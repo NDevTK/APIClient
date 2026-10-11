@@ -1459,32 +1459,13 @@ static JSValue js_doc_create_comment(JSContext *ctx, JSValueConst this_val, int 
     return node_wrap(ctx, lxb_dom_interface_node(c));
 }
 
-/* 4.5.3 createElementNS(namespace, qualifiedName). createElement's element creation over the validated triple —
-   the element carries the NAMESPACE the page asked for, so `el.namespaceURI` and a namespaced selector answer
-   what they should. testharness.js reaches it on every completed document (`createElementNS(xhtml_ns, "style")`
-   in Output.show_results), and a missing one threw inside the completion-callback list, silencing documents
-   whose tests had all already run.
-
-   §1.4's "validate and extract" IS core/dom/names.c's, and there is no longer a second one here. The copy that
-   stood in this file was written before that component existed and had drifted from it in three ways that a
-   page can see, each one a consequence of being STRING-BASED where the algorithm is length-carrying:
-     - it never validated the LOCAL NAME at all, so `createElementNS(SVG_NS, "a b")` and `createElementNS(null,
-       "1")` built elements out of names §1.4 step 6 rejects, where the shared algorithm throws the
-       InvalidCharacterError the step names;
-     - `strchr`/`strcmp` stop at U+0000, which DOM §1.4 treats as an ordinary code point a page may write, so
-       `createElementNS(ns, "a\0:b")` found no colon and `createElementNS("http://…/xmlns/\0x", "xmlns")`
-       compared equal to the XMLNS namespace it is not;
-     - it validated a prefix only by `non-empty and no second colon`, where §1.4 step 4.3 is the valid-namespace-
-       prefix predicate.
-   The shared one also takes the CONTEXT — `createElementNS` is an ELEMENT context, and that is a real
-   difference rather than a parameter for tidiness: `a=b` is a valid element local name and not a valid
-   attribute one, and the private copy validated neither.
-
-   The FIRST ARGUMENT IS `DOMString?` AND IS NOW DECLARED SO. It was declared IDL_DOMSTRING, which is ToString,
-   so `document.createElementNS(null, "div")` reached this body holding the four characters `null` and built an
-   element in a namespace of that name — and the JS_IsNull test below, which is the shape every other nullable
-   member here uses, was unreachable code that made it look handled. The one remaining reader of that test is
-   §4.5.1's createDocument, which calls the internal steps with a real JS_NULL. */
+/* §4.5 createElementNS(namespace, qualifiedName): createElement's creation over the validated triple, so the element
+   carries the namespace the page asked for. testharness.js reaches it on every completed document
+   (`createElementNS(xhtml_ns, "style")` in Output.show_results). §1.4's "validate and extract" is core/dom/names.c's,
+   length-carrying, and given the element context (`a=b` is a valid element local name and not a valid attribute
+   one): it validates the local name (§1.4 step 6), treats U+0000 as an ordinary code point, and applies §1.4 step
+   4.3's valid-namespace-prefix predicate. The first argument is declared `DOMString?`, so `createElementNS(null,
+   "div")` arrives as JS_NULL; §4.5.1's createDocument calls the internal steps with a real JS_NULL too. */
 static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     (void)magic;
@@ -1501,28 +1482,23 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
         ns = JS_ToCStringLen(ctx, &ns_len, argv[0]);
         if (!ns) return JS_EXCEPTION;
     }
-    /* LENGTH-CARRYING on both, because §1.4 decides about U+0000 and `strlen` decides about the prefix of the
-       string in front of it. names.h says the same thing from the component's side. */
+    /* Length-carrying on both, because §1.4 decides about U+0000 and `strlen` would stop at it (names.h). */
     qname = JS_ToCStringLen(ctx, &qname_len, argv[1]);
     if (!qname) { if (ns) JS_FreeCString(ctx, ns); return JS_EXCEPTION; }
 
     if (!dom_validate_and_extract(ctx, ns, ns_len, qname, qname_len, DOM_NAME_ELEMENT, &qn)) {
         if (ns) JS_FreeCString(ctx, ns);
         JS_FreeCString(ctx, qname);
-        return JS_EXCEPTION;          /* the DOMException §1.4's own step names is already thrown */
+        return JS_EXCEPTION;          /* the DOMException §1.4's step names is already thrown */
     }
-    /* §4.5's storage step, and NOT lxb_dom_element_create: that entry interns the namespace and the local
-       name through lexbor's case-folding hashes, so this method's two string arguments came back out of
-       `namespaceURI` and `localName` lowercased. element.c states which standard says each is a different
-       name; here the only thing to say is that the element is created from what the page passed — and the
-       three slices validate-and-extract hands back ARE what it passed. */
+    /* §4.5's storage step, not lxb_dom_element_create, which interns the namespace and local name through lexbor's
+       case-folding hashes; the element is created from the three slices validate-and-extract returned, which are
+       what the page passed (element.c says which standard makes case significant for each). */
     el = element_create_ns(lxb_dom_interface_document(d->dom),
                            qn.ns, qn.ns_len, qn.local, qn.local_len, qn.prefix, qn.prefix_len);
-    /* THIS FLOW MADE IT — the same statement every other creating member on this interface makes, and the one
-       this one did not. It is not inside element_create_ns, and cannot be: what a creation entry declares is
-       OWNERSHIP, and ownership is the CALLER's fact. §4.4's clone builds a whole subtree with the same creator
-       and notes only its ROOT, because dom_release_created destroys deep and a second entry naming a node
-       already freed under its parent is a double free. So the creator cannot answer it and each caller must. */
+    /* This flow made it, as every creating member on this interface says. Ownership is the caller's fact, not
+       element_create_ns's: §4.4's clone builds a subtree with the same creator and notes only its root, because
+       dom_release_created destroys deep and a second entry under a freed parent would be a double free. */
     dom_cow_note_created(lxb_dom_interface_node(el));
     if (ns) JS_FreeCString(ctx, ns);
     JS_FreeCString(ctx, qname);
@@ -1530,29 +1506,21 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
     return r;
 }
 
-/* §4.5's "INTERNAL createElementNS STEPS", named as the spec names them because a second caller reaches them:
-   §4.5.1's createDocument step 3 is "the internal createElementNS steps, GIVEN DOCUMENT" — the new document,
-   not the one whose implementation was asked. One implementation of validate-and-extract and of the element
-   creation, rather than a second one over there that could disagree about a prefix. */
+/* §4.5's "internal createElementNS steps", named as the spec names them because §4.5.1's createDocument step 3 calls
+   them "given document" (the new document, not the one whose implementation was asked); one implementation of
+   validate-and-extract and the creation. */
 JSValue document_create_element_ns(JSContext *ctx, JSValueConst doc, int argc, JSValueConst *argv)
 {
     return js_doc_create_element_ns(ctx, doc, argc, argv, 0);
 }
 
-/* §4.5's `[CEReactions] Node adoptNode(Node node)` — four steps, and the algorithm they are stated over is DOM
- * §4.5's "adopt a node", which core/dom/node.c owns because it is a shadow-including tree walk that writes each
- * node's node document through the per-flow chokepoint.
- *
- * THE TWO REFUSALS ARE DIFFERENT EXCEPTIONS AND THAT IS THE MEMBER'S POINT: a Document is a NotSupportedError
- * and a shadow root is a HierarchyRequestError, which a page's `catch (e) { e.name }` tells apart. They are
- * refusals rather than asserts — a page calling `document.adoptNode(document)` is asking a question the spec
- * answers, not violating an engine invariant.
- *
- * THE REALM IS THE RECEIVER DOCUMENT'S, not the running one. Adopt's step 3 mints wrappers and reads per-flow
- * records off them (the shadow-root association, the registry re-derivation, the adoptedCallback reaction), and
- * those are facts about the document being adopted INTO — the same rule node.c's own insert-adopt follows, and
- * the one that answers a second same-origin document's adoption out of its own realm rather than out of
- * whichever one happened to call. */
+/* §4.5's `[CEReactions] Node adoptNode(Node node)`: four steps over DOM §4.5's "adopt a node", which core/dom/node.c
+ * owns (a shadow-including walk writing each node document through the per-flow chokepoint). The two refusals
+ * are different exceptions a page's `catch (e) { e.name }` tells apart (a Document is a NotSupportedError, a
+ * shadow root a HierarchyRequestError), and they are throws: `document.adoptNode(document)` is a spec question.
+ * The realm is the receiver document's: adopt's step 3 mints wrappers and reads per-flow records (the shadow-root
+ * association, registry re-derivation, adoptedCallback reaction) about the document adopted into, as node.c's
+ * insert-adopt does. */
 static JSValue js_doc_adopt_node(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     Document *d = doc_receiver(ctx, this_val);
@@ -1565,41 +1533,28 @@ static JSValue js_doc_adopt_node(JSContext *ctx, JSValueConst this_val, int argc
     n = node_of(argv[0]);
     DCHECK(n != NULL, "adoptNode was handed something that is not a Node — the argument is an INTERFACE type "
                       "and the declaration brands it, so a non-Node is a TypeError before this body runs");
-    /* STEP 1. */
+    /* Step 1. */
     if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT)
         return JS_ThrowDOMException(ctx, "NotSupportedError", "a Document cannot be adopted");
-    /* STEP 2. It is a HierarchyRequestError and not the same refusal as step 1's: a shadow root is a node the
-       tree could hold nowhere, where a Document is a node no document may own. */
+    /* Step 2, a HierarchyRequestError rather than step 1's refusal: a shadow root is a node the tree could hold
+       nowhere, a Document a node no document may own. */
     if (shadow_root_is(n))
         return JS_ThrowDOMException(ctx, "HierarchyRequestError", "a shadow root cannot be adopted");
-    node_adopt(d->realm, n, lxb_dom_interface_document(d->dom));           /* STEP 3: adopt node into this */
-    return JS_DupValue(ctx, argv[0]);                                      /* STEP 4 */
+    node_adopt(d->realm, n, lxb_dom_interface_document(d->dom));           /* step 3: adopt node into this */
+    return JS_DupValue(ctx, argv[0]);                                      /* step 4 */
 }
 
-/* §4.5's `[CEReactions, NewObject] Node importNode(Node node,
- *  optional (boolean or ImportNodeOptions) options = false)` — SEVEN steps over DOM §4.4's `clone a node`, and
- * the ONE thing that makes it a different member from §4.4's cloneNode is its step 7: "Return the result of
- * cloning a node given node with DOCUMENT SET TO THIS, subtree set to subtree, and fallbackRegistry set to
- * registry." A clone is stated over the algorithm's DEFAULT document — node's own — so the copy belongs to the
- * tree the original belongs to; an import names the RECEIVER, which is the whole of the member.
- *
- * IT IS A MACHINE BECAUSE `clone a node` IS ONE. The walk is the page's subtree and it rests at every node
- * (core/dom/node.h's NODE_CLONE_ALGO_STAGES), so this member declares that stage block inside its own, embeds
- * the NodeCloneState and hands node_clone_run the base of it — exactly as §4.4's cloneNode and §5.5's extract
- * do. A second copier here would be a second answer to `what is a copy of this node`, missing §4.4 step 3's
- * cloning steps (HTML's for `script`, `template`, `input`, `textarea`, the nonce slot) and step 6's clonable
- * shadow root, silently, per node.
- *
- * THE TWO REFUSALS ARE BOTH NotSupportedError AND THEY ARE NOT ONE ARM. Step 1 refuses a DOCUMENT or a SHADOW
- * ROOT — two node kinds, one exception, and the pair is what separates this member from cloneNode, whose step 1
- * refuses only the shadow root because §4.4 DEFINES what a document's copy is (clone_a_document builds it).
- * Step 5.3 refuses a REGISTRY that is neither scoped nor this document's, which is a refusal about an argument
- * and not about the node. Landing one of the two would be a WRONG answer rather than a partial one.
- *
- * EVERY REFUSAL IS THE SPEC'S OWN THROW AND NONE IS AN ASSERT. The node, the options and the registry are all
- * PAGE-SUPPLIED, and this engine is a forcing solver that calls members with unusual arguments constantly: an
- * assert on any of them would hand a page an abort switch. What is asserted here is only what this codebase
- * computed — the receiver's record and the argument machine's own output. */
+/* §4.5's `[CEReactions, NewObject] Node importNode(Node node, optional (boolean or ImportNodeOptions) options =
+ * false)`: seven steps over DOM §4.4's `clone a node`, distinguished from cloneNode by step 7: "Return the result of
+ * cloning a node given node with document set to this, subtree set to subtree, and fallbackRegistry set to
+ * registry." A clone defaults to node's own document; an import names the receiver.
+ * It is a machine because `clone a node` is one: it rests at every node (core/dom/node.h's NODE_CLONE_ALGO_STAGES),
+ * so this member declares that stage block, embeds NodeCloneState and hands node_clone_run its base, as cloneNode
+ * and §5.5's extract do, keeping §4.4 step 3's cloning steps and step 6's clonable shadow root.
+ * Two refusals, both NotSupportedError: step 1 refuses a document or a shadow root (cloneNode refuses only the
+ * shadow root, since §4.4 defines a document's copy), and step 5.3 refuses a registry that is neither scoped nor
+ * this document's. Every refusal is the spec's throw: the node, options and registry are page-supplied, and only
+ * what this codebase computed (the receiver's record, the argument machine's output) is asserted. */
 #define DIN_STAGES(X) \
     X(DIN_CHECK, "DOM §4.5 importNode steps 1-6 (refuse a document or a shadow root, then resolve `subtree` " \
                  "and `registry` from the `(boolean or ImportNodeOptions)` union)") \
@@ -1613,29 +1568,22 @@ static void doc_import_visit(JSContext *ctx, void *st, JSStepVisit *v)
     node_clone_visit_state(ctx, st, v);
 }
 
-/* §4.5's importNode STEPS 3-5, AS ONE ANSWER — "Let registry be null", the boolean arm's `subtree`, and the
-   dictionary arm's three sub-steps. It answers `subtree` through `*psubtree` and the REFUSAL through its
-   return, which is the shape flatten_creation_options above already uses for the same reason: step 5.3's throw
-   and step 5.1's `subtree` are computed from one reading of one argument, and two entries over that argument
-   would be two readings that could disagree about which arm the union took.
-   THE REGISTRY IS COMPUTED ONLY TO BE REFUSED, WHICH IS A RESIDUAL AND IS NAMED AT THE CALL — see step 6 and
-   step 7 below. Returns true when the member may proceed, false with the exception pending. */
+/* §4.5's importNode steps 3-5 as one answer: "Let registry be null", the boolean arm's `subtree`, and the
+   dictionary arm's three sub-steps. It answers `subtree` through `*psubtree` and the refusal through its return,
+   as flatten_creation_options does, because both come from one reading of one argument. The registry is computed
+   only to be refused (a residual, named at step 7). Returns true to proceed, false with the exception pending. */
 static bool doc_import_options(JSContext *ctx, JSValueConst this_val, JSValueConst options, bool *psubtree)
 {
     JSValue reg_v, registry, doc_reg;
     bool same;
 
-    *psubtree = false;                                                 /* STEP 2: "Let subtree be false" */
-    /* STEP 4, "if options is a boolean, then set subtree to options". §3.2.25 Union types converted V to
-       EXACTLY ONE of the two member types and IDL_BOOL_OR_DICT places what it converted, so `JS_IsBool` is the
-       union's own OUTPUT and not a shape test performed a second time on the page's value.
-       AND THE OMITTED CALL IS THIS ARM, WHICH IS WHY THE DECLARATION STATES `= false` EXPLICITLY. §3.6 step
-       16.1 places a declared default for a position the page never reached, and this member's default is the
-       BOOLEAN `false` — where every other union-with-dictionary position in the platform's IDL defaults to
-       `{}` and therefore falls through to §3.2.17. `document.importNode(n)` is a SHALLOW import; an
-       all-defaults ImportNodeOptions would make it a deep one, because `selfOnly`'s own default is false and
-       step 5.1 NEGATES it. An explicit `null` is the other arm and is deep, which is §3.2.25 step 4 sending
-       null to the dictionary type and not a choice made here. */
+    *psubtree = false;                                                 /* step 2: "Let subtree be false" */
+    /* Step 4, "if options is a boolean, then set subtree to options". §3.2.25 "Union types" converted to exactly
+       one member type and IDL_BOOL_OR_DICT places it, so `JS_IsBool` is the union's output. The omitted call is
+       this arm, which is why the declaration states `= false`: §3.6 step 16.1 places a declared default, and this
+       member's default is the boolean `false` where other union-with-dictionary positions default to `{}`, so
+       `document.importNode(n)` is shallow (an all-defaults ImportNodeOptions would be deep, since step 5.1 negates
+       `selfOnly`). An explicit `null` takes the dictionary arm (§3.2.25 step 4) and is deep. */
     if (JS_IsBool(options)) { *psubtree = JS_ToBool(ctx, options) != 0; return true; }
     if (concolic_is(options)) {
         DFAIL("DOM §4.5's importNode reached step 4 with UNKNOWN EXTERNAL INPUT that Web IDL §3.2.25 \"Union "
@@ -1652,42 +1600,33 @@ static bool doc_import_options(JSContext *ctx, JSValueConst this_val, JSValueCon
               "the IDL_BOOL_OR_DICT branch of idl_dict_walk_run's position loop");
         return false;
     }
-    /* STEP 5, the dictionary arm. Its three sub-steps are SIBLINGS — 5.3 is not nested under 5.2 — so a
-       registry that stayed null from step 3 still reaches 5.3, where it passes because the condition is about a
-       non-null one. */
+    /* Step 5, the dictionary arm. Its sub-steps are siblings (5.3 is not under 5.2), so a registry still null from
+       step 3 reaches 5.3 and passes, since the condition is about a non-null one. */
     DCHECK(JS_IsObject(options),
            "§3.2.25's union placed something at importNode's `options` that is neither the boolean it converted "
            "nor the dictionary it built — the two member types are all the algorithm has, and a third value "
            "means the position is no longer declared IDL_BOOL_OR_DICT");
-    /* STEP 5.1, "set subtree to the NEGATION of options[\"selfOnly\"]". The member is `boolean selfOnly =
-       false`, so an absent one is false and subtree is TRUE — the dictionary arm's default is a DEEP import,
-       which is the opposite of the boolean arm's. idl_dict_bool is the reader for a declared boolean because
-       §3.2.17's member loop asks step_tobool_run for it: an unknown `selfOnly` is FORKED at the conversion and
-       arrives here as a real truth value, so there is no second fork owed at this line. */
+    /* Step 5.1, "set subtree to the negation of options[\"selfOnly\"]". `boolean selfOnly = false`, so the dictionary
+       arm defaults to a deep import. §3.2.17's member loop asks step_tobool_run for a declared boolean, so an unknown
+       `selfOnly` is forked at the conversion and arrives here as a real truth value. */
     *psubtree = !idl_dict_bool(ctx, options, "selfOnly");
-    /* STEP 5.2, "if options[\"customElementRegistry\"] EXISTS, then set registry to it" — existence and not
-       object-ness, because the member's declared type admits a registry and nothing else, and §3.2.17 makes
-       `undefined` the absence (the member declares no default). */
+    /* Step 5.2, "if options[\"customElementRegistry\"] exists, then set registry to it": existence, since §3.2.17
+       makes `undefined` the absence (the member declares no default). */
     reg_v = idl_dict_get(ctx, options, "customElementRegistry");
-    /* WEB IDL §3.2.15 Interface types ON THE MEMBER'S DECLARED TYPE, which is `CustomElementRegistry`. It runs
-       BEFORE any of the algorithm's own steps because a conversion does, so `{customElementRegistry: 5}` is a
-       TypeError and not step 5.3's NotSupportedError. It is performed HERE rather than in the declaration for
-       the reason §4.5's ElementCreationOptions and §4.9's ShadowRootInit state at their own declarations — the
-       member is declared IDL_ANY and the diff that gives an IdlDictMember its own `iface_is`/`iface_name` for
-       this interface is unwritten; core/dom/shadow_root.c carries the residual that names it once for all
-       three. Until it lands the ORDER is what differs from a browser's: a declared type throws inside
-       §3.2.17's member walk, before `selfOnly` — which sorts before this member — is read at all. */
+    /* Web IDL §3.2.15 "Interface types" on the member's declared type `CustomElementRegistry`, before the algorithm's
+       steps, so `{customElementRegistry: 5}` is a TypeError, not step 5.3's NotSupportedError. It is in the body for
+       the reason §4.5's ElementCreationOptions and §4.9's ShadowRootInit give (the member is IDL_ANY until an
+       IdlDictMember has `iface_is`/`iface_name` for it); core/dom/shadow_root.c names that residual once for all
+       three. Until then a browser throws inside §3.2.17's walk before `selfOnly` is read, and this after. */
     if (!JS_IsUndefined(reg_v) && !custom_elements_is_registry(reg_v)) {
         JS_FreeValue(ctx, reg_v);
         JS_ThrowTypeError(ctx, "ImportNodeOptions's customElementRegistry is not a CustomElementRegistry");
         return false;
     }
-    registry = reg_v;                                                  /* STEP 5.2 (the reference moves) */
-    /* STEP 5.3. The two registries an import may name are a SCOPED one and THIS DOCUMENT'S; anything else is a
-       registry the receiver resolves nothing in. It is the RECEIVER's and not the running realm's — the same
-       reading flatten_creation_options' step 1 makes, and for the same reason: `otherDoc.importNode(n)` asks
-       about otherDoc's registry, so the question is per DOCUMENT and the by-node entry is the only one that
-       can say which. */
+    registry = reg_v;                                                  /* step 5.2 (the reference moves) */
+    /* Step 5.3: an import may name a scoped registry or this document's; any other is one the receiver resolves
+       nothing in. It is the receiver's, as in flatten_creation_options step 1: `otherDoc.importNode(n)` asks about
+       otherDoc's registry. */
     if (JS_IsObject(registry) && !custom_elements_registry_is_scoped(ctx, registry)) {
         doc_reg = custom_elements_node_registry(ctx, this_val);
         same = JS_VALUE_GET_PTR(doc_reg) == JS_VALUE_GET_PTR(registry);
@@ -1720,11 +1659,9 @@ static int js_doc_import_node(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         lxb_dom_node_t *n;
         bool subtree;
 
-        /* THE DECLARATION'S OWN `idl_this_iface` HAS ALREADY REFUSED A FOREIGN RECEIVER, at Web IDL §3.7.7
-           Operations' position — before the argument conversions, which is where a browser refuses it — so this
-           arm is honouring doc_receiver's contract rather than asking the brand a second time. What
-           doc_receiver still answers that the declaration cannot is WHICH Document: the record, which is where
-           the tree this import copies INTO lives. */
+        /* The declaration's `idl_this_iface` has already refused a foreign receiver at Web IDL §3.7.7 "Operations"'
+           position, before the argument conversions; doc_receiver here answers which Document, the record holding
+           the tree this import copies into. */
         if (!d) return JS_STEP_ABRUPT;
         DCHECK(argc == 2, "§4.5 declares `importNode(Node node, optional (boolean or ImportNodeOptions) "
                           "options = false)` — two positions, with the default materialized by the argument "
@@ -1733,12 +1670,9 @@ static int js_doc_import_node(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         DCHECK(n != NULL, "importNode was handed something that is not a Node — the argument is an INTERFACE "
                           "type and the declaration brands it, so a non-Node is a TypeError before this body "
                           "runs");
-        /* STEP 1, BOTH KINDS, ONE EXCEPTION. A DOCUMENT is refused because an import puts the copy in THIS
-           document and §4.4's document arm puts it in a document of its own — the two cannot both hold, which
-           is why cloneNode answers for a document and this member does not. A SHADOW ROOT is refused because
-           it is created by `attach a shadow root` and by nothing else, so a copy of one would be a second root
-           for a host that already has one. Both are questions the standard answers, not invariants a page
-           violated, so both are throws. */
+        /* Step 1, both kinds, one exception. A document is refused because an import puts the copy in this document
+           and §4.4's document arm puts it in one of its own; a shadow root because only `attach a shadow root`
+           creates one, so a copy would be a second root for a host that has one. */
         if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT || shadow_root_is(n)) {
             JS_ThrowDOMException(ctx, "NotSupportedError",
                                  n->type == LXB_DOM_NODE_TYPE_DOCUMENT
@@ -1746,31 +1680,23 @@ static int js_doc_import_node(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
                                      : "a shadow root cannot be imported");
             return JS_STEP_ABRUPT;
         }
-        if (!doc_import_options(ctx, hdr->this_val, argv[1], &subtree))   /* STEPS 2-5 */
+        if (!doc_import_options(ctx, hdr->this_val, argv[1], &subtree))   /* steps 2-5 */
             return JS_STEP_ABRUPT;
-        /* STEP 7, `clone a node` GIVEN `document` SET TO THIS. That argument is the member.
-           WHAT IS NOT COVERED: step 6 ("if registry is null, then set registry to the result of looking up a
-           custom element registry given this") and step 7's `fallbackRegistry`. §4.4's `clone a single node`
-           element arm passes the registry to `create an element`, which is what decides the COPY's own custom
-           element registry — and node.c's clone threads no registry at all, so a copy's registry is derived
-           the way an ordinary insertion derives it rather than taken from this member's argument. It is
-           NARROWER than §4.5 and not wrong for what it does: the copy is created UNCUSTOMIZED and §4.13's
-           upgrade reaction runs when it is inserted, which is §4.13.3's answer for every copy this engine has
-           ever made — §4.4's cloneNode reaches the identical arm, so this member is not the site of the gap.
-           WHAT THE NEXT DIFF BUILDS: `registry` as a third argument of node_clone_start, carried on
-           NodeCloneState beside `doc`, read by clone_element_into and handed to the element creation — which
-           is the same one-argument shape this diff added for `document`, at the same entry, for the same
-           reason. HOW ITS ABSENCE WOULD SHOW: an element imported into a document whose registry defines its
-           local name, where the page asked for a SCOPED registry instead, resolves its definition out of the
-           document's set — so the definition a later upgrade finds is not the one the import named, observable
-           as the wrong constructor running on an inserted copy. */
+        /* Step 7, `clone a node` given `document` set to this, which is the member.
+           Named residual. Not covered: step 6 ("if registry is null, then set registry to the result of looking up
+           a custom element registry given this") and step 7's `fallbackRegistry`: node.c's clone threads no
+           registry, so a copy's registry is derived as an ordinary insertion derives it. The copy is created
+           uncustomized and §4.13's upgrade reaction runs on insertion, as for cloneNode. Next diff builds:
+           `registry` as a third argument of node_clone_start, carried on NodeCloneState beside `doc`, read by
+           clone_element_into and handed to the element creation. How its absence would show: an element imported
+           with a scoped registry resolves its definition from the document's set, so the wrong constructor runs on
+           an inserted copy. */
         node_clone_start(hdr, s, n, lxb_dom_interface_document(d->dom), subtree, DIN_ROOT, DIN_RETURN);
         return JS_STEP_YIELD;
     }
 
-    /* STEP 7's `clone a node`, WHOSE SIX REST POINTS ARE THIS MEMBER'S SIX STAGES — named individually for the
-       reason §4.4's cloneNode names them: a stage added to NODE_CLONE_ALGO_STAGES does not compile until it
-       has an arm here, where a negated test on the return stage would silently swallow it. */
+    /* Step 7's `clone a node`, whose six rest points are this member's six stages, named individually as cloneNode
+       names them, so a stage added to NODE_CLONE_ALGO_STAGES does not compile without an arm here. */
     STEP_ARM(DIN_ROOT);
     STEP_ARM(DIN_COPY);
     STEP_ARM(DIN_TEMPLATE);
@@ -1787,14 +1713,13 @@ static int js_doc_import_node(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
 }
 
 static const IdlStepDecl DOC_IMPORT_NODE_STEP = {
-    /* No release: the level stack is node_clone_visit_state's, and the teardown discharges that one list. */
+    /* No release: the level stack is node_clone_visit_state's, and teardown discharges that one list. */
     js_doc_import_node, sizeof(NodeCloneState), doc_import_visit, NULL,
     "DOM §4.5 Document.importNode (over §4.4's `clone a node` concept)", DIN_STEPS
 };
 
-/* §4.5's `[SameObject] readonly attribute DOMImplementation implementation`. SameObject is the whole reason the
-   object lives on the document's record: a page holds it and calls it later, and a fresh one per read would
-   compare unequal to the one it kept. */
+/* §4.5's `[SameObject] readonly attribute DOMImplementation implementation`, held on the record so a page that
+   kept it compares equal later. */
 static JSValue js_doc_implementation(JSContext *ctx, JSValueConst this_val, int magic)
 {
     Document *d = doc_receiver(ctx, this_val);
@@ -1807,28 +1732,22 @@ static JSValue js_doc_implementation(JSContext *ctx, JSValueConst this_val, int 
     return JS_DupValue(ctx, d->impl);
 }
 
-/* THE DOCUMENT'S LOAD LIFECYCLE. Stage 0 is DOMContentLoaded — fired at the DOCUMENT and bubbling to window,
-   which is where a page registers it — and stage 1 is load, fired at window. `readyState` moves with them,
-   because a page that missed the event reads it instead. Both are per-FLOW: the scheduler asks once per stage
-   for each flow that has run everything the document gave it, so an arm that reached the end of the document
-   fires its own listeners in its own world. */
-/* The document element of the realm's parsed document, read from the tree (DOM §4.2.1 "Document tree"). NULL
-   before the install, which `window.document` is entitled to see, and NULL once the page removes its root. */
+/* The document's load lifecycle. Stage 0 is DOMContentLoaded, fired at the document and bubbling to window; stage 1
+   is load, fired at window. `readyState` moves with them, for a page that missed the event. Both are per flow: the
+   scheduler asks once per stage for each flow that ran everything the document gave it, so each arm fires its own
+   listeners in its own world. */
+/* The document element of the realm's parsed document, read from the tree (DOM §4.2.1 "Document tree"). NULL before
+   the install, which `window.document` may see, and NULL once the page removes its root. */
 lxb_dom_node_t *document_root_node(JSContext *ctx)
 {
     Document *d = doc_of(ctx);
     return d ? document_document_element_of(lxb_dom_interface_node(d->dom)) : NULL;
 }
 
-/* THIS REALM'S ASSOCIATED DOCUMENT, AND WHY IT IS NOT REACHED THROUGH THE ROOT NODE ABOVE.
-   `document_root_node` answers with the DOCUMENT ELEMENT, so `root->owner_document` is a way of spelling "this
-   realm's document" that first asks a DIFFERENT QUESTION — does this document have a document element — and is
-   then decided by the stricter one. The two part company on a document whose element has been REMOVED, which
-   is ordinary DOM (`ChildNode.remove()` on `document.documentElement`) and leaves the realm, its global and its
-   Document exactly where they were: the element-shaped spelling then answers null for a Document that is
-   perfectly present, and every caller of it either refuses or reads through the null. So a caller that wants
-   the Document asks for the Document. NULL here means the REALM never had one, which is this engine's own
-   invariant rather than a state a page can reach. */
+/* This realm's associated document, not reached through the root node above: `document_root_node` answers with the
+   document element, which is null once the page removes it (`document.documentElement.remove()`) while the realm,
+   its global and its Document remain. A caller that wants the Document asks for it. NULL means the realm never had
+   one, an engine invariant rather than a page state. */
 lxb_dom_document_t *document_associated(JSContext *ctx)
 {
     Document *d = doc_of(ctx);
@@ -1836,22 +1755,15 @@ lxb_dom_document_t *document_associated(JSContext *ctx)
     return d ? lxb_dom_interface_document(d->dom) : NULL;
 }
 
-/* ---- HTML §2.4.3 "DOCUMENT BASE URLS" -------------------------------------------------------------------
+/* ---- HTML §2.4.3 "Document base URLs" -------------------------------------------------------------------
  *
- * THREE ALGORITHMS, AND THE ENGINE ANSWERED ALL OF THEM WITH THE ADDRESS. §2.4.3 defines a Document's
- * FALLBACK BASE URL (the srcdoc case, the about:blank case, then the address) and its DOCUMENT BASE URL (the
- * first base element's frozen URL, else the fallback); HTML §4.2.3 "The base element" defines the FREEZE that
- * fills the first. What
- * stood here was the address alone, which is only the fallback's LAST step — so `<base href>` did nothing at
- * all, and a Document at about:blank resolved relative URLs against a URL that cannot be a base.
- *
- * THE FREEZE ITSELF LIVES IN core/html/html_base_element.c, because it is an algorithm about an ELEMENT and
- * this file owns what a Document HAS. The split is the one core/dom/document.c already makes with §4.12.1's
- * scripts and §4.8.5's iframes: the DOM half stores, the element's own component decides. */
+ * Three algorithms: §2.4.3's fallback base URL (the srcdoc case, the about:blank case, then the address) and document
+ * base URL (the first base element's frozen URL, else the fallback), and HTML §4.2.3 "The base element"'s freeze,
+ * which lives in core/html/html_base_element.c because it is about an element; this file stores what a Document has,
+ * as it does for §4.12.1's scripts and §4.8.5's iframes. */
 
-/* §2.4.3's FALLBACK BASE URL of one Document — the URL HTML §4.2.3 "The base element" freezes a `<base href>`
-   AGAINST, which is why it is a separate answer from the document base URL and not a synonym for it ("Thus,
-   the base element isn't affected by itself"). BORROWED. */
+/* §2.4.3's fallback base URL of one Document: the URL HTML §4.2.3 freezes a `<base href>` against, a separate answer
+   from the document base URL ("Thus, the base element isn't affected by itself"). Borrowed. */
 const char *document_fallback_base_url_of(const lxb_dom_document_t *dom)
 {
     const Document *d = doc_rec(dom);
@@ -1859,18 +1771,12 @@ const char *document_fallback_base_url_of(const lxb_dom_document_t *dom)
     DCHECK(d != NULL, "§2.4.3's fallback base URL was asked of a document with no record — a tree that came "
                       "from neither document_install nor document_new has no address, no about base URL and "
                       "no way to answer");
-    /* STEP 1: "if document is an IFRAME SRCDOC DOCUMENT: assert document's about base URL is non-null; return
-       document's about base URL." THE CONDITION IS A CLASS AND NOT A URL TEST, which is why it reads a
-       creation fact rather than the address. HTML §4.8.5 "The `iframe` element" states the class twice and
-       the two are not the same set: the srcdoc attribute's own prose glosses it as "a Document whose URL
-       matches about:srcdoc", and process-the-iframe-attributes step 1 says of the navigation it performs
-       "the resulting Document MUST BE CONSIDERED an iframe srcdoc document". Only the second is a membership
-       rule — the first is a consequence of it, which §2.4.1's own note makes explicit ("it is not possible to
-       create an iframe srcdoc document whose URL has a non-null query … the set of all URLs that match
-       about:srcdoc only vary in their fragment"). So the class is CONTAINED IN the match set and is not equal
-       to it, and §2.4.3 itself distinguishes them: this step names the class where step 2 below spells a URL
-       match outright. Reading the ADDRESS here answered a strictly larger question and was wrong in both
-       directions at once — see the record's own field for the two documents it decided wrongly. */
+    /* Step 1: "if document is an iframe srcdoc document: assert document's about base URL is non-null; return
+       document's about base URL." The condition is a class, so it reads a creation fact, not the address. HTML
+       §4.8.5 "The `iframe` element" makes the class a membership rule ("the resulting Document must be considered
+       an iframe srcdoc document"), and its URL matching about:srcdoc is a consequence (§2.4.1's note: "the set of
+       all URLs that match about:srcdoc only vary in their fragment"), so the class is contained in the match set,
+       not equal to it; §2.4.3 names the class here and spells a URL match in step 2. See the record's field. */
     if (d->is_iframe_srcdoc) {
         DCHECK(d->base.about != NULL,
                "§2.4.3 step 1's assert failed: an iframe srcdoc Document has a NULL about base URL. A srcdoc "
@@ -1881,10 +1787,9 @@ const char *document_fallback_base_url_of(const lxb_dom_document_t *dom)
                "one call every load converges on, where §4.8.5's resource and that base URL are both in hand");
         return d->base.about;
     }
-    /* STEP 2: "if document's URL MATCHES about:blank and document's about base URL is non-null, then return
-       document's about base URL." A URL test, spelled as one, and asked only when there is an about base URL
-       to return — which for a document created from a response is never, so the parse is not paid for by the
-       branch every document in the engine takes. */
+    /* Step 2: "if document's URL matches about:blank and document's about base URL is non-null, then return
+       document's about base URL." A URL test, asked only when there is an about base URL, which a document created
+       from a response never has, so ordinary documents do not pay for the parse. */
     if (d->base.about) {
         UrlRecord u;
         bool about;
@@ -1893,30 +1798,28 @@ const char *document_fallback_base_url_of(const lxb_dom_document_t *dom)
         CHECK(url_parse(&u, d->addr.bytes, strlen(d->addr.bytes), NULL),
               "a document's own address is not a URL — §2.4.3 asks whether it MATCHES about:blank, which is a "
               "question about a URL record, and this record's address never parsed");
-        /* HTML §2.4.1's match relation, and ONLY the about:blank one: the srcdoc relation belonged to step 1
-           and step 1 no longer asks a URL anything. A document created AT about:blank whose address later
-           moved (§7.4.4's URL and history update steps — `history.pushState` from an inherited origin) stops
-           matching, and step 3's address is then the answer even though the about base URL is still there:
-           the two are separate facts and the standard tests both. */
+        /* HTML §2.4.1's match relation, the about:blank one only. A document created at about:blank whose address
+           later moved (§7.4.4's URL and history update steps, `history.pushState` from an inherited origin) stops
+           matching, and step 3's address answers though the about base URL remains: the standard tests both. */
         about = url_matches_about(&u, "blank", /*query_must_be_null*/ false);
         url_record_free(&u);
         if (about) return d->base.about;
     }
-    return d->addr.bytes;   /* STEP 3: "return document's URL" */
+    return d->addr.bytes;   /* step 3: "return document's URL" */
 }
 
-/* §2.4.3's DOCUMENT BASE URL of one Document — the answer DOM §4.4's `baseURI`, HTML §2.4.2's parse-a-URL and
-   §8.1.5.1's API base URL all name. A fact about THAT DOCUMENT and not about the running realm, which stopped
-   being the same question the moment §4.5.1's factories could build a second Document. BORROWED. */
+/* §2.4.3's document base URL of one Document: what DOM §4.4's `baseURI`, HTML §2.4.2's parse-a-URL and §8.1.5.1's API
+   base URL name. A fact about that document, not the running realm, since §4.5.1's factories build other Documents.
+   Borrowed. */
 const char *document_base_url_of(const lxb_dom_document_t *dom)
 {
     const Document *d = doc_rec(dom);
 
     DCHECK(d != NULL, "§2.4.3's document base URL was asked of a document with no record");
-    /* STEP 1: "if document has no descendant base element that has an href attribute, then return document's
-       fallback base URL." STEP 2: "otherwise, return the FROZEN BASE URL of the first base element in document
-       that has an href attribute, in tree order" — which is the element this record names, kept in step by
-       §4.2.3's own situations (core/html/html_base_element.c). */
+    /* Step 1: "if document has no descendant base element that has an href attribute, then return document's
+       fallback base URL." Step 2: "otherwise, return the frozen base URL of the first base element in document that
+       has an href attribute, in tree order", the element this record names, kept current by §4.2.3's situations
+       (core/html/html_base_element.c). */
     if (!d->base.frozen_el) return document_fallback_base_url_of(dom);
     DCHECK(d->base.frozen != NULL && d->base.frozen[0] != '\0',
            "a document names a base element whose FROZEN BASE URL is absent or empty — §4.2.3's set the "
@@ -1932,13 +1835,10 @@ const char *document_base_url(JSContext *ctx)
     return document_base_url_of(lxb_dom_interface_document(d->dom));
 }
 
-/* THIS REALM'S ACTIVE DOCUMENT'S ADDRESS — §4.5's `document.URL`, and a DIFFERENT question from the one above.
- * It is separated now because it was not before, and the conflation was invisible while the base URL WAS the
- * address: `document_base_url` answered both, so §7.2.4's "this Location object's relevant Document's URL",
- * §7.2.5's can-have-its-URL-rewritten, §7.4.4's "let newURL be document's URL" and §8.1's blob origin all read
- * a function whose name says base URL. The moment `<base href>` works, every one of those would have started
- * reporting the base instead — `location.href` would answer the markup's base URL, and a blob URL would carry
- * a CDN's origin. Which question a caller is asking is now something it has to say. */
+/* This realm's active document's address, §4.5's `document.URL`, a different question from the base URL. §7.2.4's
+ * "this Location object's relevant Document's URL", §7.2.5's can-have-its-URL-rewritten, §7.4.4's "let newURL be
+ * document's URL" and §8.1's blob origin read this; with `<base href>` in effect, the base URL would make
+ * `location.href` answer the markup's base and a blob URL carry a CDN's origin. A caller says which it asks. */
 const char *document_url(JSContext *ctx)
 {
     Document *d = doc_here(ctx);
@@ -1955,9 +1855,8 @@ lxb_dom_element_t *document_frozen_base_element(const lxb_dom_document_t *dom)
     return d->base.frozen_el;
 }
 
-/* §4.2.3's FROZEN BASE URL, STORED — see the field, and core/html/html_base_element.c for the algorithm that
-   decides WHEN this is called. `el` NULL with `url` NULL means this document has no base element with an href,
-   which §2.4.3 step 1 answers with the fallback base URL. */
+/* §4.2.3's frozen base URL, stored (see the field; core/html/html_base_element.c decides when). `el` and `url` both
+   NULL means no base element with an href, which §2.4.3 step 1 answers with the fallback base URL. */
 void document_set_frozen_base_url(lxb_dom_document_t *dom, lxb_dom_element_t *el, const char *url)
 {
     Document *d = doc_rec(dom);
@@ -1974,14 +1873,13 @@ void document_set_frozen_base_url(lxb_dom_document_t *dom, lxb_dom_element_t *el
            "§4.2.3's frozen base URL was set before the document's `document` object existed — the object is "
            "what owns the storage the flow's delta captures, so there would be nothing to keep the address "
            "alive for a parked flow");
-    /* TWO SCALAR CAPTURES FOR ONE FACT — see the field. Each is a POINTER-sized latch, which is what the byte
-       arm is for; the pair reverts together because a delta unapplies wholly. */
+    /* Two scalar captures for one fact (see the field): each is a pointer-sized latch, the byte arm's purpose, and
+       the pair reverts together because a delta unapplies wholly. */
     cow_capture_host_state(d->realm, d->doc_obj, &d->base.frozen_el, sizeof d->base.frozen_el);
     cow_capture_host_state(d->realm, d->doc_obj, &d->base.frozen, sizeof d->base.frozen);
     d->base.frozen_el = el;
-    /* THE OLD FROZEN URL IS NOT FREED — a flow that captured it above has an entry naming it, and §4.2.3's own
-       situations re-freeze on every tree change, so this is the field that changes most. It stays on the
-       record's address list until the record dies. */
+    /* The old frozen URL is not freed: a flow that captured it above names it, and §4.2.3 re-freezes on every tree
+       change. It stays on the record's address list until the record dies. */
     d->base.frozen = url ? doc_addr_intern(d, url) : NULL;
     DCHECK((d->base.frozen_el == NULL) == (d->base.frozen == NULL),
            "§4.2.3's frozen base URL and the element it belongs to disagree about whether this document has "
@@ -1989,26 +1887,14 @@ void document_set_frozen_base_url(lxb_dom_document_t *dom, lxb_dom_element_t *el
            "pair has had one of them written outside this setter");
 }
 
-/* §7.4's ABOUT BASE URL HAS NO SETTER, AND THAT IS THE FIX RATHER THAN AN OMISSION. It used to have one,
- * called by core/frame/navigable.c AFTER the host's realm builder returned — which is after this file's own
- * document_install has run every parsed walk over the finished tree. Two of those walks ask §2.4.3 "Document
- * base URLs" for a base URL: §4.2.3's freeze, which runs FIRST among them and reads the FALLBACK base URL, and
- * §4.8.5's iframe walk, which resolves a nested frame's `src` against the DOCUMENT base URL. For an IFRAME
- * SRCDOC DOCUMENT both reach document_fallback_base_url_of with a null about base URL and fire
- * §2.4.3 step 1's assert — so `<iframe srcdoc="<base href=/x/>">` and `<iframe srcdoc="<iframe src=/y>">`
- * aborted a dev build on ordinary markup, and in release resolved every relative URL in the frame against
- * `about:srcdoc`, whose opaque path makes the parse FAIL.
- *
- * THE SETTER'S OWN THIRD DCHECK WAS WRITTEN FOR EXACTLY THAT HAZARD AND COULD NOT FIRE ON IT — it asserted
- * that no base element's URL had been frozen yet, and for a srcdoc Document the freeze that would have
- * violated it aborts UPSTREAM, inside the fallback read, before it can store anything. A guard shadowed by an
- * earlier abort reads as a guard and is not one, which is why the ordering is fixed by construction here
- * instead: the value is an argument of doc_rec_new, so the record is BORN with it and there is no later
- * moment for a caller to choose. */
+/* §7.4's about base URL has no setter: it is an argument of doc_rec_new, so the record is born with it, before
+ * document_install's parsed walks run. Two of them read §2.4.3 "Document base URLs": §4.2.3's freeze (the fallback
+ * base URL) and §4.8.5's iframe walk (the document base URL for a nested `src`), and for an iframe srcdoc document a
+ * null about base URL would fire §2.4.3 step 1's assert on ordinary markup such as `<iframe srcdoc="<base
+ * href=/x/>">`, or in release resolve every relative URL against `about:srcdoc`, whose parse fails. */
 
-/* DOM §4.5's encoding, of this realm's active document — see document.h. ONE component owns what a
-   document's encoding is, for the same reason it owns what its URL is: two answers to that question is how
-   they drift apart, and this one decides how a `<script src>`'s bytes become source text. */
+/* DOM §4.5's encoding of this realm's active document (see document.h). One component owns what a document's
+   encoding is, as for its URL; it decides how a `<script src>`'s bytes become source text. */
 int document_encoding(JSContext *ctx)
 {
     Document *d = doc_here(ctx);
@@ -2019,12 +1905,9 @@ int document_encoding(JSContext *ctx)
     return d->encoding;
 }
 
-/* THE SAME FACT ASKED OF A DOCUMENT RATHER THAN OF A REALM, which is a different question and not a
-   convenience: HTML §4.10.22.5 "Selecting a form submission encoding" step 1 is "let encoding be THE
-   DOCUMENT's character encoding", and the document it means is the form's NODE DOCUMENT — a realm holds
-   several (an inert template document, a `createHTMLDocument` result), so answering from the active one would
-   report a different document's encoding for a form that is not in it. Same shape as document_base_url_of one
-   screen up, and for the same reason. */
+/* The same fact asked of a Document rather than a realm: HTML §4.10.22.5 "Selecting a form submission encoding"
+   step 1, "let encoding be the document's character encoding", means the form's node document, and a realm holds
+   several (an inert template document, a `createHTMLDocument` result). Same shape as document_base_url_of. */
 int document_encoding_of(const lxb_dom_document_t *dom)
 {
     const Document *d = doc_rec(dom);
@@ -2036,17 +1919,12 @@ int document_encoding_of(const lxb_dom_document_t *dom)
     return d->encoding;
 }
 
-/* HTML §13.2.3.2 "Determining the character encoding"'s ANSWER, WRITTEN ONTO THE DOCUMENT IT IS ABOUT.
- *
- * DOM §4.5 Interface Document gives every document the utf-8 encoding "unless stated otherwise", which
- * doc_rec_new writes; this is the one algorithm that states otherwise, and it is a NAVIGATION's step rather
- * than a Document's own — the bytes and the response metadata it reads belong to the load, so the loader calls
- * it and hands the result here. That is why this is a setter and not a lazy read: nothing reachable from a
- * Document can re-derive it, because by the time anything asks, the bytes have been decoded and parsed.
- *
- * IT IS PER-FLOW, and the capture is the POD one for the same reason document_set_url's is: a document's
- * encoding is an `int` on this record, and the `document` object is what owns the record's storage for a flow
- * parked in the middle of a load. Two flows loading one navigable from two forked responses see their own. */
+/* HTML §13.2.3.2 "Determining the character encoding"'s answer, written onto the document it is about. DOM §4.5
+ * "Interface Document" gives every document utf-8 "unless stated otherwise", which doc_rec_new writes; this is the
+ * one algorithm that states otherwise, and it is a navigation's step (the bytes and response metadata belong to the
+ * load), so the loader calls it and nothing reachable from a Document can re-derive it later.
+ * It is per flow, through the byte capture, since the encoding is a POD `int` on this
+ * record, and the `document` object owns the record's storage for a flow parked in a load. */
 void document_set_encoding(JSContext *ctx, int encoding)
 {
     Document *d = doc_here(ctx);
@@ -2063,19 +1941,13 @@ void document_set_encoding(JSContext *ctx, int encoding)
     d->encoding = encoding;
 }
 
-/* THE BYTES AN ADDRESS VALUE STANDS FOR — see core/dom/document.h.
- *
- * IT IS ONE FUNCTION AND NOT AN `if` AT EACH ARRIVAL, which is the rule CLAUDE.md states for every dispatch
- * that decides what a set of bytes IS: §7.2.5's `pushState`, §4.8.5's `<iframe src>` and §7.2.2.1's
- * `window.open` all turn a value the page computed into a Document address, and a question asked at some of
- * them and not the others does not report an absent capability — it reports an unrelated subsystem failing on
- * input it should never have been shown. The concolic's own ToString is exactly that failure: it names the
- * JavaScript coercion boundary for a value that is a perfectly good address and merely has a domain.
- *
- * THE MISSING HALF CRASHES HERE, ONCE. A concolic with NO example is a Document whose address this run does
- * not know, and there is nothing to take: taking its display SHAPE would seed `…/admin/%7Bstate%7D.id` — an
- * address no server has, fetched over the person's own session by solver/route_seed.h's declaration, whose
- * reply's fields would then be examples shaping the next endpoint. */
+/* The bytes an address value stands for (see core/dom/document.h). One function, not an `if` at each arrival
+ * (§7.2.5's `pushState`, §4.8.5's `<iframe src>`, §7.2.2.1's `window.open`), since a dispatch that decides what
+ * bytes are is one component every entry calls; a concolic's own ToString would name the JavaScript coercion
+ * boundary for a value that is a good address with a domain.
+ * A concolic with no example is a Document whose address this run does not know, and it crashes here once: its
+ * display shape would seed `…/admin/%7Bstate%7D.id`, an address no server has, which solver/route_seed.h would
+ * declare and the zone would fetch over the person's session. */
 const char *document_address_example(JSContext *ctx, JSValueConst address)
 {
     const char *bytes;
@@ -2112,9 +1984,8 @@ const char *document_address_example(JSContext *ctx, JSValueConst address)
                concolic_shape_c(address) ? concolic_shape_c(address) : "{}");
     }
     bytes = JS_ToCString(ctx, address);
-    /* FATAL AND NOT "THE ADDRESS IS ABSENT". Two things reach it — OOM, and a RELEASE build where the arm
-       above is compiled out and a concolic's ToString throws — and the second is precisely the one that must
-       not be swallowed into a Document silently left where it was. */
+    /* Fatal, not "the address is absent": the two causes are OOM and a release build, where the arm above is
+       compiled out and a concolic's ToString throws, which must not silently leave a Document where it was. */
     CHECK(bytes != NULL,
           "a Document address value would not convert to bytes: either the allocation failed, or this is a "
           "release build and the address is unknown external input, whose ToString has no concolic semantics — "
@@ -2122,11 +1993,9 @@ const char *document_address_example(JSContext *ctx, JSValueConst address)
     return bytes;
 }
 
-/* THE TWO HALVES OF AN ADDRESS SAY THE SAME THING — asserted at EVERY writer, because it is the only thing
-   standing between this record and the two-answers-to-one-question defect that made a Document answer its own
-   base URL with somebody else's. `bytes` is what every byte consumer resolves against and what the trusted
-   zone loads; `value` is what a branch forks on. They are written by one call each time, so a disagreement is
-   not a race — it is a writer that computed one of them from something other than the other. */
+/* The two halves of an address agree, asserted at every writer: `bytes` is what every byte consumer resolves
+   against and the trusted zone loads, `value` what a branch forks on. One call writes both, so a disagreement is a
+   writer that computed one from something other than the other. */
 static void doc_addr_assert_agrees(JSContext *ctx, const Document *d)
 {
 #if APICLIENT_DEV
@@ -2144,28 +2013,17 @@ static void doc_addr_assert_agrees(JSContext *ctx, const Document *d)
 #endif
 }
 
-/* HTML §2.4.3 "Document base URLs" — SET THE URL, step 1: "Set document's URL to url". It is the only way a
- * Document's address changes without a new Document, and HTML §7.4.4 "Non-fragment synchronous
- * \"navigations\""'s URL and history update steps step 8 performs it.
- *
- * IT TAKES A VALUE, WHICH IS WHERE THE ADDRESS PRIMITIVE ACTUALLY LIVES. core/dom/document.h's
- * document_url_value states why an address is a triple and not a string; this is the ONE door through which a
- * Document acquires one, so the bytes and the value can never be written by two callers that disagree — the
- * bytes are DERIVED from the value here rather than passed beside it.
- *
- * IT IS PER-FLOW, AND THE CAPTURE IS THE RECORD ARM. A flow that called `history.pushState(s, "", "/b")` is
- * the only flow whose `location.pathname` is `/b`; a sibling arm that never pushed still reads the address it
- * forked at, and a parked flow resumes onto its own. It is the record arm and not the byte one because the
- * pair now holds a JSValue: solver/cow.h reserves the byte arm for a POD SCALAR LATCH, and a memcpy of a
- * JSValue makes a reference nothing counts, so the next restore would free a value the blob still names.
- * CAPTURING THE PAIR IN ONE ENTRY IS THE POINT, not an economy: a delta unapplies wholly, so a context switch
- * puts the bytes and the value back together or puts neither back, and there is no window in which a
- * `location.pathname` derived from one flow's value serializes another flow's address.
- *
- * THE UNAPPLY IS SOUND BECAUSE NOTHING FREES THE OLD STRING: the entry writes the old pointer back and the
- * string it names is still on this record's address list. The old VALUE is not borrowed that way — the capture
- * dup'd it, so this releases the record's own reference here and the delta keeps its. THE OWNER IS THE
- * `document` OBJECT, which is what holds the record's storage alive for a parked flow that still names it. */
+/* HTML §2.4.3 "Document base URLs"' set the URL, step 1: "Set document's URL to url", the only way a Document's
+ * address changes without a new Document; HTML §7.4.4 "Non-fragment synchronous \"navigations\""'s URL and history
+ * update steps step 8 performs it.
+ * It takes a value (core/dom/document.h's document_url_value): this is the one door through which a Document gets an
+ * address, and the bytes are derived from the value here rather than passed beside it.
+ * It is per flow, through the record arm: a flow that called `history.pushState(s, "", "/b")` is the only one whose
+ * `location.pathname` is `/b`. The pair holds a JSValue, which the byte arm (solver/cow.h, POD scalar latches only)
+ * would copy uncounted, and one entry for the pair means a context switch restores both or neither. The unapply is
+ * sound because the old string stays on this record's address list; the old value was dup'd by the capture, so the
+ * record's own reference is released here and the delta keeps its. The owner is the `document` object, which holds
+ * the record's storage alive for a parked flow. */
 void document_set_url(JSContext *ctx, JSValue address)
 {
     Document *d = doc_here(ctx);
@@ -2183,11 +2041,9 @@ void document_set_url(JSContext *ctx, JSValue address)
            "parked flow");
     cow_capture_host_record(d->doc_obj, &d->addr, &DOC_ADDR_REC);
     d->addr.bytes = doc_addr_intern(d, url);
-    /* PUBLISHED BEFORE THE OLD ONE IS RELEASED, and the order is the whole of it. doc_rec_refs walks this
-       slot for the collector, and releasing a concolic address runs that class's finalizer, which is platform
-       code that may allocate — and an allocation IS a collection. Freeing first would leave the slot naming
-       storage already on the free list for the whole of that call, and the walk would decref a JSObject that
-       no longer exists. */
+    /* Published before the old value is released: doc_rec_refs walks this slot for the collector, and releasing a
+       concolic address runs that class's finalizer, which may allocate (and an allocation may collect), so freeing
+       first would let the walk decref a freed object. */
     {
         JSValue prev = d->addr.value;
 
@@ -2201,9 +2057,8 @@ void document_set_url(JSContext *ctx, JSValue address)
     doc_addr_assert_agrees(ctx, d);
 }
 
-/* THIS REALM'S ACTIVE DOCUMENT'S ADDRESS AS A VALUE — see core/dom/document.h. It is the accessor
-   core/frame/location.c derives §7.2.4's members through and the reason `location.pathname` on a COMPUTED
-   address still forks. */
+/* This realm's active document's address as a value (see core/dom/document.h): what core/frame/location.c derives
+   §7.2.4's members through, so `location.pathname` on a computed address still forks. */
 JSValue document_url_value(JSContext *ctx)
 {
     Document *d = doc_here(ctx);
@@ -2216,76 +2071,55 @@ JSValue document_url_value(JSContext *ctx)
     return JS_DupValue(ctx, d->addr.value);
 }
 
-/* HTML §3.1.5's CURRENT DOCUMENT READINESS, which is the internal slot and NOT the member. `readyState` is a
-   READONLY accessor on Document.prototype (core/dom/document_metadata.c) that RETURNS this, so there is one
-   statement of the fact. It was a data property on the `document` object, RE-WRITTEN here every time the
-   readiness moved — two statements with a window between them, and one a page could assign: the load lifecycle
-   and §8.1.7.3 step 3's render-blocked test both read the readiness, so `document.readyState = "complete"` let
-   a page skip its own DOMContentLoaded and unblock its rendering.
- *
- * IT LIVES IN THIS REALM'S OWN BASELINE RECORD, the same shape §8.12 Animation frames's map of animation frame callbacks and
- * §7.4.6.3's has-been-revealed use, and for the same two reasons: the record is unreachable from the page, so
- * nothing can write the readiness but this component; and its `stage` is an ordinary property write, so the
- * heap COW captures it and one arm of a fork advances its lifecycle without touching its sibling's.
- * A private Symbol on the Document would have done the first job and not the second cleanly — and it would
- * have been an AGENT-wide value freed by a PER-REALM teardown (document_free runs once per realm, from
- * navigable.c's realm sweep), which is one document dropping the key the others still read through. */
+/* HTML §3.1.5's current document readiness, the internal slot, not the member: `readyState` is a readonly accessor
+ * on Document.prototype (core/dom/document_metadata.c) that returns this, so a page cannot assign it (the load
+ * lifecycle and §8.1.7.3 step 3's render-blocked test both read it). It lives in this realm's own baseline record,
+ * the shape §8.12 "Animation frames"'s map and §7.4.6.3's has-been-revealed use: unreachable from the page, and its
+ * `stage` is an ordinary property write the heap COW captures, so one arm of a fork advances its lifecycle alone. A
+ * private Symbol would be agent-wide and freed by a per-realm teardown (document_free runs per realm). */
 static JSClassID g_ready_slot = JS_INVALID_CLASS_ID;
 
-/* HTML §3.1.5's THREE READINESS VALUES, in the order the enum declares them — the strings `readyState` answers
-   with and the only place they are written down. */
+/* HTML §3.1.5's three readiness values, in the enum's order: the strings `readyState` answers with. */
 static const char *const DOC_READINESS[3] = { "loading", "interactive", "complete" };
 
 static int document_readiness(JSContext *ctx);
 
-/* HTML §3.1.5's UPDATE THE CURRENT DOCUMENT READINESS, all four of its steps.
-   STEP 1 IS NOT BOOKKEEPING: "if document's current document readiness equals readinessValue, then return" is
-   what stops a `readystatechange` firing for a readiness that did not change, and it is also what makes step 4
-   below reachable only where there IS a document — a realm's record is built at "loading" before its Document
-   exists, and a re-statement of "loading" for it is exactly the no-change case.
-   STEP 4 FIRES `readystatechange` AT THE DOCUMENT, which nothing did: §3.1.1 declares `onreadystatechange` and
-   the corpus registers it, so a page waiting for "interactive" through the event rather than through the
-   property waited for ever. Step 3's load timing info is HONESTLY ABSENT — its two fields belong to
-   §Navigation-Timing's `PerformanceNavigationTiming`, which this build does not have, so there is nothing here
-   to write them onto and no member that could read them back.
-   STEP 4 IS A BARE FIRE — "fire an event named readystatechange at document", with no queue around it — and
-   the queue is at the CALLER: §13.2.7 "The end" step 9 runs "update the current document readiness to
-   'complete'" (step 9.1) and the `load` fire (step 9.5) inside ONE queued global task. That fire is event_target_fire_run's shape
-   and not this one, and it stays this one only because document_done_stage below is a plain C body the
-   scheduler drives rather than a step machine — which is the same statement as saying the readiness
-   transition cannot suspend on a `readystatechange` listener, and it is what has to change. */
+/* HTML §3.1.5's update the current document readiness, all four steps. Step 1 ("if document's current document
+   readiness equals readinessValue, then return") stops a `readystatechange` for an unchanged readiness, and makes
+   step 4 reachable only where there is a document (a realm's record starts at "loading" before its Document
+   exists). Step 4 fires `readystatechange` at the document (§3.1.1 declares `onreadystatechange`). Step 3's load
+   timing info is absent: its fields belong to Navigation Timing's `PerformanceNavigationTiming`, which this build
+   lacks.
+   Named residual. Not covered: step 4 is a bare fire, and §13.2.7 "The end" step 9 runs step 9.1's readiness update
+   and step 9.5's `load` fire in one queued task, so a `readystatechange` listener cannot suspend this transition.
+   Next diff builds: document_done_stage as a step machine, so the fire is event_target_fire_run's shape. How its
+   absence would show: a `readystatechange` listener that awaits or loops past a quantum. */
 static void document_set_ready(JSContext *ctx, int stage)
 {
     Document *d = doc_here(ctx);
     JSValue rec;
 
     DCHECK(stage >= 0 && stage <= 2, "a document readiness HTML does not define");
-    if (document_readiness(ctx) == stage) return;                                 /* STEP 1 */
+    if (document_readiness(ctx) == stage) return;                                 /* step 1 */
     rec = realm_value_get(ctx, g_ready_slot);
     DCHECK(JS_IsObject(rec), "a realm answered for its document readiness with no record");
-    JS_SetPropertyStr(ctx, rec, "stage", JS_NewInt32(ctx, stage));                /* STEP 2 */
+    JS_SetPropertyStr(ctx, rec, "stage", JS_NewInt32(ctx, stage));                /* step 2 */
     JS_FreeValue(ctx, rec);
     DCHECK(JS_IsObject(d->doc_obj),
            "a document's readiness moved before its `document` object existed — §3.1.5 step 4 fires "
            "`readystatechange` AT the document, so there would be no target for the event the page listens for");
-    /* NO TASK SOURCE: §3.1.5's step 4 is a BARE "fire an event named readystatechange at document", a
-       synchronous step of whichever algorithm moved the readiness — §13.2.7 "The end"'s own queued tasks
-       among them, which are the ones on the DOM manipulation task source. Nothing queues THIS fire, so it
-       states the positive no-source answer rather than borrowing its caller's. */
-    event_target_fire(ctx, d->doc_obj,                                            /* STEP 4 */
+    /* No task source: §3.1.5's step 4 is a bare "fire an event named readystatechange at document", a synchronous
+       step of whichever algorithm moved the readiness, so it states the positive no-source answer. */
+    event_target_fire(ctx, d->doc_obj,                                            /* step 4 */
                       event_new(ctx, "readystatechange", /*bubbles*/ false, /*cancelable*/ false),
                       JS_UNDEFINED, TASK_SOURCE_NOT_A_TASK);
 }
 
-/* HTML §8.4.1 "Opening the input stream" step 18 — "Update the current document readiness of document to
-   'loading'" — as the ONE readiness transition another algorithm may ask for.
- *
- * IT IS A NAMED ENTRY AND NOT AN EXPORTED SETTER. Every other move of the readiness belongs to §13.2.7 "The
- * end" and is driven by the lifecycle below, so a general `document_set_readiness(ctx, stage)` would be a way
- * for any component to tell a page its document had finished loading; §8.4.1's step is the single case where a
- * Document that HAS finished goes back to loading, and it is the algorithm that re-opened the input stream
- * that says so. The `readystatechange` this fires is unobservable at its one call site — §8.4.1's own note
- * says why: step 10 erased every listener and handler that could have heard it. */
+/* HTML §8.4.1 "Opening the input stream" step 18, "Update the current document readiness of document to 'loading'",
+ * the one readiness transition another algorithm may ask for. A named entry, not a general setter: every other move
+ * belongs to §13.2.7 "The end" and the lifecycle below, and §8.4.1 is the single case where a finished Document goes
+ * back to loading. The `readystatechange` it fires is unobservable here, since §8.4.1 step 10 erased every listener
+ * and handler. */
 void document_set_readiness_loading(JSContext *ctx)
 {
     document_set_ready(ctx, 0);
@@ -2306,13 +2140,10 @@ static int document_readiness(JSContext *ctx)
     return r;
 }
 
-/* §3.1.5's readyState getter steps — "return this's current document readiness" — as a fact about ONE DOCUMENT,
-   which is what the member's RECEIVER names.
-   §3.1.5 states the default in the same paragraph: "Each Document has a current document readiness, a string,
-   initially 'complete'", and only a Document that the create-and-initialize algorithm produced is reset to
-   "loading" before any script can see it. In this engine that algorithm is document_install, and the document
-   it installs is the realm's ACTIVE one — so a createHTMLDocument, a DOMParser parse or an XHR responseXML
-   answers "complete", which is both the standard's default and the truth about a tree that has no parser. */
+/* §3.1.5's readyState getter steps, "return this's current document readiness", for the receiver's document.
+   §3.1.5: "Each Document has a current document readiness, a string, initially 'complete'"; only a Document the
+   create-and-initialize algorithm produced (document_install, the realm's active one) is reset to "loading", so a
+   createHTMLDocument, a DOMParser parse or an XHR responseXML answers "complete". */
 const char *document_readiness_of(const lxb_dom_node_t *doc)
 {
     JSContext *realm = document_active_realm_of(doc);
@@ -2320,18 +2151,12 @@ const char *document_readiness_of(const lxb_dom_node_t *doc)
     return realm ? DOC_READINESS[document_readiness(realm)] : DOC_READINESS[2];
 }
 
-/* HTML §7.5.9's PAGE SHOWING, which is a Document's and lives where its readiness does.
- *
- * It is the boolean "used to ensure that scripts receive pageshow and pagehide events in a consistent manner
- * (e.g., that they never receive two pagehide events in a row without an intervening pageshow, or vice
- * versa)" — so it is not bookkeeping beside those two fires, it is the CONDITION on both of them: §13.2.7's
- * "the end" asserts it is false and sets it true before firing `pageshow`, and §7.5.9 step 9 fires `pagehide`
- * only if it is true, setting it false first.
- *
- * IT LIVES IN THIS REALM'S OWN BASELINE RECORD, the shape the readiness above and §6.2's visibility state
- * already use, and for the same two reasons: the record is unreachable from the page, so nothing but this
- * component can write the flag; and the write is an ordinary property write, so the heap COW captures it and
- * one arm of a fork can unload its document without touching its sibling's. */
+/* HTML §7.5.9's page showing, a Document's, kept where its readiness is. It is the boolean "used to ensure that
+ * scripts receive pageshow and pagehide events in a consistent manner (e.g., that they never receive two pagehide
+ * events in a row without an intervening pageshow, or vice versa)", the condition on both fires: §13.2.7 sets it
+ * true before `pageshow`, and §7.5.9 step 9 fires `pagehide` only if it is true, clearing it first. It lives in this
+ * realm's baseline record, as the readiness and §6.2's visibility state do: unreachable from the page, and an
+ * ordinary property write the heap COW captures, so one arm of a fork can unload its document alone. */
 static JSClassID g_showing_slot = JS_INVALID_CLASS_ID;
 
 bool document_page_showing(JSContext *ctx)
@@ -2356,20 +2181,16 @@ void document_page_showing_set(JSContext *ctx, bool showing)
     JS_FreeValue(ctx, rec);
 }
 
-/* HTML §8.1.7.3 "update the rendering" step 3's RENDER-BLOCKED clause, answered by the component that owns the
-   document's load lifecycle rather than guessed by the one that runs the steps.
- *
- * A Document is render-blocked while it has render-blocking elements, and the parser is what removes the last
- * of them: a browser does not present a document, and does not reveal it, until its parse has finished. In
- * this engine the tree is one Lexbor parse and the parser's completion IS stage 0 — the moment the readiness
- * leaves "loading" and DOMContentLoaded fires. It is what puts the first rendering opportunity (and therefore
- * `pagereveal` and the first animation frame) AFTER DOMContentLoaded, which is where a browser puts it. */
+/* HTML §8.1.7.3 "update the rendering" step 3's render-blocked clause, answered by the component that owns the load
+ * lifecycle. A Document is render-blocked while it has render-blocking elements, and the parser removes the last of
+ * them; here the parse's completion is stage 0, when the readiness leaves "loading" and DOMContentLoaded fires, so
+ * the first rendering opportunity (and `pagereveal` and the first animation frame) comes after DOMContentLoaded. */
 bool document_render_blocked(JSContext *ctx)
 {
     return document_readiness(ctx) == 0;
 }
 
-/* HTML §7.5.8 "Finishing the loading process" — "to COMPLETELY FINISH LOADING a Document document":
+/* HTML §7.5.8 "Finishing the loading process": "to completely finish loading a Document document":
  *
  *   1. Assert: document's browsing context is non-null.
  *   2. Set document's completely loaded time to the current time.
@@ -2379,34 +2200,15 @@ bool document_render_blocked(JSContext *ctx)
  *   5. Otherwise, if container is non-null, then queue an element task on the DOM manipulation task source
  *      given container to fire an event named `load` at container.
  *
- * THIS IS THE ONLY PLACE AN IFRAME'S `load` COMES FROM, and until it existed there was no place at all: the
- * engine fired `load` at the child's WINDOW (step 9.5 above) and nothing whatever at the CONTAINER, so
- * `frame.onload` was a handler that could not run and `frame.addEventListener('load', …)` was a listener
- * nothing dispatched to. Every corpus test that appends a frame and waits for it — which is how a test gets a
- * second document to ask questions of — waited for ever and reported a timeout, in an area whose failures are
- * then about a frame tree nobody ever finished building.
- *
- * STEP 2 IS NOT HERE BECAUSE NOTHING IN THIS TREE ASKS IT. A "completely loaded time" is read by exactly one
- * algorithm, §7.2.4's location-object navigate ("if location's relevant Document is not yet completely
- * loaded … set historyHandling to 'replace'"), and core/frame/location.c answers that from the session
- * history's own initial-about:blank test rather than from a clock. Writing a timestamp here that no reader
- * consults is the mirror of a defaulted read: a field with a producer and no consumer, indistinguishable at a
- * glance from a measurement.
- *
- * THIS IS THE LOAD EVENT STEPS' CALLER FOR A DOCUMENT A NAVIGATION PRODUCED, AND ONLY FOR ONE. §4.8.5's other
- * caller — "process the iframe attributes" with initialInsertion true, over a url that matches about:blank —
- * is built, in core/html/html_iframe.c, and the two do not overlap: the arm inside this function reads the
- * navigable's §7.4.4 "is initial about:blank" and returns, so a frame gets its `load` from exactly one of
- * them. A note here used to argue the opposite, that this path COVERED the initial-insertion case and building
- * that one would fire `load` twice. The premise was that the initial about:blank reaches this algorithm
- * later, through document_lifecycle_step — and it does not, because that walk lists only MATERIALIZED
- * navigables and nothing materializes a srcless frame until a read reaches through it, which is what the
- * missing `load` was carrying. The argument was self-sealing rather than wrong-in-detail: the case it claimed
- * to cover was the one case it could never see.
- *
- * `ctx` IS THE CHILD'S REALM — the document whose loading finished — and the fire must be enqueued in the
- * CONTAINER'S. §7.5.8's "element task" has the element's node document's relevant global for its global, which
- * is the parent's, and the parent is where the listener was registered. */
+ * This is where an iframe's `load` comes from (`frame.onload`, `frame.addEventListener('load', …)`). */
+/* Step 2 is not here, because nothing reads it: a completely loaded time is read only by §7.2.4's location-object
+ * navigate ("if location's relevant Document is not yet completely loaded … set historyHandling to 'replace'"),
+ * which core/frame/location.c answers from the session history's initial-about:blank test.
+ * This is the load event steps' caller for a document a navigation produced, and only that. §4.8.5's other caller,
+ * "process the iframe attributes" with initialInsertion true over an about:blank url, is core/html/html_iframe.c's;
+ * the arm below reads §7.4.4's "is initial about:blank" and returns, so a frame gets its `load` from exactly one.
+ * `ctx` is the child's realm, and the fire is enqueued in the container's: §7.5.8's element task has the element's
+ * node document's relevant global, the parent's, where the listener was registered. */
 static void completely_finish_loading(JSContext *ctx)
 {
     JSValueConst proxy = doc_here(ctx)->proxy;
@@ -2414,9 +2216,9 @@ static void completely_finish_loading(JSContext *ctx)
     lxb_dom_node_t *cn;
     JSContext *cctx;
 
-    /* STEP 1. Step 9.2 above already returned for a destroyed navigable, so what is left is a Document with no
-       navigable at all — §4.5's createDocument, a DOMParser's — and one of those never reaches §13.2.7's end
-       because document_lifecycle_step walks navigables. */
+    /* Step 1. Step 9.2 already returned for a destroyed navigable, so a Document here with no navigable would be
+       §4.5's createDocument or a DOMParser's, which never reach §13.2.7's end because document_lifecycle_step walks
+       navigables. */
     DCHECK(window_proxy_is(proxy),
            "§7.5.8's completely-finish-loading was reached by a Document with no navigable — §13.2.7 \"The "
            "end\" runs for the documents of this agent's navigables, so a Document that has none has no "
@@ -2424,41 +2226,27 @@ static void completely_finish_loading(JSContext *ctx)
     container = window_proxy_container(ctx, proxy);                                          /* step 3 */
     cn = node_of(container);
     if (!cn) { JS_FreeValue(ctx, container); return; }   /* a top-level traversable: step 5's "non-null" fails */
-    /* STEP 3's OTHER ANSWER, WHICH THIS ENGINE HAS TO STATE BECAUSE ITS CONTAINER LINK IS NEVER NULL. §7.5.8
-       "Finishing the loading process" reads the container at step 3 and notes that it "will be null in the case
-       where document is the initial about:blank Document in a frame or iframe, since at the point of browsing
-       context creation which calls this algorithm, the container relationship has not yet been established …
-       The consequence of this is that the following steps do nothing, i.e., we do not fire an asynchronous
-       load event on the container element for such cases. Instead, a synchronous load event is fired in a
-       special initial-insertion case when processing the iframe attributes."
-       §7.3.1.3's create is handed the container element in this engine and writes the link as one of its own
-       steps, so the null the standard relies on never arrives and the SAME FACT has to be asked directly:
-       window_proxy_ever_navigated is §7.4.4's "document's IS INITIAL about:blank" read off the navigable, and
-       false here is exactly the case the note is about. The comment that stood in this block claimed the
-       opposite — that because the container is found early, this general path COVERS the initial-insertion
-       case and building it would fire `load` twice. It does not cover it and could not: navigable_tree_order
-       lists only MATERIALIZED navigables, and a navigable holding its initial about:blank is materialized by
-       the first read that reaches THROUGH it — which for a srcless `<iframe>` is the `contentWindow` a page
-       touches inside the very `onload` this walk was supposed to deliver. That is a DEADLOCK and not a delay,
-       and it is why the claim could stand: the walk's silence and a frame that is merely slow look the same.
-       §4.8.5's branch is built (core/html/html_iframe.c) and this is its other half: it fires
-       once, at the insertion, and this arm is what keeps a later materialization from firing a second one. */
+    /* Step 3's other answer, stated because this engine's container link is never null. §7.5.8 notes the container
+       "will be null in the case where document is the initial about:blank Document in a frame or iframe, since at
+       the point of browsing context creation which calls this algorithm, the container relationship has not yet
+       been established … Instead, a synchronous load event is fired in a special initial-insertion case when
+       processing the iframe attributes." §7.3.1.3's create here writes the link as one of its own steps, so the fact
+       is asked directly: window_proxy_ever_navigated is §7.4.4's "is initial about:blank", and false is that case.
+       §4.8.5's branch (core/html/html_iframe.c) fires once at the insertion, and this arm keeps a later
+       materialization (navigable_tree_order lists only materialized navigables) from firing a second. */
     if (!window_proxy_ever_navigated(proxy)) { JS_FreeValue(ctx, container); return; }
-    /* STEP 4's BRANCH IS THE ONLY ONE THIS ENGINE CAN REACH, and step 5's is an ASSERT rather than three
-       written-but-unreachable lines. A content navigable is created for `<iframe>` and for nothing else here
-       (html_iframe.c is the only component that creates one from an element), so a container that is not an
-       `<iframe>` cannot exist — and the day §4.8.6's `<embed>` or §4.8.7's `<object>` gets one, this is the
-       site that must learn step 5, which is what makes the crash the instruction rather than a silent widening
-       of step 4 onto an element whose load event is not the iframe load event steps. */
+    /* Step 4's branch is the only one reachable here, and step 5 is an assert: only html_iframe.c creates a content
+       navigable from an element, so a non-`<iframe>` container cannot exist. When §4.8.6's `<embed>` or §4.8.7's
+       `<object>` gets one, this site must learn step 5 (fire `load` at the container), which is not the iframe load
+       event steps. */
     DCHECK(iframe_element_is(cn),
            "§7.5.8 step 5 — a navigable's container that is not an `<iframe>` finished loading. Content "
            "navigables belong to `<iframe>` alone in this engine, so building §4.8.6's `<embed>` or §4.8.7's "
            "`<object>` as navigable containers means teaching this site step 5: queue an element task on the "
            "DOM manipulation task source given container to FIRE `load` AT IT, which is not the same algorithm "
            "as §4.8.5's iframe load event steps");
-    /* THE CONTAINER'S REALM, asked of the container's own document. Two same-origin documents are one agent
-       and one heap, so this is a pointer and not a message; a CROSS-ORIGIN container is a peer's element and
-       is not in this heap to be found, which is the same boundary window_proxy_container is read across. */
+    /* The container's realm, asked of the container's own document: two same-origin documents are one agent and one
+       heap, so this is a pointer; a cross-origin container is a peer's element and not in this heap. */
     cctx = document_realm_of(cn);
     DCHECK(cctx != NULL,
            "§7.5.8 reached a container element whose document has no realm — an element that presents a "
@@ -2472,54 +2260,40 @@ static int document_done_stage(JSContext *ctx, int stage)
 {
     if (stage == 0) {
         document_set_ready(ctx, 1);
-        /* §3.1.1: DOMContentLoaded is fired AT THE DOCUMENT and BUBBLES, which is how a `window.onload`-style
-           listener registered on window hears it — the propagation path derives that from the document's
-           ancestors now rather than the caller naming the window. It is not cancelable. */
+        /* §3.1.1: DOMContentLoaded is fired at the document and bubbles, so a listener on window hears it through
+           the document's ancestors. It is not cancelable. */
         event_target_fire(ctx, doc_here(ctx)->doc_obj,
                           event_new(ctx, "DOMContentLoaded", /*bubbles*/ true, /*cancelable*/ false),
                           JS_UNDEFINED, TASK_SOURCE_DOM_MANIPULATION);   /* §13.2.7 */
         return 1;
     }
     DCHECK(stage == 1, "the document lifecycle was asked for a stage it does not have");
-    /* §13.2.7 "The end", STEP 9 — the second of its two queued global tasks. Its sub-steps are in this order
-       and each of them is observable.
-       THE NUMBER WAS 7 HERE AND IN THREE OTHER PLACES, AND 7 IS A DIFFERENT STEP: step 7 is "Spin the event
-       loop until the set of scripts that will execute as soon as possible and the list of scripts that will
-       execute in order as soon as possible are empty", which is a GATE on this task and not this task. Step 8
-       is the other gate ("Spin the event loop until there is nothing that delays the load event in the
-       Document") — so a reader sent to "step 7" to find the `load` fire arrived at the ASAP-script wait, which
-       core/loader/script_type.h already cites correctly, and the two halves of §13.2.7 read as one. */
+    /* §13.2.7 "The end", step 9: the second of its two queued global tasks, whose sub-steps are each observable and
+       in this order. Steps 7 (the ASAP-script wait, cited by core/loader/script_type.h) and 8 (the load-delay wait)
+       are gates on this task. */
     document_set_ready(ctx, 2);                                                  /* step 9.1 */
-    /* STEP 9.2: "If the Document object's browsing context is null, then abort these steps." A document whose
-       navigable was destroyed under it — a frame removed, a traversable closed — must not fire `load` or
-       `pageshow` at a Window whose browsing context is gone, and §7.5.9 destroys documents while this walk is
-       still running. It is the destruction that is asked for and not `closed`: a traversable that is merely
-       CLOSING still has its browsing context, and its documents are still finishing. */
+    /* Step 9.2: "If the Document object's browsing context is null, then abort these steps." A document whose
+       navigable was destroyed (a frame removed, a traversable closed) fires no `load` or `pageshow`, and §7.5.9
+       destroys documents while this walk runs. Destruction is asked, not `closed`: a closing traversable still has
+       its browsing context. */
     {
         JSValueConst proxy = doc_here(ctx)->proxy;
         if (window_proxy_is(proxy) && window_proxy_destroyed(proxy))
             return 1;
     }
-    /* STEP 9.5: `load` at the WINDOW — it does not bubble (there is nothing above it to bubble to) and it is
-       fired WITH THE LEGACY TARGET OVERRIDE FLAG SET, so a listener's `e.target` is the DOCUMENT. */
+    /* Step 9.5: `load` at the window. It does not bubble, and it is fired with the legacy target override flag set,
+       so a listener's `e.target` is the document. */
     event_target_fire(ctx, doc_here(ctx)->win_obj,
                       event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false),
                       doc_here(ctx)->doc_obj, TASK_SOURCE_DOM_MANIPULATION);   /* §13.2.7 */
-    /* STEPS 9.9-9.11: the document is now SHOWING, and `pageshow` says so with `persisted` false — this
-       document was loaded rather than restored from a session history entry. §7.5.9's `pagehide` is the other
-       end of that pair and fires only because this ran. */
-    /* STEPS 9.9-9.11 ARE A TRANSITION, AND §8.4.1 IS WHY THAT SENTENCE HAD TO BE WRITTEN DOWN. What stood here
-       was §13.2.7 step 9.9's assert, taken literally — "Assert: Document's page showing is false" — with the
-       reasoning that a document reaching the end twice would fire two pageshows with no pagehide between them.
-       THE INVARIANT IS RIGHT AND THE ASSERT IS NOT, because reaching the end twice is a state the standard
-       itself creates: §8.4.1 "Opening the input stream" replaces a Document IN PLACE, mints a new parser and
-       sets the readiness back to "loading", so `document.open(); document.write(…); document.close()` runs
-       §13.2.7 again on a Document that is already showing — and §8.4.1 never unloads it, so nothing has fired
-       `pagehide`. §7.5.9 "Unloading documents" is the only algorithm that clears the flag, and it is the one
-       the pair is defined against. So the flag stays the CONDITION on 9.10 and 9.11 (which is what §7.5.9's
-       own `pagehide` does with it) rather than an assertion about how many times an end can be reached. The
-       `load` fire above is deliberately NOT under this test: a browser fires `load` again after a
-       document.close(), which is what an `iframe`'s `onload` after a written document depends on. */
+    /* Steps 9.9-9.11: the document is showing, and `pageshow` says so with `persisted` false (loaded, not restored);
+       §7.5.9's `pagehide` is the other end of the pair. They are a transition conditioned on the flag rather than
+       step 9.9's literal "Assert: Document's page showing is false", because the standard reaches the end twice:
+       §8.4.1 "Opening the input stream" replaces a Document in place and resets the readiness to "loading", so
+       `document.open(); document.write(…); document.close()` runs §13.2.7 again on a showing Document that nothing
+       unloaded (§7.5.9 is the only algorithm that clears the flag). The `load` fire above is not under the test: a
+       browser fires `load` again after document.close(), which an `iframe`'s `onload` after a written document
+       relies on. */
     if (!document_page_showing(ctx)) {
         document_page_showing_set(ctx, true);
         event_target_fire(ctx, doc_here(ctx)->win_obj,
@@ -2530,48 +2304,22 @@ static int document_done_stage(JSContext *ctx, int stage)
     return 1;
 }
 
-/* HTML §13.2.7 "The end" STEP 8 — "Spin the event loop until there is nothing that DELAYS THE LOAD EVENT in
- * the Document" — as a PREDICATE over this agent's navigable tree, asked of one document.
- *
- * IT IS A GATE THE ENGINE DID NOT HAVE, AND ITS ABSENCE WAS BEING COVERED BY THE SCHEDULER'S QUIESCENCE. The
- * `load` stage below used to run whenever the walk found a document at "interactive", and the only thing that
- * had ever kept it in order was that solver/engine.c would not ask for a lifecycle stage until the running
- * flow had NOTHING left — no program, no job, no reply the host still owed. That is not step 8: quiescence is
- * both too strong and too weak, and it is wrong in the two directions separately.
- *   TOO STRONG, which is the defect a page feels: HTML makes NOTHING about a `fetch()` or a dynamic `import()`
- *     delay the load event, and a flow parked on one is not quiescent — so a bundle with one request still in
- *     the air at the end of its parse never reached `load` at all, and every listener behind it (an SPA
- *     bootstrap, a router, a lazy-loader, an analytics beacon) never ran.
- *   TOO WEAK, which is what this predicate is for: quiescence is a fact about ONE FLOW and the load event is a
- *     fact about ONE DOCUMENT, so nothing in it says a parent may not finish ahead of its own frames.
- *
- * THE SOURCE BUILT HERE IS THE NAVIGABLE CONTAINER'S, which §4.8.5 "The iframe element" states for every element
- * type that POTENTIALLY DELAYS THE LOAD EVENT (`iframe`, `embed`, `object`): "the user agent must delay the
- * load event of element's node document if element's content navigable is non-null and any of the following
- * are true: element's content navigable's active document is not ready for post-load tasks; element's content
+/* HTML §13.2.7 "The end" step 8, "Spin the event loop until there is nothing that delays the load event in the
+ * Document", as a predicate over this agent's navigable tree, asked of one document. The scheduler's quiescence is
+ * not this gate: it is a fact about one flow (so a parent could finish ahead of its frames), and HTML makes nothing
+ * about a `fetch()` or dynamic `import()` delay the load event.
+ * The source built here is the navigable container's: §4.8.5 "The iframe element" says "the user agent must delay the
+ * load event of element's node document if element's content navigable is non-null and any of the following are
+ * true: element's content navigable's active document is not ready for post-load tasks; element's content
  * navigable's is delaying load events is true; or anything is delaying the load event of element's content
- * navigable's active document."
- * ALL THREE BULLETS ARE ONE QUESTION HERE, and that is the tree's doing rather than a simplification. "Ready
- * for post-load tasks" is §13.2.7's own step 11, which follows step 9.1's readiness "complete" with nothing
- * observable between them — so readiness < 2 IS the first bullet. And the walk below is over the WHOLE
- * subtree, not over one generation, so a grandchild that is still loading answers the third bullet by being in
- * the same list. Asked of the CONTAINER relation (window_proxy_parent_navigable) rather than of the element,
- * because that relation is what §7.3.1.3 writes and what §7.3.1.6 severs — an `<iframe>` the running flow has
- * detached is not this document's delay any more, and the navigable's own parent link is where that shows.
- *
- * WHAT IT DOES NOT ANSWER, AND WHERE THAT IS ANSWERED INSTEAD. navigable_tree_order lists only the navigables
- * this instance has MATERIALIZED and only the LOCAL ones, so two kinds of child are invisible to this walk:
- *   - A CHILD WHOSE DOCUMENT IS STILL BEING FETCHED has no realm yet. It is covered, but by the SCHEDULER and
- *     not here: §7.4 step 14's load is a job whose fetch parks as a synchronous host request
- *     (solver/engine.c's engine_host_request pushes FLOW_PENDING_HOSTREQ), which makes flow_blocked true, and
- *     the arm that asks for a lifecycle stage will not ask while the flow is blocked. So the interlock exists
- *     — it is just one layer up, and it is stated in both places rather than assumed in either.
- *   - A CROSS-ORIGIN CHILD IS IN ANOTHER WASM INSTANCE and is filtered out as REMOTE. Its delay is a fact this
- *     instance cannot compute alone: §4.8.5 "The iframe element"'s three bullets are all questions about the child's
- *     ACTIVE DOCUMENT, which lives in the peer. It is the cross-instance read §Security describes, and until
- *     that read exists a parent whose only unfinished frame is cross-origin fires `load` EARLY. That is a hole
- *     with a name and an owner, not a defaulted answer.
- * The remaining sources of step 8 are per-ELEMENT flags this engine keeps no record of — see the call site. */
+ * navigable's active document." Readiness < 2 is the first bullet (§13.2.7 step 11 follows step 9.1 with nothing
+ * observable between), and the walk covers the whole subtree, so a loading grandchild answers the third. It asks the
+ * container relation (window_proxy_parent_navigable), which §7.3.1.6 severs when a flow detaches an `<iframe>`. */
+/* navigable_tree_order lists only materialized local navigables. A child whose document is still being fetched is
+ * held by the scheduler instead: §7.4 step 14's fetch parks as a synchronous host request (FLOW_PENDING_HOSTREQ),
+ * so flow_blocked is true and no lifecycle stage is asked. A cross-origin child is in another instance and is
+ * skipped, so a parent whose only unfinished frame is cross-origin fires `load` early until the cross-instance read
+ * §Security describes exists. Per-element sources are named at the call site. */
 static bool document_load_event_delayed(JSContext *ctx, JSValueConst docs, uint32_t n, JSValueConst self)
 {
     uint32_t j;
@@ -2582,10 +2330,9 @@ static bool document_load_event_delayed(JSContext *ctx, JSValueConst docs, uint3
         bool below = false;
 
         if (JS_IsSameValue(ctx, other, self)) { JS_FreeValue(ctx, other); continue; }
-        /* Is `self` an ANCESTOR of `other`? Walk the navigable's containing-navigable chain, which ends at
-           JS_UNDEFINED for a top-level traversable — so a document in another tree of this agent (an auxiliary
-           navigable a `window.open()` created) terminates without ever matching, which is right: a popup is
-           nobody's navigable container and delays nobody's load event. */
+        /* Is `self` an ancestor of `other`? The containing-navigable chain ends at JS_UNDEFINED for a top-level
+           traversable, so a document in another tree of this agent (an auxiliary navigable from `window.open()`)
+           never matches: a popup delays nobody's load event. */
         up = window_proxy_parent_navigable(ctx, other);
         while (!JS_IsUndefined(up) && !JS_IsNull(up)) {
             JSValue next;
@@ -2604,39 +2351,19 @@ static bool document_load_event_delayed(JSContext *ctx, JSValueConst docs, uint3
     return false;
 }
 
-/* THE LOAD LIFECYCLE IS PER DOCUMENT, and it was per FLOW — one counter, for one document, driven with the
- * ROOT realm's ctx. That is not a small mismatch: HTML gives every Document its own readiness and its own
- * DOMContentLoaded, so a CHILD navigable's document could never leave "loading". It never fired
- * DOMContentLoaded, never fired `load`, and — the moment §8.1.7.3 step 3's render-blocked clause existed — was
- * removed from every rendering opportunity for ever. A child document simply never ran the half of its code
- * that is behind those events, and nothing anywhere said so; wpt's
- * animation-frames/callback-cross-realm-report-exception is one test that says it out loud.
- *
- * SO THE STAGE IS READ FROM THE DOCUMENT, and the flow's counter is DELETED. The readiness is already
- * per-document and per-flow (an own slot on each realm's Document, isolated by the COW delta), which is
- * exactly what the counter was trying to be and could not be, because one integer cannot hold N documents.
- *
- * THE ORDER IS THE SPEC'S, and it is two passes rather than one. Every document's DOMContentLoaded comes
- * before any document's `load` — a parent's parse finishes while its frames are still loading — and a CHILD's
- * `load` fires before its PARENT's, because a parent's load waits for its subframes. Tree order gives the
- * first; the REVERSE of tree order gives the second, since a container precedes what it contains.
- * THE REVERSE ORDER IS ONLY THE ORDER, NOT THE WAIT, and reading it as both was the gap document_load_event_
- * delayed above now fills: reversing the walk decides which of two documents that are BOTH ready goes first,
- * and says nothing whatever about a parent that is ready while its child is not. §13.2.7 step 8 is the wait,
- * and it is asked per document in pass two.
- *
- * ONE DOCUMENT PER CALL, then return, because this is a work item on the one frontier like everything else the
- * scheduler asks for — each fire queues listener tasks the loop picks up before the next document's stage.
- * Returns 1 when it advanced one, 0 when every document of this agent is complete. */
-/* §13.2.7 "The end"'s OWN PREMISE, asked of one document: "Once the user agent stops parsing the document, the
- * user agent must run the following steps." The readiness alone used to stand for it, and it stopped standing
- * for it the moment §8.4.1 "Opening the input stream" existed: those steps set the readiness back to "loading"
- * and open an input stream that only §8.4.2's `close()` ends, so a `document.open()` with no close would have
- * had this walk fire DOMContentLoaded and `load` on a document whose parse had not begun to finish — which a
- * browser never does, and which would then have fired them a second time when the close finally came.
- * §13.2.3.5's insertion point IS "the parse has not ended" (§13.2.7's step 2 is what makes it undefined), so
- * this asks the parser rather than inferring from the readiness. A realm with no Document record cannot be
- * mid-parse: there is no tree for a parser to be building. */
+/* The load lifecycle is per document: the stage is read from each realm's Document (its readiness is an own slot,
+ * isolated by the COW delta), so a child navigable's document gets its own DOMContentLoaded and `load` and leaves
+ * §8.1.7.3 step 3's render-blocked state. The order is the spec's, in two passes: every document's DOMContentLoaded
+ * precedes any `load` (a parent's parse finishes while its frames load), in tree order, and a child's `load`
+ * precedes its parent's, in reverse tree order. The reverse order decides which of two ready documents goes first;
+ * §13.2.7 step 8 (document_load_event_delayed) is the wait, asked per document in pass two. One document per call,
+ * because this is a work item on the one frontier and each fire queues listener tasks the loop runs before the next
+ * stage. Returns 1 when it advanced one, 0 when every document of this agent is complete. */
+/* §13.2.7 "The end"'s premise, asked of one document: "Once the user agent stops parsing the document, the user
+ * agent must run the following steps." The readiness does not answer it: §8.4.1 "Opening the input stream" sets the
+ * readiness back to "loading" and opens an input stream only §8.4.2's `close()` ends. §13.2.3.5's insertion point
+ * is "the parse has not ended" (§13.2.7 step 2 makes it undefined), so this asks the parser. A realm with no Document
+ * record cannot be mid-parse. */
 static bool document_parse_ended(JSContext *realm)
 {
     const Document *d = doc_of(realm);
@@ -2672,21 +2399,16 @@ int document_lifecycle_step(JSContext *ctx)
     for (i = n; i > 0 && !did; i--) {          /* pass two: `load`, innermost first */
         JSValue proxy = JS_GetPropertyUint32(ctx, docs, i - 1);
         JSContext *realm = window_proxy_realm(ctx, proxy);
-        /* §13.2.7 STEP 8 — the spin. The reverse walk is what puts a CHILD's `load` before its parent's when
-           both are ready at once; this is what holds the parent when the child is not ready YET, which the
-           order alone cannot express and which quiescence used to hide.
-           THE SOURCES THIS PREDICATE DOES NOT YET CARRY are `img` (§4.8.4.3.5 "Updating the image data": "When
-           delay load event is true, fetching the image must delay the load event of the element's node
-           document") and the media elements' §4.8.11.5 "Loading the media resource" delaying-the-load-event
-           flag. A `script` element's own flag is not among them: it is set only while the element is fetching,
-           and a fetching script is a member of one of the lists step 7 or step 5 waits for until it has run.
-           Each of the two is a per-ELEMENT flag with no record in this engine, so each is a document that may
-           reach `load` EARLY — the same shape this
-           whole gate exists to end, one element type down. They are not defaulted-to-false here and then
-           forgotten: the flag belongs to the element's own component, and the honest place for its absence to
-           crash is where that component would raise it, not in a `||` chain here that would have to guess at
-           the state of an element it does not own. */
-        /* STEP 7, the spin over the two as-soon-as-possible lists, asked before step 8's. */
+        /* §13.2.7 step 8, the spin: it holds a parent whose child is not ready yet, which the reverse order alone
+           cannot express. A `script` element's own delaying-the-load-event flag is not a source here: it is set
+           only while the element is fetching, and a fetching script is on one of the lists step 5 or step 7
+           waits for until it has run.
+           Named residual. Not covered: `img` (§4.8.4.3.5 "Updating the image data": "When delay load event is true,
+           fetching the image must delay the load event of the element's node document") and the media elements'
+           §4.8.11.5 "Loading the media resource" delaying-the-load-event flag. Next diff builds: each as a flag its
+           own element component raises and this predicate reads. How its absence would show: a document reaching
+           `load` before such an element finished. */
+        /* Step 7, the spin over the two as-soon-as-possible lists, asked before step 8's. */
         if (document_readiness(realm) == 1 && !engine_document_load_scripts_held(document_doc(realm)) &&
             !document_load_event_delayed(ctx, docs, n, proxy)) {
             document_done_stage(realm, 1);
@@ -2701,24 +2423,17 @@ int document_lifecycle_step(JSContext *ctx)
     return did;
 }
 
-/* §3.1.1's `location` — the LOCATION OBJECT OF THIS DOCUMENT'S RELEVANT GLOBAL. It was absent, and absent is
-   not a small gap here: `document.location.pathname` is how WPT's own /common/PrefixedPostMessage.js names a
-   message channel, so 63 subtests across html/browsers failed on a property of undefined without ever reaching
-   what they were testing. The IDL audit had it listed among Document's absent members the whole time.
-   IT IS THE GLOBAL'S, not a second Location: a document and its window are one browsing context and §3.1.1 says
-   "the Location object of this's relevant global object", so this reads the one location.c built for this realm
-   rather than building another that would compare unequal to it.
-   ASKED OF THE COMPONENT, not read off the global. `window.location` is §7.2.2's `[LegacyUnforgeable] readonly
-   attribute Location`, so it is an ACCESSOR, and a JS_GetPropertyStr that reaches a getter aborts — there is no
-   flow base under a C activation. The JS_IsUndefined arm that stood here went with it: it was the "a host
-   installed no Location at all" case, and a Location is a per-realm intrinsic now, so a realm without one is a
-   realm that declined the component and realm_value_get says so at the read instead of this answering null. */
+/* §3.1.1's `location`: "the Location object of this's relevant global object", the one location.c built for this
+   realm, not a second Location that would compare unequal to it (WPT's /common/PrefixedPostMessage.js names a
+   message channel from `document.location.pathname`). It is asked of the component, not read off the global:
+   `window.location` is §7.2.2's `[LegacyUnforgeable] readonly attribute Location`, an accessor, and a
+   JS_GetPropertyStr reaching a getter aborts with no flow base under a C activation. A Location is a per-realm
+   intrinsic, so a realm without one declined the component, which realm_value_get reports at the read. */
 static JSValue js_doc_location(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)magic;
-    /* §3.1.1: null when this document is not FULLY ACTIVE — and a document §4.5 created has no browsing context
-       at all, so it can never be. It was the realm's `location` unconditionally, which handed a page an address
-       belonging to a different document the moment a second one existed. */
+    /* §3.1.1: null when this document is not fully active, and a document §4.5 created has no browsing context, so
+       it never is. */
     Document *d = doc_receiver(ctx, this_val);
 
     if (!d) return JS_EXCEPTION;
@@ -2737,10 +2452,9 @@ lxb_dom_node_t *document_document_element_of(const lxb_dom_node_t *doc)
     return lxb_dom_interface_node(lxb_dom_document_element(lxb_dom_interface_document((lxb_dom_node_t *)doc)));
 }
 
-/* §3.1.7's `body`, AS A LOOKUP ANOTHER COMPONENT CAN MAKE. HTML §6.6.6's `activeElement` ends in exactly these
-   two steps ("if candidate has a body element then return that body element; if candidate's document element
-   is non-null then return that document element"), and a second walk written there would be a second answer to a
-   question this file already answers — which is what made `document.body` a latched data property once. */
+/* §3.1.7's `body` as a lookup other components can make: HTML §6.6.6's `activeElement` ends in these two steps ("if
+   candidate has a body element then return that body element; if candidate's document element is non-null then
+   return that document element"), and a second walk there would be a second answer. */
 lxb_dom_node_t *document_body_of(const lxb_dom_node_t *doc)
 {
     if (!doc || doc->type != LXB_DOM_NODE_TYPE_DOCUMENT)
@@ -2759,9 +2473,8 @@ lxb_dom_node_t *document_target_element(JSContext *ctx)
     return NULL;
 }
 
-/* DOM §2.7's DEFAULT PASSIVE VALUE names four targets, and three of them are this file's definitions: the node
-   DOCUMENT itself, its document element, and its body. The fourth is the Window, which is not a node and is
-   answered where the registration is. It lives here so the two §3.1.1 lookups have one implementation. */
+/* DOM §2.7's default passive value names four targets, three of them this file's: the node document, its document
+   element and its body. The fourth, the Window, is not a node and is answered where the registration is. */
 bool document_is_passive_default_node(const lxb_dom_node_t *n)
 {
     lxb_dom_node_t *doc;
@@ -2774,9 +2487,9 @@ bool document_is_passive_default_node(const lxb_dom_node_t *n)
     return n == document_document_element_of(doc) || n == document_body_of(doc);
 }
 
-/* HTML's "the document's relevant global object", which §2.9's get the parent puts above a Document in the
-   event path. BORROWED, and JS_NULL for a document with no browsing context — one `createHTMLDocument` built,
-   whose events therefore stop at the document exactly as the spec says. */
+/* HTML's "the document's relevant global object", which §2.9's get the parent puts above a Document in the event
+   path. Borrowed, and JS_NULL for a document with no browsing context (one `createHTMLDocument` built), whose
+   events stop at the document as the spec says. */
 JSValueConst document_window_of(const lxb_dom_node_t *n)
 {
     Document *d = n ? doc_rec(n->owner_document) : NULL;
@@ -2794,7 +2507,7 @@ static JSValue js_doc_tree(JSContext *ctx, JSValueConst this_val, int magic)
 {
     lxb_dom_node_t *doc = node_of(this_val), *root;
 
-    /* WEB IDL §3.7.6 Attributes' brand check — a TypeError, not an assert; see doc_receiver. */
+    /* Web IDL §3.7.6 "Attributes"' brand check: a TypeError, not an assert (see doc_receiver). */
     if (!doc || doc->type != LXB_DOM_NODE_TYPE_DOCUMENT)
         return JS_ThrowTypeError(ctx, "this is not a Document");
     root = document_document_element_of(doc);
@@ -2802,8 +2515,8 @@ static JSValue js_doc_tree(JSContext *ctx, JSValueConst this_val, int magic)
     case 0:
         return node_wrap(ctx, root);
     case 1:
-        /* §3.1.7: "the first of the html element's children that is either a body element or a frameset
-           element, or null" — a frameset document has no body at all, which is the parser following the spec. */
+        /* §3.1.7: "the first of the html element's children that is either a body element or a frameset element, or
+           null"; a frameset document has no body. */
         return node_wrap(ctx, document_body_of(doc));
     case 2:
         /* §3.1.7: "the first head element that is a child of the html element". */
@@ -2815,8 +2528,7 @@ static JSValue js_doc_tree(JSContext *ctx, JSValueConst this_val, int magic)
     }
 }
 
-/* §4.5 / §3.1.1's PER-DOCUMENT STRINGS. Every one is a fact about the receiver rather than about the realm, and
-   every one was a data property latched at install and therefore absent on any other document.
+/* §4.5 / §3.1.1's per-document strings, each a fact about the receiver, not the realm.
    magic 0 = URL and documentURI (§4.5 defines the second as an alias of the first), 1 = contentType,
    2 = compatMode, 3 = characterSet / charset / inputEncoding. */
 static JSValue js_doc_strings(JSContext *ctx, JSValueConst this_val, int magic)
@@ -2825,12 +2537,10 @@ static JSValue js_doc_strings(JSContext *ctx, JSValueConst this_val, int magic)
 
     if (!d) return JS_EXCEPTION;
     switch (magic) {
-    /* §4.5: "The URL and documentURI getter steps are to return this's URL, SERIALIZED" — so this member IS
-       the address, and it answers with the address VALUE rather than with a fresh string of its bytes. That is
-       not a derivation and needs no operation name: the value's example IS that serialization, which
-       doc_addr_assert_agrees checks at both writers. A page that computed its own route and then branches on
-       `document.URL.includes("/admin")` therefore forks, exactly as the same branch through
-       `location.href` does — one address, one answer, and no member of it that quietly reads as concrete. */
+    /* §4.5: "The URL and documentURI getter steps are to return this's URL, serialized", so this member is the
+       address and answers with the address value, whose example is that serialization (doc_addr_assert_agrees
+       checks it at both writers). A page branching on `document.URL.includes("/admin")` over a computed route forks,
+       as the same branch through `location.href` does. */
     case 0:
         DCHECK(!JS_IsUndefined(d->addr.value),
                "§4.5's `URL` was read off a record holding no address value — doc_rec_new writes one at the "
@@ -2840,45 +2550,31 @@ static JSValue js_doc_strings(JSContext *ctx, JSValueConst this_val, int magic)
     case 1:
         return JS_NewString(ctx, d->content_type);
     case 2:
-        /* §4.5: "BackCompat" if the document is in quirks mode, "CSS1Compat" otherwise — the PARSER's answer,
-           read off the tree it built rather than assumed. */
+        /* §4.5: "BackCompat" if the document is in quirks mode, "CSS1Compat" otherwise: the parser's answer, read off
+           the tree it built. */
         return JS_NewString(ctx, d->dom->dom_document.compat_mode == LXB_DOM_DOCUMENT_CMODE_QUIRKS
                                      ? "BackCompat" : "CSS1Compat");
     default:
         DCHECK(magic == 3, "a Document string accessor was declared with a magic this table does not name");
-        /* DOM §4.5 Interface Document: "The characterSet, charset, and inputEncoding getter steps are to
-           return this's encoding's NAME." `charset` and `inputEncoding` are the spec's own historical aliases
-           of `characterSet` and are the SAME getter rather than three that could disagree.
-           THE NAME IS ENCODING §4.2 Names and labels' `Name` COLUMN, WHICH IS MIXED CASE ("UTF-8",
-           "Shift_JIS", "ISO-8859-8-I") — a DIFFERENT column from §7.1 Interface mixin TextDecoderCommon's
-           `encoding`, which is "this's encoding's name, ASCII lowercased". Asking for the wrong one of the two
-           is a defect that reads as a spelling choice: it reports `shift_jis` for a member every browser
-           answers `Shift_JIS` for. `encoding_name` is the one this line owes and `encoding_name_ascii_
-           lowercased` is the other; the registry keeps both because the standard has both.
-           THE VALUE IS THE RECORD'S, which is §3.1.1's per-Document state and not a constant at this line:
-           DOM §4.5 gives a document the utf-8 encoding "unless stated otherwise", and HTML §13.2.3.2
-           "Determining the character encoding" is what states otherwise (core/html/html_encoding_sniff.h),
-           writing it through document_set_encoding when a navigation's response is decoded. */
+        /* DOM §4.5 "Interface Document": "The characterSet, charset, and inputEncoding getter steps are to return
+           this's encoding's name." The aliases are the same getter. The name is Encoding §4.2 "Names and labels"'
+           `Name` column, mixed case ("UTF-8", "Shift_JIS", "ISO-8859-8-I"), not §7.1 "Interface mixin
+           TextDecoderCommon"'s `encoding`, which is "this's encoding's name, ASCII lowercased"; `encoding_name` is
+           this one and `encoding_name_ascii_lowercased` the other. The value is the record's, utf-8 "unless stated
+           otherwise", which HTML §13.2.3.2 "Determining the character encoding" states through
+           document_set_encoding (core/html/html_encoding_sniff.h). */
         return JS_NewString(ctx, encoding_name(d->encoding));
     }
 }
 
-/* §3.1.7 DOM tree accessors' `title` AND §3.2.6.4 The dir attribute's `dir`, AND WHY NEITHER IS A STORED STRING.
- *
- * `title` was one: install read `lxb_html_document_title` once and wrote the answer onto the `document` object.
- * That is wrong in all three of the ways §3.1.7's algorithm is an algorithm. It is wrong in TIME — the getter is
- * defined as a walk of the tree AS IT IS, so `document.querySelector("title").textContent = "x"` did not change
- * `document.title`, and neither did inserting a `<title>` into a document that had none. It is wrong in SUBJECT
- * — a value on one object cannot answer for a second Document. And it has no SETTER at all, so
- * `document.title = "x"` stored a string where the standard CREATES A TITLE ELEMENT AND APPENDS IT TO THE HEAD:
- * a page that sets its title and then reads its own `<head>` markup back saw markup it never got.
- *
- * `dir` is §3.2.6.4's reflection of the html element's `dir` content attribute LIMITED TO ONLY KNOWN VALUES,
- * which is what makes the getter a filter rather than a read: `<html dir=sideways>` answers the empty string,
- * and so does a document with no html element. */
+/* §3.1.7 "DOM tree accessors"' `title` and §3.2.6.4 "The dir attribute"'s `dir`, neither a stored string. §3.1.7's
+ * title getter is a walk of the tree as it is now (so `document.querySelector("title").textContent = "x"` and an
+ * inserted `<title>` change it), per document, and its setter creates a title element and appends it to the head.
+ * `dir` is §3.2.6.4's reflection of the html element's `dir` attribute limited to only known values, so the getter
+ * filters: `<html dir=sideways>`, and a document with no html element, answer the empty string. */
 
-/* The first ELEMENT of `root`'s subtree, in TREE ORDER, whose namespace is `ns` and whose qualified name is
-   `name` — the lookup "the title element of a document is the first title element in the document" is. */
+/* The first element of `root`'s subtree in tree order whose namespace is `ns` and qualified name `name`: the lookup
+   "the title element of a document is the first title element in the document" is. */
 static lxb_dom_node_t *doc_first_in_tree(lxb_dom_node_t *root, lxb_ns_id_t ns, const char *name)
 {
     lxb_dom_node_t *n;
@@ -2894,8 +2590,8 @@ static lxb_dom_node_t *doc_first_in_tree(lxb_dom_node_t *root, lxb_ns_id_t ns, c
     return NULL;
 }
 
-/* The same in ONE generation — §3.1.7's SVG arm says "the first SVG title element that is a CHILD OF the
-   document element", which is a different lookup and not a narrowing of the one above. */
+/* The same in one generation: §3.1.7's SVG arm is "the first SVG title element that is a child of the document
+   element", a different lookup, not a narrowing of the one above. */
 static lxb_dom_node_t *doc_first_child_ns(lxb_dom_node_t *parent, lxb_ns_id_t ns, const char *name)
 {
     lxb_dom_node_t *n;
@@ -2911,12 +2607,10 @@ static lxb_dom_node_t *doc_first_child_ns(lxb_dom_node_t *parent, lxb_ns_id_t ns
     return NULL;
 }
 
-/* §3.1.7's `title` GETTER, whose two remaining steps are DOM §4.11 Interface Text's CHILD TEXT CONTENT ("the concatenation of
-   the data of all the Text node CHILDREN of node, in tree order" — children, never descendants) and
-   Infra's STRIP AND COLLAPSE ASCII WHITESPACE (every run of TAB/LF/FF/CR/SPACE becomes one U+0020, and the
-   leading and trailing ones go). Both are done into one buffer because a collapse is a copy either way.
-   Returns an owned JS string; `el` may be NULL, which is the "or the empty string if the title element is null"
-   arm rather than a guard. */
+/* §3.1.7's `title` getter's remaining steps: DOM §4.11 "Interface Text"'s child text content ("the concatenation of
+   the data of all the Text node children of node, in tree order", children, not descendants) and Infra's strip and
+   collapse ASCII whitespace (each run of TAB/LF/FF/CR/SPACE becomes one U+0020, leading and trailing ones dropped),
+   into one buffer. Returns an owned JS string; `el` NULL is "or the empty string if the title element is null". */
 static JSValue doc_child_text_stripped(JSContext *ctx, lxb_dom_node_t *el)
 {
     lxb_dom_node_t *n;
@@ -2965,17 +2659,16 @@ static JSValue js_doc_html_members(JSContext *ctx, JSValueConst this_val, int ma
 
     if (!d) return JS_EXCEPTION;
     /* §7.2.2's defaultView getter steps: "If this's browsing context is null, then return null. Return this's
-       browsing context's WindowProxy object." A §4.5 Document has no browsing context and so no view — which is
-       the same `proxy` absence `location` answers null for, asked of the same field. */
+       browsing context's WindowProxy object." A §4.5 Document has no browsing context, the same `proxy` absence
+       `location` answers null for. */
     if (magic == DOC_DEFAULT_VIEW)
         return JS_IsUndefined(d->proxy) ? JS_NULL : JS_DupValue(ctx, d->proxy);
 
     doc = lxb_dom_interface_node(d->dom);
     de = document_document_element_of(doc);
     if (magic == DOC_DIR) {
-        /* §3.2.6.4: the html element's `dir`, LIMITED TO ONLY KNOWN VALUES — an unknown or absent one is the
-           empty string, and so is a document with no html element. The comparison is ASCII case-insensitive
-           because `dir` is an enumerated attribute, whose keywords are matched that way. */
+        /* §3.2.6.4: the html element's `dir` limited to only known values: unknown or absent is the empty string,
+           as is a document with no html element. Matched ASCII case-insensitively, as an enumerated attribute. */
         static const char *const KNOWN[3] = { "ltr", "rtl", "auto" };
         size_t vl = 0;
         const lxb_char_t *v;
@@ -2996,16 +2689,15 @@ static JSValue js_doc_html_members(JSContext *ctx, JSValueConst this_val, int ma
         return JS_NewStringLen(ctx, "", 0);
     }
     DCHECK(magic == DOC_TITLE, "a Document HTML-member getter was declared with a magic this table does not name");
-    /* §3.1.7 STEP 1: an SVG document element answers from the first SVG `title` that is a CHILD of it. */
+    /* §3.1.7 step 1: an SVG document element answers from the first SVG `title` that is a child of it. */
     if (de && de->ns == LXB_NS_SVG)
         return doc_child_text_stripped(ctx, doc_first_child_ns(de, LXB_NS_SVG, "title"));
-    /* STEP 2: otherwise the TITLE ELEMENT, which is the first `title` in the document in tree order. */
+    /* Step 2: otherwise the title element, the first `title` in the document in tree order. */
     return doc_child_text_stripped(ctx, doc_first_in_tree(doc, LXB_NS_HTML, "title"));
 }
 
-/* DOM §4.4's STRING REPLACE ALL, which is where both of §3.1.7's setter branches end: remove every child
-   through the per-flow chokepoint, then append ONE Text node — and only if the string is not empty, because
-   "string replace all" with the empty string adds no node and a page reading `firstChild` can tell. */
+/* DOM §4.4's string replace all, where both §3.1.7 setter branches end: remove every child through the per-flow
+   chokepoint, then append one Text node only if the string is not empty (a page reading `firstChild` can tell). */
 static void doc_string_replace_all(JSContext *ctx, lxb_dom_node_t *el, const char *s, size_t len)
 {
     lxb_dom_node_t *n, *next;
@@ -3024,9 +2716,8 @@ static void doc_string_replace_all(JSContext *ctx, lxb_dom_node_t *el, const cha
     }
 }
 
-/* §3.1.7's `title` SETTER and §3.2.6.4's `dir` SETTER — "the steps corresponding to the FIRST MATCHING
-   CONDITION", in the standard's own order, with its own "Otherwise: do nothing" as the last arm rather than as
-   a guard in front. magic 0 = title, 1 = dir. */
+/* §3.1.7's `title` setter and §3.2.6.4's `dir` setter: "the steps corresponding to the first matching condition", in
+   the standard's order, ending with its "Otherwise: do nothing". magic 0 = title, 1 = dir. */
 static JSValue js_doc_set_html_member(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     Document *d = doc_receiver(ctx, this_val);
@@ -3040,8 +2731,8 @@ static JSValue js_doc_set_html_member(JSContext *ctx, JSValueConst this_val, JSV
            "and running the page's toString from here is the drive-to-completion the flow machinery avoids");
     doc = lxb_dom_interface_node(d->dom);
     de = document_document_element_of(doc);
-    /* UNKNOWN EXTERNAL INPUT has no bytes: the SHAPE is what the tree carries, exactly as it is for
-       `textContent =`, so a title set from attacker input reads back as the source it came from. */
+    /* Unknown external input has no bytes: the shape is what the tree carries, as for `textContent =`, so a title
+       set from attacker input reads back as its source. */
     if (concolic_is(val)) {
         s = concolic_shape_c(val);
         if (!s) s = "";
@@ -3052,18 +2743,16 @@ static JSValue js_doc_set_html_member(JSContext *ctx, JSValueConst this_val, JSV
     }
 
     if (magic == DOC_DIR) {
-        /* §3.2.6.4: "If there is no such element, then the attribute must return the empty string and DO
-           NOTHING ON SETTING." A reflection limited to known values does not validate what it is given — the
-           filter is the getter's — so the content attribute takes the string as written. */
+        /* §3.2.6.4: "If there is no such element, then the attribute must return the empty string and do nothing on
+           setting." The filter is the getter's, so the content attribute takes the string as written. */
         if (de && de->ns == LXB_NS_HTML)
             dom_cow_set_attribute(lxb_dom_interface_element(de), "dir", s, len, JS_UNDEFINED);
         goto done;
     }
     DCHECK(magic == DOC_TITLE, "a Document string setter was declared with a magic this table does not name");
     if (de && de->ns == LXB_NS_SVG) {
-        /* The SVG arm: reuse the first SVG `title` child, or CREATE one and insert it as the document
-           element's FIRST child — the position is the standard's, and an append would put the title after the
-           graphics that a renderer reads it in front of. */
+        /* The SVG arm: reuse the first SVG `title` child, or create one as the document element's first child, the
+           standard's position (before the graphics a renderer reads it in front of). */
         el = doc_first_child_ns(de, LXB_NS_SVG, "title");
         if (!el) {
             lxb_dom_element_t *made = element_create_ns(lxb_dom_interface_document(d->dom),
@@ -3079,13 +2768,12 @@ static JSValue js_doc_set_html_member(JSContext *ctx, JSValueConst this_val, JSV
     if (de && de->ns == LXB_NS_HTML) {
         lxb_dom_node_t *head = lxb_dom_interface_node(lxb_html_document_head_element(lxb_html_interface_document(doc)));
         el = doc_first_in_tree(doc, LXB_NS_HTML, "title");
-        /* "If the title element is null AND the head element is null, then return" — a `<frameset>` document
-           is exactly that, and a title it is given is dropped rather than given a head to live in. */
+        /* "If the title element is null and the head element is null, then return": a `<frameset>` document, whose
+           title is dropped. */
         if (!el && !head) goto done;
         if (!el) {
-            /* THE HTML NAMESPACE, NAMED — this arm is already guarded by `de->ns == LXB_NS_HTML`, so the
-               `title` the setter creates belongs beside a document element that is in that namespace and
-               there is no question to ask. */
+            /* The HTML namespace, named: this arm is guarded by `de->ns == LXB_NS_HTML`, so the created `title`
+               belongs in that namespace. */
             lxb_dom_element_t *made = document_create_element_html(lxb_dom_interface_document(d->dom),
                                                                    "title", 5);
             el = lxb_dom_interface_node(made);
@@ -3094,18 +2782,17 @@ static JSValue js_doc_set_html_member(JSContext *ctx, JSValueConst this_val, JSV
         }
         doc_string_replace_all(ctx, el, s, len);
     }
-    /* "Otherwise: do nothing" — a document element in neither namespace, or none at all. */
+    /* "Otherwise: do nothing": a document element in neither namespace, or none. */
 done:
     if (!concolic_is(val)) JS_FreeCString(ctx, s);
     return JS_UNDEFINED;
 }
 
-/* §4.5's TWO TRAVERSER FACTORIES. `createNodeIterator(root, whatToShow, filter)` and `createTreeWalker(...)`
-   are the same five-line construction with a different object at the end, so they are one body with a magic —
-   and neither runs a line of the page's code once its arguments are converted, which is why they are plain C
-   and their MEMBERS are machines. The IDL is what does the work: `Node root` is an interface type (a non-Node
-   is a TypeError before step 1), `optional unsigned long whatToShow = 0xFFFFFFFF` is ToNumber and a modulo, and
-   `optional NodeFilter? filter = null` accepts a function OR any object and rejects a primitive.
+/* §4.5's two traverser factories, `createNodeIterator(root, whatToShow, filter)` and `createTreeWalker(...)`,
+   one body with a magic. Neither runs page code once its arguments are converted, so they are plain C and
+   their members are machines. The IDL does the work: `Node root` is an interface type, `optional unsigned long
+   whatToShow = 0xFFFFFFFF` is ToNumber and a modulo, and `optional NodeFilter? filter = null` accepts a function
+   or any object.
    magic 0 = createNodeIterator, 1 = createTreeWalker. */
 static JSValue js_doc_create_traverser(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                        int magic)
@@ -3118,8 +2805,8 @@ static JSValue js_doc_create_traverser(JSContext *ctx, JSValueConst this_val, in
                                   "reaching the body means idl_implementation_check did not run for it");
     if (!node_of(root))
         return JS_ThrowTypeError(ctx, "createNodeIterator/createTreeWalker requires a Node root");
-    /* The IDL's defaults. An absent optional argument arrives as undefined, which is what §3.6 means by
-       absent — so the default is applied here and nowhere else. */
+    /* The IDL's defaults: an absent optional argument arrives as undefined, which is §3.6's absence, so the default
+       is applied here. */
     if (argc > 1 && !JS_IsUndefined(argv[1]) && JS_ToUint32(ctx, &what, argv[1]) < 0)
         return JS_EXCEPTION;
     if (argc > 2 && !JS_IsUndefined(argv[2])) filter = argv[2];
