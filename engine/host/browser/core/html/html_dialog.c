@@ -578,6 +578,20 @@ static int64_t dialog_list_index_of(JSContext *ctx, JSValueConst list, JSValueCo
     return -1;
 }
 
+/* Infra's list "remove" of the item at `at`, over the engine's own array: the later items move down one and the
+   length drops by one. Not `Array.prototype.splice`, which is a page-replaceable property and a step machine
+   that only the interpreter's dispatch may drive. */
+static void dialog_list_remove_at(JSContext *ctx, JSValueConst list, uint32_t at)
+{
+    uint32_t n = dialog_list_len(ctx, list), i;
+
+    DCHECK(at < n, "an open dialogs list removal names an index past the list's end");
+    for (i = at; i + 1 < n; i++)
+        JS_SetPropertyUint32(ctx, list, i, JS_GetPropertyUint32(ctx, list, i + 1));
+    CHECK(JS_SetPropertyStr(ctx, list, "length", JS_NewUint32(ctx, n - 1)) >= 0,
+          "a Document's open dialogs list could not be shortened");
+}
+
 /* ---- §4.11.4's CLOSE WATCHER: set it, the setup steps, the cleanup steps, and the two DOM hooks that run them
  *
  * WHAT THIS CHAIN IS AND WHY IT IS NOT PART OF ANY METHOD. `showModal()`'s step 12 is "Assert: subject's close
@@ -672,18 +686,7 @@ static void dialog_cleanup_steps(JSContext *ctx, JSValueConst subject)
         if (!JS_IsUndefined(list)) {
             int64_t at = dialog_list_index_of(ctx, list, subject);
 
-            if (at >= 0) {
-                JSValue splice = JS_GetPropertyStr(ctx, list, "splice");
-                JSValueConst argv[2];
-                JSValue n = JS_NewInt64(ctx, at), one = JS_NewInt32(ctx, 1);
-
-                argv[0] = n;
-                argv[1] = one;
-                JS_FreeValue(ctx, JS_Call(ctx, splice, list, 2, argv));
-                JS_FreeValue(ctx, one);
-                JS_FreeValue(ctx, n);
-                JS_FreeValue(ctx, splice);
-            }
+            if (at >= 0) dialog_list_remove_at(ctx, list, (uint32_t)at);
         }
         JS_FreeValue(ctx, list);
     }
