@@ -2134,10 +2134,10 @@ JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent) {
 
 long flow_world_commit_rows_written(void) { return g_world_commit_rows; }
 
-/* ─── WHICH SENDING TIMELINES THIS ONE IS IN (flow.h's `deliver_world_q`) ───────────────────────────────
- * The same four operations as the queue above, over the same [a, b] pair shape, and separate from it for the
- * reason flow.h gives: the queue is work this timeline still owes, this is what it has already become. An
- * entry is never edited after it is pushed, so there is nothing here but append, read, count and fork. */
+/* ─── Which sending timelines this one is in (flow.h's `deliver_world_q`) ───────────────────────────────
+ * The same four operations as the queue above, over the same pair shape, and separate from it for flow.h's reason:
+ * the queue is work this timeline still owes, this is what it has already become. An entry is never edited after
+ * it is pushed, so there is nothing here but append, read, count and fork. */
 int flow_world_commits(const Flow *f) {
     JSValue v;
     int n;
@@ -2165,18 +2165,15 @@ JSValue flow_world_commit_at(const Flow *f, int i) {
     return e;
 }
 
-/* APPEND ONE. Inside cow_engine_write_begin/end for the reason the queue beside it is: this is the SCHEDULER's
-   record about a flow, written from outside any flow's delta, and a delta that captured it would un-commit a
-   timeline the moment a sibling switched in — which is exactly the state this field exists to make
-   impossible. */
+/* Append one, inside cow_engine_write_begin/end for the queue's reason: this is the scheduler's record about a
+   flow, written from outside any flow's delta, and a delta that captured it would un-commit a timeline the moment a
+   sibling switched in. */
 void flow_world_commit_push_at(JSContext *ctx, Flow *f, const char *vector, int taken, FlowCommitArm arm,
                                const char *file, int line) {
     JSValue e;
 
-    /* THE ADDRESS IS THE ABORT'S AND THE ABORT IS COMPILED OUT IN RELEASE, so it is spent nowhere else and
-       is discarded here rather than left to read as an unused parameter. It is NOT optional to pass: the
-       macro in flow.h supplies it at every call site, which is the whole reason this entry can name its
-       producer at all. */
+    /* The address is the abort's, and the abort is compiled out in release, so it is discarded here. It is not
+       optional: the macro in flow.h supplies it at every call site, which is how this entry names its producer. */
     (void)file;
     (void)line;
 
@@ -2186,56 +2183,34 @@ void flow_world_commit_push_at(JSContext *ctx, Flow *f, const char *vector, int 
     DCHECK(taken == 0 || taken == 1,
            "a delivery-world commitment carried something other than RECEIVED or FORECLOSED — the two are the "
            "whole vocabulary, and a third value would be read as one of them by whichever test asked first");
-    /* THROUGH flow.h's OWN MEMBERSHIP TEST AND NOT A LIST OF NAMES SPELLED HERE. This condition used to name
-       the members, which is a second copy of a set whose first copy is the enum — and the copy that drifts is
-       always this one, because a member is added where the vocabulary is written and the check that exists to
-       refuse an unknown value is the last place anybody looks. */
+    /* Through flow.h's membership test rather than a list of names here: a second copy of the enum's set is the copy
+       that drifts when a member is added. */
     DCHECK(flow_commit_arm_is_member(arm),
            "a delivery-world commitment named a minting mechanism this engine has no member for — the "
            "vocabulary is flow.h's FlowCommitArm and a producer states one of its members or states nothing "
            "true, so an unknown value here is either a producer that was never given a member or a park "
            "document written by something that is not this engine");
-    /* AND A FORECLOSED ROW'S OTHER SIDE IS ITS PARENT, WHICH EXISTS BY WHAT THE ROW MEANS. Such a row says
-       "this flow IS the arm minted where its parent took `vector`" — so the parent is the flow this one was
-       forked FROM, and a FORECLOSED row with no other side is not a row with a missing field, it is a claim
-       that contradicts itself. Asked here rather than at the one producer because the COLD tier replays rows
-       off a document, and a replay is exactly the producer that can hand over a pair no live code makes. */
+    /* And a foreclosed row's other side is its parent, by what the row means: "this flow is the arm minted where its
+       parent took `vector`", so a foreclosed row naming no other side contradicts itself. Asked here rather than at
+       the one live producer because the cold tier replays rows off a document, which can hand over a pair no live
+       code makes. */
     DCHECK(taken != 0 || arm != FLOW_COMMIT_ARM_NONE,
            "a receiving timeline FORECLOSED a sender subtree while naming no flow on the other side of that "
            "branch — a FORECLOSED row means this flow is the arm minted where its PARENT took that world, so "
            "the other side is the flow this one was forked from and cannot be absent. A row like this refuses "
            "every record at or under its subtree and defers them to nobody");
-    /* AND THE RECEIVED ROWS STAY PAIRWISE CONSISTENT — the one claim this LIST makes that no row of it makes,
-       asked at the APPEND because that is where a producer hands one over. Two RECEIVED worlds that CONTRADICT
-       are two sending timelines of which neither is the other continued, so no timeline of that document is in
-       both and a flow holding the pair is the off-diagonal member of a cross-product (solver/engine.c's
-       flow_answer_fork is entirely about the asking side of that). This is NOT a second spelling of
-       deliver_admits' gate: that one asks whether an ARRIVING record may be delivered and is a property of one
-       caller, and this asks whether the RECORD ITSELF is coherent, which is what makes it cover a producer
-       that does not exist yet — the delivery path cannot reach it, because deliver_admits refuses a
-       contradicting record before deliver_commit_taken pushes.
-       FORECLOSED rows are skipped and WORLD_REL_INDEPENDENT is not a violation: the first is the far side of a
-       branch and says nothing about what was heard from, and the second is two forests — a different sending
-       document, or a different session of one, which is every row a park replays into a new session.
-       world_vec_relate INTERNS the names it parses, so it is a side effect and may not sit in a DCHECK's
-       condition (solver/engine.c's engine_host_answer takes this shape for the same reason); in release
-       nothing reads the answer, so the block goes with the check.
-       RETIRES when the RECEIVED half of this list holds ONE row per sending document, replaced in place as the
-       timeline descends — deliver_commit_implied already proves those rows are a CHAIN whose deepest member
-       decides every test, and a set of one has no pair to be inconsistent about. */
-/* AND THE REMEDY THIS ABORT NAMES IS NOW CONDITIONAL ON ITS PRODUCER, WHICH IS RECORDED HERE RATHER THAN
-   QUIETLY APPLIED. The message used to name ONE repair with no condition on it — engine_perform's
-   unaddressed operation — and that repair is right for exactly ONE of this entry's four callers, and has
-   since been BUILT, which is the second thing an unscoped remedy clause costs: a clause that names one
-   repair for four producers is not only mis-aimed at three of them, it goes stale for the one it was right
-   about and the staleness is then invisible at the other three. A remedy
-   clause is read once, by somebody who has already decided to do the work, so an unconditional one is not
-   caught at the other three, it is EXECUTED: a park residue would have sent a reader to build an addressee,
-   and a hole in deliver_admits would have been filed under the answer path's cross-product and closed by a
-   mechanism that cannot reach it. The clause was never WRONG; it was unscoped, which for a shared entry
-   with four producers is the same defect wearing a correct sentence.
-   WHAT THE SITE BUYS IS THE SCOPING AND NOT THE COORDINATE. `file:line` is a fact the caller states, so the
-   triage below is selected by evidence instead of by whichever producer a reader happened to think of. */
+    /* And the received rows stay pairwise consistent, the one claim this list makes that no row makes, asked at the
+       append where a producer hands one over. Two received worlds that contradict are two sending timelines neither
+       of which is the other continued, so no timeline of that document is in both (solver/engine.c's
+       flow_answer_fork is about the asking side). This is not deliver_admits' gate, which asks whether an arriving
+       record may be delivered: this asks whether the record itself is coherent, so it covers producers that do not
+       exist yet. Foreclosed rows are skipped (the far side of a branch says nothing about what was heard), and
+       WORLD_REL_INDEPENDENT is two forests, a different sending document or session, which every replayed park row
+       is. world_vec_relate interns the names it parses, so it may not sit in a DCHECK condition (as
+       solver/engine.c's engine_host_answer); nothing reads it in release, so the block goes with the check. The
+       abort's triage is selected by the pusher's `file:line`. This retires when the received half holds one row
+       per sending document, replaced in place as the timeline descends (deliver_commit_implied proves those rows
+       are a chain whose deepest member decides every test). */
 #if APICLIENT_DEV
     if (taken) {
         int n = flow_world_commits(f), k;
@@ -2245,12 +2220,8 @@ void flow_world_commit_push_at(JSContext *ctx, Flow *f, const char *vector, int 
             JSValue cv = JS_GetPropertyUint32(ctx, row, 0);
             JSValue tv = JS_GetPropertyUint32(ctx, row, 1);
 
-            /* A FORECLOSED ROW IS SKIPPED STRUCTURALLY AND NO LONGER THROUGH A SENTINEL. This walk used to
-               hold a `rel` initialised to WORLD_REL_INDEPENDENT OUTSIDE the branch and assert on it below,
-               so a row the walk never examined and a row it examined and cleared arrived at one line
-               carrying one value. The answer is unchanged at every row; what changes is that the skip is
-               the SHAPE of the code rather than a reading of a default, and that the held vector and the
-               arm it records stay in scope for the abort that needs to print them. */
+            /* A foreclosed row is skipped structurally, by the branch, so the held vector and the arm it records
+               stay in scope for the abort that prints them. */
             if (JS_VALUE_GET_TAG(tv) == JS_TAG_INT && JS_VALUE_GET_INT(tv)) {
                 const char *held = JS_ToCString(ctx, cv);
                 JSValue av;
@@ -2261,11 +2232,9 @@ void flow_world_commit_push_at(JSContext *ctx, Flow *f, const char *vector, int 
                                     "a commitment that cannot be read leaves the one pair this list can be "
                                     "wrong about unchecked");
                 rel = world_vec_relate(vector, held);
-                /* THE HELD ROW'S OWN PRODUCER, WHICH IS THE HALF A THREADED SITE CANNOT REACH. The arriving
-                   row names its pusher by the address the macro captured; the HELD row was pushed at some
-                   earlier step whose address is long gone, and the one thing it still states about its
-                   producer is the minting mechanism it wrote down. Read rather than re-derived — it is the
-                   field flow.h's vocabulary exists for, and no line on this path had ever asked it. */
+                /* The held row's own producer, the half a threaded site cannot reach: the arriving row names its
+                   pusher by the macro's address, while the held row was pushed at an earlier step and states only
+                   the minting mechanism it wrote down, which is read here. */
                 av = JS_GetPropertyUint32(ctx, row, 2);
                 held_arm = (JS_VALUE_GET_TAG(av) == JS_TAG_INT) ? JS_VALUE_GET_INT(av) : -1;
                 JS_FreeValue(ctx, av);
@@ -2326,19 +2295,16 @@ void flow_world_commit_push_at(JSContext *ctx, Flow *f, const char *vector, int 
     }
     JS_SetPropertyUint32(ctx, f->deliver_world_q, (uint32_t)flow_world_commits(f), e);
     cow_engine_write_end();
-    /* AND THE LEDGER'S OWN COUNT, RAISED ON THE LINE THAT PERFORMS THE APPEND rather than anywhere a reader
-       might later infer one. This is the ONLY site that appends — the fork beside it shares its parent's
-       entries and states nothing — so a row that exists on a flow and was never counted here is a producer
-       that reached the Array without going through this entry, which is precisely what solver/cold.c's
-       preview asserts it cannot find. */
+    /* And the ledger's own count, raised on the line that performs the append. This is the only site that appends
+       (the fork shares its parent's entries and states nothing), so a row on a flow that was never counted here is
+       a producer that reached the Array another way, which solver/cold.c's preview asserts it cannot find. */
     g_world_commit_rows++;
 }
 
-/* THE ARM'S OWN RECORD — a new Array naming the parent's entries, and then the fork adds the one entry that
-   makes the two arms different timelines. It is the same split as every other per-flow queue here (the ARRAY
-   is per-flow because each arm commits on its own from the branch onward; the ENTRIES are shared because none
-   of them ever changes), and it is why the field is carried at all: an arm that lost its parent's commitments
-   would re-accept a message its own timeline had already foreclosed. */
+/* The arm's own record: a new Array naming the parent's entries, to which the fork then adds the one entry that
+   makes the two arms different timelines. The array is per-flow because each arm commits on its own from the
+   branch; the entries are shared because none changes. An arm that lost its parent's commitments would re-accept
+   a message its own timeline had already foreclosed. */
 JSValue flow_world_commit_fork(JSContext *ctx, const Flow *parent) {
     int n = flow_world_commits(parent), i;
     JSValue out;
@@ -2355,18 +2321,16 @@ JSValue flow_world_commit_fork(JSContext *ctx, const Flow *parent) {
     return out;
 }
 
-/* ───────────────────────────── THE JOB QUEUE ─────────────────────────────
- * See flow.h for what a record is and why each part of it is there. Everything that ever happens to the queue
- * is in this block, so the Array's shape has one reader.
+/* ───────────────────────────── The job queue ─────────────────────────────
+ * flow.h says what a record is and why each part is there. Everything that happens to the queue is in this block,
+ * so the Array's shape has one reader.
  *
- * THE CALLEE TABLE. quickjs's job functions are statics of the interpreter and the host sees them only as
- * pointers arriving at the enqueue hook, so a name for one can only be minted on FIRST SIGHT. Four of them
- * exist in this program (promise_reaction_job, js_promise_resolve_thenable_job, js_dynamic_import_job, and
- * host_call_job for every platform edge); the table is generous and CRASHES rather than growing, because a
- * fifth arriving is a fact about the interpreter that should be read by a person and not absorbed. A code
- * address is stable for the process, so the table needs no teardown — and it is deliberately NOT reset with
- * the frontier: an ordinal handed out in one session must not be re-used for a different callee in the next
- * while any record still names it. */
+ * The callee table. quickjs's job functions are statics of the interpreter, seen by the host only as pointers at
+ * the enqueue hook, so a name for one is minted on first sight. Four exist (promise_reaction_job,
+ * js_promise_resolve_thenable_job, js_dynamic_import_job, and host_call_job for every platform edge); the table
+ * crashes rather than grows, because a fifth is a fact about the interpreter for a person to read. A code address is
+ * stable for the process, so the table needs no teardown, and it is not reset with the frontier: an ordinal handed
+ * out in one session must not name a different callee in the next while a record still names it. */
 #define FLOW_JOB_FN_MAX 16
 static JSJobFunc *g_job_fn[FLOW_JOB_FN_MAX];
 static int g_job_fn_n;
@@ -2385,12 +2349,12 @@ static int job_fn_id(JSJobFunc *fn) {
     return g_job_fn_n++;
 }
 
-/* THE RECORD'S LAYOUT, stated once. The header is fixed-width and the arguments follow it, so `argc` is a
-   length subtraction and never a stored count that can disagree with what is there. */
+/* The record's layout, stated once. The header is fixed-width and the arguments follow it, so `argc` is a length
+   subtraction, never a stored count that can disagree with what is there. */
 enum { JOB_FN = 0, JOB_TASK, JOB_EXTERNAL, JOB_GLOBAL, JOB_HANDLE, JOB_SEQ, JOB_HDR };
 
-/* THE PROVENANCE BRACKET — see flow.h. A static rather than a field on the flow because it is a property of
-   the CONVERSION in flight, not of the timeline: exactly one can be open, which is what the asserts say. */
+/* The provenance bracket (flow.h). A static rather than a field because it is a property of the conversion in
+   flight, not of the timeline: exactly one can be open, as the asserts say. */
 static int g_job_external;
 
 void flow_job_external_begin(void) {
@@ -2420,8 +2384,8 @@ int flow_job_pending(const Flow *f) {
     return n;
 }
 
-/* ONE ENTRY, BORROWED — the accessor every reader in this block goes through, so the record's shape is
-   asserted in one place however many of them there are. The caller OWNS the reference it gets back. */
+/* One entry: the accessor every reader in this block uses, so the record's shape is asserted once. The caller owns
+   the reference it gets back. */
 static JSValue job_entry(const Flow *f, int i) {
     JSValue e = JS_GetPropertyUint32(pending_ctx(), f->jobs, (uint32_t)i);
 
@@ -2442,17 +2406,12 @@ static int job_field_int(JSValueConst e, int field) {
     return n;
 }
 
-/* A WIDE HEADER FIELD, READ BACK — a SECOND accessor rather than a widened job_field_int, because the two
-   shapes are different and the assert is the point: a header int is a small integer and must be one, while a
-   HANDLE and an ARRIVAL STAMP are integer VALUES that leave the small-integer tag behind at 2^31 and are still
-   exact. Both tags are accepted and integrality is what is asserted, so a field that failed to round-trip
-   crashes here rather than answering a wrong number. That is the same silent wrong answer js_task_handle_new's
-   ceiling assert refuses at the issuing end, asserted again at this end, which is the one that USES it.
-   IT TAKES THE CONSEQUENCE AS A STRING RATHER THAN BEING COPIED PER FIELD. The two fields' shapes are one
-   question and their CONSEQUENCES are two — a handle that stopped round-tripping names another timeline's
-   task, a stamp that stopped round-tripping orders two work items by a number that is neither one's — and a
-   crash a reader cannot act on is what §AN-ASSERT-THAT-NAMES-A-REMEDY is about. One reader, two remedies,
-   rather than two readers that can come to disagree about what an exact integer is. */
+/* A wide header field, read back: a second accessor rather than a widened job_field_int, because a header int must
+   be a small integer, while a handle and an arrival stamp are integer values that leave the small-integer tag at
+   2^31 and stay exact. Both tags are accepted and integrality is asserted, so a field that failed to round-trip
+   crashes rather than answering a wrong number, the check js_task_handle_new's ceiling assert makes at the issuing
+   end. It takes the consequence as a string: the shapes are one question and the consequences two (a handle that
+   stopped round-tripping names another timeline's task; a stamp orders two items by a number that is neither's). */
 static uint64_t job_field_u64(JSValueConst e, int field, const char *cost) {
     JSValue v = JS_GetPropertyUint32(pending_ctx(), e, (uint32_t)field);
     uint64_t h;
@@ -2493,15 +2452,12 @@ int flow_job_microtask(const Flow *f) {
     return 0;
 }
 
-/* THE QUEUE'S TWO KINDS, COUNTED IN ONE WALK — see flow.h's `jobs_ready_task` for what the pair answers and
-   solver/engine.c's task arm for why the two are dispatched from opposite sides of one ladder.
-   BOTH HALVES ARE COUNTED AND NEITHER IS SUBTRACTED, which is the whole reason this is a function rather than
-   a task count the caller takes away from `flow_job_pending`. The reading is a PARTITION, so the identity that
-   states it has to be one two independent writers can fail; `n - t` makes `t + (n - t) == n`, which is an
-   assert whose two sides cannot disagree and certifies nothing. flow_wfq_census accumulates these two and
-   accumulates the queue's own length separately, and asserts the sum where all three are in one hand.
-   IT IS A WALK, so a caller asks it only of a member it has already admitted — the census asks inside the
-   ready arm alone, whose population `mem_unframed` bounds, and never once per member. */
+/* The queue's two kinds, counted in one walk; flow.h's `jobs_ready_task` says what the pair answers and
+   solver/engine.c's task arm why the two are dispatched from opposite sides of one ladder. Both halves are counted
+   and neither is subtracted: the reading is a partition, so its identity must be one two independent writers can
+   fail, which `t + (n - t) == n` cannot. flow_wfq_census accumulates these and the queue's length separately and
+   asserts the sum. It is a walk, so a caller asks it only of a member it has admitted: the census asks inside the
+   ready arm alone, whose population `mem_unframed` bounds. */
 void flow_job_kinds(const Flow *f, int *task_out, int *micro_out) {
     int n = flow_job_pending(f), i, t = 0, m = 0;
 
@@ -2535,26 +2491,21 @@ void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueCons
     JS_SetPropertyUint32(ctx, e, JOB_FN, JS_NewInt32(ctx, job_fn_id(fn)));
     JS_SetPropertyUint32(ctx, e, JOB_TASK, JS_NewInt32(ctx, task ? 1 : 0));
     JS_SetPropertyUint32(ctx, e, JOB_EXTERNAL, JS_NewInt32(ctx, g_job_external));
-    /* THE KEY §7.5.10 "Destroying documents"'s step 5 COMPARES, held as a reference — see flow.h.
-       JS_GetGlobalObject is the realm's identity and the one thing about it that is a JS value; a destroyed
-       document's jobs are then found by comparing two objects rather than two pointers, one of which used to
-       be able to be freed underneath the comparison. */
+    /* The key HTML §7.5.10 "Destroying documents" step 5 compares, held as a reference (flow.h). JS_GetGlobalObject
+       is the realm's identity as a JS value, so a destroyed document's jobs are found by comparing two objects,
+       neither of which can be freed underneath the comparison. */
     JS_SetPropertyUint32(ctx, e, JOB_GLOBAL, JS_GetGlobalObject(ctx));
-    /* THE NAME THE RUNTIME ISSUED — see flow.h's HANDLE bullet for why it is a JS number and not a string or a
-       word pair. JS_NewInt64 keeps the small-integer tag for the first 2^31 handles and widens to a float64
-       past it; both are exact below 2^53, which js_task_handle_new asserts is the whole range. */
+    /* The name the runtime issued (flow.h's handle bullet says why it is a JS number). JS_NewInt64 keeps the
+       small-integer tag for the first 2^31 handles and widens to a float64 past it; both are exact below 2^53,
+       which js_task_handle_new asserts is the whole range. */
     JS_SetPropertyUint32(ctx, e, JOB_HANDLE, JS_NewInt64(ctx, (int64_t)handle));
-    /* AND WHEN IT ARRIVED, ON THE CLOCK THE PROGRAM SEQUENCE IS NAMED BY — see g_work_seq. This is the field
-       that makes §8.1.7.1 "Definitions"' one-source-one-queue rule ANSWERABLE for a flow whose work is split
-       across two carriers: the sequence's rows carry the same clock in `dyn_id`, so flow_step compares two
-       work items by WHEN THEY WERE QUEUED instead of by WHICH ARRAY HOLDS THEM.
-       IT IS TAKEN HERE AND NOT AT THE RUNTIME'S ENQUEUE, which is deliberate and is the same choice `handle`
-       makes in the other direction. A handle must be minted by the runtime because the runtime's own two
-       queues and its baseline list issue callbacks this file never sees; a stamp must be minted HERE because
-       what it orders is this flow's `jobs` against this flow's `dyn`, and `dyn` is the host's alone. The
-       baseline handover therefore stamps a task at the moment a flow ADOPTS it rather than at the moment the
-       user agent queued it — which is the honest answer for a task that had no timeline to be ordered within
-       until then, and the only one available, since nothing orders it against a row before it has a flow. */
+    /* And when it arrived, on the clock the program sequence is named by (g_work_seq). This makes HTML §8.1.7.1
+       "Definitions"' one-source-one-queue rule answerable for a flow whose work is split across two carriers: the
+       sequence's rows carry the same clock in `dyn_id`, so flow_step compares two work items by when they were
+       queued rather than which array holds them. Taken here, not at the runtime's enqueue: a handle must be minted by
+       the runtime, whose own queues and baseline list issue callbacks this file never sees, while a stamp orders this
+       flow's `jobs` against its `dyn`, the host's alone. The baseline handover therefore stamps a task when a flow
+       adopts it, since nothing orders it against a row before it has a flow. */
     JS_SetPropertyUint32(ctx, e, JOB_SEQ, JS_NewInt64(ctx, (int64_t)flow_work_seq_next()));
     for (i = 0; i < argc; i++)
         JS_SetPropertyUint32(ctx, e, (uint32_t)(JOB_HDR + i), JS_DupValue(ctx, argv[i]));
@@ -2567,13 +2518,10 @@ void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueCons
     cow_engine_write_end();
 }
 
-/* WHICH ENTRY THE NEXT PICK WOULD TAKE, WITHOUT TAKING IT — factored out of flow_job_take rather than written
-   again at the one other site that needs the answer (flow_task_precedes below). Two right answers to one
-   question is the shape that drifts, and this particular question has a rule in it that a second spelling
-   would lose: the ORDER IS NOT A FIFO POP. Within a kind the order is arrival order; ACROSS the two kinds a
-   task may not begin while this flow still holds a microtask, which is HTML §8.1.4.4 "Calling scripts"' clean
-   up after running script step 3. A caller that reached for index 0 would be right exactly when the queue
-   holds no microtask and wrong in the case the rule exists for. */
+/* Which entry the next pick would take, without taking it: shared by flow_job_take and flow_task_precedes, because
+   the order is not a FIFO pop. Within a kind it is arrival order; across kinds a task may not begin while this
+   flow holds a microtask (HTML §8.1.4.4 "Calling scripts"' clean up after running script step 3), so index 0 is
+   right only when the queue holds no microtask. */
 static int job_pick_index(const Flow *f, int n) {
     int pick = 0;
 
@@ -2589,41 +2537,30 @@ static int job_pick_index(const Flow *f, int n) {
     return pick;
 }
 
-/* DOES THIS FLOW HOLD A TASK THAT WAS QUEUED BEFORE THE ROW AT ITS CURSOR — HTML §8.1.7.3 "Processing model"
- * step 2.1's choice of queue, made so that it cannot starve either side.
+/* Does this flow hold a task queued before the row at its cursor? HTML §8.1.7.3 "Processing model" step 2.1's
+ * choice of queue, made so that it cannot starve either side.
  *
- * WHAT IT REPLACES IS A FIXED ARM ORDER, AND A FIXED ARM ORDER IS WHAT HTML §8.1.7.1 "Definitions"' OWN
- * WORKED EXAMPLE RULES OUT. HTML §8.1.7.3 "Processing model" step 2.1 chooses a queue "in an
- * implementation-defined manner" among those with at least one runnable task, and HTML §8.1.7.1 "Definitions"
- * says what that freedom is for and where it stops: a user agent may give a source preference
- * "three-quarters of the time, keeping the interface responsive but not starving other task queues".
- * flow_step's ladder took the program sequence first and unconditionally, and a page's own programs
- * EXTEND that sequence (a lazy chunk, an injected `<script>`, a `javascript:` URL, a response that is a
- * program), so the queue below it was excluded for as long as the page kept appending — §scheduler's razor,
- * "drops, starves, skips, reorders, or forgets ANY flow — it is a CAP, banned".
+ * Step 2.1 chooses a queue "in an implementation-defined manner" among those with a runnable task, and HTML
+ * §8.1.7.1 "Definitions" bounds that freedom: a user agent may prefer a source "three-quarters of the time,
+ * keeping the interface responsive but not starving other task queues". A fixed arm order cannot satisfy it: a
+ * page's programs extend the program sequence (a lazy chunk, an injected `<script>`, a `javascript:` URL, a
+ * response that is a program), and tasks run page code that appends rows while programs enqueue tasks, so either
+ * strict order can exclude the other side for ever.
  *
- * AND THE MIRROR IS EQUALLY BANNED, WHICH IS WHY THE ANSWER IS NOT THE OTHER ARM ORDER. A task runs page code
- * and page code appends rows; a program enqueues tasks. Both sides are extended by the other, so neither
- * strict order is free of permanent exclusion and choosing one would move the defect rather than end it.
+ * Arrival order is free of that by construction: a work item's stamp never changes, so the items that outrank it
+ * are fixed at its birth and finite, and whatever the page appends later is younger. Every item is reached with
+ * nothing capped or counted down: an order, not a bound. It also discharges §8.1.7.1's ordering rule for a source
+ * on both carriers (core/timing/task_source.h): within one source arrival order is queue order.
  *
- * ARRIVAL ORDER IS FREE OF IT BY CONSTRUCTION AND NOT BY POLICY. A work item's stamp never changes, so the set
- * of items that outrank it is FIXED AT ITS BIRTH and finite: whatever the page appends afterwards is younger
- * and cannot get in front. Every item is therefore reached, and nothing is capped, counted down or decided
- * against — which is the line §NO BOUNDS draws between an ORDER and a BOUND, and the reason there is no
- * constant here to tune and no budget to spend.
- * IT ALSO DISCHARGES §8.1.7.1's ORDERING RULE FOR A SOURCE THAT IS ON BOTH CARRIERS, which is the separate
- * defect core/timing/task_source.h is about: within one source arrival order IS queue order, so a source in
- * two arrays comes out in the order it was queued whichever array holds each item.
- *
- * THE THREE REFUSALS ARE EACH A RULE OF THE STANDARD AND NOT A GUARD.
- *   - `flow_stack_empty` is HTML §8.1.4.4's "If the JavaScript execution context stack is now empty": a row
- *     the cursor names DYN_POS_IMMEDIATE is HTML §4.12.1.1 "Processing model"'s "immediately execute the script
- *     element el, even if other scripts are already executing" — the synchronous tail of the program that queued
- *     it — so no task may begin in front of it and its age is not the question.
- *   - a MICROTASK outstanding is the checkpoint's, and the checkpoint arm stands above this ladder. Answering
- *     yes here would put a task in front of it and fire the ladder's own assert one arm down.
+ * The three refusals are each a rule of the standard:
+ *   - `flow_stack_empty` is §8.1.4.4's "If the JavaScript execution context stack is now empty": a row at the
+ *     cursor marked DYN_POS_IMMEDIATE is HTML §4.12.1.1 "Processing model"'s "immediately execute the script
+ *     element el, even if other scripts are already executing", the synchronous tail of the program that queued
+ *     it, so no task may begin in front of it.
+ *   - an outstanding microtask is the checkpoint's, and the checkpoint arm stands above this ladder; answering yes
+ *     would put a task in front of it and fire the ladder's own assert one arm down.
  *   - an empty queue has nothing to compare.
- * A caller reaching this with `seq_compiles` false has no row to compare against and must not ask. */
+ * A caller with `seq_compiles` false has no row to compare against and must not ask. */
 int flow_task_precedes(const Flow *f, uint64_t row_seq) {
     int n;
     JSValue e;
@@ -2640,8 +2577,8 @@ int flow_task_precedes(const Flow *f, uint64_t row_seq) {
                       "its arrival, so the page's own programs and its queued callbacks would run in an order "
                       "no clock states");
     JS_FreeValue(pending_ctx(), e);
-    /* STRICTLY OLDER, WHICH IS NOT A TIE-BREAK BUT THE ABSENCE OF A TIE. One clock issues every stamp and
-       never reuses one (g_work_seq), so two work items of one flow cannot share a number and `<` is total. */
+    /* Strictly older, and there is no tie: one clock issues every stamp and never reuses one (g_work_seq), so two
+       work items of one flow cannot share a number and `<` is total. */
     return s < row_seq;
 }
 
@@ -2696,9 +2633,8 @@ int flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm) {
     DCHECK(realm != NULL, "destroy a document step 5 was asked to remove the tasks of no realm at all");
     global = JS_GetGlobalObject(realm);
     cow_engine_write_begin();
-    /* COMPACTED IN ONE FORWARD PASS rather than spliced per hit: the walk that used this queue removed from
-       the middle with a memmove per removal, which is the same answer at N times the cost and one more index
-       to get wrong. Survivors keep their arrival order, which is what the task source guarantees the page. */
+    /* Compacted in one forward pass rather than spliced per hit; survivors keep their arrival order, which the task
+       source guarantees the page. */
     for (i = 0; i < n; i++) {
         JSValue e = job_entry(f, i);
         JSValue g = JS_GetPropertyUint32(ctx, e, JOB_GLOBAL);
@@ -2710,27 +2646,18 @@ int flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm) {
         mine = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(global);
 
         JS_FreeValue(ctx, g);
-        /* THE ONE JOB THIS WALK TAKES THAT NOTHING WILL EVER RE-CAUSE, AND IT LEFT NO TRACE.
-           HTML §7.5.10 "Destroying documents" step 5 is explicit that what it removes never runs ("remove any
-           tasks whose document is document from any task queue (without running those tasks)"), and that is
-           CORRECT for a routed cross-document delivery too: the Document the message was for is gone, so there
-           is no listener left to fire and no page left to notice. What is not correct is doing it silently. A
-           routed delivery is the single job on this queue a replay does not re-cause (see the record's WHERE
-           THE WORK CAME FROM bullet in flow.h, and cold.c's park assert built on the same sentence), so from
-           out here — where the only numbers are `_routedDelivered` and how many times the receiving page's own
-           code ran — a delivery removed here is INDISTINGUISHABLE from one the scheduler lost, and those take
-           opposite actions. It is one of the four ends solver/engine.h declares, and it is the SAME end
-           core/frame/window_message.c reports when the task does get to run and finds the navigable destroyed
-           (§7.5.10 step 5 stated where the task runs) — the two paths are one fact reached at two moments.
-           IT IS SOUND TO NAME IT WITHOUT ASKING WHAT THE JOB IS because flow.h's sentence is what makes the
-           EXTERNAL bit mean this: the routed delivery is the only work on a flow's queue that came from
-           outside the replayed program. A second kind of external job would have to revisit this line, and
-           that sentence is where the obligation is written down.
-           COUNTED PER ARM, WHICH IS WHY THE CONSERVATION LAW IS AN INEQUALITY: a fork gives each arm its own
-           Array naming the same record, so ONE queued delivery becomes an end in EACH timeline that holds a
-           copy — reached here when that timeline destroys the target Document, and at the running side when it
-           gets to fire. This walk is over ONE flow's queue (solver/engine.c's drop hook states why), so the
-           arms are counted as they each reach it rather than swept in one pass. */
+        /* The one job this walk takes that nothing will re-cause, counted. HTML §7.5.10 "Destroying documents" step
+           5 removes "any tasks whose document is document from any task queue (without running those tasks)", which
+           is correct for a routed cross-document delivery too: its Document is gone, so no listener is left. But a
+           routed delivery is the one job a replay does not re-cause (flow.h's record bullet on where the work came
+           from, and cold.c's park assert), so, seen through `_routedDelivered` and the receiving page's own runs, a
+           delivery removed silently is indistinguishable from one the scheduler lost. It is one of the four ends
+           solver/engine.h declares, the same end core/frame/window_message.c reports when the task runs and finds
+           the navigable destroyed. Naming it from the external bit alone is sound because flow.h's sentence makes
+           the routed delivery the only work from outside the replayed program; a second kind would revisit this.
+           Counted per arm: a fork gives each arm its own Array naming the same record, so one queued delivery is an
+           end in each timeline holding a copy (hence the conservation law is an inequality), and this walk is over
+           one flow's queue (solver/engine.c's drop hook says why). */
         if (mine && job_field_int(e, JOB_EXTERNAL))
             engine_routed_task_end(ROUTED_TASK_TARGET_GONE);
         if (mine) { JS_FreeValue(ctx, e); continue; }
@@ -2742,13 +2669,11 @@ int flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm) {
     return n - keep;
 }
 
-/* REMOVE ONE JOB BY NAME — see flow.h. The same forward-compacting pass as flow_job_drop_realm with the other
-   predicate, deliberately not folded into it behind a mode flag: the two questions have different answers about
-   how many entries may match ("every job of this document" versus "the one job called this"), and that
-   difference is the assert below.
-   THE CONTEXT IS THE QUEUE'S OWN. JSJobRemoveHook names a job by identity and by nothing else — there is no
-   realm in the question, because a handle is issued by one runtime counter and is not a fact about a document —
-   so the caller has none to hand down, and this is the same context every reader in this block already uses. */
+/* Remove one job by name (flow.h). The same forward-compacting pass as flow_job_drop_realm with the other
+   predicate, not folded behind a mode flag, because the two questions differ in how many entries may match
+   ("every job of this document" against "the one job called this"), which the assert states. The context is the
+   queue's own: JSJobRemoveHook names a job by identity alone (a handle comes from one runtime counter and is not a
+   fact about a document), so the caller has none to hand down. */
 int flow_job_remove(Flow *f, JSTaskHandle handle) {
     JSContext *ctx = pending_ctx();
     int n = flow_job_pending(f), keep = 0, found = 0, i;
@@ -2761,19 +2686,16 @@ int flow_job_remove(Flow *f, JSTaskHandle handle) {
     for (i = 0; i < n; i++) {
         JSValue e = job_entry(f, i);
 
-        /* EVERY entry is compared, including after a hit, because the count is what the assert is made of. */
+        /* Every entry is compared, including after a hit, because the count is what the assert is made of. */
         if (job_field_u64(e, JOB_HANDLE,
                           "a removal made with it would take some other timeline's task off the queue "
                           "instead of finding none") == (uint64_t)handle) {
-            /* AND THE OTHER REMOVAL MAY NOT TAKE A ROUTED DELIVERY AT ALL, which is a different statement from
-               §7.5.10 step 5's above rather than the same one twice. That walk removes the tasks OF A DOCUMENT
-               THAT IS GONE, so the delivery it takes has no page left to receive it; this one is a tracker
-               coalescing its OWN queued callback (HTML §4.11.4 "The dialog element", §4.11.1 "The details
-               element") in a document that is still running, and a routed delivery taken here would be a live
-               page's message deleted by an element's toggle task. It cannot happen — a delivery is pushed by
-               the engine and not by the runtime's enqueue, so it carries JS_TASK_HANDLE_NONE and no tracker's
-               handle can name it — and that is exactly why it is asserted rather than trusted: the handle
-               field is the whole of what stands between the two. */
+            /* And this removal may not take a routed delivery. §7.5.10's walk removes the tasks of a document that
+               is gone; this one is a tracker coalescing its own queued callback (HTML §4.11.4 "The dialog element",
+               §4.11.1 "The details element") in a running document, so a routed delivery taken here would be a live
+               page's message deleted by an element's toggle task. A delivery is pushed by the engine rather than the
+               runtime's enqueue, so it carries JS_TASK_HANDLE_NONE and no tracker's handle names it; the handle
+               field is all that separates the two, hence the assert. */
             DCHECK(!job_field_int(e, JOB_EXTERNAL),
                    "a tracker's removal-by-handle named the §9.3.3 task a ROUTED cross-document delivery "
                    "became — that is a live document's message being deleted by an element's coalescing task "
@@ -2799,10 +2721,9 @@ JSValue flow_job_fork(JSContext *ctx, const Flow *parent) {
     int n = flow_job_pending(parent), i;
     JSValue out;
 
-    /* THE ARM INHERITS THE QUEUE, and its absence was a real bug one layer down from the delivery queue's: an
-       arm forked with a `.then` already attached silently never ran it, and it surfaced as a rejection
-       reported unhandled in the arm whose `.catch` job never arrived. An empty queue forks as JS_UNDEFINED —
-       the common case stays a tag test, and flow_job_push mints the Array again if the arm is ever enqueued. */
+    /* The arm inherits the queue: an arm forked with a `.then` already attached must run it, or the arm reports a
+       rejection unhandled whose `.catch` job never arrived. An empty queue forks as JS_UNDEFINED, and flow_job_push
+       mints the Array if the arm is ever enqueued. */
     if (n == 0) return JS_UNDEFINED;
     out = JS_NewArray(ctx);
     CHECK(!JS_IsException(out), "flow: OOM forking a flow's job queue — an arm that lost it is a timeline whose "
