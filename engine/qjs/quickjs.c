@@ -55337,6 +55337,19 @@ static JSValue js_async_function_resolve_one(JSContext *ctx, JSAsyncFunctionData
     if (g_time_travel.timeline) s->mint_timeline = g_time_travel.timeline();
 #endif
     js_async_trail(s, 'm', 0, g_flow_gen);
+#if APICLIENT_DEV
+    {
+        char trail_buf[160];
+        trail_buf[0] = 0;
+        if (!s->is_active) js_async_trail_text(s, trail_buf, sizeof trail_buf);
+        /* An await suspends a RUNNING activation, so the one minting its continuation is live: a dead one here
+           is a frame still executing after its activation completed in some timeline. */
+        DCHECKF(s->is_active,
+                "an await is minting a continuation for an async activation that was already torn down — this "
+                "timeline (%llx) is running a frame another resume completed; trail: %s",
+                (unsigned long long)js_flow_timeline_now(), trail_buf);
+    }
+#endif
     return f;
 }
 
