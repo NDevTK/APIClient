@@ -187,29 +187,46 @@ preserve_evidence() {
   find "$old" -name '*.log' -type f 2>/dev/null | while read -r f; do
     cp -n "$f" "$ROOT/EVIDENCE-$tag-$(basename "$f")" 2>/dev/null || true
   done
-  # A BUILT ARTIFACT IS EVIDENCE TOO, AND THE RULE ABOVE IS WRITTEN ABOUT LOGS ALONE.
-  # The argument above — a log is evidence and the snapshot is not, so it is copied out BEFORE anything is
-  # deleted — generalises to the artifact WORD FOR WORD and the implementation did not: the
-  # `find -name '*.log'` preserves the record of a run and discards the PROGRAM that run was about. That
-  # program is a fact about a revision, it is what every later measurement drives, and it costs a full
-  # compile to reproduce. Measured, and it cost exactly that: a build was taken at one revision, its
-  # artifact left in the snapshot, and the NEXT freeze — by the same agent, minutes later, for the corpus
-  # pass that artifact was built for — reclaimed it. Nothing was live in it, so the liveness gate above was
-  # right to let it go; what was missing is that the gate decides WHETHER to delete and nothing decided
-  # what to CARRY OUT first.
-  # KEYED BY REVISION AND NOT BY LANE, because one revision has one artifact: two lanes freezing the same
-  # SHA preserve the same bytes, and `cp -n` then makes the second a no-op rather than a duplicate. A
-  # lane-keyed name would accumulate one copy per lane for no added evidence, which is the cost this
-  # project is least able to afford — the EVIDENCE logs beside it already run to tens of megabytes each.
-  # THE STAMP TRAVELS WITH IT OR THE BYTES ARE WORTHLESS: an artifact whose revision a reader cannot state
-  # is exactly the unstamped artifact §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES says produces no number at all.
+  # The built artifact is evidence too: it is the program a revision's measurements drive, and it costs a
+  # compile to reproduce. One revision has one artifact, so it is keyed by revision (`ARTIFACT-<rev>`), and its
+  # stamp (qjs.mjs.build.json) travels with the bytes so a reader can state which revision it is.
+  # Whether an artifact is present is a question about CONTENT (artifact_complete), never about a directory
+  # existing: a native build leaves extension/lib/qjs without a wasm, and a copy that fails part-way leaves a
+  # directory with less than the program in it. The copy is made under a temporary name and renamed into
+  # place, so the final name only ever holds a complete artifact; an incomplete directory standing there from
+  # before is replaced.
   if [ -d "$old/extension/lib/qjs" ]; then
     arev=$(basename "$old" | sed 's/.*-//')
-    if [ ! -d "$ROOT/ARTIFACT-$arev" ]; then
-      mkdir -p "$ROOT/ARTIFACT-$arev"
-      cp -pn "$old/extension/lib/qjs/"* "$ROOT/ARTIFACT-$arev/" 2>/dev/null || true
-      echo "preserved artifact of $arev -> $ROOT/ARTIFACT-$arev ($(du -sh "$ROOT/ARTIFACT-$arev" 2>/dev/null | cut -f1))"
-    fi
+    preserve_artifact "$old/extension/lib/qjs" "$arev"
+  fi
+}
+
+# Whether `$1` holds a whole artifact of revision `$2` (a SHA prefix): the program, its loader and its stamp,
+# none empty, with the stamp naming that revision.
+artifact_complete() {
+  local d="$1" rev="$2"
+  [ -s "$d/qjs.wasm" ] && [ -s "$d/qjs.mjs" ] && [ -s "$d/qjs.mjs.build.json" ] &&
+    grep -q "\"head\": *\"$rev" "$d/qjs.mjs.build.json"
+}
+
+preserve_artifact() {
+  local src="$1" arev="$2" dst="$ROOT/ARTIFACT-$2" tmp="$ROOT/.partial-ARTIFACT-$2.$$"
+  artifact_complete "$src" "$arev" || return 0
+  artifact_complete "$dst" "$arev" && return 0
+  rm -rf "$tmp"
+  if ! { mkdir "$tmp" && cp -pr "$src/." "$tmp/" && artifact_complete "$tmp" "$arev"; }; then
+    rm -rf "$tmp"
+    echo "could NOT preserve the artifact of $arev from $src — the copy into $tmp did not complete"
+    return 0
+  fi
+  # A directory under the final name is incomplete here (the test above said so), so it is no artifact.
+  if [ -e "$dst" ]; then rm -rf "$dst"; fi
+  if mv -T "$tmp" "$dst" 2>/dev/null; then
+    echo "preserved artifact of $arev -> $dst ($(du -sh "$dst" 2>/dev/null | cut -f1))"
+  else
+    # Another freeze renamed its own complete copy into place between the two lines above.
+    rm -rf "$tmp"
+    artifact_complete "$dst" "$arev" && echo "artifact of $arev already preserved by a concurrent freeze"
   fi
 }
 
