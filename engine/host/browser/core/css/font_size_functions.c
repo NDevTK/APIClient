@@ -20,15 +20,15 @@
    reads "3/5, 3/4, 8/9, 1, 6/5, 3/2, 2/1, 3/1" and 8/9 has no finite decimal, so a rounded copy would be a
    second answer that is always slightly wrong. The ORDER is the table's own, smallest first, which is what
    makes the readability floor below a question about the FIRST row rather than a scan. */
-static const struct { const char *kw; double num, den; } CSS_ABSOLUTE_SIZE[] = {
-    { "xx-small",  3.0, 5.0 },
-    { "x-small",   3.0, 4.0 },
-    { "small",     8.0, 9.0 },
-    { "medium",    1.0, 1.0 },
-    { "large",     6.0, 5.0 },
-    { "x-large",   3.0, 2.0 },
-    { "xx-large",  2.0, 1.0 },
-    { "xxx-large", 3.0, 1.0 },
+static const struct { CssKeyword kw; double num, den; } CSS_ABSOLUTE_SIZE[] = {
+    { CSS_KEYWORD_XX_SMALL,  3.0, 5.0 },
+    { CSS_KEYWORD_X_SMALL,   3.0, 4.0 },
+    { CSS_KEYWORD_SMALL,     8.0, 9.0 },
+    { CSS_KEYWORD_MEDIUM,    1.0, 1.0 },
+    { CSS_KEYWORD_LARGE,     6.0, 5.0 },
+    { CSS_KEYWORD_X_LARGE,   3.0, 2.0 },
+    { CSS_KEYWORD_XX_LARGE,  2.0, 1.0 },
+    { CSS_KEYWORD_XXX_LARGE, 3.0, 1.0 },
 };
 
 #define CSS_FS_N(set) (sizeof(set) / sizeof((set)[0]))
@@ -49,22 +49,6 @@ static const struct { const char *kw; double num, den; } CSS_ABSOLUTE_SIZE[] = {
 /* §2.5.1's closing guideline, as a NUMBER this file can be held to: "to preserve readability, an UA applying
    these guidelines should nevertheless avoid creating font sizes of less than 9 DEVICE PIXELS per EM unit". */
 #define CSS_FONT_SIZE_READABLE_DEVICE_PX 9.0
-
-/* A CSS KEYWORD, COMPARED THE WAY CSS COMPARES ONE — ASCII case-insensitively (CSS Syntax §4 makes a unit or
-   keyword ident case-insensitive), over the surrounding white space a serialization may leave on a value. The
-   span is the caller's own bytes: css_font_shorthand.c holds a token it has not copied, and requiring a
-   NUL-terminated lowercased copy would be the allocation every failure path then has to free. */
-static bool fs_kw_is(const char *v, size_t n, const char *kw)
-{
-    size_t k = strlen(kw), j;
-
-    while (n > 0 && isspace((unsigned char)*v)) { v++; n--; }
-    while (n > 0 && isspace((unsigned char)v[n - 1])) n--;
-    if (n != k) return false;
-    for (j = 0; j < k; j++)
-        if ((char)tolower((unsigned char)v[j]) != kw[j]) return false;
-    return true;
-}
 
 CssPx css_default_font_size(JSContext *realm)
 {
@@ -96,36 +80,31 @@ CssPx css_default_font_size(JSContext *realm)
 
 bool css_absolute_size_keyword(const char *kw, size_t n)
 {
-    unsigned i;
-
     DCHECK(kw != NULL || n == 0,
            "css-fonts-4 §2.5's `<absolute-size>` membership was asked through a NULL span with a non-zero "
            "length — a keyword names its bytes inside the value it was serialized from, so an absent pointer "
            "is a caller that lost it");
-    for (i = 0; i < CSS_FS_N(CSS_ABSOLUTE_SIZE); i++)
-        if (fs_kw_is(kw, n, CSS_ABSOLUTE_SIZE[i].kw)) return true;
-    return false;
+    while (n > 0 && isspace((unsigned char)*kw)) { kw++; n--; }
+    while (n > 0 && isspace((unsigned char)kw[n - 1])) n--;
+    return css_keyword_set_has(CSS_KEYWORDS_ABSOLUTE_SIZE, css_keyword_of(kw, n));
 }
 
-CssPx css_absolute_size_px(JSContext *realm, const char *kw)
+CssPx css_absolute_size_px(JSContext *realm, CssKeyword kw)
 {
     CssPx medium;
     unsigned i;
 
-    DCHECK(kw != NULL, "§2.5.1's table was asked for the entry of a NULL keyword");
     medium = css_default_font_size(realm);
     for (i = 0; i < CSS_FS_N(CSS_ABSOLUTE_SIZE); i++) {
-        if (!fs_kw_is(kw, strlen(kw), CSS_ABSOLUTE_SIZE[i].kw)) continue;
+        if (CSS_ABSOLUTE_SIZE[i].kw != kw) continue;
         /* §2.5.1: "the medium value is used as the reference middle value", so `medium`'s own entry is the
            identity and the other seven are its exact ratios. The scale is over the `CssPx`, which is what
            carries CSS_ENV_DEFAULT_FONT_SIZE through to the page — an `<absolute-size>` keyword is a function
            of the reader's font preference exactly as a bare `medium` is. */
         return css_px_scale(medium, CSS_ABSOLUTE_SIZE[i].num / CSS_ABSOLUTE_SIZE[i].den);
     }
-    DFAIL("§2.5.1's table was asked for the entry of a keyword that is not one of css-fonts-4 §2.5's eight "
-          "`<absolute-size>` values (xx-small, x-small, small, medium, large, x-large, xx-large, xxx-large). "
-          "css_absolute_size_keyword and this table are ONE list and have come apart, or a caller reached the "
-          "value entry without asking the membership one first");
+    DFAILF("§2.5.1's table was asked for keyword %u, which is not one of css-fonts-4 §2.5's eight "
+           "`<absolute-size>` values; CSS_KEYWORDS_ABSOLUTE_SIZE and this table are one list", (unsigned)kw);
     return medium;
 }
 

@@ -67,11 +67,11 @@ typedef enum {
     X(RIGHT,               "right",               LXB_CSS_PROPERTY_RIGHT,          LENGTH, ALL, INSET)            \
     X(BOTTOM,              "bottom",              LXB_CSS_PROPERTY_BOTTOM,         LENGTH, ALL, INSET)            \
     X(LEFT,                "left",                LXB_CSS_PROPERTY_LEFT,           LENGTH, ALL, INSET)            \
-    X(BORDER_TOP_WIDTH,    "border-top-width",    LXB_CSS_PROPERTY__UNDEF,         LENGTH, NON_NEGATIVE, NONE)    \
-    X(BORDER_RIGHT_WIDTH,  "border-right-width",  LXB_CSS_PROPERTY__UNDEF,         LENGTH, NON_NEGATIVE, NONE)    \
-    X(BORDER_BOTTOM_WIDTH, "border-bottom-width", LXB_CSS_PROPERTY__UNDEF,         LENGTH, NON_NEGATIVE, NONE)    \
-    X(BORDER_LEFT_WIDTH,   "border-left-width",   LXB_CSS_PROPERTY__UNDEF,         LENGTH, NON_NEGATIVE, NONE)    \
-    X(FONT_SIZE,           "font-size",           LXB_CSS_PROPERTY_FONT_SIZE,      LENGTH, NON_NEGATIVE, NONE)    \
+    X(BORDER_TOP_WIDTH,    "border-top-width",    LXB_CSS_PROPERTY__UNDEF,         LENGTH, NON_NEGATIVE, LINE_WIDTH)\
+    X(BORDER_RIGHT_WIDTH,  "border-right-width",  LXB_CSS_PROPERTY__UNDEF,         LENGTH, NON_NEGATIVE, LINE_WIDTH)\
+    X(BORDER_BOTTOM_WIDTH, "border-bottom-width", LXB_CSS_PROPERTY__UNDEF,         LENGTH, NON_NEGATIVE, LINE_WIDTH)\
+    X(BORDER_LEFT_WIDTH,   "border-left-width",   LXB_CSS_PROPERTY__UNDEF,         LENGTH, NON_NEGATIVE, LINE_WIDTH)\
+    X(FONT_SIZE,           "font-size",           LXB_CSS_PROPERTY_FONT_SIZE,      LENGTH, NON_NEGATIVE, FONT_SIZE) \
     X(BASELINE_SHIFT,      "baseline-shift",      LXB_CSS_PROPERTY_BASELINE_SHIFT, LENGTH, ALL, BASELINE_SHIFT)   \
     X(FLEX_BASIS,          "flex-basis",          LXB_CSS_PROPERTY_FLEX_BASIS,     LENGTH, NON_NEGATIVE, FLEX_BASIS) \
     X(LINE_HEIGHT,         "line-height",         LXB_CSS_PROPERTY_LINE_HEIGHT,    LINE_HEIGHT, NON_NEGATIVE, NONE) \

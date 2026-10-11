@@ -87,10 +87,10 @@ CssPx css_default_font_size(JSContext *realm);
 bool css_absolute_size_keyword(const char *kw, size_t n);
 
 /* §2.5.1's ENTRY for one of those eight — the scaling factor times the default font size above, carrying that
-   fact. `kw` must be one of them (the membership entry decides), and the answer is ABSOLUTE: an
+   fact. `kw` must be in CSS_KEYWORDS_ABSOLUTE_SIZE, and the answer is ABSOLUTE: an
    `<absolute-size>` keyword does NOT depend on the parent element, which is exactly what distinguishes it from
    §2.5's `<relative-size>` below. */
-CssPx css_absolute_size_px(JSContext *realm, const char *kw);
+CssPx css_absolute_size_px(JSContext *realm, CssKeyword kw);
 
 /* §2.5's `<relative-size>` — `larger` and `smaller`, "interpreted relative to the computed font-size of the
    PARENT element and possibly the table of font sizes".

@@ -1069,13 +1069,6 @@ static bool computed_length(lxb_dom_element_t *el, const char *name, char *spec,
 
 /* ---- CSS Backgrounds §3.2 and §3.3's BORDER LONGHANDS ----------------------------------------------------- */
 
-/* css-backgrounds-3 §3.3: "The thin, medium, and thick keywords are equivalent to 1px, 3px, and 5px,
-   respectively." CSS 2.1 §8.5.1 left the three UA-dependent and required only `thin <= medium <= thick`; the
-   level-3 sentence PINS them, so these are the spec's numbers and not this UA's preference. */
-static const struct { const char *kw; double px; } CSS_LINE_WIDTH[] = {
-    { "thin", 1.0 }, { "medium", 3.0 }, { "thick", 5.0 },
-};
-
 /* CSS 2.1 §8.5.1's `Computed value:` line, entire: "absolute length; '0' if the border style is 'none' or
    'hidden'". css-backgrounds-3 §3.3 states the same line as "absolute length, snapped as a border width" and
    moves the none/hidden rule to the USED value ("if the border-style corresponding to a given border-width is
@@ -1122,7 +1115,6 @@ static CssLength css_border_width_inherited(lxb_dom_element_t *el, int side, Css
 static bool computed_border_width(lxb_dom_element_t *el, const char *name, int side, char *spec, CssLength *out)
 {
     CssLength len;
-    unsigned i;
 
     /* §8.5.1's second clause is a NUMBER and not a snapped one: "0 if the border style is none or hidden" —
        zero is an integer number of device pixels at every ratio, so it is the same 0 on every display and it
@@ -1133,13 +1125,23 @@ static bool computed_border_width(lxb_dom_element_t *el, const char *name, int s
         *out = css_cv_px(css_px(0.0));
         return true;
     }
-    for (i = 0; i < sizeof(CSS_LINE_WIDTH) / sizeof(CSS_LINE_WIDTH[0]); i++) {
-        if (strcmp(CSS_LINE_WIDTH[i].kw, spec) != 0) continue;
-        free(spec);
-        *out = css_cv_px(css_length_snap_line_width(css_cv_realm(el), css_px(CSS_LINE_WIDTH[i].px)));
-        return true;
-    }
     if (!computed_length(el, name, spec, &len)) return false;
+    /* css-backgrounds-3 §3.3: "The thin, medium, and thick keywords are equivalent to 1px, 3px, and 5px,
+       respectively." CSS 2.1 §8.5.1 left the three UA-dependent; the level-3 sentence pins them. */
+    if (len.kind == CSS_LENGTH_KEYWORD) {
+        double px = 0.0;
+
+        switch (len.keyword) {
+        case CSS_KEYWORD_THIN:   px = 1.0; break;
+        case CSS_KEYWORD_MEDIUM: px = 3.0; break;
+        case CSS_KEYWORD_THICK:  px = 5.0; break;
+        default:
+            DFAILF("`%s` computed to keyword %u, outside css-backgrounds-3 §3.3's `<line-width>`", name,
+                   (unsigned)len.keyword);
+            break;
+        }
+        len = css_cv_px(css_px(px));
+    }
     DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
            "a `border-*-width` cascaded to a value that is neither one of §3.3's three keywords nor a length. "
            "`<line-width> = <length [0,∞]> | thin | medium | thick` admits nothing else — no percentage and no "
@@ -1181,45 +1183,49 @@ static bool computed_font_size(lxb_dom_element_t *el, char *spec, CssLength *out
            "font-affecting property on the element they refer to, the font-relative lengths resolve against "
            "the computed metrics of the parent element'), and the difference here is not a wrong number but an "
            "unbounded walk: restore the row in core/css/font_size_functions.c");
-    if (css_absolute_size_keyword(spec, strlen(spec))) {
-        CssPx px = css_absolute_size_px(css_cv_realm(el), spec);
-
-        free(spec);
-        *out = css_cv_px(px);
-        return true;
-    }
-    /* §2.5's `<relative-size>`: "interpreted relative to the computed font-size of the parent element". The
-       PARENT's, on an element with no parent element too — §7.2's initial value is what the metrics answer
-       there, so `html { font-size: larger }` is a ratio of `medium` rather than of itself. */
-    if (css_cv_kw_is(spec, "larger") || css_cv_kw_is(spec, "smaller")) {
-        bool larger = css_cv_kw_is(spec, "larger");
-        CssPx px = css_relative_size_px(css_cv_parent_font_size(el), larger);
-
-        free(spec);
-        *out = css_cv_px(px);
-        return true;
-    }
-    if (css_cv_kw_is(spec, "math")) {
-        free(spec);
-        DFAIL("css-fonts-4 §2.5 (Font size: the font-size property)'s `math` value reached the computed value: "
-              "\"special mathematical scaling rules must be applied when determining the computed value of the "
-              "font-size property\". Those rules are MathML Core §4.5 (The math-depth property), which states "
-              "the whole procedure — the computed value is the INHERITED font-size times a scale factor "
-              "derived from the inherited and computed `math-depth`, from `math-style`, and from the inherited "
-              "first available font's OpenType MATH table (`scriptPercentScaleDown` and "
-              "`scriptScriptPercentScaleDown`, with a fallback constant of 0.71 per level otherwise). THREE "
-              "things are missing and they are not one absence: `math-depth` is a property with its own "
-              "computed-value rule (`auto-add | add(<integer>) | <integer>`, resolved against the INHERITED "
-              "value and against `math-style`), `math-style` is a `Computed value: specified keyword` line "
-              "that is one row of core/css/css_property_id.h's table, one case of css_cv_computed's as-specified "
-              "arm and one of css_shorthand_complete_for "
-              "— and lexbor's property registry carries NEITHER, so §6's cascade answers nothing for either "
-              "and §7.1 has no initial value to fall to. The MATH table is the FONT RECORD css_length.c's "
-              "font-metric crash names. BUILD the two properties first: with no OpenType MATH table §4.5's "
-              "procedure still answers, out of its own 0.71 constant");
-        return false;
-    }
     if (!computed_length(el, "font-size", spec, &len)) return false;
+    if (len.kind == CSS_LENGTH_KEYWORD) {
+        switch (len.keyword) {
+        case CSS_KEYWORD_XX_SMALL:
+        case CSS_KEYWORD_X_SMALL:
+        case CSS_KEYWORD_SMALL:
+        case CSS_KEYWORD_MEDIUM:
+        case CSS_KEYWORD_LARGE:
+        case CSS_KEYWORD_X_LARGE:
+        case CSS_KEYWORD_XX_LARGE:
+        case CSS_KEYWORD_XXX_LARGE:
+            *out = css_cv_px(css_absolute_size_px(css_cv_realm(el), len.keyword));
+            return true;
+        /* §2.5's `<relative-size>`: "interpreted relative to the computed font-size of the parent element". The
+           PARENT's, on an element with no parent element too — §7.2's initial value is what the metrics answer
+           there, so `html { font-size: larger }` is a ratio of `medium` rather than of itself. */
+        case CSS_KEYWORD_LARGER:
+        case CSS_KEYWORD_SMALLER:
+            *out = css_cv_px(css_relative_size_px(css_cv_parent_font_size(el), len.keyword == CSS_KEYWORD_LARGER));
+            return true;
+        case CSS_KEYWORD_MATH:
+            DFAIL("css-fonts-4 §2.5 (Font size: the font-size property)'s `math` value reached the computed value: "
+                  "\"special mathematical scaling rules must be applied when determining the computed value of the "
+                  "font-size property\". Those rules are MathML Core §4.5 (The math-depth property), which states "
+                  "the whole procedure — the computed value is the INHERITED font-size times a scale factor "
+                  "derived from the inherited and computed `math-depth`, from `math-style`, and from the inherited "
+                  "first available font's OpenType MATH table (`scriptPercentScaleDown` and "
+                  "`scriptScriptPercentScaleDown`, with a fallback constant of 0.71 per level otherwise). THREE "
+                  "things are missing and they are not one absence: `math-depth` is a property with its own "
+                  "computed-value rule (`auto-add | add(<integer>) | <integer>`, resolved against the INHERITED "
+                  "value and against `math-style`), `math-style` is a `Computed value: specified keyword` line "
+                  "that is one KEYWORD row of core/css/css_property_id.h's table and one of "
+                  "css_shorthand_complete_for "
+                  "— and lexbor's property registry carries NEITHER, so §6's cascade answers nothing for either "
+                  "and §7.1 has no initial value to fall to. The MATH table is the FONT RECORD css_length.c's "
+                  "font-metric crash names. BUILD the two properties first: with no OpenType MATH table §4.5's "
+                  "procedure still answers, out of its own 0.71 constant");
+            return false;
+        default:
+            DFAILF("`font-size` computed to keyword %u, outside css-fonts-4 §2.5's set", (unsigned)len.keyword);
+            return false;
+        }
+    }
     /* §2.5's `Percentages: refer to parent element's font size` — resolved HERE, because that is a value the
        cascade has and not a containing block a layout would have to produce. A percentage of the parent is
        what makes `em` and `%` two spellings of one thing on this property, which §2.5's own example set says

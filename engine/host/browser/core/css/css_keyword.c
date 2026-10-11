@@ -50,9 +50,7 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
                "give that row a set and its computed value a typed arm",
                (unsigned)k);
         return false;
-    /* css-box-4 §4.1 "Page-relative (Physical) Padding Properties…" (`<length-percentage [0,∞]>`), and
-       every length whose own arm consumes its keywords before the parse: css-backgrounds-3 §3.3's
-       `<line-width>` and css-fonts-4 §2.5's sizes compute to "an absolute length". */
+    /* css-box-4 §4.1 "Page-relative (Physical) Padding Properties…" (`<length-percentage [0,∞]>`). */
     case CSS_KEYWORDS_NONE:
         return false;
     /* css-box-4 §3.1 "Page-relative (Physical) Margin Properties…": `<length-percentage> | auto`. */
@@ -95,6 +93,21 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
                k == CSS_KEYWORD_BLOCK_END || k == CSS_KEYWORD_LEFT || k == CSS_KEYWORD_RIGHT ||
                k == CSS_KEYWORD_TOP || k == CSS_KEYWORD_BOTTOM || k == CSS_KEYWORD_BOTH_INLINE ||
                k == CSS_KEYWORD_BOTH_BLOCK || k == CSS_KEYWORD_BOTH || k == CSS_KEYWORD_NONE;
+    /* css-backgrounds-3 §3.3 "Line Thickness: the border-width properties": `<line-width> = <length [0,∞]> |
+       thin | medium | thick`. */
+    case CSS_KEYWORDS_LINE_WIDTH:
+        return k == CSS_KEYWORD_THIN || k == CSS_KEYWORD_MEDIUM || k == CSS_KEYWORD_THICK;
+    /* css-fonts-4 §2.5 "Font size: the font-size property": `<absolute-size> | <relative-size> |
+       <length-percentage [0,∞]> | math`, where `<relative-size>` is `[ larger | smaller ]`. */
+    case CSS_KEYWORDS_FONT_SIZE:
+        return css_keyword_set_has(CSS_KEYWORDS_ABSOLUTE_SIZE, k) || k == CSS_KEYWORD_LARGER ||
+               k == CSS_KEYWORD_SMALLER || k == CSS_KEYWORD_MATH;
+    /* css-fonts-4 §2.5's `<absolute-size>`: `[ xx-small | x-small | small | medium | large | x-large |
+       xx-large | xxx-large ]`. */
+    case CSS_KEYWORDS_ABSOLUTE_SIZE:
+        return k == CSS_KEYWORD_XX_SMALL || k == CSS_KEYWORD_X_SMALL || k == CSS_KEYWORD_SMALL ||
+               k == CSS_KEYWORD_MEDIUM || k == CSS_KEYWORD_LARGE || k == CSS_KEYWORD_X_LARGE ||
+               k == CSS_KEYWORD_XX_LARGE || k == CSS_KEYWORD_XXX_LARGE;
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;
