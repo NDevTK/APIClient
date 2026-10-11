@@ -1435,8 +1435,8 @@ async function frontierRederive(e) {
                                                   credentialed: navigationCarriesSession(e.sourceUrl, e.origin),
                                                   /* A parked document is one only this zone holds. */
                                                   identity: navigationCarriesSession(e.sourceUrl, e.origin)
-                                                    ? navigationIdentity(engineIdentity(e.origin, e.sourceUrl),
-                                                                         e.origin, e.sourceUrl) : null }); }
+                                                    ? navigationIdentity({ identity: engineIdentity(e.origin, e.sourceUrl),
+                                                                           referrer: "none" }, e.sourceUrl) : null }); }
     catch (err) { RETHROW_FATAL(err); r = null; }
   }
   const landed = r && Array.isArray(r.urlList) && r.urlList.length ? r.urlList[r.urlList.length - 1] : null;
@@ -1782,13 +1782,43 @@ function responseFieldLines(h) {
    them. Next diff builds a document load type in safe-fetch.js whose read principal is the response's own
    origin (the bytes go to a different instance, not the initiator). Absence shows as cross-origin child
    documents loading in their logged-out form. */
-/* Who a load made for the document `msg` describes speaks as, as navigationLoad's `speakerOf`: the browser's
-   frame (frameIdentity, by the document's id and its tab, which is its group) when the browser holds that
-   document, and engineIdentity for one only this zone holds (a route seed, a peer-announced child, a
-   rehydrated recipe). Resolves null when the browser's document has gone. */
+/* A speaker is who a document load's request speaks as, {identity, referrer}: `identity` is the request's
+   client (lib/request-identity.js), and `referrer` is "client" when the request's referrer is that client's
+   URL and "none" when no referrer is known. Each `speakerOf` below resolves one, or null when the browser's
+   document it names has gone.
+   documentSpeaker: a load the document `msg` describes makes for a child navigable, whose client is that
+   document: the browser's frame (frameIdentity, by its id and its tab, which is its group) when the browser
+   holds it, and engineIdentity for one only this zone holds (a peer-announced child, a rehydrated recipe). */
 function documentSpeaker(msg) {
-  return async () => typeof msg.documentId === "string" && typeof msg.groupId === "number"
-    ? frameIdentity(msg.groupId, msg.documentId) : engineIdentity(msg.origin, msg.sourceUrl);
+  return async () => {
+    const identity = typeof msg.documentId === "string" && typeof msg.groupId === "number"
+      ? await frameIdentity(msg.groupId, msg.documentId) : engineIdentity(msg.origin, msg.sourceUrl);
+    return identity === null ? null : { identity, referrer: "client" };
+  };
+}
+
+/* seedSpeaker: the seed of the live document `msg`, re-loading what the browser's navigation loaded. A
+   sub-frame's navigation had its parent document as client, so the load speaks as that parent, found by the
+   browser's own `parentDocumentId`. A top-level navigation's initiator is not recorded, so the document speaks
+   as itself with no referrer.
+   Named residual. Not covered: a top-level document's initiator, and the parent's own referrer policy (its
+   default stands). The next diff reads the policy the engine parsed for the parent. Their absence shows as a
+   seed load's Referer and Sec-Fetch-Site differing from the browser's navigation of that document. */
+function seedSpeaker(msg) {
+  return async () => {
+    const frames = await swRpc("webNavigation.getAllFrames", { tabId: msg.groupId });
+    if (frames === null) return null;
+    const f = frames.find((x) => x.documentId === msg.documentId);
+    if (f === undefined) return null;
+    if (f.parentFrameId === -1) {
+      const own = await frameIdentityOf(f);
+      return own === null ? null : { identity: own, referrer: "none" };
+    }
+    DCHECK(typeof f.parentDocumentId === "string" && f.parentDocumentId !== "",
+           "webNavigation reported a sub-frame with no parentDocumentId — the seed load cannot name its client");
+    const parent = await frameIdentity(msg.groupId, f.parentDocumentId);
+    return parent === null ? null : { identity: parent, referrer: "client" };
+  };
 }
 
 function navigationCarriesSession(absUrl, principalOrigin) {
@@ -1801,19 +1831,17 @@ function navigationCarriesSession(absUrl, principalOrigin) {
 }
 
 /* The facts a credentialed document load of `absUrl` speaks with as `speaker`: HTML §7.4.5's request, credentials
-   mode `include` and mode `navigate`, its Cookie by lib/request-identity.js's rules for `speaker`'s jar.
-   Named residual. Not covered: the navigation's referrer (its initiator's URL) and a child navigable's
-   destination; the load states no referrer and destination `document`. Next diff carries the initiator's
-   URL and the navigable's kind on the load. Absence shows as a zone document load with no Referer, and
-   Sec-Fetch-Dest `document`, where the browser's own load of that frame sent its embedder's URL and `iframe`. */
-function navigationIdentity(speaker, principalOrigin, absUrl) {
-  DCHECK(!!speaker && typeof speaker.origin === "string" && !!speaker.partitionKey,
-         "a credentialed document load was handed no identity to speak as");
-  DCHECK(speaker.origin === principalOrigin,
-         "a document load speaks as " + speaker.origin + " for the principal " + principalOrigin + " — the " +
-         "session it carries would be another document's");
-  return identityFor(speaker, { url: absUrl, requestInit: { credentials: "include", mode: "navigate",
-                                                            referrer: "", referrerPolicy: null } },
+   mode `include` and mode `navigate`, with the speaker's client as the request's, so its Cookie, Referer and
+   Sec-Fetch-Site are that client's. The document that reads the reply is the caller's principal, a second fact.
+   Named residual. Not covered: a child navigable's destination, which webNavigation states only as
+   `sub_frame`; the load states `document`. The next diff carries the container's element kind on the load.
+   Its absence shows as Sec-Fetch-Dest `document` where the browser's own load of that frame sent `iframe`. */
+function navigationIdentity(speaker, absUrl) {
+  DCHECK(!!speaker && !!speaker.identity && typeof speaker.identity.origin === "string" &&
+         !!speaker.identity.partitionKey && (speaker.referrer === "client" || speaker.referrer === "none"),
+         "a credentialed document load was handed no {identity, referrer} to speak as");
+  return identityFor(speaker.identity, { url: absUrl, requestInit: { credentials: "include", mode: "navigate",
+                                         referrer: speaker.referrer === "client" ? null : "", referrerPolicy: null } },
                      "strict-origin-when-cross-origin");
 }
 
@@ -1847,8 +1875,8 @@ function navigationIdentity(speaker, principalOrigin, absUrl) {
    The test is written in the positive (`!== "rendezvous" && !== "report"`), so an unstated or misspelled word
    refuses by construction. */
 const DOC_REFUSAL_ARMS = Object.freeze(["rendezvous", "report", "none"]);
-/* `speakerOf` resolves the identity whose session a load the browser would credential carries
-   (documentSpeaker's), or null when it has none, which loads without the session. */
+/* `speakerOf` resolves the speaker (documentSpeaker's, seedSpeaker's) whose session a load the browser would
+   credential carries, or null when it has none, which loads without the session. */
 async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromReach, refusalArm,
                               actor, driven, speakerOf) {
   /* `refusalArm` is required; an unstated word takes the refusing arm, exactly as `none` does. */
@@ -1908,7 +1936,7 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
      refusal comes back as the chokepoint's `blocked-signal:` reply record. */
   const speaker = navigationCarriesSession(abs, principalOrigin) ? await speakerOf() : null;
   const credentialed = speaker !== null;
-  const identity = credentialed ? navigationIdentity(speaker, principalOrigin, abs) : null;
+  const identity = credentialed ? navigationIdentity(speaker, abs) : null;
   try {
     // Never `as: "script"`: these bytes are parsed as a document, not run as code.
     /* The session is carried where a browser's navigation would carry it; the chokepoint re-decides on the
@@ -5056,7 +5084,8 @@ const _hostOps = {
                                               mark says whether a drive of uncalled code ran them. */
                                            /*actor*/"page", seed.driven,
                                            /* A declared route is a document only this zone holds. */
-                                           async () => engineIdentity(seed.principalOrigin, seed.principalUrl)));
+                                           async () => ({ identity: engineIdentity(seed.principalOrigin, seed.principalUrl),
+                                                          referrer: "none" })));
         return pick.census;
       }
       if (cand.kind === "doc") {
@@ -5606,7 +5635,7 @@ self.astDispatch = async function astDispatch(msg) {
                                            scoped to `provenance !== "observed"` and the observed/observed
                                            arm fires at every address. */
                                         PROVENANCE_OBSERVED, PROVENANCE_OBSERVED, /*refusalArm*/"none",
-                                        /*actor*/"tool", /*driven*/"unstated", documentSpeaker(msg));
+                                        /*actor*/"tool", /*driven*/"unstated", seedSpeaker(msg));
     /* The seed's own rule on top of the loader's: an OK empty body is an ordinary empty Document (HTML §7.4.5),
        but a seeded document with no bytes cannot be the program this run explores, and analysing it would read
        as a clean page. */

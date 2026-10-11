@@ -255,8 +255,11 @@ Three callers speak as a document:
 - every page request `bridge.js` or `engine/trusted.mjs` hands `safeFetch` (`pageRequestIdentity`). These
   are uncredentialed under the egress default, so they carry the identity's Origin, Referer and
   `Sec-Fetch-*` and no cookies;
-- every credentialed document load `bridge.js` makes (`navigationIdentity`): a live document's seed speaks
-  as its browser frame (`frameIdentity`), and a document only the zone holds as its `engineIdentity`;
+- every credentialed document load `bridge.js` makes (`navigationIdentity`), as the request's client: a live
+  sub-frame's seed as its parent frame (`frameIdentity` by the browser's `parentDocumentId`), a live
+  top-level seed as its own frame, a child navigable's load as the document that holds it, and a document only
+  the zone holds as its `engineIdentity`. The document that reads the reply stays the load's principal;
+  `safeFetch` lets the two differ only for a navigation;
 - every operator send (above).
 Neither a message nor the engine can state an identity. `safeFetch` `CHECK`s that a credentialed request
 has one, and the zone's own fetch always omits credentials: the extension's jar, whose partition is the

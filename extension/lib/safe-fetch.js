@@ -1851,10 +1851,14 @@ async function safeFetch(url, opts) {
         "safeFetch must CORS-preflight this request and was handed no request identity — Fetch §4.8's " +
         "preflight carries the request's origin and is CORS-checked against it, and that origin is the " +
         "trusted zone's `identityFor(request)`, which the caller passes as `opts.identity`");
-  CHECK(!opts.identity || opts.identity.origin === (_isRealOrigin(_pageOrigin) ? _pageOrigin : "null"),
-        "the request identity's origin (" + (opts.identity && opts.identity.origin) + ") is not the page origin " +
-        "this zone judges the reply against (" + _pageOrigin + ") — two zone records of one request disagree, " +
-        "and the preflight and the reply would be CORS-checked as two different requesters");
+  /* Two records: `opts.identity` is who the request speaks as (its client, Fetch §2.2.5 "Requests"), and
+     `pageOrigin` the document that reads the reply. They are one document for every request but a
+     navigation's, whose client is the document that started it while its reader is the one it creates. */
+  CHECK(!opts.identity || mode === "navigate" ||
+        opts.identity.origin === (_isRealOrigin(_pageOrigin) ? _pageOrigin : "null"),
+        "a " + mode + " request speaks as " + (opts.identity && opts.identity.origin) + " while its reply is read " +
+        "by " + _pageOrigin + " — only a navigation's client differs from its reader, and the preflight and " +
+        "the reply would be CORS-checked as two different requesters");
   var init = { method: _method, credentials: "omit", redirect: "follow" };
   /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the model
      for the request this file issues (an uncredentialed GET whose forbidden header names the browser strips)
