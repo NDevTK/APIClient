@@ -41,7 +41,7 @@ function zone() {
                     fetch: () => { throw new Error(REACHED); } };
   sandbox.self = sandbox; sandbox.globalThis = sandbox;
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/document-record.js', 'lib/safe-fetch.js'])
+  for (const f of ['check.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/safe-fetch.js'])
     runInContext(readFileSync(join(EXT, f), 'utf8'), sandbox, { filename: join(EXT, f) });
   for (const n of ['safeFetch', 'safeFetchEgressStated'])
     if (typeof sandbox[n] !== 'function')
@@ -64,7 +64,7 @@ const PRINCIPAL = 'https://app.example.com/page';
 function navOpts(over) {
   return Object.assign({ pageUrl: PRINCIPAL, pageOrigin: new URL(PRINCIPAL).origin,
                          destination: 'document', mode: 'navigate', provenance: 'derived',
-                         doc: z.docRecord('observed', 'undriven', 'unpinned'),
+                         doc: z.docRecord('observed', 'undriven', 'unpinned', 'none'),
                          actor: 'page', pinned: 'unstated', credentials: 'include',
                          credentialed: true }, over || {});
 }

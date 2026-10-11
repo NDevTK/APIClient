@@ -2,8 +2,9 @@
 // Each field's index in a provisioning notice split on TAB (index 0 is the operation name), `parts`,
 // the split length of a complete record, and `encoding`, each field's encoding. `create` is
 // navigable.create; `provision` is navigable.swap and navigable.navigate; `request` is
-// navigable.request. A `var`, so a vm context's global object carries it. navigableNoticeField reads a
-// field by that encoding.
+// navigable.request. `sandbox` is the create notice's sandboxing flag set vocabulary: HTML §7.1.5's flag
+// names in core/frame/sandboxing.h's order, and the word for the empty set. A `var`, so a vm context's
+// global object carries it. navigableNoticeField reads a field by its encoding.
 var NAVIGABLE_NOTICE = Object.freeze({
   create: Object.freeze({
     child: 1,
@@ -85,6 +86,27 @@ var NAVIGABLE_NOTICE = Object.freeze({
       referrerPolicy: "token",
       address: "token",
     }),
+  }),
+  sandbox: Object.freeze({
+    flags: Object.freeze([
+      "sandboxed navigation browsing context flag",
+      "sandboxed auxiliary navigation browsing context flag",
+      "sandboxed top-level navigation without user activation browsing context flag",
+      "sandboxed top-level navigation with user activation browsing context flag",
+      "sandboxed origin browsing context flag",
+      "sandboxed forms browsing context flag",
+      "sandboxed pointer lock browsing context flag",
+      "sandboxed scripts browsing context flag",
+      "sandboxed automatic features browsing context flag",
+      "sandboxed document.domain browsing context flag",
+      "sandbox propagates to auxiliary browsing contexts flag",
+      "sandboxed modals flag",
+      "sandboxed orientation lock browsing context flag",
+      "sandboxed presentation browsing context flag",
+      "sandboxed downloads browsing context flag",
+      "sandboxed custom protocols navigation browsing context flag",
+    ]),
+    none: "none",
   }),
 });
 var navigableNoticeField = function navigableNoticeField(table, f, name) {

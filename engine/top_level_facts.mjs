@@ -105,8 +105,11 @@ export const TOP_LEVEL_FACT_NAMES = (() => {
 })();
 
 /* THE ONE STATEMENT. Every value is a string and every one is the answer the paragraph above argues for; the
-   only per-run member is the address, which is the caller's. */
-function statement(url) {
+   per-run members are the address and HTML §7.1.5's creation sandboxing flag set, which are the caller's: a
+   document a person named has the empty set (a browsing context is created with an empty popup sandboxing
+   flag set), and a top-level document the trusted zone provisions keeps its navigable's, from the zone's
+   document record. */
+function statement(url, creationSandboxFlags) {
   return {
     topLevelUrl: url,
     inheritedCsp: '',
@@ -121,7 +124,7 @@ function statement(url) {
     openerNavigable: 'N',   // §7.2.2.4's opener, remote_object.h's null: nothing opened a page a person named
     containerPolicy: 'null',
     ancestorOrigins: 'none',
-    creationSandboxFlags: 'none',
+    creationSandboxFlags,
   };
 }
 
@@ -131,13 +134,16 @@ function statement(url) {
    interface declares no parameter of is one NEWER than it, or a misspelling. Each is silent on its own: the
    first shifts every later field of the native record one slot, and the second crosses a value to a reader
    that never looks at it. */
-function checked(url) {
+function checked(url, creationSandboxFlags) {
   if (typeof url !== 'string' || url === '')
     throw new Error('top_level_facts.mjs: a top-level document was composed with no ADDRESS — §8.1.3.1 gives ' +
                     'every environment a top-level creation URL, `abi_main` refuses an empty one, and every ' +
                     'relative URL the page builds resolves against it, so an absent one is a document seated ' +
                     'nowhere rather than one seated badly.');
-  const v = statement(url);
+  if (typeof creationSandboxFlags !== 'string' || creationSandboxFlags === '')
+    throw new Error('top_level_facts.mjs: a top-level document was composed with no §7.1.5 creation sandboxing ' +
+                    'flag set — `none` is the empty set, and an absent one is a caller that skipped the question');
+  const v = statement(url, creationSandboxFlags);
   const have = Object.keys(v);
   for (const name of TOP_LEVEL_FACT_NAMES)
     if (!Object.prototype.hasOwnProperty.call(v, name))
@@ -179,8 +185,8 @@ export function topLevelFacts(url) { return checked(url); }
  * naming a grammar the two ends do not share, one process away from the composer that wrote it. */
 const NATIVE_BASE64 = new Set(['inheritedCsp', 'inheritedCspReportOnly']);
 
-export function topLevelFactFields(url) {
-  const v = checked(url);
+export function topLevelFactFields(url, creationSandboxFlags) {
+  const v = checked(url, creationSandboxFlags);
   const fields = TOP_LEVEL_FACT_NAMES.map((name) =>
     NATIVE_BASE64.has(name) ? Buffer.from(v[name]).toString('base64') : v[name]);
   /* NO FIELD MAY CONTAIN THE SEPARATOR, asserted where the record is composed rather than discovered where it

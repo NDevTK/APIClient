@@ -73,7 +73,7 @@ const headers = 'content-type: text/html; charset=utf-8\n';
 /* HTML §7.5.1's eleven for a top-level traversable, from the ONE statement of them — see
    `engine/top_level_facts.mjs`, which is what this file's residual named as its next diff and which is
    now what both this entry and `trusted.mjs` read. */
-const facts = topLevelFactFields(url);
+const facts = topLevelFactFields(url, 'none');
 
 /* THE DOCUMENT NAME IS THIS FILE'S OWN CONSTANT AND NOT THE ADDRESS. `abi_main` refuses an empty one and
    `abi_paint` composes the image's FILE NAME out of it, so a name derived from a URL would put a caller's

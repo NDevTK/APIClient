@@ -361,9 +361,10 @@ not. Nothing is refused at every setting.
 attacker-controlled engine composes and the chokepoint `CHECK`s only for vocabulary.
 
 Every request also carries the zone's record of the document it was made from (`lib/document-record.js`):
-the navigation's reach grade, its drive mark and its witness mark. The zone writes one per document when it
-provisions it, from the provisioning notice joined with the creating instance's record, so a document
-inherits every mark above it. A record is frozen, minted only by `docRecord`, and written once per document
+the navigation's reach grade, its drive mark, its witness mark, and HTML §7.1.5's creation sandboxing flag
+set. The zone writes one per document when it provisions it, from the provisioning notice composed with the
+creating instance's record by HTML's own rules, so a document inherits every mark above it and every flag the
+rules carry. A record is frozen, minted only by `docRecord`, and written once per document
 (a second write is a `CHECK` in the zone). `docRecordJoin`, the one function that derives a record from
 others, `CHECK`s that the result clears no mark and strengthens no reach, so nothing a document does relaxes
 what its navigation carried. The chokepoint reads the record as a floor under the engine's per-request words:
@@ -371,7 +372,18 @@ what its navigation carried. The chokepoint reads the record as a floor under th
 document reads `witness=pinned`, whatever the engine's record states. The engine's words can narrow these rows
 and never widen them, so an engine that states `undriven` or `unpinned` for a driven or pinned peer's requests
 does not launder them into the page's own. The record is the instance's today: an instance's record is the
-join of its documents' records (see the risk table). A signal the chokepoint
+join of its documents' records (see the risk table).
+
+The flag set follows §7.1.5 and §7.3.1.7 exactly. A nested navigable's set is the union of the notice's set
+(the engine's computation of its `<iframe sandbox>` attribute and its embedder's active set) and the creating
+instance's record, so no frame regains a permission any sandbox above it removed. An auxiliary navigable (a
+notice with no parent) is refused outright when the creator's record carries the sandboxed auxiliary
+navigation flag, and otherwise starts from the notice's set, plus the creator's whole set only when the
+creator's carries the sandbox-propagates flag. So `allow-popups-to-escape-sandbox` lets a popup out only when
+every sandbox above the creator allowed it. The one branch that is not the spec's: the risk marks always
+propagate, popups included, because they describe this tool's act and no attribute the page writes can opt
+out of it. The zone hands the engine the record's flag set, never the notice's, so a notice that drops a flag
+its creator's sandbox carries is not believed. A signal the chokepoint
 cannot determine is shown as `unknown` rather than left out, because an absent row reads as a question that was
 answered. `_signalRegistryCheck` refuses a duplicate signal, an unknown reliability grade, a non-gating signal
 with more than one value, and a default arm naming a value the registry does not have.
@@ -552,6 +564,7 @@ Each residual states what is not covered, what would close it, and how its absen
 | Page requests are uncredentialed | `fetched` and `fetchedXhr` state `credentialed: false`, so the analysed page's own data requests see the logged-out reply. They already pass the page origin the credentialed SOP would need (`eng.origin`); the wrong origin would be `originOf(msg.sourceUrl)`, which gives a sandboxed iframe its embedder's | a per-origin credential decision over the request's own credentials mode | an app whose boot data differs by session analysed in its logged-out form |
 | A credentialed request cannot carry a header list | `_credentialedOf` `CHECK`s the combination, because nothing states whose header list it is | an ownership statement carried from the site that knows, as `provenance` is | that `CHECK` firing |
 | `same-origin` credentials mode where the zone is willing | `_credentialedOf` has no pre-request same-origin test, so it `CHECK_FAIL`s | the same-origin test on the request URL against `pageOrigin`, read before the wire | that `CHECK_FAIL` firing; every willing caller today states `include` |
+| Whether a navigable is nested or auxiliary is the engine's word | the zone reads the create notice's parent field to choose §7.1.5's union over §7.3.1.7's popup rule, so an engine that states no parent for a nested frame applies the popup rule to it, which drops the creator's flags unless the creator's set carries the sandbox-propagates flag. The risk marks are not affected | the navigable's kind recorded by the zone from a fact it observes, not one the engine states | a frame's record without a flag its creator's record carries |
 | A request is judged under its instance's document record | the pending line names no asking document, so `fetched`, `fetchedXhr` and trusted.mjs's relays read the instance's record, which is the join of every document it holds: a document joined through `engineJoin` or a `join` narrows its root's requests | the park's document name on the pending line, so the lookup is per document | at an origin whose table permits the root's own record, a root document's request refused on `doc-reach`, `actor` or `witness` after a document with a weaker record joined its instance |
 | An auxiliary opened without `noopener` | it shares its opener's group but lands in another tab, so `clusterKeyOf` splits the pair; `MessageSender` carries no opener | a browser-stated opener fact joined to the opener's group | an opener and its popup analysed in two instances |
 | Unused privileged primitives | the `tabs.remove` arm of `_swRpc` and the `readExecFlag`, `postMessage`, `seedStorage` and `dispatchEvents` injectors in `_PROBE_INJECTORS` have no caller; `scripting.exec` accepts any `tabId` and `allFrames`. Today they are reachable only by the offscreen (`OFFSCREEN_HREF` equality), so they are the blast radius of a hole in that gate | delete them; the `scripting` permission stays for `pocAttackerButton` | `git grep` finding the names in `background.js` and nowhere else |

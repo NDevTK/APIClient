@@ -5,6 +5,8 @@
  * index in the record split on TAB (the operation name is index 0), `parts`, the split length of every
  * record, and `encoding`, each field's encoding as the header states it (`token` or `base64`). It also
  * renders `navigableNoticeField`, the one reader that turns a field into its value by that encoding.
+ * It also carries the sandboxing flag set's vocabulary, from core/frame/sandboxing.h, which the create
+ * notice's flag-set field is spelled in.
  *
  * Two consumers. A node reader (trusted.mjs, route.mjs, renderer_host_gate.mjs) imports NAVIGABLE_NOTICE and
  * navigableNoticeField from here, and importing asserts that extension/lib/navigable-notice.js is exactly what the header renders, so a
@@ -15,6 +17,8 @@ import { join } from "node:path";
 
 const ENGINE = import.meta.dirname;
 const HEADER = join(ENGINE, "host", "browser", "core", "frame", "navigable_notice.h");
+/* The create notice's sandboxing flag set is spelled in §7.1.5's own flag names, which sandboxing.h lists. */
+const SANDBOX_HEADER = join(ENGINE, "host", "browser", "core", "frame", "sandboxing.h");
 const JS_OUT = join(ENGINE, "..", "extension", "lib", "navigable-notice.js");
 
 /* The X(ID, jsName, ENCODING) entries of one `#define <name>(X)` list, in order. */
@@ -45,10 +49,30 @@ function parseList(h, name) {
   return table;
 }
 
+/* HTML §7.1.5's flag names in sandboxing.h's order, and the serialized empty set. Every `X(` in the list must be
+   an entry this pattern matched, as for the field tables; an entry's name and text may span lines. */
+function sandboxVocabulary() {
+  const h = readFileSync(SANDBOX_HEADER, "utf8");
+  const at = h.indexOf("#define SANDBOX_FLAG_LIST(X)");
+  if (at < 0) throw new Error(`[noticegen] ${SANDBOX_HEADER} declares no SANDBOX_FLAG_LIST(X)`);
+  const lines = [];
+  for (const line of h.slice(at).split("\n")) {
+    lines.push(line);
+    if (!line.trimEnd().endsWith("\\")) break;
+  }
+  const body = lines.join("\n").replace(/\\\n/g, " ");
+  const names = [...body.matchAll(/\bX\(\s*[A-Z0-9_]+\s*,\s*"([^"]+)"\s*\)/g)].map((m) => m[1]);
+  if (names.length === 0 || (body.match(/\bX\(/g) || []).length !== names.length)
+    throw new Error("[noticegen] SANDBOX_FLAG_LIST has an entry that is not X(NAME, \"text\")");
+  const none = /#define SANDBOX_FLAGS_SERIALIZED_NONE "([^"]+)"/.exec(h);
+  if (!none) throw new Error(`[noticegen] ${SANDBOX_HEADER} defines no SANDBOX_FLAGS_SERIALIZED_NONE`);
+  return { flags: names, none: none[1] };
+}
+
 function headerTable() {
   const h = readFileSync(HEADER, "utf8");
   return { create: parseList(h, "NAVIGABLE_CREATE_FIELDS"), provision: parseList(h, "NAVIGABLE_PROVISION_FIELDS"),
-           request: parseList(h, "NAVIGABLE_REQUEST_FIELDS") };
+           request: parseList(h, "NAVIGABLE_REQUEST_FIELDS"), sandbox: sandboxVocabulary() };
 }
 
 /* A field's value: a `token` as written, a `base64` field's bytes (RFC 4648 §4, the engine's JS_Base64Encode)
@@ -82,12 +106,18 @@ function jsText(t) {
     "// Each field's index in a provisioning notice split on TAB (index 0 is the operation name), `parts`,\n" +
     "// the split length of a complete record, and `encoding`, each field's encoding. `create` is\n" +
     "// navigable.create; `provision` is navigable.swap and navigable.navigate; `request` is\n" +
-    "// navigable.request. A `var`, so a vm context's global object carries it. navigableNoticeField reads a\n" +
-    "// field by that encoding.\n" +
+    "// navigable.request. `sandbox` is the create notice's sandboxing flag set vocabulary: HTML §7.1.5's flag\n" +
+    "// names in core/frame/sandboxing.h's order, and the word for the empty set. A `var`, so a vm context's\n" +
+    "// global object carries it. navigableNoticeField reads a field by its encoding.\n" +
     "var NAVIGABLE_NOTICE = Object.freeze({\n" +
     `  create: ${obj(t.create)},\n` +
     `  provision: ${obj(t.provision)},\n` +
     `  request: ${obj(t.request)},\n` +
+    "  sandbox: Object.freeze({\n" +
+    "    flags: Object.freeze([\n" + t.sandbox.flags.map((n) => `      ${JSON.stringify(n)},`).join("\n") +
+    "\n    ]),\n" +
+    `    none: ${JSON.stringify(t.sandbox.none)},\n` +
+    "  }),\n" +
     "});\n" +
     `var navigableNoticeField = ${navigableNoticeField.toString()};\n`;
 }

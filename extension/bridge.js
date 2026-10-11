@@ -1038,13 +1038,19 @@ function frontierPlace(e, when) {
 function frontierProvenance(e) {
   return e.provenance === undefined ? PROVENANCE_DERIVED : e.provenance;
 }
-/* A document created by a navigation the instance `eng` issued: the instance's record (lib/document-record.js)
-   joined with the navigation's own words, so the child inherits every mark above it and can never be stronger
-   than the instance that created it. */
+/* A top-level document provisioned by a navigation the instance `eng` issued (a swap, a navigation into a peer,
+   a declared route): the instance's record (lib/document-record.js) joined with the navigation's own words and
+   no flags of its own, so it keeps the navigable's flags, inherits every mark above it and can never be
+   stronger than the instance that created it. */
 function childDocRecord(eng, provenance, driven, pinned) {
   DCHECK(docRecordIs(eng.doc), "a child document was recorded under an instance with no record of its own — " +
                                "engineRoot writes one before the instance can issue anything");
-  return docRecordJoin(eng.doc, docRecord(provenance, driven, pinned));
+  return docRecordJoin(eng.doc, docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none));
+}
+/* An entry's flag set. One written before the field has the empty set: until the zone recorded flags, every
+   persisted document was a top-level root or seed created with `none`. */
+function frontierSandbox(e) {
+  return e.sandbox !== undefined ? e.sandbox : NAVIGABLE_NOTICE.sandbox.none;
 }
 /* An entry's arrival. One written before the field states its grade and the strict marks: an `observed` entry is
    the ambient seed, which no drive or pin reached, and any other grade takes `driven` and `pinned`, the words
@@ -1052,8 +1058,9 @@ function childDocRecord(eng, provenance, driven, pinned) {
 function frontierArrival(e) {
   if (e.arrival !== undefined) return e.arrival;
   const reach = frontierProvenance(e);
-  return docRecordArrival(reach === PROVENANCE_OBSERVED ? docRecord(reach, DRIVEN_NO, "unpinned")
-                                                         : docRecord(reach, DRIVEN_YES, "pinned"));
+  const none = NAVIGABLE_NOTICE.sandbox.none;
+  return docRecordArrival(reach === PROVENANCE_OBSERVED ? docRecord(reach, DRIVEN_NO, "unpinned", none)
+                                                         : docRecord(reach, DRIVEN_YES, "pinned", none));
 }
 function frontierDoc(e, when) {
   frontierPlace(e, when);
@@ -1182,7 +1189,7 @@ async function frontierResidency() {
     const shed = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
                    responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit, visits: e.visits,
                    credentialed: e.credentialed, provenance: frontierProvenance(e), arrival: frontierArrival(e),
-                   shed: true };
+                   sandbox: frontierSandbox(e), shed: true };
     frontierRecord(shed, "was shed to the configured share");
     await frontierWrite(e.key, shed);
     if (_frontierIndexBuilt) _frontierIndex.set(e.key, frontierRow(shed));
@@ -1446,7 +1453,7 @@ async function frontierRederive(e) {
     try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl, pageOrigin: e.origin,
                                                   destination: "document", mode: "navigate",
                                                   provenance: frontierProvenance(e),
-                                                  doc: docRecordOfArrival(frontierArrival(e)),
+                                                  doc: docRecordOfArrival(frontierArrival(e), frontierSandbox(e)),
                                                   actor: "tool", driven: "unstated",
                                                   pinned: "unstated",
                                                   credentials: "include",
@@ -1468,7 +1475,7 @@ async function frontierRederive(e) {
   const strandedEntry = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
                           responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit,
                           visits: e.visits, credentialed: e.credentialed, provenance: frontierProvenance(e),
-                          arrival: frontierArrival(e), shed: true, stranded: true };
+                          arrival: frontierArrival(e), sandbox: frontierSandbox(e), shed: true, stranded: true };
   frontierRecord(strandedEntry, "was stranded");
   await frontierWrite(e.key, strandedEntry);
   if (_frontierIndexBuilt) _frontierIndex.set(e.key, frontierRow(strandedEntry));
@@ -2683,7 +2690,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   CHECK(eng.doc === null && eng.records.size === 0,
         "an instance's document record was written twice — it is written once, when the root is provisioned, " +
         "and every request the instance makes is judged against it");
-  eng.doc = docRecordOfArrival(msg.arrival);
+  eng.doc = docRecordOfArrival(msg.arrival, msg.sandbox);
+  CHECK(creationSandboxFlags === docRecordSandbox(eng.doc),
+        "a document is being rooted with the flag set `" + String(creationSandboxFlags) + "` beside a record " +
+        "whose set is `" + docRecordSandbox(eng.doc) + "` — the engine is handed the record's set, one statement");
   eng.records.set(eng.docId, eng.doc);
   await rend.renderer.setArrival({ arrival: msg.arrival });
   /* Never 0: document_bundle_id folds an empty scan to 1, since a 0 would key every unidentifiable document to
@@ -3300,7 +3310,10 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
   /* The joined document's record, written once, and the instance's narrowed to include it. */
   CHECK(!eng.records.has(docName) && docRecordIs(eng.doc),
         "a joined document's record was written twice, or into an instance with no record of its own");
-  eng.records.set(docName, docRecordOfArrival(msg.arrival));
+  eng.records.set(docName, docRecordOfArrival(msg.arrival, msg.sandbox));
+  CHECK(creationSandboxFlags === docRecordSandbox(eng.records.get(docName)),
+        "a document is being joined with the flag set `" + String(creationSandboxFlags) + "` beside a record " +
+        "whose set is `" + docRecordSandbox(eng.records.get(docName)) + "` — the engine is handed the record's set");
   eng.doc = docRecordJoin(eng.doc, eng.records.get(docName));
   /* The round ends here, so it records: a join copies a whole document in and seeds its scripts as flows, so
      both Level-1 facts moved. */
@@ -3812,6 +3825,20 @@ async function hostNotice(eng, line) {
            + "from navigable_notice.h, and noticegen.mjs writes the table from the same header, so the "
            + "extension's copy is stale or the engine is from another revision");
     if (hostHolderOf(f[C.child])) return;   // already provisioned: the engine announces a document once
+    /* The child's record, before anything is opened or loaded for it: the creating instance's record composed
+       with the notice's words by HTML's own rules (lib/document-record.js), so a child of a document this tool
+       opened is never graded as one the person navigated to and inherits every mark and flag the rules carry.
+       A navigable with no parent is an auxiliary one, which §7.3.1.7 does not create at all under the
+       creator's sandboxed auxiliary navigation flag; that notice is refused here, whatever the engine decided. */
+    const _childOwn = docRecord(f[C.provenance], f[C.driven], f[C.pinned], f[C.sandboxFlags]);
+    const _childDoc = f[C.parent] === "u" ? docRecordAuxiliary(eng.doc, _childOwn)
+                                          : docRecordJoin(eng.doc, _childOwn);
+    if (_childDoc === null) {
+      console.warn("[bridge] navigable.create " + f[C.child] + " is refused: the creating document's sandbox sets " +
+                   "HTML §7.1.5's sandboxed auxiliary navigation browsing context flag, so §7.3.1.7 creates no " +
+                   "auxiliary navigable");
+      return;
+    }
     documentPolicyOpen(f[C.child]);
     /* The group: HTML §7.3.1.7's noopener arm creates the navigable given a null opener, in a new browsing context
        group (§7.3.2.1); a child and an auxiliary navigable with an opener are in the creator's group, where the
@@ -3849,14 +3876,12 @@ async function hostNotice(eng, line) {
            "carries is the one the creating engine ASKED for, and the principal this zone stamps on a peer " +
            "instance has to be the origin of the URL its bytes CAME from");
     const _childBytes = loaded.bytes === null ? new Uint8Array(0) : loaded.bytes;
-    /* The document's record is the creating instance's joined with the notice's words (childDocRecord), so a
-       child of a document this tool opened is never graded as one the person navigated to and inherits every
-       mark above it. Its reach and its arrival are on every analyze record. */
-    const _childDoc = childDocRecord(eng, f[C.provenance], f[C.driven], f[C.pinned]);
+    /* The record's reach, arrival and flag set are on every analyze record. */
     const msg = { type: "AST_ANALYZE", pageHtml: _childBytes, sourceUrl: loaded.url,
                   origin: originOf(loaded.url),
                   groupId: _inCreatorGroup ? eng.groupId : "noopener:" + (_nextNoopenerGroup++),
                   provenance: _childDoc.reach, arrival: docRecordArrival(_childDoc),
+                  sandbox: docRecordSandbox(_childDoc),
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     /* The response's own header list, whole; the creator's container is relayed separately below. */
     DCHECK(loaded && loaded.headers && typeof loaded.headers === "object",
@@ -3909,7 +3934,7 @@ async function hostNotice(eng, line) {
        container; it reads the embedder element and its node document's active flags, so the creating engine
        computes it. Members are joined by COMMA because §7.1.5's flag names contain spaces. Relayed verbatim;
        the receiving engine crashes on a word outside that section. */
-    const creationSandboxFlags = f[C.sandboxFlags];
+    const creationSandboxFlags = docRecordSandbox(_childDoc);
     DCHECK(typeof creationSandboxFlags === "string" && creationSandboxFlags !== "",
            "a navigable.create notice carried no HTML §7.1.5 CREATION SANDBOXING FLAG SET — navigable.c " +
            "writes that section's own flag names on every record, and its word for the empty set where there " +
@@ -4048,6 +4073,7 @@ async function hostNotice(eng, line) {
                       sourceUrl: swapped.url, origin: originOf(swapped.url),
                       groupId: "swap:" + (_nextSwapGroup++),
                       provenance: _swapDoc.reach, arrival: docRecordArrival(_swapDoc),
+                      sandbox: docRecordSandbox(_swapDoc),
                       responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(swapped.headers)) swapMsg.responseHeaders[_n] = swapped.headers[_n];
     /* No inherited policy: a swapped-to Document has no creator to clone a container from (HTML §7.3.2.1 with
@@ -4067,7 +4093,7 @@ async function hostNotice(eng, line) {
        and the emitting engine discards it after writing this notice, so the opener's handle answers about the
        document it had (its `closed` is true) and nothing holds a proxy for this one. */
     await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[P.document], swapped.url, null, "u", "N", "null",
-                       "none", "none", 0)._readyP;
+                       "none", swapMsg.sandbox, 0)._readyP;
     return;
   }
   /* `navigable.navigate <new document> <url> <origin> <provenance>` — a TOP-LEVEL traversable navigated to a
@@ -4098,6 +4124,7 @@ async function hostNotice(eng, line) {
     const navMsg = { type: "AST_ANALYZE", pageHtml: navd.bytes === null ? new Uint8Array(0) : navd.bytes,
                      sourceUrl: navd.url, origin: originOf(navd.url), groupId: eng.groupId,
                      provenance: _navDoc.reach, arrival: docRecordArrival(_navDoc),
+                     sandbox: docRecordSandbox(_navDoc),
                      responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(navd.headers)) navMsg.responseHeaders[_n] = navd.headers[_n];
     const _nkey = clusterKeyOf(navMsg);
@@ -4115,12 +4142,13 @@ async function hostNotice(eng, line) {
          tab's top-level navigation joining its cluster. */
       await engineJoin(navHolder, navMsg.pageHtml, navMsg, f[P.document], navd.url,
                        { csp: "", cspReportOnly: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY,
-                         referrerPolicy: DEFAULT_REFERRER_POLICY }, "u", "N", "null", "none", "none");
+                         referrerPolicy: DEFAULT_REFERRER_POLICY }, "u", "N", "null", "none",
+                       navMsg.sandbox);
       return;
     }
     /* No creator: engineCreate's grammar for that is `null`, as for the swap arm. */
     await engineCreate("", navMsg.pageHtml, navMsg, false, f[P.document], navd.url, null, "u", "N", "null",
-                       "none", "none", 1)._readyP;
+                       "none", navMsg.sandbox, 1)._readyP;
     return;
   }
   /* `document.seed <address> <provenance> <driven> <pinned>` — an address the application declared is a page of itself, reached
@@ -5084,7 +5112,8 @@ async function admitSeatLand(seat) {
        that happened. `topLevelUrl` is its own address after redirects (HTML §8.1.3.1, §7.5.1's `creationURL`). */
     /* The provenance carried into the residue this run parks: the load was decided from `seed.provenance`, so
        the stored grade must agree (at a widened origin a forced declaration passes `_seedRefusal`). */
-    const _seedDoc = docRecordJoin(seed.fromDoc, docRecord(seed.provenance, seed.driven, seed.pinned));
+    const _seedDoc = docRecordJoin(seed.fromDoc, docRecord(seed.provenance, seed.driven, seed.pinned,
+                                                           NAVIGABLE_NOTICE.sandbox.none));
     const msg = { type: "AST_ANALYZE", sourceUrl: loaded.url, origin: seed.principalOrigin,
                   groupId: "seed:" + (_nextSeedGroup++), responseHeaders: loaded.headers,
                   topLevelUrl: loaded.url,
@@ -5092,6 +5121,7 @@ async function admitSeatLand(seat) {
                   /* The declaring instance's record joined with the declaration's words, as for a child
                      navigable. */
                   provenance: _seedDoc.reach, arrival: docRecordArrival(_seedDoc),
+                  sandbox: docRecordSandbox(_seedDoc),
                   persist: true };
     DCHECK(hostClusterOf(clusterKeyOf(msg)) === null,
            "a declared route minted a browsing-context group this pool already runs an instance for — the " +
@@ -5103,7 +5133,7 @@ async function admitSeatLand(seat) {
        no caller awaits it, so its findings merge into the cumulative store. Not referenced: nothing holds a
        WindowProxy for a merely declared route, so its frontier may drain. */
     await engineCreate("", loaded.bytes, msg, true, null, loaded.url, null, "u", "N", "null",
-                       "none", "none", 0)._readyP;
+                       "none", msg.sandbox, 0)._readyP;
     return null;
   }
   DCHECK(seat.what.kind === "cold",
@@ -5131,7 +5161,7 @@ async function admitSeatLand(seat) {
                           origin: stored.origin, responseHeaders: back.headers, html: back.bytes, code: "",
                           recipes: stored.recipes, emit: stored.emit, visits: stored.visits,
                           credentialed: stored.credentialed, provenance: frontierProvenance(stored),
-                          arrival: frontierArrival(stored) },
+                          arrival: frontierArrival(stored), sandbox: frontierSandbox(stored) },
                         "was re-derived for the cold tier");
     } else {
       doc = frontierDoc(stored, "came back from the cold tier");
@@ -5146,7 +5176,8 @@ async function admitSeatLand(seat) {
                   responseHeaders: doc.responseHeaders,
                   topLevelUrl: doc.topLevelUrl, credentialed: stored.credentialed,
                   /* The word this residue was parked under, re-stated so the entry it parks again keeps it. */
-                  provenance: frontierProvenance(stored), arrival: frontierArrival(stored), persist: true };
+                  provenance: frontierProvenance(stored), arrival: frontierArrival(stored),
+                  sandbox: frontierSandbox(stored), persist: true };
     /* A rehydration whose engine aborts is bannered by engineBootFailed at the reservation, with the pool slot
        it releases; no catch here. A rehydrated recipe never has a caller (`cold`). */
     /* The stored document is passed as parked; engineRoot asserts its shape, so a missing document is never
@@ -5160,7 +5191,7 @@ async function admitSeatLand(seat) {
        `qjs_set_referenced` surviving a teardown, which is one instance's statement about itself across a park;
        here a new instance replaces one whose peers no longer exist. */
     await engineCreate(doc.code, doc.html, msg, true, null, null, null, "u", "N", "null",
-                       "none", "none", 0)._readyP;
+                       "none", msg.sandbox, 0)._readyP;
     return null;
   }
 }
@@ -5403,7 +5434,7 @@ const _hostOps = {
       await engineJoin(swap.cluster, swap.job.html, swap.job.msg, swap.docId, _tlu,
                        { csp: "", cspReportOnly: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY,
                          referrerPolicy: DEFAULT_REFERRER_POLICY }, "u", "N", "null", "none",
-                       "none");
+                       swap.job.msg.sandbox);
       await engineUnload(swap.cluster, swap.outgoing, swap.docId);
       /* `null`: this round spent its advance on the navigation and never asked the non-resident order. */
       return null;
@@ -5483,7 +5514,7 @@ const _hostOps = {
            its frontier may drain. A cross-origin child created into this instance later is the join arm's
            question, refused there, since the flag can only be stated before the frontier is seeded. */
         const eng = engineCreate("", job.html, job.msg, job.persist, null, null, null, "u",
-                                 "N", "null", "none", "none", 0);
+                                 "N", "null", "none", job.msg.sandbox, 0);
         DCHECK(hostClusterOf(key) === eng,
                "engineCreate did not leave its reservation in the pool before returning — the whole point of " +
                "the slot being taken synchronously is that the next arrival for this cluster finds it, so a " +
@@ -5555,7 +5586,7 @@ const _hostOps = {
            outlive that guarantee and turn dropped flows into "the recipes joined to ''". */
         /* The provenance of the load that produced this document, read by frontierRederive when it fetches the
            bytes back; bound to a local above so the field's receiver is a name an auditor can anchor. */
-        provenance: _parkProvenance, arrival: eng.msg.arrival,
+        provenance: _parkProvenance, arrival: eng.msg.arrival, sandbox: eng.msg.sandbox,
         credentialed: !!eng.msg.credentialed, recipes: result._park.join(";"),
         /* `emit` is the surface this run demonstrated, both halves of what it emits (@H endpoints and @S sinks).
            frontierWeight divides it by `visits`, so whenever the demonstrated surface is monotone the quotient is
@@ -5924,7 +5955,8 @@ self.astDispatch = async function astDispatch(msg) {
          origin's own root, the only address the surface has, so its `url-authority` row reads `unknown`. It
          claims nothing about how anything at this origin was actually reached or composed. */
       const _probe = { url: msg.subject + "/", destination: "", provenance: PROVENANCE_FORCED,
-                       pinned: "unstated", doc: docRecord(PROVENANCE_FORCED, DRIVEN_NO, "unpinned"),
+                       pinned: "unstated",
+                       doc: docRecord(PROVENANCE_FORCED, DRIVEN_NO, "unpinned", NAVIGABLE_NOTICE.sandbox.none),
                        actor: "tool", driven: "unstated",
                        credentialed: false, headers: null };
       return { success: true, result: {
@@ -6011,7 +6043,9 @@ self.astDispatch = async function astDispatch(msg) {
                                            seed's address. It is unreachable while both destructive gates are
                                            scoped to `provenance !== "observed"` and the observed/observed
                                            arm fires at every address. */
-                                        PROVENANCE_OBSERVED, docRecord(PROVENANCE_OBSERVED, DRIVEN_NO, "unpinned"),
+                                        PROVENANCE_OBSERVED,
+                                        docRecord(PROVENANCE_OBSERVED, DRIVEN_NO, "unpinned",
+                                                  NAVIGABLE_NOTICE.sandbox.none),
                                         /*refusalArm*/"none",
                                         /*actor*/"tool", /*driven*/"unstated", /*pinned*/"unstated",
                                         DOCUMENT_REQUEST_UNSTATED, seedSpeaker(msg));
@@ -6038,7 +6072,11 @@ self.astDispatch = async function astDispatch(msg) {
     /* The word the load was performed under, written onto the record (this run persists, so its residue is
        re-fetched later from what this states); the same constant as the load, so the two cannot disagree. */
     msg.provenance = PROVENANCE_OBSERVED;
-    msg.arrival = docRecordArrival(docRecord(PROVENANCE_OBSERVED, DRIVEN_NO, "unpinned"));
+    msg.arrival = docRecordArrival(docRecord(PROVENANCE_OBSERVED, DRIVEN_NO, "unpinned",
+                                             NAVIGABLE_NOTICE.sandbox.none));
+    /* A document the person's browser loaded: the zone states no flags for it, since its sandbox is the
+       browser's own to enforce and the engine computes what its response's CSP adds. */
+    msg.sandbox = NAVIGABLE_NOTICE.sandbox.none;
     /* The waiter carries both settlers, so a Clear can reject a document never seated with "cleared", which
        _dispatchDocument reads to abandon its tail without recording a page failure. No `code` is carried: no
        producer reaching this entry writes one. */

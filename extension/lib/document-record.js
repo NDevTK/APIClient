@@ -1,15 +1,18 @@
-// lib/document-record.js — the trusted zone's record of how each document it provisioned was reached.
+// lib/document-record.js — the trusted zone's record of each document it provisioned: how its navigation
+// reached it and the sandboxing flags its navigable was created with.
 //
-// A document's record is three facts about the navigation that produced it: its reach grade (the three
-// provenance words, CLAUDE.md's "a request carries the provenance of its values"), its drive mark (whether a
-// drive of uncalled code made it) and its witness mark (whether its address rested on a value a fork pinned).
-// The zone writes one per document at provisioning, from the provisioning notice joined with the creating
-// instance's record, and never again. lib/safe-fetch.js reads it as a floor under the engine's per-request
-// words, so an engine whose words are wrong can narrow what fires and never widen it.
+// A document's record holds the navigation's reach grade (the three provenance words, CLAUDE.md's "a request
+// carries the provenance of its values"), its drive mark (whether a drive of uncalled code made it), its
+// witness mark (whether its address rested on a value a fork pinned), and HTML §7.1.5's creation sandboxing
+// flag set. The zone writes one per document at provisioning, from the provisioning notice joined with the
+// creating instance's record, and never again. lib/safe-fetch.js reads the marks as a floor under the engine's
+// per-request words, and the zone hands the flag set to the engine, so an engine whose words are wrong can
+// narrow what fires and what a document may do, and never widen either.
 //
 // Records are frozen and minted only by docRecord; `_DOC_RECORDS` is how a reader tells a record from an
-// object with the same keys. The wire form is engine.h's arrival word, `<reach>,<drive mark>,<witness mark>`,
-// which is also what the engine starts the document's timelines with.
+// object with the same keys. The marks' wire form is engine.h's arrival word, `<reach>,<drive>,<witness>`; the
+// flag set's is the create notice's (§7.1.5's own flag names, comma-joined, or `none`), whose vocabulary
+// lib/navigable-notice.js carries from core/frame/sandboxing.h.
 
 var _DOC_REACH = ["observed", "derived", "forced"];
 var _DOC_DRIVEN = ["driven", "undriven"];
@@ -19,8 +22,35 @@ var _DOC_PINNED = ["pinned", "unpinned"];
    the vocabulary cannot silently re-rank the others. */
 var _DOC_REACH_RANK = { observed: 0, derived: 1, forced: 2 };
 var _DOC_RECORDS = new WeakSet();
+/* The three §7.1.5 flags this file's algorithms name, CHECKed against the vocabulary on load so a renamed flag
+   fails here rather than reading as unset. */
+var _SBX_ORIGIN = "sandboxed origin browsing context flag";
+var _SBX_AUXILIARY = "sandboxed auxiliary navigation browsing context flag";
+var _SBX_PROPAGATES = "sandbox propagates to auxiliary browsing contexts flag";
+CHECK(typeof NAVIGABLE_NOTICE === "object" && NAVIGABLE_NOTICE.sandbox &&
+      [_SBX_ORIGIN, _SBX_AUXILIARY, _SBX_PROPAGATES].every(function (n) {
+        return NAVIGABLE_NOTICE.sandbox.flags.indexOf(n) >= 0;
+      }),
+      "lib/document-record.js loaded without lib/navigable-notice.js's §7.1.5 vocabulary, or a flag it names is " +
+      "no longer in core/frame/sandboxing.h's list");
 
-function docRecord(reach, driven, pinned) {
+/* A serialized flag set as its members in sandboxing.h's order. The words cross from the untrusted engine on
+   the create notice, so an unknown or repeated one is refused. */
+function _sandboxOf(serialized) {
+  var V = NAVIGABLE_NOTICE.sandbox;
+  CHECK(typeof serialized === "string" && serialized !== "",
+        "a document record was minted with no sandboxing flag set — `" + V.none + "` is the empty set");
+  if (serialized === V.none) return [];
+  var names = serialized.split(",");
+  names.forEach(function (n, i) {
+    CHECK(V.flags.indexOf(n) >= 0 && names.indexOf(n) === i,
+          "a sandboxing flag set names " + JSON.stringify(n) + ", which is not one of HTML §7.1.5's flags or is " +
+          "named twice");
+  });
+  return V.flags.filter(function (n) { return names.indexOf(n) >= 0; });
+}
+
+function docRecord(reach, driven, pinned, sandbox) {
   CHECK(_DOC_REACH.indexOf(reach) >= 0 && typeof _DOC_REACH_RANK[reach] === "number" &&
         _DOC_DRIVEN.indexOf(driven) >= 0 && _DOC_PINNED.indexOf(pinned) >= 0,
         "a document record was minted from " + JSON.stringify([reach, driven, pinned]) + " — a ranked reach " +
@@ -31,7 +61,8 @@ function docRecord(reach, driven, pinned) {
   CHECK(reach !== "observed" || (driven === "undriven" && pinned === "unpinned"),
         "a document record states `observed` with a drive or witness mark — an observed document is one a " +
         "person named, which no drive navigated to and no pin addressed");
-  var r = Object.freeze({ reach: reach, driven: driven, pinned: pinned });
+  var r = Object.freeze({ reach: reach, driven: driven, pinned: pinned,
+                          sandbox: Object.freeze(_sandboxOf(sandbox)) });
   _DOC_RECORDS.add(r);
   return r;
 }
@@ -40,34 +71,100 @@ function docRecordIs(r) {
   return _DOC_RECORDS.has(r);
 }
 
-/* The stronger-wins join: the weaker reach, and a mark either record carries. A child's record is its
-   creator's joined with its own navigation's, so it inherits every mark above it, and an instance's record is
-   the join of its documents'. The join can only narrow what either input permits. */
+function _sandboxSerialized(flags) {
+  return flags.length ? flags.join(",") : NAVIGABLE_NOTICE.sandbox.none;
+}
+
+/* The flag set, serialized for the engine (the `document` and `join` records). */
+function docRecordSandbox(r) {
+  CHECK(_DOC_RECORDS.has(r), "a flag set was asked of something docRecord did not mint");
+  return _sandboxSerialized(r.sandbox);
+}
+
+/* Whether the record's navigable has HTML §7.1.5's sandboxed origin browsing context flag, which §7.3.2.1's
+   determine the origin answers with a new opaque origin. */
+function docRecordOpaque(r) {
+  CHECK(_DOC_RECORDS.has(r), "an origin question was asked of something docRecord did not mint");
+  return r.sandbox.indexOf(_SBX_ORIGIN) >= 0;
+}
+
+/* Whether `r` carries every mark and flag `of` carries and a reach no stronger. */
+function _docRecordCovers(r, of) {
+  return _DOC_REACH_RANK[r.reach] >= _DOC_REACH_RANK[of.reach] &&
+         (of.driven !== "driven" || r.driven === "driven") && (of.pinned !== "pinned" || r.pinned === "pinned") &&
+         of.sandbox.every(function (n) { return r.sandbox.indexOf(n) >= 0; });
+}
+
+/* Build a record from parts and assert permanence against the records it came from: nothing a document does
+   relaxes a flag or mark its navigation carries, so the result covers each of `from`. */
+function _docRecordDerived(reach, driven, pinned, flags, from) {
+  var j = docRecord(reach, driven, pinned, _sandboxSerialized(flags));
+  from.forEach(function (f) {
+    CHECK(_docRecordCovers(j, f),
+          "a derived document record cleared a flag or mark, or strengthened the reach, of " + JSON.stringify(f) +
+          " — a record can only narrow");
+  });
+  return j;
+}
+
+function _marksJoin(a, b) {
+  return { reach: _DOC_REACH_RANK[a.reach] >= _DOC_REACH_RANK[b.reach] ? a.reach : b.reach,
+           driven: a.driven === "driven" || b.driven === "driven" ? "driven" : "undriven",
+           pinned: a.pinned === "pinned" || b.pinned === "pinned" ? "pinned" : "unpinned" };
+}
+
+/* The stronger-wins join: the weaker reach, a mark either record carries, and the union of the flag sets.
+   It is HTML §7.1.5's "determine the creation sandboxing flags" for a nested navigable, "the union of the
+   flags that are present in" "the flags set on embedder's iframe sandboxing flag set" and "the flags set on
+   embedder's node document's active sandboxing flag set": `a` is the creating instance's record and `b` the
+   notice's own. It
+   is also how an instance's record covers every document it holds, and how a top-level provision keeps its
+   navigable's flags. */
 function docRecordJoin(a, b) {
   CHECK(_DOC_RECORDS.has(a) && _DOC_RECORDS.has(b),
         "two document records were joined and one was not minted by docRecord");
-  var j = docRecord(_DOC_REACH_RANK[a.reach] >= _DOC_REACH_RANK[b.reach] ? a.reach : b.reach,
-                    a.driven === "driven" || b.driven === "driven" ? "driven" : "undriven",
-                    a.pinned === "pinned" || b.pinned === "pinned" ? "pinned" : "unpinned");
-  /* Permanence, asserted at the one writer that derives a record from others: nothing a document does
-     relaxes a mark its navigation carries, so the result is at least as strong as each input. */
-  CHECK(_docRecordCovers(j, a) && _docRecordCovers(j, b),
-        "a joined document record cleared a mark or strengthened the reach of " + JSON.stringify([a, b]) +
-        " — the join can only narrow");
-  return j;
-}
-/* Whether `r` carries every mark `of` carries and a reach no stronger. */
-function _docRecordCovers(r, of) {
-  return _DOC_REACH_RANK[r.reach] >= _DOC_REACH_RANK[of.reach] &&
-         (of.driven !== "driven" || r.driven === "driven") && (of.pinned !== "pinned" || r.pinned === "pinned");
+  var m = _marksJoin(a, b);
+  return _docRecordDerived(m.reach, m.driven, m.pinned,
+                           NAVIGABLE_NOTICE.sandbox.flags.filter(function (n) {
+                             return a.sandbox.indexOf(n) >= 0 || b.sandbox.indexOf(n) >= 0;
+                           }), [a, b]);
 }
 
-/* engine.h's arrival word, parsed and serialized. */
-function docRecordOfArrival(arrival) {
+/* An auxiliary navigable (a popup) the creating instance `creator` opened, whose notice states `own`. HTML
+   §7.3.1.7 "the rules for choosing a navigable", given the creator's active sandboxing flag set:
+     - "If sandboxingFlagSet has the sandboxed auxiliary navigation browsing context flag set", no navigable
+       is created; this answers null and the caller refuses the notice.
+     - "If sandboxingFlagSet's sandbox propagates to auxiliary browsing contexts flag is set, then all the flags
+       that are set in sandboxingFlagSet must be set in chosen's active browsing context's popup sandboxing
+       flag set." Otherwise the popup starts from its own set alone, which is how `allow-popups-to-escape-
+       sandbox` works: only when every sandbox above the creator left the propagates flag clear.
+   The one branch that is not the spec's: the risk marks join whatever the flags do. They describe this tool's
+   act, which no attribute the page writes can opt out of, so escaping the sandbox cannot launder a forced,
+   driven or pinned creator's popup into an unmarked one. */
+function docRecordAuxiliary(creator, own) {
+  CHECK(_DOC_RECORDS.has(creator) && _DOC_RECORDS.has(own),
+        "an auxiliary navigable's record was asked of something docRecord did not mint");
+  if (creator.sandbox.indexOf(_SBX_AUXILIARY) >= 0) return null;
+  var inherits = creator.sandbox.indexOf(_SBX_PROPAGATES) >= 0;
+  var m = _marksJoin(creator, own);
+  var j = _docRecordDerived(m.reach, m.driven, m.pinned,
+                            NAVIGABLE_NOTICE.sandbox.flags.filter(function (n) {
+                              return own.sandbox.indexOf(n) >= 0 || (inherits && creator.sandbox.indexOf(n) >= 0);
+                            }), [own]);
+  CHECK(_DOC_REACH_RANK[j.reach] >= _DOC_REACH_RANK[creator.reach] &&
+        (creator.driven !== "driven" || j.driven === "driven") &&
+        (creator.pinned !== "pinned" || j.pinned === "pinned"),
+        "an auxiliary navigable's record dropped a risk mark its creator carries — they propagate to every " +
+        "navigable the creator opens");
+  return j;
+}
+
+/* engine.h's arrival word and the notice's flag set, parsed; the arrival word serialized. */
+function docRecordOfArrival(arrival, sandbox) {
   var w = typeof arrival === "string" ? arrival.split(",") : [];
   CHECK(w.length === 3, "a document record was asked of the arrival " + JSON.stringify(arrival) +
                         ", which is not engine.h's three comma-joined words");
-  return docRecord(w[0], w[1], w[2]);
+  return docRecord(w[0], w[1], w[2], sandbox);
 }
 function docRecordArrival(r) {
   CHECK(_DOC_RECORDS.has(r), "an arrival was asked of something docRecord did not mint");
@@ -78,6 +175,9 @@ if (typeof self !== "undefined") {
   self.docRecord = docRecord;
   self.docRecordIs = docRecordIs;
   self.docRecordJoin = docRecordJoin;
+  self.docRecordAuxiliary = docRecordAuxiliary;
   self.docRecordOfArrival = docRecordOfArrival;
   self.docRecordArrival = docRecordArrival;
+  self.docRecordSandbox = docRecordSandbox;
+  self.docRecordOpaque = docRecordOpaque;
 }

@@ -86,6 +86,7 @@
      constants are shared with the worker through speak-as-rule.js). -->
 <script src="speak-as-rule.js"></script>
 <script src="lib/speak-as.js"></script>
+<script src="lib/navigable-notice.js"></script>
 <script src="lib/document-record.js"></script>
 <script src="lib/safe-fetch.js"></script>
 <script src="lib/schema.js"></script>
@@ -122,5 +123,4 @@
 <script src="renderer-host.js"></script>
 <!-- the v2 host bridge: the ONLY irreducible trusted-zone JS (SECURITY.md) — dynamic-import()s the
      engine WASM lib/qjs/qjs.mjs, drives qjs_step, safe-fetches, persists IDB, installs self.astDispatch. -->
-<script src="lib/navigable-notice.js"></script>
 <script src="bridge.js"></script>

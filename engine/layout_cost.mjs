@@ -221,7 +221,7 @@ const styled = (n) => '<!DOCTYPE html><html><head><title>t</title>' +
    of that skew at the composer, which is why it is a narrowing rather than a relocation. */
 const b64 = (s) => Buffer.from(s).toString('base64');
 const record = (html, url) => ['document', url, 'offline', b64('content-type: text/html; charset=utf-8\n'),
-  b64(html), ...topLevelFactFields(url), '0'].join('\t') + '\n';
+  b64(html), ...topLevelFactFields(url, 'none'), '0'].join('\t') + '\n';
 
 const dir = mkdtempSync(join(tmpdir(), 'layout-cost-'));
 const counts = (html) => {

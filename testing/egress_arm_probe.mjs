@@ -60,7 +60,7 @@ function zone() {
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/document-record.js', 'lib/safe-fetch.js'])
+  for (const f of ['check.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/safe-fetch.js'])
     runInContext(readFileSync(join(EXT, f), 'utf8'), sandbox, { filename: join(EXT, f) });
   for (const n of ['safeFetchEgressStated', 'safeFetchFiringRefusal', 'safeFetchSignalVector',
                    'safeFetchDefaultArms'])
@@ -89,22 +89,26 @@ const SITES = [
     want: 'FIRES',
     grep: "git grep -n 'destination: \"document\"' extension/bridge.js",
     facts: { destination: 'document', actor: 'page', driven: 'undriven', pinned: 'unpinned',
-             provenance: 'derived', doc: ['observed', 'undriven', 'unpinned'], credentialed: true, headers: null } },
+             provenance: 'derived',
+             doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: true, headers: null } },
   { label: '…the same, on a path that PINNED a witness (must REFUSE — the witness conjunct)',
     want: 'REFUSED',
     grep: 'solver/engine.c engine_navigation_pinned_token — the mark rides the navigation records',
     facts: { destination: 'document', actor: 'page', driven: 'undriven', pinned: 'pinned',
-             provenance: 'derived', doc: ['observed', 'undriven', 'unpinned'], credentialed: true, headers: null } },
+             provenance: 'derived',
+             doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: true, headers: null } },
   { label: '…the same, on a FORCED path that pinned nothing (FIRES — judged like a fetch, whose bound is the witness)',
     want: 'FIRES',
     grep: 'as above; the provenance word is engine_provenance_of_running_path\'s',
     facts: { destination: 'document', actor: 'page', driven: 'undriven', pinned: 'unpinned',
-             provenance: 'forced', doc: ['observed', 'undriven', 'unpinned'], credentialed: true, headers: null } },
+             provenance: 'forced',
+             doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: true, headers: null } },
   { label: '…the same at actor=tool (must REFUSE — the `actor` conjunct)',
     want: 'REFUSED',
     grep: 'no caller states this pair today; it is the arm\'s own discriminator, exercised',
     facts: { destination: 'document', actor: 'tool', driven: 'unstated', pinned: 'unpinned',
-             provenance: 'derived', doc: ['observed', 'undriven', 'unpinned'], credentialed: true, headers: null } },
+             provenance: 'derived',
+             doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: true, headers: null } },
   /* THE AMBIENT SEED AT BOTH ACTOR WORDS, WHICH IS THE PAIR THAT MAKES ONE REPAIR AUDITABLE. The loader used
      to answer `page` for all three of its callers out of one literal, and the seed is the one that is this
      TOOL's act — safe-fetch.js's `_actorOf` says so in its own words. The two rows are kept together because
@@ -114,23 +118,28 @@ const SITES = [
   { label: 'bridge.js AMBIENT SEED, actor=tool (what it states)',
     grep: "git grep -n 'PROVENANCE_OBSERVED, PROVENANCE_OBSERVED' extension/bridge.js",
     facts: { destination: 'document', actor: 'tool', driven: 'unstated', pinned: 'unstated',
-             provenance: 'observed', doc: ['observed', 'undriven', 'unpinned'], credentialed: true, headers: null } },
+             provenance: 'observed',
+             doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: true, headers: null } },
   { label: '…the same at actor=page (the retired literal)',
     grep: 'must agree with the row above, or the repair is no longer outcome-free',
     facts: { destination: 'document', actor: 'page', driven: 'undriven', pinned: 'unstated',
-             provenance: 'observed', doc: ['observed', 'undriven', 'unpinned'], credentialed: true, headers: null } },
+             provenance: 'observed',
+             doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: true, headers: null } },
   { label: "bridge.js page fetch() relay, unpinned address",
     grep: "git grep -n 'doc: eng.doc, credentialed: false' extension/bridge.js",
     facts: { destination: '', actor: 'page', driven: 'undriven', pinned: 'unpinned',
-             provenance: 'derived', doc: ['observed', 'undriven', 'unpinned'], credentialed: false, headers: null } },
+             provenance: 'derived',
+             doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: false, headers: null } },
   { label: "bridge.js page fetch() relay, PINNED address",
     grep: 'as above; the mark comes off the engine pending line',
     facts: { destination: '', actor: 'page', driven: 'undriven', pinned: 'pinned',
-             provenance: 'forced', doc: ['observed', 'undriven', 'unpinned'], credentialed: false, headers: null } },
+             provenance: 'forced',
+             doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: false, headers: null } },
   { label: 'a program load (a lazy chunk)',
     grep: 'Fetch §2.2.5 destination `script` — _isScriptLike',
     facts: { destination: 'script', actor: 'page', driven: 'undriven', pinned: 'unstated',
-             provenance: 'forced', doc: ['observed', 'undriven', 'unpinned'], credentialed: true, headers: null } },
+             provenance: 'forced',
+             doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: true, headers: null } },
 ];
 
 /* THE TWO CONTROLS, ONE EACH WAY. A probe whose every row answers FIRES is indistinguishable from one that
@@ -140,11 +149,13 @@ const CONTROLS = [
   { label: 'CONTROL must REFUSE: this tool composing a data request',
     want: 'REFUSED',
     facts: { destination: '', actor: 'tool', driven: 'unstated', pinned: 'unpinned',
-             provenance: 'derived', doc: ['observed', 'undriven', 'unpinned'], credentialed: false, headers: null } },
+             provenance: 'derived',
+             doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: false, headers: null } },
   { label: 'CONTROL must FIRE: the page loading its own code',
     want: 'FIRES',
     facts: { destination: 'script', actor: 'page', driven: 'undriven', pinned: 'unstated',
-             provenance: 'forced', doc: ['observed', 'undriven', 'unpinned'], credentialed: true, headers: null } },
+             provenance: 'forced',
+             doc: ['observed', 'undriven', 'unpinned', 'none'], credentialed: true, headers: null } },
   /* THE ZONE'S DOCUMENT RECORD IS A FLOOR UNDER THE ENGINE'S WORDS (lib/document-record.js). The page's own
      unpinned `fetch()` with the engine stating `undriven` and `unpinned`, from three documents: one the zone
      recorded with no mark (the control, which fires), one it recorded as reached by a drive, and one it
@@ -153,27 +164,30 @@ const CONTROLS = [
   { label: 'page fetch(), document recorded unmarked (CONTROL: fires)',
     want: 'FIRES', grep: "git grep -n 'doc: eng.doc, credentialed: false' extension/bridge.js",
     facts: { destination: '', actor: 'page', driven: 'undriven', pinned: 'unpinned',
-             provenance: 'derived', doc: ['derived', 'undriven', 'unpinned'], credentialed: false,
+             provenance: 'derived',
+             doc: ['derived', 'undriven', 'unpinned', 'none'], credentialed: false,
              headers: null } },
   { label: '…from a document the zone recorded as DRIVEN (must REFUSE at actor)',
     want: 'REFUSED', grep: "git grep -n 'f.doc.driven' extension/lib/safe-fetch.js",
     facts: { destination: '', actor: 'page', driven: 'undriven', pinned: 'unpinned',
-             provenance: 'derived', doc: ['derived', 'driven', 'unpinned'], credentialed: false,
+             provenance: 'derived',
+             doc: ['derived', 'driven', 'unpinned', 'none'], credentialed: false,
              headers: null } },
   { label: '…from a document the zone recorded as PINNED (must REFUSE at witness)',
     want: 'REFUSED', grep: "git grep -n 'f.doc.pinned' extension/lib/safe-fetch.js",
     facts: { destination: '', actor: 'page', driven: 'undriven', pinned: 'unpinned',
-             provenance: 'derived', doc: ['derived', 'undriven', 'pinned'], credentialed: false,
+             provenance: 'derived',
+             doc: ['derived', 'undriven', 'pinned', 'none'], credentialed: false,
              headers: null } },
 ];
 
 const URL_UNDER_TEST = 'https://example.test/x';
 
-/* A site states its document record as lib/document-record.js's three words, minted here through the zone's
+/* A site states its document record as lib/document-record.js's four words, minted here through the zone's
    own docRecord, since the chokepoint accepts only a record that function made. */
 function ask(Z, facts) {
-  if (!Array.isArray(facts.doc) || facts.doc.length !== 3)
-    throw new Error(`a probe row states the document record ${JSON.stringify(facts.doc)} — three words`);
+  if (!Array.isArray(facts.doc) || facts.doc.length !== 4)
+    throw new Error(`a probe row states the document record ${JSON.stringify(facts.doc)} — four words`);
   const f = Object.assign({ url: URL_UNDER_TEST }, facts, { doc: Z.docRecord(...facts.doc) });
   const v = Z.safeFetchSignalVector(f);
   const r = Z.safeFetchFiringRefusal(f);

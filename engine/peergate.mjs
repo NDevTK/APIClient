@@ -234,7 +234,7 @@ function loadChokepoint(peerOrigin) {
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/document-record.js', 'lib/safe-fetch.js'])
+  for (const f of ['check.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/safe-fetch.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
   if (typeof sandbox.safeFetch !== 'function')
     throw new Error('extension/lib/safe-fetch.js installed no `safeFetch` — this gate asks that file whether ' +
@@ -508,7 +508,7 @@ async function main() {
                                           is built from a value this run computed, so no page's code is
                                           anywhere in the composition. */
                                        actor: 'tool', driven: 'unstated',
-                                       doc: ZONE.docRecord('observed', 'undriven', 'unpinned'),
+                                       doc: ZONE.docRecord('observed', 'undriven', 'unpinned', 'none'),
                                        credentialed: false });
   if (!probe || typeof probe.status !== 'number')
     record('pna', 'missing', 'safeFetch returned no reply record at all');

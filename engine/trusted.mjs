@@ -193,7 +193,8 @@ const ZONE = (() => {
   createContext(sandbox);
   speakAsHost(sandbox);
   for (const f of ['check.js', 'lib/public-suffix-table.js', 'lib/site.js', 'lib/referrer-policy.js',
-                   'lib/request-identity.js', 'speak-as-rule.js', 'lib/speak-as.js', 'lib/document-record.js',
+                   'lib/request-identity.js', 'speak-as-rule.js', 'lib/speak-as.js', 'lib/navigable-notice.js',
+                   'lib/document-record.js',
                    'lib/safe-fetch.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
   if (typeof sandbox.safeFetch !== 'function')
@@ -225,7 +226,7 @@ const ZONE = (() => {
      `_docOf` refuses on the first request rather than here at assembly. */
   for (const n of ['safeFetchWiden', 'safeFetchEgressStated', 'safeFetchFiringRefusal',
                    'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'docRecord', 'docRecordJoin',
-                   'docRecordArrival'])
+                   'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js did not install \`${n}\` — the firing decision and its ` +
                       'per-origin widening are that file\'s, read by this host and by the offscreen from the ' +
@@ -234,7 +235,7 @@ const ZONE = (() => {
   return sandbox;
 })();
 /* The record of a document a person named: the seed and the root it becomes. */
-const OBSERVED_DOC = ZONE.docRecord('observed', 'undriven', 'unpinned');
+const OBSERVED_DOC = ZONE.docRecord('observed', 'undriven', 'unpinned', NAVIGABLE_NOTICE.sandbox.none);
 
 /* EVERY FIELD OF EVERY REPLY, ASSERTED AND NEVER DEFAULTED — the same list `bridge.js` asserts at the same
    seam, because it is the same producer answering the same question and a second reader that checked less
@@ -613,11 +614,13 @@ async function main() {
      opener are in this list in qjs_init's order. The provenance, the group and the two marks are not: they
      decide the load and which instance hosts it. */
   const C = NAVIGABLE_NOTICE.create, P = NAVIGABLE_NOTICE.provision;
-  const createFacts = (f) =>
+  /* The flag set is the record's, not the notice's: the engine is handed the set this zone computed, so a
+     notice that dropped a flag its creator's sandbox carries is not believed. */
+  const createFacts = (f, doc) =>
     [f[C.topLevelUrl], b64(navigableNoticeField(C, f, 'policy')),
      b64(navigableNoticeField(C, f, 'policyReportOnly')), f[C.cspSelfOrigin], f[C.coep], f[C.coepEndpoint],
      f[C.coepReportOnly], f[C.coepReportOnlyEndpoint], f[C.referrerPolicy], f[C.parent], f[C.opener],
-     f[C.containerPolicy], f[C.ancestorOrigins], f[C.sandboxFlags]];
+     f[C.containerPolicy], f[C.ancestorOrigins], ZONE.docRecordSandbox(doc)];
 
   /* PROVISION AN INSTANCE — one PROCESS per ORIGIN-KEYED AGENT CLUSTER, which is SECURITY.md's key and not
      "per document": a SAME-ORIGIN child is a second REALM in the creator's own heap and never reaches this
@@ -658,10 +661,11 @@ async function main() {
                       'is provisioned, and every request it makes is judged against it');
     docRecords.set(docId, doc);
   };
-  /* A document created by a navigation the instance `from` issued: its record is `from`'s joined with the
-     navigation's own words, so it can never be stronger than the instance that created it. */
+  /* A top-level document provisioned by a navigation the instance `from` issued (a swap, a navigation into a
+     peer, a declared route): `from`'s record joined with the navigation's own words and no flags of its own,
+     so it keeps the navigable's flags and can never be stronger than the instance that created it. */
   const childDoc = (from, provenance, driven, pinned) =>
-    ZONE.docRecordJoin(from, ZONE.docRecord(provenance, driven, pinned));
+    ZONE.docRecordJoin(from, ZONE.docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none));
   async function provision({ docId, url, origin, headers, bytes, facts, referenced, doc, group }) {
     /* The document's record, stored on the instance because every request it makes is judged against it.
        Composed by the caller (childDoc, or the observed root's) and recorded here, so an instance is never
@@ -1237,6 +1241,18 @@ async function main() {
          context group (§7.3.2.1); a child and an auxiliary navigable with an opener are in the creator's. In
          the creator's group the peer holds a WindowProxy for the creator, whose engine raised its own flag at
          the emission (core/frame/navigable.c); this is the zone's record of that. */
+      /* The child's record, before anything is loaded for it: the creating instance's record composed with
+         the notice's words by HTML's own rules (lib/document-record.js). A navigable with no parent is an
+         auxiliary one, which §7.3.1.7 does not create at all under the creator's sandboxed auxiliary
+         navigation flag; that notice is refused here, whatever the engine that sent it decided. */
+      const own = ZONE.docRecord(f[C.provenance], f[C.driven], f[C.pinned], f[C.sandboxFlags]);
+      const doc = f[C.parent] === 'u' ? ZONE.docRecordAuxiliary(e.doc, own) : ZONE.docRecordJoin(e.doc, own);
+      if (doc === null) {
+        e.ready.push(decline(`navigable.create ${f[C.child]} — the creating document's sandbox sets HTML ` +
+                             '§7.1.5\'s sandboxed auxiliary navigation browsing context flag, so §7.3.1.7 ' +
+                             'creates no auxiliary navigable'));
+        return;
+      }
       const inCreatorGroup = f[C.group] === 'creator';
       if (inCreatorGroup) e.referenced = 1;
       const group = inCreatorGroup ? e.group : newGroup();
@@ -1261,7 +1277,6 @@ async function main() {
          own request refused on `doc-reach`, `actor` or `witness` at an origin whose table permits the holder's
          own record, after a child with a weaker record joined it. */
       const childOrigin = new URL(loaded.url).origin;
-      const doc = childDoc(e.doc, f[C.provenance], f[C.driven], f[C.pinned]);
       const holder = clusterOf(group, childOrigin);
       if (holder) {
         if (holder === e || holder.referenced !== 1)
@@ -1273,7 +1288,7 @@ async function main() {
         recordDocument(f[C.child], doc);
         holder.doc = ZONE.docRecordJoin(holder.doc, doc);
         holder.ready.push(['join', loaded.url, f[C.child], b64(fieldLines(loaded.headers)), b64(loaded.bytes),
-                           ...createFacts(f), ZONE.docRecordArrival(doc)].join('\t'));
+                           ...createFacts(f, doc), ZONE.docRecordArrival(doc)].join('\t'));
         retryHeld();
         flush();
         return;
@@ -1283,7 +1298,7 @@ async function main() {
          routed here at all. Its `w.length`, its `w.closed` and every post it makes arrive at this document,
          so this document's timelines may not run out before they do. */
       await provision({ docId: f[C.child], url: loaded.url, origin: childOrigin, group,
-                        headers: loaded.headers, bytes: loaded.bytes, facts: createFacts(f),
+                        headers: loaded.headers, bytes: loaded.bytes, facts: createFacts(f, doc),
                         /* Under the creating instance's record joined with the notice's words: taking the
                            notice's alone would let a child of a document this zone chose to open read as one
                            the person navigated to, or shed a mark the creator carries. */
@@ -1316,10 +1331,11 @@ async function main() {
          page that navigated still holds its handle, and that handle answers about the document it had, not
          about this one. Nothing anywhere holds a proxy for the swapped-TO document, so keeping its timelines
          open would park its last flow for a question no instance can ask. */
+      /* Under the creating instance's record joined with the notice's words (childDoc). */
+      const doc = childDoc(e.doc, f[P.provenance], f[P.driven], f[P.pinned]);
       await provision({ docId: f[P.document], url: loaded.url, origin: new URL(loaded.url).origin,
-                        headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
-                        /* Under the creating instance's record joined with the notice's words (childDoc). */
-                        doc: childDoc(e.doc, f[P.provenance], f[P.driven], f[P.pinned]),
+                        headers: loaded.headers, bytes: loaded.bytes,
+                        facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
                         group: newGroup(), referenced: 0 });
       return;
     }
@@ -1340,9 +1356,10 @@ async function main() {
       const loaded = await navigate(f[P.address], e.docUrl, `navigable.navigate ${f[P.document]}`,
                                     f[P.provenance], f[P.driven], f[P.pinned], e.doc);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
+      const doc = childDoc(e.doc, f[P.provenance], f[P.driven], f[P.pinned]);
       await provision({ docId: f[P.document], url: loaded.url, origin: new URL(loaded.url).origin,
-                        headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
-                        doc: childDoc(e.doc, f[P.provenance], f[P.driven], f[P.pinned]),
+                        headers: loaded.headers, bytes: loaded.bytes,
+                        facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
                         group: e.group, referenced: 1 });
       return;
     }
@@ -1393,10 +1410,11 @@ async function main() {
          is the RESPONSE's, because §7.5.1's creationURL is where the bytes came from. */
       /* AND NOT REFERENCED, WHICH IS THE SAME SENTENCE THE NAME ABOVE IS MINTED BY: nothing holds a proxy for
          a route the bundle merely DECLARED — this zone named the document because no page ever held one. */
+      /* Under the declaring instance's record joined with the declaration's words. */
+      const doc = childDoc(e.doc, f[2], f[3], f[4]);
       await provision({ docId: `seed${++seedSerial}`, url: loaded.url, origin: new URL(loaded.url).origin,
-                        headers: loaded.headers, bytes: loaded.bytes, facts: topLevelFacts(loaded.url),
-                        /* Under the declaring instance's record joined with the declaration's words. */
-                        doc: childDoc(e.doc, f[2], f[3], f[4]),
+                        headers: loaded.headers, bytes: loaded.bytes,
+                        facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
                         group: newGroup(), referenced: 0 });
       return;
     }
@@ -1829,7 +1847,8 @@ async function main() {
      tree beneath it. */
   const root = await provision({ docId, url: docUrl, origin: new URL(docUrl).origin,
                                  headers: seeded.meta.headers, bytes: seeded.bytes,
-                                 facts: topLevelFacts(docUrl), doc: OBSERVED_DOC, group: newGroup(),
+                                 facts: topLevelFacts(docUrl, ZONE.docRecordSandbox(OBSERVED_DOC)),
+                                 doc: OBSERVED_DOC, group: newGroup(),
                                  referenced: 0 });
 
   /* SHIFTED RATHER THAN `Promise.all`, because the list GROWS: a peer provisioned three rounds in appends its
