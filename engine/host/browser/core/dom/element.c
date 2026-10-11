@@ -1966,8 +1966,7 @@ static const JSCFunctionListEntry js_element_readonly[] = {
  * between, so the ordering the spec states is the ordering that happens — the only thing that changed is that
  * the walk can now yield to another flow, which cannot observe it because a flow's DOM is its own.
  * THE RECORD'S CONNECTEDNESS TEST ANSWERS INSERT STEP 7.7 AND NOTHING ELSE, and the "and nothing else" is the
- * half that is easy to lose. It has to be taken here: a REMOVAL fires the hook BEFORE the detach, because "was
- * it connected" has no answer afterwards, so the record carries the decision the spec made at mutation time.
+ * half that is easy to lose: only insertions are recorded, a removal's steps running at the chokepoint.
  * INSERT STEP 12 ASKS ITS OWN QUESTION, and asks it per entry at that entry's turn — see TS_PHASE_* below and
  * tree_steps_post_connection. Reusing this answer there is exactly the defect HTML §4.12.1.1 "Processing
  * model"'s script1-removes-script2 example is written to expose.
@@ -1980,7 +1979,6 @@ static const JSCFunctionListEntry js_element_readonly[] = {
 typedef struct {
     lxb_dom_node_t *root;     /* the subtree the steps run over */
     lxb_dom_node_t *cursor;   /* how far the walk has got — the resume point */
-    uint8_t         inserted;
     /* HTML §4.12.1.1 "Processing model"'s CHILDREN CHANGED STEPS, which are the OTHER family that ends at the
        post-connection steps: "The script children changed steps given changedNode are: 1. If the script
        element is not connected, then return. 2. Run the script HTML element post-connection steps, given
@@ -1998,8 +1996,7 @@ typedef struct {
    enqueued for upgrade twice. Each of those is a real effect on a real document with nothing to say it
    happened twice, which is exactly the shape §7.4's double load had. */
 enum {
-    /* Nothing asked yet: an inserted node's other insertion steps ran at the chokepoint, and a removed node's
-       removing steps, which ask nothing, run in one step here. */
+    /* Nothing asked yet: the node's other insertion steps ran at the chokepoint. */
     TS_NODE_EFFECTS = 0,
     TS_NODE_AUTOFOCUS         /* HTML §6.6.7's insertion steps, whose step 5 can FORK */
 };
@@ -2044,7 +2041,7 @@ enum {
  * making live traversal unsafe, possibly leading to the post-connection steps being called multiple times on
  * the same node." A second live traversal in phase two would be exactly what that sentence forbids. */
 enum {
-    TS_PHASE_INSERTION = 0,       /* insert step 7.7 — and the removing steps, which have no second phase */
+    TS_PHASE_INSERTION = 0,       /* insert step 7.7's autofocus step, and step 11's collection */
     TS_PHASE_POST_CONNECTION      /* insert step 12, over staticNodeList */
 };
 
@@ -2290,16 +2287,54 @@ static void tree_steps_insertion_steps(lxb_dom_node_t *root)
     }
 }
 
+/* DOM §4.2.3 `remove` step 11, "Run the removing steps with node, true, and parent", and step 14.1's for each
+   shadow-including descendant: after step 7's detach and before step 13's disconnectedCallback (node.c's CE hook,
+   registered after this one). None of them can rest, so they run here, at the remove they belong to, and a later
+   insert of the same member finds them done. */
+static void tree_steps_removing_steps(lxb_dom_node_t *root)
+{
+    lxb_dom_node_t *n;
+
+    for (n = root; n; ) {
+        JSContext *ctx = document_realm_of(n);
+
+        DCHECK(ctx != NULL, "remove's removing steps reached a node in a document with no realm — "
+                            "tree_steps_can_run asked this of the parent it was removed from");
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            lxb_dom_element_t *el = lxb_dom_interface_element(n);
+            JSValue w = node_wrap(ctx, n);
+
+            /* HTML §4.8.5's iframe removing steps: "destroy a child navigable given removedNode", which "happens
+               without any unload events firing (the element's content document is destroyed, not unloaded)". */
+            if (iframe_element_is(n)) iframe_destroy_navigable(ctx, w);
+            /* HTML §4.2.6's update a style block, "or disconnected": the sheet is removed. */
+            html_style_element_update(el);
+            /* HTML §3.1.6: "Whenever a render-blocking element el becomes browsing-context disconnected … unblock
+               rendering on el." An element not in the set is unaffected. */
+            render_blocking_unblock(el);
+            /* HTML §4.11.4's dialog removing steps: an open dialog's cleanup steps destroy its close watcher
+               here, before a dialog this member inserts next establishes one. */
+            html_dialog_removing_steps(ctx, w);
+            JS_FreeValue(ctx, w);
+        }
+        n = shadow_root_next_in_shadow_including(ctx, n, root);
+    }
+}
+
 static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_node_t *parent, int phase)
 {
-    int inserted = phase == NODE_TREE_INSERTED;
-    (void)ctx; (void)parent;
-    /* §4.13's insertion and removing steps are the two SIDES of the tree change, so the post-detach phase is
-       not one of them: it exists for §4.2.2's slot steps, which are a different component's. */
-    if (phase == NODE_TREE_REMOVED) return;
-    if (!root || !node_is_connected(root)) return;
+    (void)ctx;
+    /* The pre-detach phase is §4.2.3 `remove`'s steps 3-4, the live-range and iterator steps, which are other
+       hooks'. The removing steps are step 11 and are asked of the parent, since the node is detached by then. */
+    if (phase == NODE_TREE_REMOVING || !root) return;
+    if (phase == NODE_TREE_REMOVED) {
+        DCHECK(root->parent == NULL, "remove's removing steps were reached with the node still attached");
+        if (parent && node_is_connected(parent) && tree_steps_can_run(parent)) tree_steps_removing_steps(root);
+        return;
+    }
+    if (!node_is_connected(root)) return;
     if (!tree_steps_can_run(root)) return;
-    if (inserted) tree_steps_insertion_steps(root);
+    tree_steps_insertion_steps(root);
     if (g_ts_n == g_ts_cap) {
         int want = g_ts_cap ? g_ts_cap * 2 : 8;
         TreeStepEntry *a = realloc(g_ts, sizeof(*a) * (size_t)want);
@@ -2308,7 +2343,6 @@ static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_n
         g_ts = a; g_ts_cap = want;
     }
     g_ts[g_ts_n].root = g_ts[g_ts_n].cursor = root;
-    g_ts[g_ts_n].inserted = (uint8_t)(inserted != 0);
     g_ts[g_ts_n].pc_only = 0;
     g_ts_n++;
 }
@@ -2346,7 +2380,6 @@ void element_post_connection_record(lxb_dom_node_t *n)
         g_ts = a; g_ts_cap = want;
     }
     g_ts[g_ts_n].root = g_ts[g_ts_n].cursor = n;
-    g_ts[g_ts_n].inserted = 1;   /* it contributes to staticNodeList; see TreeStepEntry::pc_only */
     g_ts[g_ts_n].pc_only = 1;
     g_ts_n++;
 }
@@ -2595,7 +2628,7 @@ static int tree_steps_post_connection(JSContext *ctx, TreeStepBuf *b, JSValue in
     return b->k < b->list_n ? JS_STEP_YIELD : 0;
 }
 
-/* §4.2.3 INSERT STEP 7.7 (and the removing steps, which have no second phase). ONE NODE per call.
+/* §4.2.3 INSERT STEP 7.7's step that can fork, and step 11. ONE NODE per call.
    JS_STEP_YIELD while there is more to do — which is what makes the caller's drain a yield per node —
    JS_STEP_FORK when a per-node effect's answer depends on unknown external state, and 0 only when the SECOND
    phase is over too. `h` is the DRIVING machine's header: a fork is snapshotted at that machine, and the arm
@@ -2664,9 +2697,6 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
         DCHECK(n == e->root && b->nphase == TS_NODE_EFFECTS && b->ua_phase == 0,
                "a children-changed entry was resumed mid-node — it has no per-node steps to park inside, so "
                "its cursor is its root and its phase is the walk's initial one for the whole of its life");
-        DCHECK(e->inserted, "a children-changed entry is not marked as contributing to staticNodeList — "
-                            "step 12 is the only phase it has, so an entry that skips the collection has "
-                            "no phase left to run in");
         tree_steps_list_push(ctx, b, n);
         e->cursor = NULL;
         if (++b->i < b->n) return JS_STEP_YIELD;
@@ -2676,7 +2706,7 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
     }
     if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
-        if (e->inserted) {
+        {
             /* The node's other insertion steps ran at the chokepoint (tree_steps_insertion_steps); only §6.6.7's,
                which can fork, is left to this walk. */
             if (b->nphase == TS_NODE_EFFECTS) b->nphase = TS_NODE_AUTOFOCUS;
@@ -2710,54 +2740,6 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
                        "mid-chain — the next node would then ask the second conjunct of a question nobody "
                        "asked the first half of");
             }
-        } else {
-            /* The chokepoint already enqueued `remove` steps 13/14.2's disconnectedCallback, so a removing step
-               that enqueued a reaction here would land behind it in §4.13.6's FIFO queue. This block cannot
-               park, so a plain global count brackets it. */
-            uint64_t ce_mark = custom_elements_reactions_enqueued();
-
-            DCHECK(b->nphase == TS_NODE_EFFECTS && b->ua_phase == 0,
-                   "§4.2.3's REMOVING steps resumed mid-node — nothing in them asks anything, so there is no "
-                   "point inside one for a walk to park at");
-            /* §4.8.5's removing steps, the pair of the insertion steps above: an <iframe> that LEAVES a
-               document destroys its child navigable. Without it a removed frame kept answering as a live one —
-               `contentWindow` stayed non-null and `closed` stayed false, which is precisely what the spec files
-               distinguish a destroyed navigable by. */
-            if (iframe_element_is(n)) {
-                JSValue w = node_wrap(ctx, n);
-                iframe_destroy_navigable(ctx, w);
-                JS_FreeValue(ctx, w);
-            }
-            /* §4.2.6's SAME TRIGGER, other side — "or disconnected". One algorithm for both, which is what
-               the standard writes: its step 2 removes the sheet and its step 3 returns because the element is
-               no longer connected, so a `<style>` taken out of the document stops having a style sheet and the
-               one it had is orphaned rather than left claiming an owner node it no longer has. */
-            html_style_element_update(el);
-            /* HTML §3.1.6: "Whenever a render-blocking element el becomes browsing-context disconnected … unblock
-               rendering on el." An element not in the set is unaffected. */
-            render_blocking_unblock(el);
-            /* HTML §4.11.4's DIALOG HTML ELEMENT REMOVING STEPS, 3 steps: the dialog cleanup steps for a
-               `<dialog open>` that LEAVES the document, the immediate top-layer removal, and clearing is modal.
-               It is the other half of the close watcher's life — removing a node changes no attribute, so the
-               attribute change steps above never see this edge, and without it a removed open dialog keeps its
-               place in its Window's §6.10.2 close watcher manager for ever and one Esc closes a dialog that is
-               not in any document. */
-            {
-                JSValue w = node_wrap(ctx, n);
-                html_dialog_removing_steps(ctx, w);
-                JS_FreeValue(ctx, w);
-            }
-            /* `remove` steps 13 and 14.2 ARE NOT HERE either, and on this side the standard makes the point
-               with its numbering rather than with a loop: step 11 runs the removing steps, step 12 reads
-               isParentConnected, and step 13 enqueues disconnectedCallback — three top-level steps, of which
-               only the first is a hook another standard defines. The enqueue is at the chokepoint; see
-               core/dom/node.c's node_custom_element_reactions_tree_steps. */
-            DCHECK(custom_elements_reactions_enqueued() == ce_mark,
-                   "a REMOVING STEP enqueued a custom element callback reaction, and this drain runs after "
-                   "core/dom/node.c's node_custom_element_reactions_tree_steps has already enqueued `remove` steps 13/14.2's — "
-                   "so §4.13.6's FIFO queue delivers this node's disconnectedCallback BEFORE the reaction its "
-                   "own removing steps produced, where §4.2.3 numbers step 11 ahead of step 13. Move that "
-                   "step's enqueue to the chokepoint beside 13/14.2");
         }
     } else {
         DCHECK(b->nphase == TS_NODE_EFFECTS && b->ua_phase == 0,
@@ -2769,9 +2751,8 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
     b->nphase = TS_NODE_EFFECTS;
     b->ua_phase = 0;
     /* §4.2.3 insert step 11, for THIS node — appended after its insertion steps and after the one step that
-       can fork, so a re-entered node is collected exactly once. A REMOVAL contributes nothing: `remove` has no
-       staticNodeList and no post-connection steps, so its walk ends at the first phase. */
-    if (e->inserted) tree_steps_list_append(ctx, b, n);
+       can fork, so a re-entered node is collected exactly once. */
+    tree_steps_list_append(ctx, b, n);
     /* THE WALK IS SHADOW-INCLUDING, and that is the whole of what §4.2.3 asks for on BOTH sides of a tree
        change. `insert` step 7.7 is "For each shadow-including inclusive descendant inclusiveDescendant of node,
        in shadow-including tree order", whose step 7.7.1 is "Run the insertion steps with inclusiveDescendant";
@@ -2814,8 +2795,7 @@ static int tree_steps_walk(JSContext *ctx, TreeStepBuf *b, JSStepHdr *h, JSValue
     if (n) return JS_STEP_YIELD;
     if (++b->i < b->n) return JS_STEP_YIELD;
     if (open) return 0;
-    /* EVERY NODE'S INSERTION STEPS ARE DONE, so and only so does insert step 12 begin. A batch of nothing but
-       removals collects no staticNodeList and the walk is over here. */
+    /* EVERY NODE'S INSERTION STEPS ARE DONE, so and only so does insert step 12 begin. */
     b->phase = TS_PHASE_POST_CONNECTION;
     return b->list_n ? JS_STEP_YIELD : 0;
 }

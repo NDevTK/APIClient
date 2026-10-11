@@ -1023,6 +1023,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fragce.h"
 #include "fixture/fragscript.h"
 #include "fixture/fragbase.h"
+#include "fixture/fragdialog.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
 
@@ -1447,6 +1448,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "fragce", HTML_FRAGCE },
     { "fragscript", HTML_FRAGSCRIPT },
     { "fragbase", HTML_FRAGBASE },
+    { "fragdialog", HTML_FRAGDIALOG },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
 };
@@ -11740,6 +11742,19 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              !!strstr(js, "/fbsub2/fragbase3.js") && !strstr(js, "/fbsub3/fragbase3.js"),
              "a link inserted with a base after it in one append or one DocumentFragment was resolved against "
              "that base — DOM §4.2.3 insert runs each node's insertion steps before the next node is inserted");
+    /* `replaceChildren` removes an open dialog and inserts another: the removed one's close watcher is destroyed
+       before the inserted one's is established, so with a second group allowed the inserted dialog's group is
+       its own and the close request that closes it leaves `c` open. */
+    const char *fragdialog_why = NULL; int fragdialog_tt = 1;
+    fold_row(&fragdialog_tt, &fragdialog_why,
+             param_value_is(js, "/api/fragdialogready", "a", "1") && !!strstr(js, "\"/api/fragdialog\""),
+             "NOT REACHED: no arm both gained the second close-watcher group (the picker resolved) and closed "
+             "the inserted dialog");
+    fold_row(&fragdialog_tt, &fragdialog_why,
+             param_value_is(js, "/api/fragdialog", "s", "1open") && !strstr(js, "\"1shut\""),
+             "the close request that closed the inserted dialog also closed `c` on the arm with two groups "
+             "allowed — the inserted dialog's close watcher joined `c`'s group because the removed dialog's "
+             "was destroyed after it was established, where DOM §4.2.3's replace all removes before it inserts");
     const char *winclose_why = NULL; int winclose_tt = 1;
     fold_row(&winclose_tt, &winclose_why, !!strstr(js, "\"/api/winclose\""),
              "NOT REACHED: there is no /api/winclose record at all, so this run did not answer the statement");
@@ -15569,6 +15584,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "frag-script", fragscript_tt, "/api/fragscript", SESS_EXPLORE, fragscript_why },
         { "frag-base", fragbase_tt, "/api/fragbase", SESS_EXPLORE, fragbase_why },
         { "frag-base-multi", fragbasem_tt, "/api/fragbase", SESS_EXPLORE, fragbasem_why },
+        { "frag-dialog", fragdialog_tt, "/api/fragdialog", SESS_EXPLORE, fragdialog_why },
         { "win-opener-close", winopclose_tt, "/api/winopclose", SESS_EXPLORE, winopclose_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
         { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },
