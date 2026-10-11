@@ -6267,47 +6267,30 @@ void engine_queue_candidate(const char *body, size_t body_n, DynPos pos) {
                  TASK_SOURCE_SOLVER_CANDIDATE, pos);
 }
 
-/* HTML §7.4.2.3.2's EVALUATE A JAVASCRIPT: URL, steps 6-7 — "let script be the result of creating a classic
-   script given scriptSource … let evaluationStatus be the result of running the classic script script". The
-   source is the page's own code, so it is a program of the running flow like a lazy chunk: preemptible,
-   forkable and parkable, which a C `JS_Eval` under the live flow could never be.
-   `doc` IS THE TARGET NAVIGABLE'S ACTIVE DOCUMENT, which step 5 states outright — "let settings be
-   targetNavigable's active document's relevant settings object" — and that document is not always the
-   session's: a `<form action="javascript:…" target=frame>` runs its program in the FRAME's realm, where the
-   globals it writes are the ones a later script of that document reads. */
-/* APPEND, and HTML §7.4.2.2 "Beginning navigation" is why: it reaches this case by "Queue a global task on the
-   navigation and traversal task source given navigable's active window to navigate to a javascript: URL". The
-   evaluation this row runs is therefore a TASK, and it takes the tail like every other one. */
-/* AND `body_n` IS STEP 3's OWN ANSWER. "Let scriptSource be the UTF-8 decoding of the percent-decoding of
-   encodedScriptSource" — URL §1.3's percent-decode reaches all 256 byte values, so `javascript:a=%00` decodes
-   to a source text with a U+0000 in it, which ECMAScript §11.1 "Source Text" permits ("All Unicode code point
-   values from U+0000 to U+10FFFF … may occur in ECMAScript source text where permitted by the ECMAScript
-   grammars"). navigable.c used to assert that this could not happen, naming the length as the thing to build;
-   the length is the parameter. */
+/* HTML §7.4.2.3.2 evaluate a javascript: URL, steps 6-7: "let script be the result of creating a classic script
+   given scriptSource … let evaluationStatus be the result of running the classic script script". The source is the
+   page's own code, so it is a program of the running flow, preemptible, forkable and parkable. `doc` is the target
+   navigable's active document (step 5: "let settings be targetNavigable's active document's relevant settings
+   object"), not always the session's: a `<form action="javascript:…" target=frame>` runs in the frame's realm.
+   Appended, because §7.4.2.2 Beginning navigation reaches this by "Queue a global task on the navigation and
+   traversal task source given navigable's active window to navigate to a javascript: URL", so it is a task.
+   `body_n` is step 3's answer: "Let scriptSource be the UTF-8 decoding of the percent-decoding of
+   encodedScriptSource" reaches all 256 byte values, so `javascript:a=%00` has a U+0000, which ECMAScript §11.1
+   Source Text permits. */
 void engine_queue_javascript_url(uint32_t doc, const char *body, size_t body_n) {
-    /* CLASSIC, and §7.4.2.3.2 step 6 says so in as many words — "let script be the result of creating a CLASSIC
-       script given scriptSource" — so there is nothing here to parameterise. */
+    /* Classic: step 6 says "creating a classic script". */
     engine_queue(doc, body, body_n, DYN_JAVASCRIPT_URL, SCRIPT_TYPE_CLASSIC, NULL,
                  TASK_SOURCE_NAVIGATION_AND_TRAVERSAL, DYN_POS_APPEND);
 }
 
-/* A HOST INSTRUMENT'S PROGRAM, QUEUED INTO EVERY LIVE TIMELINE — see engine.h.
-   NOTHING RUNS INSIDE THIS CALL, which is the same sentence engine_route and engine_perform carry and here it
-   is the whole reason the entry has this shape: it is called between two steps, on the host's own time, where
-   there is no flow running, no slice open and no flow base for an exception. What it does is C bookkeeping on
-   each flow's own sequence — the program is compiled and evaluated later, by the scheduler, with that flow
-   switched in and its COW delta applied, which is what makes the answer a fact about THAT timeline's document.
-   THE SESSION'S DOCUMENT, for engine_queue_candidate's reason: an instrument's question is about the document
-   this instance was rooted at, and there is no other document a caller of this entry could mean — a child
-   navigable's geometry is reached by walking into it from that root, which is the instrument's business and
-   not this entry's.
-   APPENDED. Two dumps asked before a flow has run the first are two ordinary questions in turn, each answered
-   under its own row; nothing here forks, because two asks from one host are not two contradictory worlds.
-   AND `flow_clear_host_owed` IS PART OF THE ASK AND NOT A TIDY-UP. A flow that reported host-owed is not
-   offered the thread again until something that could change its answer names it (flow.h), and this is such an
-   event: the flow now holds a row it did not hold. Without the clear, the instrument's question would be
-   answered by every flow EXCEPT the ones parked on a reply — which on a real page is most of them, and the
-   artifact would then describe the timelines that happened not to be waiting. */
+/* A host instrument's program, queued into every live timeline (engine.h). Nothing runs inside this call: it is
+   called between steps on the host's time, with no flow running and no slice open, and only appends a row to
+   each flow's sequence; the scheduler compiles and evaluates it later with that flow switched in, so the answer
+   is about that timeline's document. The document is the session's, as for engine_queue_candidate (a child
+   navigable is reached by walking into it from the root, the instrument's business). Appended: two dumps asked in
+   turn are two questions, not two worlds. `flow_clear_host_owed` is part of the ask: the flow now holds work it
+   did not hold, and without the clear the flows parked on a reply, most of them on a real page, would never
+   answer. */
 void engine_request_dump(const char *program) {
     int n, i;
     DynBody *b;
@@ -6317,12 +6300,8 @@ void engine_request_dump(const char *program) {
            "nothing to take a completion value from, so every flow would be given an empty row to compile");
     DCHECK(g_sess_live, "a dump was asked of an instance with no live session — there is no scheduler to run "
                         "the program and no timeline whose document it would be about");
-    /* ITS LENGTH IS ITS `strlen` AND THAT IS A STATEMENT ABOUT WHO WROTE IT, exactly as it is for a
-       cross-agent operation's program: this text is the HOST's instrument, handed across an ABI whose string
-       parameters are NUL-terminated by construction, and it is not page bytes, not a percent-decoding and not
-       an attacker-shaped payload — the three populations that made every other queueing entry take a pair. A
-       length parameter here would be a second statement of a fact the terminator already carries, free to
-       disagree with it. */
+    /* Its length is its `strlen` because the host wrote it: an instrument handed across an ABI of NUL-terminated
+       strings, not page bytes, a percent-decoding or an attacker payload. */
     b = dyn_body_new(program, strlen(program));
     CHECK(b != NULL, "engine: OOM making the body of a host instrument's program");
     n = flow_count();
@@ -6334,53 +6313,25 @@ void engine_request_dump(const char *program) {
         Flow *f = flow_at(i);
         engine_queue_into(f, g_sess_doc, b, DYN_VALUE_DUMP, SCRIPT_TYPE_CLASSIC,
                           NULL, NULL, TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, NULL,
-                          /*parser_inserted*/0);   /* the host's own text, and no element at all */
+                          /*parser_inserted*/0);   /* the host's own text, and no element */
         flow_clear_host_owed(f);
     }
-    dyn_body_unref(b);   /* every row took its own reference; this entry's copy is spent */
+    dyn_body_unref(b);   /* every row took its own reference */
 }
 
-/* AN IMAGE OF EVERY LIVE TIMELINE — @PERWORLD; the whole contract is at engine.h and the mark itself is at
-   flow.h's `paint_owed`.
-   NOTHING RUNS INSIDE THIS CALL, and here that sentence is stronger than it is at engine_request_dump above:
-   that entry at least compiles a program, and this one writes N bits. The render happens in the HOST, on the
-   host's own time, after a return this mark causes — so the solver neither paints nor holds a picture, which
-   is the layering §Architecture states and the reason this seam is a mark rather than a hook.
-   THE WALK IS `engine_request_dump`'S AND FOR ITS REASON: the DOM is per-flow, so one question has N true
-   answers and a channel with one slot would silently pick one. What is NOT copied from that entry is its
-   `flow_clear_host_owed` — and that omission is the decision, not an oversight. There the clear is PART of the
-   ask, because a queued row is new work the flow did not have and a member parked on a reply would otherwise
-   never run the program. Here the ask adds no work at all: a member's picture is of the state it is ALREADY
-   in, so clearing a host-owed mark would re-admit to the pick a member that still cannot progress, and the
-   scheduler would step it, get FLOW_STEP_OWED back, and re-mark it — which is the re-admission
-   engine_sched_slice deleted from the top of every slice after it measured 1.76 million COW swaps with not one
-   flow finishing. A member waiting on the host is photographed when the host answers it.
-   AN ASK OVER A DRAINED FRONTIER IS A QUESTION NOBODY IS LEFT TO ANSWER, and it is a DCHECK for
-   engine_request_dump's reason exactly: the host would read an empty directory as a document that produced no
-   worlds rather than as a question that arrived after every timeline had finished.
-   THE ONE MEMBER THIS WALK SKIPS IS THE ONE WHOSE FINISH IS DEFERRED, AND THAT SKIP IS WHAT MAKES ASKING
-   AGAIN A THING A HOST CAN ACTUALLY DO. engine.h ends its contract with "a host that wants the arms a run has
-   since grown asks again", and until this line that sentence was an invitation to an ABORT: the discharge at
-   FLOW_STEP_DONE clears the mark, sets g_sess_finish_owed and returns with the member still in the frontier,
-   so an ask taken while the thread is with the host re-marks a world that has already ended — which the
-   deferred-finish path asserts against in as many words ("a mark laid down again while the thread was with
-   the host, which would photograph a world that has already ended"). That assert is RIGHT and stays; what was
-   missing is the ask honouring it, because the party that knows a finish is deferred is this one and not the
-   host. A host cannot see g_sess_finish_owed, has no entry that reports it, and would have to infer it from
-   the shape of its own previous round — which is the kind of second copy of a scheduler fact §Architecture
-   refuses.
-   AND THE SKIP LOSES NO PICTURE, which is the objection to answer rather than to assume: the member being
-   skipped is one whose mark was discharged one return ago, so the host is HOLDING its picture at this very
-   moment — the render is what it does between the two steps. Marking it again would not buy a second picture
-   of a second state; it would buy a second picture of the same ended world, and the finish would then run
-   with a mark still up.
-   WITH THAT, A PER-ROUND RE-ASK TERMINATES, and the argument is the discharge's own: a member's mark is spent
-   at its END (one return, one picture) or FREE at any yield it is standing for, and re-marking a member that
-   is already marked writes the bit it already has. So the price of asking every round is exactly one extra
-   return per member that ever ends — one picture per world, which is @PERWORLD's whole point — and never a
-   return per round per member. The residual in test_forced.c that predicted the opposite ("a round triggered
-   by a discharge would re-mark every member and buy another, which does not terminate") was reasoning about
-   an ask with no such skip, and it was right about that ask. */
+/* An image of every live timeline (@PERWORLD; engine.h has the contract, flow.h's `paint_owed` the mark). Nothing
+   runs inside this call: it writes N bits, and the host renders after the return the mark causes, so the solver
+   neither paints nor holds a picture. The walk is engine_request_dump's, for its reason (the DOM is per flow), but
+   without its `flow_clear_host_owed`: a picture is of the state a member is already in and adds no work, so
+   clearing the mark would re-admit a member that still cannot progress, to be stepped, answer FLOW_STEP_OWED and
+   be re-marked (the re-admission engine_sched_slice removed from the top of every slice). A member waiting on the
+   host is photographed when the host answers it. A drained frontier is a DCHECK, for engine_request_dump's reason.
+   The member whose finish is deferred is skipped: the discharge at FLOW_STEP_DONE clears its mark and returns
+   with it still in the frontier, so re-marking it would photograph an ended world, which the deferred-finish
+   path asserts against. The host already holds that member's picture, and cannot see g_sess_finish_owed, so the
+   skip belongs here. With it, re-asking every round terminates: a mark is spent at a member's end (one return,
+   one picture) or free at any yield, and re-marking a marked member writes the bit it has, so each member that
+   ends costs exactly one extra return. */
 static void paint_mark_standing_members(void) {
     int n, i;
 
@@ -6399,47 +6350,30 @@ static void paint_mark_standing_members(void) {
     }
 }
 
-/* ONE PICTURE PER WORLD, FOR EVERY WORLD THIS RUN GOES ON TO MINT — @PERWORLD, and engine.h holds the contract.
-   TWO POPULATIONS AND THEREFORE TWO LINES, which is the whole of this entry: the members STANDING right now,
-   which only a walk of the frontier can name, and the members NOT YET BORN, which only the mint can. Either
-   line alone leaves a hole a reader would read as an answer — the walk alone misses every arm forked
-   afterwards, and the mode alone misses the boot flow, which on a document that has not stepped yet is the
-   entire frontier and the only member with a document in it.
-   IT SUPERSEDES A PER-ROUND RE-ASK RATHER THAN STANDING BESIDE ONE, and test_forced.c's renewal went in the
-   diff that added this. A host renewing `engine_request_paint` every round marks a superset of the standing
-   members each time and still cannot reach a member that is FORKED, RUN AND ENDED between two of its own
-   returns — the host is only ever at a round boundary, so this is not a cadence it could have chosen more
-   finely. MEASURED, on a six-element document whose inline script branches on `window.__FLAGS.admin` and
-   whose `_forkAt` names that one branch site: `flows 2, forks 1, switches 13`, TWO images written (the
-   `baseline` and ONE world), off exactly ONE host return. Thirteen internal switches, one boundary.
-   IT IS NOT A BOUND AND IT IS NOT A CAP. What grows with the frontier is the count of worlds PHOTOGRAPHED,
-   which §NO BOUNDS requires to grow; each member pays one extra return, once, at its own end, and a member
-   that never ends never pays it. Nothing anywhere waits for "the ask" to complete, which is the reading
-   flow.h's retired refusal made and the reason it read as non-terminating.
-   THE PRICE IS REAL AND IS THE HOST'S TO REFUSE BY NOT ASKING: one CSS 2.1 §E.2 "Painting order" walk per
-   member that ever ends, on the thread the engine ages its members in. */
+/* One picture per world, for every world this run goes on to mint (@PERWORLD; engine.h). Two populations, two
+   lines: the members standing now, which only a walk of the frontier names, and members not yet born, which only
+   the mint can mark. The walk alone misses every arm forked later; the mode alone misses the boot flow, which before
+   the first step is the whole frontier. It replaces a per-round re-ask, which cannot reach a member forked, run
+   and ended between two of the host's returns (the host only sees round boundaries). Not a bound: the count of
+   worlds photographed grows with the frontier, and each member pays one extra return at its own end. The price,
+   one CSS 2.1 §E.2 Painting order walk per member that ends, on the engine's thread, is the host's to refuse by
+   not asking. */
 void engine_request_paint_every_world(void) {
     flow_paint_every_world();
     paint_mark_standing_members();
 }
 
-/* THE ANSWER RECORD'S ONE WRITER, declared ahead of the first of its two callers — its body sits beside the
-   OTHER one, where a completion is read off a program's row, because that is the caller whose own locals it was
-   factored out of. */
+/* The answer record's one writer, declared ahead of the first of its two callers; its body sits beside the other,
+   whose locals it was factored out of. */
 static void perform_answer_notify(JSContext *ctx, JSContext *ectx, Flow *f, const char *token,
                                   int completion, JSValueConst cv);
 
-/* THE OPERATION BECOMES THIS FLOW'S NEXT PROGRAM. Not a call: a peer answers by RUNNING a program, and every one
-   of these is the page's own code — an IDL getter, a page's setter, a page's function — which a C activation
-   has no flow base under. Queued with the flow switched in, so the operands the program reads are written into
-   THIS flow's delta and no sibling sees them. */
-/* AND IT RUNS IN THE REALM OF THE DOCUMENT THE PEER NAMED. Every operand is installed there and the program is
-   compiled there (flow_step), because that is what the operation IS: §7.2.1's member is read of the OTHER
-   navigable's active document, and a getter answered out of this instance's root would count the root's child
-   navigables and hand them back as the child's. The document is carried as the HANDLE that crossed the wire
-   rather than as a JSContext, for the reason every other queued platform datum is a name and not a pointer: a
-   handle survives a park and a realm does not — and it is carried ON THE ROW, because `dyn_doc` is already the
-   field that says which realm a queued program is compiled in. */
+/* The operation becomes this flow's next program. Not a call: a peer answers by running a program, and each is
+   page code (an IDL getter, a page's setter or function) that needs a flow base. Queued with the flow switched in,
+   so the operands are written into this flow's delta. It runs in the realm of the document the peer named: §7.2.1's
+   member is read of the other navigable's active document, and answering from this instance's root would count
+   the root's child navigables. The document travels as the wire's handle, which survives a park where a realm does
+   not, on the row's `dyn_doc`. */
 static void flow_perform(JSContext *ctx, Flow *f)
 {
     JSValue e, rv, tv;
@@ -6471,60 +6405,30 @@ static void flow_perform(JSContext *ctx, Flow *f)
     op = remote_op_parse(record);
     doc = world_doc_intern(remote_op_doc(op));
     n_anc = world_parse(remote_op_worlds(op), &w, &anc);
-    /* ASKED AGAIN AT THE MOMENT IT RUNS, for the reason flow_deliver asks it again: the scheduler has run other
-       flows since the record arrived, and which world holds writes here is a property of the run. */
+    /* Asked again when it runs, for flow_deliver's reason: other flows have run since the record arrived. */
     seg = world_segment(ctx, w, anc, n_anc);
     (void)seg;
     DCHECK(cow_delta_empty(seg),
            "a cross-agent operation ran in the answering flow's timeline alone while the asking world holds "
            "writes in this instance — it answers about a document missing everything the asking flow did here. "
            "Build the join of the two deltas that engine_route names");
-    /* §7.2.1'S TWO RECORD-ANSWERABLE MEMBERS DO NOT NEED A PROGRAM, SO THEY DO NOT GET ONE — and the realm
-       lookup therefore moved DOWN to its one use rather than this test moving up past it. That ordering is the
-       whole of the fix: a navigable whose active Document §7.5.10 "Destroying documents" destroyed in this
-       timeline has no realm now and will not have one (its set-the-Document's-browsing-context-to-null step
-       reaches window_proxy_set_destroyed, which nulls the record's realm), so asking for one FIRST aborted on
-       the one population §7.2.1 "Security infrastructure for Window, WindowProxy, and Location objects" says
-       is still readable. The lookup is unchanged and its partition is unchanged; it is simply asked where its
-       answer is spent, which is remote_op_program's operand install.
-       WHAT CHANGES FOR AN ACTIVE NAVIGABLE IS THE COST AND NOT THE ANSWER, and that is a derivation rather than
-       a hope. §7.2.1.3.4 "CrossOriginGetOwnPropertyHelper ( O , P )" runs "an anonymous built-in function,
-       created in the current realm, that performs the same steps as the getter of the IDL attribute P on object
-       O", and for these two the steps are THIS ENGINE'S C: core/frame/window.c's `length` getter is
-       `iframe_child_navigable_count(ctx)` over the receiver's own navigable and its `closed` getter is
-       `window_proxy_closed(ctx, nav)` — the same two expressions window_proxy_record_member_of_document
-       computes, over the same record, with the realm read off the same navigable
-       (window_proxy_realm_of_document IS that record's `realm`). So the program route and this one are one
-       answer, and running it as a program bought a flow base for a body that holds no page code and cannot
-       park. It also bought a REALM: for a navigable whose initial about:blank no read of this timeline has
-       reached through, the program route materializes one per flow, which is the cost proxy_get_step's own
-       hosted arm measured at 4000 flows and ~57% of the depth the frontier reaches without it.
-       THE PROGRAM ROUTE IS NOT SUPERSEDED AND IS NOT A FALLBACK TO THIS ONE. §7.2.1.3.1
-       "CrossOriginProperties ( O )" lists THIRTEEN names and nine of them carry [[NeedsGetter]], so what arrives
-       is an open population: a record is TEXT from an untrusted instance, remote_op_parse admits every listed
-       name, and the nine that are accessors include `location`, `opener`, `parent` and `top` — whose answers are
-       OBJECTS of the target realm and which this entry refuses by name. Delete the program route and those have
-       nothing; keep a predicate that selects between two answers to ONE question and it drifts. This is the
-       second: one question, two populations, and the refusal below is what keeps them apart.
-       AND THE ONE THING THAT WOULD BE WRONG IS ASSERTED RATHER THAN ARGUED. `ctx` here is this instance's ROOT
-       document's realm — the scheduler asserts that identity where it opens a session — and the document this
-       record names is another realm of this SAME agent (an agent is origin-keyed, so a hosted name is one of
-       ours), never a peer's. So the two realms are siblings rather than strangers, and what follows is still
-       true of siblings: core/frame/remote_object.c's encoder consults the
-       realm it is handed for exactly one shape: an OBJECT. `window_proxy_navigable_of(ctx, v)` resolves a
-       Window global against the realm it was given, and the generic export keys its `<document>:<generation>:<id>`
-       on `world_local_doc()` — so an object encoded here would be lent under the WRONG document's name, and the
-       asker would hold a reference into a document that never lent it. A NUMBER and a BOOLEAN have no such path:
-       measured by reading the interpreter rather than the contract, JS_ToBoolFree returns
-       `JS_VALUE_GET_INT(val)` for JS_TAG_BOOL and JS_ToFloat64FreeAt returns `JS_VALUE_GET_INT(val)` for
-       JS_TAG_INT (0, which is <= JS_TAG_NULL) and the double for JS_TAG_FLOAT64, each without reading `ctx`.
-       AT TODAY'S ONE CALLER THE CONDITION CANNOT FAIL, which is stated rather than hidden because it is the same
-       population doc_realm_at's own DCHECK stands on: window_proxy_record_member_of_document mints its two
-       answers with JS_NewInt32 and JS_NewBool, so what this check is for is a WIDENING of that entry to a third
-       member — `location` and `opener` are real members of that surface and their answers are objects — and a
-       widening is a diff somebody will plausibly write. It is the design decision in one line, and it is a
-       DCHECK rather than a CHECK because the value is one this codebase COMPUTED (§Offensive-programming's own
-       discriminator) and because release encoding an object here is a wrong answer rather than an unsafe one. */
+    /* §7.2.1's two record-answerable members (`length`, `closed`) need no program, so the realm lookup is asked only
+       on the program route, where its answer is spent: a navigable whose Document §7.5.10 destroyed in this
+       timeline has no realm (window_proxy_set_destroyed nulls it) and its record is still readable. The answer is
+       the same as the program's: §7.2.1.3.4 CrossOriginGetOwnPropertyHelper ( O , P ) runs "the same steps as the
+       getter of the IDL attribute P on object O", and core/frame/window.c's getters are
+       `iframe_child_navigable_count(ctx)` and `window_proxy_closed(ctx, nav)` over the same record
+       window_proxy_record_member_of_document reads. The program route would also materialize a realm per flow for a
+       navigable no read reached through (proxy_get_step's hosted arm measured that cost).
+       The program route stays, for the rest of the open population: §7.2.1.3.1 CrossOriginProperties ( O ) lists
+       thirteen names, nine with [[NeedsGetter]], a record is untrusted text, and `location`, `opener`, `parent` and
+       `top` answer objects of the target realm.
+       `ctx` is this instance's root realm, a sibling of the named document's realm in the same agent, and
+       core/frame/remote_object.c's encoder consults the realm it is handed only for an object
+       (`window_proxy_navigable_of` resolves a Window against it; a generic export keys on `world_local_doc()`), so an
+       object encoded here would be lent under the wrong document's name. A number or boolean reads no realm
+       (JS_ToBoolFree and JS_ToFloat64FreeAt answer from the tag). The record route mints only JS_NewInt32 and
+       JS_NewBool today; the DCHECK guards a widening to a member whose answer is an object. */
     member = remote_op_member(op);
     if (member != NULL && window_proxy_record_member_of_document(ctx, doc, member, &answer)) {
         DCHECK(JS_IsNumber(answer) || JS_IsBool(answer),
@@ -6539,30 +6443,22 @@ static void flow_perform(JSContext *ctx, Flow *f)
         perform_answer_notify(ctx, ctx, f, token, ENGINE_COMPLETION_NORMAL, answer);
         JS_FreeValue(ctx, answer);
     } else {
-        /* THE ENTRY IS SPENT HERE AND WHAT SURVIVES IT IS THE TOKEN. The record has become a program and has
-           nothing left to say; the token is COPIED out of the queue entry onto that program's row, because the
-           answer is the program's COMPLETION and the row is what says which completion. `strdup` and not a
-           move: the entry is a JS value that a forked ARM may still name, so the row owns a C string of its own
-           and the entry's own reference dies with the JS_FreeValue below. Nothing about this operation is left
-           on the flow, which is what lets the next entry start on a flow that is already performing one. */
+        /* The entry is spent and the token survives it: the record has become a program, and the token is copied
+           onto the program's row, because the answer is the program's completion. Copied, not moved: a forked arm
+           may still name the queue entry, so the row owns its own string. */
         char *own = strdup(token);
         JSContext *rctx = doc_realm(doc);
-        /* THE PROGRAM IS READ BEFORE THE ROW IS MADE because reading it is what SETS the operation's operands
-           on the answering realm's global (remote_op.c) — one call, and the row's body is what it answered. */
-        /* AND ITS LENGTH IS ITS `strlen` BECAUSE THIS ENGINE WROTE IT. remote_op_program answers one of this
-           file's own fixed programs for a §7.2.1 member, not page text and not anything an attacker reached,
-           so there is no U+0000 to lose — which is the whole content of stating the length at the site rather
-           than letting an entry point compute it out of sight. */
+        /* The program is read before the row is made, because reading it sets the operation's operands on the
+           answering realm's global (remote_op.c). Its length is its `strlen`: remote_op_program answers one of this
+           engine's fixed programs, not page text. */
         const char *prog_src = remote_op_program(rctx, op);
         DynBody *prog = dyn_body_new(prog_src, strlen(prog_src));
         CHECK(own != NULL, "engine: OOM moving a cross-agent operation's rendezvous token onto its program");
         CHECK(prog != NULL, "engine: OOM making the body of a cross-agent operation's program");
-        /* NO ELEMENT: this program is the ENGINE'S own text, not a `<script>`, so §4.12.1.1's "execute the
-           script element" is not the algorithm that runs it and the peer document's §3.1.7 `currentScript`
-           stays null while it does — which is the truth about a document answering a cross-agent read. */
+        /* No element: this is the engine's own text, so the peer document's §3.1.7 `currentScript` stays null. */
         engine_queue_into(f, doc, prog, DYN_CROSS_AGENT_OP, SCRIPT_TYPE_CLASSIC,
                           NULL, own, TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, NULL,
-                          /*parser_inserted*/0);   /* a peer's operation, and no element at all */
+                          /*parser_inserted*/0);   /* a peer's operation, and no element */
         dyn_body_unref(prog);
     }
     remote_op_free(op);
@@ -6573,49 +6469,21 @@ static void flow_perform(JSContext *ctx, Flow *f)
     JS_FreeValue(ctx, e);
 }
 
-/* AND THE COMPLETION, READ WHERE THE SCHEDULER READS ONE. `cv` is what the program completed with — its value,
-   or JS_EXCEPTION with the throw pending. THE THROW IS THE ANSWER: the peer ran a program and a program that
-   threw completed just as truly as one that returned, so it is encoded with its type and raised in the flow
-   that ASKED, at the line that asked, where that page's own try/catch is. Reporting it as this document's page
-   error instead would lose it and answer `undefined`.
-   IT CROSSES AS AN EMISSION, one-way: nothing here waits for it, so nothing has to un-send it when this flow
-   parks or is outranked — the same argument that makes a cross-document message an emission. */
-/* A HOST INSTRUMENT'S PROGRAM HAS COMPLETED, AND ITS VALUE IS THE PRODUCT — dumped as JSON with every unknown
-   standing on its own example, and recorded as `<world><TAB><json>`.
-   THE WORLD IS NOT A DIAGNOSTIC. This document's state IS its flows, so the program ran in every one of them
-   and the host receives N answers to one question; with the timelines unnamed they are N interchangeable
-   claims about one document, which is the defect flow_answer_perform records having measured one layer over
-   (one page's `w.closed` answered `true` and then `false` out of two contradictory timelines).
-   THE NAME IS `world_name`'S AND NOT `world_serialize`'S, AND THIS LINE USED TO SAY THE OPPOSITE — rewritten
-   rather than deleted, because a reader who re-derives it from "the ONE spelling of a world on the wire" will
-   write it again. That sentence is true of a record crossing to a PEER and this record crosses to a DRIVER,
-   and solver/world.h splits the two entries on exactly that: "one names a world to a PEER and records that it
-   did, the other names it to a READER and records nothing." What `world_serialize` RECORDS is the side effect
-   — it reaches `world_ancestry`, which sets `sent`, and solver/world.c says what `sent` means where it clears
-   it: "a peer MAY hold a segment keyed by this name". A world called `sent` because somebody PRINTED it is
-   wrong in two directions
-   at once and neither is visible here: it joins the ancestry of every vector minted below it (world.h's own
-   filter keeps only ancestors that have crossed, and that filter is what stops a name growing with the number
-   of BRANCHES rather than with the fork depth — `world_vector_write`'s `CHECK` on any page whose boot flow
-   forks freely), and it is announced as DEAD to peers that never held it, since `world_flow_gone` and
-   `world_session_gone` push exactly the `sent` worlds onto the register `qjs_world_gone` drains.
-   NOTHING DOWNSTREAM WANTED THE VECTOR. The ancestry exists so a peer can MATERIALIZE a segment by forking the
-   nearest ancestor it holds; a driver materializes nothing — testing/render_engine.mjs splits this record on
-   its FIRST tab and uses the field as an opaque Map key — so the fields it was being handed were ones it could
-   only scan past, bought at the price of both effects above.
-   IT IS STILL THE HEAD OF THAT SAME GRAMMAR AND NOT A SECOND ONE: `world_name` and `world_serialize` share the
-   one field writer, so a driver holding this name and a peer holding that vector are naming one timeline.
-   THE JSON CARRIES NO TAB AND NO NEWLINE BY CONSTRUCTION (value_dump.h says why, and json_buf.c's escaping
-   loop is what makes it true), so it is the record's last field and needs no encoding step. It is asserted
-   anyway, because a record separator inside a field is the one corruption a reader's field COUNT still passes:
-   the tail would be read as a second record under no world at all.
-   THE REALM IS THE PROGRAM'S, asked the way flow_answer_perform asks it — Web IDL §3.7 "Interfaces" gives
-   every realm its own intrinsics ("for every interface that is exposed in a given realm … a corresponding
-   property exists on the realm's global object"), and a value read through another document's is read by a
-   platform that is not the one that produced it. */
+/* A host instrument's program has completed, and its value is the product: dumped as JSON with every unknown on its
+   own example, recorded as `<world><TAB><json>`. The world is part of the answer: the program ran in every timeline,
+   so the host gets N answers, and unnamed they would be interchangeable claims about one document.
+   The name is `world_name`'s, not `world_serialize`'s (solver/world.h: "one names a world to a PEER and records that
+   it did, the other names it to a READER and records nothing"). `world_serialize` reaches `world_ancestry`, which
+   sets `sent` ("a peer MAY hold a segment keyed by this name"), and a world marked sent by being printed would join
+   the ancestry of every vector minted below it and be announced dead to peers that never held it
+   (`world_flow_gone`, `world_session_gone`). A driver needs no vector: testing/render_engine.mjs splits on the first
+   tab and uses the field as an opaque key. The two share one field writer, so both name one timeline.
+   The JSON has no tab or newline by construction (value_dump.h; json_buf.c escapes), so it is the last field; it is
+   asserted because a separator inside a field passes a field count. The realm is the program's: Web IDL §3.7
+   Interfaces gives every realm its own intrinsics. */
 static void flow_emit_dump(JSContext *ctx, Flow *f, JSValueConst cv)
 {
-    char *world = world_name(f->world);   /* @WORLDSHOT: a READER's name, and see the banner for why not the vector */
+    char *world = world_name(f->world);   /* @WORLDSHOT: a reader's name (see above) */
     char *json;
     size_t wn, jn;
 
@@ -6650,26 +6518,15 @@ static void flow_emit_dump(JSContext *ctx, Flow *f, JSValueConst cv)
     free(world);   /* world_name allocates; see solver/world.h */
 }
 
-/* THE ANSWER RECORD, WRITTEN IN ONE PLACE. Two callers reach the wire with a completion for one rendezvous
-   token — the program's, read where the scheduler reads one (flow_answer_perform), and the record-only answer
-   flow_perform gives a §7.2.1 member that needs no program at all — and the record's field layout, its
-   separator and its order are ONE grammar. Two spellings of a grammar are two grammars, which is the argument
-   core/frame/remote_op.h makes about the question and is the same about the answer.
-   `ectx` IS THE REALM THE VALUE IS CONVERTED IN AND `ctx` IS ONLY THE NOTICE'S, and the two are separate
-   parameters because they are separate facts: Web IDL §3.7 "Interfaces" gives every realm its own intrinsics
-   ("for every interface that is exposed in a given realm … a corresponding property exists on the realm's
-   global object"), so a value read through another document's is read by a platform that is not the one that
-   produced it — while engine_host_notify ignores its ctx entirely and only appends to this instance's notice
-   buffer. The two were already different expressions at the one call site this replaces; naming them makes the
-   difference a parameter rather than a coincidence.
-   THE ANSWER SAYS WHICH TIMELINE COMPUTED IT, and it is not a diagnostic. This document's state IS its flows,
-   so the operation was performed by every one of them and the asking instance receives N completions under ONE
-   rendezvous token — which, with the timelines unnamed, is N interchangeable claims about one question.
-   Measured before this field existed: the routing zone held them in a one-slot map keyed by the token, kept
-   whichever arrived last and dropped the rest, and one page's `(typeof w.closed) + ":" + w.closed` came back
-   `true` at one read and `false` at the next out of two CONTRADICTORY timelines of this document. The name is
-   world_serialize's, the ONE spelling of a world on the wire (solver/world.h), so the asker can compare it,
-   record it beside the answer it belongs to, and refuse a second delivery of it. */
+/* The answer record, written in one place. Its two callers (the program's completion in flow_answer_perform, and
+   flow_perform's record-only answer for a §7.2.1 member) write one grammar: field layout, separator and order, as
+   core/frame/remote_op.h argues for the question. `ectx` is the realm the value is converted in and `ctx` only the
+   notice's: Web IDL §3.7 Interfaces gives every realm its own intrinsics ("for every interface that is exposed in a
+   given realm … a corresponding property exists on the realm's global object"), while engine_host_notify ignores
+   its ctx and appends to this instance's buffer. The answer names the timeline that computed it, since the
+   operation ran in every timeline and N completions arrive under one token; the name is world_serialize's, the
+   one spelling of a world on the wire (solver/world.h), so the asker can record it beside the answer and refuse a
+   second delivery of it. */
 static void perform_answer_notify(JSContext *ctx, JSContext *ectx, Flow *f, const char *token,
                                   int completion, JSValueConst cv)
 {
@@ -6681,28 +6538,31 @@ static void perform_answer_notify(JSContext *ctx, JSContext *ectx, Flow *f, cons
            "a cross-agent operation's answer was written under no rendezvous token — the completion names no "
            "question, so the flow that asked would park on it forever");
     enc = remote_completion_encode(ectx, completion, cv);
-    /* world_serialize CRASHES on its own truncation rather than sending a prefix, which is what makes the name
-       on this notice the same name every other record of this world carries. */
+    /* world_serialize crashes on truncation rather than sending a prefix, so this notice carries the same name as
+       every other record of this world. */
     world_serialize(f->world, world, sizeof world);
     cap = strlen(token) + strlen(world) + strlen(enc) + 24;
     rec = malloc(cap);
     CHECK(rec != NULL, "engine: OOM writing a cross-agent operation's answer — a dropped answer parks the "
                        "asking flow on a question nothing will answer again");
-    /* THE WORLD SITS BEFORE THE COMPLETION because the completion is the record's REMAINDER: a value grammar
-       may contain a tab, and a world vector may not (world_serialize's fields are ':' and ','). */
+    /* The world sits before the completion because the completion is the remainder: a value grammar may contain a
+       tab, a world vector may not (its fields are ':' and ','). */
     snprintf(rec, cap, "remoteop.answer\t%s\t%s\t%s", token, world, enc);
     engine_host_notify(ctx, rec);
     free(rec);
     free(enc);
 }
 
+/* The completion, read where the scheduler reads one: `cv` is the program's value, or JS_EXCEPTION with the throw
+   pending. A throw is the answer too: it is encoded with its type and raised in the asking flow at the line that
+   asked, where the page's own try/catch is; reporting it as this document's page error would answer `undefined`.
+   It crosses as a one-way emission, so nothing has to un-send it when this flow parks or is outranked. */
 static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
 {
     JSValue thrown = JS_UNDEFINED;
     int completion = ENGINE_COMPLETION_NORMAL;
-    /* THE ROW THE FLOW IS STANDING ON IS THE QUESTION IT IS ANSWERING — the cursor IS the row index now, so
-       there is no session-script count to subtract. No bounds guard, because the caller has already read this
-       row's KIND to get here and only a row inside the queue has one. */
+    /* The row the flow stands on is the question it answers (the cursor is the row index). No bounds guard beyond
+       the assert: the caller read this row's kind to get here. */
     int row = f->script_i;
     char *token;
 
@@ -6720,312 +6580,154 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
         completion = ENGINE_COMPLETION_THROW;
         cv = thrown;
     }
-    /* ENCODED IN THE REALM THE PROGRAM RAN IN, because the value is that realm's — Web IDL §3.7 "Interfaces"
-       gives every realm its own intrinsics, and a value converted through another document's is converted by a
-       platform that is not the one that produced it. It is the same realm the program was compiled in, asked
-       the same way.
-       THE STANDARD IS NAMED HERE AND AT THE SIBLING ABOVE, AND IT WAS NOT. A bare `§3.7` resolves on the FILE
-       VOTE, which this file carries for HTML — so the audit read it as `html §3.7`, a section that standard
-       does not have, and filed it in the listing it explicitly does not accuse. Nothing under an unresolved
-       citation is ever checked, which is why an un-anchored one is not merely unchecked but SHIELDED. Both
-       sites are repaired together because they are one sentence written twice and a repair at one leaves the
-       other asking the same question the same wrong way. */
+    /* Encoded in the realm the program ran in, because the value is that realm's (Web IDL §3.7 Interfaces); the
+       same realm it was compiled in, asked the same way. */
     perform_answer_notify(ctx, doc_realm(flow_dyn_doc(f)), f, token, completion, cv);
     JS_FreeValue(ctx, thrown);
-    /* THE ROW STOPS OWING, and it is the row rather than the flow that stops: this program's question has been
-       answered and the flow's other rows are other questions, each still holding its own token. The kind stays
-       DYN_CROSS_AGENT_OP — it is what the program IS, and a completion is read once (the cursor advances) —
-       so what an answered row asserts from here is that nothing asks it for a token again. */
+    /* The row stops owing, not the flow: the flow's other rows are other questions with their own tokens. The kind
+       stays DYN_CROSS_AGENT_OP (it is what the program is, and the cursor advances past it), so from here an
+       answered row asserts that nothing asks it for a token again. */
     free(f->dyn_token[row]); f->dyn_token[row] = NULL;
 }
 
-/* Preempt hook, two orthogonal yield decisions at the one per-opcode suspend point:
-   (1) VALUE yield — suspend the running flow the MOMENT a parked flow outranks it (the WFQ, not a clock,
-       decides which flow runs). The rival is recomputed only when the frontier membership changes (a fork
-       adds a flow) or the running flow switches — cached by (gen, cur) so this is O(1) per consultation, never
-       an O(flows) scan per opcode.
-   (2) COOPERATIVE-QUANTUM yield — a thread-sharing floor: even a top-ranked flow breathes once it has consumed
-       a slice, so the host loop can interleave / pump / snapshot. NOT a step cap: it drops/reorders no flow and
-       the flow resumes byte-identically. */
-/* THE QUANTUM'S EXPIRY IS ASKED, NOT COMPUTED HERE — and the clock it used to be computed from is gone with the
-   arithmetic. It was `now - g_slice_start >= ENGINE_QUANTUM_MS` on a WALL clock read at each consultation, and
-   that was wrong in two ways at once.
-   WRONG MEASURE: §Testing says measure the thing the invariant is about — CPU actually consumed, never elapsed
-   time. The quantum is about thread-SHARING, and a descheduled thread is denying nobody anything (the host that
-   would use the returned thread is the same thread, descheduled with it), so wall time it did not run for is
-   not budget it spent.
-   WRONG SOURCE, WHICH IS THE HALF THAT ACTUALLY BROKE IT: this hook runs only when something RAISED a yield
-   request, and until now everything that raised one was a shape of the PAGE'S OWN BYTECODE — a loop back-edge,
-   a call, a concolic fork. A stretch of straight-line call-free code raised nothing, so the clause was not
-   merely computed from the wrong clock, it was not EVALUATED AT ALL for as long as that stretch ran. A budget
-   whose expiry is only noticed when the debtor volunteers is not a budget.
-   Both are now one component's problem: solver/quantum.h owns the edge that raises the request asynchronously
-   (a per-thread CPU timer natively) AND the measure the expiry is decided on, per host, so the answer here is a
-   question rather than an arithmetic. This hook keeps the POLICY, which is all §scheduler ever wanted here. */
-static int64_t engine_now_ms(void);   /* the WALL clock, for the gap census below — reported, never a verdict */
-/* THE RIVAL IS CACHED; THE COMPARISON IS NOT — and caching the comparison was a second way the monopolizer kept
-   the thread. `g_outranked` was a boolean recomputed only when the frontier's membership changed or the running
-   flow switched, which is sound only while nothing else can move a weight. The running flow's `cpu` moves on
-   every charge and bumps no generation, so the instant aging became a real quantity the cached verdict was a
-   comparison made before the flow had aged: the term would have demoted it correctly and the hook would never
-   have looked again.
-   WHAT IS CACHED IS THE RIVAL'S IDENTITY AND NOT ITS WEIGHT, and the difference is a defect this file used to
-   assert its way past. The sentence that stood here was: "only the RUNNING flow's weight moves between
-   generation bumps — a parked flow burns no CPU, and an emit both changes `val` and bumps the generation — so
-   the RIVAL's weight is constant across the cache's key." The premise is FALSE, and it became false the moment
-   the aging term acquired a FAMILY half. `flow_silence_notch` reads this flow's own silence plus `fam_us`, and
-   `flow_age_running`
-   writes `family->fam_us` after EVERY step without raising the generation — so a parked flow burns no CPU OF
-   ITS OWN and its weight moves anyway, because the quantity is shared with whichever arm holds the thread. On
-   a real page the whole frontier is ONE family (flow.c: every flow descends from the boot flow), so this is
-   not an edge: it is every parked member of the frontier, on every step.
-   AND THE STALENESS IS DIRECTIONAL, WHICH IS WHY IT COST AN ABORT AND NOT A MISSED YIELD. The notch is a FLOOR
-   of `(cpu_i + fam_us) / S`, and each member straddles its own boundary at its own instant because each has
-   its own `cpu_i`. So a step can carry the RIVAL's floor across while the running flow's stands still: the
-   rival's true weight drops by a whole point, the cache keeps the value from before the drop, and the hook
-   then yields to a flow that is no longer better while every quantity the seam assertion snapshots about the
-   running flow is correctly unchanged. That is the assertion's own "a rival recomputed against a stale cache",
-   fired by the cache this comment declared could not go stale.
-   SO THE WEIGHT IS RECOMPUTED AT EVERY CONSULTATION, both sides of it, which is what makes the comparison the
-   same question the pick answers rather than a different one. The O(flows) SCAN — finding WHICH flow is the
-   rival — is what the generation key is for and still happens only on a change; evaluating one weight is two
-   divisions beside a clock read the hook already performs.
-   AND IT IS NOT THE FITNESS TERM, WHICH IS WORTH WRITING DOWN BECAUSE THE TWO ARRIVED TOGETHER AND THE OTHER
-   ONE IS A CLAUSE IN THE ASSERTION BELOW. A fitness write cannot fire that assertion: it is made only on
-   the RUNNING flow, only through flow_observe_survival or flow_observe_rung, and both raise the generation —
-   so clause one is true for
-   the whole remainder of the turn and the disjunction cannot be false. Watching the distance is the discipline
-   the snapshot block states for ANY summand of the weight and is right on that ground alone; it is not the
-   mechanism that aborts, and a reader who takes it for one will conclude this cache is sound. ONE READING
-   tells the two apart: a fire with the generation EQUAL to the ranked one, which a distance write makes
-   impossible and which a family-notch straddle leaves untouched.
-   The cached POINTER is safe across the key for a
-   reason the key itself supplies: a flow leaving the frontier is a membership change and raises the
-   generation, so the rescan re-runs before a departed member could be read. That is asserted where the pointer
-   is taken rather than where it is read, because membership is an O(flows) scan and the read is per-opcode. */
+/* Preempt hook: two orthogonal yield decisions at the one per-opcode suspend point.
+   (1) Value yield: suspend the running flow the moment a parked flow outranks it (the WFQ, not a clock, decides).
+       The rival is found by an O(flows) scan only when the frontier generation or the running flow changes; its
+       weight is recomputed at every consultation.
+   (2) Cooperative-quantum yield: a thread-sharing floor, so even a top-ranked flow breathes after a slice and the
+       host loop can interleave, pump and snapshot. Not a step cap: no flow is dropped or reordered, and the flow
+       resumes byte-identically. The expiry is asked of solver/quantum.h, which owns both the asynchronous edge
+       that raises the request (a per-thread CPU timer natively) and the measure it is decided on: CPU consumed,
+       since a descheduled thread denies nobody anything, and an asynchronous source, since straight-line call-free
+       code raises no request of its own. */
+static int64_t engine_now_ms(void);   /* the wall clock, for the gap census below: reported, never a verdict */
+/* The rival is cached; the comparison is not. What is cached is the rival's identity, found by the O(flows) scan,
+   and the scan reruns only when the generation or running flow changes. Both weights are recomputed at every
+   consultation, because a parked flow's weight moves without a generation bump: `flow_silence_notch` reads the
+   flow's own silence plus its family's `fam_us`, which `flow_age_running` writes after every step, and on a real
+   page the whole frontier is one family (every flow descends from the boot flow). The notch is a floor of
+   `(cpu_i + fam_us) / S`, so a step can carry the rival across a boundary while the running flow's stands still; a
+   cached weight would then yield to a flow no longer better. A fitness write cannot cause that: it is made only on
+   the running flow, through flow_observe_survival or flow_observe_rung, which both raise the generation (a fire
+   with the generation equal to the ranked one is a notch straddle, not a distance write). The cached pointer is
+   safe across the key: a flow leaving the frontier changes membership and raises the generation, asserted where
+   the pointer is taken. */
 static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static Flow *g_rival = NULL;
-/* …AND WHICH HALF OF THAT KEY MOVED, EACH TIME IT DID — see solver/engine.h for the reading, the identity and
-   why the third row is not a rounding row. Raised in the rescan branch below, after the key is compared and
-   before the walk, so they are a partition of `scanRivalRuns` by construction rather than by two sites
-   agreeing. LIFETIME, never reset, raised in every build; nothing reads them but the census. */
+/* Which half of that key moved each time (solver/engine.h explains the reading and why the third row is not a
+   rounding row). Raised in the rescan branch after the key compare and before the walk, so they partition
+   `scanRivalRuns` by construction. Lifetime counts, raised in every build; only the census reads them. */
 static uint64_t g_rival_miss_gen = 0, g_rival_miss_cur = 0, g_rival_miss_both = 0;
-/* …AND WHAT THAT RIVAL WAS WORTH IN EVERY TERM THE FRONTIER GENERATION IS SUPPOSED TO SPEAK FOR — recorded
-   where the pointer is taken and read at every consultation until the generation next moves. It is the mirror
-   of the `g_ranked_*` block below and asks the opposite question: that one holds the INCUMBENT, whose own
-   terms the scheduler expects to move while it runs, and this one holds a member that is NOT running and
-   therefore must not move at all except through the one quantity that legitimately does.
-   THE CLAIM IS THE PRECONDITION OF EVERY SUB-LINEAR ORDER ANYBODY CAN BUILD HERE, WHICH IS WHY IT IS ASSERTED
-   RATHER THAN ARGUED. solver/flow.c's flow_pick walks the whole frontier at every ask because flow_weight is a
-   sum whose summands move underneath a key; flow_silence_phase states the decomposition that says only ONE of
-   them can move between two generations — the aging's carry bit, whose threshold is the family's and is
-   therefore common. If a reward, a completed-unit count, a fitness distance or a member's OWN service notch
-   can move with the generation standing still, then an index keyed on anything but the walk is already wrong,
-   and this is where that is found out: an O(1) reading of a member the hook is holding anyway.
-   IT ALSO HARDENS THE CACHE ABOVE, WHICH IS WHY IT IS NOT A DIAGNOSTIC LOOKING FOR A HOME. The pointer's
-   safety argument is that every change worth rescanning for raises the generation; that argument is stated at
-   the declaration and nothing checked it for anything but MEMBERSHIP. A term that moved without a bump would
-   leave this hook comparing against a rival the pick would no longer have chosen, silently, which is exactly
-   the shape the host-owed mark had before it was made a ranking change.
-   WRITTEN IN EVERY BUILD AND READ IN NONE BUT DEV, in the `g_ranked_*` pattern below and for its reason: the
-   writes are four stores in a branch that has just performed an O(members) walk, and guarding them would put
-   the assertion's operands behind a second condition that could drift from the assertion itself.
-   RETIREMENT: this record goes when the ask is no longer a walk — the index is then the thing that has to hold
-   this invariant, and it will hold it at its own update site rather than at one cached rival. */
+/* What the rival was worth in every term the frontier generation is supposed to speak for, recorded where the
+   pointer is taken and checked at every consultation until the generation moves. The mirror of `g_ranked_*`
+   below: that block holds the incumbent, whose terms may move while it runs; this holds a member that is not
+   running and must not move except through the one quantity that legitimately does (flow_silence_phase: the
+   aging's carry bit, whose threshold is the family's). If a reward, completed-unit count, fitness distance or own
+   service notch could move with the generation still, every sub-linear order over the frontier (flow_pick walks
+   it today because flow_weight's summands move under a key) would already be wrong; this catches it cheaply on a
+   member the hook holds anyway, and also checks the pointer's safety argument for more than membership. Written
+   in every build and read only in dev, like `g_ranked_*`: four stores after an O(members) walk, and guarding them
+   would put the assertion's operands behind a second condition. */
 static int64_t g_rival_own_notch = 0, g_rival_visits = 0;
 static double g_rival_val = 0.0, g_rival_dist = 0.0;
-/* …AND THE FIFTH SUMMAND, WHICH THE FOUR ABOVE OMITTED AND WHICH IS THE ONE A FORK MOVES FOR A WHOLE ARM AT
-   ONCE. flow_weight sums flow_branch_bonus, `1.0 / sub_born` over the member's top-level arm; `sub_born` is a
-   BUCKET field, so it is not a reading of this member at all and one sibling forking re-ranks every member of
-   the arm simultaneously. The INTEGER is snapshotted and not the quotient, for solver/flow.h's reason: the
-   term is a pure function of it, so this comparison entails the term's and is exact where a double's would be
-   a last-bit question asked of a quotient recomputed at another instant. */
+/* The fifth summand: flow_weight adds flow_branch_bonus, `1.0 / sub_born` over the member's top-level arm.
+   `sub_born` is a bucket field, so one sibling forking re-ranks the whole arm at once. The integer is snapshotted,
+   not the quotient (solver/flow.h): the term is a pure function of it and the comparison is exact. */
 static long g_rival_branch_born = 0;
-/* …AND THE WEIGHT ITSELF, WHICH IS THE ONE CLAUSE THE FIVE ABOVE CANNOT BE SPELLED AS AND THE ONLY ONE THAT
-   SURVIVES A SUMMAND BEING ADDED. Those five are sibling FIELDS of one computed value whose accessor exists,
-   and CLAUDE.md's rule for exactly that shape is that the assert goes over the ACCESSOR: a term summed into
-   flow_weight and NOT added to the enumeration leaves the enumeration agreeing across the one change it exists
-   to catch, which is the failure the `g_ranked_*` block below records twice in its own history — three clauses
-   while the aging read the member's own service, four when the fitness distance became a term, each revision
-   found by the formula moving rather than by the assertion. This one is term-agnostic by construction and
-   cannot be short by a summand.
-   IT IS ONE-SIDED AND THAT IS THE CLAIM RATHER THAN A WEAKENING. Between two frontier generations a member's
-   member half stands still — the five clauses here, and solver/flow.c's walk over every member of every scan —
-   and the aging notch is `(own + fam) / FLOW_SERVICE_US` over two operands flow_age_running only ever ADDS to.
-   So the notch is monotone NON-DECREASING and the weight monotone NON-INCREASING, for every member, over any
-   interval with no generation bump. An EQUALITY here would fire on the one movement the interval exists to
-   permit; the `<=` is the exact statement of what flow_silence_phase's decomposition licenses, and the five
-   equalities are what stop it being satisfied by a fall this hook has no account of.
-   WHAT STATE MAKES IT FIRE — asked because an assert whose two sides cannot disagree is a non-check with a
-   reassuring transcript, and answered with the ONE state no clause above can see rather than with a
-   disjunction. The five read the member's OWN half and deliberately omit the FAMILY's, so a forgiveness of the
-   family's silence with the generation standing still RAISES every member of that family's weight and moves
-   nothing any of them watches. flow_credit_emit is that writer and it is listed at flow.c's walk among the
-   ones that bump, so the assert passes today; what it is written for is that raise being lost, which is the
-   shape the host-owed mark had before a mark became a ranking change. A summand added to flow_weight that
-   moves UP, and a notch that can decrease, are the other two.
-   IT IS THE PRECONDITION EVERY SUB-LINEAR ASK OVER THIS FRONTIER IS DERIVED FROM, WHICH IS WHY IT IS HERE AND
-   NOT IN A DESIGN NOTE. A cached maximum, a heap, an index over flow_index_key, and the top-two fold this
-   hook's own census rows used to recommend, all rest on knowing which DIRECTION a member's weight may move
-   between two generations; the magnitude is solver/flow.h's `sil_phases` to price and the direction is this.
-   ITS SILENCE IS NOT EVIDENCE TODAY AND THE NEXT READER MUST NOT SCORE IT AS SUCH, which is the one thing a
-   clause ordered after an enumeration owes. Given the five equalities above, flow_weight's remaining freedom is
-   the family half and the carry, both monotone up, so under TODAY's term list this clause is ENTAILED by its
-   neighbours and a zero here is arithmetic rather than a measurement — CLAUDE.md's evidence-inflation rule read
-   from the far side, where the derived row is the one with no reason of its own. What it buys is the day the
-   term list MOVES: a summand added to flow_weight is outside the five by construction and inside this by
-   construction, so the clause that is entailed now is the only one of the six that cannot be short tomorrow.
-   WRITTEN IN EVERY BUILD AND READ IN NONE BUT DEV, in the block above's pattern and for its stated reason. The
-   price is ONE weighing in a branch that has just walked the whole frontier — O(1) against O(members), and it
-   raises no scan counter, because solver/flow.c raises those inside flow_pick's loop and nowhere else; in
-   release the condition is unevaluated (it stands inside a `sizeof`), so what ships is the one store.
-   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: every member that is not the cached rival.
-   solver/flow.c's walk already stamps each member's MEMBER HALF and asserts it EQUAL across a generation, and
-   that is a different claim — the weight also carries the family half and the carry, which legitimately move,
-   so no equality over the whole weight can stand there and none does. The DIRECTION is asserted here for one
-   member and nowhere for the rest. WHAT THE NEXT DIFF BUILDS: a per-member weight stamp beside `key_last`,
-   compared with `<=` rather than `==` at the same walk, which is already holding every member, its weight and
-   its stamp — one more double per Flow and one more compare per member per scan, dev-only, in the class of the
-   three stamps that are there. HOW ITS ABSENCE WOULD SHOW: a member whose weight RISES between two generations
-   passes every check in this tree while it is not the member this hook happens to be caching, so a cached
-   maximum, a heap or an index over the frontier returns a member the walk would not have, and the clause above
-   reads silent — the reader sees an order that disagrees with its own comparator and no assert naming why. */
+/* The weight itself, the one clause that survives a summand being added: the five above are fields of a computed
+   value, and an assert over the accessor cannot be short a summand (the `g_ranked_*` block below was short one
+   twice, found by the formula moving). It is one-sided by design: between two generations a member's own half
+   stands still and the aging notch `(own + fam) / FLOW_SERVICE_US` only grows (flow_age_running only adds), so the
+   weight is non-increasing; equality would fire on the one movement the interval permits. It fires on the state
+   the five cannot see: a forgiveness of the family's silence with the generation unchanged (flow_credit_emit is
+   that writer and bumps today), a summand that moves up, or a notch that decreases. The direction is the
+   precondition for any cached maximum, heap or index over flow_index_key; flow.h's `sil_phases` prices the
+   magnitude. Under today's term list it is entailed by the five, so its silence is not a measurement; what it
+   buys is coverage when the list changes. Written in every build, read only in dev (in release the condition is
+   inside a `sizeof`).
+   Named residual. Not covered: every member but the cached rival. solver/flow.c's walk asserts each member's own
+   half equal across a generation, but nothing asserts the direction of the whole weight for the rest. Next diff
+   builds: a per-member weight stamp beside `key_last`, compared with `<=` at that walk, dev-only. Absence shows
+   as: a member whose weight rises between two generations passes every check unless it is the cached rival, and
+   an index over the frontier returns a member the walk would not have, with no assert naming why. */
 static double g_rival_w = 0.0;
-/* WHAT THE FLOW HOLDING THE THREAD WAS RANKED ON WHEN IT TOOK IT — the quantities the value yield's
-   verdict is a pure function of, recorded at the switch-in and read by the assertion in the hook's value
-   clause. They are not policy and they are not a cache: nothing is decided from them, and the hook's answer is
-   identical with them removed. They exist so that the sentence "a top-ranked flow runs on at ~zero switch
-   cost" is a check rather than a claim, at the one point where it can be false. */
+/* What the flow holding the thread was ranked on when it took it: the quantities the value yield's verdict is a
+   pure function of, recorded at switch-in and read by the assertion in the hook's value clause. Not policy and not
+   a cache (the hook answers the same without them); they make "a top-ranked flow runs on at about zero switch
+   cost" a check. Anything summed into flow_weight belongs here, or the assertion reads a real rank change as an
+   unchanged one. */
 static unsigned g_ranked_gen = 0; static double g_ranked_val = 0.0;
-/* …AND THE AGING TERM'S NOTCH — this flow's silence, its own thread time since its last emission plus its fork
-   family's since any arm of it last emitted, in whole COOPERATIVE QUANTA (solver/flow.h's flow_silence_notch).
-   Two separate snapshots stood here, the flow's service quantum and its family's, and they are ONE now because
-   the weight reads one quantity: the sum, at the price FLOW_AGE_RATE states. Keeping two would be keeping the
-   coordinates of a formula this file no longer computes.
-   THE UNIT IS THE ONE THE THREAD IS HANDED OUT IN, and it used to be one whole emitted FINDING — 83 quanta —
-   which is the correction this snapshot carries. Between two of those the running flow's rank could not move
-   on aging at all, so this variable stood still across eighty-two consecutive picks and the assertion below
-   permitted nothing it should have; see the charge's own resolution assertion in engine_sched_slice. */
+/* The aging term's notch: this flow's silence (its own thread time since its last emission plus its family's since
+   any arm emitted) in whole cooperative quanta (solver/flow.h's flow_silence_notch). One snapshot, because the
+   weight reads one quantity, the sum. The unit is the quantum the thread is handed out in, so the rank can move on
+   aging between two picks (see the charge's resolution assertion in engine_sched_slice). */
 static int64_t g_ranked_silence = 0;
-/* …AND THE COMPLETED-UNIT COUNT, which is the optimism term's whole quantity (solver/flow.h's `visits`). It
-   moves at an instant no clock names — the scheduler credits it after a step that left the flow between units,
-   and a flow can be re-picked without a switch-in, so this snapshot can be several units old while the silence
-   notch stands still. Omitting it would make the assertion below fire on the most ordinary rank change there
-   is: a flow finished a program, its bonus halved, and a sibling passed it. */
+/* The completed-unit count, the optimism term's quantity (flow.h's `visits`). It moves when the scheduler credits a
+   step that left the flow between units, and a flow can be re-picked without a switch-in, so it can change while
+   the silence notch stands still: a flow finished a program, its bonus halved, and a sibling passed it. */
 static int64_t g_ranked_visits = 0;
-/* …AND THE FITNESS DISTANCE, WHICH IS A TERM OF THE WEIGHT AND SO HAS TO BE A COORDINATE OF IT. `flow_weight`
-   sums FOUR quantities — `reward + dist + ucb - silence` — and this snapshot set watched three of them, so the
-   one it did not watch could move the rank while the assertion below read the state as unchanged and called a
-   correct yield a swap for nothing. That is not a hypothetical: it aborted the smoke fixture on the first build
-   after the distance became a term, at a switch count in the ten thousands, with @S searches live.
-   THE RULE THE OMISSION BROKE IS THE ONE THIS BLOCK EXISTS FOR: these are "the coordinates the verdict is a
-   pure function of", so a term added to `flow_weight` and not added here makes that sentence false, and it
-   makes it false in the direction that fires — a real rank change reported as an unchanged one. Anything summed
-   into the weight belongs here, and the assertion is what enforces that it was not forgotten. */
+/* The fitness distance, a term of the weight (`reward + dist + ucb - silence`) and so a coordinate of it. */
 static double g_ranked_dist = 0.0;
-/* SUSPEND POINTS REACHED — every call to this hook IS one, which is the number the seam assertion needs and
-   the one quickjs's counters do not give. g_flow_preempt_requested is incremented only where the hook returns
-   TRUE, so it counts preempts WANTED, not points offered: a step showing requested=1 may have reached one
-   suspend point or a million with the WFQ declining every one of them. Reading it as the latter is a mistake I
-   made and wrote into a commit message; this counter is what tells the two apart.
-   IT IS A LIFETIME COUNT AND IS RAISED IN EVERY BUILD, and those are one decision rather than two. Nothing
-   resets it; the seam assertion below snapshots it per step and reads the DELTA, which is the only reading a
-   lifetime counter permits and the reason its per-step use does not make it a per-step quantity. It is
-   PUBLISHED as the @WFQ census's `preemptAsksLifetime` (solver/result.c) and that census is composed in every
-   build, so a raise left under `#if APICLIENT_DEV` would print 0 in release beside a `scanRivalRuns` that
-   solver/flow.c raises unconditionally and says so at its own line: an ABSENT count rendering as a ZERO one,
-   at the one row whose whole job is to be somebody else's denominator.
-   THE CONTAINMENT IS WHAT MAKES THE QUOTIENT READABLE, and it is structural rather than a hope: flow_rival_of
-   has exactly ONE caller, the rescan branch of this hook, and that branch runs AFTER this counter is raised —
-   so `scanRivalRuns <= preemptAsksLifetime` holds at every instant and the quotient is this hook's cache MISS
-   rate. That is neither of the two questions already published. `scanRivalRuns / scanNextRuns` is what a STEP
-   pays; `scanRivalRuns / rankChanges` is whether the cache is invalidated more than once per generation; this
-   is what fraction of CONSULTATIONS buy a frontier walk. Near 1 the cache absorbs nothing and the hook's cost
-   is the frontier's size per suspend point; near 0 it absorbs, and a rival scan count that is half of all
-   frontier weighing is then a statement about how often the generation MOVES. Those take different diffs and
-   no row separated them.
-   RETIREMENT: this argument goes when the census asserts the containment over rows it derives rather than
-   over two counters named here, so the quotient's denominator cannot be a different event again. */
+/* Suspend points reached: every call to this hook is one, which the seam assertion needs and quickjs's counters do
+   not give (g_flow_preempt_requested counts preempts wanted, raised only where the hook returns true). A lifetime
+   count raised in every build: the seam assertion reads its per-step delta, and the @WFQ census publishes it as
+   `preemptAsksLifetime` (solver/result.c) beside `scanRivalRuns`, which solver/flow.c raises unconditionally, so a
+   dev-only raise would print 0 in release. flow_rival_of's one caller, the rescan branch, runs after this is
+   raised, so `scanRivalRuns <= preemptAsksLifetime` always holds and the quotient is the hook's cache miss rate:
+   what fraction of consultations buy a frontier walk (near 1 the cache absorbs nothing; near 0 the rival scan
+   count says how often the generation moves). That is distinct from `scanRivalRuns / scanNextRuns` (what a step
+   pays) and `scanRivalRuns / rankChanges` (invalidations per generation). */
 static uint64_t g_preempt_asked = 0;
-/* THE GAP BETWEEN SUSPEND POINTS is the quantity the contract is about, and it is not the same as how long a
-   step ran. A step that offers the scheduler a point every few milliseconds and still runs for ten seconds is
-   BEHAVING — the scheduler was asked and declined, which is a ranking decision and lossless. A step that runs
-   five seconds between two consecutive offers is the violation, whatever its total. Asserting on the total
-   conflated the two and cost several rounds of chasing a "missing seam" in a step that turned out to offer 22
-   points quickly and then one long gap. Measured per step: reset when the step starts, updated at each
-   consultation, and closed off with the tail after the last one. */
+/* The gap between suspend points, the quantity the contract is about, which is not how long a step ran: a step
+   offering a point every few milliseconds for ten seconds is behaving (the scheduler declined, losslessly); five
+   seconds between two consecutive offers is the violation. Reset when the step starts, updated at each
+   consultation, closed with the tail after the last. */
 static int64_t g_last_ask = 0, g_max_gap = 0;
-/* …AND THE SAME TWO IN THE SLICE'S OWN MEASURE, WHICH IS THE PAIR A VERDICT COULD DECIDE ON AND THE PAIR
-   ABOVE IS NOT. See solver/engine.h's `over_gap_arms`: the wall pair is DEV-only and its one reader needs
-   this turn's consultation delta to be ZERO, so it reports a SEAMLESS turn's whole duration; these are
-   raised in EVERY build and report the widest interval between two consecutive offers of a turn that DID
-   offer some, in `quantum_thread_us()` microseconds so the figure is comparable with ENGINE_QUANTUM_MS.
-   DECLARED HERE RATHER THAN BESIDE THEIR LIFETIME SCALAR because preempt_hook is the writer and it stands
-   above that scalar's declaration; the scalar itself is declared with `g_over_asks`, where it is read.
-   THEY COST ONE CLOCK READ PER CONSULTATION, which is the one thing this block may not leave as a hope:
-   on the generic and emscripten branch quantum_expired() is `quantum_thread_us() - <slice start> >= …`
-   and this hook's last clause is `return quantum_expired()`, so on the host that ships the clock is
-   already read per consultation and this is a second read of it rather than a new class of cost; on the
-   native branch quantum_expired() reads a `volatile sig_atomic_t` flag and the read is genuinely new, in
-   a hook that already performs two flow_weight calls plus an O(members) rival rescan on a cache miss.
-   THAT IS WHY THE WALL CLOCK ABOVE STAYS UNDER THE GUARD AND THIS ONE DOES NOT, and it is a correction to
-   half of the reason that block gives rather than a disagreement with it. Its reason is two halves: that
-   nothing ever printed those numbers, and that `engine_now_ms()` on the host that matters most is not a
-   vDSO call at all but emscripten answering clock_gettime from JS. The FIRST half is retired for THIS
-   pair — solver/result.c publishes it as `sliceOverrunGapUs` and `stepUnitOverrunGapArms` in every
-   build — and is UNCHANGED for the wall pair, which still feeds one DEV-only message. The second half
-   is answered by the branch reading above and not by anybody's estimate. */
+/* The same two in the slice's own measure, the pair a verdict could decide on (solver/engine.h's
+   `over_gap_arms`). The wall pair is dev-only and reports a seamless turn's whole duration; these are raised in
+   every build and report the widest interval between two consecutive offers of a turn that offered some, in
+   `quantum_thread_us()` microseconds, comparable with ENGINE_QUANTUM_MS. Declared here because preempt_hook writes
+   them; their lifetime scalar is declared with `g_over_asks`, where it is read. They cost one clock read per
+   consultation: on the generic and emscripten branch quantum_expired() already reads that clock, so it is a second
+   read; on the native branch quantum_expired() reads a `volatile sig_atomic_t` and the read is new. The wall clock
+   stays under the guard because nothing publishes it and emscripten answers clock_gettime from JS; this pair is
+   published (`sliceOverrunGapUs`, `stepUnitOverrunGapArms`). */
 static int64_t g_gap_last_us = 0, g_gap_max_us = 0;
 
-/* …AND THE ONE OF THE THREE A CENSUS READS. Exported for solver/result.c's reason and no other: the row is
-   published beside `scanRivalRuns`, and a census that carried a count of its own would be a second definition
-   of "how often was the policy asked" — the defect solver/flow.h's scan rows exist to stop one question over.
-   The two clocks above stay private because nothing outside the seam message may read a WALL quantity from
-   this file. */
+/* The one of the three a census reads, exported for solver/result.c (published beside `scanRivalRuns`, so no second
+   definition of "how often was the policy asked"). The two clocks stay private: nothing outside the seam message
+   may read a wall quantity from this file. */
 uint64_t engine_preempt_asks(void) { return g_preempt_asked; }
 
-/* …AND THE PARTITION OF THIS HOOK'S MISSES — one call for solver/engine.h's reason. */
+/* The partition of this hook's misses, in one call (solver/engine.h). */
 EngineRivalMiss engine_rival_miss(void) {
     EngineRivalMiss m;
     m.gen = g_rival_miss_gen; m.cur = g_rival_miss_cur; m.both = g_rival_miss_both;
     return m;
 }
 
-/* The solver's policy does not care WHICH kind of point it was offered — its two decisions are the WFQ ranking
-   and the consumed slice, and both ask whether this flow should still hold the thread. */
+/* The policy does not care which kind of point it was offered: both decisions ask whether this flow should still
+   hold the thread. */
 static int preempt_hook(int kind) {
     (void)kind;
     Flow *cur = flow_running();
-    /* THE POLICY IS ONLY EVER ASKED BY THE SCHEDULER, and this is the ONE point it is asked from, so this is
-       where that is stated. Both of this hook's decisions are about the flow the scheduler is CURRENTLY
-       RUNNING — its rank against the frontier, and the slice it is holding the thread on — and between two
-       engine_sched_step calls there is no such flow: the thread belongs to the host, which is precisely why
-       quantum_end disarms the edge over it. Something entering the interpreter on the host's own time and
-       reaching this hook is therefore asking whether to park a flow nobody is driving, and the answer it gets
-       is measured against a slice that belongs to nothing.
-       IT WAS ONLY EVER CAUGHT FROM ONE SIDE, which is why it is asserted here rather than left to
-       quantum_expired's own precondition: clause (0) and clause (1) below can both answer 1 and RETURN before
-       the budget is ever consulted, so a host-time consultation that happened to be outranked or blocked was
-       answered — with a real-looking verdict — and said nothing. The measured instance was the shipped ABI's
-       reply record: qjs_provide ran the JSON parser between two steps, the parser consulted this hook at every
-       completed value, and every reply the extension delivered aborted here. The parser offers to its DRIVER
-       now (quickjs.c's json_parse_step) and asks no policy, so a hit on this line is a NEW host-time entry
-       into the interpreter — give it a driver that can act on the answer, or stop consulting the policy from
-       it; never widen the slice to cover it. */
+    /* The policy is asked only by the scheduler, from this one point. Both decisions are about the flow the
+       scheduler is running, and between two engine_sched_step calls there is none: the thread is the host's, and
+       quantum_end disarms the edge over it. An entry reaching this hook on the host's time would be asking whether
+       to park a flow nobody drives. It is asserted here because clauses (0) and (1) can return before the budget
+       (and quantum_expired's own precondition) is reached. A hit is a new host-time entry into the interpreter:
+       give it a driver that can act on the answer, or stop it consulting the policy; never widen the slice. */
     DCHECK(quantum_slice_open(),
            "the scheduler's preempt policy was consulted with NO SLICE OPEN — whoever is running this code is "
            "not the scheduler, so there is no flow whose rank or budget this answer could be about; some entry "
            "reached the interpreter on the HOST's own time between two steps");
-    /* THIS CONSULTATION, COUNTED — the census's `preemptAsksLifetime`, raised before the rescan below so the
-       containment its quotient rests on is an order of statements rather than an argument. */
+    /* This consultation, counted (`preemptAsksLifetime`), before the rescan below so the containment its quotient
+       rests on is an order of statements. */
     g_preempt_asked++;
-    /* …AND THE INTERVAL SINCE THE LAST ONE, IN THE SLICE'S OWN MEASURE — the quantity solver/engine.h's
-       `over_gap_arms` is, and the one thing a density over this count cannot be. It is raised HERE, beside the
-       increment and above every clause below, so a consultation that is answered by clause (1) or by the value
-       yield and RETURNS is still an offer that happened: the two numbers then bracket exactly the same
-       population, which is what lets the arm row's identity be asserted against the count's own branch.
-       THE MAX IS TAKEN BEFORE THE READING IS STORED, so this is the interval between two CONSECUTIVE offers and
-       never a running distance from the turn's start. Opening `g_gap_last_us` at the turn's own bracket is what
-       makes the first iteration measure the stretch BEFORE the first offer rather than nothing. */
+    /* The interval since the last offer, in the slice's own measure (solver/engine.h's `over_gap_arms`), raised
+       beside the count and above every clause, so an offer answered by clause (1) or the value yield still counts
+       and both numbers bracket the same population. The max is taken before the reading is stored, so it is the
+       interval between consecutive offers; `g_gap_last_us` is opened at the turn's bracket, so the first interval
+       is the stretch before the first offer. */
     {
         int64_t gap_now = quantum_thread_us();
         if (gap_now - g_gap_last_us > g_gap_max_us) g_gap_max_us = gap_now - g_gap_last_us;
