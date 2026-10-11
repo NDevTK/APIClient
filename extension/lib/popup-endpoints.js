@@ -111,7 +111,9 @@ function endpointRazorCell(m, where) {
 }
 
 /* What each sighting's flow assumed (lib/endpoint-record.js's `methodWitnesses`), one line per sighting and
-   never merged. A sighting with assumptions reads "found by assuming" and its entries; a forced sighting with
+   never merged. A sighting with assumptions reads "found by assuming" and its entries, after its verification:
+   "verified" where a run firing the value reached the request, "unverified" otherwise, with why in the title
+   (never "infeasible": an unverified witness is a parked search); a forced sighting with
    none is solver/endpoint.h's named residual (a forced act that files no decision) and says so rather than
    reading as nothing assumed; an unforced sighting with none assumed nothing and adds no line; a sighting no
    flow stood at was not asked. */
@@ -122,7 +124,7 @@ function endpointWitnessCell(m, where) {
       title: "the engine build that reported this method's sightings stated no witness" }, [ENDPOINT_UNKNOWN]);
   }
   const items = [];
-  for (const { provenance, assumed } of pool) {
+  for (const { provenance, assumed, verification } of pool) {
     const grade = domElement("span", { class: "ep-grade ep-grade-" + provenance }, [provenance]);
     if (assumed === null) {
       items.push(domElement("li", { class: "ep-none" }, [grade, " no flow stood at this sighting; not asked"]));
@@ -132,7 +134,13 @@ function endpointWitnessCell(m, where) {
         title: "the path was forced by an act that files no decision (solver/endpoint.h's witness residual)" },
         [grade, " assumption not spellable"]));
     } else {
-      const parts = [grade, " found by assuming "];
+      const verified = verification === "verified";
+      const parts = [grade, " ", domElement("span", {
+        class: "ep-verify ep-verify-" + (verified ? "verified" : "unverified"),
+        title: verified ? "a run with this value delivered reached the request assuming nothing else"
+          : verification === "candidate" ? "a verification run was minted and has not reached the request"
+          : "firing cannot check this witness yet (solver/endpoint.c's witness_payload residual)" },
+        [verified ? "verified" : "unverified"]), " found by assuming "];
       assumed.forEach((x, i) => {
         if (i) parts.push("; ");
         parts.push(domElement("code", { class: "ep-assumption" }, [endpointAssumptionText(x, where)]));

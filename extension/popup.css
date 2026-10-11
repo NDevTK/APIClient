@@ -2123,6 +2123,20 @@ details summary:hover {
 .ep-assumption {
   word-break: break-all;
 }
+.ep-verify {
+  display: inline-block;
+  margin: 0 4px 2px 0;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid #30363d;
+}
+.ep-verify-verified {
+  color: #3fb950;
+  border-color: #3fb950;
+}
+.ep-verify-unverified {
+  color: #8b949e;
+}
 .ep-params li {
   margin-bottom: 4px;
 }

@@ -5,7 +5,7 @@
 // with no policy), and renders lib/popup-endpoints.js's `endpointRow` for method records that differ only in
 // `_astWitnesses`. Each row is serialized as its element tree (tag, class, text). Expectations:
 //   differential       two records differing only in the pool differ in the Assumed cell and nowhere else;
-//   expected text      each case's Assumed cell reads exactly as stated below;
+//   expected text      each case's Assumed cell reads exactly as stated below, verified and unverified apart;
 //   invented negative  one record rendered twice serializes identically;
 //   armed control      a decision spelled as markup becomes text and creates no element;
 //   Trusted Types      the renders raise no violation.
@@ -23,26 +23,31 @@ const ASSUMED_CELL = 4;   // Method, Address, Razor, Provenance, Assumed, Parame
 
 const MARKUP = "<img src=x onerror=alert(1)>";
 const CASES = [
-  { name: "forced pin", pool: [{ provenance: "forced", assumed: [{ source: "location.hash", value: "#admin", kind: "string" }] }],
-    text: 'forced found by assuming location.hash = "#admin"' },
-  { name: "non-string pin is not quoted", pool: [{ provenance: "forced", assumed: [{ source: "{c}.n", value: "0", kind: "number" }] }],
-    text: "forced found by assuming {c}.n = 0" },
-  { name: "decision and completion", pool: [{ provenance: "derived", assumed: [
+  { name: "verified forced pin", pool: [{ provenance: "forced", verification: "verified",
+      assumed: [{ source: "location.hash", value: "#admin", kind: "string" }] }],
+    text: 'forced verified found by assuming location.hash = "#admin"' },
+  { name: "candidate minted, not yet observed", pool: [{ provenance: "forced", verification: "candidate",
+      assumed: [{ source: "location.hash", value: "#admin", kind: "string" }] }],
+    text: 'forced unverified found by assuming location.hash = "#admin"' },
+  { name: "non-string pin is not quoted", pool: [{ provenance: "forced", verification: "no-candidate",
+      assumed: [{ source: "{c}.n", value: "0", kind: "number" }] }],
+    text: "forced unverified found by assuming {c}.n = 0" },
+  { name: "decision and completion", pool: [{ provenance: "derived", verification: "no-candidate", assumed: [
       { decision: '{location.hash}.startsWith("#x")', taken: true }, { decision: "JSON.parse({r})", completion: 1 }] }],
-    text: 'derived found by assuming {location.hash}.startsWith("#x") → true; JSON.parse({r}) → completion 1' },
-  { name: "empty forced sighting is the residual", pool: [{ provenance: "forced", assumed: [] }],
+    text: 'derived unverified found by assuming {location.hash}.startsWith("#x") \u2192 true; JSON.parse({r}) \u2192 completion 1' },
+  { name: "empty forced sighting is the residual", pool: [{ provenance: "forced", verification: "no-candidate", assumed: [] }],
     text: "forced assumption not spellable" },
-  { name: "sightings never merged", pool: [
-      { provenance: "forced", assumed: [{ decision: "{a}>3", taken: true }] },
-      { provenance: "forced", assumed: [{ decision: "{b}>3", taken: false }] }],
-    text: "forced found by assuming {a}>3 → true|forced found by assuming {b}>3 → false" },
-  { name: "unforced empty sighting assumed nothing", pool: [{ provenance: "derived", assumed: [] }],
+  { name: "sightings never merged, verified kept apart", pool: [
+      { provenance: "forced", verification: "verified", assumed: [{ decision: "{a}>3", taken: true }] },
+      { provenance: "forced", verification: "no-candidate", assumed: [{ decision: "{b}>3", taken: false }] }],
+    text: "forced verified found by assuming {a}>3 \u2192 true|forced unverified found by assuming {b}>3 \u2192 false" },
+  { name: "unforced empty sighting assumed nothing", pool: [{ provenance: "derived", verification: "no-candidate", assumed: [] }],
     text: "nothing assumed" },
-  { name: "unasked sighting", pool: [{ provenance: "derived", assumed: null }],
+  { name: "unasked sighting", pool: [{ provenance: "derived", verification: null, assumed: null }],
     text: "derived no flow stood at this sighting; not asked" },
   { name: "no pool from an older engine", pool: undefined, text: "unknown" },
-  { name: "markup is text", pool: [{ provenance: "forced", assumed: [{ decision: MARKUP, taken: true }] }],
-    text: "forced found by assuming " + MARKUP + " → true", markup: true },
+  { name: "markup is text", pool: [{ provenance: "forced", verification: "no-candidate", assumed: [{ decision: MARKUP, taken: true }] }],
+    text: "forced unverified found by assuming " + MARKUP + " \u2192 true", markup: true },
 ];
 
 // Runs in the page: each case's row serialized, the Assumed cell's line texts, and the element count of img.
@@ -61,7 +66,8 @@ function renderCases(cases, cellIndex) {
   for (const c of cases) {
     const row = endpointRow("svc", { schemas: {} }, record(c.pool));
     const again = endpointRow("svc", { schemas: {} }, record(c.pool));
-    const bare = endpointRow("svc", { schemas: {} }, record([{ provenance: "derived", assumed: [] }]));
+    const bare = endpointRow("svc", { schemas: {} },
+                             record([{ provenance: "derived", verification: "no-candidate", assumed: [] }]));
     const cells = Array.from(row.children).map(ser);
     const bareCells = Array.from(bare.children).map(ser);
     const cell = row.children[cellIndex];

@@ -575,8 +575,9 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
      `witnessPoolWith`). A row from an engine build that predates the key states nothing. */
   if ("witness" in callSite) {
     const where = "lib/learn.js registering method " + JSON.stringify(methodName);
-    for (const assumed of callSite.witness) {
-      m._astWitnesses = witnessPoolWith(m._astWitnesses, callSite.provenance, assumed, where);
+    for (const el of callSite.witness) {
+      m._astWitnesses = witnessPoolWith(m._astWitnesses, callSite.provenance, el === null ? null : el.assumed,
+                                        el === null ? null : el.verification, where);
     }
   }
 

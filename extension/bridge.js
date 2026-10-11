@@ -51,12 +51,14 @@ const hasHole = (s) => astAddressHasHole(s || "");
    abort are already merged into the cumulative record and are still relayed. The cost counters, the park
    residue and the right to overwrite the cross-session frontier entry are gated on `_run` at their sites. */
 /* `witness` on each @H row, per solver/endpoint.h: one element per distinct sighting witness, `null` where no
-   flow stood, else that sighting's entries — `{source, value, kind}` per pin, `{decision, taken}` per assumed
-   branch, `{decision, completion}` per assumed native completion. A row from an engine build that predates the
+   flow stood, else `{assumed, verification}`: the sighting's entries — `{source, value, kind}` per pin,
+   `{decision, taken}` per assumed branch, `{decision, completion}` per assumed native completion — and one of
+   WITNESS_VERIFICATIONS. A row from an engine build that predates the
    key carries none, and then no row does (one instance emits one document shape). Beside `witnessClass`:
    `unasked` is exactly the row whose every element is `null` (the class is a MAX over the same sightings), and
    a `may-rest-on` row has a sighting whose path pinned a value, so some element holds a pin. */
 const WITNESS_PIN_KINDS = Object.freeze(["string", "number", "boolean", "null", "undefined", "bigint"]);
+const WITNESS_VERIFICATIONS = Object.freeze(["no-candidate", "candidate", "verified"]);
 function assertWitnessEntry(x, where) {
   DCHECK(x && typeof x === "object" && !Array.isArray(x), "a witness entry is not an object (" + where + ")");
   const keys = Object.keys(x).sort().join(",");
@@ -88,9 +90,15 @@ function assertEndpointWitnesses(rows) {
     let asked = 0, pinned = 0;
     for (const el of w) {
       if (el === null) continue;
-      DCHECK(Array.isArray(el), "an @H row's witness element is neither null nor an array (" + where + ")");
+      DCHECK(!!el && typeof el === "object" && Object.keys(el).sort().join(",") === "assumed,verification" &&
+             Array.isArray(el.assumed) && WITNESS_VERIFICATIONS.indexOf(el.verification) >= 0,
+             "an @H row's witness element is neither null nor {assumed: [...], verification: " +
+             WITNESS_VERIFICATIONS.join("|") + "} (" + where + "): " + JSON.stringify(el));
+      DCHECK(el.verification === "no-candidate" || el.assumed.length > 0,
+             "an @H row's witness assumed nothing and still names a verification run (" + where + ") — " +
+             "solver/endpoint.c mints a candidate only for a witness holding a pin");
       asked++;
-      for (const x of el) {
+      for (const x of el.assumed) {
         assertWitnessEntry(x, where);
         if ("source" in x) pinned++;
       }
