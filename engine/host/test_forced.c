@@ -1016,6 +1016,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/isolation.h"
 #include "fixture/platform.h"
 #include "fixture/windowclose.h"
+#include "fixture/fragfork.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
 
@@ -1436,6 +1437,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "isolation", HTML_ISOLATION },
     { "platform", HTML_PLATFORM },
     { "windowclose", HTML_WINDOWCLOSE },
+    { "fragfork", HTML_FRAGFORK },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
 };
@@ -11564,6 +11566,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "address is the peer's to load, and loading it here builds it in the wrong heap");
     /* HTML §7.2.2.1's close() over a same-origin popup this document opened: `closed` reads true on the next
        line, since the incumbent is familiar with the popup by §7.3.2.2's first step. */
+    /* A flow forked while §13.4's parse is feeding bytes: both arms finish the parse, so the record carries the
+       whole text's length and the tail element's text. */
+    const char *fragfork_why = NULL; int fragfork_tt = 1;
+    fold_row(&fragfork_tt, &fragfork_why, !!strstr(js, "\"/api/fragfork\""),
+             "NOT REACHED: there is no /api/fragfork record at all, so no arm finished the fragment parse");
+    fold_row(&fragfork_tt, &fragfork_why,
+             param_value_is(js, "/api/fragfork", "v", "200004") && param_value_is(js, "/api/fragfork", "t", "tail"),
+             "the /api/fragfork record does not carry the whole parse — an arm finished it with bytes missing");
     const char *winclose_why = NULL; int winclose_tt = 1;
     fold_row(&winclose_tt, &winclose_why, !!strstr(js, "\"/api/winclose\""),
              "NOT REACHED: there is no /api/winclose record at all, so this run did not answer the statement");
@@ -15367,6 +15377,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE, navopen_why },
         { "nav-door", navdoor_tt, "/navhidden", SESS_EXPLORE, navdoor_why },
         { "win-close", winclose_tt, "/api/winclose", SESS_EXPLORE, winclose_why },
+        { "frag-fork", fragfork_tt, "/api/fragfork", SESS_EXPLORE, fragfork_why },
         { "win-opener-close", winopclose_tt, "/api/winopclose", SESS_EXPLORE, winopclose_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
         { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },
