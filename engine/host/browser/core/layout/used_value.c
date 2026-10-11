@@ -1827,6 +1827,18 @@ lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el)
     return cb.element;
 }
 
+lxb_dom_element_t *used_value_stacking_container(lxb_dom_element_t *el)
+{
+    UvCb cb = uv_cb(el);
+    char nbuf[160];
+
+    DCHECKF((cb.box == UV_CB_PRINCIPAL || cb.box == UV_CB_TABLE_WRAPPER) && cb.element != NULL,
+            "%s: §9.4.1's stack was asked for a box whose containing block is §10.1's first, third or fourth "
+            "case, which no stack holds; the caller places those boxes through their own sections",
+            box_subject(el, nbuf, sizeof nbuf));
+    return cb.element;
+}
+
 /* TWO RECORDED EXAMPLES, COMPARED FOR AN ASSERTION AND FOR NOTHING ELSE — the same private comparison
    core/layout/flow_placement.c and core/layout/flow_position.c each hold, written here a third time rather
    than exported for the reason both of them give: a public equality over a `CssPx` is a predicate a caller

@@ -254,6 +254,11 @@ CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedEle
    entries below read the same walk and answer the width, the `direction` and those rectangles. */
 lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el);
 
+/* The element whose CSS 2.1 §9.4.1 stack places `el`'s box: its containing block's element for §10.1's second
+   case, or, for a caption, the table element whose §17.4 wrapper box holds it ("the table wrapper box …
+   contains the table box itself and any caption boxes"). Any other case is refused: no stack holds that box. */
+lxb_dom_element_t *used_value_stacking_container(lxb_dom_element_t *el);
+
 /* ---- §10.1's third and fourth cases, as a rectangle a caller can compose an origin from ----------------
    The view the entry above refuses. The tag says which of three rectangles it is; `*element` is the ancestor
    for the padding-edge case and NULL for the other two. `uv_cb` decides §10.1's four cases once and both views

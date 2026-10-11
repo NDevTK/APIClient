@@ -2463,7 +2463,7 @@ bool block_flow_child_top_ask(lxb_dom_element_t *el, CssPx *out)
     char nbuf[160], cbuf[160], pbuf[160];
 
     DCHECK(el != NULL, "a box's vertical placement was asked for with no element");
-    cb = used_value_containing_block(el);
+    cb = used_value_stacking_container(el);
     /* A NULL CONTAINING BLOCK HAS TWO PRODUCERS AND ONLY ONE OF THEM CAN REACH HERE, which is why this
        states which one rather than naming the root element outright. `used_value_containing_block` answers
        NULL for §10.1's FIRST case (the root element, whose containing block is the initial one) and — since

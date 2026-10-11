@@ -476,13 +476,30 @@ static bool fp_line_box_origin(lxb_dom_element_t *el, FlowPoint *out)
     return true;
 }
 
+/* CSS 2.1 §17.4 "Tables in the visual formatting model"'s caption: "rendered as normal block boxes inside the
+   table wrapper box", so §9.4.1 places it on the wrapper's stack (core/layout/block_flow.c walks that list) and
+   §10.1's second case composes the wrapper's origin with the stack position. The wrapper is the table element's
+   principal box and has no border or padding (§17.4 puts them on the table box), so its origin is the table
+   element's and its content edge adds nothing. */
+static bool fp_caption_origin(lxb_dom_element_t *el, FlowPoint *out)
+{
+    lxb_dom_element_t *table = used_value_stacking_container(el);
+    FlowPoint o;
+    CssPx top;
+
+    if (!flow_border_box_origin_ask(table, &o) || !block_flow_child_top_ask(el, &top)) return false;
+    out->x = css_px_add(o.x, fp_left_offset(el, used_value_containing_block_width(el)));
+    out->y = css_px_add(o.y, top);
+    return true;
+}
+
 static void fp_require_placeable(lxb_dom_element_t *el)
 {
-    /* Rows, cells and row groups are placed by §17.5's rules 1, 2 and 5 above and are not listed. Left: column
-       and column-group boxes (no mapping from element to grid column) and the caption, which §17.4 Tables in
-       the visual formatting model takes out of the grid. */
+    /* Rows, cells and row groups are placed by §17.5's rules 1, 2 and 5 above, and captions by §17.4's wrapper
+       stack (`fp_caption_origin`); none is listed. Left: column and column-group boxes (no mapping from element
+       to grid column). */
     static const char *const TABLE_INTERNAL[] = {
-        "table-column-group", "table-column", "table-caption",
+        "table-column-group", "table-column",
     };
     char *d = css_computed_value(el, "display");
     char nbuf[160];
@@ -520,10 +537,7 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "rather than §9.4.1: a row group, a column and a column group are laid out inside the TABLE's "
               "own grid of rows and columns, so a row group's position is the accumulated heights of the "
               "rows above its first, and a column's is the accumulated widths of the columns before it — "
-              "neither is a distance §9.4.1's two rules can produce. A CAPTION IS ON THIS LIST FOR A "
-              "DIFFERENT REASON AND NOT FOR THAT ONE: §17.4 Tables in the visual formatting model takes it "
-              "OUT of the grid entirely, so what refuses it below is the WRAPPER's child box list and not "
-              "§17.5 at all. "
+              "neither is a distance §9.4.1's two rules can produce. "
               "A ROW, A CELL AND A ROW GROUP ARE NO LONGER AMONG THEM AND THAT IS THE SHAPE OF EVERY ANSWER "
               "BELOW: §17.5's rules 1, 2 and 5 PLACE all three (\"Each row box occupies one row of grid "
               "cells\", \"A row group occupies the same grid cells as the rows it contains\" and \"Each cell "
@@ -561,12 +575,7 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "box holding an ELEMENT needs the reverse, which is that component's entry to add and not this "
               "file's scan. Note its own `ncols` can EXCEED the grid's, since HTML §4.9.12.1 Forming a table "
               "counts a `<colgroup span>` into the table's width, so the reverse answer can name a column no "
-              "cell occupies and the horizontal sum above has no width for it. "
-              "A CAPTION IS NOT IN THE GRID AT ALL and no longer waits on a box nothing can name — §17.4 "
-              "Tables in the visual formatting model puts it in the table WRAPPER, which §10.1's walk now "
-              "reports (core/layout/used_value.h) and whose used width and height "
-              "core/layout/used_value.c answers; what a caption still waits on is §9.4.1's stack over the "
-              "WRAPPER'S OWN CHILD BOX LIST, which core/layout/block_flow.c names in full",
+              "cell occupies and the horizontal sum above has no width for it",
               box_subject(el, nbuf, sizeof nbuf));
     if (inline_level)
         DFAILF("%s: "
@@ -881,6 +890,7 @@ static bool fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_el
         fp_computed_is(el, "display", "table-header-group") ||
         fp_computed_is(el, "display", "table-footer-group"))
         return (*out = fp_table_row_group_origin(el), true);
+    if (fp_computed_is(el, "display", "table-caption")) return fp_caption_origin(el, out);
     fp_require_placeable(el);
 
     /* §10.1's first case, §9.4.1's base case: the root's containing block is the ICB, "anchored at the canvas
