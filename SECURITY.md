@@ -113,6 +113,20 @@ module loads) and `fetchedXhr` (the page's `XMLHttpRequest`) in `bridge.js`, and
 automatic discovery sweep) in `lib/discovery-probe.js`. The engine itself opens no socket: its requests park,
 and the bridge relays each to `safeFetch`.
 
+Which extension context can open a connection at all is enforced by CSP in all but two:
+- `popup.html` and `dev.html` add `connect-src 'none'` to the manifest's extension-page policy, so the browser
+  refuses a `fetch`, XHR, WebSocket, EventSource or beacon from either. The popup reaches the network only by
+  messaging the offscreen.
+- `renderer.html`'s own policy is `default-src 'none'`, which refuses every connection from the engine frame.
+- The offscreen document (`ast-worker.html`: `connect-src 'self' https: http: data:`) and the service worker
+  (the manifest's `connect-src 'self' https: http: data:`) can reach any http(s) host. That their traffic
+  goes through `safeFetch` is code discipline, not enforcement: `fetch(` is called only in
+  `lib/safe-fetch.js` and in `renderer-host.js`'s fixed program list, and `background.js` and
+  `speak-as-rule.js` open no connection. The check is
+  `grep -rn 'fetch(\|XMLHttpRequest\|WebSocket(\|EventSource(\|sendBeacon'` over `extension/` with comments
+  excluded; its other hits are `intercept.js`'s wrappers of the page's own constructors and words inside
+  assert messages.
+
 | Gate | Enforcing symbol | Refusal reason |
 |------|------------------|----------------|
 | closed option set: an option `safeFetch` does not read (`method`, `body`, `as`, …) is refused, not dropped | `_refuseUnreadOptions` (DCHECK) | throws in dev; in release the option is dropped, which always lands on the GET this file sends |
@@ -483,12 +497,11 @@ arm. The mark can only narrow `actor`, never widen it, and a `page` caller must 
   browser reported, both halves are browser-stated: the group is `_browserFacts`' `tabId` (`sender.tab.id`)
   and the origin is `_senderOrigin`'s, so two sandboxed iframes of one page are two clusters. A document the
   zone provisions itself takes its creator's group, or a group the zone mints for a `noopener` auxiliary, a
-  swap, a seed or a cold resume, and never one the engine states; it takes its principal from its record
-  (`principalOf`, HTML §7.3.2.1's determine the origin): a record carrying the sandboxed origin flag gets a
-  fresh `null:` token, so it is its own cluster, never joins an instance of its URL's origin, loads and
-  fetches with no session, and speaks to pages as `"null"`; the engine computes `"null"` from the same flag
-  set (`qjs_init`). A same-origin child is a
-  second realm in its creator's heap (`child_in_this_agent` in `navigable.c`); a second cross-origin document of
+  swap, a seed or a cold resume, and never one the engine states. Its principal comes from its record
+  (`principalOf`, HTML §7.3.2.1 "Creating browsing contexts"' determine the origin): a record carrying the
+  sandboxed origin flag gets a fresh `null:` token, so it is its own cluster, never joins an instance of its
+  URL's origin, loads and fetches with no session, and speaks to pages as `"null"`. The engine computes
+  `"null"` from the same flag set (`qjs_init`). A same-origin child is a second realm in its creator's heap (`child_in_this_agent` in `navigable.c`); a second cross-origin document of
   one cluster, or a navigation replacing a group's top, joins the running instance (`engineJoin`, over the
   engine's `qjs_join`) instead of getting a second heap.
 - The engine names the child documents it creates; the offscreen routes them. Identity may be minted by the
