@@ -28453,8 +28453,10 @@ static int abi_main(int argc, char **argv)
                    stating that no peer will ask this document anything again — which is the end of this
                    instance's part in the session, not an unpaid bill. The registers are read rather than
                    assumed empty: a referenced instance that ALSO parked on a reply was genuinely refused, and
-                   that is abi_stalled's case exactly as it is for any other instance. */
-                if (referenced && *qjs_pending() == '\0' && *qjs_host_requests() == '\0') break;
+                   that is abi_stalled's case exactly as it is for any other instance. The flag is the engine's
+                   (`qjs_referenced`), not the record's field: this document also becomes referenced when it
+                   creates a navigable another instance hosts. */
+                if (qjs_referenced() && *qjs_pending() == '\0' && *qjs_host_requests() == '\0') break;
                 abi_stalled();
                 break;
             }
