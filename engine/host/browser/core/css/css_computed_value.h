@@ -114,6 +114,7 @@
 
 #include "core/css/css_color.h"
 #include "core/css/css_defaulting.h"
+#include "core/css/css_display.h"
 #include "core/css/css_keyword.h"
 #include "core/css/css_length.h"
 #include "core/css/css_transform_function.h"
@@ -197,16 +198,17 @@ bool css_computed_models_length(const char *name);
 lxb_dom_element_t *css_parent_element(lxb_dom_element_t *el);
 
 /* The element's BOX PARENT's `display` — the nearest ancestor element that GENERATES a box, which is not the
-   parent element when a `display: contents` ancestor sits between them. OWNED, or NULL at the root. Exported
+   parent element when a `display: contents` ancestor sits between them, read as its specified value (see the
+   definition). FALSE at the root, with `*out` unwritten. Exported
    because it is the question "is this box a flex or grid ITEM", and TWO algorithms ask it: CSS Display §2.7's
    blockification here, and CSS 2.1 §10.3's box-type split in core/layout/used_value.c — a flex item's size is
    its container's algorithm and not §10's, so a used value derived from §10 for one would be an answer from
    the wrong section. `n` must be an element's node. */
-char *css_box_parent_display(const lxb_dom_node_t *n);
+bool css_box_parent_display(const lxb_dom_node_t *n, CssDisplay *out);
 
 /* CSS 2.1 §10.3.7 "Absolutely positioned, non-replaced elements"' HYPOTHETICAL BOX's computed `display` — what
    CSS Display §2.7's blockification would have produced "if its specified `position` value had been `static`
-   and its specified `float` had been `none`". OWNED.
+   and its specified `float` had been `none`".
    IT IS HERE AND NOT AT THE LAYOUT CALLER BECAUSE §10.3.7's OWN NOTE MAKES IT A CASCADE QUESTION: "note that
    due to the rules in section 9.7, this hypothetical calculation might require also assuming a different
    computed value for `display`". §9.7's rule is §2.7's blockification, which this file implements once; a
@@ -214,16 +216,24 @@ char *css_box_parent_display(const lxb_dom_node_t *n);
    `inline-table` blockifies to `table` and not to `block`, and that a layout-internal box additionally
    converts its inner type — and would fall behind it the day a keyword is added.
    THE TWO BLOCKIFIERS THAT SURVIVE THE HYPOTHESIS ARE THE ONES §10.3.7 DOES NOT HYPOTHESISE, and they are the
-   whole difference between this entry and `css_computed_value(el, "display")`: §2.8's root rule and §2.7's
+   whole difference between this entry and `css_computed_display(el)`: §2.8's root rule and §2.7's
    "a parent with a grid or flex display value blockifies the box's display type" are facts about the ROOT and
    about the PARENT, and §10.3.7 changes only this element's own two properties. So an absolutely positioned
    `<span>` in a block container answers `inline` here and `block` there, which is exactly the difference that
    decides whether its hypothetical box is on CSS 2 §9.4.1's stack or on §9.4.2's line.
    IT IS NOT A PREDICATE AND MUST NOT BECOME ONE: the caller that wants "is the hypothetical box block-level"
-   asks §9.2.1's own classification of this string, which core/layout/block_flow.h owns for every box on that
+   asks §9.2.1's own classification of this value, which core/layout/block_flow.h owns for every box on that
    stack — a boolean here would be §9.2.1's list written a second time, keyed on a value only this file can
    produce. */
-char *css_hypothetical_static_display(lxb_dom_element_t *el);
+CssDisplay css_hypothetical_static_display(lxb_dom_element_t *el);
+
+/* css-display-3 §2's COMPUTED `display` on `el`: §7's defaulting, then §2.5's Appendix B rule, §2.8's root rule
+   and §2.7's blockification over the pair. A declaration outside §2's grammar is invalid at computed-value
+   time. */
+CssDisplay css_computed_display(lxb_dom_element_t *el);
+
+/* Is it the value the one keyword `k` spells (core/css/css_display.h's `css_display_spells`)? */
+bool css_computed_display_is(lxb_dom_element_t *el, CssKeyword k);
 
 /* CSSOM §9's own split, per property. */
 typedef enum {

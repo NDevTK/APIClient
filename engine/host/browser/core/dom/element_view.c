@@ -267,13 +267,10 @@ bool element_view_subtree_has_boxes(const lxb_dom_node_t *n)
        §2.5's ONE keyword that reaches a whole subtree: "the element and its descendants generate no boxes or
        text sequences". */
     for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
-        char *d = css_computed_value(lxb_dom_interface_element((lxb_dom_node_t *)a), "display");
+        CssDisplay d = css_computed_display(lxb_dom_interface_element((lxb_dom_node_t *)a));
         bool none;
 
-        DCHECK(d != NULL, "the cascade produced no computed `display` for an element — the UA layer answers "
-                          "`inline` for every element it does not name, so this cannot be unset");
-        none = strcmp(d, "none") == 0;
-        free(d);
+        none = css_display_spells(d, CSS_KEYWORD_NONE);
         if (none) return false;
     }
     return true;
@@ -281,7 +278,7 @@ bool element_view_subtree_has_boxes(const lxb_dom_node_t *n)
 
 bool element_view_has_box(const lxb_dom_node_t *n)
 {
-    char *d;
+    CssDisplay d;
     bool contents;
 
     DCHECK(n && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
@@ -293,11 +290,8 @@ bool element_view_has_box(const lxb_dom_node_t *n)
     /* AND css-display-3 §2.5's OTHER KEYWORD, which reaches exactly one box: `contents` means "the element
        itself does not generate any boxes, but its children and pseudo-elements still generate boxes and text
        sequences as normal", so it is asked of `n` alone and never of an ancestor. */
-    d = css_computed_value(lxb_dom_interface_element((lxb_dom_node_t *)n), "display");
-    DCHECK(d != NULL, "the cascade produced no computed `display` for an element — the UA layer answers "
-                      "`inline` for every element it does not name, so this cannot be unset");
-    contents = strcmp(d, "contents") == 0;
-    free(d);
+    d = css_computed_display(lxb_dom_interface_element((lxb_dom_node_t *)n));
+    contents = css_display_spells(d, CSS_KEYWORD_CONTENTS);
     return !contents;
 }
 
@@ -356,10 +350,9 @@ static bool ev_not_potentially_scrollable_in_either_axis(const EvTarget *t)
    engine cannot place in one of those two reaches step 3's DFAIL rather than a zero. */
 static bool ev_box_is_inline(const EvTarget *t)
 {
-    char *d = css_computed_value(lxb_dom_interface_element(t->node), "display");
-    bool inl = d != NULL && strcmp(d, "inline") == 0;
+    CssDisplay d = css_computed_display(lxb_dom_interface_element(t->node));
+    bool inl = css_display_spells(d, CSS_KEYWORD_INLINE);
 
-    free(d);
     return inl;
 }
 
@@ -1177,10 +1170,9 @@ static bool ev_has_svg_layout_box(const lxb_dom_node_t *n)
    with this one about which boxes are split. The two sections' CRASHES stay apart, because their texts do. */
 ElementViewFragments element_view_fragment_kind(lxb_dom_element_t *el)
 {
-    char *d = css_computed_value(el, "display");
+    CssDisplay d = css_computed_display(el);
     bool inl, table;
 
-    DCHECK(d != NULL, "the cascade produced no computed `display` for an element");
     /* THE INLINE ARM IS TWO CONJUNCTS AND `display` IS ONLY THE FIRST, which is CSS 2.2 §9.4.2's own
        split-an-inline-box sentence read with §9.2.2 beside it. What §6's step 3 counts once per LINE BOX is
        the box "when an inline box exceeds the width of a line box, it is SPLIT into several boxes and these
@@ -1192,9 +1184,8 @@ ElementViewFragments element_view_fragment_kind(lxb_dom_element_t *el)
        titles are written over — "Inline, NON-REPLACED elements" — which is why core/layout/used_value.c asserts
        the identical conjunction and core/layout/scrolling_area.c splits on the identical predicate: one fact
        answered from three places, and this was the one place that answered it with half the question. */
-    inl = strcmp(d, "inline") == 0 && !replaced_element_of(el).replaced;
-    table = strcmp(d, "table") == 0 || strcmp(d, "inline-table") == 0;
-    free(d);
+    inl = css_display_spells(d, CSS_KEYWORD_INLINE) && !replaced_element_of(el).replaced;
+    table = css_display_spells(d, CSS_KEYWORD_TABLE) || css_display_spells(d, CSS_KEYWORD_INLINE_TABLE);
     if (inl) return ELEMENT_VIEW_FRAGMENTS_LINE_BOXES;
     if (table) return ELEMENT_VIEW_FRAGMENTS_TABLE;
     return ELEMENT_VIEW_FRAGMENTS_ONE;

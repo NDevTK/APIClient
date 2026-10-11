@@ -56,16 +56,16 @@ static bool bf_is_root(const lxb_dom_node_t *n)
     return n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT;
 }
 
-bool block_flow_display_is_block_container(const char *display)
+bool block_flow_display_is_block_container(CssDisplay display)
 {
-    static const char *const BLOCK_CONTAINER[] = {
-        "block", "flow-root", "list-item", "inline-block", "table-cell", "table-caption",
+    static const CssKeyword BLOCK_CONTAINER[] = {
+        CSS_KEYWORD_BLOCK, CSS_KEYWORD_FLOW_ROOT, CSS_KEYWORD_LIST_ITEM, CSS_KEYWORD_INLINE_BLOCK,
+        CSS_KEYWORD_TABLE_CELL, CSS_KEYWORD_TABLE_CAPTION,
     };
     unsigned i;
 
-    DCHECK(display != NULL, "the block-container question was asked about a NULL computed `display`");
     for (i = 0; i < sizeof(BLOCK_CONTAINER) / sizeof(BLOCK_CONTAINER[0]); i++)
-        if (strcmp(BLOCK_CONTAINER[i], display) == 0) return true;
+        if (css_display_spells(display, BLOCK_CONTAINER[i])) return true;
     return false;
 }
 
@@ -161,14 +161,14 @@ bool block_flow_is_floated(lxb_dom_element_t *el)
 
 static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)
 {
-    char *d;
+    CssDisplay d;
     bool bfc;
 
     if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) return true;
     if (block_flow_is_floated(el)) return true;
-    d = bf_computed(el, "display");
-    bfc = strcmp(d, "inline-block") == 0 || strcmp(d, "flow-root") == 0 ||
-          strcmp(d, "table-cell") == 0 || strcmp(d, "table-caption") == 0 ||
+    d = css_computed_display(el);
+    bfc = css_display_spells(d, CSS_KEYWORD_INLINE_BLOCK) || css_display_spells(d, CSS_KEYWORD_FLOW_ROOT) ||
+          css_display_spells(d, CSS_KEYWORD_TABLE_CELL) || css_display_spells(d, CSS_KEYWORD_TABLE_CAPTION) ||
           /* CSS 2.1 §17.4 Tables in the visual formatting model states it of the wrapper in its own sentence —
              "The table wrapper box establishes a block formatting context" — and that box is what §9.4.1's
              stack holds for both spellings, so §8.3.1's run cannot reach through either. It is listed here
@@ -176,7 +176,6 @@ static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)
              block boxes" and a table wrapper is a block box that is not a block container, which is the one
              shape that list does not reach. */
           table_wrapper_generates(d);
-    free(d);
     if (bfc) return true;
     if (bf_computed_is(el, "overflow-x", "visible") && bf_computed_is(el, "overflow-y", "visible")) return false;
     /* §9.4.1's own parenthesis — "except when that value has been propagated to the viewport" — and the rule
@@ -267,7 +266,7 @@ static lxb_dom_element_t *bf_subtree_float(lxb_dom_node_t *n, bool is_context_ro
            §9.5 to float and nothing under it either. `contents` is NOT folded in — css-display-3 §2.5 "Box
            Generation: the none and contents keywords" keeps the CHILDREN's boxes, and the loop below already
            reaches them because this walk is over the element tree rather than over a box list. */
-        if (bf_computed_is(e, "display", "none")) return NULL;
+        if (css_computed_display_is(e, CSS_KEYWORD_NONE)) return NULL;
         if (css_computed_keyword_is(e, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(e, "position", CSS_KEYWORD_FIXED)) return NULL;
         if (block_flow_is_floated(e)) return e;
         if (bf_establishes_block_formatting_context(e)) return NULL;
@@ -466,6 +465,24 @@ bool block_flow_text_child_generates_box(const lxb_dom_node_t *n)
     return !collapses;
 }
 
+/* CSS 2.2 §9.2.1 "Block-level elements and block boxes" over css-display-3 §2's pair: a block-level box whose
+   inner type is a block container's (`flow`, `flow-root`, a list item's) or a flex or grid container's, which
+   css-grid-1 §5.2 "Sizing Grid Containers" sizes "like a block box". A block-level table is §17.4's wrapper and
+   `block ruby` is css-ruby-1's, so neither is here. */
+static bool bf_display_is_block_level(CssDisplay d)
+{
+    return d.kind == CSS_DISPLAY_PAIR && d.outer == CSS_KEYWORD_BLOCK &&
+           (d.inner == CSS_KEYWORD_FLOW || d.inner == CSS_KEYWORD_FLOW_ROOT || d.inner == CSS_KEYWORD_FLEX ||
+            d.inner == CSS_KEYWORD_GRID);
+}
+
+/* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes": an inline outer type over any inner type but ruby,
+   whose inline box css-ruby-1 builds. */
+static bool bf_display_is_inline_level(CssDisplay d)
+{
+    return d.kind == CSS_DISPLAY_PAIR && d.outer == CSS_KEYWORD_INLINE && d.inner != CSS_KEYWORD_RUBY;
+}
+
 /* CSS 2.2 §9.7 "Relationships between 'display', 'position', and 'float'" IS THE ORDER THESE THREE QUESTIONS
    ARE ASKED IN, and it is the section's whole content: "if 'display' has the value 'none', then 'position' and
    'float' do not apply. In this case, the element generates no box"; "otherwise, if 'position' has the value
@@ -476,13 +493,13 @@ bool block_flow_text_child_generates_box(const lxb_dom_node_t *n)
    all, and the crash that stood at that test fired for a box no section of CSS 2 places anywhere. */
 static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
 {
-    char *d = bf_computed(el, "display");
+    CssDisplay d = css_computed_display(el);
     bool block, inline_level;
     TableBoxKind table;
     char nbuf[160];
 
-    if (strcmp(d, "none") == 0) { free(d); return BLOCK_FLOW_CHILD_NO_BOX; }
-    if (strcmp(d, "contents") == 0)
+    if (css_display_spells(d, CSS_KEYWORD_NONE)) return BLOCK_FLOW_CHILD_NO_BOX;
+    if (css_display_spells(d, CSS_KEYWORD_CONTENTS))
         DFAIL("css-display-3 §2.5 \"Box Generation: the none and contents keywords\" gives this child "
               "`display: contents`: \"The element itself does not generate any boxes, but its children and "
               "pseudo-elements still generate boxes and text sequences as normal.\" So the box tree and the "
@@ -513,7 +530,6 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
        reads the running position out at this child's content position without ever putting it on the stack,
        which is why this classification does not have to change for it. */
     if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) {
-        free(d);
         return BLOCK_FLOW_CHILD_NO_BOX;
     }
     /* §9.7's THIRD arm, ANSWERED AND NOT REFUSED — see block_flow.h. Every caller of this classification meets
@@ -521,21 +537,16 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
        file's stack names §9.5.2's clearance below, core/layout/line_box.c names §9.4.2's shortened line box,
        and core/layout/intrinsic_size.c names what a shortened line box does to a contribution. */
     if (block_flow_is_floated(el)) {
-        free(d);
         return BLOCK_FLOW_CHILD_FLOAT;
     }
-    block = strcmp(d, "block") == 0 || strcmp(d, "flow-root") == 0 || strcmp(d, "list-item") == 0 ||
-            strcmp(d, "flex") == 0 || strcmp(d, "grid") == 0;
-    inline_level = strcmp(d, "inline") == 0 || strcmp(d, "inline-block") == 0 ||
-                   strcmp(d, "inline-flex") == 0 || strcmp(d, "inline-grid") == 0 ||
-                   strcmp(d, "inline-table") == 0;
+    block = bf_display_is_block_level(d);
+    inline_level = bf_display_is_inline_level(d);
     /* CSS 2.1 §17.2 The CSS table model's box types, classified ONCE through the component that owns the
        vocabulary §17.2.1 Anonymous table objects' rules are written in (core/layout/table_box.h). A prefix
        test on "table-" answered this question for a long time and it answered it as ONE question; the two arms
        below are two DIFFERENT missing things, and a single predicate over both is what let one crash report
        them as one. */
     table = table_box_kind(d);
-    free(d);
     if (block) return BLOCK_FLOW_CHILD_BLOCK;
     /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes": this child is inline-level, so it is not on
        §9.4.1's stack at all — §9.4.2's line boxes hold it, and which of the two formatting contexts this block
@@ -581,12 +592,10 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
               "deliberately does not hold this stage: its subject is a list that is NOT a table's, and a table "
               "component generating the table it is asked about would be that rule answering itself",
               box_subject(el, nbuf, sizeof nbuf));
-    DFAIL("this child's computed `display` is one CSS 2 §9.2's box types do not cover, so this walk cannot "
-          "classify it: it is neither block-level, nor inline-level, nor a table box, nor `none`, nor "
-          "`contents`. css-display §2's `<display-outside> <display-inside>` grammar admits pairs this engine "
-          "has never had to answer for (`ruby`, `math`, a two-value `inline flow-root`), and each is a box type "
-          "with its own formatting context. BUILD the classification in css_computed_value.c's computed_display, "
-          "whose css-display §2.7 blockification already normalises the values this walk does understand");
+    DFAILF("%s: this child's computed `display` is a ruby box or a `run-in` one, which CSS 2 §9.2's box types do "
+           "not cover. Build css-ruby-1 §2.2 \"Anonymous Ruby Box Generation\" and css-display-3 §5 \"Run-In "
+           "Layout\" (core/layout/used_value.c's `uv_box_kind` names both) as box-tree steps",
+           box_subject(el, nbuf, sizeof nbuf));
     return BLOCK_FLOW_CHILD_NO_BOX;
 }
 
@@ -691,7 +700,7 @@ BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, BoxTreeChild
    DIRECT child answers for the whole chain beneath it. */
 static bool bf_generates_inline_box(lxb_dom_element_t *el)
 {
-    return bf_computed_is(el, "display", "inline") && !replaced_element_of(el).replaced;
+    return css_computed_display_is(el, CSS_KEYWORD_INLINE) && !replaced_element_of(el).replaced;
 }
 
 /* THE NODE FORM, so the three sites that ask it of a classified child do not each re-derive "is this an
@@ -933,13 +942,12 @@ static BfContent bf_content_kind(lxb_dom_element_t *el)
    content edge, which is not a rectangle §9.4.2 gives line boxes at all. */
 bool block_flow_establishes_inline_context(lxb_dom_element_t *el)
 {
-    char *d;
+    CssDisplay d;
     bool container;
 
     DCHECK(el != NULL, "CSS 2.2 §9.4.2's establishing condition was asked with no element");
-    d = bf_computed(el, "display");
+    d = css_computed_display(el);
     container = block_flow_display_is_block_container(d);
-    free(d);
     if (!container) return false;
     return bf_content_kind(el) == BF_CONTENT_INLINE;
 }
@@ -1353,13 +1361,12 @@ static void bf_require_want_on_the_stack(lxb_dom_element_t *el, lxb_dom_element_
 static BfBox bf_anon_box(lxb_dom_element_t *parent, BlockFlowRun run, BfBaseline pass)
 {
     bool any_line_box = false;
-    char *d = bf_computed(parent, "display");
+    CssDisplay d = css_computed_display(parent);
     bool container = block_flow_display_is_block_container(d);
     BfBox out;
     CssPx first_baseline = css_px(0.0), last_baseline = css_px(0.0);
     CssPx h;
 
-    free(d);
     DCHECK(container,
            "CSS 2.2 §9.2.1.1 generates an anonymous block box inside a BLOCK CONTAINER BOX — its whole "
            "sentence is \"if a BLOCK CONTAINER BOX … has a block-level box inside it\" — and this box's parent "
@@ -1583,10 +1590,9 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
        child from its own `display`, and `bf_layout`'s subject reaches it through that function. */
     out.is_table_wrapper = false;
     {
-        char *d = bf_computed(el, "display");
+        CssDisplay d = css_computed_display(el);
 
         wrapper = table_wrapper_generates(d);
-        free(d);
     }
     if (wrapper) {
         DCHECK(anon == NULL && st == NULL,
@@ -1994,7 +2000,7 @@ static bool bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, BfBox *result
 {
     CssPx sink = css_px(0.0);
     bool sunk = false;
-    char *d = bf_computed(el, "display");
+    CssDisplay d = css_computed_display(el);
     bool container = block_flow_display_is_block_container(d);
     /* §17.4's wrapper is decided from the same string and BEFORE it is released, for the reason the two arms
        below are written apart: a table is block-LEVEL and is not a block CONTAINER (§9.2.1), so `container`
@@ -2003,7 +2009,6 @@ static bool bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, BfBox *result
     char nbuf[160];
     BfBox b;
 
-    free(d);
     b.content_h = css_px(0.0);
     b.top = bf_run_of(used_value_px(el, "margin-top"));
     b.bottom = bf_run_of(used_value_px(el, "margin-bottom"));
@@ -2356,16 +2361,15 @@ bool block_flow_auto_height_ask(lxb_dom_element_t *el, CssPx *out)
 {
     CssPx unused = css_px(0.0);
     bool found = false;
-    char *d;
+    CssDisplay d;
     bool container, flex, grid;
     BfBox b;
 
     DCHECK(el != NULL, "a content-based height was asked for with no element");
-    d = bf_computed(el, "display");
+    d = css_computed_display(el);
     container = block_flow_display_is_block_container(d);
-    flex = strcmp(d, "flex") == 0 || strcmp(d, "inline-flex") == 0;
-    grid = strcmp(d, "grid") == 0 || strcmp(d, "inline-grid") == 0;
-    free(d);
+    flex = css_display_spells(d, CSS_KEYWORD_FLEX) || css_display_spells(d, CSS_KEYWORD_INLINE_FLEX);
+    grid = css_display_spells(d, CSS_KEYWORD_GRID) || css_display_spells(d, CSS_KEYWORD_INLINE_GRID);
     /* THE FLEX DISPATCH IS NOT AN `if` IN FRONT OF THIS WALK, IT IS A ROUTE THAT MAY ANSWER. A `row`
        container's auto height is css-flexbox-1 §9.6 "Cross-Axis Alignment"' content-based cross size and
        returns here, and so does the `column` arm's §9.9.1 "Flex Container Intrinsic Main Sizes" max-content
@@ -2404,7 +2408,7 @@ bool block_flow_last_line_box_baseline_ask(lxb_dom_element_t *el, CssPx *baselin
 {
     CssPx unused = css_px(0.0);
     bool found = false;
-    char *d;
+    CssDisplay d;
     bool container;
     BfBox b;
 
@@ -2413,9 +2417,8 @@ bool block_flow_last_line_box_baseline_ask(lxb_dom_element_t *el, CssPx *baselin
            "CSS 2.2 §10.8.1's `inline-block` baseline was asked for with nowhere to put the distance. The "
            "return value is only the sentence's \"no in-flow line boxes\" disjunct, so a caller holding it "
            "alone would know that a baseline EXISTS and have no coordinate to align the line to");
-    d = bf_computed(el, "display");
+    d = css_computed_display(el);
     container = block_flow_display_is_block_container(d);
-    free(d);
     /* §9.2.1 states the alternative this walk chooses between — a block container "either contains only
        block-level boxes or establishes an inline formatting context" — over a BLOCK CONTAINER BOX, and
        §10.8.1's own sentence is about an `inline-block`, which §9.2.1 makes one. A box that is neither has no
@@ -2452,7 +2455,7 @@ bool block_flow_first_line_box_baseline_ask(lxb_dom_element_t *el, CssPx *baseli
 {
     CssPx unused = css_px(0.0);
     bool found = false;
-    char *d;
+    CssDisplay d;
     bool container;
     BfBox b;
 
@@ -2462,9 +2465,8 @@ bool block_flow_first_line_box_baseline_ask(lxb_dom_element_t *el, CssPx *baseli
            "put the distance. The return value is only the section's \"if there is no such line box\" "
            "disjunct, so a caller holding it alone would know a baseline EXISTS and have no coordinate to "
            "align the row to");
-    d = bf_computed(el, "display");
+    d = css_computed_display(el);
     container = block_flow_display_is_block_container(d);
-    free(d);
     /* THE SAME §9.2.1 ALTERNATIVE THE LAST-BASELINE ENTRY ASSERTS, over the same box and for the same reason —
        a box that is neither of §9.2.1's two shapes has no §9.4.2 line boxes of its own and no §9.4.1 stack to
        walk. CSS 2.1 §9.2.1 Block-level elements and block boxes is also what makes this entry's own caller
@@ -2628,14 +2630,12 @@ bool block_flow_child_top_ask(lxb_dom_element_t *el, CssPx *out)
    which is a different algorithm and not a narrower answer. */
 static bool bf_hypothetical_is_block_level(lxb_dom_element_t *el)
 {
-    char *d = css_hypothetical_static_display(el);
-    bool block = strcmp(d, "block") == 0 || strcmp(d, "flow-root") == 0 || strcmp(d, "list-item") == 0 ||
-                 strcmp(d, "flex") == 0 || strcmp(d, "grid") == 0 ||
+    CssDisplay d = css_hypothetical_static_display(el);
+    bool block = bf_display_is_block_level(d) ||
                  /* §17.4 puts a TABLE WRAPPER BOX on this stack for `display: table`, exactly as
                     `bf_element_child` does for a real child. */
                  table_box_kind_generates_table_box(table_box_kind(d));
 
-    free(d);
     return block;
 }
 
@@ -2705,10 +2705,9 @@ lxb_dom_element_t *block_flow_static_position_containing_block(lxb_dom_element_t
     for (n = lxb_dom_interface_node(el)->parent; n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT;
          n = n->parent) {
         lxb_dom_element_t *a = lxb_dom_interface_element(n);
-        char *d = bf_computed(a, "display");
+        CssDisplay d = css_computed_display(a);
         bool container = block_flow_display_is_block_container(d);
 
-        free(d);
         if (container) return a;
     }
     DFAILF("%s: CSS 2.1 §10.3.7 states the static position against \"the containing block of a hypothetical "
@@ -2827,7 +2826,7 @@ static bool bf_anon_boxes_compute(lxb_dom_element_t *el, BlockFlowAnonBox **out,
     BfAnonSink sink;
     CssPx unused = css_px(0.0);
     bool found = false;
-    char *d;
+    CssDisplay d;
     bool container;
     BfBox b;
 
@@ -2846,9 +2845,8 @@ static bool bf_anon_boxes_compute(lxb_dom_element_t *el, BlockFlowAnonBox **out,
        and both are asked here rather than left to the walk, because a zero is that sentence ANSWERING. See
        block_flow.h for what each shape of zero means; every one of them is a positive statement about which
        box holds this element's inline-level content, never this component declining to look. */
-    d = bf_computed(el, "display");
+    d = css_computed_display(el);
     container = block_flow_display_is_block_container(d);
-    free(d);
     if (!container) return true;
     if (bf_content_kind(el) != BF_CONTENT_MIXED) return true;
     /* §9.4.1's STACK IS RUN, because that is where §9.2.1.1's boxes are generated and where their positions
@@ -2945,12 +2943,11 @@ bool block_flow_table_box_top_ask(lxb_dom_element_t *table, CssPx *out)
 {
     CssPx top = css_px(0.0);
     bool found = false;
-    char *d = bf_computed(table, "display");
+    CssDisplay d = css_computed_display(table);
     bool wrapper = table_wrapper_generates(d);
     char nbuf[160];
     BfBox w;
 
-    free(d);
     DCHECKF(wrapper, "%s: a table box's offset was asked of an element that generates no table wrapper box",
             box_subject(table, nbuf, sizeof nbuf));
     if (!bf_layout(table, table, &top, &found, NULL, NULL, BF_BASELINE_NONE, &w)) return false;
@@ -2974,12 +2971,10 @@ CssPx block_flow_table_wrapper_height(lxb_dom_element_t *table)
 {
     CssPx unused = css_px(0.0);
     bool found = false;
-    char *d = bf_computed(table, "display");
-    bool wrapper = table_wrapper_generates(d);
+    bool wrapper = table_wrapper_generates(css_computed_display(table));
     char nbuf[160];
     BfBox w;
 
-    free(d);
     DCHECKF(wrapper, "%s: a table wrapper box's height was asked of an element that generates none",
             box_subject(table, nbuf, sizeof nbuf));
     w = bf_layout_driven(table, NULL, &unused, &found, NULL, NULL, BF_BASELINE_NONE);

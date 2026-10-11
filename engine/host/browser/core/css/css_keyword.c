@@ -130,6 +130,11 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
     case CSS_KEYWORDS_DISPLAY_LEGACY:
         return k == CSS_KEYWORD_INLINE_BLOCK || k == CSS_KEYWORD_INLINE_TABLE || k == CSS_KEYWORD_INLINE_FLEX ||
                k == CSS_KEYWORD_INLINE_GRID;
+    case CSS_KEYWORDS_DISPLAY:
+        return k == CSS_KEYWORD_LIST_ITEM || css_keyword_set_has(CSS_KEYWORDS_DISPLAY_OUTSIDE, k) ||
+               css_keyword_set_has(CSS_KEYWORDS_DISPLAY_INSIDE, k) ||
+               css_keyword_set_has(CSS_KEYWORDS_DISPLAY_INTERNAL, k) ||
+               css_keyword_set_has(CSS_KEYWORDS_DISPLAY_BOX, k) || css_keyword_set_has(CSS_KEYWORDS_DISPLAY_LEGACY, k);
     }
     DFAILF("keyword set %u is none of the sets core/css/css_keyword.h declares", (unsigned)set);
     return false;

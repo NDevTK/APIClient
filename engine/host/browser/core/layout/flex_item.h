@@ -20,11 +20,13 @@
 
 #include <lexbor/dom/dom.h>
 
+#include "core/css/css_display.h"
+
 /* css-flexbox-1 §3 "Flex Containers: the flex and inline-flex display values"' two values, decided from a
    computed `display` alone, so a consumer can learn which module owns a box first. "A flex container
    establishes a new flex formatting context for its contents" and "Flex containers are not block containers":
    the pair differs in outer display type only. */
-bool flex_item_display_is_flex_container(const char *display);
+bool flex_item_display_is_flex_container(CssDisplay display);
 
 /* §5.1's main axis, named by which writing-mode axis it is. `row` "has the same orientation as the inline axis
    of the current writing mode", `column` the block axis, and each `-reverse` is "Same as" its base value except

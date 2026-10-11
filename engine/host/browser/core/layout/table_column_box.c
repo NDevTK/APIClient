@@ -27,20 +27,17 @@
    walk because both passes must take the identical branch on the identical child list. */
 static TableBoxKind tcb_kind_of(lxb_dom_element_t *el)
 {
-    char *display = css_computed_value(el, "display");
+    CssDisplay display = css_computed_display(el);
     TableBoxKind kind;
     char nbuf[160];
 
-    DCHECK(display != NULL, "the cascade produced no computed `display` — the UA layer answers `inline` for "
-                            "every element it does not name, so this cannot be unset");
-    DCHECKF(strcmp(display, "contents") != 0,
+    DCHECKF(!css_display_spells(display, CSS_KEYWORD_CONTENTS),
             "%s: css-display-3 §2.5 \"Box Generation: the none and contents keywords\" replaces this child by "
             "its contents, and core/layout/box_tree.h's sequence therefore never yields one — so this "
             "classification cannot be handed one unless a walk in this file stepped a DOM child list instead of "
             "that sequence. The four walks below are the whole population; find the one that did",
             box_subject(el, nbuf, sizeof nbuf));
     kind = table_box_kind(display);
-    free(display);
     return kind;
 }
 

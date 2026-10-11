@@ -179,3 +179,24 @@ bool css_display_is_box(CssDisplay d, CssKeyword k)
             "a display value was asked whether it is keyword %u, which is not a `<display-box>`", (unsigned)k);
     return d.kind == CSS_DISPLAY_BOX && d.keyword == k;
 }
+
+bool css_display_spells(CssDisplay d, CssKeyword k)
+{
+    CssDisplay v = css_display_keyword(CSS_DISPLAY_BOX, CSS_KEYWORD_INVALID);
+    bool ok = css_keyword_set_has(CSS_KEYWORDS_DISPLAY, k) && css_display_parse(css_keyword_name(k), &v);
+
+    DCHECKF(ok, "keyword %u was asked of a display value, and it is not a one-keyword `display` value",
+            (unsigned)k);
+    return ok && v.kind == d.kind && v.outer == d.outer && v.inner == d.inner && v.list_item == d.list_item &&
+           v.keyword == d.keyword;
+}
+
+const char *css_display_name(CssDisplay d, char *buf, size_t cap)
+{
+    char *v = css_display_serialize(d);
+
+    DCHECK(buf != NULL && cap > 0, "a display value was named into no buffer");
+    snprintf(buf, cap, "%s", v);
+    free(v);
+    return buf;
+}

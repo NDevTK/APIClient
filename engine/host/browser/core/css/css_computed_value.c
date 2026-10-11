@@ -91,6 +91,8 @@ lxb_dom_element_t *css_parent_element(lxb_dom_element_t *el)
 /* CSS Cascade §6's cascaded value with css-variables-1 §3's SUBSTITUTION already performed — see the
    definition below for why every one of this file's four cascaded-value reads goes through it. */
 static char *css_cv_cascaded(lxb_dom_element_t *el, const char *name);
+static CssDisplay cv_display_specified(lxb_dom_element_t *el);
+static void css_cv_modelled(lxb_dom_element_t *el, const char *name);
 
 static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
 {
@@ -362,34 +364,32 @@ static char *computed_overflow(lxb_dom_element_t *el, const char *name, char *sp
    paragraph goes when this walk's contract is asserted rather than described — a DCHECK at its exit that the value
    it returns is the COMPUTED `display` of the element it read — because the divergence is then a crash at the one
    site that could be wrong about it instead of a claim in a comment. */
-char *css_box_parent_display(const lxb_dom_node_t *n)
+bool css_box_parent_display(const lxb_dom_node_t *n, CssDisplay *out)
 {
     const lxb_dom_node_t *p;
 
+    DCHECK(n != NULL && out != NULL, "a box parent's `display` was asked of no node or into nowhere");
     for (p = n->parent; p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT; p = p->parent) {
-        char *d = css_cv_specified(lxb_dom_interface_element((lxb_dom_node_t *)p), "display");
+        CssDisplay v = cv_display_specified(lxb_dom_interface_element((lxb_dom_node_t *)p));
 
-        DCHECK(d != NULL, "§7's defaulting produced no `display` for an ancestor element — the UA layer answers "
-                          "`inline` for every element it does not name, so this cannot be unset");
-        CssDisplay v;
-
-        if (!css_display_parse(d, &v) || !css_display_is_box(v, CSS_KEYWORD_CONTENTS)) return d;
-        free(d);
+        if (!css_display_is_box(v, CSS_KEYWORD_CONTENTS)) { *out = v; return true; }
         /* §2.8: "a display of contents computes to block on the root element", so the root is a box parent
            however it is declared. */
-        if (css_is_root_element(p)) return css_cv_strdup("block");
+        if (css_is_root_element(p)) {
+            bool ok = css_display_parse("block", out);
+
+            DCHECK(ok, "css-display-3 §2.1's `block` does not parse as a display value");
+            return true;
+        }
     }
-    return NULL;
+    return false;
 }
 
 /* css-flexbox-1's and css-grid-1's containers: a box whose inner display type is `flex` or `grid`, whatever its
-   outer type or spelling. `d` is a specified value lexbor validated. */
-static bool display_is_flex_or_grid_container(const char *d)
+   outer type or spelling. */
+static bool display_is_flex_or_grid_container(CssDisplay d)
 {
-    CssDisplay v;
-
-    if (d == NULL || !css_display_parse(d, &v)) return false;
-    return v.kind == CSS_DISPLAY_PAIR && (v.inner == CSS_KEYWORD_FLEX || v.inner == CSS_KEYWORD_GRID);
+    return d.kind == CSS_DISPLAY_PAIR && (d.inner == CSS_KEYWORD_FLEX || d.inner == CSS_KEYWORD_GRID);
 }
 
 /* ONE ELEMENT'S LOCAL NAME, compared EXACTLY. An HTML element's local name is lower case for every element a
@@ -534,22 +534,12 @@ static bool display_contents_computes_to_none(lxb_dom_element_t *el)
    calculation might require also assuming a different computed value for `display`". A second copy of §2.7's
    map for the hypothetical box would be one blockification rule with two implementations, free to disagree
    about `inline-table` or about a keyword one of them gained. */
-static char *display_blockified_if(lxb_dom_element_t *el, char *spec, bool out_of_flow)
+static CssDisplay display_blockified_if(lxb_dom_element_t *el, CssDisplay d, bool out_of_flow)
 {
     const lxb_dom_node_t *n = lxb_dom_interface_node(el);
-    bool root = css_is_root_element(n), blockify, ok;
-    CssDisplay d;
+    bool root = css_is_root_element(n), blockify;
+    CssDisplay pd;
 
-    /* A substituted value outside css-display-3 §2's grammar is invalid at computed-value time (css-values-5
-       "Resolving in Properties"), and `display` is not inherited, so `unset` is its initial value. */
-    if (!css_display_parse(spec, &d)) {
-        free(spec);
-        spec = cssom_initial_value("display");
-        DCHECK(spec != NULL, "§7.1 produced no INITIAL value for `display`");
-        ok = css_display_parse(spec, &d);
-        DCHECK(ok, "`display`'s initial value fails css-display-3 §2's own grammar");
-    }
-    free(spec);
     /* css-display-3 §2.5's LAST SENTENCE, ASKED BEFORE css-display-3 §2.8's ROOT RULE, AND THE ORDER IS A READING
        RATHER THAN A DEDUCTION. The two disagree about exactly one element: a `contents` DOCUMENT ROOT that Appendix
        B suppresses, which css-display-3 §2.8 would make `block`. Appendix B's `svg` row is the text that addresses
@@ -561,29 +551,66 @@ static char *display_blockified_if(lxb_dom_element_t *el, char *spec, bool out_o
        root is always `<html>` — an HTML element in none of the appendix's arms, so `<html>` takes
        css-display-3 §2.8's rule either way and the ordering is observable only in a document built some other
        way. */
-    if (css_display_is_box(d, CSS_KEYWORD_CONTENTS) && display_contents_computes_to_none(el))
-        return css_cv_strdup("none");
+    if (css_display_is_box(d, CSS_KEYWORD_CONTENTS) && display_contents_computes_to_none(el)) {
+        d.keyword = CSS_KEYWORD_NONE;
+        return d;
+    }
     /* §2.8: "Additionally, a display of contents computes to block on the root element." */
-    if (root && css_display_is_box(d, CSS_KEYWORD_CONTENTS)) return css_cv_strdup("block");
+    if (root && css_display_is_box(d, CSS_KEYWORD_CONTENTS)) {
+        bool ok = css_display_parse("block", &d);
+
+        DCHECK(ok, "css-display-3 §2.1's `block` does not parse as a display value");
+        return d;
+    }
     /* §2.8's root rule, and the three computed-value fixups §2.7 lists that the TREE decides: "Absolute
        positioning or floating an element blockifies the box's display type" and "A parent with a grid or flex
        display value blockifies the box's display type". The first two are the caller's `out_of_flow`; the
        third is a fact about the PARENT and survives the hypothetical, because §10.3.7 hypothesises only this
        element's own `position` and `float`. */
-    blockify = root || out_of_flow;
-    if (!blockify) {
-        char *pd = css_box_parent_display(n);
-        blockify = display_is_flex_or_grid_container(pd);
-        free(pd);
-    }
-    return css_display_serialize(blockify ? css_display_blockify(d) : d);
+    blockify = root || out_of_flow || (css_box_parent_display(n, &pd) && display_is_flex_or_grid_container(pd));
+    return blockify ? css_display_blockify(d) : d;
 }
 
-static char *computed_display(lxb_dom_element_t *el, char *spec)
+/* css-display-3 §2's value of `display` on `el` before §2.5's, §2.7's and §2.8's computed-value rules, with CSS
+   Cascade §7's defaulting applied. A declaration outside §2's grammar — only a substitution can hand one — is
+   invalid at computed-value time (css-values-5 "Resolving in Properties") and defaults as `unset`, which for this
+   non-inherited property is the initial value; `inherit` takes the parent's computed value whole. */
+static CssDisplay cv_display_specified(lxb_dom_element_t *el)
+{
+    CssDisplay d = { CSS_DISPLAY_BOX, CSS_KEYWORD_INVALID, CSS_KEYWORD_INVALID, false, CSS_KEYWORD_NONE };
+    CssDefaulting defaulting;
+    char *cascaded = css_cv_cascaded(el, "display");
+    bool ok;
+
+    defaulting = css_defaulting_of("display", cascaded);
+    if (defaulting == CSS_DEFAULTING_DECLARED) {
+        ok = css_display_parse(cascaded, &d);
+        free(cascaded);
+        if (ok) return d;
+        defaulting = css_defaulting_of("display", "unset");
+    } else {
+        free(cascaded);
+    }
+    if (defaulting == CSS_DEFAULTING_INHERITED) {
+        lxb_dom_element_t *parent = css_parent_element(el);
+
+        if (parent != NULL) return css_computed_display(parent);
+    }
+    cascaded = cssom_initial_value("display");
+    DCHECK(cascaded != NULL, "§7.1 produced no INITIAL value for `display`");
+    ok = cascaded != NULL && css_display_parse(cascaded, &d);
+    free(cascaded);
+    DCHECK(ok, "`display`'s initial value fails css-display-3 §2's own grammar");
+    return d;
+}
+
+static CssDisplay cv_display(lxb_dom_element_t *el)
 {
     bool out_of_flow;
-    char *f = css_computed_value(el, "float");
+    char *f;
 
+    css_cv_modelled(el, "display");
+    f = css_computed_value(el, "float");
     out_of_flow = f != NULL && strcmp(f, "none") != 0;
     free(f);
     if (!out_of_flow) {
@@ -591,13 +618,33 @@ static char *computed_display(lxb_dom_element_t *el, char *spec)
 
         out_of_flow = p == CSS_KEYWORD_ABSOLUTE || p == CSS_KEYWORD_FIXED;
     }
-    return display_blockified_if(el, spec, out_of_flow);
+    return display_blockified_if(el, cv_display_specified(el), out_of_flow);
 }
 
-char *css_hypothetical_static_display(lxb_dom_element_t *el)
+CssDisplay css_computed_display(lxb_dom_element_t *el)
+{
+    CssComputedStyleHold hold;
+    CssComputedValue v;
+
+    DCHECK(el != NULL, "a computed `display` was asked of no element");
+    css_computed_style_hold_begin(&hold);
+    if (!css_computed_style_ask(el, CSS_PROPERTY_DISPLAY, &v)) {
+        v.display = cv_display(el);
+        css_computed_style_answer(el, CSS_PROPERTY_DISPLAY, &v);
+    }
+    css_computed_style_hold_end(&hold);
+    return v.display;
+}
+
+bool css_computed_display_is(lxb_dom_element_t *el, CssKeyword k)
+{
+    return css_display_spells(css_computed_display(el), k);
+}
+
+CssDisplay css_hypothetical_static_display(lxb_dom_element_t *el)
 {
     DCHECK(el != NULL, "CSS 2.1 §10.3.7's hypothetical `display` was asked for with no element");
-    return display_blockified_if(el, css_cv_specified(el, "display"), false);
+    return display_blockified_if(el, cv_display_specified(el), false);
 }
 
 /* ---- the BOX-MODEL LENGTHS' computed value ---------------------------------------------------------------- */
@@ -1961,8 +2008,6 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
     case CSS_PROPERTY_OVERFLOW_X:
     case CSS_PROPERTY_OVERFLOW_Y:
         return computed_overflow(el, name, spec);
-    case CSS_PROPERTY_DISPLAY:
-        return computed_display(el, spec);
     case CSS_PROPERTY_TEXT_ALIGN_ALL:
     case CSS_PROPERTY_TEXT_ALIGN_LAST:
         return computed_text_align(el, name, spec);
@@ -2178,6 +2223,10 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
            "pair hands a page two numbers with both domains dropped. Ask `css_computed_border_spacing`, "
            "which answers both halves as `CssPx` and doubles §17.6.1's one-length form into the two the "
            "computed value has");
+    DCHECKF(shape != CSS_COMPUTED_SHAPE_DISPLAY,
+            "`%s`: css_computed_value was asked for `display`, whose computed value is css-display-3 §2's pair. "
+            "Ask css_computed_display, or css_computed_display_is at a call site that tests one keyword",
+            name);
     DCHECKF(shape != CSS_COMPUTED_SHAPE_KEYWORD,
             "`%s`: css_computed_value was asked for a property whose computed value is a typed keyword. Ask "
             "css_computed_keyword, or css_computed_keyword_is at a call site that tests one keyword",
@@ -2318,6 +2367,13 @@ static JSValue css_resolved_computed(JSContext *ctx, lxb_dom_element_t *el, cons
     }
     /* CSSOM §6.7.2 "Serializing CSS Values": a keyword serializes as its lowercase spelling. */
     if (css_computed_models_keyword(name)) return JS_NewString(ctx, css_keyword_name(css_computed_keyword(el, name)));
+    if (strcmp(name, "display") == 0) {
+        char *d = css_display_serialize(css_computed_display(el));
+
+        out = JS_NewString(ctx, d);
+        free(d);
+        return out;
+    }
     v = css_computed_models(name) ? css_computed_value(el, name) : css_cv_specified(el, name);
     /* A property no cascade layer answers at all — a custom property nobody set — is the EMPTY STRING, which
        is §6.6.1's own answer for one that is not set rather than a default standing in for a value.
@@ -2456,11 +2512,7 @@ bool css_used_color(lxb_dom_element_t *el, const char *name, CssColor *out)
    in "any other property". */
 static bool resolved_display_generates_a_box(lxb_dom_element_t *el)
 {
-    char *d = css_computed_value(el, "display");
-    bool box = !css_cv_is(d, "none") && !css_cv_is(d, "contents");
-
-    free(d);
-    return box;
+    return css_computed_display(el).kind != CSS_DISPLAY_BOX;
 }
 
 /* §6.6.1's getPropertyValue SHORTHAND STEP, over RESOLVED values — "for each longhand property longhand that

@@ -378,7 +378,7 @@ static bool fp_is_on_a_line_box(lxb_dom_element_t *el)
        `inline-table`, `inline-flex` and `inline-grid` leave through `fp_require_placeable`, each needing a
        module's number. A replaced element with `display: block` is block-level (§9.2.1) and takes the
        induction, with §10.3.4's and §10.6.2's extents. */
-    return fp_computed_is(el, "display", "inline") || fp_computed_is(el, "display", "inline-block");
+    return css_computed_display_is(el, CSS_KEYWORD_INLINE) || css_computed_display_is(el, CSS_KEYWORD_INLINE_BLOCK);
 }
 
 /* CSS 2 §9.4.2 "Inline formatting contexts"' placement of a box on a line ("boxes are laid out horizontally,
@@ -480,20 +480,15 @@ static void fp_require_placeable(lxb_dom_element_t *el)
     /* Rows, cells and row groups are placed by §17.5's rules 1, 2 and 5 above, and captions by §17.4's wrapper
        stack (`fp_caption_origin`); none is listed. Left: column and column-group boxes (no mapping from element
        to grid column). */
-    static const char *const TABLE_INTERNAL[] = {
-        "table-column-group", "table-column",
+    static const CssKeyword TABLE_INTERNAL[] = {
+        CSS_KEYWORD_TABLE_COLUMN_GROUP, CSS_KEYWORD_TABLE_COLUMN,
     };
-    char *d = css_computed_value(el, "display");
+    CssDisplay d = css_computed_display(el);
     char nbuf[160];
     bool table_internal = false, inline_level;
     unsigned i;
 
-    /* No guard under this assert: `css_computed_value(el, "display")` cannot return NULL (its `computed_display`
-       dereferences the specified value first, and every return is that string or a CHECKed `css_cv_strdup`),
-       so a guard would be dead and only make the assert look recoverable. */
-    DCHECKF(d != NULL, "%s: the cascade produced no computed `display` for an element whose box is being placed",
-            box_subject(el, nbuf, sizeof nbuf));
-    DCHECKF(strcmp(d, "none") != 0 && strcmp(d, "contents") != 0,
+    DCHECKF(d.kind != CSS_DISPLAY_BOX,
            "%s: "
            "CSS 2 §9.4.1's placement was asked for an element that GENERATES NO BOX — css-display-3 §2.5 "
            "\"Box Generation: the none and contents keywords\" gives `contents` no box of its own and `none` "
@@ -503,16 +498,12 @@ static void fp_require_placeable(lxb_dom_element_t *el)
            "asking where it is, so this is that predicate and this test disagreeing",
            box_subject(el, nbuf, sizeof nbuf));
     for (i = 0; i < sizeof(TABLE_INTERNAL) / sizeof(TABLE_INTERNAL[0]); i++)
-        if (strcmp(d, TABLE_INTERNAL[i]) == 0) table_internal = true;
+        if (css_display_spells(d, TABLE_INTERNAL[i])) table_internal = true;
     /* `inline` and `inline-block` are placed by §9.4.2 (`fp_line_box_origin`) before this is asked. What is left
        is atomic inline-level boxes (CSS 2.1 §9.2.2 "Inline-level elements and inline boxes") whose module
        outside CSS 2.1 §10 owns a number the line needs. */
-    inline_level = strcmp(d, "inline-table") == 0 || strcmp(d, "inline-flex") == 0 ||
-                   strcmp(d, "inline-grid") == 0;
-    /* The string is released before either crash and neither reads it: `DFAIL` compiles out in release, so a
-       `free` beside one would be a use-after-free or double free there. The messages name the `display`
-       through `box_subject`, which reads and frees its own copy; folding `d` in would reintroduce the bug. */
-    free(d);
+    inline_level = css_display_spells(d, CSS_KEYWORD_INLINE_TABLE) || css_display_spells(d, CSS_KEYWORD_INLINE_FLEX) ||
+                   css_display_spells(d, CSS_KEYWORD_INLINE_GRID);
     if (table_internal)
         DFAILF("%s: "
               "this box is TABLE-INTERNAL, and CSS 2.1 §17.5 'Visual layout of table contents' positions it "
@@ -911,15 +902,15 @@ static bool fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_el
     if (fp_is_on_a_line_box(el)) return fp_line_box_origin(el, out);
     /* CSS 2.1 §17.5 Visual layout of table contents places row, cell and row group boxes, which must not fall
        through to §9.4.1's rules; all go through `fp_table_grid_origin`. The three row group displays are
-       spelled as strings, like the tests above, rather than routed through `table_box_kind_is_row_group`'s
-       enum. The other three table-internal boxes are refused in `fp_require_placeable`. */
-    if (fp_computed_is(el, "display", "table-row")) return fp_table_row_origin(el, out);
-    if (fp_computed_is(el, "display", "table-cell")) return fp_table_cell_origin(el, out);
-    if (fp_computed_is(el, "display", "table-row-group") ||
-        fp_computed_is(el, "display", "table-header-group") ||
-        fp_computed_is(el, "display", "table-footer-group"))
+       tested as keywords rather than routed through `table_box_kind_is_row_group`'s enum. The other three
+       table-internal boxes are refused in `fp_require_placeable`. */
+    if (css_computed_display_is(el, CSS_KEYWORD_TABLE_ROW)) return fp_table_row_origin(el, out);
+    if (css_computed_display_is(el, CSS_KEYWORD_TABLE_CELL)) return fp_table_cell_origin(el, out);
+    if (css_computed_display_is(el, CSS_KEYWORD_TABLE_ROW_GROUP) ||
+        css_computed_display_is(el, CSS_KEYWORD_TABLE_HEADER_GROUP) ||
+        css_computed_display_is(el, CSS_KEYWORD_TABLE_FOOTER_GROUP))
         return fp_table_row_group_origin(el, out);
-    if (fp_computed_is(el, "display", "table-caption")) return fp_caption_origin(el, out);
+    if (css_computed_display_is(el, CSS_KEYWORD_TABLE_CAPTION)) return fp_caption_origin(el, out);
     fp_require_placeable(el);
 
     /* §10.1's first case, §9.4.1's base case: the root's containing block is the ICB, "anchored at the canvas

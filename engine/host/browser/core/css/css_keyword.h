@@ -96,11 +96,11 @@ typedef enum {
  * computed-value rule resolves a keyword to a number (`thin`, `x-large`) keeps the rest in its computed value.
  * ABSOLUTE_SIZE is no row's: it is css-fonts-4 §2.5's `<absolute-size>`, which FONT_SIZE contains. The five
  * DISPLAY_ sets are no row's either: they are css-display-3 §2's productions, which core/css/css_display.h
- * composes into the property's grammar. UNTYPED is a NAMED RESIDUAL: a TEXT-shaped row's computed value
- * is still owned text, compared by spelling (core/css/css_computed_value.h's `css_computed_value`). The next
- * diffs move each `specified keyword` row to the KEYWORD shape over a set of its own, `display` with a typed
- * pair of its own. Until each text row has one, a page's case-folded or substituted spelling of such a keyword
- * can compare unequal to the spelling a consumer tests. */
+ * composes into the property's grammar; DISPLAY, the `display` row's, is every keyword that grammar names.
+ * UNTYPED is a NAMED RESIDUAL: a TEXT-shaped row's computed value is still owned text, compared by spelling
+ * (core/css/css_computed_value.h's `css_computed_value`). The next diffs move each `specified keyword` row to
+ * the KEYWORD shape over a set of its own. Until each text row has one, a page's case-folded or substituted
+ * spelling of such a keyword can compare unequal to the spelling a consumer tests. */
 typedef enum {
     CSS_KEYWORDS_UNTYPED = 1,
     CSS_KEYWORDS_NONE,
@@ -120,7 +120,8 @@ typedef enum {
     CSS_KEYWORDS_DISPLAY_INSIDE,
     CSS_KEYWORDS_DISPLAY_INTERNAL,
     CSS_KEYWORDS_DISPLAY_BOX,
-    CSS_KEYWORDS_DISPLAY_LEGACY
+    CSS_KEYWORDS_DISPLAY_LEGACY,
+    CSS_KEYWORDS_DISPLAY
 } CssKeywordSet;
 
 /* The keyword `ident` (its first `n` bytes) spells, ASCII case-insensitively, or CSS_KEYWORD_INVALID when it

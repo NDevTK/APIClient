@@ -280,7 +280,7 @@ static CssPx lb_content_top_from_margin_edge(lxb_dom_element_t *el)
 static LbExtent lb_atomic_extent(lxb_dom_element_t *el)
 {
     CssPx margin_box = used_value_margin_edge_px(el, true);
-    bool inline_block = lb_computed_is(el, "display", "inline-block");
+    bool inline_block = css_computed_display_is(el, CSS_KEYWORD_INLINE_BLOCK);
     bool replaced = replaced_element_of(el).replaced;
     LbExtent out;
     CssPx inner_baseline = css_px(0.0);
@@ -446,7 +446,7 @@ static void lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
 {
     lxb_dom_node_t *n;
     lxb_dom_element_t *el;
-    char *d;
+    CssDisplay d;
     bool atomic, inline_box, inline_block, on_the_line;
 
     /* The run's end, tested at every depth and first: CSS 2.2 §9.2.1.1's in-flow block-level box, which
@@ -501,10 +501,9 @@ static void lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
               "boxes beside a float rather than moving them. A float in this formatting context therefore "
               "makes the number of line boxes a function of the float's own width and height, which is the "
               "measurement this component exists to avoid needing. BUILD §9.5.1's float placement");
-    d = lb_computed(el, "display");
-    if (strcmp(d, "none") == 0) { free(d); return; }
-    if (strcmp(d, "contents") == 0) {
-        free(d);
+    d = css_computed_display(el);
+    if (css_display_spells(d, CSS_KEYWORD_NONE)) { return; }
+    if (css_display_spells(d, CSS_KEYWORD_CONTENTS)) {
         DFAIL("css-display-3 §2.5 \"Box Generation: the none and contents keywords\" gives this child "
               "`display: contents`: \"The element itself does not generate any boxes, but its children and "
               "pseudo-elements still generate boxes and text sequences as normal.\" So the boxes on this line "
@@ -524,11 +523,10 @@ static void lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
               "four, and core/layout/table_box.c's array-materialising walk is the only one that is free");
         return;
     }
-    inline_block = strcmp(d, "inline-block") == 0;
-    atomic = inline_block || strcmp(d, "inline-flex") == 0 ||
-             strcmp(d, "inline-grid") == 0 || strcmp(d, "inline-table") == 0;
-    inline_box = strcmp(d, "inline") == 0;
-    free(d);
+    inline_block = css_display_spells(d, CSS_KEYWORD_INLINE_BLOCK);
+    atomic = inline_block || css_display_spells(d, CSS_KEYWORD_INLINE_FLEX) ||
+             css_display_spells(d, CSS_KEYWORD_INLINE_GRID) || css_display_spells(d, CSS_KEYWORD_INLINE_TABLE);
+    inline_box = css_display_spells(d, CSS_KEYWORD_INLINE);
     /* Which atomic inline-level boxes this walk collects. §10.8.1's whole sentence (its main arm, its "no
        in-flow line boxes" disjunct and its `overflow` disjunct) is decided in `lb_atomic_extent`; what is left
        here is whether §10.8's step 1 and a used inline size exist for the box type at all.
@@ -1680,16 +1678,12 @@ static const char *lb_node_name(lxb_dom_node_t *n, char *buf, size_t cap)
     return "(non-element node)";
 }
 
-/* The computed `display` of the same subject, the second half of the address. It leaks on the aborting
-   path, one `abort()` away; in release the call sits inside `DFAILF`'s `sizeof` and is never evaluated. It
-   calls `css_computed_value` directly rather than `lb_computed`, whose non-NULL DCHECK is right where geometry
-   is computed but would replace the first defect while composing a crash message, so this helper is total;
-   the cascade invariant keeps its own crash at the sites that compute with the value. */
+/* The computed `display` of the same subject, serialized, the second half of the address. It leaks on the
+   aborting path, one `abort()` away; in release the call sits inside `DFAILF`'s `sizeof` and is never
+   evaluated. */
 static const char *lb_el_display(lxb_dom_element_t *el)
 {
-    char *d = el == NULL ? NULL : css_computed_value(el, "display");
-
-    return d != NULL ? d : "(no computed display)";
+    return el == NULL ? "(no element)" : css_display_serialize(css_computed_display(el));
 }
 
 /* Which of `container`'s anonymous block boxes hold `child`, and where each is. `child` is `container`'s own
@@ -1888,13 +1882,12 @@ static bool lb_establishing_context(lxb_dom_element_t *el, LbContext *out)
        conditional, not in the increment clause. */
     for (a = child->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
         lxb_dom_element_t *anc = lxb_dom_interface_element(a);
-        char *d = lb_computed(anc, "display");
+        CssDisplay d = css_computed_display(anc);
         bool container = block_flow_display_is_block_container(d);
-        bool inline_box = strcmp(d, "inline") == 0;
-        bool step_over = inline_box || strcmp(d, "contents") == 0;
+        bool inline_box = css_display_spells(d, CSS_KEYWORD_INLINE);
+        bool step_over = inline_box || css_display_spells(d, CSS_KEYWORD_CONTENTS);
 
-        /* The crash below reads `d`, so the single free comes after it; the `container` arm returns, so this
-           test is reached only with `container` false. */
+        /* The `container` arm below returns, so this test is reached only with `container` false. */
         if (!container && !step_over)
             DFAILF("<%s> (display `%s`), ancestor <%s> (display `%s`): "
                   "CSS 2.2 §9.4.2's inline formatting context was asked for an inline box whose nearest "
@@ -1908,8 +1901,7 @@ static bool lb_establishing_context(lxb_dom_element_t *el, LbContext *out)
                   "blockification where the child's `display` is computed (css-display §2.7's "
                   "blockification), or BUILD the module that owns the container",
                   lb_el_name(el, ebuf, sizeof ebuf), lb_el_display(el),
-                  lb_el_name(anc, abuf, sizeof abuf), d);
-        free(d);
+                  lb_el_name(anc, abuf, sizeof abuf), lb_el_display(anc));
         if (container) {
             ctx.style = anc;
             /* §9.4.2's condition over the whole child list picks the shape, asked once through the component that
@@ -2065,7 +2057,7 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
 
     DCHECK(el != NULL && establishing != NULL && out != NULL && count != NULL,
            "CSSOM VIEW §6's box fragments were asked for with no element or nowhere to report them");
-    DCHECK(lb_computed_is(el, "display", "inline") || lb_computed_is(el, "display", "inline-block"),
+    DCHECK(css_computed_display_is(el, CSS_KEYWORD_INLINE) || css_computed_display_is(el, CSS_KEYWORD_INLINE_BLOCK),
            "CSSOM VIEW §6's box fragments were asked for a box whose computed `display` is neither `inline` "
            "nor `inline-block`, so it is not on a line box of the formatting context this walk fills. CSS 2.2 "
            "§9.2.2 \"Inline-level elements and inline boxes\" makes an `inline-table`, `inline-flex` or "
@@ -2091,7 +2083,7 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
        element or other atomic inline"), so `lb_child` collects one item and the fragment is delimited by its
        index. A single opaque box is never the box §9.4.2 "split[s] into several boxes", so it is exactly one
        fragment, which the closing assert checks. */
-    atomic = replaced_element_of(el).replaced || lb_computed_is(el, "display", "inline-block");
+    atomic = replaced_element_of(el).replaced || css_computed_display_is(el, CSS_KEYWORD_INLINE_BLOCK);
     /* HTML §15.3.4 "Phrasing content"'s `br { display-outside: newline; }` and `wbr { display-outside:
        break-opportunity; }` reach here as `display: inline` boxes (core/layout/phrasing_break.h), and
        `lb_child` puts them on the line as a forced break or an opportunity rather than as a box with two
@@ -2359,7 +2351,7 @@ bool line_box_inline_margin_span_ask(lxb_dom_element_t *el, lxb_dom_element_t **
        'inline-block' elements, the margin box is used when calculating the height of the line box"), so the
        block arm would drop both vertical margins. It is a routing invariant: core/layout/scrolling_area.c's
        `sa_is_non_replaced_inline` sends every other box to the origin-plus-extent composition first. */
-    DCHECK(lb_computed_is(el, "display", "inline"),
+    DCHECK(css_computed_display_is(el, CSS_KEYWORD_INLINE),
            "CSS 2.2 §9.4.2's margin span was asked for a box whose computed `display` is not `inline`. §8.3 "
            "\"Margin properties\"' exception — \"these properties apply to all elements, but VERTICAL MARGINS "
            "WILL NOT HAVE ANY EFFECT ON NON-REPLACED INLINE ELEMENTS\" — is what lets the block arm below "

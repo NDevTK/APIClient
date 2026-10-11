@@ -15,15 +15,16 @@
    and table-column-group boxes". They are css-display §2.4's `<display-internal>` keywords, and they are the
    TWO of the eight that a transform does not apply to: a row, a row group, a cell and a caption are all
    transformable, which is why this is the module's own two-name list and not the internal-table set. */
-static bool css_tr_is_column_box(const char *display)
+static bool css_tr_is_column_box(CssDisplay display)
 {
-    return strcmp(display, "table-column") == 0 || strcmp(display, "table-column-group") == 0;
+    return css_display_spells(display, CSS_KEYWORD_TABLE_COLUMN) ||
+           css_display_spells(display, CSS_KEYWORD_TABLE_COLUMN_GROUP);
 }
 
 bool css_transform_is_transformable(lxb_dom_element_t *el)
 {
     lxb_dom_element_t *parent;
-    char *d;
+    CssDisplay d;
     bool out;
 
     DCHECK(el != NULL, "css-transforms-1 §2 Terminology's transformable-element question was asked with no "
@@ -50,10 +51,7 @@ bool css_transform_is_transformable(lxb_dom_element_t *el)
               "special case of the CSS one");
     /* A RELEASE BUILD CANNOT CLASSIFY AN SVG ELEMENT, so it answers out of the FIRST category below —
        the one this engine models — exactly as every other member past a DFAIL in this tree does. */
-    d = css_computed_value(el, "display");
-    DCHECK(d != NULL, "the cascade produced no computed `display` for an element whose transformability was "
-                      "asked — the UA layer answers `inline` for every element it does not name, so this "
-                      "cannot be unset");
+    d = css_computed_display(el);
     /* "all elements whose layout is GOVERNED BY THE CSS BOX MODEL" is the category's opening clause, and an
        element that generates no box is outside it before any exclusion is reached: css-display-3 §2.5 "Box
        Generation: the none and contents keywords" gives `contents` no box of its own and `none` no box at all
@@ -61,7 +59,7 @@ bool css_transform_is_transformable(lxb_dom_element_t *el)
        below — those name boxes that EXIST and that a transform does not apply to — and it matters for the
        ancestor walk, where a `display: contents` wrapper between a rotated `div` and its child must not stop
        the walk and must not be reported as the rotated element either. */
-    if (strcmp(d, "none") == 0 || strcmp(d, "contents") == 0) out = false;
+    if (d.kind == CSS_DISPLAY_BOX) out = false;
     /* "except for … table-column boxes, and table-column-group boxes" */
     else if (css_tr_is_column_box(d)) out = false;
     /* "except for NON-REPLACED INLINE BOXES". An inline box is css-display's `inline` outer type with a `flow`
@@ -70,9 +68,8 @@ bool css_transform_is_transformable(lxb_dom_element_t *el)
        half is HTML §15.4 "Replaced elements"' question and core/layout/replaced_element.h answers it from the
        element's actual state, which is what makes a loading `<img>` transformable and the same `<img>` broken
        with an `alt` present not. */
-    else if (strcmp(d, "inline") == 0) out = replaced_element_of(el).replaced;
+    else if (css_display_spells(d, CSS_KEYWORD_INLINE)) out = replaced_element_of(el).replaced;
     else out = true;
-    free(d);
     return out;
 }
 

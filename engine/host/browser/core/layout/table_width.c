@@ -246,11 +246,10 @@ static void tw_distribute(CssPx *cols, const TableColumnWidth *head, size_t n, C
    site. */
 static void tw_require_table_box(lxb_dom_element_t *table)
 {
-    char *display = tw_computed(table, "display");
+    CssDisplay display = css_computed_display(table);
     bool is_table_box = table_box_kind_generates_table_box(table_box_kind(display));
     char nbuf[160];
 
-    free(display);
     if (is_table_box) return;
     DFAILF("%s: CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property is stated over a TABLE "
            "box — both of its final rules name \"the 'table' or 'inline-table' element\" — and this box's "

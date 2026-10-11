@@ -77,16 +77,7 @@ static bool sa_computed_is(lxb_dom_element_t *el, const char *name, const char *
    and telling those apart is exactly what the text-run check below needs. */
 static bool sa_is_block_container(lxb_dom_element_t *el)
 {
-    char *d = css_computed_value(el, "display");
-    char nbuf[160];
-    bool container;
-
-    DCHECKF(d != NULL, "%s: the cascade produced no computed `display` for an element — the UA layer answers "
-                       "`inline` for every element it does not name, so this cannot be unset",
-                       box_subject(el, nbuf, sizeof nbuf));
-    container = block_flow_display_is_block_container(d);
-    free(d);
-    return container;
+    return block_flow_display_is_block_container(css_computed_display(el));
 }
 
 /* §2's OVERFLOW DIRECTIONS, reduced to the one bit each axis needs: does the ENDING edge of the scrolling area
@@ -201,7 +192,7 @@ static bool sa_excluded(lxb_dom_element_t *el, lxb_dom_element_t *descendant)
    assert, naming CSSOM §9 and core/css/css_property_applies.c for a question this file asked. */
 static bool sa_is_non_replaced_inline(lxb_dom_element_t *el)
 {
-    return sa_computed_is(el, "display", "inline") && !replaced_element_of(el).replaced;
+    return css_computed_display_is(el, CSS_KEYWORD_INLINE) && !replaced_element_of(el).replaced;
 }
 
 /* ONE DESCENDANT'S CONTRIBUTION — the margin edge §2's table names on the ENDING side of this axis. A margin

@@ -361,7 +361,7 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
     TableBoxRow *rows = NULL;
     ThRowCell *bucket = NULL;
     CssPx used_spacing, declared = css_px(0.0), sum, check_sum, slack;
-    char *display;
+    CssDisplay display;
     bool is_table_box, has_declared, collapsing;
     size_t nrows, r, i;
     char nbuf[160];
@@ -374,9 +374,8 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
            "CSS 2.1 §17.5.3 was handed a grid with no cell array and a non-zero cell count — `table_grid_build` "
            "stores NULL only for a table whose rows generate no cell, so the two have been carried apart since "
            "it answered");
-    display = th_computed(table, "display");
+    display = css_computed_display(table);
     is_table_box = table_box_kind_generates_table_box(table_box_kind(display));
-    free(display);
     if (!is_table_box)
         DFAILF("%s: CSS 2.1 §17.5.3 Table height algorithms is stated over a TABLE box — \"The height of a "
                "table is given by the 'height' property for the 'table' or 'inline-table' element\" — and this "

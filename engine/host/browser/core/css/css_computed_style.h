@@ -27,6 +27,7 @@ typedef union {
     CssLineHeight    line_height;     /* CSS_COMPUTED_SHAPE_LINE_HEIGHT */
     CssBorderSpacing border_spacing;  /* CSS_COMPUTED_SHAPE_BORDER_SPACING */
     CssKeyword       keyword;         /* CSS_COMPUTED_SHAPE_KEYWORD */
+    CssDisplay       display;         /* CSS_COMPUTED_SHAPE_DISPLAY */
 } CssComputedValue;
 
 typedef struct CssComputedStyle CssComputedStyle;

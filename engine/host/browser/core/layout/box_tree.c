@@ -37,15 +37,12 @@ static const char *bt_subject(BoxTreeChild c, char *buf, size_t cap)
    so a `none` element answers FALSE and stays in the sequence for each walk's own arm to skip. */
 static bool bt_is_spliced(lxb_dom_node_t *n)
 {
-    char *d;
+    CssDisplay d;
     bool spliced;
 
     if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
-    d = css_computed_value(lxb_dom_interface_element(n), "display");
-    DCHECK(d != NULL, "the cascade produced no computed `display` — the UA layer answers `inline` for every "
-                      "element it does not name, so this cannot be unset");
-    spliced = strcmp(d, "contents") == 0;
-    free(d);
+    d = css_computed_display(lxb_dom_interface_element(n));
+    spliced = css_display_spells(d, CSS_KEYWORD_CONTENTS);
     return spliced;
 }
 

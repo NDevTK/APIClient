@@ -36,6 +36,8 @@
 
 #include <lexbor/dom/dom.h>
 
+#include "core/css/css_display.h"
+
 /* §17.2's box types, keyed by the `display` value that assigns each one's table formatting rules, plus
    `TABLE_BOX_NOT_A_TABLE_BOX` for every other value (including the anonymous inline box of a text run, which
    §17.2.1's first stage names). */
@@ -53,8 +55,8 @@ typedef enum {
     TABLE_BOX_CAPTION          /* 'table-caption'      (HTML: CAPTION) */
 } TableBoxKind;
 
-/* The computed `display` read as one of §17.2's box types. `display` must not be NULL. */
-TableBoxKind table_box_kind(const char *display);
+/* The computed `display` read as one of §17.2's box types. */
+TableBoxKind table_box_kind(CssDisplay display);
 
 /* §17.2.1's defined terms, one predicate each, so its rules can be checked against the text. */
 

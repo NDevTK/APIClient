@@ -23,7 +23,9 @@ typedef enum {
     /* CSS 2.1 §17.6.1 "The separated borders model": "two absolute lengths" */
     CSS_COMPUTED_SHAPE_BORDER_SPACING,
     /* "specified keyword": one of the row's keyword set, a `CssKeyword` */
-    CSS_COMPUTED_SHAPE_KEYWORD
+    CSS_COMPUTED_SHAPE_KEYWORD,
+    /* css-display-3 §2's "pair of keywords ... or a <display-internal> or <display-box> keyword": a CssDisplay */
+    CSS_COMPUTED_SHAPE_DISPLAY
 } CssComputedShape;
 
 /* The range a property's grammar admits for its numeric values, which css-values-4 §9.1 "Numeric Functions"
@@ -77,6 +79,7 @@ typedef enum {
     X(LINE_HEIGHT,         "line-height",         LXB_CSS_PROPERTY_LINE_HEIGHT,    LINE_HEIGHT, NON_NEGATIVE, NONE) \
     X(BORDER_SPACING,      "border-spacing",      LXB_CSS_PROPERTY__UNDEF,         BORDER_SPACING, NON_NEGATIVE, NONE) \
     X(POSITION,            "position",            LXB_CSS_PROPERTY_POSITION,       KEYWORD, ALL, POSITION)        \
+    X(DISPLAY,             "display",             LXB_CSS_PROPERTY_DISPLAY,        DISPLAY, ALL, DISPLAY)         \
     X(BOX_SIZING,          "box-sizing",          LXB_CSS_PROPERTY_BOX_SIZING,     KEYWORD, ALL, BOX_SIZING)      \
     X(CLEAR,               "clear",               LXB_CSS_PROPERTY_CLEAR,          KEYWORD, ALL, CLEAR)           \
     CSS_PROPERTY_TEXT_LIST(X)
@@ -86,7 +89,6 @@ typedef enum {
 #define CSS_PROPERTY_TEXT_LIST(X)                                                                     \
     X(OVERFLOW_X,          "overflow-x",          LXB_CSS_PROPERTY_OVERFLOW_X,     TEXT, ALL, UNTYPED)            \
     X(OVERFLOW_Y,          "overflow-y",          LXB_CSS_PROPERTY_OVERFLOW_Y,     TEXT, ALL, UNTYPED)            \
-    X(DISPLAY,             "display",             LXB_CSS_PROPERTY_DISPLAY,        TEXT, ALL, UNTYPED)            \
     X(FLOAT,               "float",               LXB_CSS_PROPERTY_FLOAT,          TEXT, ALL, UNTYPED)            \
     X(WHITE_SPACE,         "white-space",         LXB_CSS_PROPERTY_WHITE_SPACE,    TEXT, ALL, UNTYPED)            \
     X(DIRECTION,           "direction",           LXB_CSS_PROPERTY_DIRECTION,      TEXT, ALL, UNTYPED)            \

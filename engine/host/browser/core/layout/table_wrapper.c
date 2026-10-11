@@ -5,16 +5,12 @@
 #include "check.h"
 #include "core/layout/table_wrapper.h"
 
-bool table_wrapper_generates(const char *display)
+bool table_wrapper_generates(CssDisplay display)
 {
-    DCHECK(display != NULL,
-           "CSS 2.1 §17.4's table wrapper box was asked about a NULL computed `display`. §17.2 The CSS table "
-           "model assigns table formatting rules by that value and by nothing else, so there is no table and "
-           "therefore no wrapper to answer for without one");
-    return strcmp(display, "table") == 0 || strcmp(display, "inline-table") == 0;
+    return css_display_spells(display, CSS_KEYWORD_TABLE) || css_display_spells(display, CSS_KEYWORD_INLINE_TABLE);
 }
 
-bool table_wrapper_is_block_level(const char *display)
+bool table_wrapper_is_block_level(CssDisplay display)
 {
     DCHECK(table_wrapper_generates(display),
            "CSS 2.1 §17.4's \"'block' box if the table is block-level, and an 'inline-block' box if the table "
@@ -22,7 +18,7 @@ bool table_wrapper_is_block_level(const char *display)
            "here are BLOCK-LEVEL and INLINE-LEVEL, and neither of them is \"there is no box\" — a caller that "
            "let this predicate answer that third question would read a false as \"inline-level\" for every "
            "element in the document. `table_wrapper_generates` is the question that was skipped");
-    return strcmp(display, "table") == 0;
+    return css_display_spells(display, CSS_KEYWORD_TABLE);
 }
 
 bool table_wrapper_owns_property(const char *name)

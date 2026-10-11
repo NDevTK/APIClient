@@ -9,6 +9,7 @@
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_DISPLAY_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "core/css/css_keyword.h"
 
@@ -38,7 +39,14 @@ CssDisplay css_display_blockify(CssDisplay d);
    backwards-compatible, then shortest"). OWNED. */
 char *css_display_serialize(CssDisplay d);
 
+/* The serialization above written into `buf` (`cap` bytes), for a crash message: no allocation. Answers `buf`. */
+const char *css_display_name(CssDisplay d, char *buf, size_t cap);
+
 /* Is it a box of `<display-box>` keyword `k` (`none`, `contents`)? */
 bool css_display_is_box(CssDisplay d, CssKeyword k);
+
+/* Is it the value the single keyword `k` spells — `inline-block` for `inline flow-root`, `list-item` for `block
+   flow list-item`, `table-cell` for itself? `k` must be a one-keyword `display` value, which is asserted. */
+bool css_display_spells(CssDisplay d, CssKeyword k);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_CSS_CSS_DISPLAY_H */

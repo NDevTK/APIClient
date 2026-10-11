@@ -287,7 +287,7 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
 {
     lxb_dom_node_t *n;
     lxb_dom_element_t *el;
-    char *d;
+    CssDisplay d;
     bool inline_box;
 
     /* The run's end, tested first at every depth: it is §9.2.1.1's block-level box that "becomes a sibling of
@@ -328,7 +328,7 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
     el = lxb_dom_interface_element(n);
     /* css-display-3 §2.5 "Box Generation: the none and contents keywords": with `display: none`, "The element
        and its descendants generate no boxes or text sequences." */
-    if (is_computed_is(el, "display", "none")) return;
+    if (css_computed_display_is(el, CSS_KEYWORD_NONE)) return;
     /* Out of flow contributes nothing and introduces no break ("out-of-flow boxes and inline box boundaries do
        not introduce a forced line break or soft wrap opportunity in the flow"): CSS 2.2 §9.3.1 takes it out of
        normal flow, as core/layout/line_box.c also skips it. */
@@ -351,11 +351,10 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
        'position', and 'float'"' order as in core/layout/block_flow.c, so a floated `img` is not put in the
        run. */
     if (replaced_element_of(el).replaced) { is_atomic_replaced(r->m, el); return; }
-    d = is_computed(el, "display");
-    inline_box = strcmp(d, "inline") == 0;
+    d = css_computed_display(el);
+    inline_box = css_display_spells(d, CSS_KEYWORD_INLINE);
     /* Freed before either crash: a `DFAIL` compiles out in release and control falls through, so a `free` on
        each side would double free (see `tr_wraps`). */
-    free(d);
     if (inline_box) {
         /* HTML §15.3.4 "Phrasing content" first: a `br` changes the partition, not a term. The max-content size
            formats content "without breaking lines other than where explicit line breaks occur" (CSS 2.2
@@ -805,12 +804,11 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
     /* §9.4.2's condition ("an inline formatting context is established by a block container box that contains
        no block-level boxes") applies only to block containers; other boxes are dispatched to their modules. */
     {
-        char *d = is_computed(el, "display");
+        CssDisplay d = css_computed_display(el);
         bool container = block_flow_display_is_block_container(d);
         bool flex = flex_item_display_is_flex_container(d);
         bool table = table_box_kind_generates_table_box(table_box_kind(d));
 
-        free(d);
         /* css-flexbox-1 §3 "Flex Containers: the flex and inline-flex display values"' box: css-flexbox-1 §9.9's
            answer is the same pair in the same box. */
         if (flex) return flex_intrinsic_inline_sizes(el);

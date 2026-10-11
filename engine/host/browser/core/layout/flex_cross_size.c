@@ -338,16 +338,14 @@ static CssPx fx_anonymous_outer_hypothetical_cross(lxb_dom_element_t *container,
 static void fx_require_supported_container(lxb_dom_element_t *container)
 {
     char nbuf[160], wbuf[64];
-    char *display;
+    CssDisplay display;
     bool is_container;
 
     DCHECK(container != NULL,
            "css-flexbox-1 §9.4 \"Cross Size Determination\"' cross sizing was asked for with no CONTAINER "
            "element");
-    display = css_computed_value(container, "display");
-    DCHECK(display != NULL, "the cascade produced no computed `display` for a box a layout is walking");
+    display = css_computed_display(container);
     is_container = flex_item_display_is_flex_container(display);
-    free(display);
     DCHECK(is_container,
            "css-flexbox-1 §9.4 \"Cross Size Determination\"' cross sizing was asked of a box that is "
            "not a FLEX CONTAINER. §3 \"Flex Containers: the flex and inline-flex display values\" is the two "

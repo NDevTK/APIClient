@@ -130,13 +130,13 @@ bool list_marker_box_generated(lxb_dom_element_t *el)
 
     /* css-lists-3 §3.1 "The ::marker Pseudo-Element"'s last sentence: "Marker boxes only exist for list items: on
        any other element, the ::marker pseudo-element’s content property must compute to none, which suppresses
-       its creation." An exact comparison with css-display-3 §2.3 "Generating Marker Boxes: the list-item
-       keyword"'s keyword: the two-value `block flow list-item` form is not a computed value this engine
-       produces (core/css/css_computed_value.c's `blockified` refuses it). */
-    v = lm_computed(el, "display");
-    yes = strcmp(v, "list-item") == 0;
-    free(v);
-    if (!yes) return false;
+       its creation." A list item is a box whose computed `display` carries css-display-3 §2.3 "Generating Marker
+       Boxes: the list-item keyword"'s flag, whatever its outer and inner types. */
+    {
+        CssDisplay d = css_computed_display(el);
+
+        if (!(d.kind == CSS_DISPLAY_PAIR && d.list_item)) return false;
+    }
 
     /* §3.2 is ordered ("the first of these conditions that is true"), so each arm is reached only after the
        ones above it are false. */
@@ -165,15 +165,11 @@ ListMarkerPosition list_marker_position(lxb_dom_element_t *list_item)
            "css-lists-3 §3.5 \"Positioning Markers: The list-style-position property\" was asked where the "
            "marker box of an element that has none is placed — §3.1 generates one only for a list item, and "
            "§3.2's last arm gives some list items none");
-    /* §3.5's inline-box arm cannot apply: the one `list-item` value this engine computes is the one-keyword
-       form, whose outer display is block and inner display flow (css-display-3 §2.3 "Generating Marker
-       Boxes: the list-item keyword"), so the list item is a block container. */
-    v = lm_computed(list_item, "display");
-    DCHECKF(strcmp(v, "list-item") == 0,
+    /* §3.5's inline-box arm: a list item whose outer display type is not block. */
+    DCHECKF(css_computed_display(list_item).outer == CSS_KEYWORD_BLOCK,
             "%s: css-lists-3 §3.5 reads `outside` as \"equivalent to inside\" for a list item that is an inline "
-            "box, and this list item's computed `display` is not the block-level `list-item` — BUILD §3.5's "
-            "inline-box arm here", box_subject(list_item, bbuf, sizeof bbuf));
-    free(v);
+            "box, and this list item's computed `display` is not block-level — BUILD §3.5's inline-box arm here",
+            box_subject(list_item, bbuf, sizeof bbuf));
     (void) bbuf;
     v = lm_computed(list_item, "list-style-position");
     inside = strcmp(v, "inside") == 0;

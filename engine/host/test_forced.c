@@ -25581,9 +25581,9 @@ static void tf_bb_arm(TfBbShape s)
     BlockFlowAnonBox *v = NULL;
     LineBoxFragment *frags = NULL;
     lxb_dom_element_t *est = NULL;
-    char *broken = css_computed_value(s.broken, "display");
-    char *block = css_computed_value(s.block, "display");
-    char *container = css_computed_value(s.container, "display");
+    char *broken = css_display_serialize(css_computed_display(s.broken));
+    char *block = css_display_serialize(css_computed_display(s.block));
+    char *container = css_display_serialize(css_computed_display(s.container));
     char ebuf[160];
     size_t n, nfrag;
     bool ok = broken != NULL && block != NULL && container != NULL && strcmp(broken, "inline") == 0 &&
@@ -26168,7 +26168,7 @@ static void document_paint_boxless_root_selftest(JSContext *ctx)
     CHECK(root != NULL, "the markup this file wrote for css-display-3 §2.5's `none` parsed into a document "
                         "with no root element — HTML §13.2.6 \"Tree construction\" generates an `html` element "
                         "for markup that names none, and this markup names one");
-    display = css_computed_value(root, "display");
+    display = css_display_serialize(css_computed_display(root));
     CHECK(display != NULL && strcmp(display, "none") == 0,
           "the root element this file declared `display:none` on has some other computed value. css-display-3 "
           "§2.7 \"Automatic Box Type Transformations\" is what keeps it: \"This has no effect on display types "
@@ -26223,7 +26223,7 @@ static void document_paint_boxless_root_selftest(JSContext *ctx)
     root = lxb_dom_document_element(lxb_dom_interface_document(dom));
     CHECK(root != NULL, "the markup this file wrote for css-display-3 §2.5's `contents` parsed into a document "
                         "with no root element");
-    display = css_computed_value(root, "display");
+    display = css_display_serialize(css_computed_display(root));
     CHECK(display != NULL && strcmp(display, "block") == 0,
           "the root element this file declared `display:contents` on does not compute to `block`. "
           "css-display-3 §2.8 \"The Root Element's Principal Box\" says \"Additionally, a display of contents "
@@ -26294,7 +26294,7 @@ static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const
           "the markup this file wrote for css-flexbox-1 §4 \"Flex Items\" parsed into a document with no "
           "`body` — HTML §13.2.6 \"Tree construction\" generates one for markup that names none, and this "
           "markup names one");
-    display = css_computed_value(body, "display");
+    display = css_display_serialize(css_computed_display(body));
     CHECK(display != NULL && strcmp(display, "flex") == 0,
           "the element this file declared `display:flex` on has some other computed value, so the sequence "
           "measured below is not a FLEX container's child list at all and the two rows would differ for a "
@@ -26326,7 +26326,7 @@ static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const
     CHECK(first != NULL && first->next != NULL && first->next->type == LXB_DOM_NODE_TYPE_ELEMENT,
           "the markup this file wrote for css-flexbox-1 §4 did not parse into text followed by an element — "
           "the second DOM child of the container is what carries the one keyword this pair varies");
-    display = css_computed_value(lxb_dom_interface_element(first->next), "display");
+    display = css_display_serialize(css_computed_display(lxb_dom_interface_element(first->next)));
     CHECKF(display != NULL && strcmp(display, span_computed) == 0,
            "the element this file declared `display:%s` on computed `%s`, where "
            "css-display-3 §2.7 \"Automatic Box Type Transformations\" makes it `%s`. The two documents this "

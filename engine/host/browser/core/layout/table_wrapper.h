@@ -18,13 +18,15 @@
 
 #include <stdbool.h>
 
+#include "core/css/css_display.h"
+
 /* Whether an element with this computed `display` generates a table wrapper box: true for `table` and
-   `inline-table`, §17.2 The CSS table model's two table values. `display` must not be NULL. */
-bool table_wrapper_generates(const char *display);
+   `inline-table`, §17.2 The CSS table model's two table values. */
+bool table_wrapper_generates(CssDisplay display);
 
 /* Whether that wrapper is block-level (§17.4): `table` true, `inline-table` false. A wrapper must exist
    (asserted), since "not block-level" and "no box" are different answers. */
-bool table_wrapper_is_block_level(const char *display);
+bool table_wrapper_is_block_level(CssDisplay display);
 
 /* §17.4's declaration split: is the computed value of `name` on the table element used on the wrapper (true)
    or on the table box (false)? The predicate is §17.4's closed list: "The computed values of properties

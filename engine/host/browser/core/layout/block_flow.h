@@ -108,6 +108,7 @@
 
 #include <lexbor/dom/dom.h>
 
+#include "core/css/css_display.h"
 #include "core/css/css_length.h"
 #include "core/layout/box_tree.h"
 
@@ -116,7 +117,7 @@
    containing block. It is exported because BOTH of those callers ask it and the list is not "everything
    block-level": an `inline-block` is a block container and is not block-level, and a TABLE box is block-level
    and is not a block container (§17.4 makes the CELL and the CAPTION the block containers inside one). */
-bool block_flow_display_is_block_container(const char *display);
+bool block_flow_display_is_block_container(CssDisplay display);
 
 /* CSS 2.2 §9.2.2.1 "Anonymous inline boxes"'s WHITE-SPACE RULE for one TEXT child of a block container:
    "White space content that would subsequently be collapsed away according to the 'white-space' property does

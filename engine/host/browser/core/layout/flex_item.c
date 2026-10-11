@@ -34,10 +34,9 @@ static bool fi_computed_is(lxb_dom_element_t *el, const char *name, const char *
     return same;
 }
 
-bool flex_item_display_is_flex_container(const char *display)
+bool flex_item_display_is_flex_container(CssDisplay display)
 {
-    DCHECK(display != NULL, "css-flexbox-1 §3's flex-container test was asked about a NULL computed `display`");
-    return strcmp(display, "flex") == 0 || strcmp(display, "inline-flex") == 0;
+    return css_display_spells(display, CSS_KEYWORD_FLEX) || css_display_spells(display, CSS_KEYWORD_INLINE_FLEX);
 }
 
 /* The container's `display` is asserted at every entry reading a property §5 declares `Applies to: flex
@@ -45,14 +44,13 @@ bool flex_item_display_is_flex_container(const char *display)
    there. */
 static void fi_require_container(lxb_dom_element_t *el, const char *section)
 {
-    char *d;
+    CssDisplay d;
     bool container;
     char nbuf[160];
 
     DCHECKF(el != NULL, "css-flexbox-1 %s was asked about a flex container with no element", section);
-    d = fi_computed(el, "display");
+    d = css_computed_display(el);
     container = flex_item_display_is_flex_container(d);
-    free(d);
     DCHECKF(container,
             "%s: css-flexbox-1 %s states its property `Applies to: flex containers`, and this element's "
             "computed `display` is neither `flex` nor `inline-flex`. §3 \"Flex Containers: the flex and "
@@ -147,7 +145,7 @@ static bool fi_invisible_to_a_text_sequence(lxb_dom_node_t *n)
     case LXB_DOM_NODE_TYPE_DOCUMENT_TYPE:
         return true;
     case LXB_DOM_NODE_TYPE_ELEMENT:
-        return fi_computed_is(lxb_dom_interface_element(n), "display", "none");
+        return css_computed_display_is(lxb_dom_interface_element(n), CSS_KEYWORD_NONE);
     default:
         return false;
     }
@@ -229,11 +227,10 @@ FlexItemChildKind flex_item_child_kind(lxb_dom_element_t *container, lxb_dom_nod
     switch (child->type) {
     case LXB_DOM_NODE_TYPE_ELEMENT: {
         lxb_dom_element_t *el = lxb_dom_interface_element(child);
-        char *d = fi_computed(el, "display");
+        CssDisplay d = css_computed_display(el);
 
-        if (strcmp(d, "none") == 0) { free(d); return FLEX_ITEM_CHILD_NONE; }
-        if (strcmp(d, "contents") == 0) {
-            free(d);
+        if (css_display_spells(d, CSS_KEYWORD_NONE)) return FLEX_ITEM_CHILD_NONE;
+        if (css_display_spells(d, CSS_KEYWORD_CONTENTS)) {
             DFAILF("%s: css-display-3 §2.5 \"Box Generation: the none and contents keywords\" gives this child "
                    "`display: contents`: \"The element itself does not generate any boxes, but its children "
                    "and pseudo-elements still generate boxes and text sequences as normal.\" So this element "
@@ -259,7 +256,6 @@ FlexItemChildKind flex_item_child_kind(lxb_dom_element_t *container, lxb_dom_nod
                    box_subject(el, nbuf, sizeof nbuf));
             return FLEX_ITEM_CHILD_NONE;
         }
-        free(d);
         /* §4.1 "Absolutely-Positioned Flex Children": "As it is out-of-flow, an absolutely-positioned child of
            a flex container does not participate in flex layout." A float is not asked about: §4's example
            marks a `float: left` child a flex item ("floating is ignored"). */

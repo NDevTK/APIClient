@@ -14,15 +14,6 @@
 #include "core/layout/box_tree.h"
 #include "core/layout/table_box.h"
 
-static char *tb_computed(lxb_dom_element_t *el, const char *name)
-{
-    char *v = css_computed_value(el, name);
-
-    DCHECK(v != NULL, "the cascade produced no computed value for a property this engine models — every one of "
-                      "them is in lexbor's registry with an initial value, so the last layer always answers");
-    return v;
-}
-
 /* One growth step for the three arrays this file builds. Allocation failure is a `CHECK`: a dropped row would
    be wrong geometry in release (a data-integrity failure), not an absent one. */
 static void *tb_reserve(void *v, size_t n, size_t *cap, size_t esz)
@@ -40,28 +31,24 @@ static void *tb_reserve(void *v, size_t n, size_t *cap, size_t esz)
 
 /* ---- §17.2's box types ------------------------------------------------------------------------------------ */
 
-TableBoxKind table_box_kind(const char *display)
+TableBoxKind table_box_kind(CssDisplay display)
 {
-    static const struct { const char *value; TableBoxKind kind; } MAP[] = {
-        { "table", TABLE_BOX_TABLE },
-        { "inline-table", TABLE_BOX_INLINE_TABLE },
-        { "table-row-group", TABLE_BOX_ROW_GROUP },
-        { "table-header-group", TABLE_BOX_HEADER_GROUP },
-        { "table-footer-group", TABLE_BOX_FOOTER_GROUP },
-        { "table-row", TABLE_BOX_ROW },
-        { "table-cell", TABLE_BOX_CELL },
-        { "table-column", TABLE_BOX_COLUMN },
-        { "table-column-group", TABLE_BOX_COLUMN_GROUP },
-        { "table-caption", TABLE_BOX_CAPTION },
+    static const struct { CssKeyword value; TableBoxKind kind; } MAP[] = {
+        { CSS_KEYWORD_TABLE, TABLE_BOX_TABLE },
+        { CSS_KEYWORD_INLINE_TABLE, TABLE_BOX_INLINE_TABLE },
+        { CSS_KEYWORD_TABLE_ROW_GROUP, TABLE_BOX_ROW_GROUP },
+        { CSS_KEYWORD_TABLE_HEADER_GROUP, TABLE_BOX_HEADER_GROUP },
+        { CSS_KEYWORD_TABLE_FOOTER_GROUP, TABLE_BOX_FOOTER_GROUP },
+        { CSS_KEYWORD_TABLE_ROW, TABLE_BOX_ROW },
+        { CSS_KEYWORD_TABLE_CELL, TABLE_BOX_CELL },
+        { CSS_KEYWORD_TABLE_COLUMN, TABLE_BOX_COLUMN },
+        { CSS_KEYWORD_TABLE_COLUMN_GROUP, TABLE_BOX_COLUMN_GROUP },
+        { CSS_KEYWORD_TABLE_CAPTION, TABLE_BOX_CAPTION },
     };
     size_t i;
 
-    DCHECK(display != NULL,
-           "CSS 2.1 §17.2's box-type question was asked about a NULL computed `display`. The section assigns "
-           "table formatting rules by that value and by nothing else, so there is no box to classify without "
-           "one");
     for (i = 0; i < COUNTOF(MAP); i++)
-        if (strcmp(display, MAP[i].value) == 0) return MAP[i].kind;
+        if (css_display_spells(display, MAP[i].value)) return MAP[i].kind;
     return TABLE_BOX_NOT_A_TABLE_BOX;
 }
 
@@ -179,11 +166,10 @@ static size_t tb_children(lxb_dom_element_t *parent, TbChild **out)
 
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
             lxb_dom_element_t *el = lxb_dom_interface_element(n);
-            char *d = tb_computed(el, "display");
-            bool none = strcmp(d, "none") == 0;
+            CssDisplay d = css_computed_display(el);
+            bool none = css_display_spells(d, CSS_KEYWORD_NONE);
 
             kind = table_box_kind(d);
-            free(d);
             if (none) continue;
             /* No `contents` arm: box_tree.h replaces such an element by its contents (css-display-3 §2.5) and
                asserts it never yields one. The `none` arm above is CSS 2 §9.2's. */
@@ -396,13 +382,12 @@ static void tb_visit_group(lxb_dom_element_t *group, TableBoxKind gk, TbRowSink 
 /* The table box's own kind, with the caller's classification asserted rather than re-decided. */
 static TableBoxKind tb_table_kind(lxb_dom_element_t *table, const char *asked)
 {
-    char *d;
+    CssDisplay d;
     TableBoxKind tk;
     char nbuf[160];
 
-    d = tb_computed(table, "display");
+    d = css_computed_display(table);
     tk = table_box_kind(d);
-    free(d);
     DCHECKF(table_box_kind_generates_table_box(tk),
             "%s: CSS 2.1 §17.2's %s were asked of an element that does not generate a TABLE box — its computed "
             "`display` is neither `table` nor `inline-table`. Every rule this component runs is stated over "
@@ -549,10 +534,9 @@ lxb_dom_element_t *table_box_table_of(lxb_dom_element_t *internal)
 
     DCHECK(internal != NULL, "CSS 2.1 §17.2's box nesting was asked for the table box of no element");
     {
-        char *d = tb_computed(internal, "display");
+        CssDisplay d = css_computed_display(internal);
         TableBoxKind k = table_box_kind(d);
 
-        free(d);
         DCHECKF(table_box_kind_is_internal(k),
                 "%s: CSS 2.1 §17.2's box nesting was asked which TABLE BOX this box is inside, and it is not "
                 "an INTERNAL table box — §17.2's own definition is \"A 'table-cell' box, 'table-row' box, row "
@@ -567,10 +551,9 @@ lxb_dom_element_t *table_box_table_of(lxb_dom_element_t *internal)
          n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT;
          n = n->parent) {
         lxb_dom_element_t *anc = lxb_dom_interface_element(n);
-        char *d = tb_computed(anc, "display");
+        CssDisplay d = css_computed_display(anc);
         TableBoxKind k = table_box_kind(d);
 
-        free(d);
         if (table_box_kind_generates_table_box(k)) return anc;
         if (table_box_kind_is_internal(k)) continue;
         DFAILF("%s, whose ancestor %s generates neither a TABLE box nor an INTERNAL table box: CSS 2.1 "

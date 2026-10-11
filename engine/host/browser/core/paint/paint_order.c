@@ -19,19 +19,6 @@
 #include "core/paint/paint_order.h"
 #include "core/paint/stacking_order.h"
 
-/* THE COMPUTED `display`, with the one invariant this file may assert about it — the same one
-   core/paint/stacking_order.c asserts for every keyword property it reads, and for the same reason: `display`
-   is in lexbor's property registry with an initial value, so CSS Cascade §7's last defaulting layer always
-   answers and an absence would be this engine's pipeline rather than the document's. */
-static char *po_display(lxb_dom_element_t *el)
-{
-    char *v = css_computed_value(el, "display");
-
-    DCHECK(v != NULL, "the cascade produced no computed `display` — the property is in lexbor's registry with "
-                      "an initial value, so CSS Cascade §7's last layer cannot come back empty");
-    return v;
-}
-
 /* css-display-3 §2.5 "Box Generation: the none and contents keywords"'s THREE answers, which CSS 2.1 §E.2 needs kept
    apart where core/paint/stacking_order.c could fold two of them together. CSS 2.1 §9.9.1's layers only ever asked
    whether a box EXISTS; a walk asks what to do with the element's CHILDREN, and `none` and `contents` answer
@@ -43,13 +30,11 @@ typedef enum { PO_BOX_NONE, PO_BOX_CONTENTS, PO_BOX_YES } PoBoxGen;
 
 static PoBoxGen po_box_generation(lxb_dom_element_t *el)
 {
-    char *d = po_display(el);
-    PoBoxGen gen = PO_BOX_YES;
+    CssDisplay d = css_computed_display(el);
 
-    if (strcmp(d, "none") == 0) gen = PO_BOX_NONE;
-    else if (strcmp(d, "contents") == 0) gen = PO_BOX_CONTENTS;
-    free(d);
-    return gen;
+    if (css_display_is_box(d, CSS_KEYWORD_NONE)) return PO_BOX_NONE;
+    if (css_display_is_box(d, CSS_KEYWORD_CONTENTS)) return PO_BOX_CONTENTS;
+    return PO_BOX_YES;
 }
 
 /* IS THIS ONE OF CSS 2.1 §17.2 "The CSS table model"'s INTERNAL TABLE BOXES — "A 'table-cell' box,
@@ -73,11 +58,7 @@ static PoBoxGen po_box_generation(lxb_dom_element_t *el)
    over. */
 static bool po_is_internal_table_box(lxb_dom_element_t *el)
 {
-    char *d = po_display(el);
-    bool internal = table_box_kind_is_internal(table_box_kind(d));
-
-    free(d);
-    return internal;
+    return table_box_kind_is_internal(table_box_kind(css_computed_display(el)));
 }
 
 /* IS THIS BOX IN ONE OF CSS 2.1 §9.9.1 "Specifying the stack level: the 'z-index' property"'s THREE POSITIONED
@@ -134,15 +115,9 @@ static bool po_is_inline_level(lxb_dom_element_t *el)
    element that is on this line box, in tree order", which is a walk into the box and not a mark for it. */
 PaintInlineKind paint_order_inline_kind(lxb_dom_element_t *el)
 {
-    char *d;
-    bool atomic;
-
     if (!po_is_inline_level(el)) return PAINT_INLINE_NONE;
     if (replaced_element_of(el).replaced) return PAINT_INLINE_ATOMIC;
-    d = po_display(el);
-    atomic = strcmp(d, "inline") != 0;
-    free(d);
-    return atomic ? PAINT_INLINE_ATOMIC : PAINT_INLINE_NON_ATOMIC;
+    return css_computed_display_is(el, CSS_KEYWORD_INLINE) ? PAINT_INLINE_NON_ATOMIC : PAINT_INLINE_ATOMIC;
 }
 
 /* ---- the member lists CSS 2.1 §E.2's steps are stated over ---------------------------------------------------- */
@@ -460,11 +435,9 @@ static bool po_offer_table_arm(PoTableArm *a, PaintStep background_step)
 static bool po_offer_box(lxb_dom_element_t *el, bool context, PaintOrderVisit visit, void *user)
 {
     char nbuf[160];
-    char *d = po_display(el);
-    TableBoxKind kind = table_box_kind(d);
+    TableBoxKind kind = table_box_kind(css_computed_display(el));
     PoTableArm arm;
 
-    free(d);
     if (!table_box_kind_generates_table_box(kind))
         return visit(context ? PAINT_STEP_CONTEXT_BOX : PAINT_STEP_DESCENDANT_BOX, el, user);
 
@@ -501,10 +474,8 @@ static bool po_offer_box(lxb_dom_element_t *el, bool context, PaintOrderVisit vi
 static bool po_takes_step_2(lxb_dom_element_t *ce)
 {
     char nbuf[160];
-    char *d = po_display(ce);
-    TableBoxKind kind = table_box_kind(d);
+    TableBoxKind kind = table_box_kind(css_computed_display(ce));
 
-    free(d);
     DCHECKF(!table_box_kind_is_internal(kind),
             "%s: a TABLE-INTERNAL box forms a stacking context, and CSS 2.1 states no painting order for one. "
             "CSS 2.1 §E.2's step 2 has two arms — a block equivalent, or a block level table — and a row, a row group, "

@@ -98,282 +98,132 @@ static bool uv_computed_is(lxb_dom_element_t *el, const char *name, const char *
 
 /* css-display §2.4's table display types, plus the two `<display-inside>`/`<display-legacy>` spellings that
    generate a table box. CSS 2.1 §17.5 owns every one of their sizes. */
-static bool uv_display_is_table(const char *d)
+static bool uv_display_is_table(CssDisplay d)
 {
-    static const char *const TABLE[] = {
-        "table", "inline-table", "table-row-group", "table-header-group", "table-footer-group",
-        "table-row", "table-cell", "table-column-group", "table-column", "table-caption",
+    static const CssKeyword TABLE[] = {
+        CSS_KEYWORD_TABLE, CSS_KEYWORD_INLINE_TABLE, CSS_KEYWORD_TABLE_ROW_GROUP, CSS_KEYWORD_TABLE_HEADER_GROUP,
+        CSS_KEYWORD_TABLE_FOOTER_GROUP, CSS_KEYWORD_TABLE_ROW, CSS_KEYWORD_TABLE_CELL, CSS_KEYWORD_TABLE_COLUMN_GROUP,
+        CSS_KEYWORD_TABLE_COLUMN, CSS_KEYWORD_TABLE_CAPTION,
     };
     unsigned i;
 
     for (i = 0; i < sizeof(TABLE) / sizeof(TABLE[0]); i++)
-        if (strcmp(TABLE[i], d) == 0) return true;
+        if (css_display_spells(d, TABLE[i])) return true;
     return false;
 }
 
 /* THE FOUR VALUES css-flexbox-1 §3 AND css-grid-1 §5.1 ADD TO `display`, which is the question asked of a
    PARENT to decide whether this box is an ITEM and of the box ITSELF to decide whether it is a CONTAINER. */
-static bool uv_display_is_flex_or_grid(const char *d)
+static bool uv_display_is_flex_or_grid(CssDisplay d)
 {
-    return d != NULL && (strcmp(d, "flex") == 0 || strcmp(d, "inline-flex") == 0 ||
-                         strcmp(d, "grid") == 0 || strcmp(d, "inline-grid") == 0);
+    return css_display_spells(d, CSS_KEYWORD_FLEX) || css_display_spells(d, CSS_KEYWORD_INLINE_FLEX) ||
+           css_display_spells(d, CSS_KEYWORD_GRID) || css_display_spells(d, CSS_KEYWORD_INLINE_GRID);
 }
 
-/* AND WHICH HALF OF THE ONE PAIR IT IS. §3 and css-grid-1 §5.1 define each pair as the SAME container box
-   differing only in its outer display type — "block-level when placed in flow layout" against "inline-level" —
-   and both modules then size the container "using the rules of the formatting context in which it participates"
-   (css-grid-1 §5.2 "Sizing Grid Containers", css-flexbox-1 §9.2 "Line Length Determination"), so the outer
-   half is the whole of what this component has to know. IT IS DERIVED FROM THE LIST ABOVE AND NOT A SECOND
-   COPY OF IT: a fifth spelling added there is inline-level or block-level by the same test rather than by
-   being remembered in two places, which is the failure the box-type list's own comment describes. The `inline-`
-   prefix is exact over that list and nowhere near a guess about a name — §3 and css-grid-1 §5.1 write
-   the inline-level half of each pair and no other member of the list carries it. */
-static bool uv_display_is_inline_flex_or_grid(const char *d)
-{
-    return uv_display_is_flex_or_grid(d) && strncmp(d, "inline-", 7) == 0;
-}
-
-/* css-display-3 §2.5 "Box Generation: the none and contents keywords" — THE TWO VALUES THAT ARE NOT A BOX TYPE
-   AT ALL, which is a DIFFERENT question from every test below and is why it is asked separately rather than
-   folded into the classification. §2.5 defines each: `contents` is "The element itself does not generate any
-   boxes, but its children and pseudo-elements still generate boxes and text sequences as normal" and `none` is
-   "The element and its descendants generate no boxes or text sequences" — and the section then states the
-   consequence in its own sentence, "Elements with either of these values do not have inner or outer display
-   types, because they don't generate any boxes at all". A BOX TYPE IS EXACTLY AN INNER AND AN OUTER DISPLAY
-   TYPE, so there is nothing here for §10 to select between, and that is not the same fact as a box type this
-   component has not built: the question has no SUBJECT. */
-static bool uv_display_generates_no_box(const char *d)
-{
-    return strcmp(d, "none") == 0 || strcmp(d, "contents") == 0;
-}
-
-/* css-display-3 §2.2's `ruby` INNER display type together with §2.4's four LAYOUT-INTERNAL ruby values, which
-   are ONE list because ONE module sizes all five and CSS 2.1 §10 sizes none of them. §2.2 "Inner Display
-   Layout Models: the flow, flow-root, table, flex, grid, and ruby keywords" gives the container "The element
-   generates a ruby container box and establishes a ruby formatting context"; §2.4 "Layout-Internal Display
-   Types: the table-* and ruby-* keywords" gives the other four "The element is an internal ruby element. It
-   generates the appropriate internal ruby box which participates in a ruby formatting context", under that
-   section's own rule that "both the inner display type and the outer display type of elements using these
-   display values are set to the given keyword".
-   IT IS `uv_display_is_table`'s SHAPE ONE MODULE OVER: a table box is a table box whatever else is true of it
-   and CSS 2.1 §17.5 owns its size; a ruby box is a ruby box and CSS Ruby Annotation Layout Module Level 1 owns
-   its size. The only difference is that §17.5 has a member in the box-type list and CSS Ruby has a crash. */
-static bool uv_display_is_ruby(const char *d)
-{
-    static const char *const RUBY[] = {
-        "ruby", "ruby-base", "ruby-text", "ruby-base-container", "ruby-text-container",
-    };
-    unsigned i;
-
-    for (i = 0; i < COUNTOF(RUBY); i++)
-        if (strcmp(RUBY[i], d) == 0) return true;
-    return false;
-}
-
-/* THE VALUES THAT REALLY ARE BLOCK-LEVEL IN NORMAL FLOW, WRITTEN OUT — and the whole point is that this is a
-   LIST rather than an `else`, because matching none of the other tests is not the same fact as being
-   block-level. Each entry is one sentence of css-display-3 and none of them is a resemblance:
-     - `block` — css-display-3 §2.1 "Outer Display Roles for Flow Layout: the block, inline, and run-in
-       keywords": "The
-       element generates a box that is block-level when placed in flow layout".
-     - `flow` and `flow-root` — a bare <display-inside> keyword, whose outer type §2.2 "Inner Display Layout
-       Models: the flow, flow-root, table, flex, grid, and ruby keywords" defaults for it: "the element's outer
-       display type defaults to block—except for ruby, which defaults to inline". `flow`'s own definition then
-       says "Otherwise it generates a block container box", which IS §10.3.3's box. THE EXCEPTION IN THAT
-       SENTENCE IS WHY `ruby` IS NOT ON THIS LIST, and it is not a near miss — a bare `display: ruby` is
-       `inline ruby`, so the `else` this list replaces was wrong about the OUTER type as well as the inner one,
-       which is the identical failure the inline-level flex and grid containers arrived through.
-     - `list-item` — §2.3 "Generating Marker Boxes: the list-item keyword": "If no outer display type value is
-       specified, the principal box's outer display type defaults to block". Its ::marker is a pseudo-element
-       beside the principal box and does not change which section sizes that box.
-     - `flex` and `grid` — the BLOCK-LEVEL half of each pair, derived in full at the head of this file.
-     - `table-caption` — CSS 2.1 §17.4 Tables in the visual formatting model, in its own sentence: "The caption
-       boxes are block-level boxes that retain their own content, padding, margin, and border areas, and are
-       rendered as normal block boxes inside the table wrapper box." IT IS ONE OF §17.2 The CSS table model's
-       TEN BOX TYPES AND IS STILL NOT §17.5's, and that is the whole reason it is on this list rather than in
-       `uv_display_is_table`'s hands: §17.5.2 Table width algorithms: the 'table-layout' property is written
-       over "the 'table' or 'inline-table' element" and reads a caption only as CAPMIN, an INTRINSIC minimum it
-       feeds into the TABLE's width; §17.5.3 Table height algorithms is written over the table box and its
-       rows. So no section of §17.5 states a caption's own used width or height, and the box §17.4 puts it in
-       is not the table box at all — it is the table WRAPPER box, whose content edge is an ordinary §10.3.3
-       containing block. A caption classified as a table box therefore reached §17.5 for a number §17.5 never
-       states, and every arm it landed in refused it.
-       WHAT MAKES THE PLACE ON THIS LIST SAFE IS THAT THE THREE TESTS BETWEEN §17.2's ARM AND THIS ONE CANNOT
-       FIRE FOR IT, and that is css-display-3 §2.7 "Automatic Box Type Transformations" rather than an
-       ordering hope: core/css/css_computed_value.c blockifies a floated box, an absolutely positioned one and
-       a flex or grid item, and its map sends `table-caption` to `block` in every one of those cases — "if a
-       layout-internal box is blockified, its inner display type converts to flow so that it becomes a block
-       container". So a computed `table-caption` reaching `uv_box_kind` is in normal flow, unfloated,
-       statically positioned and not an item, which is exactly the antecedent §10.3.3 is stated over.
-   `table`, `inline-table` and the eight table-INTERNAL values are absent because `uv_display_is_table` has
-   already taken them, and the inline-level spellings because the three tests before this one have. */
-static bool uv_display_is_block_level_flow(const char *d)
-{
-    static const char *const BLOCK[] = { "block", "flow", "flow-root", "list-item", "flex", "grid",
-                                         "table-caption" };
-    unsigned i;
-
-    for (i = 0; i < COUNTOF(BLOCK); i++)
-        if (strcmp(BLOCK[i], d) == 0) return true;
-    return false;
-}
-
-/* THE BOX TYPE, in the order the questions have to be asked. Each test is a fact about the element that makes
-   the LATER tests inapplicable, which is why the order is the spec's and not a preference:
-     - there is a box at all, which precedes even the table test — see below;
-     - a box CSS 2.1 §17.5 sizes is one whatever else is true of it — which is NINE of §17.2 The CSS table
-       model's ten box types and not all ten, because §17.4 Tables in the visual formatting model takes the
-       CAPTION out of the table box: caption boxes "are rendered as normal block boxes inside the table
-       wrapper box". The caption is therefore §10.3.3's and §10.6.3's like any other block-level box, and it
-       is on `uv_display_is_block_level_flow`'s list with that sentence beside it. The test here is
-       `table_box_kind`'s and not a second spelling of the value, so the day §17.2's list changes this arm
-       changes with it;
-     - a child of a flex or grid container is an ITEM, and being one is what makes `float` compute to `none`
-       for it (css-flexbox-1 §3), so the item test precedes the float test;
-     - an ABSOLUTELY POSITIONED child of a flex container is NOT a flex item (css-flexbox-1 §4.1), so the
-       out-of-flow test precedes the item test;
-     - and `display` is read last because css_computed_value.c has already BLOCKIFIED it for a float, for an
-       absolutely positioned box and for a flex item, so by here it can no longer say `inline` for any of them.
-   WHY THE NO-BOX TEST IS FIRST AND NOT MERELY EARLY. Every other test asks WHICH box, and `position: absolute`
-   or a flex-container parent is a TRUE FACT about an element that generates none — so with the test anywhere
-   below them a `display: none; position: absolute` element was classified `UV_BOX_ABS` without its `display`
-   ever being read. The order is the spec's here too: §2.7 "Automatic Box Type Transformations" says of
-   blockification and inlinification that "This has no effect on display types that generate no box at all,
-   such as none or contents", so those two values SURVIVE every transformation the three tests below rely on
-   having already run, and they are the one answer that cannot be reached by asking a different question first.
-   THE LAST TEST IS THE OUTER DISPLAY TYPE OF A FLEX OR GRID CONTAINER, and it has to be asked BEFORE the
-   block-level list because that list is where a container's block-level half belongs. css-flexbox-1 §3's and
-   css-grid-1 §5.1's last paragraphs are what make the test the display string alone: each amends CSS 2.1
-   §9.7's table with a row sending `inline-flex` to `flex` and `inline-grid` to `grid`, so blockification —
-   which the three tests above have also already left through — has taken the inline-level spellings away from
-   every box that is not genuinely inline-level in flow layout, and a surviving `inline-flex` here IS an atomic
-   inline-level box.
-   AND THE TAIL IS A LIST CLOSED BY CRASHES RATHER THAN AN `else`, which is the invariant this function now
-   carries: it is TOTAL. Every arm either names the section that sizes the box or aborts naming the module that
-   does, so a `display` value nothing here understands can no longer come back as a NUMBER computed by
-   §10.3.3's constraint equation — the one failure the box-type list's own comment above says this file has no
-   way to notice. */
+/* The box type, in the order the questions have to be asked; each answered test makes the later ones
+   inapplicable:
+     - there is a box at all. css-display-3 §2.7 "Automatic Box Type Transformations" says blockification "has
+       no effect on display types that generate no box at all, such as none or contents", so `none` and
+       `contents` survive every transformation below and are refused before any other fact (a `position:
+       absolute` or an item parent) can classify a box that does not exist;
+     - a box CSS 2.1 §17.5 sizes, which is nine of §17.2's ten box types: §17.4 puts the caption in the table
+       wrapper box, where it is "rendered as normal block boxes", so it is §10.3.3's;
+     - out of flow (css-position-3 §2), which precedes the item test because an absolutely positioned child of a
+       flex container is not a flex item (css-flexbox-1 §4.1);
+     - an item, which precedes the float test because `float` does not apply to one (css-flexbox-1 §3);
+     - and then the pair. §2.7 has blockified it for a float, an absolutely positioned box and an item, so what
+       is left is in normal flow, and CSS 2.1 §10.3 selects its section by the outer display type, the inner one
+       deciding only whether an inline-level box is atomic. The tail is closed by crashes rather than an `else`:
+       a box nothing here sizes aborts naming the module that does, never reaching §10.3.3's equation. */
 static UvBox uv_box_kind(lxb_dom_element_t *el)
 {
-    char *display = uv_computed(el, "display");
-    char *parent_display;
-    /* THE RELEASE CONTINUATION OF EVERY `DFAIL` BELOW, named once and here rather than repeated at each arm. A
-       DFAIL is compiled out in release, so each crash arm falls through to whatever this holds — and it holds
-       the value the `else` those arms replace produced, deliberately: picking a DIFFERENT wrong answer for
-       release would be exactly the plausible classification the crashes exist to refuse, and it would change
-       geometry no dev build can exercise. What this function makes impossible is the wrong answer in DEV,
-       which is where the forcing function lives. */
+    CssDisplay display = css_computed_display(el);
+    CssDisplay parent_display;
+    char dbuf[64];
+    /* The release continuation of every `DFAIL` below: the classification the crashes replace, so release
+       geometry does not change under an arm no dev build reaches. */
     UvBox kind = UV_BOX_BLOCK_FLOW;
 
-    if (uv_display_generates_no_box(display)) {
-        DFAILF("CSS 2.1 §10 was asked WHICH of its `width` algorithms sizes an element whose computed "
-               "`display` is `%s`, and css-display-3 §2.5 \"Box Generation: the none and contents keywords\" "
-               "says it has none to choose between: \"Elements with either of these values do not have inner "
-               "or outer display types, because they don't generate any boxes at all\". SO THERE IS NOTHING TO "
-               "BUILD HERE AND THIS IS NOT AN UNBUILT BOX TYPE — the question has no subject, and the defect "
-               "is at the CALLER. core/layout/used_value.h states the precondition this call broke: the caller "
-               "has ALREADY established CSSOM §9 \"Resolved Values\"' two conjuncts, \"If the property applies "
-               "to the element or pseudo-element and the resolved value of the display property is not none or "
-               "contents, then the resolved value is the used value. Otherwise the resolved value is the "
-               "computed value\". TWO PREDICATES IN THIS TREE ALREADY DECIDE THAT SECOND CONJUNCT and the "
-               "route that reached here carries neither — core/css/css_computed_value.c's "
-               "`resolved_display_generates_a_box` guards §9's own arm, and core/dom/element_view.h's "
-               "`element_view_has_box` guards CSSOM VIEW §6's and §7's. GREP BOTH, and give the entry that "
-               "made this call whichever one fits it. A LAYOUT WALK OVER CHILDREN WANTS NEITHER: §2.5 makes a "
-               "`contents` element's CHILDREN the boxes standing in its place, which is a box-tree splice "
-               "rather than a guard, and core/layout/block_flow.c's own `contents` crash asks for exactly that "
-               "flattening",
-               display);
-        free(display);
+    if (display.kind == CSS_DISPLAY_BOX) {
+        DFAILF("CSS 2.1 §10 was asked which of its `width` algorithms sizes an element whose computed `display` "
+               "is `%s`, and css-display-3 §2.5 \"Box Generation: the none and contents keywords\" says "
+               "\"Elements with either of these values do not have inner or outer display types, because they "
+               "don't generate any boxes at all\". The defect is at the caller, which must first establish "
+               "CSSOM §9 \"Resolved Values\"' box conjunct: core/css/css_computed_value.c's "
+               "`resolved_display_generates_a_box` guards §9's arm and core/dom/element_view.h's "
+               "`element_view_has_box` guards CSSOM View's. A layout walk over children wants neither: §2.5 "
+               "makes a `contents` element's children the boxes in its place, a box-tree splice",
+               css_display_name(display, dbuf, sizeof dbuf));
         return kind;
     }
-    /* §17.4's ONE EXCEPTION TO THE RULE ABOVE, asked through core/layout/table_box.h's own classification
-       rather than through a keyword compare: a `table-caption` generates one of §17.2's ten box types and is
-       nevertheless sized by §10, because §17.4 puts it in the WRAPPER beside the table box and none of
-       §17.5's algorithms is stated over it. It falls through to the block-level list below. */
     if (uv_display_is_table(display) && table_box_kind(display) != TABLE_BOX_CAPTION) {
-        free(display);
         return UV_BOX_TABLE;
     }
-    /* css-position §2: `absolute` and `fixed` take the box OUT OF FLOW. `relative` and `sticky` do not — a
-       relatively positioned box is laid out in normal flow and then OFFSET, so §10.3.3 is still its section. */
-    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) {
-        free(display);
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) ||
+        css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) {
         return UV_BOX_ABS;
     }
-    parent_display = css_box_parent_display(lxb_dom_interface_node(el));
-    if (uv_display_is_flex_or_grid(parent_display)) {
-        free(parent_display);
-        free(display);
+    if (css_box_parent_display(lxb_dom_interface_node(el), &parent_display) &&
+        uv_display_is_flex_or_grid(parent_display))
         return UV_BOX_ITEM;
+    if (block_flow_is_floated(el)) return UV_BOX_FLOAT;
+    if (display.kind == CSS_DISPLAY_INTERNAL && display.keyword == CSS_KEYWORD_TABLE_CAPTION)
+        return UV_BOX_BLOCK_FLOW;
+    if ((display.kind == CSS_DISPLAY_PAIR && display.inner == CSS_KEYWORD_RUBY) ||
+        display.kind == CSS_DISPLAY_INTERNAL) {
+        /* §17.2's other internal types left through `UV_BOX_TABLE`, so an internal box here is a ruby one. */
+        DCHECKF(display.kind == CSS_DISPLAY_PAIR || !uv_display_is_table(display),
+                "computed `display: %s` is a layout-internal box that is neither a table nor a ruby one",
+                css_display_name(display, dbuf, sizeof dbuf));
+        DFAILF("this element's computed `display` is `%s`, a ruby box: CSS Ruby Annotation Layout Module Level 1 "
+               "sizes it and CSS 2.1 §10 has no algorithm for it. css-display-3 §2.2 \"Inner Display Layout "
+               "Models: the flow, flow-root, table, flex, grid, and ruby keywords\" defaults a bare `ruby` to an "
+               "inline outer type, so it is inline-level. What to build, in order: css-ruby-1 §2.2 \"Anonymous "
+               "Ruby Box Generation\" (the box tree, written against core/layout/table_box.h's CSS 2.1 §17.2.1), "
+               "§2.3 \"Annotation Pairing\", and §3.1.1 \"Inline-axis Interlinear Layout\" for the sizing. "
+               "css-ruby-1 §3.3 \"Styling Ruby Boxes\" then splits the five: \"Ruby bases and ruby containers are "
+               "treated as inline boxes\" (CSS 2.1 §10.3.1), while base and annotation containers take fewer "
+               "properties still. The UA stylesheet's `ruby` and `ruby-text` rows, omitted with a reason in "
+               "core/css/css_style_declaration.c, belong with that module",
+               css_display_name(display, dbuf, sizeof dbuf));
+        return kind;
     }
-    free(parent_display);
-    if (block_flow_is_floated(el)) { free(display); return UV_BOX_FLOAT; }
-    if (strcmp(display, "inline") == 0)                  kind = UV_BOX_INLINE;
-    else if (strcmp(display, "inline-block") == 0)       kind = UV_BOX_INLINE_BLOCK;
-    else if (uv_display_is_inline_flex_or_grid(display)) kind = UV_BOX_INLINE_FLEX_GRID;
-    else if (uv_display_is_block_level_flow(display))    kind = UV_BOX_BLOCK_FLOW;
-    else if (uv_display_is_ruby(display))
-        DFAILF("this element's computed `display` is `%s`, which is a RUBY box — CSS Ruby Annotation Layout "
-               "Module Level 1 sizes it and CSS 2.1 §10 has no algorithm for it at all. It used to fall to "
-               "§10.3.3's constraint equation and come back with a NUMBER. WHAT WAS WRONG IS THE OUTER TYPE "
-               "TOO, not only the inner one: css-display-3 §2.2 \"Inner Display Layout Models: the flow, "
-               "flow-root, table, flex, grid, and ruby keywords\" says \"the element's outer display type "
-               "defaults to block—except for ruby, which defaults to inline\", so a bare `display: ruby` is an "
-               "INLINE-LEVEL box and §10.3.3 was not merely the wrong algorithm but the wrong half of §10. "
-               "WHAT TO BUILD, in this order: css-ruby-1 §2.2 \"Anonymous Ruby Box Generation\" is the box "
-               "tree — the internal box types are generated around whatever the author wrote, exactly as CSS "
-               "2.1 §17.2.1 Anonymous table objects' are, and core/layout/table_box.h is that section built "
-               "and therefore the worked example to write this one against — then §2.3 \"Annotation Pairing\" "
-               "is the column "
-               "structure, and §3.1.1 \"Inline-axis Interlinear Layout\" is the sizing. WHAT THE SIZE RULES "
-               "ARE ONCE THAT EXISTS is css-ruby-1 §3.3 \"Styling Ruby Boxes\", and it SPLITS THE FIVE rather "
-               "than giving them one arm: \"Ruby bases and ruby containers are treated as inline boxes\", "
-               "while \"Neither the margin, padding, and border properties nor any of the properties that do "
-               "not apply to inline boxes apply to base containers or annotation containers\". SO `ruby` and "
-               "`ruby-base` land on CSS 2.1 §10.3.1 \"Inline, non-replaced elements\", whose first sentence "
-               "is that `width` does not apply, and `ruby-base-container` and `ruby-text-container` answer "
-               "for FEWER properties than any box type in the list above. THE UA STYLESHEET IS THE "
-               "OTHER HALF OF THAT DIFF: core/css/css_style_declaration.c's UA-default table deliberately "
-               "omits the `ruby` and `ruby-text` rows and records why beside them — read that record before "
-               "adding either, because the rows belong with the MODULE and not with this crash",
-               display);
-    else if (strcmp(display, "run-in") == 0)
-        DFAILF("this element's computed `display` is `run-in`, and css-display-3 §2.1 \"Outer Display Roles "
-               "for Flow Layout: the block, inline, and run-in keywords\" makes it \"a type of inline-level "
-               "box with special behavior that attempts to merge it into a subsequent block container\" — so "
-               "the fall to §10.3.3 this arm replaces answered a BLOCK-LEVEL section for an INLINE-LEVEL box, "
-               "and answered it with a number. WHAT TO BUILD IS A BOX-TREE STEP AND NOT A SECTION OF §10. "
-               "css-display-3 §5 \"Run-In Layout\" states it: \"A run-in box is a box that merges into a block "
-               "that comes after it\", inserted as a direct child of that block before any box its contents "
-               "generate — so this element has NO BOX OF ITS OWN for §10 to size. It becomes inline-level "
-               "content of the following block container and is measured there by CSS 2 §9.4.2's line boxes "
-               "like any other inline. BUILD §5's re-parenting as part of the box tree the layout walk "
-               "iterates — core/layout/block_flow.c's `display: contents` crash asks for the flattening step "
-               "that belongs beside it, and the two are one construction with two rules rather than two cases "
-               "to add to this classification. Note that a blockified `run-in` never reaches here: "
-               "core/css/css_computed_value.c maps it to `block`, so what arrives is an in-flow, unfloated, "
-               "statically positioned one");
-    else
-        DFAILF("this element's computed `display` is `%s`, which is not block-level in normal flow, not "
-               "inline-level, not a table box, not a ruby box, not `run-in`, and not one of css-display-3 "
-               "§2.5's two no-box values — so there is no arm of CSS 2.1 §10 to select and this classification "
-               "declines rather than guessing. THE SHAPE THIS ARRIVES IN IS THE TWO-VALUE `<display-outside> "
-               "<display-inside>` SYNTAX, which is a value this component only ever sees SERIALIZED: "
-               "core/css/css_computed_value.c's blockification already crashes for exactly it, naming `inline "
-               "flow-root` and `block flow list-item` and asking for the outer/inner PAIR to become the value "
-               "that file carries. BUILD THAT PAIR AND THIS WHOLE CLASSIFICATION BECOMES A SWITCH OVER THE "
-               "OUTER HALF instead of over whole keywords, which is the same fix rather than a second one — "
-               "every test above is really asking the outer type and is reading a keyword to get it. MathML "
-               "Core §4.1 \"The display: block math and display: inline math value\" is the other producer and "
-               "is why that pair is not optional: \"The display property from CSS Display Module Level 3 is "
-               "extended with a new inner display type\", spelled `math`, which exists ONLY in the two-value "
-               "form. Before assuming a `math` box can reach here, grep lexbor's `LXB_CSS_DISPLAY_*` for it — "
-               "a keyword the `display` grammar does not admit is dropped by the cascade and arrives at this "
-               "component never",
-               display);
-    free(display);
-    return kind;
+    DCHECKF(display.kind == CSS_DISPLAY_PAIR, "computed `display: %s` is of a kind css_display.h does not declare",
+            css_display_name(display, dbuf, sizeof dbuf));
+    switch (display.outer) {
+    /* css-display-3 §2.1: "The element generates a box that is block-level when placed in flow layout" — a block
+       container for `flow`, `flow-root` and a list item, and for `flex` and `grid` a container css-grid-1 §5.2
+       "Sizing Grid Containers" sizes "like a block box that establishes a formatting context, with an auto inline
+       size calculated as for non-replaced block boxes", which is §10.3.3. */
+    case CSS_KEYWORD_BLOCK:
+        return UV_BOX_BLOCK_FLOW;
+    case CSS_KEYWORD_INLINE:
+        switch (display.inner) {
+        case CSS_KEYWORD_FLOW:      return UV_BOX_INLINE;
+        case CSS_KEYWORD_FLOW_ROOT: return UV_BOX_INLINE_BLOCK;
+        /* §5.2: an inline-level container "is sized as an atomic inline-level box (such as an inline-block)". */
+        case CSS_KEYWORD_FLEX:
+        case CSS_KEYWORD_GRID:      return UV_BOX_INLINE_FLEX_GRID;
+        default:
+            DFAILF("computed `display: %s` is an inline-level pair whose inner type no arm takes; `table` and "
+                   "`ruby` left above", css_display_name(display, dbuf, sizeof dbuf));
+            return kind;
+        }
+    case CSS_KEYWORD_RUN_IN:
+        DFAILF("this element's computed `display` is `%s`, and css-display-3 §2.1 \"Outer Display Roles for Flow "
+               "Layout: the block, inline, and run-in keywords\" makes it \"a type of inline-level box with "
+               "special behavior that attempts to merge it into a subsequent block container\". What to build is "
+               "a box-tree step, not a section of §10: css-display-3 §5 \"Run-In Layout\" inserts the run-in as "
+               "inline-level content of the following block, so this element has no box of its own for §10 to "
+               "size. It is one construction with core/layout/block_flow.c's `contents` flattening. A "
+               "blockified run-in computes to `block` and never reaches here",
+               css_display_name(display, dbuf, sizeof dbuf));
+        return kind;
+    default:
+        DFAILF("computed `display: %s` has an outer type that is no `<display-outside>`",
+               css_display_name(display, dbuf, sizeof dbuf));
+        return kind;
+    }
 }
 
 /* WHETHER THIS BOX'S HORIZONTAL MARGINS ARE STATED OVER ITS USED `width` — one question, asked of the box type
@@ -540,11 +390,9 @@ typedef enum {
    here rather than falling silently into the declared arm — which is the arm that is wrong for five of them. */
 static UvEdgeModel uv_edge_model(lxb_dom_element_t *el)
 {
-    char *d = uv_computed(el, "display");
-    TableBoxKind kind = table_box_kind(d);
+    TableBoxKind kind = table_box_kind(css_computed_display(el));
     UvEdgeModel model = UV_EDGES_DECLARED;
 
-    free(d);
     switch (kind) {
     case TABLE_BOX_ROW:
     case TABLE_BOX_ROW_GROUP:
@@ -807,11 +655,7 @@ static CssPx uv_table_used_width(lxb_dom_element_t *el)
    tell a cell from a caption, and the two reads were free to see different values of one property. */
 static TableBoxKind uv_table_box_kind(lxb_dom_element_t *el)
 {
-    char *d = uv_computed(el, "display");
-    TableBoxKind kind = table_box_kind(d);
-
-    free(d);
-    return kind;
+    return table_box_kind(css_computed_display(el));
 }
 
 /* CSS 2.1 §17.5 Visual layout of table contents' USED WIDTH OF ONE CELL, which the section states as a fact
@@ -1465,13 +1309,12 @@ static UvCb uv_cb(lxb_dom_element_t *el)
     if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE)) {
         for (a = n->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
             lxb_dom_element_t *anc = lxb_dom_interface_element(a);
-            char *d = uv_computed(anc, "display");
-            bool none = strcmp(d, "none") == 0;
-            bool contents = strcmp(d, "contents") == 0;
-            bool inline_box = strcmp(d, "inline") == 0;
+            CssDisplay d = css_computed_display(anc);
+            bool none = css_display_is_box(d, CSS_KEYWORD_NONE);
+            bool contents = css_display_is_box(d, CSS_KEYWORD_CONTENTS);
+            bool inline_box = css_display_spells(d, CSS_KEYWORD_INLINE);
             bool table = uv_display_is_table(d);
 
-            free(d);
             if (none)
                 DFAILF("%s, whose ancestor %s generates no box: "
                       "§10.1's FOURTH case walked up to an ancestor whose computed `display` is `none`, and "
@@ -1554,7 +1397,7 @@ static UvCb uv_cb(lxb_dom_element_t *el)
        at all — and an `else` here would return a rectangle for every one of them. */
     for (a = n->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
         lxb_dom_element_t *anc = lxb_dom_interface_element(a);
-        char *d = uv_computed(anc, "display");
+        CssDisplay d = css_computed_display(anc);
         bool container = block_flow_display_is_block_container(d);
         /* css-flexbox-1 §3 "Flex Containers: the flex and inline-flex display values" — "Flex containers form a
            containing block for their contents exactly like block containers do. [CSS2]" That is an ELEMENT's
@@ -1564,8 +1407,8 @@ static UvCb uv_cb(lxb_dom_element_t *el)
            of a grid container, which is why the two are split here rather than sharing
            `uv_display_is_flex_or_grid`'s single predicate — that predicate answers
            `is this box a flex or grid CONTAINER`, a question with one answer, and this is a question with two. */
-        bool flex = strcmp(d, "flex") == 0 || strcmp(d, "inline-flex") == 0;
-        bool grid = strcmp(d, "grid") == 0 || strcmp(d, "inline-grid") == 0;
+        bool flex = css_display_spells(d, CSS_KEYWORD_FLEX) || css_display_spells(d, CSS_KEYWORD_INLINE_FLEX);
+        bool grid = css_display_spells(d, CSS_KEYWORD_GRID) || css_display_spells(d, CSS_KEYWORD_INLINE_GRID);
         /* `table-cell` and `table-caption` are block containers (CSS 2 §9.2.1: "non-replaced inline blocks and
            non-replaced table cells are block containers but not block-level boxes") and are returned above, so
            what reaches the table arm is only the table box and the row/column machinery. */
@@ -1573,17 +1416,16 @@ static UvCb uv_cb(lxb_dom_element_t *el)
         /* §17.2.1's misparenting rule is written over a 'table' or 'inline-table' PARENT specifically, not
            over "a table box" loosely, so the test is core/layout/table_box.h's own two-value predicate. */
         bool anc_table_box = table_box_kind_generates_table_box(table_box_kind(d));
-        bool none = strcmp(d, "none") == 0;
+        bool none = css_display_is_box(d, CSS_KEYWORD_NONE);
         /* THE TWO VALUES THE WALK STEPS OVER, for two different reasons that both end in "this ancestor is not
            the box §10.1 is asking about". css-display-3 §2.5 Box Generation: the none and contents keywords
            gives `contents` no box at all ("The element itself does not generate any boxes, but its children
            and pseudo-elements still generate boxes and text sequences as normal"), and §10.1 asks which BOX
            the rectangle is the content edge of; `inline` generates a box and it is simply not a block
            container one, which the section's own example above resolves. */
-        bool contents = strcmp(d, "contents") == 0;
-        bool step_over = contents || strcmp(d, "inline") == 0;
+        bool contents = css_display_is_box(d, CSS_KEYWORD_CONTENTS);
+        bool step_over = contents || css_display_spells(d, CSS_KEYWORD_INLINE);
 
-        free(d);
         /* §17.4's WRAPPER, WHICH IS THE ONE BOX THIS WALK ANSWERS THAT IS NOT AN ANCESTOR ELEMENT'S PRINCIPAL
            ONE. §17.2.1 Anonymous table objects decides it at the caption's own box parent and nowhere else —
            "A row group box, 'table-column-group' box, or 'table-caption' box is misparented if its parent is
@@ -2840,10 +2682,8 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
            answer 0 for `table { margin: 0 auto }`, which is the single most common table declaration on the
            web. */
         {
-            char *d = uv_computed(el, "display");
-            bool block_level = table_wrapper_is_block_level(d);
+            bool block_level = table_wrapper_is_block_level(css_computed_display(el));
 
-            free(d);
             /* §17.4: "The table wrapper box is a 'block' box if the table is block-level, and an
                'inline-block' box if the table is inline-level." An `inline-table`'s wrapper is therefore
                §10.3.9 "'Inline-block', non-replaced elements in normal flow"'s box, whose own sentence is "A
@@ -3295,16 +3135,14 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
 static lxb_dom_element_t *uv_flex_item_container(lxb_dom_element_t *el, UvBox box)
 {
     lxb_dom_element_t *container;
-    char *own;
+    CssDisplay own;
     bool is_flex;
 
     if (box != UV_BOX_ITEM) return NULL;
     container = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
     if (container == NULL) return NULL;
-    own = css_computed_value(container, "display");
-    if (own == NULL) return NULL;
+    own = css_computed_display(container);
     is_flex = flex_item_display_is_flex_container(own);
-    free(own);
     return is_flex ? container : NULL;
 }
 
@@ -4746,10 +4584,9 @@ CssPx used_value_block_level_content_px(lxb_dom_element_t *el, bool vertical)
                "re-deriving it from the box, and this arm becomes a call",
                box_subject(el, nbuf, sizeof nbuf));
     {
-        char *display = uv_computed(el, "display");
+        CssDisplay display = css_computed_display(el);
         bool table = uv_display_is_table(display);
 
-        free(display);
         if (table)
             DFAILF("%s: this FLEX ITEM generates a TABLE box, whose height CSS 2.1 §17.5.3 Table height algorithms "
                    "owns and §10.6.3 does not — a table's height is \"the sum of the row heights plus any cell "

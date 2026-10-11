@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <lexbor/dom/dom.h>
 
@@ -16,6 +17,7 @@ const char *box_subject_computed(lxb_dom_element_t *el, const char *name, char *
 
     if (buf == NULL || cap == 0) return "(nowhere to compose a computed value)";
     if (el == NULL) return "(no element)";
+    if (strcmp(name, "display") == 0) return css_display_name(css_computed_display(el), buf, cap);
     if (css_computed_models_keyword(name)) {
         n = snprintf(buf, cap, "%s", css_keyword_name(css_computed_keyword(el, name)));
         return n < 0 ? "(computed value unavailable)" : buf;

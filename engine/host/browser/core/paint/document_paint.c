@@ -62,7 +62,8 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
     DisplayListRasterCount rc;
     CssPx                  region[4];
     double                 dpr;
-    char                  *display;
+    CssDisplay             display;
+    char                   dbuf[64];
     bool                   boxless;
     int                    w = 0, h = 0;
     LayoutJob             *job;
@@ -131,20 +132,15 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
        types that generate no box at all, such as none or contents". */
     boxless = root == NULL;
     if (!boxless) {
-        display = css_computed_value(root, "display");
-        DCHECK(display != NULL,
-               "the cascade produced no computed `display` for the root element — the property is in lexbor's "
-               "registry with an initial value, so css-cascade-5 §7 \"Defaulting\"'s last layer cannot come "
-               "back empty and an absence is this engine's pipeline rather than the document's");
-        DCHECKF(strcmp(display, "contents") != 0,
+        display = css_computed_display(root);
+        DCHECKF(!css_display_spells(display, CSS_KEYWORD_CONTENTS),
                 "the root element's computed `display` is `%s`, and css-display-3 §2.8 \"The Root Element's "
                 "Principal Box\" says \"Additionally, a display of contents computes to block on the root "
                 "element\" — which core/css/css_computed_value.c performs. So this is not a document that "
                 "declared something unusual: it is the computed value disagreeing with the section that "
                 "computes it, and the fix is in that file rather than a second arm here",
-                display);
-        boxless = strcmp(display, "none") == 0;
-        free(display);
+                css_display_name(display, dbuf, sizeof dbuf));
+        boxless = css_display_spells(display, CSS_KEYWORD_NONE);
     }
 
     if (boxless) {
