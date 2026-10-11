@@ -159,6 +159,53 @@ function docRecordAuxiliary(creator, own) {
   return j;
 }
 
+/* The weaker-wins meet of `records`: the most observed reach, a mark only if every record carries it, and the
+   intersection of the flag sets. One reply fills every park a pending line folds, and the engine folds the
+   line's own marks toward the most permissive member (solver/engine.c's engine_pending_fetches), so the line
+   is judged under the meet of its askers' records: the request is made if any asking document may make it.
+   Every record covers the meet. */
+function docRecordMeet(records) {
+  CHECK(Array.isArray(records) && records.length > 0 && records.every(function (r) { return _DOC_RECORDS.has(r); }),
+        "a meet was asked of no records, or of something docRecord did not mint");
+  var m = records.reduce(function (a, b) {
+    return { reach: _DOC_REACH_RANK[a.reach] <= _DOC_REACH_RANK[b.reach] ? a.reach : b.reach,
+             driven: a.driven === "driven" && b.driven === "driven" ? "driven" : "undriven",
+             pinned: a.pinned === "pinned" && b.pinned === "pinned" ? "pinned" : "unpinned",
+             sandbox: a.sandbox.filter(function (n) { return b.sandbox.indexOf(n) >= 0; }) };
+  });
+  var j = docRecord(m.reach, m.driven, m.pinned, _sandboxSerialized(m.sandbox));
+  records.forEach(function (r) {
+    CHECK(_docRecordCovers(r, j), "a meet is not covered by one of its records: " + JSON.stringify(r));
+  });
+  return j;
+}
+
+/* The record a request is judged against, from the asking document's name as the engine states it on the
+   pending line. A document this zone provisioned answers with its own record. One the engine created inside
+   its own heap (a same-origin child or popup, or the next document of a navigable) was never provisioned;
+   the engine names it "<creator>.<n>" (solver/world.c's world_mint_doc), so the nearest provisioned ancestor
+   of its name is the document whose heap made it, and that record is the floor this zone holds it to.
+   `lookup(name)` answers a record for a document of the asking instance, `false` for a document provisioned
+   into another instance, and `undefined` for a name this zone never provisioned. Answers null, the asker
+   refused, when the walk meets another instance's document or runs out of names: the engine named a document
+   that is not one of its own. A name is engine-stated, so an engine can name any document of its own
+   instance; the floor is a record of that instance, never one it does not hold. */
+function docRecordOfAsker(name, lookup) {
+  CHECK(typeof name === "string" && name !== "" && typeof lookup === "function",
+        "an asker's record was asked with no name or no lookup");
+  for (var n = name; ; ) {
+    var r = lookup(n);
+    if (r === false) return null;
+    if (r !== undefined) {
+      CHECK(_DOC_RECORDS.has(r), "an asker lookup answered something docRecord did not mint for " + n);
+      return r;
+    }
+    var m = /^(.+)\.[0-9]+$/.exec(n);
+    if (!m) return null;
+    n = m[1];
+  }
+}
+
 /* engine.h's arrival word and the notice's flag set, parsed; the arrival word serialized. */
 function docRecordOfArrival(arrival, sandbox) {
   var w = typeof arrival === "string" ? arrival.split(",") : [];
@@ -180,4 +227,6 @@ if (typeof self !== "undefined") {
   self.docRecordArrival = docRecordArrival;
   self.docRecordSandbox = docRecordSandbox;
   self.docRecordOpaque = docRecordOpaque;
+  self.docRecordMeet = docRecordMeet;
+  self.docRecordOfAsker = docRecordOfAsker;
 }

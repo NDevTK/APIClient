@@ -370,7 +370,7 @@ attacker-controlled engine composes and the chokepoint `CHECK`s only for vocabul
 Every request also carries the zone's record of the document it was made from (`lib/document-record.js`):
 the navigation's reach grade, its drive mark, its witness mark, and HTML §7.1.5's creation sandboxing flag
 set. The zone writes one per document when it provisions it, from the provisioning notice composed with the
-creating instance's record by HTML's own rules, so a document inherits every mark above it and every flag the
+creating document's record by HTML's own rules, so a document inherits every mark above it and every flag the
 rules carry. A record is frozen, minted only by `docRecord`, and written once per document
 (a second write is a `CHECK` in the zone). `docRecordJoin`, the one function that derives a record from
 others, `CHECK`s that the result clears no mark and strengthens no reach, so nothing a document does relaxes
@@ -378,12 +378,21 @@ what its navigation carried. The chokepoint reads the record as a floor under th
 `doc-reach` is its grade, a `page` request from a driven document reads `actor=tool`, and one from a pinned
 document reads `witness=pinned`, whatever the engine's record states. The engine's words can narrow these rows
 and never widen them, so an engine that states `undriven` or `unpinned` for a driven or pinned peer's requests
-does not launder them into the page's own. The record is the instance's today: an instance's record is the
-join of its documents' records (see the risk table).
+does not launder them into the page's own.
+
+A request is judged under its asking document's record. The engine names the asking document on the pending
+line (`ASKERS`, every document whose park the line folds) and on the host request line, and the zone answers a
+name with the record it wrote when it provisioned that document; for a document the engine created inside its
+own heap, which the engine names `<creator>.<n>`, it answers with the nearest provisioned ancestor's
+(`docRecordOfAsker`). A name whose walk meets another instance's document, or no provisioned document at all,
+is refused with `blocked-asker`, and so is a create notice whose creator is refused or whose child name is not
+minted from its creator. A line that folds several parks is judged under the meet of their records
+(`docRecordMeet`), because one reply answers them all and the engine folds the line's own marks toward the
+most permissive member in the same way.
 
 The flag set follows §7.1.5 and §7.3.1.7 exactly. A nested navigable's set is the union of the notice's set
 (the engine's computation of its `<iframe sandbox>` attribute and its embedder's active set) and the creating
-instance's record, so no frame regains a permission any sandbox above it removed. An auxiliary navigable (a
+document's record, so no frame regains a permission any sandbox above it removed. An auxiliary navigable (a
 notice with no parent) is refused outright when the creator's record carries the sandboxed auxiliary
 navigation flag, and otherwise starts from the notice's set, plus the creator's whole set only when the
 creator's carries the sandbox-propagates flag. So `allow-popups-to-escape-sandbox` lets a popup out only when
@@ -579,8 +588,10 @@ Each residual states what is not covered, what would close it, and how its absen
 | Page requests are uncredentialed | `fetched` and `fetchedXhr` state `credentialed: false`, so the analysed page's own data requests see the logged-out reply. They already pass the page origin the credentialed SOP would need (`eng.origin`); the wrong origin would be `originOf(msg.sourceUrl)`, which gives a sandboxed iframe its embedder's | a per-origin credential decision over the request's own credentials mode | an app whose boot data differs by session analysed in its logged-out form |
 | A credentialed request cannot carry a header list | `_credentialedOf` `CHECK`s the combination, because nothing states whose header list it is | an ownership statement carried from the site that knows, as `provenance` is | that `CHECK` firing |
 | `same-origin` credentials mode where the zone is willing | `_credentialedOf` has no pre-request same-origin test, so it `CHECK_FAIL`s | the same-origin test on the request URL against `pageOrigin`, read before the wire | that `CHECK_FAIL` firing; every willing caller today states `include` |
-| Whether a navigable is nested or auxiliary is the engine's word | the zone reads the create notice's parent field to choose §7.1.5's union over §7.3.1.7's popup rule, so an engine that states no parent for a nested frame applies the popup rule to it, which drops the creator's flags unless the creator's set carries the sandbox-propagates flag. The risk marks are not affected | the navigable's kind recorded by the zone from a fact it observes, not one the engine states | a frame's record without a flag its creator's record carries |
-| A request is judged under its instance's document record | the pending line names no asking document, so `fetched`, `fetchedXhr` and trusted.mjs's relays read the instance's record, which is the join of every document it holds: a document joined through `engineJoin` or a `join` narrows its root's requests | the park's document name on the pending line, so the lookup is per document | at an origin whose table permits the root's own record, a root document's request refused on `doc-reach`, `actor` or `witness` after a document with a weaker record joined its instance |
+| Whether a navigable is nested or auxiliary is the engine's word | the zone reads the create notice's parent field to choose §7.1.5's union over §7.3.1.7's popup rule. Every fact it could read the kind from instead (the parent and opener fields, the `navigable.request` that precedes a child's create) is engine-stated too, because the analysed navigables exist only inside the engine. The creator's own record bounds it: a frame stated as a popup sheds only what §7.3.1.7 lets a popup of that creator shed, which is nothing unless the creator's record has neither the sandboxed auxiliary navigation flag nor the sandbox-propagates flag, that is, unless every sandbox above the creator allowed `allow-popups-to-escape-sandbox`. The risk marks are not affected | a navigable kind the trusted zone observes, which needs the analysed frame tree to exist outside the engine | a frame's record without a flag its creator's record carries |
+| Which document asked is the engine's word | the asking document's name is engine-stated, so an engine can name any document of its own instance, and the floor for a request is the most permissive record among that instance's documents rather than their join. Documents of one agent cluster share one heap and call into each other's realms, so which of them made a request is a fact only that heap holds | none in this design; a name outside the instance is refused | a request firing under a record that the document whose code made it does not carry |
+| A document the engine created in its own heap has its nearest provisioned ancestor's record | the zone never sees an in-heap creation's own words (a same-origin frame's sandbox attribute, a forced or driven navigation inside the instance), so such a document's requests are floored by its nearest provisioned ancestor's record and its own marks rest on the engine's per-request words | in-heap creations announced to the zone with their words, recorded as a provisioned document's are | an in-heap document's request firing at a default arm when the navigation that made its document was forced or driven |
+| Provision notices name no issuing document | `navigable.swap`, `navigable.navigate` and `document.seed` carry no issuing document, so the record they compose from is the instance's join: a document joined into the instance narrows them | the issuing document on navigable_notice.h's provision table and on route_seed.c's record, looked up as an asker is | a top-level navigation or declared route that the issuing document's own record permits, refused on `doc-reach`, `actor` or `witness` after a document with a weaker record joined its instance |
 | An auxiliary opened without `noopener` | it shares its opener's group but lands in another tab, so `clusterKeyOf` splits the pair; `MessageSender` carries no opener | a browser-stated opener fact joined to the opener's group | an opener and its popup analysed in two instances |
 | The live-verify injector takes any tab | `scripting.exec` in `background.js` runs `pocAttackerButton`, whose argument is the code its button evaluates, in the top frame of whatever `tabId` the offscreen names. The service worker cannot tell the attacker tab from another, so a hole in the `OFFSCREEN_HREF` gate is click-triggered MAIN-world execution in any tab | the service worker admitting only a tab whose committed URL is the attacker page it was asked to open | a Run button appearing on a page other than `ATTACKER_PAGE_URL` |
 | Dev-build asserts on renderer-supplied input | `renderer-host.js`'s window handshake DCHECKs the frame's record. In dev a compromised renderer can make those handlers throw; in release a malformed reply reaches its consumers unvalidated | refuse a malformed record with the handshake's own error instead of asserting on it | a dev build throwing at those sites for a page's malformed reply |

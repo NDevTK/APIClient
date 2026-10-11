@@ -226,7 +226,8 @@ const ZONE = (() => {
      `_docOf` refuses on the first request rather than here at assembly. */
   for (const n of ['safeFetchWiden', 'safeFetchEgressStated', 'safeFetchFiringRefusal',
                    'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'docRecord', 'docRecordJoin',
-                   'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque'])
+                   'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque',
+                   'docRecordMeet', 'docRecordOfAsker'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js did not install \`${n}\` — the firing decision and its ` +
                       'per-origin widening are that file\'s, read by this host and by the offscreen from the ' +
@@ -661,7 +662,7 @@ async function main() {
      nothing. That is not a licence to guess high: it is why the rule is stated per arm with its reason, so
      the next arm has to answer the question rather than inherit an answer. */
   /* This zone's record of each document it provisioned (extension/lib/document-record.js): how the
-     navigation reached it, its drive mark and its witness mark, joined with the creating instance's record so
+     navigation reached it, its drive mark and its witness mark, joined with the creating document's record so
      a document inherits every mark above it. Written once per document, here and nowhere else; a second
      write is a refusal, because the record is the floor the chokepoint holds the engine's words to. */
   const docRecords = new Map();
@@ -676,10 +677,21 @@ async function main() {
      so it keeps the navigable's flags and can never be stronger than the instance that created it. */
   const childDoc = (from, provenance, driven, pinned) =>
     ZONE.docRecordJoin(from, ZONE.docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none));
+  /* The record a request from instance `e` is judged against, given the documents the engine names as asking
+     it: the meet of their records (lib/document-record.js's docRecordOfAsker and docRecordMeet), or null when
+     a name is not a document of `e`, which refuses the request. */
+  const askerRecord = (e, names) => {
+    const lookup = (n) => (docRecords.has(n) ? (e.docs.includes(n) ? docRecords.get(n) : false) : undefined);
+    const recs = names.map((n) => ZONE.docRecordOfAsker(n, lookup));
+    return recs.includes(null) ? null : ZONE.docRecordMeet(recs);
+  };
+  const askerRefusal = (e, names) => `blocked-asker: the engine of [${e.tag}] named ${names.join(', ')} as ` +
+    'asking, and one of them is no document of that instance — the zone judges a request by its asking ' +
+    "document's record and holds no record for this one";
   async function provision({ docId, url, origin, headers, bytes, facts, referenced, doc, group }) {
-    /* The document's record, stored on the instance because every request it makes is judged against it.
-       Composed by the caller (childDoc, or the observed root's) and recorded here, so an instance is never
-       provisioned without one. */
+    /* The document's record, against which every request it asks is judged (askerRecord). Composed by the
+       caller and recorded here, so an instance is never provisioned without one; the instance's own `doc`
+       starts as it. */
     recordDocument(docId, doc);
     if (referenced !== 0 && referenced !== 1)
       throw new Error(`an instance was provisioned for ${url} without stating whether a peer holds a ` +
@@ -814,11 +826,11 @@ async function main() {
   /* `driven` is the engine's drive mark for this navigation (`driven`/`undriven`, off the same record as
      `provenance`): the chokepoint's `actor` row reads it, so a drive's navigation is this tool's act. `pinned`
      is the witness mark off that record, which the navigation default reads.
-     `fromDoc` is this zone's record of the instance issuing this navigation, a different fact from
-     `provenance`: the engine's words describe this navigation act, and the record describes a load this zone
-     performed before the issuing document existed. The chokepoint reads both, and the record is the floor.
-     The document this produces is recorded under neither alone but under their join (childDoc), composed by
-     the caller at `provision`. */
+     `fromDoc` is this zone's record of the document issuing this navigation (of its instance, for a notice
+     that names no issuer), a different fact from `provenance`: the engine's words describe this navigation
+     act, and the record describes a load this zone performed before the issuing document existed. The
+     chokepoint reads both, and the record is the floor. The document this produces is recorded under neither
+     alone but under their join (childDoc), composed by the caller at `provision`. */
   async function navigate(url, fromDocUrl, what, provenance, driven, pinned, fromDoc) {
     const abs = new URL(url, fromDocUrl).href;
 
@@ -905,10 +917,11 @@ async function main() {
   }
 
   /* XHR §3.5.6 "The send() method"'s fetch, answered by request id as extension/bridge.js's `fetchedXhr` does.
-     The record is xml_http_request.c's `xhr_request_op`; the origin is this zone's record of the instance. A
+     The record is xml_http_request.c's `xhr_request_op`; the origin is this zone's record of the instance, and
+     `doc` the asking document's record (askerRecord). A
      policy refusal is a decline, which the engine forks into a waiting arm and a failure arm; a network
      refusal is §3.5.6's network error, an answer with no body, so the page's XHR runs its error steps. */
-  const workXhr = async (e, id, record) => {
+  const workXhr = async (e, id, doc, record) => {
     const q = JSON.parse(record);
     for (const k of ['method', 'url', 'credentials', 'mode', 'provenance', 'pinned', 'driven'])
       if (typeof q[k] !== 'string' || q[k] === '')
@@ -929,7 +942,7 @@ async function main() {
     const abs = new URL(q.url, e.docUrl).href;
     const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, pageOrigin: e.origin, destination: '',
                                             mode: q.mode, provenance: q.provenance, pinned: q.pinned, driven: q.driven,
-                                            actor: 'page', doc: e.doc, credentialed: false,
+                                            actor: 'page', doc, credentialed: false,
                                             credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
                                             headers: q.headers.length ? q.headers : undefined,
                                             identity: ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, abs,
@@ -947,7 +960,7 @@ async function main() {
   };
 
   const workFetch = async (e, method, destination, initiator, provenance, pinned, driven, credentials, mode,
-                           referrerPolicy, referrer, url) => {
+                           referrerPolicy, referrer, askers, url) => {
     const abs = new URL(url, e.docUrl).href;
     /* EVERY ANSWER THIS FUNCTION HAS LEAVES THROUGH ONE DOOR, AND THE DOOR IS WHAT RELEASES THE KEY. Pushing
        the record and remembering the key are ONE act here rather than two statements a later arm could take
@@ -992,6 +1005,14 @@ async function main() {
       throw new Error(`${method} ${abs} is OBSERVED and was not parser-inserted — the two are composed from ` +
                       'one flag (solver/pending.h), so this zone is being told two things about one park ' +
                       'that cannot both be true');
+    /* The record this request is judged against: its asking documents' (askerRecord). A line naming a
+       document that is not one of this instance's is declined, since no record of it exists here to judge by. */
+    const doc = askerRecord(e, askers);
+    if (doc === null) {
+      settle(declineRequest(method, mode, referrerPolicy, referrer, url,
+                            `${method} ${abs} — ${askerRefusal(e, askers)}`));
+      return;
+    }
     const methodRefusal = ZONE.safeFetchMethodRefusal(method);
     if (methodRefusal) {
       /* §Attacker-sources: a state-mutating request is NEVER fired to learn. `safe-fetch.js` enforces this by
@@ -1039,7 +1060,7 @@ async function main() {
        document; this is about the load that produced the document, which happened in this zone before the
        instance existed. A page this zone chose to open goes on making its own `fetch()`es and the engine
        grades them `observed`, correctly — so without this the chokepoint would be judging the second act
-       with the first act's word. */
+       with the first act's word. The record is the asking documents' (`doc` above), not the instance's. */
     /* `page` — THIS FRAME EXISTS ONLY TO ANSWER A RECORD THE ENGINE PRODUCED, so the request in front of it
        was composed by the analysed document's own code by construction. It is STATED rather than left to be
        inferred from that sentence: safe-fetch.js asserts the word, so a frame that is wrong about its own
@@ -1052,7 +1073,7 @@ async function main() {
     const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, pageOrigin: e.origin, destination, mode,
                                             provenance, pinned, driven, credentials, useCorsPreflight: false,
                                             actor: 'page',
-                                            doc: e.doc, credentialed: false,
+                                            doc, credentialed: false,
                                             identity: ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, abs,
                                                                                credentials, mode,
                                                                                referrerPolicy, referrer) });
@@ -1080,7 +1101,7 @@ async function main() {
          passes and `headers: null` is what a park carries here. */
       const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination, provenance, pinned,
                                                     actor: 'page', driven,
-                                                    doc: e.doc, credentialed: false, headers: null });
+                                                    doc, credentialed: false, headers: null });
       if (!refusal) {
         settle(declineRequest(method, mode, referrerPolicy, referrer, url,
                             `${method} ${abs} — ${raw.refusal.reason}. The chokepoint DECLINED to make this ` +
@@ -1251,12 +1272,24 @@ async function main() {
          context group (§7.3.2.1); a child and an auxiliary navigable with an opener are in the creator's. In
          the creator's group the peer holds a WindowProxy for the creator, whose engine raised its own flag at
          the emission (core/frame/navigable.c); this is the zone's record of that. */
-      /* The child's record, before anything is loaded for it: the creating instance's record composed with
-         the notice's words by HTML's own rules (lib/document-record.js). A navigable with no parent is an
-         auxiliary one, which §7.3.1.7 does not create at all under the creator's sandboxed auxiliary
-         navigation flag; that notice is refused here, whatever the engine that sent it decided. */
+      /* The child's record, before anything is loaded for it: the creating document's record (askerRecord)
+         composed with the notice's words by HTML's own rules (lib/document-record.js). The creator is refused
+         unless it is a document of this instance and the child's name is minted from it ("<creator>.<n>",
+         solver/world.c's world_mint_doc), the nesting the record of the child's own descendants walks. A
+         navigable with no parent is an auxiliary one, which §7.3.1.7 does not create at all under the
+         creator's sandboxed auxiliary navigation flag; that notice is refused here, whatever the engine that
+         sent it decided. */
+      const creatorDoc = askerRecord(e, [f[C.creator]]);
+      if (creatorDoc === null || !/^[0-9]+$/.test(f[C.child].slice(f[C.creator].length + 1)) ||
+          !f[C.child].startsWith(`${f[C.creator]}.`)) {
+        e.ready.push(decline(`navigable.create ${f[C.child]} — ${creatorDoc === null
+          ? askerRefusal(e, [f[C.creator]])
+          : `the child's name is not minted from its creator ${f[C.creator]}`}`));
+        return;
+      }
       const own = ZONE.docRecord(f[C.provenance], f[C.driven], f[C.pinned], f[C.sandboxFlags]);
-      const doc = f[C.parent] === 'u' ? ZONE.docRecordAuxiliary(e.doc, own) : ZONE.docRecordJoin(e.doc, own);
+      const doc = f[C.parent] === 'u' ? ZONE.docRecordAuxiliary(creatorDoc, own)
+                                      : ZONE.docRecordJoin(creatorDoc, own);
       if (doc === null) {
         e.ready.push(decline(`navigable.create ${f[C.child]} — the creating document's sandbox sets HTML ` +
                              '§7.1.5\'s sandboxed auxiliary navigation browsing context flag, so §7.3.1.7 ' +
@@ -1270,7 +1303,7 @@ async function main() {
          mark whether its path chose one. The default fires the page's own `unpinned` child, as it fires the
          page's `fetch()`, and every other grade waits on `--explore`. */
       const loaded = await navigate(f[C.address], e.docUrl, `navigable.create ${f[C.child]}`, f[C.provenance],
-                                    f[C.driven], f[C.pinned], e.doc);
+                                    f[C.driven], f[C.pinned], creatorDoc);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED, derived here and never read off the
          notice even though the notice carries one: SECURITY.md draws the line at this exact record — a NAME
@@ -1280,12 +1313,14 @@ async function main() {
          document of one origin-keyed agent cluster in one heap: A embeds cross-origin B and B embeds A, and the
          grandchild joins A's instance. The holder is referenced, since every instance of a group either was
          provisioned for a peer's navigable or created one. The joined document is recorded under its own
-         record, and the holder's record, which its requests are judged against, becomes the join of the two.
-         Named residual. Not covered: the record a request is judged against is the instance's, not the asking
-         document's, so the holder's own requests read the joined document's marks too. Next diff builds: the
-         record keyed on the asking document, which the bill would have to carry. Absence shows as: a holder's
-         own request refused on `doc-reach`, `actor` or `witness` at an origin whose table permits the holder's
-         own record, after a child with a weaker record joined it. */
+         record, which its requests are judged against (askerRecord). The holder's instance record becomes the
+         join of the two; it is read only by the notices that name no issuing document.
+         Named residual. Not covered: `navigable.swap`, `navigable.navigate` and `document.seed` name no
+         issuing document, so the record they compose from is the instance's join. Next diff builds: the
+         issuing document on navigable_notice.h's provision table and on route_seed.c's record, looked up as a
+         request's asker is. Absence shows as: a top-level navigation or declared route that the issuing
+         document's own record permits, refused on `doc-reach`, `actor` or `witness` after a document with a
+         weaker record joined the issuing instance. */
       const childOrigin = principalOf(doc, loaded.url);
       const holder = clusterOf(group, childOrigin);
       if (holder) {
@@ -1309,7 +1344,7 @@ async function main() {
          so this document's timelines may not run out before they do. */
       await provision({ docId: f[C.child], url: loaded.url, origin: childOrigin, group,
                         headers: loaded.headers, bytes: loaded.bytes, facts: createFacts(f, doc),
-                        /* Under the creating instance's record joined with the notice's words: taking the
+                        /* Under the creating document's record joined with the notice's words: taking the
                            notice's alone would let a child of a document this zone chose to open read as one
                            the person navigated to, or shed a mark the creator carries. */
                         doc, referenced: 1 });
@@ -1693,7 +1728,12 @@ async function main() {
                         'the pending line verbatim and this zone splits it where the engine joined it, so a ' +
                         'short record is the two grammars having parted');
       const [, method, destination, initiator, provenance, pinned, driven, credentials, mode, referrerPolicy,
-             referrer, , url] = f;
+             referrer, askerSet, url] = f;
+      /* The asking documents (solver/engine.h's ASKERS), each named once; workFetch judges the line by them. */
+      const askers = askerSet.split(',');
+      if (askers.some((a, i) => a === '' || askers.indexOf(a) !== i))
+        throw new Error(`the host announced a fetch whose asker set \`${askerSet}\` is not a comma-joined set ` +
+                        'of document names — the engine writes each folded park\'s document once');
       /* The request's referrer policy (after Fetch §4.1 "Main fetch" gave an empty one the policy container's)
          and its referrer ("no-referrer" or a URL), both part of the identity the reply is keyed on;
          extension/bridge.js's `pendingRequest` asserts the same shape. */
@@ -1715,12 +1755,12 @@ async function main() {
          the write goes out the key is released and the next announcement is a FRESH park (see `track`). */
       if (e.answered.has(key)) return;
       track(e, key, workFetch(e, method, destination, initiator, provenance, pinned, driven, credentials, mode,
-                              referrerPolicy, referrer, url));
+                              referrerPolicy, referrer, askers, url));
     } else if (f[0] === 'request') {
       /* `request<TAB>id<TAB>asker<TAB>op` (solver/engine.h's engine_host_requests). */
       if (f.length < 4 || !f[2])
         throw new Error(`the host announced a request that is not \`request<TAB>id<TAB>asker<TAB>op\`: ${line}`);
-      const id = Number(f[1]), op = f.slice(3).join('\t');
+      const id = Number(f[1]), asker = f[2], op = f.slice(3).join('\t');
       const key = `req:${f[1]}`;
       if (e.answered.has(key)) return;
       if (!Number.isInteger(id))
@@ -1728,6 +1768,14 @@ async function main() {
                         'rendezvous inside that instance, so an unreadable one would answer whatever request ' +
                         'zero belongs to');
       e.answered.set(key, Promise.resolve());
+      /* The asking document's record, which the two arms this zone performs judge by; a request whose asker
+         is no document of this instance is declined whatever its operation, by the one rule the fetch bill's
+         askers are held to. */
+      const doc = askerRecord(e, [asker]);
+      if (doc === null) {
+        e.ready.push(declineAnswer(id, `\`${op.slice(0, 120)}\` — ${askerRefusal(e, [asker])}`));
+        return;
+      }
       /* Every cross-agent operation routes the same way: a member of a navigable's Window, the close of a
          traversable, and the internal methods a lent object performs. They differ in what the peer resolves,
          not in who resolves it, so this is a prefix and not a list: a row added to core/frame/remote_op.c's
@@ -1764,7 +1812,7 @@ async function main() {
                             'fields on every path, the policy possibly empty, so this zone and that job no ' +
                             'longer share a grammar');
           const loaded = await navigate(args.slice(i + 1), e.docUrl, 'document.fetch', args.slice(0, t),
-                                        args.slice(t + 1, u), args.slice(u + 1, w), e.doc);
+                                        args.slice(t + 1, u), args.slice(u + 1, w), doc);
           if (loaded.declined) { e.ready.push(declineAnswer(id, loaded.declined)); return; }
           /* THE ANSWER IS §7.4.5's `{url, headers}` PLUS THE DOCUMENT AS BYTES: a Document is parsed from a
              byte sequence, so the bytes travel BESIDE the record rather than through a decode this zone would
@@ -1778,7 +1826,7 @@ async function main() {
                         '0', b64(loaded.bytes)].join('\t'));
         })());
       } else if (op.startsWith('xhr.send\t')) {
-        track(e, key, workXhr(e, id, op.slice('xhr.send\t'.length)));
+        track(e, key, workXhr(e, id, doc, op.slice('xhr.send\t'.length)));
       } else {
         /* A REQUEST THIS ZONE DOES NOT CARRY IS REFUSED IN WORDS AND NOT LEFT SILENT: leaving it unanswered
            parks the asking flow for the rest of the session while the frontier reports nothing, which from

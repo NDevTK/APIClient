@@ -1062,6 +1062,24 @@ function childDocRecord(eng, provenance, driven, pinned) {
                                "engineRoot writes one before the instance can issue anything");
   return docRecordJoin(eng.doc, docRecord(provenance, driven, pinned, NAVIGABLE_NOTICE.sandbox.none));
 }
+/* The record a request from instance `eng` is judged against, given the documents the engine names as asking
+   it: the meet of their records (lib/document-record.js's docRecordOfAsker and docRecordMeet), or null when a
+   name is not a document of `eng`, which refuses the request. A name another live instance holds is that
+   instance's; one no instance holds is walked to its creator. */
+function askerRecord(eng, names) {
+  const lookup = (n) => {
+    if (eng.records.has(n)) return eng.records.get(n);
+    const h = hostHolderOf(n);
+    CHECK(h !== eng, "instance holds the document " + n + " and has no record of it — engineRoot and " +
+                     "engineJoin write the record beside the name");
+    return h === null ? undefined : false;
+  };
+  const recs = names.map((n) => docRecordOfAsker(n, lookup));
+  return recs.indexOf(null) >= 0 ? null : docRecordMeet(recs);
+}
+/* The decline token for a request whose asker is no document of its instance: one word, so the egress
+   histogram stays over a closed set. */
+const ASKER_REFUSAL = "blocked-asker:not-in-instance";
 /* A document's principal: HTML §7.3.2.1's determine the origin returns a new opaque origin when its record
    carries the sandboxed origin browsing context flag, and `origin` (the URL's, or the browser-stated one)
    otherwise. The opaque one is `_senderOrigin`'s "null:<uuid>" shape, unique per document, so clusterKeyOf
@@ -2128,7 +2146,8 @@ const NAVIGATION_DESTINATIONS = Object.freeze(["document", "embed", "frame", "if
    (`blocked-signal:`, `blocked-scheme:`, `blocked-local-network:`).
    Emptiness is not judged here: an OK zero-length body is an ordinary empty Document; refusing one is a seed's
    rule, stated at the seed. */
-/* `fromDoc` is this zone's record of the instance issuing this navigation (lib/document-record.js), distinct
+/* `fromDoc` is this zone's record of the document issuing this navigation (lib/document-record.js; of its
+   instance, for a notice that names no issuer), distinct
    from `provenance` (the engine's word about this navigation act); safe-fetch.js reads both, the record as a
    floor. An omitted one is refused by `_docOf`. The produced document's record is the join of the two
    (childDocRecord), composed by whoever states that document's analyze record. */
@@ -2520,8 +2539,9 @@ function engineReserve(cluster, docId, msg, referenced) {
      drain. engineRoot turns it into the ABI call. */
   /* The cold-tier lookup fields, null until engineRoot's frontier read decides them; a boot that dies first
      carries the nulls unchanged, which says when it died. */
-  /* `doc` is this zone's record of the instance (lib/document-record.js), the join of `records`, its documents'
-     own; both are written by engineRoot and engineJoin only. */
+  /* `records` is this zone's record of each document the instance holds (lib/document-record.js), which a
+     request is judged against by its asking document (askerRecord); `doc` is their join, read only by the
+     notices that name no issuing document. Both are written by engineRoot and engineJoin only. */
   const eng = { state: "booting", cluster, docId, topDocId: docId, joinedDocIds: [], msg,
                 doc: null, records: new Map(),
                 groupId: msg.groupId, _resumed: null, referenced,
@@ -2817,7 +2837,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* The request's destination travels with it (Fetch §2.2.5 Requests): safe-fetch.js decides the CORB class
      from §2.2.5's script-like predicate over it, so it is passed through, not reduced to a boolean. */
   const fetched = async (method, u, destination, provenance, pinned, driven, credentials, mode, referrerPolicy,
-                         referrer) => {
+                         referrer, doc) => {
     DCHECK(pinned === "pinned" || pinned === "unpinned",
            "a pending request reached the fetch relay carrying no witness mark — solver/engine.h states " +
            "`pinned` or `unpinned` on every line of the pending join, and the chokepoint reads it WITH the " +
@@ -2825,25 +2845,28 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "A relay that dropped it would have safe-fetch.js answer from `unstated`, which is the word for " +
            "an act that never had one");
     DCHECK(typeof destination === "string",
-           "a pending request reached the chokepoint with no DESTINATION — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and Fetch §2.2.5 " +
-           "makes the destination part of the request, so a caller that omits it is one whose code load " +
-           "would be fetched as data and compiled. The empty string is a real destination and means DATA");
+           "a pending request reached the chokepoint with no DESTINATION — every GetPending line carries one " +
+           "(pendingRequest) and Fetch §2.2.5 makes the destination part of the request, so a caller that " +
+           "omits it is one whose code load would be fetched as data and compiled. The empty string is a real " +
+           "destination and means DATA");
     DCHECK(typeof method === "string" && method !== "",
-           "a pending request reached the chokepoint with no method — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and the " +
-           "(method, url) pair is what the flow parked on, so a request whose method is unknown can be " +
-           "neither refused nor issued");
+           "a pending request reached the chokepoint with no method — every GetPending line carries one " +
+           "(pendingRequest) and the (method, url) pair is what the flow parked on, so a request whose method " +
+           "is unknown can be neither refused nor issued");
     /* The credentials mode is passed through for the same reason; reducing it with this zone's willingness is
        the chokepoint's job (`_credentialedOf`). */
     DCHECK(typeof credentials === "string" && credentials !== "",
-           "a pending request reached the chokepoint with no CREDENTIALS MODE — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>URL`, Fetch §2.2.5 " +
-           "\"Requests\" gives every request one, and only the algorithm that created it knows which. A " +
-           "caller that drops it hands `safe-fetch.js` a request it can decide nothing about");
+           "a pending request reached the chokepoint with no CREDENTIALS MODE — every GetPending line carries " +
+           "one (pendingRequest), Fetch §2.2.5 \"Requests\" gives every request one, and only the algorithm " +
+           "that created it knows which. A caller that drops it hands `safe-fetch.js` a request it can decide " +
+           "nothing about");
     /* The method half of the firing question is asked of the chokepoint (`safeFetchMethodRefusal`), so this
        host and engine/trusted.mjs answer it once, in the chokepoint's refusal vocabulary, and the flow stays
        parked rather than being told the server was unreachable. */
+    /* The asking documents' record (askerRecord), null when the engine named a document that is not one of this
+       instance's, which no record here can judge. */
+    if (doc === null) return { refusal: { kind: "decline", reason: ASKER_REFUSAL } };
+    DCHECK(docRecordIs(doc), "a pending request reached the fetch relay with no asking document's record");
     const _mRefusal = self.safeFetchMethodRefusal(method);
     if (_mRefusal) return { refusal: _mRefusal };
     /* A holed address is a park carrying an address the engine never determined, so there is no request to
@@ -2880,15 +2903,9 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       /* `credentials` is the request's own mode (Fetch §2.2.5 Requests), relayed off the pending line; its
          conjunction with `credentialed` is safe-fetch.js's and can only narrow, so it makes `omit` parks
          refusable and `include` ones honest once the principal above is wired. */
-      /* `doc` is this zone's record of the instance this park belongs to (lib/document-record.js), distinct
-         from `provenance` (the engine's word about the flow's path inside the document): a page this tool
-         opened makes requests the engine grades `observed`. It is the join of every document the instance holds,
-         so a document joined into it narrows its root's requests too.
-         Named residual. Not covered: the record is the instance's, not the asking document's. Next diff carries
-         the park's document name on the pending line so the lookup is per document (the engine already routes
-         by that name). Absence shows, at an origin widened for one record and not another, as a root
-         document's request refused on `doc-reach`, `actor` or `witness` after a document with a weaker record
-         joined its instance. */
+      /* `doc` is this zone's record of the documents asking this park (askerRecord over the line's ASKERS),
+         distinct from `provenance` (the engine's word about the flow's path inside the document): a page this
+         tool opened makes requests the engine grades `observed`. */
       /* `actor: "page"`: this frame answers a park the engine put on its pending line, and the engine parks on
          what the analysed document's code does. Stated so safe-fetch.js can assert it; with `witness` unpinned it
          is the row the owner's value arm turns on. */
@@ -2900,7 +2917,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          the chokepoint's `actor` row reads it. */
       const opts = { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination, mode, provenance, pinned,
                      driven, credentials, actor: "page", useCorsPreflight: false,
-                     doc: eng.doc, credentialed: false,
+                     doc, credentialed: false,
                      identity: pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, abs, credentials, mode,
                                                    referrerPolicy, referrer) };
       const r = await self.safeFetch(abs, opts);
@@ -2991,7 +3008,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* This forward serves only `rendezvous` and `none`: no consumer of it drops a work item, so a `report` would
      be honoured by the loader and then fabricated into a document by the notice that asked. A consumer that
      gains such an arm widens this list deliberately. */
-  const fetchedDocument = async (u, provenance, driven, pinned, refusalArm, request, readerOpaque) => {
+  const fetchedDocument = async (u, provenance, driven, pinned, refusalArm, request, readerOpaque, doc) => {
     DCHECK(refusalArm === "rendezvous" || refusalArm === "none",
            "a §7.4 document load was asked for stating the refusal arm " + JSON.stringify(refusalArm) +
            ", and this forward serves only `rendezvous` and `none` — a request that parks on a rendezvous " +
@@ -2999,7 +3016,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "which none of these three does, so honouring one here would hand a declined record to a consumer " +
            "whose only arm for it fabricates an empty document — which is the literal this parameter " +
            "replaced");
-    const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, eng.doc,
+    /* `doc` is the issuing document's record: the creator's for a create, the asker's for a load
+       (askerRecord), the instance's for a notice that names no issuer. */
+    DCHECK(docRecordIs(doc), "a §7.4 document load was asked for with no issuing document's record");
+    const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, doc,
                                    refusalArm, /*actor*/"page", driven, pinned, request, documentSpeaker(msg),
                                    readerOpaque);
     /* `declined` crosses (engineDeliverDocument routes it to the rendezvous, so the navigable keeps the
@@ -3024,7 +3044,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   // The XMLHttpRequest fetch (XHR §3.5.6 The send() method) through the same chokepoint. `rec` is the
   // engine's JSON request record (method, url, headers, body); the answer is the reply shape fetch_reply_new
   // builds, and a null body is the network error §3.5.6's handle errors turns into an `error` event.
-  const fetchedXhr = async (rec) => {
+  const fetchedXhr = async (rec, doc) => {
     let q = null;
     /* The request record is the engine's, crossing as JSON so it carries its types; unparseable text is
        xml_http_request.c writing something other than its record, so it aborts rather than becoming an
@@ -3125,7 +3145,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, pageOrigin: eng.origin, destination: "",
                                             mode: q.mode, provenance: q.provenance, pinned: _xhrPinned,
                                             driven: q.driven,
-                                            doc: eng.doc, actor: "page",
+                                            doc, actor: "page",
                                             credentialed: false, useCorsPreflight: q.useCorsPreflight,
                                             credentials: q.credentials, headers: q.headers,
                                             identity: pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, abs,
@@ -3685,8 +3705,8 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
      outstanding to wait on. */
   let issued = 0;
   for (const line of requests) {
-    const { method, destination, provenance, pinned, driven, credentials, mode, referrerPolicy, referrer, url } =
-      pendingRequest(line);
+    const { method, destination, provenance, pinned, driven, credentials, mode, referrerPolicy, referrer, askers,
+            url } = pendingRequest(line);
     /* The ask is counted at the call, before the gate, so the census separates a request nobody made from one
        the gate refused: `declined: {}` beside a nonzero `asked` says the policy refused nothing (an empty
        surface is then about the driving), while `asked: 0` says this loop never ran. */
@@ -3702,7 +3722,7 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
     issued += engineIssue(eng, key,
       () => { eng._egress.asked++;
               return eng.fetched(method, url, destination, provenance, pinned, driven, credentials, mode,
-                                 referrerPolicy, referrer); },
+                                 referrerPolicy, referrer, askerRecord(eng, askers)); },
       (answer) => engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer));
   }
   return issued;
@@ -3860,14 +3880,25 @@ async function hostNotice(eng, line) {
            + "from navigable_notice.h, and noticegen.mjs writes the table from the same header, so the "
            + "extension's copy is stale or the engine is from another revision");
     if (hostHolderOf(f[C.child])) return;   // already provisioned: the engine announces a document once
-    /* The child's record, before anything is opened or loaded for it: the creating instance's record composed
-       with the notice's words by HTML's own rules (lib/document-record.js), so a child of a document this tool
-       opened is never graded as one the person navigated to and inherits every mark and flag the rules carry.
-       A navigable with no parent is an auxiliary one, which §7.3.1.7 does not create at all under the
-       creator's sandboxed auxiliary navigation flag; that notice is refused here, whatever the engine decided. */
+    /* The child's record, before anything is opened or loaded for it: the creating document's record
+       (askerRecord) composed with the notice's words by HTML's own rules (lib/document-record.js), so a child
+       of a document this tool opened is never graded as one the person navigated to and inherits every mark
+       and flag the rules carry. The creator is refused unless it is a document of this instance and the
+       child's name is minted from it ("<creator>.<n>", solver/world.c's world_mint_doc), the nesting the
+       record of the child's own descendants walks. A navigable with no parent is an auxiliary one, which
+       §7.3.1.7 does not create at all under the creator's sandboxed auxiliary navigation flag; that notice is
+       refused here, whatever the engine decided. */
+    const _creatorDoc = askerRecord(eng, [f[C.creator]]);
+    if (_creatorDoc === null || !f[C.child].startsWith(f[C.creator] + ".") ||
+        !/^[0-9]+$/.test(f[C.child].slice(f[C.creator].length + 1))) {
+      console.warn("[bridge] navigable.create " + f[C.child] + " is refused: " + (_creatorDoc === null
+        ? "its creator " + f[C.creator] + " is no document of the creating instance"
+        : "its name is not minted from its creator " + f[C.creator]));
+      return;
+    }
     const _childOwn = docRecord(f[C.provenance], f[C.driven], f[C.pinned], f[C.sandboxFlags]);
-    const _childDoc = f[C.parent] === "u" ? docRecordAuxiliary(eng.doc, _childOwn)
-                                          : docRecordJoin(eng.doc, _childOwn);
+    const _childDoc = f[C.parent] === "u" ? docRecordAuxiliary(_creatorDoc, _childOwn)
+                                          : docRecordJoin(_creatorDoc, _childOwn);
     if (_childDoc === null) {
       console.warn("[bridge] navigable.create " + f[C.child] + " is refused: the creating document's sandbox sets " +
                    "HTML §7.1.5's sandboxed auxiliary navigation browsing context flag, so §7.3.1.7 creates no " +
@@ -3888,7 +3919,7 @@ async function hostNotice(eng, line) {
        an empty document, so navigationLoad aborts on a decline instead, naming what to build. */
     const loaded = await eng.fetchedDocument(f[C.address], f[C.provenance], f[C.driven], f[C.pinned],
                                              /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED,
-                                             docRecordOpaque(_childDoc));
+                                             docRecordOpaque(_childDoc), _creatorDoc);
     childRequestAlias(f[C.creator], f[C.address], loaded.url);
     /* The child's principal is principalOf its record: a new opaque origin under the sandboxed origin flag
        (HTML §7.3.2.1 Creating browsing contexts), otherwise the origin of the response's URL (`loaded.url`,
@@ -4087,11 +4118,12 @@ async function hostNotice(eng, line) {
        an address this zone declined at `document.fetch`. */
     /* `none`, for the create arm's reason: a swap is a notice, and its `pageHtml` line turns a null body into
        an empty Uint8Array. */
-    /* The record is the creating instance's joined with the notice's words, as for a created child. */
+    /* The record is the creating instance's joined with the notice's words: the swap notice names no issuing
+       document (engine/trusted.mjs's join arm states the residual). */
     const _swapDoc = childDocRecord(eng, f[P.provenance], f[P.driven], f[P.pinned]);
     const swapped = await eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned],
                                               /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED,
-                                              docRecordOpaque(_swapDoc));
+                                              docRecordOpaque(_swapDoc), eng.doc);
     DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
            "the swapped-to document load answered neither bytes nor the null that means it did not load");
     DCHECK(swapped.headers && typeof swapped.headers === "object",
@@ -4147,11 +4179,11 @@ async function hostNotice(eng, line) {
     DCHECK(!hostHolderOf(f[P.document]),
            "a top-level navigation into a peer named a document this pool already holds — the name is minted " +
            "fresh by the navigating engine, so a collision is one instance provisioned for two Documents");
-    /* The record is the creating instance's joined with the notice's words, as for a created child. */
+    /* The record is the creating instance's joined with the notice's words, as for a swap. */
     const _navDoc = childDocRecord(eng, f[P.provenance], f[P.driven], f[P.pinned]);
     const navd = await eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned],
                                            /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED,
-                                           docRecordOpaque(_navDoc));
+                                           docRecordOpaque(_navDoc), eng.doc);
     DCHECK(navd && (navd.bytes === null || navd.bytes instanceof Uint8Array) &&
            navd.headers && typeof navd.headers === "object" && typeof navd.url === "string" && navd.url !== "",
            "the navigated-to document load answered without bytes-or-null, a header list and a response URL — " +
@@ -4412,6 +4444,15 @@ async function engineServiceHostRequests(eng) {
        and the engine's counter starts at 1, so 0 or NaN would answer a call site that does not exist. */
     DCHECK(Number.isInteger(id) && id > 0,
            "an owed host request carries no usable id — an answer is routed by that number alone");
+    /* The asking document's record, which the two arms this zone performs judge by. A request whose asker is no
+       document of this instance is declined whatever its operation, by the rule the pending line's askers are
+       held to; a declined rendezvous is not listed again. */
+    const askerDoc = askerRecord(eng, [asker]);
+    if (askerDoc === null) {
+      await engineDeclineRendezvous(eng, id, ASKER_REFUSAL);
+      did++;
+      continue;
+    }
     /* A cross-agent operation is not answered by this zone: it is asked of the peer holding the document.
        `otherW.length` (HTML §7.2.2.2 Indexed access on the Window object) counts the peer's child navigables,
        and the internal methods a lent object performs ([[Get]], [[Set]], [[Delete]], [[Call]]) run the peer's
@@ -4455,7 +4496,7 @@ async function engineServiceHostRequests(eng) {
          beside `wpt_request_asked`): the answer is delivered against `engine_host_answer`'s id, and two
          identical questions from two flows are two ids. Sibling flows run while it waits. */
       did += engineIssue(eng, "xhr\n" + id,
-        () => eng.fetchedXhr(op.slice("xhr.send\t".length)),
+        () => eng.fetchedXhr(op.slice("xhr.send\t".length), askerDoc),
         // Completion 0 is normal (ECMA-262 §6.2.4 The Completion Record Specification Type): this zone fetched
         // bytes and ran no program that could throw. A relayed cross-agent operation answers 1 with the thrown
         // value, so the asking page's `try`/`catch` runs.
@@ -4493,7 +4534,7 @@ async function engineServiceHostRequests(eng) {
       () => eng.fetchedDocument(fetchArgs.slice(initTab + 1), fetchArgs.slice(0, fetchTab),
                                 fetchArgs.slice(fetchTab + 1, drivenTab),
                                 fetchArgs.slice(drivenTab + 1, pinnedTab), /*refusalArm*/"rendezvous",
-                                fetchRequest, docRecordOpaque(eng.doc)),
+                                fetchRequest, docRecordOpaque(askerDoc), askerDoc),
       /* A same-origin child's load files its landed address under its create's facts, as a cross-origin one's
          does in the `navigable.create` arm. */
       (r) => {
