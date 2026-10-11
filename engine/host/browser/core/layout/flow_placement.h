@@ -29,6 +29,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
+#include "core/layout/block_flow.h"
 #include "core/layout/flow_position.h"
 
 /* The record's storage, owned by a layout job. `tab` is a power-of-two table, NULL with `cap` 0 before the
@@ -109,6 +110,15 @@ void flow_placement_origin_record(const lxb_dom_element_t *el, FlowPoint origin,
 bool flow_placement_cb_width_ask(const lxb_dom_element_t *el, CssPx *out, const lxb_dom_element_t **cb_out);
 bool flow_placement_cb_width_peek(const lxb_dom_element_t *el, CssPx *out, const lxb_dom_element_t **cb_out);
 void flow_placement_cb_width_record(const lxb_dom_element_t *el, CssPx width, const lxb_dom_element_t *cb);
+
+/* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes" of one container ------------------------------------------
+ * block_flow_anonymous_boxes' answer, which is §9.4.1's walk over the container's whole child list; held so a
+ * container's walk runs once per job however many of its inline descendants ask for their context. `peek`
+ * counts nothing; `ask` counts; `record` copies the array and counts a derivation, and asserts the box had
+ * none. The census `asks == served + derived` is asserted in `flow_placement_census`. */
+bool flow_placement_anon_peek(const lxb_dom_element_t *el, const BlockFlowAnonBox **v, size_t *n);
+bool flow_placement_anon_ask(const lxb_dom_element_t *el, const BlockFlowAnonBox **v, size_t *n);
+void flow_placement_anon_record(const lxb_dom_element_t *el, const BlockFlowAnonBox *v, size_t n);
 
 /* The census, in solver/result.c's vocabulary. Every field is a lifetime counter of this agent, so each
    may be differenced across two samples. `asks` counts §9.4.1 stack positions asked, `served` those this

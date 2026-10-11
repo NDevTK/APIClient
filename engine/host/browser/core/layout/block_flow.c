@@ -2751,7 +2751,8 @@ CssPx block_flow_static_child_top(lxb_dom_element_t *el)
     return top;
 }
 
-bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **out, size_t *count)
+/* The enumeration itself, one §9.4.1 walk with an anonymous-box sink; the ask below holds its answer. */
+static bool bf_anon_boxes_compute(lxb_dom_element_t *el, BlockFlowAnonBox **out, size_t *count)
 {
     BfAnonSink sink;
     CssPx unused = css_px(0.0);
@@ -2797,6 +2798,77 @@ bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **ou
            "answer is one classification having been asked twice and answered differently");
     *out = sink.v;
     *count = sink.n;
+    return true;
+}
+
+static BlockFlowAnonBox *bf_anon_copy(const BlockFlowAnonBox *v, size_t n)
+{
+    BlockFlowAnonBox *c;
+
+    if (n == 0) return NULL;
+    c = malloc(n * sizeof *c);
+    CHECK(c != NULL, "out of memory copying one container's anonymous block boxes");
+    memcpy(c, v, n * sizeof *c);
+    return c;
+}
+
+#if APICLIENT_DEV
+/* NaN equals itself here: one derivation run twice over one document agrees with itself. */
+static bool bf_same_px(CssPx a, CssPx b)
+{
+    return a.px == b.px || (a.px != a.px && b.px != b.px);
+}
+
+/* A served enumeration re-derived and compared, on every sixteenth serve: a key that omits an operand of the
+   walk answers a second asker with the first asker's boxes. The re-derivation runs in a drive of its own. */
+static void bf_anon_recheck(lxb_dom_element_t *el, const BlockFlowAnonBox *held, size_t hn)
+{
+    static unsigned long long serves;
+    BlockFlowAnonBox *fresh = NULL;
+    LayoutJobDrive d;
+    size_t n = 0, i;
+    char nbuf[160];
+
+    if (serves++ % 16 != 0) return;
+    layout_job_drive_begin(&d);
+    while (!bf_anon_boxes_compute(el, &fresh, &n)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
+    DCHECKF(n == hn, "%s: a layout job served %zu CSS 2.2 §9.2.1.1 anonymous boxes where a fresh walk "
+            "enumerates %zu, so the placement record's key omits an operand of the walk",
+            box_subject(el, nbuf, sizeof nbuf), hn, n);
+    for (i = 0; i < n; i++)
+        DCHECKF(fresh[i].run.after == held[i].run.after && fresh[i].run.end == held[i].run.end &&
+                    bf_same_px(fresh[i].content_x, held[i].content_x) &&
+                    bf_same_px(fresh[i].content_y, held[i].content_y) &&
+                    bf_same_px(fresh[i].height, held[i].height),
+                "%s, anonymous box %zu: a layout job served (%g, %g, height %g) where a fresh walk gives "
+                "(%g, %g, height %g)", box_subject(el, nbuf, sizeof nbuf), i, held[i].content_x.px,
+                held[i].content_y.px, held[i].height.px, fresh[i].content_x.px, fresh[i].content_y.px,
+                fresh[i].height.px);
+    free(fresh);
+}
+#endif
+
+bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **out, size_t *count)
+{
+    const BlockFlowAnonBox *held = NULL;
+    size_t hn = 0;
+
+    DCHECK(el != NULL && out != NULL && count != NULL,
+           "CSS 2.2 §9.2.1.1's anonymous block boxes were asked for with no element or nowhere to put them");
+    /* The census counts an ask at the attempt that answers it, as the origin's does. */
+    if (flow_placement_anon_peek(el, &held, &hn)) {
+        (void)flow_placement_anon_ask(el, &held, &hn);
+#if APICLIENT_DEV
+        bf_anon_recheck(el, held, hn);
+#endif
+        *out = bf_anon_copy(held, hn);
+        *count = hn;
+        return true;
+    }
+    if (!bf_anon_boxes_compute(el, out, count)) return false;
+    (void)flow_placement_anon_ask(el, &held, &hn);
+    flow_placement_anon_record(el, *out, *count);
     return true;
 }
 

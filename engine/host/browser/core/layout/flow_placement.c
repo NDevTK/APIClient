@@ -37,9 +37,14 @@ typedef struct FpEntry {
        about how the number was produced. See core/layout/flow_placement.h's §10.1 section. */
     CssPx                    cb_width;
     const lxb_dom_element_t *cb_width_cb;
+    /* CSS 2.2 §9.2.1.1's anonymous block boxes of this box, as block_flow_anonymous_boxes enumerates them;
+       owned, NULL when there are none. */
+    BlockFlowAnonBox        *anon;
+    size_t                   anon_n;
     bool                     has_top;
     bool                     has_origin;
     bool                     has_cb_width;
+    bool                     has_anon;
 } FpEntry;
 
 
@@ -53,6 +58,9 @@ static long long g_origin_derived;
 static long long g_cb_width_asks;
 static long long g_cb_width_served;
 static long long g_cb_width_derived;
+static long long g_anon_asks;
+static long long g_anon_served;
+static long long g_anon_derived;
 
 /* THE ONE INITIAL CAPACITY, AND IT IS NOT A BOUND ON ANYTHING. §NO BOUNDS forbids deciding that work will not
    happen; this decides only how many placements fit before the table is rebuilt at twice the size, which is a
@@ -113,6 +121,10 @@ static void fp_grow(FlowPlacementRecord *r)
 
 void flow_placement_record_release(FlowPlacementRecord *r)
 {
+    size_t i;
+
+    for (i = 0; i < r->cap; i++)
+        if (r->tab[i].el != NULL) free(r->tab[i].anon);
     free(r->tab);
     r->tab = NULL;
     r->cap = 0;
@@ -313,6 +325,60 @@ void flow_placement_cb_width_record(const lxb_dom_element_t *el, CssPx width, co
     tab[i].has_cb_width = true;
 }
 
+bool flow_placement_anon_peek(const lxb_dom_element_t *el, const BlockFlowAnonBox **v, size_t *n)
+{
+    size_t i;
+    FlowPlacementRecord *r = layout_job_placement();
+
+    DCHECK(el != NULL && v != NULL && n != NULL,
+           "CSS 2.2 §9.2.1.1's anonymous-box record was asked about no box or with nowhere to answer");
+    if (r == NULL || r->cap == 0) return false;
+    i = fp_probe(r->tab, r->cap, el);
+    if (r->tab[i].el == NULL || !r->tab[i].has_anon) return false;
+    *v = r->tab[i].anon;
+    *n = r->tab[i].anon_n;
+    return true;
+}
+
+bool flow_placement_anon_ask(const lxb_dom_element_t *el, const BlockFlowAnonBox **v, size_t *n)
+{
+    g_anon_asks++;
+    if (!flow_placement_anon_peek(el, v, n)) return false;
+    g_anon_served++;
+    return true;
+}
+
+void flow_placement_anon_record(const lxb_dom_element_t *el, const BlockFlowAnonBox *v, size_t n)
+{
+    size_t i;
+    FlowPlacementRecord *r = layout_job_placement();
+    FpEntry *tab;
+
+    DCHECK(el != NULL && (n == 0 || v != NULL),
+           "CSS 2.2 §9.2.1.1's anonymous-box record was handed boxes with no container or no array");
+    /* Counted before the guard, for the origin record's reason. */
+    g_anon_derived++;
+    if (r == NULL) return;
+    if (r->used * 2 >= r->cap) fp_grow(r);
+    tab = r->tab;
+    i = fp_probe(tab, r->cap, el);
+    if (tab[i].el == NULL) {
+        tab[i].el = el;
+        r->used++;
+    }
+    DCHECK(!tab[i].has_anon,
+           "a container's CSS 2.2 §9.2.1.1 anonymous boxes were enumerated twice in one job; the enumeration "
+           "asks this record first, so a second derivation is a probe that missed a key a write had landed");
+    tab[i].anon = NULL;
+    if (n != 0) {
+        tab[i].anon = malloc(n * sizeof *tab[i].anon);
+        CHECK(tab[i].anon != NULL, "out of memory recording one container's anonymous block boxes");
+        memcpy(tab[i].anon, v, n * sizeof *tab[i].anon);
+    }
+    tab[i].anon_n = n;
+    tab[i].has_anon = true;
+}
+
 bool flow_placement_ask(const lxb_dom_element_t *el, CssPx *out)
 {
     size_t i;
@@ -379,4 +445,8 @@ void flow_placement_census(FlowPlacementCensus *out)
     out->cb_width_asks = g_cb_width_asks;
     out->cb_width_served = g_cb_width_served;
     out->cb_width_derived = g_cb_width_derived;
+    DCHECKF(g_anon_asks == g_anon_served + g_anon_derived,
+            "CSS 2.2 §9.2.1.1's anonymous-box census does not close: %lld asks against %lld served and %lld "
+            "derived; every answered ask is served from the record or derives and records",
+            g_anon_asks, g_anon_served, g_anon_derived);
 }
