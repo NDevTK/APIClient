@@ -909,20 +909,18 @@ void flow_credit_emit(double v) {
        `fam_us` are updated is observationally identical. */
 }
 
-/* THE OTHER KIND OF QUANTITY IN THE WEIGHT, and the whole of why it is a separate function from the one above.
- * flow_credit_emit is a LEDGER entry: it records that something was LEARNED, so it is paid once and adds. This
- * is a COMPARATOR reading: it records where a candidate STANDS, so it is written, not added, and it says the
- * same thing however many times it is taken. Conflating them is not a style question — a distance paid into a
- * ledger has to be paid at most once per search to keep the ledger honest, and that is exactly the rule that
- * makes every candidate after the first indistinguishable from one that never started.
- * MONOTONE, AND THAT IS THE INVARIANT AND NOT A CLAMP. A flow's payload is fixed for its life, so the longest
- * run of it any re-execution has delivered can only be discovered, never undone: a later observation on a
- * different string is another sample of the same fixed question, and taking the smaller one would let a page
- * that writes the payload twice demote the flow for its second write. So a lower reading is DISCARDED as the
- * non-observation it is, and the early return is what keeps the generation from moving for a rank that did not.
- * NOT KEYED ON THE RUNNING FLOW, unlike the credit above: the observation is made about a specific flow's own
- * bytes and the caller already holds that flow, so passing it is what stops this becoming a second way to ask
- * which flow is running. */
+/* The other kind of quantity in the weight. flow_credit_emit is a ledger entry: it records that something was
+ * learned, so it is paid once and adds. This is a comparator reading: it records where a candidate stands, so it
+ * is written, not added, and says the same thing however many times it is taken. A distance paid into a ledger
+ * would have to be paid at most once per search, which makes every candidate after the first indistinguishable
+ * from one that never started.
+ *
+ * Monotone, as an invariant rather than a clamp: a flow's payload is fixed for its life, so the longest run of it
+ * any re-execution delivered can only be discovered, never undone. A later lower reading is another sample of the
+ * same fixed question (taking it would let a page that writes the payload twice demote the flow for its second
+ * write), so it is discarded, and the early return keeps the generation still for a rank that did not move.
+ * Keyed on the flow passed, not the running flow: the observation is about a specific flow's bytes the caller
+ * holds, so this is not a second way to ask which flow is running. */
 void flow_observe_replay(Flow *f, long consumed, long total) {
     double frac;
 
@@ -939,12 +937,10 @@ void flow_observe_replay(Flow *f, long consumed, long total) {
            "run has REPLAYED and `total` the recorded path they are a prefix of, so a value outside [0,total] "
            "is a numerator taken from one flow and a denominator from another, and the fraction it makes enters "
            "the weight beside an optimism term whose entire range is 1.0");
-    /* PAST THE DELIVERY THIS RUNG IS PINNED AND MAY NOT BE WRITTEN, which is the ladder's own rule rather than
-       a guard: the source read is behind this flow, so the runway has stopped being the question, and a live
-       fraction here would rank a delivered candidate whose recorded path runs on past its source read BELOW an
-       undelivered one that happened to consume all of its own. Asserted rather than silently skipped, because
-       reaching this line in that state means dec_replay is still consuming arms for a flow whose own delivery
-       has been recorded — two components disagreeing about where this candidate stands. */
+    /* Past the delivery this rung is pinned and may not be written, the ladder's own rule: the source read is
+       behind this flow, and a live fraction would rank a delivered candidate whose recorded path runs on past its
+       source read below an undelivered one that consumed all of its own. Asserted rather than skipped, because
+       reaching here in that state means dec_replay still consumes arms for a flow whose delivery is recorded. */
     if (f->cand_rung >= FLOW_RUNG_DELIVERED) {
         DCHECK(f->cand_replay == 1.0,
                "a delivered @S candidate's runway rung is not pinned — flow_observe_rung pins it at the "
@@ -952,12 +948,11 @@ void flow_observe_replay(Flow *f, long consumed, long total) {
                "here is that pin having been missed and the ladder's bottom two bands now overlap");
         return;
     }
-    /* THE TRIPLE DESCRIBES ONE SAMPLE, ASSERTED ON THE WAY IN RATHER THAN TRUSTED. Below the delivery the
-       fraction is exactly the division of the pair beside it — same operands, same expression, computed once —
-       so a disagreement here is two writers having got at these fields separately, and the report built on the
-       pair would then contradict the comparator built on the fraction. Asserted AFTER the pin's early return
-       above, because past the delivery the fraction is a POLICY and the pair is the last OBSERVATION, and
-       those are deliberately allowed to differ (see the field). */
+    /* The triple describes one sample, asserted on the way in. Below the delivery the fraction is exactly the
+       division of the pair beside it, so a disagreement is two writers reaching these fields separately and the
+       report built on the pair would contradict the comparator. Asserted after the pin's early return, because
+       past the delivery the fraction is a policy and the pair the last observation, which may differ (see the
+       field). */
     DCHECK((f->cand_replay_of == 0) == (f->cand_replay == 0.0),
            "an @S candidate's runway fraction and the pair it was computed from disagree about whether any "
            "reading has ever been taken — `of == 0` is this flow's word for 'never observed' and so is a zero "
@@ -971,15 +966,12 @@ void flow_observe_replay(Flow *f, long consumed, long total) {
            "halves and the comparator's one number are describing different moments, which is the exact "
            "defect holding a fraction as its halves exists to remove");
     frac = (double)consumed / (double)total;
-    /* MONOTONE, AND THAT IS THE INVARIANT AND NOT A CLAMP — flow_observe_survival's sentence, one rung down. A
-       candidate's recorded path is FIXED for its life, so the longest prefix any replay has consumed can only
-       be discovered and never undone: a lower reading is another sample of the same fixed question, and taking
-       it would demote a flow for a re-execution that diverged earlier than one before it. The early return is
-       what keeps the frontier from re-ranking for a rank that did not move. */
+    /* Monotone, as flow_observe_survival one rung down: a candidate's recorded path is fixed for its life, so the
+       longest prefix any replay consumed can only be discovered, and a lower reading would demote a flow for a
+       re-execution that diverged earlier. The early return keeps the frontier from re-ranking. */
     if (frac <= f->cand_replay) return;
-    /* ALL THREE, IN ONE PLACE, BECAUSE THE PAIR IS THE FRACTION AND NOT A SECOND OBSERVATION OF IT. Writing
-       the double here and the halves anywhere else is how the sample they describe drifts apart; the asserts
-       above are that statement made enforceable on every later call. */
+    /* All three in one place, because the pair is the fraction and not a second observation of it; the asserts
+       above enforce that on every later call. */
     f->cand_replay = frac;
     f->cand_replay_arms = consumed;
     f->cand_replay_of = total;
@@ -998,16 +990,13 @@ void flow_observe_survival(Flow *f, double frac) {
            "a surviving fraction was recorded for a flow carrying no payload — the fraction's denominator IS "
            "the payload, so a flow with none has nothing this number could be a fraction of and would rank "
            "above every exploration flow on a measurement of nothing");
-    /* AND THE RUNG BELOW THIS ONE, WHICH IS THE ORDER OF THE LADDER ASSERTED FROM THE LADDER'S OWN SIDE. The
-       flow having a payload says the substitution was INSTALLED; it does not say the substitution has HAPPENED,
-       and the run this function is about to record is a run of the payload's bytes in a string — which is
-       found in the PAGE'S own text just as readily, because a breakout is punctuation. solve.c's three
-       candidate-arm entries ask the component that performs the substitution and return before reaching here
-       if it has not; this is the same statement one layer down, so a fourth sink class, or a fourth route into
-       an existing one, cannot re-open the door by forgetting to ask. It is also what makes flow_distance's
-       `cand_surv + cand_rung` composition sound: the fraction is arithmetically BELOW the delivery and
-       chronologically above it, and this is the assertion that the pair which would expose that — a nonzero
-       fraction standing at rung 0 — cannot exist. */
+    /* And the rung below this one, the ladder's order asserted from its own side. A payload says the substitution
+       was installed, not that it happened, and the run about to be recorded is a run of the payload's bytes in a
+       string, which the page's own text matches just as readily because a breakout is punctuation. solve.c's three
+       candidate-arm entries return before here unless the substituting component reports it performed; this is the
+       same statement one layer down, so a fourth sink class or route cannot forget to ask. It also makes
+       flow_distance's `cand_surv + cand_rung` sound: the fraction is arithmetically below the delivery and
+       chronologically above it, and this asserts that a nonzero fraction at rung 0 cannot exist. */
     DCHECK(f->cand_rung >= FLOW_RUNG_DELIVERED,
            "an @S survival fraction is being recorded for a flow that has not been observed to DELIVER its "
            "payload — the run about to be measured is the page's own bytes coinciding with the candidate's, "
@@ -1018,23 +1007,20 @@ void flow_observe_survival(Flow *f, double frac) {
     frontier_rank_changed();
 }
 
-/* THE SAME QUANTITY, ONE RUNG UP — see flow.h for why the writers are separate entry points, why the ladder's
- * bottom rung sits below every stage §@S names, and why the fire is not on it. Everything
- * flow_observe_survival says about being a reading rather than a payment holds verbatim here; what this adds
- * is the ORDER, which the fraction does not have.
- * WHY THE ORDER IS ASSERTED RATHER THAN ARRANGED. Each escape site in solve.c runs downstream of the arrival
- * site on the SAME string of the SAME flow, and both run downstream of a DELIVERY because every candidate-arm
- * sink entry returns at its door unless this flow's substitution has been performed — so the predecessor is
- * always already recorded, and the one way that stops being true is the one that matters: the arrival write is
- * refused for a candidate the search's own delivery table has since contradicted, and an escape recorded past
- * a refused arrival would advance a flow onto a rung the search declined to give it. That is not a rank one
- * rung too high; it is a rank identical to a candidate that arrived AND escaped, taken by one the search has
- * measured cannot arrive at all.
- * AND A RE-DELIVERY IS NOT A DEMOTION. A candidate that is RESTARTED rather than resumed (decide_enter, which
- * clears the component's live per-flow state) replays from the baseline and delivers again, so this is called
- * with FLOW_RUNG_DELIVERED for a flow already standing on ARRIVED. The early return below is the whole of the
- * handling: a lower later sample is another look at a question whose answer is fixed — this flow's payload is
- * fixed — never a statement that it has un-delivered. §@S's monotone clause is that sentence exactly. */
+/* The same quantity one rung up; flow.h says why the writers are separate entry points, why the ladder's bottom rung
+ * sits below every stage @S names, and why the fire is not on it. Everything flow_observe_survival says about a
+ * reading rather than a payment holds here; this adds the order, which the fraction does not have.
+ *
+ * The order is asserted rather than arranged. Each escape site in solve.c runs downstream of the arrival site on
+ * the same string of the same flow, and both downstream of a delivery (every candidate-arm sink entry returns at its
+ * door unless this flow's substitution was performed), so the predecessor is always recorded, except where it
+ * matters: the arrival write is refused for a candidate the search's delivery table has contradicted, and an
+ * escape past a refused arrival would give that candidate the rank of one that arrived and escaped.
+ *
+ * A re-delivery is not a demotion. A candidate restarted rather than resumed (decide_enter clears the component's
+ * per-flow state) replays from the baseline and delivers again, so this is called with FLOW_RUNG_DELIVERED for a
+ * flow already on ARRIVED. The early return is the whole handling: the payload is fixed, so a lower later sample is
+ * another look at a fixed answer, never an un-delivery. */
 void flow_observe_rung(Flow *f, int rung) {
     DCHECK(f != NULL,
            "an @S candidate's rung was recorded against no flow — a rung is a fact about ONE flow's own bytes "
@@ -1054,48 +1040,36 @@ void flow_observe_rung(Flow *f, int rung) {
            "about to hand that same payload the whole ladder anyway");
     if (rung <= f->cand_rung) return;  /* not an improvement: the rank did not move, so nothing may re-rank */
     f->cand_rung = rung;
-    /* …AND THE RUNWAY BENEATH IT IS COMPLETE, BY DEFINITION AND NOT BY OBSERVATION. The ladder's rule is that a
-       flow cannot hold a rung without its predecessor, and rung zero is the approach to the source read this
-       delivery reports at — so past it the runway is not the question any more. Written HERE rather than left
-       to dec_replay because the recorded path may run on past the source read: a delivered candidate would
-       otherwise go on reading a fraction below 1.0 and rank beneath an UNDELIVERED one that happened to
-       consume all of its own path, which inverts the ladder at its first step. Pinned, the two bottom bands
-       are disjoint — [0, 0.2] undelivered against [0.4, 0.6] delivered — which is the whole reason the rung
-       below is worth having. Unconditional because a rung can only be reached once (the early return above),
-       and idempotent because 1.0 is the fraction's own ceiling.
-       THE PAIR BESIDE IT IS DELIBERATELY NOT PINNED, and this sentence's own words are the reason: the pin is
-       BY DEFINITION AND NOT BY OBSERVATION, so writing an arm count here would invent one — a candidate can
-       reach its source read having replayed nothing at all, and there is no honest numerator to give it. Past
-       this line the fraction says where the COMPARATOR stands and the pair says what was last OBSERVED, which
-       is why flow_observe_replay asserts their identity only on the arm BELOW the delivery. */
+    /* And the runway beneath it is complete, by definition rather than observation: a flow cannot hold a rung
+       without its predecessor, and rung zero is the approach to the source read this delivery reports at. Written
+       here rather than left to dec_replay because the recorded path may run past the source read, and a delivered
+       candidate reading a fraction below 1.0 would rank beneath an undelivered one that consumed all of its path.
+       Pinned, the bottom bands are disjoint ([0, 0.2] undelivered, [0.4, 0.6] delivered). Unconditional because a
+       rung is reached once (the early return), and idempotent because 1.0 is the fraction's ceiling.
+       The pair beside it is not pinned: the pin is by definition, so an arm count here would be invented (a
+       candidate can reach its source read having replayed nothing). Past this line the fraction is where the
+       comparator stands and the pair what was last observed, which is why flow_observe_replay asserts their
+       identity only below the delivery. */
     f->cand_replay = 1.0;
     frontier_rank_changed();
 }
 
-/* A THIRD KIND OF QUANTITY, AND THE THING TO SAY ABOUT IT IS WHAT IT IS *NOT*. The two above are the WFQ's:
- * one a ledger, one a comparator, both read by flow_weight. This is neither, and it must never become either.
- * It is a fact about the PATH — did this flow ever take an arm the concrete example contradicts — recorded so
- * that a request the flow builds afterwards can declare itself FORCED rather than DERIVED (CLAUDE.md
- * §A-REQUEST-CARRIES-THE-PROVENANCE, and see `path_forced` in flow.h for why no value can answer it).
- * SO IT DOES NOT TOUCH THE FRONTIER GENERATION. §scheduler's fork-is-rank-neutral says a sibling is worth
- * exactly what its parent is worth at the instant of the branch, and BOTH arms of a forced branch are that
- * sibling — the one that agrees with the example and the one that does not. Re-ranking here would price a
- * property of the arm, which is the reset-by-splitting every other term of this file is written to forbid, and
- * flow_fork_inherit's rank-neutrality equality would not catch it because this quantity is not in the weight.
- * IDEMPOTENT BY THE ASSIGNMENT and not by a guard: a path cannot un-take an arm, so the second contradiction
- * says nothing the first did not, and there is no reading to discard. */
+/* A third kind of quantity, which is neither a ledger nor a comparator and is not read by flow_weight. It is a fact
+ * about the path, whether this flow ever took an arm the concrete example contradicts, recorded so that a request
+ * the flow builds afterwards declares itself forced rather than derived (a request carries the provenance of its
+ * values; see `path_forced` in flow.h for why no value can answer it).
+ *
+ * It does not touch the frontier generation. A fork is rank-neutral, so both arms of a forced branch are worth
+ * what their parent is worth at the branch; re-ranking here would price a property of the arm, the
+ * reset-by-splitting this file forbids, and flow_fork_inherit's rank-neutrality equality would not catch it because
+ * the quantity is not in the weight. Idempotent by the assignment: a path cannot un-take an arm. */
 void flow_mark_forced_arm(void) {
-    /* NO `if (g_running)` GUARD, for flow_age_running's reason exactly. Every caller marks a flow it is
-       STANDING IN: decide.c's two decision seams — a bytecode branch, and a native operation's outcome fork
-       over a machine's stated real completion — reach this only with a flow switched in (each returns -1
-       before asking anything otherwise), and engine.c's two exploration seams (a declined request's failure
-       arm, a modelled close request's arrival) each assert `flow_running() == f` at their own site before
-       calling. So a mark with nothing running is a fact recorded on a path belonging to no flow — and whatever
-       took it would then go on to build requests that declare themselves DERIVED.
-       THIS LIST IS A CLAIM ABOUT THE TREE AND IS KEPT WHERE THE FIELD IS DESCRIBED. The sentence that stood
-       here named decide.c as the whole of the callers and had been false since the decline fork landed; the
-       standing list is flow.h's, beside `path_forced`, and this is the local restatement of why the guard is
-       absent rather than a second copy of it. */
+    /* No `if (g_running)` guard, for flow_age_running's reason: every caller marks a flow it stands in. decide.c's
+       two decision seams (a bytecode branch, and a native operation's outcome fork over a machine's stated real
+       completion) reach here only with a flow switched in, and engine.c's two exploration seams (a declined
+       request's failure arm, a modelled close request's arrival) assert `flow_running() == f` before calling. A
+       mark with nothing running would leave the path's later requests declaring themselves derived. The standing
+       list of callers is flow.h's, beside `path_forced`. */
     DCHECK(g_running != NULL,
            "an arm contradicting its own example was recorded with no flow running — the contradiction is a "
            "fact about ONE path, so there is no flow here to be standing on it and the requests built past "
@@ -1111,19 +1085,17 @@ int flow_path_forced(const Flow *f) {
     return f->path_forced;
 }
 
-/* THE NARROWER FACT ABOUT THE SAME PATH — see flow.h's field for why it is recorded at the CHOICE of a witness
- * and not at the address that spends it. Everything flow_mark_forced_arm says about the missing `if (g_running)`
- * guard holds here verbatim and is not restated: this has ONE caller, decide.c's branch seam, which reaches it
- * only on the answer that it has just marked the same path forced. */
+/* The narrower fact about the same path; flow.h's field says why it is recorded at the choice of a witness and not
+   at the address that spends it. The guard argument of flow_mark_forced_arm holds here: the one caller, decide.c's
+   branch seam, reaches it only having just marked the same path forced. */
 void flow_mark_pinned_value(void) {
     DCHECK(g_running != NULL,
            "a determined witness was recorded with no flow running — the determination is a fact about ONE "
            "path, so there is no flow here to be standing on it, and the addresses built from that witness "
            "would be fetched as though their bytes came from the document");
-    /* THE NESTING, ASSERTED AT THE WRITE AND NOT ONLY AT THE PARK. flow.h states that this bit is strictly
-       inside `path_forced`, and the park's own composition asserts the pair it consumes — but a mark that
-       arrived here on an unmarked path would make that later assert fire arbitrarily far from the seam that
-       caused it, naming a park rather than the decision. The two are the same claim read at its two ends. */
+    /* The nesting, asserted at the write and not only at the park. flow.h states this bit is strictly inside
+       `path_forced`, and the park's composition asserts the pair, but a mark on an unmarked path would fire that
+       assert far from the seam that caused it, naming a park rather than the decision. */
     DCHECK(g_running->path_forced == 1,
            "a flow recorded that it DETERMINED a value on a contradicted arm while its path stands on no "
            "contradicted arm at all — this bit is strictly nested inside `path_forced` and its one caller is "
@@ -1144,188 +1116,128 @@ int flow_path_pinned(const Flow *f) {
     return f->path_pinned;
 }
 
-/* Age the running flow by the MICROSECONDS of thread time its step just burned. A monopolizer that runs without
-   emitting sinks below productive + unrun flows — see FLOW_AGE_RATE for the exchange that makes that true.
-   IT IS THE ONLY CHARGE ON `cpu`, AND THAT SENTENCE IS A CORRECTION. What stood here said a DEPARTING flow
-   hands what it burned to the flow that forked it — a mechanism acct_depart's own comment records as DELETED,
-   because `fam_us` counts every microsecond the family burns AS IT BURNS IT and a hand-up at departure would
-   bill it twice. The monopolizer this term is priced against is still the fork CHAIN rather than one of its N
-   names; what charges the chain is the family half below, not a residual moved at a departure.
-   NO `if (g_running)` GUARD. There is exactly one caller and it charges between a switch-in and a finish, so a
-   charge with nothing running would mean the scheduler lost track of which flow burned the time — and silently
-   discarding it is how a monopolizer stops aging altogether. It crashes instead. */
+/* Age the running flow by the microseconds of thread time its step just burned. A monopolizer that runs without
+   emitting sinks below productive and unrun flows; FLOW_AGE_RATE states the exchange that makes that true. This is
+   the only charge on `cpu`: `fam_us` counts every microsecond a family burns as it burns it, so the fork chain is
+   charged through the family half below and nothing is handed up at a departure.
+   No `if (g_running)` guard: the one caller charges between a switch-in and a finish, so a charge with nothing
+   running means the scheduler lost track of which flow burned the time, and discarding it would stop a monopolizer
+   aging. */
 void flow_age_running(int64_t us) {
     DCHECK(g_running != NULL,
            "thread time was charged with no flow running — the scheduler charges the flow it just stepped, so "
            "this is time nobody is billed for and a flow that never ages");
-    /* THE CLOCK THE SCHEDULER AGES BY IS MONOTONIC, ASSERTED WHERE ITS READING ARRIVES. A negative charge does
-       not merely lose the aging: it RAISES the flow's weight, so a flow that burns the thread would climb to the
-       top of the frontier and stay there. That is the exact failure this term exists to prevent, and the only
-       way to get one is a non-monotonic (or wrapping) clock at the call site. */
+    /* The scheduler's clock is monotonic, asserted where its reading arrives. A negative charge raises the flow's
+       weight, so a flow burning the thread would climb to the top and stay; only a non-monotonic or wrapping clock
+       at the call site produces one. */
     DCHECK(us >= 0, "a NEGATIVE thread-time charge reached the WFQ — the aging clock ran backwards, which does "
                     "not slow a monopolizer down, it promotes it");
-    /* THE ACCOUNT BOTH HALVES OF THIS CHARGE LAND ON, ASSERTED BEFORE EITHER OF THEM READS IT. It stood below
-       the `cpu` charge while that charge touched only the flow; the own half is now read over the ACCOUNT's
-       silence window (FlowAcct's `emit_gen`), so the family pointer is dereferenced by the very first
-       statement and the assertion has to precede it or it is checking a pointer already used. */
+    /* The account both halves land on, asserted before either reads it: the own half is read over the account's
+       silence window (FlowAcct's `emit_gen`), so the first statement dereferences the family pointer. */
     DCHECK(g_running->family != NULL && g_running->family->up == NULL,
            "the running flow's family tag is not the ROOT of a fork tree — an arm whose tag points at its own "
            "node has FOUNDED a family instead of joining its parent's, which is precisely the reset by "
            "splitting the whole of this accounting exists to forbid: it would carry its parent's reward with "
            "none of its parent's aging and outrank the entire backlog for free");
-    /* THE WINDOW THIS CHARGE BELONGS TO, NORMALISED BEFORE IT IS ADDED TO. `Flow.cpu` is a reading only while
-       `cpu_gen` matches the account's generation (flow_own_silence); past an emission the field holds a
-       previous window's arithmetic that every reader is already answering ZERO for, so adding to it here would
-       resurrect a quantity nothing was reading and charge this flow for thread time it burned before its
-       family's last finding. Writing the field to what its readers already return is observationally a no-op —
-       which is what makes it safe at a site the preempt hook's seam assertion straddles — and it is done HERE
-       because this is a write site already; flow_own_silence stays read-only for the reason it states.
-       NO `if` PAST A BROKEN INVARIANT: a stale generation is the ORDINARY state of every member of a family
-       that has just emitted, so this is the normal path and not a repair. */
-    /* WHETHER THIS MEMBER WAS ALREADY AWAY FROM ITS FAMILY'S BASE, READ BEFORE THE NORMALISE AND BEFORE THE
-       CHARGE — see FlowAcct's `away_n`. It has to be taken here because both statements below can move it:
-       the normalise writes the field to what its readers already return (observationally a no-op, and zero),
-       and the charge then adds to it. */
+    /* The window this charge belongs to, normalised before it is added to. `Flow.cpu` is a reading only while
+       `cpu_gen` matches the account's generation (flow_own_silence); past an emission it holds a previous window's
+       arithmetic every reader already answers zero for, and adding to it would charge this flow for time burned
+       before its family's last finding. Writing the field to what its readers return is observationally a no-op,
+       so it is safe at a site the preempt hook's seam assertion straddles; it is done here because this is a write
+       site, and flow_own_silence stays read-only. A stale generation is the ordinary state of every member of a
+       family that has just emitted, so this is the normal path, not a repair.
+       Whether this member was already away from its family's base (FlowAcct's `away_n`) is read first, because the
+       normalise and the charge below can both move it. */
     int was_away = flow_own_silence(g_running) > 0;
     if (g_running->cpu_gen != g_running->family->emit_gen) {
         g_running->cpu = 0;
         g_running->cpu_gen = g_running->family->emit_gen;
     }
     g_running->cpu += us;
-    /* …AND THE ONE TRANSITION A CHARGE CAN MAKE. `cpu` only ever rises here and the normalise only ever fires
-       where flow_own_silence was ALREADY answering zero, so base→away is the only direction available and a
-       member already away stays away — which is why this is an increment under a test and not a difference
-       of two counts. A charge of zero microseconds against a member at base moves nothing, and the test says
-       so rather than assuming `us` is positive. */
+    /* And the one transition a charge can make: `cpu` only rises here and the normalise fires only where
+       flow_own_silence already answered zero, so base to away is the only direction and a member already away
+       stays away. A zero-microsecond charge against a member at base moves nothing, and the test says so rather
+       than assuming `us` is positive. */
     if (!was_away && flow_own_silence(g_running) > 0) g_running->family->away_n++;
-    /* …AND THE SAME MICROSECONDS ON THE FAMILY. Both are the AGING term's — it is their SUM — and they are not
-       two copies of one number, because they answer two different comparisons over ONE window: `cpu` is what
-       THIS FLOW has burned since the family last emitted, while `fam_us` is what the WHOLE family has burned
-       over that same window. The first is what orders a family's members against each other and the second is
-       what orders one family against another, and a term with only the second has nothing to say on a frontier
-       that is a single family — which a real page's is.
-       ONE WINDOW AND NOT TWO, WHICH IS THE CORRECTION THIS BLOCK CARRIES. The own half used to be measured
-       since this flow's OWN last emission — a strictly longer window than the family's, since a flow's own
-       emission is one of its family's — so the two were summed into one notch and weighed against a reward
-       credited over the shorter one. See FlowAcct's `emit_gen` for what that cost and for the population it
-       could never reach: a member the scheduler has never dispatched is never charged here and so could never
-       be forgiven here either.
-       Neither of them is the OPTIMISM term's quantity; that one is a count of completed units of work and is
-       charged by flow_credit_visit, which is why it is a separate call from this one. */
+    /* And the same microseconds on the family. Both are the aging term's (it is their sum), answering two
+       comparisons over one window: `cpu` is what this flow has burned since the family last emitted, ordering a
+       family's members against each other, and `fam_us` what the whole family burned over that window, ordering
+       one family against another. A term with only the second says nothing on a single-family frontier, which a
+       real page's is. Both are measured since the family's last emission: a window since the flow's own emission
+       is strictly longer, and summing it against a reward credited over the shorter one is the defect FlowAcct's
+       `emit_gen` describes. Neither is the optimism term's quantity, a count of completed units charged by
+       flow_credit_visit. */
     g_running->family->fam_us += us;
-    /* …AND THE SAME MICROSECONDS ON THIS FLOW'S BRANCH BUCKET, WHICH IS AN OBSERVATION AND NOT A THIRD CHARGE.
-       Nothing in flow_weight reads it. It is here because this is the ONE site that adds to either half above,
-       so it is the one site at which every microsecond the engine spends can be attributed to a side of a
-       branch — and because a bucket that were charged anywhere else could disagree with the two halves it is
-       supposed to be a partition of.
-       LIFETIME AND NEVER FORGIVEN, unlike both halves above: `cpu` and `fam_us` are silence SINCE the
-       account's last emission and flow_credit_emit sends them to zero, while the question a bucket answers is
-       how much of the thread this side of the branch GOT, and an arm that burned an hour and then emitted did
-       not thereby receive less. That is why it is a separate accumulator and not a read of either.
-       AND THE INSTANCE TOTAL BESIDE IT, which is what makes the per-bucket numbers a conservation rather than
-       a list: every microsecond charged here lands on exactly one bucket, so `sum over live buckets + retired
-       == charged` is exact and is asserted at the end of flow_wfq_census. */
+    /* And the same microseconds on this flow's branch bucket: an observation, not a third charge, and nothing in
+       flow_weight reads it. This is the one site that adds to either half above, so it is the one site where every
+       microsecond can be attributed to a side of a branch without disagreeing with the halves it partitions.
+       Lifetime and never forgiven, unlike the halves (silence since the account's last emission, zeroed by
+       flow_credit_emit): a bucket answers how much of the thread this side of the branch got, and an arm that
+       burned an hour and then emitted did not receive less. The instance total beside it makes the buckets a
+       conservation: `sum over live buckets + retired == charged`, asserted at the end of flow_wfq_census. */
     DCHECK(g_running->acct != NULL && g_running->acct->branch != NULL,
            "the running flow has no fork-tree node, or its node names no branch bucket — a live member's node "
            "is minted at flow_new and released only at its departure, so this flow is being charged thread "
            "time that can be attributed to no side of any branch");
     g_running->acct->branch->sub_us += us;
     g_charged_us += us;
-    /* THE SAME MICROSECONDS WENT TO BOTH HALVES, WHICH IS WHAT KEEPS THEM ONE READING AT TWO SCOPES. This is
-       the only site that ADDS to either, so it is the only one that could add to one and not the other — a
-       charge that reached `cpu` and missed `fam_us` would make an arm's own silence outgrow its family's and
-       put the sum back in two epochs. */
+    /* The same microseconds went to both halves, which keeps them one reading at two scopes. This is the only site
+       that adds to either, so the only one that could add to one alone; a charge reaching `cpu` and missing
+       `fam_us` would make an arm's own silence outgrow its family's. */
     DCHECK_AGING_ONE_WINDOW(g_running, "a slice of the thread was charged to this flow and its family");
 #if APICLIENT_DEV
-    /* AND THE STAMP flow_best's WALK COMPARES AGAINST, MAINTAINED HERE BECAUSE THIS IS THE ONE WRITER OF A
-       MEMBER-HALF SUMMAND THAT RAISES NO GENERATION. `cpu` is read by flow_own_silence, quantised by
-       flow_service_notch and priced into flow_member_key's first term, so the two statements above MOVE the
-       member half of the flow they charge — by design, and with the frontier generation standing still, which
-       is what the banner at the top of this function calls "not an omission but the quantity the aging term
-       exists to read".
-       THE WALK'S EXEMPTION IS `m == g_running` AND IT IS EVALUATED AT THE SCAN RATHER THAN AT THE CHARGE, so
-       it covers this member only WHILE it holds the thread. flow_switch_out clears the pointer and leaves the
-       charge in the key, so the first scan after a slice boundary meets a member that is not running, whose
-       generation has not moved, and whose key carries a slice of thread time — and fires. Measured on both
-       hosts of one build at one revision: the vehicle's key fell by 0.012000000000000122, which is EXACTLY
-       one FLOW_AGE_QUANTUM and is a value no other summand can produce (optimism steps by 1/(1+v) differences
-       and the branch bonus by 1/n differences; neither is 0.012 for any small integer), and the native host's
-       fell by 2.904 — 242 notches, one long compile overrun charged in a single slice. One mechanism, two
-       magnitudes, and the cold-park, cold-resume, two-instance and browser-process stages, which drain in few
-       dispatches, did not reach it.
-       THIS IS NOT A WEAKENING AND THE CONDITION IS UNTOUCHED. flow_silence_phase's decomposition — the thing
-       the walk's assert names as its source — says `k` "moves only when the flow being CHARGED crosses a
-       quantum, and flow_age_running charges exactly one member — the running one — so between two dispatches
-       this moves for AT MOST ONE MEMBER of the frontier". It permits one member to move and names which; the
-       assert demanded zero, which is strictly stronger than its own source. Re-stamping here restores the
-       claim the decomposition actually makes, and every OTHER member still fires — which is the whole of the
-       suspect list that assert carries.
-       AND THE SUB-LINEAR ORDER SURVIVES, which is the part worth more than the repair: one re-key per
-       dispatch is O(1), so an index over this key updates at THIS line and the frontier still needs no walk.
-       A fire here after this stamp is a member the charge is NOT about, and that is the state the walk was
-       written for.
-       AFTER BOTH CHARGES AND AFTER THE WINDOW ASSERT, because the stamp must be the key this member now
-       carries and not the one it carried when the function was entered. Read-only on its operands, so it
-       cannot move what the assertions above it just examined. */
+    /* And the stamp flow_best's walk compares against, maintained here because this is the one writer of a
+       member-half summand that raises no generation: `cpu` is read by flow_own_silence, quantised by
+       flow_service_notch and priced into flow_member_key's first term, so the charge above moves the member half
+       of the flow it charges while the generation stands still. The walk exempts `m == g_running` at the scan,
+       which covers this member only while it holds the thread; flow_switch_out clears the pointer and leaves the
+       charge in the key, so without this stamp the first scan after a slice boundary would meet a non-running
+       member whose key moved by whole FLOW_AGE_QUANTUM steps. flow_silence_phase's decomposition permits exactly
+       this: `k` "moves only when the flow being CHARGED crosses a quantum ... between two dispatches this moves for
+       AT MOST ONE MEMBER of the frontier", so the stamp restores the claim it makes and every other member still
+       fires. One re-key per dispatch is O(1), so an index over this key updates here and needs no walk. After both
+       charges and the window assert, so the stamp is the key the member now carries; read-only on its operands. */
     g_running->key_last    = flow_member_key(g_running);
     g_running->key_gen     = g_gen;
     g_running->key_stamped = 1;
-    /* …AND THE PER-MEMBER HALF, ON THE SAME STATEMENT GROUP, BECAUSE THIS CHARGE MOVES IT BY THE SAME `k`.
-       flow_index_key reads flow_service_notch, which is the floor this line advances, so a charge that
-       crosses a quantum moves this stamp and the key stamp together and a charge inside one moves neither.
-       Stamping only the sum here would leave the half's check firing on exactly the member the charge IS
-       about — the state solver/flow.h's `phase_last` says the walk is not written for, arriving one
-       composition down. */
+    /* And the per-member half, in the same group, because this charge moves it by the same `k`: flow_index_key
+       reads flow_service_notch, the floor this line advances, so a charge crossing a quantum moves both stamps and
+       one inside a quantum neither. Stamping only the sum would leave the half's check firing on the member the
+       charge is about. */
     g_running->ikey_last   = flow_index_key(g_running);
-    /* …AND THE PHASE, ON THE SAME STATEMENT GROUP AND FOR THE SAME REASON. This charge is the ONE writer of
-       `own_silence` that does not raise the generation, so it is the one writer both stamps must survive —
-       and the phase is the half the key cannot carry, because the key reads the FLOOR of the quantity this
-       line advances and a charge smaller than one quantum moves the remainder while leaving the floor alone.
-       Stamping only the key here would therefore leave the phase's check firing on exactly the member the
-       charge IS about, which is the state solver/flow.h's `phase_last` says the walk is NOT written for. */
+    /* And the phase, for the same reason: this charge is the one writer of `own_silence` that raises no
+       generation, so it is the one writer all three stamps must survive, and the phase is the half the key cannot
+       carry (the key reads the floor; a sub-quantum charge moves only the remainder). See solver/flow.h's
+       `phase_last`. */
     g_running->phase_last  = flow_silence_phase(g_running);
 #endif
-    /* THE RESOLUTION THIS CHARGE MUST HAVE — that a slice of the thread MOVES the rank it is charged to — is
-       asserted at the seam where the charge meets the pick, in engine.c's scheduler loop, because that is the
-       one place both are visible and the claim is about their ORDER. See §scheduler's monopolizer sentence
-       there, and FLOW_SILENCE_US here for what a charge the pick cannot see cost, measured. */
+    /* That a slice of the thread moves the rank it is charged to is asserted where the charge meets the pick, in
+       engine.c's scheduler loop, the one place both are visible; the claim is about their order. FLOW_SILENCE_US
+       states what a charge the pick cannot see costs. */
 }
 
-/* IS THIS MEMBER BETWEEN UNITS OF WORK — asked of ANY member of the frontier and not only of the one holding
-   the thread, which is the whole reason it is a function here rather than the local engine.c already computes.
-   HTML §8.1.4.4 "Calling scripts", clean up after running script step 3: "If the JavaScript execution context
-   stack is now empty, perform a microtask checkpoint" — so a live frame answers no outright (`Flow::frame` IS
-   that stack, solver/flow.h) and a checkpoint the flow still owes answers no as well, the checkpoint being a
-   step OF the turn that is ending rather than a turn of its own. Those are the two clauses flow_credit_visit
-   asserts below, and they are asserted THROUGH this predicate so the two readings cannot drift: two spellings
-   of one predicate is the drift engine.c's own `unit_ended` local refuses, and this is that refusal extended
-   to the one caller that cannot use the local.
-   IT IS NARROWER THAN engine.c'S `unit_ended` BY EXACTLY ONE CLAUSE, AND THE CLAUSE IS NOT A PER-MEMBER FACT.
-   That local also asks `!JS_HasParkedFlow(JS_GetRuntime(ctx))`, of the RUNTIME rather than of the flow,
-   because the flow it asks about is the one switched IN and its parked-continuation queue has been moved into
-   the runtime for the duration (flow_switch_out's JS_TakeParkedFlows stores it back on `Flow::parked`). A
-   member that is not running therefore answers that half from `parked`, and the running member answers it from
-   a runtime this file holds no handle to — one question with two spellings depending on who holds the thread,
-   which is precisely what a predicate must not be. The residual at the counter below states what that costs.
-   IT DECIDES NOTHING AND IT MOVES NO RANK, for flow_credit_pick's reason: flow_weight does not read it, no
-   fork carries it, and the only consumers are an assert and a census counter. */
+/* Is this member between units of work, asked of any member and not only the one holding the thread (which is why
+   it is a function here rather than engine.c's local). HTML §8.1.4.4 "Calling scripts", clean up after running
+   script step 3: "If the JavaScript execution context stack is now empty, perform a microtask checkpoint". A live
+   frame answers no (`Flow::frame` is that stack, solver/flow.h), and so does an owed checkpoint, which is a step of
+   the turn that is ending. These are the two clauses flow_credit_visit asserts, asserted through this predicate so
+   the readings cannot drift.
+   It is narrower than engine.c's `unit_ended` by one clause that is not a per-member fact: that local asks
+   `!JS_HasParkedFlow(JS_GetRuntime(ctx))` of the runtime, because the running flow's parked-continuation queue is
+   moved into the runtime for its turn (flow_switch_out's JS_TakeParkedFlows stores it back on `Flow::parked`). The
+   residual at the counter below states what that costs. It decides nothing and moves no rank: flow_weight does not
+   read it, no fork carries it, and its consumers are an assert and a census counter. */
 static int flow_between_units(const Flow *f) {
     return f->frame == NULL && !flow_job_microtask(f);
 }
 
-/* THE THIRD CLAUSE OF engine.c'S UNIT BOUNDARY, ASKED OF A MEMBER THAT IS NOT HOLDING THE THREAD — the half
-   flow_between_units above cannot ask, and the whole of what the starvation counter's residual was about.
-   A PARK IS A PER-MEMBER FACT FOR EVERY MEMBER BUT ONE. `Flow::parked` holds a member's parked continuations,
-   and it is authoritative for anybody who is not running; the RUNNING member's queue has been moved into the
-   runtime for the duration of its turn (flow_switch_out's JS_TakeParkedFlows stores it back), so `parked`
-   reads NULL for it no matter how many continuations it holds. That is why this asserts rather than guards:
-   answering "no park" for the running flow would be a plausible datum where the honest answer is that this
-   predicate cannot see it, and a caller that needs the running member needs a runtime handle this file does
-   not have — which is a capability to BUILD (pass the runtime to the pick) and not a case to paper over.
-   THE COUNTER BELOW CAN NEVER ASK IT ABOUT THE RUNNING MEMBER, and that is a claim this assert makes
-   checkable rather than a comment asserting it: the raise requires `best != seed`, the seed IS the incumbent,
-   and the incumbent is the flow holding the thread. If this ever fires, the seed was not the running flow and
-   the residual's whole population argument was wrong — which is a finding and not an inconvenience. */
+/* The third clause of engine.c's unit boundary, asked of a member that is not holding the thread. `Flow::parked`
+   holds a member's parked continuations and is authoritative for every member except the running one, whose queue
+   is in the runtime for its turn, so `parked` reads NULL for it however many it holds. It asserts rather than
+   guards: answering "no park" for the running flow would be plausible and wrong, and a caller that needs it needs a
+   runtime handle (passed at the pick), which is a capability to build. The counter below never asks about the
+   running member (its raise requires `best != seed`, and the seed is the incumbent), and this assert makes that
+   checkable: a fire means the seed was not the running flow and the residual's population argument is wrong. */
 static int flow_holds_park(const Flow *f) {
     DCHECK(f != g_running,
            "a member's parked continuations were asked for while it holds the thread — its queue is in the "
@@ -1335,15 +1247,12 @@ static int flow_holds_park(const Flow *f) {
     return f->parked != NULL;
 }
 
-/* A FLOW COMPLETED A UNIT OF WORK — the OPTIMISM term's quantity, and the one thing in this file that is a count
-   rather than a clock. See flow.h's `visits` for what a unit is and why the term may not be thread time.
-   IT IS A SEPARATE CALL FROM flow_age_running AND THAT IS THE POINT. The two are charged at the same moment by
-   the same caller and it would be one function if they measured one thing; they measure the two quantities
-   §scheduler names separately, and collapsing them is exactly the substitution that made the aging term
-   unreachable. A step that burned a quantum inside a program charges the first and NOT the second.
-   THE FLOW IS NOT ASSERTED TO BE THE RUNNING ONE, unlike the charge above: the scheduler credits the flow it
-   just stepped, and the finish path can have cleared `g_running` by then. What IS asserted is the property that
-   makes the count a trial count. */
+/* A flow completed a unit of work: the optimism term's quantity, a count rather than a clock (flow.h's `visits`
+   says what a unit is and why the term may not be thread time). A separate call from flow_age_running though
+   charged at the same moment by the same caller, because they measure the two quantities the scheduler names
+   separately; a step that burned a quantum inside a program charges the first and not the second. The flow is not
+   asserted to be the running one (the finish path can have cleared `g_running`); what is asserted is the property
+   that makes the count a trial count. */
 void flow_credit_visit(Flow *f) {
     DCHECK(f != NULL, "a completed unit of work was credited to no flow — the optimism term's whole quantity is "
                       "per flow, so a charge with no owner is a turn nobody is recorded as having had");
@@ -1351,68 +1260,44 @@ void flow_credit_visit(Flow *f) {
            "a flow was credited a completed unit of work while it is still INSIDE a program — a preempt is the "
            "middle of a trial, not the end of one, and counting it makes this term a second clock beside the "
            "aging: the flow is then outranked by its own arms after one quantum and no program ever finishes");
-    /* …AND A MICROTASK CHECKPOINT IT STILL OWES IS THE SAME SENTENCE, WHICH IS WHERE THE UNIT ACTUALLY ENDS.
-       HTML §8.1.4.4 "Calling scripts", clean up after running script step 3: "If the JavaScript execution
-       context stack is now empty, perform a microtask checkpoint" — the checkpoint is a step OF cleaning up
-       after the script, run in the same turn, and §8.1.7.3 "Processing model" places the identical step at the
-       end of a task. The checkpoint itself is "While the event loop's microtask queue is not empty: … Run
-       oldestMicrotask", so the turn is over when the queue is EMPTY and not when the program returned. An
-       empty execution context stack is therefore the checkpoint's TRIGGER, never the unit's end, and this
-       counted it as the end.
-       WHAT THAT COST IS THE WHOLE PRODUCT. The credit is a DEMOTION — the optimism term is 1/(1+visits) — so a
-       flow was demoted at the exact instant its queued reactions first became eligible to run (every job arm of
-       flow_step is under `frame == NULL`, engine.c). It then had to win the thread a SECOND time against the
-       entire frontier before its own checkpoint could run, and on a forking page the frontier is refilled by
-       branching faster than it drains. Measured on the artifact this fixes, three runs each: a six-line fixture
-       whose only forking construct is a 40-iteration loop over `location.hash` reported 19678 flows, 1320 jobs
-       QUEUED, 1316 units credited and ZERO jobs run — the two counts within four of each other because each
-       flow that finished its program queued exactly one reaction, was credited exactly one unit, and never held
-       the thread again. The same page without the loop (4 flows) ran 28 of 28 jobs. excalidraw.com: 15993-17556
-       flows, 2657-2923 jobs queued, 3500-4067 units, jobsRun 0, endpoints 0 on all three runs.
-       IT IS NOT A DRAIN LOOP AND MAY NOT BECOME ONE. Each microtask is still its own flow_step return, still
-       preemptible, still parkable, still re-ranked; what this removes is only the flow's own demotion ACROSS
-       the checkpoint, so flow_pick's strict comparison leaves the thread with it on a tie and any strictly
-       better flow still takes it. A checkpoint that never ends is governed by the aging term, which is the term
-       §scheduler assigns that job — not by a cap here. */
+    /* And an owed microtask checkpoint is the same sentence, and is where the unit ends. HTML §8.1.4.4 "Calling
+       scripts", clean up after running script step 3: "If the JavaScript execution context stack is now empty,
+       perform a microtask checkpoint": the checkpoint is a step of cleaning up after the script, in the same turn,
+       and §8.1.7.3 "Processing model" places the identical step at the end of a task. The checkpoint runs "While
+       the event loop's microtask queue is not empty: … Run oldestMicrotask", so the turn is over when the queue is
+       empty; an empty execution context stack is the checkpoint's trigger, not the unit's end.
+       The credit is a demotion (the optimism term is 1/(1+visits)), so crediting at the trigger would demote a flow
+       at the instant its queued reactions became eligible (every job arm of flow_step is under `frame == NULL`,
+       engine.c), and it would have to win the thread again against the whole frontier before its checkpoint ran;
+       on a forking page the frontier refills faster than it drains, and no job runs.
+       It is not a drain loop: each microtask is still its own flow_step return, preemptible, parkable and
+       re-ranked. This removes only the demotion across the checkpoint, so flow_pick's strict comparison leaves the
+       thread with the flow on a tie and any strictly better flow still takes it. A checkpoint that never ends is
+       governed by the aging term, not by a cap. */
     DCHECK(!flow_job_microtask(f),
            "a flow was credited a completed unit of work while it still owes a MICROTASK CHECKPOINT — HTML "
            "§8.1.4.4 \"Calling scripts\" step 3 of clean up after running script performs the checkpoint as "
            "part of the turn that just ended, so the unit is not over and this credit DEMOTES the flow at the "
            "one instant its queued reactions became eligible to run: it must then out-rank the whole frontier "
            "a second time to run its own checkpoint, which on a forking page never happens");
-    /* AND THE TWO ABOVE READ THROUGH THE PREDICATE A SECOND CONSUMER NOW SHARES, so the boundary cannot gain a
-       clause here without gaining one there or the other way about. The two specific asserts stay because each
-       names its own cause and this one names none; what this adds is that they are the WHOLE of the boundary
-       flow_between_units states, which is the fact the starvation counter leans on and could not otherwise
-       check. Like every derived guard in this file it is an identity under the code as it stands, so it fires
-       only on an edit that breaks it. */
+    /* And the two above are read through the predicate a second consumer shares, so the boundary cannot gain a
+       clause in one place without the other. The two specific asserts stay because each names its cause; this one
+       pins that they are the whole of flow_between_units' boundary, which the starvation counter relies on. An
+       identity under the code as it stands, so it fires only on an edit that breaks it. */
     DCHECK(flow_between_units(f),
            "a completed unit of work was credited to a flow that flow_between_units says is INSIDE one, while "
            "the two asserts directly above passed — the unit boundary has gained a clause in one of the two "
            "places that state it and not in the other, so the census row that counts a re-dispatch as having "
            "had nothing to continue is judging a different boundary than the optimism term is credited at");
     f->visits++;
-    /* AND THE ORDER IS TOLD, BECAUSE THIS CREDIT IS A DEMOTION AND A DEMOTION IS A RANK CHANGE. The optimism
-       term is 1/(1+visits), so the line above LOWERS this flow's weight — the paragraph at the head of this
-       function calls that out in its own words and measures what it costs — and every other writer that moves
-       a member's rank raises the generation. This one did not, so between two generations a per-member term
-       moved, which is exactly the ONE-BIT claim engine.c's rescan hook rests on and it was not true of this
-       tree. That hook's DCHECKF names the writer rather than guessing: with the five terms printed side by
-       side it reported `completed units 43 -> 45` with the silence notch, the reward, the fitness distance and
-       the branch bucket mint count all unchanged, and `still a member of the frontier: 1` — one differing pair,
-       a LIVE rival, so a departed-flow cache was refuted in the same line. Its own remedy clause says to raise
-       the generation AT THE WRITER, and the assertion's banner says why that is the fix rather than a fifth
-       clause: a clause would have silenced the assertion while the hook went on ranking against a state the
-       scheduler had not used.
-       IT IS NOT A BOUND AND IT IS NOT A SECOND CLOCK. frontier_rank_changed bumps the generation, counts the
-       change and raises the yield REQUEST; its own contract is that raising is not deciding, so a flow that
-       still outranks the frontier keeps the thread and pays one declined hook call for the question. The rate
-       is one per COMPLETED UNIT, which is the rate at which this term genuinely moves, so nothing here decides
-       that work will not happen.
-       HOW ITS ABSENCE WOULD SHOW: the rescan hook's cached rival goes stale in the one term this line writes,
-       and a reader sees it as a `completed units` pair differing with every other term equal.
-       RETIREMENT: this record goes when the optimism term no longer reads a per-member count, because the
-       demotion it is about can then no longer be spelled here. */
+    /* And the order is told, because this credit lowers the optimism term and so is a rank change. Every writer
+       that moves a member's rank raises the generation; engine.c's rescan hook rests on the claim that a
+       per-member term cannot move between two generations, and its DCHECKF prints the five terms side by side so
+       a missing raise shows as a `completed units` pair differing with every other term equal. Raised at the
+       writer rather than tolerated by a fifth clause in that assert, which would let the hook rank against a
+       state the scheduler had not used. Not a bound or a second clock: frontier_rank_changed raises the yield
+       request, and raising is not deciding. The rate is one per completed unit, the rate at which this term moves.
+       This record retires when the optimism term no longer reads a per-member count. */
     frontier_rank_changed();
 }
 
