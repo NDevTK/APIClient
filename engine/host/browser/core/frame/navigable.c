@@ -4537,20 +4537,11 @@ JSValue navigable_root(JSContext *ctx, uint32_t doc, const char *name, OpenerPol
                "\"navigation-failure\" — the same error Document js_nav_load_step above still owes for a child "
                "navigable of this instance, and it is one value both sites take rather than two");
     }
-    /* §7.1.5's SET IS PAIRED WITH §7.3.1.3's PARENT AND THE PAIRING IS ASSERTED, exactly as this component
-       already asserts the parent against the container: determine-the-creation-sandboxing-flags reads an
-       EMBEDDER ELEMENT for a nested navigable and a POPUP SANDBOXING FLAG SET for a top-level one, and a
-       top-level traversable's popup set is filled by nothing but §7.3.1.7's rules for choosing a navigable —
-       which cannot have run for the navigable an INSTANCE was rooted in, because no `window.open` in any heap
-       reaches a document the trusted zone provisioned. So flags with no parent is a host describing a nested
-       navigable's sandbox over a navigable it also called top-level, and the two fields would then disagree
-       about what kind of navigable this is. */
-    DCHECK(creation_sandbox_flags == 0 || window_proxy_is(parent),
-           "a navigable was rooted as a TOP-LEVEL TRAVERSABLE (§7.3.1.3 parent `u`) and given a non-empty "
-           "§7.1.5 CREATION SANDBOXING FLAG SET — that section fills a top-level browsing context's set from "
-           "its POPUP sandboxing flag set alone, which only §7.3.1.7's rules for choosing a navigable ever "
-           "populate and which nothing can have populated for a navigable a host provisioned. The two fields "
-           "come off one `navigable.create` record, so this is a host that read them from different rows");
+    /* §7.1.5's determine the creation sandboxing flags reads an embedder element's sets for a nested navigable
+       and the popup sandboxing flag set for a top-level one. A top-level root with flags is an auxiliary
+       navigable whose creator, in another instance, ran §7.3.1.7's rules for choosing a navigable under the
+       sandbox propagates to auxiliary browsing contexts flag; the host states that set from its record of the
+       navigable (the trusted zone's lib/document-record.js), as it states a nested navigable's. */
     proxy = window_proxy_new_self(ctx, doc, name, opener_policy, parent, creation_sandbox_flags);
     JS_FreeValue(ctx, parent);
     return proxy;

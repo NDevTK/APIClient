@@ -985,12 +985,12 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
            "§8.1.3.1's TOP-LEVEL ORIGIN beside the top-level creation URL from the zone that created this "
            "instance — it is the same statement, made by the same party, for the same reason");
     /* §7.1.5's creation sandboxing flag set, stated by the host and never assumed here, for the parent's reason
-       below. For a top-level root the empty set is the standard's answer: determine-the-creation-sandboxing-flags
-       gives a browsing context with no embedder its popup sandboxing flag set, which §7.1.5 says is empty at
-       creation and which only §7.3.1.7 "Navigable target names"'s rules for choosing a navigable populate. For a
-       root that is a child navigable, the `navigable.create` notice carries the set. What the root document's own
-       `Content-Security-Policy: sandbox` adds is the other half of §7.4.5's union, added where a Document is
-       created. */
+       below. For a top-level root it is the popup sandboxing flag set determine-the-creation-sandboxing-flags
+       reads: empty for a document a person named (§7.1.5 creates it empty), and for an auxiliary navigable
+       another instance opened, whatever §7.3.1.7 "Navigable target names"'s rules for choosing a navigable put
+       there in that instance, which the host states. For a root that is a child navigable, the embedder's
+       union, which the host states too. What the root document's own `Content-Security-Policy: sandbox` adds is
+       the other half of §7.4.5's union, added where a Document is created. */
     /* No policies to clone: §7.4 did not create this navigable in this agent, so there is no creator's container,
        but there is a container, and CSP §2.2's self-origin of its CSP list is this agent's own (the root Document
        is created from the response at this instance's address, §2.2.2's answer). Nothing reads it through this
