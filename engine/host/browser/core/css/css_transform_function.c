@@ -228,8 +228,8 @@ static bool css_tf_angle(const char *s, const char *e, double *num, char unit[CS
 
 /* §3's "with lengths made absolute" for one `<length-percentage>` argument. The membership test comes FIRST
    and is a separate entry from the parse for the reason core/css/css_length.h states: `css_length_parse` is
-   for a value already known to match the grammar and CRASHES on one that does not, and nothing validated this
-   declaration before this component — lexbor's registry carries no `transform` entry at all — so asking
+   for a value already known to match the grammar and CRASHES on a non-keyword one that does not, and nothing
+   validated this declaration before this component — lexbor's registry carries no `transform` entry — so asking
    `css_length_is_length_percentage` is what keeps `translate(2)` an authoring mistake rather than an abort. */
 static bool css_tf_length(JSContext *realm, const CssFontMetrics *font, const char *s, const char *e,
                           CssLength *out)
@@ -255,21 +255,9 @@ static bool css_tf_length(JSContext *realm, const CssFontMetrics *font, const ch
        grammar rather than to the length parser. THE ZERO STAYS ADMITTED, which is why this tests the VALUE and
        not the shape: `translate(0)` is a length in every browser. */
     if (css_tf_number(s, e, &bare) && bare != 0.0) { free(copy); return false; }
-    ok = css_length_is_length_percentage(copy);
-    if (ok) {
-        *out = css_length_parse(realm, font, copy);
-        DCHECK(out->kind != CSS_LENGTH_KEYWORD,
-               "a value core/css/css_length.h's `css_length_is_length_percentage` admitted parsed to a KEYWORD, "
-               "and css-transforms-1 §7.1 \"2D Transform Functions\" writes no keyword in any translation's "
-               "grammar — so this is those two entries disagreeing about one production rather than a "
-               "declaration this file should have refused");
-        /* AND THE STATE IS REFUSED RATHER THAN ONLY ASSERTED, so it is impossible in the build where the
-           assert is compiled out too. A keyword that reached the serializer would be printed where a length
-           belongs, and the consumer that reduces this list to a matrix would read a translation out of a word;
-           refusing makes it CSS Syntax §2.2 "Error Handling"'s dropped declaration in both builds, which is an
-           answer every consumer already handles. */
-        if (out->kind == CSS_LENGTH_KEYWORD) ok = false;
-    }
+    /* css-transforms-1 §7.1 "2D Transform Functions" writes no keyword in any translation's grammar, so the
+       parse is given the empty keyword set and refuses an identifier itself. */
+    ok = css_length_is_length_percentage(copy) && css_length_parse(realm, font, copy, CSS_KEYWORDS_NONE, out);
     free(copy);
     return ok;
 }
@@ -479,13 +467,13 @@ static char *css_tf_length_text(const CssLength *len)
     /* UNREACHABLE BY CONSTRUCTION, and this arm is a GUARD rather than a capability this file owes. The only
        producer of these values REFUSES a keyword outright (see `css_tf_length`), so no `CssTransformList` can
        hold one — which is why the message states its own unreachability proof instead of naming something to
-       build. The release arm returns the keyword's own text: the state cannot arise, and a defined string is
-       what keeps a build with the assert compiled out from dereferencing a NULL here. */
+       build. The release arm returns the empty string: the state cannot arise, and a defined string is what
+       keeps a build with the assert compiled out from dereferencing a NULL here. */
     DFAIL("a `<length-percentage>` argument of a transform function is a KEYWORD, and css-transforms-1 §7.1 "
           "\"2D Transform Functions\" writes no keyword in any translation's grammar. `css_tf_length` refuses "
           "one at the parse rather than only asserting against it, so no list this component builds can carry "
           "one — reaching this arm is that refusal and this switch having come apart");
-    return strdup(len->keyword);
+    return strdup("");
 }
 
 char *css_transform_list_serialize(const CssTransformList *list)

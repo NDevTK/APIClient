@@ -353,18 +353,6 @@ static bool css_len_unit_of(const char *s, char *out)
     return true;
 }
 
-/* §6's KEYWORD arm — the value is not a number at all, so what the caller compares is its TEXT (see
-   css_length.h for why it is text and not an enum). Carried by value, so the length needs no free. */
-static void css_len_keyword(CssLength *out, const char *kw)
-{
-    DCHECK(strlen(kw) < CSS_LENGTH_KEYWORD_MAX,
-           "a length-valued property cascaded to a KEYWORD longer than any in a CSS length grammar. The longest "
-           "one any of them admits is css-sizing's `-webkit-fill-available`, so this is either a declaration "
-           "lexbor validated against a grammar this component does not know the property has, or a value that "
-           "is not a keyword at all reaching the keyword arm");
-    snprintf(out->keyword, sizeof out->keyword, "%s", kw);
-}
-
 /* ONE §6 UNIT, ABSOLUTIZED — the whole of the family split css_length.h describes, with each arm naming the
    component that is missing rather than the one beside it. `unit` is already lowercased and NUL-terminated.
    IT IS A FUNCTION AND NOT THE TAIL OF THE PARSE because css-values-4 §10's math functions reach the same
@@ -467,9 +455,10 @@ static CssPx css_len_math_length(void *ctx, double n, const char *unit, size_t u
     return css_len_unit_px(c->realm, c->font, lower, n);
 }
 
-CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *value)
+bool css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *value, CssKeywordSet keywords,
+                      CssLength *result)
 {
-    CssLength out = { CSS_LENGTH_KEYWORD, css_px(0.0), 0.0, { '\0' } };
+    CssLength out = { CSS_LENGTH_ABSOLUTE, css_px(0.0), 0.0, CSS_KEYWORD_INVALID };
     char unit[CSS_LEN_UNIT_MAX];
     const char *p = value;
     char *end = NULL;
@@ -486,10 +475,8 @@ CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const c
            "deciding for this file which arm it will take");
     while (*p != '\0' && isspace((unsigned char)*p)) p++;
     num = strtod(p, &end);
-    /* NOT A NUMBER AT ALL. Either a KEYWORD — `auto`, `none`, `min-content`, `normal` — whose text every
-       caller that cares compares for itself (inventing an enum of every keyword every length-valued property
-       admits would be a second copy of lexbor's own grammar), or a FUNCTION, which is a different thing and is
-       told apart by the one character that distinguishes them in CSS Syntax's own tokenizer. */
+    /* NOT A NUMBER AT ALL. Either a KEYWORD or a FUNCTION, told apart by the one character that distinguishes
+       them in CSS Syntax's own tokenizer. */
     if (end == p) {
         if (strchr(p, '(') != NULL) {
             CssLenMathCtx mc;
@@ -521,7 +508,8 @@ CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const c
                     out.kind = CSS_LENGTH_ABSOLUTE;
                 }
                 out.px = v.num;
-                return out;
+                *result = out;
+                return true;
             }
             DFAIL("a length-valued property's value is a FUNCTION that is not a math function resolving to a "
                   "`<length>` — `rgb(1, 2, 3)`, css-sizing's `fit-content()`, a `var()` substitution that "
@@ -531,9 +519,20 @@ CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const c
                   "asked. So a value reaching here is one that answered TRUE there and FALSE here, which means "
                   "the two are asking about different productions — or a caller that never asked at all, which "
                   "for a shorthand lexbor's registry does not carry is the whole of the validation there is");
+            return false;
         }
-        css_len_keyword(&out, p);
-        return out;
+        /* The identifier, less any whitespace the serialization left after it, mapped once. One the property's
+           set does not hold, including one that is no keyword at all, fails the grammar. */
+        {
+            size_t n = strlen(p);
+
+            while (n > 0 && isspace((unsigned char)p[n - 1])) n--;
+            out.keyword = css_keyword_of(p, n);
+        }
+        if (!css_keyword_set_has(keywords, out.keyword)) return false;
+        out.kind = CSS_LENGTH_KEYWORD;
+        *result = out;
+        return true;
     }
     while (*end != '\0' && isspace((unsigned char)*end)) end++;
     if (*end == '\0') {
@@ -547,22 +546,25 @@ CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const c
                "that dropped a unit");
         out.kind = CSS_LENGTH_ABSOLUTE;
         out.px = css_px(0.0);
-        return out;
+        *result = out;
+        return true;
     }
     if (*end == '%' && end[1] == '\0') {
         out.kind = CSS_LENGTH_PERCENTAGE;
         out.pct = num;
-        return out;
+        *result = out;
+        return true;
     }
     if (!css_len_unit_of(end, unit)) {
         DFAIL("a length-valued property's value carries a DIMENSION whose unit is longer than any CSS unit "
               "identifier — CSS Values §6's longest is five characters (`dvmin`), so this is a value that is "
               "not a dimension reaching the dimension arm");
-        return out;
+        return false;
     }
     out.kind = CSS_LENGTH_ABSOLUTE;
     out.px = css_len_unit_px(realm, font, unit, num);
-    return out;
+    *result = out;
+    return true;
 }
 
 /* Is `unit` (already lowercased) a LENGTH unit — CSS Values §6's absolute, font-relative and
@@ -857,7 +859,7 @@ CssPx css_length_resolve_pct_at(CssLength len, CssPx basis, const char *file, in
             len.kind == CSS_LENGTH_ABSOLUTE  ? "CSS_LENGTH_ABSOLUTE"
             : len.kind == CSS_LENGTH_KEYWORD ? "CSS_LENGTH_KEYWORD"
                                              : "kind outside the four css_length.h defines",
-            len.kind == CSS_LENGTH_KEYWORD ? len.keyword : "-",
+            len.kind == CSS_LENGTH_KEYWORD ? css_keyword_name(len.keyword) : "-",
             len.px.px);
     /* A `CSS_LENGTH_PERCENTAGE` COMES FROM ONE PRODUCTION AND NEVER FROM A MATH FUNCTION, which is why this
        arm's single expression is right: css-values-4 §5.5 "Percentages: the <percentage> type" is a bare

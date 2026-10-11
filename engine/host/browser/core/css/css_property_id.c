@@ -13,10 +13,12 @@ typedef struct {
     uintptr_t        lxb;
     CssComputedShape shape;
     CssValueRange    range;
+    CssKeywordSet    keywords;
 } CssPropertyRow;
 
 static const CssPropertyRow CSS_PROPERTY_ROWS[CSS_PROPERTY_COUNT] = {
-#define CSS_PROPERTY_ROW(id, name, lxb, shape, range) { name, lxb, CSS_COMPUTED_SHAPE_##shape, CSS_RANGE_##range },
+#define CSS_PROPERTY_ROW(id, name, lxb, shape, range, keywords) \
+    { name, lxb, CSS_COMPUTED_SHAPE_##shape, CSS_RANGE_##range, CSS_KEYWORDS_##keywords },
     CSS_PROPERTY_LIST(CSS_PROPERTY_ROW)
 #undef CSS_PROPERTY_ROW
 };
@@ -96,4 +98,10 @@ CssValueRange css_property_range(CssPropertyId id)
 {
     DCHECKF((unsigned)id < CSS_PROPERTY_COUNT, "a value range was asked for id %u, which is no row", (unsigned)id);
     return CSS_PROPERTY_ROWS[id].range;
+}
+
+CssKeywordSet css_property_keywords(CssPropertyId id)
+{
+    DCHECKF((unsigned)id < CSS_PROPERTY_COUNT, "a keyword set was asked for id %u, which is no row", (unsigned)id);
+    return CSS_PROPERTY_ROWS[id].keywords;
 }

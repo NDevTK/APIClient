@@ -147,7 +147,7 @@ bool css_computed_transform_list(lxb_dom_element_t *el, CssTransformList *out);
    one), against the realm the ELEMENT'S OWN DOCUMENT is the active document of — never the running realm, since
    an iframe's initial containing block is 300 CSS pixels wide and its parent's is 1280. The absolute arm is a
    `CssPx` and carries the environment fact it derives from; the percentage and keyword arms carry the number
-   and the text, as specified. Nothing is owned: the keyword rides the struct. The answer is the element's
+   and the core/css/css_keyword.h ID, as specified. Nothing is owned. The answer is the element's
    computed style record's (core/css/css_computed_style.h), as `css_computed_line_height`'s and
    `css_computed_border_spacing`'s are. */
 CssLength css_computed_length(lxb_dom_element_t *el, const char *name);
@@ -160,6 +160,8 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name);
    align-self properties"' stretched test branches on `auto` for a cross size and for both cross-axis margins.
    FALSE FOR EVERY OTHER ARM, which is what each of those callers means: an absolute length, a percentage and a
    math function are each `not auto` and `not none`, and none of them is a keyword this can be asked about.
+   `keyword` must be in `name`'s keyword set, which is asserted: a keyword the grammar does not admit is a
+   question whose answer is false for every element.
    IT IS EXPORTED BECAUSE THE WRONG SPELLING IS SHORTER AND READS AS THOUGH IT MEANT THIS ONE. A layout file
    typically holds a `css_computed_value` + `strcmp` predicate for the KEYWORD-valued properties it reads, and
    the identical call written with `width` or `margin-top` does not answer wrongly — it ABORTS inside the
@@ -168,7 +170,7 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name);
    name nowhere in it. Writing the two-line answer out per file is what let that happen at seven call sites in
    two files while four other files held the same two lines correctly; a fifth copy is one more place the
    keyword arm can come to be read as the whole of a computed length. */
-bool css_computed_length_is(lxb_dom_element_t *el, const char *name, const char *keyword);
+bool css_computed_length_is(lxb_dom_element_t *el, const char *name, CssKeyword keyword);
 
 /* Does this component DERIVE `name`'s computed value from the cascade's specified value? */
 bool css_computed_models(const char *name);

@@ -230,7 +230,7 @@ static CssPx fis_flex_base_size(lxb_dom_element_t *item, bool vertical, FisMainS
         /* §3.3's conversion, as for a declared main size: "flex-basis determines the size of the content box,
            unless otherwise specified, such as by box-sizing". The property is `flex-basis` on either axis;
            `prop.axis` tells the entry which edges to subtract. Its initial keyword is `auto`. */
-        if (intrinsic_declared_sizing_px(item, prop.axis, "flex-basis", "auto", &v)) return v;
+        if (intrinsic_declared_sizing_px(item, prop.axis, "flex-basis", CSS_KEYWORD_AUTO, &v)) return v;
         DFAIL("css-flexbox-1 §7.2.3 \"The flex-basis property\"' computed value was an absolute length and "
               "core/layout/intrinsic_size.h's §3.3 conversion declined it. The two read the same cascade entry "
               "one call apart, so they cannot disagree about its shape");
@@ -246,23 +246,31 @@ static CssPx fis_flex_base_size(lxb_dom_element_t *item, bool vertical, FisMainS
     DCHECK(basis.kind == CSS_LENGTH_KEYWORD,
            "`flex-basis` computed to none of the shapes css-flexbox-1 §7.2.3 \"The flex-basis property\"' "
            "`Value:` line of `content | <'width'>` admits");
-    if (strcmp(basis.keyword, "content") == 0) return measured.max_content;
-    if (strcmp(basis.keyword, "auto") == 0) {
+    switch (basis.keyword) {
+    case CSS_KEYWORD_CONTENT:
+        return measured.max_content;
+    case CSS_KEYWORD_AUTO:
         /* §7.1's `auto` reads "the value of the main size property", the one the axis names (`fis_main_props`),
            as in core/layout/flex_line.c. */
-        if (intrinsic_declared_sizing_px(item, prop.axis, prop.size, "auto", &v)) return v;
+        if (intrinsic_declared_sizing_px(item, prop.axis, prop.size, CSS_KEYWORD_AUTO, &v)) return v;
+        return measured.max_content;
+    case CSS_KEYWORD_STRETCH:
+    case CSS_KEYWORD_MIN_CONTENT:
+    case CSS_KEYWORD_MAX_CONTENT:
+    case CSS_KEYWORD_FIT_CONTENT:
+        DFAILF("`flex-basis` computed to the keyword `%s`. css-flexbox-1 §7.2.3 \"The flex-basis property\" gives "
+               "it `content | <'width'>`, and css-sizing-3 §3.2 \"Sizing Values: the <length-percentage>, auto | "
+               "none, stretch, min-content, max-content, and fit-content values\" adds the rest by reference — "
+               "\"The flex-basis property hereby also gains these new keywords, as its values are defined by "
+               "reference to <'width'>\". BUILD §3.2's keyword arm where a `width` of the same shape is answered "
+               "(core/layout/intrinsic_size.c refuses the identical keyword on the identical grammar) and this "
+               "routes through it unchanged",
+               css_keyword_name(basis.keyword));
+        return measured.max_content;
+    default:
+        DFAILF("`flex-basis` computed to keyword %u, outside css-flexbox-1 §7.2.3's set", (unsigned)basis.keyword);
         return measured.max_content;
     }
-    DFAILF("`flex-basis` computed to the keyword `%s`. css-flexbox-1 §7.2.3 \"The flex-basis property\" gives "
-           "it `content | <'width'>`, and css-sizing-3 §3.2 \"Sizing Values: the <length-percentage [0,∞]>, "
-           "auto | none, stretch, min-content, max-content, and fit-content values\" adds the rest by "
-           "reference — \"The flex-basis property hereby also gains these new keywords, as its values are "
-           "defined by reference to <'width'>\". This engine records a computed-value rule for none of those, "
-           "so BUILD §3.2's keyword arm where a `width` of the same shape is answered "
-           "(core/layout/intrinsic_size.c refuses the identical keyword on the identical grammar) and this "
-           "routes through it unchanged",
-           basis.keyword);
-    return measured.max_content;
 }
 
 /* css-flexbox-1 §9.9.3 "Flex Item Intrinsic Size Contributions" for one element flex item, as the outer pair
@@ -298,7 +306,7 @@ static FisMainSizes fis_item_main_contribution(lxb_dom_element_t *container, lxb
        automatic size". The preferred size is the main size property (`fis_main_props`); css-sizing-3 §3.2
        "Sizing Values: the <length-percentage [0,∞]>, auto | none, stretch, min-content, max-content, and
        fit-content values"' `auto` "specifies an automatic size", which is the false arm. */
-    if (intrinsic_declared_sizing_px(item, prop.axis, prop.size, "auto", &v)) {
+    if (intrinsic_declared_sizing_px(item, prop.axis, prop.size, CSS_KEYWORD_AUTO, &v)) {
         out.min_content = css_px_max(out.min_content, v);
         out.max_content = css_px_max(out.max_content, v);
     }
@@ -316,11 +324,11 @@ static FisMainSizes fis_item_main_contribution(lxb_dom_element_t *container, lxb
        `min-width` above a `max-width` wins: CSS 2.1 §10.4 "Minimum and maximum widths: 'min-width' and
        'max-width'" horizontally and §10.7 "Minimum and maximum heights: 'min-height' and 'max-height'"
        vertically, in the same order. The `auto` arm is the residual above. */
-    if (intrinsic_declared_sizing_px(item, prop.axis, prop.max_size, "none", &v)) {
+    if (intrinsic_declared_sizing_px(item, prop.axis, prop.max_size, CSS_KEYWORD_NONE, &v)) {
         out.min_content = css_px_min(out.min_content, v);
         out.max_content = css_px_min(out.max_content, v);
     }
-    if (intrinsic_declared_sizing_px(item, prop.axis, prop.min_size, "auto", &v)) {
+    if (intrinsic_declared_sizing_px(item, prop.axis, prop.min_size, CSS_KEYWORD_AUTO, &v)) {
         out.min_content = css_px_max(out.min_content, v);
         out.max_content = css_px_max(out.max_content, v);
     }

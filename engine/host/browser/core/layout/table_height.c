@@ -174,8 +174,8 @@ static ThAlign th_cell_align(lxb_dom_element_t *cell)
     char *ab;
     bool middle;
 
-    if (shift.kind == CSS_LENGTH_KEYWORD && strcmp(shift.keyword, "top") == 0) return TH_ALIGN_TOP;
-    if (shift.kind == CSS_LENGTH_KEYWORD && strcmp(shift.keyword, "bottom") == 0) return TH_ALIGN_BOTTOM;
+    if (css_length_is_keyword(shift, CSS_KEYWORD_TOP)) return TH_ALIGN_TOP;
+    if (css_length_is_keyword(shift, CSS_KEYWORD_BOTTOM)) return TH_ALIGN_BOTTOM;
     ab = th_computed(cell, "alignment-baseline");
     middle = strcmp(ab, "middle") == 0;
     free(ab);

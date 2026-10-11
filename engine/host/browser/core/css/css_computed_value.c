@@ -635,7 +635,7 @@ static JSContext *css_cv_realm(lxb_dom_element_t *el)
    the wrong arm would have to be reading by mistake. */
 static CssLength css_cv_px(CssPx px)
 {
-    CssLength out = { CSS_LENGTH_ABSOLUTE, css_px(0.0), 0.0, { '\0' } };
+    CssLength out = { CSS_LENGTH_ABSOLUTE, css_px(0.0), 0.0, CSS_KEYWORD_INVALID };
 
     out.px = px;
     return out;
@@ -1050,15 +1050,21 @@ static CssPx cv_clamp_px(const char *name, CssPx px)
     return px;
 }
 
-static CssLength computed_length(lxb_dom_element_t *el, const char *name, char *spec)
+/* `spec` parsed against `name`'s grammar and absolutized. CONSUMES `spec`. FALSE when it does not match the
+   grammar (css_length.h), with `*out` unwritten. */
+static bool computed_length(lxb_dom_element_t *el, const char *name, char *spec, CssLength *out)
 {
     CssCvFontCtx slot;
     CssFontMetrics font = css_cv_font_metrics(&slot, el, name);
-    CssLength len = css_length_parse(css_cv_realm(el), &font, spec);
+    CssLength len;
+    bool ok = css_length_parse(css_cv_realm(el), &font, spec, css_property_keywords(css_property_id_of(name)),
+                               &len);
 
     free(spec);
+    if (!ok) return false;
     if (len.kind == CSS_LENGTH_ABSOLUTE) len.px = cv_clamp_px(name, len.px);
-    return len;
+    *out = len;
+    return true;
 }
 
 /* ---- CSS Backgrounds §3.2 and §3.3's BORDER LONGHANDS ----------------------------------------------------- */
@@ -1113,7 +1119,7 @@ static CssLength css_border_width_inherited(lxb_dom_element_t *el, int side, Css
     return inherited;
 }
 
-static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, int side, char *spec)
+static bool computed_border_width(lxb_dom_element_t *el, const char *name, int side, char *spec, CssLength *out)
 {
     CssLength len;
     unsigned i;
@@ -1122,13 +1128,18 @@ static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, 
        zero is an integer number of device pixels at every ratio, so it is the same 0 on every display and it
        derives from no environment fact. That is the initial state of almost every element, which is why the
        device pixel ratio does not reach most of the tree. */
-    if (css_border_width_off(el, side)) { free(spec); return css_cv_px(css_px(0.0)); }
+    if (css_border_width_off(el, side)) {
+        free(spec);
+        *out = css_cv_px(css_px(0.0));
+        return true;
+    }
     for (i = 0; i < sizeof(CSS_LINE_WIDTH) / sizeof(CSS_LINE_WIDTH[0]); i++) {
         if (strcmp(CSS_LINE_WIDTH[i].kw, spec) != 0) continue;
         free(spec);
-        return css_cv_px(css_length_snap_line_width(css_cv_realm(el), css_px(CSS_LINE_WIDTH[i].px)));
+        *out = css_cv_px(css_length_snap_line_width(css_cv_realm(el), css_px(CSS_LINE_WIDTH[i].px)));
+        return true;
     }
-    len = computed_length(el, name, spec);
+    if (!computed_length(el, name, spec, &len)) return false;
     DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
            "a `border-*-width` cascaded to a value that is neither one of §3.3's three keywords nor a length. "
            "`<line-width> = <length [0,∞]> | thin | medium | thick` admits nothing else — no percentage and no "
@@ -1139,7 +1150,8 @@ static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, 
            "css-backgrounds-3 §3.3's `<line-width>` is `<length [0,∞]>`, and the row's range is what clamps a "
            "math function's result, so the row and the grammar have come apart");
     len.px = css_length_snap_line_width(css_cv_realm(el), len.px);
-    return len;
+    *out = len;
+    return true;
 }
 
 /* ---- css-fonts-4 §2.5 "Font size: the font-size property" ------------------------------------------------- */
@@ -1158,7 +1170,7 @@ static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, 
  * against the PARENT (the metrics above), and the walk therefore always moves one node up the flattened tree
  * and stops at the root with §7.2's initial value. Answering that predicate false would make it a definition of
  * itself, which is why this asserts it rather than assuming it. */
-static CssLength computed_font_size(lxb_dom_element_t *el, char *spec)
+static bool computed_font_size(lxb_dom_element_t *el, char *spec, CssLength *out)
 {
     CssLength len;
 
@@ -1173,7 +1185,8 @@ static CssLength computed_font_size(lxb_dom_element_t *el, char *spec)
         CssPx px = css_absolute_size_px(css_cv_realm(el), spec);
 
         free(spec);
-        return css_cv_px(px);
+        *out = css_cv_px(px);
+        return true;
     }
     /* §2.5's `<relative-size>`: "interpreted relative to the computed font-size of the parent element". The
        PARENT's, on an element with no parent element too — §7.2's initial value is what the metrics answer
@@ -1183,7 +1196,8 @@ static CssLength computed_font_size(lxb_dom_element_t *el, char *spec)
         CssPx px = css_relative_size_px(css_cv_parent_font_size(el), larger);
 
         free(spec);
-        return css_cv_px(px);
+        *out = css_cv_px(px);
+        return true;
     }
     if (css_cv_kw_is(spec, "math")) {
         free(spec);
@@ -1203,9 +1217,9 @@ static CssLength computed_font_size(lxb_dom_element_t *el, char *spec)
               "and §7.1 has no initial value to fall to. The MATH table is the FONT RECORD css_length.c's "
               "font-metric crash names. BUILD the two properties first: with no OpenType MATH table §4.5's "
               "procedure still answers, out of its own 0.71 constant");
-        return css_cv_px(css_px(0.0));
+        return false;
     }
-    len = computed_length(el, "font-size", spec);
+    if (!computed_length(el, "font-size", spec, &len)) return false;
     /* §2.5's `Percentages: refer to parent element's font size` — resolved HERE, because that is a value the
        cascade has and not a containing block a layout would have to produce. A percentage of the parent is
        what makes `em` and `%` two spellings of one thing on this property, which §2.5's own example set says
@@ -1228,7 +1242,8 @@ static CssLength computed_font_size(lxb_dom_element_t *el, char *spec)
     /* A percentage or a calculation over one resolved just above is a new number, so the range clamp is asked
        of it here as computed_length asked it of an absolute length. */
     len.px = cv_clamp_px("font-size", len.px);
-    return len;
+    *out = len;
+    return true;
 }
 
 /* ---- css-text-4 §7.1's `match-parent`, which is the ONLY thing §7.3 and §7.4 compute ----------------------
@@ -1350,17 +1365,42 @@ static int cv_border_width_side(CssPropertyId id)
     return (int)(id - CSS_PROPERTY_BORDER_TOP_WIDTH);
 }
 
+/* `spec` computed by the row's own rule. CONSUMES `spec`. FALSE when it fails the row's grammar. */
+static bool cv_length_of(lxb_dom_element_t *el, CssPropertyId id, char *spec, CssLength *out)
+{
+    const char *name = css_property_name(id);
+    int side = cv_border_width_side(id);
+
+    if (side >= 0) return computed_border_width(el, name, side, spec, out);
+    if (id == CSS_PROPERTY_FONT_SIZE) return computed_font_size(el, spec, out);
+    return computed_length(el, name, spec, out);
+}
+
 /* The derivation of one length-shaped computed value, made on its first ask in a hold. */
 static CssLength cv_length(lxb_dom_element_t *el, CssPropertyId id)
 {
     const char *name = css_property_name(id);
     int side = cv_border_width_side(id);
+    CssLength len = css_cv_px(css_px(0.0));
+    CssDefaulting defaulting;
     char *cascaded;
+    bool ok;
 
     css_cv_modelled(el, name);
     cascaded = css_cv_cascaded(el, name);
-    switch (css_defaulting_of(name, cascaded)) {
+    defaulting = css_defaulting_of(name, cascaded);
+    /* css-values-5 "Appendix A: Arbitrary Substitution Functions" / "Resolving in Properties": "If a property,
+       after property replacement, does not match its declared grammar, the declaration is invalid at
+       computed-value time", which its Note makes `unset`. A declaration lexbor or css_shorthand.c validated
+       never fails here, since each of their keyword grammars is a subset of the row's set. */
+    if (defaulting == CSS_DEFAULTING_DECLARED) {
+        if (cv_length_of(el, id, cascaded, &len)) return len;
+        cascaded = NULL;
+        defaulting = css_defaulting_of(name, "unset");
+    }
+    switch (defaulting) {
     case CSS_DEFAULTING_DECLARED:
+        DFAILF("`%s`: CSS Cascade 5 §7.3.3's `unset` defaulted to a declared value", name);
         break;
     case CSS_DEFAULTING_INHERITED: {
         /* §7.3.2: "the property's specified and computed values are the inherited value" — and the inherited
@@ -1379,24 +1419,22 @@ static CssLength cv_length(lxb_dom_element_t *el, CssPropertyId id)
 
             return side >= 0 ? css_border_width_inherited(el, side, inherited) : inherited;
         }
-        cascaded = NULL;
         break;
     }
     case CSS_DEFAULTING_INITIAL:
         free(cascaded);
-        cascaded = NULL;
         break;
     }
     /* §7.1's initial value, which is also §7.2's answer for the root element: "for the root element, which has
        no parent element, the inherited value is the initial value of the property". */
-    if (cascaded == NULL) cascaded = cssom_initial_value(name);
+    cascaded = cssom_initial_value(name);
     DCHECK(cascaded != NULL,
            "§7.1 produced no INITIAL value for a length-valued property this component models — every one of "
            "them is in lexbor's registry with an initial value, or in css_style_declaration.c's table of the "
            "eight border longhands the registry does not carry");
-    if (side >= 0) return computed_border_width(el, name, side, cascaded);
-    if (id == CSS_PROPERTY_FONT_SIZE) return computed_font_size(el, cascaded);
-    return computed_length(el, name, cascaded);
+    ok = cv_length_of(el, id, cascaded, &len);
+    DCHECKF(ok, "`%s`: the initial value fails the property's own grammar", name);
+    return len;
 }
 
 CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
@@ -1428,13 +1466,15 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
 
 /* The keyword arm of the entry above, asked as a question. See css_computed_value.h for why it is one entry
    rather than two lines each caller writes, and for which spec rules ask it. */
-bool css_computed_length_is(lxb_dom_element_t *el, const char *name, const char *keyword)
+bool css_computed_length_is(lxb_dom_element_t *el, const char *name, CssKeyword keyword)
 {
-    CssLength len;
+    CssPropertyId id = css_property_id_of(name);
 
-    DCHECK(keyword != NULL, "a computed length was asked whether it is a NULL keyword");
-    len = css_computed_length(el, name);
-    return len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, keyword) == 0;
+    DCHECKF(id != CSS_PROPERTY_INVALID && css_keyword_set_has(css_property_keywords(id), keyword),
+            "`%s` was asked whether it computes to keyword %u, which its grammar does not admit, so the answer "
+            "would be false for every element",
+            name, (unsigned)keyword);
+    return css_length_is_keyword(css_computed_length(el, name), keyword);
 }
 
 /* ---- css-inline-3 §5.1 "Line Spacing: the line-height property" -------------------------------------------- */
@@ -1467,7 +1507,8 @@ static CssLineHeight cv_line_height(lxb_dom_element_t *el)
     CssLineHeight out = { CSS_LINE_HEIGHT_NORMAL, 0.0, { 0.0, CSS_ENV_NONE, NULL } };
     lxb_dom_element_t *parent;
     char *cascaded;
-    CssLength len;
+    CssLength len = css_cv_px(css_px(0.0));
+    bool ok;
 
     css_cv_modelled(el, "line-height");
     cascaded = css_cv_cascaded(el, "line-height");
@@ -1526,7 +1567,8 @@ static CssLineHeight cv_line_height(lxb_dom_element_t *el)
               "number-typed one has no unit to resolve and no entry to answer it. BUILD the `<number>` "
               "evaluation beside the length one, and this arm becomes the number arm above");
     }
-    len = computed_length(el, "line-height", cascaded);
+    ok = computed_length(el, "line-height", cascaded, &len);
+    DCHECK(ok, "a `line-height` that `css_length_is_length_percentage` admitted failed the parse beside it");
     out.kind = CSS_LINE_HEIGHT_LENGTH;
     if (len.kind == CSS_LENGTH_ABSOLUTE) {
         out.px = len.px;
@@ -1568,6 +1610,7 @@ static CssBorderSpacing cv_border_spacing(lxb_dom_element_t *el)
     lxb_dom_element_t *parent;
     char *cascaded, *sp, *first, *second;
     CssLength h, v;
+    bool ok;
 
     css_cv_modelled(el, "border-spacing");
     cascaded = css_cv_cascaded(el, "border-spacing");
@@ -1620,15 +1663,16 @@ static CssBorderSpacing cv_border_spacing(lxb_dom_element_t *el)
                "lengths the author wrote");
     }
     free(cascaded);
-    h = computed_length(el, "border-spacing", first);
-    v = computed_length(el, "border-spacing", second);
+    h = v = css_cv_px(css_px(0.0));
+    ok = computed_length(el, "border-spacing", first, &h);
+    ok = computed_length(el, "border-spacing", second, &v) && ok;
     /* §17.6.1's `Percentages:` line is `N/A` and its `Value:` line admits no keyword, so BOTH components
        absolutize — there is no arm of this property's computed value that survives as anything else. A
        percentage or a calculation reaching here is the grammar and this derivation having come apart, and
        reading `.px` past one would report a length the declaration does not state: `css_length.h` keeps a
        calculation's unresolved percentage in `pct` and its dimension residue in `px`, so the number would be
        real, wrong, and indistinguishable from a measured one. */
-    DCHECK(h.kind == CSS_LENGTH_ABSOLUTE && v.kind == CSS_LENGTH_ABSOLUTE,
+    DCHECK(ok && h.kind == CSS_LENGTH_ABSOLUTE && v.kind == CSS_LENGTH_ABSOLUTE,
            "a `border-spacing` component computed to something that is not an absolute length, and CSS 2.1 "
            "§17.6.1 \"The separated borders model\" defines no such value: its `Value:` line is `<length> "
            "<length>?` and its `Percentages:` line is `N/A`. core/css/css_shorthand.c's grammar admits a "
@@ -2203,7 +2247,7 @@ static JSValue css_resolved_computed(JSContext *ctx, lxb_dom_element_t *el, cons
         DCHECK(len.kind == CSS_LENGTH_KEYWORD,
                "a computed length is none of the four kinds css_length.h defines — the parse answers exactly "
                "one of them and crashes rather than inventing a fifth");
-        return JS_NewString(ctx, len.keyword);
+        return JS_NewString(ctx, css_keyword_name(len.keyword));
     }
     v = css_computed_models(name) ? css_computed_value(el, name) : css_cv_specified(el, name);
     /* A property no cascade layer answers at all — a custom property nobody set — is the EMPTY STRING, which
@@ -2544,7 +2588,7 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
     }
     /* §3.1's `auto` — "Represents an unconstrained inset; the exact meaning depends on the positioning
        scheme", which is the dispatch below and is why it is a dispatch rather than a value. */
-    if (!(len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, "auto") == 0))
+    if (!css_length_is_keyword(len, CSS_KEYWORD_AUTO))
         return css_resolved_computed(ctx, el, name);
 
     pos = css_computed_value(el, "position");

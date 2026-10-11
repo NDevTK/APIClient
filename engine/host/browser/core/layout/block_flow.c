@@ -358,7 +358,7 @@ static bool bf_edge_is_open(lxb_dom_element_t *el, bool top)
    walk — core/layout/used_value.c classifies it and sends its size to its container's algorithm. */
 static bool bf_min_height_is_zero(lxb_dom_element_t *el)
 {
-    return bf_length_is_zero(el, "min-height") || css_computed_length_is(el, "min-height", "auto");
+    return bf_length_is_zero(el, "min-height") || css_computed_length_is(el, "min-height", CSS_KEYWORD_AUTO);
 }
 
 /* ---- the child list --------------------------------------------------------------------------------------- */
@@ -2612,7 +2612,7 @@ static CssPx bf_hypothetical_margin_top(lxb_dom_element_t *el, lxb_dom_element_t
     if (len.kind == CSS_LENGTH_ABSOLUTE) return len.px;
     if (len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED)
         return css_length_resolve_pct(len, used_value_content_px(cb, false));
-    DCHECK(len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, "auto") == 0,
+    DCHECK(css_length_is_keyword(len, CSS_KEYWORD_AUTO),
            "a `margin-top` computed to something CSS 2 §8.3's <margin-width> grammar does not admit — it is a "
            "length, a percentage or `auto`, and lexbor validates the declaration against exactly that");
     return css_px(0.0);

@@ -127,11 +127,11 @@ static CssPx is_intrinsic_edge_px(lxb_dom_element_t *el, IntrinsicAxis axis, boo
        ("A computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of '0'"); the only
        keyword §8.3's <margin-width> admits. */
     if (margin.kind == CSS_LENGTH_KEYWORD) {
-        DCHECKF(strcmp(margin.keyword, "auto") == 0,
+        DCHECKF(margin.keyword == CSS_KEYWORD_AUTO,
                 "`%s` computed to the keyword `%s`. CSS 2.1 §8.3 \"Margin properties\"' <margin-width> grammar "
                 "admits a length, a percentage and `auto` and nothing else, so a fourth form is a declaration "
                 "lexbor's own validation should have dropped",
-                side[IS_EDGE_MARGIN], margin.keyword);
+                side[IS_EDGE_MARGIN], css_keyword_name(margin.keyword));
         sum = css_px(0.0);
     } else if (margin.kind == CSS_LENGTH_ABSOLUTE) {
         /* An absolute length carries no percentage, so it is the contribution as is. It does not go through
@@ -558,7 +558,7 @@ CssPx intrinsic_outer_block_contribution(lxb_dom_element_t *el, CssPx inner)
    whose item percentages are cyclic against the container's main size too; the composition is not shared
    (§5.2 replaces the measurement, §9.9.3 takes the larger). */
 bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, IntrinsicAxis axis, const char *name,
-                                 const char *initial, CssPx *out)
+                                 CssKeyword initial, CssPx *out)
 {
     CssLength len = css_computed_length(ch, name);
     CssPx declared, surround;
@@ -566,14 +566,14 @@ bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, IntrinsicAxis axis, con
     bool border_box;
 
     if (len.kind == CSS_LENGTH_KEYWORD) {
-        DCHECKF(strcmp(len.keyword, initial) == 0,
+        DCHECKF(len.keyword == initial,
                 "`%s` computed to the keyword `%s` rather than to its initial value `%s`. CSS 2.1 §10.2 "
                 "\"Content width: the 'width' property\" and §10.4 \"Minimum and maximum widths: 'min-width' "
                 "and 'max-width'\" admit no other keyword, and css-sizing-3 §3.2's level-3 additions are ones "
                 "this engine records no computed-value rule for — core/layout/used_value.c asserts the same "
                 "thing about the same grammar. So this is a value the cascade produced and no section of it "
                 "defines",
-                name, len.keyword, initial);
+                name, css_keyword_name(len.keyword), css_keyword_name(initial));
         return false;
     }
     if (len.kind != CSS_LENGTH_ABSOLUTE) {
@@ -622,17 +622,17 @@ static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, Intr
     IntrinsicInlineSizes out = measured;
     CssPx v;
 
-    if (intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, "width", "auto", &v)) {
+    if (intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, "width", CSS_KEYWORD_AUTO, &v)) {
         out.min_content = v;
         out.max_content = v;
     }
-    if (intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, "max-width", "none", &v)) {
+    if (intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, "max-width", CSS_KEYWORD_NONE, &v)) {
         out.min_content = css_px_min(out.min_content, v);
         out.max_content = css_px_min(out.max_content, v);
     }
     /* §3.2's `auto` minimum is a used 0, and §5.2.1 resolves a cyclic min size against zero, so the floor runs
        on both arms. It is on the content box, before a possibly negative margin is added by the caller. */
-    if (!intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, "min-width", "auto", &v)) v = css_px(0.0);
+    if (!intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, "min-width", CSS_KEYWORD_AUTO, &v)) v = css_px(0.0);
     out.min_content = css_px_max(out.min_content, v);
     out.max_content = css_px_max(out.max_content, v);
     return out;
@@ -765,7 +765,7 @@ static IntrinsicInlineSizes is_replaced_sizes(lxb_dom_element_t *el, const Repla
            The fallback is `used_value_default_replaced_size`, not a literal 300: CSS 2.2 §10.3.2 qualifies it
            ("if 300px is too wide to fit the device, UAs should use the width of the largest rectangle that has
            a 2:1 ratio and fits the device instead"), so intrinsic and used widths agree. */
-        if (!intrinsic_declared_sizing_px(el, INTRINSIC_AXIS_HORIZONTAL, "min-width", "auto", &size))
+        if (!intrinsic_declared_sizing_px(el, INTRINSIC_AXIS_HORIZONTAL, "min-width", CSS_KEYWORD_AUTO, &size))
             size = used_value_default_replaced_size(false);
     } else {
         size = used_value_replaced_auto_width_px(el, rep);

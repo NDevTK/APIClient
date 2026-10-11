@@ -208,7 +208,7 @@ static CssPx fl_main_margins(lxb_dom_element_t *el, bool vertical)
    (css-sizing-3 §5.2.1 drops a cyclic one from a contribution), while here the basis `inner_main` is
    determined and the percentage is definite. §3.3's conversion uses the used edges, as
    `fl_main_border_padding` does. */
-static bool fl_declared_main_px(lxb_dom_element_t *el, CssPx inner_main, const char *name, const char *initial,
+static bool fl_declared_main_px(lxb_dom_element_t *el, CssPx inner_main, const char *name, CssKeyword initial,
                                 bool vertical, CssPx *out)
 {
     CssLength len;
@@ -218,7 +218,7 @@ static bool fl_declared_main_px(lxb_dom_element_t *el, CssPx inner_main, const c
     if (el == NULL) return false;
     len = css_computed_length(el, name);
     if (len.kind == CSS_LENGTH_KEYWORD) {
-        DCHECKF(strcmp(len.keyword, initial) == 0,
+        DCHECKF(len.keyword == initial,
                 "%s: `%s` computed to the keyword `%s` rather than to its initial value `%s`. "
                 "css-sizing-3 §3.2 \"Sizing Values: the <length-percentage [0,∞]>, auto | none, stretch, "
                 "min-content, max-content, and fit-content values\" adds keywords this engine records no "
@@ -229,7 +229,7 @@ static bool fl_declared_main_px(lxb_dom_element_t *el, CssPx inner_main, const c
                 "css-sizing-3 §3.2's keyword arm where a `width` of the same "
                 "shape is answered (core/layout/intrinsic_size.c and core/layout/used_value.c both refuse the "
                 "identical keyword on the identical grammar) and this routes through it unchanged",
-                box_subject(el, nbuf, sizeof nbuf), name, len.keyword, initial);
+                box_subject(el, nbuf, sizeof nbuf), name, css_keyword_name(len.keyword), css_keyword_name(initial));
         return false;
     }
     /* An absolute length is the answer and is split off: `css_length_resolve_pct` serves the two kinds that
@@ -287,9 +287,9 @@ static CssPx fl_automatic_minimum_main(lxb_dom_element_t *el, CssPx inner_main, 
         return css_px(0.0);
     /* "capped by the specified size suggestion (if one exists)", whose own definition is "If the item's
        preferred main size is definite and not automatic, then the specified size suggestion is that size." */
-    if (fl_declared_main_px(el, inner_main, prop.size, "auto", vertical, &v)) out = css_px_min(out, v);
+    if (fl_declared_main_px(el, inner_main, prop.size, CSS_KEYWORD_AUTO, vertical, &v)) out = css_px_min(out, v);
     /* "In either case, the size is clamped by the maximum main size if it's definite." */
-    if (fl_declared_main_px(el, inner_main, prop.max_size, "none", vertical, &v)) out = css_px_min(out, v);
+    if (fl_declared_main_px(el, inner_main, prop.max_size, CSS_KEYWORD_NONE, vertical, &v)) out = css_px_min(out, v);
     return out;
 }
 
@@ -314,14 +314,14 @@ static CssPx fl_flex_base_size(lxb_dom_element_t *el, CssPx inner_main, FlMainSi
     if (el == NULL) return measured.max_content;
     basis = css_computed_length(el, "flex-basis");
     if (basis.kind == CSS_LENGTH_KEYWORD) {
-        if (strcmp(basis.keyword, "content") == 0) return measured.max_content;
+        if (basis.keyword == CSS_KEYWORD_CONTENT) return measured.max_content;
         /* §7.1's `auto` reads "the main size property", the one the axis names (`fl_main_props`). */
-        if (strcmp(basis.keyword, "auto") == 0) {
-            if (fl_declared_main_px(el, inner_main, prop.size, "auto", vertical, &v)) return v;
+        if (basis.keyword == CSS_KEYWORD_AUTO) {
+            if (fl_declared_main_px(el, inner_main, prop.size, CSS_KEYWORD_AUTO, vertical, &v)) return v;
             return measured.max_content;
         }
     }
-    if (fl_declared_main_px(el, inner_main, "flex-basis", "auto", vertical, &v)) return v;
+    if (fl_declared_main_px(el, inner_main, "flex-basis", CSS_KEYWORD_AUTO, vertical, &v)) return v;
     return measured.max_content;
 }
 
@@ -365,7 +365,7 @@ static void fl_fill(FlItem *it, CssPx inner_main, FlMainSizes measured, bool ver
         /* The declaration tested is on the cross axis: `width` for a `column` container, `height` for a `row`
            one. */
         if (rep.replaced && rep.has_ratio &&
-            !css_computed_length_is(it->el, vertical ? "width" : "height", "auto"))
+            !css_computed_length_is(it->el, vertical ? "width" : "height", CSS_KEYWORD_AUTO))
             DFAILF("%s: this REPLACED flex item has a preferred aspect ratio and a declared cross size, so "
                    "css-flexbox-1 §9.2 \"Line Length Determination\"' arm B is its flex base size and §4.5 "
                    "\"Automatic Minimum Size of Flex Items\"' TRANSFERRED SIZE SUGGESTION is part of its "
@@ -404,11 +404,11 @@ static void fl_fill(FlItem *it, CssPx inner_main, FlMainSizes measured, bool ver
     }
     it->surround = css_px_add(fl_main_border_padding(it->el, vertical), fl_main_margins(it->el, vertical));
     it->base = fl_flex_base_size(it->el, inner_main, measured, vertical);
-    it->has_max = fl_declared_main_px(it->el, inner_main, prop.max_size, "none", vertical, &v);
+    it->has_max = fl_declared_main_px(it->el, inner_main, prop.max_size, CSS_KEYWORD_NONE, vertical, &v);
     it->max_main = it->has_max ? v : css_px(0.0);
     /* css-sizing-3 §3.1.2 "Minimum Size Properties: the min-width and min-height properties" gives both an
        initial `auto`, which css-sizing-3 §3.2 hands to css-flexbox-1 §4.5, so the false arm is that keyword. */
-    if (!fl_declared_main_px(it->el, inner_main, prop.min_size, "auto", vertical, &v))
+    if (!fl_declared_main_px(it->el, inner_main, prop.min_size, CSS_KEYWORD_AUTO, vertical, &v))
         v = fl_automatic_minimum_main(it->el, inner_main, measured, vertical);
     it->min_main = v;
     it->hypothetical = fl_clamp_main(it, it->base);

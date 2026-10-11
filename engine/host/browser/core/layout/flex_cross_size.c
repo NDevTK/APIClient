@@ -96,8 +96,8 @@ static CssPx fx_cross_margins_stretch_fit(lxb_dom_element_t *el, bool vertical)
     FxCrossProps prop = fx_cross_props(vertical);
     CssPx m = css_px(0.0);
 
-    if (!css_computed_length_is(el, prop.margin_start, "auto")) m = used_value_px(el, prop.margin_start);
-    if (!css_computed_length_is(el, prop.margin_end, "auto"))
+    if (!css_computed_length_is(el, prop.margin_start, CSS_KEYWORD_AUTO)) m = used_value_px(el, prop.margin_start);
+    if (!css_computed_length_is(el, prop.margin_end, CSS_KEYWORD_AUTO))
         m = css_px_add(m, used_value_px(el, prop.margin_end));
     return m;
 }
@@ -152,9 +152,9 @@ static bool fx_is_stretched(lxb_dom_element_t *container, lxb_dom_element_t *ite
     stretch = strcmp(align, "stretch") == 0;
     free(align);
     if (!stretch) return false;
-    if (!css_computed_length_is(item, prop.size, "auto")) return false;
-    return !css_computed_length_is(item, prop.margin_start, "auto") &&
-           !css_computed_length_is(item, prop.margin_end, "auto");
+    if (!css_computed_length_is(item, prop.size, CSS_KEYWORD_AUTO)) return false;
+    return !css_computed_length_is(item, prop.margin_start, CSS_KEYWORD_AUTO) &&
+           !css_computed_length_is(item, prop.margin_end, CSS_KEYWORD_AUTO);
 }
 
 /* css-flexbox-1 §9.4's step 8.1, the baseline group, which is not computed and so must not be dropped from
@@ -544,7 +544,7 @@ CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_elem
        the inline axis behaving as auto is computing to `auto`. `used_value_height_behaves_as_auto` on both
        axes would read a `column` item's main size. */
     DCHECK(vertical ? used_value_height_behaves_as_auto(item)
-                    : css_computed_length_is(item, fx_cross_props(false).size, "auto"),
+                    : css_computed_length_is(item, fx_cross_props(false).size, CSS_KEYWORD_AUTO),
            "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11 was asked for an item whose cross size "
            "property DOES NOT behave as `auto`. This entry answers one arm of step 11 and its header says "
            "which: the other arm — \"Otherwise, the used cross size is the item's hypothetical cross size\" — "

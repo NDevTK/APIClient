@@ -136,7 +136,7 @@ static bool tw_declared_content_width(lxb_dom_element_t *table, CssPx edges, Css
            "width: the 'width' property\"' Applies-to line excludes table rows and row groups and no other "
            "table box, so a table reaching this is a `display` this component classified as a table box and the "
            "cascade classifies otherwise");
-    if (w.kind == CSS_LENGTH_KEYWORD && strcmp(w.keyword, "auto") == 0) return false;
+    if (css_length_is_keyword(w, CSS_KEYWORD_AUTO)) return false;
     if (w.kind == CSS_LENGTH_ABSOLUTE) {
         declared = w.px;
     } else if (w.kind == CSS_LENGTH_PERCENTAGE || w.kind == CSS_LENGTH_CALCULATED) {
@@ -191,7 +191,7 @@ static CssPx tw_caption_outer_min(lxb_dom_element_t *caption)
            "Applies-to line now says the horizontal margins do NOT apply to a caption box — so either that "
            "line changed or this box is not a caption, and CAPMIN would be reported by two margins too small");
     inner = intrinsic_inline_sizes(caption);
-    if (intrinsic_declared_sizing_px(caption, INTRINSIC_AXIS_HORIZONTAL, "width", "auto", &declared))
+    if (intrinsic_declared_sizing_px(caption, INTRINSIC_AXIS_HORIZONTAL, "width", CSS_KEYWORD_AUTO, &declared))
         inner.min_content = css_px_max(inner.min_content, declared);
     inner.max_content = inner.min_content;
     return intrinsic_outer_contribution(caption, inner).min_content;
@@ -427,7 +427,7 @@ static void tw_fixed_layout(lxb_dom_element_t *table, const TableGrid *grid, Css
 
         if (boxes.cols[i].column == NULL) continue;
         cw = css_computed_length(boxes.cols[i].column, "width");
-        if (cw.kind == CSS_LENGTH_KEYWORD && strcmp(cw.keyword, "auto") == 0) continue;
+        if (css_length_is_keyword(cw, CSS_KEYWORD_AUTO)) continue;
         if (cw.kind == CSS_LENGTH_ABSOLUTE) {
             width = cw.px;
         } else if (cw.kind == CSS_LENGTH_PERCENTAGE || cw.kind == CSS_LENGTH_CALCULATED) {
@@ -468,7 +468,7 @@ static void tw_fixed_layout(lxb_dom_element_t *table, const TableGrid *grid, Css
         /* §17.2.1 Anonymous table objects' anonymous cell has no element and declares no `width`. */
         if (cell->element == NULL) continue;
         cw = css_computed_length(cell->element, "width");
-        if (cw.kind == CSS_LENGTH_KEYWORD && strcmp(cw.keyword, "auto") == 0) continue;
+        if (css_length_is_keyword(cw, CSS_KEYWORD_AUTO)) continue;
         if (cw.kind == CSS_LENGTH_ABSOLUTE) {
             width = cw.px;
         } else if (cw.kind == CSS_LENGTH_PERCENTAGE || cw.kind == CSS_LENGTH_CALCULATED) {

@@ -160,8 +160,7 @@ static TableColumnWidth tcw_cell_widths(lxb_dom_element_t *cell)
                box_subject(cell, nbuf, sizeof nbuf));
     /* Every other computed shape crashes rather than reading as `auto`: `auto` drops the step's floor, so
        misreading a declaration as `auto` reports the column narrower than its content. */
-    if (w.kind != CSS_LENGTH_ABSOLUTE &&
-        !(w.kind == CSS_LENGTH_KEYWORD && strcmp(w.keyword, "auto") == 0))
+    if (w.kind != CSS_LENGTH_ABSOLUTE && !css_length_is_keyword(w, CSS_KEYWORD_AUTO))
         DFAILF("%s: CSS 2.1 §17.5.2.2 Automatic table layout's step 1 compares a cell's minimum content width "
                "against \"the specified 'width' (W) of the cell\", and this cell's computed `width` is neither "
                "an absolute length nor `auto`. css-sizing-3 §3.1.1 \"Preferred Size Properties: the width and "
@@ -232,7 +231,7 @@ static TcwDeclaredWidth tcw_declared_width(lxb_dom_element_t *box)
            "step having been carried apart — and the cost is silent, because a column whose floor is dropped "
            "is a column that is merely narrow");
     w = css_computed_length(box, "width");
-    if (w.kind == CSS_LENGTH_KEYWORD && strcmp(w.keyword, "auto") == 0) return out;
+    if (css_length_is_keyword(w, CSS_KEYWORD_AUTO)) return out;
     /* Every refusal below leaves `declared` false. core/layout/used_value.c reaches this in release, where
        `DFAILF` compiles out; falling through would report `px` from the wrong `CssLength` arm (a percentage
        carries `pct`). Dropping the floor makes the column narrower but never invents a number. */

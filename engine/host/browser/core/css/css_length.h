@@ -131,6 +131,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "core/css/css_keyword.h"
 #include "quickjs.h"
 
 /* ONE ENVIRONMENT FACT. Every entry is a fact core/frame/viewport.h has already decided is PICKED rather than
@@ -291,23 +292,21 @@ typedef enum {
        That is unobservable in every USED value (the two resolve to the same number against every basis) and
        observable in exactly one place, §10.13 "Serialization", which crashes there naming it. */
     CSS_LENGTH_CALCULATED,
-    CSS_LENGTH_KEYWORD         /* not a length at all: `auto`, `none`, `min-content`, `normal`, … */
+    CSS_LENGTH_KEYWORD         /* not a length at all: one of the property's core/css/css_keyword.h set */
 } CssLengthKind;
-
-/* THE KEYWORD IS CARRIED AS TEXT AND NOT AS AN ENUM, deliberately: every caller that cares compares it against
-   the one or two spellings ITS property's grammar admits (`auto` for a margin, `none` for a `max-width`), and
-   an enum of every keyword every length-valued property admits would be a second copy of lexbor's own grammar.
-   It is carried BY VALUE so a `CssLength` needs no free, and the buffer is asserted rather than truncated: the
-   longest keyword any length-valued property's grammar admits is css-sizing's `-webkit-fill-available`, and a
-   longer one is a value lexbor validated against a grammar this engine does not know it has. */
-#define CSS_LENGTH_KEYWORD_MAX 32
 
 typedef struct {
     CssLengthKind kind;
-    CssPx         px;                             /* CSS_LENGTH_ABSOLUTE and CSS_LENGTH_CALCULATED */
-    double        pct;                            /* CSS_LENGTH_PERCENTAGE and CSS_LENGTH_CALCULATED */
-    char          keyword[CSS_LENGTH_KEYWORD_MAX];/* CSS_LENGTH_KEYWORD only */
+    CssPx         px;        /* CSS_LENGTH_ABSOLUTE and CSS_LENGTH_CALCULATED */
+    double        pct;       /* CSS_LENGTH_PERCENTAGE and CSS_LENGTH_CALCULATED */
+    CssKeyword    keyword;   /* CSS_LENGTH_KEYWORD; CSS_KEYWORD_INVALID for every other kind */
 } CssLength;
+
+/* Is `len` the keyword `k`? */
+static inline bool css_length_is_keyword(CssLength len, CssKeyword k)
+{
+    return len.kind == CSS_LENGTH_KEYWORD && len.keyword == k;
+}
 
 /* WHICH FONT SIZE A §6.1.1 FONT-RELATIVE UNIT RESOLVES AGAINST, AS A QUESTION THIS COMPONENT ASKS RATHER THAN
    ANSWERS. `em` is "the computed value of the font-size property of the element on which it is used" and `rem`
@@ -382,13 +381,18 @@ typedef struct {
    and the one question this file cannot answer for itself is which element's computed `font-size` a unit means
    (see above). It is consulted only when an `em` or a `rem` is actually present.
    A UNITLESS ZERO is a `<length>` (CSS Values §6 permits the unit to be omitted for zero, and it is how
-   lexbor serializes every box-model property's initial value). */
-CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *value);
+   lexbor serializes every box-model property's initial value).
+   AN IDENTIFIER IS MAPPED TO ITS KEYWORD HERE, once, and is admitted only if `keywords` — the property's set
+   from core/css/css_property_id.h — holds it. FALSE is an identifier outside the set: the value does not match
+   the property's grammar, which is page input (a `var()` substitution reaches here unvalidated), so the caller
+   answers with CSS's invalid-declaration rule and `*out` is not written. */
+bool css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *value, CssKeywordSet keywords,
+                      CssLength *out);
 
 /* IS THIS TEXT A `<length>` AT ALL — CSS Values §6's production, answered WITHOUT crashing and WITHOUT a realm,
    which is a different question from the one above and exists for a different caller. `css_length_parse` is for
-   a value already known to match the grammar (lexbor validated the declaration), and it CRASHES on one that
-   does not, deliberately. A shorthand LEXBOR'S REGISTRY DOES NOT CARRY reaches the cascade as raw tokens with
+   a value already known to match the grammar (lexbor validated the declaration); it refuses an identifier
+   outside the property's keyword set and CRASHES on any other mismatch, deliberately. A shorthand LEXBOR'S REGISTRY DOES NOT CARRY reaches the cascade as raw tokens with
    nothing having validated them, so `border-width: red` is a declaration CSS Syntax DROPS — not an engine gap —
    and its expansion has to be able to ask.
    TRUE for a `<number>` (§6's unitless zero, and the unitless non-zero the parse above asserts on), for a

@@ -450,7 +450,7 @@ static bool uv_margin_is_flat_zero(UvBox box)
    property, which is why it takes a `CssLength` and not a name. */
 static bool uv_len_is_auto(CssLength len)
 {
-    return len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, "auto") == 0;
+    return css_length_is_keyword(len, CSS_KEYWORD_AUTO);
 }
 
 /* A LENGTH THAT IS A `CssPx` — CSS 2.1 §10.4's "using the computed value of 'max-width' as the computed value
@@ -460,7 +460,7 @@ static bool uv_len_is_auto(CssLength len)
    BOUND, not only of the fact the winning operand happened to carry (css_length.h). */
 static CssLength uv_len_px(CssPx px)
 {
-    CssLength len = { CSS_LENGTH_ABSOLUTE, css_px(0.0), 0.0, { '\0' } };
+    CssLength len = { CSS_LENGTH_ABSOLUTE, css_px(0.0), 0.0, CSS_KEYWORD_INVALID };
 
     len.px = px;
     return len;
@@ -2052,10 +2052,10 @@ bool used_value_height_behaves_as_auto(lxb_dom_element_t *el)
     DCHECK(el != NULL, "the behaves-as-auto question was asked with no element");
     h = css_computed_length(el, "height");
     if (h.kind == CSS_LENGTH_KEYWORD) {
-        DCHECK(uv_len_is_auto(h),
-               "a `height` computed to a keyword that is not `auto`. CSS 2.1 §10.5's `<length> | <percentage> "
-               "| auto` admits no other, and css-sizing-3 §3.2 \"Sizing Values\"'s `min-content`/`max-content`/"
-               "`fit-content()` are level-3 additions this engine records no computed-value rule for");
+        if (!uv_len_is_auto(h))
+            DFAILF("a `height` computed to css-sizing-3 §3.2's `%s`, a level-3 keyword whose behaves-as-auto "
+                   "answer (§3.2.1) this engine has not built; BUILD it with that keyword's block-size arm",
+                   css_keyword_name(h.keyword));
         return true;
     }
     if (h.kind == CSS_LENGTH_ABSOLUTE) return false;
@@ -2297,8 +2297,12 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
            "a `min-`/`max-` size computed to a kind that is none of the four css_length.h defines — "
            "css-sizing-3 §3.1.2 and §3.1.3's grammars admit a length, a percentage, a math function carrying "
            "both, and a keyword, and the arms above have taken the first three");
-    if (is_max && strcmp(len.keyword, "none") == 0) return false;
-    if (!is_max && uv_len_is_auto(len)) {
+    switch (len.keyword) {
+    case CSS_KEYWORD_NONE:
+        DCHECK(is_max, "a `min-` size computed to `none`, which only css-sizing-3 §3.1.3's grammar admits");
+        return false;
+    case CSS_KEYWORD_AUTO: {
+        DCHECK(!is_max, "a `max-` size computed to `auto`, which only css-sizing-3 §3.1.2's grammar admits");
         /* css-flexbox-1 §4.5 "Automatic Minimum Size of Flex Items" IS STATED OVER THE MAIN AXIS AND OVER
            NOTHING ELSE, so a FLEX item's CROSS-axis `min-height: auto` is not its automatic minimum size and
            never was — §4.5's own sentence is "the used value of a MAIN AXIS automatic minimum size on a flex
@@ -2360,7 +2364,8 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
        CSS 2.2 §10.6.3's content-based height, and neither is the other turned sideways.
        §3.3's `box-sizing` conversion is applied to both for the reason every other arm applies it: each of the
        three is a CONTENT size and the used value css-sizing-3 §3.3 exposes is the border box's. */
-    if (strcmp(len.keyword, "min-content") == 0 || strcmp(len.keyword, "max-content") == 0) {
+    case CSS_KEYWORD_MIN_CONTENT:
+    case CSS_KEYWORD_MAX_CONTENT: {
         CssPx px;
 
         if (vertical) {
@@ -2368,23 +2373,26 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
         } else {
             IntrinsicInlineSizes in = intrinsic_inline_sizes(el);
 
-            px = strcmp(len.keyword, "min-content") == 0 ? in.min_content : in.max_content;
+            px = len.keyword == CSS_KEYWORD_MIN_CONTENT ? in.min_content : in.max_content;
         }
         *out = uv_is_border_box(el) ? css_px_add(px, uv_surround_total(uv_surround(el, vertical))) : px;
         return true;
     }
-    DFAIL("a `min-`/`max-` size is css-sizing-3 §3.2's `fit-content()` or one of the level-3 sizing values "
-          "beside it, whose used value the section states as a clamp: \"use the fit-content formula with the "
-          "available space replaced by the specified argument, i.e. `min(max-content, max(min-content, "
-          "<length-percentage>))`, where the <length-percentage> argument is resolved exactly as for "
-          "<length-percentage> values standing alone\". THE TWO INTRINSIC SIZES ARE BUILT "
-          "(core/layout/intrinsic_size.h) and that clamp is the same three-term one `uv_shrink_to_fit_width` "
-          "already computes; what this arm lacks is the ARGUMENT, because `fit-content(20px)` is a FUNCTION and "
-          "`css_computed_length` carries a bare keyword with nothing under it. BUILD the argument through the "
-          "computed-value model — css-values-4 §10.11 \"Computed Value\" leaves its percentage unresolved "
-          "exactly as a math function's is, so it is the shape `CSS_LENGTH_CALCULATED` already has — and this "
-          "arm is then the clamp over it. §3.2's `calc-size()` is a separate grammar and a separate build");
-    return false;
+    case CSS_KEYWORD_STRETCH:
+    case CSS_KEYWORD_FIT_CONTENT:
+        DFAILF("a `min-`/`max-` size is css-sizing-3 §3.2's `%s`. `stretch` \"applies stretch-fit sizing, "
+               "attempting to match the size of the box’s margin box to the size of its containing block\" "
+               "(§4.2 \"Stretch-fit Sizing: filling the containing block\"), and `fit-content` is "
+               "\"min(max-content, max(min-content, stretch))\". The two intrinsic sizes are built "
+               "(core/layout/intrinsic_size.h); BUILD §4.2's stretch-fit size, and `fit-content` is then the "
+               "clamp `uv_shrink_to_fit_width` already computes with it as the available space",
+               css_keyword_name(len.keyword));
+        return false;
+    default:
+        DFAILF("a `min-`/`max-` size computed to keyword %u, outside css-sizing-3 §3.1.2's and §3.1.3's sets",
+               (unsigned)len.keyword);
+        return false;
+    }
 }
 
 static UvLimits uv_limits(lxb_dom_element_t *el, UvBox box, bool vertical)
@@ -2463,7 +2471,7 @@ static void uv_require_no_ratio_table(lxb_dom_element_t *el, const UvLimits *lim
     /* The cheap conjuncts first, and the classification last — `replaced_element_of` reads an image request's
        state, and the table's subject is a shape that answers no to one of these two tests long before that. */
     if (!lim->has_max && !(lim->has_min && lim->min.px > 0.0)) return;
-    if (!css_computed_length_is(el, "width", "auto") || !css_computed_length_is(el, "height", "auto")) return;
+    if (!css_computed_length_is(el, "width", CSS_KEYWORD_AUTO) || !css_computed_length_is(el, "height", CSS_KEYWORD_AUTO)) return;
     rep = replaced_element_of(el);
     if (!rep.replaced || !rep.has_ratio) return;
     DFAIL("CSS 2.1 §10.4 \"Minimum and maximum widths: 'min-width' and 'max-width'\" has a SECOND algorithm "
@@ -2668,7 +2676,7 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
            this pass has already fixed, and its own §10.3.3 pass would re-enter this test with the two margins'
            roles swapped, which is a recursion with no base case. */
         if (!vertical && box == UV_BOX_BLOCK_FLOW && !uv_len_is_auto(*size_len) &&
-            !css_computed_length_is(el, opposite, "auto")) {
+            !css_computed_length_is(el, opposite, CSS_KEYWORD_AUTO)) {
             bool rtl = used_value_containing_block_is_rtl(el);
             bool ignored = strcmp(name, rtl ? "margin-left" : "margin-right") == 0;
 
@@ -2700,7 +2708,7 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
                         "margin and found a keyword. The test above has already established that it is not "
                         "`auto`, and CSS 2.1 §8.3's <margin-width> grammar admits a length, a percentage and "
                         "`auto` and nothing else",
-                        opposite, ol.kind == CSS_LENGTH_KEYWORD ? ol.keyword : "-");
+                        opposite, ol.kind == CSS_LENGTH_KEYWORD ? css_keyword_name(ol.keyword) : "-");
                 other = ol.kind == CSS_LENGTH_ABSOLUTE
                             ? ol.px
                             : css_length_resolve_pct(ol, used_value_containing_block_width(el));
@@ -2726,7 +2734,7 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
        `calc(1rem - 100%)` that comes out negative IS the used value. */
     if (len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED)
         return css_length_resolve_pct(len, used_value_containing_block_width(el));
-    DCHECK(strcmp(len.keyword, "auto") == 0,
+    DCHECK(uv_len_is_auto(len),
            "a margin's computed value is neither a length, nor a percentage, nor `auto` — CSS 2.1 §8.3's "
            "<margin-width> grammar admits exactly those three, and lexbor validates the declaration against "
            "it, so a fourth form here is a serializer that produced something the grammar does not");
@@ -3095,7 +3103,7 @@ static CssPx uv_shrink_to_fit_width(lxb_dom_element_t *el, CssLength size_len, U
    below are NOT part of what is exported. */
 CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedElement *rep)
 {
-    bool h_auto = css_computed_length_is(el, "height", "auto");
+    bool h_auto = css_computed_length_is(el, "height", CSS_KEYWORD_AUTO);
 
     /* "If 'height' and 'width' both have computed values of 'auto' and the element also has an intrinsic
        width, then that intrinsic width is the used value of 'width'." */
@@ -3151,7 +3159,7 @@ CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedEle
    day a block-axis intrinsic size exists it asks for this function by the same argument. */
 static CssPx uv_replaced_height(lxb_dom_element_t *el, const ReplacedElement *rep)
 {
-    bool w_auto = css_computed_length_is(el, "width", "auto");
+    bool w_auto = css_computed_length_is(el, "width", CSS_KEYWORD_AUTO);
 
     /* "If 'height' and 'width' both have computed values of 'auto' and the element also has an intrinsic
        height, then that intrinsic height is the used value of 'height'." */
@@ -3951,7 +3959,7 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
        whenever a math function contains percentages". `height: calc(100% - 2rem)` therefore behaves as auto
        WHOLE under the same antecedent rather than having its percentage half treated separately, which is why
        `pct` above admits both kinds and neither is split. */
-    DCHECK((len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, "auto") == 0) || (pct && vertical),
+    DCHECK(uv_len_is_auto(len) || (pct && vertical),
            "a `width` or `height` reached the `auto` arms as something that is neither `auto` nor a vertical "
            "percentage behaving as one. CSS 2.1 §10.2 and §10.5 admit `<length> | <percentage> | auto`, a "
            "horizontal percentage always has §10.2's basis and resolved above, and css-sizing-3 §3.2's "
@@ -4596,8 +4604,8 @@ CssPx used_value_rel_offset_px(lxb_dom_element_t *el, bool vertical)
        one cascade walk per member instead of two. */
     lead  = css_computed_length(el, LEADING[vertical ? 1 : 0]);
     trail = css_computed_length(el, TRAILING[vertical ? 1 : 0]);
-    lead_auto  = lead.kind  == CSS_LENGTH_KEYWORD && strcmp(lead.keyword,  "auto") == 0;
-    trail_auto = trail.kind == CSS_LENGTH_KEYWORD && strcmp(trail.keyword, "auto") == 0;
+    lead_auto  = uv_len_is_auto(lead);
+    trail_auto = uv_len_is_auto(trail);
 
     /* "If both 'left' and 'right' are 'auto' (their initial values), the used values are '0' (i.e., the boxes
        stay in their original position)." — and its vertical twin, "If both are 'auto', their used values are

@@ -90,7 +90,7 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el);
    `min-width: auto` is the caller's, since css-flexbox-1 §4.5 "Automatic Minimum Size of Flex Items" overrides
    it for flex items. §3.3's conversion is applied here over the intrinsic surround. */
 bool intrinsic_declared_sizing_px(lxb_dom_element_t *el, IntrinsicAxis axis, const char *name,
-                                 const char *initial, CssPx *out);
+                                 CssKeyword initial, CssPx *out);
 
 /* CSS 2.2 §9.4.2 "Inline formatting contexts" over one run of `el`'s content (core/layout/block_flow.h's
    `BlockFlowRun`), as content-box inline sizes in CSS pixels, styled by `el`, which an anonymous box around
