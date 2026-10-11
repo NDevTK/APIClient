@@ -14,10 +14,8 @@ static const char HTML_SRCDOC[] =
        core/dom/document.c are about (step 1's "Assert: document's about base URL is non-null." and the pairing
        checked at the record's birth); without a srcdoc document no run can reach them.
        IT IS MARKUP AND NOT SCRIPT, for the realm budget: a frame a `<script>` created would be created by every
-       flow that reached it, while markup is created once by the parse, before anything forks.
-       EVERY ADDRESS IS AN ABSOLUTE LITERAL, so none can become unknown and fail to go out, and the endpoint
-       surface reports each as written.
-       THE ROWS, ordered so an earlier one localises a later one's absence:
+       flow that reached it, while markup is created once by the parse, before anything forks. Every address
+       is an absolute literal, reported by the endpoint surface as written. THE ROWS, in localising order:
          /api/sdrun    the armed control — the srcdoc Document was built and its script ran.
          /api/sdbase   §4.2.3 "The base element" freezes `/api/` against §2.4.3's fallback base URL, whose
                        step 1 for this class is "Return document's about base URL"; read through
