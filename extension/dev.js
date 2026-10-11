@@ -10,6 +10,13 @@ async function devLoad() {
          "GET_HOST_ORDER did not answer with the host's Level-1 reading or with the null that says it has " +
          "taken no round — the offscreen answers it straight off bridge.js's `_level1`");
   domReplaceChildren(document.getElementById("dev-host-order"), [devHostOrderSection(order)]);
+  /* The offscreen answers GET_ENGINE_RUNS unconditionally off the array bridge.js declares at load, so
+     anything but an array is the command not reaching that document. */
+  const runs = await chrome.runtime.sendMessage({ type: "GET_ENGINE_RUNS" });
+  DCHECK(Array.isArray(runs),
+         "GET_ENGINE_RUNS did not answer with an array — the offscreen slices it straight off bridge.js's " +
+         "_engineLog, so anything else is that command not reaching the offscreen document at all");
+  domReplaceChildren(document.getElementById("dev-engine-runs"), [devEngineRunsSection(runs)]);
 }
 
 document.getElementById("dev-refresh").addEventListener("click", devLoad);

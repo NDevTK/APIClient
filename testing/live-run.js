@@ -9,7 +9,7 @@
 //
 // WHAT IT READS is `self._engineLog` in the offscreen document, which is the record
 // `bridge.js` writes for every engine run (see `engineLogWrite`). That is the shipped
-// path: the popup's GET_ENGINE_RUNS reads the same array. It is NOT a console scrape —
+// path: the diagnostics page's GET_ENGINE_RUNS reads the same array. It is NOT a console scrape —
 // the renderer deliberately does not tee its stdout, so a console scrape measures the
 // instrument rather than the run.
 //

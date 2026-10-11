@@ -623,7 +623,7 @@ async function offscreenPage(browser, extId) {
 }
 
 /* READ OFF THE RUN RECORD, which is the shipped path: bridge.js asserts `_wfq`'s presence and shape
-   on every result document it accepts, and the popup's GET_ENGINE_RUNS reads the same array.
+   on every result document it accepts, and the diagnostics page's GET_ENGINE_RUNS reads the same array.
    A row with NO `wfq` at all and a row carrying `{members:0}` are DIFFERENT FACTS and are returned
    as different things — bridge.js's own contract for this field is that a missing census is a broken
    contract while `{members:0}` is an empty frontier, and collapsing them would report a scheduler

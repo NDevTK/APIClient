@@ -16,7 +16,7 @@
 let nextDocumentId = 0;
 /* The run log and the crash count, declared at load so that their absence means this file did not load, an
    empty log means no engine finalized, and a zero means no engine aborted. crashBanner counts every abort
-   path; rendererPoolProbe reads both, and the log also answers the popup's GET_ENGINE_RUNS. The log holds page
+   path; rendererPoolProbe reads both, and the log also answers the diagnostics page's GET_ENGINE_RUNS. The log holds page
    addresses, so hostClear empties it; the crash count holds none and survives a clear.
    One row per run: a run owns exactly one row (`eng._log`), a partial snapshot overwrites that row rather than
    appending, and the record's `run` field says which state the row reports, so a snapshot of a run in
@@ -647,7 +647,7 @@ function linesToAnalysis(lines, msg, outcome, eng) {
        arrived, so a crash that left an unconsumed partial logs as crashed; its findings still travel on the
        returned analysis labelled `_run:"crashed"`. */
     /* It does carry its cause, `err`, the same root @WHY string engineCrash puts on the banner, so the row
-       the popup's GET_ENGINE_RUNS and testing/live-run.js read names the capability that failed. */
+       the diagnostics page's GET_ENGINE_RUNS and testing/live-run.js read names the capability that failed. */
     : { run: outcome, resumed: resumed,
         coldLookup: cold.lookup, coldOther: cold.other, bundleId: cold.bundle,
         url: (msg && msg.sourceUrl) || "", err: crashErr };

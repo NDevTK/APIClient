@@ -439,23 +439,6 @@ async function importOpenApiSpec(e) {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/* THE LABEL THAT NAMES WHICH PAGE A ROW IS ABOUT — the engine-run list, the @S finding's source and page, the
-   request log. It read `parsed.hostname`, which DROPS THE PORT, and a port is part of the ORIGIN: three probe
-   documents on 8890, 8896 and 8850 are three different origins with three different frontiers, and all three
-   rendered as the single word "127.0.0.1". MEASURED in the engine-runs panel: eight rows, three pages, one
-   label — the panel exists to say which run belongs to which page and could not. `host` is the same string
-   with the port when there is a non-default one, which is what the browser's own UI shows. */
-function _shortUrl(u) {
-  try {
-    var parsed = new URL(u);
-    var path = parsed.pathname.replace(/\/$/, "");
-    if (!path) return parsed.host;
-    return parsed.host + path;
-  } catch (_) {
-    return u;
-  }
-}
-
 /* renderPbTree — a decoded body as a `.pb-tree` element. Iterative: the stack holds one job per field node,
    each carrying the element it renders into, so a deeply nested message renders without growing the JS
    call stack. Jobs of one container are pushed contiguously and in reverse, and a job's nested jobs are
