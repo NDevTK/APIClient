@@ -66,24 +66,26 @@ CssPx table_cell_border_edges(lxb_dom_element_t *cell)
         CssLength pad = css_computed_length(cell, PADDINGS[i]);
         CssLength bor;
 
+        /* css-sizing-3 §5.2.1 Intrinsic Contributions of Percentage-Sized Boxes: "For the min size properties,
+           as well as for margins and paddings (and gutters), a cyclic percentage is resolved against zero for
+           determining intrinsic size contributions." A cell's percentage padding is resolved against the row
+           the columns this algorithm produces (used_value.c's containing-block width for a cell), so it is
+           cyclic here and contributes zero; the used padding is resolved after the columns are known. */
+        if (pad.kind == CSS_LENGTH_PERCENTAGE) {
+            if (!collapsing) {
+                bor = css_computed_length(cell, BORDERS[i]);
+                DCHECK(bor.kind == CSS_LENGTH_ABSOLUTE,
+                       "a `border-*-width` computed to something that is not an absolute length (css-backgrounds-3 "
+                       "§3.3's `Computed value:` is an absolute length)");
+                edges = css_px_add(edges, bor.px);
+            }
+            continue;
+        }
         if (pad.kind != CSS_LENGTH_ABSOLUTE)
-            DFAILF("%s: a table cell's `%s` is not an absolute length, and CSS 2.1 §17.5.2.2 Automatic table "
-                   "layout cannot resolve it. CSS 2.1 §8.4 refers a padding percentage to the containing "
-                   "block's width and then names THIS case as the one it does not define: \"If the containing "
-                   "block's width depends on this element, then the resulting layout is undefined in CSS "
-                   "2.1.\" For a cell that rectangle is the TABLE BOX's content width, which is what this "
-                   "algorithm is being run to produce — so the resolution is a CYCLE and not a missing lookup. "
-                   "§17.5.2.2 states its own inputs and does "
-                   "not name one: \"Input to the automatic table layout must only include the width of the "
-                   "containing block and the content of, and any CSS properties set on, the table and any of "
-                   "its descendants.\" BUILD the fixed point the way CSS 2.1 leaves open and this engine must "
-                   "not guess at: resolve the percentage against the width the algorithm settles on, which "
-                   "means running the four steps with the percentage terms at zero, deriving the table width, "
-                   "and re-running them — and RECORD that as the reading taken, because §17.5.2.2 is "
-                   "non-normative from \"The remainder of this section is non-normative\" onward and offers no "
-                   "other. A `calc()` or a keyword here is a different defect: `padding-*`'s `Computed value:` "
-                   "line is \"the percentage as specified or the absolute length\", so neither is a value the "
-                   "cascade can hand back",
+            DFAILF("%s: a table cell's `%s` is a `calc()` or a keyword. `padding-*`'s `Computed value:` line is "
+                   "\"the percentage as specified or the absolute length\", and a `calc()` mixing a length and a "
+                   "percentage needs css-sizing-3 §5.2.1's zero applied to its percentage term only: BUILD that "
+                   "split over the calculated value",
                    box_subject(cell, nbuf, sizeof nbuf), PADDINGS[i]);
         edges = css_px_add(edges, used_value_px(cell, PADDINGS[i]));
         /* §17.6.2 replaces the cell's own border with the grid-line resolution, added below for both sides. */

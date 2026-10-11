@@ -686,7 +686,14 @@ static CssPx uv_table_cell_used_width(lxb_dom_element_t *el)
                "answer with — the columns in hand belong to a grid this cell is not in",
                box_subject(el, nbuf, sizeof nbuf), box_subject(table, tbuf, sizeof tbuf));
     border_box = table_cell_used_border_box(&widths, cell);
-    content = css_px_max(css_px_sub(border_box, table_cell_border_edges(el)), css_px(0.0));
+    /* A percentage padding entered the columns as zero (table_cell_border_edges); its used value is resolved
+       against the row now that the columns are known, and leaves the content box. */
+    content = css_px_sub(border_box, table_cell_border_edges(el));
+    if (css_computed_length(el, "padding-left").kind == CSS_LENGTH_PERCENTAGE)
+        content = css_px_sub(content, used_value_px(el, "padding-left"));
+    if (css_computed_length(el, "padding-right").kind == CSS_LENGTH_PERCENTAGE)
+        content = css_px_sub(content, used_value_px(el, "padding-right"));
+    content = css_px_max(content, css_px(0.0));
     table_widths_release(&widths);
     table_grid_release(&grid);
     if (uv_is_border_box(el)) return border_box;
@@ -1781,6 +1788,19 @@ CssPx used_value_containing_block_width(lxb_dom_element_t *el)
        instead.)" — so the wrapper has no border and no padding whatever the table element declares. That is
        asserted through core/layout/table_wrapper.h's own reading of §17.4's list rather than re-read from the
        section here, so the day the list changes the two cannot disagree. */
+    /* A TABLE CELL's percentage padding (§8.4 refers both axes' to the containing block's width) resolves
+       against its ROW's inline size: the used widths of the columns and the border spacing between them,
+       inside the two outer spacings. CSS 2 §10.1 would answer the table wrapper, and css-tables-3 states no
+       override; the row is what Chrome 148.0.7778.167 does, measured on a 300px table (border 5px, padding
+       7px, so a 276px content box) with three columns and `border-spacing: 10px`: `padding-left: 10%` and
+       `padding-top: 10%` both computed to 25.59px, a 256px base, which is the row (276 less two outer
+       spacings) and not the wrapper's 300, the content box's 276, or §3.8's assignable 236. Under
+       `border-collapse: collapse` the base was 295, the collapsed table's content width, which the row also
+       is there. */
+    if (cb.box == UV_CB_TABLE_WRAPPER && uv_table_box_kind(el) == TABLE_BOX_CELL) {
+        w = uv_table_row_used_width(el);
+        goto done;
+    }
     if (cb.box == UV_CB_TABLE_WRAPPER) {
         UV_WRAPPER_SUBJECT_IS_NOT_INTERNAL(el, "its width");
         DCHECK(!table_wrapper_owns_property("border-left-width") &&

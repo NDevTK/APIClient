@@ -42,7 +42,8 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
    core/layout/intrinsic_size.h answers in and the border box §17.5.2 measures columns in. Shared by
    §17.5.2.2's step 1, §17.5.2.1 Fixed table layout's step 2 (converting a first-row cell's declared `width`)
    and core/layout/used_value.c, so the four-term sum is spelled once. It is not used_value.c's surround; see
-   table_column_width.c for the cycle that separates them.
+   table_column_width.c for the cycle that separates them. A percentage padding contributes zero (css-sizing-3
+   §5.2.1's cyclic percentage), so a caller wanting the used content box subtracts the resolved one too.
    It answers both of CSS 2.1 §17.6 Borders' models itself, from the cell's table: under §17.6.1 The separated
    borders model the cell's own `border-*-width`; under §17.6.2 The collapsing border model half of §17.6.2.1
    Border conflict resolution's winner at each vertical grid line, zero on the perimeter
