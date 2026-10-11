@@ -11076,91 +11076,60 @@ int engine_sched_step(void) {
                "engine_step_unit_runs would fail with a negative half and read as a broken clock");
         g_between_us += t_in - g_slice_exit_us;
     }
-    /* THE SLICE ITSELF, COUNTED WHERE ITS BUDGET IS ARMED — solver/engine.h's `slices`. It is the denominator
-       `loop_us` and `between_slices_us` would otherwise not have, and the bound the `over_arms` residual
-       names: the quantum arms once here and the dispatch loop ends the slice on that same expiry, so at most
-       one turn per slice can end on the cooperative clause. Raised BEFORE the body rather than after it
-       because the count is of slices ENTERED, which is the population both spans are over and which a body
-       that aborts cannot retroactively un-enter. */
+    /* The slice itself, counted where its budget is armed (solver/engine.h's `slices`): the denominator `loop_us`
+       and `between_slices_us` would otherwise lack, and the bound the `over_arms` residual names, since the quantum
+       arms once here and the loop ends the slice on that expiry, so at most one turn per slice ends on the
+       cooperative clause. Raised before the body because it counts slices entered, the population both spans are
+       over. */
     g_slices++;
     quantum_begin();
-    /* THE FLOW STAMP AND THE DOM CAPTURE ARE THE SLICE'S, NOT THE SESSION'S — and that is one correction, not
-       two, because they are twins over the two halves of the same state (the JS heap and the Lexbor tree).
-       They were set in engine_sched_begin and cleared in engine_session_close, which reads like a session-
-       scoped flag and IS one — but engine_sched_slice returns YIELD without switching the running flow out, so
-       "the session is live" and "a flow is running" are not the same statement and the gap between them is the
-       host's own time. Everything the host created there (the ABI's parse of a fetch reply, and then a dup of
-       it onto EVERY parked flow's pending register) was stamped with the live generation, so
-       `JS_ObjFlowGen(obj) > d->fork_gen` skipped it in every delta forked earlier: a write to that shared
-       object by any of those flows was recorded nowhere and survived that flow's unapply. Silent, and
-       refcounting kept it from ever crashing.
-       IT IS THE WRAPPER THAT MAKES THIS SYMMETRIC, which is the same reason the wrapper exists for the
-       quantum: the body has SEVERAL exits and a mark cleared at all but one of them would look correct
-       forever. One bracket around one call cannot be got wrong. THE ENUMERATION THAT STOOD HERE IS GONE AND
-       THE REASON IS THE SAME ONE IT GAVE FOR ITSELF. It listed "the park's DONE, three yields, STALLED twice
-       … and the exhausted path that closes the session" — SEVEN — and said it was "spelled out because it
-       was WRONG while the count was right", having named a seeded-candidate yield that had gone and missed
-       two exits added since. Measured at this revision, with comments and string literals stripped from the
-       body, there are SIX `return` statements: two DONE, two YIELD, two STALLED. So the count has now been
-       wrong in both directions, the list has been wrong once, and NOTHING here depends on either — the
-       argument is that there is more than one exit. A list of exits in a comment is a census of a function
-       that changes, which is what this file's own banner says a comment may not be.
-       AND IT IS SUSPEND/RESTORE, NEVER CLEAR/RE-ENTER. The generation is monotonic — every delta's fork_gen is
-       a point on that one line — so the next slice resumes at the number this one left, and a restart at 1
-       would make a later object compare as older than an earlier fork. */
-    /* AND THE CAPTURE ROUTE IS THE THIRD, WHICH THE PARAGRAPH ABOVE LEFT OUT — the one that made the stamp line
-       below not merely incomplete but the thing that ARMED the corruption.
-       The three marks are one statement in three registers: the STAMP says what generation an object is born
-       at, `g_dom_capture` says whether the Lexbor tree is being recorded, and the DELTA says WHOSE head a
-       capture lands in. The DOM half turned its recording OFF for the host's time; the JS half turned its STAMP
-       to 0 and left the route pointed at whichever flow the slice last switched in — and `cow_set_current` is
-       never called between slices, because §scheduler requires the yield to keep the running flow switched in.
-       So across the host's own time the capture hook was LIVE and aimed at a stranger's delta, and stamping the
-       host's objects BASELINE is exactly what removed the only thing that had been skipping them: a baseline
-       object is `flow_gen 0 <= d->fork_gen`, which is the SHARED arm of cow_capture_hook's test.
-       WHAT THAT DID, and it is the whole of the `urlList` abort: every property the host wrote on an object it
-       had just created was recorded as a CREATION (existed=0) in that flow's head, and the next context switch
-       away from it ran cow_unapply_entries, which DELETES a creation. A reply record built by
-       fetch_reply_new — or parsed by qjs_provide — therefore arrived at its delivery as `{}`: no urlList, no
-       status, no headers, no body, with its refcount intact and nothing to say what had happened. The same
-       sentence covers every other object the host builds between slices (qjs_host_answer's parsed answer,
-       qjs_route's and qjs_perform's delivery records), which is the list the DCHECK in qjs_step already names.
-       SUSPEND/RESTORE for the same reason the generation is: the slice left the route pointed at the flow it is
-       still holding across the yield, and the next slice must resume with that flow's captures going where they
-       went — clearing it would be a flow running with its writes recorded nowhere. */
+    /* The flow stamp, the DOM capture and the capture route belong to the slice, not the session:
+     * engine_sched_slice returns YIELD without switching the running flow out, so "the session is live" and "a
+     * flow is running" differ by the host's own time. The three marks are one statement in three registers: the
+     * stamp says what generation an object is born at, `g_dom_capture` whether the Lexbor tree is being recorded,
+     * and the delta whose head a capture lands in. Across the host's time all three are off. The stamp is 0, so
+     * what the host creates (the ABI's parse of a fetch reply and its dup onto every parked flow's register,
+     * qjs_host_answer's parsed answer, qjs_route's and qjs_perform's delivery records) is baseline and shared by
+     * construction; a live stamp would hide those objects from every delta forked earlier
+     * (`JS_ObjFlowGen(obj) > d->fork_gen` skips them) and lose a flow's writes to them. The route is NULL, so no
+     * host write lands in a flow's head; a live route with a baseline stamp would record the host's property
+     * writes as creations in a stranger's head (a baseline object takes cow_capture_hook's shared arm), and the
+     * next switch away would delete them, delivering a reply record as `{}`. qjs_step's DCHECK names the
+     * host-side list.
+     *
+     * The wrapper makes this symmetric: the body has several exits, and one bracket around one call cannot miss
+     * one. Suspend and restore, never clear and re-enter: the generation is monotonic (every delta's fork_gen is a
+     * point on one line), so the next slice resumes at the number this one left, and the route resumes pointed at
+     * the flow held across the yield, whose captures must keep going where they went. */
     JS_SetFlowGen(g_slice_flow_gen);
     g_dom_capture = 1;
     cow_set_current(g_slice_delta);
-    /* THE HOST'S OWN TIME IS BEHIND THIS LINE, and on the first slice so is everything the session setup did
-       before any flow existed — the two cases the other three boundaries cannot see. Between two slices the
-       host parses a fetch reply into a record, routes a delivery and writes a synchronous answer, all of which
-       build JS values; a throw any of them leaves standing belongs to no flow at all, and the slice below would
-       hand it to whichever flow it resumes first. `detail` is the session's live flag, which distinguishes
-       "before the session was opened" from "between two of its slices". */
+    /* The host's own time is behind this line, and on the first slice so is the session setup before any flow
+       existed, two cases the other boundaries cannot see. Between slices the host parses a fetch reply into a
+       record, routes a delivery and writes a synchronous answer, all building JS values; a throw any of them leaves
+       standing belongs to no flow, and the slice below would hand it to the first flow it resumes. `detail` is the
+       session's live flag, separating before the session opened from between two slices. */
     ENGINE_NO_STRAY(g_sess_ctx, "slice-entry: the host's own time between slices (and the session setup before "
                                 "the first one)", g_sess_live);
     r = engine_sched_slice();
-    /* …AND THE SCHEDULER'S TAIL, which is the fourth segment: HTML §8.1.7.3's end-of-checkpoint hook, the aging
-       charge and flow_finish all run after the post-step boundary inside the loop, so this is the only line
-       that watches them. Asked BEFORE the marks below are put back, so what it reports is the state the slice
-       actually ended in. */
+    /* And the scheduler's tail: HTML §8.1.7.3's end-of-checkpoint hook, the aging charge and flow_finish run after
+       the loop's post-step boundary, so only this line watches them. Asked before the marks are put back, so it
+       reports the state the slice ended in. */
     ENGINE_NO_STRAY(g_sess_ctx, "slice-exit: the scheduler's tail after the last step "
                                 "(§8.1.7.3's end-of-checkpoint hook, the aging charge, flow_finish)", r);
     g_slice_flow_gen = JS_FlowGen();   /* the forks this slice took moved it; carry them, never restart */
     JS_SetFlowGen(0);                  /* the host's own time is baseline: what it creates is shared by construction */
     g_dom_capture = 0;
-    /* …and it is recorded into NO delta, which is what makes the line above safe rather than merely tidy. The
-       save reads whatever the slice left: the flow it is still holding across a yield, or NULL after a close —
-       engine_session_close switches its last flow out, and flow_switch_out un-currents as it unapplies, which
-       is the same reason that function's own clear of the live stamp is enough for the line above. */
+    /* And recorded into no delta, which makes the line above safe: the save reads whatever the slice left, the
+       flow it still holds across a yield or NULL after a close (engine_session_close switches its last flow out,
+       and flow_switch_out un-currents as it unapplies, which is also why that function's clear of the live stamp
+       suffices). */
     g_slice_delta = cow_current();
     cow_set_current(NULL);
     quantum_end();
-    /* WHAT THIS SLICE COST THE ENGINE'S OWN THREAD, CLOSED AFTER `quantum_end()` BECAUSE DISARMING THE EDGE
-       IS THE SLICE'S WORK AND NOT THE HOST'S — the same boundary the marks above are restored at. One
-       accumulate at one line, past every one of the body's returns, which is the property the wrapper is for:
-       a charge written at those returns would be missing from one of them eventually and the symptom would be
-       a slice's whole duration in neither row rather than a crash. */
+    /* What this slice cost the engine's own thread, closed after `quantum_end()` because disarming the edge is the
+       slice's work, at the boundary the marks are restored at. One accumulate past every return of the body, which
+       is what the wrapper is for. */
     {
         int64_t t_out = quantum_thread_us();
 
@@ -11175,37 +11144,30 @@ int engine_sched_step(void) {
                "narrowed under solver/engine.h's `loop_us`; the reading it feeds does not go absent, it "
                "INVERTS, and a negative `loopUs` reads as an engine that was never given the thread");
         g_loop_us += t_out - t_in;
-        /* CARRIED FOR THE NEXT SLICE'S GAP, so the host's time between two slices is measured from a reading
-           that was already taken rather than from a third. */
+        /* Carried for the next slice's gap, so the host's time between slices is measured from a reading already
+           taken. */
         g_slice_exit_us  = t_out;
         g_slice_exit_set = 1;
     }
     return r;
 }
 
-/* A host that has nothing else to do between quanta — the node smoke test — drives the SAME steps in a loop.
-   That is a HOST's loop over the one scheduler, not a second scheduler: the state machine is unchanged and a
-   quantum boundary is invisible to it. */
-/* THE HOST STREAMS WHAT THE RUN IS COSTING, because a run that does not finish reports nothing at all.
-   The three cost numbers are published in the result document, which is built when the frontier drains — so a
-   run that takes twenty minutes instead of three says exactly nothing about why, which is the state the last
-   attempt to measure one ended in. Emitting them as the run goes is the host's own job: between returns from
-   the scheduler it pumps messages, interleaves engines, streams findings and snapshots, and this is a finding.
-   THE CADENCE IS A COUNT, NOT A CLOCK. A wall-clock cadence would make the output differ run to run for a
-   reason that has nothing to do with the engine; a switch count is what the engine actually did, so two runs of
-   the same page emit the same lines. It is a reporting interval and not a bound: nothing is dropped, skipped or
-   reordered by it, and the loop it sits in is unchanged. */
-/* Sized against what a run actually costs rather than guessed: this fixture's whole exploration is under six
-   thousand switches, so a cadence in the hundreds of thousands emits nothing and tells nobody anything. */
+/* A host with nothing else to do between quanta (the node smoke test) drives the same steps in a loop: a host's
+   loop over the one scheduler, to which a quantum boundary is invisible. */
+/* The host streams what the run is costing, because the result document is built when the frontier drains and a
+   run that does not finish would otherwise say nothing about why. Between returns from the scheduler the host pumps
+   messages, interleaves engines, streams findings and snapshots, and this is one more finding. The cadence is a
+   count, not a clock: a switch count is what the engine did, so two runs of one page emit the same lines, and as a
+   reporting interval it drops, skips and reorders nothing. */
+/* Sized against what a run costs: this fixture's whole exploration is under six thousand switches, so a cadence in
+   the hundreds of thousands would emit nothing. */
 #define ENGINE_PROGRESS_EVERY 1000
 
-/* THE C ALLOCATOR'S OWN TWO NUMBERS — see engine.h for what each says. `live` is what it has handed
-   out and not been given back (quickjs's bytes included, since js_malloc routes to malloc); `arena` is the
-   total space it has taken from the system, which in wasm is LINEAR MEMORY AND ONLY EVER GROWS. It is one
-   allocator interface with two spellings: emscripten's dlmalloc exports the classic `mallinfo` with size_t
-   fields, glibc's `mallinfo` is int-wide and deprecated in favour of the size_t `mallinfo2`. Picking the
-   spelling is an ABI question about the platform's malloc, not a choice about what to measure — both answer
-   the same two fields, and the int-wide one would silently wrap on a run this size. */
+/* The C allocator's own two numbers (engine.h). `live` is what it has handed out and not been given back (quickjs's
+   bytes included, since js_malloc routes to malloc); `arena` is the space taken from the system, which in wasm is
+   linear memory and only grows. One interface, two spellings: emscripten's dlmalloc exports the classic `mallinfo`
+   with size_t fields, while glibc's `mallinfo` is int-wide (it would wrap on a run this size) and deprecated in
+   favour of `mallinfo2`. */
 #if defined(__EMSCRIPTEN__)
 #define ENGINE_MALLINFO_T struct mallinfo
 #define ENGINE_MALLINFO() mallinfo()
@@ -11226,10 +11188,9 @@ size_t engine_c_alloc_arena(void)
     return (size_t)m.arena + (size_t)m.hblkhd;   /* brk'd space plus whatever came from mmap */
 }
 
-/* THE FRONTIER'S OWN READING — see engine.h for what each row is and for why this is one struct rather than
-   twelve getters. It DECIDES NOTHING and it reads no other component: every row is a static of this file, and
-   the things a reader wants BESIDE them (the delta chains, the cold tier's byte census, the WFQ's order) are
-   their own components' to answer and are composed beside this one in solver/result.c. */
+/* The frontier's own reading (engine.h has each row and why it is one struct). It decides nothing and reads no other
+   component: every row is a static of this file, and what a reader wants beside them (the delta chains, the cold
+   tier's byte census, the WFQ's order) is composed beside it in solver/result.c. */
 void engine_frontier_census(EngineFrontierCensus *out)
 {
     DCHECK(out != NULL, "the frontier census was asked for into no record — a reading of an instant that lands "
@@ -11244,10 +11205,9 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->deepest           = g_deepest;
     out->completed         = g_completed;
     out->deepest_left      = g_deepest_left;
-    /* THE SEED LENGTH `deepest` AND `completed` ARE READ AGAINST — see EngineFrontierCensus. It is read from
-       the SESSION'S table rather than from any flow's `dyn_n`, because a flow's sequence is the seed followed
-       by whatever that timeline queued, so per-flow it is a different number per arm and none of them is the
-       document's. A closed session reads 0: engine_session_close gives the table back. */
+    /* The seed length `deepest` and `completed` are read against (EngineFrontierCensus), from the session's table
+       rather than any flow's `dyn_n`, which is the seed plus whatever that timeline queued and differs per arm. A
+       closed session reads 0: engine_session_close gives the table back. */
     out->root_programs     = g_root_n;
     out->root_programs_held_at_seed    = g_root_n_held;
     out->root_programs_awaited_at_seed = g_root_n_awaited;
@@ -11272,32 +11232,19 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->paged_asks         = g_reclaim_asks;
     out->paged_unarmed      = g_reclaim_unarmed;
     out->paged_floor        = g_reclaim_floor;
-    /* THE PAYMENT PAIR IS AN INEQUALITY AND IT IS ASSERTED HERE, at the one place both halves are read
-       together. `answered` counts the asks this session SETTLED; `asked` counts the ids it minted. A settled
-       count above the minted count is not a large number, it is the two counters having stopped describing one
-       population, and only their ORDER says so — both read as a healthy run on their own.
-       WHAT IT NAMES IS A MINT OR A CREDIT, AND NOT A LIFETIME. This message used to offer "a counter that
-       survived a session boundary" as the first of two hypotheses, and that hypothesis is unreachable: all
-       four host counters are on engine_session_close's NOT-RESET list together, so a carried total carries
-       every term and preserves the order. It cost a reader the wrong search once; a cause that cannot produce
-       the symptom is the stale-DFAIL failure with a number attached, so it is gone rather than demoted.
-       THE TWO REAL PRODUCERS ARE BOTH CLOSED AND BOTH ARE STRUCTURAL, which is what makes this an invariant
-       rather than an expectation: every id is minted by `mint_req` (so a re-issue at a fork is an ask like any
-       other), and `g_host_answered` is credited at exactly ONE line — the delivery that finds PEND_HAVE_VALUE
-       clear, writes the value and returns — so an id can be settled at most once and a second peer TIMELINE's
-       answer goes to `g_host_answers_extra` instead. A fire is therefore one of those two facts having stopped
-       being true: an id minted somewhere other than `mint_req`, or a second credit for one entry. */
-    /* THE TWO RETIREMENT PARTITIONS, ASSERTED AT THE ONE PLACE ALL SIX ROWS ARE IN ONE HAND — the same
-       identity solver/cold.c asserts between its `step_units` histogram and `flows`, and asserted for the same
-       reason: a split whose parts do not provably sum to the whole is two numbers that can drift, and drifted
-       they are worse than the one number they replaced, because each half then looks like a measurement.
-       WHAT IT ACTUALLY CATCHES is a retirement or a sale added LATER that moves the total without stating
-       which population it moved. Both totals are written at exactly one line each today and the arm is written
-       on the line beside it, so the identity holds by inspection right now — that is the point: the moment a
-       second site appears, the reading composed from these rows would silently start describing a frontier
-       whose members are not all accounted for, and this is what stops it. `finished` and `sold` are lifetime
-       totals of the INSTANCE (neither is on engine_sched_begin's reset path), so no session boundary can
-       separate a total from its arms. */
+    /* The payment pair is an inequality, asserted where both halves are read together: `answered` counts the asks
+       this session settled, `asked` the ids it minted, and only their order says the two describe one population.
+       A fire names a mint or a credit, not a lifetime: all four host counters carry across a session boundary
+       together (engine_sched_begin's not-reset list), preserving the order. Both producers are structural: every
+       id is minted by `mint_req` (a re-issue at a fork is an ask like any other), and `g_host_answered` is credited
+       at one line, the delivery that finds PEND_HAVE_VALUE clear, so an id is settled at most once and a second
+       peer timeline's answer goes to `g_host_answers_extra`. A fire is an id minted elsewhere or a second credit
+       for one entry. */
+    /* The two retirement partitions, asserted where all six rows are in hand, as solver/cold.c asserts its
+       `step_units` histogram against `flows`: a split whose parts do not provably sum to the whole is two numbers
+       that drift, each looking like a measurement. Each total and its arm are written on adjacent lines today;
+       this catches a retirement or sale added later without stating which population it moved. `finished` and
+       `sold` are instance lifetime totals, so no session boundary separates a total from its arms. */
     DCHECKF(out->finished_flows + out->finished_cands == out->finished,
             "the frontier census's retirement rows do not partition its retirement total (%ld exploration + "
             "%ld candidate against %ld finished) — every member is on exactly one side of `Flow.cand_src` for "
@@ -11311,31 +11258,16 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "it, so a sale path that reads it afterwards gets freed memory rather than a wrong count and this "
             "is where that shows",
             out->sold_flows, out->sold_cands, out->sold);
-    /* AND THE TWO TOTALS THEMSELVES PARTITION THE FRONTIER'S DEPARTURES, asserted here for the two above's
-       reason and ONE LEVEL UP FROM THEM. Each of those says what its own total is made of; neither says what
-       the totals are made OF, so the frontier's departure count and this file's two retirement totals were
-       three numbers living in two censuses with no identity anywhere between them — and "this engine retires
-       nothing" is exactly the sentence a reader composes by reading two of them at zero and subtracting.
-       A subtraction across two censuses that share no identity is not a measurement.
-
-       THE PARTITION IS EXACT BY CONSTRUCTION AND THAT IS WHY IT CAN BE ASSERTED RATHER THAN ESTIMATED.
-       solver/flow.c's `flow_remove` is the one line a member ever leaves the frontier on, `flow_release` is
-       its one caller, and it has exactly three on a live instance: flow_finish (which raises `g_finished` on
-       the line beside it), engine_reclaim_tail (which raises `g_flows_sold`), and flow_registry_free's drain
-       (which now raises the third arm). None of the three is reset by a session boundary — the sale totals are
-       asserted to CARRY at engine_sched_begin and the arrival/departure pair is not reset by
-       flow_registry_init — so no boundary can separate this total from its arms.
-
-       THE THIRD TERM IS NOT DECORATION EVEN THOUGH IT READS 0 AT EVERY CENSUS A HOST TAKES TODAY. Every host
-       opens one session per instance and the teardown drain runs after the report is composed, so what the
-       term buys is that the identity is true at every instant of the instance's life rather than only at the
-       instants the census happens to be called — a host that censuses after a partial teardown gets an answer
-       instead of a false fire, and the arm a reader most wants to name is the one that is named.
-
-       WHAT IT CATCHES is a departure path added later that moves the frontier's count without saying which
-       population left, and that is not a hypothetical here: reclamation gated on anything other than
-       completion is a FOURTH arm by construction, so the next diff in this area is precisely the diff this
-       fires on if it forgets to declare itself. */
+    /* And the two totals partition the frontier's departures, one level up: without this, the frontier's departure
+       count and this file's retirement totals are three numbers in two censuses with no identity between them, and
+       "this engine retires nothing" is a subtraction across them. Exact by construction: solver/flow.c's
+       `flow_remove` is the one line a member leaves the frontier on, `flow_release` its one caller, and that has
+       three callers on a live instance: flow_finish (raising `g_finished`), engine_reclaim_tail (raising
+       `g_flows_sold`) and flow_registry_free's drain (raising the third arm). None is reset by a session boundary
+       (the sale totals carry at engine_sched_begin, and flow_registry_init does not reset arrivals and
+       departures). The third term reads 0 at every census hosts take today, since the drain runs after the report,
+       but keeps the identity true at every instant. It catches a departure path added later without an arm, which
+       any reclamation gated on something other than completion would be. */
     DCHECKF(out->finished + out->sold + (long)flow_departures_teardown() == (long)flow_departures(),
             "the frontier's departure causes do not partition its departure count (%ld finished + %ld sold + "
             "%lld gone with the registry against %lld departures) — flow_remove is the one line a member ever "
@@ -11344,12 +11276,10 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "about a frontier whose members are not all accounted for",
             out->finished, out->sold,
             (long long)flow_departures_teardown(), (long long)flow_departures());
-    /* AND THE SEED TABLE'S PARTITION, asserted here for the same reason and about a table built ONCE per
-       session rather than per flow: `held` is a row whose source text this instance already has and `awaited`
-       is one whose bytes the reply door still owes, which is the whole content of the pair. A difference means
-       a row was added to the table by a path that did not say which side it was on, and the side that matters
-       is the one `replyAsked` is read against — an unlabelled row there silently lowers the bundle's own share
-       of the reply door and makes a run that learned nothing read as one that reached a request. */
+    /* And the seed table's partition, about a table built once per session: `held` is a row whose source text this
+       instance has, `awaited` one whose bytes the reply door still owes, `refused` one whose `src` did not
+       encoding-parse. An unlabelled row would lower the bundle's share of the reply door that `replyAsked` is read
+       against, making a run that learned nothing read as one that reached a request. */
     DCHECKF(out->root_programs_held_at_seed + out->root_programs_awaited_at_seed +
                 out->root_programs_refused_at_seed == out->root_programs,
             "the root document's seed rows do not partition its own count (%d held + %d awaited + %d refused "
@@ -11358,23 +11288,18 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "against a bundle share that is not the bundle's",
             out->root_programs_held_at_seed, out->root_programs_awaited_at_seed,
             out->root_programs_refused_at_seed, out->root_programs);
-    /* AND THE PROGRAM-START PARTITION, asserted for the reason the two above are and at the same place. It is
-       the ONLY identity these four rows have, which is stated here because the missing one is the tempting
-       one: `prog_queued_cand` is an ASK and `prog_starts_cand` counts STARTS ACROSS TIMELINES, and a fork
-       copies an unstarted row into the arm it makes — so a started count above the asked count is that copy
-       and not a broken number, and an inequality between them would fire on a healthy branch. */
+    /* And the program-start partition, the only identity these four rows have. `prog_queued_cand` is an ask and
+       `prog_starts_cand` counts starts across timelines, and a fork copies an unstarted row into its arm, so
+       starts above asks is that copy; an inequality between them would fire on a healthy branch. */
     DCHECKF(out->prog_starts_cand + out->prog_starts_other == out->prog_starts,
             "the frontier census's program-start rows do not partition its start total (%ld candidate + %ld "
             "other against %ld starts) — a start is of exactly ONE row and that row's kind is read on the line "
             "beside the total, so a difference is a second place a program can start that moved the total "
             "without saying which population it moved",
             out->prog_starts_cand, out->prog_starts_other, out->prog_starts);
-    /* AND THE TWO REPLY DOORS' OWN PAIRS, ASSERTED HERE BECAUSE THIS IS THE ONE PLACE ALL FIVE ROWS ARE READ
-       TOGETHER. Each door's queue is a SUBSET of the replies it examined — both raises happen in one
-       straight-line block for one reply, and nothing forks between them — so a queued count above its own ask
-       count is not a large number, it is the two counters having stopped describing one population, and it is
-       exactly what a door that raises its queued arm and forgot its ask looks like. That forgetting is the
-       one thing four separate entries cannot prevent by construction, so it is asserted instead. */
+    /* And the two reply doors' own pairs, asserted where all five rows are read together: each door's queue is a
+       subset of the replies it examined (both raises happen in one straight-line block for one reply, with no fork
+       between), so a queued count above its ask count is a door that raised its queued arm and not its ask. */
     DCHECKF(out->net_prog_fetch_queued <= out->net_prog_fetch_asks,
             "the fetch() reply door queued more programs than it was shown replies (%ld queued against %ld "
             "asks) — both are raised in one straight-line block for one reply record, so the queue side is a "
@@ -11387,28 +11312,20 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "is a SUBSET by construction and a door that raises engine_note_net_prog_xhr_queued without "
             "having raised the ask is about to publish a numerator with no denominator under it",
             out->net_prog_xhr_queued, out->net_prog_xhr_asks);
-    /* AND THE TWO ARMS AGAINST THE ONE ENTRY, WHICH IS AN INEQUALITY AND SAYS SO. `engine_queue_fetched_script`
-       raises the total and has a THIRD caller on purpose — test_forced.c's `loadScript` host edge, which
-       stands in for a `<script src>`-shaped door — so an equality would fire on that fixture and the residue
-       is a quantity a reader READS rather than one this line requires to be zero. What it catches is the
-       direction that cannot be innocent: an arm above the total is a door that queued a program WITHOUT going
-       through the one compile entry, which is the second compile door §A-superseded-system-is-DELETED forbids
-       arriving as an observation rather than as a mechanism. */
+    /* And the two arms against the one entry, an inequality: `engine_queue_fetched_script` raises the total and
+       has a third caller, test_forced.c's `loadScript` host edge standing in for a `<script src>`-shaped door, so
+       the residue is read, not required to be zero. An arm above the total is a door that queued a program without
+       going through the one compile entry, a second compile door. */
     DCHECKF(out->net_prog_fetch_queued + out->net_prog_xhr_queued <= out->net_prog_queued,
             "the reply doors' queued arms exceed the programs the one compile entry built (%ld fetch + %ld "
             "xhr against %ld at engine_queue_fetched_script) — a door crediting itself with a program that "
             "entry never saw has queued it somewhere else, which is a SECOND compile door beside the working "
             "one and is what these rows exist to make visible",
             out->net_prog_fetch_queued, out->net_prog_xhr_queued, out->net_prog_queued);
-    /* AND THE REFUSAL EDGE'S OWN PARTITION, which is the row that makes a zero `sold` READABLE. Every call to
-       engine_reclaim_tail leaves by exactly one of three doors — declined because the safepoint is not armed,
-       answered at the frontier's floor, or a sale that gives back exactly one flow — so the three arms are the
-       whole of the asks by construction. WHAT IT CATCHES is a fourth door added to that hook without a
-       counter: the reading composed from these rows would then attribute its refusals to one of the three that
-       did not happen, which is worse than the single ambiguous zero they replaced, because each arm would
-       still look like a measurement. `asks` is also the only row here that can distinguish "the allocator
-       never refused" from "the pager was consulted and could do nothing", and those are the two states a
-       reader of `sold: 0` has been unable to tell apart. */
+    /* And the refusal edge's own partition, which makes a zero `sold` readable: every engine_reclaim_tail call
+       leaves by one of three doors (declined because the safepoint is unarmed, answered at the floor, a sale of one
+       flow), so the arms are the whole of the asks, and this catches a fourth door added without a counter. `asks`
+       alone separates "the allocator never refused" from "the pager was consulted and could do nothing". */
     DCHECKF(out->paged_unarmed + out->paged_floor + out->sold == out->paged_asks,
             "the frontier census's reclaim rows do not partition the asks the allocator made (%ld unarmed + "
             "%ld at the floor + %ld sold against %ld asked) — engine_reclaim_tail returns through exactly "
@@ -11428,148 +11345,69 @@ void engine_frontier_census(EngineFrontierCensus *out)
 static int (*g_provider)(JSContext *ctx);
 void engine_set_provider(int (*provide)(JSContext *ctx)) { g_provider = provide; }
 
-/* …AND WHETHER THIS HOST WANTS THE FRONTIER'S RESIDUE — see engine.h. A seam, not a policy: the answer is the
-   host's and the moment the park is TAKEN at is the engine's. */
+/* And whether this host wants the frontier's residue (engine.h): a seam, not a policy; the answer is the host's and
+   the moment the park is taken is the engine's. */
 static int (*g_park_hook)(void);
 void engine_set_park_hook(int (*want_park)(void)) { g_park_hook = want_park; }
 
-/* THE CENSUS, FOR EVERY HOST WHOSE OUTPUT IS A STREAM OF LINES — one cadence, one order, one emitter.
+/* The census, for every host whose output is a stream of lines: one cadence, one order, one emitter.
  *
- * WHY THIS IS A FUNCTION AND NOT A BLOCK IN A LOOP, AND IT IS A CORRECTION RATHER THAN A TIDY-UP. The five
- * lines below stood inside `run_scheduler`, which the smoke fixture reaches through `engine_run` and NOTHING
- * else does — the ABI's hosts drive `engine_sched_step` through `qjs_step` and never enter that loop. So the
- * five censuses were COMPOSED on every sample of every run and PRINTED only by the fixture, which is
- * §Testing's "measure what the shipped path writes, not what a harness prints" with the writer on the wrong
- * side of it for the SECOND time in one file: the block's own banner records the first, where these rows were
- * computed for the product and printed for the smoke, and moving the numbers into this block fixed the
- * COMPOSITION and left the EMISSION exactly where it was.
+ * A function rather than a block in run_scheduler, because the ABI's hosts drive engine_sched_step through qjs_step
+ * and never enter that loop, and the census must be printed on the shipped path, not only by the fixture. Two hosts
+ * call it: run_scheduler (the smoke) and test_forced.c's `--abi` arm (the native ABI, whose trusted zone reads its
+ * stdout as a record stream). The wasm ABI hosts (route.mjs, solvergate.mjs, pagecensus.mjs, the extension's
+ * bridge) read the result document, which carries the same bytes from the same composers.
  *
- * WHAT THAT COST, MEASURED ON THE SHIPPED PATH RATHER THAN ARGUED. `test_forced.c --abi`, driven with one
- * `document` record over its own channel, ran a page to a DRAIN — 9808 context switches, 774 flows, 4644 jobs
- * and a 14-row fork table — and wrote `@QUANTUM` once, its bills, and `@RESULT`. Not one census line. The
- * same host on a page whose frontier does NOT drain inside a budget writes `@QUANTUM` and nothing else at all,
- * so a run exploring thousands of worlds and a run wedged on one member are the SAME SILENCE from outside.
- * That is the only thing this entry changes: both are still the same run; only one of them is now legible.
+ * It runs on the host's own time between two steps, never inside a slice, so with the flow stamp and capture route
+ * down it creates no flow's JS value, which makes `result_heap_json`'s runtime walk legal here. The cadence is
+ * ENGINE_PROGRESS_EVERY units of engine_work_done() (forks + flows + jobs + switches) or a new candidate, whichever
+ * comes first; a sample is O(frontier members) and prices itself on its own output (`scanCensusWeights` against
+ * `scanNextWeights` on the @WFQ line).
  *
- * WHO CALLS IT AND WHO DELIBERATELY DOES NOT. The block's own banner already states the rule — "a host that
- * publishes a DOCUMENT reads the census out of it, and a host whose output IS lines must print it when it is
- * TAKEN or it is not in the output at all" — and it names exactly two hosts in this tree: `run_scheduler`
- * (the smoke) and `test_forced.c`'s `--abi` arm (the native ABI, whose trusted zone reads its stdout as a
- * record stream). The wasm ABI hosts — `route.mjs`, `solvergate.mjs`, `pagecensus.mjs`, the extension's
- * bridge — read the RESULT DOCUMENT, which carries these same bytes from these same composers, so a line for
- * them would be a second spelling of a number they already hold.
- *
- * WHERE IT RUNS AND HOW OFTEN, STATED HERE BECAUSE AN OBSERVER RUNS AT THE FREQUENCY OF WHAT IT OBSERVES.
- * On the HOST's own time, between two steps, never inside a slice — so it creates no JS value and the flow
- * stamp and the capture route are down, which is what makes `result_heap_json`'s runtime walk legal here. The
- * cadence is `ENGINE_PROGRESS_EVERY` units of `engine_work_done()` (forks + flows + jobs + switches) or a NEW
- * CANDIDATE, whichever comes first, and a sample is O(frontier members): solver/flow.h's own note says it
- * weighs every member twice, and prices ITSELF on the line it prints — read `scanCensusWeights` against
- * `scanNextWeights` on the @WFQ line of the very run you are reading for the share of all frontier-weighing
- * that went to the REPORT rather than to the run. An instrument that cannot be priced from its own output is
- * the one §Testing says is not a measurement; this one can be, on every sample, by its reader.
- *
- * THE FIRST SAMPLE IS UNCONDITIONAL AND THAT IS LOAD-BEARING, not an artifact of `last_cands` starting at -1.
- * It is what separates THREE states a reader otherwise cannot tell apart from a killed run's output: NO census
- * line at all is a host that never reached its first round (or a binary without this entry); EXACTLY ONE is a
- * frontier that has not moved `ENGINE_PROGRESS_EVERY` units nor minted a candidate since — a wedged run, said
- * POSITIVELY, with the numbers it wedged at; MANY is a run exploring, and the series says how. An absent line
- * and a zero line are different facts (solver/result.c says so about every row of @COLD), and this is that
- * rule applied to the sample itself.
- *
- * AND EACH OF THOSE THREE STATES IS READABLE OFF ONE LINE RATHER THAN OFF THE WHOLE STREAM, which is what the
- * sample ordinal is for. The paragraph above is a statement about a COUNT OF LINES, so only a reader holding
- * the log entire can make it — and CLAUDE.md's standing instruction is to read a run's TERMINAL census, which
- * a series of length ONE satisfies with its OPENING sample and says nothing whatever about having done so. A
- * reader who greps one line out of a build log, or reads one echoed by the trusted zone, gets the state before
- * anything happened and has nothing on the line to tell them. So every line states the ordinal of the sample it
- * belongs to: the greatest ordinal in a log IS the series length, and a last line reading 1 is the wedged state
- * this paragraph describes rather than an end state. It is spliced by the emission below and is NOT a
- * composer's row — see the comment there for why a fact about a POSITION IN A STREAM may not ride bytes that
- * also go on a document, and why one of the five lines does not carry it.
- *
- * THE CADENCE IS STATIC AND NOT A CALLER'S LOCAL, which is the one behaviour change here beyond the caller
- * set. `engine_work_done` is a LIFETIME counter that this file refuses to reset at a session boundary, so a
- * cadence restarting per call would be a reporting interval keyed on a clock that does not restart with it.
- * `long` rather than the `int` the local carried, for the same reason: the counter is a long and a run that
- * outlives an `int` would wrap its own reporting interval.
- *
- * AND IT ANSWERS WHETHER IT SAMPLED, WHICH IS THE ONE FACT A LINE-STREAM HOST CANNOT RE-DERIVE WITHOUT
- * KEEPING A SECOND COPY OF THIS CADENCE. solver/engine.h states what that answer is for and why a caller may
- * not compute it for itself; what it is used for TODAY is the other half of the sentence this banner already
- * makes — the result DOCUMENT is composed when the frontier drains or stalls, and a real page's does neither,
- * so a host that streams its five lines and not its FINDINGS has made the run legible and left the product's
- * own answer on the floor. `test_forced.c`'s `--abi` arm spends this return on `qjs_emit_partial`. */
+ * The first sample is unconditional, which separates three states: no census line is a host that never reached its
+ * first round; exactly one is a frontier that has neither moved ENGINE_PROGRESS_EVERY units nor minted a candidate
+ * since, a wedged run stated with its numbers; many is a run exploring. Each line carries its sample ordinal, so the
+ * state is readable off one line: the greatest ordinal in a log is the series length, and a last line reading 1 is
+ * the wedged state. The cadence and the ordinal are statics, because engine_work_done is a lifetime counter not
+ * reset at a session boundary, and `long`, like that counter. It answers whether it sampled (solver/engine.h),
+ * which a line-stream host cannot re-derive without a second copy of the cadence: the result document is composed
+ * only when the frontier drains or stalls, which a real page's never does, so test_forced.c's `--abi` arm spends
+ * this return on `qjs_emit_partial` to stream its findings too. */
 int engine_census_emit(void)
 {
     static long next = ENGINE_PROGRESS_EVERY;
     static int  last_cands = -1;
-    /* THE SAMPLE ORDINAL, STATIC FOR THE CADENCE'S OWN REASON. The emission below states what it is and why no
-       composer publishes it; what makes it a LIFETIME count rather than a per-call one is the paragraph above
-       about `next` — `engine_work_done()` is not reset at a session boundary, so an ordinal that restarted
-       while the cadence it numbers did not would give two samples of one process one number. `long` for the
-       same reason that counter is one. */
+    /* The sample ordinal, static for the cadence's reason: an ordinal that restarted while the cadence it numbers
+       did not would give two samples of one process one number. */
     static long seq = 0;
 
-    /* THE PRECONDITION THAT MAKES EVERY LINE BELOW LEGAL, NAMED AT THE CALLER'S MISTAKE. Each of the five
-       composers walks state the SESSION owns — the frontier, the pager's tables, the runtime behind
-       `g_sess_ctx` — so a host that asks for a census outside a live session is asking about nothing, and
-       `result_heap_json`'s own null check would report it as a missing runtime one component further on. */
+    /* The precondition that makes every line below legal: each composer walks state the session owns (the
+       frontier, the pager's tables, the runtime behind `g_sess_ctx`), so a census outside a live session is about
+       nothing, and `result_heap_json`'s null check would report it one component later as a missing runtime. */
     DCHECK(g_sess_live && g_sess_ctx != NULL,
            "a census was asked for with no live session — every row of these five lines is a walk of the "
            "frontier, the pager and the runtime this session holds, so a host asking here is reporting on "
            "state that has been torn down or was never seeded");
 
-    /* Either enough work has happened to be worth a line, or the SEARCH grew — a new candidate is the event
-       that changes what the rest of the run will cost, so it is worth saying when it happens. */
+    /* Either enough work has happened to be worth a line, or the search grew: a new candidate changes what the
+       rest of the run will cost. */
     if (engine_work_done() < next && solve_candidate_count() == last_cands)
         return 0;
     while (engine_work_done() >= next) next += ENGINE_PROGRESS_EVERY;
     last_cands = solve_candidate_count();
-    /* THE SAMPLE IS NUMBERED BEFORE IT IS COMPOSED, so the four emissions below carry ONE ordinal and the lines
-       of a block are joinable by it rather than by the order they happen to arrive in. Raised on its own
-       statement and never inside a condition: an increment is a side effect and §Offensive-programming forbids
-       one in a DCHECK's condition, which is exactly the mistake a counter asserted at its own read invites. */
+    /* The sample is numbered before it is composed, so the emissions carry one ordinal and a block's lines join by
+       it rather than by arrival order. On its own statement, since an increment is a side effect a DCHECK
+       condition may not have. */
     seq += 1;
 
-    /* THE FOUR CENSUSES, EACH PRINTED FROM THE ONE COMPOSER THAT ALSO PUTS IT ON THE RESULT DOCUMENT
-       — solver/result.c's `result_swap_json`/`result_cold_json`/`result_heap_json`/`result_wfq_json`
-       and solver/decide.c's `decide_fork_json`. Not four renderings of four structs: one composer per
-       census, two emission sites, and the bytes are the SAME BYTES, so the two can never disagree.
-
-       WHY THEY MOVED HERE, AND IT IS THE SAME SENTENCE FOR ALL OF THEM. Every row below was a static of
-       this file with exactly one consumer — a printf inside `run_scheduler`, which `engine_run` reaches
-       and nothing else does — so the pager's own accounting, the runtime's heap decomposition, the cost
-       of a context switch and the frontier's provenance were computed on every census of every
-       production run and printed on NONE of them: §Testing's "measure what the shipped path writes, not
-       what a harness prints" with the writer on the wrong side of it. Sixty-nine numbers, not one of
-       them ever read off a real page.
-
-       AND THAT REPAIR FIXED THE COMPOSITION AND LEFT THE EMISSION, WHICH IS WHY THE SENTENCE ABOVE IS
-       REWRITTEN RATHER THAN DELETED — a reader who re-derives it will re-introduce the printf inside one
-       host's loop. The clause it used to carry ("this loop runs for exactly one host … the extension's
-       ABI drives `engine_sched_step` directly and never enters this function") was TRUE of the block and
-       is what made these five lines a fixture-only stream: the numbers reached the product's result
-       DOCUMENT and the lines reached only the smoke, so a run that never drains — which is every real
-       page inside any budget anyone has given one — printed nothing at all. This is a FUNCTION for
-       exactly that reason, and the banner above it names both of its callers and the two hosts that
-       deliberately do not call it.
-
-       A HOST WHOSE OUTPUT IS A STREAM OF LINES STILL PRINTS ITS OWN LINE, and that is not a second
-       reporting mechanism: it is the rule result.h states for a page error and test_forced.c states
-       for the @S array — a host that publishes a DOCUMENT reads the census out of it, and a host whose
-       output IS lines must print it when it is TAKEN or it is not in the output at all.
-
-       THE @PROGRESS LINE IS GONE AND ITS ROWS ARE NOT. `switches`, `flows` and `candidates` were the
-       result document's `_switches`/`_flows`/`_candidates` under a second spelling; `objects` and
-       `heapKiB` were the @HEAP line's own rows; `live` and `sold` are the frontier's and are in the
-       cold census, where `finished` beside them is what tells a frontier that RETIRED its flows from
-       one that PAGED them; `forks` and the fork table are `_forkAt` and its total. What is deleted
-       outright is the three that were a SAMPLE of one flow rather than a census of anything — the
-       running flow's script cursor, and the sink and payload of whichever candidate happened to be
-       switched in. `deepest` and `completed` answer the cursor's question as facts about the DOCUMENT,
-       and the @S array already carries every candidate's sink and payload; a sample of one flow at one
-       instant is not a measurement the next reader can compare against anything. */
+    /* The censuses, each printed from the one composer that also puts it on the result document (solver/result.c's
+       `result_swap_json`/`result_cold_json`/`result_heap_json`/`result_wfq_json`, solver/decide.c's
+       `decide_fork_json`): one composer per census, two emission sites, the same bytes, so the two cannot
+       disagree. A host whose output is lines prints its own line, the rule result.h states for a page error and
+       test_forced.c for the @S array: a host that publishes a document reads the census out of it, and a host
+       whose output is lines must print it when taken or it is not in the output. No line samples one flow (the
+       running flow's cursor, the switched-in candidate's sink and payload): `deepest` and `completed` answer the
+       cursor's question about the document, and the @S array carries every candidate's sink and payload. */
     {
         char *swap = result_swap_json(), *cold = result_cold_json();
         char *heap = result_heap_json(g_sess_ctx), *wfq = result_wfq_json(), *forks = decide_fork_json();
@@ -11578,51 +11416,32 @@ int engine_census_emit(void)
               "a census could not be composed — these five lines are the whole of what this host says "
               "about the frontier it is draining, and a run that continues without one reports its "
               "cost, its heap and its order as an absence that reads exactly like a zero");
-        /* ONE PRINT PER MARKER, because a marker is what a reader MATCHES on: build.mjs greps
-           `^@COLD (\{.*\})$` and `^@WFQ (\{.*\})$` to drive its stuck-run discriminators, and a
-           single format string carrying five of them puts four marker names in the middle of an
-           emission where nothing looking for an emission's marker can see them. The bytes on the
-           stream are identical; what differs is whether the stream is READABLE as five records.
-           AND THE MARKER STAYS A LITERAL AT THE HEAD OF ITS OWN FORMAT STRING, which is why the ordinal below
-           is spliced at each line rather than once inside a helper taking the marker as an argument:
-           engine/fieldgate.mjs reads a stream marker as `@TAG` at the very START of an emission, so a marker
-           handed to a helper is a marker that namespace no longer sees WRITTEN — and a written marker read as
-           unwritten is a finding in the one gate that pairs this stream's producers with its readers.
-
-           EACH LINE STATES THE ORDINAL OF THE SAMPLE IT BELONGS TO, SPLICED IN FRONT OF THE COMPOSER'S FIRST
-           ROW. It is written HERE and is a row of no composer, because those bytes are read at TWO emission
-           sites — this stream and solver/result.c's own document — and an ordinal is a fact about a POSITION IN
-           A STREAM, which a document is not. A composer row would answer a count of census LINES on a document
-           whose host emits none, and that zero is a REGIME rather than a count: one field answering two
-           questions, which is the shape §A-FIELD-A-CONSUMER-DEFAULTS calls a plausible datum. A composer does
-           not know it is being streamed; the thing that streams it does, and owns the number.
-           IT IS NOT A SECOND SPELLING OF `workDone`, WHICH result_wfq_json ALREADY PUBLISHES. That row says
-           WHEN a sample was composed and this says WHICH sample it is, and only the second is UNIQUE: the gate
-           above has a second arm, so a NEW CANDIDATE emits a sample without `engine_work_done()` having
-           advanced at all and two samples can carry one `workDone`. That is what makes the ordinal the key the
-           lines of one block are JOINED by — result_wfq_json's own note is that two censuses share no identity
-           unless a row holds one — and it is why emitting `workDone` here as well would put a DUPLICATE KEY on
-           the @WFQ line, which a JSON parser resolves silently to whichever of the two came last.
-           THE SPLICE STEPS ONE BYTE PAST THE COMPOSER'S OPENING BRACE, so the composer's bytes go out VERBATIM
-           as a suffix and the payload is still ONE object for `^@COLD (\{.*\})$` to match whole. The comma is
-           CONDITIONAL because a composer may legitimately answer an EMPTY object — result_wfq_json does so for
-           an empty frontier, as a positive statement that nothing was standing — and an ordinal followed by
-           `,}` is not a smaller answer but a line no reader can parse: engine/trusted.mjs takes an unparseable
-           payload as the two grammars having parted rather than as a line to drop.
-
-           @FORKAT IS DELIBERATELY NOT ONE OF THEM, AND THAT IS A FINDING ABOUT THAT LINE'S OBJECT RATHER THAN A
-           NARROWING HERE. Its payload is not a record of named rows: it is a TABLE whose keys are PARTITIONED
-           BY THEIR FIRST BYTE — solver/decide.c writes a constraint key opening on concolic_ident_compose's
-           decimal length prefix, a mechanism row on `(`, an unnamed fork site on `~` and its own two bounds on
-           `_` — and engine/build.mjs's `forkReading` classifies every key exhaustively and THROWS on a fourth
-           spelling, deliberately, because a key it cannot name is mass filed under whichever population it
-           resembles. `{}` there is also the positive statement that nothing forked, which a spliced row would
-           end. So that census is placed in its block by the @COLD line it is printed beside, which is what that
-           reader's own landed residual on this pairing already asks for.
-           RESIDUAL: a reader who greps `^@FORKAT` alone still has no ordinal. What the next diff builds is a
-           fourth namespace in `forkReading` — a census-owned member admitted BY NAME, as its two bounds are —
-           and its empty-table sentence rewritten to mean "the ordinal and no rows". Its absence shows as a
-           @FORKAT line that cannot be placed in a series without counting the @COLD lines above it. */
+        /* One print per marker, because a marker is what a reader matches on: build.mjs greps
+         * `^@COLD (\{.*\})$` and `^@WFQ (\{.*\})$`, and one format string carrying five would bury four markers
+         * mid-emission. The marker stays a literal at the head of its own format string, which is why the ordinal
+         * is spliced per line rather than in a helper taking the marker: engine/fieldgate.mjs reads a stream
+         * marker as `@TAG` at the start of an emission.
+         *
+         * Each line states its sample ordinal, spliced before the composer's first row. It is no composer's row,
+         * because those bytes also go on solver/result.c's document, and an ordinal is a fact about a position in a
+         * stream, which a document is not: a composer row would read 0 on a document whose host emits no lines,
+         * one field answering two questions. It is not `workDone` (which result_wfq_json publishes): that says when
+         * a sample was composed and this which sample it is, and only this is unique, since a new candidate emits a
+         * sample without work advancing; emitting `workDone` here too would put a duplicate key on the @WFQ line.
+         * The splice steps one byte past the composer's opening brace, so the composer's bytes go out verbatim and
+         * the payload stays one object. The comma is conditional because a composer may answer an empty object
+         * (result_wfq_json does for an empty frontier), and `,}` would be unparseable, which engine/trusted.mjs
+         * reads as the two grammars having parted.
+         *
+         * @FORKAT is not spliced: its payload is a table whose keys are partitioned by their first byte
+         * (solver/decide.c writes a constraint key on concolic_ident_compose's decimal length prefix, a mechanism
+         * row on `(`, an unnamed fork site on `~` and its two bounds on `_`), engine/build.mjs's `forkReading`
+         * throws on a fourth spelling, and `{}` there states that nothing forked. It is placed in its block by the
+         * @COLD line printed beside it.
+         * Named residual. Not covered: a reader grepping `^@FORKAT` alone has no ordinal. Next diff builds: a
+         * fourth namespace in `forkReading`, a census-owned member admitted by name as its two bounds are, with its
+         * empty-table sentence rewritten to mean "the ordinal and no rows". Absence shows as: a @FORKAT line that
+         * cannot be placed in a series without counting the @COLD lines above it. */
         DCHECK(swap[0] == '{' && swap[1] != '\0' && cold[0] == '{' && cold[1] != '\0'
                    && heap[0] == '{' && heap[1] != '\0' && wfq[0] == '{' && wfq[1] != '\0',
                "a census composer handed this host bytes that are not a closed object — the four emissions "
@@ -11643,9 +11462,8 @@ int engine_census_emit(void)
         free(swap); free(cold); free(heap); free(wfq); free(forks);
     }
     fflush(stdout);
-    /* THE SAMPLE HAPPENED — said AFTER the flush rather than at the gate above, because what a caller does
-       with this answer is write MORE of its own stream at the same instant, and a `1` handed out before these
-       five lines were on the wire would order a host's output by whichever `printf` ran first. */
+    /* The sample happened, said after the flush, because a caller writes more of its own stream on this answer,
+       and a `1` before these lines were on the wire would order the host's output by whichever printf ran first. */
     return 1;
 }
 
@@ -11653,162 +11471,58 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                           const ScriptSchedule *sched, lxb_dom_element_t **els, int n, int forking,
                           const char *recipes) {
     int r;
-    /* THE RESIDUE THIS HOST WAS HANDED, or NULL. This line used to say the cold tier's resume "belongs to the
-       host that has an IndexedDB", and that was a claim about STORAGE standing in for a claim about the
-       SCHEDULER: seeding from a residue is engine_sched_begin's own alternative to seeding a boot flow, and a
-       host with a file is as much a store as a host with an object store. Passing NULL from here made the
-       resume path unreachable from every host but the extension's, which is exactly the shape §SECURITY.md
-       names one level up — a mechanism that can be written, reviewed and self-tested with no process able to
-       run it. The store is the caller's business; the choice is the scheduler's, and it is made in one place. */
+    /* The residue this host was handed, or NULL. Seeding from a residue is engine_sched_begin's own alternative to
+       seeding a boot flow, and a host with a file is as much a store as one with an object store; the store is the
+       caller's business and the choice the scheduler's, made in one place. */
     engine_sched_begin(ctx, bodies, srcs, types, sched, els, n, forking, recipes);
     for (;;) {
-        /* DOES THIS HOST WANT THE RESIDUE? Level-1 eviction is the HOST's decision — it is the only zone that
-           can see the other documents' engines and the summed working set — so it is a SEAM here exactly as
-           the stall payment is, and for the same reason: the scheduler holds no idea of what memory pressure
-           is, and the host holds no idea of what a flow is. A host that never evicts installs nothing, which
-           is every existing caller.
-           IT TRUNCATES NOTHING, which is what keeps it out of §NO BOUNDS. The park WRITES every member of the
-           frontier and the caller stores it, so what this seam decides is WHEN the residue leaves memory and
-           never how much of it survives — which is precisely the difference between paging and a cap.
-           ASKED AT THE TOP OF THE LOOP, so a host that answers yes gets the park taken at the next step
-           boundary with no flow switched in, which is the only moment every flow's decision state is in its
-           own blob rather than in decide.c's globals. */
+        /* Does this host want the residue? Level-1 eviction is the host's decision (only it sees the other
+           documents' engines and the summed working set), so it is a seam, as the stall payment is: the scheduler
+           has no idea of memory pressure and the host none of a flow. A host that never evicts installs nothing. It
+           truncates nothing: the park writes every member and the caller stores it, so the seam decides when the
+           residue leaves memory, never how much survives. Asked at the top of the loop, so the park is taken at the
+           next step boundary with no flow switched in. */
         if (g_park_hook && g_park_hook())
             engine_request_park();
         r = engine_sched_step();
         if (r == ENGINE_STEP_DONE)
             break;
-        /* THE HOST PAYS EVERY SLICE. It used to pay only at a STALL, and that was recorded here as a known
-           defect with the fix written out in order; this is that fix, and the reason it could not be taken
-           before is one line in solver/pending.h that has now been corrected.
-           WHAT THE OLD SCHEDULE COST, and it is the answer to why this document never got deeper than its
-           second <script>. A stall is reached only when the pick finds NO runnable member, so under a stall-only
-           seam a flow's reply is conditional on EVERY OTHER FLOW in the document also becoming blocked. One
-           flow's progress is then a function of 511 siblings' states — a cross-flow coupling this scheduler
-           forbids everywhere else — and the coupling gets WORSE as exploration succeeds, because every fork adds
-           a member that must also block before anybody is paid, and a fork RE-ISSUES its parent's unanswered
-           synchronous request under a fresh id (engine_sibling_assemble), so the set to be blocked on is
-           regenerated by the very thing that makes progress. The leading flow — the one furthest into the
-           document, the only one that can reach a lazily-loaded chunk — is the flow this hurts most: it is the
-           first to block on the host and the last to be answered.
-           THE PRODUCT NEVER HAD IT, which is why this host was the odd one out rather than the canary. The
-           extension's bridge pulls qjs_pending and qjs_host_requests after EVERY non-DONE return — a stall and
-           an ordinary quantum are paid on the same schedule there, which is why main.c carrying the stall code
-           separately changes what the host KNOWS and not when it pays — so in the extension a blocked flow is
-           answered at the next quantum. This driver now speaks the same schedule.
-           AND THE CLAUSE THAT STOOD HERE — "which is also what makes it a fair oracle for the product: a
-           difference in findings between the two hosts should be a difference in the ENGINE, and a payment
-           schedule is not one" — IS TRUE OF `run_scheduler` AND FALSE OF THE NATIVE BINARY, because that
-           binary has TWO drivers and only this one was fixed. Its `--abi` arm is a host of the production
-           `qjs_*` entries and paid inside `if (step == ENGINE_STEP_STALLED)`, which is the schedule this
-           paragraph's own first half names as the defect. It is rewritten rather than deleted because the
-           reasoning is right and is what a reader re-derives: a driver repaired at ONE of two call sites
-           reads as a host repaired, and nothing named the second.
-           THE `--abi` ARM NOW POLLS, IN SOURCE, AND THE COST OF THAT REPAIR WAS NOT WHAT THIS RECORD'S OWN
-           RETIREMENT CLAUSE IMPLIED. `pays on the same schedule` names an OUTCOME and reads as a one-line move
-           of `abi_pay` out of its stall branch, and that move alone HANGS: the channel is half-duplex at BOTH
-           ends, so `engine/trusted.mjs` writes to an instance only while it is `stalled` and the child blocks
-           in `getdelim` until `go`. Moving the read without the write would have had the child block forever
-           on a zone that had already decided not to speak to it. The repair is therefore a second VERB on the
-           one channel — `poll`, answered in the same turn with whatever is READY and never awaited — which
-           keeps the deadlock rule exactly as written (the zone writes only in answer to a line the child wrote
-           asking to read) and changes only which condition makes the child ask. Two files, two ends, one
-           commit; the JS half is additive, so a child that never writes `poll` is answered as it always was.
-           WHAT IS NOT ESTABLISHED IS THAT IT WORKS, and this record stays until somebody observes it. The
-           claim above is about the INSTALLED artifact, a build retires it and no amount of reading does, so
-           the observation is named with the actor who can make it: a COORDINATOR builds, drives one real SPA
-           through the `--abi` arm, and reads the census for `replyAnswered` equal to `replyAsked` with
-           `rowsAwaitingBytes` 0 — the numbers the WASM host already answers for the same document.
-           OBSERVED, AND THE PAYMENT HALF IS DISCHARGED. A coordinator built the native binary and drove
-           `https://gitlab.com/explore` through this `--abi` arm over engine/trusted.mjs under a 900 s
-           RLIMIT_CPU, thread-cpu quantum 12 ms: `replyAsked 45 == replyAnswered 45` with `replyOutstanding 0`
-           at EVERY ONE of the run's 15 censuses, against the 1-of-43 with 42 frozen across 35 consecutive
-           censuses this record was written about. The livelock this paragraph describes is gone from the
-           built artifact and not merely from the source.
-           AND THE OTHER HALF OF THE CONDITION ABOVE WAS NEVER A REACHABLE ONE, WHICH IS THIS RECORD'S OWN
-           DEFECT AND NOT THE ENGINE'S. `rowsAwaitingBytes` 0 reads as a fact about the DOCUMENT and is a SUM
-           OVER LIVE MEMBERS: engine_rows_awaiting_bytes walks every flow and counts that flow's own
-           DYN_SCRIPT_SRC rows, and solver/engine.h says so at the accessor in its own words — "IT IS SUMMED
-           PER MEMBER AND THE FAN-OUT IS THE ANSWER … one document row awaited by N members counts N times",
-           with no inequality holding in either direction. So on any forking frontier the row is the
-           document's outstanding programs MULTIPLIED by the member count, and demanding 0 of it demands that
-           no member anywhere still holds an unfetched program — which is a condition about the SEARCH's size
-           and not about the reply door this record is about. Measured on the same run, and it is the
-           accessor's paragraph confirmed rather than a new finding: the quotient held at 26.98 rows per
-           member at EVERY census while the frontier grew 4034 → 4993, a 24% growth with the ratio flat to
-           two decimals, so the document had ~27 outstanding programs throughout and every member carried its
-           own copy. A retirement condition that names a per-member sum is the §READ-THE-ACCESSOR defect
-           written into the one clause a reader acts on, and the check that catches it costs one read of the
-           header one file over — which is where the correct reasoning already was.
-           RETIREMENT: the payment claim is MET and this record is REWRITTEN RATHER THAN DELETED, because a
-           reader who re-derives the stall-only schedule from ENGINE_STEP_STALLED's own definition will
-           re-introduce it. What remains open is NOT this record: the run aborted at solver/flow.c's
-           comparator surrogate before it could ask for those ~27 programs, so whether the engine REQUESTS
-           them is a question about the order and is recorded where that abort fires.
-           AND THE STALL-ONLY SCHEDULE IS NOT MERELY SLOWER THERE, IT IS UNREACHABLE. ENGINE_STEP_STALLED is
-           returned only where the run queue is EMPTY, so a frontier forking on unknowns never produces it and
-           the payment is never reached at all — the coupling this paragraph describes is not a delay but a
-           LIVELOCK, since the one reply that did arrive is what starts the forking that prevents the next.
-           MEASURED over the archived censuses, partitioned by HOST rather than by revision: one real SPA (26
-           of its programs awaiting bytes at seed, 43 reply-door asks) read `replyAnswered 43` with
-           `rowsAwaitingBytes 0` in 3 of 3 runs under the WASM artifact, and `replyAnswered 1` with
-           `replyOutstanding 42` held across 37, 35, 35 and 18 CONSECUTIVE censuses in 4 of 4 runs under the
-           `--abi` arm, forks climbing 3 -> 6242 in the same series while the count stayed at 1. A second real
-           page read 27 of 27 under the WASM artifact. Those runs were relayed as a page whose bytes never
-           arrived and a fetch path that was broken; the bytes arrive, and what does not is the host's payment.
-           SO A NATIVE `--abi` CENSUS AND A WASM ONE ARE NOT COMPARABLE ON ANY REPLY-CONSUMING ROW until
-           `replyOutstanding` is read: a GAUGE standing at a positive value across a whole census series is
-           this schedule, and it is not a delivery defect however much it reads like one.
-           RETIREMENT: this record goes when a census taken from the `--abi` arm of a BUILT artifact reads
-           `replyAnswered == replyAsked` on a document the WASM host answers in full, because the sentence
-           above is then true as originally written and no second driver exists for it to be false of. The
-           SOURCE half of that condition is met and is deliberately not enough: every host of the `qjs_*`
-           entries now pays at a slice boundary rather than only at a stall, and this record is about what the
-           shipped binary does.
-           WHY IT ABORTED WHEN IT WAS TRIED, and it was neither the provider nor the reply record. `pending_ready`
-           answered YES for an ANSWERED HOSTREQ, so a synchronous answer arriving between two slices made the
-           register look deliverable, flow_step called the reply delivery, and it swap-removed the rendezvous
-           record and pushed it through a `resolve` capability it does not have. At a stall that state cannot
-           exist, because the asking machine consumes its answer on the very next step; at a quantum boundary
-           nothing guarantees the asking machine runs next. Both halves are fixed at the root — the predicate
-           asks the KIND (solver/pending.h) and the delivery LEAVES a synchronous answer where its machine will
-           take it (flow_deliver_one_reply) — so the shape this branch was avoiding no longer exists to be
-           avoided. */
+        /* The host pays every slice, not only at a stall. ENGINE_STEP_STALLED is returned only when the run queue
+           is empty, so under a stall-only payment one flow's reply would wait on every other flow also blocking, a
+           cross-flow coupling that grows as exploration succeeds (every fork adds a member that must block, and a
+           fork re-issues its parent's unanswered synchronous request under a fresh id, engine_sibling_assemble); a
+           frontier forking on unknowns would never stall and never be paid, a livelock that hurts most the leading
+           flow, the one that can reach a lazily-loaded chunk. Every host pays on this schedule: the extension's
+           bridge pulls qjs_pending and qjs_host_requests after every non-DONE return, and test_forced.c's `--abi`
+           arm asks with a `poll` verb answered in the same turn with whatever is ready (the channel is half-duplex
+           at both ends: engine/trusted.mjs writes to an instance only in answer to a line asking to read). Paying
+           between slices is sound because pending_ready asks the entry's kind (solver/pending.h) and
+           flow_deliver_one_reply leaves a synchronous answer where its machine will take it: at a quantum boundary
+           the asking machine need not run next. */
         {
-            /* THE HOST'S OWN TIME, ASSERTED WHERE IT BEGINS — the same claim qjs_step makes at the ABI boundary,
-               made here because this driver has no ABI and pays the provider directly. A provider BUILDS
-               objects (a reply record, a peer's answer) and the three marks that decide what happens to those
-               objects belong to the flow that just ran, not to the host: with the stamp up they are stamped as
-               a flow's and no later write to them is ever captured, and with the capture ROUTE up every field
-               the provider writes is recorded as a creation in that flow's head and DELETED by its next
-               unapply — which is how a reply record reached its delivery as `{}`. Two registers, one fact, and
-               the failure mode of each is silent in the opposite direction. */
+            /* The host's own time, asserted where it begins: the claim qjs_step makes at the ABI boundary, made
+               here because this driver pays the provider directly. A provider builds objects (a reply record, a
+               peer's answer). With the last flow's stamp up they would be stamped as that flow's and no later
+               write to them captured; with its capture route up every field the provider writes would be recorded
+               as a creation in that flow's head and deleted by its next unapply, delivering an empty record. */
             DCHECK(JS_FlowGen() == 0 && cow_current() == NULL,
                    "the host is being paid with the last flow's generation or its capture route still up — "
                    "every object the provider now builds either belongs to that flow (so nobody else's write "
                    "to it is ever captured) or has its every field recorded as a CREATION in that flow's head, "
                    "which the next context switch deletes: the record arrives at its delivery empty");
             int filled = g_provider ? g_provider(ctx) : 0;
-            /* AND THE PROVIDER IS ITS OWN SEGMENT, which is the split the slice-entry boundary's own report
-               asked for. That boundary watches the WHOLE of the host's time as one region, and the host's time
-               has two halves that fail in different places: the PROVIDER, which builds JS values (a reply
-               record, a peer's answer, a cross-agent operation's text), and everything else this loop does
-               between two steps — the census lines, the progress emission, the cold-tier preview — which
-               reads. A completion standing here belongs to the first; one that reaches slice-entry with this
-               silent belongs to the second, and there is no third half. `detail` is what the payment filled,
-               so a leak on a payment that answered nothing reads differently from one that answered records. */
+            /* And the provider is its own segment: the host's time has two halves that fail in different places,
+               the provider, which builds JS values (a reply record, a peer's answer, a cross-agent operation's
+               text), and the rest of this loop between two steps (the census lines, the progress emission, the
+               cold-tier preview), which reads. A completion standing here belongs to the first; one reaching
+               slice-entry with this silent belongs to the second. `detail` is what the payment filled. */
             ENGINE_NO_STRAY(ctx, "host-provider: the host's reply/answer/operation payment", filled);
-            /* AND THE PAYMENT WAS COMPLETE, asserted at the seam instead of inferred from a census line six
-               minutes later. This provider answers out of its OWN tables — a reply record it builds, a peer's
-               answer it stands in for — so unlike the extension's it has no asynchronous half and nothing it
-               may legitimately still owe once it has run. A record outstanding here is therefore one it was
-               never handed or one it walked past. `blocked` and `owed` cannot say which: they report the LEVEL
-               of unanswered work, and a frontier that keeps issuing requests reads identically whether the host
-               is paying promptly or has silently skipped a record. This says which, at the moment it happens,
-               and it names the two registers separately because they are two questions.
-               UNCONDITIONAL NOW, rather than inside the stall branch: the claim is about what the provider
-               leaves behind and is equally true of a slice at which nothing was outstanding (both registers are
-               empty either way), so guarding it by the stall would only have narrowed where it can fire. */
+            /* And the payment was complete, asserted at the seam. This provider answers out of its own tables, so
+               unlike the extension's it has no asynchronous half and owes nothing once it has run: a record still
+               outstanding is one it was never handed or walked past, which `blocked` and `owed` (levels of
+               unanswered work) cannot distinguish from prompt payment on a frontier that keeps issuing requests.
+               The two registers are named separately because they are two questions, and the check is
+               unconditional, since both are empty on a slice with nothing outstanding too. */
             if (g_provider) {
                 DCHECK(*engine_host_requests() == '\0',
                        "the smoke host paid and a SYNCHRONOUS request is still outstanding — this provider "
@@ -11820,31 +11534,24 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                        "flow that issued this fetch keeps its snapshot and its continuation and is never handed "
                        "the body, so everything the page does behind that reply is missing from the run");
             }
-            /* NOBODY CAN SUPPLY IT, so this driver stops driving — and STOPPING IS NOT THE SAME AS THE SESSION
-               ENDING, which is why the close is below rather than here. The frontier that remains is real
-               (every flow parked on a reply that never came), and it is handed to the teardown as SNAPSHOTS.
-               The condition is unchanged: a STALL the payment could not move. A stall with nothing filled is a
-               frontier waiting on something outside this host's tables — in the smoke driver, the referenced-
-               document case, which no reply can answer. */
+            /* Nobody can supply it, so this driver stops driving, which is not the session ending (the close is
+               below): the remaining frontier is real, every flow parked on a reply that never came, and goes to the
+               teardown as snapshots. A stall the payment could not move, with nothing filled, is a frontier waiting
+               on something outside this host's tables; in the smoke driver, the referenced-document case, which no
+               reply can answer. */
             if (r == ENGINE_STEP_STALLED && filled == 0)
                 break;
         }
         engine_census_emit();
     }
-    /* THE SESSION IS CLOSED ON EVERY EXIT, not only on the one that drained. `engine_sched_step` closes it when
-       it answers DONE; the OTHER way out of this loop — a stall nobody can supply — left the session LIVE, with
-       the scheduler's hooks still installed over a frontier the host was about to tear down and one flow still
-       switched in. That is exactly what engine_session_close's own comment says must not differ between the two
-       ways a session ends, and the way it ended here was the one nothing said.
-       THE `r != ENGINE_STEP_DONE` THAT STOOD HERE IS GONE, and its absence is the point: it made "did this exit
-       already close the session?" a question every host answers for itself, which is one hand-copied condition
-       per driver and a §NO-STUBS-grade hole in whichever one gets it wrong. The wpt runner got it wrong the
-       first time it grew a second exit, and 26 files aborted on flow_release. `engine_sched_end` answers it
-       once, so a host's rule is now "call it when you stop stepping" with nothing to get right. */
+    /* The session is closed on every exit, not only on the one that drained: engine_sched_step closes it when it
+       answers DONE, and the other way out (a stall nobody can supply) would leave the hooks installed over a
+       frontier about to be torn down, with a flow switched in. engine_sched_end answers "did this exit already
+       close the session?" once, so a host's rule is to call it when it stops stepping. */
     engine_sched_end();
 }
 
-/* EXPLORE: seed boot OR a parked residue, then drain the frontier, forking at every concolic branch. */
+/* Explore: seed the boot flow or a parked residue, then drain the frontier, forking at every concolic branch. */
 void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types,
                 lxb_dom_element_t **els, int n, const char *recipes) {
     /* Named residual. Not covered: this entry's caller (test_forced.c) passes no schedule column, so it is
@@ -11865,12 +11572,11 @@ void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *ty
     free(sched);
 }
 
-/* WHETHER THE FRONTIER HAS ALREADY GONE DOWN IN THIS TEARDOWN. It is not agent state and is deliberately not
-   declared as any: it is zero everywhere outside the window between the two calls below, and what it exists for
-   is that the window is the one place a host can put the browser half in the wrong half of it. */
+/* Whether the frontier has already gone down in this teardown. Not agent state: it is zero outside the window
+   between the two calls below, and the window is the one place a host can put the browser half on the wrong side. */
 static int g_frontier_released;
 
-/* See solver/engine.h — THE FRONTIER, AND IT GOES DOWN WHILE THE BROWSER IS STILL STANDING. */
+/* See solver/engine.h: the frontier goes down while the browser is still standing. */
 void solver_frontier_free(JSContext *ctx)
 {
     DCHECK(ctx != NULL, "the frontier was released against no realm — its flows hold JSValues and its deltas "
@@ -11879,20 +11585,15 @@ void solver_frontier_free(JSContext *ctx)
     DCHECK(!g_frontier_released,
            "the frontier was released twice in one agent — the second call walks a registry the first already "
            "freed, and every flow it would have named is one the first call already tore down");
-    /* THE @S SEARCHES GO BACK BEFORE THE FRONTIER, AND THE ORDER IS THE WHOLE OF WHY. A search takes a
-       reference on the DECISION CHAIN at the moment its sink is detected — add_pending's decide_freeze_path,
-       the re-injection point every later candidate is seeded from — and that reference is neither a flow's nor
-       the running flow's globals'. flow_registry_free ends in decide_free, whose `g_dec_seg_live == 0` is a
-       statement that every such reference has already been given back, and solve_free is the give-back: with
-       it AFTER, any session that detected a sink while standing on a non-empty decision path aborted the
-       renderer at teardown. That is every real page, because a page that has taken one branch before its first
-       tainted sink is the ordinary case rather than the corner — measured on testing/corpus/control, which
-       forks on `window.__FLAGS.admin` before its first markup sink and hit that assert on every run, while the
-       same sink with no branch in front of it froze an EMPTY path, held no segment, and completed.
-       IT IS THE SHAPE core/platform.h STATES AND THE ONE concolic_free's OWN ASSERT RELIES ON: the claimant
-       releases at its own release, and the holder asserts that it did — so the fix is the position of the
-       give-back, never a softer assert. Nothing in the frontier's teardown reads this file's store (flow_release
-       does not call solve_flow_end; the scheduler does), so the claim can be given back before it. */
+    /* The @S searches go back before the frontier, and the order is the reason. A search takes a reference on the
+       decision chain when its sink is detected (add_pending's decide_freeze_path, the re-injection point later
+       candidates are seeded from), held neither by a flow nor by the running flow's globals. flow_registry_free
+       ends in decide_free, whose `g_dec_seg_live == 0` says every such reference has been given back, and
+       solve_free is the give-back; after it, any session that detected a sink while standing on a non-empty
+       decision path would abort at teardown, which is the ordinary case (a page that takes one branch before its
+       first tainted sink). The shape is core/platform.h's, which concolic_free's assert relies on: the claimant
+       releases at its own release and the holder asserts it did. Nothing in the frontier's teardown reads the
+       search store (flow_release does not call solve_flow_end; the scheduler does). */
     solve_free();
     flow_registry_free(ctx);
     g_frontier_released = 1;
@@ -11904,23 +11605,19 @@ void solver_agent_free(JSContext *ctx)
     DCHECK(ctx != NULL, "the solver's agent state was released against no realm — the frontier's flows hold "
                         "JSValues and its deltas hold the writes those flows made, so there is a realm they "
                         "belong to and a release with none would drop them against nothing");
-    /* THE FRONTIER IS ALREADY GONE, AND IT WENT WHILE THE BROWSER WAS STILL STANDING — see solver_frontier_free
-       in solver/engine.h for the whole of why, and core/platform.c's own census assert for the other end of
-       it. Reaching here with the frontier live means a host ran this column where it used to be one call: the
-       lines below release the emission tables and the source registry, and the flows that would have been torn
-       down after them are suspended INSIDE browser components this agent's platform release has already
-       finished with. */
+    /* The frontier is already gone, and went while the browser was still standing (solver_frontier_free in
+       solver/engine.h; core/platform.c's census assert is the other end). Reaching here with it live means the
+       flows torn down after the lines below would be suspended inside browser components platform_agent_free has
+       already finished with. */
     DCHECK(g_frontier_released,
            "the solver's agent state was released with the FRONTIER STILL LIVE — a suspended flow is a live "
            "activation of the browser, so its teardown re-enters the very components platform_agent_free has "
            "already given back; call solver_frontier_free BEFORE platform_agent_free and this after it");
-    /* NOTHING OF THE BROWSER HALF IS STILL REGISTERED HERE, AND THAT IS AN ORDERING STATEMENT RATHER THAN A
-       TIDINESS ONE. Each of these slots holds a C function pointer INTO a browser component, and every browser
-       component was released by platform_agent_free, which runs BEFORE this call — so a slot still set is the
-       scheduler holding a callback into state that has already been given back. That is exactly the defect
-       core/agent_state.h records for Indexed Database §2.7.1's cleanup: found by reading, invisible to both of
-       JS_FreeRuntime's censuses, because a stale handle gave its reference back and then kept the number.
-       The claimant releases; this asserts that it did. */
+    /* Nothing of the browser half is still registered here, an ordering statement: each slot holds a C function
+       pointer into a browser component, every one released by platform_agent_free before this call, so a slot
+       still set is a callback into released state, invisible to both of JS_FreeRuntime's censuses
+       (core/agent_state.h records the same defect for Indexed Database §2.7.1's cleanup). The claimant releases;
+       this asserts that it did. */
     DCHECK(g_timer_hook == NULL,
            "§8.1.7's timer step was still registered when the solver's agent state was released — "
            "core/timing/timer.c claimed it and gives it back at timer_free, which is a row on "
@@ -11946,68 +11643,45 @@ void solver_agent_free(JSContext *ctx)
            "state was released — core/html/html_link.c claimed it at html_link_declare and gives it back at "
            "html_link_free, which html_element_free calls and core/dom/element.c drives from platform.h's "
            "release column, and that column runs in full before this one");
-    /* THE ORPHAN COUNTERS AND THE GENERATION THEY LAST WALKED AT, given back with the frontier they describe.
-       THE ARGUMENT THAT USED TO JUSTIFY `g_orphans_driven`'S RESET IS RETIRED AND ITS REPLACEMENT IS NOT THE
-       SAME SENTENCE. It read: the ordinal names an argument's source identity ({orphan7.arg0}), so a second
-       session on top of the first would mint identities that collide with the previous session's constraints.
-       Every clause of that is now false in the direction that MATTERS — engine_orphan_call names each unknown
-       `{orphan<locator>.argN}` from JS_OrphanHash, which is a fact about the BUNDLE, so this counter names
-       nothing at all, and §ONE-global-frontier is explicit that two drives of one body SHARING the name is
-       correct rather than the aliasing an ordinal was avoiding. A reader who re-derived the retired reason
-       would conclude the opposite of the design, which is why it is rewritten here rather than deleted.
-       WHAT SURVIVES IS THE SENTENCE `g_orphan_asks` ALREADY HAD, and it covers both: they are per-SESSION
-       numbers, and the result document is the AGENT's rather than any one document's — engine_sched_begin
-       asserts that a host opens exactly ONE session per instance, so the two boundaries coincide and this
-       release is what keeps them coinciding. The GENERATION is a different fact and keeps its
-       own reason — it is a memo about ONE runtime's heap, so a second agent that kept it would skip a walk
-       over a heap it never walked. All are single words: the release is what makes them a session's rather
-       than a process's.
-       `g_orphan_asks` IS ON THIS LINE AND WAS NOT, which was a defect in the commit that introduced it rather
-       than an omission with no consequence. The hosts that take a runtime down and bring another up per file
-       run many sessions in one process, so a counter left standing reports the PROCESS's total under a name
-       the result document spells per AGENT — and this one in particular: the whole of what `asked` is for
-       is that `asked == 0` means NO FLOW IN THIS SESSION ever reached the end of its own work. A carried-over
-       count makes that read `asked > 0` for a session that never asked at all, which is the exact reading the
-       pair exists to distinguish, inverted, in the direction that looks healthy. */
+    /* The orphan counters and the generation they last walked at, given back with the frontier they describe.
+       `g_orphans_driven` names nothing (engine_orphan_call names each unknown `{orphan<locator>.argN}` from
+       JS_OrphanHash, a fact about the bundle, and two drives of one body sharing the name is correct), so like
+       `g_orphan_asks` these are per-session numbers, while the result document is the agent's: engine_sched_begin
+       asserts one session per instance, so the two boundaries coincide and this release keeps them coinciding.
+       Hosts that take a runtime down and bring another up per file run many sessions in one process, and a carried
+       `g_orphan_asks` would read `asked > 0` for a session that never asked, inverting the reading the pair exists
+       for. The generation is a memo about one runtime's heap, so a second agent keeping it would skip a walk over a
+       heap it never walked. */
     g_orphans_driven = 0; g_orphan_asks = 0;
-    /* AND THE ASK'S OWN PARTITION WITH IT, for the sentence directly above: they sum to `g_orphan_asks` and a
-       summand a second session kept would report the previous session's asks under this one's total and break
-       the equality at the first census of a host that runs many sessions in one process. */
+    /* And the ask's partition with it: the parts sum to `g_orphan_asks`, so a summand a second session kept would
+       break the equality at its first census. */
     g_orphan_asks_memo = 0; g_orphan_asks_empty = 0; g_orphan_asks_took = 0;
     g_orphan_gen_seen = 0; g_orphan_gen_valid = 0;
-    /* …AND THE ROUND TRIP'S THREE NUMBERS BESIDE THEM, for the same sentence: what an inherited drive did with
-       its recipe is a fact about ONE session's residue, and the latch is a fact about ONE frontier's members.
-       A second session that kept any of them would report the first session's round trip as its own and would
-       skip the routing walk on a frontier that has just been rebuilt with claims in it. */
+    /* And the round trip's three numbers, for the same reason: what an inherited drive did with its recipe is a
+       fact about one session's residue, and the latch about one frontier's members; kept, they would report the
+       first session's round trip and skip the routing walk on a frontier just rebuilt with claims in it. */
     g_orphan_claims_met = 0; g_orphan_claims_unmet = 0; g_orphan_claims_closed = 0;
     attr_shadow_free(ctx);
     endpoint_free();
-    /* THE PAGE-ERROR CONSOLE, BESIDE THE OTHER EMISSION TABLE AND AFTER THE WHOLE PLATFORM. It had no release
-       at all, so both its tables leaked their rows on every run of every host and its route LATCH would have
-       handed a second agent an answer no host of that agent ever gave. WHAT MAKES THIS POSITION SAFE is that
-       every writer of that console is already gone, and there are only two kinds: a FLOW (`flow_step`,
-       `flow_run_one_job`, a module's rejection reaction), all released by `solver_frontier_free` above this
-       column; and a BROWSER HOST EDGE — HTML §8.1.4.6 "Runtime script errors"'s console hook in
-       core/events/report_exception.c, §8.1.4.7/§8.1.6.4's report hook in core/html/unhandled_rejection.c —
-       each a slot its component declares to core/agent_state.h and nulls on core/platform.c's release column,
-       which `platform_agent_free` has already run in full. So nothing left in this agent can report a page
-       error into a table this line is about to free. */
+    /* The page-error console, beside the other emission table and after the whole platform, so its tables' rows
+       and its route latch do not outlive the agent. Safe here because every writer is gone, and there are two
+       kinds: a flow (`flow_step`, `flow_run_one_job`, a module's rejection reaction), all released by
+       solver_frontier_free above; and a browser host edge (HTML §8.1.4.6 "Runtime script errors"'s console hook in
+       core/events/report_exception.c, §8.1.4.7/§8.1.6.4's report hook in core/html/unhandled_rejection.c), each a
+       slot its component declares to core/agent_state.h and nulls on core/platform.c's release column, which
+       platform_agent_free has run in full. */
     result_free();
     /* The metrics block, after every composer above has run its last composition and before the next agent's
        concolic_init asserts it zero. */
     metrics_agent_release();
-    /* THE CONCOLIC VALUE COMPONENT IS LAST, and the position is the argument. Its SOURCE REGISTRY is what a
-       report asks for a source's browser delivery — the encode set, the address component, the reproduction
-       mechanism — so every line above may still read it while it renders and releases what it holds. It is
-       also the one registry in this half that BROWSER components write into: each row is a claim given back by
-       its claimant on core/platform.h's release column, which platform_agent_free ran before this call, so the
-       assert at its first line is a checked statement about ITS CLAIMANTS rather than about this component —
-       and it names the one that did not finish out of the row, which is why nothing here has to list them. */
+    /* The concolic value component is last, and the position is the argument: its source registry is what a report
+       asks for a source's browser delivery (the encode set, the address component, the reproduction mechanism), so
+       every line above may still read it. It is also the one registry here that browser components write into,
+       each row a claim given back on core/platform.h's release column before this call, so its first assert is a
+       checked statement about its claimants and names the one that did not give its row back. */
     concolic_free();
-    /* AND THE TEARDOWN WINDOW CLOSES. A host that takes a runtime down and brings another up per file runs many
-       agents in one process, so a latch left standing would make the NEXT agent's solver_agent_free read a
-       frontier release that belonged to the previous one — which is the exact question this pair exists to
-       ask, answered with a fact about a program that has already ended. */
+    /* And the teardown window closes: a host running many agents in one process would otherwise have the next
+       agent's solver_agent_free read a frontier release that belonged to the previous one. */
     g_frontier_released = 0;
 }
 
