@@ -52703,7 +52703,7 @@ static int flow_settle_await(JSContext *ctx, JSAsyncFunctionState *s) {
 /* MODULE evaluation under the flow feature. A module is not a program JS_FlowNew can wrap: it is a GRAPH that
    must be linked and then evaluated in dependency order. But every bytecode module BODY is already an async
    function driven through async_func_resume — the same seam a flow's base runs on, which is why
-   js_inner_module_evaluation treats them all as async-evaluated — so each body parks at a back-edge and the
+   step_module_evaluate_run treats them all as async-evaluated — so each body parks at a back-edge and the
    host pump (JS_ResumeParkedFlow) resumes it, exactly like any other flow. What was missing was only the ENTRY:
    JS_FlowNew compiled with JS_EVAL_TYPE_GLOBAL and threw the caller's MODULE flag away, so a module source was
    parsed as a classic script and every import/export came back as "unsupported keyword" — a parser error for a
@@ -69069,7 +69069,7 @@ enum { MODLINK_DONE = 0,      /* 16.2.1.6.1.2 step 5: the graph is linked */
    -1 when the module needs no visit at all — which is the recursive form's early `return index`. */
 static int js_module_linking_enter(JSContext *ctx, JSModuleDef *m, JSModuleDef **pstack_top, int index)
 {
-    /* BEFORE THE TEST AND NOT ONLY BEFORE THE WRITE, for the reason js_evaluate_module gives at its own entry:
+    /* BEFORE THE TEST AND NOT ONLY BEFORE THE WRITE, for the reason step_module_evaluate_run gives at its own entry:
        whether this flow LINKS the module at all is decided by a status a sibling may have written, so the four
        statuses below are read in this flow's world or the decision is made in somebody else's. The early return
        is the half that was costing the most — a sibling reading LINKING or LINKED skips the module entirely and
@@ -69436,7 +69436,28 @@ static __exception int js_load_module_then(JSContext *ctx, JSModuleDef *m,
                                            const JSTrampStepDef *on_loaded);
 
 static JSValue js_module_eval_capability(JSContext *ctx, JSModuleDef *m);
-static JSValue js_evaluate_module(JSContext *ctx, JSModuleDef *m);
+
+/* 16.2.1.6.1.3 Evaluate ( ) AS A REQUEST SUB-SEQUENCE, Link's twin below. 16.2.1.6.1.3.1 InnerModuleEvaluation
+   ( module, stack, index ) runs module bodies inside its walk, so each body is a CALL request on the running
+   flow's chain and the walk's cursor lives here: a park or a fork inside a body carries the rest of the walk.
+   0 = Evaluate has returned (its capability settled or pending); JS_STEP_CALL / JS_STEP_YIELD = return that code
+   and re-enter; -1 = threw before the capability existed. */
+typedef struct JSModuleEvalOp {
+    struct JSModuleEvalFrame *frames;  /* OWNED, and declared to the step teardown by the machine's `visit` */
+    int depth, cap;
+    int index;                         /* InnerModuleEvaluation's `index` */
+    JSModuleDef *stack_top;            /* Evaluate's `stack`, threaded through JSModuleDef.stack_prev */
+    JSModuleDef *root;                 /* Evaluate's `module`, after its [[CycleRoot]] step */
+    JSModuleDef *body;                 /* the module whose body the CALL in flight runs, NULL when none is */
+    JSValue cb[2];                     /* that CALL's operands: [this = undefined, the module's body] */
+    JSValue res;                       /* its completion: the promise the async body returns */
+    uint8_t phase;                     /* step_call_run's own cursor */
+    uint8_t started;
+} JSModuleEvalOp;
+
+static int step_module_evaluate_run(JSContext *ctx, JSModuleEvalOp *op, JSModuleDef *m,
+                                    JSValue in, JSValue **out_cb, int *out_argc);
+static void step_module_evaluate_visit(JSContext *ctx, JSModuleEvalOp *op, JSStepVisit *v);
 
 /* 16.2.1.6.1.2 Link ( ) AS A REQUEST SUB-SEQUENCE — the shared half of the two continuations that link a
    loaded graph, in the shape every other sub-sequence in this file has (step_program_run, step_call_run):
@@ -69547,6 +69568,7 @@ static const char *js_module_loaded_unforkable(const void *state);
 typedef struct JSModuleLoaded {
     JSStepHdr hdr;          /* MUST be first. The closure's data is [resolve, reject, module]. */
     JSModuleLinkOp op;      /* 16.2.1.6.1.2 Link ( ) */
+    JSModuleEvalOp ev;      /* 16.2.1.6.1.3 Evaluate ( ) */
     JSValue cap;            /* 16.2.1.6.1.3 Evaluate ( )'s promise, held across the settle that adopts it */
     JSValue settle_cb[3];   /* the load's own resolve CALL: [this, resolve, cap] */
     JSValue settle_res;
@@ -69583,6 +69605,7 @@ static void js_module_loaded_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSModuleLoaded *s = st;
     int k;
     step_module_link_visit(ctx, &s->op, v);
+    step_module_evaluate_visit(ctx, &s->ev, v);
     v->val(ctx, &s->cap);
     v->val(ctx, &s->settle_res);
     for (k = 0; k < 3; k++)
@@ -69623,7 +69646,7 @@ static int js_module_loaded_import_step(JSContext *ctx, void *st, JSValue cb_res
     JSModuleLoaded *s = st;
     JSCFunctionDataRecord *rec = JS_VALUE_GET_OBJ(s->hdr.func_obj)->u.c_function_data_record;
     JSModuleDef *m;
-    JSValue cap, ret_val, func_obj, evaluate_resolving_funcs[2];
+    JSValue cap, func_obj, evaluate_resolving_funcs[2];
     int r;
 
     DCHECK(JS_VALUE_GET_TAG(rec->data[2]) == JS_TAG_MODULE,
@@ -69638,6 +69661,10 @@ static int js_module_loaded_import_step(JSContext *ctx, void *st, JSValue cb_res
             s->settle_res = JS_UNDEFINED;
             s->settle_cb[0] = s->settle_cb[1] = s->settle_cb[2] = JS_UNDEFINED;
             s->settle_phase = 0;
+            s->ev.started = 0;
+            s->ev.frames = NULL;
+            s->ev.cb[0] = s->ev.cb[1] = JS_UNDEFINED;
+            s->ev.res = JS_UNDEFINED;
         }
         r = step_module_link_run(ctx, &s->op, m, cb_result, out_cb, out_argc);
         if (r)
@@ -69646,7 +69673,10 @@ static int js_module_loaded_import_step(JSContext *ctx, void *st, JSValue cb_res
         return JS_STEP_YIELD;
 
     STEP_ARM(MODIMP_EVALUATE);
+        if (s->ev.started)
+            goto evaluate;
         JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
         /* THE CAPABILITY BEFORE EVALUATING, and step 8.f's PerformPromiseThen before it too — spelled as the
            three operations rather than as JS_EvalFunction precisely so the registration lands between the
            second and the third. The module body can FORK; a sibling forked mid-body inherits the world as it
@@ -69676,14 +69706,14 @@ static int js_module_loaded_import_step(JSContext *ctx, void *st, JSValue cb_res
               "a module evaluation's continuation could not be attached — the import would never settle");
         JS_FreeValue(ctx, evaluate_resolving_funcs[0]);
         JS_FreeValue(ctx, cap);
-
-        ret_val = js_evaluate_module(ctx, m);
-        /* The capability exists, so the only failure js_evaluate_module can still report is the one that
-           creates it; every evaluation error settles that capability instead, which is what the reactions
-           above are for. */
-        DCHECK(!JS_IsException(ret_val), "module evaluation threw after its capability existed — an evaluation "
-                                         "error settles the capability, it does not throw past it");
-        JS_FreeValue(ctx, ret_val);
+    evaluate:
+        /* The capability exists, so the only failure Evaluate can still report is the one that creates it;
+           every evaluation error settles that capability instead, which is what the reactions above are for. */
+        r = step_module_evaluate_run(ctx, &s->ev, m, cb_result, out_cb, out_argc);
+        DCHECK(r >= 0, "module evaluation threw after its capability existed — an evaluation error settles the "
+                       "capability, it does not throw past it");
+        if (r)
+            return r < 0 ? JS_STEP_ABRUPT : r;
         return JS_STEP_DONE;
 }
 
@@ -70321,7 +70351,6 @@ static int js_module_loaded_run_step(JSContext *ctx, void *st, JSValue cb_result
     JSModuleLoaded *s = st;
     JSCFunctionDataRecord *rec = JS_VALUE_GET_OBJ(s->hdr.func_obj)->u.c_function_data_record;
     JSModuleDef *m;
-    JSValue ev;
     int r;
 
     DCHECK(JS_VALUE_GET_TAG(rec->data[2]) == JS_TAG_MODULE,
@@ -70336,6 +70365,10 @@ static int js_module_loaded_run_step(JSContext *ctx, void *st, JSValue cb_result
             s->settle_res = JS_UNDEFINED;
             s->settle_cb[0] = s->settle_cb[1] = s->settle_cb[2] = JS_UNDEFINED;
             s->settle_phase = 0;
+            s->ev.started = 0;
+            s->ev.frames = NULL;
+            s->ev.cb[0] = s->ev.cb[1] = JS_UNDEFINED;
+            s->ev.res = JS_UNDEFINED;
         }
         r = step_module_link_run(ctx, &s->op, m, cb_result, out_cb, out_argc);
         if (r)
@@ -70375,13 +70408,13 @@ static int js_module_loaded_run_step(JSContext *ctx, void *st, JSValue cb_result
         return JS_STEP_YIELD;
 
     STEP_ARM(MODRUN_EVALUATE);
-        JS_FreeValue(ctx, cb_result);
-        ev = js_evaluate_module(ctx, m);
-        /* The capability exists, so the only failure js_evaluate_module can still report is the one that
-           creates it; every evaluation error settles that capability instead. */
-        DCHECK(!JS_IsException(ev), "module evaluation threw after its capability existed — an evaluation error "
-                                    "settles the capability, it does not throw past it");
-        JS_FreeValue(ctx, ev);
+        /* The capability exists, so the only failure Evaluate can still report is the one that creates it;
+           every evaluation error settles that capability instead. */
+        r = step_module_evaluate_run(ctx, &s->ev, m, cb_result, out_cb, out_argc);
+        DCHECK(r >= 0, "module evaluation threw after its capability existed — an evaluation error settles the "
+                       "capability, it does not throw past it");
+        if (r)
+            return r < 0 ? JS_STEP_ABRUPT : r;
         return JS_STEP_DONE;
 }
 
@@ -70551,7 +70584,7 @@ static int js_import_opts_resolve_unknown(JSContext *ctx, JSImportOpts *s, JSVal
 }
 
 /* step 12: hand the resolved specifier and attribute record to the host. The load cannot run synchronously —
-   it would recurse into js_evaluate_module — so it is a job, and nothing here runs the page's code. */
+   it would recurse into Evaluate — so it is a job, and nothing here runs the page's code. */
 static int js_import_opts_enqueue(JSContext *ctx, JSImportOpts *s)
 {
     JSValue args[5];
@@ -70932,7 +70965,7 @@ static JSValue js_async_module_execution_fulfilled(JSContext *ctx, JSValueConst 
             DCHECK(m->eval_has_exception, "m->eval_has_exception");
         } else if (js_module_is_async_evaluated(m)) {
             /* EVERY bytecode body is async-evaluated, top-level await or not, because a loop/await back-edge can
-               PARK it — the same rule js_inner_module_evaluation applies, and the reason only a C init_func
+               PARK it — the same rule step_module_evaluate_run applies, and the reason only a C init_func
                module is synchronous here. Splitting on has_tla alone drove a parking body through
                js_execute_sync_module and then marked it EVALUATED, settling its top-level capability while the
                body was still suspended; the body's later completion re-entered this function on an
@@ -70958,21 +70991,17 @@ static JSValue js_async_module_execution_fulfilled(JSContext *ctx, JSValueConst 
     return JS_UNDEFINED;
 }
 
-/* THE REACTIONS ARE REGISTERED BEFORE THE BODY RUNS, and the order is the whole point. The body can FORK — a
-   concolic branch in a module's top level is ordinary — and a sibling forked mid-body inherits the world as it
-   was AT the branch. Registering afterwards put `js_async_module_execution_fulfilled` on the promise only in the
-   arm that reached the end of this C function, so every other arm evaluated its module and then settled a
-   promise with no reactions on it: the module never became EVALUATED in that world and the importing
-   `.then(m => …)` never ran. Splitting the call is what makes the registration precede the fork point. */
-static int js_execute_async_module(JSContext *ctx, JSModuleDef *m)
+/* 16.2.1.6.1.3.2 ExecuteAsyncModule ( module )'s PerformPromiseThen: AsyncModuleExecutionFulfilled and
+   AsyncModuleExecutionRejected registered on the body's promise. Every arm of a fork inside the body must
+   register: the walk's CALL returns into its own machine in each arm, and the C entry below registers before it
+   runs the body, because a sibling forked there does not return into this function. */
+static void js_module_eval_register(JSContext *ctx, JSModuleDef *m, JSValueConst promise)
 {
-    JSValue promise, m_obj;
-    JSValue resolve_funcs[2];
-    JSAsyncFunctionData *s;
+    JSValue m_obj, resolve_funcs[2];
 
-    promise = js_async_function_start(ctx, m->func_obj, JS_UNDEFINED, 0, NULL, &s);
-    if (JS_IsException(promise))
-        return -1;
+    DCHECK(JS_GetOpaque(promise, JS_CLASS_PROMISE) != NULL,
+           "a module body's evaluation answered something that is not a promise — every bytecode module body "
+           "is an async function, so its call returns one");
     m_obj = JS_NewModuleValue(ctx, m);
     resolve_funcs[0] = JS_NewCFunctionData(ctx, js_async_module_execution_fulfilled, 0, 0, 1, vc(&m_obj));
     resolve_funcs[1] = JS_NewCFunctionData(ctx, js_async_module_execution_rejected, 0, 0, 1, vc(&m_obj));
@@ -70980,6 +71009,17 @@ static int js_execute_async_module(JSContext *ctx, JSModuleDef *m)
     JS_FreeValue(ctx, m_obj);
     JS_FreeValue(ctx, resolve_funcs[0]);
     JS_FreeValue(ctx, resolve_funcs[1]);
+}
+
+static int js_execute_async_module(JSContext *ctx, JSModuleDef *m)
+{
+    JSValue promise;
+    JSAsyncFunctionData *s;
+
+    promise = js_async_function_start(ctx, m->func_obj, JS_UNDEFINED, 0, NULL, &s);
+    if (JS_IsException(promise))
+        return -1;
+    js_module_eval_register(ctx, m, promise);
     JS_FreeValue(ctx, promise);
     /* TRUE, and the loop immediately below is the promise being kept — the two lines are one statement about
        ordering and must not drift apart. §16.2.1.6.1.3.4 AsyncModuleExecutionFulfilled runs this walk INSIDE a
@@ -71069,12 +71109,15 @@ fail:
 /* spec: InnerModuleEvaluation. Return (index, JS_UNDEFINED) or (-1,
    exception) */
 /* 16.2.1.6.1.3.1 InnerModuleEvaluation, split so the WALK around it is an explicit frame stack rather than C
-   recursion — see js_inner_module_evaluation below. This is its POST-ORDER half (steps 12-16). */
-static int js_module_eval_finish(JSContext *ctx, JSModuleDef *m, JSModuleDef **pstack_top, JSValue *pvalue)
+   recursion — see step_module_evaluate_run below. This is its POST-ORDER half (steps 12-16). */
+static int js_module_eval_finish(JSContext *ctx, JSModuleDef *m, JSModuleDef **pstack_top, bool *pexec,
+                                 JSValue *pvalue)
 {
     JSModuleDef *m1;
 
     bool exec_async = false;
+
+    *pexec = false;
 
     /* Announced again for js_module_eval_after_child's reason: the children's bodies ran since the entry. */
     js_module_eval_capture(ctx, m);
@@ -71127,10 +71170,9 @@ static int js_module_eval_finish(JSContext *ctx, JSModuleDef *m, JSModuleDef **p
        pop had not happened, and it then settles the body's promise and reaches that assert with status
        EVALUATING. The pop is pure state — no page code runs in it — so performing it first makes every arm of a
        fork see the state the continuation requires. It also makes an unhandled case defined rather than
-       asserting: a module body that dynamically imports ITSELF reached js_evaluate_module with status
-       EVALUATING, which is not one of the three that function accepts. */
-    if (exec_async)
-        js_execute_async_module(ctx, m);
+       asserting: a module body that dynamically imports ITSELF reached Evaluate with status EVALUATING, which
+       is not one of the three it accepts. The body is the caller's CALL request (step_module_evaluate_run). */
+    *pexec = exec_async;
     *pvalue = JS_UNDEFINED;
     return 0;
 }
@@ -71182,7 +71224,7 @@ static int js_module_eval_enter(JSContext *ctx, JSModuleDef *m, int index, JSMod
 #ifdef ENABLE_DUMPS // JS_DUMP_MODULE_RESOLVE
     if (check_dump_flag(ctx->rt, JS_DUMP_MODULE_RESOLVE)) {
         char buf1[ATOM_GET_STR_BUF_SIZE];
-        printf("js_inner_module_evaluation '%s':\n", JS_AtomGetStr(ctx, buf1, sizeof(buf1), m->module_name));
+        printf("InnerModuleEvaluation '%s':\n", JS_AtomGetStr(ctx, buf1, sizeof(buf1), m->module_name));
     }
 #endif
     if (m->status == JS_MODULE_STATUS_EVALUATING_ASYNC ||
@@ -71211,61 +71253,209 @@ static int js_module_eval_enter(JSContext *ctx, JSModuleDef *m, int index, JSMod
     return index + 1;
 }
 
-/* The walk. It recursed with a js_check_stack_overflow guard, so a module graph deeper than the C stack failed
-   with a synthetic RangeError — a BOUND on the page's own data, which this engine does not have. Nothing caps the
-   frame array. The traversal is unchanged: `index`, the dfs/ancestor indices and the per-child bookkeeping are
-   threaded exactly where the recursion threaded them. */
+/* The walk's cursor: one frame per module whose 16.2.1.6.1.3.1 child loop (`For each ModuleRequest Record
+   request of module.[[RequestedModules]]`) is in progress. The traversal is Tarjan's, threaded exactly as the
+   recursion threaded `index` and the dfs/ancestor indices. Nothing caps the frame array. */
 typedef struct JSModuleEvalFrame {
     JSModuleDef *m;
     int i;              /* cursor over m->req_module_entries */
 } JSModuleEvalFrame;
 
-static int js_inner_module_evaluation(JSContext *ctx, JSModuleDef *m,
-                                      int index, JSModuleDef **pstack_top,
-                                      JSValue *pvalue)
+static int js_module_eval_push(JSContext *ctx, JSModuleEvalOp *op, JSModuleDef *m)
 {
-    JSModuleEvalFrame *frames = NULL;
-    int depth = 0, cap = 0, ret = -1, did = 0, nindex;
-
-    nindex = js_module_eval_enter(ctx, m, index, pstack_top, pvalue, &did);
-    if (nindex < 0)
-        return -1;
-    index = nindex;
-    if (!did)
-        return index;
-    for (;;) {
-        JSModuleEvalFrame *f;
-        if (depth == cap) {
-            int ncap = cap ? cap * 2 : 8;
-            JSModuleEvalFrame *nf = js_realloc(ctx, frames, sizeof(*nf) * (size_t)ncap);
-            if (unlikely(!nf)) { *pvalue = JS_GetException(ctx); goto done; }
-            frames = nf;
-            cap = ncap;
-        }
-        frames[depth].m = m;
-        frames[depth].i = 0;
-        depth++;
-        for (;;) {
-            f = &frames[depth - 1];
-            if (f->i < f->m->req_module_entries_count) {
-                JSModuleDef *m1 = f->m->req_module_entries[f->i].module;
-                f->i++;
-                nindex = js_module_eval_enter(ctx, m1, index, pstack_top, pvalue, &did);
-                if (nindex < 0) goto done;
-                index = nindex;
-                if (did) { m = m1; break; }          /* descend */
-                if (js_module_eval_after_child(ctx, f->m, m1, pvalue) < 0) goto done;
-                continue;
-            }
-            if (js_module_eval_finish(ctx, f->m, pstack_top, pvalue) < 0) goto done;
-            depth--;
-            if (depth == 0) { ret = index; *pvalue = JS_UNDEFINED; goto done; }
-            if (js_module_eval_after_child(ctx, frames[depth - 1].m, f->m, pvalue) < 0) goto done;
-        }
+    if (op->depth == op->cap) {
+        int ncap = op->cap ? op->cap * 2 : 8;
+        JSModuleEvalFrame *nf = js_realloc(ctx, op->frames, sizeof(*nf) * (size_t)ncap);
+        if (unlikely(!nf))
+            return -1;
+        op->frames = nf;
+        op->cap = ncap;
     }
- done:
-    js_free(ctx, frames);
-    return ret;
+    op->frames[op->depth].m = m;
+    op->frames[op->depth].i = 0;
+    op->depth++;
+    return 0;
+}
+
+/* 16.2.1.6.1.3 Evaluate ( )'s abrupt arm: every module still on `stack` becomes evaluated with `result` as its
+   [[EvaluationError]], and the top-level capability is rejected. Takes `result`. */
+static void js_module_eval_abrupt(JSContext *ctx, JSModuleEvalOp *op, JSValue result)
+{
+    JSModuleDef *m = op->root, *m1;
+    JSValue ret_val;
+
+    while (op->stack_top != NULL) {
+        m1 = op->stack_top;
+        DCHECK(m1->status == JS_MODULE_STATUS_EVALUATING, "m1->status == JS_MODULE_STATUS_EVALUATING");
+        /* `m1` and not `m`, as in the SCC pop: js_module_set_status announces it. */
+        js_module_set_status(ctx, m1, JS_MODULE_STATUS_EVALUATED);
+        m1->eval_has_exception = true;
+        m1->eval_exception = js_dup(result);
+        m1->cycle_root = m; /* spec bug: should be present */
+        op->stack_top = m1->stack_prev;
+    }
+    JS_FreeValue(ctx, result);
+    op->depth = 0;
+    DCHECK(m->status == JS_MODULE_STATUS_EVALUATED, "m->status == JS_MODULE_STATUS_EVALUATED");
+    DCHECK(m->eval_has_exception, "m->eval_has_exception");
+    ret_val = JS_Call(ctx, m->resolving_funcs[1], JS_UNDEFINED, 1, vc(&m->eval_exception));
+    JS_FreeValue(ctx, ret_val);
+}
+
+/* Evaluate's normal arm: a graph that evaluated synchronously resolves its capability now; an asynchronous one
+   is resolved by AsyncModuleExecutionFulfilled. */
+static void js_module_eval_normal(JSContext *ctx, JSModuleEvalOp *op)
+{
+    JSModuleDef *m = op->root;
+
+    DCHECK(m->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m->status == JS_MODULE_STATUS_EVALUATED, "m->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m->status == JS_MODULE_STATUS_EVALUATED");
+    DCHECK(!m->eval_has_exception, "!m->eval_has_exception");
+    if (!m->async_evaluation) {
+        JSValueConst value = JS_UNDEFINED;
+        JSValue ret_val;
+
+        DCHECK(m->status == JS_MODULE_STATUS_EVALUATED, "m->status == JS_MODULE_STATUS_EVALUATED");
+        ret_val = JS_Call(ctx, m->resolving_funcs[0], JS_UNDEFINED, 1, &value);
+        JS_FreeValue(ctx, ret_val);
+    }
+    DCHECK(op->stack_top == NULL, "16.2.1.6.1.3 Evaluate ( ): `stack` is not empty after its walk returned");
+}
+
+static int step_module_evaluate_run(JSContext *ctx, JSModuleEvalOp *op, JSModuleDef *m,
+                                    JSValue in, JSValue **out_cb, int *out_argc)
+{
+    JSModuleEvalFrame *f;
+    JSValue result;
+    bool exec;
+    int nindex, did, r;
+
+    if (!op->started) {
+        JSValue cap;
+
+        /* every owned field before the first operation that can fail: the teardown visits them all */
+        op->frames = NULL;
+        op->depth = op->cap = 0;
+        op->index = 0;
+        op->stack_top = NULL;
+        op->root = NULL;
+        op->body = NULL;
+        op->cb[0] = op->cb[1] = JS_UNDEFINED;
+        op->res = JS_UNDEFINED;
+        op->phase = 0;
+        op->started = 1;
+        JS_FreeValue(ctx, in);
+        /* Evaluate's steps up to its [[TopLevelCapability]] test. The capture precedes the READ: whether this
+           flow evaluates at all is decided by state a sibling may have written. */
+        js_module_eval_capture(ctx, m);
+        DCHECK(m->status == JS_MODULE_STATUS_LINKED || m->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m->status == JS_MODULE_STATUS_EVALUATED, "m->status == JS_MODULE_STATUS_LINKED || m->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m->status == JS_MODULE_STATUS_EVALUATED");
+        if (m->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m->status == JS_MODULE_STATUS_EVALUATED)
+            m = m->cycle_root;
+        /* The test is `eval_started` and not the capability: a consumer takes the capability before the body
+           runs so it can register first, and reading that as "already evaluated" would return a promise
+           nothing settles. */
+        if (m->eval_started) {
+            DCHECK(!JS_IsUndefined(m->promise),
+                   "a module whose evaluation started has no capability — its consumers have nothing to wait on");
+            return 0;
+        }
+        js_module_eval_capture(ctx, m);   /* `m` may be the cycle root, never announced */
+        m->eval_started = true;
+        cap = js_module_eval_capability(ctx, m);
+        if (JS_IsException(cap))
+            return -1;
+        JS_FreeValue(ctx, cap);
+        op->root = m;
+        nindex = js_module_eval_enter(ctx, m, 0, &op->stack_top, &result, &did);
+        if (nindex < 0)
+            goto abrupt;
+        op->index = nindex;
+        if (!did) {
+            js_module_eval_normal(ctx, op);
+            return 0;
+        }
+        if (js_module_eval_push(ctx, op, m) < 0) {
+            result = JS_GetException(ctx);
+            goto abrupt;
+        }
+    } else if (op->phase != 0) {
+        /* the body CALL has completed: ExecuteAsyncModule's PerformPromiseThen on its promise. A throw does not
+           come back here; this machine does not declare catches_abrupt. */
+        r = step_call_run(ctx, &op->phase, STEP_CB(op->cb), JS_UNDEFINED, JS_UNDEFINED, 0, NULL,
+                          in, &op->res, out_cb, out_argc);
+        DCHECK(r == 0,
+               "a module body's CALL request resumed and did not end — step_call_run's second phase always "
+               "completes, so a step code here is a cursor that names a request nobody issued");
+        DCHECK(op->body != NULL && op->depth > 0 && op->frames[op->depth - 1].m == op->body,
+               "a module body's CALL completed for a module that is not the walk's current frame");
+        js_module_eval_register(ctx, op->body, op->res);
+        JS_FreeValue(ctx, op->res);
+        op->res = JS_UNDEFINED;
+        op->body = NULL;
+        goto popped;
+    } else {
+        JS_FreeValue(ctx, in);   /* re-entered from a JS_STEP_YIELD: the driver delivers undefined */
+    }
+
+    DCHECK(op->depth > 0, "16.2.1.6.1.3.1's walk advanced with no frame on its path");
+    f = &op->frames[op->depth - 1];
+    while (f->i < f->m->req_module_entries_count) {
+        JSModuleDef *m1 = f->m->req_module_entries[f->i].module;
+
+        f->i++;
+        nindex = js_module_eval_enter(ctx, m1, op->index, &op->stack_top, &result, &did);
+        if (nindex < 0)
+            goto abrupt;
+        op->index = nindex;
+        if (did) {
+            if (js_module_eval_push(ctx, op, m1) < 0) {
+                result = JS_GetException(ctx);
+                goto abrupt;
+            }
+            /* a rest with nothing to run, offered: the graph is the page's size */
+            return JS_STEP_YIELD;
+        }
+        if (js_module_eval_after_child(ctx, f->m, m1, &result) < 0)
+            goto abrupt;
+    }
+    if (js_module_eval_finish(ctx, f->m, &op->stack_top, &exec, &result) < 0)
+        goto abrupt;
+    if (exec) {
+        /* ExecuteModule as a CALL of the module's body with `this` undefined, which selects its code over its
+           16.2.1.7.3.1 prologue. Its frame lands on this flow's chain, so a park or a fork inside it holds the
+           walk too. */
+        DCHECK(JS_VALUE_GET_TAG(f->m->func_obj) == JS_TAG_OBJECT,
+               "a module reached ExecuteModule with no body object — js_create_module_function builds one for "
+               "every module of the graph before the link");
+        op->body = f->m;
+        r = step_call_run(ctx, &op->phase, STEP_CB(op->cb), f->m->func_obj, JS_UNDEFINED, 0, NULL,
+                          JS_UNDEFINED, &op->res, out_cb, out_argc);
+        DCHECK(r == JS_STEP_CALL,
+               "a module body's CALL request answered something other than a call — its cursor was already in "
+               "flight, so the answer to the old request is about to be collected as this one's");
+        return r;
+    }
+ popped:
+    f = &op->frames[op->depth - 1];
+    op->depth--;
+    if (op->depth == 0) {
+        js_module_eval_normal(ctx, op);
+        return 0;
+    }
+    if (js_module_eval_after_child(ctx, op->frames[op->depth - 1].m, f->m, &result) < 0)
+        goto abrupt;
+    return JS_STEP_YIELD;
+ abrupt:
+    js_module_eval_abrupt(ctx, op, result);
+    return 0;
+}
+
+static void step_module_evaluate_visit(JSContext *ctx, JSModuleEvalOp *op, JSStepVisit *v)
+{
+    int k;
+    for (k = 0; k < 2; k++)
+        v->val(ctx, &op->cb[k]);
+    v->val(ctx, &op->res);
+    v->buf(ctx, (void **)&op->frames, (size_t)op->cap * sizeof(*op->frames));
 }
 
 /* Run the <eval> function of the module and of all its requested
@@ -71479,70 +71669,6 @@ static JSValue js_module_eval_capability(JSContext *ctx, JSModuleDef *m)
         m->promise = JS_NewPromiseCapability(ctx, m->resolving_funcs);
         if (JS_IsException(m->promise))
             return JS_EXCEPTION;
-    }
-    return js_dup(m->promise);
-}
-
-static JSValue js_evaluate_module(JSContext *ctx, JSModuleDef *m)
-{
-    JSModuleDef *m1, *stack_top;
-    JSValue ret_val, result;
-
-    /* BEFORE the status is even READ: whether this flow evaluates at all is decided by state a sibling may have
-       written, so the capture has to precede the test, not the write. */
-    js_module_eval_capture(ctx, m);
-    DCHECK(m->status == JS_MODULE_STATUS_LINKED || m->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m->status == JS_MODULE_STATUS_EVALUATED, "m->status == JS_MODULE_STATUS_LINKED || m->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m->status == JS_MODULE_STATUS_EVALUATED");
-    if (m->status == JS_MODULE_STATUS_EVALUATING_ASYNC ||
-        m->status == JS_MODULE_STATUS_EVALUATED) {
-        m = m->cycle_root;
-    }
-    /* ALREADY EVALUATING OR EVALUATED: the capability IS the answer. The test is the STATUS, not "does a
-       capability exist" — a consumer may have taken the capability first precisely so it could register before
-       the body ran, and reading that as "already evaluated" would return a promise nothing will ever settle. */
-    /* ALREADY STARTED: the capability IS the answer, and the walk below must not run a second time. */
-    if (m->eval_started) {
-        DCHECK(!JS_IsUndefined(m->promise),
-               "a module whose evaluation started has no capability — its consumers have nothing to wait on");
-        return js_dup(m->promise);
-    }
-    js_module_eval_capture(ctx, m);   /* `m` may be the cycle root this function moved to, never announced */
-    m->eval_started = true;
-    {
-        JSValue cap = js_module_eval_capability(ctx, m);
-        if (JS_IsException(cap))
-            return JS_EXCEPTION;
-        JS_FreeValue(ctx, cap);
-    }
-
-    stack_top = NULL;
-    if (js_inner_module_evaluation(ctx, m, 0, &stack_top, &result) < 0) {
-        while (stack_top != NULL) {
-            m1 = stack_top;
-            DCHECK(m1->status == JS_MODULE_STATUS_EVALUATING, "m1->status == JS_MODULE_STATUS_EVALUATING");
-            /* `m1` AND NOT `m`, exactly as the SCC pop above — see the note there. */
-            js_module_set_status(ctx, m1, JS_MODULE_STATUS_EVALUATED);
-            m1->eval_has_exception = true;
-            m1->eval_exception = js_dup(result);
-            m1->cycle_root = m; /* spec bug: should be present */
-            stack_top = m1->stack_prev;
-        }
-        JS_FreeValue(ctx, result);
-        DCHECK(m->status == JS_MODULE_STATUS_EVALUATED, "m->status == JS_MODULE_STATUS_EVALUATED");
-        DCHECK(m->eval_has_exception, "m->eval_has_exception");
-        ret_val = JS_Call(ctx, m->resolving_funcs[1], JS_UNDEFINED,
-                          1, vc(&m->eval_exception));
-        JS_FreeValue(ctx, ret_val);
-    } else {
-        DCHECK(m->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m->status == JS_MODULE_STATUS_EVALUATED, "m->status == JS_MODULE_STATUS_EVALUATING_ASYNC || m->status == JS_MODULE_STATUS_EVALUATED");
-        DCHECK(!m->eval_has_exception, "!m->eval_has_exception");
-        if (!m->async_evaluation) {
-            DCHECK(m->status == JS_MODULE_STATUS_EVALUATED, "m->status == JS_MODULE_STATUS_EVALUATED");
-            JSValueConst value = JS_UNDEFINED;
-            ret_val = JS_Call(ctx, m->resolving_funcs[0], JS_UNDEFINED,
-                              1, &value);
-            JS_FreeValue(ctx, ret_val);
-        }
-        DCHECK(stack_top == NULL, "stack_top == NULL");
     }
     return js_dup(m->promise);
 }
