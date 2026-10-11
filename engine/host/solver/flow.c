@@ -1884,116 +1884,67 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     return f;
 }
 
-/* THE ARRIVAL RULE — START-TIME FAIR QUEUEING'S `max{v(t), F_prev}`, AND IT IS A RELATION RATHER THAN A COPY.
+/* The arrival rule: start-time fair queueing's `max{v(t), F_prev}`, as a relation rather than a copy.
  *
- * flow_fork_inherit already states half of this rule and already obeys it: "a continuation of an active flow
- * enters at that flow's virtual time, never at the system's, or any flow can reset its own virtual clock by
- * splitting." That sentence is about a FORK because a fork was the only entry anybody had looked at. It is a
- * statement about ENTERING, and the other three ways a flow enters this frontier are the ones this rule covers:
+ * flow_fork_inherit states the rule for a fork ("a continuation of an active flow enters at that flow's virtual
+ * time, never at the system's, or any flow can reset its own virtual clock by splitting"). It is a rule about
+ * entering, and this covers the other three entries, each of which founds a family (what "from-baseline" means)
+ * whose account must be placed:
  *
- *   - engine_join_document's boot flow (engine.c) — a Document the browser handed this agent mid-run,
- *   - solve.c's candidate session — one per @S search the run seeds, and
- *   - cold.c's park_flow_add — one per recipe the tier rebuilds.
+ *   - engine_join_document's boot flow (engine.c): a Document the browser handed this agent mid-run,
+ *   - solve.c's candidate session: one per @S search the run seeds, and
+ *   - cold.c's park_flow_add: one per recipe the tier rebuilds.
  *
- * Each of those FOUNDS a family, which is the whole of what "from-baseline" means, so it has an account of its
- * own and that account has to be placed. A flow at zero reward and zero silence carries only the optimism
- * bonus, so it entered the queue at 1.0 against a leader worth hundreds — below the entire backlog, for
- * findings it had no opportunity to make. That is the defect this rule was written for, and closing it by
- * COPYING the leader's reward onto the newcomer's account closed it for one instant only.
+ * A flow at zero reward and zero silence carries only the optimism bonus, so it would enter at 1.0 against a
+ * leader worth hundreds, below the entire backlog, for findings it had no opportunity to make. A copy of the
+ * leader's reward fixes that for one instant only. In SFQ the server takes the minimum tag, so v(t) can never pass
+ * a waiting member; this order takes the maximum and an emission raises the served account's tag, so v(t) runs
+ * away from waiting members, and a coordinate stamped at creation is passed by what the incumbent earns afterwards.
+ * Two newcomers created at two instants would then differ by something neither did.
  *
- * WHY A COPY CANNOT BE THE ANSWER, WHICH IS THE CORRECTION THIS FUNCTION NOW CARRIES. `max(v(t), F_prev)` is
- * evaluated at every ARRIVAL, and its content is that a member which has not been SERVED does not fall behind
- * the clock. In SFQ that holds for free: the server takes the MINIMUM tag, so v(t) can never pass a waiting
- * member. THIS order takes the MAXIMUM and an emission RAISES the served account's tag, so v(t) runs AWAY from
- * the waiting members rather than toward them — and a coordinate stamped once, at creation, is passed by
- * exactly what the incumbent earns afterwards. Two newcomers created at two instants then read two different
- * coordinates for something NEITHER of them did, which is CLAUDE.md's two-instants test failed at this door,
- * one term over from where flow_optimism already failed it and for the same reason.
- * MEASURED, on the build smoke fixture and quoted at the revision it was taken at (cfbc8f48): `valMin` pinned
- * at 183.0 from the second census to the last while `valMax` gained 217 to 400.0 and the frontier grew from 89
- * to 660 members; `valZero` was 0 at every sample, so nothing was entering at the floor any more — the floor
- * was where the arrivals had been LEFT. `valArrived` froze at exactly 12 beside `cands: 12`, with `turns: 0`
- * on every one of them: the twelve were the @S candidate sessions, so the delivery probe, the derived
- * breakout, the byte-provenance distance and the fire were all unreachable BY CONSTRUCTION, and the run
- * reported a clean parked search instead of a starved one.
+ * So the coordinate is read, not written, until the account is first served. An unplaced account's reward is
+ * frontier_vt() (acct_family_val), re-read at every pick; the dispatch that first gives it the thread freezes that
+ * reading into `base` (flow_set_running), and from then on it stands on its own tag plus its own ledger. That is
+ * `max(v(t), F_prev)` evaluated continuously for a member with no F_prev, and it makes placement a fact about the
+ * queue rather than a race with the newcomer's creation instant.
  *
- * SO THE COORDINATE IS READ, NOT WRITTEN, UNTIL THE ACCOUNT IS FIRST SERVED. An unplaced account's reward IS
- * frontier_vt() (acct_family_val), re-read at every pick; the dispatch that first gives it the thread freezes
- * that reading into `base` (flow_set_running) and from then on it stands on its own tag plus its own ledger
- * like every other account. That is `max(v(t), F_prev)` with the max evaluated CONTINUOUSLY for a member with
- * no F_prev to compare against, and it is what makes the placement a fact about the queue rather than a race
- * with whichever microsecond the newcomer happened to be created in.
+ * It does not re-relate an account that has been served: such an account earns and ages on its own tag, so a
+ * leader that keeps emitting leads and a served account that produces nothing can be passed. That is the bandit
+ * ordering the scheduler asks for (accumulated emitted value, order only); whether a leader's advantage decays is
+ * a different question. So `val_min` does not climb with `val_max`, and the alternatives are inadmissible:
+ *   (a) re-relate until the account earns: an account that emitted once stands at its tag while one that never
+ *       emitted stands at the clock, so a finding demotes its author by the whole reward spread, a promise
+ *       outweighing a finding without bound, which flow_nonreward exists to prevent; and the never-earning account
+ *       has been dispatched, so it is tried and unproductive, the arm optimism ranks lowest.
+ *   (b) re-relate every account (`max(v(t), base + earned)` for all): every account below the clock flattens onto
+ *       it, so `earned` orders nothing and the reward term is a common offset.
+ *   (c) stop the clock running away: a reward that is a rate is forbidden ("Additive (not a literal value/cpu
+ *       ratio)"), and a decaying leader advantage is a policy about the leader, not this door.
+ * A uniform lift cancels, so the handicap is by construction a promise outweighing findings, and the principled
+ * place to stop granting it is the account's first dispatch, the opportunity it compensates for. A pinned `val_min`
+ * then says an account given its turn that produced nothing stands below one that produced. `val_unplaced` tells
+ * that apart from accounts still held at the clock because nothing has reached them, and `turns` (solve.h) is
+ * where the rule is visible.
  *
- * WHAT IT DOES NOT DO, STATED HERE BECAUSE THE NEXT READER WILL OTHERWISE ATTRIBUTE IT: it does not re-relate
- * an account that HAS been served. Such an account earns and ages on its own tag, so a leader that keeps
- * emitting still leads and a served-once account that produces nothing can be passed by it again. That is the
- * bandit ordering §scheduler asks for ("accumulated emitted VALUE ... ORDER-only"), and whether a leader's
- * advantage should decay is a different question from this one. What is closed here is the population that had
- * never been reached AT ALL.
+ * It cannot promote: the newcomer ties the frontier's virtual time on the queue coordinate and stands one optimism
+ * range above it on the full weight (bounded at 1.0 by flow_nonreward), which it pays back at FLOW_AGE_QUANTUM per
+ * quantum it burns. A page that manufactures documents and candidate sessions buys each of them turns and none a
+ * monopoly.
  *
- * SO `val_min` DOES NOT CLIMB WITH `val_max` AFTER THIS, AND THAT IS A RESULT RATHER THAN A SHORTFALL — the
- * derivation is written out because the obvious next diff is inadmissible and a reader will otherwise build
- * it. A pinned floor beside a climbing ceiling can be lifted in exactly three ways and two of them break
- * flow_nonreward's bound or the ledger:
- *   (a) KEEP RE-RELATING UNTIL THE ACCOUNT EARNS. Then an account that has emitted ONCE stands at its own tag
- *       while one that has emitted NEVER stands at the clock, so a single finding DEMOTES its author by the
- *       whole reward spread — 199 points, measured — and a PROMISE outweighs a FINDING by an unbounded amount,
- *       which is precisely what flow_nonreward exists to make impossible. It is also inverted against the UCB
- *       term it would be imitating: the never-earning account here has been DISPATCHED, so it is tried and
- *       unproductive, which is the arm optimism ranks lowest.
- *   (b) RE-RELATE EVERY ACCOUNT — `max(v(t), base + earned)` for all — which has no inversion and flattens
- *       every account below the clock onto it, so `earned` orders nothing between accounts and §scheduler's
- *       reward term is a common offset. That is the erasure the base/earned split was made to be able to
- *       refuse rather than the re-relation it was made to allow.
- *   (c) MAKE THE CLOCK NOT RUN AWAY — a leader's advantage that decays, or a reward that is a rate rather than
- *       a total. §scheduler's sentence forbids the second in terms ("Additive (not a literal value/cpu
- *       ratio)"), and the first is a policy question about the LEADER and not about this door.
- * A UNIFORM lift changes no order at all (it cancels), so the handicap this rule grants is by construction a
- * promise outweighing findings — and the only principled place to stop granting it is the moment the account
- * has had the OPPORTUNITY the handicap was compensating for, which is its first dispatch. What a pinned
- * `val_min` then says is "an account that was given its turn and produced nothing stands below one that
- * produced", which is the ordering working. `val_unplaced` beside it is the row that tells that reading apart
- * from the one this rule was written for — accounts still being held at the clock because nothing has reached
- * them — and `turns` (solve.h) is where the fix is actually visible.
+ * The function is an assertion, not an assignment. Nothing is copied: the optimism count reads 1.0 for a flow that
+ * has completed nothing (flow_optimism), the reward is a reading, and the aging is not copied either. Copying the
+ * incumbent's `flow_own_silence` and `acct_family_us` onto an account founding its own family would leave a debt
+ * the source family forgives at its next emission (FlowAcct's `emit_gen`) but the newcomer can clear only by
+ * emitting, which needs the dispatch the debt forecloses; and frontier_vt() is already the serving item's queue
+ * coordinate, aging included.
  *
- * IT CANNOT PROMOTE. The newcomer TIES the frontier's virtual time on the queue coordinate and stands exactly
- * one optimism range above it on the full weight — the term flow_nonreward bounds at 1.0 precisely so that "a
- * PROMISE never outweighs a FINDING" — and it pays that lift back at FLOW_AGE_QUANTUM per quantum it burns. So
- * a page that manufactures documents and candidate sessions buys each of them turns and none of them a
- * monopoly, and it buys no more of them than it did before: what changed is that the ones it made an hour ago
- * are not buried by what the leader has earned since.
- *
- * THE FUNCTION IS THEREFORE AN ASSERTION AND NOT AN ASSIGNMENT, AND THAT IS THE MECHANISM RATHER THAN A
- * SHRINKING. Four tags used to be written here — the reward, the optimism count, and both halves of the aging
- * — and each was a copy of a fact about whichever flow happened to hold the thread. The optimism count went
- * first (flow_optimism: a flow that has completed nothing reads 1.0 whoever is in service, so there was no
- * position for it to arrive at). The reward is now a reading. AND THE AGING GOES WITH THEM, WHICH IS THE
- * SECOND DEFECT AT THIS DOOR: `flow_own_silence(g_running)` and `acct_family_us(g_running)` were copied onto
- * an account that FOUNDS its own family, so the source family's identical debt was forgiven at its very next
- * emission (FlowAcct's `emit_gen`) while the newcomer's could be forgiven only by an emission of its own — a
- * debt whose only currency was the dispatch the debt itself was foreclosing, which is §scheduler's razor's
- * STARVES. It is not needed either: frontier_vt() is the serving item's QUEUE COORDINATE, aging included, so
- * copying the aging again would charge the newcomer twice for thread time it never consumed.
- *
- * AND THIS IS WHY AN ACCOUNT PER BRANCH ARM IS INADMISSIBLE, WHICH IS A DIFFERENT REFUTATION FROM THE TWO
- * ABOVE AND THE ONLY ONE THAT REACHES THE PAIR flow_fork_inherit'S EQUALITY CANNOT COMPARE. The two above are
- * about a COPY: copying the parent's aging is an unrepayable debt, and copying its reward is birth order. The
- * proposal that survives both is to let an arm FOUND ITS OWN ACCOUNT and copy nothing — it would then arrive
- * here, unplaced, reading the clock like any from-baseline flow, and there is no seeding to object to. That is
- * the refutation everyone reaches for and it is the wrong one.
- * IT FAILS THE TWO-INSTANTS TEST ANYWAY, BECAUSE AN UNPLACED ACCOUNT DOES NOT READ A CONSTANT — IT READS A
- * CLOCK, AND A CLOCK IS EXACTLY WHAT MAKES TWO INSTANTS DIFFER. `frontier_vt()` is the serving item's queue
- * coordinate and it ADVANCES, so two arms of ONE parent founding accounts at two instants arrive at two
- * different virtual times, differing by precisely what the frontier did in between — which is birth order and
- * nothing else. A higher reward ranks better and `vt` climbs, so the LATER arm is born ABOVE the earlier:
- * newest-first, the same LIFO a copied reward produces, reached by the one route that avoids copying. Neither
- * arm did anything between the two branches, which is the whole of the test.
- * SO BOTH DOORS ARE SHUT AND THE FAMILY IS THE ANSWER RATHER THAN A COMPROMISE: a fork JOINS, every member of
- * a family reads ONE reward, and §scheduler's "a never-run flow is never starved" holds WITHIN a family by
- * construction, because the gap that guarantee is tight in is identically zero there.
- * A READER WHO ARRIVES WANTING THE TWO SIDES OF AN EXAMPLE-FREE BRANCH TO BE COMPARABLE IS USUALLY HOLDING A
- * THROUGHPUT MEASUREMENT AND READING IT AS AN ORDERING ONE — see the `neverPicked` block at the head of this
- * file for the figures that decide which, and for the denominator they have to be quoted with. */
+ * An account per branch arm is inadmissible for a separate reason. An arm founding its own account would arrive
+ * here unplaced, copying nothing, but an unplaced account reads a clock, and `frontier_vt()` advances: two arms of
+ * one parent founding accounts at two instants would arrive at two virtual times differing by what the frontier did
+ * in between, the later one above (newest-first, the LIFO a copied reward produces). So a fork joins the family,
+ * every member reads one reward, and "a never-run flow is never starved" holds within a family by construction. A
+ * reader wanting the two sides of an example-free branch comparable is usually reading a throughput measurement as
+ * an ordering one; the `neverPicked` block at the head of this file has the figures and their denominator. */
 static void flow_arrive_at_virtual_time(Flow *f) {
     DCHECK(f->val == 0.0 && f->cpu == 0 && f->cpu_gen == 0 && f->visits == 0 &&
            f->family == f->acct && f->family->fam_us == 0 && f->family->emit_gen == 0 &&
@@ -2002,54 +1953,41 @@ static void flow_arrive_at_virtual_time(Flow *f) {
            "absence of every one of these, so a caller that wrote one first has ranked this flow at a virtual "
            "time nobody chose, and `placed` is in the list because a stamped account stops reading the clock "
            "at all and would stand for ever at a coordinate written before it existed on the frontier");
-    /* THE PLACEMENT IS THE ABSENCE OF A STAMP, so there is nothing to write and nothing to skip when the
-       frontier is idle. `frontier_vt()` answers SFQ's v(0) = 0 for a session that has dispatched nothing, and
-       holds the last serving coordinate between two slices, which is the case the old `if (!g_running) return`
-       could not tell apart from a fresh registry. */
+    /* The placement is the absence of a stamp, so there is nothing to write and nothing to skip when the frontier is
+       idle: `frontier_vt()` answers SFQ's v(0) = 0 for a session that has dispatched nothing and holds the last
+       serving coordinate between two slices. */
     DCHECK(!g_running || flow_is_member(g_running),
            "the flow holding the thread is not a member of the frontier, so the coordinate the clock is a "
            "reading of belongs to no queue — every unplaced account is being ranked against nothing");
-    /* THE RULE ITSELF, ASSERTED WHERE IT IS APPLIED, AND IT IS AN EQUALITY AGAINST THE CLOCK RATHER THAN
-       AGAINST THE INCUMBENT. A newcomer enters AT the frontier's virtual time — not at or below it — and
-       flow_pick's STRICT comparison is what then leaves the thread with whoever holds it, so a tie is the whole
-       of what "arrives" means and there is nothing left for a `<=` to express. It reads the CLOCK and not
-       `flow_queue_weight(g_running)` because those are two different quantities between two dispatches: the
-       item in service sinks as it burns, and frontier_vt_serve deliberately does not follow it down, since a
-       member that has been given nothing may not be charged for the thread time of the one that has.
-       WRITTEN OVER flow_queue_weight RATHER THAN OVER A LIST OF FIELDS for the reason flow_fork_inherit gives
-       about its own equality: a list cannot fire when a term is ADDED, and every term this rule has ever been
-       missing was added to the weight by somebody who did not know this function existed. A term added to the
-       queue coordinate that a newcomer cannot stand at — anything read off the newcomer's own payload or its
-       own history — makes the two sides differ here, at the door, instead of six censuses later in a `valMin`
-       that does not move.
-       TWO TERMS ARE NAMED RATHER THAN CARRIED, AND NAMING THEM IS WHAT KEEPS THIS EXACT. §@S's distance is a
-       fraction OF A PAYLOAD, and a newcomer's payload is not the payload the flow in service holds — there is
-       no position for it to arrive at. The OPTIMISM bonus is the same sentence one term over: it is 1/(1+units
-       this flow has COMPLETED), so a flow that has completed nothing reads it at 1.0 whoever is in service.
-       Both sit outside flow_queue_weight (see flow_optimism), so this equality is over the TAGS alone.
-       EXACT WITH NO EPSILON, and now for a stronger reason than before: nothing is copied at all. The reward
-       IS frontier_vt() by construction (acct_family_val's unplaced arm) and the newcomer's aging notch is an
-       integer division of zero, so the two sides are the same float read twice. */
+    /* The rule, asserted where it is applied, as an equality against the clock rather than the incumbent. A
+       newcomer enters at the frontier's virtual time, and flow_pick's strict comparison then leaves the thread with
+       its holder, so a tie is what "arrives" means. It reads the clock and not `flow_queue_weight(g_running)`: the
+       item in service sinks as it burns, and frontier_vt_serve does not follow it down, since a member given
+       nothing may not be charged for the thread time of the one that has.
+       Written over flow_queue_weight rather than a list of fields, for flow_fork_inherit's reason: a list cannot
+       fire when a term is added, and a term a newcomer cannot stand at (anything read off its own payload or
+       history) makes the two sides differ here, at the door. Two terms sit outside flow_queue_weight (see
+       flow_optimism), so this is over the tags alone: the @S distance is a fraction of a payload the newcomer does
+       not share, and the optimism bonus reads 1.0 for a flow that has completed nothing. Exact with no epsilon:
+       the reward is frontier_vt() by construction (acct_family_val's unplaced arm) and the newcomer's aging notch
+       is an integer division of zero, so both sides are the same float read twice. */
     DCHECK(flow_queue_weight(f) == frontier_vt(),
            "a flow arriving from the baseline did not enter at the frontier's virtual time — it was placed "
            "above the clock (a page promoting the documents and candidate sessions it creates over the whole "
            "backlog) or below it (a newcomer the ordering can never reach, which is what starved every @S "
            "candidate session behind a boot family whose account the whole frontier stood on)");
-    /* AND BOTH HALVES OF THE AGING ARE STILL ONE READING — of nothing, which is what a member that has never
-       been offered the thread owes. Asserted at this transition like every other one that can move either
-       half, so a future edit that puts a copy back here fires at the door rather than in a census. */
+    /* And both halves of the aging are one reading, of nothing, which is what a member never offered the thread
+       owes. Asserted at this transition like every other that can move either half. */
     DCHECK_AGING_ONE_WINDOW(f, "a newcomer entered at the frontier's virtual time");
 }
 
-/* THE PROGRAMS A NEW FLOW STARTS WITH — installed by the session, asked at the ONE place a flow is created.
-   The scheduler may not know what a document's programs ARE (that is the engine's inventory, and this layer
-   owns the registry), so the answer arrives as a hook exactly as the timer, rendering and checkpoint steps do.
-   IT IS ASKED HERE AND NOT AT EACH CREATOR because a flow with no sequence runs NOTHING and says nothing about
-   it: a creator that forgot would add a member that finishes immediately, which is indistinguishable from a
-   document whose scripts all completed. There are four creators of a fresh timeline of this agent's root
-   document — the boot flow, a cold-resumed flow replaying from its first script, an @S candidate session, and
-   whatever is written next — and a hand-copied seeding line at each is the same hand-picked list this project
-   forbids for per-realm intrinsics, for the same reason: the one that is missed is silent. */
+/* The programs a new flow starts with, installed by the session and asked at the one place a flow is created. The
+   scheduler does not know what a document's programs are (the engine's inventory), so the answer arrives as a hook,
+   as the timer, rendering and checkpoint steps do. Asked here rather than at each creator, because a flow with no
+   sequence runs nothing and finishes immediately, indistinguishable from a document whose scripts all completed.
+   There are several creators of a fresh timeline of the root document (the boot flow, a cold-resumed flow replaying
+   from its first script, an @S candidate session, and whatever is written next), and a seeding line at each is a
+   hand-picked list whose missed member is silent. */
 static void (*g_seed_hook)(Flow *f);
 void flow_set_seed_hook(void (*fn)(Flow *f)) {
     DCHECK(fn == NULL || g_seed_hook == NULL,
@@ -2058,36 +1996,30 @@ void flow_set_seed_hook(void (*fn)(Flow *f)) {
     g_seed_hook = fn;
 }
 
-/* A FLOW WHOSE SEQUENCE ITS CREATOR ESTABLISHES ITSELF — the fork (which INHERITS the parent's rows) and a
-   joined document's boot flow (which is seeded with THAT document's programs, not the root's). Both would be
-   wrong with the root document's sequence on them: the fork would leak the rows its own copy then overwrites,
-   and the joined flow would re-run the root's bundle in a second timeline. Named rather than defaulted, so the
-   two exceptions are the two that say so and everything else gets the sequence it needs. */
+/* A flow whose sequence its creator establishes itself: the fork (which inherits the parent's rows) and a joined
+   document's boot flow (seeded with that document's programs, not the root's). The root sequence would make the
+   fork leak the rows its copy then overwrites and the joined flow re-run the root's bundle in a second timeline.
+   Named rather than defaulted, so the two exceptions say so. */
 Flow *flow_add_unseeded(JSContext *ctx, JSValueConst fn, WorldId parent) {
-    /* THE WORLD IS MINTED HERE so no flow can exist without one. A fork passes the world it BRANCHED AT and the
-       child records the edge, which is what lets another instance materialize this flow's segment by forking
-       the nearest ancestor it already holds. A from-baseline flow passes WORLD_NONE and gets a root.
-       `parent` IS THE FORK POINT AND NOT THE OTHER ARM'S WORLD: the arm that keeps running is re-minted as a
-       child of the same name (engine_sibling_assemble), so the branch retires its own world and the two arms
-       are siblings rather than ancestor-and-descendant — which is what makes "do these two senders contradict?"
-       answerable at a peer. */
+    /* The world is minted here, so no flow exists without one. A fork passes the world it branched at and the child
+       records the edge, which lets another instance materialize this flow's segment by forking the nearest ancestor
+       it holds; a from-baseline flow passes WORLD_NONE and gets a root. `parent` is the fork point, not the other
+       arm's world: the arm that keeps running is re-minted as a child of the same name (engine_sibling_assemble),
+       so the two arms are siblings, which makes "do these two senders contradict?" answerable at a peer. */
     int from_baseline = world_is_none(parent);
     Flow *f = flow_new(ctx, fn, from_baseline ? world_mint() : world_mint_child(parent));
-    /* AND WHERE IT ENTERS THE QUEUE, decided by the SAME predicate that decides where it enters the world tree,
-       because they are one question asked twice: a flow standing on another flow's decisions is a continuation
-       and takes that flow's account (flow_fork_inherit, at the fork), and a flow standing on nobody's arrives
-       at the frontier's virtual time. `parent` is the only thing that tells the two apart, so the arrival is
-       decided here rather than at each of the three from-baseline call sites, none of which knew it was making
-       a ranking decision at all. */
+    /* And where it enters the queue, decided by the same predicate as where it enters the world tree, one question
+       asked twice: a flow standing on another flow's decisions is a continuation and takes that flow's account
+       (flow_fork_inherit), and a flow standing on nobody's arrives at the frontier's virtual time. Decided here
+       rather than at the three from-baseline call sites. */
     if (from_baseline) flow_arrive_at_virtual_time(f);
     return f;
 }
 
 Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent) {
     Flow *f = flow_add_unseeded(ctx, fn, parent);
-    /* THE SEQUENCE IS ESTABLISHED BEFORE THE FLOW IS EVER PICKED, which is what makes the seeding part of
-       CREATING a flow rather than a step it takes. A member the scheduler could pick with an empty sequence
-       would report itself finished, and "finished" is the one answer that is never retried. */
+    /* The sequence is established before the flow is ever picked: a member picked with an empty sequence would
+       report itself finished, the one answer that is never retried. */
     DCHECK(g_seed_hook != NULL,
            "a flow was added to the frontier with nothing to seed its program sequence — the session installs "
            "that hook when it opens, so this flow was created outside a session and would run no program at "
@@ -2096,27 +2028,18 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent) {
     return f;
 }
 
-/* BLOCKED = holding an unanswered synchronous host request. COUNTED, not scanned, and the argument this line
-   used to make for scanning is retired rather than deleted, because it was right about the hazard and wrong
-   about one premise and a reader who re-derives it will re-introduce it. It said: "a counter is a second
-   representation of the same fact, and the two drift at exactly the sites (fork, drain, release) that are
-   already the hardest to keep in step. The register is short — it is one flow's outstanding requests."
-   THE LAST SENTENCE IS FALSE AND IS WHAT THE REST STOOD ON. The register is not one flow's OUTSTANDING
-   requests, it is one flow's whole history of parks: an entry stays until that flow delivers it, so the length
-   only rises — measured at ~165 per live flow on a live document and still climbing. A per-opcode read paying
-   a walk of that is the shape solver/pending_index.h records one level up, where two host doors walking these
-   same registers were two thirds of the process's CPU.
-   THE HAZARD IT NAMED IS REAL AND IS ANSWERED AT ITS OWN LEVEL, not waved away: the count lives ON the
-   register array, so the fork and the release carry it by construction rather than by two sites remembering
-   to, and it is AUDITED against a full walk at exactly those two sites — both of which already walk every
-   entry, so the audit costs nothing anywhere. The third site it named, the answer, is the one that genuinely
-   comes from outside, and it is why solver/pending.h has a door that is HANDED the register and a generic
-   setter that crashes on that field rather than doing half the transition. See pending.h at `pending_blocked`
-   for why this classification can be counted at all when the reply-side ones cannot. */
+/* Blocked: holding an unanswered synchronous host request. Counted, not scanned. The register is one flow's whole
+   history of parks, not its outstanding requests: an entry stays until that flow delivers it, so the length only
+   rises, and a per-opcode walk of it is the shape solver/pending_index.h records one level up. The drift hazard of
+   a count beside the fact it summarises is answered at its level: the count lives on the register array, so the
+   fork and the release carry it by construction, and it is audited against a full walk at those two sites, which
+   already walk every entry. The answer comes from outside, so solver/pending.h has a door that is handed the
+   register and a generic setter that crashes on that field. See pending.h at `pending_blocked` for why this
+   classification can be counted when the reply-side ones cannot. */
 int flow_blocked(const Flow *f) { return pending_blocked(f->pending); }
 
-/* THE DELIVERY QUEUE'S LENGTH — see flow.h. Same context and same tag assert as the operation queue below it,
-   because it is the same shape: an Array this engine appends to and nothing outside it touches. */
+/* The delivery queue's length (flow.h). Same context and tag assert as the operation queue, because it is the same
+   shape: an Array this engine appends to and nothing outside it touches. */
 int flow_deliver_pending(const Flow *f) {
     JSValue v;
     int n;
@@ -2131,9 +2054,8 @@ int flow_deliver_pending(const Flow *f) {
     return n;
 }
 
-/* THE UNMADE-DELIVERY FIFO ITSELF — see flow.h for the shape and for why all three mutators live beside the
-   field. An entry is an immutable two-element [record, senderOrigin] Array; nothing edits one after the push,
-   so append / take-from-the-front / fork is the whole of it. */
+/* The unmade-delivery FIFO (flow.h has the shape, and why all three mutators live beside the field). An entry is an
+   immutable two-element [record, senderOrigin] Array, so append, take-from-the-front and fork are the whole of it. */
 void flow_deliver_push(JSContext *ctx, Flow *f, const char *record, const char *sender_origin) {
     JSValue e;
 
@@ -2157,11 +2079,10 @@ void flow_deliver_push(JSContext *ctx, Flow *f, const char *record, const char *
     cow_engine_write_end();
 }
 
-/* TAKE THE OLDEST, which is the whole of why this is a queue and not a set: HTML §9.3.3 "Posting messages"
-   ends the window post message steps by queueing a global task on the posted message task source, and
-   §8.1.7.1 "Definitions" gives a task a source in order to "group and serialize related tasks" — so the order
-   two messages arrived in is the order the page must observe them in. A swap-remove would hand the page one
-   sender's second message before its first. */
+/* Take the oldest, which is why this is a queue: HTML §9.3.3 "Posting messages" ends the window post message steps
+   by queueing a global task on the posted message task source, and §8.1.7.1 "Definitions" gives a task a source to
+   "group and serialize related tasks", so the page observes messages in arrival order. A swap-remove would hand the
+   page one sender's second message before its first. */
 JSValue flow_deliver_take(JSContext *ctx, Flow *f) {
     int n = flow_deliver_pending(f), i;
     JSValue e;
@@ -2178,9 +2099,8 @@ JSValue flow_deliver_take(JSContext *ctx, Flow *f) {
     return e;
 }
 
-/* ONE ENTRY, WITHOUT CONSUMING IT — the accessor both non-consuming readers go through (engine_route compares
-   the arriving record's world against every queued one, the cold tier writes them out), so the pair's shape is
-   asserted in ONE place however many callers read it. */
+/* One entry, without consuming it: the accessor both non-consuming readers use (engine_route compares the arriving
+   record's world against every queued one; the cold tier writes them out), so the pair's shape is asserted once. */
 JSValue flow_deliver_entry(const Flow *f, int i) {
     JSValue e;
 
@@ -2192,12 +2112,11 @@ JSValue flow_deliver_entry(const Flow *f, int i) {
     return e;
 }
 
-/* THE ARM'S OWN QUEUE — a new Array naming the parent's ENTRIES. The arm is that timeline continued, so a
-   message that arrived in this document before the branch arrived in the arm too, and it makes its own
-   delivery under its own delta: the multiplicity §7.2.1 has when a document's state is its flows, not one
-   message delivered twice. The ARRAY is per-flow because each arm consumes at its own rate; the ENTRIES are
-   shared because none of them ever changes. An empty queue forks as JS_UNDEFINED — the common case stays a
-   tag test, and flow_deliver_push mints the Array again if the arm is ever routed one. */
+/* The arm's own queue: a new Array naming the parent's entries. The arm is that timeline continued, so a message
+   that arrived before the branch arrived in the arm too, delivered under the arm's own delta: the multiplicity
+   §7.2.1 has when a document's state is its flows, not one message delivered twice. The array is per-flow because
+   each arm consumes at its own rate; the entries are shared because none changes. An empty queue forks as
+   JS_UNDEFINED, and flow_deliver_push mints the Array if the arm is ever routed one. */
 JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent) {
     int n = flow_deliver_pending(parent), i;
     JSValue out;
