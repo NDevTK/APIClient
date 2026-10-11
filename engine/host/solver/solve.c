@@ -57,6 +57,12 @@ typedef struct {
    concolic.c's to say (concolic_pred_copy / concolic_pred_release); this file owns the array and the name. */
 typedef struct { char *src; ConcolicPred *pred; int npred; } PrincipalGate;
 
+/* One sender identity a path reaching this sink pinned: the principal's `src` and the pin (concolic.h's
+   ConcolicPrincipalPin), both owned by the search. A list of these is a disjunction over paths when it is a
+   search's sender demand (Cand.snd) and a conjunction over one path when it is a verdict's evidence (Cand.pp). */
+typedef struct { char *principal; ConcolicPrincipalPin pin; } SenderPin;
+typedef struct { SenderPin *row; int n; } SenderPins;
+
 /* The verdict on what a search's frozen path demanded of an attacker's principal. It is a separate fact from the
    demands in `pg`: the rows are the evidence, this is the decision, and a consumer branches on this.
    PG_UNEXAMINED is 0, so the Cand compound literal in sink_search leaves a never-frozen path unexamined without
@@ -67,7 +73,7 @@ typedef enum {
     PG_UNEXAMINED = 0,   /* no path was ever frozen for this search, so nothing has been asked */
     PG_NONE,             /* examined: the frozen path demanded nothing of any declared principal */
     PG_FORGEABLE,        /* examined: it demanded a shape an attacker can hold — `pg` carries which */
-    PG_UNFORGEABLE       /* examined: it pinned one, which no cross-document attacker can meet */
+    PG_UNFORGEABLE       /* examined: it pinned one, so the sender is a document at that origin — `pp` says which */
 } PrincipalDemand;
 
 /* One sink's search, keyed by (injection identity, sink class). Its members are three accounting units. Report
@@ -208,6 +214,13 @@ typedef struct {
        conjunction. `pg_demand` is the verdict a consumer branches on and is never derived from `npg` here; see
        PrincipalDemand. */
     PrincipalGate *pg; int npg; PrincipalDemand pg_demand;
+    /* The pins under a PG_UNFORGEABLE verdict, taken at the same capture, so `pg` and `pp` are the two kinds of
+       evidence one frozen path's verdict can have. Empty under every other verdict. */
+    SenderPins pp;
+    /* The senders this search waits on: the pins of every detection whose path pinned a principal, which
+       detect_sink records here instead of opening the search on that path. Each entry alone satisfies its own
+       path. Distinct from `pp`, which is about the one path every candidate replays. */
+    SenderPins snd;
 } Cand;
 static Cand *g_pending = NULL; static int g_pending_n = 0, g_pending_cap = 0;
 
@@ -663,6 +676,51 @@ static void cand_gate_row(void *user, const char *src, const ConcolicPred *pred,
     e->npg++;
 }
 
+/* One principal's pins, called back by concolic_principal_pins; appended to `user` unless an equal row is
+   already there, so a re-detection of one path adds nothing. */
+static void sender_pin_row(void *user, const char *src, const ConcolicPrincipalPin *pin, int n) {
+    SenderPins *sp = (SenderPins *)user;
+
+    DCHECK(sp != NULL && src != NULL && *src && pin != NULL && n > 0,
+           "a principal's pins arrived for no list, with no principal named, or with no pins");
+    for (int k = 0; k < n; k++) {
+        const ConcolicPrincipalPin *q = &pin[k];
+        int dup = 0;
+        SenderPin *a;
+
+        for (int i = 0; i < sp->n && !dup; i++) {
+            const ConcolicPrincipalPin *h = &sp->row[i].pin;
+            dup = !strcmp(sp->row[i].principal, src) && h->kind == q->kind && h->loose == q->loose &&
+                  !strcmp(h->tok, q->tok) && (h->subject ? q->subject && !strcmp(h->subject, q->subject)
+                                                         : !q->subject);
+        }
+        if (dup) continue;
+        a = realloc(sp->row, (size_t)(sp->n + 1) * sizeof *a);
+        CHECK(a, "solve: OOM recording the sender a path reaching a sink demands");
+        sp->row = a;
+        a[sp->n].principal = strdup(src);
+        CHECK(a[sp->n].principal, "solve: OOM naming the principal a path pinned");
+        concolic_principal_pin_copy(&a[sp->n].pin, q);
+        sp->n++;
+    }
+}
+
+/* Take the running flow's principal pins into `sp`, answering how many rows that added. */
+static int sender_pins_learn(SenderPins *sp) {
+    int before = sp->n;
+    concolic_principal_pins(sender_pin_row, sp);
+    return sp->n - before;
+}
+
+static void sender_pins_free(SenderPins *sp) {
+    for (int i = 0; i < sp->n; i++) {
+        free(sp->row[i].principal);
+        concolic_principal_pin_release(&sp->row[i].pin);
+    }
+    free(sp->row);
+    sp->row = NULL; sp->n = 0;
+}
+
 /* Decide what the path every candidate of this search replays demanded of an attacker's principal: the verdict
    and its evidence, written together while the flow that froze the path exists. */
 static void cand_learn_principal_gates(Cand *e) {
@@ -671,13 +729,13 @@ static void cand_learn_principal_gates(Cand *e) {
            "a search's principal demands were decided twice — this runs past the ONE capture's own two "
            "returns, so a second verdict describes a path this search no longer stands on, exactly as a second "
            "recorded length would");
-    /* A pinned principal is stated as PG_UNFORGEABLE rather than left as an empty set. detect_sink's suppression
-       stops a detection from opening a search, but this capture also has the witness door (derive_from_witness,
-       a resumed search's own context probe), which that suppression never sees. A path's demands conjoin, so
-       reporting only its forgeable ones, or an empty set a consumer cannot tell from "demanded nothing", would
-       state a satisfiable identity for an unsatisfiable path. The sink stays reportable through any sibling
-       flow that reaches it without the demand. */
-    if (concolic_principal_pinned()) { e->pg_demand = PG_UNFORGEABLE; return; }
+    /* A pinned principal is stated as PG_UNFORGEABLE with its pins rather than left as an empty set. A pinned
+       detection never opens a search (detect_sink), but this capture also has the witness door
+       (derive_from_witness, a resumed search's own context probe), which detection never sees. A path's demands
+       conjoin, so reporting only its forgeable ones, or an empty set a consumer cannot tell from "demanded
+       nothing", would state an identity an attacker can hold for a path whose sender must be the pinned one. */
+    DCHECK(e->pp.n == 0, "a search's verdict pins were taken before its verdict was decided");
+    if (sender_pins_learn(&e->pp)) { e->pg_demand = PG_UNFORGEABLE; return; }
     concolic_principal_preds(cand_gate_row, e);
     /* The walk calls back exactly where it found a demand, so `npg` is now the verdict; deriving it here keeps
        the enum and the rows from being two producers that can disagree. */
@@ -742,16 +800,16 @@ static void add_pending(const char *src, const char *root, int sink) {
        taken back. This is not a seen-set: what closes a search is emitted output, the detecting flow runs on,
        and detect_sink has already counted the arrival. */
     if (search_solved(e)) return;
-    /* A detection opening an entry it did not create means the cold tier made it, which leaves one of two
-       numbers: a resumed record raises `tried`, a withdrawn one raises `resumed_withdrawn`. Any other entry was
-       made by a third door. */
-    DCHECK(created || e->tried > 0 || e->resumed_withdrawn > 0,
-           "a sink search is being opened on an entry this detection did not create and no cold-resumed "
-           "candidate accounts for — g_pending has two writers, detection and the cold tier's rebuild, and the "
-           "second either RESUMES a record (raising `tried`) or WITHDRAWS one whose carrier refuses its "
-           "payload (raising `resumed_withdrawn`), so an entry that predates this call with neither was put "
-           "there by a third door and is about to be handed a context probe and a re-injection point on behalf "
-           "of a search nobody opened");
+    /* A detection opening an entry it did not create means the cold tier or a pinned detection made it, which
+       leaves one of three numbers: a resumed record raises `tried`, a withdrawn one raises `resumed_withdrawn`,
+       and a pinned detection records a sender. Any other entry was made by another door. */
+    DCHECK(created || e->tried > 0 || e->resumed_withdrawn > 0 || e->snd.n > 0,
+           "a sink search is being opened on an entry this detection did not create and nothing accounts for — "
+           "g_pending's other writers are the cold tier's rebuild, which either RESUMES a record (raising "
+           "`tried`) or WITHDRAWS one whose carrier refuses its payload (raising `resumed_withdrawn`), and a "
+           "pinned detection, which records a sender (`snd`). An entry with none of the three was put there by "
+           "another door and is about to be handed a context probe and a re-injection point on behalf of a "
+           "search nobody opened");
     e->opened = 1;
     /* The re-injection path is taken here for every class, at the moment a flow stands at this sink holding the
        value that reached it: a candidate with no path re-forks the document's whole gate tree (2^K flows behind
@@ -837,6 +895,18 @@ static void record_sink(int cls, const char *source, const char *poc) {
     if (twin->reinject) { decide_blob_free(twin->reinject); twin->reinject = NULL; }
 }
 
+/* A detection whose path pinned a principal (see detect_sink): the search learns the root the way add_pending
+   does, so both doors agree on how these bytes arrive, and records the sender. It seeds nothing and freezes no
+   path. The flow is paid when the demand is new, since a new sender demand is new output. */
+static void park_on_sender(const char *src, const char *root, int sink) {
+    int created = 0;
+    Cand *e = sink_search(src, sink, &created);
+
+    cand_learn_root(e, root);
+    if (sender_pins_learn(&e->snd)) flow_credit_emit(1.0);
+    DCHECK(e->snd.n > 0, "a detection behind a pinned principal recorded no sender for its search");
+}
+
 /* Detection: the tail the three sink classes share, and the last point at which the value that carried the
    attacker's bytes exists. The search is keyed by the value's injection identity, derived ones included,
    because that is where a substitution has to land; how the bytes arrived is asked with the value's root,
@@ -847,9 +917,10 @@ static void detect_sink(JSValueConst arg, int cls) {
     /* The arrival census is counted here, where the three classes converge, and the concolic test with it, so a
        new class cannot forget either. An empty @S surface means one of four things that take opposite actions:
        no attacker source was read (counted where concolic.h mints one), no sink ran, sinks ran on the page's
-       own strings, or tainted input arrived and its search was suppressed as unforgeable, which is a positive
-       result. The counts are exploration-only because every caller returns inside its own is_verifying()
-       branch first, so a candidate's own bytes coming back are never counted as the page delivering taint.
+       own strings, or tainted input arrived behind an unforgeable check and its search waits on a sender,
+       which is a positive result. The counts are exploration-only because every caller returns inside its own
+       is_verifying() branch first, so a candidate's own bytes coming back are never counted as the page
+       delivering taint.
        The one rule that is not every class's is asserted here rather than asked: ECMAScript §19.2.1.1
        PerformEval ( source, strictCaller, direct ) step 2 makes a concrete non-string offered to eval a call
        that compiles nothing. solve_eval_sink declines it; markup and URL sinks run ToString, so an object with
@@ -874,13 +945,16 @@ static void detect_sink(JSValueConst arg, int cls) {
     DCHECK(root != NULL,
            "an attacker value reached a sink carrying no delivery ROOT — the reproduction envelope is built "
            "from it, and without one this finding would state that nothing carries these bytes to the victim");
-    /* Can an attacker be the one standing here (the unforgeable-origin rule), asked while the flow that arrived
-       still exists. What is suppressed is the search, not the arm: the flow runs on, since the page really does
-       reach this sink when a message from the pinned origin arrives, but a PoC no cross-document attacker can
-       deliver is a false one. No entry is emitted, since a parked entry would say "not solved yet"; the sink
-       stays reportable through any other flow that reaches it without the demand. The return is counted,
-       because it is a decision rather than an absence. */
-    if (concolic_principal_pinned()) { METRIC_ADD(sink_suppressed, 1); return; }
+    /* Who must be standing here, asked while the flow that arrived still exists. A path that pinned a principal
+       is real: the page reaches this sink when a document at the pinned origin posts, and an attacker gets
+       there through a gadget at that origin. The search records that sender and is not opened on this path,
+       because its candidates replay one frozen path and a sibling flow reaching the sink with no such demand
+       must be able to be that path. Counted, because it is a decision rather than an absence. */
+    if (concolic_principal_pins(NULL, NULL)) {
+        METRIC_ADD(sink_needs_sender, 1);
+        park_on_sender(src ? src : (shape ? shape : "?"), root, cls);
+        return;
+    }
     add_pending(src ? src : (shape ? shape : "?"), root, cls);
 }
 
@@ -1884,6 +1958,27 @@ static void emit_delivery_probed(JsonBuf *b, const Cand *e) {
     snprintf(t, sizeof t, "%d", e->deliv_runs); json_buf_raw(b, t);
 }
 
+/* A list of sender pins as `[{"principal":..,"equals":..,"kind":..,"loose":B[,"subject":..]}]`, in capture
+   order, after the caller has written its key. `subject` is absent exactly where the compared value owned no
+   identity (concolic.h). */
+static void emit_sender_pins(JsonBuf *b, const SenderPins *sp) {
+    DCHECK(sp->n > 0 && sp->row != NULL, "a sender list was emitted with no rows — its key is written only "
+                                         "where some path pinned a principal");
+    json_buf_raw(b, "[");
+    for (int i = 0; i < sp->n; i++) {
+        const SenderPin *r = &sp->row[i];
+        if (i) json_buf_raw(b, ",");
+        json_buf_raw(b, "{"); json_buf_key(b, "principal"); json_buf_str(b, r->principal);
+        json_buf_raw(b, ","); json_buf_key(b, "equals"); json_buf_str(b, r->pin.tok);
+        json_buf_raw(b, ","); json_buf_key(b, "kind");
+        json_buf_str(b, concolic_lit_report_name((ConcolicLit)r->pin.kind));
+        json_buf_raw(b, ","); json_buf_key(b, "loose"); json_buf_raw(b, r->pin.loose ? "true" : "false");
+        if (r->pin.subject) { json_buf_raw(b, ","); json_buf_key(b, "subject"); json_buf_str(b, r->pin.subject); }
+        json_buf_raw(b, "}");
+    }
+    json_buf_raw(b, "]");
+}
+
 /* The source's declared browser delivery, written the same way into both entry shapes: `sourceEncodes` is what a
    breakout had to survive and `sourceDelivers` what a run measured, while `delivery` and `deliveryPrefix` are
    what a reproduction must perform. Asked with the root, not the injection identity, because the registry
@@ -1937,6 +2032,10 @@ static void emit_delivery(JsonBuf *b, const Cand *e, const char *root, const cha
                "the walk's own answer at the capture, so `forgeable` with no rows would state that an identity "
                "is constrained and not say by what, and rows under any other verdict would offer a delivery "
                "layer a shape to satisfy for a path whose answer is that no shape does");
+        DCHECK(e->pg_demand == PG_UNFORGEABLE ? e->pp.n > 0 : e->pp.n == 0,
+               "a search's principal verdict and its recorded pins disagree — `unforgeable` is decided by the "
+               "pins the capture took, so one without the other names a sender for no path or no sender for one");
+        if (e->pp.n) { json_buf_raw(b, ","); json_buf_key(b, "principalPins"); emit_sender_pins(b, &e->pp); }
     }
     if (e && e->npg) {
         json_buf_raw(b, ","); json_buf_key(b, "principalGates"); json_buf_raw(b, "[");
@@ -2156,9 +2255,13 @@ char *solve_json_array(JSContext *ctx) {
            until its probe arrives, so `probes == payloads` is either a probe that has not reached the sink (a
            distance question) or one that did, in a state no escape could be constructed from, which for a
            percent-encoded source is the correct final answer. It counts distinct writes (learn_witness dedups
-           by text), so `witnessed:2` is two contexts read. Absent for a single-context class, which runs no
-           probe. */
-        if (sink_class(g_pending[i].sink)->derive != SINK_DERIVE_NONE) {
+           by text), so `witnessed:2` is two contexts read. Absent where the search holds no probe, decided by
+           reading its entries: a single-context class runs none, and a search no detection has opened (one
+           waiting on a sender, or rebuilt by the cold tier) has pushed none yet. */
+        if (cand_probes(&g_pending[i]) > 0) {
+            DCHECK(sink_class(g_pending[i].sink)->derive != SINK_DERIVE_NONE,
+                   "a single-context sink class holds a context probe — add_pending pushes one only for a "
+                   "class that derives its breakouts");
             json_buf_raw(&b, ","); json_buf_key(&b, "witnessed");
             snprintf(t, sizeof t, "%d", g_pending[i].nwit); json_buf_raw(&b, t);
         }
@@ -2209,6 +2312,12 @@ char *solve_json_array(JSContext *ctx) {
             char dv[64];
             emit_delivery(&b, &g_pending[i], g_pending[i].root, cand_delivers(&g_pending[i], dv, sizeof dv));
         }
+        /* `senderDemand`: the senders this parked search waits on, one per pinned path that reached the sink.
+           Parked entries only: a fired search has a PoC, and its own path's identity is `principalDemand`. */
+        if (g_pending[i].snd.n) {
+            json_buf_raw(&b, ","); json_buf_key(&b, "senderDemand");
+            emit_sender_pins(&b, &g_pending[i].snd);
+        }
         json_buf_raw(&b, "}");
     }
     json_buf_raw(&b, "]");
@@ -2237,6 +2346,8 @@ void solve_free(void) {
             gate_pred_free(g_pending[i].pg[c].pred, g_pending[i].pg[c].npred);
         }
         free(g_pending[i].pg);
+        sender_pins_free(&g_pending[i].pp);
+        sender_pins_free(&g_pending[i].snd);
         free(g_pending[i].src);
         free(g_pending[i].root);
     }

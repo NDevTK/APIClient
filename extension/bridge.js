@@ -319,7 +319,7 @@ function assertResultDocument(r) {
    of its own. The @S arrival census's four rows are also read by name below (linesToAnalysis), so they are
    asserted to be declared. A missing schema has a missing counter's two causes, in the same order. */
 const METRIC_KINDS = ["lifetime", "gauge", "maximum", "constant", "regime"];
-const SCENSUS_READ = ["_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"];
+const SCENSUS_READ = ["_sourceReads", "_sinkReached", "_sinkTainted", "_sinkNeedsSender"];
 function assertMetricsFamilies(r) {
   const schema = r._metricsSchema;
   DCHECK(schema && typeof schema === "object" && Array.isArray(schema.families),
@@ -612,7 +612,7 @@ function linesToAnalysis(lines, msg, outcome, eng) {
         /* What the work met, which is what tells a page with nothing to find from a page nobody reached. Carried
            on the record because the probe watching this seam cannot read the cumulative store. */
         sourceReads: result._sourceReads, sinkReached: result._sinkReached,
-        sinkTainted: result._sinkTainted, sinkSuppressed: result._sinkSuppressed,
+        sinkTainted: result._sinkTainted, sinkNeedsSender: result._sinkNeedsSender,
         /* Uncalled-code driving: `driven` alone cannot tell a page that ships no uncalled code from a scheduler
            that never reached the question; `asked` can. */
         orphansDriven: result._orphansDriven, orphansAsked: result._orphansAsked,

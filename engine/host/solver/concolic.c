@@ -729,11 +729,11 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    contradicted. It prunes only a branch on the same predicate the flow already fixed.
    ex_contra: this flow took an arm the value's own example says a real session does not take
    (concolic_contradict_example). */
-/* pinned_root: some value rooted at this key was demanded by this flow, a fact about the source.
-   `event.origin`, `event.origin.toLowerCase()` and `String(event.origin)` are three identities and one demand
-   on the attacker's principal. It is not `val`: writing the lowercased token under `message.origin` would make
-   a later read of `event.origin` answer it, a fabricated value. A §7.2.13 IsLooselyEqual ( x, y ) gate makes
-   the demand without a determination, because its holding arm bounds the operand to a set (concolic_pin). */
+/* ppin: the pins this flow made on values rooted at this key, kept only where the key is a declared
+   principal. `event.origin`, `event.origin.toLowerCase()` and `String(event.origin)` are three identities and
+   one demand on the attacker's principal. It is not `val`: writing the lowercased token under `message.origin`
+   would make a later read of `event.origin` answer it, a fabricated value. A §7.2.13 IsLooselyEqual ( x, y )
+   gate makes the demand without a determination, because its holding arm bounds the operand to a set. */
 /* The domain rows, each keyed by the hole and accumulated by conjunction within one flow:
    excl: the tokens an equality gate proved the hole is not, on the arm `val` does not cover. Forced
    multi-path runs both arms of every `x === "admin"`, so this is the second flow's report of its parameter.
@@ -756,7 +756,7 @@ typedef struct { double num; char *txt; signed char present; signed char inclusi
 typedef struct { BoundSide lo, hi; } Bound;
 typedef struct { char *key; char *val; signed char valkind; char **excl; int nexcl; Bound *bnd;
                  ConcolicPred *pred; int npred; ConcolicLooseEq *leq; int nleq;
-                 signed char truth; signed char pinned_root; signed char ex_contra;
+                 ConcolicPrincipalPin *ppin; int nppin; signed char truth; signed char ex_contra;
                  char *adec; int adec_arm; signed char adec_what; signed char adec_neg; } Cons;
 
 static void bound_side_free(BoundSide *s) { free(s->txt); s->txt = NULL; s->present = 0; }
@@ -787,6 +787,8 @@ static void cons_entry_free(Cons *e) {
     free(e->pred);
     for (i = 0; i < e->nleq; i++) concolic_looseeq_release(&e->leq[i]);
     free(e->leq);
+    for (i = 0; i < e->nppin; i++) concolic_principal_pin_release(&e->ppin[i]);
+    free(e->ppin);
     free(e->adec);
 }
 /* …and one measurement: the freeze's byte census reads exactly the fields the free above disposes of. */
@@ -809,6 +811,9 @@ static long cons_entry_bytes(const Cons *e) {
     }
     n += (long)e->nleq * (long)sizeof(ConcolicLooseEq);
     for (i = 0; i < e->nleq; i++) n += (long)strlen(e->leq[i].tok) + 1;
+    n += (long)e->nppin * (long)sizeof(ConcolicPrincipalPin);
+    for (i = 0; i < e->nppin; i++)
+        n += (long)strlen(e->ppin[i].tok) + 1 + (e->ppin[i].subject ? (long)strlen(e->ppin[i].subject) + 1 : 0);
     if (e->adec) n += (long)strlen(e->adec) + 1;
     return n;
 }
@@ -955,8 +960,17 @@ static Cons *cons_entry(const char *key) {
             concolic_looseeq_copy(&g_pins[g_pins_n].leq[k], &below->leq[k]);
         g_pins[g_pins_n].nleq = below->nleq;
     }
+    g_pins[g_pins_n].ppin = NULL;
+    g_pins[g_pins_n].nppin = 0;
+    if (below && below->nppin) {
+        int k;
+        g_pins[g_pins_n].ppin = malloc((size_t)below->nppin * sizeof(ConcolicPrincipalPin));
+        CHECK(g_pins[g_pins_n].ppin, "concolic: OOM copying an inherited principal pin set");
+        for (k = 0; k < below->nppin; k++)
+            concolic_principal_pin_copy(&g_pins[g_pins_n].ppin[k], &below->ppin[k]);
+        g_pins[g_pins_n].nppin = below->nppin;
+    }
     g_pins[g_pins_n].truth = below ? below->truth : -1;
-    g_pins[g_pins_n].pinned_root = below ? below->pinned_root : 0;
     g_pins[g_pins_n].ex_contra = below ? below->ex_contra : 0;
     g_pins[g_pins_n].adec = (below && below->adec) ? strdup(below->adec) : NULL;
     CHECK(!(below && below->adec) || g_pins[g_pins_n].adec, "concolic: OOM copying an inherited assumed decision");
@@ -971,8 +985,54 @@ static Cons *cons_entry(const char *key) {
            "same fact would fork a branch this flow has already decided");
     return &g_pins[g_pins_n - 1];
 }
-/* Member `i` of a root: defined with the registry below, declared here because the pin is its first reader. */
+/* Member `i` of a root, and whether a member is a declared principal: defined with the registry below,
+   declared here because the pin is their first reader. */
 static int root_member(const char *root, int i, const char **p, size_t *n);
+static int src_principal(const char *p, size_t n);
+
+/* The principal pin's ownership contract (concolic.h): one copy and one release, shared by the constraint
+   head's copy-up and solve.c's search record. */
+void concolic_principal_pin_copy(ConcolicPrincipalPin *dst, const ConcolicPrincipalPin *src) {
+    DCHECK(src->tok != NULL && src->kind != (signed char)CONCOLIC_LIT_NONE,
+           "a principal pin with no operand was copied — the store writes one only where the operand is spelled");
+    dst->tok = strdup(src->tok);
+    CHECK(dst->tok, "concolic: OOM copying the origin a flow pinned a principal to");
+    dst->subject = src->subject ? strdup(src->subject) : NULL;
+    CHECK(!src->subject || dst->subject, "concolic: OOM copying the identity a principal pin compared");
+    dst->kind = src->kind;
+    dst->loose = src->loose;
+}
+
+void concolic_principal_pin_release(ConcolicPrincipalPin *p) {
+    free(p->tok);
+    free(p->subject);
+    p->tok = NULL; p->subject = NULL;
+}
+
+/* One pin on one principal member's entry, appended unless the flow already made exactly this demand. */
+static void principal_pin_add(const char *member, const char *subject, ConcolicLit kind, const char *tok,
+                              int loose) {
+    Cons *c = cons_entry(member);
+    ConcolicPrincipalPin *a;
+    int i;
+
+    for (i = 0; i < c->nppin; i++) {
+        const ConcolicPrincipalPin *q = &c->ppin[i];
+        if (q->kind == (signed char)kind && q->loose == loose && !strcmp(q->tok, tok) &&
+            (q->subject ? subject && !strcmp(q->subject, subject) : !subject))
+            return;
+    }
+    a = reclaim_realloc(c->ppin, (size_t)(c->nppin + 1) * sizeof *a);
+    CHECK(a, "concolic: OOM recording a pin on an attacker's principal");
+    c->ppin = a;
+    a[c->nppin].tok = strdup(tok);
+    a[c->nppin].subject = subject ? strdup(subject) : NULL;
+    CHECK(a[c->nppin].tok && (!subject || a[c->nppin].subject),
+          "concolic: OOM recording a pin on an attacker's principal");
+    a[c->nppin].kind = (signed char)kind;
+    a[c->nppin].loose = (signed char)loose;
+    c->nppin++;
+}
 
 /* The pin, and the principal mark beside it (see concolic.h). They are written together because nothing
    downstream can recover the mark: by the time a value reaches a sink the pinned identity is gone and only the
@@ -988,7 +1048,7 @@ int concolic_pin_store(const char *src, const char *root, ConcolicLit kind, cons
        would pick a witness that concretize-on-pin then decides every later branch from.
        The demand survives both, so this is not an early return. `e.origin == TRUSTED` is still a demand on the
        principal, unforgeable cross-origin because two Strings go straight to §7.2.14 by §7.2.13's step 1;
-       refusing the mark would un-suppress every loose origin check and emit a false PoC. */
+       refusing the pin would hand every loose origin check to a delivery from an attacker origin. */
     DCHECK(algo == JS_CONCOLIC_EQ_LOOSE || algo == JS_CONCOLIC_EQ_STRICT,
            "an arm recorded an equality observation naming an algorithm quickjs.h does not declare — §7.2.13 "
            "and §7.2.14 differ on exactly whether the holding arm determined a value, so an unnamed one has "
@@ -1028,23 +1088,27 @@ int concolic_pin_store(const char *src, const char *root, ConcolicLit kind, cons
         wrote = 1;
         /* `c` is dead from here: cons_entry may grow the head by realloc, so nothing below reaches through it. */
     }
-    /* Marked on every member, because a root may name a set. concolic_principal_pinned looks each declared
-       principal up by its own name, so a mark under a joint key would leave `message.origin` unpinned for a
-       flow that pinned a value derived from it, and the unforgeable-origin rule would emit a PoC no
-       cross-origin attacker can deliver. root_member answers at i == 0 and stops for a single source, so the
-       ordinary case walks once. `cons_entry` may grow the head, so nothing holds its result across calls. */
+    /* Filed on every principal member, because a root may name a set. concolic_principal_pins looks each
+       declared principal up by its own name, so a pin under a joint key would leave `message.origin` unpinned
+       for a flow that pinned a value derived from it, and the finding would offer a delivery from an
+       attacker-owned origin that cannot fire. A member that is no principal carries nothing: the attacker
+       writes it, and its pin is the ordinary solved case. `cons_entry` may grow the head, so nothing holds
+       its result across calls. */
     if (root) {
         const char *mp;
         size_t mn;
         int mi;
 
         for (mi = 0; root_member(root, mi, &mp, &mn); mi++) {
-            char *one = reclaim_malloc(mn + 1);
+            char *one;
+
+            if (!src_principal(mp, mn)) continue;
+            one = reclaim_malloc(mn + 1);
             CHECK(one, "concolic: OOM naming a member of a pinned value's delivery ROOT — a member that "
                        "could not be spelled is a principal demand this flow made and nothing can answer for");
             memcpy(one, mp, mn);
             one[mn] = '\0';
-            cons_entry(one)->pinned_root = 1;
+            principal_pin_add(one, src, kind, val, algo == JS_CONCOLIC_EQ_LOOSE);
             free(one);
         }
     }
@@ -2238,25 +2302,36 @@ void concolic_declare_source_principal(const char *component, const char *src)
           "\"no component carries these bytes to the victim\". Call concolic_declare_source first");
 }
 
-/* Whether this flow has demanded a particular value of an attacker's principal (see concolic.h). A walk of the
- * registry rather than a keyed lookup, because the flow must not be taught which sources are principals; this
- * array is the one place that knows. O(declared principals), one indexed chain probe each. */
-int concolic_principal_pinned(void)
+/* The pins this flow made on each attacker principal (see concolic.h). A walk of the registry rather than a
+ * keyed lookup, because the flow must not be taught which sources are principals; this array is the one place
+ * that knows. O(declared principals), one indexed chain probe each. */
+int concolic_principal_pins(void (*cb)(void *user, const char *src, const ConcolicPrincipalPin *pin, int n),
+                            void *user)
 {
-    int i;
+    int i, found = 0;
 
     for (i = 0; i < g_srcs_n; i++) {
         const Cons *c;
         if (!g_srcs[i].principal) continue;
         c = cons_lookup(g_srcs[i].src);
-        if (c && c->pinned_root) return 1;
+        if (!c || !c->nppin) continue;
+        DCHECK(c->ppin != NULL, "a principal's pin count stands over no pins");
+        found++;
+        if (cb) cb(user, g_srcs[i].src, c->ppin, c->nppin);
     }
-    return 0;
+    return found;
+}
+
+/* The principal answering a root member, matched over the slice like src_row. */
+static int src_principal(const char *p, size_t n)
+{
+    int row = src_row(p, n);
+    return row >= 0 && g_srcs[row].principal;
 }
 
 /* …and what it demanded without pinning (concolic.h has the named residual). The same walk as
- * concolic_principal_pinned, as a second function because the answers are different kinds: a pin is a yes/no
- * deciding whether a search may open, a demand is an observation a report carries. One predicate answering
+ * concolic_principal_pins, as a second function because the answers are different kinds: a pin decides whether
+ * a search may open or must wait for a sender, a demand is an observation a report carries. One walk answering
  * both would be decided by the stricter one, since a pinned principal returns before any demand is read.
  * Rows are read through `concolic_strpred_read`, so `strp_key` stays the one speller of that key. */
 void concolic_principal_preds(void (*cb)(void *user, const char *src, const ConcolicPred *pred, int n),
@@ -5136,7 +5211,7 @@ static ConcolicExState example_state_of(const Concolic *c, const Cons **ppin)
     if (!c) return CONCOLIC_EX_NONE;
     if (g_pin_any && c->src_self && c->src) {
         const Cons *p = cons_lookup(c->src);
-        /* `val` is the determination and `pinned_root` is not: concolic_pin marks a loose equality's holding
+        /* `val` is the determination and `ppin` is not: concolic_pin files a loose equality's holding
            arm without writing a value, so an entry is often present with nothing pinned (`pin_of`'s test). */
         if (p && p->val) { *ppin = p; return CONCOLIC_EX_DETERMINED; }
     }
@@ -5644,9 +5719,9 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
     /* The one point at which this document's run acquires attacker-controlled input, counted there: every
        component owning an attacker source mints through this call. An empty @S surface has four readings
        with opposite actions: no attacker source read; read but nothing tainted reached a code-execution sink;
-       reached one but suppressed by an unforgeable check; or no sink ran. The last three are counted at the
-       arrival (solve.c's detect_sink); this is the first. Counted after the overlay gate, so it counts values
-       minted: a conformance host's run would otherwise report attacker input it never acquired. */
+       reached one behind an unforgeable check, parked on a sender demand; or no sink ran. The last three are
+       counted at the arrival (solve.c's detect_sink); this is the first. Counted after the overlay gate, so it
+       counts values minted: a conformance host's run would otherwise report attacker input it never acquired. */
     METRIC_ADD(source_reads, 1);
 #if APICLIENT_DEV
     if (src && concolic_source_encodes(src)) {

@@ -1348,8 +1348,8 @@ const row = {
      The comment above bought one rung and stopped: measured over three passes of twelve live app pages,
      EVERY measurable site read `sinks: 0` AND `candidates: 0`, and the row could not say whether the search
      had nothing to search (no attacker source was ever read) or never got there (sources read, no sink
-     reached) or was declined (taint reached a sink and the check was unforgeable, so §Attacker-sources
-     SUPPRESSES it — correctly, and it must never look like a page with no sinks). Those are three opposite
+     reached) or waits on a sender (taint reached a sink behind an unforgeable check, so the search needs a
+     document at the pinned origin, and it must never look like a page with no sinks). Those are three opposite
      findings behind one zero, which is exactly what §@S forbids: "a candidate killed by a gate must be
      distinguishable from one a filter ate and from one that was never scheduled".
      `bridge.js` has been forwarding all four onto every run record with a comment naming them "the only
@@ -1360,7 +1360,7 @@ const row = {
   sourceReads: counted.length ? counted[counted.length - 1].sourceReads : null,
   sinkReached: counted.length ? counted[counted.length - 1].sinkReached : null,
   sinkTainted: counted.length ? counted[counted.length - 1].sinkTainted : null,
-  sinkSuppressed: counted.length ? counted[counted.length - 1].sinkSuppressed : null,
+  sinkNeedsSender: counted.length ? counted[counted.length - 1].sinkNeedsSender : null,
   /* THE @S POLICY ENVELOPE, WHICH IS THE ONLY THING THAT SEPARATES A REPORTED XSS FROM ONE THE PAGE'S OWN
      POLICY KILLS. CLAUDE.md §@S: a firing breakout in the model is NOT yet a working exploit -- the PoC has
      to run under the page's ACTUAL policy, and an inline `onerror` is dead under `script-src 'self'`. The

@@ -1692,7 +1692,7 @@ function _principalGateSentence(principalGates) {
 }
 
 function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, pageUrl, marker,
-                           principalDemand, principalGates) {
+                           principalDemand, principalGates, principalPins) {
   DCHECK(typeof poc === "string" && poc.length > 0,
          "an @S live-verify was started with no engine poc — solve_json_array emits `poc` on every fire-verified "
          + "entry and only on those, so a probe without one is being built for a PARKED search (sink=" + sinkName + ")");
@@ -1869,15 +1869,21 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
                + "it. ";
     out.delivery = "the attacker keeps the victim open in a document of their own and posts the payload to it";
     if (principalDemand === "unforgeable") {
-      // §Attacker-sources' SUPPRESSING half, and it is the engine's strongest negative result rather than a
-      // gap in this layer: the path every candidate replays PINNED the victim's `event.origin` to a concrete
-      // token, and a principal is a value an attacker names only by OWNING the domain it names. There is no
-      // delivery to perform at any origin this or any other harness could present.
-      out.why = _pgWhy + "The engine reports that the path reaching this sink PINNED the victim's "
-              + "`event.origin` to an exact value — an identity an attacker names only by owning the domain, so "
-              + "no cross-document delivery reproduces it. That is not a statement that the sink is safe: the "
-              + "sink and its breakout are fire-verified, and it stays reachable through any path whose origin "
-              + "check is forgeable.";
+      // The path every candidate replays pinned the victim's `event.origin` to an exact origin, so the post
+      // must come from a document at that origin. An attacker gets there through a gadget: a page of that
+      // origin which itself posts attacker-influenced data to the victim. This layer cannot present that
+      // origin, so it names it rather than performing a delivery that would answer no-hit for a reason that is
+      // not an engine divergence.
+      DCHECK(Array.isArray(principalPins) && principalPins.length > 0,
+             "an `unforgeable` principal verdict arrived with no pins — solve.c emits `principalPins` exactly "
+             + "under that verdict, so the probe was built from a record that lost them (sink=" + sinkName + ")");
+      out.why = _pgWhy + "The engine reports that the path reaching this sink pinned the victim's "
+              + "`event.origin`: " + principalPins.map(function (r) {
+                  return "the sender must be " + JSON.stringify(r.equals);
+                }).join(", and ")
+              + ". An attacker reaches that through a gadget, a document at that origin which itself posts "
+              + "attacker-influenced data to this window; a post from an origin the attacker owns cannot pass "
+              + "the check. The sink and its breakout are fire-verified under that sender.";
       return out;
     }
     if (principalDemand === "forgeable") {
@@ -1976,7 +1982,7 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
 function startExploitProbe(msg) {
   _pruneProbeSessions();
   const { waitMs, findingId, sinkName, poc, source, delivery, deliveryPrefix,
-          principalDemand, principalGates } = msg || {};
+          principalDemand, principalGates, principalPins } = msg || {};
   if (!poc) throw new Error("need the engine's poc (the fire-verified breakout input from the @S finding)");
 
   // pageUrl: the page the finding was observed on (recorded in securityFindings). The caller may pass it;
@@ -2053,7 +2059,7 @@ function startExploitProbe(msg) {
   // PROBE_HIT lands on this marker and _recordProbeHit decides whether the reporting document is the one the
   // payload was delivered to.
   var _poc = buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, session.pageUrl, marker,
-                               principalDemand, principalGates);
+                               principalDemand, principalGates, principalPins);
   DCHECK(!!_poc && typeof _poc === "object" && typeof _poc.payload === "string",
          "buildLiveDelivery answered with no record — it returns {pocJs, payload, context, source} on every "
          + "arm including the ones it cannot perform, so an absent one is that function having grown a path "

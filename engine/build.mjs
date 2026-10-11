@@ -4584,19 +4584,19 @@ function censusReading(out) {
   /* AND WHAT THE @S HALF MET, WHICH IS THE ONE THING AN EMPTY SECURITY SURFACE CANNOT SAY ABOUT ITSELF. The
      probe rows above say whether a sink FIRED; `@S []` has four readings that take opposite work — the page
      never read an attacker source, a source was read but no sink RAN, a sink ran and only the page's own
-     strings arrived, or something tainted arrived and the search was SUPPRESSED because the check on it was
-     unforgeable — and the last of those is the engine's STRONGEST negative result rendered as the same
-     nothing as never having looked. test_forced.c's own note records the measurement that forced the line
+     strings arrived, or something tainted arrived behind an unforgeable check and its search waits on a
+     sender at the pinned origin — and the last of those is a parked search rendered as the same nothing as
+     never having looked. test_forced.c's own note records the measurement that forced the line
      into existence: a full-budget run emitted 349 samples of `@S []` and 349 @WFQ lines reading `cands: 0`,
      and neither said whether a sink had run at all. It had not — the script holding all four of them ended on
      an uncaught throw more than a thousand statements earlier — and `_sinkReached: 0` is the one number that
      says so. It had no reader; this is it, and it sits beside the @PAGEERR count that names the throw. */
   const sc = metricsCensus(out, "@SCENSUS", "scensus",
-                           ["_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"]);
+                           ["_sourceReads", "_sinkReached", "_sinkTainted", "_sinkNeedsSender"]);
   if (sc)
     parts.push(`@S arrivals: ${sc._sourceReads} attacker-source read(s), ${sc._sinkReached} sink(s) reached, ` +
-               `${sc._sinkTainted} with tainted input, ${sc._sinkSuppressed} search(es) declined as ` +
-               `unforgeable` +
+               `${sc._sinkTainted} with tainted input, ${sc._sinkNeedsSender} of them behind an unforgeable ` +
+               `origin check, waiting on a sender` +
                (sc._sourceReads === 0
                  ? ` — ZERO source reads, so an empty @S surface here says nothing about the page: no attacker `
                    + `input was ever acquired, which is a driving gap and not a finding`

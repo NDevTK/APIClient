@@ -785,10 +785,11 @@ for (const p of passes) for (const r of p.rows) {
               !r.stepUnitRuns || typeof r.stepUnitRuns.finished !== 'number') ? 'unjudged'
              : r.stepUnitRuns.finished === r.wfqDepartures ? 'retired' : 'MIXED',
     /* THE @S ARRIVAL CENSUS, WHICH IS WHAT MAKES `sinks: 0` A FINDING RATHER THAN A SHRUG. Read in the order
-       a search travels -- a source is read, a sink is reached, taint arrives at one, the search is declined
-       as unforgeable -- so the column says WHERE the zero starts, and a corpus-wide `sinks: 0` stops being
-       one number with three opposite meanings. site.mjs carries these off the run record bridge.js writes. */
-    src: r.sourceReads, reach: r.sinkReached, taint: r.sinkTainted, sup: r.sinkSuppressed,
+       a search travels -- a source is read, a sink is reached, taint arrives at one, the search waits on a
+       sender behind an unforgeable check -- so the column says WHERE the zero starts, and a corpus-wide
+       `sinks: 0` stops being one number with three opposite meanings. site.mjs carries these off the run
+       record bridge.js writes. */
+    src: r.sourceReads, reach: r.sinkReached, taint: r.sinkTainted, snd: r.sinkNeedsSender,
     /* THE @S POLICY ENVELOPE, WHICH IS WHAT MAKES `sinks: N` A SECURITY FINDING RATHER THAN A COUNT.
        CLAUDE.md §@S: a firing breakout in the model is NOT yet a working exploit -- it has to run under the
        page's ACTUAL policy, and "sink REAL, CSP blocks: needs X" is a different verdict from a bare XSS.
@@ -1108,10 +1109,10 @@ const table = [...seen.entries()].map(([id, ms]) => ({
   goneVia: spread(ms, 'gone') + '>' + (ms.some((m) => m.goneWhy === 'MIXED') ? 'MIXED'
             : ms.some((m) => m.goneWhy === 'retired') ? 'retired' : '-'),
   sk: spread(ms, 'sinks'), rn: spread(ms, 'runs'), ld: spread(ms, 'load'),
-  /* `src>reach>taint>sup` READ LEFT TO RIGHT IS WHERE THE @S SEARCH GOT TO. A `-` here is one of two facts
+  /* `src>reach>taint>snd` READ LEFT TO RIGHT IS WHERE THE @S SEARCH GOT TO. A `-` here is one of two facts
      and only the shouted line under the table tells them apart: the pass's INSTRUMENT could not answer (its
      rows carry no such field at all), or its RUNS carried no counters. */
-  arrival: ['src', 'reach', 'taint', 'sup'].map((k) => spread(ms, k)).join('>'),
+  arrival: ['src', 'reach', 'taint', 'snd'].map((k) => spread(ms, k)).join('>'),
   /* `ask>drv` READ LEFT TO RIGHT IS WHERE ORPHAN-DRIVING GOT TO, in the order the mechanism travels — a flow
      runs out of work and ASKS whether the page shipped code nothing called, and a body is then DRIVEN. That
      order is what makes the zero readable, and it is the whole reason the pair is one column: `0>0` is a
@@ -1147,7 +1148,7 @@ console.log(`list: ${list.rel} (${list.rows.length} sites, ${table.length} measu
 const dwellW = Math.max('dwellMs'.length, ...table.map((t) => String(t.dwell).length)) + 2;
 console.log('\n' + pad('site', 20) + pad('outcome', 20) + pad('abort/n', 8) + pad('fin/n', 7) +
   pad('dwellMs', dwellW) + pad('terminal', termW) +
-  pad('ep', 8) + pad('sinks', 7) + pad('src>reach>taint>sup', 21) + pad('ask>drv', 13) +
+  pad('ep', 8) + pad('sinks', 7) + pad('src>reach>taint>snd', 21) + pad('ask>drv', 13) +
   pad('sink>csp>tt', 16) + pad('miss>owed', 13) +
   pad('flows', 12) + pad('switches', 12) + pad('units', 9) + pad('fl/unit', 14) + pad('gone>via', 14) +
   pad('load', 10) + 'signature');
@@ -1227,7 +1228,7 @@ for (const t of table)
 const predates = passes.filter((p) => p.arrival === 'predates').map((p) => p.label);
 const carried = passes.filter((p) => p.arrival === 'carried').map((p) => p.label);
 if (predates.length)
-  console.log('\n*** THE `src>reach>taint>sup` COLUMN IS OVER ' + carried.length + ' OF ' + passes.length +
+  console.log('\n*** THE `src>reach>taint>snd` COLUMN IS OVER ' + carried.length + ' OF ' + passes.length +
     ' PASS(ES) — ' + predates.join(', ') + ' predate(s) those counters entirely (the rows carry no such ' +
     'field), so a `-` there is this instrument being unable to ask, NOT a page with no attacker sources. ' +
     'Every other column is over all ' + passes.length + '. ***');

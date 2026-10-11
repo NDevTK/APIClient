@@ -47,6 +47,17 @@ static const char HTML_MESSAGING[] =
     "_bcrecv.addEventListener('message', function(e){ fetch('/api/bcmsg?v=bcENTER');"
     " if (e.data === 'adminpanel') { fetch('/api/bcfork?w=bcADMIN'); } else { fetch('/api/bcfork?w=bcPUBLIC'); } });"
     "_bcsend.postMessage(location.hash.slice(1));"
+    /* An exact origin check in front of a sink. A cross-origin peer posts once the page asks `/api/xdready`
+       (test_forced.c's fixture_route_gadget_post). The first handler's pinned arm sinks `event.data` into
+       markup, so its finding must park with a sender demand for `https://a.example` rather than vanish; the
+       second's pinned arm reaches no sink, so `https://b.example` must be named by no demand. Each pinned arm
+       emits a constant to `/api/xdgate` first, the reachability witness its row is read beside. */
+    "var _xdSinkEl = document.createElement('div'); document.body.appendChild(_xdSinkEl);"
+    "window.addEventListener('message', function(e){"
+    " if (e.origin === 'https://a.example') { fetch('/api/xdgate?v=xdA'); _xdSinkEl.innerHTML = e.data; } });"
+    "window.addEventListener('message', function(e){"
+    " if (e.origin === 'https://b.example') { fetch('/api/xdgate?v=xdB'); } });"
+    "fetch('/api/xdready');"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

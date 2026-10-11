@@ -203,11 +203,11 @@ function scheduler(pg) {
 /* WHAT THE RUN COST, AND — the last four — WHAT ITS WORK MET. bridge.js forwards the @S arrival census onto
    every run record for the reason solver/result.c emits it: an empty `securitySinks` array has four readings
    that take opposite actions, and a probe that reports only `sinks: 0` cannot tell "no attacker source was
-   ever read" from "taint arrived at a sink and the search was declined as unforgeable". This driver was
+   ever read" from "taint arrived at a sink behind an unforgeable check and waits on a sender". This driver was
    reporting the cost columns and dropping the four that say whether there was anything to find. */
 const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "unitsDone",
                   "worldSegmentsHeld", "worldSegmentsMade", "worldSegmentsForked",
-                  "sourceReads", "sinkReached", "sinkTainted", "sinkSuppressed",
+                  "sourceReads", "sinkReached", "sinkTainted", "sinkNeedsSender",
                   /* AND THE ORPHAN PAIR, for the same sentence this list's own comment makes about the four
                      before it: they are the columns that say whether there was anything to find. §What-the-
                      tool-produces makes the drive of never-called code the headline surface, and `driven`
@@ -2898,7 +2898,7 @@ async function main() {
         sourceReads: spread(rs, first("sourceReads")),
         sinkReached: spread(rs, first("sinkReached")),
         sinkTainted: spread(rs, first("sinkTainted")),
-        sinkSuppressed: spread(rs, first("sinkSuppressed")),
+        sinkNeedsSender: spread(rs, first("sinkNeedsSender")),
         park: spread(rs, first("park")),
         storeEndpointsDelta: spread(rs, (r) => r.storeEndpointsDelta),
       }));

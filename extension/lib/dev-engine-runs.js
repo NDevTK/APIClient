@@ -29,10 +29,10 @@ function devEngineRunsSection(runs) {
     ["worldSegmentsHeld", "cross-instance world segments held"],
     ["worldSegmentsMade", "…made (cumulative)"], ["worldSegmentsForked", "…forked"],
     /* What makes an empty @S surface readable: `securitySinks: []` has four readings that take opposite work
-       (no attacker source read, none reached a sink, only the page's own strings arrived, or taint arrived and
-       the search was declined because the check on it was unforgeable). */
+       (no attacker source read, none reached a sink, only the page's own strings arrived, or taint arrived
+       behind an unforgeable check and the search waits on a sender at the pinned origin). */
     ["sourceReads", "attacker-source reads"], ["sinkReached", "sinks reached"],
-    ["sinkTainted", "…with tainted input"], ["sinkSuppressed", "…search declined (unforgeable check)"],
+    ["sinkTainted", "…with tainted input"], ["sinkNeedsSender", "…waiting on a sender (unforgeable check)"],
   ];
   const rows = runs.slice().reverse().map((m) => {
     DCHECK(typeof m.url === "string",

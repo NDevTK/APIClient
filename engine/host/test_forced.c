@@ -496,6 +496,10 @@ static int  fixture_cold_moment_met(void);
 static int  fixture_park_requested(void);
 static void fixture_ask_remote_op(JSContext *ctx);
 static void fixture_route_peer_post(JSContext *ctx);
+/* The messaging document's cross-origin peer post: fixture_provide raises the latch when the page asks
+   `/api/xdready`, after its handlers are listening, and the exploring session's hook routes it once. */
+static int  g_xd_ready, g_xd_routed;
+static void fixture_route_gadget_post(JSContext *ctx);
 
 /* ─── THE ADDRESSES THIS HOST SERVES AS SOMETHING OTHER THAN JSON: A PAIR, AND A THIRD AT ANOTHER DOOR ───
  *
@@ -819,6 +823,7 @@ static int fixture_provide(JSContext *ctx) {
            here: `engine_pending_fetches` skips a refused entry, so the address is never joined again and
            this branch is never reached a second time. A fixture-side `once` flag would be a second answer
            to that question and free to disagree with it. */
+        if (!strcmp(abs, "https://x.test/api/xdready")) g_xd_ready = 1;
         if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
             filled += engine_decline(ctx, method, mode, referrer_policy, referrer, url,
                                      "blocked-signal: this origin has not been widened for a program load "
@@ -8910,8 +8915,8 @@ static int s_num(const char *js, const char *sink, const char *src, const char *
     /* THE RECORD IS NAMED, NOT ONLY THE KEY. This reader has one line and, since the middle rungs are read for
        every derived search rather than for one of them, many callers — so a message naming only the field says
        "some @S entry lost a count" and leaves the reader to open all of them. `witnessed` is emitted only where
-       the class DERIVES (solve.c gates it on `derive != SINK_DERIVE_NONE`), so the FIRST way this fires is a
-       caller asking it of a single-context class, and that caller is identified by exactly this pair. */
+       the search holds a probe (solve.c reads `cand_probes`), so the FIRST way this fires is a caller asking it
+       of a single-context class or of a search no detection has opened, identified by exactly this pair. */
     DFAILF("the parked @S entry %s <- %s carries no `%s` — solve.h declares the parked shape and every count in "
            "it is emitted unconditionally for the classes that have it, so an absent one is either the "
            "producer's shape having moved under this reader or this key being asked of a class that does not "
@@ -9031,7 +9036,7 @@ static int s_stage(const char *js, const char *sink, const char *src) {
  * place of the search's counters, and a search that fired has BY CONSTRUCTION witnessed a context and built the
  * escape that fired. S_UNSEEN is the other end — there is no record to ask, and asking one would abort inside
  * s_num for a document that simply never detected this sink.
- * ASKED ONLY OF A DERIVING CLASS. `witnessed` is emitted on the class's `derive` column, so a single-context
+ * ASKED ONLY OF A DERIVING CLASS. `witnessed` is emitted where the search holds a probe, so a single-context
  * class (SINK_URL states its two written-down vectors at detection and runs no probe at all) has no such field,
  * and a 0 read for one would say "the probe never arrived" about a search that has none. s_num aborts there by
  * name rather than defaulting, which is what keeps that a routing question and not a silent zero. */
@@ -10345,6 +10350,28 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "boundary — a live JSValue crosses neither a park, a session nor an instance — so a single arm "
              "says either that the array was not written, or that it was dropped between the enqueue and the "
              "delivery (PQ_SYMBOLS in core/frame/window_message.c is the one slot that carries it)");
+    /* An exact origin check in front of a sink: the routed peer post takes each handler's pinned arm, and the
+       markup sink behind `https://a.example` must report a parked search whose sender demand is that origin. */
+    const char *xd_pin_a_why = NULL; int xd_pin_a = 1;
+    fold_row(&xd_pin_a, &xd_pin_a_why, param_value_is(js, "/api/xdgate", "v", "xdA"),
+             "NOT REACHED: the `https://a.example` arm never ran, so the routed peer post was not delivered or "
+             "its origin arrived concrete and decided the check");
+    const char *xd_pin_b_why = NULL; int xd_pin_b = 1;
+    fold_row(&xd_pin_b, &xd_pin_b_why, param_value_is(js, "/api/xdgate", "v", "xdB"),
+             "NOT REACHED: the `https://b.example` arm never ran, so the negative row beside it is unarmed");
+    const char *xd_sender_why = NULL; int xd_sender = 1;
+    fold_row(&xd_sender, &xd_sender_why, s_field(js, "innerHTML", MESSAGE_DATA_SRC, "\"search\":\"parked\""),
+             "the pinned arm ran and the markup sink behind it has no parked search: a finding behind an exact "
+             "origin check was dropped rather than parked on a sender");
+    fold_row(&xd_sender, &xd_sender_why,
+             s_field(js, "innerHTML", MESSAGE_DATA_SRC,
+                     "\"senderDemand\":[{\"principal\":\"" MESSAGE_ORIGIN_SRC "\",\"equals\":\"https://a.example\""),
+             "the parked search does not name `https://a.example` as the sender it waits on, so a gadget search "
+             "has no origin to look for");
+    const char *xd_nosink_why = NULL; int xd_nosink = 1;
+    fold_row(&xd_nosink, &xd_nosink_why, !strstr(js, "\"equals\":\"https://b.example\""),
+             "a sender demand names `https://b.example`, whose handler reaches no sink: a pin is recorded as a "
+             "demand only where an attacker value arrives at a sink");
     const char *bc_msg_ran_why = NULL; int bc_msg_ran = 1;
     fold_row(&bc_msg_ran, &bc_msg_ran_why, param_value_is(js, "/api/bcmsg", "v", "bcENTER"),
              "NOT REACHED: there is no /api/bcmsg record, so §9.5 postMessage step 9's delivery task never ran "
@@ -15026,6 +15053,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "mh-nofail", mh_nofail, "/api/mhfail", SESS_EXPLORE, mh_nofail_why, .reach = "mh-ask" },
         { "sc-msg-ran", sc_msg_ran, "/api/scmsg", SESS_EXPLORE, sc_msg_ran_why },
         { "sc-msg-fork", sc_msg_fork, "/api/scfork", SESS_EXPLORE, sc_msg_fork_why, .gate = "sc-msg-ran" },
+        { "xd-pin-a", xd_pin_a, "/api/xdgate", SESS_EXPLORE, xd_pin_a_why },
+        { "xd-pin-b", xd_pin_b, "/api/xdgate", SESS_EXPLORE, xd_pin_b_why },
+        { "xd-sender", xd_sender, "_xdSinkEl.innerHTML", SESS_EXPLORE, xd_sender_why, .gate = "xd-pin-a" },
+        { "xd-nosink", xd_nosink, "_xdSinkEl", SESS_EXPLORE, xd_nosink_why, .reach = "xd-pin-b" },
         { "bc-msg-ran", bc_msg_ran, "/api/bcmsg", SESS_EXPLORE, bc_msg_ran_why },
         { "bc-msg-fork", bc_msg_fork, "/api/bcfork", SESS_EXPLORE, bc_msg_fork_why, .gate = "bc-msg-ran" },
         /* THE SEVEN ORPHAN ROWS SHARE ONE `why`, AND IT IS THE ONLY THING THAT MAKES THEIR 0 ACTIONABLE — see
@@ -16140,6 +16171,8 @@ static int fixture_have_answers(void) {
     char *js;
     int ok;
 
+    /* Before the sampling gate, so the post leaves at the first consultation after the page asked for it. */
+    fixture_route_gadget_post(g_probe_ctx);
     if (engine_work_done() < next) return 0;
     next = engine_work_done() + PROBE_SAMPLE_EVERY;
     /* THE RESULT DOCUMENT, RENDERED AT A STEP BOUNDARY WITH NO FLOW SWITCHED IN — which is the position this
@@ -16450,8 +16483,9 @@ static int fixture_park_requested(void) { return g_park_requested; }
  * not same origin with this agent indistinguishable from an attacker's, so window_message_deliver_remote
  * wraps the stamped serialization concolic rather than concretising it — which is the arm §Attacker-sources
  * is about, and the arm a same-origin stand-in would never reach. */
-static void fixture_route_peer_post(JSContext *ctx) {
-    WorldId peer = { world_doc_intern("mpeer"), 1, 0 };
+static void fixture_post_from_peer(JSContext *ctx, const char *peer_doc, const char *message,
+                                   const char *origin) {
+    WorldId peer = { world_doc_intern(peer_doc), 1, 0 };
     const char *const *carried;
     const char *vector = NULL;
     StructuredData sd = { NULL, 0 };
@@ -16459,9 +16493,6 @@ static void fixture_route_peer_post(JSContext *ctx) {
     char *b64, *rec;
     size_t b64_cap, n, rec_cap;
     int nseg, i, ser;
-
-    if (g_post_routed || g_sess != SESS_PARK) return;
-    g_post_routed = 1;
 
     world_segment(ctx, peer, NULL, 0);
     nseg = world_segments_park(&carried);
@@ -16480,7 +16511,7 @@ static void fixture_route_peer_post(JSContext *ctx) {
        CLONE. A structured graph would exercise core/structured_clone.c, which has its own rows; what this
        needs is bytes the DESERIALIZE in §9.3.3 step 8's task accepts, so that the task reaches an end rather
        than aborting inside a payload this fixture built wrong. */
-    payload = JS_NewString(ctx, "tf-peer-post");
+    payload = JS_NewString(ctx, message);
     CHECK(!JS_IsException(payload), "test_forced: OOM building a peer's posted message");
     /* PERFORMED ON ITS OWN LINE AND THE ANSWER TESTED BELOW IT, never inside the condition: a check's
        condition is read as side-effect-free everywhere in this tree (check.h), and a serialize inside one
@@ -16508,10 +16539,24 @@ static void fixture_route_peer_post(JSContext *ctx) {
              world_doc_name(world_local_doc()), vector, b64);
     /* THE ORIGIN TRAVELS BESIDE THE RECORD AND NEVER INSIDE IT (SECURITY.md): only the trusted zone may stamp
        one, and this function is standing in for that zone. */
-    engine_route(ctx, rec, "https://peer.example");
+    engine_route(ctx, rec, origin);
     free(rec);
     free(b64);
     structured_data_free(ctx, &sd);
+}
+
+static void fixture_route_peer_post(JSContext *ctx) {
+    if (g_post_routed || g_sess != SESS_PARK) return;
+    g_post_routed = 1;
+    fixture_post_from_peer(ctx, "mpeer", "tf-peer-post", "https://peer.example");
+}
+
+/* The peer is cross-origin and is not the origin either handler gates on, so the stamped origin is the
+   example and both arms of each `event.origin ===` fork; the pinned arms are what the rows read. */
+static void fixture_route_gadget_post(JSContext *ctx) {
+    if (!g_xd_ready || g_xd_routed) return;
+    g_xd_routed = 1;
+    fixture_post_from_peer(ctx, "xpeer", "<b>xdpost</b>", "https://peer.example");
 }
 
 /* THE QUESTION, ASKED ONCE, THROUGH THE PRODUCTION DOOR. `windowproxy.get … length` is HTML §7.2.1.3.1
@@ -26565,6 +26610,28 @@ static void flex_contents_splice_selftest(JSContext *ctx)
            plain.members, plain.items, plain.first_seq_texts);
 }
 
+/* The one pin a message selftest step made: exactly one principal carrying exactly one pin, whose origin, kind,
+   algorithm and compared identity are the step's. */
+static void message_pin_take(void *user, const char *src, const ConcolicPrincipalPin *pin, int n)
+{
+    const ConcolicPrincipalPin **out = user;
+
+    CHECK(!strcmp(src, MESSAGE_ORIGIN_SRC) && n == 1 && *out == NULL,
+          "a message selftest step filed its pin under a principal other than `message.origin`, or filed more "
+          "than one");
+    *out = pin;
+}
+
+static void message_principal_pin_is(const char *subject, int loose, const char *why)
+{
+    const ConcolicPrincipalPin *pin = NULL;
+
+    CHECK(concolic_principal_pins(message_pin_take, &pin) == 1 && pin != NULL, why);
+    CHECK(!strcmp(pin->tok, "https://trusted.test") && pin->kind == (signed char)CONCOLIC_LIT_STRING &&
+              pin->loose == loose && pin->subject && !strcmp(pin->subject, subject),
+          why);
+}
+
 static void message_source_selftest(void)
 {
     const char *kind = NULL, *enc;
@@ -26595,52 +26662,44 @@ static void message_source_selftest(void)
           "nothing at all — the first is false of steps 7 and 8.4 and the second is the shape a report reads "
           "as `no component carries these bytes`");
 
-    /* A FLOW THAT HAS NARROWED NOTHING HAS DEMANDED NOTHING. Asserted first because every check below is a
-       transition from this state, and a rule that answered 1 here would suppress every @S finding there is. */
-    CHECK(!concolic_principal_pinned(),
-          "the principal rule answered `pinned` for a constraint that holds nothing — every @S search would "
-          "be suppressed at detection and the tool would emit no PoC at all");
-    /* A PIN ON A SOURCE THE ATTACKER WRITES IS NOT A DEMAND ON A PRINCIPAL. This is the direction that must
-       never move: `location.hash === "admin"` is the ordinary solved case, and a rule that caught it would
-       silently delete the findings this half of the tool exists for. */
+    /* A flow that has narrowed nothing has demanded nothing. Asserted first because every check below is a
+       transition from this state, and a rule that answered a pin here would park every @S finding on a sender. */
+    CHECK(concolic_principal_pins(NULL, NULL) == 0,
+          "the principal rule answered a pin for a constraint that holds nothing — every @S search would wait "
+          "on a sender at detection and the tool would emit no PoC at all");
+    /* A pin on a source the attacker writes is not a demand on a principal: `location.hash === "admin"` is the
+       ordinary solved case, and a rule that caught it would park the findings this half of the tool exists for. */
     concolic_pin_store("{location.hash}", "location.hash", CONCOLIC_LIT_STRING, "admin", JS_CONCOLIC_EQ_STRICT);
-    CHECK(!concolic_principal_pinned(),
+    CHECK(concolic_principal_pins(NULL, NULL) == 0,
           "the principal rule read an ordinary equality pin as a demand on an attacker's own principal — a "
-          "value the attacker WRITES is solved, and suppressing it drops a real PoC");
-    /* …AND A PIN ROOTED AT THE PRINCIPAL IS ONE, in the spelling every bundle writes. */
+          "value the attacker WRITES is solved, and parking it on a sender drops a real PoC");
+    /* …and a pin rooted at the principal is one, in the spelling every bundle writes, carrying the origin the
+       sender must have. */
     concolic_pin_store(MESSAGE_ORIGIN_SRC, MESSAGE_ORIGIN_SRC, CONCOLIC_LIT_STRING, "https://trusted.test",
                        JS_CONCOLIC_EQ_STRICT);
-    CHECK(concolic_principal_pinned(),
-          "an exact equality against `event.origin` did not register as a demand on the attacker's principal "
-          "— §Attacker-sources makes that check unsatisfiable cross-origin, so a PoC taken off this flow is "
-          "one that cannot be delivered");
+    message_principal_pin_is(MESSAGE_ORIGIN_SRC, 0,
+                             "an exact equality against `event.origin` did not record the pinned origin as the "
+                             "sender a delivery must present");
     concolic_clear_pins();
-    CHECK(!concolic_principal_pinned(),
+    CHECK(concolic_principal_pins(NULL, NULL) == 0,
           "a demand survived the constraint being cleared — the rule reads the RUNNING flow's own narrowing, "
-          "so one flow's origin check would suppress every other flow's findings");
-    /* …AND A **LOOSE** EQUALITY IS THE SAME DEMAND, which is the direction that emits a false PoC if it is
-       ever read as the weaker one. `if (e.origin == TRUSTED)` is a spelling real handlers write; a principal
-       is a String and the token is a String, so §7.2.13 IsLooselyEqual ( x, y ) step 1 — "If SameType(x, y)
-       is true, then … Return IsStrictlyEqual(x, y)" — hands that comparison straight to §7.2.14, and the
-       check is exactly as unforgeable cross-origin as `===`. concolic_pin refuses the loose VALUE and must
-       not refuse this MARK; a diff that split them the other way would un-suppress every loose origin check
-       in every bundle at once, and §Attacker-sources forbids that direction by name. */
+          "so one flow's origin check would park every other flow's findings");
+    /* …and a loose equality is the same demand. `if (e.origin == TRUSTED)` is a spelling real handlers write;
+       two Strings go through §7.2.13 IsLooselyEqual ( x, y ) step 1 to §7.2.14, so the sender it demands is
+       the one `===` demands. concolic_pin refuses the loose value and must not refuse this pin. */
     concolic_pin_store(MESSAGE_ORIGIN_SRC, MESSAGE_ORIGIN_SRC, CONCOLIC_LIT_STRING, "https://trusted.test",
                        JS_CONCOLIC_EQ_LOOSE);
-    CHECK(concolic_principal_pinned(),
-          "a LOOSE equality against `event.origin` did not register as a demand on the attacker's principal — "
-          "§7.2.13 step 1 sends two Strings to §7.2.14, so the check is unsatisfiable cross-origin and every "
-          "@S finding taken off this flow is a PoC no attacker document can deliver");
+    message_principal_pin_is(MESSAGE_ORIGIN_SRC, 1,
+                             "a LOOSE equality against `event.origin` did not record the pinned origin — §7.2.13 "
+                             "step 1 sends two Strings to §7.2.14, so a delivery from any other origin cannot fire");
     concolic_clear_pins();
-    /* THE DERIVED SPELLING IS THE SAME DEMAND. `String(e.origin) === X` pins the derived identity and not the
-       source, and a rule keyed by the pinned value's own name would answer `unpinned` for it — which is a
-       false PoC for one of the two most common ways a real handler writes this check. */
+    /* The derived spelling is the same demand. `String(e.origin) === X` pins the derived identity and not the
+       source, so the pin is filed under the root and names the derived identity as its subject. */
     concolic_pin_store("String(" MESSAGE_ORIGIN_SHAPE ")", MESSAGE_ORIGIN_SRC, CONCOLIC_LIT_STRING,
                        "https://trusted.test", JS_CONCOLIC_EQ_STRICT);
-    CHECK(concolic_principal_pinned(),
-          "an equality against a DERIVATION of `event.origin` did not register as a demand on the principal — "
-          "the demand is about whose bytes these are, which no derivation changes, and that is why the pin "
-          "records its ROOT beside its identity");
+    message_principal_pin_is("String(" MESSAGE_ORIGIN_SHAPE ")", 0,
+                             "an equality against a DERIVATION of `event.origin` did not record a pin on the "
+                             "principal — the demand is about whose bytes these are, which no derivation changes");
     concolic_clear_pins();
 }
 
@@ -26988,7 +27047,7 @@ static void looseeq_selftest(void)
 
     /* AND THE OVER-CORRECTION: A STRICT EQUALITY MUST STILL PIN AND MUST FILE NOTHING HERE. `concolic_pin`
        is where §7.2.14's determination goes, and a domain row beside it would state the weaker claim next
-       to the stronger one. The pin is asserted through the store it writes, which is `pinned_root`'s twin
+       to the stronger one. The pin is asserted through the store it writes, which is the principal pin's twin
        one key over — the value itself is pin_kind_selftest's subject and is not re-asserted here. */
     concolic_pin_store("leq.s", "leq.s", CONCOLIC_LIT_STRING, "admin", JS_CONCOLIC_EQ_STRICT);
     n = -1;

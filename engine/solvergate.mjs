@@ -47,7 +47,7 @@
  * WHAT IT DOES NOT COMPARE, and each name is here because it is a COST rather than a finding: `_switches`,
  * `_flows`, `_candidates`, `_jobsQueued`, `_jobsRun`, `_unitsDone`, `_worldSegmentsHeld`, `_worldSegmentsMade`,
  * `_worldSegmentsForked`, `_park`, the four numbers of the @S arrival census (`_sourceReads`, `_sinkReached`,
- * `_sinkTainted`, `_sinkSuppressed`), the routed-delivery TRIPLE and the four ends of the task it queues
+ * `_sinkTainted`, `_sinkNeedsSender`), the routed-delivery TRIPLE and the four ends of the task it queues
  * (`_routedDelivered`, `_routedRefused`, `_routedZeroDelivery`, `_routedTasksFired`,
  * `_routedTasksTargetOrigin`, `_routedTasksTargetGone`, `_routedTasksThrew`), the orphan census
  * (`_orphansDriven`, `_orphansAsked`), the placement census's fourteen lifetime counts (`_layout`), the
@@ -1139,7 +1139,7 @@ function wfqRowsMoved(a, b) {
 const DROP = new Map([
   ["", new Set(["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun", "_unitsDone",
                 "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked", "_park",
-                "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed",
+                "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkNeedsSender",
                 /* Counted once per (routed record, timeline offered it), so their sum is the number of flows
                    standing when the host routed — see the header. Zero in this gate by construction: nothing
                    here calls qjs_route. */

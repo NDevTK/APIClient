@@ -176,6 +176,26 @@ function _encodeSentence(item) {
           + "subset"];
 }
 
+// The senders a pinned path demands, as a sentence: solve.h's `senderDemand` on a parked search and
+// `principalPins` under an `unforgeable` verdict share one row grammar. A path reaching the sink pinned the
+// victim's `event.origin`, so the payload must be posted by a document at that origin: a gadget there that
+// itself forwards attacker-influenced data. The rows are the engine's, so their shape is asserted, never
+// defaulted, and nothing here composes an origin the record does not name.
+function _senderPinSentence(rows) {
+  DCHECK(Array.isArray(rows) && rows.length > 0 && rows.every(function (r) {
+           return !!r && typeof r.principal === "string" && typeof r.equals === "string"
+               && typeof r.kind === "string" && typeof r.loose === "boolean"
+               && (r.subject === undefined || typeof r.subject === "string");
+         }),
+         "an @S sender list reached the popup with no rows or with a row outside solve.h's grammar "
+         + "({principal, equals, kind, loose[, subject]}) (" + JSON.stringify(rows) + ")");
+  return rows.map(function (r) {
+    return "a sender at " + JSON.stringify(r.equals) + " (the page tests `"
+         + (r.subject !== undefined ? r.subject : "a value derived from " + r.principal) + "` "
+         + (r.loose ? "==" : "===") + " that " + r.kind + ")";
+  }).join(", or ");
+}
+
 // WHICH QUESTION A PARKED SEARCH IS STUCK ON, which is the whole content of the parked card and which one
 // number could never say. `solve.h` emits four fields for exactly this and the panel rendered none of them,
 // so two states needing OPPOSITE work printed byte-identically:
@@ -914,6 +934,7 @@ function renderSecurityPanel() {
          reads as an engine-fidelity divergence. So the receiver sees the record's real shape. */
       if (item.principalDemand) probeObj.principalDemand = item.principalDemand;
       if (item.principalGates)  probeObj.principalGates = item.principalGates;
+      if (item.principalPins)   probeObj.principalPins = item.principalPins;
       var probe = JSON.stringify(probeObj);
       var verifyBtn = domElement("button", { class: "verify-btn", "data-probe": probe, "data-key": key },
                                  ["Verify in real Chrome"]);
@@ -1320,6 +1341,14 @@ function renderSecurityPanel() {
         // have to reach the victim if a candidate ever fires — which is the same declared fact the fired card
         // renders, from the same field.
         domElement("div", { class: "card-dims" }, [_deliverySentence(pit)]),
+        // A search waiting on a sender: the reason its candidates are not running is an exact origin check,
+        // and what would unblock it is a gadget at the named origin, not more scheduling.
+        pit.senderDemand
+          ? domElement("div", { class: "card-dims" }, [
+              "needs a gadget: " + _senderPinSentence(pit.senderDemand) + " — a document at that origin "
+              + "which itself posts attacker-influenced data to this window. A post from an origin the attacker "
+              + "owns cannot pass the check."])
+          : [],
         domElement("div", { class: "card-meta" }, [_secSourceLink(pe)]),
       ]));
     }

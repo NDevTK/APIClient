@@ -16,8 +16,8 @@
  * integrity of this API is based on the inability for scripts of one origin to post arbitrary events … to
  * objects in other origins" — and §9.3.2.1 "Authors" is why every real bundle checks it. So `origin` is
  * declared a PRINCIPAL (solver/concolic.h): a forgeable check (endsWith, includes, startsWith) pins nothing
- * and is SOLVED, while an exact `===` PINS the principal and is a demand no cross-document attacker can meet,
- * which suppresses the finding rather than emitting a PoC that cannot be delivered.
+ * and is SOLVED, while an exact `===` PINS the principal: the sender must be a document at that origin, so
+ * the finding parks with that sender as its demand (a gadget there), never a PoC from an attacker origin.
  *
  * WHICH MESSAGES ARE ATTACKER INPUT IS DECIDED AT ONE PLACE — window_message_deliver_remote, against this
  * agent's own origin. An agent is origin-keyed, so a post from inside it is the app posting to itself and its
@@ -925,8 +925,8 @@ void window_message_init(JSContext *ctx)
        candidate through `location.hash` dies on the fragment set encoding `<`.
        AND THE ORIGIN IS A PRINCIPAL, WHICH THE DATA IS NOT — the difference §9.3.2.1 "Authors" tells a page to
        rely on and §9.3.2.2 "User agents" says the API's integrity rests on. The attacker WRITES `data` and
-       merely OWNS `origin`, so an equality gate on the first is solved and one on the second is a demand no
-       cross-document attacker can meet (solver/concolic.h, concolic_declare_source_principal). */
+       merely OWNS `origin`, so an equality gate on the first is solved and one on the second demands a sender
+       at the pinned origin (solver/concolic.h, concolic_declare_source_principal). */
     concolic_declare_source(WM_COMPONENT, MESSAGE_DATA_SRC, "", 0, SRC_DELIVER_CROSS_DOCUMENT_MESSAGE);
     concolic_declare_source(WM_COMPONENT, MESSAGE_ORIGIN_SRC, "", 0, SRC_DELIVER_CROSS_DOCUMENT_MESSAGE);
     concolic_declare_source_principal(WM_COMPONENT, MESSAGE_ORIGIN_SRC);

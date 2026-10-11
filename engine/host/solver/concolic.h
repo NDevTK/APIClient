@@ -586,17 +586,15 @@ void        concolic_declare_source(const char *component, const char *src, cons
  * checking `origin` is what the standard tells a page to do, and it works precisely because the value cannot
  * be written.
  *
- * WHAT IT DECIDES. An equality against a concrete token PINS the source (decide.c's concretize-on-pin), and a
- * pin on a principal is a demand the attacker cannot meet from a document of their own — so a flow that
- * reached a sink through one is a REAL code path that no cross-document attacker can drive, and an @S finding
- * taken off it would be a PoC that does not reproduce. §Attacker-sources states the pair exactly: a forgeable
- * check (endsWith/includes/startsWith) is SOLVED, an unforgeable one (=== exact) is unsatisfiable cross-origin
- * and SUPPRESSES the finding. The forgeable half needs nothing here, and that is the point of splitting them:
- * a prefix or substring predicate PINS NOTHING (concolic_cmp answers OPCMP_NONE for it), so it never reaches
- * this rule and the search proceeds — which is the correct verdict for it and is reached by the pin's own
- * semantics rather than by a second test that would have to enumerate the string builtins. What the forgeable
- * half DOES state is its DOMAIN, and that is concolic_strpred_file below, which reaches it without enumerating
- * one either — the sentence above is about the PRINCIPAL rule and never about the report.
+ * What it decides. An equality against a concrete token pins the source (decide.c's concretize-on-pin), and a
+ * pin on a principal is a demand an attacker cannot meet from a document of their own: the sender must be a
+ * document at the pinned origin. A flow that reached a sink through one is a real code path whose sender is a
+ * gadget, a document at that origin that itself posts attacker-influenced bytes, so the finding parks with the
+ * pin as its sender demand (`concolic_principal_pins`) and is never dropped. A forgeable check
+ * (endsWith/includes/startsWith) is solved directly and needs nothing here: a prefix or substring predicate
+ * PINS NOTHING (concolic_cmp answers OPCMP_NONE for it), so it never reaches this rule and the search
+ * proceeds, reached by the pin's own semantics rather than by a test enumerating the string builtins. What the
+ * forgeable half does state is its domain, which concolic_strpred_file below records.
  *
  * IT IS A PROPERTY OF THE SOURCE AND NOT OF THE SINK, which is why it is declared beside the delivery and not
  * asked at the emission: the same fact decides every finding rooted there, and a consumer that re-derived it
@@ -605,21 +603,22 @@ void        concolic_declare_source(const char *component, const char *src, cons
  * The component must already own `src`; a principal declared for a row nobody holds is a claim with no
  * claimant, which is the one thing the registry's give-back cannot express. */
 void        concolic_declare_source_principal(const char *component, const char *src);
-/* HAS THIS FLOW PINNED A PRINCIPAL SOURCE? — asked where an attacker value ARRIVES AT A SINK, because that is
-   the last point at which the flow that reached it still exists. It reads the running flow's own path
-   constraint, so it parks and forks with the flow exactly as every other narrowing does, and it answers 0 for
-   a flow that merely tested a principal without pinning it (a prefix check, or the FALSE arm of an equality).
-   A DERIVED spelling counts: `event.origin.toLowerCase() === X` pins the derived value and not the source, and
-   the demand on the attacker's principal is the same either way — which is why the pin is recorded under the
-   pinned value's ROOT as well as its own identity (concolic_pin), and why this question is asked of the root.
-   THE OTHER ARM OF §Attacker-sources' PAIR IS `concolic_principal_preds`, DECLARED BELOW BY NAME AND NOT BY
-   POSITION: this answers the UNFORGEABLE half (a pin the attacker cannot meet, which SUPPRESSES), and that
-   one carries the FORGEABLE half's observation (the demands a path made WITHOUT pinning, which §Attacker-
-   sources SOLVES). They are two questions over one registry column and a reader of either needs the other,
-   because an entry answering 0 here and nothing there is a third state — a path that demanded nothing of the
-   attacker's identity at all. It is declared beside `concolic_strpred_read` because it returns that entry's
-   row type, which is typedef'd further down this header. */
-int         concolic_principal_pinned(void);
+/* One pin this flow made on a principal: the sender identity a delivery must present. `tok` and `kind` are the
+   operand the page compared against, `loose` whether the equality was §7.2.13 IsLooselyEqual ( x, y ) rather
+   than §7.2.14 IsStrictlyEqual ( x, y ). `subject` is the injection identity of the value compared, which is the
+   principal's own `src` for `event.origin === X` and a derived identity for `event.origin.toLowerCase() === X`;
+   NULL when the compared value was a derivation owning no identity (concolic_pin's `cmp_src_own` 0). */
+typedef struct { char *subject; char *tok; signed char kind; signed char loose; } ConcolicPrincipalPin;
+void        concolic_principal_pin_copy(ConcolicPrincipalPin *dst, const ConcolicPrincipalPin *src);
+void        concolic_principal_pin_release(ConcolicPrincipalPin *p);
+/* The pins the running flow made on each declared principal, asked where an attacker value arrives at a sink,
+   the last point at which the flow that reached it still exists. Calls `cb` once per principal carrying pins
+   with that principal's `src` and its pins (borrowed until the constraint next grows), and answers how many
+   principals it called back for; `cb` may be NULL to ask only that count. A pin made on a derived spelling is
+   filed under the pinned value's root members (concolic_pin_store), so it is found here. 0 for a flow that only
+   tested a principal without pinning it; that flow's demand is `concolic_principal_preds`' forgeable half. */
+int         concolic_principal_pins(void (*cb)(void *user, const char *src, const ConcolicPrincipalPin *pin, int n),
+                                    void *user);
 /* THE CLAIM, GIVEN BACK — called from the claimant's own `_free`, once, whatever number of rows it declared,
    and concolic_free asserts the registry is empty afterwards. It removes THIS component's rows and no others,
    which is what keeps that assert falsifiable: a claimant that forgot leaves its rows behind and is named. A
@@ -937,10 +936,10 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v);
    THE DEMAND IS MADE UNDER BOTH, AND REFUSING IT WOULD MANUFACTURE A FALSE PoC. `if (e.origin == TRUSTED)` is
    a spelling real handlers write, and a principal is a String while the token is a String — so §7.2.13 step 1
    ("If SameType(x, y) is true, then … Return IsStrictlyEqual(x, y)") hands that comparison straight to
-   §7.2.14, and the check is exactly as unforgeable cross-origin as `===`. `concolic_principal_pinned` reads
-   this mark and solve.c suppresses on it, so gating the mark on the algorithm too would un-suppress every
-   loose origin check in every bundle — §Attacker-sources' "never a false PoC" failing in the one direction
-   that emits one. The demand is that the flow required a particular value OF the principal; that a loose
+   §7.2.14, and the check is exactly as unforgeable cross-origin as `===`. `concolic_principal_pins` reads
+   this mark and solve.c parks the finding on it as a sender demand, so gating the mark on the algorithm too
+   would hand every loose origin check to a delivery from an attacker-owned origin, a PoC that cannot fire.
+   The demand is that the flow required a particular value OF the principal; that a loose
    equality bounds rather than determines it does not make it less of a demand.
    AN UNSTATED ALGORITHM TAKES THE REFUSED ARM. JS_CONCOLIC_EQ_LOOSE is quickjs.h's zero, so a caller that
    forgets refuses the value and keeps the demand — forgetting is not a way to be exempted.
@@ -1306,19 +1305,19 @@ void        concolic_strpred_file(const char *hole, const char *method, const ch
    over this value was branched on along the path that built this request), never a hole a caller may fill. */
 const ConcolicPred *concolic_strpred_read(const char *hole, int *n);
 /* …AND THE SAME READ ASKED OF AN ATTACKER'S PRINCIPAL, WHICH IS §Attacker-sources' FORGEABLE HALF — the twin
- * of `concolic_principal_pinned` above and the other arm of the pair that rule states: a forgeable check
- * (`endsWith`/`includes`/`startsWith`) is SOLVED and an unforgeable `===` is unsatisfiable cross-origin and
- * SUPPRESSES the finding. The suppressing arm is `concolic_principal_pinned`'s; this is the solving arm's
- * OBSERVATION, and it is declared HERE rather than beside that entry because `ConcolicPred` is typedef'd
- * above and an anonymous-struct typedef has no forward declaration.
+ * of `concolic_principal_pins` above and the other arm of the pair: a forgeable check
+ * (`endsWith`/`includes`/`startsWith`) is solved for an attacker-registered origin, and an unforgeable `===`
+ * parks the finding on a sender at the pinned origin. The pinned arm is `concolic_principal_pins`'; this is the
+ * forgeable arm's observation, and it is declared here rather than beside that entry because `ConcolicPred` is
+ * typedef'd above and an anonymous-struct typedef has no forward declaration.
  *
  * `cb` IS CALLED ONCE PER DECLARED PRINCIPAL THIS FLOW TESTED, with that principal's `src` and the BORROWED
  * row `concolic_strpred_read` filed under it — and never for a principal the flow left alone, because an
  * absence here is the positive statement that this path made no demand an attacker has to meet. A flow that
- * PINNED one is a different answer and is `concolic_principal_pinned`'s: a pin reaches no recorder here at
+ * PINNED one is a different answer and is `concolic_principal_pins`': a pin reaches no recorder here at
  * all, since a pinned source concretizes and the real builtin then runs over real bytes.
  *
- * A WALK AND NOT AN INDEX, for `concolic_principal_pinned`'s reason exactly: the flow does not know which
+ * A WALK AND NOT AN INDEX, for `concolic_principal_pins`' reason exactly: the flow does not know which
  * sources are principals and must not be taught a name for one, and the delivery registry is the one place
  * that does. A CALLBACK AND NOT ONE RETURNED ROW because more than one principal may carry a demand and the
  * demands CONJOIN along one path — a caller handed only the first would compose an identity satisfying one
@@ -1336,7 +1335,7 @@ const ConcolicPred *concolic_strpred_read(const char *hole, int *n);
  * made ON (the call hook composes `concolic_hole_key(concolic_shape_c(this_val))`), so
  * `event.origin.toLowerCase().endsWith(t)` files its demand under the toLowerCase RESULT's hole and this walk
  * reads the principal's own. `concolic_pin` already has the answer for its own arm and this is the property
- * it does not share: a pin marks `pinned_root` on EVERY MEMBER of the pinned value's delivery root, with its
+ * it does not share: a pin files `ppin` on EVERY principal MEMBER of the pinned value's delivery root, with its
  * own comment stating that a mark written under a joint key would leave `message.origin` unpinned for a flow
  * that pinned a value derived from it.
  *   WHAT THE NEXT DIFF BUILDS: that same second filing on this recorder — `concolic_strpred_file` taking the

@@ -744,7 +744,7 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
  * keep `EPA_SOURCE_DETERMINED` rare: a pinned source re-read is a bare primitive, so the first line answers
  * `EPA_CONCRETE`; `src_self` is written only at the two mints that read a pin and never by `concolic_derived`, so
  * every composed address answers not-determined however its operand was pinned; and the holding arm of §7.2.13
- * IsLooselyEqual ( x, y ) writes `pinned_root` without a value. What remains is a source held in a page variable
+ * IsLooselyEqual ( x, y ) writes no pin value. What remains is a source held in a page variable
  * before its own strict gate and passed bare, endpoint.h's worked example.
  *
  * Whose unknown it is (concolic.h's `concolic_root_whose_any`, a disjunction over the root set the mint states and
