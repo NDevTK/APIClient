@@ -142,8 +142,8 @@ static CssPx fp_left_offset(lxb_dom_element_t *el, CssPx cb_width)
  * Spacings come from table_width.h's and table_height.h's answers, never the property, and are zero under
  * §17.6.2, where edges "coincide with the hypothetical grid lines on which the borders of the cells are
  * centered"; one arithmetic serves both models. The table box's origin is the wrapper's: §17.4 gives the
- * wrapper the element's margins and initial border and padding, and the table box the reverse, so with no
- * caption the table box's border edge is the wrapper's content edge (asserted below); a caption is refused. */
+ * wrapper the element's margins and initial border and padding, and the table box the reverse, so the table
+ * box's border edge is the wrapper's content edge (asserted below) moved down past its top captions. */
 
 /* The one table layout every table placement reads, gathered once so columns (§17.5.2 Table width algorithms:
    the 'table-layout' property) and rows (§17.5.3 Table height algorithms) are built over the grid the rectangle
@@ -152,7 +152,7 @@ static CssPx fp_left_offset(lxb_dom_element_t *el, CssPx cb_width)
    has no such span, so nothing is kept. */
 typedef struct {
     lxb_dom_element_t *table;
-    FlowPoint          origin;    /* the TABLE box's border-box origin, which §17.4 makes the wrapper's */
+    FlowPoint          origin;    /* the TABLE box's border-box origin, inside §17.4's wrapper */
     TableGrid          grid;
     TableUsedWidths    widths;
     TableUsedHeights   heights;
@@ -161,9 +161,6 @@ typedef struct {
 /* `el` is the box being placed, not the table: the refusals below name it. */
 static void fp_table_frame_build(lxb_dom_element_t *el, FpTableFrame *out)
 {
-    lxb_dom_element_t **captions = NULL;
-    size_t ncaptions;
-    char nbuf[160], tbuf[160];
 
     out->table = table_box_table_of(el);
     DCHECK(!table_wrapper_owns_property("border-top-width") && !table_wrapper_owns_property("padding-top") &&
@@ -174,23 +171,10 @@ static void fp_table_frame_build(lxb_dom_element_t *el, FpTableFrame *out)
            "border and padding and the initial `margin-*`. This arithmetic reads the table element's own border "
            "and padding as the TABLE BOX's and adds nothing for the wrapper — so if that list has moved, the "
            "two boxes no longer coincide and every box below is offset by a border nobody accounted for");
-    ncaptions = table_box_captions(out->table, &captions);
-    free(captions);
-    if (ncaptions != 0)
-        DFAILF("%s, in %s: CSS 2.1 §17.4 Tables in the visual formatting model puts this box's table box inside "
-               "a WRAPPER that also contains %zu CAPTION box(es) — \"the table generates a principal block box "
-               "called the table wrapper box that contains the table box itself and any caption boxes (in "
-               "document order)\" — and §17.4.1 Caption position and alignment decides which of them stand "
-               "ABOVE it (`caption-side: top`, the initial value, \"Positions the caption box above the table "
-               "box\"). Every such caption shifts the table box down inside the wrapper, and this function "
-               "takes the table box's origin to BE the wrapper's, which is exact only when nothing precedes it. "
-               "There is no distance to add: a caption's own margin-box height is CSS 2.1 §10.6.3's over its "
-               "content, taken on the WRAPPER's child box list, which is not any element's DOM child list — "
-               "core/layout/block_flow.c owns that walk and names what it still lacks. BUILD it there and this "
-               "arm becomes a sum over the captions §17.4.1 puts above the table box",
-               box_subject(el, nbuf, sizeof nbuf), box_subject(out->table, tbuf, sizeof tbuf), ncaptions);
-    /* §17.4's wrapper is what §9.4.1 stacks, so the table element's origin is an ordinary recursion. */
+    /* §17.4's wrapper is what §9.4.1 stacks, so the table element's origin is an ordinary recursion, and the
+       table box sits below the wrapper's top captions on the wrapper's own stack. */
     out->origin = flow_border_box_origin(out->table);
+    out->origin.y = css_px_add(out->origin.y, block_flow_table_box_top(out->table));
     table_grid_build(out->table, &out->grid);
     table_widths(out->table, &out->grid, &out->widths);
     table_heights(out->table, &out->grid, &out->heights);

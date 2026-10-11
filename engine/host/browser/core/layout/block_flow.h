@@ -505,6 +505,11 @@ size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
    `float` as `none` on it, and Chrome floats it. Every layout reader of the question asks here. */
 bool block_flow_is_floated(lxb_dom_element_t *el);
 
+/* The distance from `table`'s table wrapper box's top content edge to its table box's top border edge: CSS 2.1
+   §17.4's wrapper stack, past the captions §17.4.1's `caption-side: top` puts above the table box. Zero with
+   no such caption. `table` must generate a table wrapper box (asserted). */
+CssPx block_flow_table_box_top(lxb_dom_element_t *table);
+
 /* The same enumeration without a drive of its own: false ("not yet") when the walk deferred a contribution,
    with nothing stored; true with the boxes at `*out` (the caller's to free) and their number at `*count`. */
 bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **out, size_t *count);

@@ -1791,6 +1791,8 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
                    "SAME two sections over the SAME two elements, so they cannot disagree unless one of them "
                    "has been changed without the other");
             if (ce != NULL) flow_placement_record(ce, through_top);
+            DCHECK(!(wrapper && ce == NULL),
+                   "a table box collapsed through on its wrapper's stack; bf_table_box gives it no such run");
             if (ce != NULL && ce == want) {
                 *want_top = through_top;
                 *found = true;
@@ -1826,6 +1828,12 @@ static bool bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wan
                "container being walked — the identical assert on the collapse-through arm above states why "
                "the enumeration and this test cannot disagree");
         if (ce != NULL) flow_placement_record(ce, pos);
+        /* On a wrapper's stack the NULL entry is the table box, the table element's other box, so a walk asked
+           about the table element itself reports where its table box sits. */
+        if (wrapper && ce == NULL && want == el) {
+            *want_top = pos;
+            *found = true;
+        }
         if (ce != NULL && ce == want) {
             *want_top = pos;
             *found = true;
@@ -2880,6 +2888,22 @@ bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **ou
     (void)flow_placement_anon_ask(el, &held, &hn);
     flow_placement_anon_record(el, *out, *count);
     return true;
+}
+
+CssPx block_flow_table_box_top(lxb_dom_element_t *table)
+{
+    CssPx top = css_px(0.0);
+    bool found = false;
+    char *d = bf_computed(table, "display");
+    bool wrapper = table_wrapper_generates(d);
+    char nbuf[160];
+
+    free(d);
+    DCHECKF(wrapper, "%s: a table box's offset was asked of an element that generates no table wrapper box",
+            box_subject(table, nbuf, sizeof nbuf));
+    (void)bf_layout_driven(table, table, &top, &found, NULL, NULL, BF_BASELINE_NONE);
+    DCHECKF(found, "%s: the table wrapper's stack never placed its table box", box_subject(table, nbuf, sizeof nbuf));
+    return top;
 }
 
 size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
