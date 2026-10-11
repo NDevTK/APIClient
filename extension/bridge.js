@@ -1886,9 +1886,11 @@ function seedSpeaker(msg) {
     const parent = await frameIdentity(msg.groupId, f.parentDocumentId);
     if (parent === null) return null;
     const parentName = await documentNameOf(frames, f.parentDocumentId);
+    /* A parent the engine built inside its embedder's instance has no policy entry; the request facts carry
+       its container's policy already (Fetch §4.1 Main fetch's substitution, at the create). */
     const policy = parentName === null ? null : await documentReferrerPolicy(parentName);
     return { identity: parent, referrer: "client", policy,
-             request: policy === null ? null : await seedChildRequest(parentName, msg.seedUrl) };
+             request: parentName === null ? null : await seedChildRequest(parentName, msg.seedUrl) };
   };
 }
 
@@ -1926,23 +1928,23 @@ function childRequestRecord(creator, address, facts) {
 function childRequestAlias(creator, named, landed) {
   const c = childRequestsOf(creator);
   const n = new URL(named).href;
-  if (c.facts.has(n) && URL.canParse(landed)) childRequestRecord(creator, new URL(landed).href, c.facts.get(n));
+  if (!URL.canParse(landed)) return;
+  if (c.facts.has(n)) childRequestRecord(creator, new URL(landed).href, c.facts.get(n));
+  if (c.names.has(n)) childNameRecord(creator, new URL(landed).href, c.names.get(n));
 }
 
-/* The engine's name `child` for the cross-origin child `creator` created at `named`, which this zone loaded and
-   which landed on `landed`: both addresses answer with it, and any lookup waiting on either. */
-function childNameRecord(creator, named, landed, child) {
+/* The engine's name `child` of the child navigable's document `creator` created at `address` (the
+   `navigable.request` notice's, or a landed address childRequestAlias files); the first record stands, and any
+   lookup waiting on that address is answered. */
+function childNameRecord(creator, address, child) {
+  DCHECK(typeof child === "string" && child !== "", "a child navigable's name was recorded empty");
   const c = childRequestsOf(creator);
-  for (const u of [named, landed]) {
-    if (!URL.canParse(u)) continue;
-    const a = new URL(u).href;
-    if (!c.names.has(a)) c.names.set(a, child);
-    const w = c.nameWaiters.get(a);
-    if (w !== undefined) { c.nameWaiters.delete(a); for (const resolve of w) resolve(c.names.get(a)); }
-  }
+  if (!c.names.has(address)) c.names.set(address, child);
+  const w = c.nameWaiters.get(address);
+  if (w !== undefined) { c.nameWaiters.delete(address); for (const resolve of w) resolve(c.names.get(address)); }
 }
 
-/* The engine's name of the cross-origin child `creator` created at `url`, waiting for its create notice while the
+/* The engine's name of the child `creator` created at `url`, waiting for its `navigable.request` notice while the
    instance holding `creator` can still send one; null once that instance has left the pool. */
 async function seedChildName(creator, url) {
   const c = childRequestsOf(creator);
@@ -1957,18 +1959,16 @@ async function seedChildName(creator, url) {
 
 /* The engine's name of the browser's document `documentId` among `frames` (webNavigation.getAllFrames' answer):
    its own documentId where an instance installed its seed, otherwise the name its parent's instance created it
-   under, found by the parent's name and the frame's address. Null where neither holds: a top-level document no
-   instance installed, or a same-origin child, which is a realm in its parent's instance announced by no name.
-   Named residual. Not covered: a same-origin child's engine name. The next diff puts the child's name on the
-   `navigable.request` notice, whose fields the notice field table owns. Its absence shows as a frame nested in a
-   same-origin sub-frame loading its seed under DOCUMENT_REQUEST_UNSTATED. */
+   under (the `navigable.request` notice's child), found by the parent's name and the frame's address. Null for
+   a top-level document no instance installed.
+   Named residual. Not covered: a child whose navigable's initial `about:blank` was read before its load, whose
+   loaded document the engine names afresh (navigable.c's load mints from the navigable's name). The next diff
+   announces that name on the load. Its absence shows as a seed nested in such a frame waiting for its parent's
+   instance to leave the pool. */
 async function documentNameOf(frames, documentId) {
   if ((await documentReferrerPolicy(documentId)) !== null) return documentId;
   const f = frames.find((x) => x.documentId === documentId);
-  if (f === undefined || f.parentFrameId === -1) return null;
-  const p = frames.find((x) => x.documentId === f.parentDocumentId);
-  if (p === undefined || !URL.canParse(f.url) || !URL.canParse(p.url) || originOf(f.url) === originOf(p.url))
-    return null;
+  if (f === undefined || f.parentFrameId === -1 || !URL.canParse(f.url)) return null;
   const parent = await documentNameOf(frames, f.parentDocumentId);
   return parent === null ? null : await seedChildName(parent, f.url);
 }
@@ -3750,6 +3750,7 @@ async function hostNotice(eng, line) {
            "a navigable.request notice does not match lib/navigable-notice.js's request table: " + line);
     childRequestRecord(f[R.creator], new URL(f[R.address]).href,
                        { destination: f[R.destination], referrerPolicy: f[R.referrerPolicy] });
+    childNameRecord(f[R.creator], new URL(f[R.address]).href, f[R.child]);
     return;
   }
   if (f[0] === "navigable.create") {
@@ -3777,7 +3778,6 @@ async function hostNotice(eng, line) {
     const loaded = await eng.fetchedDocument(f[C.address], f[C.provenance], f[C.driven], f[C.pinned],
                                              /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED);
     childRequestAlias(f[C.creator], f[C.address], loaded.url);
-    childNameRecord(f[C.creator], f[C.address], loaded.url, f[C.child]);
     /* The child's principal is the origin of the response's URL (`loaded.url`, after redirects, which only
        this zone followed), not the notice's origin field: SECURITY.md makes routing and the origin stamped on a
        delivered message the trusted zone's alone. The same URL gives the cluster and the address the instance

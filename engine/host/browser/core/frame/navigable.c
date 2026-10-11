@@ -1437,16 +1437,18 @@ static char *nav_request_referrer_policy(JSContext *ctx, const NavLoadState *s)
     return out;
 }
 
-/* `navigable.request` (navigable_notice.h's request table): the §7.4.5 request facts of a child navigable this
-   document created at `addr`, its destination and its request referrer policy after Fetch §4.1 Main fetch
-   (possibly empty), announced to the trusted zone for its own load of the same frame. */
-static void nav_announce_child_request(JSContext *ctx, const char *addr, JSValueConst container,
+/* `navigable.request` (navigable_notice.h's request table): the §7.4.5 request facts of the child navigable this
+   document created at `addr` under the world name of `child`, its destination and its request referrer policy
+   after Fetch §4.1 Main fetch (possibly empty), announced to the trusted zone for its own load of the same
+   frame. */
+static void nav_announce_child_request(JSContext *ctx, uint32_t child, const char *addr, JSValueConst container,
                                        const char *request_policy, const char *item)
 {
     char *dest = nav_container_destination(container);
     char *policy = nav_main_fetch_referrer_policy(request_policy, item);
     const char *const fields[NAVIGABLE_REQUEST_N] = {
         [NAVIGABLE_REQUEST_CREATOR] = world_doc_name(document_doc(ctx)),
+        [NAVIGABLE_REQUEST_CHILD] = world_doc_name(child),
         [NAVIGABLE_REQUEST_DESTINATION] = dest,
         [NAVIGABLE_REQUEST_REFERRER_POLICY] = policy,
         [NAVIGABLE_REQUEST_ADDRESS] = addr,
@@ -3892,9 +3894,6 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        §7.2.2.1's step 15 and §4.6.5's follow-the-hyperlink step 11 the navigate they each already own
        (navigable.h states the asymmetry this leaves in the meantime), and this arm then reaches
        navigable_navigate below like every other destination. */
-    /* The child's §7.4.5 request facts, for the zone's own load of the same frame. */
-    if (is_child)
-        nav_announce_child_request(ctx, addr, container, referrer_policy, creator_policy.referrer_policy);
     DCHECK(!destination_is_javascript,
            "§7.4's create was asked to make a navigable whose ADDRESS is a `javascript:` URL — §7.3.1.7 step 8 "
            "creates a navigable with no url at all and §7.2.2.1 step 15 navigates it, which is the algorithm "
@@ -3907,6 +3906,9 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     /* MINTED FROM THE CREATOR, not from the instance root: this agent holds one realm per same-origin
        document, and naming every child "<root>.<n>" would collide the moment two realms both created one. */
     child = world_mint_doc(document_doc(ctx));
+    /* The child's §7.4.5 request facts and its name, for the zone's own load of the same frame. */
+    if (is_child)
+        nav_announce_child_request(ctx, child, addr, container, referrer_policy, creator_policy.referrer_policy);
     /* WHO THE NAVIGABLE HANGS OFF, and the two shapes §7.4 distinguishes. A CHILD navigable (§4.8.5's iframe)
        is nested in this one: its `parent` is this Window and it has no opener. An AUXILIARY one (§7.4's popup)
        is a TOP-LEVEL traversable — it is its own parent and its own top — and what links it back here is

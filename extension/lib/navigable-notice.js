@@ -68,12 +68,14 @@ var NAVIGABLE_NOTICE = Object.freeze({
   }),
   request: Object.freeze({
     creator: 1,
-    destination: 2,
-    referrerPolicy: 3,
-    address: 4,
-    parts: 5,
+    child: 2,
+    destination: 3,
+    referrerPolicy: 4,
+    address: 5,
+    parts: 6,
     encoding: Object.freeze({
       creator: "token",
+      child: "token",
       destination: "token",
       referrerPolicy: "token",
       address: "token",

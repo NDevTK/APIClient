@@ -55,6 +55,7 @@ enum { NAVIGABLE_NOTICE_TOKEN, NAVIGABLE_NOTICE_REMAINDER };
    (core/frame/navigable.c's nav_announce_child_request), for the zone's own load of the same frame. */
 #define NAVIGABLE_REQUEST_FIELDS(X)                                                                        \
     X(CREATOR, creator, TOKEN)          /* the creating document's world name */                          \
+    X(CHILD, child, TOKEN)              /* the child navigable's document's world name */                 \
     X(DESTINATION, destination, TOKEN)  /* Fetch §2.2.5's destination of the container */                 \
     X(REFERRER_POLICY, referrerPolicy, TOKEN) /* after Fetch §4.1 Main fetch, possibly empty */           \
     X(ADDRESS, address, TOKEN)          /* the address the child is navigated to */
