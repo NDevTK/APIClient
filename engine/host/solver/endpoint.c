@@ -1597,24 +1597,22 @@ static void param_set_pred(Param *p, const ConcolicPred *src, int n) {
     p->npred = n;
 }
 
-/* …AND EVERY LATER ONE NARROWS IT — `param_intersect_excl`'s claim over a set of predicates instead of a set
-   of tokens, and the SAME rule rather than a second one. A predicate the record still carries is one EVERY
-   observed path to this endpoint obeyed; one this flow did not test is one some path did not obey, and the
-   claim goes. There is no hull because there is no order: `startsWith("/api")` and `startsWith("/admin")` do
-   not weaken to a common predicate, and inventing one that covered both would mean deciding what the method
-   MEANS — the recogniser §RUN-DON'T-MATCH forbids, arriving inside a merge rule. */
+/* And every later one narrows it, `param_intersect_excl`'s rule over predicates: a predicate the record still
+   carries is one every observed path obeyed. No hull, since there is no order: `startsWith("/api")` and
+   `startsWith("/admin")` do not weaken to a common predicate, and inventing one would mean deciding what the method
+   means, a recognizer inside a merge rule. */
 static void param_intersect_pred(Param *p, const ConcolicPred *src, int n) {
     int i, j, k = 0;
     for (i = 0; i < p->npred; i++) {
         int keep = 0;
         for (j = 0; j < n; j++) if (param_pred_same(&p->pred[i], &src[j])) { keep = 1; break; }
         if (keep) p->pred[k++] = p->pred[i];
-        else concolic_pred_release(&p->pred[i]);   /* the ROW's strings; the array is this param's */
+        else concolic_pred_release(&p->pred[i]);   /* the row's strings; the array is this param's */
     }
     p->npred = k;
 }
 
-/* THE LOOSE EQUALITIES' FIRST OBSERVATION — this endpoint's record takes the set the recording flow proved. */
+/* The loose equalities' first observation: this endpoint's record takes the set the recording flow proved. */
 static void param_set_leq(Param *p, const ConcolicLooseEq *src, int n) {
     DCHECK(p->nleq == 0 && p->leq == NULL,
            "an endpoint param's loose-equality set was seeded twice — the first sighting takes the set and "
@@ -1625,20 +1623,17 @@ static void param_set_leq(Param *p, const ConcolicLooseEq *src, int n) {
     p->nleq = n;
 }
 
-/* …AND EVERY LATER ONE NARROWS IT — `param_intersect_excl`'s claim over a set of loose equalities instead of a
-   set of excluded tokens, and the SAME rule rather than a second one. A claim the record still carries is one
-   EVERY observed path to this endpoint obeyed; a gate this flow did not hold is one some path reached the
-   request without, and the claim goes. There is no hull because there is no order: `== 0` and `== ""` do not
-   weaken to a common claim, and inventing one that covered both would mean computing the union of two of
-   §7.2.13 IsLooselyEqual ( x, y )'s holding sets — which is deciding what `==` MEANS, in a merge rule, over an
-   Object arm that runs the page's own ToPrimitive and is not running here. */
+/* And every later one narrows it, `param_intersect_excl`'s rule over loose equalities: a gate this flow did not
+   hold is one some path reached the request without. No hull: `== 0` and `== ""` do not weaken to a common claim,
+   and covering both would mean computing the union of two of §7.2.13 IsLooselyEqual ( x, y )'s holding sets,
+   deciding what `==` means over an Object arm that runs the page's own ToPrimitive. */
 static void param_intersect_leq(Param *p, const ConcolicLooseEq *src, int n) {
     int i, j, k = 0;
     for (i = 0; i < p->nleq; i++) {
         int keep = 0;
         for (j = 0; j < n; j++) if (param_leq_same(&p->leq[i], &src[j])) { keep = 1; break; }
         if (keep) p->leq[k++] = p->leq[i];
-        else concolic_looseeq_release(&p->leq[i]);   /* the ROW's string; the array is this param's */
+        else concolic_looseeq_release(&p->leq[i]);   /* the row's string; the array is this param's */
     }
     p->nleq = k;
 }
@@ -1650,23 +1645,12 @@ static void param_add_val(Param *p, const char *v) {   /* merge a validValue (de
     p->vals[p->nvals++] = strdup(v);
 }
 
-/* `origin_of_path` AND `origin_on_surface` STOOD HERE AND THEIR ONE CONSUMER IS GONE. Between them they
-   answered "is this the FIRST endpoint this surface has held on that host", which was the event that seeded
-   the engine's own discovery probes — one flow per candidate document address. Active discovery is the trusted
-   zone's again (extension/lib/discovery-probe.js), which asks the same question of the API keys and page
-   credentials it holds and this engine does not, so nothing here asks it. They are deleted rather than kept:
-   a pair of functions computing an answer nobody reads is indistinguishable from a live capability. */
-
-/* an endpoint's IDENTITY is (method, path, provenance, param-set) — same identity merges param values. A
-   param's LOCATION is part of it: an `id` the code puts in the path and an `id` it puts in the body are two
-   different things to send, so two requests that agree only on the names are not one endpoint.
-   AND THE PROVENANCE IS PART OF IT, which is what makes CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's "never
-   merged into the observed pool" a property of this structure rather than a rule somebody has to keep. A
-   FORCED sighting cannot reach a record built from derived ones, so no value learned only because a gate was
-   forced can be published under the claim that the app's own code computes it. The alternative — one record
-   whose grade folds — is the same defect a `||` is: nothing crashes, the row looks ordinary, and the reviewer
-   reads a fabricated example as a measured one. See endpoint.h for why the pending line folds and this does
-   not. */
+/* An endpoint's identity is (method, path, provenance, param set); the same identity merges param values. A param's
+   location is part of it: an `id` in the path and an `id` in the body are two different things to send. The
+   provenance is part of it, which makes "forced replies are never merged into observed data" a property of this
+   structure: a forced sighting cannot reach a record built from derived ones, so no value learned only because a
+   gate was forced is published as one the app computes (endpoint.h has why the pending line folds and this does
+   not). */
 static int same_identity(Endpoint *e, const char *method, const char *path, int prov, const KvBuf *kv) {
     if (e->prov != prov || strcmp(e->method, method) || strcmp(e->path, path) || e->np != kv->n) return 0;
     for (int i = 0; i < kv->n; i++)
@@ -1676,38 +1660,28 @@ static int same_identity(Endpoint *e, const char *method, const char *path, int 
 
 void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                      const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov, int door) {
-    /* WHAT THIS SIGHTING IS EVIDENCE OF, ASSERTED AT THE MINT for `kv_add`'s reason exactly: every site that
-       records an endpoint passes through here, so there is no way to add one without answering, and the
-       answer cannot be defaulted later by a consumer. The value outside the vocabulary is the dangerous one
-       and not the missing one — `0` is `observed`, so an uninitialised grade reads as the strongest claim
-       this surface makes. */
+    /* What this sighting is evidence of, asserted at the mint for `kv_add`'s reason: every site that records an
+       endpoint passes through here. A value outside the vocabulary is the dangerous one: `0` is `observed`, so an
+       uninitialised grade reads as the strongest claim this surface makes. */
     DCHECKF(prov == PROV_OBSERVED || prov == PROV_DERIVED || prov == PROV_FORCED,
             "an endpoint was recorded with the provenance %d, which is none of the three solver/pending.h "
             "defines — the grade is part of this record's identity and is emitted on it, so an unrecognised "
             "one both merges with nothing and publishes a word no consumer can read. method=%s", prov, method);
-    /* AND WHICH MECHANISM COMPOSED THE ADDRESS, ASSERTED AT THE SAME MINT AND FOR THE SAME REASON THE GRADE
-       ABOVE IS: every site that records an endpoint passes through here, so there is no way to add one
-       without answering. IT IS A MEMBERSHIP TEST AND NOT A RANGE despite its spelling — `ENDPOINT_DOORS`
-       gives its members no explicit values, so the enum is dense from `EPD_UNSTATED` to `EPD_COUNT` by
-       construction and the two bounds are the list's own ends rather than numbers anybody chose.
-       THE ZERO IS THE ONE THAT MATTERS AND IT IS THE ONE A PRODUCER REACHES BY FORGETTING, which is why
-       `EPD_UNSTATED` is 0 rather than a door: an uninitialised or dropped answer is refused here instead of
-       being read downstream as whichever mechanism the numbering put first, and endpoint_door_token's
-       `CHECK` catches the same record in the build where this assert is compiled out. */
+    /* And which mechanism composed the address, asserted at the same mint for the same reason. A membership test
+       despite its spelling: `ENDPOINT_DOORS` gives its members no explicit values, so the enum is dense from
+       `EPD_UNSTATED` to `EPD_COUNT`. `EPD_UNSTATED` is 0 so that a producer that forgets is refused here rather than
+       read as whichever mechanism the numbering put first; endpoint_door_token's CHECK catches the same record in
+       release. */
     DCHECKF(door > EPD_UNSTATED && door < EPD_COUNT,
             "an endpoint was recorded with the door %d, which is none of endpoint.h's ENDPOINT_DOORS — the "
             "mechanism that composed an address is the one fact about a sighting no consumer can re-derive, "
             "and it is what CLAUDE.md's `epEmitted - epPreProgram` razor subtracts two totals to approximate, "
             "so a record without one is a row that partitions with nothing. State the door for the mechanism "
             "this call site IS. method=%s", door, method);
-    /* AND WHOSE BYTES THE BODY IS, ASSERTED AT THE SAME MINT AND FOR A SHARPER REASON THAN THE GRADE ABOVE.
-       A body's bytes are either what the request SENDS or the engine's display spelling of an unknown, and
-       only the producer knows which — it asked core/fetch/body.h that question in order to obtain them. The
-       zero is UNSTATED rather than either answer, so a producer that forgets is refused instead of being
-       silently read as the replayable one, which is the arm that publishes a hole's characters as a payload.
-       THE SITE IS NAMED BY ITS mime AND method BECAUSE THIS ASSERT CANNOT STAMP ONE: three callers pass a
-       body and all three would report this line, so the message carries what tells them apart rather than
-       leaving a reader to grep every endpoint_record in the tree. */
+    /* And whose bytes the body is: what the request sends, the engine's display spelling of an unknown, or an
+       example of the payload, which only the producer knows (it asked core/fetch/body.h to obtain them). The zero
+       is UNSTATED, so a producer that forgets is refused rather than read as the replayable arm. The message names
+       mime and method because three callers pass a body and all would report this line. */
     DCHECKF(!body || body->kind == EPB_SENT || body->kind == EPB_SHAPE || body->kind == EPB_EXAMPLE,
             "a request body reached the @H surface without its producer saying whether the bytes are what the "
             "request SENDS, this engine's display spelling of an unknown, or an EXAMPLE of the payload. Those "
@@ -1715,24 +1689,18 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
             "and the third is what the payload looks like at ranges `params` names. Emitting any of them as "
             "another hands a reviewer a request the page never made or hides one it did. State the kind from "
             "the arm core/fetch/body.h already told you. method=%s mime=%s", method, body->mime ? body->mime : "(none)");
-    /* AND THE ONE PAIRING BETWEEN THE TWO FACTS ABOVE, WHICH IS THE CONSTRAINT THE WHOLE EXAMPLE KEY RESTS ON.
-       §10.4.5.18 TypedArraySetElement ( obj, index, value ) records a span even where NO BYTE was written — an
-       unknown may carry no example and writing `0` would be §@H's value known only to satisfy a gate — so a body
-       carrying spans has bytes the request CANNOT be said to send, whatever its producer thinks. Asserting it
-       at the mint is what lets body_store dispatch on `nspan` and body_example_b64 assert its own precondition
-       instead of each re-deriving a rule a producer could quietly disagree with.
-       IT IS ONE-WAY: a body with NO span may still be an example (nothing here says otherwise), and what is
-       refused is the spanned body that claims to be replayable. */
+    /* And the one pairing between the two facts above, which the example key rests on: §10.4.5.18
+       TypedArraySetElement ( obj, index, value ) records a span even where no byte was written, so a body carrying
+       spans has bytes the request cannot be said to send. Asserted at the mint, so body_store can dispatch on
+       `nspan` and body_example_b64 assert its precondition. One-way: a body with no span may still be an example. */
     DCHECKF(!body || body->nspan == 0 || body->kind == EPB_EXAMPLE,
             "a request body carrying unknown byte ranges reached the @H surface graded as something other "
             "than an EXAMPLE of the payload — some of its bytes are an unknown's example and some are bytes "
             "nobody wrote, so no record of this request may claim it sends exactly them. method=%s kind=%d",
             method, (int)body->kind);
-    /* AND THAT ITS SPAN RECORD IS ONE FACT. `EndpointBody` is declared at each producer and filled field by
-       field, so a member added to it is a member some producer forgets — and a count with no array is read as
-       a body with unknown ranges nobody can name while an array with no count is read as a body with none.
-       Neither is a state a consumer could tell from a body that simply has no spans, which is why the pair is
-       asserted here rather than defended at each reader. */
+    /* And that its span record is one fact: `EndpointBody` is filled field by field at each producer, and a count
+       with no array reads as unknown ranges nobody can name while an array with no count reads as none, neither
+       distinguishable by a consumer from a body with no spans. */
     DCHECKF(!body || (body->span == NULL) == (body->nspan == 0),
             "a request body reached the @H surface with half a span record — its producer set the array or "
             "the count and not the other, so this body either claims unknown byte ranges it holds no "
@@ -1740,25 +1708,16 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     DCHECKF(!body || body->nspan >= 0,
             "a request body reached the @H surface claiming a negative number of unknown byte ranges, which "
             "is a producer that declared this record and never filled it. method=%s", method);
-    /* THE ASK, COUNTED HERE AND NOT ONE LINE LOWER — this is the CALL and the next line is the GATE, and
-       CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION is the whole reason the order matters: a count taken past
-       a gate re-implements that gate's refusals as absences, and this gate legitimately declines every request
-       a candidate re-fire makes. Recorded BEFORE it, the number is a fact about what this engine's execution
-       reached, which is independent of every arm the gate has and of every arm it may grow.
-       THE PROGRAM BIT IS READ ONCE FOR THE WHOLE CALL, for §scheduler's "an operation takes its inputs with
-       it" read at the smallest scale there is. The mint below re-reads it and asserts the two agree, which is
-       cheaper than arguing that nothing between here and there can start a program and is the only form of
-       that claim a later diff cannot quietly falsify. */
+    /* The ask, counted here, before the gate on the next line: a count taken past a gate re-implements its
+       refusals as absences, and this gate declines every request a candidate re-fire makes. The program bit is read
+       once for the whole call (an operation takes its inputs with it); the mint below re-reads it and asserts the
+       two agree, which a later diff cannot quietly falsify. */
     int ask_pre_program = !engine_any_program_started();
-    /* AND THAT THE BOUNDARY THIS BIT IS READ AGAINST BELONGS TO THIS SURFACE'S SESSION — see g_boundary_spent
-       for the two scopes and for why no figure either census produces can show the disagreement afterwards.
-       ASSERTED AT THE FIRST ASK AND NOT AT THE RESET, because the reset is a legitimate act on its own: a
-       process may end there. What is not legitimate is an ask arriving afterwards, because that ask and every
-       record it mints are graded against a boundary another document crossed. WHAT THE NEXT DIFF BUILDS is the
-       one endpoint.h's fourth-number residual already names — the any-program-started bit carried on the
-       DOCUMENT the record's realm belongs to, raised where THAT document's first program starts — which
-       answers this and the child-navigable case with one change, since both are the same mistake about whose
-       progress the boundary describes. */
+    /* And that the boundary this bit is read against belongs to this surface's session (see g_boundary_spent).
+       Asserted at the first ask, not at the reset, which is legitimate on its own (a process may end there); an ask
+       arriving afterwards is graded against a boundary another document crossed. The fix is endpoint.h's
+       fourth-number residual: the any-program-started bit carried on the document the record's realm belongs to,
+       raised where that document's first program starts, which also answers the child-navigable case. */
     DCHECK(!g_boundary_spent,
            "an @H ask arrived on a surface whose counters were reset while a program had already started on "
            "this instance — the program-state boundary is `g_prog_starts`, which the engine's session "
@@ -1769,38 +1728,26 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
            "identities hold, and `pre_program` is decided at each mint and never re-armed");
     g_asks++;
     if (ask_pre_program) g_asks_pre_program++;
-    if (g_suppress) { g_ask_suppressed++; return; }   /* candidate/verify run -> not a real @H endpoint */
-    /* WHETHER THIS SIGHTING'S ADDRESS WAS ONE THE RUN HAD DETERMINED — read HERE, once, from the same value
-       the display spelling above is taken from, because both the merge arm and the mint below need it and a
-       second call would be a second reading of a value that is borrowed for the length of this call. It is
-       read BEFORE any of the scans, for §scheduler's `an operation takes its inputs with it` at the smallest
-       scale there is: nothing below this line holds the JSValue. */
+    if (g_suppress) { g_ask_suppressed++; return; }   /* candidate/verify run: not a real @H endpoint */
+    /* Whether this sighting's address was one the run had determined, read once here from the value the display
+       spelling is taken from: the merge arm and the mint both need it, the value is borrowed for this call, and
+       nothing below holds the JSValue. */
     int acls = address_class_of(url);
-    /* THE NO-FLOW FALLBACK'S DIRECTION, ASSERTED WHERE BOTH ARE IN ONE HAND — `address_class_of`'s residual
-       argues at length that its flow-less answer CLAIMS MORE on §What-the-tool-produces' bar rather than
-       less, and that argument was prose. It is read HERE and not at that function because the mapping takes a
-       DOOR and only a caller holds one: an assert that cannot name its second operand is the shape this file
-       has already been bitten by. The mapping happens to be door-INDEPENDENT for this member — it is
-       `endpoint_razor_class_of`'s FIRST line — so this passes for every door, and that is the fact being
-       pinned: the day a door arm is put in front of it, this fires rather than the residual's reasoning
-       quietly becoming false. */
+    /* The bar's claiming member maps to `runtime-only` for every door: it is `endpoint_razor_class_of`'s first
+       line. Asserted here because the mapping takes a door and only a caller holds one; a door arm put in front of
+       that line fires this. */
     DCHECK(endpoint_razor_class_of(door, EPA_UNKNOWN) == EPZ_RUNTIME_ONLY,
            "`address_class_of`'s flow-less member is no longer the one `endpoint_razor_class_of` maps to "
            "`runtime-only` — that function's residual rests on the no-flow fallback CLAIMING on the product's "
            "bar, which is why a stale pin chain would assert a determination no flow made; if this member "
            "now maps elsewhere, the direction that argument states is inverted and the gate it justifies is "
            "protecting the opposite thing");
-    /* …AND THE SAME PAIRING FOR THE MEMBER THAT DOES *NOT* CLAIM, WHICH IS THE WHOLE OF WHAT THE WHOSE READ
-       BOUGHT AND IS THEREFORE THE ONE THING WORTH ASSERTING ABOUT IT. `address_class_of` narrows the bar by
-       returning `EPA_UNKNOWN_UNPROVEN`, and that narrowing is real only while this mapping leaves such a row
-       at `unproven`: a door arm, or a member reordered above `EPA_UNKNOWN`, would hand the bar back every row
-       of this engine's own instrument holes and the over-claim that read closed would be restored silently,
-       with every census still summing. It is read HERE for the sibling's reason — the mapping takes a DOOR and
-       only a caller holds one.
-       THE `EPB_OFF_DOCUMENT` ARM IS EXCLUDED AND IS NOT AN EXEMPTION: that operand is the bar's OTHER
-       positive statement and is independently sound (`reply-chunk` hands this surface bytes that were in no
-       served document), so a row clearing through the DOOR is the union working rather than this member
-       claiming. What is pinned is the ADDRESS-side mapping, which is the only side this read moved. */
+    /* And the member that does not claim: `address_class_of` narrows the bar by returning `EPA_UNKNOWN_UNPROVEN`,
+       and that narrowing is real only while this mapping leaves such a row `unproven`; a door arm, or a member
+       reordered above `EPA_UNKNOWN`, would hand the bar back every instrument hole with every census still summing.
+       The `EPB_OFF_DOCUMENT` arm is excluded, not exempted: that operand is the bar's other positive statement
+       (`reply-chunk` hands this surface bytes in no served document), so a row clearing through the door is the
+       union working. */
     DCHECK(endpoint_door_bytes(door) == EPB_OFF_DOCUMENT ||
            endpoint_razor_class_of(door, EPA_UNKNOWN_UNPROVEN) == EPZ_UNPROVEN,
            "`address_class_of`'s whose-narrowed member now CLAIMS on the product's own bar through a door "
@@ -1808,17 +1755,12 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
            "run did not determine and whose every root this engine minted, the served document spells, or no "
            "mint could speak for, and a mapping that clears it restores exactly the over-claim the read "
            "closed: on a real site every row that cleared this bar was this engine's own instrument hole");
-    /* …AND WHAT THE PATH THAT COMPOSED IT HAD CHOSEN, read on the same line as the address class and for the
-       same reason: both the merge arm and the mint below need it, and it is a fact about the RUNNING FLOW,
-       which is what §scheduler's `an operation takes its inputs with it` is about at this scale — nothing
-       below this line is entitled to re-ask, because by then this call has suspended nowhere but the flow
-       standing is no longer this read's to assume. */
+    /* And what the path that composed it had chosen, read on the same line and for the same reason: a fact about
+       the running flow, which nothing below may re-ask. */
     int wcls = witness_class_now();
-    /* …AND WHICH SOURCES THE ADDRESS'S BYTES ENTERED THROUGH, COPIED HERE for the two reasons the two reads
-       above give and one of its own: the slice `concolic_root_c` hands back points into the VALUE's own record,
-       which is borrowed for the length of this call, and the record below outlives it. A value that is not a
-       concolic answers NULL and so does one whose bytes entered through nothing this engine minted as a source
-       — see the struct for why those two are told apart by `addr_class` and not by this pointer. */
+    /* And which sources the address's bytes entered through, copied here: `concolic_root_c` points into the value's
+       own record, borrowed for this call, and the record below outlives it. NULL for a non-concolic value and for
+       one whose bytes entered through nothing minted as a source; `addr_class` tells them apart (see the struct). */
     char *aroot = NULL;
     { const char *r = concolic_root_c(url);
       if (r) { aroot = strdup(r);
@@ -1829,27 +1771,20 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     char *ex = url_example(ctx, url);
     char *shape_path = url_path_of(disp);
     char *expath = ex ? url_path_of(ex) : NULL;
-    /* PATH, THEN QUERY, THEN BODY — the order a request is written in, and the order the identity above
-       compares in. The path is re-spelled by the scan (see path_scan) and it is the re-spelled one that
-       becomes the endpoint's `url`, because the params are named in ITS grammar and a record whose holes and
-       whose param names disagree is one nothing can replay.
-       THE EXAMPLE IS ALIGNED AGAINST BOTH HALVES OF THE ADDRESS, which it was not: it was split at the `?`
-       and only the path half was ever read, so a hole in a QUERY value rendered as its shape while the same
-       hole one segment earlier rendered as the bytes the code computed. That is the whole of what a bundle
-       does with a config it just fetched — `fetch('/api/user?region=' + c.region)` — so the surface named the
-       address and carried no example under any param a reply's field reached. The two halves are split HERE
-       rather than inside either scan, because `?` is the address's own boundary and neither grammar contains
-       it.
-       THE BODY CARRIES AN EXAMPLE FOR EXACTLY THE VALUES THE RUN OBSERVED LANDING IN IT. A body the page
-       composed as a STRING spells its own holes and the JSON arm reads them; a body it wrote BYTE BY BYTE is
-       named off its span record. What a range's row still does not carry is the bytes the serializer emitted
-       for it — see body_params' residual. */
+    /* Path, then query, then body: the order a request is written in and the identity compares in. The path is
+       re-spelled by the scan (see path_scan), and the re-spelled one becomes the endpoint's `url`, because the
+       params are named in its grammar. The example is aligned against both halves of the address, so a hole in a
+       query value (`fetch('/api/user?region=' + c.region)`) carries the bytes the code computed, as one in the path
+       does; the halves are split here because `?` is the address's own boundary and neither grammar contains it.
+       The body carries an example for exactly the values the run observed landing in it: a string-composed body
+       spells its holes and the JSON arm reads them, and a byte-by-byte body is named off its span record
+       (body_params' residual has what is still missing). */
     KvBuf kvb = { 0 };
     char *path = path_scan(&kvb, shape_path, expath);
     { const char *q = strchr(disp, '?'), *eq = ex ? strchr(ex, '?') : NULL;
       if (q && q[1]) kv_pairs(&kvb, q + 1, (eq && eq[1]) ? eq + 1 : NULL, EP_QUERY); }
-    /* NAMED FIELDS FIRST; THE RAW BYTES ONLY WHERE THERE ARE NONE. A body this engine reads is better
-       described by its fields than by a blob, and emitting both would put one fact on the record twice. */
+    /* Named fields first; the raw bytes only where there are none: a body this engine reads is better described by
+       its fields, and both would put one fact on the record twice. */
     int body_named = body_params(ctx, &kvb, body);
     free(disp); free(ex); free(expath); free(shape_path);
 
@@ -1861,88 +1796,52 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                 param_widen_bound(&g_eps[i].params[j].bnd, &kvb.e[j].bnd);
                 param_intersect_pred(&g_eps[i].params[j], kvb.e[j].pred, kvb.e[j].npred);
                 param_intersect_leq(&g_eps[i].params[j], kvb.e[j].leq, kvb.e[j].nleq);
-                /* THE ONE UNION AMONG THE FOUR INTERSECTIONS ABOVE, and the struct's own banner says why: the
-                   four are claims about the VALUE that a path reaching the request without obeying them
-                   disproves, and this is a fact about whether the OBSERVATION could ask anything at all,
-                   which a later concrete sighting cannot take back. `same_identity` reads names and
-                   locations only, so the two sightings being merged here are free to disagree about it. */
+                /* The one union among the four intersections, for the struct's reason: those are claims about the
+                   value that a path disproves, while this is whether the observation could ask anything, which a
+                   later concrete sighting cannot take back. `same_identity` reads names and locations only, so the
+                   two sightings may disagree about it. */
                 g_eps[i].params[j].has_hole |= kvb.e[j].has_hole;
             }
-            /* A REQUIRED HEADER THIS ENDPOINT DID NOT HAVE IS EMITTED OUTPUT, and this path credited the WFQ
-               with nothing for it. An endpoint's IDENTITY is method + path + param names AND locations
-               (same_identity), so a
-               flow that builds a differently-SHAPED request already earns its point below — what reached here
-               and went uncounted was a flow that called a known endpoint and revealed that it also wants
-               `Authorization`, or a content type, or an API key. §What-the-tool-produces names required headers
-               as one of the things this engine exists to learn, so a flow that learns one has emitted, and the
-               ranking has to see it or the arm that found the authenticated call sinks back among arms that
-               found nothing.
-               STRUCTURE, NOT DATA — the line this credit stops at, and the reason `param_add_val` above earns
-               nothing. A header NAME is a fact about what the endpoint requires, bounded by the code; a param
-               VALUE is a better example of something already known, and it is unbounded in the INPUT, so a loop
-               over opaque data could mint credit without limit and outrank the whole frontier by generating
-               strings. One point per merge that gained structure, matching the granularity below: an endpoint
-               is one discovery however many headers arrive with it, and a header the surface gains later is
-               one more. */
-            /* FIRST BODY WINS, AND IT IS NEVER OVERWRITTEN. A request body is ONE example of what this
-               endpoint is sent, not a set to be merged; replacing it would swap one example for another with
-               nothing on the record to say so. A sighting at a different GRADE is already a different record
-               (provenance is part of `same_identity`), so this cannot silently mix a forced body into an
-               observed one. */
+            /* A required header this endpoint did not have is emitted output, credited to the WFQ: the identity is
+               method + path + param names and locations, so a flow building a differently shaped request earns its
+               point below, and what reaches here is a flow that called a known endpoint and revealed it also wants
+               `Authorization`, a content type or an API key, which this engine exists to learn. Structure, not
+               data: a header name is bounded by the code, while a param value (`param_add_val`, which earns
+               nothing) is unbounded in the input, and a loop over opaque data could mint credit without limit. One
+               point per merge that gained structure: an endpoint is one discovery however many headers arrive. */
+            /* First body wins and is never overwritten (body_store): a request body is one example, and a sighting
+               at a different grade is a different record. */
             body_store(&g_eps[i], body, body_named);
-            /* THE RECORD-LEVEL UNION, AND THE ONLY FIELD ON THIS RECORD THAT HAS ONE. `door` and
-               `pre_program` are properties of the MINT and are deliberately never re-armed (see the struct);
-               this is a claim about whether ANY observed path composed the address out of a value it had not
-               determined, which a later determined sighting cannot take back — `has_hole`'s rule one grain
-               out, and endpoint.h's list states why intersecting would make the hard bar's floor read lower
-               than what the run established.
-               `same_identity` COMPARES THE DISPLAY SPELLING, so the two sightings reaching here are free to
-               disagree about this exactly as they are about a param's hole: the spelling of a concolic address
-               is its SHAPE and a determined one's is its bytes, so agreement here is not something the
-               identity has already forced and is not something this line may assume. */
-            /* …AND IT IS A `MAX` OVER AN ORDERED LIST, which is the SAME union spelled for a list longer
-               than two rather than a new rule — and which is why the whose fact needed NO field of its own
-               and NO fourth merge rule here: the ORDER carries its disjunction. `if (acls == EPA_UNKNOWN)`
-               was that union's two-member spelling and is exactly what endpoint.h's banner forbids extending
-               by hand: it would leave a record `concrete` for ever once any sighting read it, however many
-               later sightings proved the address entered at a source, which is a hole certified by a reading
-               — the identical defect the witness merge one line down records for `unasked`. EVERY step is the
-               union's own sentence: a sighting that proved MORE is not taken back by one that proved less,
-               and at the top step that reads as concolic.h's `_any` one grain out — a sighting that composed
-               the address out of an unknown somebody OUTSIDE this engine supplied is not taken back by one
-               that composed it out of a hole this engine minted. */
-            /* …AND THE DELIVERY ROOT MOVES WITH THE CLASS, ON THIS LINE AND NOWHERE ELSE, so the two are
-               always ONE sighting's. A root merged on its own rule — kept from the first sighting, or raised
-               whenever a later one had any — would pair a class this sighting proved with a provenance another
-               one held, and a reader reading the pair would be reading two moments (see the struct). The
-               class is the MAX, so this is the sighting whose class the record carries by construction. */
+            /* The record-level merge of the address class, the only field on the record with one (`door` and
+               `pre_program` are properties of the mint; see the struct). A max over the ordered list, the union's
+               sentence for a list longer than two, so the whose fact needed no field or merge rule of its own: a
+               sighting that proved more is not taken back by one that proved less, and at the top step that is
+               concolic.h's `_any` one grain out (an address composed from an unknown supplied outside this engine
+               is not taken back by one composed from an engine-minted hole). `same_identity` compares the display
+               spelling, which for a concolic address is its shape and for a determined one its bytes, so sightings
+               here may disagree about the class. The delivery root moves with the class on this line and nowhere
+               else, so the two are always one sighting's. */
             if (acls > g_eps[i].addr_class) {
                 g_eps[i].addr_class = acls;
                 free(g_eps[i].addr_root);
                 g_eps[i].addr_root = aroot;   /* ownership transferred; the `done:` arm frees what is left */
                 aroot = NULL;
             }
-            /* …AND THE SAME MERGE OVER THE WITNESS, WRITTEN AS A `MAX` BECAUSE THE LIST IS ORDERED BY HOW
-               MUCH IS CLAIMED. The arm above is a union over two members and can be spelled as one `if`
-               against the raising value; this one has three, and the two directions are different facts:
-               a sighting that could ASK outranks one that could not, and a path that HAD chosen a witness is
-               not taken back by a later path that had not. Spelling it as `if (wcls == EPW_MAY_REST_ON)`
-               would be correct about the second and would leave an `unasked` record `unasked` forever once
-               any later sighting read `no-witness`, which is a hole certified by a reading. */
+            /* The same max over the witness, ordered by how much is claimed: a sighting that could ask outranks one
+               that could not, and a path that had chosen a witness is not taken back by one that had not.
+               `if (wcls == EPW_MAY_REST_ON)` would leave an `unasked` record `unasked` for ever once a later
+               sighting read `no-witness`. */
             if (wcls > g_eps[i].witness_class) g_eps[i].witness_class = wcls;
             if (endpoint_merge_headers(&g_eps[i], hdrs, nhdrs) > 0)
                 flow_credit_emit(1.0);
-            /* THE ARM THE SURFACE HAS NO ROW FOR. A sighting that merges teaches the record structure and
-               moves NO census figure — not `minted`, not `emitted`, and deliberately not `preProgram`, whose
-               flag is a property of the mint and is not re-armed (see the struct). So a run in which running
-               code composed every address the markup had already named is byte-identical, on all four rows, to
-               one in which running code composed nothing at all. This is where those two part. */
+            /* The arm the surface has no row for: a merge teaches the record structure and moves no census figure
+               (not `minted`, not `emitted`, not `preProgram`, whose flag belongs to the mint), so running code
+               composing every address the markup had named would be byte-identical on all four rows to running
+               code composing nothing. This is where the two part. */
             g_ask_merged++;
-            /* …AND WHICH OF THE TWO POPULATIONS THIS MERGE WAS, READ HERE BECAUSE HERE IS THE ONLY PLACE BOTH
-               FACTS EXIST. The ask's own program state is the local the door read at its entry, and the
-               RECORD's is the flag its mint decided and deliberately never re-arms — so a census taken later
-               holds the second and can never recover the first, and a raise anywhere else would be asking one
-               of them about the wrong instant. */
+            /* And which population this merge was, read here, the only place both facts exist: the ask's program
+               state is the local read at the door's entry, the record's is the flag its mint decided, and a later
+               census holds only the second. */
             if (!ask_pre_program && g_eps[i].pre_program) g_ask_merged_pre_program++;
             goto done;
         }
@@ -1951,38 +1850,26 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     Endpoint *e = &g_eps[g_eps_n++];
     memset(e, 0, sizeof *e);
     e->method = strdup(method); e->path = strdup(path); e->prov = prov;
-    /* WHETHER ANY PROGRAM HAD STARTED WHEN THIS RECORD WAS BORN — read HERE, at the mint, because that is the
-       instant the fact is about and the only instant at which it is still true. A read at the census would
-       answer for the census's moment, which is the end of the run, and every record would grade the same. */
+    /* Whether any program had started when this record was born, read at the mint, the instant the fact is about;
+       a read at the census would answer for the end of the run. */
     e->pre_program = !engine_any_program_started();
-    /* AND WHICH MECHANISM COMPOSED IT — decided HERE and never re-armed, which is `pre_program`'s rule one
-       line up and holds for its reason: a later sighting of an address this surface already holds merges, and
-       what a reader wants to know is which mechanism composed the address that CREATED the record. A door
-       re-armed on every merge would answer about the last sighting, and the emitted row would then say that a
-       `<head>`'s own `<link>` was composed by a `fetch()` that merely asked for it again. */
+    /* And which mechanism composed it, decided here and never re-armed, for `pre_program`'s reason: a re-armed door
+       would say a `<head>`'s own `<link>` was composed by a `fetch()` that merely asked for it again. */
     e->door = door;
-    /* …AND WHETHER THE RUN HAD DETERMINED THE ADDRESS, written UNCONDITIONALLY so nothing on this record
-       depends on the `memset` above having left the conservative member at zero. It is the union's identity
-       element: a first sighting's class IS the record's class, and every later one can only raise it to
-       `EPA_UNKNOWN`. */
+    /* And whether the run had determined the address, written unconditionally rather than relying on the `memset`:
+       a first sighting's class is the record's, and later ones can only raise it. */
     e->addr_class = acls;
-    /* …AND THE PROVENANCE THAT CLASS WAS DERIVED FROM, written on the line below it because the two are one
-       sighting's fact (see the struct) and transferred rather than copied: a first sighting's root IS the
-       record's root, exactly as its class is, and the `done:` arm frees this local only where no record took
-       it. NULL here is the value's own answer and never an allocation this line declined to make — the CHECK
-       at the read above is what makes that true. */
+    /* And the provenance that class was derived from, transferred rather than copied, since class and root are one
+       sighting's fact (see the struct); the `done:` arm frees this local only where no record took it. NULL is the
+       value's own answer, never a declined allocation (the CHECK at the read). */
     e->addr_root = aroot; aroot = NULL;
-    /* …AND WHAT THE PATH THAT COMPOSED IT HAD CHOSEN, written UNCONDITIONALLY for `addr_class`' reason one
-       line up: it is the MAX's identity element only because `EPW_UNASKED` happens to be zero, and depending
-       on that would make this record's correctness a property of the member ORDER in a list whose order a
-       later diff is free to think is arbitrary. */
+    /* And what the composing path had chosen, written unconditionally: the max's identity element only because
+       `EPW_UNASKED` happens to be zero, and the list's order is a later diff's to change. */
     e->witness_class = wcls;
-    /* AND THAT THE ASK AND THE MINT ARE ONE INSTANT. The bit is monotone and `++`-only at engine.c's single
-       program-start line, so the only way these can differ is a program having started between this function's
-       entry and this line — which would mean something on the path above (a display spelling, a path scan, a
-       JSON body parse) runs page code. None does today; asserting it is what stops a later diff making one of
-       them do so and silently splitting the ask census's partition from the record's flag, after which
-       `asks - preProgram` and `emitted - preProgram` would be complements of two different boundaries. */
+    /* And the ask and the mint are one instant. The bit is monotone and raised `++`-only at engine.c's single
+       program-start line, so the two differ only if something on the path above (a display spelling, a path scan,
+       a JSON body parse) runs page code. None does; the assert keeps a later diff from splitting the ask census's
+       partition from the record's flag. */
     DCHECK(e->pre_program == ask_pre_program,
            "a program started between an endpoint ask reaching the @H surface and that ask minting its "
            "record — the two are counted as one instant, so the ask census's program-state partition and this "
@@ -2002,46 +1889,30 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         e->np++;
     }
     body_store(e, body, body_named);
-    /* The count is deliberately DROPPED here: every header of a brand-new endpoint is new, and the discovery
-       being credited is the ENDPOINT. Crediting both would price one sighting at one point plus one per header
-       it happened to carry, which makes a request's header count part of the ranking. */
+    /* The count is dropped here: every header of a brand-new endpoint is new, and the discovery credited is the
+       endpoint, so a request's header count does not enter the ranking. */
     (void)endpoint_merge_headers(e, hdrs, nhdrs);
-    flow_credit_emit(1.0);   /* a NEW endpoint: this flow just emitted value-of-information -> WFQ reward */
+    flow_credit_emit(1.0);   /* a new endpoint: this flow emitted value of information, the WFQ reward */
 done:
     free(path);
-    /* THE ROOT THIS CALL COPIED AND NO RECORD TOOK — a merge that did not raise the class, and nothing else.
-       Both arms that keep it NULL the local on the same line, so this frees exactly the sightings whose
-       provenance the surface already held a better-placed copy of. */
+    /* The root this call copied and no record took: a merge that did not raise the class. Both arms that keep it
+       NULL the local on the same line. */
     free(aroot);
     kv_free(&kvb);
 }
 
-/* THE READER THE ASSET DECISION DID NOT HAVE. solver/reply_decode.c has always ASKED what a reply is — of
-   `computedType`, the one type decision, taken by the zone that read the bytes — and its only consumer was its
-   own early return, so a body it declined to learn FROM stayed an endpoint on this surface. That is the
-   mirror of the defect §Architecture counts seven of: not a field read with nothing writing it, but one
-   written, asserted, and consumed by nothing on the surface the rule governs — "an observation with a computed
-   writer and no reader is not a mechanism", and it is harder to see because the value is real. Measured: an
-   image compressor whose document ships nine `<img>` elements and no API reported NINE endpoints, every one of
-   them a file, and a reader of that popup is told the tool learned nine things about an API.
-   THE KEY IS COMPUTED BY THE SAME TWO STEPS `endpoint_record` KEYS BY, called here rather than restated —
-   a second normalisation would be two answers to one question, which is how a retraction silently matches
-   nothing. `url_display` is not among them because it is the identity on a concrete string and this address is
-   one: a concolic's request carries its SHAPE to the host (core/fetch/fetch.c), so the string that comes back
-   with the reply is already the display form this surface filed it under.
-   AND A COMPONENT THAT HANDS THE HOST A SERIALIZATION INSTEAD STILL OWES THIS CALL THE SHAPE, which is a
-   fact about the CALLER rather than a second rule here: XHR §3.5.1 The open() method parses, and URL Standard
-   §1.3 "Percent-encoded bytes" puts U+007B ({) and U+007D (}) in the path percent-encode set, so the
-   serialization of an unknown-input address spells its holes `%7B…%7D` and matches no record this file holds.
-   core/xhr/xml_http_request.c answers it through `xhr_request_address`, whose projection is this same display
-   form; the sentence that used to stand at that site instead asserted the two strings were one, and a verdict
-   for every unknown-input address it filed named nothing at all.
-   IT MARKS RATHER THAN DELETES. The address may be recorded again by another call site in the same run, and
-   what was learned is a fact about the RESOURCE, so a later sighting must stay suppressed — and the params of
-   a record dropped mid-array would take their neighbours' indices with them.
-   EVERY same-(method, path) RECORD IS MARKED and the param set is not part of this identity: `same_identity`
-   separates two REQUESTS to one address by what they carry, and what the bytes turned out to be is a fact
-   about the address alone. */
+/* The asset decision's reader: solver/reply_decode.c asks what a reply is (of `computedType`, the one type decision,
+   taken by the zone that read the bytes), and this marks the records whose replies were files, so an image's
+   address is not reported as an API endpoint. The key is computed by the two steps `endpoint_record` keys by,
+   called rather than restated, since a second normalisation would make a retraction silently match nothing.
+   `url_display` is not among them: it is the identity on a concrete string, and a concolic request carries its
+   shape to the host (core/fetch/fetch.c), so the string coming back with the reply is the display form this surface
+   filed it under. A component that hands the host a serialization still owes this call the shape: XHR §3.5.1 The
+   open() method parses, and URL Standard §1.3 "Percent-encoded bytes" puts U+007B ({) and U+007D (}) in the path
+   percent-encode set, so a serialization spells holes `%7B…%7D`; core/xhr/xml_http_request.c answers through
+   `xhr_request_address`, whose projection is this display form. It marks rather than deletes: the address may be
+   recorded again in the same run and must stay suppressed, and dropping a record would shift its neighbours'
+   params. Every same-(method, path) record is marked, since what the bytes were is a fact about the address. */
 void endpoint_mark_asset(const char *method, const char *url) {
     KvBuf kvb = { 0 };
     char *upath, *path;
@@ -2060,11 +1931,10 @@ void endpoint_mark_asset(const char *method, const char *url) {
     kv_free(&kvb);
 }
 
-/* THE NUMBERS THE EMITTED ARRAY IS A FRACTION OF — see endpoint.h for why its length alone is three states,
-   and for what the fourth adds that the first three structurally cannot: they partition the surface by what
-   the REPLY turned out to be, and it says how much of the surface predates the page's own code running.
-   ONE walk, and the emitted arm is spelled with the SAME `is_asset` skip `endpoint_json_array` performs, so
-   the two producers of this figure cannot disagree about what an endpoint is. */
+/* The numbers the emitted array is a fraction of (endpoint.h: its length alone is three states, and the fourth
+   number says how much of the surface predates the page's own code running). One walk, the emitted arm spelled with
+   the same `is_asset` skip as `endpoint_json_array`, so the two producers cannot disagree about what an endpoint
+   is. */
 void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pre_program) {
     long a = 0, em = 0, pre = 0;
     DCHECK(minted && assets && emitted && pre_program,
@@ -2074,10 +1944,8 @@ void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pr
         if (g_eps[i].is_asset) a++;
         else {
             em++;
-            /* COUNTED INSIDE THE EMITTED ARM AND NOWHERE ELSE, so this number is a subset of the figure it
-               will be read against rather than of the mint. Spelled with the SAME `is_asset` skip
-               `endpoint_json_array` performs, for the reason `emitted` is: a record kind that stops being
-               written cannot make the two disagree silently. */
+            /* Counted inside the emitted arm only, so this is a subset of the figure it is read against rather
+               than of the mint. */
             if (g_eps[i].pre_program) pre++;
         }
     }
@@ -2085,38 +1953,22 @@ void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pr
            "the @H surface's asset and endpoint counts do not sum to the records minted — they are one walk "
            "over one array with a two-arm split, so a disagreement here is a record that is neither kind and "
            "the emitted figure is about a population this census cannot see");
-    /* AND THE CONTAINMENT THAT MAKES THE FOURTH NUMBER READABLE AT ALL. It is the whole of the relation these
-       two rows have — the pre-program records are a SUBSET of the emitted ones, never a partition of the mint
-       — and it is the one thing a reader has to be able to assume to compute the complement. A value above
-       `emitted` would be the count having been raised outside the skip above, which is the one way this walk
-       can go wrong and the one way the arithmetic a reader does with it silently inverts. */
+    /* And the containment that makes the fourth number readable: pre-program records are a subset of the emitted
+       ones, which a reader computing the complement must be able to assume; a value above `emitted` is a raise
+       outside the skip. */
     DCHECK(pre <= em,
            "the @H surface counted more records minted BEFORE the first program than it emits at all — the "
            "pre-program count is raised only inside the emitted arm of this one walk, so a value above it is "
            "a second raise added outside that arm; a reader computing `emitted - preProgram` as the number of "
            "addresses running code could have composed would read a negative count as a large one");
-    /* AND THE ONE IDENTITY THAT SPANS THE TWO INSTRUMENTS, ASSERTED HERE BECAUSE THIS IS THE ONLY PLACE THE
-       RECORD ARRAY AND THE MINT COUNT ARE IN ONE HAND. It is neither decoration on this walk nor a second copy
-       of endpoint_ask_census's: that function asserts the two PARTITIONS and the CUT, over the six numbers only it holds,
-       and this asserts a relation NEITHER instrument can check alone — a count of CALLS against a count of
-       RECORDS. What it fires on is the failure that would make every figure on this line unreadable, a record
-       reaching `g_eps` by a path that did not pass endpoint_record's door. endpoint.h's funnel note is a claim
-       about this tree that a grep answers today; this is the same claim made by something that cannot go
-       stale, and it is what keeps the ask counters read on every run by code that is here already. */
-    /* AND THE SECOND CROSS-INSTRUMENT RELATION, WHICH IS THE ONE THE RAZOR'S OWN NUMERATOR RESTS ON AND WHICH
-       NOTHING ASSERTED. endpoint.h says the two censuses "constrain each other rather than repeating each
-       other", and until this line only ONE direction of that was checkable — the mint count against the record
-       array. The PROGRAM-STATE halves were not: every pre-program record was minted by an ask whose own
-       pre-program bit was true (the mint asserts that pairing one record at a time), so the emitted
-       pre-program count is contained in the pre-program ASK count, and the assets skipped above only make it
-       smaller. It is exactly the relation a reader performs without noticing when they read `emitted -
-       preProgram` beside `asks - preProgram` as two complements of ONE boundary: if these two rows can drift,
-       those two subtractions are complements of two different boundaries and the pair says nothing.
-       THE TWO SIDES CAN DISAGREE, WHICH IS THE TEST. They are raised at different events on different
-       structures — one per ASK at the door's entry, one per RECORD by this walk — and a per-record DCHECK at
-       the mint constrains one pairing at a time and cannot see a total. What this fires on is the shape that
-       makes both subtractions unreadable at once: a boundary read at two instants, or a record reaching the
-       array by a path the door never counted a pre-program ask for. */
+    /* And the two relations that span the two instruments, asserted here, the only place the record array and the
+       ask counts are in one hand (endpoint_ask_census asserts its own partitions and cut). `pre <=
+       g_asks_pre_program`: every pre-program record was minted by an ask whose own bit was true (the mint asserts
+       the pairing per record) and assets only make `pre` smaller, so if the two drift, `emitted - preProgram` and
+       `asks - preProgram` are complements of two different boundaries; they are raised at different events on
+       different structures, so the sides can disagree. `g_ask_minted == g_eps_n` fires on a record reaching `g_eps`
+       by a path that did not pass endpoint_record's door: endpoint.h's funnel note, stated by something that cannot
+       go stale. */
     DCHECK(pre <= g_asks_pre_program,
            "the @H surface emits more records minted before the first program than the door counted asks made "
            "before one — every such record was minted by such an ask and the assets skipped by this walk can "
@@ -2131,17 +1983,11 @@ void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pr
     *minted = (long)g_eps_n; *assets = a; *emitted = em; *pre_program = pre;
 }
 
-/* THE ASK SIDE OF THE SAME SURFACE — see endpoint.h for what it separates that the four numbers above
-   structurally cannot, and the statics at the head of this file for why each row is what it is.
-   SIX AND NOT FOUR, AND IT IS A SECOND CALL RATHER THAN MORE OUT-PARAMETERS ON THE WALK ABOVE. That
-   one's own note says a fifth number would be "a second accessor … a second instant", and the reason it gives
-   is that it is ONE WALK OVER A MUTABLE ARRAY. These are not on the array: they are monotone scalars raised on
-   the three paths out of one door, so reading them at a different instant than the walk costs nothing a reader
-   can observe — the walk's figures can only have grown since, and by a mint the mint arm already counted.
-   THE TWO PARTITIONS AND THE CUT ARE ASSERTED HERE BECAUSE THIS IS THE ONLY PLACE ALL SIX ARE IN ONE
-   HAND. The cross
-   identity against the record array is asserted in endpoint_surface_census for the same reason and not here,
-   where `g_eps_n` is a fact about a different structure that this function has no business reading. */
+/* The ask side of the same surface (endpoint.h has what it separates that the four numbers cannot; the statics at
+   the head of this file, each row). A second call rather than more out-parameters on the walk above: these are
+   monotone scalars raised on the three paths out of one door, not on the mutable array, so reading them at another
+   instant costs nothing a reader can observe. The two partitions and the cut are asserted here, where all six are
+   in hand; the cross identity against the record array is in endpoint_surface_census. */
 void endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *merged, long *minted,
                          long *merged_pre_program) {
     DCHECK(asks && pre_program && suppressed && merged && minted && merged_pre_program,
@@ -2159,25 +2005,21 @@ void endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *
            "pre-program count is raised only inside the one entry that raises the total, so a value above it "
            "is a second raise, and a reader computing `asks - preProgram` as the number of network call sites "
            "running code reached would read a negative count as a large one");
-    /* AND THE TWO CONTAINMENTS OF THE CUT, ASSERTED HERE FOR THE REASON THE TWO PARTITIONS ABOVE ARE: this is
-       the only place every term of either is in one hand. They are not one check written twice — the cut
-       selects on TWO independent facts and each containment fires on a different way of getting it wrong.
-       THE FIRST IS AGAINST THE ARM IT SITS INSIDE. It is raised only on the line after `g_ask_merged`, so a
-       value above it is a second raise added outside that arm — which is exactly how a reader would come to
-       subtract it from `merged` and read a negative complement as a large one. */
+    /* And the two containments of the cut, asserted here, where every term of either is in hand; the cut selects on
+       two independent facts, and each containment fires on a different way of getting it wrong. The first is
+       against the arm it sits inside: it is raised only on the line after `g_ask_merged`, so a larger value is a
+       raise outside that arm. */
     DCHECKF(g_ask_merged_pre_program <= g_ask_merged,
             "the @H surface counted more asks merging into a record minted before the first program (%ld) "
             "than asks that merged at all (%ld) — the cut is raised only inside the merge arm that raises the "
             "total, so a larger cut is a raise added outside it, and a reader taking the rest of the merges "
             "as the arm where running code re-composed its OWN addresses would read a negative count as a "
             "large one", g_ask_merged_pre_program, g_ask_merged);
-    /* AND THE SECOND IS AGAINST THE OTHER FACT THE CUT SELECTS ON, WHICH THE FIRST CANNOT SEE. Every member of
-       this cut was asked with a program running, so it is also contained in the complement of the
-       program-state partition — and that is the quantity endpoint.h offers as the separation between the two
-       readings of a zero razor, so a cut exceeding it would make the row it exists to refine arithmetically
-       impossible. The two sides are raised at different events (one at the door's entry, one at the merge), so
-       they part company exactly when the door's program bit and the record's stop meaning one instant, which
-       is the state the mint's own DCHECK guards from the other side. */
+    /* And the second is against the other fact the cut selects on: every member was asked with a program running,
+       so it is contained in `asks - preProgram`, endpoint.h's separation between the two readings of a zero razor.
+       The sides are raised at different events (the door's entry, the merge), so they part exactly when the door's
+       program bit and the record's stop meaning one instant, the state the mint's DCHECK guards from the other
+       side. */
     DCHECKF(g_ask_merged_pre_program <= g_asks - g_asks_pre_program,
             "the @H surface counted more asks merging into markup-minted records (%ld) than asks made after a "
             "program had started at all (%ld of %ld) — both facts are read at the same door, the ask's from "
@@ -2189,13 +2031,11 @@ void endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *
     *merged_pre_program = g_ask_merged_pre_program;
 }
 
-/* THE EDGE HANDS OVER ITS OWN STAGE TABLE, ONCE PER SESSION, AT ITS DECLARATION. It is `js_fetch_steps[]`
-   itself and not a copy: a table of string literals with static storage, so it outlives every document this
-   session opens and the array sized from it is the only thing that has to be given back.
-   `first_stage` IS THE EDGE'S TO STATE AND IS NEVER ASSUMED. IDL_STEP_FIRST is idl_args.h's, a member's own
-   stages are numbered from it, and this file has no business knowing that — so the stage a row is keyed by is
-   `steps[stage - first]` with the base the machine itself supplied. A hard-coded 2 here would be a second
-   copy of a constant one header owns, and it would be wrong the day a member's prologue grows a stage. */
+/* The edge hands over its own stage table once per session at its declaration: `js_fetch_steps[]` itself, a table of
+   string literals with static storage that outlives every document, so the array sized from it is all that is given
+   back. `first_stage` is the edge's to state: IDL_STEP_FIRST is idl_args.h's and a member's stages are numbered
+   from it, so a row is keyed `steps[stage - first]` with the base the machine supplied; a constant here would break
+   the day a member's prologue grows a stage. */
 static void edge_declare(EndpointEdge *e, const char *who, const char *entry,
                          const char *const *steps, int first_stage) {
     int n = 0;
@@ -2210,12 +2050,10 @@ static void edge_declare(EndpointEdge *e, const char *who, const char *entry,
             "state it counts and no name to put on one, and a histogram whose buckets cannot be named is a "
             "bare count wearing a partition's shape", who);
     while (steps[n]) n++;
-    /* RE-DECLARED WITH THE SAME TABLE IS THE ORDINARY CASE AND COSTS NOTHING — one session per instance, and
-       a host that opens two runs this twice. A DIFFERENT table is a second machine reaching this edge's rows,
-       which it may not: they are keyed by ONE machine's stages and two machines' stages summed into one
-       histogram would be the averaged population §a-coverage-figure-states-what-it-is-a-fraction-of names.
-       IT IS PER EDGE AND NOT PER FILE, which is the whole reason there are two of these structs: core/fetch
-       and core/xhr each declare their own table here and neither can reach the other's array. */
+    /* Re-declared with the same table is ordinary and costs nothing (a host that opens two sessions runs this
+       twice). A different table is a second machine reaching this edge's rows, which are keyed by one machine's
+       stages, so two machines summed into one histogram would be an averaged population. Per edge, which is why
+       there are two structs: core/fetch and core/xhr each declare their own. */
     if (e->steps) {
         DCHECKF(e->steps == steps && e->stage_first == first_stage && e->stage_n == n && e->entry == entry,
                 "a SECOND machine declared itself to the %s edge census, or the same machine declared a "
@@ -2226,9 +2064,8 @@ static void edge_declare(EndpointEdge *e, const char *who, const char *entry,
         return;
     }
     e->died = (long *)calloc((size_t)n, sizeof *e->died);
-    /* ALLOCATION, SO A `CHECK` — §Offensive-programming names OOM as the universal invariant that is fatal in
-       release too, and the alternative here is a census whose partition arm is a NULL every teardown writes
-       through. */
+    /* Allocation, so a CHECK: OOM is fatal in release too, and the alternative is a partition arm every teardown
+       writes through as NULL. */
     CHECKF(e->died != NULL, "the %s edge census could not allocate its per-stage partition", who);
     e->steps = steps;
     e->stage_n = n;
@@ -2236,19 +2073,14 @@ static void edge_declare(EndpointEdge *e, const char *who, const char *entry,
     e->entry = entry;
 }
 
-/* THE COMPILE REPORT, MATCHED AGAINST ONE EDGE. `name` is bytes valid for this call only — quickjs converts the
-   atom into its own frame's buffer, which is what keeps this seam free of a runtime-lifetime atom reference the
-   leak report at JS_FreeRuntime would name — so a match is a compare and never a keep. An edge that has not
-   declared has a NULL `entry` and matches nothing, which is `endpoint_edge_member_asked`'s rule for a member
-   that declares no steps: the caller has no arm to get wrong and no reason to know this file has two edges. */
-/* …AND IT ANSWERS WHETHER THIS EDGE CLAIMS THE NAME AS A USE, which is a second fact about one call and not a
-   second question: `JS_OrphanTakeOne` orders its candidates by it, so the answer has to come from whoever owns
-   the entry name and the one place that is, is here.
-   A `typeof` READ ANSWERS NO AND STILL RAISES ITS OWN ROW. `typeof fetch === "function"` is a FEATURE DETECT:
-   driving the body that spells it reaches the guard and never the call, so an edge that claimed it would order a
-   bundle's capability probes ahead of its request builders — the direction that spends the walk on the one
-   population it cannot learn an address from. The split already exists two lines down and this is what it is
-   for; the census keeps both and only the ORDER reads one. */
+/* The compile report, matched against one edge. `name` is bytes valid for this call only (quickjs converts the atom
+   into its own frame's buffer, keeping this seam free of a runtime-lifetime atom reference the leak report at
+   JS_FreeRuntime would name), so a match is a compare, never a keep. An edge that has not declared has a NULL
+   `entry` and matches nothing. It also answers whether this edge claims the name as a use, since `JS_OrphanTakeOne`
+   orders its candidates by it and the entry name's owner is here. A `typeof` read answers no and still raises its
+   own row: `typeof fetch === "function"` is a feature detect, and driving the body that spells it reaches the
+   guard, never the call, so claiming it would order capability probes ahead of request builders. The census keeps
+   both; only the order reads one. */
 static int edge_named(EndpointEdge *e, const char *name, int typeof_only) {
     if (!e->entry || strcmp(e->entry, name) != 0) return 0;
     if (typeof_only) { e->named_typeof++; return 0; }
@@ -2256,10 +2088,10 @@ static int edge_named(EndpointEdge *e, const char *name, int typeof_only) {
     return 1;
 }
 
-/* …AND THE STATE IS GONE. `stage` is where it was standing, `reached` whether its construction had completed
-   (the fetch edge's OFFER, the XHR edge's PLACEMENT — endpoint.h states which and why they differ). The two
-   arms are the partition, and they are two arms of ONE teardown so that a third way out cannot be added
-   without landing in neither — which is what the identity at the accessor fires on. */
+/* And the state is gone. `stage` is where it stood, `reached` whether its construction had completed (the fetch
+   edge's offer, the XHR edge's placement; endpoint.h states which and why). The two arms are the partition, two arms
+   of one teardown, so a third way out cannot be added without landing in neither, which the accessor's identity
+   fires on. */
 static void edge_freed(EndpointEdge *e, const char *who, int stage, int reached) {
     int i = stage - e->stage_first;
 
@@ -2267,10 +2099,9 @@ static void edge_freed(EndpointEdge *e, const char *who, int stage, int reached)
             "a %s state was torn down before its machine declared its stages — the census cannot name the arm "
             "this teardown belongs to, and a partition with an unnameable arm is a total with a hole in it",
             who);
-    /* A `CHECK` FOR THE REASON absent.c's vocabulary bound is one: the line below INDEXES the array with this
-       value in EVERY build, and a guard compiled out of the build where the write still happens is not a
-       guard. There is no arm here that could be right either — a state standing at a stage its own machine
-       does not name is a fact about the driver, not a row to file. */
+    /* A CHECK, for absent.c's vocabulary bound's reason: the line below indexes the array with this value in every
+       build, and a state standing at a stage its own machine does not name is a fact about the driver, not a row to
+       file. */
     CHECKF(i >= 0 && i < e->stage_n,
            "a %s state was torn down standing at stage %d, which its machine's own table does not name "
            "(it declares %d stages based at %d) — the stage a machine holds is asserted against its "
@@ -2286,52 +2117,21 @@ void endpoint_fetch_edge_declare(const char *entry, const char *const *steps, in
     edge_declare(&g_fetch_edge, "fetch", entry, steps, first_stage);
 }
 
-/* THE SAME DECLARATION FOR THE OTHER EDGE, AND THE TABLE IS `SEND_STEPS` AND NOT THE LIFECYCLE MACHINE'S.
-   endpoint.h holds the refutation in full: `send()` is where an XMLHttpRequest request is CONSTRUCTED and
-   where it can throw or park without ever reaching a door, and the lifecycle machine's twenty stages are all
-   downstream of the record. `first_stage` is the edge's to state for core/fetch's reason exactly — SEND_STAGES
-   is based at IDL_STEP_FIRST and which constant that is belongs to core/idl_args.h. */
+/* The same declaration for the other edge, with `SEND_STEPS` rather than the lifecycle machine's table (endpoint.h
+   has the argument): `send()` is where an XMLHttpRequest request is constructed and can throw or park before a door,
+   and the lifecycle machine's twenty stages are downstream of the record. `first_stage` is the edge's to state for
+   core/fetch's reason: SEND_STAGES is based at IDL_STEP_FIRST, core/idl_args.h's constant. */
 void endpoint_xhr_edge_declare(const char *entry, const char *const *steps, int first_stage) {
     edge_declare(&g_xhr_edge, "xhr send", entry, steps, first_stage);
 }
 
-/* A DECLARED MEMBER'S CALL ENTERED THE HOSTING MACHINE'S PROLOGUE, keyed on the STAGE TABLE the caller hands
-   over and on nothing else. core/idl_args.c calls this once per call for EVERY declared member — it cannot
-   know which two of them are network edges and must not be told, because a list of network members spelled
-   there would be the drifting second copy §AN-AUDITOR-DERIVES-THE-RULE forbids, and it would drift in the
-   silent direction: a member removed from it reads as a door nobody called.
-   THE KEY IS THE POINTER AND NOT A NAME, which is the same property `edge_declare` already leans on. Both
-   edges declared themselves with their own X-list — core/fetch's `js_fetch_steps[]`, core/xhr's `SEND_STEPS` —
-   static tables of string literals that outlive every document, and core/idl_args.c holds that same pointer on
-   the member's own `IdlStepDecl`. So the two sides agree by IDENTITY rather than by a string compare that
-   could match a member sharing a label, and there is no third list anywhere: an edge that never declared has
-   a NULL `steps` and matches nothing, which is what an uninstalled door should read.
-   A MEMBER THAT DECLARES NO STEPS PASSES NULL and is dropped here rather than at the caller, so the caller has
-   no arm to get wrong and no reason to know this file has two edges at all. */
-/* THE COMPILER RESOLVED A FREE IDENTIFIER AGAINST THE GLOBAL OBJECT, keyed on the NAME the edge declared and
-   on nothing else. quickjs calls this once per occurrence as it rewrites the reference, for EVERY free
-   identifier in every program this session compiles and not only the two this file has edges for — it cannot
-   know which of them are network entry points and must not be told, which is `endpoint_edge_member_asked`'s
-   argument one frame out and has the same silent failure direction: a list of door names spelled in the
-   compiler would read, for a name removed from it, as a program that never spelled it.
-   BOTH EDGES ARE OFFERED THE NAME AND NEITHER IS TOLD WHICH ONE MATCHED, so a name that somehow belonged to two
-   would raise both rows rather than whichever `if` ran first — the silent double-attribution no total reveals.
-   The two entries are disjoint by construction, being a member name and an interface name of two standards.
-   WHAT IT COSTS AND HOW OFTEN IT RUNS, because an observer runs at the frequency of what it observes: two
-   length-guarded compares per free identifier of every compiled program, once per compile, on the compiler's
-   own time and inside no flow's slice. It allocates nothing and raises no ask, so it cannot move the ask rows
-   it exists to make readable. */
-/* THE PROPERTY SPELLING OF AN ENTRY — `JSConcolicHooks.global_member_named`, reached through
-   solver/concolic.c's dispatch and NOT installed on that table directly, because this is its second consumer
-   and because THE RECEIVER TEST IS NOT THIS FILE'S. Whether `base` denotes the global OBJECT is a fact about
-   which names a realm binds to itself; the dispatch owns the one statement of it, so the `base` never arrives
-   here and no list in this file can be the one that drops a name.
-   THE MEMBER IS KEYED ON THE EDGE'S OWN `entry` and on nothing else, exactly as its sibling is and over the
-   same field, so the order and the census cannot disagree about which names are doors. Both edges are offered
-   the member and neither is told which matched, for the reason stated at the sibling.
-   IT RAISES ITS OWN ROW AND ANSWERS THE ORDER. There is no `typeof` parameter and there cannot be — see the
-   field. So the answer is as good as the row: a body that spells `globalThis.fetch` may be probing rather than
-   calling, and ordering a probe early costs a position and never an answer, because that walk is an ORDER. */
+/* The property spelling of an entry, `JSConcolicHooks.global_member_named`, reached through solver/concolic.c's
+   dispatch rather than installed on that table directly, because this is its second consumer and the receiver test
+   is not this file's: whether `base` denotes the global object is a fact about which names a realm binds to
+   itself, stated once in the dispatch, so `base` never arrives here. Keyed on the edge's own `entry`, as its
+   sibling is, so the order and the census cannot disagree about which names are doors; both edges are offered the
+   member. It raises its own row and answers the order; there is no `typeof` parameter (see the field), so a body
+   spelling `globalThis.fetch` may be probing, and ordering a probe early costs a position, never an answer. */
 int endpoint_compile_global_member(const char *member) {
     int hit = 0;
 
@@ -2341,10 +2141,15 @@ int endpoint_compile_global_member(const char *member) {
     return hit;
 }
 
-/* THE RETURN VALUE IS THE ORDER'S AND THE ROWS ARE THE CENSUS'S, and both edges are asked whatever the first
-   one answers — a short-circuit here would leave the second edge's row unraised for a name that somehow belonged
-   to two, which is the silent double-attribution no total reveals and which the paragraph above keeps both
-   compares for. So the two calls are unconditional and the answers are OR'd. */
+/* The compiler resolved a free identifier against the global object, keyed on the name the edge declared and nothing
+   else. quickjs calls this once per occurrence for every free identifier in every program this session compiles: it
+   cannot know which are network entry points and must not be told, since a list of door names spelled in the
+   compiler would read, for a name removed from it, as a program that never spelled it. Both edges are offered the
+   name and both are asked whatever the first answers, so a name belonging to two would raise both rows rather than
+   whichever `if` ran first; the return is the order's and the rows the census's, OR'd. The two entries are disjoint
+   by construction (a member name and an interface name of two standards). It costs two length-guarded compares per
+   free identifier, once per compile, on the compiler's own time and inside no flow's slice; it allocates nothing
+   and raises no ask. */
 int endpoint_compile_global_named(const char *name, int typeof_only) {
     int a, b;
 
@@ -2354,45 +2159,49 @@ int endpoint_compile_global_named(const char *name, int typeof_only) {
     return a || b;
 }
 
+/* A declared member's call entered the hosting machine's prologue, keyed on the stage table the caller hands over and
+   nothing else. core/idl_args.c calls this once per call for every declared member; it cannot know which are
+   network edges and must not be told, because a list of network members spelled there would drift silently (a
+   member removed from it reads as a door nobody called). The key is the pointer, not a name: both edges declared
+   themselves with their own X-list (core/fetch's `js_fetch_steps[]`, core/xhr's `SEND_STEPS`), static tables
+   core/idl_args.c holds on the member's own `IdlStepDecl`, so the sides agree by identity. An edge that never
+   declared has a NULL `steps` and matches nothing; a member that declares no steps passes NULL and is dropped
+   here. */
 void endpoint_edge_member_asked(const char *const *steps) {
     if (!steps) return;
     if (steps == g_fetch_edge.steps)    g_fetch_edge.called++;
     else if (steps == g_xhr_edge.steps) g_xhr_edge.called++;
 }
 
-/* THE CONSTRUCTION BEGAN — raised at the machine's ONE-TIME CAPTURE, which is the first line of its first
-   stage. A deep-fork copy inherits that flag and does NOT come through here, which is the whole reason
-   endpoint.h forbids pairing this row with either of the teardown rows by a containment. */
+/* The construction began, raised at the machine's one-time capture, the first line of its first stage. A deep-fork
+   copy inherits that flag and does not come through here, which is why endpoint.h forbids pairing this row with
+   either teardown row by a containment. */
 void endpoint_fetch_edge_began(void) { g_fetch_edge.began++; }
 
-/* …AND IT REACHED THE DOOR. Raised on the line before the edge's own endpoint_record call, so this counts
-   OFFERS and never records: the gate below may still suppress one, and that is the ask/outcome split this
-   whole census is an instance of. */
+/* And it reached the door, raised on the line before the edge's own endpoint_record call: this counts offers, never
+   records, since the gate may still suppress one. */
 void endpoint_fetch_edge_offered(void) { g_fetch_edge.reached++; }
 
 void endpoint_fetch_edge_freed(int stage, int offered) { edge_freed(&g_fetch_edge, "fetch", stage, offered); }
 
-/* THE OTHER EDGE'S THREE, AND THE SECOND OF THEM IS A PLACEMENT AND NOT AN OFFER. `send()` hands the
-   constructed request to the lifecycle machine at §3.5.6 step 12 or 13 and is then done with it, so its
-   teardown can say whether the construction COMPLETED and cannot say whether an address was ever offered —
-   which is why the partition below is over the placement and why the offer is a row of its own. */
+/* The other edge's three, and the second is a placement, not an offer: `send()` hands the constructed request to the
+   lifecycle machine at §3.5.6 step 12 or 13 and is then done with it, so its teardown can say whether the
+   construction completed and not whether an address was offered; hence the partition over the placement and the
+   offer as a row of its own. */
 void endpoint_xhr_edge_began(void) { g_xhr_edge.began++; }
 void endpoint_xhr_edge_placed(void) { g_xhr_edge.reached++; }
 void endpoint_xhr_edge_freed(int stage, int placed) { edge_freed(&g_xhr_edge, "xhr send", stage, placed); }
 
-/* …AND THE ADDRESS THIS EDGE OFFERED THE SURFACE, raised on the line before `xhr_record_endpoint`'s own
-   endpoint_record call. It is raised INSIDE the lifecycle machine, so it is a fact about this EDGE and about
-   no send state — endpoint.h states why no inequality between it and the placement row may be asserted. */
+/* And the address this edge offered the surface, raised on the line before `xhr_record_endpoint`'s endpoint_record
+   call, inside the lifecycle machine: a fact about this edge and no send state (endpoint.h has why no inequality
+   between it and the placement row may be asserted). */
 void endpoint_xhr_edge_offered(void) { g_xhr_offered++; }
 
-/* THE CENSUS, AS ROWS OF `_cold` RATHER THAN A CENSUS OF ITS OWN — endpoint.h states what every row is, which
-   identities close over them, and, first, that the stage arms are a PARTITION and not a ladder: a zero in one
-   stage says nothing whatever about its neighbours. */
-/* ONE NUMBER, AS JSON'S OWN SPELLING OF IT. core/json_buf.h writes a VALUE a caller already formatted, and
-   solver/solve.c formats its own the same way — a fixed buffer is not the hand-counted composition
-   solver/compose.h exists to end, because the width of a `%ld` is a property of the TYPE and not of a format
-   string somebody will add a field to. The return is checked rather than assumed: a truncation here would
-   publish a number missing its leading digits, which is a wrong measurement and not a malformed document. */
+/* The census, as rows of `_cold` rather than a census of its own (endpoint.h has every row and the identities over
+   them; the stage arms are a partition, not a ladder, so a zero in one stage says nothing about its neighbours). */
+/* One number, in JSON's own spelling. core/json_buf.h writes a value a caller already formatted, as solver/solve.c
+   does; a fixed buffer is fine because the width of a `%ld` is a property of the type. The return is checked: a
+   truncation would publish a number missing its leading digits. */
 static void edge_num(JsonBuf *b, long v) {
     char t[32];
     int n = snprintf(t, sizeof t, "%ld", v);
@@ -2404,30 +2213,17 @@ static void edge_num(JsonBuf *b, long v) {
     json_buf_raw(b, t);
 }
 
-/* THE EMITTED SURFACE PARTITIONED BY THE MECHANISM THAT COMPOSED EACH ADDRESS — see endpoint.h for what a
-   door is and why neither `prov` nor the program-state flag can stand in for one. This is the row that lets a
-   reader answer CLAUDE.md §What-the-tool-produces' own question without the subtraction it names as the
-   product's razor: `epEmitted - epPreProgram` bounds forced execution's contribution from above and names
-   none of it, and these rows say which mechanism each emitted address came through.
-   EVERY DOOR IS EMITTED INCLUDING THE ZEROES, which is this file's rule for `epFetchOutDiedAtLife` and is
-   load-bearing for the same two reasons. A table listing only its non-zero rows is one whose shape a reader
-   has to know before they can tell a mechanism that never ran from a mechanism that does not exist — and
-   extension/bridge.js REFUSES an empty histogram on this census by name, so a document whose every address
-   came through one door would abort the trusted zone.
-   THE KEYS ARE COMPUTED AND ARE NOT FIELD NAMES, the same construct and the same argument as the stage table
-   above: `json_buf_key` takes a literal and the compiler enforces it, which is what makes every FIELD name in
-   this seam auditable, while a DOOR TOKEN comes off `ENDPOINT_DOORS` and so goes through the VALUE entry.
-   THE COMMA IS A LATCH AND NOT THE LOOP INDEX for `endpoint_json_array`'s reason exactly — the loop starts one
-   past `EPD_UNSTATED` and an index-keyed comma would have to encode that offset, which is a second place for
-   the list's first member to be named.
-   THE IDENTITY IS ASSERTED HERE BECAUSE HERE IS WHERE BOTH SIDES ARE IN ONE HAND, and it is a cross-check
-   between two producers rather than two readings of one walk: this loop and `endpoint_surface_census`'s are
-   two walks over `g_eps` spelled with the SAME `is_asset` skip `endpoint_json_array` performs, so what it
-   fires on is one of those three skips changing without the others — after which the histogram and the total
-   it is published beside are fractions of two different populations, and a reader partitioning the surface by
-   door would be partitioning a number that is not its size. extension/bridge.js and engine/build.mjs each
-   re-check the same sum against the EMITTED DOCUMENT, which is the genuinely independent half: they read what
-   was published rather than the array it was published from. */
+/* The emitted surface partitioned by the mechanism that composed each address (endpoint.h has what a door is and why
+   neither `prov` nor the program-state flag can stand in for one): these rows say which mechanism each emitted
+   address came through, which `epEmitted - epPreProgram` only bounds from above. Every door is emitted including
+   zeroes: a table of only its nonzero rows needs its shape known before a reader can tell a mechanism that never ran
+   from one that does not exist, and extension/bridge.js refuses an empty histogram on this census by name. The keys
+   are computed (door tokens off `ENDPOINT_DOORS`, through the value entry), not field names, which `json_buf_key`'s
+   literal rule keeps for fields. The comma is a latch, not the loop index, because the loop starts one past
+   `EPD_UNSTATED`. The identity is a cross-check between two producers: this loop and endpoint_surface_census's walk
+   `g_eps` with the same `is_asset` skip as `endpoint_json_array`, so it fires on one of the three skips changing
+   alone; extension/bridge.js and engine/build.mjs re-check the sum against the emitted document, the independent
+   half. */
 char *endpoint_door_hist_json(void) {
     JsonBuf b = { 0 };
     long n[EPD_COUNT];
@@ -2437,12 +2233,10 @@ char *endpoint_door_hist_json(void) {
     memset(n, 0, sizeof n);
     for (i = 0; i < g_eps_n; i++) {
         if (g_eps[i].is_asset) continue;
-        /* THE RANGE IS RE-ASSERTED AT THE READ AND NOT ONLY AT THE MINT, because the subscript is on the next
-           line and `endpoint_record`'s own check is compiled out of release: an out-of-range door would index
-           outside this array and raise whatever the stack holds beside it, which is the `ep_loc_name` hazard
-           with a WRITE instead of a read. In release the emit's `endpoint_door_token` still refuses the
-           record, so nothing publishes a fabricated door either way; what this adds is that nothing corrupts
-           the frame on the way there. */
+        /* The range is re-asserted at the read, because the subscript is on the next line and the mint's check is
+           compiled out of release: an out-of-range door would write outside this array. In release
+           `endpoint_door_token` still refuses the record at the emit, so nothing publishes a fabricated door; this
+           keeps the frame intact on the way. */
         DCHECKF(g_eps[i].door > EPD_UNSTATED && g_eps[i].door < EPD_COUNT,
                 "an @H record reached the door census carrying the door %d, which is none of endpoint.h's "
                 "ENDPOINT_DOORS — the mint refuses an unstated one, so this is a record that reached this "
