@@ -41,7 +41,10 @@ function cookieSiteStatus(identity, url) {
   return siteOf(url) === identity.partitionKey.topLevelSite ? "same-site" : "cross-site";
 }
 
-const _CREDENTIALS_MODES = ["omit", "same-origin", "include"];
+/* Fetch §2.2.5 "Requests"' credentials modes. Named apart from lib/safe-fetch.js's `_CREDENTIALS_MODES`:
+   this document's classic scripts share one global scope, and a second `const` of one name is a
+   SyntaxError that stops the later file from loading at all. */
+const IDENTITY_CREDENTIALS_MODES = ["omit", "same-origin", "include"];
 
 /* The facts a send speaking as `identity` applies to `request` ({url, requestInit}): the Origin (always
    the identity's own), the Referer by Referrer Policy §8.3, the credentials mode, and the partition key
@@ -50,7 +53,7 @@ const _CREDENTIALS_MODES = ["omit", "same-origin", "include"];
 function identityFor(identity, request, documentPolicy) {
   const ri = request.requestInit;
   const credentials = ri.credentials === null ? "same-origin" : ri.credentials;
-  CHECK(_CREDENTIALS_MODES.indexOf(credentials) >= 0, "a request names the credentials mode " +
+  CHECK(IDENTITY_CREDENTIALS_MODES.indexOf(credentials) >= 0, "a request names the credentials mode " +
         JSON.stringify(credentials) + ", which Fetch §2.2.5 does not define");
   const policy = ri.referrerPolicy === null || ri.referrerPolicy === "" ? documentPolicy : ri.referrerPolicy;
   let referrer;
