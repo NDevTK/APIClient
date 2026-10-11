@@ -11424,25 +11424,29 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&navopen_tt, &navopen_why, param_value_is(js, "/api/navopen", "v", "proxy"),
              "§7.4 open() handed back no WindowProxy — this statement's `v` is `null`");
     /* HTML §7.4.2.2's destination is an @H row through the `navigation` door, graded by the path that named it:
-       a page only a forced arm opens is `forced` and at no other grade, the page's own unforked `open()` is
-       `derived`, and a cross-site destination is recorded and announced to a peer rather than loaded here. */
+       a page only a forced arm opens is `forced` and is never the page's own act at another grade, the page's
+       own unforked `open()` is `derived`, and a cross-site destination is recorded and announced to a peer
+       rather than loaded here. Each rung asks the page's own act (`driven` false): a drive of the `.then`
+       callback over a symbolic reply forces nothing, so its row is `derived` and driven, which is the tool's
+       act and a different fact. */
+#define NAV_DOOR_OWN "\"driven\":false,\"door\":\"navigation\""
     const char *navdoor_why = NULL; int navdoor_tt = 1;
     fold_row(&navdoor_tt, &navdoor_why,
-             emitted_record_graded_has(js, "https://x.test/navpage", "derived", "\"door\":\"navigation\""),
+             emitted_record_graded_has(js, "https://x.test/navpage", "derived", NAV_DOOR_OWN),
              "NOT REACHED or not recorded: no `derived` `navigation` record for the unforked `open('/navpage')`, so "
              "core/frame/navigable.c's destination row did not run for the control and the rungs below say "
              "nothing about grading");
     fold_row(&navdoor_tt, &navdoor_why,
-             emitted_record_graded_has(js, "https://x.test/navhidden", "forced", "\"door\":\"navigation\""),
-             "no `forced` `navigation` record for `/navhidden`, which only the arm contradicting `num`'s example "
+             emitted_record_graded_has(js, "https://x.test/navhidden", "forced", NAV_DOOR_OWN),
+             "no `forced` `navigation` record for `/navhidden`, which only the arm contradicting the reply "
              "opens — the hidden page's address is not on the surface at the grade of the fork that reached it");
     fold_row(&navdoor_tt, &navdoor_why,
-             !emitted_record_graded_has(js, "https://x.test/navhidden", "derived", "\"door\":\"navigation\"") &&
-             !emitted_record_graded_has(js, "https://x.test/navhidden", "observed", "\"door\":\"navigation\""),
+             !emitted_record_graded_has(js, "https://x.test/navhidden", "derived", NAV_DOOR_OWN) &&
+             !emitted_record_graded_has(js, "https://x.test/navhidden", "observed", NAV_DOOR_OWN),
              "`/navhidden` has a `navigation` record graded as the page's own, though no unforked path opens it — "
              "the default egress arm would then load a page only this engine reached");
     fold_row(&navdoor_tt, &navdoor_why,
-             emitted_record_graded_has(js, "https://other.test/navxsite", "derived", "\"door\":\"navigation\""),
+             emitted_record_graded_has(js, "https://other.test/navxsite", "derived", NAV_DOOR_OWN),
              "no `navigation` record for the cross-site `open()` — the row is written before the agent split, "
              "so a missing one means the cross-agent arm was reached without it");
     fold_row(&navdoor_tt, &navdoor_why, g_docfetch_cross_site == 0,

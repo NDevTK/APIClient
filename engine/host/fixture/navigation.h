@@ -129,11 +129,14 @@ static const char HTML_NAVIGATION[] =
     "fetch('/api/xdocread?v=' + (_w.closed === false && _w.length === 0 &&"
     " typeof _w.closed === 'boolean' && typeof _w.length === 'number' ? 'xread' : 'wrong'));"
     "</script>"
-    /* HTML §7.4.2.2 "Beginning navigation"'s destination as an @H row (the `navigation` door). `num`'s example
-       is 1920, so the `> 5000` arm contradicts it: `/navhidden` is a page only a forced arm opens. `/navpage`
-       is opened by this document's own unforked code, and `other.test` is cross-site, so it is announced to a
+    /* HTML §7.4.2.2 "Beginning navigation"'s destination as an @H row (the `navigation` door). This host
+       answers every fetch with `{"region":"us-west-2"}`, so the `!==` arm contradicts the reply: `/navhidden`
+       is a page only a forced arm opens, the shape `if (user.isAdmin) open('/admin')` has. `/navpage` is
+       opened by this document's own unforked code, and `other.test` is cross-site, so it is announced to a
        peer rather than loaded here; the `nav-door` row reads all three. */
-    "<script>if (num > 5000) open('/navhidden'); open('/navpage'); open('https://other.test/navxsite');</script>"
+    "<script>fetch('/api/navgate').then(function(r){ return r.json(); }).then(function(c){"
+    " if (c.region !== 'us-west-2') open('/navhidden'); });"
+    "open('/navpage'); open('https://other.test/navxsite');</script>"
     TF_CANVAS_INK
     "</body></html>";
 
