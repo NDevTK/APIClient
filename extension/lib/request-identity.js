@@ -13,7 +13,13 @@ async function frameIdentity(tabId, documentId) {
          "frameIdentity needs the tab and the documentId the browser stamped on the observation");
   const frames = await swRpc("webNavigation.getAllFrames", { tabId });
   const f = (frames || []).find((x) => x.documentId === documentId);
-  if (!f) return null;
+  return f ? frameIdentityOf(f) : null;
+}
+
+/* frameIdentity for one entry of webNavigation.getAllFrames' answer: null for a document that is not
+   http(s), which no send speaks as. */
+async function frameIdentityOf(f) {
+  const documentId = f.documentId;
   const u = new URL(f.url);
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
   const { partitionKey } = await swRpc("cookies.getPartitionKey", { documentId });
@@ -157,15 +163,18 @@ async function cookieNamesFor(identityFacts, url) {
 }
 
 /* Whether a real frame could send this request: one speaking as `speaking` (the Origin the request carries as
-   its own, stated or the frame's) from the frame `identity`, whose partition key is the jar, with `facts`
-   (identityFor's answer) and the `sent` {origin, referer} headers. Answers {producible, by, reasons}, where
-   `reasons` names each header no document of `speaking` under that top-level site sends.
+   its own, stated or the frame's) from the frame `identity`, whose partition key is the jar (the frame's own,
+   `frameKey`, or one the person stated), with `facts` (identityFor's answer) and the `sent` {origin, referer}
+   headers (an origin of null is none sent). Answers {producible, by, reasons, jarHeld}: `reasons` names each
+   header no document of `speaking` under that top-level site sends, and `jarHeld` whether the picked frame
+   holds the jar itself.
    - Jar: RFC 6265bis §5.2.1 "Document-based requests" makes a document's site for cookies opaque when it or
      an ancestor is not same site with the top-level origin; the key's hasCrossSiteAncestor states that.
    - Origin and Sec-Fetch-Site: speakAsOrigin's and speakAsFetchSite's answers for a document of `speaking`.
    - Referer: Fetch §5.4 "Request class" makes a referrer of another origin "client". */
-function identityProducibleBy(identity, facts, speaking, sent, method, mode, url) {
+function identityProducibleBy(identity, frameKey, facts, speaking, sent, method, mode, url) {
   const pk = identity.partitionKey;
+  const jarHeld = pk.topLevelSite === frameKey.topLevelSite && pk.hasCrossSiteAncestor === frameKey.hasCrossSiteAncestor;
   const reasons = [];
   const speakingSite = speaking === "null" ? null : siteOf(speaking + "/");
   if (!pk.hasCrossSiteAncestor && speakingSite !== null && speakingSite !== pk.topLevelSite)
@@ -183,6 +192,6 @@ function identityProducibleBy(identity, facts, speaking, sent, method, mode, url
     reasons.push("a document of " + speaking + " sends no Referer of another origin (Fetch §5.4 Request class)");
   const where = !pk.hasCrossSiteAncestor ? "" :
     speakingSite === pk.topLevelSite ? " nested inside a cross-site frame" : " embedded";
-  return { producible: reasons.length === 0, reasons,
+  return { producible: reasons.length === 0, reasons, jarHeld,
            by: "a document of " + speaking + where + " under the top-level site " + pk.topLevelSite };
 }

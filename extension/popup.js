@@ -1006,6 +1006,7 @@ async function loadState() {
   tabResolved = frameTree.tabResolved;
   availableFrames = frameTree.frames;
   _resolvePin();   // validate/advance the pinned send-target against the live frame tree
+  await loadSendJarDomain();   // the open frames the Send panel offers as jars and origins
   tabData = await chrome.runtime.sendMessage({
     type: "GET_STATE",
     tabId: currentTabId,

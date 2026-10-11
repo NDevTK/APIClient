@@ -2400,8 +2400,9 @@ async function buildExportRequest(msg) {
   ) {
     headers["Content-Type"] = msg.contentType;
   }
-  // The Origin and Referer the person stated replace the frame's on the send, so the export carries them too.
-  if (msg.stated.origin !== null) headers["Origin"] = msg.stated.origin;
+  /* The Origin and Referer the person stated replace the frame's on the send, so the export carries them too;
+     a stated "no Origin" leaves the export without one. */
+  if (msg.stated.origin !== null && msg.stated.origin.header !== null) headers["Origin"] = msg.stated.origin.header;
   if (msg.stated.referer !== null) headers["Referer"] = msg.stated.referer;
 
   /* API key: the user's explicit choice from the Send panel's key selector, which the popup posts with every

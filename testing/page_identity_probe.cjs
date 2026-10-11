@@ -100,7 +100,7 @@ async function main() {
       methodId: null, url: u, httpMethod: o.method || "GET", contentType: "", headers: o.headers || {},
       body: o.body === undefined ? null : { mode: "raw", rawBody: o.body, formData: null },
       frameId: 0, apiKeyOverride: null, requestInit: o.requestInit,
-      stated: o.stated || { origin: null, referer: null } })
+      stated: o.stated || { origin: null, referer: null, jar: null } })
       .then((x) => (x && x.error ? { error: x.error } : { status: x && x.status })), route, url, init);
     else if (how === "off" || how === "dnr") {
       if (how === "dnr") await setRule(rule(url), { "Origin": A, "Referer": A + "/page?x=secret",
@@ -157,13 +157,13 @@ async function main() {
   }
   await fire("send.forbidden", "B", "send", Object.assign(ri("include"), { headers: { "Cookie": "x=1" } }));
   // The Send panel's stated Origin and Referer, in place of the frame's: on the request and on its preflight.
-  const evil = { origin: "https://evil.example", referer: "https://evil.example/csrf?x=1" };
+  const evil = { origin: { header: "https://evil.example" }, referer: "https://evil.example/csrf?x=1", jar: null };
   await fire("send.stated", "B", "send", Object.assign(ri("include"), { stated: evil }));
   await fire("send.stated.post", "B", "send", Object.assign(riPost("include"), { stated: evil }));
-  await fire("send.stated.refonly", "A", "send", Object.assign(ri("include"), { stated: { origin: null,
+  await fire("send.stated.refonly", "A", "send", Object.assign(ri("include"), { stated: { origin: null, jar: null,
                                                                                          referer: evil.referer } }));
   // A stated Origin that is not an origin is refused, never sent.
-  await fire("send.stated.bad", "B", "send", Object.assign(ri("include"), { stated: { origin: evil.referer,
+  await fire("send.stated.bad", "B", "send", Object.assign(ri("include"), { stated: { origin: { header: evil.referer }, jar: null,
                                                                                       referer: null } }));
   if (hasDnr) {
     const cond = (extra) => (url) => Object.assign({ urlFilter: "|" + url + "|", tabIds: [-1],

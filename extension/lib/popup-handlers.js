@@ -537,13 +537,19 @@ async function handlePopupMessage(msg, sender, sendResponse) {
       DCHECK(typeof msg.url === "string" && typeof msg.httpMethod === "string" && msg.httpMethod !== "" &&
              !!msg.requestInit && ["credentials", "mode", "referrer", "referrerPolicy"].every((k) =>
                msg.requestInit[k] === null || typeof msg.requestInit[k] === "string") &&
-             !!msg.stated && ["origin", "referer"].every((k) => msg.stated[k] === null || typeof msg.stated[k] === "string"),
-             "SEND_IDENTITY_PREVIEW arrived without the url, method, requestInit and stated {origin, referer} " +
-             "the Send panel's send would carry, so the preview would describe another request");
+             safeFetchStatedShape(msg.stated),
+             "SEND_IDENTITY_PREVIEW arrived without the url, method, requestInit and stated {origin, referer, " +
+             "jar} the Send panel's send would carry, so the preview would describe another request");
       const _ipdoc = _docFromMsg(msg);
       if (!_ipdoc) { sendResponse({ error: "no document for request" }); return; }
       operatorIdentityPreview(sender, _ipdoc.tabId, _ipdoc.documentId, msg.url, msg.httpMethod, msg.requestInit,
                               msg.stated).then(sendResponse);
+      return true;
+    }
+
+    case "SEND_JAR_DOMAIN": {
+      // The frames whose jars and origins the Send panel offers (lib/popup-send.js loadSendJarDomain).
+      operatorJarDomain(sender).then((list) => { checkJarDomain(list, "SEND_JAR_DOMAIN"); sendResponse(list); });
       return true;
     }
 

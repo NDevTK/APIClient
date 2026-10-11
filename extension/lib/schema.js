@@ -464,6 +464,6 @@ function pageContextStatedGrade(initiator, who) {
    defaults apply (Fetch §5.4 "Request class"), which is what the page's own `fetch(url)` would send. */
 const PAGE_CONTEXT_COMPOSED_INIT = Object.freeze({ credentials: null, mode: null, referrer: null,
                                                    referrerPolicy: null });
-/* The Send panel's stated Origin and Referer for an operator send no person typed them for: neither, so the
-   frame's own are sent. */
-const PAGE_CONTEXT_STATED_NONE = Object.freeze({ origin: null, referer: null });
+/* The Send panel's stated record for an operator send no person stated one for: nothing, so the frame's own
+   Origin, Referer and jar are used (lib/safe-fetch.js safeFetchStatedShape). */
+const PAGE_CONTEXT_STATED_NONE = Object.freeze({ origin: null, referer: null, jar: null });

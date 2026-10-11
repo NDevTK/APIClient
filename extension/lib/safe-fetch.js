@@ -1408,8 +1408,8 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
    request. Its cookies are the identity's (cookieHeaderFor's Cookie) only where this zone is willing
    (`credentialed`); otherwise it carries none. The zone's own fetch omits credentials, so this extension's
    jar adds nothing and a reply's Set-Cookie is not stored. `stated` is null, or the operator tier's
-   person-typed {origin, referer}, each of which replaces the identity's header on every rule of the send. A
-   request with no identity runs `send` as this extension. */
+   Send-panel record (safeFetchStatedShape), whose Origin and Referer replace the identity's on every rule of
+   the send. A request with no identity runs `send` as this extension. */
 async function _speakAs(identity, href, method, mode, destination, credentialed, preflightNames, stated, init, send) {
   if (!identity) return send();
   CHECK(typeof withSpeakAsRules === "function",
@@ -1423,10 +1423,14 @@ async function _speakAs(identity, href, method, mode, destination, credentialed,
     rules.push({ method: "OPTIONS", headers: speakAsPreflightHeaders(facts, method, destination, href, preflightNames) });
   if (stated !== null)
     rules.forEach(function (r) {
-      if (stated.origin !== null) r.headers["Origin"] = stated.origin;
+      if (stated.origin !== null) r.headers["Origin"] = stated.origin.header;
       if (stated.referer !== null) r.headers["Referer"] = stated.referer;
     });
-  return withSpeakAsRules(identity.origin, href, rules, stated, send);
+  /* The worker admits an Origin or Referer outside the identity only as a value the person stated; removing
+     a header needs no admission. */
+  var admitted = stated === null ? null
+    : { origin: stated.origin === null ? null : stated.origin.header, referer: stated.referer };
+  return withSpeakAsRules(identity.origin, href, rules, admitted, send);
 }
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
   /* CORB for a script-like load, over facts already computed, answering the rule that refused or null, so
@@ -2099,13 +2103,29 @@ function fetchForbiddenRequestHeader(pairs) {
   return null;
 }
 
+/* The Send panel's stated record, {origin, referer, jar}, each null for the frame's own:
+   - `origin` {header}: the Origin sent, a serialized origin or "null", or null for none at all;
+   - `referer`: the Referer sent;
+   - `jar` {tabId, documentId}: the open frame whose cookie partition the send speaks with, picked from
+     lib/send.js's operatorJarDomain and resolved there through chrome.cookies.getPartitionKey, so no
+     partition key is ever typed. */
+function safeFetchStatedShape(stated) {
+  return !!stated && typeof stated === "object" && Object.keys(stated).length === 3 &&
+         (stated.origin === null || (!!stated.origin && Object.keys(stated.origin).length === 1 &&
+           (stated.origin.header === null || typeof stated.origin.header === "string"))) &&
+         (stated.referer === null || typeof stated.referer === "string") &&
+         (stated.jar === null || (!!stated.jar && Number.isInteger(stated.jar.tabId) &&
+           typeof stated.jar.documentId === "string" && stated.jar.documentId !== ""));
+}
+
 /* The person's typing is input: a stated value that is not what its header carries is refused, never sent.
-   Answers the refusal reason, or null. The operator tier and lib/send.js's identity preview both ask it. */
+   Answers the refusal reason, or null. The operator tier and lib/send.js's identity preview both ask it. A
+   jar is never typed: it names a frame, and lib/send.js refuses one whose frame is gone. */
 function safeFetchStatedRefusal(stated) {
-  if (stated.origin !== null && stated.origin !== "null" &&
-      !(URL.canParse(stated.origin) && /^https?:$/.test(new URL(stated.origin).protocol) &&
-        new URL(stated.origin).origin === stated.origin))
-    return "stated-origin-not-an-origin:" + stated.origin;
+  var o = stated.origin === null ? null : stated.origin.header;
+  if (o !== null && o !== "null" &&
+      !(URL.canParse(o) && /^https?:$/.test(new URL(o).protocol) && new URL(o).origin === o))
+    return "stated-origin-not-an-origin:" + o;
   if (stated.referer !== null &&
       !(URL.canParse(stated.referer) && /^https?:$/.test(new URL(stated.referer).protocol) &&
         new URL(stated.referer).href === stated.referer && !stated.referer.includes("#")))
@@ -2120,10 +2140,10 @@ function safeFetchStatedRefusal(stated) {
    scheme, credentials in the URL, a forbidden request-header, a same-origin-mode request to another origin,
    and Fetch §4.8's preflight. The reply is returned whole, whether or not Fetch §4.10's CORS check would let
    the frame's own script read it.
-   `opts.stated` is the Origin and Referer the person typed into the Send panel ({origin, referer}, each null
-   for the frame's own), for testing a server's CORS or CSRF checks. This is the one tier that passes it to
-   the speak-as rule; the preflight is then CORS-checked against the stated Origin, which is what the server
-   was sent. Cookies and `Sec-Fetch-*` stay the frame's. */
+   `opts.stated` is the Send panel's record (safeFetchStatedShape), for testing a server's CORS or CSRF
+   checks; its jar is already in `opts.identity`. This is the one tier that passes an Origin or Referer to the
+   speak-as rule; the preflight is then CORS-checked against the stated Origin, which is what the server was
+   sent, or the identity's when the person stated that none is sent. `Sec-Fetch-*` stays the frame's. */
 async function safeFetchOperator(url, opts) {
   CHECK(typeof senderIsExtensionDocument === "function" && senderIsExtensionDocument(opts.sender),
         "an operator send arrived from " + JSON.stringify(opts.sender && opts.sender.origin) + " — only an " +
@@ -2135,9 +2155,8 @@ async function safeFetchOperator(url, opts) {
         (opts.body === null || typeof opts.body === "string" || opts.body instanceof Uint8Array) &&
         ["cors", "no-cors", "same-origin"].indexOf(opts.mode) >= 0,
         "an operator send is missing its method, header pairs, body statement or mode");
-  CHECK(!!opts.stated && ["origin", "referer"].every(function (k) {
-          return opts.stated[k] === null || typeof opts.stated[k] === "string"; }),
-        "an operator send states no {origin, referer} — lib/send.js passes the Send panel's fields, or " +
+  CHECK(safeFetchStatedShape(opts.stated),
+        "an operator send states no {origin, referer, jar} record — lib/send.js passes the Send panel's, or " +
         "PAGE_CONTEXT_STATED_NONE for a probe");
   var stated = opts.stated;
   var statedRefusal = safeFetchStatedRefusal(stated);
@@ -2165,7 +2184,8 @@ async function safeFetchOperator(url, opts) {
     try {
       if (preflight) {
         var pf = await _corsPreflight(parsed.href, opts.method, opts.headers, opts.identity.credentials, false,
-                                      stated.origin !== null ? stated.origin : opts.identity.origin, undefined);
+                                      stated.origin !== null && stated.origin.header !== null
+                                        ? stated.origin.header : opts.identity.origin, undefined);
         if (pf) return { refusal: _refused("network", "blocked-cors-preflight:" + pf + ":" + parsed.origin,
                                            [parsed.href], {}) };
       }
@@ -2202,6 +2222,7 @@ if (typeof self !== "undefined") {
   self.safeFetch = safeFetch;
   self.safeFetchOperator = safeFetchOperator;
   self.safeFetchStatedRefusal = safeFetchStatedRefusal;
+  self.safeFetchStatedShape = safeFetchStatedShape;
   self.fetchForbiddenRequestHeader = fetchForbiddenRequestHeader;
   self.safeFetchMethodRefusal = safeFetchMethodRefusal;
   self.safeFetchWiden = safeFetchWiden;

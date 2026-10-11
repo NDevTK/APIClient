@@ -198,7 +198,9 @@ renderer, so a compromised renderer can neither read nor forge an operator's rep
 - The Send panel's identity preview (`SEND_IDENTITY_PREVIEW`, `operatorIdentityPreview` in `lib/send.js`)
   `CHECK`s the same sender predicate. It answers the popup the frame's Origin, Referer, partition key and
   the names of the cookies a send would carry, with the rule that excluded each other name, and never a
-  cookie value.
+  cookie value. `SEND_JAR_DOMAIN` (`operatorJarDomain`) `CHECK`s it too and lists every open http(s) frame
+  with its browser-stamped partition key. A send may speak with another open frame's jar, named by that
+  frame's `documentId` and resolved through `chrome.cookies.getPartitionKey`, never by a typed key.
 - Every caller also states whose act it is, and `pageContextRequireUserInitiated` `CHECK`s
   `PAGE_CONTEXT_USER_INITIATED`. The automatic discovery sweep (`handleResponseBody`) states
   `PAGE_CONTEXT_TOOL_INITIATED`, and `fetchDiscoveryForService` routes it to `safeFetch`.

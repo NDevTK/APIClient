@@ -266,7 +266,7 @@
         <div class="send-url-row">
           <label class="send-url-label" for="send-stated-origin">Origin</label>
           <input id="send-stated-origin" type="text" spellcheck="false" list="send-origin-domain"
-                 placeholder="blank: the frame's own, derived at send">
+                 placeholder="blank: the frame's own, derived at send; none: no Origin">
           <span id="send-stated-origin-mark" class="send-provenance-mark"></span>
           <datalist id="send-origin-domain"></datalist>
         </div>
@@ -278,6 +278,12 @@
           <span id="send-stated-referer-mark" class="send-provenance-mark"></span>
         </div>
         <div id="send-referer-example" class="field-ast-values"></div>
+        <!-- The frame whose cookie partition the send speaks with, from loadSendJarDomain's open frames; never
+             a typed key. -->
+        <div class="send-url-row">
+          <label class="send-url-label" for="send-jar">Cookie jar</label>
+          <select id="send-jar"><option value="">the frame's own</option></select>
+        </div>
         <div id="send-jar-row" class="field-ast-values"></div>
         <button id="btn-send" type="button">Send Request</button>
         <div class="export-row">

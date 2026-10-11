@@ -534,10 +534,11 @@ function renderSendUrl() {
   var stated = function (v, unstated) { return v === null ? unstated : v; };
   row.appendChild(domElement("div", { class: "send-url-note" }, [
     "Sent from this extension as the frame the request was observed in — " +
-    (typed.origin === null ? "its Origin" : "the Origin you stated, " + typed.origin + ", in place of its own") +
+    (typed.origin === null ? "its Origin" : typed.origin.header === null ? "no Origin, as you stated"
+      : "the Origin you stated, " + typed.origin.header + ", in place of its own") +
     ", " +
     (typed.referer === null ? "its Referer" : "the Referer you stated, " + typed.referer + ", in place of its own") +
-    " and its cookies — with mode " + stated(init.mode, "not stated") + ", referrer " +
+    " and " + (typed.jar === null ? "its cookies" : "the cookies of the jar you picked") + " — with mode " + stated(init.mode, "not stated") + ", referrer " +
     stated(init.referrer === "about:client" ? "the page's URL" : init.referrer === "" ? "none" : init.referrer,
            "not stated") + ", referrer policy " +
     stated(init.referrerPolicy === "" ? "the document's" : init.referrerPolicy, "not stated") +
@@ -590,11 +591,9 @@ function sendPanelDocumentId() {
    beside each field, and the cookie jar the send speaks with. Every fact is the offscreen's
    SEND_IDENTITY_PREVIEW answer (lib/send.js operatorIdentityPreview, which calls what the send calls), so
    nothing here derives one. A blank field is the frame's own, derived at send, and its example follows the
-   URL, method, mode, frame and credentials mode; a typed one is the operator's and follows nothing.
-   `url` is the parsed address, or null when there is none. Answers arriving after a newer render are dropped.
-   Not covered: a jar other than the picked frame's, and stating that no Origin goes out. The next diff has
-   operatorSendAsFrame take a stated partition key and an absent Origin. Their absence shows as a jar row
-   whose only choice is the credentials mode, and an Origin domain with no "none" member. */
+   URL, method, mode, frame and credentials mode; a typed one is the operator's and follows nothing. The
+   Origin's domain and the jar's are the open frames (loadSendJarDomain), with "null" and "none" for Origin.
+   `url` is the parsed address, or null when there is none. Answers arriving after a newer render are dropped. */
 var _sendIdentityAsked = 0;
 function renderSendIdentity(url) {
   var asked = ++_sendIdentityAsked;
@@ -612,11 +611,6 @@ function renderSendIdentity(url) {
   };
   mark("send-stated-origin-mark", typed.origin !== null);
   mark("send-stated-referer-mark", typed.referer !== null);
-  var origins = [];
-  availableFrames.forEach(function (f) { var o = _origOf(f); if (o !== "" && origins.indexOf(o) < 0) origins.push(o); });
-  domReplaceChildren(el("send-origin-domain"), origins.concat(["null"]).map(function (o) {
-    return domElement("option", { value: o }, []);
-  }));
   var label = function (text) { return domElement("span", { class: "ast-values-label" }, [text]); };
   var say = function (text) {
     [originEx, refererEx, jar].forEach(function (e) { domReplaceChildren(e, [text]); });
@@ -644,12 +638,18 @@ function renderSendIdentity(url) {
     domReplaceChildren(refererEx, [label("Frame's own:"), " ", p.referer === null
       ? "none: " + source + " under " + policy + " (Referrer Policy §8.3)"
       : offeredValueChip(p.referer, derived("Referrer Policy §8.3 over " + source + ", under " + policy))]);
-    var pk = p.frame.partitionKey;
     var lines = [domElement("div", {}, [label("Cookie jar:"), " ",
-      domElement("span", { class: "send-jar-key" }, [pk.topLevelSite + (pk.hasCrossSiteAncestor ? ", cross-site ancestor" : "")]),
-      " ", domElement("span", { class: "send-provenance-mark",
-                                title: "chrome.cookies.getPartitionKey for the frame's document" }, ["(observed)"]),
+      domElement("span", { class: "send-jar-key" }, [sendJarKeyText(p.jar.partitionKey)]), " ",
+      p.jar.source === "frame"
+        ? domElement("span", { class: "send-provenance-mark",
+                               title: "chrome.cookies.getPartitionKey for the frame's document" }, ["(observed)"])
+        : domElement("span", { class: "send-provenance-mark",
+                               title: "picked by you: the partition chrome.cookies.getPartitionKey states for " +
+                                      p.jar.holder.docUrl }, ["(operator)"]),
       " credentials " + p.credentials])];
+    if (p.producibleBy !== null && !p.producibleBy.jarHeld)
+      lines.push(domElement("div", {}, ["The frame you picked does not hold this jar: " + p.jar.holder.origin +
+                                        " does, and the frame's own is " + sendJarKeyText(p.frame.partitionKey)]));
     lines.push(domElement("div", {}, [
       "Sends: ",
       p.cookieNames.length === 0 ? "no cookies" : p.cookieNames.join(", ")]));
@@ -691,14 +691,60 @@ function sendPanelRequestInit() {
   };
 }
 
-/* The Origin and Referer the person typed in place of the frame's own (#send-stated-origin and
-   #send-stated-referer), each null when its field is empty. The offscreen's operator tier refuses a value
-   that is not what the header carries. */
+/* The Send panel's stated record (lib/safe-fetch.js safeFetchStatedShape), each member null for the frame's
+   own: the Origin typed in #send-stated-origin, where "none" states that no Origin is sent; the Referer typed
+   in #send-stated-referer; and the frame picked in #send-jar, whose partition the send speaks with. The
+   offscreen's operator tier refuses a typed value that is not what its header carries. */
 function sendPanelStatedHeaders() {
   var o = document.getElementById("send-stated-origin"), r = document.getElementById("send-stated-referer");
-  DCHECK(!!o && !!r, "the Send panel carries no stated Origin or Referer field — extension/popup.html declares both");
-  return { origin: o.value.trim() === "" ? null : o.value.trim(),
-           referer: r.value.trim() === "" ? null : r.value.trim() };
+  var j = document.getElementById("send-jar");
+  DCHECK(!!o && !!r && !!j, "the Send panel carries no stated Origin, Referer or jar control — " +
+         "extension/popup.html declares all three");
+  var origin = o.value.trim();
+  return { origin: origin === "" ? null : { header: origin === "none" ? null : origin },
+           referer: r.value.trim() === "" ? null : r.value.trim(),
+           jar: j.value === "" ? null : _sendJarHolders[j.value] };
+}
+
+/* A partition key as the jar rows write it. */
+function sendJarKeyText(pk) {
+  return pk.topLevelSite + (pk.hasCrossSiteAncestor ? ", cross-site ancestor" : "");
+}
+
+/* The open frames, from the offscreen's SEND_JAR_DOMAIN (lib/send.js operatorJarDomain), as #send-jar's
+   options and #send-origin-domain's: one jar per distinct partition key, held by the frame picked before
+   when it still holds that key, and every frame origin with "null" and "none". `_sendJarHolders` maps an
+   option's documentId to its {tabId, documentId}; a picked frame that has closed keeps its option, marked
+   gone, so the panel never changes the person's pick for them and the send refuses it by name. */
+var _sendJarHolders = {};
+async function loadSendJarDomain() {
+  var list = await chrome.runtime.sendMessage({ type: "SEND_JAR_DOMAIN" });
+  checkJarDomain(list, "loadSendJarDomain");
+  var sel = document.getElementById("send-jar");
+  var picked = sel.value;
+  var keyOf = function (pk) { return pk.topLevelSite + "|" + pk.hasCrossSiteAncestor; };
+  var byKey = {}, order = [];
+  list.forEach(function (f) {
+    var k = keyOf(f.partitionKey);
+    if (!(k in byKey)) { byKey[k] = f; order.push(k); }
+    else if (f.documentId === picked) byKey[k] = f;
+  });
+  var options = [domElement("option", { value: "" }, ["the frame's own"])];
+  order.forEach(function (k) {
+    var f = byKey[k];
+    _sendJarHolders[f.documentId] = { tabId: f.tabId, documentId: f.documentId };
+    options.push(domElement("option", { value: f.documentId },
+                            [sendJarKeyText(f.partitionKey) + ", held by " + f.origin + " (tab " + f.tabId + ")"]));
+  });
+  if (picked !== "" && !order.some(function (k) { return byKey[k].documentId === picked; }))
+    options.push(domElement("option", { value: picked }, ["the frame picked before, now gone"]));
+  domReplaceChildren(sel, options);
+  sel.value = picked;
+  var origins = [];
+  list.forEach(function (f) { if (origins.indexOf(f.origin) < 0) origins.push(f.origin); });
+  domReplaceChildren(document.getElementById("send-origin-domain"), origins.concat(["null", "none"]).map(function (o) {
+    return domElement("option", { value: o }, []);
+  }));
 }
 
 function loadSendRequestInit(req) {

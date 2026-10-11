@@ -797,10 +797,9 @@ function _checkSendPanelRequest(msg, command) {
            msg.requestInit[k] === null || typeof msg.requestInit[k] === "string"),
          command + " arrived with no requestInit — lib/popup-send.js's sendPanelRequestInit writes the four " +
          "members (null where unstated) on every send, and without them nobody chose the credentials mode");
-  DCHECK(!!msg.stated && typeof msg.stated === "object" &&
-         ["origin", "referer"].every((k) => msg.stated[k] === null || typeof msg.stated[k] === "string"),
-         command + " arrived with no stated {origin, referer} — lib/popup-send.js's sendPanelStatedHeaders " +
-         "writes both (null for the frame's own) on every send");
+  DCHECK(safeFetchStatedShape(msg.stated),
+         command + " arrived with no stated {origin, referer, jar} — lib/popup-send.js's sendPanelStatedHeaders " +
+         "writes all three (null for the frame's own) on every send");
 }
 
 /* A body is bytes when its type is a binary wire format; JSPB (json+protobuf) is text. */
@@ -815,8 +814,8 @@ function _isBinaryContentType(ct) {
 /* An operator send: a request the person composed, sent from this zone as the frame `documentId` names
    (lib/request-identity.js's frameIdentity, browser-stamped), through safe-fetch.js's operator tier, which
    CHECKs that `sender` is an extension document. `opts` is {method, headers (a map), body (string or null),
-   bodyEncoding (null or "base64"), requestInit, stated}, where `stated` is the Send panel's typed
-   {origin, referer} (PAGE_CONTEXT_STATED_NONE for a probe). Answers {error} or {ok, status, statusText,
+   bodyEncoding (null or "base64"), requestInit, stated}, where `stated` is the Send panel's record
+   (safeFetchStatedShape; PAGE_CONTEXT_STATED_NONE for a probe). Answers {error} or {ok, status, statusText,
    headers, body, bodyEncoding?}, where `body` is text or, for a binary type, base64.
    Not covered: the frame's own referrer policy is not observable from this zone, so a request that states
    none uses Referrer Policy §3's default. The next diff reads the policy the engine parsed when it loaded
@@ -827,9 +826,9 @@ async function operatorSendAsFrame(sender, tabId, documentId, initiator, url, op
          (opts.body === null || typeof opts.body === "string") && !!opts.requestInit && !!opts.stated,
          "an operator send named no method, header map, body statement, requestInit or stated headers");
   if (!URL.canParse(url)) return { error: "blocked: invalid URL" };
-  const identity = await frameIdentity(tabId, documentId);
-  if (identity === null) return { error: "the frame this request speaks as is gone (document " + documentId + ")" };
-  const { facts, mode } = _operatorFacts(identity, url, opts.requestInit);
+  const who = await _operatorIdentity(tabId, documentId, opts.stated);
+  if (who.error !== null) return { error: who.error };
+  const { facts, mode } = _operatorFacts(who.identity, url, opts.requestInit);
   const body = opts.body === null ? null : opts.bodyEncoding === "base64" ? base64ToUint8(opts.body) : opts.body;
   const r = await safeFetchOperator(url, { sender, identity: facts, method: opts.method, mode, body,
                                           headers: Object.keys(opts.headers).map((k) => [k, String(opts.headers[k])]),
@@ -860,31 +859,68 @@ function _operatorFacts(identity, url, requestInit) {
            mode: requestInit.mode === null ? "cors" : requestInit.mode };
 }
 
+/* Who an operator send speaks as: the frame `documentId` (frameIdentity, browser-stamped), with the cookie
+   partition of the frame the person stated as the jar (`stated.jar`, itself resolved through frameIdentity),
+   or its own. Answers {error} naming the frame that is gone, or {error: null, identity, frame, holder}:
+   `identity` is the frame's origin and URL over the jar's partition key, `frame` the picked frame's own
+   identity, and `holder` the identity of the frame whose jar it is. */
+async function _operatorIdentity(tabId, documentId, stated) {
+  const frame = await frameIdentity(tabId, documentId);
+  if (frame === null) return { error: "the frame this request speaks as is gone (document " + documentId + ")" };
+  if (stated.jar === null) return { error: null, identity: frame, frame, holder: frame };
+  const holder = await frameIdentity(stated.jar.tabId, stated.jar.documentId);
+  if (holder === null) return { error: "the frame whose cookie jar was picked is gone (document " +
+                                       stated.jar.documentId + ")" };
+  return { error: null, identity: { origin: frame.origin, docUrl: frame.docUrl, partitionKey: holder.partitionKey },
+           frame, holder };
+}
+
+/* The jars and origins the Send panel offers: every http(s) frame open in any tab, as [{tabId, documentId,
+   origin, url, partitionKey}], each partition key chrome.cookies.getPartitionKey's for that document. */
+async function operatorJarDomain(sender) {
+  CHECK(senderIsExtensionDocument(sender),
+        "the jar domain was asked from " + JSON.stringify(sender && sender.origin) + " — it lists the frames " +
+        "of every tab, which only an extension document may read");
+  const out = [];
+  for (const tab of await swRpc("tabs.query", {})) {
+    // webNavigation's "null if the specified tab ID is invalid": the tab closed since the query.
+    const frames = await swRpc("webNavigation.getAllFrames", { tabId: tab.id });
+    if (frames === null) continue;
+    for (const f of frames) {
+      const id = await frameIdentityOf(f);
+      if (id !== null) out.push({ tabId: tab.id, documentId: f.documentId, origin: id.origin, url: id.docUrl,
+                                  partitionKey: id.partitionKey });
+    }
+  }
+  return out;
+}
+
 /* The Send panel's identity preview: what an operator send of `method` to `url` as the frame `documentId`
    carries, by the calls operatorSendAsFrame makes, never their values for cookies. `stated` is the panel's
-   typed {origin, referer}. Answers lib/identity-preview.js's record: {error}, or the frame's browser-stamped
-   identity, the Origin (Fetch §3.2 "`Origin` header") and Referer (Referrer Policy §8.3) the frame's own send
-   carries, the headers sent once the stated ones replace them, the cookie names with each excluded name's
-   rule, and identityProducibleBy's answer. */
+   record (safeFetchStatedShape). Answers lib/identity-preview.js's record: {error}, or the frame's
+   browser-stamped identity, the jar and the frame holding it, the Origin (Fetch §3.2 "`Origin` header") and
+   Referer (Referrer Policy §8.3) the frame's own send carries, the headers sent once the stated ones replace
+   them, the cookie names with each excluded name's rule, and identityProducibleBy's answer. */
 async function operatorIdentityPreview(sender, tabId, documentId, url, method, requestInit, stated) {
   CHECK(senderIsExtensionDocument(sender),
         "an identity preview was asked from " + JSON.stringify(sender && sender.origin) + " — it reads the " +
         "person's cookie names, which only an extension document may, as only one may send with them");
   if (!URL.canParse(url) || !/^https?:$/.test(new URL(url).protocol))
     return { error: "the address is not an http(s) URL, so the send path will refuse it" };
-  const identity = await frameIdentity(tabId, documentId);
-  if (identity === null) return { error: "the frame this request speaks as is gone (document " + documentId + ")" };
-  const { facts, mode } = _operatorFacts(identity, url, requestInit);
+  const who = await _operatorIdentity(tabId, documentId, stated);
+  if (who.error !== null) return { error: who.error };
+  const { facts, mode } = _operatorFacts(who.identity, url, requestInit);
   const origin = speakAsOrigin(facts.origin, method, mode, url, facts.referrerPolicy);
-  const sent = { origin: stated.origin !== null ? stated.origin : origin,
+  const sent = { origin: stated.origin !== null ? stated.origin.header : origin,
                  referer: stated.referer !== null ? stated.referer : facts.referrer };
   const statedRefusal = safeFetchStatedRefusal(stated);
   const cookies = await cookieNamesFor(facts, url);
-  const speaking = stated.origin !== null ? stated.origin : identity.origin;
-  const pk = identity.partitionKey;
+  const speaking = stated.origin !== null && stated.origin.header !== null ? stated.origin.header : who.frame.origin;
+  const key = (k) => ({ topLevelSite: k.topLevelSite, hasCrossSiteAncestor: k.hasCrossSiteAncestor });
   const preview = {
-    frame: { origin: identity.origin, docUrl: identity.docUrl,
-             partitionKey: { topLevelSite: pk.topLevelSite, hasCrossSiteAncestor: pk.hasCrossSiteAncestor } },
+    frame: { origin: who.frame.origin, docUrl: who.frame.docUrl, partitionKey: key(who.frame.partitionKey) },
+    jar: { partitionKey: key(who.identity.partitionKey), source: stated.jar === null ? "frame" : "operator",
+           holder: { origin: who.holder.origin, docUrl: who.holder.docUrl } },
     method, mode, origin, referer: facts.referrer, policy: facts.referrerPolicy,
     policySource: requestInit.referrerPolicy === null || requestInit.referrerPolicy === "" ? "default" : "request",
     referrerSource: requestInit.referrer === null || requestInit.referrer === "about:client" ? "client"
@@ -892,7 +928,7 @@ async function operatorIdentityPreview(sender, tabId, documentId, url, method, r
     sent, statedRefusal, credentials: facts.credentials, cookieArm: cookies.arm, cookieNames: cookies.names,
     excluded: cookies.excluded,
     producibleBy: statedRefusal !== null ? null
-      : identityProducibleBy(identity, facts, speaking, sent, method, mode, url),
+      : identityProducibleBy(who.identity, who.frame.partitionKey, facts, speaking, sent, method, mode, url),
   };
   checkIdentityPreview(preview, "operatorIdentityPreview");
   return preview;
