@@ -22,7 +22,15 @@ typedef enum {
     CSS_COMPUTED_SHAPE_BORDER_SPACING
 } CssComputedShape;
 
-/* X(ID, name, lexbor id, shape). The first eighteen rows share one `Computed value:` line: CSS 2.1 §8.3 and
+/* The range a property's grammar admits for its numeric values, which css-values-4 §9.1 "Numeric Functions"
+   clamps a math function's result to at computed value time where the value is resolved by then, and at used
+   value time otherwise. ALL is a value with no such bound, or none at all (a keyword). */
+typedef enum {
+    CSS_RANGE_ALL = 1,
+    CSS_RANGE_NON_NEGATIVE   /* `[0,∞]` */
+} CssValueRange;
+
+/* X(ID, name, lexbor id, shape, range). The first eighteen rows share one `Computed value:` line: CSS 2.1 §8.3 and
  * §8.4's margins and paddings and §10.2 and §10.5's `width` and `height` ("the percentage as specified or the
  * absolute length"), css-sizing-3's four limits, and CSS 2.1 §9.3.2 "Box offsets: `top`, `right`, `bottom`,
  * `left`"'s insets. core/layout/used_value.c reads the limits for CSS 2.1 §10.4's and §10.7's clamp; an inset's
@@ -34,77 +42,77 @@ typedef enum {
  * box-model lengths nor limits: a baseline shift's percentage refers to the used `line-height`, which no cascade
  * step holds, so it survives to the computed value; a flex basis adds `content` to `width`'s keywords. */
 #define CSS_PROPERTY_LIST(X)                                                                          \
-    X(MARGIN_TOP,          "margin-top",          LXB_CSS_PROPERTY_MARGIN_TOP,     LENGTH)            \
-    X(MARGIN_RIGHT,        "margin-right",        LXB_CSS_PROPERTY_MARGIN_RIGHT,   LENGTH)            \
-    X(MARGIN_BOTTOM,       "margin-bottom",       LXB_CSS_PROPERTY_MARGIN_BOTTOM,  LENGTH)            \
-    X(MARGIN_LEFT,         "margin-left",         LXB_CSS_PROPERTY_MARGIN_LEFT,    LENGTH)            \
-    X(PADDING_TOP,         "padding-top",         LXB_CSS_PROPERTY_PADDING_TOP,    LENGTH)            \
-    X(PADDING_RIGHT,       "padding-right",       LXB_CSS_PROPERTY_PADDING_RIGHT,  LENGTH)            \
-    X(PADDING_BOTTOM,      "padding-bottom",      LXB_CSS_PROPERTY_PADDING_BOTTOM, LENGTH)            \
-    X(PADDING_LEFT,        "padding-left",        LXB_CSS_PROPERTY_PADDING_LEFT,   LENGTH)            \
-    X(WIDTH,               "width",               LXB_CSS_PROPERTY_WIDTH,          LENGTH)            \
-    X(HEIGHT,              "height",              LXB_CSS_PROPERTY_HEIGHT,         LENGTH)            \
-    X(MIN_WIDTH,           "min-width",           LXB_CSS_PROPERTY_MIN_WIDTH,      LENGTH)            \
-    X(MAX_WIDTH,           "max-width",           LXB_CSS_PROPERTY_MAX_WIDTH,      LENGTH)            \
-    X(MIN_HEIGHT,          "min-height",          LXB_CSS_PROPERTY_MIN_HEIGHT,     LENGTH)            \
-    X(MAX_HEIGHT,          "max-height",          LXB_CSS_PROPERTY_MAX_HEIGHT,     LENGTH)            \
-    X(TOP,                 "top",                 LXB_CSS_PROPERTY_TOP,            LENGTH)            \
-    X(RIGHT,               "right",               LXB_CSS_PROPERTY_RIGHT,          LENGTH)            \
-    X(BOTTOM,              "bottom",              LXB_CSS_PROPERTY_BOTTOM,         LENGTH)            \
-    X(LEFT,                "left",                LXB_CSS_PROPERTY_LEFT,           LENGTH)            \
-    X(BORDER_TOP_WIDTH,    "border-top-width",    LXB_CSS_PROPERTY__UNDEF,         LENGTH)            \
-    X(BORDER_RIGHT_WIDTH,  "border-right-width",  LXB_CSS_PROPERTY__UNDEF,         LENGTH)            \
-    X(BORDER_BOTTOM_WIDTH, "border-bottom-width", LXB_CSS_PROPERTY__UNDEF,         LENGTH)            \
-    X(BORDER_LEFT_WIDTH,   "border-left-width",   LXB_CSS_PROPERTY__UNDEF,         LENGTH)            \
-    X(FONT_SIZE,           "font-size",           LXB_CSS_PROPERTY_FONT_SIZE,      LENGTH)            \
-    X(BASELINE_SHIFT,      "baseline-shift",      LXB_CSS_PROPERTY_BASELINE_SHIFT, LENGTH)            \
-    X(FLEX_BASIS,          "flex-basis",          LXB_CSS_PROPERTY_FLEX_BASIS,     LENGTH)            \
-    X(LINE_HEIGHT,         "line-height",         LXB_CSS_PROPERTY_LINE_HEIGHT,    LINE_HEIGHT)       \
-    X(BORDER_SPACING,      "border-spacing",      LXB_CSS_PROPERTY__UNDEF,         BORDER_SPACING)    \
+    X(MARGIN_TOP,          "margin-top",          LXB_CSS_PROPERTY_MARGIN_TOP,     LENGTH, ALL)    \
+    X(MARGIN_RIGHT,        "margin-right",        LXB_CSS_PROPERTY_MARGIN_RIGHT,   LENGTH, ALL)    \
+    X(MARGIN_BOTTOM,       "margin-bottom",       LXB_CSS_PROPERTY_MARGIN_BOTTOM,  LENGTH, ALL)    \
+    X(MARGIN_LEFT,         "margin-left",         LXB_CSS_PROPERTY_MARGIN_LEFT,    LENGTH, ALL)    \
+    X(PADDING_TOP,         "padding-top",         LXB_CSS_PROPERTY_PADDING_TOP,    LENGTH, NON_NEGATIVE) \
+    X(PADDING_RIGHT,       "padding-right",       LXB_CSS_PROPERTY_PADDING_RIGHT,  LENGTH, NON_NEGATIVE) \
+    X(PADDING_BOTTOM,      "padding-bottom",      LXB_CSS_PROPERTY_PADDING_BOTTOM, LENGTH, NON_NEGATIVE) \
+    X(PADDING_LEFT,        "padding-left",        LXB_CSS_PROPERTY_PADDING_LEFT,   LENGTH, NON_NEGATIVE) \
+    X(WIDTH,               "width",               LXB_CSS_PROPERTY_WIDTH,          LENGTH, NON_NEGATIVE) \
+    X(HEIGHT,              "height",              LXB_CSS_PROPERTY_HEIGHT,         LENGTH, NON_NEGATIVE) \
+    X(MIN_WIDTH,           "min-width",           LXB_CSS_PROPERTY_MIN_WIDTH,      LENGTH, NON_NEGATIVE) \
+    X(MAX_WIDTH,           "max-width",           LXB_CSS_PROPERTY_MAX_WIDTH,      LENGTH, NON_NEGATIVE) \
+    X(MIN_HEIGHT,          "min-height",          LXB_CSS_PROPERTY_MIN_HEIGHT,     LENGTH, NON_NEGATIVE) \
+    X(MAX_HEIGHT,          "max-height",          LXB_CSS_PROPERTY_MAX_HEIGHT,     LENGTH, NON_NEGATIVE) \
+    X(TOP,                 "top",                 LXB_CSS_PROPERTY_TOP,            LENGTH, ALL)    \
+    X(RIGHT,               "right",               LXB_CSS_PROPERTY_RIGHT,          LENGTH, ALL)    \
+    X(BOTTOM,              "bottom",              LXB_CSS_PROPERTY_BOTTOM,         LENGTH, ALL)    \
+    X(LEFT,                "left",                LXB_CSS_PROPERTY_LEFT,           LENGTH, ALL)    \
+    X(BORDER_TOP_WIDTH,    "border-top-width",    LXB_CSS_PROPERTY__UNDEF,         LENGTH, NON_NEGATIVE) \
+    X(BORDER_RIGHT_WIDTH,  "border-right-width",  LXB_CSS_PROPERTY__UNDEF,         LENGTH, NON_NEGATIVE) \
+    X(BORDER_BOTTOM_WIDTH, "border-bottom-width", LXB_CSS_PROPERTY__UNDEF,         LENGTH, NON_NEGATIVE) \
+    X(BORDER_LEFT_WIDTH,   "border-left-width",   LXB_CSS_PROPERTY__UNDEF,         LENGTH, NON_NEGATIVE) \
+    X(FONT_SIZE,           "font-size",           LXB_CSS_PROPERTY_FONT_SIZE,      LENGTH, NON_NEGATIVE) \
+    X(BASELINE_SHIFT,      "baseline-shift",      LXB_CSS_PROPERTY_BASELINE_SHIFT, LENGTH, ALL)    \
+    X(FLEX_BASIS,          "flex-basis",          LXB_CSS_PROPERTY_FLEX_BASIS,     LENGTH, NON_NEGATIVE) \
+    X(LINE_HEIGHT,         "line-height",         LXB_CSS_PROPERTY_LINE_HEIGHT,    LINE_HEIGHT, NON_NEGATIVE) \
+    X(BORDER_SPACING,      "border-spacing",      LXB_CSS_PROPERTY__UNDEF,         BORDER_SPACING, NON_NEGATIVE) \
     CSS_PROPERTY_TEXT_LIST(X)
 
 /* The text-shaped rows. Which `Computed value:` line each derives, and which algorithm reads it, is stated at
  * its arm of css_computed_value.c's derivation. */
 #define CSS_PROPERTY_TEXT_LIST(X)                                                                     \
-    X(OVERFLOW_X,          "overflow-x",          LXB_CSS_PROPERTY_OVERFLOW_X,     TEXT)              \
-    X(OVERFLOW_Y,          "overflow-y",          LXB_CSS_PROPERTY_OVERFLOW_Y,     TEXT)              \
-    X(DISPLAY,             "display",             LXB_CSS_PROPERTY_DISPLAY,        TEXT)              \
-    X(FLOAT,               "float",               LXB_CSS_PROPERTY_FLOAT,          TEXT)              \
-    X(CLEAR,               "clear",               LXB_CSS_PROPERTY_CLEAR,          TEXT)              \
-    X(POSITION,            "position",            LXB_CSS_PROPERTY_POSITION,       TEXT)              \
-    X(BOX_SIZING,          "box-sizing",          LXB_CSS_PROPERTY_BOX_SIZING,     TEXT)              \
-    X(WHITE_SPACE,         "white-space",         LXB_CSS_PROPERTY_WHITE_SPACE,    TEXT)              \
-    X(DIRECTION,           "direction",           LXB_CSS_PROPERTY_DIRECTION,      TEXT)              \
-    X(WRITING_MODE,        "writing-mode",        LXB_CSS_PROPERTY_WRITING_MODE,   TEXT)              \
-    X(ALIGNMENT_BASELINE,  "alignment-baseline",  LXB_CSS_PROPERTY_ALIGNMENT_BASELINE, TEXT)          \
-    X(BASELINE_SOURCE,     "baseline-source",     LXB_CSS_PROPERTY_BASELINE_SOURCE, TEXT)             \
-    X(TEXT_ALIGN_ALL,      "text-align-all",      LXB_CSS_PROPERTY_TEXT_ALIGN_ALL, TEXT)              \
-    X(TEXT_ALIGN_LAST,     "text-align-last",     LXB_CSS_PROPERTY_TEXT_ALIGN_LAST, TEXT)             \
-    X(TRANSFORM,           "transform",           LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
-    X(CAPTION_SIDE,        "caption-side",        LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
-    X(TABLE_LAYOUT,        "table-layout",        LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
-    X(BORDER_COLLAPSE,     "border-collapse",     LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
-    X(FLEX_DIRECTION,      "flex-direction",      LXB_CSS_PROPERTY_FLEX_DIRECTION, TEXT)              \
-    X(FLEX_WRAP,           "flex-wrap",           LXB_CSS_PROPERTY_FLEX_WRAP,      TEXT)              \
-    X(FLEX_GROW,           "flex-grow",           LXB_CSS_PROPERTY_FLEX_GROW,      TEXT)              \
-    X(FLEX_SHRINK,         "flex-shrink",         LXB_CSS_PROPERTY_FLEX_SHRINK,    TEXT)              \
-    X(ALIGN_ITEMS,         "align-items",         LXB_CSS_PROPERTY_ALIGN_ITEMS,    TEXT)              \
-    X(ALIGN_SELF,          "align-self",          LXB_CSS_PROPERTY_ALIGN_SELF,     TEXT)              \
-    X(ALIGN_CONTENT,       "align-content",       LXB_CSS_PROPERTY_ALIGN_CONTENT,  TEXT)              \
-    X(ORDER,               "order",               LXB_CSS_PROPERTY_ORDER,          TEXT)              \
-    X(VISIBILITY,          "visibility",          LXB_CSS_PROPERTY_VISIBILITY,     TEXT)              \
-    X(Z_INDEX,             "z-index",             LXB_CSS_PROPERTY_Z_INDEX,        TEXT)              \
-    X(POINTER_EVENTS,      "pointer-events",      LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
-    X(LIST_STYLE_TYPE,     "list-style-type",     LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
-    X(LIST_STYLE_POSITION, "list-style-position", LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
-    X(LIST_STYLE_IMAGE,    "list-style-image",    LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
-    X(BORDER_TOP_STYLE,    "border-top-style",    LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
-    X(BORDER_RIGHT_STYLE,  "border-right-style",  LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
-    X(BORDER_BOTTOM_STYLE, "border-bottom-style", LXB_CSS_PROPERTY__UNDEF,         TEXT)              \
-    X(BORDER_LEFT_STYLE,   "border-left-style",   LXB_CSS_PROPERTY__UNDEF,         TEXT)
+    X(OVERFLOW_X,          "overflow-x",          LXB_CSS_PROPERTY_OVERFLOW_X,     TEXT, ALL)      \
+    X(OVERFLOW_Y,          "overflow-y",          LXB_CSS_PROPERTY_OVERFLOW_Y,     TEXT, ALL)      \
+    X(DISPLAY,             "display",             LXB_CSS_PROPERTY_DISPLAY,        TEXT, ALL)      \
+    X(FLOAT,               "float",               LXB_CSS_PROPERTY_FLOAT,          TEXT, ALL)      \
+    X(CLEAR,               "clear",               LXB_CSS_PROPERTY_CLEAR,          TEXT, ALL)      \
+    X(POSITION,            "position",            LXB_CSS_PROPERTY_POSITION,       TEXT, ALL)      \
+    X(BOX_SIZING,          "box-sizing",          LXB_CSS_PROPERTY_BOX_SIZING,     TEXT, ALL)      \
+    X(WHITE_SPACE,         "white-space",         LXB_CSS_PROPERTY_WHITE_SPACE,    TEXT, ALL)      \
+    X(DIRECTION,           "direction",           LXB_CSS_PROPERTY_DIRECTION,      TEXT, ALL)      \
+    X(WRITING_MODE,        "writing-mode",        LXB_CSS_PROPERTY_WRITING_MODE,   TEXT, ALL)      \
+    X(ALIGNMENT_BASELINE,  "alignment-baseline",  LXB_CSS_PROPERTY_ALIGNMENT_BASELINE, TEXT, ALL)  \
+    X(BASELINE_SOURCE,     "baseline-source",     LXB_CSS_PROPERTY_BASELINE_SOURCE, TEXT, ALL)     \
+    X(TEXT_ALIGN_ALL,      "text-align-all",      LXB_CSS_PROPERTY_TEXT_ALIGN_ALL, TEXT, ALL)      \
+    X(TEXT_ALIGN_LAST,     "text-align-last",     LXB_CSS_PROPERTY_TEXT_ALIGN_LAST, TEXT, ALL)     \
+    X(TRANSFORM,           "transform",           LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL)      \
+    X(CAPTION_SIDE,        "caption-side",        LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL)      \
+    X(TABLE_LAYOUT,        "table-layout",        LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL)      \
+    X(BORDER_COLLAPSE,     "border-collapse",     LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL)      \
+    X(FLEX_DIRECTION,      "flex-direction",      LXB_CSS_PROPERTY_FLEX_DIRECTION, TEXT, ALL)      \
+    X(FLEX_WRAP,           "flex-wrap",           LXB_CSS_PROPERTY_FLEX_WRAP,      TEXT, ALL)      \
+    X(FLEX_GROW,           "flex-grow",           LXB_CSS_PROPERTY_FLEX_GROW,      TEXT, NON_NEGATIVE) \
+    X(FLEX_SHRINK,         "flex-shrink",         LXB_CSS_PROPERTY_FLEX_SHRINK,    TEXT, NON_NEGATIVE) \
+    X(ALIGN_ITEMS,         "align-items",         LXB_CSS_PROPERTY_ALIGN_ITEMS,    TEXT, ALL)      \
+    X(ALIGN_SELF,          "align-self",          LXB_CSS_PROPERTY_ALIGN_SELF,     TEXT, ALL)      \
+    X(ALIGN_CONTENT,       "align-content",       LXB_CSS_PROPERTY_ALIGN_CONTENT,  TEXT, ALL)      \
+    X(ORDER,               "order",               LXB_CSS_PROPERTY_ORDER,          TEXT, ALL)      \
+    X(VISIBILITY,          "visibility",          LXB_CSS_PROPERTY_VISIBILITY,     TEXT, ALL)      \
+    X(Z_INDEX,             "z-index",             LXB_CSS_PROPERTY_Z_INDEX,        TEXT, ALL)      \
+    X(POINTER_EVENTS,      "pointer-events",      LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL)      \
+    X(LIST_STYLE_TYPE,     "list-style-type",     LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL)      \
+    X(LIST_STYLE_POSITION, "list-style-position", LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL)      \
+    X(LIST_STYLE_IMAGE,    "list-style-image",    LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL)      \
+    X(BORDER_TOP_STYLE,    "border-top-style",    LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL)      \
+    X(BORDER_RIGHT_STYLE,  "border-right-style",  LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL)      \
+    X(BORDER_BOTTOM_STYLE, "border-bottom-style", LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL)      \
+    X(BORDER_LEFT_STYLE,   "border-left-style",   LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL)
 
 typedef enum {
-#define CSS_PROPERTY_ID_ROW(id, name, lxb, shape) CSS_PROPERTY_##id,
+#define CSS_PROPERTY_ID_ROW(id, name, lxb, shape, range) CSS_PROPERTY_##id,
     CSS_PROPERTY_LIST(CSS_PROPERTY_ID_ROW)
 #undef CSS_PROPERTY_ID_ROW
     CSS_PROPERTY_COUNT,
@@ -115,8 +123,9 @@ typedef enum {
 /* The row `name` names, or CSS_PROPERTY_INVALID. One hash probe and one string compare. */
 CssPropertyId css_property_id_of(const char *name);
 
-/* A row's name and shape. `id` must be a row. */
+/* A row's name, shape and range. `id` must be a row. */
 const char *css_property_name(CssPropertyId id);
 CssComputedShape css_property_shape(CssPropertyId id);
+CssValueRange css_property_range(CssPropertyId id);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_CSS_CSS_PROPERTY_ID_H */

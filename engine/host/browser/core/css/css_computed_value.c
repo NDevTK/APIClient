@@ -1031,6 +1031,25 @@ static CssFontMetrics css_cv_font_metrics(CssCvFontCtx *slot, lxb_dom_element_t 
    that knows it: `50vw` becomes a number out of §10.1's initial containing block and carries that rectangle's
    environment fact the whole way to the page, and `2em` becomes one out of the computed `font-size` the
    metrics above walk to, carrying the reader's own default font size the same way. */
+/* css-values-4 §9.1 "Numeric Functions"'s clamp of a resolved length to `name`'s range (core/css/
+   css_property_id.h). A negative LITERAL never reaches here — css-values-4 §5.1 "Range Restrictions and Range
+   Definition Notation" makes it an invalid declaration, dropped at parse — but §9.1 states the opposite for a
+   math function: "numeric functions returning out-of-range values never cause a declaration to become
+   invalid. Instead, the value of a numeric function is clamped to the range allowed in the context it is used
+   at computed value time if possible". So a negative here is a calculation's result and is clamped, once, by
+   the row's range. It is `css_px_max` and not an `if`, because the clamped value's environment facts are the
+   value's: `calc(1rem - 20px)` lands on either side of the floor depending on the reader's default font size.
+   A value still holding a percentage is resolved, and so clamped, at used value time. */
+static CssPx cv_clamp_px(const char *name, CssPx px)
+{
+    CssPropertyId id = css_property_id_of(name);
+
+    DCHECKF(id != CSS_PROPERTY_INVALID, "`%s`: a length was clamped for a property with no row, so no range", name);
+    if (id != CSS_PROPERTY_INVALID && css_property_range(id) == CSS_RANGE_NON_NEGATIVE)
+        px = css_px_max(px, css_px(0.0));
+    return px;
+}
+
 static CssLength computed_length(lxb_dom_element_t *el, const char *name, char *spec)
 {
     CssCvFontCtx slot;
@@ -1038,6 +1057,7 @@ static CssLength computed_length(lxb_dom_element_t *el, const char *name, char *
     CssLength len = css_length_parse(css_cv_realm(el), &font, spec);
 
     free(spec);
+    if (len.kind == CSS_LENGTH_ABSOLUTE) len.px = cv_clamp_px(name, len.px);
     return len;
 }
 
@@ -1115,9 +1135,9 @@ static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, 
            "`auto` — so this is a declaration that reached the cascade without its grammar, which is exactly "
            "what css_shorthand.c validates for the two shorthands lexbor's registry does not carry");
     DCHECK(len.px.px >= 0.0,
-           "a NEGATIVE `border-*-width` reached the computed value. css-backgrounds-3 §3.3 states it outright "
-           "— 'Negative values are invalid' — so the declaration should have been DROPPED by the grammar that "
-           "admitted it rather than absolutized here");
+           "a NEGATIVE `border-*-width` reached the computed value past computed_length's range clamp — "
+           "css-backgrounds-3 §3.3's `<line-width>` is `<length [0,∞]>`, and the row's range is what clamps a "
+           "math function's result, so the row and the grammar have come apart");
     len.px = css_length_snap_line_width(css_cv_realm(el), len.px);
     return len;
 }
@@ -1205,23 +1225,9 @@ static CssLength computed_font_size(lxb_dom_element_t *el, char *spec)
            "<length-percentage [0,∞]> | math` and admits nothing else — no `auto`, no `normal`, no bare "
            "`<number>` — so this is a declaration that reached the cascade without its grammar, which lexbor's "
            "own `font-size` state machine and core/css/css_font_shorthand.c's `<'font-size'>` both refuse");
-    /* css-values-4 §9.1 "Numeric Functions"'S CLAMP, AND WHY IT IS A CLAMP RATHER THAN THE ASSERT THAT STOOD
-       HERE. §2.5's range is `[0,∞]` and a negative LITERAL is a dropped declaration — §5.1 "Range Restrictions
-       and Range Definition Notation": "if the value is outside the allowed range, then unless otherwise
-       specified, the declaration is invalid and must be ignored" — which is what the assert asserted and is
-       still true. What is no longer true is that nothing else can be negative: §9.1 states the opposite rule
-       for a math function, "as the value of a numeric function can't, generally, be known at parse time when
-       range restrictions are enforced, numeric functions returning out-of-range values NEVER cause a
-       declaration to become invalid. Instead, the value of a numeric function is CLAMPED to the range allowed
-       in the context it is used at computed value time if possible". `font-size: calc(1rem - 20px)` is
-       therefore a valid declaration computing to 0, and asserting it away would report a page's own CSS as an
-       engine invariant. The two are told apart by the derivation and not by a flag: a negative literal cannot
-       reach here, so a negative that does is a top-level calculation's result.
-       IT IS `css_px_max` AND NOT AN `if`, because the clamped-away value's environment facts are the value's:
-       `calc(1rem - 20px)` is a function of the reader's DEFAULT FONT SIZE at every viewport, including the ones
-       where it lands at the floor, and taking the bare 0 would delete the arm where the reader's own preference
-       makes it positive. */
-    len.px = css_px_max(len.px, css_px(0.0));
+    /* A percentage or a calculation over one resolved just above is a new number, so the range clamp is asked
+       of it here as computed_length asked it of an absolute length. */
+    len.px = cv_clamp_px("font-size", len.px);
     return len;
 }
 
@@ -1536,7 +1542,7 @@ static CssLineHeight cv_line_height(lxb_dom_element_t *el)
            "keyword. The two are one question asked twice — `css_length_is_length_percentage` and "
            "`css_length_parse` walk the same productions — so a value that passes the first and is not a "
            "length, a percentage or a calculation to the second means they have come apart");
-    out.px = css_length_resolve_pct(len, css_font_size_px(el));
+    out.px = cv_clamp_px("line-height", css_length_resolve_pct(len, css_font_size_px(el)));
     return out;
 }
 
@@ -1631,20 +1637,13 @@ static CssBorderSpacing cv_border_spacing(lxb_dom_element_t *el)
            "context, so a `calc()` mixing a percentage into a length type passes it and arrives here as "
            "CSS_LENGTH_CALCULATED. NARROW THE GRAMMAR rather than widening this: §17.6.1 resolves percentages "
            "against nothing, so the declaration is invalid and belongs dropped at the cascade");
-    /* §17.6.1: "Lengths may not be negative." css-values-4 §5.1 "Range Restrictions and Range Definition
-       Notation" says what a value outside a property's range IS rather than what to do with it here — "If the
-       value is outside the allowed range, then unless otherwise specified, the declaration is invalid and must
-       be ignored" — so the answer is a DROPPED DECLARATION at the cascade and never a clamp at the computed
-       value, which would report a distance §17.6.1 defines no table as having. */
+    /* §17.6.1: "Lengths may not be negative." A negative literal is a declaration css-values-4 §5.1 drops at
+       parse, and a math function's result is clamped by computed_length to the row's range, so neither
+       component can be negative here. */
     DCHECK(h.px.px >= 0.0 && v.px.px >= 0.0,
-           "a `border-spacing` computed NEGATIVE, and CSS 2.1 §17.6.1 \"The separated borders model\" states "
-           "\"Lengths may not be negative\" — so this declaration is one css-values-4 §5.1 \"Range "
-           "Restrictions and Range Definition Notation\" makes invalid, and an invalid declaration is dropped "
-           "rather than computed. core/css/css_shorthand.c's grammar tests the SIGN OF THE WRITTEN TOKEN, "
-           "which catches `-2px` and cannot catch `calc(1px - 2px)`: the sign of a math function is not in its "
-           "text and is known only once core/css/css_math.h has evaluated it. BUILD the range check where the "
-           "evaluation already happens, so the declaration is dropped at the cascade for both spellings, and "
-           "this assert then guards an impossible state rather than a reachable one");
+           "a `border-spacing` component computed NEGATIVE past computed_length's range clamp — CSS 2.1 "
+           "§17.6.1 \"The separated borders model\" states \"Lengths may not be negative\" and the row's range "
+           "is NON_NEGATIVE, so the row and the clamp have come apart");
     out.horizontal = h.px;
     out.vertical = v.px;
     return out;

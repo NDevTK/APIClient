@@ -12,10 +12,11 @@ typedef struct {
     const char      *name;
     uintptr_t        lxb;
     CssComputedShape shape;
+    CssValueRange    range;
 } CssPropertyRow;
 
 static const CssPropertyRow CSS_PROPERTY_ROWS[CSS_PROPERTY_COUNT] = {
-#define CSS_PROPERTY_ROW(id, name, lxb, shape) { name, lxb, CSS_COMPUTED_SHAPE_##shape },
+#define CSS_PROPERTY_ROW(id, name, lxb, shape, range) { name, lxb, CSS_COMPUTED_SHAPE_##shape, CSS_RANGE_##range },
     CSS_PROPERTY_LIST(CSS_PROPERTY_ROW)
 #undef CSS_PROPERTY_ROW
 };
@@ -89,4 +90,10 @@ CssComputedShape css_property_shape(CssPropertyId id)
 {
     DCHECKF((unsigned)id < CSS_PROPERTY_COUNT, "a computed shape was asked for id %u, which is no row", (unsigned)id);
     return CSS_PROPERTY_ROWS[id].shape;
+}
+
+CssValueRange css_property_range(CssPropertyId id)
+{
+    DCHECKF((unsigned)id < CSS_PROPERTY_COUNT, "a value range was asked for id %u, which is no row", (unsigned)id);
+    return CSS_PROPERTY_ROWS[id].range;
 }
