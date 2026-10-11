@@ -102,6 +102,7 @@ int solve_eval_sink_announced(void);
    grows after it has already been seeded once. Everything past the cursor is taken, so nothing is seeded twice
    and nothing appended later is missed — the two halves the old `if (tried) continue` could not both say. */
 int  solve_seed_candidates(JSContext *ctx);   /* seeds whatever each search has added since last time */
+int  solve_seeds_owed(void);   /* whether solve_seed_candidates has a payload to consider; it may still withdraw it */
 /* How many candidate flows this document has seeded in total. Each one RE-RUNS the page, so this number times
    the page's cost is most of what an @S search spends — and it is what says whether a run got slower because
    there were more searches or because each search grew. */

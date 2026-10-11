@@ -1591,6 +1591,12 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    PoC. Idempotent, so the scheduler asks again whenever the frontier drains: a derived breakout is appended
    after its probe has run and a sink in late-loaded code is found after the first drain, and the cursor
    picks both up without seeding anything twice. */
+int solve_seeds_owed(void) {
+    for (int i = 0; i < g_pending_n; i++)
+        if (search_seeds(&g_pending[i]) && g_pending[i].seeded < g_pending[i].npl) return 1;
+    return 0;
+}
+
 int solve_seed_candidates(JSContext *ctx) {
     int added = 0;
     for (int i = 0; i < g_pending_n; i++) {
@@ -1612,11 +1618,14 @@ int solve_seed_candidates(JSContext *ctx) {
                context probe is ASCII alphanumeric, so both are measurements rather than attacks. */
             if (e->pl[e->seeded].kind == CAND_ESCAPE &&
                 !solve_delivered_ok(&e->deliv, e->pl[e->seeded].bytes)) continue;
-            f = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* a candidate session runs from the baseline */
+            /* A candidate session runs from the baseline, and is this tool's act from its first park, so it is
+               named before its seed grades the document's program loads. */
+            f = flow_add_unseeded(ctx, JS_UNDEFINED, WORLD_NONE);
             f->cand_src     = strdup(e->src);
             f->cand_payload = strdup(e->pl[e->seeded].bytes);
             f->cand_sink    = sink_name(e->sink);
             CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
+            flow_seed(f);
             /* The other side of the withdrawal, asserted where the cost is taken: this is where a payload becomes
                a document re-run, so a route into flow creation that skips the check above crashes here instead
                of quietly spending the run. */

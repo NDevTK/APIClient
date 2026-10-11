@@ -27,6 +27,8 @@ void  witness_verify_queue(const char *key, const char *src, const char *payload
 /* Mints a flow for every queued verification not yet seeded. Called at the pick beside solve_seed_candidates,
    so a verification is a member of the one frontier. Returns how many flows it added. */
 int   witness_verify_seed(JSContext *ctx);
+/* Whether witness_verify_seed would mint a flow. */
+int   witness_verify_seeds_owed(void);
 /* A verification flow rebuilt from the cold tier: records its key as seeded so this session does not mint a
    second run for the same witness. */
 void  witness_verify_resumed(const char *key);

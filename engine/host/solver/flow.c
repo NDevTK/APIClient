@@ -1967,14 +1967,24 @@ Flow *flow_add_unseeded(JSContext *ctx, JSValueConst fn, WorldId parent) {
     return f;
 }
 
-Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent) {
-    Flow *f = flow_add_unseeded(ctx, fn, parent);
+void flow_seed(Flow *f) {
     /* The sequence is established before the flow is ever picked: a member picked with an empty sequence would
        report itself finished, the one answer that is never retried. */
     DCHECK(g_seed_hook != NULL,
            "a flow was added to the frontier with nothing to seed its program sequence — the session installs that "
            "hook when it opens, so this flow was created outside a session");
+    /* The seed parks the new flow's program requests, and a park reads the document and records an endpoint
+       against flow_running(); with another member switched in, both would be that member's (its DOM delta, its
+       account and its candidate suppression). A from-baseline flow's view is the baseline. */
+    DCHECK(g_running == NULL,
+           "a flow was seeded while another member holds the thread — switch that member out first, since the "
+           "seed's parks read its document and credit its account");
     g_seed_hook(f);
+}
+
+Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent) {
+    Flow *f = flow_add_unseeded(ctx, fn, parent);
+    flow_seed(f);
     return f;
 }
 

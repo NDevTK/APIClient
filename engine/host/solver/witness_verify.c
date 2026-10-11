@@ -87,6 +87,12 @@ void witness_verify_queue(const char *key, const char *src, const char *payload)
     append(key, src, payload);
 }
 
+int witness_verify_seeds_owed(void) {
+    for (int i = 0; i < g_vfy_n; i++)
+        if (!g_vfy[i].seeded) return 1;
+    return 0;
+}
+
 int witness_verify_seed(JSContext *ctx) {
     int added = 0;
 
@@ -98,11 +104,12 @@ int witness_verify_seed(JSContext *ctx) {
         /* A fresh member from the baseline: it is entered like any new flow and explores like one, with the one
            source substituted. No recorded path is installed, because the claim under test is that the value
            alone reaches the request; a path would carry the assumptions being checked. */
-        f = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);
+        f = flow_add_unseeded(ctx, JS_UNDEFINED, WORLD_NONE);
         f->cand_src = strdup(v->src);
         f->cand_payload = strdup(v->payload);
         f->cand_vfy = strdup(v->key);
         CHECK(f->cand_src && f->cand_payload && f->cand_vfy, "witness_verify: OOM minting a verification flow");
+        flow_seed(f);   /* named first: its seed's parks are this tool's act */
         v->seeded = 1;
         added++;
     }

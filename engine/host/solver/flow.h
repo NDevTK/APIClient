@@ -523,9 +523,13 @@ void  flow_registry_free(JSContext *ctx);
    shared chain. Dups `fn`. Returns the stored Flow* (stable until removed). Never fails: OOM aborts via CHECK.
    flow_add seeds the flow with this agent's root document's programs as rows of its own queue
    (flow_set_seed_hook). flow_add_unseeded is for a creator whose flow must not start there: the fork, which
-   inherits its parent's rows, and a joined document's boot flow, seeded with that document's programs. */
+   inherits its parent's rows, and a joined document's boot flow, seeded with that document's programs.
+   flow_seed is flow_add's second half, for a creator that states who the flow is (an @S candidate, a witness
+   verification, a cold-rebuilt member) before its seed parks requests graded by flow_path_driven. Asserts that
+   no member is switched in. */
 Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent);
 Flow *flow_add_unseeded(JSContext *ctx, JSValueConst fn, WorldId parent);
+void  flow_seed(Flow *f);
 /* Install the hook that gives a new flow its program sequence (solver/engine.c owns the document's script
    inventory). Installed when a session opens and removed when it closes, so this layer does not depend on what a
    document's programs are. */

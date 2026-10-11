@@ -10000,6 +10000,14 @@ static int engine_sched_slice(void) {
            exists to keep in step. A blocked flow's reply is not deferred by this: every driver pays the host at
            every slice (run_scheduler below, main.c's qjs_step at the ABI), so a flow suspended inside a read is
            answered at the next slice. */
+        Flow *incumbent = cur;
+        /* A new member is seeded with no member switched in (flow_seed): its parks read the baseline document and
+           credit no account. The incumbent keeps its standing in the pick and is switched back in if it wins. */
+        if (cur && (solve_seeds_owed() || witness_verify_seeds_owed())) {
+            flow_switch_out(ctx, cur);
+            solve_flow_begin(NULL);
+            cur = NULL;
+        }
         solve_seed_candidates(ctx);
         witness_verify_seed(ctx);   /* the same for an endpoint witness's verification (witness_verify.h) */
         /* WFQ: highest value of information among the members that can still make progress; a fresh fork (UCB)
@@ -10008,7 +10016,7 @@ static int engine_sched_slice(void) {
            schedule rather than a ranking: the incumbent is displaced only by a strictly better flow, the
            comparison the preempt hook makes, so the two ends of the decision cannot disagree and a field of
            equal-weight members (most frontiers) does not pay a COW delta swap per iteration. */
-        Flow *best = flow_next_to_run(cur, FLOW_SCAN_NEXT);
+        Flow *best = flow_next_to_run(incumbent, FLOW_SCAN_NEXT);
         /* Nothing left to run: the frontier is empty, or every member is waiting on the host (the stall), decided
            by asking each member rather than by counting unproductive picks. */
         if (!best) break;

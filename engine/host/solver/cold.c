@@ -1679,7 +1679,7 @@ static Flow *park_flow_add(JSContext *ctx, double val, int before, long flows)
        fork at — which is a question about what `sent` means across a generation, and is not this grammar's.
        Until then the abort a peer takes on two members of one resumed document is CORRECT: the two sending
        worlds really are roots, and no arm of that peer really does hold the second one's messages. */
-    Flow *fl = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);
+    Flow *fl = flow_add_unseeded(ctx, JS_UNDEFINED, WORLD_NONE);   /* seeded by its arm, once it is named */
     /* IT WENT ON THE END, WHICH IS THE HALF OF THE MERGE A LIVE FRONTIER CARES ABOUT. A rebuilt flow must be
        an addition and never a substitution: the registry appends, so this one belongs at `before` plus however
        many this document has rebuilt so far. If a member were ever displaced — a reorder, a swap-remove, a
@@ -1933,6 +1933,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
             fl->started = 1;
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
             fl->pin_blob = concolic_pins_blob_empty();
+            flow_seed(fl);
             flows++; g_resumed.flows++;
             last_flow = fl;
         } else if (kind == 'r') {
@@ -2094,6 +2095,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
             fl->started = 1;
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
             fl->pin_blob = concolic_pins_blob_empty();
+            flow_seed(fl);   /* named first: its seed's parks are this tool's act */
             flows++;
             last_flow = fl;
         } else if (kind == 'c') {
@@ -2225,7 +2227,9 @@ void cold_resume(JSContext *ctx, const char *recipes)
             fl->pin_blob = concolic_pins_blob_empty();
             /* THE FLOW IS COUNTED HERE AND ITS KIND WAS COUNTED ABOVE, because a 'c' record now lands in one
                of two kinds and only the branch that chose knows which. `flows` is the merge's own total and a
-               withdrawn record still produced a member, so it rises either way. */
+               withdrawn record still produced a member, so it rises either way. It is seeded once the
+               substitution is read or withdrawn, since the seed's parks are graded by it. */
+            flow_seed(fl);
             flows++;
             last_flow = fl;
         } else {
