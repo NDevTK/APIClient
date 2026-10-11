@@ -2431,7 +2431,7 @@ bool block_flow_last_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)
     return b.has_line_box;
 }
 
-bool block_flow_first_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)
+bool block_flow_first_line_box_baseline_ask(lxb_dom_element_t *el, CssPx *baseline, bool *has)
 {
     CssPx unused = css_px(0.0);
     bool found = false;
@@ -2461,13 +2461,26 @@ bool block_flow_first_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)
            "list having come apart, and a REPLACED cell (an `<img style=\"display:table-cell\">`) reaching "
            "this walk is CSS 2.1 §17.2 The CSS table model's \"replaced elements with these 'display' values "
            "are treated as their given display types during layout\" needing an arm §17.5.3 does not write");
-    b = bf_layout_driven(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_FIRST);
+    DCHECK(has != NULL, "the first-line-box baseline ask was given nowhere to say whether a line box exists");
+    if (!bf_layout(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_FIRST, &b)) return false;
     DCHECK(!found, "the first-baseline walk reported placing a box it was not looking for");
     /* Same frame as the entry above and as `block_flow_auto_height`: the distance is from this box's own TOP
        CONTENT EDGE, so a caller measuring from a BORDER edge adds its own border and padding and this file
        adds neither. */
     *baseline = b.baseline;
-    return b.has_line_box;
+    *has = b.has_line_box;
+    return true;
+}
+
+bool block_flow_first_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)
+{
+    LayoutJobDrive d;
+    bool has = false;
+
+    layout_job_drive_begin(&d);
+    while (!block_flow_first_line_box_baseline_ask(el, baseline, &has)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
+    return has;
 }
 
 bool block_flow_child_top_ask(lxb_dom_element_t *el, CssPx *out)
@@ -2911,19 +2924,32 @@ bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **ou
     return true;
 }
 
-CssPx block_flow_table_box_top(lxb_dom_element_t *table)
+bool block_flow_table_box_top_ask(lxb_dom_element_t *table, CssPx *out)
 {
     CssPx top = css_px(0.0);
     bool found = false;
     char *d = bf_computed(table, "display");
     bool wrapper = table_wrapper_generates(d);
     char nbuf[160];
+    BfBox w;
 
     free(d);
     DCHECKF(wrapper, "%s: a table box's offset was asked of an element that generates no table wrapper box",
             box_subject(table, nbuf, sizeof nbuf));
-    (void)bf_layout_driven(table, table, &top, &found, NULL, NULL, BF_BASELINE_NONE);
+    if (!bf_layout(table, table, &top, &found, NULL, NULL, BF_BASELINE_NONE, &w)) return false;
     DCHECKF(found, "%s: the table wrapper's stack never placed its table box", box_subject(table, nbuf, sizeof nbuf));
+    *out = top;
+    return true;
+}
+
+CssPx block_flow_table_box_top(lxb_dom_element_t *table)
+{
+    LayoutJobDrive d;
+    CssPx top;
+
+    layout_job_drive_begin(&d);
+    while (!block_flow_table_box_top_ask(table, &top)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
     return top;
 }
 

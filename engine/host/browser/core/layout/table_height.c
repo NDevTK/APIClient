@@ -206,18 +206,25 @@ typedef struct {
     ThAlign            align;
 } ThRowCell;
 
+/* Whether MIN over `cells` measures baselines: with at most one baseline cell, MIN is `max(H)` by the
+   procedure itself (one cell's `A + (H - A)` is its `H`), so no baseline is measured. `table_heights_ask`
+   asks the baselines under the same test before `th_row_min` reads them. */
+static bool th_row_reads_baselines(const ThRowCell *cells, size_t n)
+{
+    size_t i, nbaseline = 0;
+
+    for (i = 0; i < n; i++)
+        if (cells[i].align == TH_ALIGN_BASELINE) nbaseline++;
+    return nbaseline > 1;
+}
+
 static CssPx th_row_min(const ThRowCell *cells, size_t n)
 {
     CssPx tallest = css_px(0.0), above = css_px(0.0), below = css_px(0.0);
-    size_t i, nbaseline = 0;
+    size_t i;
 
-    for (i = 0; i < n; i++) {
-        tallest = css_px_max(tallest, cells[i].height);
-        if (cells[i].align == TH_ALIGN_BASELINE) nbaseline++;
-    }
-    /* With at most one baseline cell, MIN is `max(H)` by the procedure itself (one cell's `A + (H - A)` is
-       its `H`), so no baseline is measured. */
-    if (nbaseline <= 1) return tallest;
+    for (i = 0; i < n; i++) tallest = css_px_max(tallest, cells[i].height);
+    if (!th_row_reads_baselines(cells, n)) return tallest;
     for (i = 0; i < n; i++) {
         CssPx a;
 
@@ -303,6 +310,49 @@ static bool th_declared_minimum(lxb_dom_element_t *table, CssPx *out)
        Restrictions and Range Definition Notation"), so a negative here is a math function's result. */
     *out = css_px_max(css_length_resolve_pct(h, basis), css_px(0.0));
     return true;
+}
+
+bool table_heights_ask(lxb_dom_element_t *table, const TableGrid *grid)
+{
+    ThRowCell *bucket;
+    size_t r, i, n;
+    bool ready = true;
+
+    DCHECK(table != NULL && grid != NULL, "CSS 2.1 §17.5.3's inputs were asked with no table or no grid");
+    if (grid->ncells == 0) return true;
+    bucket = calloc(grid->ncells, sizeof(*bucket));
+    CHECK(bucket != NULL, "out of memory collecting a row's cells for CSS 2.1 §17.5.3");
+    /* Every cell box height `th_cell_box_height` reads, in the order `table_heights` reads them. A replaced
+       cell is left to that function's own refusal. */
+    for (i = 0; i < grid->ncells && ready; i++) {
+        lxb_dom_element_t *cell = grid->cells[i].element;
+        CssPx unused;
+
+        if (cell == NULL || replaced_element_of(cell).replaced) continue;
+        ready = block_flow_auto_height_ask(cell, &unused);
+    }
+    /* The baselines `th_row_min` measures, row by row under `th_row_reads_baselines`. */
+    for (r = 0; r < grid->nrows && ready; r++) {
+        n = 0;
+        for (i = 0; i < grid->ncells; i++) {
+            const TableGridCell *c = &grid->cells[i];
+
+            if (c->row != r || c->rowspan != 1) continue;
+            bucket[n].element = c->element;
+            bucket[n].align = c->element == NULL ? TH_ALIGN_BASELINE : th_cell_align(c->element);
+            n++;
+        }
+        if (!th_row_reads_baselines(bucket, n)) continue;
+        for (i = 0; i < n && ready; i++) {
+            CssPx unused;
+            bool has;
+
+            if (bucket[i].align != TH_ALIGN_BASELINE || bucket[i].element == NULL) continue;
+            ready = block_flow_first_line_box_baseline_ask(bucket[i].element, &unused, &has);
+        }
+    }
+    free(bucket);
+    return ready;
 }
 
 void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHeights *out)

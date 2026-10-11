@@ -71,6 +71,11 @@ typedef struct {
    name, since every term is a floor under a row. */
 void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHeights *out);
 
+/* The walks `table_heights` reads over the same `table` and `grid`, asked without a drive: each cell's
+   content height and the cell baselines a row's MIN measures. False ("not yet") when one was deferred, with
+   the question suspended on the current job; true when `table_heights` will find every one answered. */
+bool table_heights_ask(lxb_dom_element_t *table, const TableGrid *grid);
+
 /* One cell's used border-box height from the answer above, the twin of core/layout/table_width.h's
    `table_cell_used_border_box`: a cell's box fills the rows it covers (§17.5, and §17.5.3: "Cell boxes that are
    smaller than the height of the row receive extra top or bottom padding."). `cell` must be a cell of the grid

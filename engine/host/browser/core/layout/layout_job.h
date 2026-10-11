@@ -38,13 +38,14 @@
  * and the next activation computes them before it retries the node. A resting drive also defers once it has
  * opened rest_unit_items(REST_UNIT_LAYOUT_BODIES) bodies in one activation, so a node whose derivation is wide
  * rests mid-node rather than only a deep one. */
-/* NAMED RESIDUAL, drives that are not rest points. Not covered: core/layout/block_flow.c's auto-height,
- * baseline and table-box entries are still driven where flow_position.c's table arms reach them (table_height.c's
- * row heights, the table box's offset) and where line_box.c measures an `inline-block`'s baseline, so those
- * compute what they deferred inside the same activation. Next: the table frame asks its row heights over
- * `block_flow_auto_height_ask` and propagates "not yet" to the table arms. How its absence shows: the
- * REST_UNIT_LAYOUT_DESCENDANTS bracket's CPU assert naming a unit whose heavy node is a table part or an
- * `inline-block`. */
+/* NAMED RESIDUAL, drives that are not rest points. Not covered: core/layout/block_flow.c's auto-height and
+ * last-baseline entries are still driven where core/layout/used_value.c sizes a box for a caller inside the walk
+ * (an `inline-block` on a line, an absolutely positioned box's containing-block height, intrinsic_block_size.c)
+ * and where line_box.c measures an `inline-block`'s baseline, so those compute what they deferred inside the
+ * same activation. Next: line_box.c's atomic inline measurement asks that height and baseline and propagates
+ * "not yet" through the line-box asks. How its absence shows: the REST_UNIT_LAYOUT_DESCENDANTS bracket's CPU
+ * assert naming a unit whose heavy node is an `inline-block`, a line containing one, or an absolutely
+ * positioned box. */
 
 /* NAMED RESIDUAL, cycles that cross no question kind. Not covered: the layout call graph has recursion
  * cycles that pass through none of the three kinds (intrinsic sizes, line-box atomic extents, the

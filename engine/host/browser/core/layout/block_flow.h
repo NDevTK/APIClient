@@ -453,6 +453,10 @@ bool block_flow_last_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline);
    `el` MUST BE A BLOCK CONTAINER (§9.2.1), which a non-replaced table cell is by that section's own sentence. */
 bool block_flow_first_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline);
 
+/* The same baseline asked without a drive of its own: false ("not yet") when the walk deferred a question,
+   with nothing written; true with `*baseline` and `*has` (the return value above) written. */
+bool block_flow_first_line_box_baseline_ask(lxb_dom_element_t *el, CssPx *baseline, bool *has);
+
 /* CSS 2.2 §9.2.1.1 "Anonymous block boxes"' OTHER SHAPE OF §9.4.2's CONTEXT — the one with no element to name
    it. §9.2.1.1: "if a block container box (such as that generated for the DIV above) has a block-level box
    inside it (such as the P above), then we force it to have only block-level boxes inside it", and the boxes
@@ -509,6 +513,10 @@ bool block_flow_is_floated(lxb_dom_element_t *el);
    §17.4's wrapper stack, past the captions §17.4.1's `caption-side: top` puts above the table box. Zero with
    no such caption. `table` must generate a table wrapper box (asserted). */
 CssPx block_flow_table_box_top(lxb_dom_element_t *table);
+
+/* The same offset asked without a drive of its own: false ("not yet") when the wrapper walk deferred a
+   question, with `*out` unwritten. */
+bool block_flow_table_box_top_ask(lxb_dom_element_t *table, CssPx *out);
 
 /* The height of `table`'s table wrapper box: its stack of top captions, table box and bottom captions (CSS 2.1
    §17.4, §17.4.1), whose margins stay inside it because the wrapper establishes a block formatting context.

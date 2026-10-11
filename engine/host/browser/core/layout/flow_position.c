@@ -158,14 +158,23 @@ typedef struct {
     TableUsedHeights   heights;
 } FpTableFrame;
 
-/* `el` is the box being placed, not the table: the refusals below name it. */
-static void fp_table_frame_build(lxb_dom_element_t *el, FpTableFrame *out)
+static bool fp_table_box_origin_ask(lxb_dom_element_t *table, FlowPoint *out);
+
+/* `el` is the box being placed, not the table: the refusals below name it. False ("not yet") when the table
+   box's origin or a walk §17.5.3 reads was deferred; nothing is then held. */
+static bool fp_table_frame_build_ask(lxb_dom_element_t *el, FpTableFrame *out)
 {
     out->table = table_box_table_of(el);
-    out->origin = flow_table_box_origin(out->table);
+    if (!fp_table_box_origin_ask(out->table, &out->origin)) return false;
     table_grid_build(out->table, &out->grid);
     table_widths(out->table, &out->grid, &out->widths);
+    if (!table_heights_ask(out->table, &out->grid)) {
+        table_widths_release(&out->widths);
+        table_grid_release(&out->grid);
+        return false;
+    }
     table_heights(out->table, &out->grid, &out->heights);
+    return true;
 }
 
 static void fp_table_frame_release(FpTableFrame *f)
@@ -261,14 +270,14 @@ static FlowPoint fp_table_grid_origin(const FpTableFrame *f, size_t row, size_t 
 }
 
 /* §17.5's rule 1, "Each row box occupies one row of grid cells": every column of the row's grid row. */
-static FlowPoint fp_table_row_origin(lxb_dom_element_t *el)
+static bool fp_table_row_origin(lxb_dom_element_t *el, FlowPoint *out)
 {
     FpTableFrame f;
     FlowPoint p = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
     size_t row = 0;
     char nbuf[160], tbuf[160];
 
-    fp_table_frame_build(el, &f);
+    if (!fp_table_frame_build_ask(el, &f)) return false;
     if (!table_grid_row_of(&f.grid, el, &row)) {
         /* The frame is released before the crash (it owns no element, so `f.table` survives): `DFAILF` compiles
            out in release and this arm falls through to the zero point. */
@@ -281,23 +290,24 @@ static FlowPoint fp_table_row_origin(lxb_dom_element_t *el)
                "not report as a row of it. There is no position to answer with — the grid in hand is not this "
                "row's",
                box_subject(el, nbuf, sizeof nbuf), box_subject(f.table, tbuf, sizeof tbuf));
-        return p;
+        *out = p;
+        return true;
     }
-    p = fp_table_grid_origin(&f, row, 0, f.widths.ncols);
+    *out = fp_table_grid_origin(&f, row, 0, f.widths.ncols);
     fp_table_frame_release(&f);
-    return p;
+    return true;
 }
 
 /* §17.5's rule 5, "Each cell is thus a rectangular box, one or more grid cells wide and high", using
    core/layout/table_grid.h's rectangle. */
-static FlowPoint fp_table_cell_origin(lxb_dom_element_t *el)
+static bool fp_table_cell_origin(lxb_dom_element_t *el, FlowPoint *out)
 {
     FpTableFrame f;
     FlowPoint p = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
     const TableGridCell *cell;
     char nbuf[160], tbuf[160];
 
-    fp_table_frame_build(el, &f);
+    if (!fp_table_frame_build_ask(el, &f)) return false;
     cell = table_grid_cell_of(&f.grid, el);
     if (cell == NULL) {
         /* Released before the crash, as in `fp_table_row_origin`. */
@@ -310,11 +320,12 @@ static FlowPoint fp_table_cell_origin(lxb_dom_element_t *el)
                "objects' box generation does not report as a row of this table. There is no position to answer "
                "with — the grid in hand is not this cell's",
                box_subject(el, nbuf, sizeof nbuf), box_subject(f.table, tbuf, sizeof tbuf));
-        return p;
+        *out = p;
+        return true;
     }
-    p = fp_table_grid_origin(&f, cell->row, cell->col, cell->colspan);
+    *out = fp_table_grid_origin(&f, cell->row, cell->col, cell->colspan);
     fp_table_frame_release(&f);
-    return p;
+    return true;
 }
 
 /* §17.5's rule 2, "A row group occupies the same grid cells as the rows it contains": every column of the
@@ -330,19 +341,18 @@ static FlowPoint fp_table_cell_origin(lxb_dom_element_t *el)
  * empty `<tbody>` with a vertical `border-spacing`.
  * No refusal arm: `table_grid_row_group_of` asserts the wrong-table walk and `table_grid_empty_row_group_line`
  * asserts the group is this table's. */
-static FlowPoint fp_table_row_group_origin(lxb_dom_element_t *el)
+static bool fp_table_row_group_origin(lxb_dom_element_t *el, FlowPoint *out)
 {
     FpTableFrame f;
-    FlowPoint p;
     const TableGridRowGroup *run;
     size_t line;
 
-    fp_table_frame_build(el, &f);
+    if (!fp_table_frame_build_ask(el, &f)) return false;
     run = table_grid_row_group_of(&f.grid, el);
     line = (run != NULL) ? run->first : table_grid_empty_row_group_line(&f.grid, el);
-    p = fp_table_grid_origin(&f, line, 0, f.widths.ncols);
+    *out = fp_table_grid_origin(&f, line, 0, f.widths.ncols);
     fp_table_frame_release(&f);
-    return p;
+    return true;
 }
 
 /* Whether a box is on a line box, asked here before §9.4.1's rules, which are written about block-level boxes
@@ -903,12 +913,12 @@ static bool fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_el
        through to §9.4.1's rules; all go through `fp_table_grid_origin`. The three row group displays are
        spelled as strings, like the tests above, rather than routed through `table_box_kind_is_row_group`'s
        enum. The other three table-internal boxes are refused in `fp_require_placeable`. */
-    if (fp_computed_is(el, "display", "table-row")) { *out = fp_table_row_origin(el); return true; }
-    if (fp_computed_is(el, "display", "table-cell")) { *out = fp_table_cell_origin(el); return true; }
+    if (fp_computed_is(el, "display", "table-row")) return fp_table_row_origin(el, out);
+    if (fp_computed_is(el, "display", "table-cell")) return fp_table_cell_origin(el, out);
     if (fp_computed_is(el, "display", "table-row-group") ||
         fp_computed_is(el, "display", "table-header-group") ||
         fp_computed_is(el, "display", "table-footer-group"))
-        return (*out = fp_table_row_group_origin(el), true);
+        return fp_table_row_group_origin(el, out);
     if (fp_computed_is(el, "display", "table-caption")) return fp_caption_origin(el, out);
     fp_require_placeable(el);
 
@@ -1011,9 +1021,10 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
 
 /* CSS 2 §8.1 "Box dimensions"' padding box origin: the border box origin moved inward by the leading border on
    each axis, derived from `flow_border_box_origin` so an unplaceable box crashes there first. */
-FlowPoint flow_table_box_origin(lxb_dom_element_t *table)
+static bool fp_table_box_origin_ask(lxb_dom_element_t *table, FlowPoint *out)
 {
     FlowPoint p;
+    CssPx top;
 
     DCHECK(!table_wrapper_owns_property("border-top-width") && !table_wrapper_owns_property("padding-top") &&
                !table_wrapper_owns_property("padding-left") && table_wrapper_owns_property("margin-top"),
@@ -1025,8 +1036,20 @@ FlowPoint flow_table_box_origin(lxb_dom_element_t *table)
            "two boxes no longer coincide and every box below is offset by a border nobody accounted for");
     /* §17.4's wrapper is what §9.4.1 stacks, so the table element's origin is an ordinary recursion, and the
        table box sits below the wrapper's top captions on the wrapper's own stack. */
-    p = flow_border_box_origin(table);
-    p.y = css_px_add(p.y, block_flow_table_box_top(table));
+    if (!flow_border_box_origin_ask(table, &p) || !block_flow_table_box_top_ask(table, &top)) return false;
+    p.y = css_px_add(p.y, top);
+    *out = p;
+    return true;
+}
+
+FlowPoint flow_table_box_origin(lxb_dom_element_t *table)
+{
+    LayoutJobDrive d;
+    FlowPoint p;
+
+    layout_job_drive_begin(&d);
+    while (!fp_table_box_origin_ask(table, &p)) (void)block_flow_drive_deferred(&d);
+    layout_job_drive_end(&d);
     return p;
 }
 
