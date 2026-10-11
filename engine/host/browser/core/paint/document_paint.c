@@ -10,6 +10,7 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
+#include "core/dom/document.h"
 #include "core/frame/viewport.h"
 #include "core/graphics/raster_surface.h"
 #include "core/layout/layout_job.h"
@@ -103,12 +104,10 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
        mark, so the walk would be spent to learn what this line already knows. */
     if (!viewport_canvas_region(ctx, region)) return false;
 
-    root = lxb_dom_document_element(lxb_dom_interface_document(dom));
-    DCHECK(root != NULL,
-           "a document reached CSS 2.1 §E.2 \"Painting order\"'s walk with no root element. Every document "
-           "this host holds is parsed from HTML markup and HTML §13.2.6 \"Tree construction\" generates an "
-           "`html` element for markup that names none, so a null here is the parse having built no tree "
-           "rather than a document shape this walk cannot handle");
+    /* DOM §4.2.1 "Document tree"'s document element, "the element whose parent is that document, if it
+       exists; otherwise null", read from the tree as it is now: a page may remove its root
+       (`document.documentElement.remove()`), and then no box exists and the `boxless` arm below answers. */
+    root = lxb_dom_interface_element(document_document_element_of(lxb_dom_interface_node(dom)));
 
     /* THE DEVICE SIZE OF THE IMAGE, which is core/paint/display_list_raster.h's own derivation and the one
        place the CSS-pixel-to-device-pixel rounding is made. The ratio is an OPERAND here for the reason that
@@ -130,26 +129,29 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
        css-display-3 §2.8 disagreeing with this one. `none` survives the same blockification because
        css-display-3 §2.7 "Automatic Box Type Transformations" says it does: "This has no effect on display
        types that generate no box at all, such as none or contents". */
-    display = css_computed_value(root, "display");
-    DCHECK(display != NULL,
-           "the cascade produced no computed `display` for the root element — the property is in lexbor's "
-           "registry with an initial value, so css-cascade-5 §7 \"Defaulting\"'s last layer cannot come back "
-           "empty and an absence is this engine's pipeline rather than the document's");
-    DCHECKF(strcmp(display, "contents") != 0,
-            "the root element's computed `display` is `%s`, and css-display-3 §2.8 \"The Root Element's "
-            "Principal Box\" says \"Additionally, a display of contents computes to block on the root "
-            "element\" — which core/css/css_computed_value.c performs. So this is not a document that "
-            "declared something unusual: it is the computed value disagreeing with the section that computes "
-            "it, and the fix is in that file rather than a second arm here",
-            display);
-    boxless = strcmp(display, "none") == 0;
-    free(display);
+    boxless = root == NULL;
+    if (!boxless) {
+        display = css_computed_value(root, "display");
+        DCHECK(display != NULL,
+               "the cascade produced no computed `display` for the root element — the property is in lexbor's "
+               "registry with an initial value, so css-cascade-5 §7 \"Defaulting\"'s last layer cannot come "
+               "back empty and an absence is this engine's pipeline rather than the document's");
+        DCHECKF(strcmp(display, "contents") != 0,
+                "the root element's computed `display` is `%s`, and css-display-3 §2.8 \"The Root Element's "
+                "Principal Box\" says \"Additionally, a display of contents computes to block on the root "
+                "element\" — which core/css/css_computed_value.c performs. So this is not a document that "
+                "declared something unusual: it is the computed value disagreeing with the section that "
+                "computes it, and the fix is in that file rather than a second arm here",
+                display);
+        boxless = strcmp(display, "none") == 0;
+        free(display);
+    }
 
     if (boxless) {
-        /* css-display-3 §2.5's `none`: "The element and its descendants generate no boxes or text sequences".
-           There is nothing for CSS 2.1 §E.2 "Painting order" to walk, and the REGION is untouched by that —
-           it is a fact about the viewport — so the answer is the surface already sized above with no mark on
-           it. `complete` is TRUE because nothing was left unpainted: false is stated for a painter that met an
+        /* No document element, or css-display-3 §2.5's `none`: "The element and its descendants generate no
+           boxes or text sequences". There is nothing for CSS 2.1 §E.2 "Painting order" to walk, and the REGION
+           is untouched by that — it is a fact about the viewport — so the answer is the surface already sized
+           above with no mark on it. `complete` is TRUE because nothing was left unpainted: false is stated for a painter that met an
            operand it could not compute and STOPPED, and this walk was never owed. `offers` staying zero is
            what tells a reader the two apart, because core/paint/paint_order.c offers CSS 2.1 §E.2's step 1 for
            every root it walks and a walk that happened therefore reports at least one. */

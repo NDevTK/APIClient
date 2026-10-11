@@ -76,19 +76,17 @@ static void bp_decline(BpState *st, BoxPaintDecline why)
 #define BP_WHY_UNBUILT ((1u << (unsigned)BOX_PAINT_DECLINE_UNBUILT_REPLACED) | \
                         (1u << (unsigned)BOX_PAINT_DECLINE_UNBUILT_STEP))
 
-/* "THE ROOT ELEMENT", ASKED OF THE DOCUMENT RATHER THAN OF THE PARENT. core/paint/paint_order.c and
-   core/paint/stacking_order.c each hold one spelling of it — "the element whose parent is the Document" — and
-   each says in its own words that a third would be the one that drifts and that it would route to the other
-   when either is exported. Neither is, so this file asks lexbor's OWN entry instead of writing a fourth copy
-   of that sentence: `lxb_dom_document_element` is the DOM's answer to the same question and cannot drift from
-   a predicate it does not contain. */
+/* "The root element", asked of the document: DOM §4.2.1 "Document tree"'s document element, "the element whose
+   parent is that document, if it exists; otherwise null", which core/dom/document.h computes from the tree.
+   lexbor's `lxb_dom_document_element` is not that answer: it is the node the parse attached, and a page that
+   removes or replaces its root leaves it naming the old one. */
 static bool bp_is_root_element(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el);
 
     DCHECK(n->owner_document != NULL, "a box was painted out of a node with no owner document — every node a "
                                       "tree walk reaches was minted by a Document and carries it");
-    return lxb_dom_document_element(n->owner_document) == el;
+    return document_document_element_of(lxb_dom_interface_node(n->owner_document)) == n;
 }
 
 /* CSS 2.1 §14.2 "The background"'s FIRST `body` ELEMENT CHILD of a root, which is the element CSS 2.1 §14.2
@@ -195,7 +193,9 @@ static bool bp_background_propagates_to_canvas(JSContext *ctx, lxb_dom_element_t
 
     if (!lxb_html_tree_node_is(n, LXB_TAG_BODY)) return false;
     /* THE ROOT IS THE DOCUMENT'S OWN ANSWER, for `bp_is_root_element`'s reason above. */
-    root = n->owner_document != NULL ? lxb_dom_document_element(n->owner_document) : NULL;
+    root = n->owner_document != NULL ?
+        lxb_dom_interface_element(document_document_element_of(lxb_dom_interface_node(n->owner_document))) :
+        NULL;
     if (root == NULL || root == el) return false;
     return bp_canvas_background_element(ctx, root) == el;
 }

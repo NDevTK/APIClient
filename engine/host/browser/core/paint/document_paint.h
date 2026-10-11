@@ -132,7 +132,8 @@ typedef struct {
    field of `count` is zero. `out` is INITIALISED by this entry on every arm and is the caller's to free on
    every arm; `count` is required for core/paint/display_list_raster.h's own reason and is written even when
    nothing is drawn.
-   A ROOT THAT GENERATES NO BOX ANSWERS TRUE WITH AN EMPTY IMAGE — `out` is the region's own device size,
+   A ROOT THAT GENERATES NO BOX, OR NO DOCUMENT ELEMENT AT ALL (a page may remove it), ANSWERS TRUE WITH AN
+   EMPTY IMAGE — `out` is the region's own device size,
    every number in `count` is zero and `complete` is TRUE, because nothing was left unpainted rather than a
    painter having stopped. `offers` of ZERO is what tells that state from a walk that ran:
    core/paint/paint_order.c offers CSS 2.1 §E.2 "Painting order"'s step 1 for every root it walks, so a walk
