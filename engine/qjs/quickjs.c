@@ -115269,6 +115269,58 @@ void JS_SetHostPromiseRejectionTracker(JSRuntime *rt,
     rt->host_promise_rejection_tracker_opaque = opaque;
 }
 
+/* A reaction about to be queued in the running flow whose handler is an await continuation created after this
+   flow's last fork must have been minted in this flow's timeline: such a closure is reachable only from the
+   timeline that minted it, and js_async_resume_isolate skips its clone on that premise. `where` names the
+   enqueue site. */
+/* What the enqueue-site assert below says about the promise and the awaiting body: the promise's generation,
+   the module whose capability it is (or none), and the awaiting function's name and file. */
+static const char *js_reaction_ident(JSContext *ctx, JSValueConst promise, JSAsyncFunctionData *a, char *buf,
+                                     size_t cap)
+{
+    struct list_head *el;
+    const char *mod = "none", *fn = "?", *file = "?";
+    char mb[64], fb[48], fl[96];
+    JSValueConst cf = a->func_state.frame.cur_func;
+    list_for_each(el, &ctx->loaded_modules) {
+        JSModuleDef *m = list_entry(el, JSModuleDef, link);
+        if (JS_VALUE_GET_TAG(m->promise) == JS_TAG_OBJECT &&
+            JS_VALUE_GET_OBJ(m->promise) == JS_VALUE_GET_OBJ(promise)) {
+            mod = JS_AtomGetStr(ctx, mb, sizeof mb, m->module_name);
+            break;
+        }
+    }
+    if (JS_VALUE_GET_TAG(cf) == JS_TAG_OBJECT && js_class_has_bytecode(JS_VALUE_GET_OBJ(cf)->class_id)) {
+        JSFunctionBytecode *b = JS_VALUE_GET_OBJ(cf)->u.func.function_bytecode;
+        fn = JS_AtomGetStr(ctx, fb, sizeof fb, b->func_name);
+        file = JS_AtomGetStr(ctx, fl, sizeof fl, b->filename);
+    }
+    snprintf(buf, cap, "promiseGen=%u module=%s awaiter=%s@%s", (unsigned)JS_ObjFlowGen(promise), mod, fn, file);
+    return buf;
+}
+
+static void js_reaction_timeline_check(JSContext *ctx, JSValueConst promise, JSValueConst handler, const char *where)
+{
+#if APICLIENT_DEV
+    char ib[200];
+    JSObject *p;
+    JSAsyncFunctionData *a;
+    if (!g_time_travel.timeline || JS_VALUE_GET_TAG(handler) != JS_TAG_OBJECT) return;
+    p = JS_VALUE_GET_OBJ(handler);
+    if (p->class_id != JS_CLASS_ASYNC_FUNCTION_RESOLVE && p->class_id != JS_CLASS_ASYNC_FUNCTION_REJECT) return;
+    if (JS_IsFlowShared(handler)) return;
+    a = p->u.async_function_data;
+    DCHECKF(a->mint_timeline == g_time_travel.timeline(),
+            "%s queued a reaction whose await continuation was minted in timeline %llx after this flow's last "
+            "fork (closureGen=%u > forkGen=%u), while this flow is timeline %llx — the promise it settles carries "
+            "another timeline's reaction (%s)",
+            where, (unsigned long long)a->mint_timeline, (unsigned)p->flow_gen, (unsigned)g_flow_fork_gen,
+            (unsigned long long)g_time_travel.timeline(), js_reaction_ident(ctx, promise, a, ib, sizeof ib));
+#else
+    (void)ctx; (void)promise; (void)handler; (void)where;
+#endif
+}
+
 static void fulfill_or_reject_promise(JSContext *ctx, JSValueConst promise,
                                       JSValueConst value, bool is_reject)
 {
@@ -115303,6 +115355,7 @@ static void fulfill_or_reject_promise(JSContext *ctx, JSValueConst promise,
         args[2] = rd->handler;
         args[3] = js_bool(is_reject);
         args[4] = value;
+        js_reaction_timeline_check(ctx, promise, args[2], "a promise settlement");
         JS_EnqueueJob(ctx, promise_reaction_job, 5, args);
         list_del(&rd->link);
         promise_reaction_data_free(ctx->rt, rd);
@@ -116886,6 +116939,7 @@ static __exception int perform_promise_then(JSContext *ctx,
         args[2] = rd->handler;
         args[3] = js_bool(i);
         args[4] = s->promise_result;
+        js_reaction_timeline_check(ctx, promise, args[2], "a then on a settled promise");
         JS_EnqueueJob(ctx, promise_reaction_job, 5, args);
         for(i = 0; i < 2; i++)
             promise_reaction_data_free(ctx->rt, rd_array[i]);
