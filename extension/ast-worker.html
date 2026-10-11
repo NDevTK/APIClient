@@ -1,4 +1,8 @@
 <!DOCTYPE html>
+<!-- Within the first 1024 bytes (HTML §4.2.5.4 Specifying the document's character encoding): without it
+     the document and the scripts it loads decode in the locale's legacy encoding (windows-1252 in en-US),
+     and every non-ASCII string they build is mojibake. -->
+<meta charset="utf-8">
 <!-- `frame-src 'self'` IS WHAT LETS THIS DOCUMENT HOLD A RENDERER, and its absence was a block with no
      symptom on this side: the manifest's extension_pages policy grants `frame-src 'self'`, but policies
      COMBINE and every one must allow, and this document's own policy names no frame-src at all — so it fell
