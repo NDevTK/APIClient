@@ -32,7 +32,9 @@ bool table_wrapper_is_block_level(CssDisplay display);
    or on the table box (false)? The predicate is §17.4's closed list: "The computed values of properties
    'position', 'float', 'margin-*', 'top', 'right', 'bottom', and 'left' on the table element are used on the
    table wrapper box and not the table box; all other values of non-inheritable properties are used on the
-   table box and not the table wrapper box."
+   table box and not the table wrapper box." — widened by css-tables-3 §3.6.1 Overrides applying in all modes
+   with `overflow`, `opacity`, `filter`, `clip`, `clip-path`, `isolation`, `mask-*`, `mix-blend-mode`,
+   `transform-*` and `perspective`.
    Ask about non-inherited properties only: an inherited one reaches both boxes from the parent
    (core/css/css_defaulting.c has the inherited list). The other box gets the initial value ("the initial
    values are used instead"), which the consumer supplies. */

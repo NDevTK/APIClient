@@ -13,6 +13,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
+#include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
@@ -543,6 +544,14 @@ static IoRect io_intersect(IoRect a, IoRect b)
     return out;
 }
 
+/* css-tables-3 §3.6.1: of a table's `overflow` values only `clip` and `hidden` take effect ("when its value is
+   not either visible, clip or hidden, is ignored and treated as if its value was visible"). */
+static bool io_overflow_kept_on_table(lxb_dom_element_t *table, const char *axis)
+{
+    return css_computed_keyword_is(table, axis, CSS_KEYWORD_HIDDEN) ||
+           css_computed_keyword_is(table, axis, CSS_KEYWORD_CLIP);
+}
+
 /* §3.2.7 "COMPUTE THE INTERSECTION of a target target and an intersection root root":
      1. Let intersectionRect be the result of getting the bounding box for target.
      2. Let container be the containing block of target.
@@ -617,16 +626,22 @@ static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JS
             break;
         }
         if (lxb_dom_interface_node(container) == rootn) break;            /* step 3's own condition */
-        /* A table wrapper link takes neither step 3.3 nor step 3.4: `overflow` is not on CSS 2 §17.4's list
-           of the wrapper's properties, so the wrapper has the initial `visible` ("the initial values are used
-           instead") and is no scroll container and has no content clip. The table element's own `overflow`
-           is its table box's, which is not in the chain. */
+        /* A table wrapper link carries the table element's `overflow` (css-tables-3 §3.6.1 Overrides applying
+           in all modes lists it among the properties "used on the table-wrapper box and not the table grid
+           box"), and the same section ignores every value but three: "The overflow property on the table-root
+           and table-wrapper box, when its value is not either visible, clip or hidden, is ignored and treated
+           as if its value was visible." So a wrapper whose two axes are neither `clip` nor `hidden` takes
+           neither step 3.3 nor step 3.4; one that is takes them below, over the element that carries the
+           value. */
         if (link.table_wrapper) {
-            DCHECK(!table_wrapper_owns_property("overflow"),
-                   "CSS 2 §17.4's declaration split now gives `overflow` to the table WRAPPER, and this walk "
-                   "steps past a wrapper link on the reading that the wrapper takes the initial `visible`");
-            link = used_value_containing_block_link(container);           /* step 3.5 */
-            continue;
+            DCHECK(table_wrapper_owns_property("overflow-x") && table_wrapper_owns_property("overflow-y"),
+                   "css-tables-3 §3.6.1's declaration split no longer gives `overflow` to the table WRAPPER, "
+                   "and this walk reads the table element's `overflow` as the wrapper's");
+            if (!io_overflow_kept_on_table(container, "overflow-x") &&
+                !io_overflow_kept_on_table(container, "overflow-y")) {
+                link = used_value_containing_block_link(container);       /* step 3.5 */
+                continue;
+            }
         }
         /* STEPS 3.3 AND 3.4 ARE TWO QUESTIONS AND NOT ONE, AND THIS FILE USED TO SAY THEY WERE ONE. The
            retired claim was that "CSSOM VIEW defines a SCROLL CONTAINER by the same overflow properties a
