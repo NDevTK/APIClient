@@ -2150,8 +2150,9 @@ async function main() {
    path. The sender origin is stamped here, from this zone's record of the instance, because the engine may not
    state its own (SECURITY.md). A receiver path is covered by the sender symbol at its longest prefix: a member
    read below a sender's unknown derives from it. One `@JOIN` line per distinct (receiver, id, path); an id no
-   sender indexed is said, never dropped. A child's document is untrusted, so an unreadable one is skipped
-   here, where the flow-base report above has already said so. */
+   sender indexed (a message holding no unknown is not indexed) is said with `sender: null`, never dropped. A
+   child's document is untrusted, so an unreadable one is skipped here, where the flow-base report above has
+   already said so. */
 function routedPostJoin(instances) {
   const docOf = (i) => {
     if (i.result === null) return null;
@@ -2182,10 +2183,14 @@ function routedPostJoin(instances) {
       }
       const sym = s.post.symbols.filter((x) => typeof x.path === 'string' && m[2].startsWith(x.path))
                                 .sort((a, b) => b.path.length - a.path.length)[0] ?? null;
+      /* With no symbol at or above the path, the value the receiver used holds the sender's unknowns below it. */
+      const contains = sym ? [] : s.post.symbols.filter((x) => typeof x.path === 'string' &&
+                                                                x.path.startsWith(m[2]))
+                                                 .map((x) => ({ path: x.path, source: x.source }));
       console.error(`[trusted] @JOIN ${JSON.stringify({
         receiver: i.tag, id: m[1], path: m[2], sender: s.sender, senderOrigin: s.senderOrigin,
         relation: s.post.relation, targetOrigin: s.post.targetOrigin,
-        source: sym ? sym.source : null, shape: sym ? sym.shape : null })}`);
+        source: sym ? sym.source : null, shape: sym ? sym.shape : null, contains })}`);
     }
   }
 }
