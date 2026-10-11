@@ -10,8 +10,8 @@
  * that solver/endpoint.c's edges declare (`fetch`, `XMLHttpRequest`), and an XHR site is its constructor.
  * Next diff: an edge declares a member entry and the compiler reports the field get that names it on any
  * receiver, beside the global report, so those reads join each body's site table.
- * Absence shows as: @H rows arriving through the `beacon`, `image-element`, `form-submit` or `module-import`
- * doors while `reachSites` counts only bodies that spell `fetch` or `XMLHttpRequest`. */
+ * Absence shows as: @H rows arriving through the `beacon`, `image-element`, `form-submit`, `navigation` or
+ * `module-import` doors while `reachSites` counts only bodies that spell `fetch` or `XMLHttpRequest`. */
 #ifndef ENGINE_HOST_SOLVER_NET_REACH_H
 #define ENGINE_HOST_SOLVER_NET_REACH_H
 

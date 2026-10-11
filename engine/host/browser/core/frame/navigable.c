@@ -38,7 +38,8 @@
 #include "solver/engine.h"
 #include "solver/flow.h"             /* the realm teardown's assert: what the frontier still names by HANDLE */
 #include "solver/world.h"
-#include "solver/solve.h"            /* the @S URL class's ONE detector — §7.2.2.1 step 4 is an arrival at it */
+#include "solver/endpoint.h"         /* the @H surface, which records every destination a navigation names */
+#include "solver/solve.h"           /* the @S URL class's ONE detector — §7.2.2.1 step 4 is an arrival at it */
 #include "solver/concolic.h"         /* and the ONE predicate that asks whether a destination was computed */
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
@@ -436,6 +437,28 @@ static bool child_address(JSContext *ctx, const char *url, SandboxFlags sandbox_
     url_record_free(&rec);
     url_record_free(&base);
     return ok;
+}
+
+/* The @H row for a navigation's destination, which child_address has resolved and serialized. It is recorded
+   before any policy decides whether the address loads: a page reached only past a forced gate is a hidden page,
+   and its address is all the default policy lets this run learn of it. `prov` and `driven` are the running
+   path's, read once by the caller for this row and for the load, so a forked arm's destination is `forced` and
+   the page's own unforked code's is `derived`. `about:` destinations fetch nothing (js_nav_load_step asks the
+   same scheme test) and are not addresses. The method is GET because neither caller has a POST arm: a form
+   submission records its own request (core/html/html_form.c) and never reaches §7.4.2.2. */
+static void navigable_record_destination(JSContext *ctx, const char *addr, int prov, int driven)
+{
+    JSValue v;
+
+    DCHECK(addr != NULL && strncmp(addr, "javascript:", sizeof "javascript:" - 1) != 0,
+           "a navigation's destination reached the @H surface as a `javascript:` URL or as nothing — both "
+           "callers serve §7.4.2.2's scheme arm (or assert it unreachable) before recording, and that arm "
+           "fetches no address");
+    if (strncmp(addr, "about:", 6) == 0) return;
+    v = JS_NewString(ctx, addr);
+    CHECK(!JS_IsException(v), "navigable: OOM recording a navigation's destination on the @H surface");
+    endpoint_record(ctx, "GET", v, NULL, 0, NULL, prov, driven, EPD_NAVIGATION);
+    JS_FreeValue(ctx, v);
 }
 
 /* §7.4's CREATE A NEW NAVIGABLE, as ONE operation with ONE result — see navigable.h for why it is synchronous
@@ -2709,6 +2732,7 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url, 
     /* §7.4.2.2 step 21's scheme test, answered by the one component that parses this destination — see
        child_address, and the branch below for why it is served HERE and asserted unreachable at the create. */
     bool is_javascript = false;
+    int prov, driven;
 
     DCHECK(window_proxy_is(proxy), "something that is not a WindowProxy was navigated");
     /* AND IT IS ONE OF THIS AGENT'S, asked BEFORE anything is read off it. §7.1's rules for choosing a
@@ -2925,15 +2949,17 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url, 
     /* AND SO IS THE PROVENANCE, WHICH IS THIS OPERATION'S AND NOT THE NAVIGABLE'S. §7.4.2.2's navigate is
        reached by RUNNING the page's code — a `location` assignment, a form submission, a link activation, an
        `open()` at a named navigable — so the only question left is whether the path that ran stood on an arm
-       its own concrete example contradicts. */
+       its own concrete example contradicts. Read once, for the surface row and the load alike. */
+    prov = engine_prov_of_running_path();
+    driven = engine_driven_of_running_path();
+    navigable_record_destination(ctx, addr, prov, driven);
     navigable_load_enqueue(ctx, proxy, addr, origin_agent(),
                            serialized_policy_container_of(document_policy(ctx)),
                            strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL,
                            /* §7.4.2.2's `documentResource`, straight from the caller — §4.8.5's srcdoc arm is
                               the only one that states it and every other navigation states null. */
                            document_resource,
-                           engine_provenance_of_running_path(),
-                           engine_driven_token(engine_driven_of_running_path()));
+                           engine_provenance_token(prov), engine_driven_token(driven));
     free(addr);
     return JS_DupValue(ctx, proxy);
 }
@@ -3568,7 +3594,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     SerializedPolicyContainer creator_policy;
     /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for the navigation this create FOLDS IN — §7.3.1.3
        "Child navigables"' step 14, whose load reaches the network exactly as §7.4.2.2's navigate does.
-       COMPUTED ONCE, HERE, AND READ BY BOTH ARMS BELOW. The two arms are one operation seen from two sides: a
+       COMPUTED ONCE, HERE, AND READ BY BOTH ARMS BELOW and by the destination's surface row. The two arms are one operation seen from two sides: a
        SAME-ORIGIN child's load is enqueued as a job in this heap and a CROSS-ORIGIN child's is announced to a
        host that provisions a peer, and it would be incoherent for the agent boundary to change what this
        navigation is evidence of. Asking twice is what would let them disagree, and the field is a firing
@@ -3578,8 +3604,10 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        seeded (see navigable_load_enqueue's own note about the task that has no owner), so the path that would
        say whether a gate was forced does not exist and no gate was forced — which is what
        engine_provenance_of_running_path answers `derived` for, in the under-claiming direction. */
-    const char *provenance = engine_provenance_of_running_path();
-    const char *driven = engine_driven_token(engine_driven_of_running_path());
+    const int prov = engine_prov_of_running_path();
+    const int drives = engine_driven_of_running_path();
+    const char *provenance = engine_provenance_token(prov);
+    const char *driven = engine_driven_token(drives);
     char *addr = NULL;
     const Origin *origin = NULL;
     /* §7.4.2.2's scheme dispatch, as child_address answered it — see the assertion below for why a create is
@@ -3697,6 +3725,8 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            "one and no Document is created from one, so there is no address here to create a navigable at. "
            "Unfold the create and the navigate (navigable.h names it), so `window.open(\"javascript:…\")` and "
            "`<a href=\"javascript:…\" target=_blank>` reach navigable_navigate's scheme branch");
+    /* Before the agent split, so a same-origin and a cross-origin destination are one row kind. */
+    navigable_record_destination(ctx, addr, prov, drives);
     /* MINTED FROM THE CREATOR, not from the instance root: this agent holds one realm per same-origin
        document, and naming every child "<root>.<n>" would collide the moment two realms both created one. */
     child = world_mint_doc(document_doc(ctx));

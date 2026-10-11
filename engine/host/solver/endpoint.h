@@ -110,7 +110,11 @@ typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind;
     /* a `<form action>` from the markup and one whose action a script wrote reach core/html/html_form.c's  \
        one recording pair alike */                                                                           \
     X(EPD_FORM_SUBMIT,     "form-submit", EPR_EITHER, EPB_DOCUMENT)                                 \
-    X(EPD_FETCH,           "fetch", EPR_BEYOND, EPB_DOCUMENT)                                       \
+    /* HTML §7.4.2.2 "Beginning navigation"'s destination, and §7.4's create when it folds one in: a page   \
+       address, recorded where core/frame/navigable.c resolves it and before any policy decides whether it  \
+       loads. A markup `<iframe src>` and a script's `open()` or `location` write reach it alike. */         \
+    X(EPD_NAVIGATION,      "navigation", EPR_EITHER, EPB_DOCUMENT)                                  \
+    X(EPD_FETCH,          "fetch", EPR_BEYOND, EPB_DOCUMENT)                                       \
     X(EPD_XHR,             "xhr", EPR_BEYOND, EPB_DOCUMENT)                                         \
     X(EPD_BEACON,          "beacon", EPR_BEYOND, EPB_DOCUMENT)                                      \
     /* a sub-request written inside a multipart batch body the page composed */                              \
@@ -132,8 +136,8 @@ typedef enum {
 const char *endpoint_door_token(int door);
 
 /* What a markup parse of the served document reaches through a door: the door list's third column. Three
-   words, not two: `link-element`, `image-element` and `form-submit` are reached by parser-inserted and
-   script-created elements alike and the door does not record which, so a two-way split would have to guess,
+   words, not two: `link-element`, `image-element`, `form-submit` and `navigation` are reached by
+   parser-inserted and script-created elements alike and the door does not record which, so a two-way split would have to guess,
    and either guess mis-credits one population. `beyond` is named for what a markup parse reaches and never
    for who ran, which is why `reply-chunk` is in it. This is a diagnostic, not the product's bar:
    `endpoint_razor_class_of` composes the bar and does not read the reach. */

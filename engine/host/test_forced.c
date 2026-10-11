@@ -5204,6 +5204,11 @@ static const IdlStepDecl HOSTREQ_DECL = { hostreq_step, sizeof(HostReqState), ho
    the interleaving. */
 static int g_seed_route_derived;
 static int g_seed_declarations;
+/* Document loads this host was asked to perform for a cross-site address. A navigable created at another
+   agent's address is announced on a `navigable.create` notice and its load is the peer's, so the navigation
+   document's two cross-site `open()`s ask for none and the `nav-door` row reads this as zero. */
+static int g_docfetch_cross_site;
+#define FIXTURE_CROSS_SITE "https://other.test/"
 /* The address the fixture's own statement composes out of the region its own host serves — see the statement.
    Stated here as the whole serialized URL because that is what the notice carries: §7.2.5 step 5's
    encoding-parse resolves the argument against the document's address before §7.4.4 ever sees it. */
@@ -5360,6 +5365,9 @@ static int hostreq_answer_all(JSContext *ctx)
                        "load job writes `document.fetch<TAB><provenance><TAB><driven><TAB><url>` "
                        "(core/frame/navigable.c), so a missing tab or an empty tail is that record's two ends "
                        "disagreeing rather than a page navigating to nothing");
+                if ((size_t)(end - asked) >= sizeof FIXTURE_CROSS_SITE - 1 &&
+                    !memcmp(asked, FIXTURE_CROSS_SITE, sizeof FIXTURE_CROSS_SITE - 1))
+                    g_docfetch_cross_site++;
                 JS_DefinePropertyValueStr(ctx, v, "url",
                                           JS_NewStringLen(ctx, asked, (size_t)(end - asked)), JS_PROP_C_W_E);
                 /* AS BYTES: §2.2.5's body is a byte sequence, and a Document is parsed from one.
@@ -8342,6 +8350,24 @@ static int emitted_record_prefix_has(const char *js, const char *prefix, const c
     for (i = 0; i < n; i++)
         for (p = r[i].b; p + m <= r[i].b + r[i].n; p++)
             if (memcmp(p, needle, m) == 0) return 1;
+    return 0;
+}
+
+/* Does the statement at `url` have a record at the provenance `grade` that carries `needle` — a claim about one
+   arm's record, for a row whose subject is the grade itself (a page only a forced arm reaches is `forced`, and
+   the same address at another grade is the defect). */
+static int emitted_record_graded_has(const char *js, const char *url, const char *grade, const char *needle) {
+    EmittedRec r[EMITTED_REC_MAX];
+    size_t m = strlen(needle), gm = strlen(grade), gn;
+    int n = emitted_records(js, url, r, EMITTED_REC_MAX), i;
+    const char *p, *g;
+
+    for (i = 0; i < n; i++) {
+        g = emitted_rec_grade(&r[i], &gn);
+        if (gn != gm || memcmp(g, grade, gm) != 0) continue;
+        for (p = r[i].b; p + m <= r[i].b + r[i].n; p++)
+            if (memcmp(p, needle, m) == 0) return 1;
+    }
     return 0;
 }
 
@@ -11397,6 +11423,31 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "NOT REACHED: there is no /api/navopen record at all, so this run did not answer the statement");
     fold_row(&navopen_tt, &navopen_why, param_value_is(js, "/api/navopen", "v", "proxy"),
              "§7.4 open() handed back no WindowProxy — this statement's `v` is `null`");
+    /* HTML §7.4.2.2's destination is an @H row through the `navigation` door, graded by the path that named it:
+       a page only a forced arm opens is `forced` and at no other grade, the page's own unforked `open()` is
+       `derived`, and a cross-site destination is recorded and announced to a peer rather than loaded here. */
+    const char *navdoor_why = NULL; int navdoor_tt = 1;
+    fold_row(&navdoor_tt, &navdoor_why,
+             emitted_record_graded_has(js, "https://x.test/navpage", "derived", "\"door\":\"navigation\""),
+             "NOT REACHED or not recorded: no `derived` `navigation` record for the unforked `open('/navpage')`, so "
+             "core/frame/navigable.c's destination row did not run for the control and the rungs below say "
+             "nothing about grading");
+    fold_row(&navdoor_tt, &navdoor_why,
+             emitted_record_graded_has(js, "https://x.test/navhidden", "forced", "\"door\":\"navigation\""),
+             "no `forced` `navigation` record for `/navhidden`, which only the arm contradicting `num`'s example "
+             "opens — the hidden page's address is not on the surface at the grade of the fork that reached it");
+    fold_row(&navdoor_tt, &navdoor_why,
+             !emitted_record_graded_has(js, "https://x.test/navhidden", "derived", "\"door\":\"navigation\"") &&
+             !emitted_record_graded_has(js, "https://x.test/navhidden", "observed", "\"door\":\"navigation\""),
+             "`/navhidden` has a `navigation` record graded as the page's own, though no unforked path opens it — "
+             "the default egress arm would then load a page only this engine reached");
+    fold_row(&navdoor_tt, &navdoor_why,
+             emitted_record_graded_has(js, "https://other.test/navxsite", "derived", "\"door\":\"navigation\""),
+             "no `navigation` record for the cross-site `open()` — the row is written before the agent split, "
+             "so a missing one means the cross-agent arm was reached without it");
+    fold_row(&navdoor_tt, &navdoor_why, g_docfetch_cross_site == 0,
+             "this instance was asked to load a cross-site document — a navigable created at another agent's "
+             "address is the peer's to load, and loading it here builds it in the wrong heap");
     /* HTML §7.2.2.1's close() over a same-origin popup this document opened: `closed` reads true on the next
        line, since the incumbent is familiar with the popup by §7.3.2.2's first step. */
     const char *winclose_why = NULL; int winclose_tt = 1;
@@ -15184,6 +15235,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "hostreq-fork", hostreqfork_tt, "/api/hostreqfork", SESS_EXPLORE, hostreqfork_why },
         { "json-fork", jsonfork_tt, "/api/jsonok", SESS_EXPLORE, jsonfork_why },
         { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE, navopen_why },
+        { "nav-door", navdoor_tt, "/navhidden", SESS_EXPLORE, navdoor_why },
         { "win-close", winclose_tt, "/api/winclose", SESS_EXPLORE, winclose_why },
         { "win-opener-close", winopclose_tt, "/api/winopclose", SESS_EXPLORE, winopclose_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
