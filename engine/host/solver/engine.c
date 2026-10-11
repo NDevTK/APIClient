@@ -1435,6 +1435,9 @@ const char *engine_host_requests(void) {
                which keeps a decline a fork rather than a spin. */
             if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
                 !pending_entry_host_owed(p)) { JS_FreeValue(pending_ctx(), p); continue; }
+            DCHECK(pending_get_int(p, PEND_ADDRESS) != FETCH_ADDRESS_UNKNOWN,
+                   "a rendezvous whose address has no bytes is about to be shown to a host — the scheduler refuses "
+                   "it after the step that opened it (host_requests_decline_unaddressed), before the slice returns");
             /* The host's name is what the host is shown. This buffer is the only place an id leaves the engine,
                so every id the zone can quote back comes from here; the machine's name would give the host two
                arms' identical names and land one answer in two contradictory worlds. */
@@ -3801,17 +3804,67 @@ int engine_decline(JSContext *ctx, const char *method, const char *mode, const c
    HOSTREQ record from outside the asking flow, so it is the statement of where such a record can be. It stops at
    the first match: exactly one register names an unanswered rendezvous, because a fork unshares it and mints a
    fresh id. */
-/* See engine.h. The rendezvous is opened and refused in one act, so its record exists for flow_decline_fork to
-   build the two arms over and is never listed to a host. */
-uint32_t engine_host_request_unaddressed(JSContext *ctx, const char *op) {
-    uint32_t req = engine_host_request(ctx, op);
-    int marked = engine_host_decline(ctx, req, PENDING_DECLINED_UNADDRESSED);
+/* Unaddressed rendezvous opened by the step running now, refused when it returns. */
+static int g_unaddressed_opened;
 
-    DCHECK(marked == 1, "a rendezvous opened for an unaddressed request was not found to refuse — "
-                        "engine_host_request parks it on the running flow's register");
-    (void)marked;
-    g_reply_unaddressed++;
+/* See engine.h. The rendezvous is opened and marked; the scheduler refuses it once the step returns. A refusal
+   written while the step runs lands before the step's own host-owed report, which would then hold the flow out
+   of the pick with nothing left to clear it. */
+uint32_t engine_host_request_unaddressed(JSContext *ctx, const char *op) {
+    Flow *f = flow_running();
+    uint32_t req = engine_host_request(ctx, op);
+    int marked = 0;
+
+    for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+        JSValue p = pending_entry(f->pending, i);
+        if (pending_get_int(p, PEND_KIND) == FLOW_PENDING_HOSTREQ && (uint32_t)pending_get_int(p, PEND_REQ) == req) {
+            pending_set_int(p, PEND_ADDRESS, FETCH_ADDRESS_UNKNOWN);
+            marked++;
+        }
+        JS_FreeValue(ctx, p);
+    }
+    DCHECK(marked == 1, "a rendezvous opened for an unaddressed request is not on its flow's register once — "
+                        "engine_host_request parks exactly one entry under the id it returns");
+    g_unaddressed_opened++;
     return req;
+}
+
+/* Refuses every unaddressed rendezvous the step that just returned opened, as the trusted zone refuses one it
+   will not make: engine_host_decline marks it and clears its flow's host-owed mark, so flow_decline_fork builds
+   its two arms at that flow's next pick. Runs before the slice can return, so no host is shown one. Ids are
+   collected first because the refusal walks the same registers. */
+static void host_requests_decline_unaddressed(void)
+{
+    uint32_t *ids = NULL;
+    int n_ids = 0, cap = 0;
+    Flow *f;
+
+    if (!g_unaddressed_opened) return;
+
+    for (int k = 0; (f = flow_at(k)) != NULL; k++)
+        for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+            JSValue p = pending_entry(f->pending, i);
+            if (pending_get_int(p, PEND_KIND) == FLOW_PENDING_HOSTREQ &&
+                pending_get_int(p, PEND_ADDRESS) == FETCH_ADDRESS_UNKNOWN && pending_entry_host_owed(p)) {
+                if (n_ids == cap) {
+                    cap = cap ? cap * 2 : 4;
+                    ids = realloc(ids, (size_t)cap * sizeof *ids);
+                    CHECK(ids, "engine: OOM collecting unaddressed rendezvous");
+                }
+                ids[n_ids++] = (uint32_t)pending_get_int(p, PEND_REQ_HOST);
+            }
+            JS_FreeValue(pending_ctx(), p);
+        }
+    DCHECKF(n_ids >= 1, "%d unaddressed rendezvous were opened in the step that just returned and no register "
+            "holds one — the flow parked on it left the frontier within its own step", g_unaddressed_opened);
+    for (int i = 0; i < n_ids; i++) {
+        int marked = engine_host_decline(pending_ctx(), ids[i], PENDING_DECLINED_UNADDRESSED);
+        DCHECK(marked == 1, "an unaddressed rendezvous collected a moment ago was not found to refuse");
+        (void)marked;
+        g_reply_unaddressed++;
+    }
+    g_unaddressed_opened = 0;
+    free(ids);
 }
 
 int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason) {
@@ -10568,6 +10621,8 @@ static int engine_sched_slice(void) {
                        "refused entry is a different, legal state)");
                 flow_set_host_owed(cur);
             }
+            /* The engine answers as host for an address with no bytes, after the mark it clears. */
+            host_requests_decline_unaddressed();
             /* Nothing is cleared by progress: no step can answer another flow's wait, since every kind on the
                register (a fetch reply, an external script's text, a synchronous request's answer, a routed record,
                a cross-agent operation) is filled by the host, which does not run until this slice returns.

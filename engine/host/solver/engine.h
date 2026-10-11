@@ -651,8 +651,9 @@ const PolicyContainer *engine_document_policy(uint32_t doc);
    rendezvous). */
 long engine_unaddressed_total(void);
 /* engine_host_request for a request whose address has no bytes (core/fetch/fetch.h's FETCH_ADDRESS_UNKNOWN):
-   the rendezvous is opened on the running flow and refused with PENDING_DECLINED_UNADDRESSED before any host
-   is shown it, so the flow takes flow_decline_fork's two arms. Returns the rendezvous id. */
+   the rendezvous is opened on the running flow and refused with PENDING_DECLINED_UNADDRESSED when the step
+   returns, before any host is shown it, so the flow takes flow_decline_fork's two arms. Returns the rendezvous
+   id. */
 uint32_t engine_host_request_unaddressed(JSContext *ctx, const char *op);
 
 /* Whether the address may rest on a witness this engine chose: a second field, not a fourth provenance word,
