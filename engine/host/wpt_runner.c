@@ -1889,8 +1889,8 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                    park for ever and the file would time out with nothing said. */
                 DCHECK(c != NULL, "a cross-agent operation named a document this host never provisioned — the "
                                   "navigable.create notice for it was dropped, or this is a CHILD instance "
-                                  "asking its PARENT, which is the reverse direction of a transport that has "
-                                  "only one: a child answers, it never initiates");
+                                  "asking its PARENT, the reverse of this transport's one direction: a child "
+                                  "writes notices unasked in its boot round, but never asks for an operation");
                 if (c) {
                     /* The zone's rendezvous token travels with the operation, because the performing instance
                        answers by emitting a completion that names one (engine.h's engine_perform). This channel
