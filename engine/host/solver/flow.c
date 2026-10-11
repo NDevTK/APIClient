@@ -3107,275 +3107,70 @@ long flow_branch_born(const Flow *f) {
     return f->acct->branch->sub_born;
 }
 
-/* THE HALF OF THAT KEY AN INDEX MAY ACTUALLY BE KEYED ON — every summand of the member half that is a reading
-   of THIS MEMBER and of nothing this member SHARES, which is a strictly smaller set than the member half
-   itself, and the difference is the whole of what an index's UPDATE COST is decided by.
-   TWO BLOCKS OF THIS FILE DISAGREED ABOUT flow_branch_bonus AND THIS SAYS WHICH ONE IS RIGHT. The banner below
-   opened "EVERY TERM OF THE WEIGHT THAT IS A READING OF **THIS MEMBER** — the key an index over this frontier
-   would be built on" and then summed flow_branch_bonus, which is `1.0 / sub_born` read through
-   `f->acct->branch` — ONE POINTER SHARED BY EVERY LIVE ARM OF THAT BUCKET, which is the exact property that
-   same sentence uses to exclude acct_family_val and the family notch. flow_pick's banner says the opposite in
-   as many words: the branch term "is neither", the `br->sub_born++` at the fork "raises it for the bucket the
-   arm JOINS, and every live member of that bucket changes weight in that one statement", so an index that
-   bakes it into a per-member key "pays O(live members of the bucket) PER FORK" and it "is carried as a
-   per-BUCKET OFFSET read at query time or the index is not sub-linear". Five hundred lines apart, and a reader
-   reaching the key's own banner last keys an index on the quantity the other block forbids — which is the cost
-   MOVED rather than removed, on exactly the forking page an index is wanted for.
-   THE PARTITION IS THREE-WAY AND WAS BEING SPELLED AS TWO, and it is by SCOPE rather than by arrival door:
-   acct_family_val and the family notch are per-ACCOUNT, flow_branch_bonus is per-BUCKET, and the own notch,
-   the optimism and the fitness distance are per-MEMBER — `f->cpu` against its family's `emit_gen`, `f->visits`,
-   and `f->cand_replay`/`cand_surv`/`cand_rung`, no one of which any other member can move. flow_pick's banner
-   already names those three groups in prose; this is that sentence written as code, so the two cannot come to
-   disagree again.
-   IT IS A SUBEXPRESSION AND NOT A RE-ASSOCIATION, WHICH IS THE WHOLE REASON IT IS WORTH LANDING. C evaluates
-   `A + B + C + D` as `((A + B) + C) + D`, so the member key's first three summands ARE this expression and the
-   function below is now literally this value plus the bucket term. A candidate set keyed HERE, with
-   flow_branch_bonus applied as a per-bucket offset at query time, therefore reproduces flow_member_key EXACTLY
-   — bit for bit, not to within a last bit, which is the difference between a check that can be exact and the
-   tolerance this file refuses everywhere. solver/flow.h's FlowIndexChecks names the re-association standing
-   between this frontier and a sub-linear order; this removes the one that is FREE, and leaves flow_weight's
-   own member half not being a subexpression of IT exactly where it was, because that one is an ORDER change in
-   the last bit and is a decision rather than a diff.
-   THE ONE WAY THE IDENTITY COULD FAIL IS EXCESS PRECISION, AND IT IS GUARDED RATHER THAN ARGUED. A host whose
-   FLT_EVAL_METHOD is 2 evaluates doubles wider than binary64 and ROUNDS at a return, so the call boundary this
-   introduces would be a rounding the flat spelling does not make. Both hosts this project builds for are
-   binary64 throughout; the DCHECK below is what says so on the day one is not — loudly, rather than by
-   reordering two members the order currently ties.
-   ONE CONSUMER, AND THAT IS NOT THE PRODUCER-WITH-NO-READER SHAPE: this is a NAMED SUBEXPRESSION of the
-   function directly beneath it and not a stored field, so there is no value here that could go unread.
-   IT IS NOT A TERM AND NOTHING RANKS BY IT, for flow_member_key's own reason and with nothing added: flow_weight
-   is untouched by this, and so is every number it returns.
-   NAMED RESIDUAL — THE OFFSET IS CARRIED AND THE ASK STILL WALKS. The clause that stood here read "nothing in
-   this engine holds a per-bucket offset, so no ask is answered from this key", and named the next diff as
-   "that offset on FlowAcct beside `sub_born`, maintained on the statement that maintains `sub_born`". That is
-   BUILT — `FlowAcct.sub_offset`, written adjacently at flow_new and at flow_fork_inherit's join, read by
-   acct_branch_offset with the BUCKET as its operand, and tied to the published integer by the second
-   equality flow_member_key makes. It is retired in place rather than deleted because a reader who re-derives the gap
-   from this function's name will re-propose exactly it. WHAT IT BOUGHT IS A SPELLING AND NOT A SPEED, and
-   saying so is the point: the term now has a form in which a bucket is the operand, which is what flow_pick's
-   banner means by "carried as a per-BUCKET OFFSET read at query time" and which nothing before it had.
-   NOT COVERED: there is no candidate set, so flow_pick weighs every member and asks that offset once per
-   MEMBER — one read per member of a quantity that is now one number per ARM. THREE things stand between that and
-   an ask that does not walk and none of them is this function's; this clause said TWO and listed two, and the
-   third is the only one of them that decides what such an ask COSTS rather than how a bucket is SPELLED.
-   Nothing ENUMERATES the frontier's distinct
-   buckets: every reader of one reaches it through a member (`f->acct->branch`, or `f->family` at the census's
-   root door), and `branch_gen` de-duplicates a bucket WITHIN a member walk rather than replacing one. And
-   `FlowAcct` is file-private to flow.c, so no holder outside this file can name a bucket at all — which is why
-   flow_member_key's second equality is stated through `flow_branch_born`'s integer, the one spelling of this
-   quantity that crosses the boundary.
-   AND THE THIRD IS `flow_own_silence` READ THROUGH THE FAMILY'S `emit_gen`, WHICH BULK-INVALIDATES THIS KEY
-   FOR A WHOLE FAMILY IN ONE STATEMENT AND IS THE ONLY SUMMAND HERE THAT MOVES FOR MANY MEMBERS AT ONCE. The
-   two blockers above are about REACHING a bucket; this one is about what the key is worth once reached, and
-   no amount of enumeration touches it. flow_credit_emit sends every member of a family to zero own silence
-   through the account's generation — no per-member write, which is the whole point of the epoch — so every
-   member's `k` and every member's phase go to zero together, and on a real page the whole frontier is ONE
-   family (flow_pick's `unrun` banner says so in its own words). An index keyed here is therefore rebuilt for
-   the entire frontier at every EMISSION, which is the event the scheduler exists to produce: the cheaper the
-   engine gets at its job, the more often the key it is ordered by is thrown away.
-   IT IS NOT FATAL AND THE REASON IS THE SAME EPOCH, WHICH IS WHY THIS IS A COST TO PRICE RATHER THAN A
-   REFUSAL. The reset is UNIFORM — every member lands at `k = 0` and phase 0 in the same statement — so the
-   post-emission state is one an epoch-keyed structure can express with no per-member write at all, exactly as
-   `flow_own_silence` already expresses it. What is NOT free is leaving that state, and the population that
-   does is bounded rather than general: flow_age_running charges ONE member per dispatch, and the two birth
-   doors copy a silence that is already in hand (flow_fork_inherit takes the parent's, flow_arrive_at_virtual_time
-   takes the running member's). So the set of members standing away from the epoch's base is bounded by
-   DISPATCHES PLUS FORKS since the family last emitted, and never by the size of the frontier — which is the
-   quantity that decides whether an index here is sub-linear.
-   THIS SENTENCE ENDED ", AND WHICH NOTHING IN THIS ENGINE COUNTS", AND THE CLAUSE BELOW IT SAID THE REBUILD
-   WAS INVISIBLE IN EVERY CENSUS THIS FILE PUBLISHES. Both were TRUE WHEN WRITTEN and both are false now, and
-   they are rewritten rather than deleted because a reader who re-derives the gap from the epoch's own O(1)
-   reset will write them again: a generation bump leaves no per-member trace, so the natural conclusion is
-   that the population it moves cannot be known, and the four incremental sites are what make it knowable.
-   WHAT COUNTS IT: `FlowAcct.away_n`, maintained at four sites and never walked, summed at each emission into
-   `g_epoch_rebuild` by flow_credit_emit's own statement group BEFORE the bump that empties it, published by
-   result.c as `epochRebuildLifetime` against `epochResetsLifetime`, and checked against a direct walk of
-   flow_own_silence at the end of flow_wfq_census so a FIFTH transition site fires rather than drifts.
-   HOW ITS ABSENCE WOULD SHOW, STATED AS AN OBSERVATION AND NOT AS AN INSTANCE: a reader pricing an index over
-   this key would have only `members` to price it against, so their figure would be right between two
-   emissions and wrong across one, with the rebuild appearing in no census and in no reading taken from one.
-   THE READING IS THE ONE result.c PRESCRIBES AND IT HAS BEEN TAKEN: `epochRebuildLifetime` over
-   `scanNextWeights` — the lifetime maintenance against the lifetime walk it would REPLACE — read off the
-   terminal census of each smoke segment of four build logs at four revisions, and SEPARATED BY HOST, because
-   one build log holds a native segment and a wasm one and a figure quoted out of the directory would be a
-   figure about whichever stage the grep reached. It read 0.186% to 0.274%, and FELL MONOTONICALLY with the
-   frontier in every segment on both hosts — from above 100% at one member to about a fifth of one percent at
-   a hundred and fifty — which is the shape the bound above predicts: the rebuild is bounded by dispatches
-   plus forks since the last emission while the walk is the frontier once per ask. On result.c's own stated
-   rule ("well below it the epoch is a COST and an index narrows"), that is WELL BELOW, and the per-emission
-   quotient agreed to three digits ACROSS THE TWO HOSTS (1.652 against 1.663 at the last interval).
-   THIS CLAUSE ENDED ", WHICH NO CLOCK-COARSENING READING DOES", AND THAT WAS AN OVER-CLAIM WITHDRAWN BEFORE
-   IT LANDED. It is a promise about readings its author had not measured, and one counterexample would have
-   discarded the true part with it. What IS measured is narrower and is the whole of why the agreement is
-   worth stating: BOTH of these quotients are counts of MEMBERS over counts of MEMBERS, so neither operand is
-   denominated in a clock at all, and a host's slice measure cannot reach either. That is the property, and it
-   is checkable from the accessors rather than from a comparison with other rows.
-   IT IS THEREFORE NOT THE FIGURE flow.h DECLINES TO PRICE AN INDEX WITH, and the two must not be conflated
-   by a reader who meets both. That refusal is about `sil_phases` — a count of distinct sub-quantum RESIDUES,
-   which is a reading OF THE CLOCK and whose own banner says so. This is `away_n` summed at each emission
-   against the walk, which flow_epoch_rebuild's own declaration calls "the reading that decides whether a
-   sub-linear order over this frontier is buildable at all" and prescribes against exactly this denominator.
-   Same design question, two rows, and only one of them has a microsecond anywhere in it.
-   NEITHER DENOMINATOR IS `members`, WHICH IS THE OTHER WAY A READING HERE WOULD HAVE BEEN UNSTABLE: a
-   per-member denominator moves with how much of the frontier was ever charged, and a lifetime numerator over
-   a TERMINAL gauge under-reads by the factor the frontier grew. Both of these are lifetime over lifetime.
-   AND IT IS A FIXTURE READING, WHICH IS THE HALF THAT MAKES IT A HYPOTHESIS ABOUT REAL DOCUMENTS RATHER THAN
-   A PROPERTY OF THE ENGINE: those segments drive the build smoke's own document, whose frontier size and fork
-   factor are its author's design decisions, so the RATIO is partly a statement about that fixture. What the
-   fixture cannot make up is the DIRECTION, which is monotone in eight independent segments, and the
-   denominator is this engine's own walk either way. The number is not quoted here as the engine's; the
-   derivation is, and it is one command per log: read the terminal `@WFQ` census of each segment, partition
-   by the `@QUANTUM` line's `isCpu`, and divide `epochRebuildLifetime` by `scanNextWeights` — or read
-   `epochRebuildWalkShare`, which testing/live-wfq.js now composes per census so no reader has to.
-   AND THAT FILE IS A HARD GATE RATHER THAN A CONVENIENCE, WHICH THIS SENTENCE UNDER-STATES AND WHICH CHANGES
-   WHAT A BRANCH-SCOPE LANDING COSTS. `branchScope()` there reads THIS COMPONENT'S SOURCE TEXT — result.c's
-   `result_wfq_json` body — and THROWS on any branch-scope row matching its own prefix that its instant and
-   diffable lists do not name. Measured with controls on COPIES rather than argued: unmodified, 23 branch-scope
-   keys and no unread rows, passing; with one new `br`-prefixed row, it throws; with a row named outside the
-   prefix, it passes — which is the evasion to REFUSE, since the gate exists to stop a reader-less column and
-   dodging it defeats a working check. So publishing a new branch-scope row is a FOUR-file landing whose fourth
-   file is deploy-on-write across a C-to-JS seam WITH NO BUILD IN IT: the throw fires the moment result.c is
-   saved. A lane scoped to this component alone cannot land one.
-   THE POPULATION IS EXACT AND IS READ OFF THE ACCESSOR RATHER THAN INFERRED FROM THIS PARAGRAPH:
-   flow_own_silence is `f->cpu_gen == f->family->emit_gen ? f->cpu : 0`, so a member stands away from its
-   family's epoch base exactly when `f->family && f->cpu_gen == f->family->emit_gen && f->cpu > 0`. That
-   spelling is what confirms the half this clause rests on — the reset needs NO per-member write, because
-   flow_credit_emit moves `emit_gen` and every member's silence reads zero from the comparison alone.
-   AND THE DENOMINATOR ALREADY SHIPS, WHICH IS WHY NO SECOND ONE IS OWED: the quantity an index here would
-   replace is the walk, and `scanNextWeights` is already the lifetime sum over scans of the members each one
-   weighed. So the reading is the lifetime sum of the away count SAMPLED AT EACH EMISSION — which is the whole
-   rebuild an epoch-keyed index pays — against that row. A gauge read at a census instant cannot answer it and
-   must not be offered as though it could: a census lands at an arbitrary point between two emissions, so the
-   gauge is near zero just after one and at its peak just before, and the sample is a lottery rather than a
-   measurement.
-   AND THE ROW IS A FOUR-FILE LANDING, WHICH IS NOT DERIVABLE FROM THIS FILE AND IS WHY IT IS WRITTEN HERE.
-   A census row becomes readable only where result.c emits it, field by field, into the report's format string
-   and argument list; computed here and not emitted there it is a write with no reader, which is the shape
-   this file refuses everywhere else. The precedent is the row that prices the SIBLING design: the
-   derived-margin candidate set's `band_members`/`band_weighed` landed as ONE commit over flow.c, flow.h,
-   result.c and testing/live-wfq.js. So this clause names work that CANNOT LAND EXCEPT TOGETHER, and a lane
-   scoped to flow.c and flow.h alone can only produce the half that nothing reads — the clause used to say
-   "a row" and left its reader to be discovered at the boundary, which is a residual reasoning from where its
-   author was standing rather than from where its consumer lives.
-   RETIREMENT — MET, AND THE CLAUSE IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER RE-DERIVES IS THE
-   ABSENCE AND NOT THE ROW. It read: "this clause goes when that population is counted — the maintained away
-   count raised where a member's own silence first leaves its family's epoch base, zeroed where
-   flow_credit_emit clears the epoch, summed INTO a lifetime row at that same statement, and emitted by
-   result.c — because the rebuild is then a number beside the walk's rather than an argument here." Every one
-   of those four is standing, in the four files this clause said could not land apart, and `away_n`'s own
-   declaration holds the derivation.
-   IT WAS MET THIRTY-ONE MINUTES AFTER IT WAS WRITTEN AND STOOD FOR HUNDREDS OF COMMITS AFTERWARDS, which is
-   the part worth keeping, because the failure is not the clause and not the landing. The commit that wrote
-   this residual did not count the population — verified at that revision rather than inferred, with a
-   control that spoke — and the commit that counted it says so in its own subject. So this is ORDINARY
-   STALENESS and not a clause that was wrong at birth: the mechanism WORKED, somebody read a residual and
-   built exactly the thing it asked for. What did not happen is the half CLAUDE.md puts in the same breath —
-   a diff that satisfies a retirement condition removes that record IN THE SAME COMMIT — and the cost of
-   skipping it is measured and specific: a coordinator read this clause, built a brief out of it, and
-   dispatched a lane to build a row that was already emitted, already kind-declared and already checked by a
-   conservation identity. A residual is read by exactly one person, once, at the moment they have already
-   decided to do the work, so a met condition left standing does not mislead a reader — it SPENDS one.
-   RETIREMENT: this record goes when a retirement condition in this tree cannot be written without the
-   command that showed its mechanism absent, AND the build refuses a diff that satisfies one while leaving
-   it standing — because the condition is then closed by construction at both ends, and neither a clause born
-   met nor a clause met and kept is spellable. Not "when no met condition stands here": that is satisfied by
-   an absence over this file's own prose, which an edit meets and no construction does.
-   WHAT THE NEXT DIFF BUILDS, AND THE CLAUSE THIS REPLACES NAMED A THING THAT IS HALF STANDING — kept in its
-   own words because it is an ABSENCE, and the only reader of a named absence is somebody about to build it.
-   It read: "that enumeration — the distinct `branch` nodes of the live frontier, maintained where membership
-   moves (flow_new opens one, the fork's join is the only thing that ever retires one from use, and
-   acct_depart is where a bucket loses its last member), so one offset can be read for a whole arm instead of
-   once per member of it. It is the operand acct_branch_offset already takes and nothing supplies."
-   THE SITE LIST IS EXACT AND THE ABSENCE IS NOT. `branch_take` already enumerates the distinct buckets, once
-   per scan, with its live-bearing completeness asserted and its count published as `branches` — see
-   acct_branch_offset's own banner for what that retired sentence said and why it is kept there too. What is
-   absent is a WALK-FREE enumeration, and the three sites named here are complete for a LIVE-BEARING count and
-   SHORT BY ONE for a mirror of `branches` itself, which takes empties and therefore also needs `acct_unref`,
-   where a bucket node is freed. The clause does not say which shape it meant, and the two have different
-   maintenance.
-   AND IT IS NOT A LANDABLE FIRST MEMBER, WHICH IS THE PART THAT DECIDES WHETHER TO BUILD IT AT ALL. A
-   walk-free count's only consumer is a per-bucket index fold at the pick, which does not exist — so landed
-   alone it is the write with no reader this file refuses everywhere else, and §Do-subproblems-IN-ORDER's own
-   test (name the CALL that will consume it and confirm that call exists today) answers none. The landable
-   pair is ONE commit: the walk-free enumeration AND the per-bucket fold over flow_index_key, with the walk
-   retained inside a DCHECK as a cross-check rather than as a fallback — nothing selects between them, the
-   index always answers and the assert only compares.
-   AND BEFORE EITHER, A NUMBER PER DOCUMENT, BECAUSE TWO RELAYED READINGS OF THE DECIDING QUANTITY DISAGREE BY
-   FIFTY-FOLD AND NEITHER IS THIS FILE'S. One says ~50 buckets with a single one holding 38836 of 75113
-   members, where a bucket fold narrows 75113 to 50 and this design is the right half of the right one; the
-   other says 18724 members in ONE family and ONE bucket, where the offset is a common constant, the fold
-   narrows nothing, and the pick would want an index over flow_index_key alone. They are about DIFFERENT
-   DOCUMENTS, and the row that settles it per document is `branches` — read it there before spending the pair.
-   HOW ITS ABSENCE WOULD SHOW, AND THE READING IS A DIFFERENCE RATHER THAN A QUOTIENT OF TWO TOTALS: on
-   consecutive @WFQ censuses of ONE run, `scanNextWeights` differenced between two samples, divided by the same
-   interval's `scanNextRuns` delta and priced against the `members` gauge over that same interval, reads about
-   ONE — every member weighed at every ask, which is what a walk reads and what an ask answered from a
-   candidate set cannot. THE CLAUSE THIS REPLACES SAID TO DIVIDE THE LIFETIME TOTALS AND IT UNDER-READ THE
-   COST, which is why the method is spelled out here and not left to the obvious spelling: `scanNextWeights`
-   and `scanNextRuns` are LIFETIME counts and `members` is a GAUGE, so a lifetime quotient priced against a
-   TERMINAL gauge under-reads by the factor the frontier GREW over the run, and on a growing frontier that is
-   the whole of the finding. Two runs of one document read 0.55 that way and a monotone 0.63 → 0.97 per
-   interval, agreeing to three digits at every interval across both. Per interval or it says nothing.
-   RETIREMENT: this record goes when flow_member_key cannot be written without naming the scope each of its
-   summands is read at — a term added to it that lands in neither this function nor an explicit bucket offset
-   being a compile error rather than a sentence here. */
+/* The half of the member key an index may be keyed on: every summand that is a reading of this member and of
+   nothing it shares. The weight's terms partition by scope three ways: acct_family_val and the family notch are
+   per account, flow_branch_bonus is per bucket (`1.0 / sub_born` through `f->acct->branch`, one pointer shared by
+   every live arm, so the fork's `br->sub_born++` re-weighs the whole bucket and an index baking it into a member key
+   "pays O(live members of the bucket) PER FORK"), and the own notch, the optimism and the fitness distance are per
+   member (`f->cpu` against its family's `emit_gen`, `f->visits`, `f->cand_replay`/`cand_surv`/`cand_rung`), which no
+   other member can move. flow_pick's banner names the same three groups.
+   A subexpression, not a re-association: C evaluates `A + B + C + D` as `((A + B) + C) + D`, so flow_member_key is
+   this value plus the bucket term, bit for bit, and a candidate set keyed here with the bucket offset applied at
+   query time reproduces it exactly. solver/flow.h's FlowIndexChecks names the re-association that remains
+   (flow_weight's own member half), an order change in the last bit and a decision. Excess precision (FLT_EVAL_METHOD
+   2 rounding at the return) is the one way the identity fails, and flow_member_key's DCHECK guards it. Not a term:
+   flow_weight is untouched.
+   Named residual. Not covered: there is no candidate set, so flow_pick weighs every member and reads the bucket
+   offset once per member. Three things stand between that and an ask that does not walk. Nothing enumerates the
+   distinct buckets without walking members (`branch_take` reaches each through a member, and `branch_gen`
+   de-duplicates within the walk). `FlowAcct` is private to this file, so a holder outside it uses
+   `flow_branch_born`'s integer. And the family's `emit_gen` bulk-invalidates this key: an emission sends every
+   member's `k` and phase to zero in one statement, and a real page's frontier is one family. That reset is uniform,
+   which an epoch-keyed structure expresses with no per-member write; leaving it is bounded by dispatches plus forks
+   since the last emission, which `FlowAcct.away_n` counts (summed into `g_epoch_rebuild` at each emission, published
+   as `epochRebuildLifetime` against `epochResetsLifetime`, checked against a walk in flow_wfq_census). Its reading
+   is `epochRebuildLifetime` over `scanNextWeights`, lifetime over lifetime and per host (testing/live-wfq.js
+   composes it as `epochRebuildWalkShare`); it is not flow.h's `sil_phases`, which is a clock reading.
+   Next diff builds: one commit holding a walk-free bucket enumeration (maintained at flow_new, the fork's join and
+   acct_depart for a live-bearing count, plus acct_unref to mirror `branches` with empties) and the per-bucket fold
+   over this key at the pick, with the walk kept inside a DCHECK as a cross-check. Read `branches` per document
+   first: a single bucket makes the offset a common constant and the fold narrows nothing. A new branch-scope row
+   lands in four files (flow.c, flow.h, result.c, testing/live-wfq.js, whose `branchScope()` reads result.c's
+   `result_wfq_json` and throws on a `br`-prefixed row its lists do not name).
+   Absence shows as: on consecutive @WFQ censuses of one run, the interval's `scanNextWeights` delta over its
+   `scanNextRuns` delta, against `members` over the interval, reads about one (every member weighed per ask). Read
+   per interval: lifetime counts against a terminal gauge under-read by the factor the frontier grew.
+   This record retires when flow_member_key cannot be written without naming the scope each summand is read at. */
 static double flow_index_key(const Flow *f) {
     return -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM
            + flow_optimism(f) + flow_distance(f);
 }
 
-/* EVERY TERM OF THE WEIGHT THAT IS NOT THE FAMILY'S — the quantity whose invariance between two frontier
-   generations is the precondition of every sub-linear order anybody can propose here, and NOT the key such an
-   order may be KEYED on, which is flow_index_key directly above.
-   THIS BANNER OPENED "EVERY TERM OF THE WEIGHT THAT IS A READING OF **THIS MEMBER** — the key an index over
-   this frontier would be built on", AND IS REWRITTEN RATHER THAN DELETED BECAUSE THAT IS THE SENTENCE A READER
-   RE-DERIVES. It follows from the stability walk and only from it: the walk must stamp EVERYTHING that can
-   move, so the composition the walk needs is the composition a reader will go on calling the key. It was false
-   of flow_branch_bonus, and flow_index_key's banner says how and what it costs.
-   ONE QUANTITY, TWO QUESTIONS, AND THE STRICTER ONE DECIDES THE COMPOSITION — which is why the looser one was
-   answered wrongly in silence. What must STAND STILL between two generations is THIS, the bucket term
-   included, or flow_pick's walk goes blind to a fork re-ranking a whole arm at once; what an index may be
-   KEYED on is flow_index_key, the bucket term EXCLUDED, or that index pays O(live members of the bucket) per
-   fork. The split is two functions over ONE composition rather than two compositions free to disagree.
-   flow_weight is the family's coordinate plus this member's
-   minus a carry bit: the reward and the family's aging notch are read through ONE pointer by every arm of a
-   family, so they are a COMMON OFFSET that orders nothing within one — and a real page's whole frontier is one
-   family — while flow_silence_phase decomposes the carry out as a single bit against a threshold that is the
-   family's and therefore common too. What is left is this.
-   IT IS NOT A TERM AND NOTHING RANKS BY IT, which is flow_silence_phase's own sentence and holds here for the
-   same arithmetic: `-(double)notch * FLOW_AGE_QUANTUM` is ONE multiply of ONE exact integer, and a weight
-   rebuilt as this plus the family's halves would sum three products where flow_weight sums one, differ from it
-   in the last bit, and reorder two members the order currently ties. flow_weight is untouched and must stay
-   so. This exists to be STAMPED AND COMPARED WITH ITSELF, where equality of doubles is exact because it is the
-   same expression on the same operands — the property flow_fork_inherit's equality over flow_weight already
-   rests on, not a tolerance.
-   THE SUMMANDS ARE IN flow_nonreward'S ORDER, DELIBERATELY, AND THAT IS WHAT ARMS THE GUARD BELOW. Where the
-   family has burned nothing since its last emission the notch IS this member's own and the carry is zero, so
-   the two functions are the same sequence of operations on the same operands and must agree BIT FOR BIT. That
-   state is not a corner: flow_credit_emit sends every member of a family to a family notch of zero in one
-   statement, so the guard is armed in ordinary operation. It is what catches the one way this pair rots — a
-   sixth summand reaching flow_nonreward and not reaching this — which is the silent narrowing that would make
-   every assertion derived from the decomposition true of less than it claims.
-   MENTIONED ONLY INSIDE DCHECK CONDITIONS, so release neither calls it nor emits it — the shape acct_vt_leads
-   and flow_is_min_weight already establish in this file. */
+/* Every term of the weight that is not the family's: the quantity whose invariance between two frontier
+   generations every proposed sub-linear order presupposes, and not the key an order may be keyed on, which is
+   flow_index_key above. One quantity, two questions, and the stricter decides the composition: what must stand
+   still between generations includes the bucket term, or flow_pick's walk goes blind to a fork re-ranking a whole
+   arm; what an index is keyed on excludes it. Two functions over one composition.
+   flow_weight is the family's coordinate plus this member's, minus a carry bit: the reward and the family notch are
+   read through one pointer by every arm, a common offset that orders nothing within a family, and
+   flow_silence_phase decomposes the carry out as one bit against a family threshold. Not a term and nothing ranks by
+   it: a weight rebuilt as this plus the family's halves would sum three products where flow_weight sums one and
+   differ in the last bit. It exists to be stamped and compared with itself, exact because it is the same
+   expression on the same operands.
+   The summands are in flow_nonreward's order, which arms the guard below: where the family has burned nothing since
+   its last emission the two functions are the same operations on the same operands and agree bit for bit, a state
+   every emission produces, so a summand reaching flow_nonreward and not this fires. Mentioned only inside DCHECK
+   conditions, so release neither calls nor emits it, as acct_vt_leads and flow_is_min_weight. */
 static double flow_member_key(const Flow *f) {
-    /* THE BUCKET TERM IS THE LAST SUMMAND, AND THAT IS WHAT MAKES THE SPLIT EXACT rather than a
-       re-association: `A + B + C + D` is `((A + B) + C) + D`, so flow_index_key IS this expression's first
-       three summands and this is that value plus the fourth, bit for bit. */
+    /* The bucket term is the last summand, which makes the split exact: flow_index_key is this expression's first
+       three summands, and this is that value plus the fourth. */
     double k = flow_index_key(f) + flow_branch_bonus(f);
-    /* THE FLAT SPELLING IS KEPT AS THE OTHER SIDE, WHICH IS WHAT MAKES THIS A CHECK AND NOT A TAUTOLOGY: the
-       two are maintained by two statements, so a fifth summand reaching one and not the other fires here, and
-       so does a host that evaluates doubles wider than binary64 and therefore rounds at the call boundary
-       above.
-       A NEW MEMBER-HALF TERM GOES AT THE END OF flow_index_key AND A NEW BUCKET TERM AFTER THIS ONE, which is
-       the only pair of placements under which both sides go on associating the same way. It is stated here
-       because this guard is what enforces it, and a reader meeting a fire needs to know which end to add to
-       rather than to conclude that the split is unsound.
-       IT IS A SECOND EVALUATION OF THE MEMBER HALF PER CALL, so in a dev build flow_pick's per-member stamp
-       now pays this key twice where it paid it once. That is the class flow_pick already prices for the stamp
-       itself, and it is named here rather than left to be rediscovered, because the sentence that prices a
-       guard is what a reader deciding whether the guard is affordable reads. In release the condition is a
-       `sizeof` and neither side is evaluated at all. */
+    /* The flat spelling is the other side: two statements maintain the two, so a summand reaching one and not the
+       other fires here, and so does a host evaluating doubles wider than binary64 that rounds at the call
+       boundary. A new member-half term goes at the end of flow_index_key and a new bucket term after this one, the
+       only placements under which both sides associate the same way. A second evaluation of the member half per
+       call, so in a dev build flow_pick's per-member stamp pays this key twice; in release the condition is a
+       `sizeof` and neither side is evaluated. */
     DCHECK(k == -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM
                 + flow_optimism(f) + flow_distance(f) + flow_branch_bonus(f),
            "the member half of the WFQ's weight is no longer its per-member half plus its bucket term — the "
@@ -3384,23 +3179,15 @@ static double flow_member_key(const Flow *f) {
            "the return from flow_index_key. Every claim that a candidate set may be taken from the per-member "
            "key with the bucket applied as a query-time offset rests on this being EXACT rather than close, "
            "and an index built on a key that is merely close reorders two members this order ties");
-    /* …AND THE SAME EQUALITY WRITTEN THE WAY A HOLDER OF THE PUBLISHED INTEGER WOULD HAVE TO TAKE IT, WHICH
-       IS THE ONE ROUTE THAT CROSSES THIS FILE'S BOUNDARY. The left side reaches the bucket term through
-       `FlowAcct.sub_offset`, the stored double the order actually reads; the right side reconstructs it from
-       `flow_branch_born`, the integer solver/flow.h publishes precisely because `FlowAcct` is private here. So
-       this states that the two halves an ask outside flow.c could hold — a per-member key and a per-bucket
-       denominator — rebuild the member half BIT FOR BIT, which is the claim the residual at flow_index_key is
-       about and the one that decides whether a candidate set may be taken from that key at all.
-       IT IS NOT acct_branch_offset'S GUARD RESTATED, AND THE TEST THIS FILE APPLIES TO EVERY ADDED ASSERTION
-       IS WHERE THE TWO SIDES COME FROM. That one compares a stored field against a quotient, both read out of
-       ONE bucket, and catches a writer of `sub_born` that left the offset standing. This compares a SUM built
-       by flow_member_key's own route against a sum built through the published entry, so it also catches the
-       excess-precision case the banner above names — a host whose FLT_EVAL_METHOD is 2 rounds `k` at the store
-       and may not round the right side — and it is the only site at which the INTEGER an index would carry and
-       the DOUBLE the order reads are ever put side by side.
-       IT IS A SECOND EVALUATION OF THE MEMBER HALF PER CALL, NAMED RATHER THAN LEFT TO BE REDISCOVERED, which
-       is the price the guard above already states and this doubles again in a dev build. In release the
-       condition is a `sizeof` and no side of it is evaluated at all. */
+    /* And the same equality as a holder of the published integer would take it, the one route across this file's
+       boundary: the left side reaches the bucket term through `FlowAcct.sub_offset`, the double the order reads,
+       and the right rebuilds it from `flow_branch_born`, the integer solver/flow.h publishes because `FlowAcct` is
+       private. So the two halves an ask outside flow.c could hold, a per-member key and a per-bucket denominator,
+       rebuild the member half bit for bit, which decides whether a candidate set may be taken from that key.
+       Unlike acct_branch_offset's guard (a stored field against a quotient in one bucket), this compares two sums
+       built by two routes, so it also catches excess precision rounding `k` at the store, and it is the one site
+       where the integer an index would carry meets the double the order reads. Another evaluation per call in a
+       dev build; nothing in release. */
     DCHECK(k == flow_index_key(f) + 1.0 / (double)flow_branch_born(f),
            "the member half of the WFQ's weight is no longer its per-member key plus `1/sub_born` over its "
            "branch bucket — the left side takes that term from the bucket's stored offset and the right side "
@@ -3413,18 +3200,15 @@ static double flow_member_key(const Flow *f) {
 }
 
 #if APICLIENT_DEV
-/* WHAT AN INDEX OVER THAT KEY WOULD COMPARE, WRITTEN ONCE SO THE CHECK AND ITS PROSE CANNOT DRIFT — the
-   member's own half, shifted by the two quantities an index would hold PER ACCOUNT rather than per member.
-   `acct_family_val` and `flow_family_notch` are read through one pointer by every arm of a family, so they
-   are a COMMON OFFSET that orders nothing within one; the carry is the single per-member bit that moves
-   between two frontier generations, and `flow_silence_phase` decomposes it out. That is the whole of
-   `notch = k + K + (p + R >= S)` spelled as the thing a candidate set would be taken from.
-   IT IS A RE-ASSOCIATION AND THAT IS THE POINT RATHER THAN A DEFECT. flow_weight sums ONE product of ONE
-   exact integer; this sums two, so it may differ from the comparator in the last bit. Were it bit-identical
-   there would be nothing to measure — the fold in flow_pick exists precisely to find out whether the
-   difference ever reaches the ANSWER, and solver/flow.h's FlowIndexChecks says what each outcome licenses.
-   DEV-ONLY, and it raises no scan counter: flow.h's FLOW_SCANS banner says those rows count the flow_weight
-   the scan itself performed and never the ones a DCHECK below it makes, and every caller of this is one. */
+/* What an index over that key would compare, written once so the check and its prose cannot drift: the member's own
+   half shifted by the two quantities an index would hold per account. `acct_family_val` and `flow_family_notch` are
+   read through one pointer by every arm, a common offset within a family; the carry is the one per-member bit that
+   moves between two frontier generations, decomposed out by `flow_silence_phase`. That is
+   `notch = k + K + (p + R >= S)` spelled as what a candidate set would be taken from. A re-association by design:
+   flow_weight sums one product of one exact integer and this sums two, so it may differ in the last bit, and the
+   fold in flow_pick measures whether that ever reaches the answer (solver/flow.h's FlowIndexChecks says what each
+   outcome licenses). Dev-only, and it raises no scan counter: flow.h's FLOW_SCANS banner counts only the
+   flow_weight the scan itself performs, and every caller of this is a DCHECK. */
 static double flow_index_surrogate(const Flow *f) {
     return acct_family_val(f) + flow_member_key(f)
            - (double)(flow_family_notch(f) + flow_silence_carry(f)) * FLOW_AGE_QUANTUM;
