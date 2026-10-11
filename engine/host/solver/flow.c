@@ -1,11 +1,8 @@
-/* Flow registry + WFQ — see flow.h.
- *
- * The registry also owns the teardown of a flow that NEVER FINISHED, which is why this file knows what a
- * flow's state is made of: the fields are declared in flow.h, so their destructors belong wherever a Flow is
- * freed. The alternative — a scheduler that must remember to sweep the survivors before the registry goes down
- * — is the shape where a host that forgets retains the whole runtime with nothing to name the owner. */
+/* Flow registry and WFQ (flow.h). The registry also owns the teardown of a flow that never finished: the fields are
+ * declared in flow.h, so their destructors belong where a Flow is freed, rather than in a scheduler that must
+ * remember to sweep the survivors before the registry goes down. */
 #include "solver/flow.h"
-#include "solver/engine.h"     /* ENGINE_QUANTUM_MS — the scheduler's slice IS this file's service quantum */
+#include "solver/engine.h"     /* ENGINE_QUANTUM_MS: the scheduler's slice is this file's service quantum */
 #include "solver/cow.h"        /* a survivor's heap COW delta */
 #include "solver/dom_cow.h"    /* …and its DOM delta head + shared base segment */
 #include "solver/decide.h"     /* …and its suspended decision vector */
@@ -19,850 +16,287 @@
 
 static Flow **g_flows = NULL;
 static int g_flows_n = 0, g_flows_cap = 0;
-static long g_rank_changes = 0;   /* …and the same event counted for the LIFE of the instance, so it is
-                                     commensurable with the scan counters, which nothing resets either.
-                                     See frontier_rank_changed for why the generation NUMBER is not. */
+static long g_rank_changes = 0;   /* the rank-change event counted for the life of the instance, commensurable
+                                     with the scan counters, which nothing resets either (see
+                                     frontier_rank_changed for why the generation number is not) */
 static unsigned g_gen = 0;   /* bumped whenever the frontier's membership changes (add/remove) — lets the
                                 value-yield recompute the rival only on a change, never per-opcode */
-/* EVERY ROW EVER APPENDED TO ANY FLOW'S COMMITMENT LEDGER, for the life of THIS frontier — a LIFETIME
-   COUNTER, and it is here rather than on a Flow for the reason the dispatch count below is: a sum over the
-   members standing NOW is a GAUGE that FALLS when a receiver departs, and the whole question this answers is
-   what was written by flows that have since gone. Declared at the top of the file rather than beside the
-   ledger it counts because flow_registry_free — which resets it, beside the call that resets the ask census
-   it is read against — stands above that block. See flow.h for the three states it separates and
-   flow_world_commit_push for the one line that raises it. */
+/* Every row ever appended to any flow's commitment ledger for the life of this frontier: a lifetime counter, kept
+   here rather than on a Flow because a sum over the standing members is a gauge that falls when a receiver departs,
+   and the question is what flows that have gone wrote. Declared at the top because flow_registry_free, which resets
+   it beside the ask census it is read against, stands above the ledger's block. flow.h has the three states it
+   separates; flow_world_commit_push is its one raise. */
 static long g_world_commit_rows;
-/* EVERY DISPATCH THIS INSTANCE HAS EVER MADE — a LIFETIME COUNTER, and it is here rather than on a Flow
-   because that is the only place it can be one. `Flow.picks` is a GAUGE the moment a member departs: the
-   number leaves the frontier with it, so a sum over the members standing NOW is a statement about the live
-   population and can FALL between two censuses. This cannot; it only rises, so it is the one of the two that
-   may be differenced across samples, and the pair is what separates "each dispatch reached a fresh member"
-   from "the dispatches are landing on members that already had one" — which no row in this file could ask.
-   NOT RESET BY flow_registry_init, for the reason stated at `g_rank_changes` two lines up and at
-   frontier_rank_changed: a quantity a second registry would zero is not commensurable with the scan counters
-   nothing zeroes, and a reader dividing one lifetime by another lifetime-that-restarted gets a ratio about no
-   run at all. CROSS-CHECKABLE, which is what makes it a counter rather than a number: flow_credit_pick has
-   exactly ONE caller and engine.c increments its own `g_switches` on the line beside it, so this must equal
-   the result document's `_switches` for the same instance, and a divergence names a second dispatch path. */
+/* Every dispatch this instance has made: a lifetime counter, kept here because `Flow.picks` is a gauge once a member
+   departs (its number leaves with it). The pair separates "each dispatch reached a fresh member" from "dispatches
+   land on members that already had one". Not reset by flow_registry_init, for `g_rank_changes`' reason: a ratio of
+   one lifetime to a lifetime that restarted is about no run. Cross-checkable: flow_credit_pick has one caller and
+   engine.c raises `g_switches` beside it, so this equals the result document's `_switches`. */
 static int64_t g_picks_total = 0;
-/* …AND THE HALF OF THAT TOTAL THE FRONTIER NO LONGER HOLDS — a LIFETIME COUNTER, and the arm that turns the
-   one above from a bare total into a PARTITION. The banner one line up already states the fact it is made of:
-   `Flow.picks` is a GAUGE the moment a member departs, so the sum over the members standing NOW can FALL, and
-   the difference between that sum and this instance's total is exactly what the departed members took with
-   them. That sentence was the READING flow.h prescribes — `(picks_lifetime - picks_live) / departures` is what
-   a departed member held on average — and NOTHING ESTABLISHED IT: the census asserted only that the gauge does
-   not EXCEED the counter, which is true of every distribution of that difference including one in which no
-   departed member ever held a dispatch at all. A reader dividing the subtraction by `departures` was dividing
-   by a denominator nobody had checked was the numerator's population, and the comment at that assert said the
-   difference WAS what the retired members took — described, in the register of something checked.
-   IT IS THE SAME MOVE `g_departures_teardown` IS, ONE QUANTITY OVER: a total over a population nobody had
-   partitioned, given the arm that accounts for what left, so the identity between the two halves can be
-   written down at all. AND IT IS NO LONGER THE SAME MOVE IN THE ONE RESPECT THAT MATTERED: this banner read
-   "what it does NOT do is publish a row", and it does — `WfqCensus.picks_departed` carries it and
-   result_wfq_json emits it as `picksDeparted`, so the identity is checkable on the document and not only in a
-   dev process. The retired clause is recorded rather than struck because `g_departures_teardown` is STILL the
-   unpublished one, so a reader who re-derives the analogy from the two banners will conclude both are.
-   RAISED AT flow_remove AND NOT BESIDE `g_departures`, WHICH IS A DIFFERENCE OF TWO LINES AND IS FORCED
-   RATHER THAN CHOSEN: the departure is counted after `free(f)`, and this reads `f->picks`, so the two arms of
-   one departure are credited at two lines of one block by necessity. An early return added between them is
-   what the identity at the end of flow_wfq_census then fires on, which is the whole reason it is an identity
-   and not a comment.
-   NOT RESET BY flow_registry_init, for `g_picks_total`'s reason and WITHOUT costing the identity: the drain
-   flow_registry_free performs goes through flow_remove for every member it holds, so a retired registry has
-   credited every one of them here and the identity re-reads `0 + total == total` at the next init.
-   IT DECIDES NOTHING AND MOVES NO RANK, for flow_credit_pick's reason — flow_weight does not read it, no fork
-   carries it (flow_fork_inherit ASSERTS a newborn arm's `picks` is 0 and says in as many words that it is the
-   one field the inheritance deliberately does not carry), and nothing anywhere branches on it. */
+/* The half of that total the frontier no longer holds, which makes the total a partition: the members' gauge sum
+   plus this equals `g_picks_total`, asserted at the end of flow_wfq_census and published as `picksDeparted`
+   (`WfqCensus.picks_departed`), so flow.h's reading `(picks_lifetime - picks_live) / departures` is checked rather
+   than assumed. Raised at flow_remove, two lines from the departure count by necessity (the departure is counted
+   after `free(f)` and this reads `f->picks`); an early return between them fires the identity. Not reset by
+   flow_registry_init: the drain through flow_remove credits every member, so the identity reads `0 + total ==
+   total` at the next init. It decides nothing: flow_weight does not read it and no fork carries it
+   (flow_fork_inherit asserts a newborn arm's `picks` is 0). */
 static int64_t g_picks_departed = 0;
-/* …AND HOW MANY OF THOSE DISPATCHES REACHED A MEMBER WHOSE JAVASCRIPT EXECUTION CONTEXT STACK WAS EMPTY —
-   the LIFETIME half of the census's `mem_unframed`, and the row that decides between the two readings the job
-   split's residual below could state and deliberately would not choose between.
-   A GAUGE CANNOT ANSWER IT, WHICH IS WHY IT IS A SECOND QUANTITY AND NOT A SECOND SPELLING. `mem_unframed` is
-   taken over the members standing at ONE instant, so it says who is in that state and is silent on whether the
-   scheduler has ever handed one of them the thread: a member dispatched while unframed that then framed itself
-   by running has left that count entirely, and a member that departed took its share of it away. Only a
-   counter can say how many such dispatches there were, and that is the fact the residual needs.
-   RAISED IN flow_credit_pick BESIDE `g_picks_total` AND NOWHERE ELSE, which is what makes the containment
-   asserted at the end of flow_wfq_census hold by CONSTRUCTION rather than by two writers agreeing: it is a
-   conditional increment in the same statement block as the unconditional one it is a subset of, so the two
-   are credited at ONE moment and the pair cannot become a numerator over somebody else's denominator. That is
-   the defect CLAUDE.md records as a starvation count raised inside a SELECTOR against a denominator raised at
-   a SWITCH, and the arithmetic tell for it — a subset exceeding its population — is the assert.
-   ASKED THROUGH flow_stack_empty, WHICH IS THE PREDICATE THE CENSUS'S OWN ARMS ARE WRITTEN AGAINST, so an edit
-   to HTML §8.1.4.4 "Calling scripts"' clean up after running script step 3 as this engine states it reaches
-   the numerator and the population it is a count of together. A second spelling here — `f->frame` alone —
-   would be two sets wearing one word, which is exactly the drift the job split above had to be repaired for.
-   NOT RESET BY flow_registry_init, for `g_picks_total`'s reason and without costing the identity: both are
-   totals of the INSTANCE, so a reset of one and not the other is the incommensurability that rule is about.
-   IT DECIDES NOTHING AND IT MOVES NO RANK, for flow_credit_pick's reason — flow_weight does not read it, no
-   fork carries it, nothing resets it, and nothing anywhere branches on it. A count of dispatches a population
-   has NOT received is exactly the numerator a watchdog over a flow that "never finishes anything" would be
-   built from, and §NO BOUNDS forbids one: this is a REPORT, and the moment anything decides from it the
-   question it exists to answer is no longer askable. */
+/* How many of those dispatches reached a member whose JavaScript execution context stack was empty: the lifetime
+   half of the census's `mem_unframed`, which as a gauge cannot answer it (a member dispatched unframed that then
+   framed itself, or departed, has left the gauge). Raised in flow_credit_pick in the same block as `g_picks_total`,
+   so the containment asserted at flow_wfq_census holds by construction rather than by a numerator raised at a
+   selector over a denominator raised at a switch. Asked through flow_stack_empty, the predicate the census's arms
+   use (HTML §8.1.4.4 "Calling scripts"' clean up after running script step 3), so one edit reaches numerator and
+   population together. Not reset by flow_registry_init. It decides nothing and moves no rank: a count of dispatches
+   a population did not receive is the numerator a watchdog would be built from, and none may be. */
 static int64_t g_unframed_picks_total = 0;
-/* …AND THE SUBSET OF *THOSE* THAT REACHED A MEMBER THE CENSUS'S READY ARM WOULD HAVE COUNTED — the row
-   flow.h's `unframed_picks_lifetime` residual named as its next diff, and the one that makes that counter a
-   MEASUREMENT of the job backlog rather than a BOUND on it.
-   IT IS A SECOND QUANTITY AND NOT A NARROWING. `g_unframed_picks_total`'s predicate is flow_stack_empty
-   ALONE, so it counts a dispatch to an unframed member holding NO job exactly as it counts one to a ready
-   holder; this restates the ready arm's own three conjuncts (`!flow_host_owed && flow_stack_empty &&
-   flow_job_pending > 0`), so its non-zero arm is decisive where the superset's is only a bound.
-   RAISED INSIDE THE SUPERSET'S OWN `if`, so the containment asserted at the end of flow_wfq_census holds by
-   CONSTRUCTION and not by two writers agreeing — and so flow_job_pending's property read is paid once per
-   UNFRAMED dispatch rather than once per dispatch: the two rows are `unframedPicksLifetime` and
-   `picksLifetime` on the census line, so the ratio it costs is derivable there and is not a figure here.
-   Nothing per pick that is not already inside this `if`, and nothing whatever per opcode.
-   THE IDENTITY THIS REPLACES MUST NOT BE RE-DERIVED. flow.h licensed reading the superset as the subset
-   wherever `jobs_ready == (jobs / members) * mem_unframed` held, on the ground that a fork byte-copies its
-   parent's queue so no unframed member holds zero. That is true of a frontier THAT HAS RUN NO JOB and of no
-   other, and both arms are now measured — five drives of two real documents through the artifact stamped
-   d17472ff0ee24a38d6e2964ad530bcee8be23c7a, terminal census of each. The identity is EXACT on the three whose
-   `jobsRun` is 0 (`jobsReady` 238 == 17*14, 102 == 17*6, 357 == 17*21 against `jobsQueued` 17 and
-   `memUnframed` 14, 6, 21) and FAILS by orders of magnitude on the two whose `jobsRun` is 118 and 138 — the
-   falsifier being exactly the first dispatch that ran a job, as the licence's own caveat predicted. A licence
-   whose precondition is the very state under investigation is one a reader will carry past it, which is why
-   the row exists instead.
-   IT DECIDES NOTHING AND IT MOVES NO RANK, for `g_unframed_picks_total`'s reason and under the same ban: a
-   count of dispatches that reached a job holder and ran no job is exactly the numerator §NO BOUNDS forbids a
-   watchdog being built from. */
+/* The subset of those that reached a member the census's ready arm counts (`!flow_host_owed && flow_stack_empty &&
+   flow_job_pending > 0`), which makes `unframed_picks_lifetime` a measurement of the job backlog rather than a
+   bound. Raised inside the superset's `if`, so the containment holds by construction and flow_job_pending's property
+   read is paid once per unframed dispatch. flow.h's identity `jobs_ready == (jobs / members) * mem_unframed` holds
+   only for a frontier that has run no job (a fork byte-copies its parent's queue) and fails after the first, which
+   is why this row exists. It decides nothing, under the same ban. */
 static int64_t g_ready_picks_total = 0;
-/* THE ONE CLOCK BOTH OF A FLOW'S TASK CARRIERS ARE STAMPED FROM — HTML §8.1.7.1 "Definitions"' ordering rule
-   made answerable, and the whole of what lets flow_step choose between them without a preference.
-   HTML §8.1.7.1 "Definitions" partitions work by SOURCE ("For each event loop, every task source must be
-   associated with a specific task queue") and a flow's arrays partition it by CARRIER — a PROGRAM (`dyn`),
-   a queued C callback (`jobs`). core/timing/task_source.h states what that costs and states the repair as "a
-   source is in ONE queue"; that is ONE repair and it is not the only one, and it is the weaker of the two. A
-   source on two carriers is unorderable only while the order is taken over the CARRIERS: over ARRIVAL it is
-   ordered exactly, because within one source arrival order IS queue order, so
-       A queued, then B      runs A then B
-       B queued, then A      runs B then A
-   both come out right however the two items are carried. One clock therefore discharges §8.1.7.1 for every
-   source at once — including a source no producer has written yet — where moving a producer discharges it for
-   one and leaves the next author of a producer to get it right again.
-   AND IT IS WHAT MAKES NON-STARVATION STRUCTURAL RATHER THAN A POLICY. HTML §8.1.7.3 "Processing model"
-   step 2.1 leaves the choice of queue "implementation-defined", and HTML §8.1.7.1 "Definitions"' own worked example
-   says what that freedom is not: a user agent may prefer a source "three-quarters of the time, keeping the
-   interface responsive but not starving other task queues". A fixed arm order starves whenever the arm above it
-   is fed by a set the page extends, which is both of these. Arrival order cannot: a work item's stamp never
-   changes and the set of items older than it is FINITE AND FIXED AT ITS BIRTH, so every item is reached after a
-   bounded amount of work that already existed when it was queued. Nothing is capped, nothing is counted down,
-   nothing decides that work will not happen — which is the line §NO BOUNDS draws and the reason the repair is
-   an order rather than a budget.
-   IT STARTS AT 1 so that 0 — the `dyn_id` register field's own default — is a name no work item answers to,
-   which is the contract `dyn_id` already had and which this counter inherits whole.
-   IT IS NOT PARKED, for `dyn_id`'s reason exactly: the cold tier stores a RECIPE and replays the document, so
-   a resumed flow's rows and its queued callbacks are both rebuilt and take fresh stamps together. There is no
-   revision at which an item from before a park is compared with one from after it. */
+/* The one clock both of a flow's task carriers are stamped from, which lets flow_step choose between them without a
+   preference. HTML §8.1.7.1 "Definitions" partitions work by source ("For each event loop, every task source must
+   be associated with a specific task queue"), while a flow's arrays partition it by carrier, a program (`dyn`) or a
+   queued C callback (`jobs`); core/timing/task_source.h states the cost and one repair. Arrival order is the other:
+   within one source arrival order is queue order, so a source on two carriers is ordered exactly over arrival, and
+   one clock discharges §8.1.7.1 for every source, including ones no producer has written yet. It also makes
+   non-starvation structural: HTML §8.1.7.3 "Processing model" step 2.1 leaves the queue choice
+   "implementation-defined", and §8.1.7.1's example bounds that freedom ("keeping the interface responsive but not
+   starving other task queues"). A fixed arm order starves when the arm above is fed by a set the page extends,
+   while an item's stamp never changes and the items older than it are finite and fixed at its birth: an order, not
+   a budget. It starts at 1, so 0 (`dyn_id`'s default) names no item. It is not parked: the cold tier stores a recipe
+   and replays, so a resumed flow's rows and callbacks are rebuilt and restamped together. */
 static uint64_t g_work_seq = 1;
 
 uint64_t flow_work_seq_next(void) {
-    /* THE STAMP IS CARRIED AS A JS NUMBER ON THE JOB RECORD, so it is only a name while it round-trips — the
-       same ceiling js_task_handle_new asserts at the issuing end for the handle, asserted here for the same
-       reason and with the opposite consequence: a handle that stopped round-tripping names another task, and a
-       stamp that stopped round-tripping silently ORDERS two work items by a number that is not either one's.
-       A dev abort rather than a fatal check because the state is this engine's own arithmetic and not a
-       production invariant (§Offensive-programming's rule for which macro). */
+    /* The stamp is carried as a JS number on the job record, so it is only a name while it round-trips: past 2^53
+       two items would be ordered by a number that is neither one's arrival. A DCHECK, since it is this engine's own
+       arithmetic. */
     DCHECK(g_work_seq < 9007199254740992ull,
            "this instance has queued more work items than a JS number names exactly — the stamp is stored on "
            "the job record as a number and read back to order it against a program row, so past this point two "
            "items compare by a value that is neither one's arrival");
     return g_work_seq++;
 }
-/* EVERY MEMBER THIS INSTANCE HAS EVER ADMITTED TO THE FRONTIER, AND EVERY ONE IT HAS EVER LET GO — the two
-   LIFETIME counters that say whether the ORDER is deciding anything at all, which no row in this file could
-   ask and which the one row that looks as though it could is not.
-   WHY `g_rank_changes` IS NOT THIS COUNT, AND WHY THAT IS WORSE THAN IT NOT EXISTING. frontier_rank_changed
-   is called from these sites and exactly TWO of them change the membership: the clock write
-   (frontier_vt_serve), three fitness observations (flow_observe_replay/_survival/_rung), the completed-unit
-   credit (flow_credit_visit), three host-owed transitions (flow_set_host_owed, flow_clear_host_owed,
-   flow_clear_host_owed_all), the arrival (flow_new) and the departure (flow_remove). THE LIST IS STATED AND
-   THE COUNT IS NOT: this enumeration read NINE while the tree held TEN — flow_credit_visit was the one it
-   missed — and a number beside a list it disagrees with is the half of the pair nobody adds up. So
-   `rankChanges / picksLifetime` is a numerator raised at every one of those events over a denominator raised
-   at one — CLAUDE.md's count-offered-as-a-share-of-another, with the population it
-   mostly counts being the order working rather than a defect.
-   AND IT READS AS IF IT WERE THE ARRIVAL COUNT ON EXACTLY THE DOCUMENT ANYBODY MEASURES. On a page that
-   emits nothing, fetches nothing and never moves the clock, most of those sites never fire: measured at
-   artifact c23bfe6a on testing/fixtures/wjp_absent.html, `rankChanges` 34315 against `members` 34309 at the
-   last census of a 180 s series — a difference of SIX, constant at every one of its twelve samples. So the wrong reading is CORRECT
-   to four figures on the run a reader is most likely to take it from, and is a mixture of every one of those
-   populations on any run that fetches or emits anything. A quantity that agrees with the one you want on the
-   sample you have is the shape that never gets checked.
-   WHAT THE PAIR IS FOR, AND IT IS THE ONE QUESTION THAT DECIDES WHETHER A WEIGHT CHANGE CAN HELP AT ALL.
-   `arrivals / picksLifetime` is HOW MANY MEMBERS ARE MINTED PER DISPATCH. Below 1 the frontier is draining
-   and the ORDER decides who is served first, which is what every term of flow_weight is written to argue
-   about. Above 1 it is not draining at any ordering whatever: the served prefix is a vanishing fraction of a
-   set that grows, and a comparator that separates two members of the untouched remainder has reordered
-   something nothing is consuming. THAT IS NOT A BOUND AND IT LICENSES NONE — §NO BOUNDS makes a growing
-   frontier the design working, and this pair does not gate, cap or shed anything. It says which of two
-   readings a `neverPickedAtTop` plateau has, and those readings take opposite diffs.
-   MEASURED, AND THE RATIO IS NOT MARGINAL — a 180 s series on ONE fresh instance, artifact c23bfe6a on
-   testing/fixtures/wjp_absent.html, twelve samples at 15 s. `families` was 1 and `valMin`/`valMax`/`valTop`/`vt`
-   were 0 at every sample, so the reward term was not a common offset on this document, it was the constant
-   zero. `wTop - wMin` was 0.030 or 0.036 at every sample: the whole order, at 34309 members,
-   resolved into four hundredths of a point, because `svcMin..svcMax` spanned 179..184 and `visMin..visMax`
-   spanned 5..7 — six notches and three optimism readings between them. `neverPickedAtTop` fell 94.6% ->
-   81.8% of the frontier across the series with `neverPickedGap` 0.0 throughout, which flow.h's own worked
-   example prices at six hundred wide; the last sample was 28072.
-   AND THE HOLDING RATIO IS WHY THAT PLATEAU IS NOT A VERDICT ON THE ORDER. `members / picksLifetime` fell
-   21.0 -> 5.67 over the same series (12786/609 to 34309/6056), monotonically at every sample, so the plateau
-   was draining the whole time and the frontier was still holding between five and six members for every
-   dispatch the instance had ever made. On an instance
-   left running to 13102 dispatches the same document reported `neverPickedAtTop` 43 — 0.1% — with a weight
-   spread of 171. The order does separate; what the early samples measure is a frontier still filling.
-   AND THE SAME SPREAD ON A DOCUMENT NOBODY DESIGNED SAYS WHAT IT COSTS THE PRODUCT, which the fixture series
-   above cannot: it measures the ORDER and not what the order fails to reach. Artifact 58d56516, a 4.5 MB real
-   bundle replayed from its own mirror at its original host and paths, 224 samples over 167 s:
-     node testing/corpus/serve-faithful.mjs <id> <port> & node engine/pagecensus.mjs http://127.0.0.1:<port>/
-   THAT COMMAND NO LONGER RUNS AND THESE FIGURES CANNOT BE RE-TAKEN, KEPT AT THE HEAD OF THEM RATHER THAN LEFT
-   FOR A READER TO FIND BY TYPING IT. `testing/corpus/serve-faithful.mjs` and the committed capture it replayed
-   were DELETED at e36d41d2 ("corpus: THIS REPOSITORY CARRIES NO COPY OF ANYBODY ELSE'S SITE") — established by
-   CONTENT and not by ancestry, `git cat-file -e origin/main:testing/corpus/serve-faithful.mjs` answering "does
-   not exist", which is the check this repository being SHALLOW leaves available — and testing/corpus/run.sh
-   says so in its own words by refusing `AT=frozen` outright. So every number below is a reading about a
-   subject this tree does not carry: sound where it is about the ENGINE, and unrepeatable, so a later
-   disagreement with it is not a regression, cannot be bisected, and is not evidence about anything.
-   `wTop - wMin` is 0.036 — the fixture's figure to the digit — with `valMin == valMax == valTop == 4`, so the
-   reward is not a common offset here either, it is one value every member holds. 71452 members and 71451
-   forks come from FIFTY branch sites at `brDepthMax` 6 over THIRTY-NINE source reads, one bucket holding
-   38836: a cross product of a handful of unknowns, not seventy thousand decisions.
-   AND THE SENTENCE THAT STOOD HERE — "10507 of 10569 steps are REPLAY HITS, so nearly all of the thread goes
-   into re-running prefixes" — IS A UNIT ERROR, REWRITTEN RATHER THAN DELETED BECAUSE ITS CONCLUSION IS WHAT
-   THIS BLOCK GETS QUOTED FOR AND A READER WHO RE-DERIVES IT WILL RE-DIVIDE THE SAME TWO ROWS. `replayHits` is
-   counted in ARMS — decision-vector slots consumed at dec_replay — and decide.c says so at the declaration and
-   calls reading it otherwise "the `svcMax` defect exactly"; `steps` is ENTRIES INTO flow_step, raised at that
-   function's own first lines. One step passes through as many branches as its program has, so arms per step
-   has no ceiling of 1 and "10507 of 10569" is not a subset relation at all — the two magnitudes happened to
-   agree, which is the shape that never gets checked.
-   AND THE CONCLUSION IS CONTRADICTED BY THE FORK ITSELF, which no arithmetic would have caught:
-   engine_sibling_assemble COPIES the parent's frame, its `script_i`, its `last_compiled` and its delta (an
-   O(1) shared base segment), so an IN-SESSION sibling does not re-run its prefix — that function's own DCHECK
-   forbids the state in which it would, in the words "its first step would compile that program's row again
-   and replay every side effect the parent has already performed". Replay AS RE-EXECUTION is what a COLD-TIER
-   REBUILD does, and this run reports `resumed` 0 — WHICH IS THE CLAUSE THAT MAKES THIS SENTENCE SURVIVE BEING
-   MET ALONE, AND IT DID NOT CARRY ONE. Read as it stood, beside a `replayHits` of 3345, it forces one of two
-   false conclusions: that the sentence is wrong, or that a cold rebuild happened three thousand times. Neither
-   is the case and the argument above is untouched — `dec_replay` consumes a recorded ARM in session, for a
-   sibling taking the arm it was FORKED to take, and that is the ordinary state on every real page measured
-   here (`replayHits` 3345 and 3439 with `resumed` 0 in both). What a cold rebuild adds is the RE-EXECUTION,
-   and only `resumed` above zero says one happened. solver/decide.c states the pairing at the counter's own
-   declaration, where a reader of the row is standing; this clause exists so the two sites agree rather than
-   costing a reading to whoever meets this one first.
-   WHAT THE ROW LICENSES IN ITS OWN UNIT IS LESS THAN EITHER READING, AND SAYING SO IS THE POINT: not every
-   fork records a slot at all (decide_fork_same_path asks no predicate, and dec_fork_handoff "claims no replay
-   slot"), so 10507 arms against 71451 forks is not a fraction of anything this document publishes. The row
-   says how many recorded questions were re-asked and matched. It does not say where the thread went.
-   THE TWO ROWS THAT DO SAY IT ARE NOW QUOTED, AND THE ANSWER IS WHAT ASKING THE ORDER COSTS RATHER THAN
-   ANYTHING THE ORDER DECIDED. Not on that mirror, which is gone; the retirement clause that stood here named
-   an instrument no revision contains, so it could never have been satisfied as written. Re-taken instead on a
-   document this repository TRACKS — testing/fixtures/wjp_absent.html, four `src` rows and no inline — at
-   artifact 9213fbab, 64 commits behind its tip, TWO runs of 161 s and 163 s under one 180 s CPU budget on a
-   quiet box, served by any static server over that directory:
-     node engine/pagecensus.mjs http://127.0.0.1:<port>/wjp_absent.html <transcript.jsonl>
-   `scanNextWeights / steps` reads 17604 and 17801 against `members` 31828 and 32232 — so THAT QUOTIENT OVER
-   `members` is 0.553 and 0.552, which is a second division and not this one — and that second quotient read
-   0.5531 at a sample a THIRD of the way through the first run, on a frontier that tripled between the two
-   readings. A quotient that holds to three figures while its denominator triples is a FULL O(members) walk
-   per step, which no single sample could have said. THE DENOMINATOR IS NAMED BECAUSE LEAVING IT UNNAMED COST
-   A RELAY: `0.553` sitting beside a named quotient was passed on AS that quotient, which reads as half an
-   evaluation per step — cheap — where the figure this paragraph is about is seventeen thousand of them.
-   `scanRivalRuns / forks` reads 1.985 and 1.992.
-   AND THE CLAUSE THAT STOOD HERE READ THAT AS A SECOND RAISE — "the hook rescans about twice per fork, where
-   flow.h's own cadence note predicts about once, so something raises the frontier generation a second time per
-   fork and `flow_rank_changes` is the row that would name it" — WHICH DOES NOT FOLLOW FROM THESE ROWS, AND IS
-   REWRITTEN RATHER THAN DELETED BECAUSE THE QUOTIENT IS REAL AND A READER WHO RE-DERIVES IT WILL RE-DRAW THE
-   SAME INFERENCE. Two things are wrong with it and only the second is about magnitudes.
-   A RAISE IS NOT A MISS. `scanRivalRuns` counts walks the preempt hook PERFORMED, and it performs one only
-   when it is CONSULTED and finds its key changed — which happens at an interpreter opcode. Raises made inside
-   ONE C call have no opcode between them, so N of them collapse into a SINGLE miss at the next poll;
-   engine.c's own hook says exactly this of the adjacent pair ("no interpreter opcode runs between them"). So
-   no number of extra raises per fork can produce a second rescan per fork — and the fork path raises exactly
-   once in any case: engine_sibling_assemble's flow_add_unseeded reaches flow_new, which is the only site on
-   that path, and flow_fork_inherit raises nothing at all.
-   THE KEY IS A DISJUNCTION AND ONLY ONE DISJUNCT WAS BEING READ. The rescan condition is
-   `flow_frontier_gen() != g_seen_gen || cur != g_seen_cur`, so the INCUMBENT SWITCH invalidates the cache as
-   readily as the generation does, at a cadence of one per dispatch rather than one per fork — and
-   `picksLifetime` is 34971 and 35603 on these same two runs, the same order as the forks. A quotient near 2.0
-   over forks is what a page whose dispatches and whose forks are of one order looks like when BOTH halves of
-   the key fire, and that reading needs no second raise anywhere.
-   WHICH OF THE TWO IT ACTUALLY IS, THESE ROWS CANNOT SAY, and neither can `flow_rank_changes`: that row
-   counts RAISES, which is the quantity just established not to be what the hook pays for, and it is raised at
-   every site the banner at `g_arrivals` lists. The partition that answers it is `rivalMissGen`, `rivalMissCur`
-   and `rivalMissBoth` (solver/engine.h), raised inside the rescan branch itself and asserted at the census to
-   sum to `scanRivalRuns`. So the quotient above is a measurement whose CAUSE is open, and the sentence it
-   replaces was a mechanism named without one — the move this file records going wrong three times one screen
-   up. The two arms take opposite diffs: a `gen` arm is the order genuinely having changed and the walk is what
-   a forking page owes, while a `cur` arm is a walk for a frontier whose GENERATION stood still — and
-   `rivalMissBoth` is what says whether either repair buys anything at all, since where both halves moved in
-   one interval removing one changes nothing.
-   THAT CLAUSE READ: a frontier in which only the EXCLUDED member moved, which a fold naming the top two
-   members would answer in O(1). It is kept in its own words because a reader who re-derives it from the key
-   will write it again, and it is refuted by two mechanisms this file already states — flow_silence_carry's
-   bit moves with no generation bump behind it, so members within one FLOW_AGE_QUANTUM reorder between two
-   rescans, and flow_pick_skipped drops the EXCLUDED member before flow_weight, so a rival scan holds no
-   reading whatever of the one member a cur change re-admits. solver/engine.h carries the retirement, the
-   sound shape and its margin; `sil_phases` here carries what prices it.
-   SUMMED, THE TWO RUNS EVALUATED 2.17 AND 2.22 BILLION MEMBER WEIGHTS TO PERFORM `unitsDone` 380 AND 522 —
-   5.70 and 4.25 million weight evaluations per unit of work — a figure whose 34% spread is ENTIRELY its
-   denominator's, which the sentence below names as the one column that moves, so it is quoted as the pair it
-   is rather than as the single number the first landing of this paragraph gave it — split next 30.1%/30.0%, rival
-   49.0%/49.3%, other 20.7%/20.5%, census 0.2% on both. Those are COUNTS and not clocks, for the reason
-   FLOW_SCANS gives, so a loaded box cannot have inflated any of them; `unitsDone` is the one column of this
-   paragraph that moved with the interleaving and it is not what the paragraph is about.
-   AND IT IS NOT THE ORDER, SETTLED BY THE TWO ROWS THIS FILE ALREADY NAMES FOR THAT QUESTION RATHER THAN BY
-   THE FRACTION IT WARNS AGAINST. `starvedPicksIdle` is 0 and 1 against `picksLifetime` 34971 and 35603 — ONE
-   pick in seventy thousand ever passed over a member — and `neverPickedGap` is 0 at both, so the best
-   never-picked member stands AT the top. `valMin == valMax == valTop` reproduces here at 1, a second document
-   and a second artifact, so the reward orders nothing on this one either; and it costs nothing that it does
-   not, because there is no member it would have had to be ranked ahead of. The frontier is wide because
-   forking is the point (§THERE IS NO GRIND: this is what BFS looks like, not a depth preference to restore),
-   and the thread is spent ASKING rather than running.
-   THE COST IS QUADRATIC IN THE FRONTIER AND THAT LICENSES NO BOUND WHATEVER (§NO BOUNDS). Every ask is
-   O(members) and the asks are one per STEP and about two per FORK, so a page that forks pays members-squared
-   to be ordered — and the diff that follows from it changes what an ask COSTS and never what it ANSWERS,
-   which is the only kind of diff this measurement licenses. Capping a fork site, bounding the cross product or
-   shedding an arm would move every number above and answer a different question.
-   RETIRES: a reading of these rows on which the four entries' weights do NOT grow with `steps * members`,
-   which is what a sub-linear ask would look like and is the one observation that would make this paragraph
-   describe a cost the engine no longer pays.
-   WHAT IS NEW IS THE CURSOR HISTOGRAM, AND IT IS A FACT ABOUT THE DOCUMENT RATHER THAN THE QUEUE.
-   `deepest` 7, `programCursors` {0..6: 0, 7: 71296, 8: 156}: ONE program is holding the entire frontier —
-   71296 members have finished program 6 and are standing at program 7's door, while 156 have finished 7 and
-   are standing at 8's.
-   THE CLAUSE THAT STOOD HERE — "with nothing of the document's own table left to run" — WAS FALSE AND IS
-   REWRITTEN, BECAUSE IT WAS DERIVED FROM THE HISTOGRAM'S EXTENT AND THE EXTENT IS NOT THE TABLE. The buckets
-   run to `deepestLeft + 1` because that is how far any LIVE MEMBER has got, so a top bucket reads exactly the
-   same whether the sequence ends there or continues for another sixteen rows.
-   `deepestLeft` AND NOT `deepest`, WHICH THIS PARAGRAPH SAID AND WHICH IS TRUE ONLY OF A DOCUMENT EVERY ROW
-   OF WHICH RAN — as this one's did, which is why the reading above holds and is not being withdrawn. The two
-   numbers separate when a row is LEFT without being STARTED: HTML §4.12.1.1 "Processing model"'s "execute the
-   script element" step 4 runs nothing for an external `<script src>` whose fetch failed, and the cursor
-   passes it while `deepest` stays put. A page of this shape with row 3 failing would read `deepest 7` with a
-   top bucket at 9, and a reader holding the retired sentence would call that an instrument disagreeing with
-   the maximum beside it. `engine_seed_scripts` queues the
-   WHOLE of a document's table at flow creation, so every member's `dyn_n` is 24 from birth and cursor 8 means
-   SIXTEEN ROWS REMAIN. The row that separates those two states is `outOfPrograms`, which this reading did not
-   quote — and that is the same defect as the one above it, one row over: a number read against the wrong
-   denominator, where the right one was not published.
-   AND THE ROW MAP IS WHAT MAKES EVERY LATER READING OF THIS DOCUMENT CONCRETE. Counted off the mirror in
-   document order: rows 0-1 INLINE, 2-4 `src`, 5 INLINE, 6-19 `src`, 20-23 INLINE. So `deepest 7` means the
-   run reached the SECOND of fourteen consecutive chunk rows; the 71296 are piled at row 7's door and the 156
-   at row 8's, and both of those doors are an external `src` whose bytes arrive through the reply door.
-   THAT REFRAMES THE DIAGNOSIS AND IS WORTH MORE THAN THE CORRECTION. "The order never gets there" and "the
-   members ARE there and the bytes never arrive" are opposite work — the first is the WFQ's and the second is
-   the fetch path's — and cursor 8 says 156 members had already arrived. `replyAsked` against
-   `rootProgramsAwaitedAtSeed` (17 for this document) is the pair that separates them, and neither number was in the
-   reading above because neither existed. Only five of the rows at or below index 7 carry a `src`, so a run
-   stopped at `deepest 7` should show `replyAsked` near 5 and not near 17: a figure at 17 would mean the bundle
-   was fetched whole and the programs were not run, which is the fetch path working and the order failing, and
-   a figure at 5 is the reverse. That is a prediction and this census never made it.
-   AND THE SENTENCE THAT STOOD HERE — "SIXTEEN SCRIPTS OF THE DOCUMENT NEVER START" — WAS READ OFF THE WRONG
-   ACCESSOR AND IS REWRITTEN RATHER THAN DELETED, BECAUSE IT IS THE DERIVATION A READER RE-DOES. It was
-   `progStarts` 24 minus the histogram's eight slots. `progStarts` counts program STARTS ACROSS EVERY FLOW AND
-   EVERY TIMELINE (engine.c raises it at the one line a program is compiled, beside the candidate/other split),
-   so 24 starts over 8 indices is three lineages walking one sequence and the subtraction was of a count of
-   STARTS from a count of ROWS. The refutation was at the raise site: that comment already records this row
-   being read as a count of program starts and calls it "how a defect in a label becomes a defect in a
-   diagnosis". I read the row's NAME and not the line that writes it, which is the one check §READ-THE-ACCESSOR
-   asks for, and the sentence was quoted into briefs before anybody re-derived it.
-   WHAT THE CENSUS ACTUALLY COULD NOT SAY IS HOW MANY PROGRAMS THE DOCUMENT HAS, and that was not an oversight
-   in the reading: no row published one. `deepest 7` is equally "this document has eight programs and a flow
-   ran them all" and "it has far more and nothing reached them" — two states that take opposite work, one
-   sending a reader to the chunk-discovery path and the other to the order. `rootPrograms` is that denominator
-   now (solver/engine.h), so the next measurement states the fraction instead of inventing one; the reading
-   above is therefore the last one taken without it, and the conclusion the deleted sentence drew — that a
-   bundle's later chunks are not reached — is a HYPOTHESIS this census never tested.
-   AND THE HYPOTHESIS IS TRUE, ESTABLISHED SINCE BY COUNTING THE FROZEN DOCUMENT ITSELF — WHICH MAKES THIS A
-   RIGHT CONCLUSION REACHED BY WRONG EVIDENCE AND NOT A WRONG CLAIM, SO THE METHOD IS THE FINDING AND THE
-   SENTENCE WAS ONLY ITS SYMPTOM. The mirror `serve-faithful.mjs` replayed held TWENTY-FIVE `<script>` open
-   tags, of which one was `type="application/ld+json"` and executed nothing (§4.12.1.1's type check drops it
-   before it can become a row), none sat inside a `<noscript>` or a `<template>`, and the remaining
-   twenty-four split SEVENTEEN with a `src` against SEVEN inline. So the document really did hold 24
-   executable programs and `deepest 7` really does mean sixteen of them were never started.
-   THE COINCIDENCE IS THE WHOLE LESSON AND IT IS WHY NOBODY CAUGHT IT: `progStarts` READ 24 AND `rootPrograms`
-   IS 24, and they are different quantities that happened to agree on this one document. A count of program
-   STARTS across every flow and timeline and a count of the document's own ROWS have no reason to be equal;
-   had the run started thirty-one programs the subtraction would have produced a negative number and the error
-   would have announced itself. It agreed instead, so a derivation that means nothing produced a figure that
-   was exactly right, and the figure was quoted onward as evidence for the method that produced it.
-   AND THAT COUNT WAS OFFERED AS A PREDICTION THIS MEASUREMENT COULD BE SCORED AGAINST, WHICH IS NOW
-   UNSCORABLE BY CONSTRUCTION — and that is a real result rather than a failure to measure, so it is stated
-   here instead of left as a note a reader discovers by trying to collect it. The prediction read "the next run
-   of that mirror must read `rootPrograms` 24, `rootProgramsAwaitedAtSeed` 17 and `rootProgramsHeldAtSeed` 7",
-   and THERE IS NO NEXT RUN OF THAT MIRROR: the paragraph at the head of these figures already records that
-   `testing/corpus/serve-faithful.mjs` and the capture it replayed were deleted, so the subject the three
-   numbers are a prediction ABOUT is a document this tree does not carry. A prediction whose subject cannot be
-   re-driven is not weak evidence, it is NO evidence — nothing can confirm or refute it — and a reader who
-   quotes it as a standing falsifier is quoting one that can only ever come back absent.
-   WHAT THE HAND COUNT IS STILL WORTH IS THE SHAPE AND NOT THE THREE NUMBERS. The reasoning survives for any
-   document whose script tags somebody counts: the engine's own script table is built by document_exec_scripts
-   and drops rows a hand count does not model, so a lower number names which rows those are and a higher one
-   says the count missed a shape. `rootPrograms` is the denominator that makes that comparison possible at all,
-   and the run that scores it has to be taken on a subject that still exists — a live site, or one of this
-   tree's own tracked fixtures, whose `<script>` tags are countable the same way and whose bytes a reader can
-   re-fetch.
-   THE DISCRIMINATOR THE ORDER HAS NOT GOT, stated as a question because naming a term here without an
-   observation that separates the two sides is the wrong-narrowing move one level up: `neverPicked` is 64605 of
-   71452 with `neverPickedGap` 0, so the member that is the ONLY one standing at program 8 and the member that
-   is the 38837th arm at program 7 are BOTH never-picked, both hold reward 4, and nothing between them exceeds
-   0.036. The optimism term is keyed on completed units and answers the same for both. What would have to
-   exist is a reading on which those two are comparable AT ALL — and it must be one a fork CARRIES, since a
-   term that separated the two arms of a branch fails the rank-neutrality equality by construction.
-   THIS LICENSES NO BOUND AND NO CAP (§NO BOUNDS). Nothing here argues for shedding an arm, capping a fork
-   site or bounding a cross product; a growing frontier is the design working. It says only that the ORDER, on
-   a real document, is not currently choosing between two kinds of work that are worth very different amounts.
-   AND IT IS NOT EVIDENCE THAT THE ORDER IS WHAT IS WRONG, WHICH IS THE READING THESE FIGURES INVITE AND HAVE
-   ALREADY PRODUCED ONCE — A THROUGHPUT PROBLEM DISPATCHED AS AN ORDERING ONE. `neverPicked` is a fraction of
-   the FRONTIER, and what decides whether it says anything about ranking at all is `picksLifetime`, the
-   denominator it is quoted without above. This file says so itself at the starvation counter: `never_picked`
-   climbing "is arithmetic about the fork factor and not about the order (5786 flows created against 1010
-   dispatches — no ordering can dispatch what the thread has not reached)". MEASURED on the same mirror these
-   numbers came from, on a quiet box: `_unitsDone` 55 against 17165 flows, with `_jobsRun` 0. The thread
-   reached essentially nothing, so 64605 unpicked members is what a fork factor does to a frontier nobody
-   served, and not a statement about rank.
-   `neverPickedGap` 0 POINTS THE OTHER WAY FROM HOW IT READS, AND IT IS THE ROW THAT SETTLES IT: the best
-   never-picked member stands AT the top, so nothing is ranked ahead of it and the order is ready to serve it
-   the moment a dispatch exists. A gap of zero is an order with nothing to answer for.
-   THE TWO SUBJECTS TAKE OPPOSITE WORK, which is why the distinction is worth this paragraph: an ordering
-   defect is repaired by a TERM, and a throughput one by finding where a TURN GOES. So a reader who meets this
-   block with a mechanism already in mind owes two numbers before naming it — `picksLifetime` beside the
-   fraction, and `starvedPicksIdle` against `picksLifetime`, that subset being the only instrument here that
-   asks whether a pick ever PASSED OVER a member, which is what "is the order wrong" actually asks.
-
-   THAT IS A GAUGE OVER A COUNTER AND IT IS THE REASON THESE TWO ROWS EXIST. `members` is a gauge, so
-   `members / picksLifetime` is a HOLDING ratio over the whole session and cannot be differenced into a rate;
-   read at one instant it says nothing about whether the frontier is filling or draining, which is the single
-   fact that decides how the plateau beside it should be read. Read at the SAME `picksLifetime` it is stable —
-   14.5, 15.5 and 14.68 across three separate runs at 1299, 1222 and 1294 dispatches — so the variance is
-   entirely in WHEN the sample was taken, which is exactly what a counter/counter rate removes and a
-   gauge/counter one cannot.
-   A CONSERVATION IDENTITY DEFINES THEM AND IS ASSERTED WHERE BOTH TERMS ARE IN ONE HAND (flow_wfq_census):
-   `arrivals - departures == members`. That is what makes these counters rather than numbers, in the sense
-   `g_picks_total` above already establishes for itself, and it is checkable from OUTSIDE the process on the
-   published document. It is exact and not approximate because each has exactly one writer: flow_new appends
-   the only member this registry ever gains and flow_remove's swap-remove is the only decrement of `g_flows_n`
-   that is not the registry coming up.
-   NOT RESET BY flow_registry_init, for `g_picks_total`'s reason one line up AND without costing the identity:
-   flow_registry_free drains the frontier through flow_release (`while (g_flows_n)`), which is flow_remove's
-   one caller, so every member of a retired registry has DEPARTED and the identity re-reads 0 == 0 at the next
-   init. That is asserted there rather than assumed, and it catches a second registry raised over a live
-   frontier — which is a leak of every flow standing in it and today has nothing else to fire on. */
+/* Every member this instance has ever admitted to the frontier and every one it has let go: lifetime counters that
+ * say whether the order is deciding anything. `g_rank_changes` is not this count: frontier_rank_changed is called
+ * at the clock write (frontier_vt_serve), the fitness observations (flow_observe_replay/_survival/_rung), the
+ * completed-unit credit (flow_credit_visit), the host-owed transitions (flow_set_host_owed, flow_clear_host_owed,
+ * flow_clear_host_owed_all), the arrival (flow_new) and the departure (flow_remove), and only the last two change
+ * membership; on a page that emits nothing and never moves the clock it happens to track arrivals closely, which
+ * is the agreement that never gets checked.
+ *
+ * `arrivals / picksLifetime` is how many members are minted per dispatch. Below 1 the frontier is draining and the
+ * order decides who is served first, which is what flow_weight's terms argue about; above 1 the served prefix is a
+ * vanishing fraction of a growing set, and separating two members of the untouched remainder reorders something
+ * nothing consumes. It is not a bound and licenses none: it says which reading a `neverPickedAtTop` plateau has.
+ * `members / picksLifetime` is a gauge over a counter, a holding ratio that cannot be differenced into a rate.
+ * Before calling an ordering defect, read `picksLifetime` beside `neverPicked` (a fork factor fills a frontier no
+ * thread has reached) and `starvedPicksIdle` against `picksLifetime`, the one instrument that asks whether a pick
+ * passed over a member; `neverPickedGap` 0 means the best never-picked member stands at the top. An ordering defect
+ * is repaired by a term and a throughput one by finding where a turn goes.
+ *
+ * Asking the order costs O(members) per ask, one ask per step and about two per fork (the rival cache's key is a
+ * disjunction of the generation and the incumbent; `rivalMissGen`, `rivalMissCur` and `rivalMissBoth` in
+ * solver/engine.h partition `scanRivalRuns`), so a forking page pays members squared to be ordered. A diff here
+ * changes what an ask costs, never what it answers; capping a fork site or shedding an arm would answer a different
+ * question.
+ *
+ * `arrivals - departures == members` is a conservation identity asserted in flow_wfq_census and checkable on the
+ * published document; it is exact because each counter has one writer (flow_new appends the only member the
+ * registry gains, and flow_remove's swap-remove is the only decrement of `g_flows_n`). Not reset by
+ * flow_registry_init: flow_registry_free drains the frontier through flow_release (`while (g_flows_n)`),
+ * flow_remove's one caller, so the identity reads 0 == 0 at the next init, which is asserted there and catches a
+ * second registry raised over a live frontier. */
 static int64_t g_arrivals = 0;
 static int64_t g_departures = 0;
-/* …AND THE ONE DEPARTURE CAUSE THAT HAD NO COUNTER, WHICH IS WHAT LEFT `g_departures` A BARE TOTAL OVER A
-   POPULATION NOBODY HAD PARTITIONED. `flow_remove` is the ONE line a member ever leaves the frontier on and
-   `flow_release` is its ONE caller, so every departure this instance makes is one of exactly three things: a
-   flow that COMPLETED (engine.c's flow_finish, which credits `finished`), a flow the pager SOLD to the cold
-   tier (engine_reclaim_tail, which credits `sold`), and the drain in flow_registry_free below — which
-   credited nothing, so the two retirement totals could never account for every member that left and the
-   identity between them could not be written down at all.
-
-   IT IS THE ARM THE READING IS ACTUALLY ABOUT, not a tidy-up of the other two. "This engine retires nothing"
-   is composed today by reading `finished` and `sold` at zero and INFERRING that every member left with the
-   instance — two rows from one census, a third from another, and no identity anywhere tying them to the
-   frontier's own count. A member counted here is one the frontier was still holding when its registry went
-   down: not a departure the scheduler chose, the platform's, which is the whole content of the claim.
-
-   COUNTED AT THE RELEASE AND NOT FROM `g_flows_n` TAKEN BEFORE THE LOOP. A release ANNOUNCES a world death to
-   this instance's peers (see the end of flow_release), so a count taken in advance would be a claim about
-   what that announcement cannot do rather than a count of what the loop actually did — the same reason
-   `g_departures` itself is raised on the line that performs the removal and not derived from the gauge. */
+/* The departure cause that had no counter. `flow_remove` is the one line a member leaves the frontier on and
+   `flow_release` its one caller, so every departure is a flow that completed (engine.c's flow_finish, crediting
+   `finished`), one the pager sold (engine_reclaim_tail, `sold`), or the drain in flow_registry_free below, counted
+   here, and the three partition `g_departures` (asserted at engine_frontier_census). A member counted here is one
+   the frontier still held when its registry went down. Counted at the release rather than from `g_flows_n` before
+   the loop, because a release announces a world death to this instance's peers (the end of flow_release), as
+   `g_departures` is raised on the line that removes. */
 static int64_t g_departures_teardown = 0;
 static Flow *g_running = NULL;   /* the flow currently holding the worker (the scheduler sets it) */
 
-/* THE FORK TREE, which is what the aging term is actually about — and the one thing in this file that is not a
- * property of a single flow.
- *
- * §scheduler prices the aging term so that "a monopolizer that burns CPU without emitting sinks below
- * productive+unrun flows". A FORK CHAIN IS ONE MONOPOLIZER WEARING N NAMES, and that is not a hypothetical
- * shape: quickjs.c's step_length_unknown walk forks a "stop at n" arm at EVERY position, each arm runs the rest
- * of the document and then FINISHES, and `cpu` charged the ARM. So the thread time the walk really spent went to
- * flows that ceased to exist; the walker's own recorded service grew only by the per-position ask, so the family
- * never sank. Measured on the minimal fixture: 22 of 26 probe rows stayed 0 and were FLAT from sample 16 of 113,
- * every one of them waiting on a sibling arm the walk family outranked for the whole run. quickjs.c's claim that
- * "CPU-aging sinks it below every flow that does emit" was true of the TERM and false of what the term could SEE.
- *
- * SO A DEPARTING FLOW HANDS ITS SERVICE TO THE FLOW THAT FORKED IT. That is the whole mechanism, and it is
- * hierarchical fair-share's own rule rather than a new policy: a group is charged for everything below it, or any
- * member sheds its debt by splitting. flow_weight is UNCHANGED; what changed is what `cpu` accumulates.
- *
- * WHY A NODE AND NOT A `Flow *` PARENT. An arm can outlive the flow that forked it, so a pointer at the parent
- * is a pointer at freed memory exactly when the charge needs it. This node is refcounted by its owning flow AND
- * by every live child's `up`, so the ancestry stays addressable for precisely as long as something below it can
- * still be charged and no longer. `owner == NULL` is that flow having left the frontier: a charge walks PAST it
- * to the nearest LIVE ancestor, because a departed flow has no rank left for the service to move, and it
- * COMPRESSES the run it walked — union-find's find, which is why a deep dead ancestry is paid for once however
- * many flows depart below it. */
+/* The fork tree, which the aging term is about, and the one thing in this file that is not a property of a single
+ * flow. The term demotes "a monopolizer that burns CPU without emitting", and a fork chain is one monopolizer
+ * wearing N names: quickjs.c's step_length_unknown walk forks a "stop at n" arm at every position, each arm runs the
+ * rest of the document and finishes, and charging only the arm would leave the walker's family unaged. So a
+ * departing flow hands its service to the flow that forked it, hierarchical fair share's rule (a group is charged
+ * for everything below it, or any member sheds its debt by splitting); flow_weight is unchanged, only what `cpu`
+ * accumulates. A node rather than a `Flow *` parent, because an arm can outlive its parent: the node is refcounted by
+ * its owning flow and by every live child's `up`, so the ancestry is addressable exactly as long as something below
+ * it can be charged. `owner == NULL` is a flow that left the frontier: a charge walks past it to the nearest live
+ * ancestor and compresses the run it walked (union-find's find), so a deep dead ancestry is paid for once. */
 typedef struct FlowAcct {
     Flow *owner;              /* the flow this node accounts for; NULL once it has left the frontier */
-    /* THE NODE OF THE FLOW THIS ONE WAS FORKED FROM; NULL for a from-baseline flow.
-       NAMED RESIDUAL — THE THIRD ACCOUNTING SCOPE IS BUILT AND IT IS ONE LEVEL DEEP. `branch` below is that
-       scope: every flow reaches, in one indirection, the TOP-LEVEL ARM its whole subtree hangs under, and
-       flow_wfq_census publishes that bucket's live membership, its lifetime membership and its lifetime burn.
-       So the sentence this residual used to say could not be said — "the two sides of this branch received X
-       and Y" — is a number for every branch a ROOT flow takes, which on a page whose flows all descend from
-       boot is every branch the boot flow itself takes.
-       THE REMEDY CLAUSE THAT STOOD HERE WAS WRONG ON BOTH OF ITS HALVES AND IS RECORDED RATHER THAN DELETED,
-       BECAUSE A NEXT-DIFF CLAUSE IS READ ONCE BY SOMEBODY WHO HAS ALREADY DECIDED TO DO THE WORK. It said:
-       "the SAME three counters held per NODE rather than per top-level arm, so a bucket is any fork point and
-       `branch` is no longer one level", with the cost objection "an update whose cost is not O(depth) at
-       every charge — affordable on a STAR fork tree and quadratic on a CHAIN", and it made `brDepthMax` the
-       precondition. `brDepthMax` ANSWERED: 5..6 over a frontier that grew to 75113 on a real 4.5 MB bundle,
-       and 6 over 71452 in this file's own artifact-58d56516 reading — a STAR, so the named cost is paid. The
-       clause was refuted anyway, twice.
-       IT WOULD HAVE MOVED A TERM OF THE ORDER, WHICH IS THE ONE THING THIS SCOPE MAY NOT DO. `branch` is read
-       by flow_branch_bonus (`1.0 / sub_born` over the bucket), which flow_nonreward sums into
-       flow_weight — the field's own paragraph below records three consumers pricing it while two declarations
-       denied it. Re-keying `branch` to the nearest fork point is exactly the transfer flow_fork_inherit
-       performs in reverse, and that site's own DCHECK states the consequence: delete the transfer and "the
-       newborn keeps its own bucket at one live member — bonus 1.0 — against a parent bucket of L, so the
-       equality FIRES for every L above one". The clause proposed a weight change wearing an observation's
-       clothes, in a paragraph whose sentence above correctly says nothing ranks by `up`.
-       AND IT PRICED THE WRONG RESOURCE. The cost that binds is not the WALK, it is RETENTION. A bucket must
-       outlive its owner — acct_unref frees a node at refcount zero and acct_compress_dead splices out every
-       dead non-branch node between a live member and its branch node, for the reason stated at that function:
-       without it a family whose arms depart one at a time retains one node per departed arm, "which for the
-       unknown-length walk this file is written against is one node per iteration". Making every fork point a
-       bucket PINS precisely the nodes that loop exists to free, per departed arm, unbounded, and §NO BOUNDS
-       forbids capping it. The clause's own precondition could never have discovered that, because depth says
-       nothing about how many dead ancestors have live descendants.
-       WHAT WAS BUILT INSTEAD, AND IT ANSWERS THE QUESTION THE CLAUSE ASKED RATHER THAN THE MECHANISM IT NAMED:
-       the MINTING FAN — `br_fan_max`, `br_fan_sum`, `br_fan_depth`. Live members are counted by the node their
-       `up` names, over NON-ROOT parents only, which is exactly this residual's uncovered population (a fork
-       off a root already opens a bucket of its own). It needs no retention, no charge-time walk and no change
-       to `branch`: a live member's `up` is written once at its fork and moved only at its own departure, so
-       the key is its true fork parent, and the whole cost is one pointer load and one generation-stamped
-       increment inside the census's EXISTING member walk. `br_fan_depth` is what separates the clause's two
-       indistinguishable states — minting at the first branch reads depth 1, minting two levels down reads 3.
-       NOT COVERED, NARROWED: THE BURN AND THE LIFETIME MINT COUNT OF A DEEP FORK. `sub_us`, `sub_born` and
-       `sub_gone` are still maintained only where `branch == self`, so "how much of the thread did each side of
-       a DEEP branch get" and "has this deep fork minted a hundred or a hundred thousand" have no number. The
-       fan answers WHICH fork is minting and HOW WIDE it stands now; it is a GAUGE and says nothing about
-       receipt. This field is still the only record of those levels, and nothing charges through it and nothing
-       ranks by it: it is read by acct_unref, by acct_compress_dead, by three preconditions and by the fan door
-       in flow_wfq_census, all of them lifetime management or observation, plus the one-level branch derivation
-       in flow_fork_inherit.
-       WHAT MUST EXIST AFTERWARD: a per-deep-fork receipt whose maintenance PINS NO NODE THE COMPRESSION WOULD
-       OTHERWISE FREE. That is the constraint the retired clause did not know it was under, and it is stated
-       as a property rather than as a mechanism because the mechanism is not established — a reader who reaches
-       for per-node buckets will re-derive the retention the paragraph above refutes.
-       HOW ITS ABSENCE SHOWS: a census in which `br_fan_max` is a large share of `br_fan_sum` — one deep fork
-       holding the standing crowd — while every burn row on the line is a TOP-LEVEL arm's, so a reader can say
-       which fork minted the frontier and cannot say what that fork's two sides RECEIVED. */
+    /* The node of the flow this one was forked from; NULL for a from-baseline flow. Nothing charges through it and
+     * nothing ranks by it: it is read by acct_unref, acct_compress_dead, three preconditions, the fan count in
+     * flow_wfq_census, and the one-level branch derivation in flow_fork_inherit. The third accounting scope is
+     * `branch` below, one level deep: every flow reaches the top-level arm its subtree hangs under in one
+     * indirection, and flow_wfq_census publishes that bucket's live and lifetime membership and lifetime burn.
+     * Per-node buckets would be wrong twice: re-keying `branch` to the nearest fork point would move a term of the
+     * order (flow_branch_bonus, `1.0 / sub_born` over the bucket, is summed into flow_weight, and flow_fork_inherit's
+     * DCHECK fires on it), and it would pin, per departed arm and without bound, the nodes acct_compress_dead exists
+     * to free. The minting fan (`br_fan_max`, `br_fan_sum`, `br_fan_depth`), counted by `up` over non-root parents
+     * in the census's existing walk, says which deep fork is minting and how wide it stands now.
+     * Named residual. Not covered: the burn and lifetime mint count of a deep fork; `sub_us`, `sub_born` and
+     * `sub_gone` are maintained only where `branch == self`, and the fan is a gauge that says nothing about
+     * receipt. Next diff builds: a per-deep-fork receipt whose maintenance pins no node the compression would
+     * otherwise free (a property; the mechanism is not established). Absence shows as: a census in which
+     * `br_fan_max` is a large share of `br_fan_sum` while every burn row is a top-level arm's, so which fork minted
+     * the frontier is known and what its two sides received is not. */
     struct FlowAcct *up;
     int refcount;             /* the owner's reference + every live child's `up` */
-    /* THE FAMILY'S SERVICE SINCE ITS LAST EMISSION — the quantity flow_weight's aging term is now made of, and
-       MEANINGFUL ONLY ON A ROOT (`up == NULL`). Every flow carries a direct `family` pointer at that root, so
-       this is read and written in O(1) and never by walking.
-       WHY IT REPLACED THE PER-ARM CHARGE. The reward was then COPIED down every arm at its fork, so a family
-       that emitted V and had N live arms presented V exactly N times; the aging that is supposed to cancel V was
-       charged to whichever arm HELD THE THREAD, and the departed-arm hand-up below moved it only when an arm
-       LEFT. The arms that stayed LIVE each carried only the prefix from their own fork point, so every one of
-       them had to individually burn V / FLOW_AGE_RATE before it stopped outranking a reward-0 member: the
-       thread time to reach one was N * V / RATE and not V / RATE, and §NO BOUNDS refuses to bound N.
-       IT WAS INSTRUMENTED BEFORE IT WAS BUILT, and the number is why this exists rather than a paragraph.
-       Smoke fixture, full document, 686 members: `svcMax` 1124 against `svcFamMax` 8910 — the family had burned
-       7.93 times what its largest single arm showed, against an optimism term whose entire range is 1.0 and a
-       `valMax` of 10.0. The eight members at reward 0 were the @S candidates and `candSvcMax` was 1: over a
-       fifteen-minute run the whole security search got about one quantum. That is not scheduler polish, it is
-       the reason the @S half reports nothing.
-       SO THE TWO TERMS ARE NOW SYMMETRIC: the reward is the FAMILY's (`val` below) and the aging that cancels
-       it is the FAMILY's (charged once however many names the family wears). §scheduler's sentence — "a
-       monopolizer that burns CPU without emitting sinks below productive+unrun flows" — is about a monopolizer,
-       and this file already said which one: "a fork chain is one monopolizer wearing N names, so it enters at
-       one place and it is charged as one thing." It entered at one place and was charged as N.
-       THAT SENTENCE USED TO READ "the reward is the FAMILY's (COPIED AT EVERY FORK)", AND THE PARENTHESIS
-       REFUTED THE CLAIM IT WAS OFFERED AS EVIDENCE FOR. A quantity copied at the fork INSTANT is not the
-       family's: two arms of one parent, forked at two instants, hold what the parent held at two different
-       times, so they differ by exactly what the parent emitted in between — which neither of them did. The
-       reward was therefore a PER-CHAIN PREFIX wearing a family's name, and the aging that was charged once per
-       family could not cancel it, because a common offset cancels out of every within-family comparison while
-       the prefix spread does not. On a real page the whole frontier is ONE family, so that spread WAS the
-       order: members served strictly newest-first, the tail unreachable at any silence, and a frontier that
-       grows without draining. The field below is what makes the sentence true. */
+    /* The family's service since its last emission, the quantity flow_weight's aging term is made of, meaningful
+       only on a root (`up == NULL`); every flow carries a direct `family` pointer at its root, so it is read and
+       written in O(1). It is charged to the family because the reward is the family's (`base + earned` below):
+       charging only the arm holding the thread would make each of N live arms burn V / FLOW_AGE_RATE separately
+       before it stopped outranking a reward-0 member, N * V / RATE in all, and N is not bounded. So a fork chain,
+       one monopolizer wearing N names, is charged as one thing. */
     int64_t fam_us;
-    /* THE FAMILY'S ACCUMULATED EMITTED VALUE — §scheduler's reward term, held at the SAME accounting unit that
-       pays the aging above and for the same reason, MEANINGFUL ONLY ON A ROOT.
-       A CREDIT MINTED ONCE MAY BE PRESENTED ONCE. The defect the paragraph above describes is one emission
-       raising N members' rank while the debit that cancels it is charged to one account: the credit inflates
-       by the fork factor of the page's own bundle and the debit does not, so no amount of silence can ever pay
-       it off, and §scheduler's "a never-run flow is never starved" is false of every frontier whose reward
-       spread exceeds the optimism term's whole range of 1.0. Held here, one emission raises the family once,
-       and the silence charged to that family cancels exactly it.
-       IT IS ALSO WHAT MAKES A FORK RANK-NEUTRAL FOR FREE, AND ACROSS MORE THAN ONE INSTANT. A copied term is
-       neutral only between a parent and the arm born at that instant; flow_fork_inherit's equality is written
-       over one branch and cannot see the pair it does not compare — two arms of the same parent, forked at two
-       instants, which must also be worth the same because neither did anything between the two branches. A
-       term read through the shared root satisfies both by construction: there is nothing to copy, so there is
-       nothing a fork can carry differently.
-       WHAT THE ORDER IS THEN MADE OF, AT TWO SCOPES, WHICH IS THE POINT AND NOT A SIDE EFFECT. WITHIN a family
-       this term is a common offset and cancels, so members are ordered by the optimism bonus and their OWN
-       silence — both bounded, and NEITHER of them reset by the emitting MEMBER, which is the correction this
-       sentence carries and which took two diffs to become true of both halves. The optimism bonus is not moved
-       by an emission at all (flow_credit_emit says why the per-member zero that used to move it was one credit
-       presented twice). The own silence is forgiven for every arm of the ACCOUNT at any arm's emission
-       (`emit_gen` below) EXCEPT the emitter, which carries its burn across the bump for that same reason: the
-       credit is the family's and the debit is the member's, so erasing the second with the first is one credit
-       presented twice, and it erased the only within-family ordering signal there is. So what orders a
-       family's members is fewest completed units first and least own burn first — fair queueing over the arms and
-       §scheduler's BFS. BETWEEN families it is the whole bandit ordering, charged once against a silence
-       charged once, so a family that emitted V holds the thread for V seconds of ITS OWN silence and is then
-       passed. Neither scope can do the other's job, which is the same sentence flow_silence_notch already
-       makes about the two halves of the aging. */
-    /* …AND IT IS TWO QUANTITIES, WHICH ONE FIELD HID UNTIL AN ASSERT WENT LOOKING FOR THE OTHER. The reward
-       this account is ranked by is `base + earned` and always was; what one field could not say is WHICH of the
-       two any given point came from, and they are not the same kind of thing at all.
-       `earned` IS A LEDGER: what THIS account has emitted, raised only by flow_credit_emit, one point per
-       finding, unbounded by §NO BOUNDS because bounding it would cap how much a family may be worth.
-       `base` IS A QUEUE COORDINATE: where this account ENTERED the order. A from-baseline flow founds its own
-       family and must not enter below the whole frontier, so flow_arrive_at_virtual_time places it at the
-       virtual time of the account in service; a resumed flow is placed at the total the session that parked it
-       wrote down. Neither is a thing this account emitted, and nothing about either says it did.
-       WHAT THE CONFLATION COST, AND IT IS NOT HYPOTHETICAL — IT WAS AN ASSERT THAT WOULD HAVE FIRED ON A
-       HEALTHY FRONTIER. The census asserts that an account's forgiveness count (`emit_gen`) is past zero
-       exactly when its reward is, because flow_credit_emit raises both in one statement with no return between
-       them. That is TRUE of `earned` and FALSE of the sum: an arrived account stands at a reward of whatever
-       the leader held — 189 points, measured — with `emit_gen` still at 0, because arriving is not emitting.
-       The assert had not fired only because such an account had never reached the FRONT of the order, which is
-       precisely the starvation the split is a step toward fixing: the first diff that let a candidate session
-       lead would have aborted the engine on an invariant that was right about the ledger and wrong about the
-       field.
-       AND IT IS THE SEAM THE REWARD BAND NEEDS. `val_min` pinned across a whole run while `val_max` gains two
-       hundred is an account sitting at the coordinate it ARRIVED at while another EARNS past it, and no term
-       can re-relate the first without naming it apart from the second — and `placed` one field down is that
-       re-relation, which is why the split had to land before it could. Split, that is one field to re-derive;
-       summed, it was a ledger nobody may touch. The order reads `base + earned` through acct_family_val and is
-       unchanged by this split, which is the point: the arithmetic is identical and the QUESTIONS are separable.
-       `self_emit` and `val_zero` (flow.h) are the census rows that were quietly answering about the sum. */
+    /* The family's accumulated emitted value, the reward term, held at the accounting unit that pays the aging and
+     * meaningful only on a root. A credit minted once may be presented once: an emission raising N members' rank
+     * against a debit charged to one account would inflate the credit by the bundle's fork factor, and no silence
+     * could pay it off. Read through the shared root, the term is rank-neutral across forks at any instants: there
+     * is nothing to copy, so two arms of one parent forked at two instants read the same value. Within a family it
+     * is a common offset and cancels, so members are ordered by the optimism bonus and their own silence (fewest
+     * completed units first, least own burn first), neither reset by the emitting member: the optimism bonus is not
+     * moved by an emission (flow_credit_emit), and the own silence is forgiven for every arm of the account at an
+     * emission (`emit_gen`) except the emitter, which keeps its burn. Between families it is the whole bandit
+     * ordering, charged once against a silence charged once.
+     *
+     * It is two quantities. `earned` is a ledger, what this account emitted, raised only by flow_credit_emit, one
+     * point per finding and unbounded. `base` is a queue coordinate, where the account entered the order: a
+     * from-baseline flow founds its own family and is placed at the virtual time of the account in service
+     * (flow_arrive_at_virtual_time), a resumed flow at the total the parking session wrote down; neither was
+     * emitted. The census's assert that `emit_gen` is past zero exactly when the reward is holds of `earned` and
+     * would be false of the sum (an arrived account stands at the leader's reward with `emit_gen` 0). The order
+     * reads `base + earned` through acct_family_val, so the split changes no arithmetic; `self_emit` and `val_zero`
+     * (flow.h) are the census rows about it. */
     double base;
     double earned;
-    /* …AND WHETHER `base` IS A STORED TAG AT ALL, WHICH IS THE OTHER HALF OF THE SPLIT ABOVE AND THE THING THAT
-       MAKES THE COORDINATE A RELATION RATHER THAN A COPY. `base` above says this account entered the order at
-       the frontier's virtual time; what it could not say is WHEN that reading was taken, and a reading taken
-       ONCE, at creation, is stale from the instant the account in service earns past it.
-       ZERO MEANS THE ACCOUNT HAS NEVER HELD THE THREAD, and while it is zero `base` is not read at all: the
-       account's coordinate IS the frontier's virtual time (g_vt), re-read at every pick. ONE means the account
-       has been dispatched at least once, and from that dispatch onward `base` is the tag frozen at the virtual
-       time it was standing at — SFQ's F, taken when the item is first served. So an account that has been
-       given nothing does not fall behind, and an account that HAS been served stands on its own tag plus its
-       own ledger, which is what keeps `earned` an ordering between accounts instead of a number the arrival
-       rule erases.
-       WHY THE FREEZE IS AT SERVICE AND NOT AT CREATION, WHICH IS THE WHOLE OF THIS FIELD. Start-time fair
-       queueing's `max(v(t), F_prev)` is evaluated at each ARRIVAL, and its content is that a member which has
-       not been SERVED does not fall behind the clock — in SFQ that holds for free, because the server takes the
-       MINIMUM tag and v(t) can therefore never pass a waiting member. This order takes the MAXIMUM and an
-       emission RAISES the served account's tag, so v(t) runs AWAY from the waiting members instead of toward
-       them, and a coordinate stamped at creation is passed by exactly what the incumbent earns afterwards.
-       Measured, on the build smoke fixture: `valMin` pinned at 183.0 from the second census to the last while
-       `valMax` gained 217 and the frontier grew to 660 members, with `valArrived` — accounts standing entirely
-       on the coordinate they arrived at — frozen at 12 beside `cands: 12`, `turns: 0` on every one of them.
-       Those twelve were the @S candidate sessions, so every §@S mechanism was unreachable by construction.
-       AND IT MUST BE A FACT ABOUT THE ACCOUNT, NEVER ABOUT A MEMBER. Two arms of one parent forked at two
-       instants must read the coordinate the same, so there is nothing here for a fork to carry differently:
-       the arm joins the family (flow_fork_inherit) and reads this bit through the same pointer. A per-flow
-       copy of it would be reset-by-splitting arriving through the arrival door. */
+    /* Whether `base` is a stored tag at all, which makes the coordinate a relation rather than a copy. Zero: the
+       account has never held the thread, `base` is not read, and the coordinate is the frontier's virtual time
+       (`g_vt`), re-read at every pick. One: dispatched at least once, and `base` is the tag frozen at the virtual
+       time it stood at, start-time fair queueing's F taken when the item is first served. The freeze is at
+       service, not creation: SFQ's `max(v(t), F_prev)` keeps an unserved member from falling behind because its
+       server takes the minimum tag, while this order takes the maximum and an emission raises the served account's
+       tag, so v(t) runs away from waiting members, and a coordinate stamped at creation would be passed by
+       whatever the incumbent earns afterwards (stranding, for instance, every @S candidate session). A fact about
+       the account, never a member: two arms forked at two instants must read it the same, so the arm joins the
+       family (flow_fork_inherit) and reads this bit through the same pointer. */
     unsigned char placed;
-    /* WHICH SILENCE WINDOW THIS ACCOUNT IS CURRENTLY IN — bumped by every emission credited here, and read by
-       nothing except `Flow.cpu_gen` beside it. It is the OTHER half of the reset `fam_us` above performs, and
-       it exists because the aging term has two halves that were measured over TWO DIFFERENT WINDOWS while being
-       SUMMED into one notch and weighed against ONE reward.
-       WHY THAT IS A UNIT ERROR AND NOT A POLICY. `fam_us` is the family's burn since ANY arm of it last emitted;
-       `Flow.cpu` was this flow's burn since ITS OWN last emission, which is a strictly LONGER window, because a
-       flow's own emission is also one of its family's. The reward those two are subtracted from is the FAMILY's
-       (`val` above), credited over the family's window — so the own half was a debt denominated in a window the
-       income could not cover, and for one population it could never be retired at all: `Flow.cpu` is written
-       only for the flow HOLDING THE THREAD, so a member the scheduler has never dispatched carries whatever its
-       parent had burned at the fork, forever, while the parent's is forgiven at the parent's next emission.
-       The arm is then permanently behind its own parent by `floor(parent_cpu_at_fork / S) * FLOW_AGE_QUANTUM`,
-       for thread time the arm never consumed, repayable only by being dispatched — which is the thing it is
-       being denied. That is §scheduler's razor's STARVES: not a deprioritisation, a debt whose only currency is
-       the dispatch it forecloses.
-       MEASURED, on the build smoke fixture, over the run's 71 censuses: `unrun` — the count of members standing
-       at `cpu == 0` — was ZERO at 69 of them, nonzero only at censuses 8 and 9 while the frontier was under a
-       thousand members and never again after it passed one; `neverPicked`
-       reached 943 with the best of them 0.011 from the front of the order, and sat pinned at ~819 across a
-       dozen consecutive censuses in which the frontier grew by 437 and every one of those newcomers was
-       dispatched. Because `unrun` is also the population flow_pick's two ordering guards are gated on, both of
-       them short-circuited to vacuity at every pick of the entire run.
-       SO THE OWN HALF IS READ OVER THE FAMILY'S WINDOW TOO, which is what this generation makes O(1). A member
-       whose `cpu_gen` does not match this counter has burned nothing since the window opened, so its own
-       silence IS zero and no walk of the family is needed to say so. The two halves are then one quantity read
-       at two scopes — which is what flow_silence_notch already claimed of them — rather than two clocks with
-       two epochs.
-       uint64 and never wrapped: one increment per emitted finding cannot reach 2^64 in any session, and a wrap
-       would alias a stale mark onto the live generation, which reads a frozen silence as a current one and
-       restores the exact defect this field removes. */
+    /* Which silence window this account is in, bumped by every emission credited here and read only against
+       `Flow.cpu_gen`. The aging term's two halves must be measured over one window: `fam_us` is the family's burn
+       since any arm emitted, while a flow's own burn since its own emission is a longer window, a debt the
+       family's income could not cover; and `Flow.cpu` is written only for the flow holding the thread, so a
+       never-dispatched member would carry its parent's burn at the fork for ever, a debt payable only by the
+       dispatch it forecloses. So the own half is read over the family's window too: a member whose `cpu_gen` does
+       not match this counter has burned nothing since the window opened, and its own silence is zero with no walk.
+       uint64 and never wrapped: one increment per finding cannot reach 2^64, and a wrap would alias a stale mark
+       onto the live generation. */
     uint64_t emit_gen;
-    /* THE CENSUS'S MARK, AND IT IS HERE BECAUSE A FAMILY HAS NO MEMBER OF ITS OWN TO BE COUNTED THROUGH. The
-       census reaches families only via their arms, so counting DISTINCT ones out of one walk of the frontier
-       is a set problem, and the set's identity is this NODE'S ADDRESS rather than any value it holds — two
-       families standing at the same `fam_us` are two families, which is exactly the state a pair of extrema
-       cannot see. Marking the root as the walk passes it makes the count O(members) with one word per node and
-       no ancestry walk, which is the shape a renderer counts distinct objects in one traversal by.
-       ZERO IS THE UNMARKED STATE and `reclaim_calloc` supplies it, so a node minted between two censuses is
-       counted by the next one instead of inheriting a stale mark; the generation is bumped past zero on wrap
-       for the same reason. It is written only by the census, which decides nothing. */
+    /* The census's mark, here because a family has no member of its own to be counted through: counting distinct
+       families in one walk is a set problem whose identity is this node's address (two families at one `fam_us`
+       are two), so marking the root as the walk passes makes the count O(members) with one word per node. Zero is
+       unmarked, which `reclaim_calloc` supplies, so a node minted between censuses is counted by the next one; the
+       generation skips zero on wrap. Written only by the census. */
     unsigned census_gen;
-    /* HOW MANY LIVE MEMBERS OF THIS FAMILY STAND AWAY FROM ITS EPOCH BASE — a GAUGE, meaningful only where
-       `family == self`, and the one quantity that says whether an index over flow_index_key is a COST or a
-       BAR. flow_own_silence is `cpu_gen == family->emit_gen ? cpu : 0`, so a member is at its family's base
-       exactly when that reads zero, and flow_credit_emit sends a whole family there by moving `emit_gen` with
-       NO PER-MEMBER WRITE. An epoch-keyed index therefore rebuilds only the members standing AWAY, and this
-       is how many they are.
-       MAINTAINED INCREMENTALLY AT FOUR SITES AND NEVER WALKED, because the only instant its value is wanted
-       is the emission itself and a walk there would be an instrument changing the run it samples. The sites
-       are flow_age_running (a charge takes the running member away from base), flow_fork_inherit (a newborn
-       inherits its parent's silence and is born away), acct_depart (an away member leaves), and
-       flow_credit_emit (the bump takes the whole family back, and the emitter alone is re-stamped). The
-       arrival door is NOT among them: flow_arrive_at_virtual_time ASSERTS `cpu == 0 && cpu_gen == 0`, so a
-       from-baseline flow arrives at base by construction rather than by a transition anybody counts.
-       THE IDENTITY IS WHAT MAKES A MISSED SITE FIRE RATHER THAN LIE, and it is the point of the field rather
-       than a check on it: flow_wfq_census sums this over distinct families in the SAME walk that counts
-       members reading a non-zero flow_own_silence, and the two must agree. One is maintained by four
-       statements at four sites and the other is computed from the accessor, so a fifth transition nobody
-       found is a fire and not a quiet drift. */
+    /* How many live members of this family stand away from its epoch base: a gauge, meaningful where
+       `family == self`, which says whether an index over flow_index_key is a cost or a bar. flow_own_silence is
+       `cpu_gen == family->emit_gen ? cpu : 0`, so a member is at base exactly when that reads zero, and
+       flow_credit_emit sends a whole family there by moving `emit_gen` with no per-member write; an epoch-keyed
+       index rebuilds only the members away. Maintained incrementally at four sites and never walked (a walk at the
+       emission would be an instrument changing the run): flow_age_running (a charge takes the running member
+       away), flow_fork_inherit (a newborn inherits its parent's silence), acct_depart (an away member leaves) and
+       flow_credit_emit (the bump takes the family back and re-stamps the emitter alone). The arrival door is not
+       among them: flow_arrive_at_virtual_time asserts `cpu == 0 && cpu_gen == 0`. flow_wfq_census sums this over
+       distinct families in the walk that counts members with nonzero flow_own_silence, and the two must agree, so
+       a missed transition fires. */
     long away_n;
-    /* THE TOP-LEVEL ARM THIS NODE'S SUBTREE HANGS UNDER — the ACCOUNTING SCOPE BETWEEN the member and the
-       family root, and the four fields below are what it accounts for. A root's is ITSELF; a node forked
-       DIRECTLY off a root is ITSELF (it is a new arm of the family); anything deeper inherits its parent's. So
-       every ancestry path holds EXACTLY ONE node with `branch == self`, it is set once at the node's creation
-       and never moves, and every flow reaches its bucket in ONE indirection — the same shape `Flow.family`
-       already uses to reach the root without walking, and for the same reason: flow_weight is evaluated inside
-       DCHECK conditions, where a walk that compresses is forbidden.
-       WHAT IT IS FOR, AND THE ORDER READS IT — WHICH IS THE OPPOSITE OF WHAT THIS SAID, AND THE SENTENCE IT
-       REPLACES WAS A GUARANTEE RATHER THAN A LABEL, SO IT FAILED IN THE DIRECTION THAT GETS BUILT ON. It read
-       "The order reads NOTHING here" and "a weight term over a branch would fail flow_fork_inherit's
-       rank-neutrality equality by construction", and flow_nonreward SUMS flow_branch_bonus — `1.0 / sub_born` over
-       exactly this bucket — into flow_weight today. Three consumers price it: flow_nonreward adds it,
-       FLOW_NONREWARD_MAX carries a `branch: alone in it` line for it, and flow_silence_us_to_sink's bound is
-       `+ 2.0` rather than `+ 1.0` precisely because of it. THE CONSUMERS ARE RIGHT AND THE DECLARATION WAS
-       WRONG, which is this project's own consumer-outranks-the-declaration rule arriving inside one file.
-       WHY THE EQUALITY PASSES ANYWAY, WHICH IS A REAL INVARIANT AND NOT THE ABSENCE OF A TERM. A branch term
-       is rank-neutral for TWO different reasons in two different cases, and the retired sentence hid both. A
-       fork off a NON-root MOVES the newborn into its parent's bucket (flow_fork_inherit), so parent and arm
-       read ONE `live` and are equal because they share a denominator — the transfer is LOAD-BEARING FOR THE
-       ORDER, which the site performing it also denied. A fork off a ROOT gives the arm its OWN bucket, and the
-       two are equal because BOTH hold exactly one live member: nothing ever raises a root's own `sub_born`
-       past the 1 flow_new wrote, since `br` is never `parent->acct` when the parent is a root. That second
-       case rests on a structural fact rather than on a shared field, so it is the fragile one and it is now
-       ASSERTED at the line that decides it rather than described here.
-       SO THE SCOPE IS BOTH AN OBSERVATION AND A TERM, and what the fields make possible is still the one
-       sentence neither existing scope can say: WITHIN a family the
-       branch is invisible, BETWEEN families there is only one family on a page whose flows all descend from
-       boot, so "the two sides of this branch received X and Y" was an argument and is now a number.
-       AND IT IS WHY acct_compress_dead HAS A THIRD STOP CONDITION. Retention wants a dead spine gone; a
-       subtree figure wants exactly the dead spine, because the service a DEPARTED arm consumed is part of what
-       its subtree received. Those two are in direct opposition and neither is wrong. They are separated by
-       noticing that only ONE node per path has to survive its owner: the compression still splices out every
-       dead node between a live member and its branch node — which is where the unbounded retention was, one
-       node per departed arm — and stops AT the branch node, which is then pinned by its descendants' own `up`
-       references with no second refcount to keep in step. One extra retained node per LIVE bucket, and a
-       bucket with no live member has refcount zero and is freed like any other node. */
+    /* The top-level arm this node's subtree hangs under: the accounting scope between the member and the family
+     * root. A root's is itself; a node forked directly off a root is itself (a new arm); anything deeper inherits
+     * its parent's. So every ancestry path holds exactly one node with `branch == self`, set once at creation, and
+     * every flow reaches its bucket in one indirection, as `Flow.family` reaches the root, because flow_weight is
+     * evaluated inside DCHECK conditions where a compressing walk is forbidden.
+     *
+     * The order reads it: flow_nonreward sums flow_branch_bonus (`1.0 / sub_born` over this bucket) into
+     * flow_weight, FLOW_NONREWARD_MAX carries a line for it, and flow_silence_us_to_sink's bound is `+ 2.0` because
+     * of it. It is rank-neutral at a fork for two reasons in two cases: a fork off a non-root moves the newborn into
+     * its parent's bucket (flow_fork_inherit), so both read one `sub_born`; a fork off a root gives the arm its own
+     * bucket, and the two are equal because both hold one member (nothing raises a root's own `sub_born` past the 1
+     * flow_new wrote), the fragile case, asserted where it is decided.
+     *
+     * It is why acct_compress_dead has a third stop: retention wants the dead spine gone, while a subtree figure
+     * wants it (a departed arm's service is part of what its subtree received). Only one node per path must
+     * survive its owner, so the compression splices out every dead node between a live member and its branch node
+     * and stops at the branch node, pinned by its descendants' `up` references: one extra node per live bucket, and
+     * a bucket with no live member is freed like any other. */
     struct FlowAcct *branch;
-    /* THE THREAD TIME EVERY FLOW IN THIS BRANCH'S SUBTREE HAS EVER BURNED, IN MICROSECONDS — a LIFETIME
-       COUNTER, MEANINGFUL ONLY WHERE `branch == self`, and it is NOT the quantity `fam_us` above is.
-       `fam_us` is a GAUGE: the family's burn SINCE ITS LAST EMISSION, sent to zero for a whole family in one
-       statement by flow_credit_emit, so it may FALL between two samples and may not be differenced. This is
-       never forgiven and never reset, because the question it answers is not "how much silence is this account
-       carrying" but "how much of the thread did this side of the branch GET" — and an arm that burned an hour
-       and then emitted did not thereby receive less. Every microsecond charged in flow_age_running lands on
-       exactly one of these, which is what makes the identity at the end of flow_wfq_census exact.
-       MICROSECONDS AND NOT NOTCHES, DELIBERATELY. The seven `svc*` rows are all `<thread time> /
-       FLOW_SERVICE_US` and their names do not say so, and this file records what that cost: `svcMax: 1764`
-       relayed as a dispatch count that exists nowhere in this program. A raw microsecond total has no
-       quotient in it to be mis-read, and the row it is published under says its unit and its kind. */
+    /* The thread time every flow in this branch's subtree has ever burned, in microseconds: a lifetime counter,
+       meaningful where `branch == self` and never forgiven or reset, unlike `fam_us` (a gauge since the last
+       emission), because it answers how much of the thread this side of the branch received. Every microsecond
+       charged in flow_age_running lands on exactly one of these, which makes flow_wfq_census's identity exact.
+       Microseconds, not notches: the `svc*` rows are thread time / FLOW_SERVICE_US under names that do not say so,
+       and a raw total has no quotient to misread. */
     int64_t sub_us;
-    /* EVERY MEMBER EVER MINTED INTO THIS BRANCH'S SUBTREE, AND EVERY ONE THAT HAS EVER LEFT IT — two LIFETIME
-       COUNTERS whose difference is the bucket's LIVE membership, which is the other half of "X and Y". Held as
-       a pair rather than as one live count for `g_arrivals`/`g_departures`' reason exactly: a gauge cannot say
-       whether a bucket that holds a hundred members now has minted a hundred or a hundred thousand, and that
-       difference is the whole question a branching subtree poses.
-       BOTH ARE MONOTONE ACROSS THE ONE RE-PARENTING THAT HAPPENS. flow_new opens a bucket for every flow
-       (a flow with no parent yet IS its own top-level arm), and flow_fork_inherit then moves the newborn into
-       its parent's — as `sub_gone++` here and `sub_born++` there, in one statement, never as a retraction of
-       the `sub_born` already published. So a census landing between the two reads a coherent frontier and
-       neither counter ever falls. */
+    /* Every member ever minted into this branch's subtree and every one that has left: lifetime counters whose
+       difference is the live membership, a pair because a gauge cannot say whether a bucket of a hundred members has
+       minted a hundred or a hundred thousand. Both stay monotone across the one re-parenting: flow_new opens a
+       bucket for every flow, and flow_fork_inherit moves the newborn into its parent's as `sub_gone++` here and
+       `sub_born++` there, in one statement, never a retraction. */
     long sub_born;
     long sub_gone;
-    /* …AND THE ORDER'S READING OF THE FIRST OF THAT PAIR, HELD ONCE PER BUCKET INSTEAD OF DERIVED ONCE PER
-       MEMBER — `1.0 / sub_born`, which is the whole of what flow_branch_bonus returns and therefore the whole
-       of what this scope contributes to every one of its live members' weight.
-       IT CACHES NOTHING AND IT IS A PRIMITIVE FOR ONE THING. Dividing at each member was never expensive; what
-       it was, was UNSPELLABLE AS A BUCKET QUANTITY — the term existed only as a call taking a Flow, so every
-       proposal for an ask that does not walk had to bake it into a per-member key, which flow_pick's own
-       banner prices at O(live members of the bucket) PER FORK and calls "the cost MOVED rather than removed".
-       This is that offset given a name and a scope, which is the one form an index can hold per bucket and
-       apply once to a whole arm. Nothing here makes any ask cheaper on its own; see the residual at
-       flow_index_key for what still stands between this and one.
-       IT IS WRITTEN ON THE STATEMENT THAT WRITES `sub_born` AND NOWHERE ELSE, which is what makes the pair a
-       CHECK rather than a second copy: the two writers (flow_new's initialisation and flow_fork_inherit's
-       join) each write both fields adjacently, and acct_branch_offset compares the stored double against the
-       quotient recomputed from the integer at every read. A `sub_born` raised without its offset therefore
-       fires at the next weighing instead of re-ranking a whole arm in silence.
-       ITS KIND IS NEITHER OF ITS NEIGHBOURS' AND THIS IS WHERE THAT IS SAID. `sub_born` and `sub_gone` are
-       LIFETIME COUNTS a reader may difference; this is a PURE FUNCTION of the first of them AT THE INSTANT IT
-       IS READ, so differencing it says only that the bucket minted, which the counter it divides already says
-       better and in a unit. It is monotone DOWNWARD over a bucket's life, which is the one respect in which it
-       resembles neither, and it is published nowhere — flow_branch_born publishes the INTEGER, for the reason
-       solver/flow.h gives there.
-       NOTHING NEW RANKS BY IT. This is the value flow_weight already summed, reached by a different route, and
-       flow_member_key asserts the two routes agree BIT FOR BIT rather than closely. */
+    /* The order's reading of `sub_born`, held once per bucket: `1.0 / sub_born`, the whole of what
+       flow_branch_bonus returns and this scope contributes to each live member's weight. Not a cache for speed: it
+       makes the term spellable as a bucket quantity, the one form an index can hold per bucket and apply to a whole
+       arm (see the residual at flow_index_key). Written on the statement that writes `sub_born` and nowhere else
+       (flow_new's initialisation and flow_fork_inherit's join write both adjacently), and acct_branch_offset
+       compares it with the quotient recomputed from the integer at every read, so a raise without its offset fires
+       at the next weighing. A pure function of `sub_born` at the instant read, monotone downward and published
+       nowhere (flow_branch_born publishes the integer); flow_member_key asserts the two routes agree bit for bit. */
     double sub_offset;
-    /* HOW DEEP IN THE FORK TREE THIS NODE SITS — 0 at a root, parent + 1 at a fork, never moved by the
-       compression (which rewrites `up` and not this). It is a GAUGE over the live members the census reaches,
-       it ranks nothing, and it is here to answer ONE question that decides what the next diff may cost: an
-       aggregate maintained by walking to the root on every charge is O(depth) per charge, which is affordable
-       if the fork tree is a STAR (one flow forking N arms off one node) and quadratic if it is a CHAIN (each
-       arm forking the next). Those two shapes are indistinguishable in every other row here, and this file is
-       written against a walk whose arms could be either. */
+    /* How deep in the fork tree this node sits: 0 at a root, parent + 1 at a fork, never moved by the compression
+       (which rewrites `up`). A gauge over the members the census reaches that ranks nothing; it says whether the
+       fork tree is a star or a chain, which decides whether an aggregate maintained by walking to the root per
+       charge (O(depth)) is affordable. */
     int depth;
-    /* THE CENSUS'S MARK FOR THE BUCKET WALK — separate from `census_gen` above and not a second spelling of
-       it, because a ROOT is both a family AND a branch and one field cannot record that it has been counted
-       once as each. Same generation VALUE, two marks. Zero is unmarked, `reclaim_calloc` supplies it. */
+    /* The census's mark for the bucket walk, separate from `census_gen` because a root is both a family and a
+       branch and one field cannot record that it was counted once as each. Same generation value; zero unmarked. */
     unsigned branch_gen;
-    /* …AND A THIRD MARK, WITH A COUNT UNDER IT — HOW MANY LIVE MEMBERS WERE FORKED DIRECTLY OFF THIS NODE.
-       A THIRD rather than a second spelling of either above, for the reason there are already two: a node can
-       be counted once as a family, once as a bucket and once as a FORK PARENT in one scan, and one field
-       cannot record three. Same generation VALUE, three marks.
-       WHY THE KEY IS `up` AND WHY THAT IS EXACT RATHER THAN APPROXIMATE. `up` has exactly two writers —
-       flow_fork_inherit, at the fork, and acct_compress_dead, which runs only from acct_depart and only on
-       the DEPARTING flow's own node. So a LIVE member's `up` is its fork parent's node, written once and never
-       moved while that member stands; the compression rewrites the chain ABOVE a dead node and never a live
-       member's edge. Counting members by `up` is therefore counting them by the fork that minted them, at the
-       instant of the census, with no ancestry walk and nothing retained to make it possible.
-       IT IS A GAUGE, and `census_gen`'s sentence is why the mark is a generation: clearing a per-node count
-       over a frontier of tens of thousands is a walk and an increment is not. The count is reset on the first
-       member of a scan that reaches its node, not by a pass. */
+    /* A third mark with a count under it: how many live members were forked directly off this node (a node can be
+       counted as a family, a bucket and a fork parent in one scan). Keyed on `up`, which is exact: `up` has two
+       writers, flow_fork_inherit at the fork and acct_compress_dead, which runs only from acct_depart on the
+       departing flow's own node, so a live member's `up` is its fork parent's node, written once. A gauge, reset by
+       generation on the first member of a scan that reaches its node rather than by a clearing pass. */
     unsigned fan_gen;
     long fan_n;
 } FlowAcct;
 
-/* THE CENSUS, counted at the two points a node's lifetime begins and ends so the pair cannot drift from what it
-   counts — the same shape as the four frozen chains', and asserted at the frontier's teardown. */
+/* The node census, counted where a node's lifetime begins and ends and asserted at the frontier's teardown, as for
+   the four frozen chains. */
 static long g_acct_live;
 
-/* EVERY MICROSECOND THIS INSTANCE HAS EVER CHARGED, AND THE SHARE OF IT THAT WENT TO BRANCH BUCKETS WHOSE
-   WHOLE SUBTREE HAS SINCE DEPARTED — the two LIFETIME COUNTERS that make the per-branch burn published by
-   flow_wfq_census a CONSERVATION rather than a list of extrema. Every `us` that reaches flow_age_running lands
-   on exactly one branch's `sub_us`; a branch node is freed only once nothing in its subtree is live, and its
-   total is folded into the second of these at that free. So the whole of the thread this instance has spent is
-   accounted for at every instant by `sum over live buckets + retired == charged`, which is the identity
-   asserted at the end of the census and — because all three terms are published — checkable from OUTSIDE the
-   process on the emitted document.
-   NEITHER IS RESET BY flow_registry_init, for `g_picks_total`'s reason, AND THE IDENTITY SURVIVES THAT
-   DELIBERATELY: flow_registry_free drains the frontier through flow_release, every flow departs, every node
-   reaches refcount zero, so every bucket's total has been folded into the retired term by the time a second
-   registry comes up. A quantity a second registry would zero is not commensurable with the counters nothing
-   zeroes, and here it would additionally break an identity that is otherwise exact.
-   MICROSECONDS, LIFETIME, NEVER FORGIVEN — which is what separates them from every `svc*` row in the census.
-   Those are silence since an account's last emission and are sent to zero for a whole family in one statement;
-   these count thread time RECEIVED, and an arm that burned an hour and then emitted did not receive less. */
+/* Every microsecond this instance has charged, and the share that went to branch buckets whose whole subtree has
+   since departed: lifetime counters that make the per-branch burn a conservation. Every charged `us` lands on one
+   branch's `sub_us`, and a branch node is freed only when nothing in its subtree is live, its total folded into the
+   retired term then, so `sum over live buckets + retired == charged` at every instant, asserted at the census's end
+   and checkable on the document. Not reset by flow_registry_init: the drain through flow_release frees every node,
+   folding every bucket, before a second registry comes up. Microseconds received, never forgiven, unlike the
+   `svc*` rows. */
 static int64_t g_charged_us = 0;
 static int64_t g_branch_retired_us = 0;
 
-/* Drop a reference: refcount--, free at zero, continue into `up`. A LOOP, not recursion — the ancestry is as
-   deep as the fork tree, which an unknown-length walk makes as deep as the walk is long, and the C stack cannot
-   be parked. The twin of cow_seg_unref / dec_seg_unref / cons_seg_unref. */
+/* Drop a reference: refcount--, free at zero, continue into `up`. A loop, not recursion: the ancestry is as deep as
+   the fork tree, which an unknown-length walk makes as deep as the walk, and the C stack cannot be parked. The twin
+   of cow_seg_unref / dec_seg_unref / cons_seg_unref. */
 static void acct_unref(FlowAcct *a) {
     while (a && --a->refcount <= 0) {
         FlowAcct *up = a->up;
@@ -870,15 +304,10 @@ static void acct_unref(FlowAcct *a) {
                "a fork-tree node was freed while the flow it accounts for is still in the frontier — that "
                "flow holds a reference of its own, so a zero here means the reference was dropped twice and "
                "that flow's next departure charges through freed memory");
-        /* A BRANCH BUCKET'S TOTALS OUTLIVE THE BUCKET — folded here rather than lost, which is what keeps the
-           census's burn identity exact instead of one-sided. A node with `branch == self` is reached from a
-           live member in one indirection, so its reaching zero here says NOTHING in its subtree is live any
-           more: its lifetime burn can no longer be published as a live bucket's, and dropping it would make
-           the engine's total thread time silently unaccountable for as the frontier turns over.
-           IT IS ALSO WHERE THE `branch` POINTER IS PROVED NOT TO DANGLE. Every live member's `branch` names a
-           node on its own ancestry path, acct_compress_dead stops at branch nodes so that path always still
-           holds one, and a node with a live descendant therefore has a reference — so a bucket freed here has
-           no live member naming it, which is the same fact the fold rests on. */
+        /* A branch bucket's totals outlive the bucket, folded here so the census's burn identity stays exact: a
+           node with `branch == self` reaching zero means nothing in its subtree is live. This is also where
+           `branch` is shown not to dangle: every live member's `branch` names a node on its own ancestry path,
+           which acct_compress_dead keeps, so a bucket freed here has no live member naming it. */
         DCHECK(a->branch != NULL,
                "a fork-tree node reached its free with no branch bucket — flow_new is the only mint and it "
                "points every node at one, so this node was built somewhere else and the thread time charged "
@@ -890,44 +319,24 @@ static void acct_unref(FlowAcct *a) {
     }
 }
 
-/* SHORTEN THE RUN OF DEAD ANCESTORS ABOVE `a` — RETENTION, and no longer an answer to anything. It used to be
-   `acct_live_ancestor`, which found the nearest live ancestor because a departing flow's residual service had
-   to be charged somewhere; there is no such charge any more (see acct_depart), and what is left is the reason
-   it compressed: without this a family whose arms depart one at a time retains one node per departed arm for as
-   long as any descendant lives, which for the unknown-length walk this file is written against is one node per
-   iteration.
-   IT STOPS AT THE ROOT — `t->up` non-NULL is the loop condition — and the root is the node every member of the
-   family points its `family` tag at, so no compression can ever move a tag or orphan one. Refs the new target
-   BEFORE dropping the old link, so the unref cannot free the node it walked to.
-   AND IT STOPS AT A BRANCH NODE, WHICH IS THE ONE PLACE RETENTION AND ACCOUNTING WERE IN DIRECT OPPOSITION.
-   Retention wants the dead spine gone; a SUBTREE figure wants exactly the dead spine, because the service a
-   departed arm consumed is part of what its subtree received. Both are right, and they are separated by how
-   MANY nodes each needs: the accounting needs ONE per path (the top-level arm — FlowAcct's `branch`), while
-   the unbounded retention this loop exists to prevent is one node per DEPARTED ARM, all of which sit between a
-   live member and that one node and are still spliced out here. So the third clause pins exactly one node per
-   live bucket and costs the walk one comparison per trip.
-   THE `t->up` CLAUSE IS NOW IMPLIED BY THE NEW ONE — a node with `up == NULL` is a root and a root's `branch`
-   is itself — and it is KEPT because it states the root stop DIRECTLY. The guarantee above ("no compression
-   can ever move a tag or orphan one") is a claim about the ROOT, and replacing a stated guarantee with a
-   derived one is how a guarantee stops being checkable. */
+/* Shorten the run of dead ancestors above `a`, for retention: without this a family whose arms depart one at a time
+   retains one node per departed arm while any descendant lives, one per iteration of an unknown-length walk. It
+   stops at the root (`t->up` non-NULL), the node every member's `family` tag names, so no compression moves a tag;
+   and at a branch node, which a subtree figure needs (FlowAcct's `branch`), for one comparison per trip. The root
+   clause is implied by the branch clause (a root's `branch` is itself) and kept because it states the root stop
+   directly. It refs the new target before dropping the old link, so the unref cannot free the node it walked to. */
 static void acct_compress_dead(FlowAcct *a) {
     FlowAcct *t = a->up;
     while (t && !t->owner && t->up && t->branch != t) t = t->up;
     if (t && t != a->up) { t->refcount++; acct_unref(a->up); a->up = t; }
 }
 
-/* A FLOW LEAVES THE FRONTIER — the node's LIFETIME and nothing else. What used to stand here also handed this
-   flow's residual service (`cpu - born`) to its nearest live ancestor, and that is DELETED rather than kept
-   beside the family charge: with `fam_us` counting every microsecond the family burns AS IT BURNS IT, a hand-up
-   at departure would bill the family a second time for the same thread time and REFUND nothing — it would age
-   a productive family for the work of every arm that has already finished, twice. `born` existed only to
-   compute that residual and is gone with it, and so is `acct_live_ancestor`'s answer to "who to charge": there
-   is no per-arm charge left to route. What the departure still owes the tree is the compression above, which
-   is retention and not accounting — see acct_compress_dead. */
-/* …AND THE SILENCE READING, FORWARD-DECLARED FOR THE ONE CALLER THAT STANDS ABOVE IT. acct_depart has to ask
-   whether a departing member was standing away from its family's base BEFORE it clears `f->acct` and
-   `f->family`, and this reader is stated once beside the window it is a reading of rather than moved up here
-   to suit its earliest caller. Not dev-only: the away count is maintained in every build. */
+/* A flow leaves the frontier: the node's lifetime and nothing else. No residual service is handed up: `fam_us`
+   counts every microsecond the family burns as it burns it, so a hand-up would bill the family twice. What the
+   departure owes the tree is the compression above, retention rather than accounting. */
+/* The silence reading, forward-declared for its one caller above its definition: acct_depart asks whether the
+   departing member was away from its family's base before it clears `f->acct` and `f->family`. In every build,
+   since the away count is maintained in every build. */
 static int64_t flow_own_silence(const Flow *f);
 
 static void acct_depart(Flow *f) {
@@ -935,12 +344,9 @@ static void acct_depart(Flow *f) {
            "a flow departed without owning its own fork-tree node — either it never got one, or another flow's "
            "node is standing in for it, and the family this flow's arms are charged to is not its own");
     f->acct->owner = NULL;   /* it has left the frontier: a later compression walks past it */
-    /* …AND AN AWAY MEMBER TAKES ITS PLACE IN THE AWAY POPULATION WITH IT — see FlowAcct's `away_n`. FIRST in
-       this function, because every statement below it dismantles exactly what the reading needs: `f->acct`
-       is cleared, and `f->family` is cleared last of all, and flow_own_silence answers ZERO for a member
-       whose family pointer is gone. Asked after either, a departing member would read as having been at base
-       and the gauge would drift upward by one for every away member that ever leaves — which the census
-       identity would then report as a defect in the count rather than in this ordering. */
+    /* And an away member leaves the away population (FlowAcct's `away_n`), asked first because the statements
+       below clear `f->acct` and then `f->family`, after which flow_own_silence answers zero and the gauge would
+       drift up by one per away departure. */
     if (flow_own_silence(f) > 0) f->family->away_n--;
     /* …AND THE MEMBER LEAVES ITS BRANCH BUCKET, on the line that performs the departure and BEFORE the unref
        below, because the bucket may BE this node and this is the last instant it is certainly addressable.
