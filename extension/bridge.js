@@ -1392,7 +1392,7 @@ async function frontierResidency() {
   if (total <= share) return;
   /* Highest in the one order first, so the share is spent on what it values most. */
   const tree = level1Tree(_pool, _frontierIndex);
-  const k = new Map(rows.map((row) => [row, level1Key(tree, row.sourceUrl, row, true)]));
+  const k = new Map(rows.map((row) => [row, level1Key(tree, row.sourceUrl, row, true, LEVEL1_DOOR.cold)]));
   rows.sort((a, b) => level1Ahead(k.get(b), k.get(a)) ? 1 : level1Ahead(k.get(a), k.get(b)) ? -1 : 0);
   /* The resident set is a strict prefix of the order: the first entry that does not fit ends it. A best fit
      would keep a small low-weight document over a large high-weight one, a second policy nobody chose. */
@@ -1603,6 +1603,7 @@ async function frontierStoredForm(entry) {
   return stored;
 }
 async function frontierPut(key, entry) {
+  if (entry && entry.recipes) await level1AskSites([entry.sourceUrl]);
   try {
     await frontierBodiesReady();
     if (entry && entry.recipes) {
@@ -1704,9 +1705,25 @@ function level1Weight(a, totalUs) {
 function level1Rate(a) {
   return a.serviceUs === 0 ? null : a.paid / (a.serviceUs / 1e6);
 }
+/* The entry points into Level 1's population, one per kind of member, each of which awaits level1AskSites over
+   the member's address before the member can be ranked; level1SiteOf names the one whose member was not asked.
+   The site is never stored on a member: Chrome's list changes with its version, which the memo is keyed by. */
+const LEVEL1_DOOR = Object.freeze({
+  cold: "a cold row (frontierIndex and frontierPut ask before they index; a shed or stranded rewrite keeps its " +
+        "row's address)",
+  instance: "an instance (engineRoot asks before its first account)",
+  doc: "a waiting document (astDispatch asks before it queues)",
+  seed: "a declared route (hostNotice asks before it registers)",
+});
+function level1AskSites(urls) {
+  return siteAsk(siteHostsOf(urls));
+}
 /* A document's site: HTML §7.1.1.1 "obtain a site" through lib/site.js's siteOf. An opaque origin is a site
    only of itself, so its document is its own site, named by its address. */
-function level1SiteOf(url) {
+function level1SiteOf(url, door) {
+  DCHECK(siteAnswered(url),
+         "Level 1 ranked " + door + " at " + url + " whose host was never asked — that entry point awaits " +
+         "siteAsk (level1AskSites) before the member joins the population, so a ranked member is an asked one");
   const site = siteOf(url);
   return site === null ? "opaque " + url : site;
 }
@@ -1716,20 +1733,21 @@ function level1SiteOf(url) {
    served nothing. */
 function level1Tree(resident, idx) {
   const sites = new Map();
-  const add = (url, paid, us) => {
-    const k = level1SiteOf(url), a = sites.get(k);
+  const add = (url, paid, us, door) => {
+    const k = level1SiteOf(url, door), a = sites.get(k);
     if (a) { a.paid += paid; a.serviceUs += us; } else sites.set(k, { paid: paid, serviceUs: us });
   };
-  for (const row of idx.values()) add(row.sourceUrl, row.paid, row.serviceUs);
-  for (const e of resident) if (e.level1 !== undefined) add(e.msg.sourceUrl, e.level1.paid, e.level1.serviceUs);
+  for (const row of idx.values()) add(row.sourceUrl, row.paid, row.serviceUs, LEVEL1_DOOR.cold);
+  for (const e of resident)
+    if (e.level1 !== undefined) add(e.msg.sourceUrl, e.level1.paid, e.level1.serviceUs, LEVEL1_DOOR.instance);
   let totalUs = 0;
   for (const a of sites.values()) totalUs += a.serviceUs;
   return { sites: sites, totalUs: totalUs };
 }
 /* A document's place in the tree: its site, the site's weight among sites, and its own weight within the site.
    A document no member of which can run ranks last at both levels. */
-function level1Key(tree, url, acct, runnable) {
-  const site = level1SiteOf(url);
+function level1Key(tree, url, acct, runnable, door) {
+  const site = level1SiteOf(url, door);
   if (!runnable) return { site: site, siteW: -Infinity, docW: -Infinity };
   const sa = tree.sites.get(site) || LEVEL1_UNSERVED;
   return { site: site, siteW: level1Weight(sa, tree.totalUs), docW: level1Weight(acct, sa.serviceUs) };
@@ -1763,7 +1781,12 @@ function frontierRow(e) {
 }
 async function frontierIndex() {
   if (_frontierIndexBuilt) return _frontierIndex;
-  for (const e of await frontierAll()) {
+  const all = await frontierAll();
+  /* Rows restored from an earlier session name hosts this session has not asked. */
+  await level1AskSites(all.filter((e) => e && typeof e.sourceUrl === "string").map((e) => e.sourceUrl));
+  /* Another caller may have built the index while the ask was in flight. */
+  if (_frontierIndexBuilt) return _frontierIndex;
+  for (const e of all) {
     /* The store's invariant: frontierPut deletes an entry with no recipes, so every stored row has them. */
     DCHECK(e && typeof e.recipes === "string" && e.recipes !== "",
            "the cross-session frontier holds an entry with no parked recipes — frontierPut deletes rather than " +
@@ -1986,7 +2009,7 @@ function _candRanked(cen, kind, url, row, tree) {
          "CAND_KINDS is what the record's accounting, the popup's columns and the admission's dispatch are " +
          "all read from, so a kind ranked outside it would be counted into the total and accounted for by no " +
          "population");
-  const key = level1Key(tree, url, row, true);
+  const key = level1Key(tree, url, row, true, LEVEL1_DOOR[kind]);
   cen[d.pop]++;
   cen.cands++;
   if (key.siteW === Infinity) cen.candSiteUnserved++;
@@ -3564,7 +3587,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          "another's address");
   /* The first round's record, taken before this instance is rankable: `qjs_begin` above seeded the frontier, so
      a top-flow weight now exists, and the facts are written before the state that makes them readable, so the
-     ranking and RAM floor never see a hot engine that has not reported. */
+     ranking and RAM floor never see a hot engine that has not reported. Its site is asked first. */
+  await level1AskSites([eng.msg.sourceUrl]);
   await engineRecordFacts(eng);
   eng.state = "hot";
 }
@@ -3810,7 +3834,7 @@ function engineKey(eng, tree) {
   DCHECK(eng.level1 !== undefined,
          "an engine that has been rooted carries no Level-1 account — engineRecordFacts writes one before the " +
          "record first becomes hot and at the end of every round since");
-  return level1Key(tree, eng.msg.sourceUrl, engineAccount(eng), eng.level1.runnable);
+  return level1Key(tree, eng.msg.sourceUrl, engineAccount(eng), eng.level1.runnable, LEVEL1_DOOR.instance);
 }
 /* One delivery, both channels, so no call site carries the record and forgets the bytes. `rep` is what
    `fetched` answered: `null` for a network error (the JSON `null` the engine rejects with a TypeError), or
@@ -4653,6 +4677,7 @@ async function hostNotice(eng, line) {
        address cannot authorize itself), and the pool may no longer hold that engine at admission. The
        provenance is stored from the record (always `derived` here, since a refused one returned above);
        navigationLoad asserts the vocabulary on the way out. */
+    await level1AskSites([f[1]]);
     if (!_seeds.has(f[1]))
       /* The declaring document's reach grade travels with the item for the same reason. */
       /* `doc` is the seed's own record, the declaring document's joined with the declaration's words. */
@@ -5389,6 +5414,10 @@ async function hostSchedule(pool, ops) {
     DCHECK(!_servedSite || _unS === 0,
            "Level 1 picked a served site (" + bestK.site + ") over " + _unS + " hot document(s) of a never-served " +
            "site — a never-served site weighs +Infinity among sites");
+    /* Named residual. Not covered: within a site every never-served document is ahead of every served one, so a
+       site that mints barren copies spends its whole share on them before its productive document deepens. Next
+       diff builds: a level between site and document, documents grouped by their address template. Absence
+       shows as: a site's served document taking no slice while `unserved` stays above zero for that site. */
     DCHECK(bestK.docW === Infinity ||
            ks.every((k) => k.site !== bestK.site || k.docW !== Infinity),
            "Level 1 picked a served document of " + bestK.site + " while a never-served hot document of that " +
@@ -6647,6 +6676,7 @@ self.astDispatch = async function astDispatch(msg) {
     /* The caller is answered at the instance's finalize, after any install has settled the referrer policy entry;
        a document no instance installed (cleared, failed boot) settles it here. */
     let result;
+    await level1AskSites([msg.sourceUrl]);
     try { result = await new Promise((resolve, reject) => { _waiting.push({ html: loaded.bytes, msg, persist, resolve, reject }); _hostKick(); }); }
     finally { documentPolicySettle(String(msg.documentId), null); }
     return { success: true, result };   // fetchCallSites is already deduped by the engine
@@ -6673,5 +6703,5 @@ console.debug("[ast-worker v2] bridge ready (self.astDispatch + self.rendererPoo
    stated in them, and a driver's own copy would go stale silently. */
 if (typeof module !== "undefined" && module.exports)
   module.exports = { hostSchedule, engineKey, level1Weight, level1Rate, level1Tree, level1Key, level1Ahead,
-                     level1SiteOf, LEVEL1_UNSERVED,
+                     level1SiteOf, LEVEL1_UNSERVED, LEVEL1_DOOR,
                      _bestCandidate, _candPopulation, _level1Record, _candCensus, CAND_KINDS, CAND_SPREAD };

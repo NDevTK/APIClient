@@ -58,6 +58,13 @@ function _hostIsDomain(host) {
   return host !== "" && !host.startsWith("[") && !/^\d+\.\d+\.\d+\.\d+$/.test(host);
 }
 
+/* Whether a site question about `url` is answerable now: its host was asked, or its origin is opaque and names
+   no host to ask. For an assertion naming the entry point that skipped `siteAsk`. */
+function siteAnswered(url) {
+  const u = new URL(url);
+  return u.origin === "null" || _siteMemo.has(u.hostname);
+}
+
 /* The browser's registrable domain for `host`, or null for none. */
 function registrableDomainOf(host) {
   DCHECK(_siteMemo.has(host), "the site of " + JSON.stringify(host) + " was read before it was asked — the async " +

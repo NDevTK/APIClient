@@ -74,19 +74,39 @@ process.on('unhandledRejection', (e) => {
   }
   throw e;
 });
+/* The browser's registrable domains for every host this driver names, declared here because this realm has no
+   service worker to ask chrome.publicSuffix. lib/site.js's own siteAsk fills its memo through the `swRpc` below,
+   which answers `site.registrableDomains` from this table and nothing else; a host absent from it is refused, so
+   a fixture naming a new host fails at its ask rather than being given a site nobody declared. */
+const SITE_TABLE = Object.freeze({
+  'a.test': 'a.test', 'b.test': 'b.test', 'c.test': 'c.test', 'd.test': 'd.test', 'e.test': 'e.test',
+  'm.test': 'm.test', 'n.test': 'n.test', 'p.test': 'p.test', 'x.test': 'x.test', 'z.test': 'z.test',
+});
+const SITE_TABLE_VERSION = 'level1-driver-table/1';
+async function swRpc(method, hosts) {
+  if (method !== 'site.registrableDomains') throw new Error('this driver answers no service-worker call `' + method + '`');
+  const domains = {};
+  for (const h of hosts) {
+    if (!(h in SITE_TABLE)) throw new Error('the driver was asked the site of `' + h + '`, which SITE_TABLE does not declare');
+    domains[h] = SITE_TABLE[h];
+  }
+  return { version: SITE_TABLE_VERSION, domains };
+}
 const ZONE = (() => {
-  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, MessageChannel };
+  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, MessageChannel, swRpc };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   sandbox.module = { exports: {} };
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/public-suffix-table.js', 'lib/site.js', 'lib/referrer-policy.js',
+  for (const f of ['check.js', 'lib/site.js', 'lib/referrer-policy.js',
                    'lib/request-identity.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/safe-fetch.js',
                    'bridge.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
   return sandbox;
 })();
 const B = ZONE.module.exports;
+/* Every host the driver ranks is asked first, as each production entry point asks before its member joins. */
+await ZONE.siteAsk(Object.keys(SITE_TABLE));
 for (const n of ['hostSchedule', 'engineKey', 'level1Weight', 'level1Tree', 'level1Key', '_bestCandidate',
                  '_candPopulation', '_level1Record', '_candCensus', 'CAND_KINDS', 'CAND_SPREAD'])
   if (B[n] === undefined)
@@ -194,6 +214,14 @@ console.log('[level1] ── the one weight ──');
        'at equal service, more novel value ranks higher');
   must(B.level1Weight(a, 2 * N) > B.level1Weight(a, N),
        'the bonus grows with all service, so a document left unserved while others run regains rank');
+}
+
+console.log('[level1] ── a ranked member is an asked one ──');
+{
+  let threw = false;
+  try { B._bestCandidate(pop({ idx: idxOf(row('k1', 'https://never.test/', 1, 1e6)) })); }
+  catch (e) { threw = !!(e && e.apiclientFatal) && /never asked/.test(e.message) && /cold row/.test(e.message); }
+  must(threw, 'ranking a cold row whose host was never asked aborts, naming the entry point that skipped the ask');
 }
 
 console.log('[level1] ── the three facts `_level1Record` keeps apart ──');
