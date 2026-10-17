@@ -58,6 +58,11 @@ static int       g_stepid = -1;
    is about, arriving as a declaration list. */
 static JSClassID g_driver_slot = JS_INVALID_CLASS_ID;
 static int    g_ready;
+/* The decline census (rendering.h's RenderingCensus): process lifetime counts, reset by nothing. */
+static RenderingCensus g_census;
+
+/* What step 1's walk set aside, by clause; filled only for the in-parallel step 1's ask. */
+typedef struct { long none, hidden, blocked, idle; } RenderingExclusions;
 
 /* ---- steps 2 to 5 ----------------------------------------------------------------------------------------
  *
@@ -117,7 +122,7 @@ static bool doc_has_rendering_work(JSContext *docctx)
  *
  * A RENDER-BLOCKED DOCUMENT IS REMOVED BY STEP 3's first clause, which is HTML §3.1.6 Render-blocking mechanism's
  * own predicate (core/dom/render_blocking.h). */
-static JSValue rendering_collect_docs(JSContext *ctx)
+static JSValue rendering_collect_docs(JSContext *ctx, RenderingExclusions *ex)
 {
     JSValue docs = JS_NewArray(ctx), all = navigable_tree_order(ctx), len;
     uint32_t ndocs = 0, n = 0, i;
@@ -135,11 +140,18 @@ static JSValue rendering_collect_docs(JSContext *ctx)
            this read is C and cannot, so it concretizes on what the flow already decided (page_visibility.h).
            A flow exploring the backgrounded world therefore gets no rendering opportunity, which is what a
            browser does to a hidden tab. */
-        if (page_visibility_hidden(docctx)) { JS_FreeValue(ctx, proxy); continue; }
-        if (!render_blocking_document_render_blocked(docctx) && doc_has_rendering_work(docctx))
+        if (page_visibility_hidden(docctx)) {
+            if (ex) ex->hidden++;
+        } else if (render_blocking_document_render_blocked(docctx)) {
+            if (ex) ex->blocked++;
+        } else if (!doc_has_rendering_work(docctx)) {
+            if (ex) ex->idle++;
+        } else {
             JS_SetPropertyUint32(ctx, docs, ndocs++, JS_DupValue(ctx, proxy));
+        }
         JS_FreeValue(ctx, proxy);
     }
+    if (ex && n == 0) ex->none++;
     JS_FreeValue(ctx, all);
     return docs;
 }
@@ -635,7 +647,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
            loop recorded when it decided there was one, not the moment this task happens to run. */
         s->frame_ts = event_loop_last_render(ctx);
         /* STEPS 2-5 */
-        s->docs = rendering_collect_docs(ctx);
+        s->docs = rendering_collect_docs(ctx, NULL);
         {
             JSValue len = JS_GetPropertyStr(ctx, s->docs, "length");
             JS_ToUint32(ctx, &s->ndocs, len);
@@ -1182,9 +1194,9 @@ static const JSTrampStepDef js_update_rendering_def = {
 
 /* Its step 1, "wait until at least one navigable ... might have a rendering opportunity", over the same walk
    step 2 makes. It is asked BEFORE the clock moves, so it must not itself move it. */
-static bool rendering_any_opportunity(JSContext *ctx)
+static bool rendering_any_opportunity(JSContext *ctx, RenderingExclusions *ex)
 {
-    JSValue docs = rendering_collect_docs(ctx), len;
+    JSValue docs = rendering_collect_docs(ctx, ex), len;
     uint32_t n = 0;
 
     len = JS_GetPropertyStr(ctx, docs, "length");
@@ -1194,23 +1206,51 @@ static bool rendering_any_opportunity(JSContext *ctx)
     return n > 0;
 }
 
+/* Counts one decline under `arm` and returns the 0 the caller answers. Each ask ends in one grant or one
+   decline, and a fork in a comparison below can finish one ask twice, so outcomes never fall below asks. */
+static int rendering_declined(RenderingDecline arm)
+{
+    long asks, grants, out = 0;
+    int k;
+
+    DCHECK(arm < RENDERING_DECLINE_N, "a rendering decline names no arm of rendering_run_opportunity");
+    g_census.declines[arm]++;
+    dom_cow_rendering_stats(&asks, &grants, NULL, NULL);
+    for (k = 0; k < RENDERING_DECLINE_N; k++) out += g_census.declines[k];
+    DCHECKF(asks <= grants + out, "rendering_run_opportunity was asked %ld times and ended %ld times (%ld "
+            "grants, %ld declines): an ask left by a return that is neither", asks, grants + out, grants, out);
+    return 0;
+}
+
+void rendering_census(RenderingCensus *out)
+{
+    DCHECK(out != NULL, "the rendering decline census was asked into nowhere");
+    *out = g_census;
+}
+
 int rendering_run_opportunity(JSContext *ctx, bool due_only)
 {
     JSValue now, last, ms, next;
     JSContext *topctx;
     JSValue driver;
 
-    /* THE ASK, AHEAD OF ALL FOUR DECLINE ARMS — solver/dom_cow.h states why the census is a pair. Every arm
-       below this line is the machine WORKING (nothing might have an opportunity, a timer is due first, the
-       clock may not be jumped past a reply in flight), so a census of what was GRANTED could not tell a run
-       whose scheduler never reached this rung from one whose gate always said no, and those take opposite
-       work. It goes above the `g_ready` latch too: a caller that reached this function asked, whatever this
-       component had got round to declaring. */
+    /* The ask, ahead of the four decline arms (rendering.h's RenderingDecline) — solver/dom_cow.h states why
+       the census is a pair. Each arm below is the machine working, so a census of grants alone could not tell
+       a run whose scheduler never reached this rung from one whose gate always said no. */
     dom_cow_rendering_asked();
-    if (!g_ready)
-        return 0;
-    if (!rendering_any_opportunity(ctx))
-        return 0;                                    /* step 1: nothing might have one */
+    DCHECK(g_ready, "rendering_run_opportunity was asked in an agent whose rendering component is not declared; "
+                    "rendering_init sets the hook after the latch and rendering_free clears it before");
+    {
+        RenderingExclusions ex = { 0, 0, 0, 0 };
+
+        if (!rendering_any_opportunity(ctx, &ex)) {   /* step 1: nothing might have one */
+            g_census.step1_no_navigable += ex.none;
+            g_census.step1_hidden += ex.hidden;
+            g_census.step1_render_blocked += ex.blocked;
+            g_census.step1_no_work += ex.idle;
+            return rendering_declined(RENDERING_DECLINE_NO_OPPORTUNITY);
+        }
+    }
     now = event_loop_now(ctx);
     last = event_loop_last_render(ctx);
     ms = JS_NewFloat64(ctx, RENDERING_FRAME_MS);
@@ -1232,7 +1272,7 @@ int rendering_run_opportunity(JSContext *ctx, bool due_only)
     if (due_only && event_loop_before(ctx, now, next)) {
         JS_FreeValue(ctx, next);
         JS_FreeValue(ctx, now);
-        return 0;
+        return rendering_declined(RENDERING_DECLINE_FRAME_AHEAD);
     }
     /* ONE CLOCK, TWO SOURCES. §8.1.7.3 step 2.1 gives the scheduler exactly one freedom — which task queue to
        take a task from — and it is not a freedom to run a task before the moment it becomes due. A timer that
@@ -1246,7 +1286,7 @@ int rendering_run_opportunity(JSContext *ctx, bool due_only)
     if (timer_due_before(ctx, next)) {
         JS_FreeValue(ctx, next);
         JS_FreeValue(ctx, now);
-        return 0;
+        return rendering_declined(RENDERING_DECLINE_TIMER_FIRST);
     }
     /* AND THE OTHER SOURCE IS NOT ON THIS CLOCK AT ALL — the jump's own premise, asked because the frame is
        reached by MOVING the clock and §8.1.7.3 Processing model reaches it by WAITING: its in-parallel list
@@ -1269,7 +1309,7 @@ int rendering_run_opportunity(JSContext *ctx, bool due_only)
     if (event_loop_before(ctx, now, next) && !event_loop_may_advance()) {
         JS_FreeValue(ctx, next);
         JS_FreeValue(ctx, now);
-        return 0;
+        return rendering_declined(RENDERING_DECLINE_REPLY_OWED);
     }
     /* The timer source is the other thing due on this clock and it is NOT due before `next` — which is what
        the question above established, so nothing is already due to move past and the assert is told so

@@ -64,4 +64,22 @@ void rendering_free(JSRuntime *rt);
    taken only if its moment is not after the current one, and the clock never moves to reach it. */
 int rendering_run_opportunity(JSContext *ctx, bool due_only);
 
+/* The arms by which rendering_run_opportunity declines an ask, in the order it tests them. */
+typedef enum {
+    RENDERING_DECLINE_NO_OPPORTUNITY,   /* in-parallel step 1: no navigable might have a rendering opportunity */
+    RENDERING_DECLINE_FRAME_AHEAD,      /* a spin's ask whose frame is still ahead of the clock */
+    RENDERING_DECLINE_TIMER_FIRST,      /* a timer expires before the frame */
+    RENDERING_DECLINE_REPLY_OWED,       /* the frame is ahead and the clock may not jump past an owed reply */
+    RENDERING_DECLINE_N
+} RenderingDecline;
+
+/* The decline census: lifetime counts per arm, and for the step-1 declines, how many documents the walk set
+   aside by each of its clauses (hidden, render-blocked, nothing to render) and how many declines found no
+   navigable at all. Asserted in rendering.c: asks <= grants + the declines (solver/dom_cow.h's census). */
+typedef struct {
+    long declines[RENDERING_DECLINE_N];
+    long step1_no_navigable, step1_hidden, step1_render_blocked, step1_no_work;
+} RenderingCensus;
+void rendering_census(RenderingCensus *out);
+
 #endif

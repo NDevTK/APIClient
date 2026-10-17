@@ -36,6 +36,7 @@
 /* §8.1.4.6 "Runtime script errors"'s throw site — one component derives it, this one reports it. */
 #include "core/events/report_exception.h"
 #include "core/timing/event_loop.h"   /* whether the clock's licence was wanted and refused — see event_loop_advance_census */
+#include "core/rendering/rendering.h"   /* why §8.1.7.3's in-parallel half declined — the `renderingDeclined*` rows */
 #include "core/timing/thread_work.h"   /* the thread work that clock does not see — see the `tw*` rows */
 
 /* The page's own uncaught errors, deduped (see result.h). The message is the page's own and is not interpreted.
@@ -845,6 +846,7 @@ char *result_swap_json(void) {
     long dw = 0, dsi = 0, du = 0, dn = 0;
     long df = 0, dr = 0, dss = 0;
     long roa = 0, rog = 0, ros = 0, rod = 0;
+    RenderingCensus rc;
     char asks[COW_STATE_KINDS_JSON_MAX], made[COW_STATE_KINDS_JSON_MAX];
     char *sites, *out;
 
@@ -855,6 +857,7 @@ char *result_swap_json(void) {
     dom_cow_site_stats(&dw, &dsi, &du, &dn);
     dom_cow_site_set_stats(&df, &dr, &dss);
     dom_cow_rendering_stats(&roa, &rog, &ros, &rod);
+    rendering_census(&rc);
     cow_state_hist_json(asks, sizeof asks, 0, "cowStateAsks");
     cow_state_hist_json(made, sizeof made, 1, "cowStateMade");
     sites = cow_site_hist_json();
@@ -894,6 +897,13 @@ char *result_swap_json(void) {
                     empty set has never folded. */
                  "\"renderingOpportunityAsks\":%ld,\"renderingOpportunities\":%ld,"
                  "\"renderingOpportunitiesSited\":%ld,\"renderingDigests\":%ld,"
+                 /* The declines by arm (core/rendering/rendering.h's RenderingCensus), lifetime counts whose sum
+                    with the grants is at least the asks; and for step 1's declines, the documents its walk set
+                    aside by clause and the declines that found no navigable at all. */
+                 "\"renderingDeclinedNoOpportunity\":%ld,\"renderingDeclinedFrameAhead\":%ld,"
+                 "\"renderingDeclinedTimerFirst\":%ld,\"renderingDeclinedReplyOwed\":%ld,"
+                 "\"renderingStep1NoNavigable\":%ld,\"renderingStep1Hidden\":%ld,"
+                 "\"renderingStep1RenderBlocked\":%ld,\"renderingStep1NoWork\":%ld,"
                  /* The per-flow coroutine-activation swap, the `is_gendata` entry kind (a shared generator's or
                     async closure's execution-state pointer) that `cowStateAsks`/`cowStateMade` cannot see.
                     `Calls` because they are raised before any gate cow.c owns. The gap is per sub-kind and the
@@ -914,6 +924,9 @@ char *result_swap_json(void) {
                  "\"cowStateAsks\":%s,\"cowStateMade\":%s,\"cowHostRecAsksBySite\":%s}",
                  sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de,
                  dw, dsi, du, dn, df, dr, dss, roa, rog, ros, rod,
+                 rc.declines[RENDERING_DECLINE_NO_OPPORTUNITY], rc.declines[RENDERING_DECLINE_FRAME_AHEAD],
+                 rc.declines[RENDERING_DECLINE_TIMER_FIRST], rc.declines[RENDERING_DECLINE_REPLY_OWED],
+                 rc.step1_no_navigable, rc.step1_hidden, rc.step1_render_blocked, rc.step1_no_work,
                  gc, gm, ac, am, asks, made, sites);
     free(sites);
     return out;
