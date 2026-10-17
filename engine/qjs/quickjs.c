@@ -126902,6 +126902,20 @@ int JS_IsEqual(JSContext *ctx, JSValueConst op1, JSValueConst op2)
     return JS_VALUE_GET_BOOL(sp[0]);
 }
 
+int JS_IsRelated(JSContext *ctx, JSValueConst op1, JSValueConst op2, int opcode)
+{
+    JSValue sp[2] = { js_dup(op1), js_dup(op2) };
+
+    DCHECK(!JS_IsObject(op1) && !JS_IsObject(op2),
+           "JS_IsRelated was handed an object operand — its ToPrimitive would run the page's valueOf from C, "
+           "with no flow base under it");
+    DCHECK(opcode == OP_lt || opcode == OP_lte || opcode == OP_gt || opcode == OP_gte,
+           "JS_IsRelated was handed an opcode that is none of §13.10.1's four relational operators");
+    if (js_relational_slow(ctx, endof(sp), opcode))
+        return -1;
+    return JS_VALUE_GET_BOOL(sp[0]);
+}
+
 bool JS_IsStrictEqual(JSContext *ctx, JSValueConst op1, JSValueConst op2)
 {
     return js_strict_eq2(ctx, op1, op2, JS_EQ_STRICT);

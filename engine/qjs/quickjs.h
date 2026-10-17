@@ -841,6 +841,10 @@ JS_EXTERN int JS_AddIntrinsicAToB(JSContext *ctx);
 /* for equality comparisons and sameness */
 JS_EXTERN int JS_IsEqual(JSContext *ctx, JSValueConst op1, JSValueConst op2);
 JS_EXTERN bool JS_IsStrictEqual(JSContext *ctx, JSValueConst op1, JSValueConst op2);
+/* ECMAScript §13.10.1's `<`, `<=`, `>` and `>=` (`opcode` is OP_lt, OP_lte, OP_gt or OP_gte, as the concolic `rel`
+   hook is handed it) over two operands that carry no object, so no ToPrimitive runs page code: 1 or 0, or -1
+   with an exception pending. */
+JS_EXTERN int JS_IsRelated(JSContext *ctx, JSValueConst op1, JSValueConst op2, int opcode);
 JS_EXTERN bool JS_IsSameValue(JSContext *ctx, JSValueConst op1, JSValueConst op2);
 /* Similar to same-value equality, but +0 and -0 are considered equal. */
 JS_EXTERN bool JS_IsSameValueZero(JSContext *ctx, JSValueConst op1, JSValueConst op2);

@@ -3725,6 +3725,27 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
            the page ran, so it is absent. Non-finite likewise: `x < Infinity` narrows nothing, `x < NaN` is
            false for every x, and neither is a JSON number a report could carry. The predicate still forks;
            only the bound is absent. */
+        /* The example: the real §13.10.1 operator on the operands' own examples, as cmp_example runs §7.2.13 or
+           §7.2.14 for an equality, so `screen.width > 768` over a modelled width answers the arm this session
+           takes. An operand with no bytes, or one that is an object or a Symbol, leaves the relation without one. */
+        {
+            JSValue exa = ca ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
+            JSValue exb = cb ? concolic_example(ctx, b) : JS_DupValue(ctx, b);
+
+            if ((!ca || example_present(a)) && (!cb || example_present(b)) &&
+                example_operable(exa) && example_operable(exb)) {
+                int holds = JS_IsRelated(ctx, exa, exb, op);
+
+                /* §7.2.12's only failure over two non-object, non-Symbol primitives is none: ToNumeric of a
+                   String, a Boolean, undefined or null cannot throw, and a BigInt against a String compares or
+                   answers false. */
+                CHECK(holds >= 0, "concolic relation: §7.2.12 IsLessThan refused two primitives that carry no "
+                                  "object and no Symbol");
+                concolic_set_example(ctx, res, JS_NewBool(ctx, holds));
+            }
+            JS_FreeValue(ctx, exa);
+            JS_FreeValue(ctx, exb);
+        }
         if (!concolic_is(other) && JS_IsNumber(other)) {
             double num = 0;
             int gotn = JS_ToFloat64(ctx, &num, other);
