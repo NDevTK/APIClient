@@ -95370,12 +95370,12 @@ typedef struct JSConcolicCall {
 } JSConcolicCall;
 STEP_STATE_HDR_FIRST(JSConcolicCall);
 
-/* Named residual. Not covered: an Object operand (a RegExp handed to replace/split/match, a replacer callback,
-   a method of an object example such as an array example's `map`, an unknown method's own `.call`, whose
+/* Named residual. Not covered: an Object operand other than a builtin-protocol RegExp (a replacer callback, a
+   method of an object example such as an array example's `map`, an unknown method's own `.call`, whose
    receiver is the method); the result carries no example. Next diff: the builtin handed the unknown rather
-   than its example where its algorithm passes an operand on to the page's code, starting with the RegExp
-   methods' exec of the receiver. How its absence shows: an address built through `.replace(/…/, …)` over an
-   unknown is emitted as a shape where the same chain through a string pattern carries bytes.
+   than its example where its algorithm passes an operand on to the page's code, starting with a replacer
+   callback's matched substrings. How its absence shows: an address built through `.replace(/…/, fn)` over an
+   unknown is emitted as a shape where the same chain through a string replacement carries bytes.
    Named residual. Not covered: a throw another value of the unknown would reach while its example's run
    completes normally (`x.toFixed(d)` with an unknown `d`). Next diff: the outcome asked on every run, with the
    normal completion stated real, once a builtin whose throw no operand can reach declares so at its definition.
@@ -95388,14 +95388,86 @@ enum { CCALL_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_concolic_call_steps[] = { CCALL_STAGES(JS_STEP_STAGE_LABEL) NULL };
 enum { CCALL_NORMAL, CCALL_THROW };   /* the outcome fork's completions; the normal one is numbered first */
 
+/* Whether the RegExp protocol over `v` runs only this realm's builtins, so a String method handed it passes the
+   receiver's example to no page code. Every member §22.2.6's methods and String.prototype's RegExp arms Get
+   must be the original: `v` holds only its own `lastIndex` over this realm's %RegExp.prototype%, which holds
+   its own `exec`, `flags`, the eight flag getters, `source`, `constructor` (%RegExp%, whose @@species getter is
+   the original) and the five symbol methods. A sticky, non-global `v` is refused too: its exec writes
+   `lastIndex` from where the match ended, which the example's run would leave in the page's object. */
+static JSValue js_regexp_get_source(JSContext *ctx, JSValueConst this_val);
+static JSValue js_regexp_get_flag(JSContext *ctx, JSValueConst this_val, int mask);
+
+static bool js_concolic_call_regexp_builtin(JSContext *ctx, JSValueConst v)
+{
+    static const struct { const char *name; int kind; int id; } MEMBER[] = {
+        /* kind 0: a step method; 1: a step getter; 2: js_regexp_get_flag's getter; 3: js_regexp_get_source's */
+        { "exec", 0, STEPDEF_REGEXP_EXEC },        { "flags", 1, STEPDEF_REGEXP_FLAGS },
+        { "global", 2, LRE_FLAG_GLOBAL },          { "ignoreCase", 2, LRE_FLAG_IGNORECASE },
+        { "multiline", 2, LRE_FLAG_MULTILINE },    { "dotAll", 2, LRE_FLAG_DOTALL },
+        { "unicode", 2, LRE_FLAG_UNICODE },        { "unicodeSets", 2, LRE_FLAG_UNICODE_SETS },
+        { "sticky", 2, LRE_FLAG_STICKY },          { "hasIndices", 2, LRE_FLAG_INDICES },
+        { "source", 3, 0 },
+    };
+    static const struct { JSAtom atom; int id; } SYMBOL[] = {
+        { JS_ATOM_Symbol_replace, STEPDEF_RE_REPLACE }, { JS_ATOM_Symbol_split, STEPDEF_RE_SPLIT },
+        { JS_ATOM_Symbol_match, STEPDEF_RE_MATCH },     { JS_ATOM_Symbol_matchAll, STEPDEF_RE_MATCHALL },
+        { JS_ATOM_Symbol_search, STEPDEF_RE_SEARCH },
+    };
+    JSValueConst proto = ctx->class_proto[JS_CLASS_REGEXP];
+    JSPropertyDescriptor pd;
+    JSShape *sh;
+    JSObject *p;
+    int flags, has, ok;
+    size_t i;
+
+    if (!JS_IsRegExp(v)) return false;
+    p = JS_VALUE_GET_OBJ(v);
+    sh = p->shape;
+    if (sh->prop_count != 1 || get_shape_prop(sh)[0].atom != JS_ATOM_lastIndex ||
+        (get_shape_prop(sh)[0].flags & JS_PROP_TMASK) != JS_PROP_NORMAL || sh->proto != JS_VALUE_GET_OBJ(proto))
+        return false;
+    flags = lre_get_flags(str8(p->u.regexp.bytecode));
+    if ((flags & LRE_FLAG_STICKY) && !(flags & LRE_FLAG_GLOBAL)) return false;
+    for (i = 0; i < countof(MEMBER) + countof(SYMBOL); i++) {
+        JSAtom atom = i < countof(MEMBER) ? JS_NewAtom(ctx, MEMBER[i].name) : SYMBOL[i - countof(MEMBER)].atom;
+        int kind = i < countof(MEMBER) ? MEMBER[i].kind : 0;
+        int id = i < countof(MEMBER) ? MEMBER[i].id : SYMBOL[i - countof(MEMBER)].id;
+        JSValueConst f;
+        JSObject *fp;
+
+        has = JS_GetOwnSlotDesc(ctx, &pd, proto, atom);
+        if (i < countof(MEMBER)) JS_FreeAtom(ctx, atom);
+        if (has <= 0) return false;
+        f = kind == 0 ? pd.value : pd.getter;
+        fp = JS_VALUE_GET_TAG(f) == JS_TAG_OBJECT ? JS_VALUE_GET_OBJ(f) : NULL;
+        ok = ((kind == 0) == !(pd.flags & JS_PROP_GETSET)) && fp != NULL && fp->class_id == JS_CLASS_C_FUNCTION &&
+             (kind <= 1 ? fp->u.cfunc.cproto == JS_CFUNC_step && fp->u.cfunc.magic == id
+                        : JS_IsCFunction(ctx, f, kind == 2 ? (JSCFunction *)js_regexp_get_flag
+                                                           : (JSCFunction *)js_regexp_get_source, id));
+        js_free_desc(ctx, &pd);
+        if (!ok) return false;
+    }
+    has = JS_GetOwnSlotDesc(ctx, &pd, proto, JS_ATOM_constructor);
+    ok = has > 0 && !(pd.flags & JS_PROP_GETSET) && js_same_value(ctx, pd.value, ctx->regexp_ctor);
+    if (has > 0) js_free_desc(ctx, &pd);
+    if (!ok) return false;
+    has = JS_GetOwnSlotDesc(ctx, &pd, ctx->regexp_ctor, JS_ATOM_Symbol_species);
+    ok = has > 0 && (pd.flags & JS_PROP_GETSET) && JS_IsCFunction(ctx, pd.getter, (JSCFunction *)js_get_this, 0);
+    if (has > 0) js_free_desc(ctx, &pd);
+    return ok;
+}
+
 /* One operand's stand-in for the examples' run: a primitive as itself, an unknown by its example when that is
-   a primitive, and JS_UNINITIALIZED where there is none (no example, or an Object). Owned. */
+   a primitive, a RegExp whose protocol is all builtins as itself, and JS_UNINITIALIZED where there is none (no
+   example, or any other Object). Owned. */
 static JSValue js_concolic_call_operand(JSContext *ctx, JSValueConst v)
 {
     JSValue ex;
 
-    if (!g_concolic.is(v))
-        return JS_IsObject(v) ? JS_UNINITIALIZED : js_dup(v);
+    if (!g_concolic.is(v)) {
+        if (!JS_IsObject(v)) return js_dup(v);
+        return js_concolic_call_regexp_builtin(ctx, v) ? js_dup(v) : JS_UNINITIALIZED;
+    }
     ex = g_concolic.example(ctx, v);
     if (JS_IsUndefined(ex) || JS_IsObject(ex)) {
         JS_FreeValue(ctx, ex);
