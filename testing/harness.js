@@ -109,6 +109,29 @@ const DEFAULT_PORT = Number(process.env.HARNESS_PORT || 9337);
 const CHROME_FOR_TESTING_VERSION = "155.0.8059.84";
 const CHROME_FOR_TESTING = `/opt/chrome-for-testing-${CHROME_FOR_TESTING_VERSION}/chrome`;
 
+/* The binary every tool in this tree launches, as {path, version}: Chrome for Testing at
+   CHROME_FOR_TESTING_VERSION, or HARNESS_CHROME's binary, whose version is reported rather than required. */
+function chromeForTesting() {
+  const chromePath = process.env.HARNESS_CHROME || CHROME_FOR_TESTING;
+  if (!fs.existsSync(chromePath))
+    throw new Error(`${chromePath} does not exist. Install it with: bash testing/chrome_for_testing_setup.sh`);
+  const version = execSync(`${JSON.stringify(chromePath)} --version`).toString().trim();
+  if (!process.env.HARNESS_CHROME && !version.endsWith(" " + CHROME_FOR_TESTING_VERSION))
+    throw new Error(`${chromePath} reports \`${version}\`, not Chrome for Testing ${CHROME_FOR_TESTING_VERSION}`);
+  return { path: chromePath, version };
+}
+
+/* A browser a tool owns for its own run, which puppeteer starts and closes: `opts` is puppeteer.launch's
+   options, and the binary is chromeForTesting()'s, never the tool's. The long-lived harness browser is
+   cmdRestart's spawn of the same binary. */
+async function launchChrome(opts) {
+  if (Object.prototype.hasOwnProperty.call(opts, "executablePath"))
+    throw new Error("launchChrome was handed an executablePath — the binary is chromeForTesting()'s");
+  const chrome = chromeForTesting();
+  log(`browser: ${chrome.version} (${chrome.path})`);
+  return puppeteer.launch(Object.assign({}, opts, { executablePath: chrome.path }));
+}
+
 function log(...args) { console.log(...args); }
 function err(...args) { console.error(...args); }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -874,12 +897,7 @@ async function cmdStart(args) {
   // Detached process group so the launching shell exiting doesn't
   // take Chrome with it. stdio:'ignore' severs pipes; unref() means
   // node can exit without waiting on Chrome.
-  const chromePath = process.env.HARNESS_CHROME || CHROME_FOR_TESTING;
-  if (!fs.existsSync(chromePath))
-    throw new Error(`${chromePath} does not exist. Install it with: bash testing/chrome_for_testing_setup.sh`);
-  const chromeVersion = execSync(`${JSON.stringify(chromePath)} --version`).toString().trim();
-  if (!process.env.HARNESS_CHROME && !chromeVersion.endsWith(" " + CHROME_FOR_TESTING_VERSION))
-    throw new Error(`${chromePath} reports \`${chromeVersion}\`, not Chrome for Testing ${CHROME_FOR_TESTING_VERSION}`);
+  const { path: chromePath, version: chromeVersion } = chromeForTesting();
   log(`browser: ${chromeVersion} (${chromePath})`);
   /* THE SANDBOX STAYS ON, AND ROOT IS THE THING THAT GETS FIXED — not the sandbox.
      This block used to add `--no-sandbox` whenever the process was root, with the argument that a container
@@ -1858,4 +1876,5 @@ async function main() {
   catch (e) { err(e.stack || e.message || e); process.exit(1); }
 }
 
-main();
+module.exports = { CHROME_FOR_TESTING_VERSION, chromeForTesting, launchChrome };
+if (require.main === module) main();

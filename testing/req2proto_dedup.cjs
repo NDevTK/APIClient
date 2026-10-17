@@ -11,7 +11,7 @@
 const http = require("http");
 const path = require("path");
 const fs = require("fs");
-const puppeteer = require("puppeteer");
+const { launchChrome } = require("./harness.js");
 
 const ROOT = path.resolve(process.argv[2] || path.join(__dirname, ".."));
 const EXT = path.join(ROOT, "extension");
@@ -39,7 +39,7 @@ const MIME = { ".js": "text/javascript", ".html": "text/html", ".json": "applica
   await new Promise((r) => srv.listen(0, "127.0.0.1", r));
   const port = srv.address().port;
 
-  const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox"] });
+  const browser = await launchChrome({ headless: "new", args: ["--no-sandbox"] });
   const page = await browser.newPage();
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "load" });
 

@@ -28,7 +28,8 @@
 // THE ORIGIN IS A PARAMETER AND ITS DEFAULT IS A PRIVATE BASE, for serve.mjs's own reason: 8899 is shared and
 // two lanes running the control at once lose a pass to EADDRINUSE, so this defaults to the 18899 base rather
 // than teaching a reader to take the shared one.
-import puppeteer from 'puppeteer';
+import { createRequire } from 'node:module';
+const { launchChrome } = createRequire(import.meta.url)('../../harness.js');
 
 /* nav-load.html IS THE 14th `DOCS` ROW, SO ITS PORT IS BASE + 13 — DERIVED HERE AND NOT WRITTEN DOWN. A
    literal would be a second copy of a number serve.mjs's table already decides, and that table's own rule is
@@ -55,8 +56,7 @@ const WANT = [
 
 const reqs = [];
 const errs = [];
-const b = await puppeteer.launch({
-  executablePath: process.env.CHROME || '/opt/chrome-for-testing/chrome',
+const b = await launchChrome({
   headless: true,
   /* `--no-proxy-server` BECAUSE THIS BOX HAS AN EGRESS PROXY AND THE SUBJECT IS 127.0.0.1. A proxied loopback
      request is a different request, and one that fails reads as the fixture not making it. */

@@ -15,7 +15,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const puppeteer = require("puppeteer");
+const { launchChrome } = require("./harness.js");
 
 const EXT = path.resolve(process.argv[2] || path.join(__dirname, "..", "extension"));
 const PAGES = ["popup.html", "dev.html"];
@@ -53,7 +53,7 @@ function probeText() {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "popup-tt-"));
   // Chrome refuses to start its sandbox as root, which is how the cloud containers run.
   const root = typeof process.getuid === "function" && process.getuid() === 0;
-  const browser = await puppeteer.launch({ headless: true, pipe: true, enableExtensions: [EXT], userDataDir: profile,
+  const browser = await launchChrome({ headless: true, pipe: true, enableExtensions: [EXT], userDataDir: profile,
                                            args: ["--no-first-run", "--no-default-browser-check",
                                                   ...(root ? ["--no-sandbox"] : [])] });
   const failures = [];

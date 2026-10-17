@@ -3,7 +3,7 @@
 // The engine (engine/host/browser/core/url/public_suffix.c) and the native host's site oracle (engine/psl.mjs)
 // answer registrable domains from Chromium's list at the tag engine/pslgen.mjs pins, with Chromium's matching.
 // The extension's zone asks the running browser through chrome.publicSuffix (extension/background.js). This
-// tool launches the Chrome it is given with a throwaway extension holding the `publicSuffix` permission, asks
+// tool launches harness.js's Chrome with a throwaway extension holding the `publicSuffix` permission, asks
 // it for every host built from both lists' rules (each rule, one label under it and two under it) and from a
 // fixed list of hard hosts, and compares the engine's answer with the browser's. The host is serialized by the
 // URL parser first, which is what every caller hands a site question.
@@ -12,7 +12,7 @@
 // browser's version tag) gives the browser's answer: the lists differ and the matching does not. Every other
 // disagreement is a matching disagreement, and the tool exits 1 when there is one.
 //
-// Usage: node testing/psl_agreement.mjs <chrome binary> [--json <out>]
+// Usage: node testing/psl_agreement.mjs [--json <out>]
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,13 +23,12 @@ import * as engine from "../engine/psl.mjs";
 import { parseList } from "../engine/psl_list.mjs";
 
 const require = createRequire(import.meta.url);
-const puppeteer = require("puppeteer");
+const { launchChrome } = require("./harness.js");
 const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const LIST_PATH = "net/base/registry_controlled_domains/effective_tld_names.dat";
-const chromeBin = process.argv[2];
 const jsonAt = process.argv.indexOf("--json");
-if (!chromeBin || !fs.existsSync(chromeBin)) {
-  console.error("usage: node testing/psl_agreement.mjs <chrome binary> [--json <out>]");
+if (process.argv.length !== 2 && !(process.argv.length === 4 && jsonAt === 2)) {
+  console.error("usage: node testing/psl_agreement.mjs [--json <out>]");
   process.exit(2);
 }
 
@@ -67,11 +66,12 @@ fs.writeFileSync(path.join(ext, "manifest.json"), JSON.stringify({
   background: { service_worker: "sw.js" } }));
 fs.writeFileSync(path.join(ext, "sw.js"), "");
 
-const browser = await puppeteer.launch({ executablePath: chromeBin, headless: true, pipe: true,
-  enableExtensions: [ext], args: ["--no-sandbox"] });
+const browser = await launchChrome({ headless: true, pipe: true, enableExtensions: [ext], args: ["--no-sandbox"] });
 let failed = false;
 try {
-  const swt = await browser.waitForTarget((t) => t.type() === "service_worker" && t.url().startsWith("chrome-extension://"));
+  // This extension's worker, by its script: another chrome-extension:// worker target can come first.
+  const swt = await browser.waitForTarget((t) => t.type() === "service_worker" &&
+                                                 /^chrome-extension:\/\/[a-p]{32}\/sw\.js$/.test(t.url()));
   const sw = await swt.worker();
   const has = await sw.evaluate(() => typeof chrome.publicSuffix);
   const version = await sw.evaluate(async () =>
