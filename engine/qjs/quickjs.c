@@ -31975,6 +31975,10 @@ typedef struct JSArraySort {
                                        its valueOf/@@toPrimitive — a suspension point like any other, which
                                        therefore cannot live in a C local across it. */
     JSValue copy;                   /* toSorted's ArrayCreate(len), until it becomes the thing being sorted (owned) */
+    JSValue ustr[2];                /* the default ordering's xString / yString where the operand is unknown,
+                                       held across the other ToString's suspension (owned), else undefined */
+    JSValue order;                  /* whether the merge takes y first, while that ToBoolean is asked (owned),
+                                       else JS_UNINITIALIZED; see sort_order_unknown */
     JSValue cb_args[4];             /* [this=undefined, method, src[l].val, src[r].val]; call_argv=&cb_args[2], argc=2 */
 } JSArraySort;
 static int js_array_sort_step(JSContext *ctx, struct JSArraySort *s, JSValue res, JSValueConst out_args[2],
@@ -32006,6 +32010,7 @@ typedef struct JSTASort {
     JSValue *items;         /* SortIndexedProperties' List: `len` Numbers or BigInts (owned) */
     JSValue *tmp;           /* merge scratch. Its entries ALIAS items' during a block, so items is the one owner */
     JSValue cmpres;         /* the comparator's result, held across its own ToNumber (owned) */
+    JSValue order;          /* the merge's order question while it is asked (owned), else JS_UNINITIALIZED */
     int64_t len, width, i, lo, mid, hi, l, r, k, wb;
     uint8_t pending;        /* a comparator result is awaited */
     JSValue cb_args[4];     /* [this=undefined, comparator, x, y]; call_argv=&cb_args[2], argc=2 */
@@ -89492,8 +89497,8 @@ static const char *const js_date_ctor_steps[] = { DATECTOR_STAGES(JS_STEP_STAGE_
    `new Date(u * 1000)` with a concrete example behind `u` yields an unknown whose provenance and domain are
    right and whose concrete date nobody has, where the real operation could have computed one.
    WHAT THE NEXT DIFF BUILDS: this machine answering at its own site instead of reporting upward. It TAKES the
-   parked operand off the header rather than calling STEP_UNKNOWN_ANSWERED, which frees it and is only for a
-   machine whose answer need not preserve the taint, and derives with js_concolic_derive over that operand
+   parked operand off the header, as the sort's order question does (sort_take_unknown), and derives with
+   js_concolic_derive over that operand
    whose `real` is the time value these steps actually compute from the operand's own example — which is what
    21.4.3.2 Date.parse ( string ) already does one algorithm over, running the real parse on the example so
    the derived value carries the number it really produced. For the multi-argument shape that is one
@@ -98073,6 +98078,7 @@ static int js_array_sort_recv(JSContext *ctx, JSArraySort *s)
     s->n = 0; s->len = 0; s->undefined_count = 0; s->pending = 0; s->flip = 0;
     s->width = 1; s->i = 0; s->lo = s->mid = s->hi = s->l = s->r = s->k = 0; s->wb = 0;
     s->coerced = JS_UNDEFINED; s->copy = JS_UNDEFINED; s->cmpres = JS_UNDEFINED;
+    s->ustr[0] = JS_UNDEFINED; s->ustr[1] = JS_UNDEFINED; s->order = JS_UNINITIALIZED;
     for (i = 0; i < 4; i++) s->cb_args[i] = JS_UNDEFINED;
     s->obj = JS_ToObject(ctx, s->hdr.this_val);
     if (JS_IsException(s->obj)) { s->obj = JS_UNDEFINED; return -1; }
@@ -98145,6 +98151,53 @@ static int js_array_sort_collect(JSContext *ctx, JSArraySort *s, JSValue in, JSV
    THAT LIST IS EXHAUSTIVE, AND JS_STEP_UNKNOWN IS NOT ON IT — both of this algorithm's coercions are over an
    ORDERING, so both answer it here (see the two collapse sites below) rather than handing it out. That is what
    js_array_sort_vstep's "a step code this stage does not route" is entitled to assume. */
+/* The one question a stable merge asks of a comparison: does y go first? Over unknown input it is the ordering
+   the engine's own relational operator computes, `a <op> b` through g_concolic.rel, so the predicate carries the
+   operands' examples and the branch seam forks on it like the page's own `if (r > 0)`. The two arms are the
+   merge's two observable outcomes: §23.1.3.30.2 CompareArrayElements ( x, y, comparator ) and §23.2.4.8
+   CompareTypedArrayElements ( x, y, comparator ) answer -1, +0 or 1 (or the comparator's Number), and a stable
+   merge whose left run precedes takes x for every answer but a positive one. Consumes `a` and `b`, at least one
+   of which is unknown. Owned, or JS_EXCEPTION. */
+static JSValue sort_order_unknown(JSContext *ctx, JSValue a, JSValue b, OPCodeEnum op)
+{
+    JSValue sp[2] = { a, b };
+
+    DCHECK(g_concolic.rel != NULL && g_concolic.is != NULL && (g_concolic.is(a) || g_concolic.is(b)),
+           "a sort's order question over unknown input has no unknown operand, or no relational hook to ask");
+    if (!g_concolic.rel(ctx, sp + 2, op)) {
+        JS_FreeValue(ctx, a);
+        JS_FreeValue(ctx, b);
+        return JS_ThrowInternalError(ctx, "sort: the relational hook declined an unknown operand");
+    }
+    return sp[0];
+}
+
+/* The operand a coercion sub-sequence parked with JS_STEP_UNKNOWN, taken off the header. Owned. */
+static JSValue sort_take_unknown(JSStepHdr *h)
+{
+    JSValue v = h->unknown_operand;
+
+    DCHECK(!JS_IsUninitialized(v), "a sort took an unknown operand no coercion parked");
+    h->unknown_operand = JS_UNINITIALIZED;
+    return v;
+}
+
+/* §23.1.3.30.2 steps 5-6's ToString of an element the coercion reported unknown: the String(x) derivation over
+   the parked operand, which keeps its source and example. Owned. */
+static JSValue sort_unknown_string(JSContext *ctx, JSStepHdr *h)
+{
+    JSValue u = sort_take_unknown(h), r;
+
+    DCHECK(g_concolic.to_str != NULL, "a sort met an unknown element under a host with no ToString hook");
+    r = g_concolic.to_str(ctx, u);
+    DCHECK(!JS_IsUninitialized(r), "the ToString hook declined the operand the coercion reported unknown");
+    JS_FreeValue(ctx, u);
+    return r;
+}
+
+/* step_tobool_run's `op` for the merge's one ordering question. */
+#define SORT_ORDER_OP "the merge's order of x and y (CompareArrayElements or CompareTypedArrayElements)"
+
 static int js_array_sort_step(JSContext *ctx, JSArraySort *s, JSValue res, JSValueConst out_args[2],
                               JSValue **out_cb, int *out_argc)
 {
@@ -98155,48 +98208,43 @@ static int js_array_sort_step(JSContext *ctx, JSArraySort *s, JSValue res, JSVal
     ValueSlot *dst = s->flip ? s->array : s->tmp;
     int rc;
     if (s->pending) {
-        double v;
-        /* 23.1.3.30.2 CompareArrayElements step 4.a coerces what the comparator RETURNED, and JS_ToFloat64Free
-           did that from C — so a comparator returning an object ran its valueOf in an activation with no flow
-           base, in the one machine that had already been built to park everything else. The result is held on
-           the state because the coercion suspends. */
-        if (s->hdr.num_phase == NUM_PH_START) {
-            DCHECK(JS_IsUndefined(s->cmpres), "a comparator result is already being coerced on this sort");
-            s->cmpres = res;
+        double v = 0;
+        int y_first;
+
+        /* §23.1.3.30.2 step 4.a coerces what the comparator returned, so an object result runs its valueOf; the
+           result is held on the state because that coercion suspends. An unknown result has an example, and
+           whether it is positive is asked of it (sort_order_unknown); the ask suspends too, and a sibling
+           re-enters here with undefined placed. Step 4.b's NaN is +0, which `v > 0` answers with x first. */
+        if (JS_IsUninitialized(s->order)) {
+            if (s->hdr.num_phase == NUM_PH_START) {
+                DCHECK(JS_IsUndefined(s->cmpres), "a comparator result is already being coerced on this sort");
+                s->cmpres = res;
+                res = JS_UNDEFINED;
+            }
+            rc = step_tofloat64_run(ctx, &s->hdr, s->cmpres, res, &v, out_cb, out_argc);
+            res = JS_UNDEFINED;
+            if (rc == JS_STEP_UNKNOWN) {
+                s->order = sort_order_unknown(ctx, sort_take_unknown(&s->hdr), js_int32(0), OP_gt);
+                if (JS_IsException(s->order)) { s->order = JS_UNINITIALIZED; return -1; }
+            } else if (rc) {
+                return rc < 0 ? -1 : rc;
+            }
+            JS_FreeValue(ctx, s->cmpres); s->cmpres = JS_UNDEFINED;
+        } else {
+            DCHECK(JS_IsUndefined(res), "a sort re-entered its order question with a value placed");
+            JS_FreeValue(ctx, res);
             res = JS_UNDEFINED;
         }
-        rc = step_tofloat64_run(ctx, &s->hdr, s->cmpres, res, &v, out_cb, out_argc);
-        res = JS_UNDEFINED;
-        /* A COMPARATOR THAT ANSWERED WITH UNKNOWN EXTERNAL INPUT ORDERS NOTHING, AND THE SPEC ALREADY HAS A
-           NAME FOR THAT ANSWER. ECMAScript §23.1.3.30.2 CompareArrayElements ( x, y, comparator ) step 4.b is
-           "If result is NaN, return +0𝔽." — a comparator result that carries no ordering is +0𝔽 — and
-           §23.1.3.30.1 SortIndexedProperties ( obj, length, sortCompare, holes ) says of a run whose comparator
-           is not a consistent one: "The sort order is implementation-defined if sortCompare is not a consistent
-           comparator for the elements of items.", where consistency requires of the returned v that
-           "Furthermore, v is a Number, and v is not NaN." An unknown is not a Number this engine holds, so the
-           order is the implementation's to choose, and +0𝔽 is the choice that keeps the MOST: that section's
-           own stability condition, "And for all non-negative integers j and k such that j < k < itemCount, if
-           ℝ(sortCompare(old[j], old[k])) = 0, then π(j) < π(k); i.e., the sort is stable.", pins the result to
-           the identity permutation, so every element survives with its own example and its own provenance.
-           Deriving the MACHINE's completion from the operand instead — which is what returning the code does —
-           would make `arr.sort(cmp)` an unknown ARRAY, and then `fetch(arr[0].url)` has lost a URL the run had
-           computed, to say something about an ordering nobody reads.
-           THE COMPARATOR STILL RAN: it was called, its emits and its side effects happened, and its own
-           `valueOf` ran too if it returned an object. Only the meaningless fork is removed. `v = 0` rather than
-           a branch of its own, so the collapse and step 4.b's NaN leave through the ONE predicate below. */
-        if (rc == JS_STEP_UNKNOWN) {
-            STEP_UNKNOWN_ANSWERED(ctx, &s->hdr);
-            v = 0;
-        } else if (rc) {
-            return rc < 0 ? -1 : rc;
+        if (!JS_IsUninitialized(s->order)) {
+            rc = step_tobool_run(ctx, &s->hdr, s->order, SORT_ORDER_OP, &y_first);
+            if (rc) return rc < 0 ? -1 : rc;
+            JS_FreeValue(ctx, s->order);
+            s->order = JS_UNINITIALIZED;
+        } else {
+            y_first = v > 0;
         }
-        JS_FreeValue(ctx, s->cmpres); s->cmpres = JS_UNDEFINED;
         s->pending = 0;
-        /* step 4.b: a NaN result is +0𝔽, which a stable sort keeps in original order. `v <= 0` is FALSE for NaN,
-           so every comparison took the right element and `[1,2,3,4].sort(() => NaN)` came out reversed. Asking
-           whether v is GREATER than zero is the one form that answers both cases: NaN and 0 alike keep the
-           left (earlier) element, which is what stability means. */
-        if (!(v > 0)) sort_slot_move(&dst[s->k++], &src[s->l++]);
+        if (!y_first) sort_slot_move(&dst[s->k++], &src[s->l++]);
         else          sort_slot_move(&dst[s->k++], &src[s->r++]);
         return JS_STEP_YIELD;
     } else if (s->hdr.str_phase == STR_PH_START) {
@@ -98241,49 +98289,66 @@ static int js_array_sort_step(JSContext *ctx, JSArraySort *s, JSValue res, JSVal
                    re-derives on re-entry are the same two — but they are re-derived from the SOURCE buffer of
                    the pass this entry is in, which the ping-pong may have swapped since the last one. */
                 ValueSlot *ap = &src[s->l], *bp = &src[s->r];
-                int cmp;
-                if (s->cmp_ph == 0) {
-                    if (!ap->str) {
-                        rc = step_tostring_run(ctx, &s->hdr, ap->val, res, &s->coerced, out_cb, out_argc);
+                int y_first;
+
+                if (JS_IsUninitialized(s->order)) {
+                    if (s->cmp_ph == 0) {
+                        if (!ap->str) {
+                            rc = step_tostring_run(ctx, &s->hdr, ap->val, res, &s->coerced, out_cb, out_argc);
+                            res = JS_UNDEFINED;
+                            if (rc == JS_STEP_UNKNOWN) {
+                                s->ustr[0] = sort_unknown_string(ctx, &s->hdr);
+                            } else if (rc) {
+                                return rc < 0 ? -1 : rc;
+                            } else {
+                                ap->str = JS_VALUE_GET_STRING(s->coerced);
+                                s->coerced = JS_UNDEFINED;
+                            }
+                        }
+                        s->cmp_ph = 1;
+                    }
+                    if (!bp->str) {
+                        rc = step_tostring_run(ctx, &s->hdr, bp->val, res, &s->coerced, out_cb, out_argc);
                         res = JS_UNDEFINED;
-                        if (rc == JS_STEP_UNKNOWN) STEP_UNKNOWN_ANSWERED(ctx, &s->hdr);
-                        else if (rc) return rc < 0 ? -1 : rc;
-                        else {
-                            ap->str = JS_VALUE_GET_STRING(s->coerced);
+                        if (rc == JS_STEP_UNKNOWN) {
+                            s->ustr[1] = sort_unknown_string(ctx, &s->hdr);
+                        } else if (rc) {
+                            return rc < 0 ? -1 : rc;
+                        } else {
+                            bp->str = JS_VALUE_GET_STRING(s->coerced);
                             s->coerced = JS_UNDEFINED;
                         }
                     }
-                    s->cmp_ph = 1;
-                }
-                if (!bp->str) {
-                    rc = step_tostring_run(ctx, &s->hdr, bp->val, res, &s->coerced, out_cb, out_argc);
-                    res = JS_UNDEFINED;
-                    if (rc == JS_STEP_UNKNOWN) STEP_UNKNOWN_ANSWERED(ctx, &s->hdr);
-                    else if (rc) return rc < 0 ? -1 : rc;
-                    else {
-                        bp->str = JS_VALUE_GET_STRING(s->coerced);
-                        s->coerced = JS_UNDEFINED;
+                    s->cmp_ph = 0;
+                    /* An unknown xString or yString leaves steps 7-10 to the relation itself: y goes first
+                       exactly when step 9's IsLessThan(yString, xString) holds (a tie keeps x, the earlier
+                       element, as stability requires). Both ToStrings ran, so every call the algorithm makes
+                       was made. */
+                    if (!ap->str || !bp->str) {
+                        JSValue xs = ap->str ? js_dup(JS_MKPTR(JS_TAG_STRING, ap->str)) : s->ustr[0];
+                        JSValue ys = bp->str ? js_dup(JS_MKPTR(JS_TAG_STRING, bp->str)) : s->ustr[1];
+
+                        s->ustr[0] = JS_UNDEFINED;
+                        s->ustr[1] = JS_UNDEFINED;
+                        s->order = sort_order_unknown(ctx, ys, xs, OP_lt);
+                        if (JS_IsException(s->order)) { s->order = JS_UNINITIALIZED; return -1; }
                     }
+                } else {
+                    DCHECK(JS_IsUndefined(res), "a sort re-entered its order question with a value placed");
                 }
-                s->cmp_ph = 0;
-                /* THE SAME COLLAPSE THE COMPARATOR BRANCH MAKES, and reached the same way: an element that IS
-                   unknown external input has no String for §23.1.3.30.2 CompareArrayElements ( x, y,
-                   comparator ) steps 5-6 to produce, so steps 7-10's two IsLessThan tests decide nothing and
-                   the algorithm's own last step decides it instead — step 11 is "Return +0𝔽." NULL here means
-                   exactly that and nothing else: a ToString that SUSPENDS returns above, and one that
-                   SUCCEEDS fills the slot, so the only way past both blocks with an empty `str` is the
-                   sub-sequence having reported the operand unknown. That is why no flag rides the state — the
-                   condition is already recorded in the thing it is about, and a flag would be a second copy
-                   of it that a suspension between the two coercions could disagree with.
-                   BOTH ToStrings STILL RUN. §23.1.3.30.2 step 6 is the page's code whenever y is an ordinary
-                   object with a `toString`, and an unknown x is no reason to skip it; the collapse removes the
-                   COMPARISON, never a call the algorithm makes. The pos tiebreak below then carries it to the
-                   stable order §23.1.3.30.1 SortIndexedProperties ( obj, length, sortCompare, holes ) requires
-                   of a zero comparison, which is where the element's own example and provenance survive. */
-                cmp = (ap->str && bp->str) ? js_string_compare(ap->str, bp->str) : 0;
-                if (cmp == 0)
-                    cmp = (ap->pos > bp->pos) - (ap->pos < bp->pos);
-                if (cmp <= 0) sort_slot_move(&dst[s->k++], &src[s->l++]);
+                if (!JS_IsUninitialized(s->order)) {
+                    rc = step_tobool_run(ctx, &s->hdr, s->order, SORT_ORDER_OP, &y_first);
+                    if (rc) return rc < 0 ? -1 : rc;
+                    JS_FreeValue(ctx, s->order);
+                    s->order = JS_UNINITIALIZED;
+                } else {
+                    int cmp = js_string_compare(ap->str, bp->str);
+
+                    if (cmp == 0)
+                        cmp = (ap->pos > bp->pos) - (ap->pos < bp->pos);
+                    y_first = cmp > 0;
+                }
+                if (!y_first) sort_slot_move(&dst[s->k++], &src[s->l++]);
                 else          sort_slot_move(&dst[s->k++], &src[s->r++]);
                 return JS_STEP_YIELD;
             }
@@ -98401,12 +98466,12 @@ static int js_array_sort_vstep(JSContext *ctx, void *st, JSValue cb_result, JSVa
         r = js_array_sort_step(ctx, s, cb_result, (JSValueConst *)&s->cb_args[2], out_cb, out_argc);   /* consumes cb_result */
         cb_result = JS_UNDEFINED;
         if (r < 0) return -1;
-        /* 5 is the default ordering's ToString and JS_STEP_YIELD is the per-element rest point — both are the
-           DRIVER's to act on and this machine's to be re-entered at, unchanged. 1 is the one code this stage
-           translates: a comparison of the page's comparator is due. Spelled as the three codes it is rather
-           than as `r != 0`, because the catch-all is what would silently turn a code nobody routed into a call
-           of the comparator with the merge's operands still on the state. */
-        if (r == 5 || r == JS_STEP_YIELD) return r;
+        /* 5 is the default ordering's ToString, JS_STEP_YIELD the per-element rest point and JS_STEP_FORK the
+           order question over unknown input — the driver's to act on and this machine's to be re-entered at,
+           unchanged. 1 is the one code this stage translates: a comparison of the page's comparator is due.
+           Spelled as the codes they are rather than as `r != 0`, because the catch-all is what would silently
+           turn a code nobody routed into a call of the comparator with the merge's operands still on the state. */
+        if (r == 5 || r == JS_STEP_YIELD || r == JS_STEP_FORK) return r;
         if (r == 1) {
             s->cb_args[0] = JS_UNDEFINED;            /* the comparator gets this = undefined */
             s->cb_args[1] = s->method;
@@ -98414,12 +98479,10 @@ static int js_array_sort_vstep(JSContext *ctx, void *st, JSValue cb_result, JSVa
             return JS_STEP_CALL;
         }
         /* WHICH CODE — the remedy here is to route one, and a routing instruction with no code in it names an
-           action with no object. js_array_sort_step's contract above is EXHAUSTIVE (-1, 0, 1, 5, JS_STEP_YIELD)
-           and JS_STEP_UNKNOWN is deliberately not on it: all three of this algorithm's coercion sites — the
-           comparator's ToNumber and the default ordering's two ToStrings — answer it THEMSELVES, because
-           §23.1.3.30.2 CompareArrayElements ( x, y, comparator )'s result is an ORDERING and an unknown one
-           carries nothing forward. So a code arriving here is one of those three having stopped answering, and
-           the integer is what says which question was asked. */
+           action with no object. js_array_sort_step's contract is exhaustive (-1, 0, 1, 5, JS_STEP_YIELD,
+           JS_STEP_FORK) and JS_STEP_UNKNOWN is not on it: the comparator's ToNumber and the default ordering's
+           two ToStrings take the parked operand into the order question themselves (sort_order_unknown). So a
+           code arriving here is one of those three having stopped doing so, and the integer says which. */
         DCHECKF(r == 0, "the merge reported step code %d, which this stage does not route", r);
         if (s->hdr.arg) {
             /* the sorted list goes into A from here on, and A is what the machine yields */
@@ -98488,6 +98551,9 @@ static void js_array_sort_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->coerced);   /* a ToString that landed just before a suspension */
     v->val(ctx, &s->cmpres);    /* a comparator result held across its own ToNumber */
     v->val(ctx, &s->copy);      /* toSorted's result, until the gather is over and it becomes the sorted list */
+    v->val(ctx, &s->ustr[0]);
+    v->val(ctx, &s->ustr[1]);
+    v->val(ctx, &s->order);
     v->slots(ctx, &s->array, s->len, s->wb, s->n);
     v->slots(ctx, &s->tmp,   s->len, s->wb, s->n);
 }
@@ -124573,7 +124639,7 @@ static int js_ta_sort_vstep(JSContext *ctx, void *st, JSValue cb_result, JSValue
         cb_result = JS_UNDEFINED;
         /* js_mallocz leaves a JSValue reading as JS_TAG_INT 0, not JS_UNDEFINED, so every owned field is stated
            here — the coercion's own DCHECK is what catches the omission, and did. */
-        s->obj = JS_UNDEFINED; s->cmpres = JS_UNDEFINED;
+        s->obj = JS_UNDEFINED; s->cmpres = JS_UNDEFINED; s->order = JS_UNINITIALIZED;
         s->items = NULL; s->tmp = NULL; s->pending = 0;
         s->len = 0; s->width = 0; s->i = 0; s->lo = 0; s->mid = 0; s->hi = 0;
         s->l = 0; s->r = 0; s->k = 0; s->wb = 0;
@@ -124628,37 +124694,43 @@ static int js_ta_sort_vstep(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
     if (s->hdr.stage == TAS_MERGE) {
         if (s->pending) {
-            double v;
-            /* 23.2.4.8 CompareTypedArrayElements step 2.a coerces what the comparator RETURNED, so an object result runs its valueOf. It
-               is held on the state because that coercion suspends. */
-            if (s->hdr.num_phase == NUM_PH_START) {
-                DCHECK(JS_IsUndefined(s->cmpres), "a comparator result is already being coerced on this sort");
-                s->cmpres = cb_result;
+            double v = 0;
+            int y_first;
+
+            /* §23.2.4.8 CompareTypedArrayElements step 2.a coerces what the comparator returned, so an object
+               result runs its valueOf; held on the state because that coercion suspends. An unknown result is
+               the merge's order question (sort_order_unknown), asked as the Array merge asks it; a sibling
+               re-enters here with undefined placed. Step 2.b's NaN is +0, which `v > 0` answers with x first. */
+            if (JS_IsUninitialized(s->order)) {
+                if (s->hdr.num_phase == NUM_PH_START) {
+                    DCHECK(JS_IsUndefined(s->cmpres), "a comparator result is already being coerced on this sort");
+                    s->cmpres = cb_result;
+                    cb_result = JS_UNDEFINED;
+                }
+                rc = step_tofloat64_run(ctx, &s->hdr, s->cmpres, cb_result, &v, out_cb, out_argc);
+                cb_result = JS_UNDEFINED;
+                if (rc == JS_STEP_UNKNOWN) {
+                    s->order = sort_order_unknown(ctx, sort_take_unknown(&s->hdr), js_int32(0), OP_gt);
+                    if (JS_IsException(s->order)) { s->order = JS_UNINITIALIZED; return -1; }
+                } else if (rc) {
+                    return rc < 0 ? -1 : rc;
+                }
+                JS_FreeValue(ctx, s->cmpres); s->cmpres = JS_UNDEFINED;
+            } else {
+                DCHECK(JS_IsUndefined(cb_result), "a sort re-entered its order question with a value placed");
+                JS_FreeValue(ctx, cb_result);
                 cb_result = JS_UNDEFINED;
             }
-            rc = step_tofloat64_run(ctx, &s->hdr, s->cmpres, cb_result, &v, out_cb, out_argc);
-            cb_result = JS_UNDEFINED;
-            /* THE SAME COLLAPSE Array.prototype.sort's merge makes, for the same reason and one section over:
-               ECMAScript §23.2.4.8 CompareTypedArrayElements ( x, y, comparator ) step 2.b is "If result is
-               NaN, return +0𝔽.", so a comparator result carrying no ordering already has +0𝔽 as its answer,
-               and §23.1.3.30.1 SortIndexedProperties ( obj, length, sortCompare, holes ) — which step 7 of
-               §23.2.3.29 %TypedArray%.prototype.sort ( comparator ) invokes — makes the order
-               implementation-defined for an inconsistent comparator and stable for a zero comparison. Handing
-               the code out instead completed the WHOLE sort as a derived unknown, which is worse here than in
-               the Array case: every element of a typed array is a real Number the engine read out of the
-               buffer, so the unknown would replace a list of concrete values with one that has none.
-               The comparator ran; only the fork over its meaningless result is removed. */
-            if (rc == JS_STEP_UNKNOWN) {
-                STEP_UNKNOWN_ANSWERED(ctx, &s->hdr);
-                v = 0;
-            } else if (rc) {
-                return rc < 0 ? -1 : rc;
+            if (!JS_IsUninitialized(s->order)) {
+                rc = step_tobool_run(ctx, &s->hdr, s->order, SORT_ORDER_OP, &y_first);
+                if (rc) return rc < 0 ? -1 : rc;
+                JS_FreeValue(ctx, s->order);
+                s->order = JS_UNINITIALIZED;
+            } else {
+                y_first = v > 0;
             }
-            JS_FreeValue(ctx, s->cmpres); s->cmpres = JS_UNDEFINED;
             s->pending = 0;
-            /* step 2.b: a NaN v is +0, and a stable sort keeps the earlier element for +0 — which asking
-               whether v is GREATER than zero answers for both. */
-            if (!(v > 0)) s->tmp[s->k++] = s->items[s->l++];
+            if (!y_first) s->tmp[s->k++] = s->items[s->l++];
             else          s->tmp[s->k++] = s->items[s->r++];
         } else {
             JS_FreeValue(ctx, cb_result);
@@ -124723,6 +124795,7 @@ static void js_ta_sort_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSTASort *s = st;
     v->val(ctx, &s->cmpres);
+    v->val(ctx, &s->order);
     v->val(ctx, &s->obj);
     v->array(ctx, (void **)&s->items, sizeof(JSValue), (int)s->len, (int)s->len, js_step_visit_value_elem);
     v->buf(ctx, (void **)&s->tmp, (size_t)s->len * sizeof(JSValue));

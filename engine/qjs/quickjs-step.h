@@ -957,32 +957,9 @@ JS_EXTERN JSValueConst JS_StepClosureData(const JSStepHdr *h, int i);
  * return an ordinary object whose `valueOf` answers with unknown external input, and §7.1.1 ToPrimitive
  * ( input [ , preferredType ] ) is what discovers that — one hop after the pre-check would have run. Such a
  * machine answers WHEN THE SUB-SEQUENCE REPORTS, by consuming JS_STEP_UNKNOWN instead of returning it, which
- * is the ONE site both ways in converge on. It then owns the parked operand, and STEP_UNKNOWN_ANSWERED is how
- * it gives it back. A pre-check ALONE is not a narrower version of this — it is a hole with a crash in it. */
+ * is the ONE site both ways in converge on. It then takes the parked operand off the header, keeping its source
+ * and example. A pre-check ALONE is not a narrower version of this — it is a hole with a crash in it. */
 #define JS_STEP_UNKNOWN 24
-
-/* THIS SITE ANSWERED THE COERCION ITSELF — release the operand JS_STEP_UNKNOWN parked, because the driver
- * never sees the code and so never takes it. Use it ONLY where the machine's own answer does not need the
- * unknown: §23.1.3.30.2 CompareArrayElements ( x, y, comparator )'s result is an ORDERING and not a value the
- * sort returns, so an unknown one carries nothing forward and the elements keep their own provenance. A
- * machine whose answer must PRESERVE the taint does not use this — it takes the operand the way
- * js_str_replace's forwarding site does, or lets the driver derive the completion.
- *
- * A MACRO RATHER THAN A FUNCTION so the DCHECK stamps the site that gave the answer. Its remedy — go and look
- * at what handed this step code out, because a coercion sub-sequence did not — names an action with no object
- * the moment every caller reports one shared line. (No quotation marks anywhere in this block: the audit reads
- * a quoted run under a citation as a claim about the SECTION, and this tree's own prose in quotes lands in the
- * same bucket a fabricated sentence does, with nothing mechanical to separate them.) */
-#define STEP_UNKNOWN_ANSWERED(ctx_, h_) do {                                                            \
-        JSStepHdr *step_unk_h_ = (h_);                                                                  \
-        DCHECK(!JS_IsUninitialized(step_unk_h_->unknown_operand),                                        \
-               "this site answered a coercion's JS_STEP_UNKNOWN with a value of its own while the "     \
-               "machine is standing on no unknown operand — the operand is parked by the coercion "     \
-               "sub-sequence and by nothing else, so the step code being answered here came from "      \
-               "somewhere that never asked the question");                                              \
-        JS_FreeValue(ctx_, step_unk_h_->unknown_operand);                                                \
-        step_unk_h_->unknown_operand = JS_UNINITIALIZED;                                                 \
-    } while (0)
 
 /* The machine's own arguments, borrowed. Out-of-range reads undefined, which is what the IDL's optional
    arguments mean at this level. */
