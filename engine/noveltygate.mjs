@@ -238,13 +238,15 @@ const shopKnown = ZONE.noveltyOwed(SHOP, { spelling: null, n: 0 }, new Map());
 }
 {
   const G = await run('g-twice', SHOP + '/g', DOC_G, null, null);
-  const ids = dlist(G).map((d) => d.identity);
-  const twice = dlist(G).filter((d) => ids.indexOf(d.identity) !== ids.lastIndexOf(d.identity));
-  const [first, second] = twice;
-  rowReached('G-twice', twice.length === 2,
-             twice.length === 2 && first.seen === 0 && second.seen === 1 && opt(second) < 1 / (1 + second.visits) &&
-             opt(second) < opt(first) && hasEndpoint(G, '/api/twice'),
-             dcensus(G) + ` — ${twice.length} drive(s) of a repeated identity`);
+  /* Each repeated identity (the function and the callback its drive creates) reads 0, 1, … in seed order, and
+     every later drive is lowered against its own visits and ranks below the first. */
+  const by = new Map();
+  for (const d of dlist(G)) by.set(d.identity, [...(by.get(d.identity) || []), d]);
+  const repeated = [...by.values()].filter((ds) => ds.length > 1);
+  rowReached('G-twice', repeated.length > 0,
+             repeated.every((ds) => ds.every((d, k) => d.seen === k && (k === 0 ||
+               (opt(d) < 1 / (1 + d.visits) && opt(d) < opt(ds[0]))))) && hasEndpoint(G, '/api/twice'),
+             dcensus(G) + ` — ${repeated.length} repeated identit(ies)`);
 }
 {
   /* The zone half of the same count: an instance that reported C's drives is handed none of them back, and a
