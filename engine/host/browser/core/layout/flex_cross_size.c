@@ -17,6 +17,7 @@
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
 #include "core/layout/intrinsic_size.h"
+#include "core/layout/layout_job.h"
 #include "core/layout/line_box.h"
 #include "core/layout/used_value.h"
 
@@ -225,6 +226,9 @@ CssPx flex_cross_size_anonymous_lines(lxb_dom_element_t *container, const FlexLi
     bool any_line_box;
     CssPx inner;
     BlockFlowRun seq;
+    LineBoxAvailableWidth avail;
+    LayoutJobDrive d;
+    size_t from = 0;
     lxb_dom_node_t *first = m->first;
     char nbuf[160];
 
@@ -236,9 +240,14 @@ CssPx flex_cross_size_anonymous_lines(lxb_dom_element_t *container, const FlexLi
        container's own start. */
     seq.after = box_tree_child_node(box_tree_prev_sibling(container, box_tree_child_of_node(first)));
     seq.end = m->end;
-    inner = line_box_content_height(container, seq,
-                                    line_box_available_width_stated(flex_line_used_main_size(container, first)),
-                                    &any_line_box, first_baseline, last_baseline);
+    avail = line_box_available_width_stated(flex_line_used_main_size(container, first));
+    /* This entry answers synchronously, so it is a drive: the line box asks computed, with what they defer
+       computed beneath it, before the reduction reads them, as `block_flow_auto_height` drives its own walk. */
+    layout_job_drive_begin(&d);
+    while (!line_box_atomics_ask(container, seq, avail, &from) || !line_box_extents_ask(container, seq, avail))
+        (void)block_flow_drive_deferred(&d);
+    inner = line_box_content_height(container, seq, avail, &any_line_box, first_baseline, last_baseline);
+    layout_job_drive_end(&d);
 
     DCHECKF(any_line_box,
             "%s: css-flexbox-1 §4 \"Flex Items\"' ANONYMOUS FLEX ITEM was measured and CSS 2.2 §9.4.2 "

@@ -1453,10 +1453,10 @@ static LbFill *lb_fill_of(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAva
    `lb_layout_end`. */
 /* Named residual. Not covered: a reader that is not an ask (`line_box_content_height`, `line_box_glyphs`,
    `line_box_inline_fragments` and the asks' own readers once they have asked) completes a fill or its extents
-   that no ask took, in one activation. Next: core/layout/flex_cross_size.c's and paint's reads behind
-   `line_box_atomics_ask` and `line_box_extents_ask`, as core/layout/block_flow.c's and
-   core/layout/intrinsic_block_size.c's are. How its absence shows: a resting drive's bracket overrunning with
-   `_layoutFillRests` flat while a flex item's cross size is measured. */
+   that no ask took, in one activation. Next: core/paint/box_paint.c's reads behind `line_box_atomics_ask` and
+   `line_box_extents_ask`, as core/layout/block_flow.c's, core/layout/intrinsic_block_size.c's and
+   core/layout/flex_cross_size.c's are. How its absence shows: a paint's activation completing a fill no
+   layout asked for, with `_layoutFillRests` flat. */
 static LbFill *lb_layout(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail, LbFill *local)
 {
     LbFill *f = lb_fill_of(style, run, avail, local, false);
