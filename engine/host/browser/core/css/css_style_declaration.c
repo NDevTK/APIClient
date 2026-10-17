@@ -2221,6 +2221,17 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
     { "xmp", "margin-block-start", "1em" },        { "xmp", "margin-block-end", "1em" },
     { "blockquote", "margin-inline-start", "40px" }, { "blockquote", "margin-inline-end", "40px" },
     { "figure", "margin-inline-start", "40px" },     { "figure", "margin-inline-end", "40px" },
+    /* HTML §15.3.3's `listing, plaintext, pre, xmp { font-family: monospace; white-space: pre; }`, read by
+       core/fonts/font_matching.h's family walk and core/layout/text_run.c's white space processing.
+       `pre[wrap] { white-space: pre-wrap; }` is an attribute selector, which this table's keys do not express,
+       and its value is one text_run.c does not build yet. */
+    { "listing", "font-family", "monospace" },   { "listing", "white-space", "pre" },
+    { "plaintext", "font-family", "monospace" }, { "plaintext", "white-space", "pre" },
+    { "pre", "font-family", "monospace" },       { "pre", "white-space", "pre" },
+    { "xmp", "font-family", "monospace" },       { "xmp", "white-space", "pre" },
+    /* HTML §15.3.4 Phrasing content's `code, kbd, samp, tt { font-family: monospace; }` */
+    { "code", "font-family", "monospace" }, { "kbd", "font-family", "monospace" },
+    { "samp", "font-family", "monospace" }, { "tt", "font-family", "monospace" },
     /* HTML §15.3.6 Sections and headings */
     { "article", "display", "block" }, { "aside", "display", "block" },
     { "h1", "display", "block" },    { "h2", "display", "block" },
@@ -2660,13 +2671,12 @@ static unsigned cssd_ua_heading_level(lxb_dom_element_t *el, const lxb_char_t *t
  * core/paint/box_paint.c writes into a glyph mark's `em` for core/paint/display_list_raster.c to size the
  * outline with. So a missing `font-size` row is not an absent declaration, it is every heading on every page
  * laid out and PAINTED at body size — which is what this engine did.
- *   §15.3.6's `:heading { font-weight: bold }` and §15.3.4's `b, strong { font-weight: bolder }`,
- *   `cite, dfn, em, i, var { font-style: italic }` and `code, kbd, samp, tt { font-family: monospace }` are
- *   DELIBERATELY ABSENT by that same test and not by oversight: `font-weight`, `font-style` and `font-family`
- *   are carried by the cascade and read by NOTHING — no layout entry, no paint entry, no computed-value entry
- *   names any of the three — so a row for one is a declaration with no reader, which is the write-with-no-reader
- *   shape and not a smaller transcription. They land in the diff that gives core/css/font_metrics.h a second
- *   face to select, because that is the consumer whose absence makes them inert.
+ *   §15.3.6's `:heading { font-weight: bold }` and §15.3.4's `b, strong { font-weight: bolder }` and
+ *   `cite, dfn, em, i, var { font-style: italic }` are DELIBERATELY ABSENT by that same test: `font-weight`
+ *   and `font-style` are carried by the cascade and read by nothing, since every installed face is one regular
+ *   face (core/fonts/font_matching.h's residual), so a row for one is a declaration with no reader.
+ *   `font-family` has its reader in core/fonts/font_matching.h, and §15.3.4's `code, kbd, samp, tt` rows are in
+ *   the type table above.
  *   §15.3.4's `sub, sup { line-height: normal }` IS read (core/layout/line_box.c takes
  *   `css_used_line_height_px`) and is left for the next diff rather than excused: `normal` is that property's
  *   own initial value, so the row's whole effect is to STOP an inherited non-normal line height reaching a
