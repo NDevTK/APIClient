@@ -24402,10 +24402,11 @@ static JSValue js_closure2(JSContext *ctx, JSValue func_obj,
        whole argument. AT THIS LINE and not beside the generation bump above, which is the one thing about the
        placement that is load-bearing: the bump is a NUMBER and needs nothing of the object, while a host handed
        this closure may KEEP it and call it later, so it is offered only once `var_refs` holds every cell this
-       function owes it — above, `p->u.func.var_refs` is still NULL. The three filters are JS_OrphanTakeOne's own
-       so that both doors offer one set, and marking `entered` on a nonzero answer is that function's own
-       sentence: a body the host has scheduled is not a second orphan. */
-    if (ctx->rt->orphan_born && b->byte_code_buf && !b->entered && !b->is_program) {
+       function owes it — above, `p->u.func.var_refs` is still NULL. `entered` is not asked: it is one bit per
+       body for the whole runtime, and a closure built here is reachable only from this timeline, whatever another
+       timeline did with the same body. Marking `entered` on a nonzero answer is the take's own sentence: a body
+       the host has scheduled is not a second orphan. */
+    if (ctx->rt->orphan_born && b->byte_code_buf && !b->is_program) {
         if (ctx->rt->orphan_born(ctx, func_obj, b->arg_count, ctx->rt->orphan_born_opaque))
             b->entered = 1;
     }
@@ -114788,7 +114789,11 @@ static bool orphan_candidate(JSGCObjectHeader *gp, JSObject **pp, JSFunctionByte
     if (b->is_program) return false;
     /* A closure another timeline built is not reachable from this one: driving it would run that timeline's
        environment under this flow's delta, whose capture skips objects created after its fork. A stamp of 0 is a
-       closure built outside every flow, which is the baseline every timeline shares. */
+       closure built outside every flow, which is the baseline every timeline shares.
+       Named residual. Not covered: `entered` above is one bit per body for the runtime, so once one timeline
+       drives or runs a body no other timeline's closure of it is taken. Next diff builds: the take's mark kept
+       per timeline, written through the delta as any shared write is. Absence shows as: a body whose closures
+       stand in two timelines with different environments, driven in only the first to ask. */
     DCHECK(p->u.func.timeline != 0 || p->flow_gen == 0,
            "a function object carries no timeline but was created at a fork generation above the baseline — it "
            "was built while the generation stamp was up and no flow was switched in, so no take can say which "

@@ -3105,8 +3105,9 @@ JS_EXTERN uint64_t JS_OrphanPreferredTakes(JSRuntime *rt);
 JS_EXTERN int      JS_OrphanScriptsDrawn(JSRuntime *rt);
 /* COULD THE ORPHAN SET HAVE GROWN — the count of function objects this runtime has ever made. Creating one is
    the only event that can add to the set (running a body only marks it entered, taking one only marks it
-   taken, collecting one only removes it), so a host that took the orphans at generation G may skip the heap
-   walk until this differs from G. Compared for INEQUALITY only, so its wrap costs one redundant walk. */
+   taken, collecting one only removes it), so a host that took the orphans at generation G from one timeline
+   may skip that timeline's walk until this differs from G (a take answers per timeline). Compared for
+   INEQUALITY only, so its wrap costs one redundant walk. */
 JS_EXTERN uint32_t JS_OrphanGen(JSRuntime *rt);
 /* …AND THAT ONE EVENT OFFERED AS IT HAPPENS, BECAUSE A GENERATION ONLY SAYS TO LOOK AGAIN. The counter above
    lets a host SKIP a walk it would have wasted; this lets it see a body no later walk can reach. The take
@@ -3116,9 +3117,10 @@ JS_EXTERN uint32_t JS_OrphanGen(JSRuntime *rt);
    its own steps therefore sees such a body exactly when some other reference happens to outlive the frame,
    which is a fact about that host's schedule and not about the page.
    CALLED AT js_closure2, the one line every function object in this runtime passes through, with the closure
-   COMPLETE — every cell of `var_refs` installed, so a hook that keeps the value may call it. It is handed only a
-   body no frame has begun, that is not a program, and that no take has taken: the same three filters
-   JS_OrphanTakeOne applies, so the two doors offer one set. `fn` is BORROWED and a hook that keeps it dups it.
+   COMPLETE — every cell of `var_refs` installed, so a hook that keeps the value may call it. It is handed every
+   closure of a body that is not a program, entered or not: the closure belongs to the running timeline, which
+   is owed its own closure whatever another timeline ran or took (a resumed drive waits for exactly that). `fn`
+   is BORROWED and a hook that keeps it dups it.
    A NONZERO ANSWER MEANS THE HOST HAS SCHEDULED THIS BODY, and the runtime then marks it `entered` exactly as a
    take does — one body is one drive however many closures of it a factory makes, so a later take must not hand
    the same body to a second driver. A zero answer leaves the body takeable and changes nothing whatever. */
