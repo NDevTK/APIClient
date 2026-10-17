@@ -10050,6 +10050,7 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
       engine_retract_flow(g_sess_ctx, tail);
       cold_park_flow(tail);
       flow_release(g_sess_ctx, tail);
+      cold_park_spare_refill();   /* the sale freed memory: re-hold the block the next sale opens at the floor */
       g_flows_sold++;
       if (was_cand) g_flows_sold_cands++; else g_flows_sold_flows++; }
     return 1;
@@ -10230,6 +10231,8 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     DCHECK(flow_count() == 0,
            "a session began over a frontier that already has members — the boot flow and a parked residue are "
            "alternative seedings");
+    /* The park document's spare block, held before the frontier can reach the RAM floor. */
+    cold_park_spare_refill();
     /* A residue refused whole for an older name spelling seeds the boot flow, as no residue does. */
     if (!(recipes && *recipes && cold_resume(ctx, recipes)))
         flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* the first flow: the page's scripts, empty decision vector */

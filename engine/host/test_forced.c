@@ -7911,22 +7911,27 @@ static const char *arg_val(int argc, char **argv, const char *flag) {
  * document that dies with the writer cannot be read by anybody, which is the mechanical reason the read half
  * had never executed here. A file IS that store: the same string, the same key (the caller's path), the same
  * hand-back. What crosses is TEXT and it carries its type, which is the property SECURITY.md states about
- * every other tier boundary and is true of this one for free — cold_park_recipes is already the language
+ * every other tier boundary and is true of this one for free — cold_park_write's bytes are already the language
  * cold_resume parses.
  * IT IS NOT A SECOND SCHEDULER, A REPLAY HARNESS OR A DRIVER. The resume is engine_sched_begin's own choice
  * between a residue and a boot flow; all this supplies is the two sessions and the shelf between them. */
-TF_UNIT void tf_park_store(const char *path, const char *recipes) {
-    FILE *f = fopen(path, "wb");
-    size_t n = strlen(recipes);
-    size_t put;
+typedef struct { FILE *f; size_t put; } TfParkFile;
+
+static void tf_park_store_block(const char *bytes, size_t len, void *opaque) {
+    TfParkFile *pf = opaque;
+    pf->put += fwrite(bytes, 1, len, pf->f);
+}
+
+TF_UNIT void tf_park_store(const char *path) {
+    TfParkFile pf = { fopen(path, "wb"), 0 };
     int closed;
 
-    CHECK(f, "this host could not open its cold-tier store to write the parked residue — every flow the park "
-             "just wrote down is the only remaining copy of that timeline, and it is about to go with the "
-             "instance");
-    put = fwrite(recipes, 1, n, f);
-    closed = fclose(f);
-    CHECK(put == n && closed == 0,
+    CHECK(pf.f, "this host could not open its cold-tier store to write the parked residue — every flow the park "
+                "just wrote down is the only remaining copy of that timeline, and it is about to go with the "
+                "instance");
+    cold_park_write(tf_park_store_block, &pf);
+    closed = fclose(pf.f);
+    CHECK(pf.put == cold_park_bytes() && closed == 0,
           "this host could not write the whole parked residue — a truncated park document is worse than none: "
           "the records it kept name segments the records it lost were standing on");
 }
@@ -30848,12 +30853,11 @@ int main(int argc, char **argv) {
            "exit that deletes the origin's entry — never the park rows, which read 0 together here for "
            "this one reason and whose `why` strings each name a different mechanism");
     if (engine_frontier_paged()) {
-        const char *recipes = cold_park_recipes();
         cold_parked(&g_cp);
         /* THE RESIDUE GOES TO THE SHELF BEFORE THE TEARDOWN RUNS. flow_registry_free frees the park document
            with the frontier it belongs to, so a store written after it would be written from freed memory —
            and the residue is the only remaining copy of every flow in it. */
-        if (cold_park_path) tf_park_store(cold_park_path, recipes);
+        if (cold_park_path) tf_park_store(cold_park_path);
         /* AND THE FOREIGN SEGMENTS BESIDE THE KINDS, because the 'w' arm of the grammar is the one this
            fixture's own census could not otherwise say anything about — ColdParked counts it and, until this
            column existed, only cold_park's internal preview check ever read the number. A kind that is written
@@ -30869,7 +30873,7 @@ int main(int argc, char **argv) {
                "\"worlds\":%ld,\"commits\":%ld,\"delivers\":%ld,\"bytes\":%zu,\"store\":\"%s\"}\n",
                cold_park_records(), g_cp.segs, g_cp.flows, g_cp.cands, g_cp.orphans, g_cp.worlds,
                g_cp.commits, g_cp.delivers,
-               strlen(recipes), cold_park_path ? cold_park_path : "-");
+               cold_park_bytes(), cold_park_path ? cold_park_path : "-");
     }
     if (cold_resume_path) {
         long met = 0, unmet = 0;

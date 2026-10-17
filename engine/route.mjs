@@ -245,7 +245,7 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arriv
        module is torn down whole. */
   }
   /* THE RESIDUE SEEDS THE FRONTIER INSTEAD OF THE BOOT FLOW (solver/cold.h). It is ';'-joined records, which
-     is the language cold_park_recipes both writes and reads; the extension joins the stored ARRAY the same
+     is the language cold_park_write hands over and cold_resume reads; the extension joins the stored ARRAY the same
      way, so this zone stores what that one stores. */
   /* HOW THIS DOCUMENT WAS REACHED (solver/engine.h's engine_set_arrival): the notice's provenance for a peer,
      `observed` for a root this driver names. Stated before the seed, since every timeline's grade starts there. */

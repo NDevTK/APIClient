@@ -344,39 +344,76 @@ void cold_census_release(ColdCensus *out)
  * because the trusted zone stores it in IndexedDB and IndexedDB stores JSON, so cold_park_json builds the
  * array out of the records on demand — which is also where the claim "nothing in this document needs JSON
  * escaping" is finally asserted rather than distributed across four writers. A host with a FILE (the fixture)
- * stores cold_park_recipes() directly and hands it straight back, which is the same document with one fewer
- * translation in it. */
-static char *g_park;
-static size_t g_park_len, g_park_cap;
+ * stores cold_park_write's bytes directly and hands them straight back, which is the same document with one
+ * fewer translation in it. */
+/* THE DOCUMENT IS HELD AS A CHAIN OF FIXED-SIZE BLOCKS, because it grows during a sale at the RAM floor
+ * (engine_reclaim_tail writes a flow down before it frees it), exactly when no memory is left. A contiguous
+ * buffer grows by a doubling realloc, which needs about twice the document transiently; a block never copies,
+ * and one spare block, held at all times and re-acquired after a sale frees memory (cold_park_spare_refill),
+ * funds the block a sale opens at the floor. A record may span blocks: every reader takes the bytes in block
+ * order (cold_park_write), so the document is the same byte string the contiguous form wrote. */
+#define PARK_BLOCK_BYTES 16384
+typedef struct ParkBlock {
+    struct ParkBlock *next;
+    size_t len;
+    char bytes[PARK_BLOCK_BYTES];
+} ParkBlock;
+static ParkBlock *g_park_head, *g_park_tail, *g_park_spare;
+static size_t g_park_len;
 static long  g_park_recs;
+#if APICLIENT_DEV
+/* FNV-1a over the bytes in the order park_raw appended them, the contiguous form's own digest, which
+   cold_park_write checks the chain against. */
+static uint64_t g_park_stream_digest = 0xcbf29ce484222325ull;
+static uint64_t park_fnv(uint64_t h, const char *s, size_t n) {
+    for (size_t i = 0; i < n; i++) { h ^= (unsigned char)s[i]; h *= 0x100000001b3ull; }
+    return h;
+}
+#endif
 /* …AND THE RENDERED TRANSPORT, rebuilt from the records on every ask rather than accumulated beside them. Two
    accumulated copies would be two things to keep in step, and result.c asks twice (once to size its buffer,
    once to fill it) — so this is idempotent by construction: the same records render the same bytes. */
 static char *g_park_json;
 
-static void park_reserve(size_t n)
+void cold_park_spare_refill(void)
 {
-    if (g_park_len + n + 1 > g_park_cap) {
-        size_t nc = g_park_cap ? g_park_cap : 256;
-        while (g_park_len + n + 1 > nc) nc *= 2;
-        g_park = realloc(g_park, nc);
-        /* A CHECK RATHER THAN A DCHECK, and in the one place where that reads backwards: this runs BECAUSE the
-           host is out of RAM. A park that cannot allocate its own document has lost the whole residue it was
-           called to save — every parked flow, silently, in exactly the situation the cold tier exists for —
-           and there is no version of proceeding past it. The document is a few hundred KiB against a frontier
-           of hundreds of MiB, which is the whole reason paging pays for itself. */
-        CHECK(g_park, "the cold tier could not allocate its own park document — the entire suspended frontier "
-                      "would be dropped at the moment it was being saved");
-        g_park_cap = nc;
-    }
+    /* Plain malloc, never the reclaim edge: this is the sale's own reserve, and a refusal leaves it for a later
+       refill rather than selling a flow to fund it. */
+    if (!g_park_spare) g_park_spare = malloc(sizeof *g_park_spare);
+}
+
+/* The next block, from the allocator or else from the spare. Plain malloc for the reason above. */
+static ParkBlock *park_block_new(void)
+{
+    ParkBlock *b = malloc(sizeof *b);
+    if (!b) { b = g_park_spare; g_park_spare = NULL; }
+    /* A CHECK RATHER THAN A DCHECK, and in the one place where that reads backwards: this runs BECAUSE the host
+       is out of RAM. A park that cannot extend its own document has lost the residue it was called to save, and
+       there is no version of proceeding past it; the spare is what makes this the floor and not the first
+       sale. */
+    CHECK(b, "the cold tier could not extend its own park document, spare block included — the entire suspended "
+             "frontier would be dropped at the moment it was being saved");
+    b->next = NULL; b->len = 0;
+    return b;
 }
 
 static void park_raw(const char *s, size_t n)
 {
-    park_reserve(n);
-    memcpy(g_park + g_park_len, s, n);
-    g_park_len += n;
-    g_park[g_park_len] = 0;
+#if APICLIENT_DEV
+    g_park_stream_digest = park_fnv(g_park_stream_digest, s, n);
+#endif
+    while (n) {
+        size_t k;
+        if (!g_park_tail || g_park_tail->len == PARK_BLOCK_BYTES) {
+            ParkBlock *b = park_block_new();
+            if (g_park_tail) g_park_tail->next = b; else g_park_head = b;
+            g_park_tail = b;
+        }
+        k = PARK_BLOCK_BYTES - g_park_tail->len;
+        if (k > n) k = n;
+        memcpy(g_park_tail->bytes + g_park_tail->len, s, k);
+        g_park_tail->len += k; g_park_len += k; s += k; n -= k;
+    }
 }
 
 static void park_str(const char *s) { park_raw(s, strlen(s)); }
@@ -1441,25 +1478,62 @@ void cold_park(void)
     park_doc_agrees();
 }
 
-const char *cold_park_recipes(void)
+void cold_park_write(ColdParkSink *sink, void *opaque)
 {
-    /* THE DOCUMENT ITSELF, in the one language this file both writes and reads. A host that can store a string
-       stores this and hands it straight back to engine_sched_begin; nothing between the two translates, so
-       there is no second grammar for the round trip to disagree across. "" is the positive answer for a
-       frontier that drained, exactly as "[]" is on the transport side — engine_sched_begin reads an empty one
-       as "no residue" and seeds a boot flow instead. */
-    return g_park ? g_park : "";
+    /* THE DOCUMENT ITSELF, in the one language this file both writes and reads, handed over block by block in
+       order. Nothing for a frontier that drained, which engine_sched_begin reads as "no residue". */
+    size_t total = 0;
+#if APICLIENT_DEV
+    uint64_t h = 0xcbf29ce484222325ull;
+#endif
+    for (const ParkBlock *b = g_park_head; b; b = b->next) {
+        DCHECK(b->len > 0 && b->len <= PARK_BLOCK_BYTES && (b->next == NULL) == (b == g_park_tail) &&
+                   (b->next == NULL || b->len == PARK_BLOCK_BYTES),
+               "the park document's chain holds an empty, overfull or unfilled inner block, or its tail is not "
+               "its last block — park_raw fills each block before it opens the next");
+#if APICLIENT_DEV
+        h = park_fnv(h, b->bytes, b->len);
+#endif
+        total += b->len;
+        sink(b->bytes, b->len, opaque);
+    }
+    DCHECK(total == g_park_len, "the park document's blocks hold a different length than park_raw appended");
+#if APICLIENT_DEV
+    DCHECK(h == g_park_stream_digest,
+           "the park document's blocks, read in order, digest differently from the bytes park_raw appended — a "
+           "host would store and resume a document the contiguous form never wrote");
+#endif
 }
+
+size_t cold_park_bytes(void) { return g_park_len; }
 
 long cold_park_records(void) { return g_park_recs; }
 
+/* One block of the document rendered into the transport: each ';' becomes `","`. */
+static void park_json_sink(const char *bytes, size_t len, void *opaque)
+{
+    char **o = opaque;
+    for (size_t i = 0; i < len; i++) {
+        char c = bytes[i];
+        if (c == ';') { *(*o)++ = '"'; *(*o)++ = ','; *(*o)++ = '"'; continue; }
+        /* THE ESCAPE CLAIM, ASSERTED WHERE THE JSON IS MADE. Three writers each state what their own fields may
+           hold (park_rec's digits, park_rec_cand's sink letters, park_hex's two hex characters), and the
+           property they exist to guarantee is this one: no record needs escaping, so a byte that would have
+           needed one is a writer that got its charset wrong. Said once, here, rather than trusted three times. */
+        DCHECK(c != '"' && c != '\\' && (unsigned char)c >= 0x20 && (unsigned char)c < 0x7f,
+               "a park record holds a byte that would need JSON escaping — the recipe grammar exists so that "
+               "cannot happen, so one of the record writers accepted a field it should have refused and the "
+               "host is about to store a value that will not parse");
+        *(*o)++ = c;
+    }
+}
+
 const char *cold_park_json(void)
 {
-    const char *p;
     char *o;
     size_t need;
 
-    if (!g_park) return "[]";
+    if (!g_park_head) return "[]";
     /* THE TRANSPORT, RENDERED FROM THE RECORDS. Each ';' becomes `","` (+2 bytes), and the whole is wrapped in
        `["` … `"]` (+4) with a NUL — a bound, not a guess, so the write below cannot run past its buffer.
        Idempotent because it is a pure function of the records: result.c asks once to size its own buffer and
@@ -1470,19 +1544,7 @@ const char *cold_park_json(void)
                        "exists and every flow in it would be dropped at the boundary that was to save it");
     o = g_park_json;
     *o++ = '['; *o++ = '"';
-    for (p = g_park; *p; p++) {
-        if (*p == ';') { *o++ = '"'; *o++ = ','; *o++ = '"'; continue; }
-        /* THE ESCAPE CLAIM, ASSERTED WHERE THE JSON IS MADE. Three writers each state what their own fields
-           may hold (park_rec's digits, park_rec_cand's sink letters, park_hex's two
-           hex characters), and the property they exist to guarantee is this one: no record needs escaping, so
-           no escape path is needed and a byte that would have needed one is a writer that got its charset
-           wrong. Said once, here, rather than trusted three times over. */
-        DCHECK(*p != '"' && *p != '\\' && (unsigned char)*p >= 0x20 && (unsigned char)*p < 0x7f,
-               "a park record holds a byte that would need JSON escaping — the recipe grammar exists so that "
-               "cannot happen, so one of the record writers accepted a field it should have refused and the "
-               "host is about to store a value that will not parse");
-        *o++ = *p;
-    }
+    cold_park_write(park_json_sink, &o);
     *o++ = '"'; *o++ = ']'; *o = 0;
     DCHECK((size_t)(o - g_park_json) < need, "the rendered park document overran the bound its own records set");
     return g_park_json;
@@ -2386,7 +2448,12 @@ int cold_resume(JSContext *ctx, const char *recipes)
 
 void cold_free(void)
 {
-    free(g_park); g_park = NULL; g_park_len = g_park_cap = 0; g_park_recs = 0;
+    while (g_park_head) { ParkBlock *n = g_park_head->next; free(g_park_head); g_park_head = n; }
+    g_park_tail = NULL; g_park_len = 0; g_park_recs = 0;
+    free(g_park_spare); g_park_spare = NULL;   /* the sale's reserve is the session's; the next one refills it */
+#if APICLIENT_DEV
+    g_park_stream_digest = 0xcbf29ce484222325ull;
+#endif
     free(g_park_json); g_park_json = NULL;   /* the transport is a render of the records; it dies with them */
     /* THE ORDINAL COUNTER GOES BACK TO ZERO WITH THE DOCUMENT IT NUMBERED, and the names it handed out died
        with the segments (decide.c's `park_id`), which flow_registry_free has just asserted are all gone. */

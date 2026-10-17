@@ -666,7 +666,7 @@ void cold_park_flow(Flow *f);
    residue, and the RAM comes back when that instance is torn down. Called with no flow switched in, which the
    primitive asserts per flow. It is deliberately not the TAIL SELECTION a lone over-budget engine needs — which
    flows go and how far down the frontier to go — see the OOM CHECK in engine.c's flow-compile path.
-   A FRONTIER WITH NO MEMBERS WRITES NO BYTES AT ALL, which is the positive answer cold_park_recipes describes
+   A FRONTIER WITH NO MEMBERS WRITES NO BYTES AT ALL, which is the positive answer cold_park_write describes
    and not a refusal. The host decides WHEN it wants the residue and the engine decides what the residue IS, so
    a park asked for over an empty registry is ANSWERED rather than rejected — and an engine reaches that state
    honestly: a peer holding a reference into this document keeps the session live past its own last flow, and
@@ -685,8 +685,15 @@ void cold_park(void);
    language anywhere in the system was `extension/bridge.js` joining the array it had stored. No process held
    both ends, and the entire read half — the 's'/'c' rebuilds, park_unhex, solve_resume_candidate — was
    therefore unreachable from any host without an IndexedDB. A host that can store a string (the fixture stores
-   a file) stores this and hands it back to engine_sched_begin unchanged. Borrowed; freed by cold_free. */
-const char *cold_park_recipes(void);
+   a file) stores these bytes and hands them back to engine_sched_begin unchanged.
+   Written to `sink` in order, a block at a time (cold.c holds the document as a chain of blocks so it can grow
+   at the RAM floor without copying); the concatenation is the document, and `sink` may not write to it. */
+typedef void ColdParkSink(const char *bytes, size_t len, void *opaque);
+void cold_park_write(ColdParkSink *sink, void *opaque);
+size_t cold_park_bytes(void);   /* …the concatenation's length */
+/* Hold the one spare block a sale at the RAM floor opens the document's next block from: called as a session
+   begins and after each sale frees memory, with a plain allocation that may fail and is asked again later. */
+void cold_park_spare_refill(void);
 
 /* HOW MANY RECORDS ARE IN IT — the writer's own count, not a second parse of its output. A host that wants to
    say what it stored asks; a host that counted the ';' itself would be a second speller of the grammar. */
