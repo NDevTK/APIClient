@@ -102,9 +102,12 @@ const PROFILE_DIR = process.env.HARNESS_PROFILE
 const LOCK_FILE = process.env.HARNESS_LOCK
   ? path.resolve(process.env.HARNESS_LOCK) : path.join(__dirname, "harness.lock");
 const DEFAULT_PORT = Number(process.env.HARNESS_PORT || 9337);
-/* WHERE A WORLD-READABLE BROWSER LIVES when the resolved one sits under a home directory nobody else can
-   traverse. One constant so the guard below and the message it prints cannot disagree about the path. */
-const SHARED_CHROME = process.env.HARNESS_SHARED_CHROME || "/opt/chrome-for-testing/chrome";
+/* The browser this harness drives: Chrome for Testing 155.0.8059.84, a Stable that holds chrome.publicSuffix
+   (Chrome 153 and later), installed world-readable for the unprivileged account by
+   testing/chrome_for_testing_setup.sh, which reads this version from here. The launch reads the binary's own
+   `--version` and refuses another; HARNESS_CHROME names a different binary, whose version is printed. */
+const CHROME_FOR_TESTING_VERSION = "155.0.8059.84";
+const CHROME_FOR_TESTING = `/opt/chrome-for-testing-${CHROME_FOR_TESTING_VERSION}/chrome`;
 
 function log(...args) { console.log(...args); }
 function err(...args) { console.error(...args); }
@@ -324,7 +327,6 @@ async function cmdRestart(args, keepIdb) {
    failure to arrange one THROWS, naming the single command that fixes it. A harness that quietly downgrades
    its own isolation teaches the next reader that the isolation was never load-bearing. */
 function resolveUnprivileged(chromePath) {
-  /* `chromePath` is reassigned below when a readable copy is used, so the caller must take the resolved one. */
   if (typeof process.getuid !== "function" || process.getuid() !== 0) return null;   // already unprivileged
   if (process.env.HARNESS_ALLOW_NO_SANDBOX === "1") {
     log("WARNING: HARNESS_ALLOW_NO_SANDBOX=1 — Chrome will run as root with --no-sandbox.");
@@ -353,22 +355,10 @@ function resolveUnprivileged(chromePath) {
     try { execSync(`su -s /bin/sh ${name} -c 'test -x ${JSON.stringify(p)}'`, { stdio: "ignore" }); return true; }
     catch { return false; }
   };
-  /* AND IT LOOKS FOR ONE BEFORE IT REFUSES. The first version of this guard only rejected, which is the right
-     default and the wrong whole behaviour: it made every invocation carry HARNESS_CHROME by hand, and a check
-     that must be worked around on every run is one somebody eventually works around permanently — with
-     HARNESS_ALLOW_NO_SANDBOX, which is the outcome this guard exists to prevent. So the conventional readable
-     location is TRIED, and using it is announced rather than silent, because a harness that quietly runs a
-     different binary than the one puppeteer resolved is its own kind of lie. */
-  if (!canExec(chromePath) && canExec(SHARED_CHROME)) {
-    log(`${chromePath} is not reachable by ${name}; using the readable copy at ${SHARED_CHROME}`);
-    chromePath = SHARED_CHROME;
-  }
   if (!canExec(chromePath)) {
     throw new Error(
-      `\`${name}\` cannot execute ${chromePath} — puppeteer installs under root's home, which is not\n` +
-      `  traversable by anyone else, and no readable copy was found at ${SHARED_CHROME}. Make one:\n` +
-      `      cp -r "$(dirname ${JSON.stringify(chromePath)})" /opt/chrome-for-testing && chmod -R a+rX /opt/chrome-for-testing\n` +
-      `      HARNESS_CHROME=/opt/chrome-for-testing/$(basename ${JSON.stringify(chromePath)}) node testing/harness.js restart`);
+      `\`${name}\` cannot execute ${chromePath}. Install the harness's Chrome for Testing world-readable:\n` +
+      `      bash testing/chrome_for_testing_setup.sh`);
   }
   try { fs.mkdirSync(PROFILE_DIR, { recursive: true }); execSync(`chown -R ${uid}:${gid} ${JSON.stringify(PROFILE_DIR)}`); }
   catch (e) { throw new Error(`could not hand ${PROFILE_DIR} to ${name}: ${e.message}`); }
@@ -456,7 +446,7 @@ function resolveUnprivileged(chromePath) {
       `  which is why this refuses rather than repairing.`);
   }
   log(`dropping privileges to ${name} (uid ${uid}) so Chrome keeps its sandbox`);
-  return { uid, gid, name, chromePath, home };
+  return { uid, gid, name, home };
 }
 
 /* AND THE DIRECTORY CHROME IS HANDED MUST BE REACHABLE BY THE UID THAT WILL RUN IT, WHICH IS A DIFFERENT
@@ -884,7 +874,13 @@ async function cmdStart(args) {
   // Detached process group so the launching shell exiting doesn't
   // take Chrome with it. stdio:'ignore' severs pipes; unref() means
   // node can exit without waiting on Chrome.
-  let chromePath = process.env.HARNESS_CHROME || await puppeteer.executablePath();
+  const chromePath = process.env.HARNESS_CHROME || CHROME_FOR_TESTING;
+  if (!fs.existsSync(chromePath))
+    throw new Error(`${chromePath} does not exist. Install it with: bash testing/chrome_for_testing_setup.sh`);
+  const chromeVersion = execSync(`${JSON.stringify(chromePath)} --version`).toString().trim();
+  if (!process.env.HARNESS_CHROME && !chromeVersion.endsWith(" " + CHROME_FOR_TESTING_VERSION))
+    throw new Error(`${chromePath} reports \`${chromeVersion}\`, not Chrome for Testing ${CHROME_FOR_TESTING_VERSION}`);
+  log(`browser: ${chromeVersion} (${chromePath})`);
   /* THE SANDBOX STAYS ON, AND ROOT IS THE THING THAT GETS FIXED — not the sandbox.
      This block used to add `--no-sandbox` whenever the process was root, with the argument that a container
      with no other user is where the harness runs unattended. That argument is wrong for THIS harness in a way
@@ -898,7 +894,6 @@ async function cmdStart(args) {
      `--no-sandbox` renderer has `Seccomp: 0`, `NoNewPrivs: 0` and init's namespace. That is the difference the
      flag was quietly making. */
   const dropTo = resolveUnprivileged(chromePath);
-  if (dropTo && dropTo.chromePath) chromePath = dropTo.chromePath;
   /* AND THE LAST LAUNCH INPUT NOBODY ASKED THE TARGET UID ABOUT. `dropTo` is known exactly here and
      EXT_DIR goes onto the command line on the next line, so this is the origin of the claim that Chrome
      can load what it is being handed. */
