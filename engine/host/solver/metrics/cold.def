@@ -280,11 +280,12 @@ METRIC(slice_us, "sliceUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
 METRIC(sched_us, "schedUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
 METRIC(slice_overruns, "sliceOverruns", LIFETIME, "turn", PROCESS, "solver/engine.c", INT)
 METRIC(step_unit_runs, "stepUnitRuns", LIFETIME, "step", PROCESS, "solver/engine.c", OBJECT)
-/* The thread work the event loop's clock does not see (core/timing/thread_work.h): per kind, the outermost
-   spans, the bytes they consumed and their thread CPU, beside the opcode units the clock banked and the units it
-   discarded. Read the CPU against `stepUs` on the same census; a kind's CPU per byte over the loop's CPU per
-   opcode is the conversion its charge would take. */
-METRIC(tw_opcode_units, "twOpcodeUnits", LIFETIME, "unit", PROCESS, "core/timing/event_loop.c", INT)
+/* The thread work outside the interpreter's dispatch (core/timing/thread_work.h): per kind, the outermost
+   spans, the bytes they consumed and their thread CPU, beside every unit the clock banked, the units the host
+   charges retired and the units discarded. A kind's CPU per byte over the loop's CPU per opcode is the rate its
+   charge takes (thread_work.h states the calibration). */
+METRIC(tw_banked_units, "twBankedUnits", LIFETIME, "unit", PROCESS, "core/timing/event_loop.c", INT)
+METRIC(tw_charged_units, "twChargedUnits", LIFETIME, "unit", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_discarded_units, "twDiscardedUnits", LIFETIME, "unit", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_script_parse_bytes_all, "twScriptParseBytesAll", LIFETIME, "byte", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_script_parse_spans, "twScriptParseSpans", LIFETIME, "span", PROCESS, "core/timing/thread_work.c", INT)

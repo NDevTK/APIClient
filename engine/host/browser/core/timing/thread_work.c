@@ -10,6 +10,7 @@ static long     g_spans[THREAD_WORK_N];
 static uint64_t g_bytes[THREAD_WORK_N];
 static int64_t  g_cpu_us[THREAD_WORK_N];
 static uint64_t g_discarded;
+static uint64_t g_charged;
 static int      g_depth;
 
 void thread_work_begin(ThreadWorkSpan *s)
@@ -43,6 +44,7 @@ void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
     DCHECK(kind != THREAD_WORK_SCRIPT_PARSE && kind < THREAD_WORK_N,
            "a charge named script parse or no kind — quickjs's tokenizer charges script parse itself");
     units = bytes * PER_KIB[kind] / 1024;
+    g_charged += units;
     if (units != 0) JS_FlowRetireWork(units);
 }
 
@@ -53,7 +55,8 @@ void thread_work_census(ThreadWorkCensus *out)
     int k;
 
     DCHECK(out != NULL, "the thread-work census was asked into nowhere");
-    out->opcode_units = event_loop_work_banked_life();
+    out->banked_units = event_loop_work_banked_life();
+    out->charged_units = g_charged;
     out->discarded_units = g_discarded;
     out->script_parse_bytes_all = JS_FlowParseBytesLife();
     for (k = 0; k < THREAD_WORK_N; k++) {

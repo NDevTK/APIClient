@@ -1489,7 +1489,8 @@ char *result_cold_json(void) {
         ThreadWorkCensus tw;
 
         thread_work_census(&tw);
-        METRIC_SET(tw_opcode_units, (long long)tw.opcode_units);
+        METRIC_SET(tw_banked_units, (long long)tw.banked_units);
+        METRIC_SET(tw_charged_units, (long long)tw.charged_units);
         METRIC_SET(tw_discarded_units, (long long)tw.discarded_units);
         METRIC_SET(tw_script_parse_bytes_all, (long long)tw.script_parse_bytes_all);
         METRIC_SET(tw_script_parse_spans, tw.spans[THREAD_WORK_SCRIPT_PARSE]);

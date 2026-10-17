@@ -1,11 +1,10 @@
-/* WORK THE THREAD DOES OUTSIDE THE INTERPRETER'S DISPATCH — the spans the event loop's clock (event_loop.h's
- * work mover) does not see because they retire no opcode: decoding bytes, tokenizing HTML, parsing CSS, and
- * parsing script (the last counted inside quickjs, JS_FlowParseBytesLife).
+/* Work the thread does outside the interpreter's dispatch, which retires no opcode: decoding bytes, tokenizing
+ * HTML, parsing CSS, and parsing script (the last counted and charged inside quickjs, JS_FlowParseBytesLife).
  *
  * A census: each span is counted with the bytes it consumed and the thread CPU it took (quantum_thread_us),
- * beside the opcode work the clock banked and the work it discarded, so the share of a run's thread time the
- * clock does not charge is readable against `stepUs`. CPU is a report here and never a clock input: the clock
- * must be a function of the flow's path.
+ * beside all the work the clock (event_loop.h's work mover) banked, the host charges retired, and the work
+ * discarded, so a rate can be re-read against `stepUs`. CPU is a report here and never a clock input: the
+ * clock must be a function of the flow's path.
  *
  * The charge. Each kind's bytes move the clock in the opcode unit, at a fixed rate: what one byte of the kind
  * costs this engine's thread, over what one retired opcode costs it, both read off this census at one build
@@ -54,7 +53,9 @@ void thread_work_note_discarded(uint64_t units);
 
 /* The census, copied out. */
 typedef struct {
-    uint64_t opcode_units, discarded_units, script_parse_bytes_all;
+    uint64_t banked_units;      /* every unit the clock banked: opcodes, script parse and the host charges */
+    uint64_t charged_units;     /* units thread_work_charge retired, banked or later discarded */
+    uint64_t discarded_units, script_parse_bytes_all;
     long spans[THREAD_WORK_N];
     uint64_t bytes[THREAD_WORK_N];
     int64_t cpu_us[THREAD_WORK_N];
