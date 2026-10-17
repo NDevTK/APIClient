@@ -662,13 +662,26 @@ static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
     css_px_diff_range(a, b, &lo, &hi);
     if (lo >= 0.0) win = want_hi ? &a : &b;
     else if (hi <= 0.0) win = want_hi ? &b : &a;
-    /* Undecided, so the winner moves with the facts: the result is an opaque function of them, minted as one
-       atom so that every place this one result is carried to can still subtract it. */
+    /* Undecided, so the winner moves with the facts. The result is `lo + max(hi - lo, 0)` (`min` for the
+       smaller), one atom over the operands' DIFFERENCE added to one of them, so moving both operands by one
+       length moves the result by it and leaves the atom alone: two boxes alike but for where they sit compose
+       one atom, and their extents subtract to a constant. `lo` is the operand the difference's leading term
+       orders first, a test translation and operand order both leave alone, so max(a, b) and max(b, a) are one
+       form. The example stays the winner's own number. */
     if (win == NULL) {
-        CssPx ab[2] = { a, b };
+        CssPx d = css_px_sub(a, b), base, delta, x;
+        bool a_first;
 
         DCHECK(out.env != CSS_ENV_NONE, "an extreme of two determined lengths was left undecided");
-        css_px_form_atom(&out, want_hi ? "max" : "min", ab, 2);
+        DCHECK(d.env != CSS_ENV_NONE && d.form->known && d.form->n > 0,
+               "an extreme was left undecided over operands whose difference is a constant — the range of a "
+               "constant decides it");
+        a_first = d.form->m[0].k < 0.0;
+        base = a_first ? a : b;
+        delta = css_px_sub(a_first ? b : a, base);
+        x = css_px_atom(want_hi ? "max(_, 0)" : "min(_, 0)", &delta, 1,
+                        want_hi ? fmax(delta.px, 0.0) : fmin(delta.px, 0.0));
+        out.form = css_px_add(base, x).form;
         return out;
     }
     tol = 1e-9 * fmax(1.0, fmax(fabs(a.px), fabs(b.px)));
