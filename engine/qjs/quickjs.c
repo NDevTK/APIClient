@@ -53631,6 +53631,11 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
         /* TERMINAL, like CONT_OP_KEYED: the reference it resolves belongs to the OP_with_* opcode, whose operands
            are on the frame's own stack, which the frame clone carries. The record has no requester field. */
         return NULL;
+    case CONT_ACQUIRE_GET:
+        /* GetIterator step 3's @@iterator read, parked under a getter or a Proxy trap: the consumer whose
+           acquisition it is waits on it */
+        *out_kind = ((JSAcquireGet *)st)->consumer_kind;
+        return ((JSAcquireGet *)st)->consumer;
     case CONT_SETMAP_CTOR: case CONT_TA_TARGET: {
         /* a construct sequence: whoever asked for the construct, which its consume machine records */
         JSIterConsume *cs = ctor_seq_consume(st, kind);
@@ -53642,7 +53647,7 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
         break;
     /* No arm yet: a kind that has never been asked for its requester by a fork. */
     case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
-    case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF: case CONT_ACQUIRE_GET:
+    case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
     case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
@@ -53705,6 +53710,8 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         JSIterConsume *cs = ctor_seq_consume(st, kind);
         cs->outer = outer; cs->outer_kind = outer_kind; return;
     }
+    case CONT_ACQUIRE_GET:
+        ((JSAcquireGet *)st)->consumer = outer; ((JSAcquireGet *)st)->consumer_kind = outer_kind; return;
     /* Terminal: cont_outer_get answers no link for these, so there is nothing to write back. */
     case CONT_OP_KEYED: case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: case CONT_PROMISE_ALL:
     case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
@@ -53713,7 +53720,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         break;
     /* No arm yet, as in cont_outer_get. */
     case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
-    case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF: case CONT_ACQUIRE_GET:
+    case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
     case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
@@ -53813,12 +53820,19 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         /* a construct sequence under one of its reads — a new.target `prototype` getter or Proxy trap, or a
            subclass's `add`/`set` accessor — branching on unknown input */
         return js_ctor_seq_clone(ctx, st, kind);
+    case CONT_ACQUIRE_GET: {
+        /* the record is its consumer link (bound by the walk) and a borrow of the consumer's own operand, which
+           the sibling's cloned operand stack holds too */
+        JSAcquireGet *na = js_mallocz(ctx, sizeof(*na));
+        if (na) *na = *(const JSAcquireGet *)st;
+        return na;
+    }
     /* No arm here. A kind that is only ever a frame's own cont_state (CONT_ARG_LIST_YIELD's anchor, say) is
        cloned by clone_deep_flow's arm for it; any other has not yet been asked to copy a link. */
     case CONT_ARG_LIST_YIELD: case CONT_NONE: case CONT_AGEN_CREATE: case CONT_CONSTRUCT: case CONT_SETTER:
     case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_EXEC:
     case CONT_PROMISE_TRY: case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
-    case CONT_ACQUIRE_GET: case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE:
+    case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE:
     case CONT_ITER_CLOSE_CALL: case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE:
     case CONT_FOROF_GET: case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP:
     case CONT_PROMISE_CAP: case CONT_PROMISE_TRY_SETTLE:
@@ -54832,6 +54846,15 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         js_free_rt(rt, st);
         return;
     }
+    case CONT_ACQUIRE_GET: {
+        /* the acquisition can never finish, so the consumer waiting on it goes with it */
+        JSAcquireGet *ag = st;
+        void *co = ag->consumer;
+        uint8_t ck = ag->consumer_kind;
+        js_free_rt(rt, ag);
+        tramp_cont_free(ctx, co, ck);
+        return;
+    }
     case CONT_SETMAP_CTOR:
         /* the sequence and its consume machine, whose end releases the construct's requester exactly once */
         js_setmap_ctor_free(ctx, (JSSetMapCtor *)st);
@@ -54924,7 +54947,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
     /* No arm yet: a record no released flow has yet held. A kind whose state is NULL never reaches the switch.
        CONT_IMPORT is reached as the TOPRIM arm's parked capability, which that arm releases itself. */
     case CONT_IMPORT: case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
-    case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF: case CONT_ACQUIRE_GET:
+    case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
     case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
