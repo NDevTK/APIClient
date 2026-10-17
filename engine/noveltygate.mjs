@@ -9,7 +9,8 @@
  *   B-stale     A's lines under another spelling: refused whole.   B-late  handed in round 1: later mints unpaid.
  * Drives of uncalled code, over C and D of https://shop.test sharing /bundle.js, D adding its own function:
  *   C, D-alone  handed nothing: every drive reads a product count of 0.
- *   D-known     C's identities (positive control): the bundle's drives read C's count, D's own read 0, all run.
+ *   D-known     C's identities (positive control): the bundle's drives read C's count, rank below their own
+ *               visits unlowered and below D's own code seeded at the same unit count; all still run.
  *   D-invented  invented drive lines (negative control): no drive is lowered.
  * Exit status is 0 only when every row holds; each row prints what it read.
  */
@@ -193,10 +194,15 @@ const shopKnown = ZONE.noveltyOwed(SHOP, { spelling: null, n: 0 });
   const D1 = await run('d-known', SHOP + '/d', DOC_D, shopKnown, null);
   const bundled = dlist(D1).filter((d) => cDrives.has(d.identity));
   const own = dlist(D1).filter((d) => !cDrives.has(d.identity));
+  /* Two drives are seeded at two completed-unit counts, and the optimism already differs by those; the rank
+     claim is therefore made where the visits agree: a drive of a body the product explored ranks below a drive
+     of one it did not, seeded at the same count. */
+  const pairs = bundled.flatMap((b) => own.filter((o) => o.visits === b.visits).map((o) => [b, o]));
   row('D-known', bundled.length > 0 && own.length > 0 && bundled.every((d) => d.seen >= 1) &&
-      own.every((d) => d.seen === 0) && Math.max(...bundled.map(opt)) < Math.min(...own.map(opt)) &&
-      hasEndpoint(D1, '/api/shared') && hasEndpoint(D1, '/api/only'),
-      dcensus(D1) + ` — bundle drive optimism ${bundled.map(opt).join('/')} against ${own.map(opt).join('/')}`);
+      own.every((d) => d.seen === 0) && bundled.every((d) => opt(d) < 1 / (1 + d.visits)) &&
+      pairs.every(([b, o]) => opt(b) < opt(o)) && hasEndpoint(D1, '/api/shared') && hasEndpoint(D1, '/api/only'),
+      dcensus(D1) + ` — ${pairs.length} equal-visit pair(s): ` +
+      pairs.map(([b, o]) => `${opt(b).toFixed(4)} < ${opt(o).toFixed(4)}`).join(', '));
 }
 {
   const invented = new Set();
