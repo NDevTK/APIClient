@@ -141,11 +141,8 @@ void novelty_credit(NoveltyKind kind, int novel) {
     }
 }
 
-unsigned novelty_drive_note_at(NoveltyId id, int64_t visits, const char *file, int line) {
+unsigned novelty_drive_note(NoveltyId id, int64_t visits) {
     NoveltySlot *s = slot_claim(id, NOVELTY_DRIVE);
-    DCHECKF(s->own_n == 0,
-            "%s:%d filed a drive of a body this instance already drove — JS_OrphanTakeOne consumes a body's "
-            "`entered` bit, so a second drive of one identity is two bodies sharing a key", file, line);
     if (!(s->flags & SLOT_OWN)) {
         s->flags |= SLOT_OWN;
         g_own_n++;

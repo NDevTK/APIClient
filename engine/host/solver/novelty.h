@@ -65,11 +65,12 @@ void novelty_credit(NoveltyKind kind, int novel);
 double novelty_landed_value(void);
 
 /* Files a drive of uncalled code under `id` (NOVELTY_DRIVE) and answers how many drives of it the product had
-   recorded before this one: the count the drive's optimism term reads (solver/flow.h's `orphan_seen`). A body is
-   taken once per runtime, so this instance filing one identity twice is asserted at the caller's `file`/`line`.
-   `visits` is the drive's completed-unit count at its seed, kept for the census beside the count. */
-unsigned novelty_drive_note_at(NoveltyId id, int64_t visits, const char *file, int line);
-#define novelty_drive_note(id, visits) novelty_drive_note_at((id), (visits), __FILE__, __LINE__)
+   recorded before this one: the count the drive's optimism term reads (solver/flow.h's `orphan_seen`). One
+   identity may be filed more than once: it names a script's content and a position, and each compile of the
+   same bytes (a chunk each flow fetches and runs) makes a body of its own that the take hands over separately.
+   The set's count column carries how many. `visits` is the drive's completed-unit count at its seed, kept for
+   the census beside the count. */
+unsigned novelty_drive_note(NoveltyId id, int64_t visits);
 
 /* The zone's known identities, as serialized typed text: the line NOVELTY_SPELLING, then one line per identity,
    `<kind token> <32 lowercase hex digits>`, and for a counted kind ` <count>` after it, newline-terminated; a
