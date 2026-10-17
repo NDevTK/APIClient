@@ -86264,6 +86264,7 @@ typedef struct JSInstanceOf {
     JSValue val;        /* O — the value, then the chain link being walked (owned) */
     JSValue proto;      /* P, from step 4 (owned) */
     JSValue handler;    /* @@hasInstance, held across its call (owned) */
+    JSValue test;       /* the handler's result while step 3.a's ToBoolean is asked (owned), else JS_UNINITIALIZED */
     JSValue result;     /* DONE (owned) */
     uint8_t mode;       /* the CURRENT entry: a bound target restarts at the operator whichever entry began */
 } JSInstanceOf;
@@ -86319,13 +86320,16 @@ static int js_instanceof_walk(JSContext *ctx, JSInstanceOf *s)
     return 1;
 }
 
+/* step_tobool_run's `op` for 13.10.2 InstanceofOperator step 3.a. */
+#define IO_TEST_OP "InstanceofOperator step 3.a, ToBoolean of the @@hasInstance result"
+
 static int js_instanceof_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSInstanceOf *s = st;
 
     if (s->hdr.stage == IO_ENTRY) {
         JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
-        s->result = JS_UNDEFINED; s->proto = JS_UNDEFINED; s->handler = JS_UNDEFINED;
+        s->result = JS_UNDEFINED; s->proto = JS_UNDEFINED; s->handler = JS_UNDEFINED; s->test = JS_UNINITIALIZED;
         s->mode = (uint8_t)s->hdr.arg;
         if (s->mode == INSTOF_ORDINARY) {
             /* Function.prototype[@@hasInstance](V): the receiver is C and the argument is O. */
@@ -86369,8 +86373,25 @@ static int js_instanceof_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
             return 3;
         }
         if (s->hdr.stage == IO_CALL_GOT) {
-            if (JS_IsException(cb_result)) return -1;
-            s->result = js_bool(JS_ToBoolFree(ctx, cb_result));
+            /* Step 3.a's ToBoolean over unknown input is a fork through the branch seam: §7.1.2 answers true
+               for every concolic. The handler's result is held on the state because the ask suspends and a
+               sibling re-enters here with undefined placed. */
+            int b, r;
+
+            if (JS_IsUninitialized(s->test)) {
+                if (JS_IsException(cb_result)) return -1;
+                s->test = cb_result;
+            } else {
+                DCHECK(JS_IsUndefined(cb_result),
+                       "an instanceof coercion was re-entered with a value placed while its operand is held");
+                JS_FreeValue(ctx, cb_result);
+            }
+            cb_result = JS_UNDEFINED;
+            r = step_tobool_run(ctx, &s->hdr, s->test, IO_TEST_OP, &b);
+            if (r) return r < 0 ? -1 : r;
+            JS_FreeValue(ctx, s->test);
+            s->test = JS_UNINITIALIZED;
+            s->result = js_bool(b);
             return 0;
         }
         if (s->hdr.stage == IO_ORDINARY) {
@@ -86482,6 +86503,7 @@ static void js_instanceof_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->val);
     v->val(ctx, &s->proto);
     v->val(ctx, &s->handler);
+    v->val(ctx, &s->test);
 }
 
 static JSValue js_instanceof_fini(JSContext *ctx, void *st, bool take_result)

@@ -1382,25 +1382,14 @@ JS_EXTERN bool step_fork_pending(const JSStepHdr *h);
  * Returns JS_STEP_FORK (the caller returns it; the state must be complete-or-empty, since the sibling's
  * snapshot is taken there), or 0 once *pres is 0 or 1.
  *
- * RESIDUAL — WHAT IS NOT COVERED. The array-callback walk (every/some/filter and their %TypedArray% twins) is
- * the only consumer. Every other C body that coerces a value the PAGE produced still answers from §7.1.2's own
- * steps and therefore takes `true` for unknown input: the find family (Array find/findIndex/findLast/
- * findLastIndex and their four %TypedArray% twins — EIGHT builtins sharing one machine, which is the number
- * that matters, since routing the machine covers all of them), the Iterator helper `filter` predicate, the
- * eager iterator terminals (`some`/`every`/`find` over an iterator), and the internal-method booleans a Proxy
- * trap returns ([[Has]], [[Set]], [[DefineOwnProperty]], [[PreventExtensions]], [[SetPrototypeOf]],
- * [[IsExtensible]]).
- *
- * WHAT THE NEXT DIFF BUILDS. The find machine alone is routable as this one was: its state begins with a
- * JSStepHdr, so it needs a held-operand field of its own (JSArrayEvery.test's shape and sentinel) and its
- * predicate-test branch calling this. The two ITERATOR families are NOT — their records carry no JSStepHdr at
- * all, so they have no fork seam to reach and the diff that covers them is the one that gives them one; naming
- * them here without that distinction would send the next reader to add a call where there is no header to pass.
- *
- * HOW ITS ABSENCE WOULD SHOW. `[{}].find(x => x.isAdmin)` over unknown input answers with the element and
- * forks nothing, where the same predicate written as `for (…) if (x.isAdmin)` forks two worlds — one builtin
- * and its hand-written equivalent disagreeing about the same program, which is exactly the divergence the
- * solver differential is built to fail on. */
+ * The consumers are the array-callback walk, the find machine, the sort's order question and
+ * InstanceofOperator's step 3.a. Named residual. Not covered: the Iterator helper `filter` predicate, the eager
+ * iterator terminals (`some`/`every`/`find` over an iterator) and the internal-method booleans a Proxy trap
+ * returns ([[Has]], [[Set]], [[DefineOwnProperty]], [[PreventExtensions]], [[SetPrototypeOf]], [[IsExtensible]])
+ * still answer from §7.1.2's own steps, so unknown input takes `true`. Next diff: a JSStepHdr on the iterator
+ * helper and terminal records, which carry none and so have no fork seam, then their predicate tests calling
+ * this. How its absence shows: `iter.filter(x => x.isAdmin)` over unknown input forks nothing where the same
+ * predicate written as `for (…) if (x.isAdmin)` forks two worlds. */
 JS_EXTERN int step_tobool_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, const char *op, int *pres);
 
 /* ToString AS A REQUEST — the coercion nearly every Web IDL argument actually is. `DOMString type`,
