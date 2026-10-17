@@ -108,7 +108,8 @@ typedef struct {
     uint8_t *odd_ri;
 } LineBreakScan;
 
-/* The effective class of every character, with LB9's combining marks marked LB_IGNORED and LB10 applied.
+/* The effective class of character `i`, scanned left to right with `*lastp` the last character LB9 did not
+   ignore, with LB9's combining marks marked LB_IGNORED and LB10 applied.
      LB9 "Treat X (CM | ZWJ)* as if it were X. … where X is any line break class except BK, CR, LF, NL, SP, or
        ZW." So a CM or ZWJ takes its base's class and is then ignored by every later rule.
      LB10 "Treat any remaining CM or ZWJ as if it had the properties of U+0041 A LATIN CAPITAL LETTER A, that
@@ -119,40 +120,36 @@ typedef struct {
    gives that; skipping left over the whole run to SP would make both AL.
    An ignored mark inherits its base's three scan answers, per LB9 ("treat it as if it has the line breaking
    class of the base character in all of the following rules"); no rule reads them there. */
-static void lb_scan(const uint32_t *cps, size_t count, LineBreakScan *s)
+static void lb_scan_at(const uint32_t *cps, size_t i, const LineBreakScan *s, ptrdiff_t *lastp)
 {
-    ptrdiff_t last = -1;
-    size_t i;
+    ptrdiff_t last = *lastp;
+    LineBreakClass raw = line_break_class_of(cps[i]);
+    uint8_t c;
 
-    for (i = 0; i < count; i++) {
-        LineBreakClass raw = line_break_class_of(cps[i]);
-        uint8_t c;
+    if (raw == LB_CLASS_CM || raw == LB_CLASS_ZWJ) {
+        uint8_t base = last >= 0 ? s->cls[last] : LB_NONE;
+        bool absorbs = base != LB_NONE && base != LB_CLASS_BK && base != LB_CLASS_CR &&
+                       base != LB_CLASS_LF && base != LB_CLASS_NL && base != LB_CLASS_SP &&
+                       base != LB_CLASS_ZW;
 
-        if (raw == LB_CLASS_CM || raw == LB_CLASS_ZWJ) {
-            uint8_t base = last >= 0 ? s->cls[last] : LB_NONE;
-            bool absorbs = base != LB_NONE && base != LB_CLASS_BK && base != LB_CLASS_CR &&
-                           base != LB_CLASS_LF && base != LB_CLASS_NL && base != LB_CLASS_SP &&
-                           base != LB_CLASS_ZW;
-
-            if (absorbs) {
-                s->cls[i] = LB_IGNORED;
-                s->nonspace[i] = s->nonspace[last];
-                s->numeric[i] = s->numeric[last];
-                s->odd_ri[i] = s->odd_ri[last];
-                continue;
-            }
-            c = LB_CLASS_AL;   /* LB10 */
-        } else {
-            c = (uint8_t)raw;
+        if (absorbs) {
+            s->cls[i] = LB_IGNORED;
+            s->nonspace[i] = s->nonspace[last];
+            s->numeric[i] = s->numeric[last];
+            s->odd_ri[i] = s->odd_ri[last];
+            return;
         }
-        s->cls[i] = c;
-        s->nonspace[i] = c == LB_CLASS_SP ? (last >= 0 ? s->nonspace[last] : -1) : (int32_t)i;
-        s->numeric[i] = c == LB_CLASS_NU ? 1u
-                        : ((c == LB_CLASS_SY || c == LB_CLASS_IS) && last >= 0 ? s->numeric[last] : 0u);
-        s->odd_ri[i] = c != LB_CLASS_RI ? 0u
-                       : (last >= 0 && s->cls[last] == LB_CLASS_RI ? (uint8_t)!s->odd_ri[last] : 1u);
-        last = (ptrdiff_t)i;
+        c = LB_CLASS_AL;   /* LB10 */
+    } else {
+        c = (uint8_t)raw;
     }
+    s->cls[i] = c;
+    s->nonspace[i] = c == LB_CLASS_SP ? (last >= 0 ? s->nonspace[last] : -1) : (int32_t)i;
+    s->numeric[i] = c == LB_CLASS_NU ? 1u
+                    : ((c == LB_CLASS_SY || c == LB_CLASS_IS) && last >= 0 ? s->numeric[last] : 0u);
+    s->odd_ri[i] = c != LB_CLASS_RI ? 0u
+                   : (last >= 0 && s->cls[last] == LB_CLASS_RI ? (uint8_t)!s->odd_ri[last] : 1u);
+    *lastp = (ptrdiff_t)i;
 }
 
 /* ---- the neighbours the rules are stated over ---------------------------------------------------------- */
@@ -415,33 +412,70 @@ static LineBreakAction lb_decide(const uint32_t *cps, const LineBreakScan *s, si
     return LINE_BREAK_OPPORTUNITY;
 }
 
-void line_break_actions(const uint32_t *cps, size_t count, LineBreakAction *out)
+void line_break_pass_begin(LineBreakPass *p, const uint32_t *cps, size_t count, LineBreakAction *out)
 {
-    LineBreakScan s;
-    unsigned char *block;
-    size_t i;
-
-    DCHECK(out != NULL, "[UAX14]'s line break actions were asked for with nowhere to write them");
+    DCHECK(p != NULL && out != NULL, "[UAX14]'s line break actions were asked for with nowhere to write them");
     DCHECK(cps != NULL || count == 0, "a non-empty character sequence was described with a NULL pointer");
+    p->cps = cps;
+    p->count = count;
+    p->out = out;
+    p->block = NULL;
+    p->last = -1;
+    p->at = 0;
+    p->scanned = false;
+    p->done = false;
     /* LB2 `sot ×` — never break at the start of text. It is applied before LB3, so an empty sequence's one
        position is this and not eot's mandatory break. */
     out[0] = LINE_BREAK_PROHIBITED;
-    if (count == 0) return;
+    if (count == 0) { p->done = true; return; }
     DCHECK(count <= 0x7FFFFFFFu, "an inline formatting context of more than two billion characters was handed "
                                  "to [UAX14]. The scan below indexes it with an int32_t, which is a real "
                                  "ceiling and is asserted rather than wrapped");
     /* One allocation carved into four, int32 array first so its alignment is the block's. */
-    block = malloc(count * (sizeof(int32_t) + 3));
-    CHECK(block != NULL, "out of memory scanning [UAX14]'s Line_Break classes for a text run. The allocation is "
-                         "seven bytes per character of one inline formatting context, so a failure here is the "
-                         "physical floor and not a layout that asked for something unreasonable");
-    s.nonspace = (int32_t *)(void *)block;
-    s.cls = block + count * sizeof(int32_t);
-    s.numeric = s.cls + count;
-    s.odd_ri = s.numeric + count;
-    lb_scan(cps, count, &s);
-    for (i = 1; i < count; i++) out[i] = lb_decide(cps, &s, count, i);
+    p->block = malloc(count * (sizeof(int32_t) + 3));
+    CHECK(p->block != NULL, "out of memory scanning [UAX14]'s Line_Break classes for a text run. The allocation "
+                            "is seven bytes per character of one inline formatting context, so a failure here is "
+                            "the physical floor and not a layout that asked for something unreasonable");
+    p->nonspace = (int32_t *)(void *)p->block;
+    p->cls = p->block + count * sizeof(int32_t);
+    p->numeric = p->cls + count;
+    p->odd_ri = p->numeric + count;
+}
+
+bool line_break_pass_done(const LineBreakPass *p)
+{
+    DCHECK(p != NULL, "[UAX14]'s pass was asked about with no pass");
+    return p->done;
+}
+
+/* One scan position, or once every position is scanned, one boundary. Every boundary reads scan answers at and
+   left of it and classes to its right (LB25's three, LB15c's two), so deciding starts only after the scan. */
+void line_break_pass_step(LineBreakPass *p)
+{
+    LineBreakScan s;
+
+    DCHECK(p != NULL && !p->done, "[UAX14]'s pass was stepped after its last boundary");
+    s.cls = p->cls;
+    s.nonspace = p->nonspace;
+    s.numeric = p->numeric;
+    s.odd_ri = p->odd_ri;
+    if (!p->scanned) {
+        lb_scan_at(p->cps, p->at++, &s, &p->last);
+        if (p->at == p->count) { p->scanned = true; p->at = 1; }
+        if (p->at != p->count || !p->scanned) return;
+    } else {
+        p->out[p->at] = lb_decide(p->cps, &s, p->count, p->at);
+        if (++p->at != p->count) return;
+    }
     /* LB3 `! eot` — always break at the end of text. */
-    out[count] = LINE_BREAK_MANDATORY;
-    free(block);
+    p->out[p->count] = LINE_BREAK_MANDATORY;
+    line_break_pass_release(p);
+    p->done = true;
+}
+
+void line_break_pass_release(LineBreakPass *p)
+{
+    DCHECK(p != NULL, "[UAX14]'s pass was released with no pass");
+    free(p->block);
+    p->block = NULL;
 }

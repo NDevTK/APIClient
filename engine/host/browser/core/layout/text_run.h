@@ -184,8 +184,14 @@ typedef struct {
        `font-family` once. Scoped to this measurement, during which no computed value moves. */
     lxb_dom_element_t *faces_of;
     FontFallbackList faces;
-    /* The collection is closed and [UAX14] has run (`text_run_measure_finish_begin`). */
+    /* The collection is closed (`text_run_measure_finish_begin`). */
     bool finished;
+    /* Where the steps after the collection stand: counting the code points, copying them out, [UAX14]'s pass,
+       §5.5's tailoring, then §2.1's walk. `cursor` is the phase's next item or position, `copied` the code
+       points copied so far; text_run.c's `TrPrep` names the phases. */
+    int prep;
+    size_t cursor, copied;
+    LineBreakPass breaks;
     /* §2.1's walk over the code point positions: the next one (from 1), the code points it classifies, and the
        open line of each of the two partitions. `cps` is owned and freed when the walk completes. */
     size_t walk;
@@ -205,6 +211,19 @@ void text_run_measure_init(TextRunMeasure *m);
    adjacent characters). The caller has established that the run generates a box (CSS 2.2 §9.2.2.1 "Anonymous
    inline boxes", answered by core/layout/block_flow.h). */
 void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text);
+
+/* The same node added one code point per `step`, held between them so a caller that rests can stop inside a
+   node; `add_text` is the three run to the node's end. Nothing else may be added to `m` until `done`. */
+typedef struct {
+    lxb_dom_element_t *style;
+    const lxb_char_t *p, *end;              /* the node's bytes still to decode */
+    bool collapse, preserve_breaks, wraps;  /* css-text-3 §3's `white-space`, read once per node */
+} TextRunText;
+
+void text_run_measure_text_begin(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text,
+                                 TextRunText *t);
+bool text_run_measure_text_done(const TextRunText *t);
+void text_run_measure_text_step(TextRunMeasure *m, TextRunText *t);
 
 /* Add one inline box boundary at the current position: css-sizing-3 §2.2's outer-size contribution for one
    side of `style`'s box, in CSS pixels. Called only at the box's two boundaries (§5.5). There is no side
@@ -237,10 +256,10 @@ void text_run_measure_add_forced_break(TextRunMeasure *m, lxb_dom_element_t *sty
 void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, CssPx min_content,
                                  CssPx max_content);
 
-/* Close the collection and run [UAX14] over it; nothing may be added afterwards. css-sizing-3 §2.1's two answers
-   are then a walk over the code point positions, one per `step`, which answers how many items it summed; `done`
-   says the walk is complete and the answers readable. `finish` is the three run to completion. The pass is kept
-   for the fill; each caller owes `text_run_measure_release` exactly once, complete or not. */
+/* Close the collection; nothing may be added afterwards. Each `step` then takes one item or position: the code
+   points copied out, [UAX14]'s pass, §5.5's tailoring, and css-sizing-3 §2.1's walk; it answers how many items
+   it took, and `done` says the two answers are readable. `finish` is the three run to completion. The pass is
+   kept for the fill; each caller owes `text_run_measure_release` exactly once, complete or not. */
 void text_run_measure_finish_begin(TextRunMeasure *m);
 bool text_run_measure_finish_done(const TextRunMeasure *m);
 size_t text_run_measure_finish_step(TextRunMeasure *m);

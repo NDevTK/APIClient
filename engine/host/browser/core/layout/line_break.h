@@ -16,6 +16,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_LINE_BREAK_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_LINE_BREAK_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -35,10 +36,29 @@ typedef enum {
 LineBreakClass line_break_class_of(uint32_t cp);
 
 /* The action at every position of `cps[0 .. count-1]`, written into `out[0 .. count]` (one more entry than
-   characters). `out[i]` is the boundary immediately before `cps[i]`: `out[0]` is LB2 "Never break at the start
-   of text" (prohibited) and `out[count]` is LB3 "Always break at the end of text" (mandatory). For an empty
-   sequence "an empty string would consist of sot followed immediately by eot" and LB2 applies before LB3, so
-   its one position is prohibited. */
-void line_break_actions(const uint32_t *cps, size_t count, LineBreakAction *out);
+   characters), as a pass held between positions so a caller that rests can stop after any one of them.
+   `out[i]` is the boundary immediately before `cps[i]`: `out[0]` is LB2 "Never break at the start of text"
+   (prohibited) and `out[count]` is LB3 "Always break at the end of text" (mandatory). For an empty sequence "an
+   empty string would consist of sot followed immediately by eot" and LB2 applies before LB3, so its one position
+   is prohibited. UAX #14 revision 55 (tr14-55, Unicode 17.0.0, the edition core/layout/line_break_class.h's UCD
+   is) §6 "Line Breaking Algorithm" is stated over the whole sequence, and the pass keeps that: one left-to-right
+   scan position per step, then one decided boundary per step. `begin` writes `out[0]`; the caller keeps `cps`
+   and `out` alive and unmoved until `done` or `release`. */
+typedef struct {
+    const uint32_t *cps;
+    size_t count;
+    LineBreakAction *out;
+    unsigned char *block;   /* owned: the scan's four arrays below, freed when the pass completes or is released */
+    uint8_t *cls, *numeric, *odd_ri;
+    int32_t *nonspace;
+    ptrdiff_t last;         /* the scan's last character LB9 did not ignore, or -1 */
+    size_t at;              /* the next scan position, then the next boundary */
+    bool scanned, done;
+} LineBreakPass;
+
+void line_break_pass_begin(LineBreakPass *p, const uint32_t *cps, size_t count, LineBreakAction *out);
+bool line_break_pass_done(const LineBreakPass *p);
+void line_break_pass_step(LineBreakPass *p);
+void line_break_pass_release(LineBreakPass *p);
 
 #endif

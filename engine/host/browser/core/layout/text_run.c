@@ -153,6 +153,9 @@ void text_run_measure_init(TextRunMeasure *m)
     m->faces_of = NULL;
     m->faces.n = 0;
     m->finished = false;
+    m->prep = 0;
+    m->cursor = 0;
+    m->copied = 0;
     m->walk = 0;
     m->cps = NULL;
     m->answered = false;
@@ -420,14 +423,14 @@ void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, Cs
     m->in_white_space_run = false;
 }
 
-void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text)
+void text_run_measure_text_begin(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text,
+                                 TextRunText *t)
 {
     const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)text;
-    const lxb_char_t *p, *end;
     TrWhiteSpace ws;
 
-    DCHECK(m != NULL && style != NULL && text != NULL,
-           "a text run was measured with no accumulator, no style element or no node");
+    DCHECK(m != NULL && style != NULL && text != NULL && t != NULL,
+           "a text run was measured with no accumulator, no style element, no node or nowhere to hold it");
     DCHECK(!m->finished, "a text node was added to a measurement that has already produced its two answers. "
                          "text_run_measure_finish releases the collection those answers were derived from, so "
                          "this is one accumulator being used for two runs");
@@ -447,53 +450,75 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
        appears would accept a `pre-wrap` run that happens to contain none, a correctness owed to the string
        rather than to this component. The value is a fact about the inline. */
     ws = tr_white_space(style);
+    t->style = style;
+    t->collapse = ws.collapse;
+    t->preserve_breaks = ws.preserve_breaks;
+    t->wraps = ws.wraps;
     /* An empty text node (DOM §4.10's `data` may be the empty string) contributes nothing and leaves the
        collapsing state as it was, so a collapsible run split across it collapses as one run. */
-    if (cd->data.data == NULL || cd->data.length == 0) return;
-    p = cd->data.data;
-    end = p + cd->data.length;
-    while (p < end) {
-        uint32_t cp = (uint32_t)lxb_encoding_decode_valid_utf_8_single(&p, end);
+    t->p = cd->data.data;
+    t->end = cd->data.data == NULL ? NULL : cd->data.data + cd->data.length;
+}
 
-        /* Lexbor's decoder, rather than another hand-rolled UTF-8 walk. It requires well-formed bytes, which a
-           DOM string has: lexbor's parser replaces malformed input and quickjs's encoder emits the three-byte
-           form even for an unpaired surrogate, which decodes to that code point and is stopped by the advance
-           measure's own scalar-value assert. */
-        DCHECK(cp != (uint32_t)LXB_ENCODING_DECODE_ERROR,
-               "a DOM string held bytes that are not well-formed UTF-8. Lexbor's parser replaces malformed "
-               "input and every other writer of character data in this engine goes through quickjs's own "
-               "encoder, so a tree containing one was built by something that did neither");
-        /* §4.1.3: under `pre` and `pre-line` "segment breaks are not collapsible and are instead transformed
-           into a preserved line feed (U+000A)", which §3 makes a forced line break — the same item
-           HTML §15.3.4's `br` adds. Spaces beside it are collapsible under `pre-line`, and §4.1.1 step 1's
-           removal of them is §4.1.2's trimming at the two line edges the break makes. */
-        if (cp == 0x000A && ws.preserve_breaks) {
-            tr_append_forced_break(m, style);
-            continue;
-        }
-        /* §4.1.1's second bullet: under `pre` "any sequence of spaces is treated as a sequence of non-breaking
-           spaces", each one measured, and a tab is preserved for §4.1.2 to position. A CR is "treated
-           identically to spaces (U+0020) in all respects" (§4). None is collapsible, so §4.1.2 trims none. */
-        if (!ws.collapse && tr_is_collapsible_white_space(cp)) {
-            m->in_white_space_run = false;
-            tr_append(m, cp == 0x0009 ? 0x0009 : 0x0020, style, ws.wraps, false);
-            continue;
-        }
-        if (tr_is_collapsible_white_space(cp)) {
-            /* §4.1.1's one surviving space of a run, opened at its first collapsible character and not reopened
-               by the ones after it (step 4: "any collapsible space immediately following another collapsible
-               space … is collapsed to have zero advance width"). It is recorded as U+0020, what every path
-               through §4.1.1 leaves (step 3's tab, §4.1.3's segment break, §4's CR), and carries the inline of
-               the first white-space character, the box css-text-3 §5.5 says controls the break it creates. */
-            if (!m->in_white_space_run) {
-                tr_append(m, 0x0020, style, ws.wraps, true);
-                m->in_white_space_run = true;
-            }
-            continue;
-        }
-        m->in_white_space_run = false;
-        tr_append(m, cp, style, ws.wraps, false);
+bool text_run_measure_text_done(const TextRunText *t)
+{
+    DCHECK(t != NULL, "a text node's progress was asked about with no node held");
+    return t->p == t->end;
+}
+
+void text_run_measure_text_step(TextRunMeasure *m, TextRunText *t)
+{
+    uint32_t cp;
+
+    DCHECK(!m->finished && !text_run_measure_text_done(t),
+           "a text node was stepped past its last character or into a closed measurement");
+    cp = (uint32_t)lxb_encoding_decode_valid_utf_8_single(&t->p, t->end);
+    /* Lexbor's decoder, rather than another hand-rolled UTF-8 walk. It requires well-formed bytes, which a DOM
+       string has: lexbor's parser replaces malformed input and quickjs's encoder emits the three-byte form even
+       for an unpaired surrogate, which decodes to that code point and is stopped by the advance measure's own
+       scalar-value assert. */
+    DCHECK(cp != (uint32_t)LXB_ENCODING_DECODE_ERROR,
+           "a DOM string held bytes that are not well-formed UTF-8. Lexbor's parser replaces malformed "
+           "input and every other writer of character data in this engine goes through quickjs's own "
+           "encoder, so a tree containing one was built by something that did neither");
+    /* §4.1.3: under `pre` and `pre-line` "segment breaks are not collapsible and are instead transformed into a
+       preserved line feed (U+000A)", which §3 makes a forced line break — the same item HTML §15.3.4's `br`
+       adds. Spaces beside it are collapsible under `pre-line`, and §4.1.1 step 1's removal of them is §4.1.2's
+       trimming at the two line edges the break makes. */
+    if (cp == 0x000A && t->preserve_breaks) {
+        tr_append_forced_break(m, t->style);
+        return;
     }
+    /* §4.1.1's second bullet: under `pre` "any sequence of spaces is treated as a sequence of non-breaking
+       spaces", each one measured, and a tab is preserved for §4.1.2 to position. A CR is "treated identically
+       to spaces (U+0020) in all respects" (§4). None is collapsible, so §4.1.2 trims none. */
+    if (!t->collapse && tr_is_collapsible_white_space(cp)) {
+        m->in_white_space_run = false;
+        tr_append(m, cp == 0x0009 ? 0x0009 : 0x0020, t->style, t->wraps, false);
+        return;
+    }
+    if (tr_is_collapsible_white_space(cp)) {
+        /* §4.1.1's one surviving space of a run, opened at its first collapsible character and not reopened by
+           the ones after it (step 4: "any collapsible space immediately following another collapsible space …
+           is collapsed to have zero advance width"). It is recorded as U+0020, what every path through §4.1.1
+           leaves (step 3's tab, §4.1.3's segment break, §4's CR), and carries the inline of the first
+           white-space character, the box css-text-3 §5.5 says controls the break it creates. */
+        if (!m->in_white_space_run) {
+            tr_append(m, 0x0020, t->style, t->wraps, true);
+            m->in_white_space_run = true;
+        }
+        return;
+    }
+    m->in_white_space_run = false;
+    tr_append(m, cp, t->style, t->wraps, false);
+}
+
+void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text)
+{
+    TextRunText t;
+
+    text_run_measure_text_begin(m, style, text, &t);
+    while (!text_run_measure_text_done(&t)) text_run_measure_text_step(m, &t);
 }
 
 /* ---- the measurement ---------------------------------------------------------------------------------------- */
@@ -829,30 +854,27 @@ static size_t tr_item_boundary_of_cp(const size_t *item_of_cp, size_t k)
  * It is a tailoring UAX14 §8 "Customization" provides for, applied to the one array before any partition reads
  * it, so every boundary still has one answer. A mandatory action is never overwritten (§5.5's forced breaks
  * and LB3's eot are stronger than an opportunity); the loop bounds keep eot out and the assert the rest. */
-static void tr_atomic_nbsp_tailoring(TextRunMeasure *m, const uint32_t *cps)
+static void tr_atomic_nbsp_tailor_at(TextRunMeasure *m, size_t i)
 {
-    size_t i;
+    bool left_atomic = m->items[m->item_of_cp[i - 1]].kind == TEXT_RUN_ITEM_ATOMIC;
+    bool right_atomic = m->items[m->item_of_cp[i]].kind == TEXT_RUN_ITEM_ATOMIC;
+    uint32_t other = left_atomic ? m->cps[i] : m->cps[i - 1];
 
-    for (i = 1; i < m->ncps; i++) {
-        bool left_atomic = m->items[m->item_of_cp[i - 1]].kind == TEXT_RUN_ITEM_ATOMIC;
-        bool right_atomic = m->items[m->item_of_cp[i]].kind == TEXT_RUN_ITEM_ATOMIC;
-        uint32_t other = left_atomic ? cps[i] : cps[i - 1];
-
-        if (left_atomic == right_atomic) continue;   /* neither side, or both — no adjacent character */
-        if (other != 0x00A0) continue;
-        DCHECK(line_break_class_of(0x00A0) == LB_CLASS_GL,
-               "U+00A0 NO-BREAK SPACE's [UAX14] Line_Break class is not GL, so LB12 `GL ×` and LB12a "
-               "`[^SP BA HY] × GL` are no longer what suppresses the opportunity beside it and this tailoring "
-               "is correcting a rule that no longer fires. css-text-3 §5.5's exception names this character by "
-               "code point, so the class is the thing that moved and core/layout/line_break_class.c is where");
-        DCHECK(m->actions[i] != LINE_BREAK_MANDATORY,
-               "css-text-3 §5.5's U+00A0 exception was about to downgrade a MANDATORY break to a soft wrap "
-               "opportunity. No rule makes a boundary between U+FFFC (class CB) and U+00A0 (class GL) "
-               "mandatory — LB4, LB5 and LB6 are stated over BK, CR, LF and NL and LB3 over eot, which this "
-               "loop does not reach — so a mandatory action here is the rule chain and this derivation having "
-               "come apart, and taking the opportunity would move a forced line break");
-        m->actions[i] = LINE_BREAK_OPPORTUNITY;
-    }
+    DCHECK(i >= 1 && i < m->ncps, "css-text-3 §5.5's tailoring was asked at a boundary with no character beside it");
+    if (left_atomic == right_atomic) return;   /* neither side, or both — no adjacent character */
+    if (other != 0x00A0) return;
+    DCHECK(line_break_class_of(0x00A0) == LB_CLASS_GL,
+           "U+00A0 NO-BREAK SPACE's [UAX14] Line_Break class is not GL, so LB12 `GL ×` and LB12a "
+           "`[^SP BA HY] × GL` are no longer what suppresses the opportunity beside it and this tailoring "
+           "is correcting a rule that no longer fires. css-text-3 §5.5's exception names this character by "
+           "code point, so the class is the thing that moved and core/layout/line_break_class.c is where");
+    DCHECK(m->actions[i] != LINE_BREAK_MANDATORY,
+           "css-text-3 §5.5's U+00A0 exception was about to downgrade a MANDATORY break to a soft wrap "
+           "opportunity. No rule makes a boundary between U+FFFC (class CB) and U+00A0 (class GL) "
+           "mandatory — LB4, LB5 and LB6 are stated over BK, CR, LF and NL and LB3 over eot, which this "
+           "loop does not reach — so a mandatory action here is the rule chain and this derivation having "
+           "come apart, and taking the opportunity would move a forced line break");
+    m->actions[i] = LINE_BREAK_OPPORTUNITY;
 }
 
 /* css-sizing-3 §2.1 "Auto Box Sizes": "If the ideal max-content size would be smaller than the min-content
@@ -865,65 +887,116 @@ static void tr_floor_max_content(TextRunMeasure *m)
     m->max_content = css_px_max(m->max_content, m->min_content);
 }
 
+/* The phases between the closed collection and §2.1's walk, one item or position per step. */
+typedef enum {
+    TR_PREP_COUNT = 0,   /* the code-point-bearing items, counted */
+    TR_PREP_EDGES,       /* a run of box edges only, summed as its one line */
+    TR_PREP_COPY,        /* the code points and their items, copied out for [UAX14] */
+    TR_PREP_BREAKS,      /* core/layout/line_break.h's pass */
+    TR_PREP_TAILOR,      /* css-text-3 §5.5's U+00A0 tailoring */
+    TR_PREP_WALK         /* §2.1's walk */
+} TrPrep;
+
 void text_run_measure_finish_begin(TextRunMeasure *m)
 {
-    uint32_t *cps;
-    size_t i, k = 0;
-
     DCHECK(m != NULL, "a text run measurement was finished with nothing to finish");
     DCHECK(!m->finished, "a text run measurement was finished twice — the second call would run [UAX14] over a "
                          "collection the first one released");
     m->finished = true;
+    m->prep = TR_PREP_COUNT;
+    m->cursor = 0;
+    m->copied = 0;
     if (m->count == 0) {
         /* An inline formatting context with no items: css-sizing-3 §2.1's two sizes are the size that "fits
            around its contents", and there are none, so both are zero. */
         DCHECK(m->items == NULL, "an empty run holds a collection it never appended to");
         m->answered = true;
-        return;
     }
-    for (i = 0; i < m->count; i++)
-        if (tr_kind_has_code_point(m->items[i].kind)) m->ncps++;
-    if (m->ncps == 0) {
-        /* A run of box edges only (empty inline boxes). [UAX14] is not run: css-text-3 §5.5's "inline box
-           boundaries do not introduce a forced line break or soft wrap opportunity in the flow" leaves nowhere
-           to break, so there is one line and both of css-sizing-3 §2.1's answers are its size, independent of
-           any width. `splits` stays false, which tells the fill's caller it has no available width to derive. */
-        m->max_content = css_px_max(m->max_content, tr_line_size(m, 0, m->count, TEXT_RUN_SIZE_MAX_CONTENT));
-        m->min_content = css_px_max(m->min_content, tr_line_size(m, 0, m->count, TEXT_RUN_SIZE_MIN_CONTENT));
-        tr_floor_max_content(m);
-        m->answered = true;
-        return;
-    }
-    cps = malloc(m->ncps * sizeof *cps);
-    m->actions = malloc((m->ncps + 1) * sizeof *m->actions);
-    m->item_of_cp = malloc(m->ncps * sizeof *m->item_of_cp);
-    CHECK(cps != NULL && m->actions != NULL && m->item_of_cp != NULL,
-          "out of memory running [UAX14]'s line breaking over one inline formatting context. Every allocation "
-          "is one entry per code point of the run — its own text, its forced breaks and its atomic inlines — "
-          "so a failure here is the physical floor");
-    for (i = 0; i < m->count; i++) {
-        if (!tr_kind_has_code_point(m->items[i].kind)) continue;
-        cps[k] = tr_code_point_at(m, i);
-        m->item_of_cp[k] = i;
-        k++;
-    }
-    DCHECK(k == m->ncps,
-           "the second walk over the collection found a different number of CODE-POINT-BEARING items than the "
-           "first one did, so the [UAX14] arrays are sized for a run that is not the one being copied into "
-           "them. Nothing may append between the two walks — they are one statement in one function");
-    line_break_actions(cps, m->ncps, m->actions);
-    /* css-text-3 §5.5's tailoring, applied to the one array before any partition reads it. */
-    tr_atomic_nbsp_tailoring(m, cps);
-    m->cps = cps;
-    m->walk = 1;
-    tr_line_sum_open(&m->max_line, 0);
-    tr_line_sum_open(&m->min_line, 0);
 }
 
 bool text_run_measure_finish_done(const TextRunMeasure *m)
 {
     DCHECK(m != NULL && m->finished, "a text run measurement's walk was asked about before its collection closed");
     return m->answered;
+}
+
+/* One step before §2.1's walk; answers the items it took. */
+static size_t tr_prep_step(TextRunMeasure *m)
+{
+    switch ((TrPrep)m->prep) {
+    case TR_PREP_COUNT:
+        if (tr_kind_has_code_point(m->items[m->cursor].kind)) m->ncps++;
+        if (++m->cursor < m->count) return 1;
+        m->cursor = 0;
+        if (m->ncps == 0) {
+            /* A run of box edges only (empty inline boxes). [UAX14] is not run: css-text-3 §5.5's "inline box
+               boundaries do not introduce a forced line break or soft wrap opportunity in the flow" leaves
+               nowhere to break, so there is one line and both of css-sizing-3 §2.1's answers are its size,
+               independent of any width. `splits` stays false, which tells the fill's caller it has no available
+               width to derive. */
+            tr_line_sum_open(&m->max_line, 0);
+            tr_line_sum_open(&m->min_line, 0);
+            m->prep = TR_PREP_EDGES;
+            return 1;
+        }
+        m->cps = malloc(m->ncps * sizeof *m->cps);
+        m->actions = malloc((m->ncps + 1) * sizeof *m->actions);
+        m->item_of_cp = malloc(m->ncps * sizeof *m->item_of_cp);
+        CHECK(m->cps != NULL && m->actions != NULL && m->item_of_cp != NULL,
+              "out of memory running [UAX14]'s line breaking over one inline formatting context. Every allocation "
+              "is one entry per code point of the run — its own text, its forced breaks and its atomic inlines — "
+              "so a failure here is the physical floor");
+        m->prep = TR_PREP_COPY;
+        return 1;
+    case TR_PREP_EDGES:
+        tr_line_sum_add(m, &m->max_line, TEXT_RUN_SIZE_MAX_CONTENT);
+        tr_line_sum_add(m, &m->min_line, TEXT_RUN_SIZE_MIN_CONTENT);
+        if (++m->cursor < m->count) return 1;
+        m->max_content = css_px_max(m->max_content, m->max_line.size);
+        m->min_content = css_px_max(m->min_content, m->min_line.size);
+        tr_floor_max_content(m);
+        m->answered = true;
+        return 1;
+    case TR_PREP_COPY: {
+        size_t i = m->cursor++;
+
+        if (tr_kind_has_code_point(m->items[i].kind)) {
+            DCHECK(m->copied < m->ncps,
+                   "the copy found more CODE-POINT-BEARING items than the count did, so the [UAX14] arrays are "
+                   "sized for a run that is not the one being copied into them; nothing may append after the "
+                   "collection closes");
+            m->cps[m->copied] = tr_code_point_at(m, i);
+            m->item_of_cp[m->copied] = i;
+            m->copied++;
+        }
+        if (m->cursor < m->count) return 1;
+        DCHECK(m->copied == m->ncps,
+               "the copy found fewer CODE-POINT-BEARING items than the count did, so the [UAX14] arrays are "
+               "sized for a run that is not the one copied into them");
+        line_break_pass_begin(&m->breaks, m->cps, m->ncps, m->actions);
+        m->prep = TR_PREP_BREAKS;
+        return 1;
+    }
+    case TR_PREP_BREAKS:
+        line_break_pass_step(&m->breaks);
+        if (!line_break_pass_done(&m->breaks)) return 1;
+        m->cursor = 1;
+        m->prep = TR_PREP_TAILOR;
+        return 1;
+    case TR_PREP_TAILOR:
+        /* css-text-3 §5.5's tailoring, applied to the one array before any partition reads it. */
+        if (m->cursor < m->ncps) tr_atomic_nbsp_tailor_at(m, m->cursor++);
+        if (m->cursor < m->ncps) return 1;
+        m->walk = 1;
+        tr_line_sum_open(&m->max_line, 0);
+        tr_line_sum_open(&m->min_line, 0);
+        m->prep = TR_PREP_WALK;
+        return 1;
+    case TR_PREP_WALK:
+        break;
+    }
+    DFAIL("css-sizing-3 §2.1's preparation was stepped in a phase TrPrep does not name, or in its walk");
+    return 0;
 }
 
 /* The two answers are one walk over different lines, css-sizing-3 §2.1 "Auto Box Sizes"'s own construction: "if
@@ -939,8 +1012,9 @@ size_t text_run_measure_finish_step(TextRunMeasure *m)
     bool forced, soft = false;
 
     DCHECK(m != NULL && m->finished && !m->answered && !m->released,
-           "css-sizing-3 §2.1's walk was stepped outside its run: before [UAX14], after its last position, or "
-           "after the release");
+           "css-sizing-3 §2.1's walk was stepped outside its run: before the collection closed, after its last "
+           "position, or after the release");
+    if (m->prep != TR_PREP_WALK) return tr_prep_step(m);
     i = m->walk++;
     DCHECKF(i >= 1 && i <= m->ncps, "css-sizing-3 §2.1's walk reached position %zu of a run of %zu code points",
             i, m->ncps);
@@ -1027,6 +1101,7 @@ void text_run_measure_release(TextRunMeasure *m)
     DCHECK(!m->released, "a text run measurement was released twice, and the second call frees pointers the "
                          "first one returned to the allocator");
     m->released = true;
+    if (m->prep == TR_PREP_BREAKS) line_break_pass_release(&m->breaks);
     free(m->items);
     free(m->actions);
     free(m->item_of_cp);
