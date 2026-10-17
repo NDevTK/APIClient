@@ -113,11 +113,13 @@ function row(name, ok, what) {
   if (!ok) failed++;
 }
 const census = (nov) => nov.kinds.map((k) => `${k.kind} ${k.paid}/${k.asks} paid, ${k.knownUnpaid} known`).join('; ') +
-                        `; known ${nov.known}, own ${nov.own}, refusedTexts ${nov.refusedTexts}`;
+                        `; known ${nov.known}, own ${nov.own} (${nov.ownKnown} of them known), ` +
+                        `refusedTexts ${nov.refusedTexts}, scope ${nov.scope}`;
 
 const A = await run('a', ORIGIN + '/a', DOC_A, null, null);
 const a = A._novelty, aEp = kindOf(a, 'endpoint');
-row('A', aEp.asks > 0 && aEp.paid === aEp.asks && aEp.knownUnpaid === 0 && a.known === 0, census(a));
+row('A', aEp.asks > 0 && aEp.paid === aEp.asks && aEp.knownUnpaid === 0 && a.known === 0 && a.scope === ORIGIN,
+    census(a));
 ZONE.noveltyAbsorb(ORIGIN, a);
 const known = ZONE.noveltyOwed(ORIGIN, { spelling: null, n: 0 });
 

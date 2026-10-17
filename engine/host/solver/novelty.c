@@ -140,6 +140,7 @@ static void learn_line(const char *p, size_t n) {
     for (int i = 0; i < 32; i++) {
         int v = hex_digit((unsigned char)p[i]);
         DCHECK(v >= 0, "a known-identity line's digest is not lowercase hex — novelty_json writes it that way");
+        if (v < 0) return;
         if (i < 16) id.hi = id.hi << 4 | (uint64_t)v; else id.lo = id.lo << 4 | (uint64_t)v;
     }
     s = slot_claim(id, (NoveltyKind)kind);
