@@ -1,26 +1,17 @@
-/* NOVELTY AGAINST THE PRODUCT, OVER TWO DOCUMENTS OF ONE APP — `node engine/noveltygate.mjs <binary>`, after
- * `node engine/build.mjs native`.
- *
- * Two documents of https://app.test share two requests and the second adds one endpoint and one header. Each
- * runs as its own `--abi` instance, as two tabs of one app are two agent clusters. This file plays the trusted
- * zone's two novelty duties with extension/lib/novelty-set.js loaded verbatim (the same file bridge.js and
- * trusted.mjs load): absorb every `@RESULT`'s `_novelty` into the cluster origin's partition, and hand the
- * partition to an instance as `novelty` records, at boot or in a round. Every fetch is answered with a network
- * error, so each frontier drains without a network; the requests are recorded at Fetch §5.6 step 12, before
- * the park.
- *
- * Rows, each read off one instance's last `@RESULT` (`_novelty`, `fetchCallSites`):
- *   A            the first document, handed nothing: every endpoint ask paid.
- *   B-alone      the second document, handed nothing: the pre-channel behaviour, every ask paid.
- *   B-known      the second document handed A's identities at boot (positive control): endpoint paid equals
- *                |B's endpoint identities - A's| and knownUnpaid |B's ∩ A's|, both nonzero, and paid is
- *                below B's recorded endpoint count; the header it adds is paid.
- *   B-invented   handed identities nothing emitted (invented negative control): nothing known-unpaid, every
- *                ask paid as in B-alone, and the set's size counted as known.
- *   B-stale      handed A's lines under another spelling: refused whole, nothing known-unpaid.
- *   B-late       handed A's identities in its first round, after its first request was minted: the requests
- *                minted after the round are known-unpaid and the first is paid.
- * Exit status 0 only when every row holds; each row prints what it read.
+/* Novelty against the product over two documents of one app: `node engine/noveltygate.mjs <binary>`.
+ * Two documents of https://app.test, each its own `--abi` instance (two tabs are two agent clusters), share two
+ * requests; the second adds one endpoint and one header. This file plays the zone with
+ * extension/lib/novelty-set.js loaded verbatim: it absorbs each `@RESULT`'s `_novelty` into the cluster origin's
+ * partition and hands it back as `novelty` records. Every fetch gets a network error so frontiers drain; requests
+ * are recorded at Fetch §5.6 step 12, before the park. Rows, read off each instance's last `@RESULT`:
+ *   A           handed nothing: every endpoint ask paid.
+ *   B-alone     handed nothing: every ask paid (the behaviour without the channel).
+ *   B-known     A's identities at boot (positive control): paid = |B - A|, knownUnpaid = |B ∩ A|, both nonzero,
+ *               paid below B's recorded endpoints, and B's added header paid.
+ *   B-invented  identities nothing emitted (negative control): nothing known-unpaid, the set's size counted.
+ *   B-stale     A's lines under another spelling: refused whole, nothing known-unpaid.
+ *   B-late      A's identities in its first round: requests minted after it are known-unpaid, the first is paid.
+ * Exit status is 0 only when every row holds.
  */
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
