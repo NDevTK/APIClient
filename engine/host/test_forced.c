@@ -11490,6 +11490,23 @@ TF_UNIT void probes_isolation_operands_sort(const char *js, Probe *tab, int *n) 
              "against /api/bsmin's `w` — with `read` present this is §4.9.5's fill answering `done` true or "
              "answering twice, and with `read` absent it is the clause above's lost world showing up a "
              "second time");
+    /* BOTH WORLDS OF A FORK TAKEN WHILE A CONSTRUCT IS PARKED ON ITS NEW.TARGET'S `prototype` READ, and the
+       arguments each world's construct received: a sibling whose borrowed window still named the parent's
+       operand stack, or whose owned block was shared, would read stale or freed arguments. */
+    const char *ctorfork_why = NULL;
+    int ctorfork_tt = 1;
+    FORK_ROW(js, &ctorfork_tt, &ctorfork_why, "/api/ctorsuper", "w",
+             "a fork inside a new.target `prototype` trap under super(a, b)", "A", "B");
+    fold_row(&ctorfork_tt, &ctorfork_why, param_value_only(js, "/api/ctorsuper", "v", "xy"),
+             "a world of the super() construct forked in its new.target's `prototype` trap did not receive the "
+             "arguments `x`, `y`: /api/ctorsuper's `v` is not exactly `xy`, so the sibling read its borrowed "
+             "argument window somewhere other than its own copy of the derived constructor's operand stack");
+    FORK_ROW(js, &ctorfork_tt, &ctorfork_why, "/api/ctorrefl", "w",
+             "a fork inside a new.target `prototype` trap under Reflect.construct", "C", "D");
+    fold_row(&ctorfork_tt, &ctorfork_why, param_value_only(js, "/api/ctorrefl", "v", "xy"),
+             "a world of the Reflect.construct forked in its new.target's `prototype` trap did not receive the "
+             "arguments `x`, `y`: /api/ctorrefl's `v` is not exactly `xy`, so the sibling's owned argument "
+             "block is not its own copy");
     const Probe rows[] = {
         /* KEYED ON THE STATEMENT AND NOT ON AN ENDPOINT, because this row is about a branch and a branch
            emits nothing: `cfg.admin` is what a reader greps for to find the gate it is about. It stands
@@ -11526,6 +11543,7 @@ TF_UNIT void probes_isolation_operands_sort(const char *js, Probe *tab, int *n) 
            to find the statement these rows are about — and `bs-reach` is first for `td-reach`'s reason: it is
            the row that says whether `bs-min`'s 0 is the engine's or this fixture's. */
         { "bs-reach", bs_reach, "bsMin", SESS_EXPLORE, bs_reach_why },
+        { "ctor-fork", ctorfork_tt, "/api/ctorsuper", SESS_EXPLORE, ctorfork_why },
         { "bs-min", bsmin_tt, "bsMin", SESS_EXPLORE, bsmin_why },
         { "async", async_tt, "/api/then", SESS_EXPLORE, async_why },
         { "await", await_tt, "/api/await", SESS_EXPLORE, await_why },

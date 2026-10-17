@@ -160,6 +160,21 @@ static const char HTML_OPERANDS[] =
     " } catch (bsX) { fetch('/api/bsreach?d=no&n=' + bsX.name); }"
     "</script>"
     TF_CANVAS_INK
+    /* A FORK WHILE A CONSTRUCT IS PARKED ON ITS NEW.TARGET'S `prototype` READ (10.1.13 step 2), whose `get` trap
+       branches on unknown input: `super(a, b)` borrows its arguments from the derived constructor's operand stack,
+       and Reflect.construct's come from the argsList it owns. The `ctor-fork` row reads both worlds of each. */
+    "<script>"
+    "var cpW = 'none', cpK = 'k';"
+    "var cpTrap = { get: function (t, k) { if (k === 'prototype') { if (cpK === 'k') cpW = state.cpk ? 'A' : 'B';"
+    " else cpW = state.cpk2 ? 'C' : 'D'; } return t[k]; } };"
+    "class CpB { constructor(a, b) { this.v = a + b; } }"
+    "class CpD extends CpB { constructor(a, b) { super(a, b); } }"
+    "var cpSup = Reflect.construct(CpD, ['x', 'y'], new Proxy(function () {}, cpTrap));"
+    "fetch('/api/ctorsuper?w=' + cpW + '&v=' + cpSup.v);"
+    "cpK = 'k2';"
+    "var cpRef = Reflect.construct(CpB, ['x', 'y'], new Proxy(function () {}, cpTrap));"
+    "fetch('/api/ctorrefl?w=' + cpW + '&v=' + cpRef.v);"
+    "</script>"
     "</body></html>";
 
 #endif

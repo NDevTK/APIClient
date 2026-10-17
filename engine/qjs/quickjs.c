@@ -30371,6 +30371,29 @@ static void js_ctor_proto_free(JSContext *ctx, JSCtorProto *cp)
     js_free_rt(ctx->rt, cp);
 }
 
+/* A parked construct copied for the sibling: a second reference to exactly what js_ctor_proto_free releases one
+   of. `outer` still names the original requester, which tramp_cont_relink_outer binds; a borrowed `args` window
+   still names the parent's storage, which clone_deep_flow moves into the sibling's copy of it. func and ntgt are
+   borrowed from operand slots the sibling's cloned frames hold too. NULL on OOM. */
+static JSCtorProto *js_ctor_proto_clone(JSContext *ctx, const JSCtorProto *cp)
+{
+    JSCtorProto *n = js_malloc(ctx, sizeof(*n));
+    int i;
+
+    if (!n) return NULL;
+    *n = *cp;
+    if (cp->args_owned) {
+        DCHECK(cp->args >= cp->args_owned && cp->args <= cp->args_owned + cp->argc,
+               "a parked construct owns an argument block and reads its arguments from somewhere else");
+        n->args_owned = js_malloc(ctx, sizeof(JSValue) * (size_t)(cp->argc > 0 ? cp->argc : 1));
+        if (!n->args_owned) { js_free(ctx, n); return NULL; }
+        for (i = 0; i < cp->argc; i++) n->args_owned[i] = js_dup(cp->args_owned[i]);
+        n->args = n->args_owned + (cp->args - cp->args_owned);
+    }
+    n->super_ref = js_dup(cp->super_ref);
+    return n;
+}
+
 static void js_array_len_free(JSContext *ctx, JSArrayLen *al)
 {
     JS_FreeValue(ctx, al->obj);
@@ -53656,6 +53679,12 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_CONSTRUCT:
         *out_kind = ((struct JSConstruct *)st)->outer_kind;
         return ((struct JSConstruct *)st)->outer;
+    case CONT_CTOR_PROTO:
+        /* a construct parked on its new.target's `prototype` read: what waits on it is whoever asked for the
+           construct (a step machine's Construct request, a capability's subclass construct), or nothing for a
+           bytecode `new`, whose answer goes on the operand stack */
+        *out_kind = ((JSCtorProto *)st)->outer_kind;
+        return ((JSCtorProto *)st)->outer;
     case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET:
         /* BOTH ROLES OF ONE RECORD: a consumer waiting on a read, write or call it issued (8), or on GetIterator
            step 5.b's nextMethod read (51). What waits on it is whoever asked for the consume either way. */
@@ -53735,7 +53764,7 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
-    case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO:
+    case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
     }
@@ -53775,6 +53804,8 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         ((JSPromiseExec *)st)->outer = outer; ((JSPromiseExec *)st)->outer_kind = outer_kind; return;
     case CONT_CONSTRUCT:
         ((struct JSConstruct *)st)->outer = outer; ((struct JSConstruct *)st)->outer_kind = outer_kind; return;
+    case CONT_CTOR_PROTO:
+        ((JSCtorProto *)st)->outer = outer; ((JSCtorProto *)st)->outer_kind = outer_kind; return;
     case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET:
         ITERCONS_ROLE_AGREES(st, kind);
         ((struct JSIterConsume *)st)->outer = outer; ((struct JSIterConsume *)st)->outer_kind = outer_kind; return;
@@ -53808,7 +53839,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
-    case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO:
+    case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
     }
@@ -53900,6 +53931,10 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         /* a construct sequence under one of its reads — a new.target `prototype` getter or Proxy trap, or a
            subclass's `add`/`set` accessor — branching on unknown input */
         return js_ctor_seq_clone(ctx, st, kind);
+    case CONT_CTOR_PROTO:
+        /* an ordinary construct under its new.target's `prototype` read — a getter or a Proxy `get` trap
+           branching on unknown input. clone_deep_flow moves a borrowed argument window afterwards. */
+        return js_ctor_proto_clone(ctx, (const JSCtorProto *)st);
     case CONT_ACQUIRE_GET: {
         /* the record is its consumer link (bound by the walk) and a borrow of the consumer's own operand, which
            the sibling's cloned operand stack holds too */
@@ -53919,7 +53954,7 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     case CONT_ITER_HELPER_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET:
     case CONT_ITER_CALL_GET_NOARG: case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET:
     case CONT_FOROF_ENUMREC_WRAP: case CONT_ITER_FROM_NEXT_GET:
-    case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV: case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO:
+    case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV: case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE:
     case CONT_AGEN_DEFER: case CONT_GETPROP_YIELD:
     case CONT_ARRAY_LEN_YIELD:
@@ -53980,6 +54015,43 @@ static int tramp_cont_relink_outer(JSContext *ctx, void *clone, uint8_t kind)
            "clone_deep_flow: a forked frame reads its arguments out of the PARENT's continuation record — "  \
            "a callback/accessor frame OWNS its arguments, and one with none has no argument buffer, so a "   \
            "pointer INTO the request's own storage means some call entry started borrowing it again")
+
+/* Moves the borrowed argument window of `cst`, the sibling's copy of the parked construct `ost`, into the
+   sibling's copy of the storage holding it: the base frame's buffer (`ob`/`cb`, `bslots` slots), one of the
+   chain's frame buffers (`oa[j]`/`ca[j]`), or the cb buffer of the step machine that requested the construct. */
+static void clone_ctor_proto_window(const JSCtorProto *ost, JSCtorProto *cst, TrampFrame **oa, TrampFrame **ca,
+                                    int n, JSStackFrame *ob, JSStackFrame *cb, int bslots)
+{
+    const JSValue *q = (const JSValue *)ost->args;
+    int j;
+
+    if (q >= ob->arg_buf && q <= ob->arg_buf + bslots) {
+        cst->args = cb->arg_buf + (q - ob->arg_buf);
+        return;
+    }
+    for (j = 0; j < n; j++) {
+        JSValue *b = tramp_buf_base(oa[j]);
+        if (b && q >= b && q <= b + tramp_buf_slots(oa[j])) {
+            cst->args = tramp_buf_base(ca[j]) + (q - b);
+            return;
+        }
+    }
+    if (ost->outer && (ost->outer_kind == CONT_STEP || ost->outer_kind == CONT_STEP_YIELD)) {
+        const JSStepHdr *oh = ost->outer;
+        const uint8_t *o0 = ost->outer;
+        size_t ssz = STEP_ARGV_OFFSET(oh->def->size) + sizeof(JSValue) * (size_t)(oh->argc > 0 ? oh->argc : 0);
+        if ((const uint8_t *)q >= o0 && (const uint8_t *)q < o0 + ssz) {
+            DCHECK(cst->outer != ost->outer && cst->outer_kind == ost->outer_kind,
+                   "clone_deep_flow: a parked construct's requester was not cloned before its argument window "
+                   "was moved into it");
+            cst->args = (JSValueConst *)((uint8_t *)cst->outer + ((const uint8_t *)q - o0));
+            return;
+        }
+    }
+    DFAIL("clone_deep_flow: a construct parked on its new.target's prototype read borrows an argument window "
+          "that lies in no frame buffer of the forked chain and in no requesting step machine — find the storage "
+          "its construct site borrowed and move the window into the sibling's copy of it here");
+}
 
 static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
     JSStackFrame *ob = &s->frame;
@@ -54614,6 +54686,31 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
             }
             if (!nx) break;
             lst = nx; lk = nk;
+        }
+    }
+    /* A construct parked on its new.target's `prototype` read borrows its argument window from storage the fork
+       copies: a frame buffer of this chain (the construct site's operand stack, a derived frame's argv) or the
+       cb buffer of the step machine that requested the construct, its `outer`. js_ctor_proto_clone left the
+       sibling's record naming the parent's copy, so the window moves into the sibling's by the same offset. The
+       original and cloned chains are walked in step, link for link. */
+    {
+        int bslots = TRAMP_FRAME_SLOTS(ob->arg_count, JS_VALUE_GET_OBJ(ob->cur_func)->u.func.function_bytecode);
+
+        for (int ji = 0; ji < n; ji++) {
+            uint8_t olk = oa[ji]->cont_kind, clk = ca[ji]->cont_kind;
+            void *ost = oa[ji]->cont_state, *cst = ca[ji]->cont_state;
+
+            while (ost && cst) {
+                uint8_t onk, cnk;
+                void *onx = cont_outer_get(ost, olk, &onk), *cnx = cont_outer_get(cst, clk, &cnk);
+
+                DCHECK(olk == clk && !onx == !cnx,
+                       "clone_deep_flow: the sibling's continuation chain does not have the parent's shape");
+                if (olk == CONT_CTOR_PROTO && ((JSCtorProto *)ost)->args_owned == NULL
+                    && ((JSCtorProto *)ost)->args != NULL)
+                    clone_ctor_proto_window(ost, cst, oa, ca, n, ob, cb, bslots);
+                ost = onx; cst = cnx; olk = onk; clk = cnk;
+            }
         }
     }
     c->tramp_top = ca[0];
