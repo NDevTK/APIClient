@@ -55783,7 +55783,10 @@ static JSAsyncFunctionData *js_async_resume_isolate(JSContext *ctx, JSValueConst
         return s;
     } else if (!JS_IsFlowShared(func_obj)) {
         /* A closure created after this flow's last fork was minted by this flow, in the timeline it is running
-           now (a fork mints a fresh timeline for each arm), so its activation is no other flow's. */
+           now (a fork mints a fresh timeline for each arm), so its activation is no other flow's. A flow's
+           timeline changes only at a fork, whose generation bump makes every closure it held shared; a cold
+           resume replays from the first script under the root world cold.c names before the flow runs, so it
+           mints its continuations afresh rather than restoring a stamp from the ended session. */
         DCHECKF(!g_time_travel.timeline || s->mint_timeline == g_time_travel.timeline(),
                 "an await continuation the clone gate reads as private (closureGen=%u > forkGen=%u) was minted in "
                 "timeline %llx and is being resumed in timeline %llx — another flow's continuation reached this "
