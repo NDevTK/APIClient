@@ -7886,8 +7886,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
        step 2 contains). Declared outside the loop and reset per entry, because the body iterates (the turn
        continuation at the reply delivery) and must remember across passes. A step runs at most one task and then
        only step 2.8's checkpoint, whatever the policy answers: the policy decides how much of one turn a step
-       completes, never how many turns, which makes it a granularity and not a cap. Only the task arm that
-       continues sets it. */
+       completes, never how many turns, which makes it a granularity and not a cap. Only the task arms that
+       continue set it. */
     int turn_task_done = 0;
     /* Whether this call began with a live frame, read once before the loop: the question is about the call, and its
        one consumer is the `!framed_at_entry` assert beside `g_unframed_steps++`. The loop may move `f->frame`, and
@@ -7901,8 +7901,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
            The three assignments at the top of this loop are guarded by `turn_task_done`, as the checkpoint arm is:
            the loop iterates (the turn continuation at the reply delivery), and a continued pass must not rename a
            step already named for the task it performed, or `deliver-one-reply` would be credited only to
-           deliveries whose `turn_continues()` answered no. `turn_task_done` is that settled-name predicate: its only
-           writer is the reply-delivery arm, meaning this step performed its §8.1.7.3 step 2.6 task. */
+           deliveries whose `turn_continues()` answered no. `turn_task_done` is that settled-name predicate: its
+           writers are the reply-delivery arm and §13.2.7 step 3's arm, meaning this step performed its task. */
         if (!turn_task_done && flow_answer_exhausted(f)) {
             g_step_unit = STEP_UNIT_RETIRE_EXHAUSTED_ASK;
             return FLOW_STEP_RETIRED;
@@ -7920,14 +7920,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
            transparent to observable ordering, so the flow resumes before any job it has queued. Yielding after
            one resume keeps the scheduler in charge; a park that parks again rides the switch-out. */
         if (!turn_task_done) g_step_unit = STEP_UNIT_RESUME_PARKED;
-        /* Nothing else may move the name: the delivery arm writes `turn_task_done` on the line after it names the
+        /* Nothing else may move the name: each writer of `turn_task_done` sets it on the line after it names the
            step, so on any pass created by this function's own `continue` the step is already named. A fourth
            assignment added above without the guard crashes here. */
-        DCHECK(!turn_task_done || g_step_unit == STEP_UNIT_DELIVER_REPLY,
+        DCHECK(!turn_task_done || g_step_unit == STEP_UNIT_DELIVER_REPLY || g_step_unit == STEP_UNIT_PARSE_END,
                "a continued pass of one step carries a unit name that is not the task it performed — "
-               "`turn_task_done` is written only by the reply-delivery arm, on the line after it names the "
-               "step, so any other name here is an assignment that ran on a pass created by this function's "
-               "own `continue` and the step is about to be reported as an arm it never took");
+               "`turn_task_done` is written only by the reply-delivery arm and §13.2.7 step 3's arm, each on the "
+               "line after it names the step, so any other name here is an assignment that ran on a pass created "
+               "by this function's own `continue` and the step is about to be reported as an arm it never took");
         /* Resuming a parked continuation is progress only if the flow can still get somewhere: a flow blocked on
            the host resumes into the same wait. Its completion is taken here, the one place it can be: a parked
            continuation is the late half of a job (a step machine offers a park at every re-entry, so most jobs
