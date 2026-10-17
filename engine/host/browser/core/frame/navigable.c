@@ -478,35 +478,6 @@ static bool child_in_this_agent(const Origin *child_origin)
     return origin_same(origin_agent(), child_origin);
 }
 
-/* Each [URL, Set-Cookie field] of a navigation's answer whose URL is this agent's origin, received into the
-   agent's jar as an HTTP API's cookie (cookie_jar_receive_http). `list` is the answer's array, BORROWED. */
-static void nav_receive_set_cookies(JSContext *ctx, JSValueConst list)
-{
-    int64_t n = 0, i;
-
-    CHECK(JS_GetLength(ctx, list, &n) >= 0, "a navigation answer's Set-Cookie list has no length");
-    for (i = 0; i < n; i++) {
-        JSValue pair = JS_GetPropertyInt64(ctx, list, i);
-        JSValue urlv = JS_GetPropertyUint32(ctx, pair, 0), fieldv = JS_GetPropertyUint32(ctx, pair, 1);
-        size_t ulen = 0, flen = 0;
-        const char *u = JS_IsString(urlv) ? JS_ToCStringLen(ctx, &ulen, urlv) : NULL;
-        const char *f = JS_IsString(fieldv) ? JS_ToCStringLen(ctx, &flen, fieldv) : NULL;
-        UrlRecord rec;
-
-        DCHECK(u != NULL && f != NULL, "a navigation answer's Set-Cookie entry is not a [URL, field] pair of "
-               "strings — the trusted zone writes each as one");
-        url_record_init(&rec);
-        if (u && f && url_parse(&rec, u, ulen, NULL) && origin_same_as_url(origin_agent(), &rec))
-            cookie_jar_receive_http(ctx, &rec, f, flen);
-        url_record_free(&rec);
-        JS_FreeCString(ctx, u);
-        JS_FreeCString(ctx, f);
-        JS_FreeValue(ctx, urlv);
-        JS_FreeValue(ctx, fieldv);
-        JS_FreeValue(ctx, pair);
-    }
-}
-
 /* A TOP-LEVEL traversable's navigation whose response origin is another agent's, with §7.1.3.2 having kept the
    browsing context: the incoming Document is created in a peer instance of this browsing context group, and the
    navigable here becomes a remote one presenting it. The record is `navigable.navigate <new document> <url>
@@ -2323,15 +2294,12 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        is therefore released beside the other bytes this frame owns, after the creation below has taken what
        it needs — see the free at the end of this function. */
     /* Fetch §4.7 "HTTP-network fetch" stores a credentialed response's Set-Cookie before anything reads the
-       response, so the jar this flow's Document reads has them before the Document exists. The write lands in
-       the asking flow's COW delta, so no sibling flow sees it. A field answered from another origin belongs to
-       that origin's agent and is not applied here.
-       Named residual. Not covered: a field of another origin's hop, a Document created in a peer, and an
-       instance's root Document (qjs_init takes no Set-Cookie list). The next diff routes the first two to the
-       peer's jar and gives qjs_init the list. Its absence shows as a document whose document.cookie lacks a
-       cookie its own response, or a redirect hop of it, set. */
-    if (!swapped && in_agent && fetches)
-        nav_receive_set_cookies(ctx, cookiesv);
+       response. The trusted zone hands this answer only the pairs whose URL is this agent's origin and routes
+       every other pair to its own origin's instance, so they are this jar's whichever agent the Document is
+       created in (a hop on this origin of a navigation that ends in a peer included). The write lands in the
+       asking flow's COW delta, so no sibling flow sees it. */
+    if (fetches)
+        cookie_jar_receive_http_pairs(ctx, cookiesv);
     if (!swapped && in_agent) {
         /* HTML §7.4.5 "Populating a session history entry", from the list of conditions that block a navigation
            before its Document is created: "navigationParams's RESERVED ENVIRONMENT is non-null and the result

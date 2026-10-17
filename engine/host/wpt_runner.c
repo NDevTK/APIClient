@@ -26,6 +26,7 @@
 #include "core/fetch/request.h"
 #include "core/fetch/fetch.h"
 #include "core/mime/mime_type.h"   /* §4.2's essence: what this host states it served */
+#include "core/url/origin.h"
 #include "core/url/url.h"
 #include "core/html/html_parse.h"   /* the one place a Document is parsed; that header owns the token bytes */
 #include "core/loader/document_load_type.h"  /* §7.4.5: which document a response loads as, and its computed type */
@@ -1152,14 +1153,21 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
                           body ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)body, len) : JS_NULL);
         JS_SetPropertyStr(ctx, v, "headers", JS_NewString(ctx, field_lines));
         free(field_lines);
-        /* Each Set-Cookie field beside the URL it answered, which the navigated Document's jar receives (Fetch
-           §4.7 "HTTP-network fetch"); this runner follows no redirect, so every field answered `r->url`. */
+        /* Each Set-Cookie field beside the URL it answered (Fetch §4.7 "HTTP-network fetch"); this runner follows
+           no redirect, so every field answered `r->url`. Only this agent's jar is handed its own origin's pairs:
+           a response of another origin is a document a child instance hosts, and that child loads it itself. */
         {
             JSValue cookies = JS_NewArray(ctx);
             uint32_t nc = 0;
             int hi;
+            UrlRecord answered;
+            bool own;
 
-            for (hi = 0; hi < r->hdrs.n; hi++) {
+            url_record_init(&answered);
+            own = url_parse(&answered, r->url, strlen(r->url), NULL) &&
+                  origin_same_as_url(origin_agent(), &answered);
+            url_record_free(&answered);
+            for (hi = 0; own && hi < r->hdrs.n; hi++) {
                 JSValue pair;
                 if (strcasecmp(r->hdrs.e[hi].name, "set-cookie") != 0) continue;
                 pair = JS_NewArray(ctx);

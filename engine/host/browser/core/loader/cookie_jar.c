@@ -91,6 +91,7 @@
 #include "quickjs.h"
 #include "core/agent_state.h"
 #include "core/loader/cookie_jar.h"
+#include "core/url/origin.h"
 #include "core/url/public_suffix.h"
 #include "core/url/url.h"
 
@@ -705,6 +706,39 @@ void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, const char *s, siz
 void cookie_jar_receive_http(JSContext *ctx, const UrlRecord *uri, const char *s, size_t len)
 {
     cj_receive(ctx, uri, s, len, true);
+}
+
+void cookie_jar_receive_http_pairs(JSContext *ctx, JSValueConst list)
+{
+    int64_t n = 0, i;
+
+    CHECK(JS_IsArray(list) && JS_GetLength(ctx, list, &n) >= 0,
+          "a Set-Cookie list is not an array — the trusted zone states one on every fetch's answer");
+    for (i = 0; i < n; i++) {
+        JSValue pair = JS_GetPropertyInt64(ctx, list, i);
+        JSValue urlv = JS_GetPropertyUint32(ctx, pair, 0), fieldv = JS_GetPropertyUint32(ctx, pair, 1);
+        size_t ulen = 0, flen = 0;
+        const char *u = JS_IsString(urlv) ? JS_ToCStringLen(ctx, &ulen, urlv) : NULL;
+        const char *f = JS_IsString(fieldv) ? JS_ToCStringLen(ctx, &flen, fieldv) : NULL;
+        bool parsed, own;
+        UrlRecord rec;
+
+        CHECK(u != NULL && f != NULL, "a Set-Cookie list entry is not a [URL, field] pair of strings — the "
+                                      "trusted zone writes each as one");
+        url_record_init(&rec);
+        parsed = url_parse(&rec, u, ulen, NULL);
+        own = parsed && origin_same_as_url(origin_agent(), &rec);
+        /* The release arm skips the pair: another origin's field is that origin's agent's to store. */
+        DCHECK(own, "a Set-Cookie pair reached the jar of an agent its URL's origin is not — the trusted zone "
+                    "routes each pair to the instance of its URL's (group, origin) agent cluster");
+        if (own) cookie_jar_receive_http(ctx, &rec, f, flen);
+        url_record_free(&rec);
+        JS_FreeCString(ctx, u);
+        JS_FreeCString(ctx, f);
+        JS_FreeValue(ctx, urlv);
+        JS_FreeValue(ctx, fieldv);
+        JS_FreeValue(ctx, pair);
+    }
 }
 
 void cookie_jar_store(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,

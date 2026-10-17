@@ -765,6 +765,16 @@
         params: [ARRIVAL],
         reply: [WORKING_SET] },
 
+      /* Set-Cookie fields for this instance's jar (main.c's qjs_receive_cookies): every pair of a response the
+         zone fetched whose URL has this cluster's origin, crossing after `Init` and before `Begin` for the
+         root, and before `Join` for a joined document. */
+      { ordinal: 30, name: "ReceiveCookies",
+        params: [
+          { name: "setCookies", type: "string", retained: false,
+            why: "a JSON array of [URL, Set-Cookie field] pairs, each URL of this instance's origin — the zone " +
+                 "routes every pair to its own origin's cluster, and the engine asserts that it did" }],
+        reply: [WORKING_SET] },
+
       { ordinal: 23, name: "Decline",
         params: [
           { name: "method", type: "string", retained: false,

@@ -62,6 +62,11 @@ void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, const char *set_co
    serves (all of them "non-HTTP"). `uri` is the URL that response answered. */
 void cookie_jar_receive_http(JSContext *ctx, const UrlRecord *uri, const char *set_cookie, size_t len);
 
+/* cookie_jar_receive_http over each [URL, Set-Cookie field] pair of `list`, the trusted zone's record of the
+   fields a fetch's responses (its redirect hops included) carried. The zone routes each pair to the jar of the
+   agent its URL's origin keys, so every URL is this agent's origin; that is asserted. `list` is BORROWED. */
+void cookie_jar_receive_http_pairs(JSContext *ctx, JSValueConst list);
+
 /* §5.3's COOKIE-ATTRIBUTE-LIST as §5.3 ITSELF READS IT — the four attributes its steps ask for by
    attribute-name, plus the two flags, in the parsed shape rather than as the list of byte-sequence pairs a
    Set-Cookie header spells. `domain` and `path` are BORROWED and must outlive the store call; every field is

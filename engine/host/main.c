@@ -29,6 +29,7 @@
 #include "browser/core/frame/window_message.h"
 #include "browser/core/frame/remote_object.h"
 #include "browser/core/html/html_iframe.h"
+#include "browser/core/loader/cookie_jar.h"         /* the agent's jar, which qjs_receive_cookies writes */
 #include "browser/core/loader/document_load_type.h"  /* §7.4.5: which document a response loads as */
 #include "browser/core/loader/document_load_decode.h"  /* §13.2.3.2: which decoder that response's bytes need */
 #include "browser/core/loader/document_load.h"       /* §7.4.5's load-a-document: the §7.5 subsection it runs */
@@ -1000,6 +1001,26 @@ QJS_EXPORT void qjs_set_arrival(const char *arrival)
     DCHECK(!g_begun, "this document's arrival was stated after the frontier was seeded — the boot flow's grade "
                      "is taken from it before its seed parks a request");
     engine_set_arrival(engine_arrival_of_token(arrival));
+}
+
+/* Set-Cookie fields of responses the trusted zone fetched for documents of this agent's origin, as a JSON array
+   of [URL, field] pairs, received into the agent's jar (cookie_jar_receive_http_pairs) on the host's time, so
+   every timeline reads them. The zone hands an instance its root document's fields after qjs_init and before
+   qjs_begin, and a joined document's before qjs_join, so the jar holds them before any script of that document
+   runs. */
+QJS_EXPORT void qjs_receive_cookies(const char *pairs_json)
+{
+    JSValue list;
+
+    DCHECK(g_ctx != NULL, "qjs_receive_cookies ran before qjs_init built the agent whose jar it writes");
+    DCHECK(JS_FlowGen() == 0 && cow_current() == NULL,
+           "qjs_receive_cookies ran with a flow's stamp or capture route up — the fields would land in that "
+           "flow's delta rather than in the jar every timeline of the agent shares");
+    CHECK(pairs_json != NULL, "qjs_receive_cookies was handed no list");
+    list = JS_ParseJSON(g_ctx, pairs_json, strlen(pairs_json), "<set-cookie pairs>");
+    CHECK(!JS_IsException(list), "the trusted zone's Set-Cookie list is not JSON");
+    cookie_jar_receive_http_pairs(g_ctx, list);
+    JS_FreeValue(g_ctx, list);
 }
 
 /* Whether a peer holds a reference into this instance's document, read off solver/engine.c's one flag. It is

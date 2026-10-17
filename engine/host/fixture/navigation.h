@@ -141,6 +141,11 @@ static const char HTML_NAVIGATION[] =
        `!==` arm contradicts the reply and opens `/cookieload`, whose answer sets `flowc` and an HttpOnly `hoc`;
        its Document reads document.cookie. The other arm waits three host round trips and reads its own; the
        `flow-jar` row reads both. */
+    /* The root's own response set `rootc` (Path=/p) before this document ran, received into the agent's jar at
+       the baseline as main.c's qjs_receive_cookies hands an instance its root's fields; the `root-jar` row
+       reads it here, and the `flow-jar` row's sibling arm reads it too while `/cookieload` (another path)
+       does not. */
+    "<script>fetch('/api/rootjar?c=' + encodeURIComponent(document.cookie || 'none'));</script>"
     "<script>fetch('/api/ckgate').then(function(r){ return r.json(); }).then(function(c){"
     " if (c.region !== 'us-west-2') { open('/cookieload'); return; }"
     " fetch('/api/ckwait').then(function(){ return fetch('/api/ckwait'); }).then(function(){"

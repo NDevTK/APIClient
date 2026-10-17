@@ -2890,6 +2890,8 @@ function engineReserve(cluster, docId, msg, referenced) {
   const eng = { state: "booting", cluster, docId, topDocId: docId, joinedDocIds: [], msg,
                 records: new Map(),
                 groupId: msg.groupId, _resumed: null, referenced,
+                /* Whether engineRoot has opened this instance's jar to zoneRouteSetCookies. */
+                cookiesOpen: false,
                 _coldLookup: null, _coldOther: null, _bundleId: null,
                 origin: msg.origin, _resolvers: [], _remoteAsked: new Set(),
                 /* The requests this zone has asked for and not yet answered to the engine, keyed as the
@@ -3097,6 +3099,13 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
         "whose set is `" + docRecordSandbox(rootDoc) + "` — the engine is handed the record's set, one statement");
   eng.records.set(eng.docId, rootDoc);
   await rend.renderer.setArrival({ arrival: msg.arrival });
+  /* And the Set-Cookie fields the zone holds for this cluster (zoneRouteSetCookies), the root document's own
+     response's among them, in the same window: the jar has them before the root's first script runs. The jar
+     is opened before the hand-off, so a pair routed while it is in flight goes straight to the instance. */
+  eng.cookiesOpen = true;
+  const _held = _heldCookies.has(eng.cluster) ? _heldCookies.get(eng.cluster) : [];
+  _heldCookies.delete(eng.cluster);
+  await rend.renderer.receiveCookies({ setCookies: JSON.stringify(_held) });
   /* Never 0: document_bundle_id folds an empty scan to 1, since a 0 would key every unidentifiable document to
      one frontier entry. */
   /* `>>> 0` because the wire carries an i32 (mojom `int32 bundleId`) for a C `unsigned`; the reader
@@ -4167,6 +4176,47 @@ function hostClusterOf(key) {
   return null;
 }
 
+/* Set-Cookie pairs for an agent cluster whose instance's jar is not open yet, by cluster key: engineRoot hands
+   them to the instance it roots, after Init and before Begin. */
+const _heldCookies = new Map();
+
+/* RFC 6265bis §5.7's storage, routed. Each [URL, Set-Cookie field] pair of a response this zone fetched for a
+   document of group `groupId` belongs to the jar of the agent its URL's origin keys in that group, whichever
+   instance asked for the fetch: a redirect hop on another origin writes that origin's jar, and a document
+   created in a peer brings its fields to the peer. An instance whose jar is open receives its pairs now; any
+   other's are held for its root. The cluster key is clusterKeyOf's, so an opaque-origin instance receives
+   none: a sandboxed document's response cookies are its URL's origin's. */
+async function zoneRouteSetCookies(groupId, pairs) {
+  DCHECK(Array.isArray(pairs) && pairs.every((c) => Array.isArray(c) && c.length === 2 &&
+                                                   typeof c[0] === "string" && typeof c[1] === "string"),
+         "a fetch answered no [URL, Set-Cookie field] list — safeFetch states one on every reply");
+  const byCluster = new Map();
+  for (const p of pairs) {
+    const key = clusterKeyOf({ groupId, origin: originOf(p[0]) });
+    if (!byCluster.has(key)) byCluster.set(key, []);
+    byCluster.get(key).push(p);
+  }
+  for (const [key, ps] of byCluster) {
+    const holder = hostClusterOf(key);
+    if (holder && holder.cookiesOpen) {
+      await holder.r.renderer.receiveCookies({ setCookies: JSON.stringify(ps) });
+    } else {
+      if (!_heldCookies.has(key)) _heldCookies.set(key, []);
+      for (const p of ps) _heldCookies.get(key).push(p);
+    }
+  }
+}
+
+/* The pairs of a load the instance `eng` asked for: those of its own cluster stay in the answer, which the
+   asking flow's jar applies (core/frame/navigable.c), and every other pair is routed to its own cluster. */
+async function zoneAnswerSetCookies(eng, pairs) {
+  const own = [], other = [];
+  for (const p of pairs) (clusterKeyOf({ groupId: eng.groupId, origin: originOf(p[0]) }) === eng.cluster
+                          ? own : other).push(p);
+  await zoneRouteSetCookies(eng.groupId, other);
+  return own;
+}
+
 /* The rendezvous for a cross-agent operation, owned by this zone because neither engine can hold it: the
    asking instance's request id is unique only inside that instance, so the token, opaque to both engines
    (main.c states that at both entries), names which instance and call site a completion belongs to.
@@ -4336,6 +4386,8 @@ async function hostNotice(eng, line) {
            "response's headers, and a missing list is a producer that stopped writing one rather than a " +
            "response that carried none, which is the empty object");
     for (const _n of Object.keys(loaded.headers)) msg.responseHeaders[_n] = loaded.headers[_n];
+    /* The load's Set-Cookie fields go to the jars their URLs' origins key in this document's group. */
+    await zoneRouteSetCookies(msg.groupId, loaded.setCookies);
     /* The creator's clone is relayed as a container, never as a response header: a response header's policy
        gets the response URL's origin as its self-origin (CSP §2.2.2 Parse response's Content Security
        Policies), while CSP §2.2 Policies gives an inherited list the creator's self-origin, which §6.7.2.8 Does
@@ -4531,6 +4583,8 @@ async function hostNotice(eng, line) {
                       addressSpace: self.safeFetchDocumentAddressSpace(swapped.url, _swapFrom.issuerDoc),
                       responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(swapped.headers)) swapMsg.responseHeaders[_n] = swapped.headers[_n];
+    /* The load's Set-Cookie fields go to the jars their URLs' origins key in this document's group. */
+    await zoneRouteSetCookies(swapMsg.groupId, swapped.setCookies);
     /* No inherited policy: a swapped-to Document has no creator to clone a container from (HTML §7.3.2.1 with
        a null creator), so a response without CSP is a Document under no policy. */
     DCHECK(hostClusterOf(clusterKeyOf(swapMsg)) === null,
@@ -4589,6 +4643,8 @@ async function hostNotice(eng, line) {
                      addressSpace: self.safeFetchDocumentAddressSpace(navd.url, _navFrom.issuerDoc),
                      responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(navd.headers)) navMsg.responseHeaders[_n] = navd.headers[_n];
+    /* The load's Set-Cookie fields go to the jars their URLs' origins key in this document's group. */
+    await zoneRouteSetCookies(navMsg.groupId, navd.setCookies);
     const _nkey = clusterKeyOf(navMsg);
     DCHECK(_nkey !== eng.cluster,
            "the engine sent a top-level navigation to a peer for a response in its OWN agent cluster — the " +
@@ -4986,7 +5042,8 @@ async function engineDeliverDocument(eng, id, r) {
   DCHECK(Array.isArray(r.setCookies) && r.setCookies.every((c) => Array.isArray(c) && c.length === 2 &&
                                                               typeof c[0] === "string" && typeof c[1] === "string"),
          "a document load answered no [URL, Set-Cookie field] list — navigationLoad states one on every arm");
-  await engineAnswer(eng, id, { url: r.url, headers: responseFieldLines(r.headers), setCookies: r.setCookies },
+  const _ownCookies = await zoneAnswerSetCookies(eng, r.setCookies);
+  await engineAnswer(eng, id, { url: r.url, headers: responseFieldLines(r.headers), setCookies: _ownCookies },
                      r.bytes);
 }
 /* A refusal of a synchronous request (a document load or an XHR fetch), recorded on the rendezvous it names.
@@ -5658,6 +5715,8 @@ async function admitSeatLand(seat) {
            "group id is a fresh counter, so a hit means two seeds were given one id and the second would " +
            "JOIN the heap the first built, which is two documents behind one agent");
     _reserveStats.seeded++;
+    /* The load's Set-Cookie fields go to the jars their URLs' origins key in this document's group. */
+    await zoneRouteSetCookies(msg.groupId, loaded.setCookies);
     /* `null` creator: nothing embedded or opened it, so HTML §7.1.7 has no container to clone. `u`/`null`/
        `none`: no parent, no container element and no ancestors, one fact about a top-level page. `cold: true`:
        no caller awaits it, so its findings merge into the cumulative store. Not referenced: nothing holds a
@@ -6645,6 +6704,8 @@ self.astDispatch = async function astDispatch(msg) {
       return { success: true, result: linesToAnalysis([], msg, "nothing-to-run", null) };
     }
     self.onNavigationOutcome(msg.documentId, { state: "delivered" });
+    /* The load's Set-Cookie fields go to the jars their URLs' origins key in this document's group. */
+    await zoneRouteSetCookies(msg.groupId, loaded.setCookies);
     /* The document is at the address the response came from: HTML §7.4.5 determines the Document's URL, and so
        its origin, its API base URL (HTML §8.1.3.2 Environment settings objects) and the frontier key, over the
        response's URL, as `fetchedDocument` does for a child navigable. */

@@ -52,6 +52,7 @@
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "solver/engine.h"
 #include "solver/cow.h"
+#include "core/loader/cookie_jar.h"   /* the root document's own Set-Cookie, received at the baseline */
 #include "core/loader/document_scripts.h"
 #include "core/paint/display_list.h"   /* CSS 2.1 §E.2 "Painting order"'s ink, whose ORDER is its whole
                                           statement — the half a fixture can hold to an answer with no
@@ -12831,14 +12832,20 @@ TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
     /* The value is recorded as the page sent it, encodeURIComponent'd. */
     fold_row(&flowjar_tt, &flowjar_why, param_value_is(js, "/api/cookieload", "c", "flowc%3D1"),
              "the loaded Document's document.cookie is not `flowc=1`: the answer's Set-Cookie was not received into "
-             "the agent's jar (core/frame/navigable.c's nav_receive_set_cookies), or the HttpOnly `hoc` was read by "
-             "a non-HTTP API");
+             "the agent's jar (core/frame/navigable.c's cookie_jar_receive_http_pairs), or the HttpOnly `hoc` was "
+             "read by a non-HTTP API, or the root's Path=/p `rootc` was");
     fold_row(&flowjar_tt, &flowjar_why, !!strstr(js, "\"/api/cookiesib\""),
              "NOT REACHED: no /api/cookiesib record, so the sibling arm's read is unscored");
-    fold_row(&flowjar_tt, &flowjar_why, param_value_is(js, "/api/cookiesib", "c", "none") &&
-                                        !param_value_is(js, "/api/cookiesib", "c", "flowc%3D1"),
-             "the sibling arm read a cookie only the other arm's navigation set — the jar write left that flow's "
-             "COW delta");
+    fold_row(&flowjar_tt, &flowjar_why, param_value_is(js, "/api/cookiesib", "c", "rootc%3D1"),
+             "the sibling arm's document.cookie is not the root's `rootc=1` alone — a cookie only the other arm's "
+             "navigation set leaked out of that flow's COW delta, or the root's own field is missing");
+    /* The root document's own response's Set-Cookie is in the jar before its first script runs. */
+    const char *rootjar_why = NULL; int rootjar_tt = 1;
+    fold_row(&rootjar_tt, &rootjar_why, !!strstr(js, "\"/api/rootjar\""),
+             "NOT REACHED: no /api/rootjar record, so the root's boot-time read is unscored");
+    fold_row(&rootjar_tt, &rootjar_why, param_value_is(js, "/api/rootjar", "c", "rootc%3D1"),
+             "the root document's first script read no `rootc=1` — the fields its own response set were not in the "
+             "agent's jar before its scripts ran (cookie_jar_receive_http_pairs at the baseline)");
     /* §7.2.5.1: a cross-origin proxy answers `closed` and refuses `name`. */
     /* THE NEGATIVE STAYS WHOLE-DOCUMENT AND THE POSITIVES DO NOT, which is this file's own discriminator: a
        superstring or a neighbouring record can only make `!strstr` fail EARLY, never pass, so `LEAKED`
@@ -13006,6 +13013,7 @@ TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
         { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE, navopen_why },
         { "nav-door", navdoor_tt, "/navhidden", SESS_EXPLORE, navdoor_why },
         { "flow-jar", flowjar_tt, "/api/ckgate", SESS_EXPLORE, flowjar_why },
+        { "root-jar", rootjar_tt, "/api/rootjar", SESS_EXPLORE, rootjar_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
         { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },
         { "xdoc-job", xdocjob_tt, "/api/xdocjob", SESS_EXPLORE, xdocjob_why },
@@ -30450,6 +30458,16 @@ int main(int argc, char **argv) {
 
     /* The trusted host's half: what it is owed, and how it pays. */
     engine_set_provider(fixture_provide);
+    /* The root document's own response's Set-Cookie, received at the baseline before any script runs, as
+       main.c's qjs_receive_cookies hands an instance its root's fields after qjs_init. */
+    {
+        static const char ROOT_PAIRS[] = "[[\"https://x.test/p\",\"rootc=1; Path=/p\"]]";
+        JSValue root_pairs = JS_ParseJSON(ctx, ROOT_PAIRS, sizeof ROOT_PAIRS - 1, "<root set-cookie>");
+
+        CHECK(!JS_IsException(root_pairs), "the fixture's root Set-Cookie list is not JSON");
+        cookie_jar_receive_http_pairs(ctx, root_pairs);
+        JS_FreeValue(ctx, root_pairs);
+    }
 
     DocScripts scripts = document_exec_scripts(dom);   /* each <script> its own program body — no concat */
     /* THE RESIDUE THIS SESSION IS CONTINUING, read off the shelf before the scheduler is seeded — because the

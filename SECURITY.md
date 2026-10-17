@@ -336,8 +336,13 @@ anything reads the reply. Whose act a request is, is the egress rule's own answe
 page loading itself, as a browser would) is the page's, an operator send is the person's, and a request that
 fires only because an origin was widened (a forked value, a probe, a tool-composed request) is this tool's,
 whose reply's cookies never reach the person's jar, since a forced reply is never merged into observed state.
-Whoever's act it is, the fields ride the reply to the asking flow, and a navigation's are received into that
-flow's own engine jar (core/frame/navigable.c), a write in its COW delta that no sibling flow sees. The storing
+Whoever's act it is, the fields ride the reply as [URL, field] pairs, and each pair belongs to the engine jar
+of the agent its URL's origin keys in the document's group (`bridge.js`'s `zoneRouteSetCookies`), whichever
+instance asked: an instance is handed only its own origin's pairs. A navigation's own-origin pairs are received
+into the asking flow's jar (core/frame/navigable.c), a write in its COW delta that no sibling flow sees; a pair
+of another origin, a redirect hop's or a document created in a peer, goes to that origin's instance on its
+host's time (`ReceiveCookies`), or is held until that instance is rooted and handed over after `Init` and
+before `Begin`, which is also how a root document gets its own response's fields. The storing
 is `lib/cookie-store.js`'s: RFC 6265bis (draft 22) §5.6 parses each field and §5.7 "Storage Model" decides, on
 the request URL's host and the identity's site for cookies, whether the cookie is kept; CHIPS §2.3 makes a
 `Partitioned` one the request's partition's. A cookie the model ignores is never written: a `Domain` that
