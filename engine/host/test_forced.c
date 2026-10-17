@@ -136,6 +136,7 @@
 #include "core/indexeddb/idb_transaction.h"
 #include "core/indexeddb/idb_upgrade_abort.h"
 #include "solver/endpoint.h"
+#include "solver/novelty.h"
 #include "solver/result.h"
 #include "solver/solve.h"
 #include "solver/cold.h"      /* the cross-session tier: this host's residue, and what a resume rebuilt */
@@ -27600,6 +27601,20 @@ static char *abi_bytes(const char *b64, size_t *plen, const char *what)
     return bytes;
 }
 
+/* A `novelty` record's one field after its verb: solver/novelty.h's set text, base64'd because it is lines. It is
+   the extension's NoveltyLearn on this channel, valid before the `document` record (the boot handover) and in any
+   round after it (the product grew). */
+static void abi_novelty(char *p)
+{
+    size_t n = 0;
+    char *text = abi_bytes(abi_take(&p, "known-identity text"), &n, "known-identity text");
+
+    CHECKF(p == NULL, "a novelty record carries a field after its text. trailing=[%s]", p ? p : "");
+    DCHECK(n == strlen(text), "the known-identity text carries a NUL — it is lines of tokens and hex");
+    qjs_novelty_learn(text);
+    free(text);
+}
+
 /* ONE RECORD OUT. Every line this host writes is one of these, and each is flushed at once because the zone
    is a process reading a pipe rather than a library returning: a bill left in a stdio buffer is a bill the
    zone cannot start work on, and at the stall it would be a bill nobody can see while both ends wait. */
@@ -27884,6 +27899,11 @@ static int abi_pay(void)
                the zone already paid, which abi_announce's change test would then never send. */
             if (paid > 0) { free(g_abi_announced); g_abi_announced = NULL; }
             return paid;
+        }
+        if (!strcmp(verb, "novelty")) {
+            abi_novelty(p);
+            free(rec);
+            continue;
         }
         if (!strcmp(verb, "provide")) {
             const char *method = abi_take(&p, "request method");
@@ -28770,6 +28790,15 @@ static int abi_main(int argc, char **argv)
                        "that arrived from somewhere, and there is no tree to build from nothing");
     p = rec;
     verb = abi_take(&p, "verb");
+    /* The boot handover first: what the product already holds, learned before the parse records anything. */
+    while (!strcmp(verb, "novelty")) {
+        abi_novelty(p);
+        free(rec);
+        rec = abi_line();
+        CHECK(rec != NULL, "this host was handed the product's known identities and then no document record");
+        p = rec;
+        verb = abi_take(&p, "verb");
+    }
     CHECKF(!strcmp(verb, "document"), "a record arrived on this host's channel under the verb `%s`, which it "
                                       "does not carry — one document in, one result out, and a verb this "
                                       "entry does not know is a caller expecting a capability it has not", verb);
@@ -29617,6 +29646,7 @@ int main(int argc, char **argv) {
     sort_merge_selftest(ctx);       /* 23.1.3.30.1 step 4 rests per element, and both schedules agree */
     concat_keyed_selftest(ctx);     /* §23.1.3.2's keyed walk rests per request, declaring no yield of its own */
     endpoint_init();
+    novelty_set_scope("https://x.test");   /* the origin of the address tf_realm_install below gives the document */
     solve_init(ctx);
     /* The schema every census line of this stream is declared in, once per instance, so a reader takes a
        family's row set and kinds from the artifact that printed its rows. */

@@ -7,6 +7,7 @@
 #include "solver/concolic.h"
 #include "solver/engine.h"    /* the provenance's one wire spelling; this surface prints the same three words */
 #include "solver/flow.h"
+#include "solver/novelty.h"   /* what a mint or a header gain is worth: its identity against the product */
 #include "solver/pending.h"   /* …and PROV_*, the vocabulary those words spell */
 #include "solver/witness_verify.h"   /* the queue an eligible witness is verified through */
 #include "check.h"
@@ -117,7 +118,10 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
                     reviewer edits, these bytes what stands there now). It makes no replay claim, since some bytes
                     are an unknown's example, so it cannot share `body_b64`'s key. */
                  char *body_mime, *body_b64, *body_shape, *body_example_b64;
-                 Witness *wit; int nwit, witcap; } Endpoint;
+                 Witness *wit; int nwit, witcap;
+                 /* The record's identity against the product (solver/novelty.h), over exactly the fields
+                    `same_identity` compares, written at the mint and asserted equal at every merge. */
+                 NoveltyId id; } Endpoint;
 
 /* See endpoint.h. The switch is generated from the list the enum is, so a door added to `ENDPOINT_DOORS` gains its
    arm in the same expansion, unlike `ep_loc_name`'s hand-kept table, which needs a `CHECK` at every subscript. The
@@ -1918,6 +1922,43 @@ static int same_identity(Endpoint *e, const char *method, const char *path, int 
     return 1;
 }
 
+/* The NOVELTY_ENDPOINT identity of a sighting: `same_identity`'s fields in its order, each param as its location
+   and its name. Two sightings `same_identity` merges have one identity, and endpoint_record asserts both
+   directions of that, so a field added to one and not the other fires at the first sighting it separates.
+   Named residual. Not covered: a path-relative address is spelled as the page wrote it, so two documents of one
+   origin whose bases differ name two resources with one identity. Next diff builds: the record keyed by the
+   address resolved against its realm's base URL, here and in `same_identity` at once. Absence shows as: one
+   record, paid once, where documents at two paths of one origin each request a different resource. */
+static NoveltyId endpoint_identity(const char *method, const char *path, int prov, int driven, const KvBuf *kv) {
+    const char **f = malloc((size_t)(4 + 2 * kv->n) * sizeof *f);
+    NoveltyId id;
+    int n = 0;
+    CHECK(f, "endpoint: OOM spelling an endpoint's identity");
+    f[n++] = method; f[n++] = path; f[n++] = engine_provenance_token(prov); f[n++] = driven ? "driven" : "undriven";
+    for (int i = 0; i < kv->n; i++) {
+        CHECK(kv->e[i].loc == EP_QUERY || kv->e[i].loc == EP_PATH || kv->e[i].loc == EP_BODY,
+              "endpoint: a param carries a location ep_loc_name has no row for");
+        f[n++] = ep_loc_name[kv->e[i].loc];
+        f[n++] = kv->e[i].name;
+    }
+    id = novelty_id(NOVELTY_ENDPOINT, f, n);
+    free(f);
+    return id;
+}
+
+/* Files the NOVELTY_HEADER identity of each header `e` gained from index `from` on, a header name on the
+   record's own identity, and answers whether any of them is novel. */
+static int endpoint_note_headers(const Endpoint *e, int from) {
+    char eid[33];
+    int novel = 0;
+    snprintf(eid, sizeof eid, "%016llx%016llx", (unsigned long long)e->id.hi, (unsigned long long)e->id.lo);
+    for (int j = from; j < e->nh; j++) {
+        const char *f[2] = { eid, e->hdrs[j].name };
+        novel |= novelty_note(NOVELTY_HEADER, novelty_id(NOVELTY_HEADER, f, 2));
+    }
+    return novel;
+}
+
 /* The address's path, re-spelled by path_scan, and its path and query params into `kvb`: the one speller of a
    request's address for the record and for a verification's observation. Returns the path, owned, and the display
    spelling into `*disp_out` (owned) when it is non-NULL. */
@@ -2149,9 +2190,14 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     /* Named fields first; the raw bytes only where there are none: a body this engine reads is better described by
        its fields, and both would put one fact on the record twice. */
     int body_named = body_params(ctx, &kvb, body);
+    NoveltyId nid = endpoint_identity(method, path, prov, driven, &kvb);
 
     for (int i = 0; i < g_eps_n; i++) {                 /* merge into an existing same-identity endpoint */
         if (same_identity(&g_eps[i], method, path, prov, driven, &kvb)) {
+            int had_headers = g_eps[i].nh;
+            DCHECK(g_eps[i].id.hi == nid.hi && g_eps[i].id.lo == nid.lo,
+                   "a sighting merged into a record whose novelty identity differs from its own — "
+                   "endpoint_identity spells a field same_identity does not compare");
             for (int j = 0; j < kvb.n; j++) {
                 param_add_val(&g_eps[i].params[j], kvb.e[j].val);
                 param_intersect_excl(&g_eps[i].params[j], kvb.e[j].excl, kvb.e[j].nexcl);
@@ -2170,7 +2216,8 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                `Authorization`, a content type or an API key, which this engine exists to learn. Structure, not
                data: a header name is bounded by the code, while a param value (`param_add_val`, which earns
                nothing) is unbounded in the input, and a loop over opaque data could mint credit without limit. One
-               point per merge that gained structure: an endpoint is one discovery however many headers arrive. */
+               point per merge that gained structure: an endpoint is one discovery however many headers arrive.
+               Paid only where a gained header's identity is absent from the product (solver/novelty.h). */
             /* First body wins and is never overwritten (body_store): a request body is one example, and a sighting
                at a different grade is a different record. */
             body_store(&g_eps[i], body, body_named);
@@ -2196,7 +2243,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
             if (wcls > g_eps[i].witness_class) g_eps[i].witness_class = wcls;
             endpoint_witness_add(&g_eps[i], &wit);
             if (endpoint_merge_headers(&g_eps[i], hdrs, nhdrs) > 0)
-                flow_credit_emit(1.0);
+                novelty_credit(NOVELTY_HEADER, endpoint_note_headers(&g_eps[i], had_headers));
             /* The arm the surface has no row for: a merge teaches the record structure and moves no census figure
                (not `minted`, not `emitted`, not `preProgram`, whose flag belongs to the mint), so running code
                composing every address the markup had named would be byte-identical on all four rows to running
@@ -2214,6 +2261,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     Endpoint *e = &g_eps[g_eps_n++];
     memset(e, 0, sizeof *e);
     e->method = strdup(method); e->path = strdup(path); e->prov = prov; e->driven = driven;
+    e->id = nid;
     endpoint_disp_add(e, disp);
     /* Whether any program had started when this record was born, read at the mint, the instant the fact is about;
        a read at the census would answer for the end of the run. */
@@ -2253,10 +2301,17 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         e->np++;
     }
     body_store(e, body, body_named);
-    /* The count is dropped here: every header of a brand-new endpoint is new, and the discovery credited is the
-       endpoint, so a request's header count does not enter the ranking. */
+    /* The count is dropped here: every header of a brand-new record is new, and the discovery credited is the
+       endpoint, so a request's header count does not enter the ranking. A record new here whose identity the
+       product already holds is paid nothing for itself, and its headers are then asked about as a merge's are:
+       a second document's sighting of a known endpoint can still be the first to carry `Authorization`. */
     (void)endpoint_merge_headers(e, hdrs, nhdrs);
-    flow_credit_emit(1.0);   /* a new endpoint: this flow emitted value of information, the WFQ reward */
+    {
+        int novel = novelty_note(NOVELTY_ENDPOINT, nid);
+        int hnovel = endpoint_note_headers(e, 0);
+        novelty_credit(NOVELTY_ENDPOINT, novel);
+        if (!novel && e->nh) novelty_credit(NOVELTY_HEADER, hnovel);
+    }
 done:
     free(path);
     free(disp);

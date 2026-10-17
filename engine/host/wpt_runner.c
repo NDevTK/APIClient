@@ -58,6 +58,7 @@
 #include "core/frame/navigable.h"
 #include "solver/world.h"
 #include "solver/cow.h"
+#include "solver/novelty.h"   /* the endpoint surface's identity scope, stated by this host */
 #include "solver/dom_cow.h"
 #include "core/frame/window_message.h"
 #include "core/structured_clone.h"
@@ -2430,6 +2431,9 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        is the frontier's. Its contents are the scheduler's: engine_sched_begin seeds it and asserts it finds it
        empty, so an agent init that put a flow there could not be the agent of a session. */
     flow_registry_init(doc_name);
+    /* The scope the endpoint surface qualifies its identities by: a request a test makes is recorded like any
+       other, and solver/novelty.h refuses an identity asked before an instance names its origin. */
+    novelty_set_scope(origin);
     /* The DOM chokepoint's context. §4.2.3's insertion and removing steps are fired from the solver's tree
        chokepoint, which needs the runtime they run in; without it no <script> is prepared, no custom element
        upgrades and no §4.8.5 child navigable is created. */

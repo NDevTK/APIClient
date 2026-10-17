@@ -85,6 +85,7 @@
 #include "solver/concolic.h"
 #include "solver/cow.h"
 #include "solver/endpoint.h"
+#include "solver/novelty.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/quantum.h"
@@ -459,7 +460,7 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
 {
     /* §7.1.5's set, parsed before anything is built from it; see the read below. */
     SandboxFlags creation_flags = 0;
-    char *origin;
+    char *origin, *novelty_scope;
     HeaderList response_headers;
     /* §7.5.1's type and content type for the Document this entry installs, decided by the parse's §7.4.5 dispatch
        and carried to the install. */
@@ -521,6 +522,10 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
               "and every relative URL the page builds resolves against it");
         origin = (creation_flags & SANDBOX_ORIGIN) ? strdup("null") : url_serialize_origin(&rec);
         CHECK(origin != NULL, "the document address has no serializable origin, or OOM");
+        /* The novelty scope is the address's origin whatever the sandbox makes the principal: it qualifies how
+           this instance's relative addresses resolve, which a sandboxed document's do against its own URL. */
+        novelty_scope = url_serialize_origin(&rec);
+        CHECK(novelty_scope != NULL, "the document address has no serializable origin, or OOM");
         url_record_free(&rec);
     }
     memset(&response_headers, 0, sizeof response_headers);
@@ -547,6 +552,8 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                      "segments, so an unnamed document cannot take part in cross-document time travel");
     flow_registry_init(doc_id);
     endpoint_init();
+    novelty_set_scope(novelty_scope);
+    free(novelty_scope);
     solve_init(g_ctx);
 
     /* The two hook sets the solver owns, each declared by its own component and shared with test_forced.c. */
@@ -1835,4 +1842,15 @@ QJS_EXPORT void qjs_emit_partial(void)
     printf("@RESULT %s\n", js);
     free(js);
     fflush(stdout);
+}
+
+/* The trusted zone's known identities for this instance's cluster, in solver/novelty.h's set text: what the
+   product already holds, so a credit site pays nothing for it. Additive, and valid before qjs_init so that the
+   markup the root's parse records is judged against the set too; the zone calls it at boot and again whenever
+   another instance's result grows the product. Borrowed: every line is parsed and copied inside the call. */
+QJS_EXPORT void qjs_novelty_learn(const char *text)
+{
+    CHECK(text != NULL, "qjs_novelty_learn was handed no text — the zone states an empty set as the spelling "
+                        "line alone");
+    novelty_learn(text);
 }

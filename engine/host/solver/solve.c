@@ -15,6 +15,7 @@
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/metrics.h"   /* detect_sink raises the arrival census */
+#include "solver/novelty.h"   /* what opening a search and proving it are worth against the product */
 #include "check.h"
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>
@@ -369,6 +370,13 @@ static const SinkClass *sink_class(int sink) {
     return &SINKS[sink];
 }
 static const char *sink_name(int sink) { return sink_class(sink)->name; }
+
+/* The identity of a search (NOVELTY_SINK) or of its fired finding (NOVELTY_FINDING): the (class, source) pair
+   both `sink_search` and record_sink's store are keyed by, so one entry is one identity. */
+static NoveltyId sink_identity(NoveltyKind kind, int sink, const char *src) {
+    const char *f[2] = { sink_name(sink), src };
+    return novelty_id(kind, f, 2);
+}
 
 /* The class of a candidate flow's `cand_sink`. The flow holds this table's own name pointer, so the binding is
    identity rather than a string compare, and any other pointer is a candidate this table did not seed. */
@@ -821,8 +829,9 @@ static void add_pending(const char *src, const char *root, int sink) {
            "be frozen would be whatever chain the previously-switched-in flow left behind");
     /* The flow that made the observation is paid for it. The credit is at the open rather than at the slot's
        creation, because a cold resume creating the slot observes nothing and runs with no flow; it sits below
-       the assert so a missing flow aborts instead of silently skipping the payment. */
-    flow_credit_emit(1.0);
+       the assert so a missing flow aborts instead of silently skipping the payment. A search the product already
+       holds, opened by another document or session, is paid nothing (solver/novelty.h). */
+    novelty_credit(NOVELTY_SINK, novelty_note(NOVELTY_SINK, sink_identity(NOVELTY_SINK, sink, src)));
     cand_learn_path(e);
     sc = sink_class(sink);
     /* A single-context class's written-down vectors are attacks: the seeder may withdraw a contradicted one, and
@@ -887,8 +896,9 @@ static void record_sink(int cls, const char *source, const char *poc) {
           "requires every emitted PoC to carry its reproduction envelope, and a finding that lost its root "
           "reports as one no navigation reaches");
     /* The flow that proved the exploit is paid for it, as add_pending pays the detection. A candidate flow
-       records no endpoints (endpoint_suppress), so without this its reward would rest on the optimism term. */
-    flow_credit_emit(1.0);
+       records no endpoints (endpoint_suppress), so without this its reward would rest on the optimism term. A
+       finding the product already holds is paid nothing (solver/novelty.h). */
+    novelty_credit(NOVELTY_FINDING, novelty_note(NOVELTY_FINDING, sink_identity(NOVELTY_FINDING, cls, f->source)));
     /* Give back the re-injection point: the blob pins the frozen segment and every segment below it, and a
        solved search seeds nothing further. Clearing it is what closes the search, since search_seeds reads this
        NULL; the probe's other arms keep arriving after a fire and would otherwise be seeded again. */
@@ -897,7 +907,10 @@ static void record_sink(int cls, const char *source, const char *poc) {
 
 /* A detection whose path pinned a principal (see detect_sink): the search learns the root the way add_pending
    does, so both doors agree on how these bytes arrive, and records the sender. It seeds nothing and freezes no
-   path. The flow is paid when the demand is new, since a new sender demand is new output. */
+   path. The flow is paid when the demand is new, since a new sender demand is new output.
+   Named residual. Not covered: the demand is new against this instance's table only. Next diff builds: a
+   NOVELTY_SENDER identity over the pin rows' (principal, pin) spelling, noted and credited as add_pending is.
+   Absence shows as: a second document of one app paid for a pinned sink's sender the product already holds. */
 static void park_on_sender(const char *src, const char *root, int sink) {
     int created = 0;
     Cand *e = sink_search(src, sink, &created);

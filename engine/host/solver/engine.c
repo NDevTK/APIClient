@@ -51,6 +51,7 @@
 #include "solver/reply_decode.h" /* …and what the reply body itself teaches — see engine_provide */
 #include "solver/pending_index.h" /* which records a reply answers, without walking the frontier to find out */
 #include "solver/endpoint.h"    /* the @H surface, and one of the three tables no leak walk in this runtime can see */
+#include "solver/novelty.h"     /* the identity set novelty_free gives back beside the @H surface */
 #include "solver/attr_shadow.h" /* …and the taint shadow, whose entries are GC objects and are leaked by two hosts */
 #include "solver/metrics.h"     /* the agent's metrics block, released with the agent */
 #include "check.h"
@@ -11828,6 +11829,9 @@ void solver_agent_free(JSContext *ctx)
     g_orphan_claims_met = 0; g_orphan_claims_unmet = 0; g_orphan_claims_closed = 0;
     attr_shadow_free(ctx);
     endpoint_free();
+    /* And the identity set with the tables whose credit sites filed it: an identity left standing would assert
+       against the next agent's first mint of the same record. */
+    novelty_free();
     /* The page-error console, beside the other emission table and after the whole platform, so its tables' rows
        and its route latch do not outlive the agent. Safe here because every writer is gone, and there are two
        kinds: a flow (`flow_step`, `flow_run_one_job`, a module's rejection reaction), all released by

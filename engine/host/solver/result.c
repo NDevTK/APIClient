@@ -6,6 +6,7 @@
 #include "solver/compose.h"   /* every census below is sized by what it writes — see composef */
 #include "solver/result.h"
 #include "solver/endpoint.h"
+#include "solver/novelty.h"
 #include "solver/rung_entry.h"  /* the invoker rungs' denominator, read beside `stepUnitRuns` */
 #include "solver/solve.h"
 #include "solver/engine.h"
@@ -1628,6 +1629,9 @@ char *result_json(JSContext *ctx) {
     /* …and what the order was denominated in: solver/quantum.h's composer, a property of the host, without
        which two `_wfq` orderings are not comparable (see result.h). */
     char *quantum = quantum_json();
+    /* …and what this instance's emissions were worth against the product (solver/novelty.h): the credit census,
+       and every identity it filed, which is how the trusted zone's known set grows. */
+    char *novelty = novelty_json();
     /* No `probeResults` surface: a probe answer is the reply to a deliberately malformed request, which this
        engine cannot make (its only network edge is the pending register, and the host performs a GET through
        safeFetch). extension/lib/req2proto.js issues the probe as the page and writes
@@ -1635,9 +1639,9 @@ char *result_json(JSContext *ctx) {
     char *out;
 
     if (!eps || !sinks || !errs || !errsRetracted || !errsExplored || !wfq || !cold || !heap || !swap ||
-        !forkAt || !quantum || !absent) {
+        !forkAt || !quantum || !absent || !novelty) {
         free(eps); free(sinks); free(errs); free(errsRetracted); free(errsExplored); free(wfq);
-        free(cold); free(heap); free(swap); free(forkAt); free(quantum); free(absent);
+        free(cold); free(heap); free(swap); free(forkAt); free(quantum); free(absent); free(novelty);
         return NULL;
     }
     /* Sized by composef (solver/compose.h), so a field added below needs no count, slack or margin. The fit is
@@ -1815,6 +1819,7 @@ char *result_json(JSContext *ctx) {
                              /* …and what all of the above was denominated in: a property of the host that decides
                                 whether two of these documents may be compared at all. result.h and
                                 solver/quantum.h state the argument; nothing in this file composes it. */
+                             "\"_novelty\":%s,"
                              "\"_quantum\":%s,\"_park\":%s}",
                      eps, sinks, errs, errsRetracted, errsExplored, posts,
                      engine_switch_count(), flow_created_count(), solve_candidate_count(),
@@ -1834,6 +1839,7 @@ char *result_json(JSContext *ctx) {
                      place.cb_width_asks, place.cb_width_served, place.cb_width_derived,
                      casc.asks_life, casc.served_life, casc.resolved_life,
                      casc.computed_asks_life, casc.computed_served_life, casc.computed_resolved_life,
+                     novelty,
                      quantum,
                      cold_park_json());
         free(scensus);
@@ -1853,5 +1859,6 @@ char *result_json(JSContext *ctx) {
     free(forkAt);
     free(absent);
     free(quantum);
+    free(novelty);
     return out;
 }

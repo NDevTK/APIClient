@@ -122,6 +122,9 @@ QJS_EXPORT void qjs_set_yield_floor(double floor);
 QJS_EXPORT void qjs_request_park(void);
 QJS_EXPORT void qjs_emit_partial(void);
 
+/* The product's known identities for this cluster (solver/novelty.h's set text), at boot and incrementally. */
+QJS_EXPORT void qjs_novelty_learn(const char *text);
+
 /* NAMED RESIDUAL OVER THE WHOLE PAINT SURFACE BELOW — IT HAS NO CONSUMER IN THE TRUSTED ZONE, AND THE
    ENGINE HALF IS NOT WHAT IS MISSING. Every paint entry declared below is in build.mjs's `QJS_ABI`, so each
    is `--export=`'d on wasm-ld and reaches the shipped module as `Module._qjs_*`; a host could call one today
