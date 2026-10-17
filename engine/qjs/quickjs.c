@@ -54079,6 +54079,15 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
             DCHECK(JS_VALUE_GET_TAG(genobj) == JS_TAG_OBJECT,
                    "clone_deep_flow: generator-body fork could not resolve the generator object");
             JSGeneratorData *g0 = otf->gen_data;
+            /* The swap gen_fork records installs g1 into `genobj` at every switch-in, so `genobj` must be the
+               generator whose running state this frame is; asserted here, where the frame that resolved it is in
+               scope, rather than at the switch-in that would install into whatever it named. */
+            DCHECKF(JS_VALUE_GET_OBJ(genobj)->class_id == JS_CLASS_GENERATOR &&
+                    JS_VALUE_GET_OBJ(genobj)->u.generator_data == g0,
+                    "clone_deep_flow: a generator-drive frame (cont kind %d, %s drive) resolved an object that is "
+                    "not the generator whose state it runs (class %d) — the sibling's swap would install a "
+                    "generator state into it", (int)otf->cont_kind, gen_forof ? "for-of" : "direct .next()",
+                    (int)JS_VALUE_GET_OBJ(genobj)->class_id);
             JSStackFrame *gof = &g0->func_state.frame;
             JSGeneratorData *g1 = js_mallocz(ctx, sizeof(*g1));
             if (!g1) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
