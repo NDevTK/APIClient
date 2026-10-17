@@ -3692,6 +3692,12 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
        bucket's key, re-keyed where a family's reward, placement or notch moves (flow_credit_emit, flow_set_running,
        flow_restore_reward, flow_age_running), with unplaced families keyed off the clock as one group. Absence
        shows as: `scanIndexEntries` per `scanIndexAsks` rising with `families` while weighings per ask stay flat. */
+    /* Named residual. Not covered: a bucket's key reads its treap's maximum uncarried, so an ask opens every bucket
+       whose uncarried maximum reaches the answer and descends each one's straddling path, though most members
+       carry most of a quantum. Next diff builds: bucket keys over the reward-relative weight `b + max(key - Q *
+       floor((fam_us + phase) / S))`, which only falls as the family burns, so a key refreshed at the pop that
+       finds it stale stays an upper bound. Absence shows as: entries per ask flat in `members` and proportional to
+       `branches`. */
     for (fam = g_ix_fams; fam; fam = fam->ix_fnext) {
         FlowIxNode *top = fam->ix_buckets;
         ix_q_push(&q, &IX_BUCKET(top)->ix_q, acct_family_coord(fam), top->x, top->self, top->ikey, top->seq,
