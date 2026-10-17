@@ -119,6 +119,7 @@
 #include "core/css/css_keyword.h"
 #include "core/css/css_length.h"
 #include "core/css/css_transform_function.h"
+#include "core/css/font_metrics.h"
 #include "core/fonts/font_matching.h"
 #include "quickjs.h"
 
@@ -388,6 +389,11 @@ CssPx css_font_size_px(lxb_dom_element_t *el);
    A VERTICAL WRITING MODE CRASHES in the direction resolution this shares with `ch` and `ic`, which is where
    css-writing-modes-4 §5.1's `text-orientation` is named as the row to add. */
 CssPx css_font_advance_measure_px(lxb_dom_element_t *el, InstalledFont face, uint32_t codepoint);
+
+/* The pair kerning `face` adds to the advance of `codepoint` in `el`'s run, at `el`'s font size, given what
+   follows it in that run (core/css/font_metrics.h). Zero in a vertical inline axis, whose 'vkrn' is not built. */
+CssPx css_font_kerning_px(lxb_dom_element_t *el, InstalledFont face, uint32_t codepoint,
+                          FontMetricsCodepointAfter after, void *arg);
 
 /* css-values-4 §6.1.1's `ch` on `el`, in CSS pixels: the typical advance measure of "0" in the face that
    renders it, at `el`'s own computed `font-size`. css-text-3 §4.1.2's 0.5ch tab threshold is its reader. */

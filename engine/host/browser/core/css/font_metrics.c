@@ -148,6 +148,25 @@ static const struct { uint32_t cp; FontMetricsAdvanceDirection dir; double em; }
    synthesize vertical font metrics for fonts that lack them. (This specification does not define heuristics
    for synthesizing such metrics.)" — at which point the measure becomes determinable and the assumption stops
    applying. Until then the crash that names that work lives at the entry above, where a line break asks. */
+/* The run's following scalar values as the face's glyphs, for pair_kerning_x_advance. */
+typedef struct { FontMetricsCodepointAfter after; void *arg; const OpenTypeMetrics *face; } FontMetricsGlyphs;
+
+static int32_t font_metrics_glyph_after(void *arg, size_t k)
+{
+    FontMetricsGlyphs *g = arg;
+    int32_t cp = g->after(g->arg, k);
+
+    return cp < 0 ? -1 : (int32_t)open_type_metrics_glyph_id(g->face, (uint32_t)cp);
+}
+
+double font_metrics_kerning_em(InstalledFont font, uint32_t left, FontMetricsCodepointAfter after, void *arg)
+{
+    FontMetricsGlyphs g = { after, arg, installed_font_metrics(font) };
+
+    return (double)pair_kerning_x_advance(installed_font_kerning(font), open_type_metrics_glyph_id(g.face, left),
+                                          font_metrics_glyph_after, &g) / g.face->units_per_em;
+}
+
 double font_metrics_typical_advance_measure_em(InstalledFont font, uint32_t codepoint,
                                                FontMetricsAdvanceDirection direction)
 {

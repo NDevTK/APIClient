@@ -125,6 +125,11 @@ typedef struct {
        self-consistent-looking offset array out of the same bytes, which is why core/fonts/glyph_outline.h
        walks the whole array against it. Zero when `has_outlines` is false. */
     bool     long_loca;
+    /* 'GPOS' — Glyph Positioning Table and 'GDEF' — Glyph Definition Table, located and decoded by
+       core/fonts/pair_kerning.h, as the outline pair is by its own decoder. Zero length for a table the face
+       lacks. */
+    size_t   gpos, gpos_len;
+    size_t   gdef, gdef_len;
 } OpenTypeMetrics;
 
 /* READ a face out of `sfnt[0..len)`, validating every claim the bytes make. Returns false with `m->reject` set
@@ -144,6 +149,10 @@ bool open_type_metrics_read(OpenTypeMetrics *m, const unsigned char *sfnt, size_
    glyph that really gets drawn, which is why this returns 0 rather than failing: the caller that wants
    "does this face cover it?" is asking a different question and asks it below. */
 uint16_t open_type_metrics_glyph_id(const OpenTypeMetrics *m, uint32_t codepoint);
+
+/* The face's 'GPOS' and 'GDEF' spans, each NULL with a zero length where the face has no such table. */
+void open_type_metrics_layout_tables(const OpenTypeMetrics *m, const unsigned char **gpos, size_t *gpos_len,
+                                     const unsigned char **gdef, size_t *gdef_len);
 
 /* DOES THIS FACE COVER THIS SCALAR VALUE — glyph 0 is the answer to two different questions and this is the one
    that tells them apart. css-values-4 §6.1.1's `ch` and `ic` are stated over the "0" and "水" glyph "in the

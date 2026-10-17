@@ -365,7 +365,7 @@ bool open_type_metrics_read(OpenTypeMetrics *m, const unsigned char *sfnt, size_
     uint16_t num_tables, i;
     uint32_t prev_tag = 0;
     bool first_tag = true;
-    OtTable head, maxp, hhea, hmtx, cmap, vhea, vmtx, os2, glyf, loca;
+    OtTable head, maxp, hhea, hmtx, cmap, vhea, vmtx, os2, glyf, loca, gpos, gdef;
 
     DCHECK(m != NULL && sfnt != NULL,
            "a face was read out of a NULL pointer. The bytes are BORROWED by OpenTypeMetrics and must outlive "
@@ -439,7 +439,13 @@ bool open_type_metrics_read(OpenTypeMetrics *m, const unsigned char *sfnt, size_
     os2 = ot_find(m, num_tables, OT_TAG('O', 'S', '/', '2'));
     glyf = ot_find(m, num_tables, OT_TAG('g', 'l', 'y', 'f'));
     loca = ot_find(m, num_tables, OT_TAG('l', 'o', 'c', 'a'));
+    gpos = ot_find(m, num_tables, OT_TAG('G', 'P', 'O', 'S'));
+    gdef = ot_find(m, num_tables, OT_TAG('G', 'D', 'E', 'F'));
     m->has_os2 = os2.found;
+    m->gpos = gpos.found ? gpos.off : 0;
+    m->gpos_len = gpos.found ? gpos.len : 0;
+    m->gdef = gdef.found ? gdef.off : 0;
+    m->gdef_len = gdef.found ? gdef.len : 0;
 
     if (!head.found || !maxp.found || !hhea.found || !hmtx.found || !cmap.found)
         OT_REJECT(m, "the face is missing a table the measurement needs. 'head' — Font Header Table carries "
@@ -610,6 +616,16 @@ bool open_type_metrics_read(OpenTypeMetrics *m, const unsigned char *sfnt, size_
 }
 
 /* ---- lookup ----------------------------------------------------------------------------------------------- */
+
+void open_type_metrics_layout_tables(const OpenTypeMetrics *m, const unsigned char **gpos, size_t *gpos_len,
+                                     const unsigned char **gdef, size_t *gdef_len)
+{
+    DCHECK(m != NULL && m->reject == NULL && m->sfnt != NULL, "a face that did not read was asked for its tables");
+    *gpos = m->gpos_len ? m->sfnt + m->gpos : NULL;
+    *gpos_len = m->gpos_len;
+    *gdef = m->gdef_len ? m->sfnt + m->gdef : NULL;
+    *gdef_len = m->gdef_len;
+}
 
 /* THE ASSERT EVERY ACCESSOR OPENS WITH. A face that failed to read is zeroed, so reading one would hand back
    zeros — a plausible datum indistinguishable from a measurement, which is the exact defect a default hides.

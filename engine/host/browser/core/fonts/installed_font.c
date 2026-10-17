@@ -16,10 +16,13 @@ typedef struct {
     bool metrics_read;
     GlyphOutlines outlines;
     bool outlines_read;
+    PairKerning kerning;
+    bool kerning_read;
 } InstalledFace;
 
 static InstalledFace g_faces[INSTALLED_FONT_COUNT] = {
-#define INSTALLED_FONT_ROW(id, family, fact, bytes) { family, bytes, &bytes##_LEN, { 0 }, false, { 0 }, false },
+#define INSTALLED_FONT_ROW(id, family, fact, bytes) \
+    { family, bytes, &bytes##_LEN, { 0 }, false, { 0 }, false, { 0 }, false },
     INSTALLED_FONT_LIST(INSTALLED_FONT_ROW)
 #undef INSTALLED_FONT_ROW
 };
@@ -83,4 +86,24 @@ const GlyphOutlines *installed_font_outlines(InstalledFont f)
         face->outlines_read = true;
     }
     return &face->outlines;
+}
+
+const PairKerning *installed_font_kerning(InstalledFont f)
+{
+    InstalledFace *face = installed_face(f);
+    const OpenTypeMetrics *m = installed_font_metrics(f);
+
+    if (!face->kerning_read) {
+        const unsigned char *gpos, *gdef;
+        size_t gpos_len, gdef_len;
+
+        open_type_metrics_layout_tables(m, &gpos, &gpos_len, &gdef, &gdef_len);
+        /* A CHECK for the reason the metrics read gives: the bytes are this user agent's own. */
+        CHECKF(pair_kerning_read(&face->kerning, gpos, gpos_len, gdef, gdef_len),
+               "installed font %s carries 'GPOS' kerning this engine cannot state (%s); re-run "
+               "engine/fontsubset.mjs rather than editing the bytes", face->family,
+               face->kerning.reject ? face->kerning.reject : "no reason given");
+        face->kerning_read = true;
+    }
+    return &face->kerning;
 }

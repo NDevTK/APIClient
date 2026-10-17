@@ -220,6 +220,13 @@ double font_metrics_advance_measure_em(InstalledFont font, uint32_t codepoint,
 double font_metrics_typical_advance_measure_em(InstalledFont font, uint32_t codepoint,
                                                FontMetricsAdvanceDirection direction);
 
+/* The scalar value `k` places after a character in its run (k = 0 is the next), or -1 past the run's end. */
+typedef int32_t (*FontMetricsCodepointAfter)(void *arg, size_t k);
+
+/* The horizontal pair kerning `font` applies to the character `left` in its run, as a multiple of the em
+   (core/fonts/pair_kerning.h): the adjustment to its advance from the pairs it forms with what follows. */
+double font_metrics_kerning_em(InstalledFont font, uint32_t left, FontMetricsCodepointAfter after, void *arg);
+
 /* CSS 2.1 §10.8.1's `A` — `font`'s "characteristic height above the baseline" — for that face
    rendered at `font_size`, in CSS pixels. It is the used value css-values-4 §6.1.1's `cap` unit falls back to.
    IT TAKES THE SIZE RATHER THAN ANSWERING A RATIO because the ascent is a METRIC and not a multiplier: a

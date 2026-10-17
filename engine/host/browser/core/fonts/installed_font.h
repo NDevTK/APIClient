@@ -14,6 +14,7 @@
 
 #include "core/fonts/glyph_outline.h"
 #include "core/fonts/open_type_metrics.h"
+#include "core/fonts/pair_kerning.h"
 
 #define INSTALLED_FONT_LIST(X)                                                              \
     X(LIBERATION_SERIF, "Liberation Serif", "liberationSerif", LIBERATION_SERIF_SFNT)       \
@@ -38,5 +39,8 @@ const OpenTypeMetrics *installed_font_metrics(InstalledFont f);
 /* The face's TrueType outlines, proved on first use. `reject` is non-NULL exactly when the face carries no
    'glyf'/'loca' pair, which is a capability (CFF) and not a broken face. */
 const GlyphOutlines *installed_font_outlines(InstalledFont f);
+
+/* The face's 'GPOS' pair kerning, proved on first use; a face with no 'GPOS' kerns nothing. */
+const PairKerning *installed_font_kerning(InstalledFont f);
 
 #endif

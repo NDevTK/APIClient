@@ -549,10 +549,37 @@ static CssPx tr_tab_advance(lxb_dom_element_t *style, CssPx pos)
    line ends, so a prefix that trimmed over `[lo, upto)` would remove a mid-line space and the offsets would not
    add up to the line's size. `upto == hi` is the size, where the line's last item ends (a fragment's far
    edge); every smaller `upto` is a position inside it. */
+/* What follows character `at` in its shaping run for pair kerning: the characters after it on the line in the
+   same element and face, up to a box edge, an atomic inline, a forced break or the trim. */
+typedef struct { const TextRunMeasure *m; size_t at, end; } TrKernRun;
+
+static int32_t tr_kern_after(void *arg, size_t k)
+{
+    const TrKernRun *r = arg;
+    size_t j = r->at + 1 + k;
+    const TextRunItem *left = &r->m->items[r->at];
+
+    if (j >= r->end || r->m->items[j].kind != TEXT_RUN_ITEM_CHAR || r->m->items[j].style != left->style ||
+        r->m->items[j].face != left->face)
+        return -1;
+    return (int32_t)r->m->items[j].cp;
+}
+
+/* A shaping run's inline size, as real Chrome snaps it: Chromium 0842759f
+   third_party/blink/renderer/core/layout/inline/line_breaker.cc sets an item's inline size to its shape
+   result's SnappedWidth(), which platform/fonts/shaping/shape_result.h defines as
+   `LayoutUnit::FromFloatCeil(width_)`, the advances' sum rounded up to the next 1/64 px. */
+static CssPx tr_snapped_width(CssPx width)
+{
+    return css_px_atom("Blink ShapeResult::SnappedWidth: ceil(width * 64) / 64", &width, 1,
+                       ceil(width.px * 64.0) / 64.0);
+}
+
 static CssPx tr_line_prefix(const TextRunMeasure *m, size_t lo, size_t hi, size_t upto,
                             TextRunSizeBasis basis)
 {
-    CssPx sum = css_px(0.0);
+    CssPx sum = css_px(0.0), run = css_px(0.0);
+    lxb_dom_element_t *run_style = NULL;
     size_t i, keep_lo = hi, keep_hi = lo;
 
     DCHECK(lo <= hi && hi <= m->count, "a line was measured over a range that is not inside the collected run");
@@ -569,34 +596,58 @@ static CssPx tr_line_prefix(const TextRunMeasure *m, size_t lo, size_t hi, size_
         if (tr_item_stops_trim(&m->items[i])) { keep_lo = i; break; }
     for (i = hi; i > lo; i--)
         if (tr_item_stops_trim(&m->items[i - 1])) { keep_hi = i; break; }
+    /* The characters of one element form one shaping run, whose advances are summed and snapped once where
+       it ends (tr_snapped_width); a prefix that stops inside a run adds its unsnapped advances. */
     for (i = lo; i < upto; i++) {
         CssPx advance;
+        TrKernRun kr;
 
         /* The two sized kinds are summed wherever they land and neither is trimmed, since §4.1.2 removes only
            collapsible spaces: an edge adds css-sizing-3 §2.2's outer size at one boundary, an atomic inline
            CSS 2 §8.1's margin box (CSS 2.2 §9.4.2: "horizontal margins, borders, and padding are respected
            between these boxes"). */
         if (tr_kind_has_size(m->items[i].kind)) {
+            if (run_style != NULL) { sum = css_px_add(sum, tr_snapped_width(run)); run = css_px(0.0); }
+            run_style = NULL;
             sum = css_px_add(sum, tr_sized_px(m, i, basis));
             continue;
         }
         /* A forced break occupies a position and no width: its U+000A exists for [UAX14] alone, and an advance
            for it would be the first available font's .notdef. It is skipped before the trim test, so a break at
-           a line's edge is neither kept nor removed. */
-        if (m->items[i].kind == TEXT_RUN_ITEM_FORCED_BREAK) continue;
+           a line's edge is neither kept nor removed. It ends a shaping run. */
+        if (m->items[i].kind == TEXT_RUN_ITEM_FORCED_BREAK) {
+            if (run_style != NULL) { sum = css_px_add(sum, tr_snapped_width(run)); run = css_px(0.0); }
+            run_style = NULL;
+            continue;
+        }
         if (i < keep_lo || i >= keep_hi) continue;   /* §4.1.2 removed it from this line */
+        if (run_style != tr_char_at(m, i)->style) {
+            if (run_style != NULL) { sum = css_px_add(sum, tr_snapped_width(run)); run = css_px(0.0); }
+            run_style = tr_char_at(m, i)->style;
+        }
         /* A tab is preserved exactly when it is still U+0009: Phase I turns a collapsible one into a space. */
-        if (tr_char_at(m, i)->cp == 0x0009)
-            advance = tr_tab_advance(tr_char_at(m, i)->style, sum);
-        else
+        if (tr_char_at(m, i)->cp == 0x0009) {
+            advance = tr_tab_advance(tr_char_at(m, i)->style, css_px_add(sum, run));
+        } else {
             advance = css_font_advance_measure_px(tr_char_at(m, i)->style, tr_char_at(m, i)->face,
                                                   tr_char_at(m, i)->cp);
-        DCHECK(advance.px >= 0.0,
-               "the first available font reported a NEGATIVE advance measure for a character on a line. "
-               "OpenType 'hmtx' — Horizontal Metrics Table's advanceWidth is a UFWORD, .notdef's included, and "
-               "a computed `font-size` is non-negative — so this is a derivation that lost a sign and not a "
-               "face");
-        sum = css_px_add(sum, advance);
+            DCHECK(advance.px >= 0.0,
+                   "the first available font reported a NEGATIVE advance measure for a character on a line. "
+                   "OpenType 'hmtx' — Horizontal Metrics Table's advanceWidth is a UFWORD, .notdef's included, "
+                   "and a computed `font-size` is non-negative — so this is a derivation that lost a sign");
+            kr.m = m;
+            kr.at = i;
+            kr.end = keep_hi < hi ? keep_hi : hi;
+            advance = css_px_add(advance, css_font_kerning_px(tr_char_at(m, i)->style, tr_char_at(m, i)->face,
+                                                              tr_char_at(m, i)->cp, tr_kern_after, &kr));
+        }
+        run = css_px_add(run, advance);
+    }
+    /* The run open at `upto` ends there when nothing of it continues on the line. */
+    if (run_style != NULL) {
+        bool continues = upto < hi && upto < keep_hi && m->items[upto].kind == TEXT_RUN_ITEM_CHAR &&
+                         m->items[upto].style == run_style;
+        sum = css_px_add(sum, continues ? run : tr_snapped_width(run));
     }
     return sum;
 }

@@ -62,12 +62,10 @@
  * applies to all remaining glyph IDs") is reached from a page through DejaVu Sans Mono, whose short-form table
  * gives most mapped glyphs the last record's advance; each generated file states its own face's case.
  *
- * WHAT IS DROPPED AND WHY DROPPING IT IS SOUND FOR THE QUESTIONS ASKED. The engine asks a face FOUR questions:
- * what is `unitsPerEm`, which glyph does this scalar value map to, what is that glyph's advance, and what
- * SHAPE is it. OpenType answers the first three from 'head', 'cmap', and 'hhea'+'hmtx'+'maxp' and from nothing
- * else, and the fourth from 'glyf'+'loca' — so the tables kept are those seven (plus 'vhea'/'vmtx' where a
- * face has them; no installed face does, which is why a vertical advance is a NAMED unbuilt capability in
- * core/fonts/open_type_metrics.c rather than a silent fallback to the horizontal number).
+ * WHAT IS DROPPED AND WHY DROPPING IT IS SOUND. The engine asks a face for `unitsPerEm`, a scalar value's glyph,
+ * its advance, its SHAPE and a pair's kerning, which OpenType answers from 'head', 'cmap', 'hhea'+'hmtx'+'maxp',
+ * 'glyf'+'loca' and 'GPOS' with 'GDEF''s classes (core/fonts/pair_kerning.h): those, plus 'vhea'/'vmtx' where
+ * a face has them (none does, so a vertical advance is a NAMED unbuilt capability in open_type_metrics.c).
  *
  * A TABLE IS KEPT WHEN THE ENGINE ASKS A QUESTION ONLY THAT TABLE ANSWERS, and the list grows when the engine
  * learns to ask, never when a table looks useful.
@@ -75,8 +73,8 @@
  * SO WHAT STILL GOES IS 'CFF '/'MATH'/'cvt '/'fpgm'/'prep'/'gasp' — the first because outlines that are not
  * TrueType are a form the sfntVersion pin above refuses outright, and the rest because they are HINTING:
  * instructions that grid-fit a rasterized result at a particular size, which this engine does not do and
- * which core/fonts/glyph_outline.c reads past by name. And 'GSUB'/'GPOS'/'GDEF'/'kern' (SHAPING — a real absence and not a cosmetic one: a shaping engine
- * would need them, and until one exists the advance of a run is the sum of its glyphs' advances), 'OS/2'
+ * which core/fonts/glyph_outline.c reads past by name. And 'GSUB' (substitution, a real absence: a run's
+ * glyphs are its characters' own), 'kern' (HarfBuzz reads it only for a face with no 'GPOS'), 'OS/2'
  * (sTypoAscender/sTypoDescender, which CSS 2.1 §10.8.1's note recommends for `A` and `D` —
  * core/css/font_metrics.c still PICKS those two numbers, and the day it reads them off a face this list grows
  * a table), 'name'/'post'/'FFTM' (identification).
@@ -147,7 +145,8 @@ const FACES = {
   },
 };
 
-/* THE TABLES THE ENGINE READS. 'vhea'/'vmtx' are kept WHEN PRESENT and are not required: OpenType makes them
+/* THE TABLES THE ENGINE READS. 'GPOS'/'GDEF' are kept WHEN PRESENT: a face without them kerns nothing, which
+   is what HarfBuzz does with it too. 'vhea'/'vmtx' are kept WHEN PRESENT and are not required: OpenType makes them
    optional, and css-writing-modes-4 §5.1.1 "Vertical Typesetting and Font Features" says the UA "must
    synthesize vertical font metrics for fonts that lack them" while defining no heuristic for doing so — so
    their absence is a capability to build, stated at the lookup, not a hole to paper over here.
@@ -157,7 +156,7 @@ const FACES = {
    whose outlines are CFF would have to be pinned separately and would need a second decoder, so refusing it
    here is the honest arm and not a narrowing. */
 const REQUIRED = ["cmap", "glyf", "head", "hhea", "hmtx", "loca", "maxp"];
-const OPTIONAL = ["vhea", "vmtx"];
+const OPTIONAL = ["GDEF", "GPOS", "vhea", "vmtx"];
 
 const FACE = FACES[process.argv[2]];
 const input = process.argv[3];
