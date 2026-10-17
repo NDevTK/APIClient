@@ -109,7 +109,7 @@ static JSAtom console_label_example_atom(JSContext *ctx, JSValueConst label, con
            "or undefined and nothing else, so a DETERMINED example that is an object is a pin store holding a "
            "kind the read-back cannot mint, and §7.1.21 ToPropertyKey over it would re-enter the page's code "
            "from a C activation with no flow base under it");
-    if (JS_IsObject(ex) || (JS_IsUndefined(ex) && st != CONCOLIC_EX_DETERMINED)) {
+    if (JS_IsObject(ex) || (st != CONCOLIC_EX_HELD && st != CONCOLIC_EX_DETERMINED)) {
         JS_FreeValue(ctx, ex);
         return JS_ATOM_NULL;
     }

@@ -83,7 +83,11 @@ typedef struct {
        `br_key` is set. */
     char *br_key;
     signed char br_neg; /* 1 = this value is the logical complement of the predicate `br_key` names */
-    JSValue example;    /* concrete example, or JS_UNDEFINED */
+    JSValue example;    /* concrete example, meaningful only where `ex_has` says one is held */
+    /* Whether an example is held at all. `undefined` is a value a real read produces — a member the record the
+       visitor was served does not have — so absence is this bit and never the field's value. 1 wherever the mint
+       was handed bytes (concolic_alloc), and on a member read whose parent's example lacks the member. */
+    uint8_t ex_has;
     /* This value's own [[Prototype]] (§10.1.1 [[GetPrototypeOf]] ( )), derived once and held so the answer has
        an identity: `Object.getPrototypeOf(x) === Object.getPrototypeOf(x)` must be true, and §10.4.7.2
        SetImmutablePrototype ( obj, proto ) step 2 compares by SameValue against what step 1 returned.
@@ -2768,12 +2772,34 @@ static int example_slot(JSContext *ctx, JSValueConst parent_example, JSAtom atom
     return 1;
 }
 
-static JSValue example_member(JSContext *ctx, JSValueConst parent_example, JSAtom atom)
+/* The member's example, read off the parent's: 1 with `*out` owned (`undefined` included) where one is held, 0
+   where none is. An own data slot is its value. A member no object on an Object example's prototype chain holds
+   is `undefined`, §10.1.8.1 OrdinaryGet ( O, P, Receiver ) step 2.b's answer at a null prototype. An inherited
+   member and an accessor hold none: their value is a method or the page's code, not the record's bytes. */
+static int example_member(JSContext *ctx, JSValueConst parent_example, JSAtom atom, JSValue *out)
 {
-    JSValue v;
+    JSValue o, proto, v;
     int flags;
 
-    return example_slot(ctx, parent_example, atom, &v, &flags) ? v : JS_UNDEFINED;
+    if (example_slot(ctx, parent_example, atom, out, &flags))
+        return !(flags & JS_PROP_GETSET);
+    if (!JS_IsObject(parent_example))
+        return 0;
+    for (o = JS_GetPrototype(ctx, parent_example); JS_IsObject(o); o = proto) {
+        DCHECK(!JS_IsProxy(o), "an example's prototype chain reached a Proxy — its [[GetPrototypeOf]] and "
+                               "[[GetOwnProperty]] are the page's code, which no example read may run");
+        if (example_slot(ctx, o, atom, &v, &flags)) {
+            JS_FreeValue(ctx, v);
+            JS_FreeValue(ctx, o);
+            return 0;
+        }
+        proto = JS_GetPrototype(ctx, o);
+        JS_FreeValue(ctx, o);
+        CHECK(!JS_IsException(proto), "concolic: an example's prototype could not be read");
+    }
+    CHECK(!JS_IsException(o), "concolic: an example's prototype could not be read");
+    *out = JS_UNDEFINED;
+    return 1;
 }
 
 /* Exotic [[Get]]: reading any field of a concolic value yields a derived concolic carrying the field-path
@@ -2817,8 +2843,18 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     /* src = the field path (a precise @S injection point); root = the parent's, unchanged. A field of an
        unknown object is controlled separately, hence the new injection identity, but arrives by the same route
        as the object's bytes, and a report must say so. */
-    r = concolic_alloc(ctx, shape, shape, c->root, c->root_whose, ident,
-                       example_member(ctx, c->example, atom));
+    {
+        JSValue mex;
+        int held = c->ex_has && example_member(ctx, c->example, atom, &mex);
+
+        r = concolic_alloc(ctx, shape, shape, c->root, c->root_whose, ident, held ? mex : JS_UNDEFINED);
+        if (held) {
+            Concolic *rc = JS_GetOpaque(r, g_concolic_class);
+
+            DCHECK(rc != NULL, "a member read was minted as something that is not a concolic value");
+            rc->ex_has = 1;
+        }
+    }
     /* A member read's `src` is its own shape, so it names this value: the precondition the `pin_of` arm above
        stands on. Recorded for readers other than this mint, such as the CSS cascade asking about a value
        `el.setAttribute('t', cfg.theme)` stashed in the DOM, which have only the JSValue. */
@@ -3341,6 +3377,21 @@ static int example_operable(JSValueConst v) {
     return !JS_IsObject(v) && !JS_IsSymbol(v);
 }
 
+static ConcolicExState example_state_of(const Concolic *c, const Cons **ppin);
+/* Whether a concolic operand has bytes this flow may compute with: an example it holds, or a value it
+   determined, either of which may be `undefined`. concolic_example answers JS_UNDEFINED for absence too, so a
+   site that must tell `"a" + undefined` from an operand with no bytes asks this. Named residual. Not covered:
+   the arithmetic, builtin and call sites still read JS_UNDEFINED from concolic_example as absence. Next diff
+   builds: each of them asking this instead. Absence shows as: a value derived from an operand whose example is
+   `undefined` carrying no example where its operands' examples compute one. */
+static int example_present(JSValueConst v) {
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    const Cons *pin;
+    ConcolicExState st = example_state_of(c, &pin);
+
+    return st == CONCOLIC_EX_HELD || st == CONCOLIC_EX_DETERMINED;
+}
+
 /* The comparison's own example: the engine's real equality run over values the run already holds
  * (`JS_IsStrictEqual` is §7.2.14, `JS_IsEqual` is §7.2.13), never a re-implementation of either. The caller
  * states which algorithm through `op`, which matters because `"1" == 1` is true and `"1" === 1` is false.
@@ -3355,8 +3406,8 @@ static JSValue cmp_example(JSContext *ctx, JSValueConst a, JSValueConst b, int c
                            int is_neq, JSConcolicEqOp op) {
     JSValue exa = ca ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
     JSValue exb = cb ? concolic_example(ctx, b) : JS_DupValue(ctx, b);
-    int hava = ca ? !JS_IsUndefined(exa) : 1;
-    int havb = cb ? !JS_IsUndefined(exb) : 1;
+    int hava = ca ? example_present(a) : 1;
+    int havb = cb ? example_present(b) : 1;
     JSValue out = JS_UNDEFINED;
 
     if (hava && havb && example_operable(exa) && example_operable(exb)) {
@@ -4492,7 +4543,7 @@ JSValue concolic_own_keys_pred(JSContext *ctx, JSValueConst record)
     /* No question for an ordinary object (its key set is its shape) or a record with an example (its key set is
        the example's, answered by the internal method below). Only an example-free record has an unknown key
        set; the condition matches the method's so the asker and the reader agree. */
-    if (!c || !JS_IsUndefined(c->example))
+    if (!c || c->ex_has)
         return JS_UNINITIALIZED;
     return own_keys_pred(ctx, c);
 }
@@ -4537,7 +4588,7 @@ int concolic_own_key_mint(JSContext *ctx, JSValueConst record, int n)
         return 0;
     /* The same condition as concolic_own_keys_pred, written the same way: a record with an example has an
        observed key set, so no question was minted for the caller to stand on. */
-    DCHECK(JS_IsUndefined(c->example),
+    DCHECK(!c->ex_has,
            "a record whose example holds its key set was asked to materialise an UNKNOWN member — its key set "
            "is an observation about the payload this visitor was served, so the caller forked over a question "
            "concolic_own_keys_pred never minted");
@@ -4590,7 +4641,7 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
     *plen = 0;
     if (!c)
         return 0;
-    if (JS_IsUndefined(c->example)) {
+    if (!c->ex_has) {
         /* No example is not an empty record: answering the empty List as a fact would decide
            `Object.keys(x).length === 0` for a record the run never saw. So it is answered as the flow's own arm.
            The question (`concolic_own_keys_pred`) is asked by the consumer, which has a resume point to fork at;
@@ -5000,6 +5051,7 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
     c->root_whose = root_whose;   /* one fact with the root above — see the field and the assert */
     c->ident = ident;       /* consume — NULL means this engine cannot spell the value; see the struct */
     c->example = example;   /* consume */
+    c->ex_has = !JS_IsUndefined(example);
     c->cmp_op = OPCMP_NONE;
     /* The algorithm is the one field here reclaim_calloc cannot set: "not an equality" is CMP_ALGO_NONE, and
        its zero would be JS_CONCOLIC_EQ_LOOSE, claiming the page wrote `==` over a non-predicate. */
@@ -5231,7 +5283,7 @@ static ConcolicExState example_state_of(const Concolic *c, const Cons **ppin)
            arm without writing a value, so an entry is often present with nothing pinned (`pin_of`'s test). */
         if (p && p->val) { *ppin = p; return CONCOLIC_EX_DETERMINED; }
     }
-    if (JS_IsUndefined(c->example)) return CONCOLIC_EX_NONE;
+    if (!c->ex_has) return CONCOLIC_EX_NONE;
     if (g_ex_contra_any && c->ident) {
         const Cons *e = cons_lookup(c->ident);
         if (e && e->ex_contra) return CONCOLIC_EX_CONTRADICTED;
@@ -5295,6 +5347,7 @@ void concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example) {
     if (!c) { JS_FreeValue(ctx, example); return; }
     JS_FreeValue(ctx, c->example);
     c->example = example;   /* consume */
+    c->ex_has = !JS_IsUndefined(example);
 }
 
 static char *cstr_dup(JSContext *ctx, JSValueConst v) {   /* concrete operand -> its string form (heap copy) */
@@ -5470,8 +5523,8 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
        `"aundefined"` and `1 + undefined` is NaN, so absence is asked of the concolic side only. A concolic
        operand's structured example is absent here too: steps 1.a and 1.b would run §7.1.1 ToPrimitive over it,
        which is the page's code (example_operable). */
-    int hava = ca ? !JS_IsUndefined(exa) && example_operable(exa) : 1;
-    int havb = cb ? !JS_IsUndefined(exb) && example_operable(exb) : 1;
+    int hava = ca ? example_present(a) && example_operable(exa) : 1;
+    int havb = cb ? example_present(b) && example_operable(exb) : 1;
     JSValue example = JS_UNDEFINED;
     /* A concrete operand is a primitive by the time it reaches here: §7.1.1 over a raw Object runs the page's
        valueOf/toString, which belongs on the ToPrimitive trampoline (js_toprim_operand / do_toprim_tramp)

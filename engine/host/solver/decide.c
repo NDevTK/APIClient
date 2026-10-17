@@ -1425,15 +1425,13 @@ static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
     JSValue ex;
     int real;
 
-    /* JS_UNDEFINED is concolic.h's spelling of an absent example, so a value whose example is `undefined` reads
-       as carrying none, except where `concolic_example_state` says DETERMINED: a pin of `undefined` proves the
-       condition falsy, so the primary is the false arm and its sibling is marked forced. The state and the value
-       come off one decision inside concolic.c, and asking the state is side-effect-free. NONE (no bytes) and
-       CONTRADICTED (bytes this path disproved) still answer unobserved, the sound direction; HELD cannot carry
-       `undefined` as a real example. */
+    /* concolic_example answers JS_UNDEFINED for an absent example too, so presence is the state's: HELD (an
+       example, `undefined` included — a member the served record lacks) and DETERMINED (a pin, which may be of
+       `undefined`) are bytes, and a falsy one makes the false arm primary. NONE (no bytes) and CONTRADICTED
+       (bytes this path disproved) answer unobserved, the sound direction. */
     st = concolic_example_state(cond);
+    if (st != CONCOLIC_EX_HELD && st != CONCOLIC_EX_DETERMINED) return REAL_ARM_UNOBSERVED;
     ex = concolic_example(ctx, cond);
-    if (JS_IsUndefined(ex) && st != CONCOLIC_EX_DETERMINED) return REAL_ARM_UNOBSERVED;
     real = JS_ToBool(ctx, ex);
     JS_FreeValue(ctx, ex);
     /* §7.1.2 ToBoolean's only failure is an exception VALUE, which an example can never be: an example rides

@@ -393,7 +393,7 @@ IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *p
         ConcolicExState st = concolic_example_state(v);
         JSValue ex = concolic_example(ctx, v);
 
-        if (JS_IsUndefined(ex) && st != CONCOLIC_EX_DETERMINED) {
+        if (st != CONCOLIC_EX_HELD && st != CONCOLIC_EX_DETERMINED) {
             JS_FreeValue(ctx, ex);
             /* AND THE TWO REMAINING STATES ARE ONE HAND-BACK, WHICH IS WHAT `st` IS STILL READ FOR AND WHAT IT
                IS NO LONGER READ FOR. It still separates a DETERMINED `undefined` — a DECIDED §7.4 answer, not
