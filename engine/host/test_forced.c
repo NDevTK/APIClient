@@ -30343,7 +30343,7 @@ static uint64_t native_cgroup_limit(void) {
 
 /* The RAM floor engine_reclaim_tail sells the frontier's tail at is an allocation that fails, and a 64-bit host
    under overcommit never fails one: a memory cgroup kills the process instead, with the tail unsold. So this
-   host refuses where the shipped vehicle does: wasm32's address space (build.mjs's WASM_ADDRESS_BYTES, its
+   host refuses where the shipped vehicle does: its wasm64 address space (build.mjs's WASM_ADDRESS_BYTES, its
    `-sMAXIMUM_MEMORY`), or a tighter memory cgroup limit or RLIMIT_AS already on the process. A sanitized build
    keeps its own reservation, which an address-space limit would refuse at start; the wasm build of this file is
    the shipped vehicle itself, whose linear memory is the ceiling. */

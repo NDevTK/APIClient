@@ -1,6 +1,6 @@
 /* APIClient v2 build — minimal emscripten WASM build of CLEAN quickjs-ng + the
  * host scheduler entry (engine/host/main.c). Deliberately small: the old build
- * (COW barrier post-processing, wasm64, JSPI, Lexbor/Z3 link) is gone with the
+ * (COW barrier post-processing, JSPI, Lexbor/Z3 link) is gone with the
  * fresh fork. Re-add each capability ONLY when the scheduler needs it, verified.
  *
  *   node engine/build.mjs                  -> engine/host/out/qjs.mjs + qjs.wasm (node smoke test)
@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { stampArtifact, gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 import { probeTables } from "./probe_rows.mjs";
 import { abortRecord } from "./abort_record.mjs";
-import { vehicleReading, compareVehicle } from "./vehicle.mjs";
+import { vehicleReading, compareVehicle, emsdkNode } from "./vehicle.mjs";
 import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
 import { objStore, toolIdentity } from "./obj_store.mjs";
 import { cpuText } from "./gate_cpu.mjs";
@@ -1294,6 +1294,28 @@ const forkSiteKeySlots = sourceFact(() =>
              "the @FORKAT reader checks that an unnamed-fork-site table reporting an eviction is actually " +
              "full, which is the condition Space-Saving's bound holds under — the same check the predicate " +
              "table gets, over its own size"));
+/* Each `QJS_EXPORT` prototype in engine/host/qjs_abi.h as an emscripten conversion signature: the return,
+   then each parameter, `p` for a pointer and `_` for an `int`, an `unsigned` or `void`. Every scalar of this
+   ABI is one of those i32 types; any other scalar type throws, because a 64-bit scalar would also need `p`
+   and this reading would have to guess which it is. */
+const abiPointerSignatures = sourceFact(() => {
+  const src = hostSource("qjs_abi.h", "the wasm64 ABI link states each entry's pointer parameters to emscripten");
+  const kind = (decl, where) => {
+    if (decl.includes("*")) return "p";
+    const type = decl.trim().split(/\s+/).filter((w) => !/^qjs_\w+$/.test(w));
+    const scalar = type.length > 1 ? type.slice(0, -1).join(" ") : type.join(" ");
+    if (["void", "int", "unsigned", "unsigned int"].includes(scalar)) return "_";
+    throw new Error(`[build] ${where} in engine/host/qjs_abi.h is \`${decl.trim()}\`, neither a pointer nor ` +
+                    `an i32 scalar; state its wasm64 conversion here before it crosses the ABI`);
+  };
+  const sigs = new Map();
+  for (const m of src.matchAll(/^QJS_EXPORT\s+([^;(]*?)\b(qjs_\w+)\s*\(([^)]*)\)\s*;/gm)) {
+    const params = m[3].trim() === "void" ? [] : m[3].split(",");
+    sigs.set(m[2], kind(m[1] + " " + m[2], `${m[2]}'s return`) +
+                   params.map((d, i) => kind(d, `${m[2]}'s parameter ${i}`)).join(""));
+  }
+  return sigs;
+});
 const progressEvery = sourceFact(() =>
   hostDefine("solver/engine.c", "ENGINE_PROGRESS_EVERY",
              "hungCause states its window as an absolute span of engine_work_done and the census cadence is " +
@@ -6803,10 +6825,15 @@ function report(stages, findings) {
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const QJS = join(ENGINE, "qjs");
-/* wasm32's address space, which the shipped engine's allocator refuses at (`-sMAXIMUM_MEMORY` in CFLAGS). The
-   native host is handed the same number as the address-space ceiling it arms (test_forced.c's
-   native_ceiling_arm), so the RAM floor the engine sells its tail at exists on both vehicles. */
-const WASM_ADDRESS_BYTES = 4294967296;
+/* The shipped engine is the wasm64 (Memory64) target, and this is its address space: the largest memory V8
+   grows a Memory64 instance to, kV8MaxWasmMemory64Pages (262144) pages of 64 KiB on a 64-bit host, which is
+   16 GiB (v8 src/wasm/wasm-limits.h, the same at branch-heads/15.5, which Chrome 155 ships, and at main; it
+   equals the JS API's kSpecMaxMemory64Pages). The allocator refuses at it (`-sMAXIMUM_MEMORY`), and the native
+   host is handed the same number as the address-space ceiling it arms (test_forced.c's native_ceiling_arm), so
+   the RAM floor the engine sells its tail at exists on both hosts. */
+const WASM_ADDRESS_BYTES = 262144 * 65536;
+/* The wasm target, on every emcc compile and link: an object compiled for wasm32 cannot link into wasm64. */
+const WASM_TARGET = ["-sMEMORY64=1"];
 const HOST = join(ENGINE, "host");
 const OUT = join(HOST, "out");
 const EXT_QJS = join(ENGINE, "..", "extension", "lib", "qjs");   // where bridge.js imports the engine from
@@ -6855,6 +6882,8 @@ const EMCC = join(EMSDK, "upstream", "emscripten", process.platform === "win32" 
        which wasm32 cannot run.
    So the check is a function called at each spawn site. The message is unchanged and still says exactly what to
    run, which is the half worth keeping: "emcc not found" alone sends whoever hits it hunting for the version. */
+/* The node a wasm program is spawned on (engine/vehicle.mjs's `wasmNode`), asked where it is spawned. */
+const wasmNode = () => emsdkNode(EMSDK);
 function requireEmcc() {
   if (existsSync(EMCC)) return EMCC;
   console.error("[build] emcc not found at " + EMCC + "\n" +
@@ -6907,7 +6936,7 @@ const LEXBOR_INC = LEXBOR_SRC;
    `-o` IS DELIBERATELY ABSENT: the output path is what the identity NAMES, so folding it in is circular. The
    213 sources are absent for the opposite reason — `lexborSourceId` IS their content. And `-r` is why the
    output is a relocatable partial-link object rather than an `.a`: emcc will not archive from `.c`. */
-const LEXBOR_CFLAGS = ["-I", LEXBOR_INC, "-O2", "-w", "-D_GNU_SOURCE", "-DENABLE_DUMPS", "-r"];
+const LEXBOR_CFLAGS = ["-I", LEXBOR_INC, "-O2", "-w", "-D_GNU_SOURCE", "-DENABLE_DUMPS", "-r", ...WASM_TARGET];
 /* ── NO SOURCE THIS REPOSITORY DOES NOT TRACK MAY REACH A COMPILE ────────────────────────────────────────
    THREE WALKERS ENUMERATE BY EXTENSION AND NONE OF THEM ASKS GIT, WHICH IS CORRECT AND IS WHY THIS EXISTS.
    `walkC` and `findC` below, and `lexbor_source.mjs`'s own walk, each take every `.c` (and for the content key
@@ -8544,7 +8573,7 @@ const CFLAGS = [
      strcmp. This line used to read `-w -Werror=implicit-function-declaration`, which does NOT work: `-w`
      suppresses the diagnostic outright, so the -Werror= promotion has nothing left to promote. The quiet list
      is explicit for that reason, and the moment it went in the gate found three more missing includes. */
-  "-O1", ...QUIET_WARNINGS,
+  "-O1", ...QUIET_WARNINGS, ...WASM_TARGET,
   "-D_GNU_SOURCE", "-DENABLE_DUMPS",
   /* `__FILE__` IS REPO-RELATIVE, AND THAT IS A CORRECTNESS FLAG AND NOT A TIDINESS ONE. Every source reaches
      the compiler by absolute path, so without this the string that bakes into an object — the one a DCHECK
@@ -8611,16 +8640,11 @@ const LDFLAGS_COMMON = [
   // (the failing C assert + file:line — e.g. a refcount/gc_obj_list leak), the offensive-programming ideal of a
   // LOUD *and* diagnosable dev failure. Off by default so normal dev builds stay fast; enable when debugging.
   ...(process.argv.includes("assert") ? ["-sASSERTIONS=2"] : []),
-  /* THE ARCHITECTURE'S CEILING, not a budget. wasm32 addresses 4 GiB and emscripten stops the heap at 2 GiB
-     unless told otherwise, so the growth flag alone was a 2 GiB cap wearing the word "growth". The smoke
-     fixture's forced multi-path run measures gigabytes of live allocation — the frontier holds every flow's COW
-     delta in RAM because the smoke has no IDB cold tier to page the low-value tail into — so the 2 GiB stop was
-     already the thing about to fail. Raising it to what the address space actually holds is the platform floor;
-     the real answer for a frontier this size is the cold tier, which is the scheduler's work and not a flag.
-     THE SANITIZED TARGET IS NOT HERE, and that is measured rather than assumed — see `sanitize` above: a wasm
-     ASan link cannot reach the second context switch inside 4 GiB, so the flag that used to sit on this line
-     was a mode that had never run. */
-  "-sALLOW_MEMORY_GROWTH=1", "-sMAXIMUM_MEMORY=" + WASM_ADDRESS_BYTES,
+  /* The architecture's ceiling, not a budget: emscripten stops the heap at 2 GiB unless told otherwise, so
+     the growth flag alone is a cap. The forced multi-path frontier holds every flow's COW delta in RAM until
+     the cold tier pages its tail out, so the ceiling is the address space WASM_ADDRESS_BYTES states. The
+     sanitized target is not here: see `sanitize` above. */
+  ...WASM_TARGET, "-sALLOW_MEMORY_GROWTH=1", "-sMAXIMUM_MEMORY=" + WASM_ADDRESS_BYTES,
   "-sSTACK_SIZE=8388608",
   /* THE MODULE NAMES ITS OWN FUNCTIONS, so a stack is readable without a second instrument. `wasm-ld` strips
      the name section by default — emscripten's own `building.py` says so in its own words, "wasm-ld can strip
@@ -8657,7 +8681,21 @@ const LDFLAGS_ABI = [
      the whole byte path failing at its first use. */
   "-sEXPORTED_RUNTIME_METHODS=" + JSON.stringify(["ccall", "lengthBytesUTF8", "stringToUTF8", "HEAPU8"]),
   "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sEXPORT_NAME=createQJS", "-sINVOKE_RUN=0",
+  "-sSIGNATURE_CONVERSIONS=" + abiSignatureConversions(),
 ];
+/* Every ABI entry that takes or returns a pointer, as `name:sig` for emscripten's SIGNATURE_CONVERSIONS: under
+   Memory64 a pointer is an i64, which JS holds as a BigInt, and the wrapper emscripten generates from this
+   converts a number in and out, so every caller of the ABI passes and receives plain numbers on both
+   targets. `_malloc` and `_free` are emscripten's own and already wrapped. */
+function abiSignatureConversions() {
+  const sigs = abiPointerSignatures();
+  return QJS_ABI.filter((f) => {
+    if (!sigs.has(f))
+      throw new Error(`[build] ${f} is on the ABI list and engine/host/qjs_abi.h declares no \`QJS_EXPORT\` ` +
+                      `prototype for it, so its pointer parameters cannot be stated to the wasm64 link`);
+    return sigs.get(f).includes("p");
+  }).map((f) => `${f}:${sigs.get(f)}`).join(",");
+}
 
 /* THE EMCC TOOLCHAIN IS BUILT HERE AND NOT WITH `toolchain()` ABOVE, AND THE REASON IS A REQUIREMENT RATHER
    THAN A TASTE: this is the only line in the file that calls `requireEmcc()` at module scope, so it is what
@@ -9030,7 +9068,7 @@ STAGES.push(...COLD_STAGES);
    is, and it must therefore decide. `report()` refuses the other combination rather than trusting this line. */
 const WASM_SMOKE = SMOKE_LINK.code
   ? [skipped("smoke test", "the smoke program did not link")]
-  : await runDocuments("smoke test", process.execPath, [join(OUT, "qjs.js")],
+  : await runDocuments("smoke test", wasmNode(), [join(OUT, "qjs.js")],
                "the @H row printed 0 above names the statement the fixture document makes and this run did " +
                "not answer — engine/host/test_forced.c's probe table is where that row is declared. This is " +
                "the VEHICLE's run: its slice is wall-denominated, so how far it got is a fact about the box " +
@@ -9102,7 +9140,7 @@ for (const [logs, artifact, host, why] of [
    revision — which is worse than not running it, and is why this is a SKIP rather than an attempt. */
 STAGES.push(onHost(ABI_LINK.code
   ? skipped("two-instance ABI drive", "the production ABI program did not link")
-  : runProgram("two-instance ABI drive", [join(ENGINE, "route.mjs")],
+  : runChild("two-instance ABI drive", wasmNode(), [join(ENGINE, "route.mjs")],
                "this is the cross-instance seam: the world registry, the nearest-first ancestry fork, the " +
                "synchronous cross-origin read, and the park on an outstanding one. Nothing else in this tree " +
                "provisions a second instance, so a failure here is unobserved by every other gate."),
@@ -9123,7 +9161,7 @@ STAGES.push(onHost(ABI_LINK.code
    `extension/lib/qjs/` and report that number under this revision. */
 STAGES.push(onHost(ABI_LINK.code
   ? skipped("browser-process layer", "the production ABI program did not link")
-  : runProgram("browser-process layer", [join(ENGINE, "renderer_host_gate.mjs")],
+  : runChild("browser-process layer", wasmNode(), [join(ENGINE, "renderer_host_gate.mjs")],
                "this is the renderer registry and the RenderFrameHost, driven by their own bytes: two " +
                "cross-origin renderers provisioned into one browsing-context group, the duplicate-cluster " +
                "refusal that is SECURITY.md's one-instance-per-cluster rule, and the routing-id accounting. " +

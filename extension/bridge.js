@@ -665,7 +665,7 @@ function linesToAnalysis(lines, msg, outcome, eng) {
   DCHECK(!(outcome !== "crashed" && result) || (eng && typeof eng.residentBytes === "number"),
          "a run reached the counters arm with no reported working set on its instance — engineRecordFacts " +
          "states it at the end of every round and before the reservation becomes hot, so its absence is that " +
-         "ordering having moved, and the one byte figure on this row that can answer what share of the wasm32 " +
+         "ordering having moved, and the one byte figure on this row that can answer what share of the wasm64 " +
          "address space this instance has taken would be missing from a run that had it");
   const m = (outcome !== "crashed" && result)
     /* The scheduler's own counters, so context switching, forking and preemption are observable. Every value
@@ -733,7 +733,7 @@ function linesToAnalysis(lines, msg, outcome, eng) {
         egressAsked: eng._egress.asked, egressDeclined: Object.assign({}, eng._egress.declined),
         /* The instance's whole linear memory, `M.HEAPU8.length` as renderer.html stated it on the reply
            engineRecordFacts last awaited: arena plus stack plus static data, so it is the only figure here that
-           answers what share of the wasm32 address space the instance has taken (`heap.arenaKiB` is a subset).
+           answers what share of the wasm64 address space the instance has taken (`heap.arenaKiB` is a subset).
            It is separate from `heap`, whose rows build.mjs derives from result_heap_json's format string, and
            it is a different observer at a different moment, so no quotient against `heap` is composed. A wasm
            Memory never shrinks, so the latest value is the high-water mark and a share of the per-module ceiling

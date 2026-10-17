@@ -1,8 +1,5 @@
 /* The vehicle comparison: one fixture document run on the native development host and on the shipped WASM
- * build, through the same entry (engine/host/test_forced.c's `--doc <name>`), and the two runs' answers and
- * work compared.
- *
- * What is compared, and when each comparison is entitled to a verdict:
+ * build through one entry (test_forced.c's `--doc <name>`), and the two runs' answers and work compared:
  *   - the statements asked (the row names of the @H table): a property of the program, so always;
  *   - the crash identity (engine/abort_record.mjs): when both runs crashed, and when one crashed while the
  *     other reached its final table, since a completed run executed every flow the crashing one could have;
@@ -11,13 +8,12 @@
  *   - every @H table paired by the `@HWORK` work total it was composed at, and the work retired by a completed
  *     run: only when both hosts announce the same `@QUANTUM` slice, because a slice in different currencies
  *     interleaves flows differently and the two runs then take different paths through one document.
- *
  *   node engine/vehicle.mjs --native <bin> --wasm <qjs.js> [--wasm-node <node>] [--cpu <s>] [--jobs <n>]
  *                           --out <dir> <doc>...
  * runs each named document on both hosts under the CPU budget and prints one comparison per document. */
 
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { probeTables } from "./probe_rows.mjs";
@@ -143,10 +139,22 @@ export function compareVehicle(doc, nat, veh) {
   return { defect, answered, compared, uncompared, work };
 }
 
+/* The node that runs the wasm64 artifact: emsdk's own (its `.emscripten` config's NODE_JS), because the final
+   Memory64 encoding needs node 24 (emscripten's tools/feature_matrix.py, MEMORY64 'node': 240000) and the node
+   on the path may be older. */
+export function emsdkNode(emsdk) {
+  const cfg = readFileSync(join(emsdk, ".emscripten"), "utf8").match(/^NODE_JS = '([^']+)'$/m);
+  if (!cfg) throw new Error(`${join(emsdk, ".emscripten")} states no NODE_JS, so no node is named that can run ` +
+                            `the wasm64 artifact`);
+  const node = cfg[1].replace("$CFGDIR", emsdk);
+  if (!existsSync(node)) throw new Error(`emsdk's NODE_JS ${node} does not exist`);
+  return node;
+}
+
 /* ── The lane-facing driver ─────────────────────────────────────────────────────────────────────────── */
 
 function args(argv) {
-  const o = { docs: [], cpu: 900, jobs: 2, wasmNode: process.execPath };
+  const o = { docs: [], cpu: 900, jobs: 2, wasmNode: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--native") o.native = argv[++i];
@@ -161,6 +169,7 @@ function args(argv) {
   if (!o.native || !o.wasm || !o.out || !o.docs.length || !(o.cpu > 0) || !(o.jobs > 0))
     throw new Error("usage: node engine/vehicle.mjs --native <bin> --wasm <qjs.js> [--wasm-node <node>] " +
                     "[--cpu <s>] [--jobs <n>] --out <dir> <doc>...");
+  if (o.wasmNode === null) o.wasmNode = emsdkNode(join(dirname(fileURLToPath(import.meta.url)), ".work", "emsdk"));
   return o;
 }
 
