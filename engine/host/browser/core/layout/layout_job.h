@@ -86,7 +86,7 @@ typedef struct {
    are the walk's enumeration cursor and stay valid across a rest by the memo validity argument above. */
 typedef struct {
     lxb_dom_node_t *prev, *brk;
-    size_t wi, item;
+    size_t wi;
     bool   ifc, at_run, run_inline, escaping, placed, has_line_box;
     CssPx  pos, run_pos, run_neg, esc_pos, esc_neg, baseline;
 } LayoutBfCursor;

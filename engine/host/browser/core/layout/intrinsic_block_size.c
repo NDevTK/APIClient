@@ -86,7 +86,6 @@ CssPx intrinsic_block_run_size(lxb_dom_element_t *style, BlockFlowRun run)
     {
         LayoutJobDrive d;
         LineBoxAvailableWidth avail = line_box_available_width_derived();
-        size_t from = 0;
         CssPx h;
 
         /* This entry answers synchronously, so it is a drive: the asks computed, with what they defer computed
@@ -94,7 +93,7 @@ CssPx intrinsic_block_run_size(lxb_dom_element_t *style, BlockFlowRun run)
            three out-parameters are discarded: §10.6.3's first bullet is a distance, and baselines are CSS 2.1
            §10.8's question. A run with no line box answers the zero that entry returns. */
         layout_job_drive_begin(&d);
-        while (!line_box_atomics_ask(style, run, avail, &from) || !line_box_extents_ask(style, run, avail))
+        while (!line_box_atomics_ask(style, run, avail) || !line_box_extents_ask(style, run, avail))
             (void)block_flow_drive_deferred(&d);
         h = line_box_content_height(style, run, avail, &any_line_box, &first, &last);
         layout_job_drive_end(&d);

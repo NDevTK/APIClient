@@ -1512,11 +1512,10 @@ static BfBox bf_table_box(lxb_dom_element_t *table)
 /* The stack walk's loop state: the enumeration's place (`prev`, `brk`, `at_run`, and `wi` on a wrapper's
    stack), the running position, the open run, and the run escaping through the top edge. `run_inline` is
    whether the enumeration passed an inline-level box between `prev` and `brk`. `ifc` is the walk
-   having taken §9.4.2's branch, and `item` the atomic inline its line boxes' asks reached in the current
-   run (line_box_atomics_ask's `from`). */
+   having taken §9.4.2's branch. */
 typedef struct {
     lxb_dom_node_t *prev, *brk;
-    size_t wi, item;
+    size_t wi;
     bool   ifc, at_run, run_inline, escaping, placed;
     CssPx  pos;
     BfRun  run, esc_run;
@@ -1531,7 +1530,6 @@ static bool bf_walk_stage(size_t body, lxb_dom_element_t *el, const BfWalk *w, c
     c.prev = w->prev;
     c.brk = w->brk;
     c.wi = w->wi;
-    c.item = w->item;
     c.ifc = w->ifc;
     c.at_run = w->at_run;
     c.run_inline = w->run_inline;
@@ -1557,7 +1555,6 @@ static bool bf_walk_resume(size_t body, lxb_dom_element_t *el, BfWalk *w, BfBox 
     w->prev = c.prev;
     w->brk = c.brk;
     w->wi = c.wi;
-    w->item = c.item;
     w->ifc = c.ifc;
     w->at_run = c.at_run;
     w->run_inline = c.run_inline;
@@ -1635,7 +1632,6 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
     w.prev = NULL;
     w.brk = NULL;
     w.wi = 0;
-    w.item = 0;
     w.ifc = false;
     w.at_run = true;
     w.run_inline = false;
@@ -1683,7 +1679,7 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             /* THE BOX HAS AN ELEMENT AND ITS OWN CONTENT BOX IS THE CONTAINING BLOCK OF ITS LINES, so
                §9.4.2's width is `el`'s and is left to be derived — which also keeps it unread for a run with
                no break position in it, the skip line_box.h states as load-bearing. */
-            if (!line_box_atomics_ask(el, whole, line_box_available_width_derived(), &w.item) ||
+            if (!line_box_atomics_ask(el, whole, line_box_available_width_derived()) ||
                 !line_box_extents_ask(el, whole, line_box_available_width_derived()))
                 return bf_walk_stage(body, el, &w, &out);   /* "not yet": deferred, or the fill rested */
             h = line_box_content_height(el, whole, line_box_available_width_derived(),
@@ -1782,12 +1778,11 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             }
             /* The anonymous box is one of a resting drive's boxes; a body's walk that has spent them stops. */
             if (!layout_job_bf_step(body)) return bf_walk_stage(body, el, &w, &out);
-            if (!line_box_atomics_ask(el, anon_run, line_box_available_width_derived(), &w.item) ||
+            if (!line_box_atomics_ask(el, anon_run, line_box_available_width_derived()) ||
                 !line_box_extents_ask(el, anon_run, line_box_available_width_derived()))
                 return bf_walk_stage(body, el, &w, &out);   /* "not yet": deferred, or the fill rested */
             b = bf_anon_box(el, anon_run, pass);
             w.at_run = false;
-            w.item = 0;
         } else if (w.brk != NULL) {
             ce = lxb_dom_interface_element(w.brk);
             if (!bf_box(ce, pass, &b))

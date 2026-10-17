@@ -293,10 +293,9 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
    margin box of an `inline-block` and its §10.8.1 baseline), asked without a drive before the line boxes are
    measured. False ("not yet") when one walk was deferred, with the question suspended on the current job, or
    when a resting drive's line box items (core/layout/layout_job.h) were spent, with the fill held part-taken by
-   the job's line box record; either way asking again continues. `*from` is the first item asked; on "not yet"
-   it is set to the item whose walk deferred, so a caller that keeps it resumes there. */
-bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail,
-                          size_t *from);
+   the job's line box record; either way asking again continues. The scan over the atomic inlines holds its
+   place in the fill too, so no caller keeps a cursor. */
+bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail);
 
 /* CSS 2.2 §10.8's extent of each of the fill's line boxes, which `line_box_content_height`, the block axis of
    `line_box_content_span_ask` and the fragments read, taken one item at a time under a resting drive's line box

@@ -228,7 +228,6 @@ CssPx flex_cross_size_anonymous_lines(lxb_dom_element_t *container, const FlexLi
     BlockFlowRun seq;
     LineBoxAvailableWidth avail;
     LayoutJobDrive d;
-    size_t from = 0;
     lxb_dom_node_t *first = m->first;
     char nbuf[160];
 
@@ -244,7 +243,7 @@ CssPx flex_cross_size_anonymous_lines(lxb_dom_element_t *container, const FlexLi
     /* This entry answers synchronously, so it is a drive: the line box asks computed, with what they defer
        computed beneath it, before the reduction reads them, as `block_flow_auto_height` drives its own walk. */
     layout_job_drive_begin(&d);
-    while (!line_box_atomics_ask(container, seq, avail, &from) || !line_box_extents_ask(container, seq, avail))
+    while (!line_box_atomics_ask(container, seq, avail) || !line_box_extents_ask(container, seq, avail))
         (void)block_flow_drive_deferred(&d);
     inner = line_box_content_height(container, seq, avail, &any_line_box, first_baseline, last_baseline);
     layout_job_drive_end(&d);

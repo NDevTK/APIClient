@@ -1111,6 +1111,7 @@ typedef struct LbFill {
     LbLineFacts   *facts;      /* one per line, published once every one is written */
     LbLineFacts   *partial;
     size_t         extents;
+    size_t         atomics;    /* items below this have had their atomic inline's walks answered */
     bool           walking;
     LbLineWalk     walk;
     CssPx          top;
@@ -1145,6 +1146,7 @@ static void lb_fill_init(LbFill *f, lxb_dom_element_t *style, BlockFlowRun run, 
     f->facts = NULL;
     f->partial = NULL;
     f->extents = 0;
+    f->atomics = 0;
     f->walking = false;
     f->top = css_px(0.0);
     f->span = LB_SPAN_NONE;
@@ -1540,12 +1542,10 @@ static LbLines lb_reduce(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvai
     return out;
 }
 
-bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail,
-                          size_t *from)
+bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)
 {
     LbFill *f;
-    size_t i, items;
-    bool ready = true;
+    size_t items;
 
 #if APICLIENT_DEV
     /* The fill's float check (lb_fill) searches the fill's whole formatting context. It is asked here first,
@@ -1562,21 +1562,22 @@ bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAva
         return false;
     }
     items = f->n == 0 ? 0 : f->lines[f->n - 1].to;
-    DCHECKF(from != NULL && *from <= items,
-            "the atomic inlines of a fill of %zu items were asked from item %zu; a resuming caller passes back "
-            "the item this ask stopped at, over the same fill", items, from != NULL ? *from : (size_t)0);
-    /* With the facts already held, every extent is computed and there is nothing left to ask. The item count
-       is the partition's, which `text_run_fill_step` closes at the end of the collection. */
-    if (f->facts == NULL)
-        for (i = *from; i < items; i++) {
-            if (!text_run_measure_item_is_atomic(&f->m, i)) continue;
-            if (!lb_atomic_ask(text_run_measure_item_style(&f->m, i))) {
-                *from = i;
-                ready = false;
-                break;
-            }
+    /* The item count is the partition's, which `text_run_fill_step` closes at the end of the collection. The
+       scan holds its place in the fill, so each item is looked at once whichever caller asks and however often
+       it rests; an atomic whose walk was deferred stays at the cursor and is asked again. */
+    while (f->atomics < items) {
+        size_t i = f->atomics;
+
+        if (!lb_left()) {
+            METRIC_ADD(fill_rests, 1);
+            return false;
         }
-    return ready;
+        layout_job_line_items_spend(1);
+        if (text_run_measure_item_is_atomic(&f->m, i) && !lb_atomic_ask(text_run_measure_item_style(&f->m, i)))
+            return false;
+        f->atomics++;
+    }
+    return true;
 }
 
 bool line_box_extents_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)
@@ -1929,10 +1930,9 @@ size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph 
        `line_box_inline_fragments` is over its own. */
     {
         LineBoxAvailableWidth avail = line_box_available_width_derived();
-        size_t from = 0;
 
         layout_job_drive_begin(&d);
-        while (!line_box_atomics_ask(style, run, avail, &from) || !line_box_extents_ask(style, run, avail))
+        while (!line_box_atomics_ask(style, run, avail) || !line_box_extents_ask(style, run, avail))
             (void)block_flow_drive_deferred(&d);
     }
     f = lb_layout(style, run, line_box_available_width_derived());
@@ -2529,9 +2529,7 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
        content edge, keeping coordinates in line_box.h's frame (offsets from the container's content box) while
        lines are measured inside their box; the seed is zero for the unmixed shape. */
     for (b = 0; b < ctx.n; b++) {
-        size_t from = 0;
-
-        if (!line_box_atomics_ask(style, ctx.box[b].run, line_box_available_width_derived(), &from) ||
+        if (!line_box_atomics_ask(style, ctx.box[b].run, line_box_available_width_derived()) ||
             !line_box_extents_ask(style, ctx.box[b].run, line_box_available_width_derived())) {
             free(ctx.box);
             return false;
