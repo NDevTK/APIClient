@@ -5,6 +5,7 @@
 #include "check.h"
 #include "solver/world.h"
 #include "solver/decide.h"   /* decide_history_name: what a minted document name is identified by */
+#include "solver/flow.h"     /* flow_running: which timeline, if any, is creating */
 
 /* A LOCALLY MINTED WORLD and the fork edge that produced it. Kept as a flat array indexed by serial-1, because
    serials are dense and monotonic: a world's parent is one load, and the ancestry walk is a pointer chase over
@@ -71,7 +72,11 @@ static uint32_t g_session;
    different document. It is small by construction — one entry per document this instance has ever named. */
 /* NO `JSContext *realm` COLUMN — see the record below, which is the whole of why and the only thing
    standing between the next reader and re-adding one. */
-typedef struct { char *name; bool hosted; } DocEntry;
+/* `minter` is the timeline whose creation first minted the name here (WORLD_NONE for the pre-boot baseline),
+   read by world_mint_doc's assert; `minted` says the name was minted here at all, and not only interned. */
+typedef struct { char *name; bool hosted; bool minted; WorldId minter; } DocEntry;
+/* The pre-boot baseline's creations so far: its ordinal, since it has no decision history to count under. */
+static int g_baseline_mints;
 static DocEntry *g_docs;
 static uint32_t g_docs_n, g_docs_cap;
 
@@ -201,6 +206,7 @@ uint32_t world_mint_doc(uint32_t parent)
     uint32_t doc;
     uint64_t history;
     int ordinal;
+    Flow *f;
 
     DCHECK(parent != 0 && parent <= g_docs_n, "a document was created by a parent that names no document");
     DCHECK(g_doc != 0, "a document was created before world_registry_init named the one creating it");
@@ -209,7 +215,16 @@ uint32_t world_mint_doc(uint32_t parent)
        at them (decide_history_name), so a replay of that history re-mints the name and two timelines that
        diverged at a recorded branch mint two. Unique within a timeline by the ordinal, and synchronous. The 30
        is the '.', a `int`'s ten digits, the '-', sixteen hex digits and the NUL. */
-    decide_history_name(&history, &ordinal);
+    f = flow_running();
+    if (f) decide_history_name(&history, &ordinal);
+    else {
+        /* The pre-boot baseline, which every flow stands on and no flow made: a parse-created frame. Its history
+           is one slot under question 0, which dec_append refuses to record, so no flow's history starts with it
+           and no flow's creation shares its name. A new session's install re-mints the same names in order. */
+        history = (1469598103934665603ULL ^ 0) * 1099511628211ULL;
+        ordinal = ++g_baseline_mints;
+        CHECK(ordinal > 0, "world registry: the baseline's creation ordinal wrapped — the next name collides");
+    }
     cap = strlen(self) + 30;
     buf = malloc(cap);
     CHECK(buf != NULL, "world registry: OOM minting a document name — a document that cannot be named can "
@@ -217,6 +232,17 @@ uint32_t world_mint_doc(uint32_t parent)
     snprintf(buf, cap, "%s.%d-%016llx", self, ordinal, (unsigned long long)history);
     doc = world_doc_intern(buf);   /* interning COPIES; this buffer is ours to release */
     free(buf);
+    /* A name minted again is the same creation in another timeline (a replay, or siblings over one history).
+       It may never be one the creating timeline already sees: the baseline's, or its own ancestry's. */
+    if (g_docs[doc - 1].minted)
+        DCHECK(!world_is_none(g_docs[doc - 1].minter) && (f == NULL || !world_descends_from(f->world,
+                                                                                    g_docs[doc - 1].minter)),
+               "a creation minted the name of a document its own timeline already sees — the baseline's, or one "
+               "its ancestry made — so two documents of one timeline share one identity");
+    else {
+        g_docs[doc - 1].minted = true;
+        g_docs[doc - 1].minter = f ? f->world : WORLD_NONE;
+    }
     return doc;
 }
 
@@ -335,6 +361,7 @@ void world_registry_free(JSContext *ctx)
     free(g_docs);
     g_docs = NULL;
     g_docs_n = g_docs_cap = 0;
+    g_baseline_mints = 0;
     g_doc = 0;
     g_next_serial = 0;
     g_session = 0;

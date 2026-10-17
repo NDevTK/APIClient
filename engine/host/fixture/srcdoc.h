@@ -45,8 +45,14 @@ static const char HTML_SRCDOC[] =
        The sync read is that frame's reachability witness; the timer read is the subject, a timer rather than
        a `load` handler because an absent `load` would be a silence where an arm can be a value. */
     "<iframe id=sdo src=\"about:srcdoc\"></iframe>"
+    /* /api/sdmint: a frame SCRIPT creates while both frames above, which the baseline created, exist. It runs
+       before any branch of the parent's own, so it is the boot flow's first creation; `own` says it got a
+       navigable of its own and not one of the baseline's. */
     "<script>"
     "var sdo = document.getElementById('sdo');"
+    "var sdm = document.createElement('iframe'); document.body.appendChild(sdm);"
+    "fetch('/api/sdmint?v=' + ((sdm.contentWindow !== document.getElementById('sdf').contentWindow"
+    " && sdm.contentWindow !== sdo.contentWindow && sdm.contentDocument.URL === 'about:blank') ? 'own' : 'shared'));"
     "function sdoRead(d) {"
     " return (d.URL === 'about:blank') ? 'initial'"
     "  : (d.URL !== 'about:srcdoc') ? 'otheraddr'"

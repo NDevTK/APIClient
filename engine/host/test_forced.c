@@ -12232,6 +12232,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              param_value_is(js, "/api/sdotherwise", "v", "initial"),
              "the timer re-read the `about:srcdoc` frame and got neither `ownaddr` nor `initial` — see "
              "/api/sdsync's row for what the two remaining tokens mean");
+    /* A FLOW'S FIRST CREATION BESIDE THE BASELINE'S: the baseline names its parse-created frames under a history
+       no flow's can begin with (solver/world.c's world_mint_doc), so the boot flow's script-created frame is a
+       document of its own and not one of theirs under a shared name. */
+    const char *sdmint_why = NULL; int sdmint_tt = 1;
+    fold_row(&sdmint_tt, &sdmint_why, !!strstr(js, "\"/api/sdmint\""),
+             "there is no /api/sdmint record: the parent's script never reached the fetch after creating its own "
+             "frame. Read /api/sdsync, the next statement's row, to tell the creation from the schedule");
+    fold_row(&sdmint_tt, &sdmint_why, param_value_is(js, "/api/sdmint", "v", "own"),
+             "/api/sdmint's `v` is not `own`: the frame the boot flow created answered with the Window of a frame "
+             "the baseline created, or its document is not its initial about:blank — one name, two creations");
     /* AND THE REALM THE ROW ABOVE BUILT CAME BACK — §A-CAPABILITY-MATERIALIZED-PER-FLOW's ceiling, asked as a
        measurement instead of read off a line by hand.
        WHAT WAS HERE BEFORE WAS A SENTENCE ADDRESSED TO A PERSON. The iframe statement's own note said "READ
@@ -15690,6 +15700,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "srcdoc-domparser-not-class", sdparse_tt, "/api/sdparse", SESS_EXPLORE, sdparse_why },
         { "srcdoc-otherwise-sync", sdsync_tt, "/api/sdsync", SESS_EXPLORE, sdsync_why },
         { "srcdoc-otherwise-timer", sdother_tt, "/api/sdotherwise", SESS_EXPLORE, sdother_why },
+        { "srcdoc-script-child-own", sdmint_tt, "/api/sdmint", SESS_EXPLORE, sdmint_why },
         /* KEYED ON THE REMOVAL rather than on an endpoint, because this row is about a statement that emits
            nothing: §7.5.10's release is observable as a COUNT and not as a fetch. */
         { "realm-reclaim", realmback_tt, "document.body.removeChild(_if)", SESS_EXPLORE, realmback_why },

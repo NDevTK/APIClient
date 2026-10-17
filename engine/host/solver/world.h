@@ -167,12 +167,14 @@ void world_doc_adopt(uint32_t doc);
 uint32_t    world_doc_intern(const char *name);
 const char *world_doc_name(uint32_t doc);
 
-/* MINT A DOCUMENT CREATED BY `parent`, by the running flow, and return its handle. Synchronous and unbounded.
+/* MINT A DOCUMENT CREATED BY `parent`, by the running flow or, with none running, by the pre-boot baseline, and
+   return its handle. Synchronous and unbounded.
    The name is "<parent>.<k>", k being "<ordinal>-<history>" (solver/decide.h's decide_history_name), so the
    parent prefix is recoverable from it and a replay of the creating history mints the same name: a document is
    identified by the history that created it, never by how many documents the instance minted before it. The
+   baseline's history is one no flow's can begin with, and its ordinal counts its own creations in order. The
    parent is named rather than assumed to be the instance root, since a same-origin child is a realm of this
-   instance and creates children of its own. Requires a running flow. */
+   instance and creates children of its own. */
 uint32_t world_mint_doc(uint32_t parent);
 /* Whether `w` is `a` or one of its descendants in this instance's minted table: the timeline `a` named
    continued. Worlds of another document or session answer false. */
