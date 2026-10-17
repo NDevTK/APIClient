@@ -689,8 +689,8 @@ static void tr_line_sum_open(TextRunLineSum *s, size_t lo)
     s->lo = lo;
     s->at = lo;
     s->content = false;
-    s->sum = css_px(0.0);
-    s->size = css_px(0.0);
+    css_px_sum_init(&s->sum);
+    css_px_sum_init(&s->size);
 }
 
 /* Add item `s->at` to the line: `tr_line_prefix`'s additions over `[lo, at + 1)` in its order, so `size` is
@@ -708,21 +708,21 @@ static void tr_line_sum_add(const TextRunMeasure *m, TextRunLineSum *s, TextRunS
     if (tr_kind_has_size(it->kind)) {
         CssPx px = tr_sized_px(m, i, basis);
 
-        s->sum = css_px_add(s->sum, px);
+        css_px_sum_add(&s->sum, px);
         if (tr_item_stops_trim(it)) { s->size = s->sum; s->content = true; }
-        else                        s->size = css_px_add(s->size, px);
+        else                        css_px_sum_add(&s->size, px);
         return;
     }
     if (it->kind == TEXT_RUN_ITEM_FORCED_BREAK) return;
     if (!tr_item_stops_trim(it) && !s->content) return;   /* §4.1.2's leading trim */
     if (tr_char_at(m, i)->cp == 0x0009)
-        advance = tr_tab_advance(it->style, s->sum);
+        advance = tr_tab_advance(it->style, css_px_sum_value(&s->sum));
     else
         advance = css_font_advance_measure_px(it->style, it->face, it->cp);
     DCHECK(advance.px >= 0.0,
            "the first available font reported a NEGATIVE advance measure for a character on a line; OpenType "
            "'hmtx''s advanceWidth is a UFWORD and a computed `font-size` is non-negative");
-    s->sum = css_px_add(s->sum, advance);
+    css_px_sum_add(&s->sum, advance);
     if (tr_item_stops_trim(it)) { s->size = s->sum; s->content = true; }
 }
 
@@ -952,8 +952,8 @@ static size_t tr_prep_step(TextRunMeasure *m)
         tr_line_sum_add(m, &m->max_line, TEXT_RUN_SIZE_MAX_CONTENT);
         tr_line_sum_add(m, &m->min_line, TEXT_RUN_SIZE_MIN_CONTENT);
         if (++m->cursor < m->count) return 1;
-        m->max_content = css_px_max(m->max_content, m->max_line.size);
-        m->min_content = css_px_max(m->min_content, m->min_line.size);
+        m->max_content = css_px_max(m->max_content, css_px_sum_value(&m->max_line.size));
+        m->min_content = css_px_max(m->min_content, css_px_sum_value(&m->min_line.size));
         tr_floor_max_content(m);
         m->answered = true;
         return 1;
@@ -1062,11 +1062,11 @@ size_t text_run_measure_finish_step(TextRunMeasure *m)
                "apart");
     }
     if (forced) {
-        m->max_content = css_px_max(m->max_content, m->max_line.size);
+        m->max_content = css_px_max(m->max_content, css_px_sum_value(&m->max_line.size));
         tr_line_sum_open(&m->max_line, at);
     }
     if (forced || soft) {
-        m->min_content = css_px_max(m->min_content, m->min_line.size);
+        m->min_content = css_px_max(m->min_content, css_px_sum_value(&m->min_line.size));
         tr_line_sum_open(&m->min_line, at);
     }
     if (i < m->ncps) return k;
@@ -1339,14 +1339,14 @@ size_t text_run_fill_step(TextRunFill *f, const TextRunMeasure *m)
         /* "cannot fit horizontally within a single line box", measured over the line as it would be if this
            position were not taken: the comparison is at `at` and the emission at `prev`. `prev > start` is
            §9.4.2's cannot-be-split condition stated positively. */
-        if (f->prev > f->start && f->line.size.px > f->available.px) {
-            tr_fill_emit(f, m, f->prev, f->at_prev.size);
+        if (f->prev > f->start && f->line.size.v.px > f->available.px) {
+            tr_fill_emit(f, m, f->prev, css_px_sum_value(&f->at_prev.size));
             f->line = f->seg;
         }
         if (forced) {
             /* css-text-3 §5.5 makes this break forced "regardless of the white-space value", so the line ends
                here whether or not anything overflowed; at `i == ncps` it is LB3 closing the run. */
-            tr_fill_emit(f, m, at, f->line.size);
+            tr_fill_emit(f, m, at, css_px_sum_value(&f->line.size));
             tr_line_sum_open(&f->line, at);
         }
         f->prev = at;

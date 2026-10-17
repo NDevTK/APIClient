@@ -146,8 +146,9 @@ typedef struct {
 typedef struct {
     size_t lo, at;
     bool   content;   /* an item §4.1.2 stops trimming at is in `[lo, at)` */
-    CssPx  sum;       /* the sized items, and the characters from the first content item on */
-    CssPx  size;      /* the line `[lo, at)`'s inline size: `sum` less the characters after the last content item */
+    /* Held as sums (core/css/css_length.h), so a partial sum's form is interned only where it is read. */
+    CssPxSum sum;     /* the sized items, and the characters from the first content item on */
+    CssPxSum size;    /* the line `[lo, at)`'s inline size: `sum` less the characters after the last content item */
 } TextRunLineSum;
 
 /* The running state of one inline formatting context's measurement, written and read only through the entries

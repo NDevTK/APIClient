@@ -485,12 +485,12 @@ CssPx css_px_atom(const char *op, const CssPx *args, int nargs, double px)
     return out;
 }
 
-/* `out`'s form becomes `p` in normal form. Too wide a form is one atom. The operands' facts are one realm's
+/* `p` in normal form into `*f`, answering true; or false where `out` needs no interned form of `p`: a length
+   derived from no fact, or too wide a form, which becomes one atom here. The operands' facts are one realm's
    (css_px_combine asserts it), and a fact is one number per realm, so the form holds no values to agree. */
-static void css_px_form_set(CssPx *out, CssPxPoly *p)
+static bool css_px_form_normal(CssPx *out, CssPxPoly *p, CssPxForm *f)
 {
     int i = 0, n = 0;
-    CssPxForm f;
 
     qsort(p->m, (size_t)p->n, sizeof p->m[0], css_px_mono_cmp);
     while (i < p->n) {
@@ -506,7 +506,7 @@ static void css_px_form_set(CssPx *out, CssPxPoly *p)
     }
     if (out->env == CSS_ENV_NONE) {
         DCHECK(n == 0, "a length derived from no fact composed a form with a monomial over one");
-        return;
+        return false;
     }
     if (n > CSS_PX_FORM_MAX) {
         char *key = NULL;
@@ -521,14 +521,22 @@ static void css_px_form_set(CssPx *out, CssPxPoly *p)
         fputc(')', f);
         CHECK(fclose(f) == 0 && key, "css_length: OOM naming an atom");
         css_px_form_atom_named(out, key, "poly", &def, 1);
-        return;
+        return false;
     }
-    memset(&f, 0, sizeof f);
-    f.known = true;
-    f.n = n;
-    f.c = p->c;
-    memcpy(f.m, p->m, (size_t)n * sizeof p->m[0]);
-    out->form = css_px_form_intern(out->realm, &f);
+    memset(f, 0, sizeof *f);
+    f->known = true;
+    f->n = n;
+    f->c = p->c;
+    memcpy(f->m, p->m, (size_t)n * sizeof p->m[0]);
+    return true;
+}
+
+/* `out`'s form becomes `p` in normal form (`css_px_form_normal`), interned. */
+static void css_px_form_set(CssPx *out, CssPxPoly *p)
+{
+    CssPxForm f;
+
+    if (css_px_form_normal(out, p, &f)) out->form = css_px_form_intern(out->realm, &f);
 }
 
 /* `out`'s form becomes `ka·a + kb·b`, over two known operands. */
@@ -568,6 +576,45 @@ CssPx css_px_add(CssPx a, CssPx b)
     CssPx out = css_px_combine(a, b, a.px + b.px);
 
     if (css_px_is_known(a) && css_px_is_known(b)) css_px_form_lin(&out, a, 1.0, b, 1.0);
+    return out;
+}
+
+void css_px_sum_init(CssPxSum *s)
+{
+    DCHECK(s != NULL, "a length sum was begun with nowhere to hold it");
+    s->v = css_px(0.0);
+    s->held = false;
+}
+
+/* `css_px_add`'s steps over the held form: the same combination and the same normal form, kept by value. */
+void css_px_sum_add(CssPxSum *s, CssPx b)
+{
+    CssPx a, out;
+
+    DCHECK(s != NULL, "a term was added to no length sum");
+    a = s->v;
+    if (s->held) a.form = &s->f;
+    out = css_px_combine(a, b, a.px + b.px);
+    s->held = false;
+    if (css_px_is_known(a) && css_px_is_known(b)) {
+        CssPxPoly p;
+
+        p.c = 0.0;
+        p.n = 0;
+        css_px_poly_axpy(&p, 1.0, a);
+        css_px_poly_axpy(&p, 1.0, b);
+        s->held = css_px_form_normal(&out, &p, &s->f);
+    }
+    s->v = out;
+}
+
+CssPx css_px_sum_value(const CssPxSum *s)
+{
+    CssPx out;
+
+    DCHECK(s != NULL, "a length sum was read from no sum");
+    out = s->v;
+    if (s->held) out.form = css_px_form_intern(out.realm, &s->f);
     return out;
 }
 

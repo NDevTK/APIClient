@@ -284,6 +284,17 @@ double css_px_form_eval(CssPx a);
    union and is what the boundary mints one joint domain from. */
 CssPx css_px_add(CssPx a, CssPx b);
 CssPx css_px_sub(CssPx a, CssPx b);
+/* A sum taken one term at a time: `value` answers exactly the length the chain `css_px_add(…css_px_add(css_px(0),
+   t1)…, tn)` answers, but a partial sum's form is held by value and interned only when `value` is read, so a
+   long chain does not leave one interned form per term in the realm's table. Copying it copies the sum. */
+typedef struct {
+    CssPx     v;      /* the chain's length so far; its form is `f` while `held` */
+    CssPxForm f;
+    bool      held;
+} CssPxSum;
+void css_px_sum_init(CssPxSum *s);
+void css_px_sum_add(CssPxSum *s, CssPx b);
+CssPx css_px_sum_value(const CssPxSum *s);
 /* `k` is a pure ratio — a percentage divided by 100 — so it changes no fact. */
 CssPx css_px_scale(CssPx a, double k);
 /* THE LARGER AND THE SMALLER EXAMPLE OF TWO LENGTHS, each carrying BOTH their facts. Three spec algorithms need
