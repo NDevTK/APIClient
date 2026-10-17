@@ -95500,7 +95500,7 @@ STEP_STATE_HDR_FIRST(JSConcolicCall);
 
 /* Named residual. Not covered: an Object operand other than a builtin-protocol RegExp or a replace callback (a
    method of an object example other than an array callback method, a `.call` reached as a value rather than
-   at a call operator, a replacer over a pattern with named groups); the result carries no example. Next diff:
+   at a call operator); the result carries no example. Next diff:
    the same forwarding for Array.prototype's other methods over an unknown receiver (`slice`, `concat`,
    `indexOf`), each once its step machine is shown to read the receiver only through [[Get]]. How its absence
    shows: an address built from `cfg.items.slice(1)` over a fetched record is a shape where `cfg.items[1]`
@@ -95632,7 +95632,9 @@ static JSValue js_concolic_call_operand(JSContext *ctx, JSValueConst v)
    and §22.2.6.11 RegExp.prototype [ %Symbol.replace% ] ( string, replaceValue ) pass the matched substring,
    the captures, the position and the whole string). In the examples' run those pieces are the example's bytes, so
    this closure stands in for the page's function and hands it each string or number argument as an unknown
-   derived from the receiver and the pattern, carrying that piece as its example. The page's function runs on
+   derived from the receiver and the pattern, carrying that piece as its example; §22.2.6.11's namedCaptures,
+   the `groups` object §22.2.7.2 RegExpBuiltinExec ( regexp, string ) creates, is handed over rebuilt from the
+   same pieces (js_concolic_replacer_groups). The page's function runs on
    the flow as a CALL request; what it returns is handed back to the builtin as bytes, its example where it is
    unknown, and a return with no example marks the run's result as having none. Closure data:
    [the page's function, the receiver, the pattern, the holder the call machine reads `lost` from]. */
@@ -95649,6 +95651,45 @@ STEP_STATE_HDR_FIRST(JSConcolicReplacer);
     X(CREPL_CALLED, "the replacer's return, as the replacement string's bytes")
 enum { CREPL_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_concolic_replacer_steps[] = { CREPL_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* §22.2.7.2's `groups` as the page receives it: a new OrdinaryObjectCreate(null) object whose data property
+   for each group name holds an unknown derived from the receiver, the pattern and the name, carrying the
+   matched bytes as its example, or undefined where the group did not participate. `src` is the examples'
+   run's own groups object, which a builtin-protocol pattern's exec built, so its walk runs no page code. Owned. */
+static JSValue js_concolic_replacer_groups(JSContext *ctx, JSConcolicReplacer *s, JSValueConst src)
+{
+    JSObject *p = JS_VALUE_GET_OBJ(src);
+    JSShapeProperty *prs;
+    JSValue g;
+    uint32_t i;
+
+    DCHECK(p->class_id == JS_CLASS_OBJECT && p->shape->proto == NULL,
+           "a replacer's Object argument is RegExpBuiltinExec's null-prototype groups object");
+    g = JS_NewObjectProto(ctx, JS_NULL);
+    if (JS_IsException(g)) return g;
+    for (i = 0, prs = get_shape_prop(p->shape); i < p->shape->prop_count; i++, prs++) {
+        JSValueConst v = p->prop[i].u.value;
+        JSValue d;
+
+        if (prs->atom == JS_ATOM_NULL) continue;
+        DCHECK((prs->flags & JS_PROP_TMASK) == JS_PROP_NORMAL && (JS_IsString(v) || JS_IsUndefined(v)),
+               "a groups member is a data property holding a matched substring or undefined");
+        if (JS_IsString(v)) {
+            JSValue name = JS_AtomToString(ctx, prs->atom);
+            if (JS_IsException(name)) goto fail;
+            JSValueConst ops[3] = { JS_StepClosureData(&s->hdr, 1), JS_StepClosureData(&s->hdr, 2), name };
+            d = g_concolic.derived(ctx, "String.prototype.replace replacer named capture", ops, 3, js_dup(v));
+            JS_FreeValue(ctx, name);
+        } else {
+            d = JS_UNDEFINED;
+        }
+        if (JS_DefinePropertyValue(ctx, g, prs->atom, d, JS_PROP_C_W_E | JS_PROP_THROW) < 0) goto fail;
+    }
+    return g;
+fail:
+    JS_FreeValue(ctx, g);
+    return JS_EXCEPTION;
+}
 
 static int js_concolic_replacer_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
@@ -95670,6 +95711,10 @@ static int js_concolic_replacer_step(JSContext *ctx, void *st, JSValue cb_result
                                         js_int32(i) };
                 s->cb[2 + i] = g_concolic.derived(ctx, "String.prototype.replace replacer argument", ops, 3,
                                                   js_dup(a));
+            } else if (JS_IsObject(a)) {
+                DCHECK(i == n - 1, "only namedCaptures, the last replacer argument, is an Object");
+                s->cb[2 + i] = js_concolic_replacer_groups(ctx, s, a);
+                if (JS_IsException(s->cb[2 + i])) { s->cb[2 + i] = JS_UNDEFINED; return -1; }
             } else {
                 s->cb[2 + i] = js_dup(a);
             }
@@ -95719,9 +95764,8 @@ static const JSTrampStepDef js_concolic_replacer_def = {
 };
 
 /* The replace argument the examples' run takes for the page's function `fn` at operand index 1: the stand-in
-   above, when the callee's example is String.prototype.replace or replaceAll over an unknown receiver and the
-   pattern holds no named groups (§22.2.6.11's `groups` object would hand the page the example's bytes as
-   member values). JS_UNINITIALIZED where it does not apply. `pattern` is the run's own pattern operand. */
+   above, when the callee's example is String.prototype.replace or replaceAll over an unknown receiver.
+   JS_UNINITIALIZED where it does not apply. `pattern` is the run's own pattern operand. */
 static JSValue js_concolic_call_replacer(JSContext *ctx, JSConcolicCall *s, JSValueConst fex, JSValueConst pattern)
 {
     JSObject *fp = JS_VALUE_GET_OBJ(fex);
@@ -95732,9 +95776,6 @@ static JSValue js_concolic_call_replacer(JSContext *ctx, JSConcolicCall *s, JSVa
     if (!(fp->u.cfunc.cproto == JS_CFUNC_step &&
           (fp->u.cfunc.magic == STEPDEF_STR_REPLACE || fp->u.cfunc.magic == STEPDEF_STR_REPLACE_ALL)) ||
         !g_concolic.is(s->hdr.this_val) || g_concolic.is(fn) || !JS_IsFunction(ctx, fn))
-        return JS_UNINITIALIZED;
-    if (JS_IsRegExp(pattern) &&
-        (lre_get_flags(str8(JS_VALUE_GET_OBJ(pattern)->u.regexp.bytecode)) & LRE_FLAG_NAMED_GROUPS))
         return JS_UNINITIALIZED;
     s->holder = JS_NewObjectProto(ctx, JS_NULL);
     if (JS_IsException(s->holder)) { s->holder = JS_UNDEFINED; return JS_EXCEPTION; }
