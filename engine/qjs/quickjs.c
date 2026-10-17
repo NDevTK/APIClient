@@ -54948,6 +54948,19 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
            own arm. */
         js_with_has_free(ctx, (JSWithHas *)st);
         return;
+    case CONT_CTOR_PROTO: {
+        /* A construct parked on its new.target's `prototype` read (10.1.13 step 2), released with nobody to
+           answer to. js_ctor_proto_free releases what the record owns (super_ref, the args_owned block and its
+           elements, the record); func, ntgt and a borrowed args window are the caller's operand slots, freed by
+           that frame's arm. The construct's requester goes with it, as in the CONT_CONSTRUCT arm. The link is
+           read before the free. */
+        JSCtorProto *cp = st;
+        void *co = cp->outer;
+        uint8_t ck = cp->outer_kind;
+        js_ctor_proto_free(ctx, cp);
+        tramp_cont_free(ctx, co, ck);
+        return;
+    }
     case CONT_OWNKEYS_CHK: {
         /* a proxy invariant check released with nobody to answer to, and whatever asked for the operation goes
            with it, as in the CONT_GETPROP arm. The link is read BEFORE the free. */
@@ -54988,7 +55001,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
     case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
-    case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO:
+    case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
     }
