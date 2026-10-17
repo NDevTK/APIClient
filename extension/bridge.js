@@ -1051,6 +1051,13 @@ DCHECK(typeof self.safeFetchEgressStating === "function",
        "feeds it, and without the registration every request would race the restore and be refused with a " +
        "row of the person's own control they never ticked");
 self.safeFetchEgressStating(egressPolicyReady());
+/* This extension's own third-party-cookie setting (lib/request-identity.js), kept in the `prefs` store beside
+   the egress table and restored once at load; a send that needs it before the restore lands awaits it. Only
+   the AST_THIRD_PARTY_COOKIES arm below changes it, and only for the popup. */
+const _thirdPartyCookiesReady = (async () => {
+  self.identityThirdPartyCookiesStated(self.identityThirdPartyCookiesRestored(await frontierPref("thirdPartyCookies")));
+})();
+self.identityThirdPartyCookiesStating(_thirdPartyCookiesReady);
 /* The write-back, taken off the table rather than off the message that changed it, so a grant the chokepoint
    refused is never persisted. */
 function egressPolicyPersist() {
@@ -2197,6 +2204,7 @@ function navigationIdentity(speaker, absUrl, request) {
   const policy = request.referrerPolicy !== null || speaker.policy === null || speaker.policy === ""
     ? "strict-origin-when-cross-origin" : speaker.policy;
   return identityFor(speaker.identity, { url: absUrl, requestInit: { credentials: "include", mode: "navigate",
+                                         destination: request.destination,
                                          referrer: speaker.referrer === "client" ? null : "",
                                          referrerPolicy: request.referrerPolicy } },
                      policy);
@@ -6079,11 +6087,11 @@ self.astDispatch = async function astDispatch(msg) {
        is a property of the rest of this function; it is the memoized read started at load, so it costs a
        microtask. */
     await egressPolicyReady();
-    /* Five types; any other is an unbuilt capability, so it aborts rather than reporting a false success to a
+    /* Six types; any other is an unbuilt capability, so it aborts rather than reporting a false success to a
        caller that will not look. */
     DCHECK(!!msg && (msg.type === "AST_ANALYZE" || msg.type === "AST_CLEAR" ||
                      msg.type === "AST_FRONTIER_SHARE" || msg.type === "AST_EGRESS_POLICY" ||
-                     msg.type === "AST_REQUEST_POLICY"),
+                     msg.type === "AST_REQUEST_POLICY" || msg.type === "AST_THIRD_PARTY_COOKIES"),
            "the trusted zone dispatched a type this bridge does not answer: `" + (msg && msg.type) + "` — " +
            "every edge into the engine is built here, so an unanswered type is a capability that was asked " +
            "for and never made, not an option the caller may proceed without");
@@ -6096,6 +6104,21 @@ self.astDispatch = async function astDispatch(msg) {
        occupy. It is a knob on storage, never on work (an instance count or a throttle would be a bound): every
        recipe, counter and entry survives at every setting, including zero, and only whether a document is held
        or fetched back changes. The reply carries the value now in force, so a caller can read back what took. */
+    /* This extension's third-party-cookie setting: read, or set by the person (`allowed`), answered with the
+       value now in force. A change is a person's act, so it carries the user-initiated grade the egress
+       command carries. */
+    if (msg.type === "AST_THIRD_PARTY_COOKIES") {
+      await _thirdPartyCookiesReady;
+      if (msg.allowed !== undefined) {
+        CHECK(msg.initiator === PAGE_CONTEXT_USER_INITIATED && typeof msg.allowed === "boolean",
+              "the third-party-cookie setting was asked to change by " + JSON.stringify(msg.initiator) +
+              " to " + JSON.stringify(msg.allowed) + " — only the person, in the popup, changes it, to a boolean");
+        await frontierPrefPut("thirdPartyCookies", msg.allowed);
+        self.identityThirdPartyCookiesStated(msg.allowed);
+      }
+      return { success: true, result: { allowed: self.identityThirdPartyCookiesAllowed(),
+                                        defaultAllowed: THIRD_PARTY_COOKIES_DEFAULT } };
+    }
     if (msg.type === "AST_FRONTIER_SHARE") {
       DCHECK(msg.bytes === undefined ||
              (typeof msg.bytes === "number" && Number.isFinite(msg.bytes) && msg.bytes >= 0),

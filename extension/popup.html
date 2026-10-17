@@ -51,6 +51,13 @@
       <span id="frontier-share-status" class="frontier-share-status"></span>
     </div>
 
+    <!-- This extension's own third-party-cookie setting (lib/request-identity.js), separate from the browser's,
+         which the extension does not read. -->
+    <div class="third-party-cookies">
+      <label><input id="third-party-cookies" type="checkbox" /> Third-party cookies on the tool's sends</label>
+      <span id="third-party-cookies-status" class="third-party-cookies-status"></span>
+    </div>
+
     <!-- THE SECOND SETTING, AND IT IS NOT A KNOB ON WORK EITHER. CLAUDE.md §Attacker-sources: firing what a
          bundle only reaches past a FORCED gate is "CONFIGURABLE AND PER-ORIGIN, BECAUSE EXPERIMENTATION IS
          NOT ALWAYS WRONG AND A SINGLE SWITCH CANNOT SAY SO … Default conservative, widened deliberately per

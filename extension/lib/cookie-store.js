@@ -111,12 +111,17 @@ function _cookieLast(attrs, name) {
 var _COOKIE_API_SAME_SITE = { Strict: "strict", Lax: "lax", None: "no_restriction", Default: "unspecified" };
 
 /* §5.7 "Storage Model" for a cookie received from `url` by a request that speaks with `facts`
-   (identityFor's answer) and is a top-level navigation or not: {details} for chrome.cookies.set, or {ignored:
-   rule}. The request URL is secure as Chrome counts it, a potentially trustworthy URL (measured: Chrome 148
-   sets a Secure cookie for http://127.0.0.1 and http://localhost). Step 16 reads the unpartitioned jar, where
-   every cookie a non-secure one could overlay lives, since a partitioned cookie is secure. */
-async function cookieStorageModel(cookie, url, facts, topLevelNavigation) {
+   (identityFor's answer): {details} for chrome.cookies.set, or {ignored: rule}. Step 1's ignore is this
+   extension's third-party-cookie setting, which spares a Partitioned cookie (measured in Chrome 148). The
+   request URL is secure as Chrome counts it, a potentially trustworthy URL (measured: Chrome 148 sets a
+   Secure cookie for http://127.0.0.1 and http://localhost). Step 16 reads the unpartitioned jar, where every
+   cookie a non-secure one could overlay lives, since a partitioned cookie is secure. */
+async function cookieStorageModel(cookie, url, facts) {
   var u = new URL(url), host = u.hostname, attrs = cookie.attrs;
+  if (_cookieLast(attrs, "Partitioned") === null) {
+    var blocked = await thirdPartyCookiesBlocked(facts);
+    if (blocked !== null) return { ignored: blocked + " (RFC 6265bis §5.7 step 1)" };
+  }
   if (cookie.name === "" && cookie.value === "")
     return { ignored: "an empty name and value (RFC 6265bis §5.7 step 2)" };
   DCHECK(!_COOKIE_CTL.test(cookie.name + cookie.value) &&
@@ -152,7 +157,7 @@ async function cookieStorageModel(cookie, url, facts, topLevelNavigation) {
   }
   var sameSiteAttr = _cookieLast(attrs, "SameSite");
   var sameSite = sameSiteAttr === null ? "Default" : sameSiteAttr.value;
-  if (sameSite !== "None" && !facts.sameSite && !topLevelNavigation)
+  if (sameSite !== "None" && !facts.sameSite && !facts.topLevelNavigation)
     return { ignored: "SameSite " + sameSite + " from a cross-site request that is not a top-level navigation " +
                       "(RFC 6265bis §5.7 step 18)" };
   if (sameSite === "None" && !secure) return { ignored: "SameSite=None without Secure (RFC 6265bis §5.7 step 19)" };
@@ -179,8 +184,9 @@ async function cookieStorageModel(cookie, url, facts, topLevelNavigation) {
    whose request included credentials and spoke with `facts`: each field value in order, as `fields` lists
    them (a string, or null for one webRequest reported as bytes, which chrome.cookies.set cannot take).
    Answers [{name, stored} | {name, ignored}], where the browser's own refusal of a write is an ignore too. */
-async function cookieStoreSetCookies(fields, url, facts, topLevelNavigation) {
-  CHECK(Array.isArray(fields) && !!facts && typeof facts.sameSite === "boolean" && !!facts.partitionKey &&
+async function cookieStoreSetCookies(fields, url, facts) {
+  CHECK(Array.isArray(fields) && !!facts && typeof facts.sameSite === "boolean" &&
+        typeof facts.topLevelNavigation === "boolean" && !!facts.partitionKey &&
         typeof facts.partitionKey.topLevelSite === "string",
         "a reply's cookies were stored without its Set-Cookie list or identityFor's facts — the jar, the " +
         "partition and the SameSite step are all the request's");
@@ -192,7 +198,7 @@ async function cookieStoreSetCookies(fields, url, facts, topLevelNavigation) {
     }
     var cookie = cookieParse(fields[i], url, Date.now());
     if (cookie.ignored) { out.push({ name: null, ignored: cookie.ignored }); continue; }
-    var decided = await cookieStorageModel(cookie, url, facts, topLevelNavigation);
+    var decided = await cookieStorageModel(cookie, url, facts);
     if (decided.ignored) { out.push({ name: cookie.name, ignored: decided.ignored }); continue; }
     var wrote = await swRpc("cookies.set", decided.details);
     out.push(wrote.refused === null ? { name: cookie.name, stored: true }

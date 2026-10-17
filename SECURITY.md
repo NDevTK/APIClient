@@ -331,7 +331,9 @@ the request URL's host and the identity's site for cookies, whether the cookie i
 the request host does not domain-match or that is a public suffix, `Secure` from a URL that is not
 potentially trustworthy, a non-secure cookie that would overlay a secure one, a SameSite cookie from a
 cross-site request that is not a top-level navigation, `SameSite=None` or `Partitioned` without `Secure`,
-and a prefix whose conditions fail. The browser's own refusal of a write is an ignore too. A top-level
+a prefix whose conditions fail, and an unpartitioned cookie this extension's third-party-cookie setting
+blocks.
+The browser's own refusal of a write is an ignore too. A top-level
 navigation keeps a cookie of any SameSite value (§5.7 step 18.3; Chrome 148 stores Lax and Strict cookies
 from a browser-initiated navigation, measured), where Fetch §3.1.3's same-site mode would answer
 "lax-or-less" for it.
@@ -382,9 +384,19 @@ Residuals, each a difference from the document's own request:
   `chrome.cookies` states no creation time.
 - The storage access status is assumed `active`.
 - The partition bit is computed as the request's own cross-site status, with the frame's
-  `hasCrossSiteAncestor`, for the cookies a send carries and the ones its reply stores; a top-level
-  navigation's partition is its client's top-level site, as CHIPS §2.2 states it. The
-  person's third-party-cookie setting is read neither for sending nor for storing.
+  `hasCrossSiteAncestor`, for the cookies a send carries and the ones its reply stores. A top-level
+  navigation's partition is the site it navigates to, with no cross-site ancestor, as Chrome 148 keys it
+  (measured); CHIPS §2.2 names the client's top-level site instead.
+- Third-party cookies follow this extension's own setting, not the browser's, which the extension does not
+  read (it holds no `privacy` permission). The setting is a boolean in the offscreen document's IndexedDB
+  `prefs` store, restored before any send asks; only the person changes it, with the popup's control, whose
+  message the offscreen document admits from an extension document only (`senderIsExtensionDocument`, by
+  `MessageSender.origin`) and the host takes only with the user-initiated grade. The engine and pages have no
+  message that reads or sets it; a content script's message is dropped at that gate (measured in Chrome 148:
+  no reply, and the setting unchanged). It is read for each send and store that is cross-site with its site
+  for cookies and is not a top-level navigation; off, such a send carries and stores Partitioned cookies only,
+  under a rule naming the setting, which is what Chrome 148 does with its own setting off (measured). The
+  default is on, what Chrome 148 does in a fresh profile with no setting changed (measured).
 - An operator's frame policy is not observable from this zone, so an operator send that states none uses the
   default policy, strict-origin-when-cross-origin. An engine page request carries the referrer and policy the
   engine states on its request record, and a referrer not of the identity's origin is "client" (Fetch §5.4).

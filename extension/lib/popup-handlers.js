@@ -418,6 +418,20 @@ async function handlePopupMessage(msg, sender, sendResponse) {
       return;
     }
 
+    /* This extension's third-party-cookie setting, read and set through the one entry into the host. The
+       relay forwards exactly the three fields the command has. */
+    case "THIRD_PARTY_COOKIES": {
+      DCHECK(Object.keys(msg).every((k) => ["type", "initiator", "allowed"].indexOf(k) >= 0),
+             "the third-party-cookie message carries a field this relay does not forward");
+      const reply = await self.astDispatch({ type: "AST_THIRD_PARTY_COOKIES", initiator: msg.initiator,
+                                             allowed: msg.allowed });
+      DCHECK(reply && reply.success === true && reply.result && typeof reply.result.allowed === "boolean" &&
+             typeof reply.result.defaultAllowed === "boolean",
+             "the host answered the third-party-cookie command without the setting now in force");
+      sendResponse(reply.result);
+      return;
+    }
+
     /* The frame's CSP verdict on the request the Send panel will send, asked of the engine instance holding
        that document through the host's one entry. It informs the person and refuses nothing: the send is their
        explicit act. */

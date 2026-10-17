@@ -356,6 +356,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   renderFrontierShare();
 
+  /* This extension's third-party-cookie setting: sent only on a change, and re-rendered from the answer. */
+  document.getElementById("third-party-cookies").addEventListener("change", async (ev) => {
+    await renderThirdPartyCookies(!!ev.target.checked);
+  });
+  renderThirdPartyCookies();
+
   /* THE EGRESS CONTROL. It sends only on a CLICK and it re-renders from the answer, so what is shown is the
      table now in force rather than the act that was attempted — the same rule the setting above it keeps and
      for the same reason: a control that reported its own success could be permitting nothing. */
@@ -1046,6 +1052,21 @@ async function renderFrontierShare(bytes) {
     mb(r.docBytes) + " MB stored across " + r.entries + " parked page(s)" +
     (r.overShare > 0 ? "; " + mb(r.overShare) + " MB over the share is the only copy there is and was kept" : "") +
     "; " + r.shed + " shed, " + r.rederived + " fetched back, " + r.stranded + " could not be";
+}
+
+/* This extension's third-party-cookie setting, as the host holds it: `allowed` undefined reads it, a boolean
+   sets it. The status line says what it covers and that it is not the browser's setting. */
+async function renderThirdPartyCookies(allowed) {
+  const r = await chrome.runtime.sendMessage(allowed === undefined ? { type: "THIRD_PARTY_COOKIES" }
+    : { type: "THIRD_PARTY_COOKIES", initiator: "user-initiated", allowed });
+  DCHECK(r && typeof r.allowed === "boolean" && typeof r.defaultAllowed === "boolean",
+         "the third-party-cookie command answered without the setting now in force");
+  document.getElementById("third-party-cookies").checked = r.allowed;
+  document.getElementById("third-party-cookies-status").textContent =
+    (r.allowed ? "On" : "Off") + (r.allowed === r.defaultAllowed ? " (default)" : "") +
+    ": when off, a request this tool sends with your cookies to a site other than the page's (not a page " +
+    "navigation) carries and stores only partitioned cookies. This is the extension's own setting; Chrome's " +
+    "third-party cookie setting is separate and is not read.";
 }
 
 /* ─── THE PER-ORIGIN EGRESS WIDENING ─────────────────────────────────────────────────────────────────────

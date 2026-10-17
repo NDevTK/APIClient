@@ -82,8 +82,9 @@ function zone(edge) {
 function navOpts(Z, principal, url, over) {
   const origin = new URL(principal).origin;
   const identity = Z.identityFor(Z.engineIdentity(origin, principal),
-                                 { url, requestInit: { credentials: 'include', mode: 'navigate', referrer: '',
-                                                       referrerPolicy: null } },
+                                 { url, requestInit: { credentials: 'include', mode: 'navigate',
+                                                       destination: 'document',
+                                                       referrer: '', referrerPolicy: null } },
                                  'strict-origin-when-cross-origin');
   return Object.assign({ pageOrigin: origin,
                          destination: 'document', mode: 'navigate', provenance: 'derived',
@@ -175,9 +176,17 @@ ROUTES.set('/sc/1', setCookie(['host1=a; Path=/', 'dom1=b; Domain=.Example.test'
                            'old=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT', 'cap=1; Max-Age=999999999',
                           ]))
   .set('/sc/3', setCookie(['xs=1', 'xsl=1; SameSite=Lax', 'xsn=1; SameSite=None; Secure']))
-  .set('/hop/sc', { status: 302, headers: { Location: '/home-sc', 'Set-Cookie': ['hopc=1; Path=/'] } });
+  .set('/hop/sc', { status: 302, headers: { Location: '/home-sc', 'Set-Cookie': ['hopc=1; Path=/'] } })
+  .set('/sc/5', setCookie(['xs=1', 'xsl=1; SameSite=Lax', 'xsn=1; SameSite=None; Secure',
+                           'xsp=1; Secure; Partitioned; SameSite=None']))
+  .set('/sc/4', setCookie(['pkn=1; Secure; Partitioned; SameSite=None', 'unn=1; Secure; SameSite=None',
+                           'lxn=1; SameSite=Lax']));
 const C = `http://127.0.0.2:${PORT}`, D = `http://app.example.test:${PORT}`;
+ROUTES.set('/hop/tc', hop(`${C}/sc/4`)).set('/sc/6', ROUTES.get('/sc/5'));
 const cookieWrites = [];   // [{name, details, before: the number of server hits when it was written}]
+/* C's jar: an unpartitioned None and Lax cookie, and one of whichever partition is asked for. */
+const C_JAR = [{ name: 'tp', value: '1', path: '/', sameSite: 'no_restriction' },
+               { name: 'tl', value: '1', path: '/', sameSite: 'lax' }];
 const speakAsRules = new Map();   // ruleId -> { method, url, requestHeaders }
 let zf = null;
 const FIXTURE_EDGE = {
@@ -198,6 +207,9 @@ const FIXTURE_EDGE = {
     if (api === 'cookies.getAll' && args.name !== undefined)
       return [{ name: 'lock', value: 'held', domain: '.example.test', path: '/', secure: true }]
         .filter((c) => c.name === args.name);
+    if (api === 'cookies.getAll' && args.url.startsWith(C + '/'))
+      return args.partitionKey ? [{ name: 'tpp', value: '1', path: '/', sameSite: 'no_restriction',
+                                    partitionKey: Object.assign({}, args.partitionKey) }] : C_JAR;
     if (api === 'cookies.getAll')
       return args.partitionKey ? [] : [{ name: 'sid', value: 'probe', path: '/', sameSite: 'lax' }];
     if (api === 'cookies.set') { cookieWrites.push({ name: args.name, details: args, before: hits.length });
@@ -216,7 +228,8 @@ const FIXTURE_EDGE = {
    `fetch()` (bridge.js's `fetched`: uncredentialed, `cors`, the engine's referrer). */
 const REFERRING = (Z) => ({ identity: Z.identityFor(Z.engineIdentity(A, `${A}/page`),
                                                      { url: `${A}/hop/1b`, requestInit: { credentials: 'include',
-                                                       mode: 'navigate', referrer: null, referrerPolicy: null } },
+                                                       mode: 'navigate', destination: 'document', referrer: null,
+                                                       referrerPolicy: null } },
                                                      'strict-origin-when-cross-origin') });
 const PAGE_FETCH = (Z, url) => ({ destination: '', mode: 'cors', credentials: 'same-origin', credentialed: false,
                                   useCorsPreflight: false,
@@ -264,10 +277,27 @@ const FIXTURE_ROWS = [
                   wrote('__Host-ok').details.partitionKey === undefined && wrote('gone').details.expirationDate === 0 &&
                   wrote('old').details.expirationDate === Date.UTC(2015, 9, 21, 7, 28) / 1000 &&
                   Math.abs(wrote('cap').details.expirationDate - (Date.now() / 1000 + 400 * 86400)) < 60) },
-  { label: 'COOKIES, the page\'s credentialed cors fetch of cross-site 127.0.0.2: only SameSite=None is stored',
+  { label: 'COOKIES, the page\'s credentialed cors fetch of cross-site 127.0.0.2, the third-party-cookie setting ' +
+           'at its default (on): its None cookie and its partition\'s are sent, and only SameSite=None is stored',
     url: `${C}/sc/3`, want: 'REFUSE:network', over: (Z) => CREDENTIALED_FETCH(Z, `${C}/sc/3`),
-    stored: ['xsn'], ignored: ['xs', 'xsl'],
+    stored: ['xsn'], ignored: ['xs', 'xsl'], carried: { path: '/sc/3', cookie: 'tp=1; tpp=1', referer: null },
     check: () => wrote('xsn').details.partitionKey === undefined },
+  /* This extension's third-party-cookie setting off: a cross-site request that is not a top-level navigation
+     sends and stores Partitioned cookies only; a top-level navigation is first-party to its own site. */
+  { label: 'THIRD-PARTY COOKIES OFF, the same cors fetch: only the Partitioned cookie is sent and stored',
+    url: `${C}/sc/5`, want: 'REFUSE:network', over: (Z) => CREDENTIALED_FETCH(Z, `${C}/sc/5`), thirdPartyAllowed: false,
+    stored: ['xsp'], ignored: ['xs', 'xsl', 'xsn'], carried: { path: '/sc/5', cookie: 'tpp=1', referer: null },
+    check: () => JSON.stringify(wrote('xsp').details.partitionKey) ===
+                   JSON.stringify({ topLevelSite: 'http://127.0.0.1', hasCrossSiteAncestor: true }) },
+  { label: 'THIRD-PARTY COOKIES ON, stated: the same cors fetch sends and stores its unpartitioned cookies',
+    url: `${C}/sc/6`, want: 'REFUSE:network', over: (Z) => CREDENTIALED_FETCH(Z, `${C}/sc/6`), thirdPartyAllowed: true,
+    stored: ['xsn', 'xsp'], ignored: ['xs', 'xsl'], carried: { path: '/sc/6', cookie: 'tp=1; tpp=1', referer: null } },
+  { label: 'THIRD-PARTY COOKIES OFF, a navigation that hops cross-site to 127.0.0.2: first-party there, its ' +
+           'Lax cookie sent, and its Partitioned cookie keyed on the destination\'s site',
+    url: `${A}/hop/tc`, want: 'REFUSE:network', thirdPartyAllowed: false,
+    stored: ['pkn', 'unn', 'lxn'], ignored: [], carried: { path: '/sc/4', cookie: 'tp=1; tl=1; tpp=1', referer: null },
+    check: () => JSON.stringify(wrote('pkn').details.partitionKey) ===
+                   JSON.stringify({ topLevelSite: 'http://127.0.0.2', hasCrossSiteAncestor: false }) },
   { label: 'COOKIES, a 3xx\'s Set-Cookie is stored before its hop is sent',
     principal: `${D}/page`, url: `${D}/hop/sc`, want: 'ANSWERED', list: [`${D}/hop/sc`, `${D}/home-sc`],
     stored: ['hopc'], ignored: [],
@@ -289,6 +319,9 @@ async function run(Z, principal, row) {
   try {
     const over = typeof row.over === 'function' ? row.over(Z) : row.over;
     cookieWrites.length = 0;
+    /* The host's restore with nothing stored, unless the row states the person's setting. */
+    if (Z === zf) Z.identityThirdPartyCookiesStated(row.thirdPartyAllowed === undefined
+      ? Z.identityThirdPartyCookiesRestored(null) : row.thirdPartyAllowed);
     r = row.ask ? await row.ask(Z, row)
       : await Z.safeFetch(row.url, navOpts(Z, row.principal || principal, row.url, over));
     if (r && r.refusal) { got = r.refusal.kind === 'decline' ? 'DECLINE' : 'REFUSE:' + r.refusal.kind;

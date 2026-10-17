@@ -1502,8 +1502,7 @@ async function _speakAs(identity, urlList, method, mode, destination, credential
   /* Fetch §4.7 "HTTP-network fetch": "If includeCredentials is true, then the user agent should parse and store
      response `Set-Cookie` headers", which cookieArmFor's "listed" arm is. */
   if (sent.resp && cookieArmFor(facts, href).arm === "listed")
-    await cookieStoreSetCookies(_setCookiesOf(sent.resp), href, facts,
-                                mode === "navigate" && destination === "document");
+    await cookieStoreSetCookies(_setCookiesOf(sent.resp), href, facts);
   return sent;
 }
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {

@@ -58,9 +58,15 @@ function cookieSiteStatus(identity, url) {
 const IDENTITY_CREDENTIALS_MODES = ["omit", "same-origin", "include"];
 
 /* The facts a send speaking as `identity` applies to `request` ({url, requestInit}): the Origin (always
-   the identity's own), the Referer by Referrer Policy §8.3, the credentials mode, and the partition key
-   the request's cookies come from. `documentPolicy` is the identity's policy container's referrer policy,
-   which Fetch §4.1 "Main fetch" uses when the request states "". */
+   the identity's own), the Referer by Referrer Policy §8.3, the credentials mode, whether it navigates a
+   top-level traversable (mode "navigate", destination "document"), and the partition key the request's
+   cookies come from. `documentPolicy` is the identity's policy container's referrer policy, which Fetch §4.1
+   "Main fetch" uses when the request states "".
+   A top-level navigation's partition is the site it navigates to, with no cross-site ancestor, as Chrome keys
+   it (measured in Chrome 148: a Partitioned cookie set by the reply to a link navigation from 127.0.0.1 to
+   localhost was stored under {http://localhost, false}). CHIPS (draft-cutler-httpbis-partitioned-cookies-01)
+   §2.2 "Computing the cookie partition key" says otherwise: "Let "cookie-partition-key" be the site of the
+   top-document when the user agent made the request", the navigation's client's. */
 function identityFor(identity, request, documentPolicy) {
   const ri = request.requestInit;
   const credentials = ri.credentials === null ? "same-origin" : ri.credentials;
@@ -74,10 +80,15 @@ function identityFor(identity, request, documentPolicy) {
     const r = ri.referrer === null ? "client" : referrerForIdentity(ri.referrer, identity.origin);
     referrer = determineRequestReferrer(r, policy, identity.docUrl, request.url);
   }
+  CHECK(ri.mode !== "navigate" || typeof ri.destination === "string",
+        "a navigation request reached its identity with no destination — whether it navigates a top-level " +
+        "traversable decides its cookie partition, its SameSite exception and whether it is third-party");
+  const topLevelNavigation = ri.mode === "navigate" && ri.destination === "document";
   const status = cookieSiteStatus(identity, request.url);
+  const partitionKey = topLevelNavigation ? { topLevelSite: siteOf(request.url), hasCrossSiteAncestor: false }
+    : { topLevelSite: identity.partitionKey.topLevelSite, hasCrossSiteAncestor: status === "cross-site" };
   return { origin: identity.origin, referrer, referrerPolicy: policy, credentials, sameSite: status === "same-site",
-           partitionKey: { topLevelSite: identity.partitionKey.topLevelSite, hasCrossSiteAncestor: status === "cross-site" },
-           client: identity };
+           topLevelNavigation, partitionKey, client: identity };
 }
 
 /* The facts the next request of a redirect chain speaks with, from the facts `facts` the last one spoke with
@@ -90,7 +101,9 @@ function identityForRedirect(facts, url, policy) {
         "and cookie site from the client those facts were computed for");
   return identityFor(facts.client, { url, requestInit: { credentials: facts.credentials,
                                                          referrer: facts.referrer === null ? "" : facts.referrer,
-                                                         referrerPolicy: policy } },
+                                                         referrerPolicy: policy,
+                                                         mode: facts.topLevelNavigation ? "navigate" : null,
+                                                         destination: facts.topLevelNavigation ? "document" : null } },
                      policy);
 }
 
@@ -138,19 +151,73 @@ async function _partitionedCookies(url, partitionKey) {
   return list;
 }
 
-/* RFC 6265bis §5.8.3 "Retrieval Algorithm" for a request that is not a navigation: on a cross-site one
-   (`sameSite` false) a cookie whose same-site-flag is not "None" is excluded, as the Lax exception is for
-   navigations. So the unpartitioned cookies that survive plus the request's partition's, merged by path
-   length, as {sent, excluded: [{name, rule}]}.
+/* This extension's own third-party-cookie setting: whether a send that is cross-site with its site for
+   cookies, and is not a top-level navigation, carries and stores unpartitioned cookies. It is not the
+   browser's setting, which this extension does not read. The host restores it from its own store before any
+   send asks (`identityThirdPartyCookiesStating`) and states it again whenever the person changes it in the
+   popup; no other writer exists. The default is what Chrome 148 does in a fresh profile with no setting
+   changed: a cross-site subresource request sent and stored an unpartitioned SameSite=None cookie
+   (measured). */
+const THIRD_PARTY_COOKIES_DEFAULT = true;
+let _thirdPartyCookiesAllowed = null;
+let _thirdPartyCookiesStating = null;
+function identityThirdPartyCookiesStating(restore) {
+  CHECK(_thirdPartyCookiesStating === null && typeof restore.then === "function",
+        "the third-party-cookie setting's restore was registered twice, or as no promise — one host restores it once");
+  _thirdPartyCookiesStating = restore;
+}
+/* The stored value, or the default where the store holds none. This zone is the store's only writer, so any
+   other shape is corruption. */
+function identityThirdPartyCookiesRestored(stored) {
+  CHECK(stored === null || typeof stored === "boolean",
+        "the stored third-party-cookie setting is " + JSON.stringify(stored) + ", neither absent nor a boolean");
+  return stored === null ? THIRD_PARTY_COOKIES_DEFAULT : stored;
+}
+function identityThirdPartyCookiesStated(allowed) {
+  CHECK(typeof allowed === "boolean", "the third-party-cookie setting was stated as " + JSON.stringify(allowed));
+  _thirdPartyCookiesAllowed = allowed;
+}
+function identityThirdPartyCookiesAllowed() {
+  CHECK(_thirdPartyCookiesAllowed !== null, "the third-party-cookie setting was read before its host stated it");
+  return _thirdPartyCookiesAllowed;
+}
+
+/* Whether the setting blocks an unpartitioned cookie of a request speaking with `facts`: the rule that
+   blocks it, or null. A request is third-party when it is cross-site with its site for cookies; a top-level
+   navigation's site for cookies is its own, as Chrome 148 counts it (measured with the browser's setting
+   false: a cross-site subresource request sent and stored only Partitioned cookies, and a cross-site link
+   navigation sent and stored unpartitioned ones too). Read on every send and every store. */
+async function thirdPartyCookiesBlocked(facts) {
+  if (facts.sameSite || facts.topLevelNavigation) return null;
+  if (_thirdPartyCookiesAllowed === null) {
+    CHECK(_thirdPartyCookiesStating !== null,
+          "a cross-site send asked the third-party-cookie setting in a host that restores none — its cookies " +
+          "would follow no one's setting");
+    await _thirdPartyCookiesStating;
+  }
+  return identityThirdPartyCookiesAllowed() ? null
+    : "this extension's third-party-cookie setting is off, which blocks an unpartitioned cookie on a cross-site " +
+      "request";
+}
+
+/* RFC 6265bis §5.8.3 "Retrieval Algorithm": on a cross-site request (`sameSite` false) a cookie whose
+   same-site-flag is not "None" is excluded, unless the request is a top-level navigation and the flag is Lax
+   or Default (every navigation this zone sends is a GET, a safe method). This extension's third-party-cookie
+   setting may exclude the unpartitioned cookies too. So the unpartitioned cookies that survive plus the
+   request's partition's, merged by path length, as {sent, excluded: [{name, rule}]}.
    Not covered: the creation-time order between the two lists (chrome.cookies states no creation time, so each
-   list keeps its own order), and the person's third-party-cookie setting. Their absence shows as a Cookie
-   header whose order or members differ from the page's own. */
-async function _identityCookies(url, partitionKey, sameSite) {
+   list keeps its own order). Its absence shows as a Cookie header whose order differs from the page's own. */
+async function _identityCookies(url, facts) {
   const all = await swRpc("cookies.getAll", { url });
-  const kept = (c) => sameSite || c.sameSite === "no_restriction";
-  const excluded = all.filter((c) => !kept(c)).map((c) => ({ name: c.name,
-    rule: "SameSite " + c.sameSite + " on a cross-site request that is not a navigation (RFC 6265bis §5.8.3)" }));
-  const sent = all.filter(kept).concat(await _partitionedCookies(url, partitionKey))
+  const blocked = await thirdPartyCookiesBlocked(facts);
+  const laxAllowed = (c) => facts.topLevelNavigation && (c.sameSite === "lax" || c.sameSite === "unspecified");
+  const sameSiteKept = (c) => facts.sameSite || c.sameSite === "no_restriction" || laxAllowed(c);
+  const excluded = all.filter((c) => blocked !== null || !sameSiteKept(c)).map((c) => ({ name: c.name,
+    rule: blocked !== null ? blocked
+      : "SameSite " + c.sameSite + " on a cross-site request that is not a top-level navigation's Lax exception " +
+        "(RFC 6265bis §5.8.3)" }));
+  const sent = all.filter((c) => blocked === null && sameSiteKept(c))
+    .concat(await _partitionedCookies(url, facts.partitionKey))
     .map((c, i) => ({ c, i })).sort((a, b) => (b.c.path.length - a.c.path.length) || (a.i - b.i)).map((x) => x.c);
   return { sent, excluded };
 }
@@ -159,7 +226,7 @@ async function _identityCookies(url, partitionKey, sameSite) {
    null. */
 async function cookieHeaderFor(identityFacts, url) {
   if (cookieArmFor(identityFacts, url).arm === "none") return { cookie: null };
-  const { sent } = await _identityCookies(url, identityFacts.partitionKey, identityFacts.sameSite);
+  const { sent } = await _identityCookies(url, identityFacts);
   if (sent.length === 0) return { cookie: null };
   return { cookie: sent.map((c) => (c.name !== "" ? c.name + "=" : "") + c.value).join("; ") };
 }
@@ -170,7 +237,7 @@ async function cookieNamesFor(identityFacts, url) {
   const arm = cookieArmFor(identityFacts, url);
   const pk = identityFacts.partitionKey;
   if (arm.arm === "listed") {
-    const { sent, excluded } = await _identityCookies(url, pk, identityFacts.sameSite);
+    const { sent, excluded } = await _identityCookies(url, identityFacts);
     return { arm: arm.arm, names: sent.map((c) => c.name), excluded };
   }
   const all = (await swRpc("cookies.getAll", { url })).concat(await _partitionedCookies(url, pk));
