@@ -31,6 +31,7 @@
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
+#include "core/rendering/visual_update.h"
 #include "core/resize_observer/resize_observer.h"
 #include "core/timing/event_loop.h"
 #include "core/timing/hr_time.h"
@@ -103,7 +104,9 @@ typedef struct { long none, hidden, blocked, idle; } RenderingExclusions;
    canonical one. */
 static bool doc_has_rendering_work(JSContext *docctx)
 {
-    return page_reveal_pending(docctx) || animation_frame_pending(docctx)
+    /* visual_update_pending is the step's "would have no visible effect" for a document whose tree changed
+       since its last update (core/rendering/visual_update.h). */
+    return page_reveal_pending(docctx) || visual_update_pending(docctx) || animation_frame_pending(docctx)
         || media_query_list_pending(docctx) || intersection_observer_pending(docctx)
         || scroll_events_pending(docctx);
 }
@@ -463,11 +466,9 @@ static void steps_20_to_23(JSContext *docctx)
                 "core/timing/performance_observer.c — so build the interface, declare its entry type through "
                 "performance_observer_declare_entry_type, then both steps");
     /* STEP 22 — "update the rendering or user interface of doc and its node navigable to reflect the current
-       state". THE PAINT, and the only step of the twenty-three with no headless equivalent: everything before
-       it computes values that exist whether or not anything is drawn, and this one draws. There is no
-       scriptable result for it to produce and no interface whose arrival would give it one, so it is a
-       documented no-effect rather than an assertion — the one place in this component where that is the
-       honest answer. */
+       state". The paint, the only step with no headless equivalent and no scriptable result; what it leaves
+       is that doc now reflects its current state, so its pending visual update is taken. */
+    visual_update_taken(docctx);
     /* STEP 23 — "process top layer removals given doc", which is CSS Positioned Layout Level 4 §3.3 Top Layer
        Manipulation's own algorithm and whose note names this step as its ONE caller: "this is intended to be
        called during the 'Update the Rendering' step of HTML's rendering algorithm. It is not intended to be

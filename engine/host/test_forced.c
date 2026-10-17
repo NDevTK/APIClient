@@ -1047,6 +1047,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/griditem.h"
 #include "fixture/contentsflex.h"
 #include "fixture/custommedia.h"
+#include "fixture/visualupdate.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1477,6 +1478,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "griditem", HTML_GRIDITEM },
     { "contentsflex", HTML_CONTENTSFLEX },
     { "custommedia", HTML_CUSTOMMEDIA },
+    { "visualupdate", HTML_VISUALUPDATE },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -13322,6 +13324,27 @@ TF_UNIT void probes_custommedia(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `visualupdate` document. */
+TF_UNIT void probes_visualupdate(const char *js, Probe *tab, int *n) {
+    /* HTML §8.1.7.3: a tree change after the first frame is a visible effect, so a rendering opportunity follows
+       and step 16 delivers the ResizeObserver's initial observation (fixture/visualupdate.h). */
+    const char *vupd_why = NULL; int vupd_tt = 1;
+    fold_row(&vupd_tt, &vupd_why, !!strstr(js, "\"/api/vupd\""),
+             "NOT REACHED: there is no /api/vupd record at all, not even the solver's drive of the callback");
+    /* The solver drives an uncalled callback as an orphan, so a record alone proves nothing about the frame;
+       the page's own timeline must have reached it. */
+    fold_row(&vupd_tt, &vupd_why, emitted_record_has_both(js, "/api/vupd", "\"driven\":false", "\"ro\""),
+             "only the solver's drive reached the callback: no rendering opportunity followed the append, so "
+             "step 16 never delivered the observation — HTML §8.1.7.3's Unnecessary rendering step removed a "
+             "document whose tree changed");
+    fold_row(&vupd_tt, &vupd_why, param_value_is(js, "/api/vupd", "ro", "1"),
+             "the ResizeObserver callback's request carries no ro=1");
+    const Probe rows[] = {
+        { "visual-update-after-mutation", vupd_tt, "/api/vupd", SESS_EXPLORE, vupd_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `windowclose` document. */
 TF_UNIT void probes_windowclose(const char *js, Probe *tab, int *n) {
     const char *winclose_why = NULL;
@@ -16649,6 +16672,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_griditem(js, probes, &np);
     probes_contentsflex(js, probes, &np);
     probes_custommedia(js, probes, &np);
+    probes_visualupdate(js, probes, &np);
     probes_windowclose(js, probes, &np);
     probes_windowopenerclose(js, probes, &np);
     probes_timers(js, probes, &np);

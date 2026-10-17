@@ -98,6 +98,7 @@
 #include "core/rendering/animation_frame.h"
 #include "core/scheduling/idle_callback.h"
 #include "core/rendering/page_reveal.h"
+#include "core/rendering/visual_update.h"
 #include "core/rendering/rendering.h"
 #include "core/resize_observer/resize_observer.h"
 #include "core/storage/storage.h"
@@ -252,6 +253,7 @@ static void d_viewport(JSContext *c, const PlatformAgent *a) { (void)a; viewport
 static void d_visual_viewport(JSContext *c, const PlatformAgent *a) { (void)a; visual_viewport_init(c); }
 static void d_scroll_events(JSContext *c, const PlatformAgent *a) { (void)a; scroll_events_init(c); }
 static void d_media_query_list(JSContext *c, const PlatformAgent *a) { (void)a; media_query_list_init(c); }
+static void d_visual_update(JSContext *c, const PlatformAgent *a) { (void)a; visual_update_init(c); }
 static void d_rendering(JSContext *c, const PlatformAgent *a) { (void)a; rendering_init(c); }
 static void d_headers(JSContext *c, const PlatformAgent *a) { (void)a; headers_init(c); }
 static void d_response(JSContext *c, const PlatformAgent *a) { (void)a; response_init(c); }
@@ -488,6 +490,7 @@ static void r_event_loop(JSRuntime *rt) { event_loop_free(rt); }
 static void r_animation_frame(JSRuntime *rt) { animation_frame_free(rt); }
 static void r_idle_callback(JSRuntime *rt) { idle_callback_free(rt); }
 static void r_structured_clone(JSRuntime *rt) { structured_clone_free(rt); }
+static void r_visual_update(JSRuntime *rt) { visual_update_free(rt); }
 static void r_rendering(JSRuntime *rt) { rendering_free(rt); }
 static void r_document(JSRuntime *rt) { document_agent_free(rt); }
 static void r_element(JSRuntime *rt) { element_free(rt); }
@@ -869,6 +872,10 @@ static const PlatformComponent PLATFORM[] = {
        It follows `event` because its step 2 fires one. */
     { "scroll_events",       d_scroll_events,       NULL,        r_scroll_events },
     { "media_query_list",    d_media_query_list,    i_media_query_list, r_media_query_list },
+    /* A document's pending visual update, before `rendering`: its Unnecessary rendering test asks it and its step
+       22 takes it. It registers on DOM §4.2.3's children changed list, whose table core/dom/node.c gives back per
+       agent. */
+    { "visual_update",       d_visual_update,       NULL,        r_visual_update },
     /* After the three whose algorithms update-the-rendering's steps 8 and 10 are. */
     { "rendering",           d_rendering,           NULL,        r_rendering },
     /* DOM §3.1 "Interface AbortController" and §3.2 "Interface AbortSignal", ahead of `request`: Fetch §5.4's
