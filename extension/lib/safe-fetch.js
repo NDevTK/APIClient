@@ -1297,6 +1297,17 @@ function safeFetchPermitted(origin) {
    which fact held it; the order is the registry's, not a ranking of harm. A permission changes which act may
    be spent, never what a reply is worth: `forced` still marks a reply as evidence about a request no client
    makes. Wherever this refuses, the address is still derived in full and reported. */
+/* Whether a default arm admits the vector `v`: the page loading itself, as a browser would, and so the page's
+   act rather than this tool's. */
+function _defaultArmAdmits(v) {
+  return _DEFAULT_ARMS.some(function (a) { return a.when.every(function (c) { return v[c.signal] === c.value; }); });
+}
+/* Whose act a request is, by the one rule the firing walk decides with: true when a default arm admits it.
+   A request that fires only because a person widened its origin is this tool's act (a forked value, a probe,
+   a tool-composed request). */
+function _isPageAct(facts) {
+  return _defaultArmAdmits(_signalVector(facts));
+}
 function _firingRefusal(facts) {
   var v, i, s;
   v = _signalVector(facts);
@@ -1305,8 +1316,7 @@ function _firingRefusal(facts) {
      engine correctly grades `observed`. All nine pairs are reachable and distinct: the request's grade is the
      engine's, the reach grade is this zone's, and neither bounds the other. */
   /* Defaults first: they are permissions and the table only widens, so the order changes no answer. */
-  for (i = 0; i < _DEFAULT_ARMS.length; i++)
-    if (_DEFAULT_ARMS[i].when.every(function (c) { return v[c.signal] === c.value; })) return null;
+  if (_defaultArmAdmits(v)) return null;
   /* An unstated table is empty, so the walk would refuse a permitted origin in the policy's own voice. That
      is conservative, hence a DCHECK, and unreadable, hence asserted at all. `safeFetch` awaits
      `_EXPLORED_STATING` first, so this checks that construction; a host that neither states nor promises
@@ -1530,12 +1540,15 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
    lib/speak-as.js's rules for the last URL of `urlList` (Fetch §2.2.5's URL list, which a redirect grows): one
    for its own method and, when `preflightNames` is a list, one for its OPTIONS request. Its cookies are the
    identity's (cookieHeaderFor's Cookie) only where this zone is willing (`credentialed`); otherwise it carries
-   none, and where it carries them its reply's Set-Cookie is stored in the identity's jar (lib/cookie-store.js)
-   before anything reads the reply. The zone's own fetch omits credentials, so this extension's jar neither adds
-   nor receives a cookie. `stated` is null, or the operator tier's Send-panel record (safeFetchStatedShape),
+   none. Where it carries them and the request is the page's act or the person's (`jarTakesReply`), its
+   reply's Set-Cookie is stored in the identity's jar (lib/cookie-store.js) before anything reads the reply;
+   a reply to this tool's own act never reaches the person's jar, since a forced reply is never merged into
+   observed state. The zone's own fetch omits credentials, so this extension's jar neither adds nor receives
+   a cookie. `stated` is null, or the operator tier's Send-panel record (safeFetchStatedShape),
    whose Origin and Referer replace the identity's on every rule of the send. A request with no identity runs
    `send` as this extension, uncredentialed. */
-async function _speakAs(identity, urlList, method, mode, destination, credentialed, preflightNames, stated, init, send) {
+async function _speakAs(identity, urlList, method, mode, destination, credentialed, jarTakesReply, preflightNames,
+                        stated, init, send) {
   if (!identity) return send();
   var href = urlList[urlList.length - 1];
   CHECK(typeof withSpeakAsRules === "function",
@@ -1558,8 +1571,12 @@ async function _speakAs(identity, urlList, method, mode, destination, credential
     : { origin: stated.origin === null ? null : stated.origin.header, referer: stated.referer };
   var sent = await withSpeakAsRules(identity.origin, href, rules, admitted, send);
   /* Fetch §4.7 "HTTP-network fetch": "If includeCredentials is true, then the user agent should parse and store
-     response `Set-Cookie` headers", which cookieArmFor's "listed" arm is. */
-  if (sent.resp && cookieArmFor(facts, href).arm === "listed")
+     response `Set-Cookie` headers", which cookieArmFor's "listed" arm is.
+     Named residual. Not covered: a tool act's reply Set-Cookie applied to the asking flow's own jar (the
+     engine's per-flow cookie_jar). The next diff carries the fields on the reply record and builds the jar's
+     HTTP receive. Its absence shows as a flow whose probe reply set a cookie reading none of it in
+     document.cookie. */
+  if (sent.resp && jarTakesReply && cookieArmFor(facts, href).arm === "listed")
     await cookieStoreSetCookies(_setCookiesOf(sent.resp), href, facts);
   return sent;
 }
@@ -2031,9 +2048,10 @@ async function safeFetch(url, opts) {
        this; this tool declines to spend the act. The flow parks rather than running its failure path, so it
        fires the day the origin is widened, and the address is still reported. A widening is a statement
        about one host, so a hop to another is asked again, and `url-authority` reads the hop's own address. */
-    var _ptok = _firingRefusal({ url: _current, destination: destination, provenance: provenance,
-                                 pinned: pinnedMark, doc: doc, actor: actor, driven: driven,
-                                 credentialed: credentialed, headers: _headerList });
+    var _signalFacts = { url: _current, destination: destination, provenance: provenance,
+                         pinned: pinnedMark, doc: doc, actor: actor, driven: driven,
+                         credentialed: credentialed, headers: _headerList };
+    var _ptok = _firingRefusal(_signalFacts);
     if (_ptok)
       return _refused("decline", "blocked-signal" + (_hop ? "-redirect:" : ":") + _ptok,
                       _exposedUrlList(_urlList), {});
@@ -2077,7 +2095,8 @@ async function safeFetch(url, opts) {
        tainting is `basic`. */
     var _cookies = credentialed && (!_identity || _identity.credentials === "include" || _tainting === "basic");
     var _sent = await _sendSerialized(_current.href, function () {
-      return _speakAs(_identity, _urlList, _method, mode, destination, _cookies, _preflight ? _unsafeNames : null,
+      return _speakAs(_identity, _urlList, _method, mode, destination, _cookies, _isPageAct(_signalFacts),
+                      _preflight ? _unsafeNames : null,
                       null, init, async function () {
         if (_preflight) {
           var _pf = await _corsPreflight(_current.href, _method, _headerList || [], opts.credentials,
@@ -2394,7 +2413,8 @@ async function safeFetchOperator(url, opts) {
     var checkedOrigin = stated.origin !== null && stated.origin.header !== null ? stated.origin.header
       : requestRedirectTaint(identity.origin, urlList) === "same-origin" ? identity.origin : "null";
     var sent = await _sendSerialized(current.href, function () {
-      return _speakAs(identity, urlList, method, opts.mode, "", true, preflight ? unsafe : null, stated, init,
+      /* The person's own act, speaking as a frame they picked: its reply's cookies are theirs to keep. */
+      return _speakAs(identity, urlList, method, opts.mode, "", true, true, preflight ? unsafe : null, stated, init,
                       async function () {
         /* A fetch that rejects is Fetch §5.6's network error, an answer the person is shown; an invariant
            abort travels on. */

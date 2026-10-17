@@ -183,7 +183,8 @@ ROUTES.set('/sc/1', setCookie(['host1=a; Path=/', 'dom1=b; Domain=.Example.test'
                            'lxn=1; SameSite=Lax']));
 const C = `http://127.0.0.2:${PORT}`, D = `http://app.example.test:${PORT}`;
 ROUTES.set('/hop/tc', hop(`${C}/sc/4`)).set('/sc/6', ROUTES.get('/sc/5')).set('/sc/7', ROUTES.get('/sc/5'))
-  .set('/sc/8', ROUTES.get('/sc/5'));
+  .set('/sc/8', ROUTES.get('/sc/5')).set('/sc/9', setCookie(['act9=1; Path=/']))
+  .set('/sc/10', setCookie(['act10=1; Path=/'])).set('/sc/11', setCookie(['act11=1; Path=/']));
 const cookieWrites = [];   // [{name, details, before: the number of server hits when it was written}]
 /* C's jar: an unpartitioned None and Lax cookie, and one of whichever partition is asked for. */
 const C_JAR = [{ name: 'tp', value: '1', path: '/', sameSite: 'no_restriction' },
@@ -320,6 +321,15 @@ const FIXTURE_ROWS = [
     stored: ['pkn', 'unn', 'lxn'], ignored: [], carried: { path: '/sc/4', cookie: 'tp=1; tl=1; tpp=1', referer: null },
     check: () => JSON.stringify(wrote('pkn').details.partitionKey) ===
                    JSON.stringify({ topLevelSite: 'http://127.0.0.2', hasCrossSiteAncestor: false }) },
+  /* Whose act a credentialed request is decides whether its reply's Set-Cookie reaches the person's jar: the
+     page's (a default egress arm admits it) does, this tool's (it fires only because A is widened) does not. */
+  { label: 'COOKIES, a pinned route seed at widened A is the tool\'s act: its Set-Cookie is not written',
+    url: `${A}/sc/9`, want: 'ANSWERED', over: () => PINNED, stored: [], ignored: ['act9'] },
+  { label: 'COOKIES, a frontier re-derivation (actor tool, derived) at widened A: not written',
+    url: `${A}/sc/10`, want: 'ANSWERED',
+    over: () => ({ actor: 'tool', driven: 'unstated', pinned: 'unstated' }), stored: [], ignored: ['act10'] },
+  { label: 'COOKIES, the ambient seed (observed, tool) is the person\'s own request repeated: written',
+    url: `${A}/sc/11`, want: 'ANSWERED', over: AMBIENT, stored: ['act11'], ignored: [] },
   { label: 'COOKIES, a 3xx\'s Set-Cookie is stored before its hop is sent',
     principal: `${D}/page`, url: `${D}/hop/sc`, want: 'ANSWERED', list: [`${D}/hop/sc`, `${D}/home-sc`],
     stored: ['hopc'], ignored: [],

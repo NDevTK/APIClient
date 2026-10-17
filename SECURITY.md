@@ -324,9 +324,14 @@ Three callers speak as a document:
 - every operator send (above).
 Neither a message nor the engine can state an identity. `safeFetch` `CHECK`s that a credentialed request
 has one, and the zone's own fetch always omits credentials: the extension's jar, whose partition is the
-extension's, is never sent and receives nothing. A send that carries the identity's cookies stores its
-reply's `Set-Cookie`, a 3xx's included, in the identity's jar before anything reads the reply
-(`lib/cookie-store.js`): RFC 6265bis (draft 22) §5.6 parses each field and §5.7 "Storage Model" decides, on
+extension's, is never sent and receives nothing. A send that carries the identity's cookies, and is the
+page's act or the person's, stores its reply's `Set-Cookie`, a 3xx's included, in the identity's jar before
+anything reads the reply. Whose act a request is, is the egress rule's own answer: one a default arm admits (the
+page loading itself, as a browser would) is the page's, an operator send is the person's, and a request that
+fires only because an origin was widened (a forked value, a probe, a tool-composed request) is this tool's,
+whose reply's cookies never reach the person's jar, since a forced reply is never merged into observed state.
+Applying them to the asking flow's own jar instead is not built yet (the residual at `_speakAs`). The storing
+is `lib/cookie-store.js`'s: RFC 6265bis (draft 22) §5.6 parses each field and §5.7 "Storage Model" decides, on
 the request URL's host and the identity's site for cookies, whether the cookie is kept; CHIPS §2.3 makes a
 `Partitioned` one the request's partition's. A cookie the model ignores is never written: a `Domain` that
 the request host does not domain-match or that is a public suffix, `Secure` from a URL that is not
