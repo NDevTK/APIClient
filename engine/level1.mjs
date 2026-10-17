@@ -6,8 +6,8 @@
  *
  * WHY THIS FILE EXISTS, WHICH IS A MEASUREMENT GAP AND NOT A TEST GAP. §scheduler splits the WFQ in two.
  * Level-2 — the flows inside one document — is composed by the ENGINE, so its census rides the result
- * document and every gate that reads a result reads it. Level-1 is `engineWeight` per HOT INSTANCE against
- * `level1Weight` per waiting address, declared route and cold row, and NO ENGINE CAN SEE ANOTHER ENGINE:
+ * document and every gate that reads a result reads it. Level-1 is `engineKey` per HOT INSTANCE against
+ * `level1Key` per waiting address, declared route and cold row, and NO ENGINE CAN SEE ANOTHER ENGINE:
  * this order is composed entirely in `bridge.js`, so no result document can ever carry it and no corpus run
  * touches it. test262 links five quickjs sources and not one line of this zone; WPT judges by a browser
  * oracle; solvergate compares a document against itself through one host. The Level-1 order is outside all
@@ -87,7 +87,7 @@ const ZONE = (() => {
   return sandbox;
 })();
 const B = ZONE.module.exports;
-for (const n of ['hostSchedule', 'engineWeight', 'level1Weight', 'level1ServiceTotal', '_bestCandidate',
+for (const n of ['hostSchedule', 'engineKey', 'level1Weight', 'level1Tree', 'level1Key', '_bestCandidate',
                  '_candPopulation', '_level1Record', '_candCensus', 'CAND_KINDS', 'CAND_SPREAD'])
   if (B[n] === undefined)
     throw new Error('extension/bridge.js did not export `' + n + '` — this driver is the only reader of the ' +
@@ -138,8 +138,12 @@ const job = (url, o = {}) => ({ msg: { sourceUrl: url, frameId: o.frameId || 0, 
 const row = (key, url, paid, serviceUs, o = {}) =>
   ({ key, sourceUrl: url, paid, serviceUs, shed: false, stranded: o.stranded === true,
      bytes: 0, rederivable: true });
-/* The service total a walk over `P` uses, read through the shipped function. */
-const totalOf = (P) => B.level1ServiceTotal(P.resident, P.idx);
+/* The key a walk over `P` gives the document at `url` with account `acct`, read through the shipped functions. */
+const keyOf = (P, url, acct) => B.level1Key(B.level1Tree(P.resident, P.idx), url, acct, true);
+/* An instance as hostSchedule and engineKey read one: a hot record with an address and a stated account. */
+const engM = (url, paid, serviceUs, o = {}) =>
+  Object.assign({ state: 'hot', msg: { sourceUrl: url }, prior: null, _readyP: null,
+                  level1: { runnable: true, paid: paid, serviceUs: serviceUs } }, o);
 const eng = (url, fkey) => ({ msg: { sourceUrl: url }, fkey: fkey || ('k|' + url) });
 const idxOf = (...rows) => new Map(rows.map((r) => [r.key, r]));
 const seedsOf = (...addrs) => new Map(addrs.map((a) => [a, { url: a, principalUrl: a,
@@ -199,7 +203,7 @@ console.log('[level1] ── the three facts `_level1Record` keeps apart ──'
    half would be a reading of a walk that did not run. */
 {
   const p = [eng('https://a.test/'), eng('https://b.test/')];
-  const r = record(p, { n: 2, drained: 0, unserved: 0, wTop: 3, wMin: 1 });
+  const r = record(p, { n: 2, drained: 0, unserved: 0, unservedSites: 0, wTop: 3, wMin: 1 });
   checkPresence(r, false);
   must(r.wTop === 3 && r.wMin === 1 && !('wRunner' in r),
        'the RESIDENT half is a full reading even when the non-resident order was never asked', r);
@@ -216,7 +220,7 @@ console.log('[level1] ── the three facts `_level1Record` keeps apart ──'
   must(pick.best === null, 'a walk that ranked nothing picks nothing', pick.census);
   must(pick.census.cands === 0 && pick.census.exclSub === 1,
        'a sub-frame leaves the order as an EXCLUSION and not as a silence', pick.census);
-  const r = record([], { n: 0, drained: 0, unserved: 0 }, pick.census, 1);
+  const r = record([], { n: 0, drained: 0, unserved: 0, unservedSites: 0 }, pick.census, 1);
   checkPresence(r, true);
   console.log('[level1]   asked, empty     ' + JSON.stringify(r));
 }
@@ -232,16 +236,18 @@ console.log('[level1] ── the three facts `_level1Record` keeps apart ──'
                   seeds: seedsOf('https://a.test/admin'),
                   idx: idxOf(row('k1', 'https://c.test/', 6, 3e6)) });
   const pick = B._bestCandidate(P);
-  const r = record([], { n: 0, drained: 0, unserved: 0 }, pick.census, 1);
+  const r = record([], { n: 0, drained: 0, unserved: 0, unservedSites: 0 }, pick.census, 1);
   checkPresence(r, true);
   must(r.cands === 3 && KIND_POP.every((k) => r[k] === 1),
        'every declared kind reaches the census as its own population', r);
   must(r.cands === B.CAND_KINDS.reduce((n, k) => n + r[k.pop], 0),
        'the populations account for the total, summed over the DECLARED kinds', r);
-  must(pick.best.w === Infinity && pick.best.kind !== 'cold' && r.candUnserved === 2,
-       'a never-served item wins over a served one, and the census counts the never-served', r);
-  must(kindWMax(r, 'cold') === B.level1Weight(P.idx.get('k1'), totalOf(P)) && r.candWMax === kindWMax(r, 'cold'),
-       'the served item is reported at the weight the walk ranked it by', r);
+  must(pick.best.key.siteW === Infinity && pick.best.kind !== 'cold' && r.candUnserved === 2 &&
+       r.candSiteUnserved === 2,
+       'an item of a never-served site wins over a served one, and the census counts both levels', r);
+  must(kindWMax(r, 'cold') === keyOf(P, 'https://c.test/', P.idx.get('k1')).siteW &&
+       r.candWMax === kindWMax(r, 'cold'),
+       'the served item is reported at the site weight the walk ranked it by', r);
   console.log('[level1]   full reading     ' + JSON.stringify(r));
 }
 
@@ -268,7 +274,7 @@ console.log('[level1] ── the discriminator: which tie is this ──');
   const known = row('k1', 'https://a.test/', 9, 3e6);
   const P = pop({ waiting: [job('https://a.test/'), job('https://z.test/')], idx: idxOf(known) });
   const cen = B._bestCandidate(P).census;
-  must(kindWMax(cen, 'doc') === B.level1Weight(known, totalOf(P)),
+  must(kindWMax(cen, 'doc') === keyOf(P, 'https://a.test/', known).siteW,
        'a waiting document ranks by what this profile has already spent and learned AT ITS ADDRESS', cen);
   must(cen.candSvcMax === known.serviceUs && cen.candUnserved === 1,
        'the census reports the service that produced that rank, beside the one never-served address', cen);
@@ -287,7 +293,7 @@ console.log('[level1] ── the weight that leaves the order ──');
   const cen = B._bestCandidate(P).census;
   must(cen.exclLive === 1 && kindPop(cen, 'cold') === 0,
        'a residue whose address a waiting document holds leaves the cold order', cen);
-  must(kindWMax(cen, 'doc') === B.level1Weight(held, totalOf(P)),
+  must(kindWMax(cen, 'doc') === keyOf(P, 'https://a.test/', held).siteW,
        'and the document that excluded it carries exactly the weight that left', cen);
   console.log('[level1]   exclLive         ' + JSON.stringify(cen));
 }
@@ -365,14 +371,14 @@ console.log('[level1] ── hostSchedule, driven with mock engines ──');
 {
   const rounds = [];
   const poolArr = [];
-  const e1 = { state: 'hot', w: 5, _readyP: null };
+  const e1 = engM('https://e.test/', 5, 1e6);
   poolArr.push(e1);
   /* Served rows only: an unserved candidate would spend the round on its admission (the `admitted` arm). */
   const asked = pop({ idx: idxOf(row('k1', 'https://c.test/', 6, 3e6)) });
   let admits = 0, steps = 0;
   const ops = {
-    weight: (e) => e.w,
-    serviceTotal: () => 0,
+    key: B.engineKey,
+    tree: () => B.level1Tree(poolArr, new Map()),
     /* THE ADMISSION ASKS THE ORDER ON THE FIRST ROUND AND ANSWERS THE POSITIVE `null` AFTERWARDS — the two
        shapes hostSchedule asserts at the seam, both driven. */
     admit: async () => (admits++ === 0 ? B._bestCandidate(asked).census : null),
@@ -443,10 +449,11 @@ console.log('[level1] ── hostSchedule, driven with mock engines ──');
   for (const r of rounds) console.log('[level1]   round ' + r.round + '  ' + JSON.stringify(r));
 }
 
-console.log('[level1] ── the pick: new targets first, and the leader keeps the thread ──');
+console.log('[level1] ── the pick: a site, then a document within it ──');
 
-/* A ROUND WHOSE ADMISSION OFFERED A NEVER-SERVED ITEM SPENDS ITS ADVANCE ON THAT ADMISSION, and a round that
-   steps a served engine beside one aborts. A yielded engine that outranks every hot one is waited for. */
+/* A ROUND WHOSE ADMISSION OFFERED AN ITEM OF A NEVER-SERVED SITE SPENDS ITS ADVANCE ON THAT ADMISSION; a
+   never-served document of a served site does not, and a round that steps a served site beside a never-served
+   one aborts. A yielded engine ahead of every hot one is waited for. */
 async function drive(poolArr, ops) {
   const seen = [];
   let published;
@@ -457,49 +464,112 @@ async function drive(poolArr, ops) {
   delete ZONE._level1;
   return { seen, died };
 }
-const baseOps = (poolArr, o) => Object.assign({
-  weight: (e) => e.w, serviceTotal: () => 0, admit: async () => null,
+const baseOps = (poolArr, o, all) => Object.assign({
+  key: B.engineKey, tree: () => B.level1Tree(all || poolArr, new Map()), admit: async () => null,
   evictee: async () => ({ evict: null, cand: null }), requestPark: async () => {}, release: async () => {},
   step: async () => 0, serviceFetch: async () => {},
   finish: async (e) => { const i = poolArr.indexOf(e); if (i >= 0) poolArr.splice(i, 1); },
 }, o);
 {
-  const poolArr = [{ state: 'hot', w: 5, _readyP: null }];
-  const unserved = pop({ waiting: [job('https://n.test/')] });
+  const poolArr = [engM('https://e.test/', 5, 1e6)];
+  const newSite = pop({ waiting: [job('https://n.test/')] });
   let admits = 0, stepped = 0;
-  const ops = baseOps(poolArr, { admit: async () => (admits++ === 0 ? B._bestCandidate(unserved).census : null),
+  const ops = baseOps(poolArr, { admit: async () => (admits++ === 0 ? B._bestCandidate(newSite).census : null),
                                  step: async () => { stepped++; return 0; } });
   const { seen, died } = await drive(poolArr, ops);
   must(died === null && seen[0].rAdmitted === 1 && seen[0].hot === 0 && stepped === 1,
-       'the round whose admission seated a never-served item stepped nothing; the next round stepped',
+       'the round whose admission seated a never-served SITE stepped nothing; the next round stepped',
        died ? String(died.message || died) : seen);
 }
 {
-  const poolArr = [{ state: 'hot', w: 5, _readyP: null }];
-  const unserved = pop({ waiting: [job('https://n.test/')] });
-  const ops = baseOps(poolArr, { evictee: async () => ({ evict: null, cand: B._bestCandidate(unserved).census }) });
-  const { died } = await drive(poolArr, ops);
-  must(died !== null && !!died.apiclientFatal,
-       'stepping a served engine while the order this round asked held a never-served item aborts');
+  /* The same never-served address, but of the site the hot engine is already serving: it is ahead only within
+     that site, so the round steps rather than spending itself on the admission. */
+  const poolArr = [engM('https://e.test/', 5, 1e6)];
+  const sameSite = pop({ resident: poolArr, waiting: [job('https://e.test/next')] });
+  let admits = 0, stepped = 0;
+  const ops = baseOps(poolArr, { admit: async () => (admits++ === 0 ? B._bestCandidate(sameSite).census : null),
+                                 step: async () => { stepped++; return 0; } });
+  const { seen, died } = await drive(poolArr, ops);
+  must(died === null && seen[0].hot === 1 && seen[0].candUnserved === 1 && seen[0].candSiteUnserved === 0 &&
+       stepped === 1,
+       'a never-served document of a served site does not take the round from its site\'s own deepening',
+       died ? String(died.message || died) : seen);
 }
 {
-  /* B yields and its service round is in flight; it outranks A, so the round waits for B rather than
+  const poolArr = [engM('https://e.test/', 5, 1e6)];
+  const newSite = pop({ waiting: [job('https://n.test/')] });
+  const ops = baseOps(poolArr, { evictee: async () => ({ evict: null, cand: B._bestCandidate(newSite).census }) });
+  const { died } = await drive(poolArr, ops);
+  must(died !== null && !!died.apiclientFatal,
+       'stepping a served site while the order this round asked held a never-served site aborts');
+}
+{
+  /* B yields and its service round is in flight; it is ahead of A, so the round waits for B rather than
      deepening A, and B takes the next slice. */
-  const poolArr = [];
-  const A = { state: 'hot', w: 1, name: 'A', _readyP: null };
-  const Bk = { state: 'hot', w: 9, name: 'B', _readyP: null };
-  poolArr.push(A, Bk);
+  const A = engM('https://a.test/', 1, 1e6, { name: 'A' });
+  const Bk = engM('https://b.test/', 9, 1e6, { name: 'B' });
+  const poolArr = [A, Bk];
   const order = [];
   let n = 0;
   const ops = baseOps(poolArr, {
     step: async (e) => { order.push(e.name); return ++n >= 3 ? 0 : 2; },
     serviceFetch: () => new Promise((res) => setTimeout(res, 5)),
   });
-  /* hostSchedule sets `state = "hot"` when the round lands; a finished engine leaves the pool. */
   const { died } = await drive(poolArr, ops);
   must(died === null && order[0] === 'B' && order[1] === 'B',
        'the leader keeps the thread across its own service round instead of a lesser document deepening',
        died ? String(died.message || died) : order);
+}
+
+console.log('[level1] ── a site that mints addresses spends only its own share ──');
+
+/* Site M mints 1000 never-served addresses beside its served root; site P has one productive document. Each
+   slice is one 12 ms quantum of service; P earns 0.6 per quantum falling to nothing over its first 1000, M's
+   documents earn nothing. The same drive
+   without the minted addresses is the control. The tree's site level sees only site accounts, so M's minting
+   moves neither site's share, and M's new documents each take their first quantum within M's slices, ahead of
+   M's root. */
+async function mintDrive(minted, slices) {
+  const P = engM('https://p.test/', 100, 2e6, { name: 'P', rate: 0.6, decay: 0.0006 });
+  const root = engM('https://m.test/', 40, 2e6, { name: 'M', rate: 0, decay: 0 });
+  const kids = [];
+  for (let i = 0; i < minted; i++) kids.push(engM('https://m.test/p' + i, 0, 0, { name: 'm' + i, rate: 0, decay: 0 }));
+  const poolArr = [P, root, ...kids];
+  const all = poolArr.slice();
+  const order = [];
+  const ops = baseOps(poolArr, {
+    step: async (e) => {
+      if (order.length >= slices) return 0;
+      order.push(e.name);
+      e.level1.serviceUs += 12000; e.level1.paid += e.rate; e.rate = Math.max(0, e.rate - e.decay);
+      return 2;
+    },
+  }, all);
+  const { died } = await drive(poolArr, ops);
+  return { order, died };
+}
+{
+  const mint = await mintDrive(1000, 3000), ctrl = await mintDrive(0, 3000);
+  const count = (o, f) => o.filter(f).length;
+  const pM = count(mint.order, (x) => x === 'P'), pC = count(ctrl.order, (x) => x === 'P');
+  const mM = mint.order.length - pM, mC = ctrl.order.length - pC;
+  const kidsServed = new Set(mint.order.filter((x) => x[0] === 'm' && x !== 'M')).size;
+  const firstRoot = mint.order.indexOf('M');
+  const kidSlicesBeforeRoot = firstRoot < 0 ? count(mint.order, (x) => x[0] === 'm' && x !== 'M')
+                                            : count(mint.order.slice(0, firstRoot), (x) => x[0] === 'm' && x !== 'M');
+  must(mint.died === null && ctrl.died === null, 'both drives ran to completion',
+       String((mint.died || ctrl.died || {}).message));
+  must(pM === pC && pM > mM,
+       'the productive site keeps its UCB share against a site minting 1000 addresses — exactly the share it ' +
+       'has against that site with none',
+       { productiveMint: pM, productiveControl: pC, mintingSite: mM, mintingControl: mC });
+  must(mM === mC && kidsServed === Math.min(1000, mM) &&
+       kidSlicesBeforeRoot === Math.min(1000, mM),
+       'the minting site\'s new documents each take their first quantum only within that site\'s share, ahead of ' +
+       'its own served root',
+       { mintingSite: mM, kidsServed, kidSlicesBeforeRoot, firstRoot });
+  console.log('[level1]   minting          P ' + pM + ' / M ' + mM + ' of ' + mint.order.length +
+              ' slices (control P ' + pC + ' / M ' + mC + '); minted documents served ' + kidsServed);
 }
 
 console.log('[level1] ── verdict ──');
