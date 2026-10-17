@@ -1044,6 +1044,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/xdmulti.h"
 #include "fixture/declines.h"
 #include "fixture/absentarm.h"
+#include "fixture/griditem.h"
+#include "fixture/contentsflex.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1471,6 +1473,8 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "xdmulti", HTML_XDMULTI },
     { "declines", HTML_DECLINES },
     { "absentarm", HTML_ABSENTARM },
+    { "griditem", HTML_GRIDITEM },
+    { "contentsflex", HTML_CONTENTSFLEX },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -13262,6 +13266,38 @@ TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `griditem` document. */
+TF_UNIT void probes_griditem(const char *js, Probe *tab, int *n) {
+    /* css-grid-1 §6.2 "Grid Item Sizing": a `width: auto` item fills its grid area, here the container's one
+       implicit column at 300px (fixture/griditem.h). */
+    const char *gridiw_why = NULL; int gridiw_tt = 1;
+    fold_row(&gridiw_tt, &gridiw_why, !!strstr(js, "\"/api/gridiw\""),
+             "NOT REACHED: there is no /api/gridiw record at all — a document that aborted at "
+             "core/layout/used_value.c's grid-item DFAIL emits nothing, and that DFAIL names what to build");
+    fold_row(&gridiw_tt, &gridiw_why, param_value_is(js, "/api/gridiw", "w", "300px"),
+             "css-grid-1 §6.2: the grid item's used width is not its 300px grid area");
+    const Probe rows[] = {
+        { "grid-item-auto-width", gridiw_tt, "/api/gridiw", SESS_EXPLORE, gridiw_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `contentsflex` document. */
+TF_UNIT void probes_contentsflex(const char *js, Probe *tab, int *n) {
+    /* css-display-3 §2.5's `contents` splice makes `cf` an item of the flex container, and css-flexbox-1 §9.2
+       sizes it to its 120px max-content (fixture/contentsflex.h). */
+    const char *cflexw_why = NULL; int cflexw_tt = 1;
+    fold_row(&cflexw_tt, &cflexw_why, !!strstr(js, "\"/api/cflexw\""),
+             "NOT REACHED: there is no /api/cflexw record at all — a document that aborted at "
+             "core/layout/used_value.c's contents-splice DFAIL emits nothing, and that DFAIL names what to build");
+    fold_row(&cflexw_tt, &cflexw_why, param_value_is(js, "/api/cflexw", "w", "120px"),
+             "css-flexbox-1 §9.2: the spliced flex item's used width is not its 120px max-content size");
+    const Probe rows[] = {
+        { "contents-flex-item-width", cflexw_tt, "/api/cflexw", SESS_EXPLORE, cflexw_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `windowclose` document. */
 TF_UNIT void probes_windowclose(const char *js, Probe *tab, int *n) {
     const char *winclose_why = NULL;
@@ -16586,6 +16622,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fragdialog(js, probes, &np);
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);
+    probes_griditem(js, probes, &np);
+    probes_contentsflex(js, probes, &np);
     probes_windowclose(js, probes, &np);
     probes_windowopenerclose(js, probes, &np);
     probes_timers(js, probes, &np);
