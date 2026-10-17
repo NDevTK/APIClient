@@ -342,7 +342,9 @@ instance asked: an instance is handed only its own origin's pairs. A navigation'
 into the asking flow's jar (core/frame/navigable.c), a write in its COW delta that no sibling flow sees; a pair
 of another origin, a redirect hop's or a document created in a peer, goes to that origin's instance on its
 host's time (`ReceiveCookies`), or is held until that instance is rooted and handed over after `Init` and
-before `Begin`, which is also how a root document gets its own response's fields. The storing
+before `Begin`, which is also how a root document gets its own response's fields. Held pairs are dropped when
+their group's last document is destroyed (its tab closed and no instance of it left), and a load landing after
+that holds nothing. `engine/cookieroute.mjs` drives this routing over the shipped functions. The storing
 is `lib/cookie-store.js`'s: RFC 6265bis (draft 22) §5.6 parses each field and §5.7 "Storage Model" decides, on
 the request URL's host and the identity's site for cookies, whether the cookie is kept; CHIPS §2.3 makes a
 `Partitioned` one the request's partition's. A cookie the model ignores is never written: a `Domain` that

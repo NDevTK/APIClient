@@ -2926,6 +2926,7 @@ function engineBootFailed(eng, e) {
          "slot it holds is this function's to release, so something else removing it means two owners for one " +
          "record and the surviving one will free a frame twice");
   if (i >= 0) _pool.splice(i, 1);
+  zoneReclaimHeldCookies(eng.groupId);
   eng.state = "failed";
   childRequestsClose(eng);
   if (_documentReferrerPolicies.has(eng.docId)) documentPolicySettle(eng.docId, null);
@@ -3099,13 +3100,9 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
         "whose set is `" + docRecordSandbox(rootDoc) + "` — the engine is handed the record's set, one statement");
   eng.records.set(eng.docId, rootDoc);
   await rend.renderer.setArrival({ arrival: msg.arrival });
-  /* And the Set-Cookie fields the zone holds for this cluster (zoneRouteSetCookies), the root document's own
-     response's among them, in the same window: the jar has them before the root's first script runs. The jar
-     is opened before the hand-off, so a pair routed while it is in flight goes straight to the instance. */
-  eng.cookiesOpen = true;
-  const _held = _heldCookies.has(eng.cluster) ? _heldCookies.get(eng.cluster) : [];
-  _heldCookies.delete(eng.cluster);
-  await rend.renderer.receiveCookies({ setCookies: JSON.stringify(_held) });
+  /* And the Set-Cookie fields the zone holds for this cluster, the root document's own response's among them,
+     in the same window: the jar has them before the root's first script runs. */
+  await zoneOpenJar(eng);
   /* Never 0: document_bundle_id folds an empty scan to 1, since a 0 would key every unidentifiable document to
      one frontier entry. */
   /* `>>> 0` because the wire carries an i32 (mojom `int32 bundleId`) for a C `unsigned`; the reader
@@ -4177,8 +4174,13 @@ function hostClusterOf(key) {
 }
 
 /* Set-Cookie pairs for an agent cluster whose instance's jar is not open yet, by cluster key: engineRoot hands
-   them to the instance it roots, after Init and before Begin. */
+   them to the instance it roots, after Init and before Begin (zoneOpenJar). A group's pairs are reclaimed
+   when its last document is destroyed (zoneReclaimHeldCookies). */
 const _heldCookies = new Map();
+/* The tab groups whose tab has closed, and the groups whose held pairs were reclaimed. Neither comes back: a tab
+   id is not reused, and every zone-minted group id is fresh. */
+const _closedTabGroups = new Set();
+const _goneGroups = new Set();
 
 /* RFC 6265bis §5.7's storage, routed. Each [URL, Set-Cookie field] pair of a response this zone fetched for a
    document of group `groupId` belongs to the jar of the agent its URL's origin keys in that group, whichever
@@ -4190,6 +4192,8 @@ async function zoneRouteSetCookies(groupId, pairs) {
   DCHECK(Array.isArray(pairs) && pairs.every((c) => Array.isArray(c) && c.length === 2 &&
                                                    typeof c[0] === "string" && typeof c[1] === "string"),
          "a fetch answered no [URL, Set-Cookie field] list — safeFetch states one on every reply");
+  /* A load that lands after its group was destroyed has no jar to reach: no document of the group remains. */
+  if (_goneGroups.has(groupId)) return;
   const byCluster = new Map();
   for (const p of pairs) {
     const key = clusterKeyOf({ groupId, origin: originOf(p[0]) });
@@ -4205,6 +4209,42 @@ async function zoneRouteSetCookies(groupId, pairs) {
       for (const p of ps) _heldCookies.get(key).push(p);
     }
   }
+}
+
+/* engineRoot's hand-off of the pairs held for `eng`'s cluster. The jar is opened first, so a pair routed while
+   the hand-off is in flight goes straight to the instance. */
+async function zoneOpenJar(eng) {
+  DCHECK(eng.cookiesOpen === false, "an instance's jar was opened twice — engineRoot roots an instance once");
+  eng.cookiesOpen = true;
+  const held = _heldCookies.has(eng.cluster) ? _heldCookies.get(eng.cluster) : [];
+  _heldCookies.delete(eng.cluster);
+  await eng.r.renderer.receiveCookies({ setCookies: JSON.stringify(held) });
+}
+
+/* Whether any document of browsing-context group `groupId` remains. A tab group's browser documents are all
+   destroyed when its tab closes; that, not each document's lifetime port, is the signal, because a document in
+   the back/forward cache closes its port without being destroyed and its eviction reports nothing. The group's
+   other documents are the instances this zone holds for it. */
+function zoneGroupLive(groupId) {
+  if (_pool.some((e) => e.groupId === groupId)) return true;
+  return typeof groupId === "number" && !_closedTabGroups.has(groupId);
+}
+
+/* The spec's end of a browsing-context group, applied to what the zone holds for it: once its last document is
+   destroyed, no instance of any of its clusters can be rooted, so the pairs held for them are dropped. Asked
+   at each departure of one of its documents (a tab closing, an instance leaving the pool). */
+function zoneReclaimHeldCookies(groupId) {
+  if (zoneGroupLive(groupId)) return;
+  _goneGroups.add(groupId);
+  const prefix = String(groupId) + "\u0000";
+  for (const key of [..._heldCookies.keys()]) if (key.startsWith(prefix)) _heldCookies.delete(key);
+}
+
+/* A tab closed: every browser document of its group is destroyed (offscreen-brain.js's _onTabRemoved). */
+function zoneTabClosed(tabId) {
+  DCHECK(typeof tabId === "number", "a tab close named no tab id");
+  _closedTabGroups.add(tabId);
+  zoneReclaimHeldCookies(tabId);
 }
 
 /* The pairs of a load the instance `eng` asked for: those of its own cluster stay in the answer, which the
@@ -6141,6 +6181,7 @@ const _hostOps = {
            "result document and then tears it down, and a reservation has no instance to ask, so its " +
            "document would be reported as analysed and empty");
     const i = _pool.indexOf(eng); if (i >= 0) _pool.splice(i, 1);
+    zoneReclaimHeldCookies(eng.groupId);
     const result = await engineFinalize(eng);
     childRequestsClose(eng);
     /* A crashed run does not write the cross-session frontier: its recipes would claim flows resumable from a
@@ -6403,6 +6444,8 @@ async function hostClear() {
      fetch a page of an origin the person asked to forget. A declaration has no caller to reject. */
   _seeds.clear();
   const dropped = _pool.splice(0);
+  /* Pairs held for clusters of a session the person asked to forget go with it. */
+  _heldCookies.clear();
   for (const job of waiting) job.reject(new Error("cleared"));
   for (const eng of dropped) { for (const w of eng._resolvers) w.reject(new Error("cleared")); eng._resolvers.length = 0; }
   /* The frame goes with the engine: nothing else will reach the renderer of an engine out of the pool, and an
@@ -6765,4 +6808,6 @@ console.debug("[ast-worker v2] bridge ready (self.astDispatch + self.rendererPoo
 if (typeof module !== "undefined" && module.exports)
   module.exports = { hostSchedule, engineKey, level1Weight, level1Rate, level1Tree, level1Key, level1Ahead,
                      level1SiteOf, LEVEL1_UNSERVED, LEVEL1_DOOR,
-                     _bestCandidate, _candPopulation, _level1Record, _candCensus, CAND_KINDS, CAND_SPREAD };
+                     _bestCandidate, _candPopulation, _level1Record, _candCensus, CAND_KINDS, CAND_SPREAD,
+                     zoneRouteSetCookies, zoneAnswerSetCookies, zoneOpenJar, zoneReclaimHeldCookies,
+                     zoneTabClosed, engineDeliverDocument, clusterKeyOf };

@@ -2675,6 +2675,8 @@ function _onTabRemoved(tabId) {
     _wsConnState.delete(d.documentId);
   }
   webRequestTabRemoved(tabId);
+  /* And the Set-Cookie pairs bridge.js holds for clusters of the tab's group, once no instance holds it either. */
+  zoneTabClosed(tabId);
   // A tab close frees NOTHING else. The document's own analysis buffer is freed by the review reclaim (when
   // its run returns), not by the tab going away, and the cross-session continuation of a closed tab's learning
   // is the GLOBAL frontier's parked recipes rather than a page source held in RAM. Keyed by documentId.
