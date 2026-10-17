@@ -89,11 +89,16 @@ function _setCookiesOf(resp) {
         "realm whose Headers has no getSetCookie — its cookies would be stored as none");
   return resp.headers.getSetCookie();
 }
+/* RFC 9110 §9.2.2 "Idempotent Methods": "PUT, DELETE, and safe request methods" (§9.2.1: GET, HEAD, OPTIONS
+   and TRACE). */
+var _IDEMPOTENT_METHODS = ["GET", "HEAD", "OPTIONS", "TRACE", "PUT", "DELETE"];
 /* One send over the service worker's wire (wire.js), answered as the Response the worker's fetch answered: a
    port per send, the body in base64 chunks, since runtime messages carry JSON only. The zone pings the worker
    every 10 s and acknowledges each chunk, which keeps it alive while the network is slow (it is ended after
-   30 s with no message, measured in Chrome 148). A port that disconnects first is Fetch §5.6's network error,
-   a TypeError naming the worker; an abort disconnects it. */
+   30 s with no message, measured in Chrome 148). A worker that ends the port before the answer's head is
+   RFC 9110 §9.2.2's "communication failure ... before the client is able to read the server's response": an
+   idempotent send goes again on a new port, and any other is Fetch §5.6's network error, a TypeError naming
+   the worker, as is an end after the head. An abort disconnects the port. */
 function _wireRelay(href, init) {
   CHECK(typeof init.method === "string" && init.credentials === "omit" && init.redirect === "manual" &&
         (init.headers === undefined || Array.isArray(init.headers)),
@@ -113,6 +118,12 @@ function _wireRelay(href, init) {
       if (!headSeen) reject(e); else if (stream) stream.error(e);
     }
     port.onDisconnect.addListener(function () {
+      if (!settled && !headSeen && _IDEMPOTENT_METHODS.indexOf(init.method) >= 0) {
+        settled = true;
+        clearInterval(ping);
+        resolve(_wireRelay(href, init));
+        return;
+      }
       fail("the service worker ended the send of " + href + " after " + received + " body bytes, before its " +
            "answer was complete");
     });

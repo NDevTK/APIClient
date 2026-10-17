@@ -11,8 +11,8 @@
 // traffic, joined in the offscreen document to a page's capture; this file keeps the worker's own, joined here.
 // Messages carry JSON only (a Uint8Array arrives as an object of indices, an ArrayBuffer as {}, measured), so
 // bodies cross as base64 chunks. The worker is ended after 30 s with no message even with a fetch pending
-// (measured), so the zone pings each send; a worker that ends anyway disconnects the port, which the zone
-// answers as a network error naming it.
+// (measured), so the zone pings each send; a worker that ends anyway disconnects the port, and the zone
+// sends an idempotent request again or answers a network error naming it (lib/safe-fetch.js's _wireRelay).
 
 const _WIRE_ORIGIN = new URL(chrome.runtime.getURL("")).origin;
 const _WIRE_SENDER = chrome.runtime.getURL("ast-worker.html");

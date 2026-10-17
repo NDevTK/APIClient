@@ -163,8 +163,11 @@ Which extension context can open a connection at all is enforced by CSP in all b
   one message is refused past 64 MiB, measured in Chrome 148), so a body crosses as base64 chunks, one per
   read of the worker's fetch. A worker with no message for 30 s is ended even with its fetch pending (measured:
   headers withheld 60 s), so the zone pings each send every 10 s and acknowledges each chunk (measured: a
-  60 s wait and a 90 s streamed body completed). A port that disconnects before the answer is complete is
-  Fetch §5.6's network error, a `TypeError` naming the worker and the bytes received.
+  60 s wait and a 90 s streamed body completed). A worker that ends a port before the answer's head is
+  RFC 9110 §9.2.2's communication failure before the response: an idempotent send (PUT, DELETE, GET, HEAD,
+  OPTIONS, TRACE) goes again on a new port, the same request under the same gate decision, and any other
+  send is Fetch §5.6's network error. A port that ends after the head is that network error too, a
+  `TypeError` naming the worker and the bytes received.
 
 | Gate | Enforcing symbol | Refusal reason |
 |------|------------------|----------------|
