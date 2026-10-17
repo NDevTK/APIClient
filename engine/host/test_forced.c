@@ -12544,6 +12544,9 @@ TF_UNIT void probes_orphan(const char *js, Probe *tab, int *n) {
        are about. One is §21.4.2.1 step 4.c.iii's ToNumber of the primitive step 4.c.i made; the other is steps
        5.b-5.h's ToNumber of the argument itself. Both reached §7.1.4 ToNumber ( arg )'s conversion boundary
        over unknown external input and aborted the instance, which took every row here down with them. */
+    int orphan_sib_ran     = strstr(js, "\"/api/orphan/sib-a-ran\"") != NULL;
+    int orphan_sib_other   = strstr(js, "\"/api/orphan/sib-b-driven\"") != NULL;
+    int orphan_sib_refused = strstr(js, "\"/api/orphan/sib-a-driven\"") == NULL;
     int orphan_date1  = strstr(js, "\"/api/orphan/date1\"") != NULL;
     int orphan_datef  = strstr(js, "\"/api/orphan/datef\"") != NULL;
     /* AND WHICH OF THREE THINGS A 0 ON ANY OF THE SEVEN ROWS ABOVE IS — the one clause none of them could make.
@@ -12722,6 +12725,18 @@ TF_UNIT void probes_orphan(const char *js, Probe *tab, int *n) {
            `orphan_why` still carries the split between the schedule, the take and the row. */
         { "orphan-date1", orphan_date1, "orphanDate", SESS_EXPLORE, orphan_why },
         { "orphan-datef", orphan_datef, "orphanDate", SESS_EXPLORE, orphan_why, .gate = "orphan-date1" },
+        /* The per-timeline `entered` mark (fixture/orphan.h's `orphanSibFork`). `sib-ran` is the witness that arm
+           `a` ran the body; `sib-other` is the positive control, `b`'s own closure driven although `a` ran the
+           body, gated on the witness because without it nothing was run to hide `b`'s closure; `sib-refused` is
+           the negative control, `a`'s closure never driven, reached through the positive because a run that drove
+           nothing refuses everything. */
+        { "orphan-sib-ran", orphan_sib_ran, "orphanSibFork", SESS_EXPLORE, orphan_why },
+        { "orphan-sib-other", orphan_sib_other, "orphanSibBody", SESS_EXPLORE, orphan_why,
+          .gate = "orphan-sib-ran" },
+        { "orphan-sib-refused", orphan_sib_refused, "orphanSibBody", SESS_EXPLORE,
+          "a driven arm emitted /api/orphan/sib-a-driven: arm `a`'s closure of orphanSibBody, which `a` had run, "
+          "was taken — in `a` (its `entered` mark was not set where `a` ran it) or in another timeline (the "
+          "take's timeline filter let it through)", .reach = "orphan-sib-other" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

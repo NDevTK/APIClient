@@ -218,6 +218,11 @@ void      cow_capture_async_state(JSContext *ctx, JSValueConst obj);
    why that diff is not a cow_capture_host_record over the module graph. */
 void      cow_capture_module_eval(JSContext *ctx, void *mod);
 
+/* Install as JSTimeTravelHooks.body_mark: capture a function body's one-byte `entered` mark before this flow first
+   sets it, holding `body` (the bytecode) for the life of the entry, so a body one timeline ran or took is still
+   unentered in every other. */
+void      cow_capture_body_mark(JSContext *ctx, JSValueConst body, uint8_t *mark);
+
 /* Capture a BROWSER COMPONENT's own mutable C record (`n` bytes at `p`) before this flow changes it. A component
    that keeps state in its class opaque writes it where no property hook and no engine hook can see, so that write
    does not time-travel: Response's body-used latch, set by whichever arm of a fork read the reply first, left the
@@ -442,7 +447,8 @@ void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork, uint64_t (*time
     X(HOST_REC, "hostRec")  \
     X(BUFFER,   "buffer")   \
     X(OBJECT,   "object")   \
-    X(ITER,     "iter")
+    X(ITER,     "iter")     \
+    X(BODY,     "body")
 
 /* HOW WIDE ONE OF THE TWO KIND HISTOGRAMS IS AS JSON, DERIVED FROM THE LIST RATHER THAN COUNTED BY HAND — the
    derivation solver/step_unit.h makes and for its reason: this sizes a STACK buffer a caller fills row by row,

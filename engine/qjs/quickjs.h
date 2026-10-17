@@ -2241,6 +2241,10 @@ typedef struct JSTimeTravelHooks {
        from it. Both NULL, as in a host that installs no flows, stamps 0 and filters nothing. */
     uint32_t (*timeline_handle)(void);
     int (*timeline_continues)(uint32_t handle);
+    /* Capture a function body's `entered` mark, the byte at `mark` inside the bytecode `body` names (a
+       JS_TAG_FUNCTION_BYTECODE value the entry may hold), before the running flow first sets it, so a timeline
+       that never ran or took the body reads 0. */
+    void (*body_mark)(JSContext *ctx, JSValueConst body, uint8_t *mark);
 } JSTimeTravelHooks;
 /* A BUFFER'S WHOLE STORAGE STATE, as an opaque owned blob — the buffer twin of JS_ObjStateSave, and engine-owned
    for the same reason: two of the things it holds are engine-internal and one of them is a REFERENCE.

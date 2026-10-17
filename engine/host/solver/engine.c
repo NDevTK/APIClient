@@ -5711,7 +5711,7 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
 
 /* Two functions because they answer two questions. `engine_orphan_resume` is this flow's own work: a drive it is,
  * whose body was handed back, and whose call it must build before it can run anything. `engine_orphan_seed` is the
- * frontier's work: it consumes a bit on shared bytecode (JSFunctionBytecode.entered, one per body per runtime), it
+ * frontier's work: it consumes a bit on shared bytecode (JSFunctionBytecode.entered, one per body per timeline), it
  * hands the body to a member that need not be this one, and the performing flow gains nothing of its own.
  * Asked as one, a runtime-global set would gate a per-flow verdict: no flow could finish while any un-entered body
  * existed anywhere on the heap, and running page code keeps creating them, so the frontier would only grow.
@@ -8799,8 +8799,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                         /* Held for every later timeline that reaches these bytes, keyed on the identity the repeat
                            census keys on (solver/dyn_body.h). The body takes its own reference, so this flow still
                            owns `fn` and frees it below. A second offer of one body's parse keeps the first closure,
-                           for the reason dyn_body_parse_hold states: `entered` is a mutable bit on the bytecode and
-                           is the orphan identity. */
+                           for the reason dyn_body_parse_hold states. */
                         dyn_body_parse_hold(pb, prog_ctx, prog_name, src_flags, fn);
                         f->frame = JS_FlowInstantiate(prog_ctx, fn);
                         JS_FreeValue(prog_ctx, fn);

@@ -1340,11 +1340,14 @@ typedef struct JSFunctionBytecode {
        code" has exactly one answer per body and it is stored where the body is.
        IT IS SET AT `restart:` AND NOWHERE ELSE. Every way of entering a bytecode body — the C entry, each of
        the trampoline's three pushes, the coroutine resume — converges on that one label before it executes an
-       opcode, so a call shape added later cannot forget to mark, because there is no marking to remember. The
-       cost is one predictable byte store per frame entry into a struct the interpreter is about to read anyway.
+       opcode, so a call shape added later cannot forget to mark, because there is no marking to remember.
        IT IS ALSO SET BY JS_OrphanTakeOne, which is what makes an orphan a work item taken once rather than a
-       question re-asked: see that function for why that is not a seen-set. */
-    uint8_t entered : 1;
+       question re-asked: see that function for why that is not a seen-set.
+       IT IS PER TIMELINE: every set goes through js_body_mark_entered, which has the time-travel hooks capture
+       this byte in the running flow's delta first, so a timeline that never ran or took the body reads 0 and
+       both arms of a fork read the value their common prefix left. A whole byte, so the capture holds no other
+       field. */
+    uint8_t entered;
     /* THIS BODY'S SOURCE RESOLVED A NETWORK DOOR'S OWN ENTRY NAME AGAINST THE GLOBAL OBJECT — the one fact
        about a function that is knowable BEFORE it has ever run, and the reason `JS_OrphanTakeOne` can order its
        candidates at all. A body nothing ever called has no frame, no operand and no moment, so every other
@@ -9347,6 +9350,18 @@ int JS_IsFlowLocal(JSValueConst obj) {
    created after is private and cloning it would be delta bloat. The scheduler sets this whenever it switches a
    flow in, next to cow_set_current. */
 static _Thread_local uint32_t g_flow_fork_gen = 0;
+
+/* Sets `b`'s `entered` mark in the running timeline. The hooks capture the byte first, so the set is undone for
+   every timeline that did not make it. Every body is captured, whatever its age: a compiled program is held for
+   every later timeline that reaches its bytes (solver/dyn_body.h), so no body is private to the flow that
+   compiled it, as an object created after a fork is. */
+static void js_body_mark_entered(JSContext *ctx, JSFunctionBytecode *b)
+{
+    if (b->entered) return;
+    if (g_time_travel.body_mark)
+        g_time_travel.body_mark(ctx, JS_MKPTR(JS_TAG_FUNCTION_BYTECODE, b), &b->entered);
+    b->entered = 1;
+}
 void JS_SetFlowForkGen(uint32_t gen) { g_flow_fork_gen = gen; }
 int JS_IsFlowShared(JSValueConst obj) {
     return JS_VALUE_GET_TAG(obj) == JS_TAG_OBJECT &&
@@ -24402,13 +24417,12 @@ static JSValue js_closure2(JSContext *ctx, JSValue func_obj,
        whole argument. AT THIS LINE and not beside the generation bump above, which is the one thing about the
        placement that is load-bearing: the bump is a NUMBER and needs nothing of the object, while a host handed
        this closure may KEEP it and call it later, so it is offered only once `var_refs` holds every cell this
-       function owes it — above, `p->u.func.var_refs` is still NULL. `entered` is not asked: it is one bit per
-       body for the whole runtime, and a closure built here is reachable only from this timeline, whatever another
-       timeline did with the same body. Marking `entered` on a nonzero answer is the take's own sentence: a body
-       the host has scheduled is not a second orphan. */
+       function owes it — above, `p->u.func.var_refs` is still NULL. `entered` is not asked: a claim this
+       timeline holds is owed its own closure even of a body this timeline has already run. Marking `entered` on
+       a nonzero answer is the take's own sentence: a body the host has scheduled is not a second orphan. */
     if (ctx->rt->orphan_born && b->byte_code_buf && !b->is_program) {
         if (ctx->rt->orphan_born(ctx, func_obj, b->arg_count, ctx->rt->orphan_born_opaque))
-            b->entered = 1;
+            js_body_mark_entered(ctx, b);
     }
     return func_obj;
  fail:
@@ -35901,7 +35915,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
        label every entry into a bytecode body reaches before its first opcode — the C entry below, each of the
        trampoline's pushes (do_tramp_call, the construct push, the apply reshape), and the coroutine resume —
        so the mark cannot be missed by a call shape nobody thought of. See JSFunctionBytecode.entered. */
-    b->entered = 1;
+    js_body_mark_entered(ctx, b);
     b->ran = 1;
     /* AND IT IS STANDING SOMEWHERE, from this instant. The frame is born with a NULL cur_pc — three separate
        birth sites write that NULL — and until the body reached an opcode that happened to store one, a stack
@@ -114707,7 +114721,7 @@ JSValue *JS_FlowNewCall(JSContext *ctx, JSValueConst func, JSValueConst this_val
  * WHAT AN ORPHAN IS. A function the page defined that nothing has run: an admin handler behind a login the
  * visitor does not have, a lazy chunk's export nothing imported, a route the bundle ships and never mounts.
  * Driving one is how this project learns the logged-in API surface while logged out, and the fact it turns on
- * is one bit — JSFunctionBytecode.entered, set at the interpreter's one body-entry label.
+ * is one bit — JSFunctionBytecode.entered, set at the interpreter's one body-entry label and kept per timeline.
  *
  * WHY THE HEAP AND NOT A REGISTRY. The three places the set could come from answer different questions. The
  * bytecode's own function table (a program's cpool tree) names every function the page DECLARED, including
@@ -114909,11 +114923,8 @@ static bool orphan_candidate(JSGCObjectHeader *gp, JSObject **pp, JSFunctionByte
     if (b->is_program) return false;
     /* A closure another timeline built is not reachable from this one: driving it would run that timeline's
        environment under this flow's delta, whose capture skips objects created after its fork. A stamp of 0 is a
-       closure built outside every flow, which is the baseline every timeline shares.
-       Named residual. Not covered: `entered` above is one bit per body for the runtime, so once one timeline
-       drives or runs a body no other timeline's closure of it is taken. Next diff builds: the take's mark kept
-       per timeline, written through the delta as any shared write is. Absence shows as: a body whose closures
-       stand in two timelines with different environments, driven in only the first to ask. */
+       closure built outside every flow, which is the baseline every timeline shares. `entered` above is this
+       timeline's (js_body_mark_entered), so a body another timeline ran or took is still a candidate here. */
     DCHECK(p->u.func.timeline != 0 || p->flow_gen == 0,
            "a function object carries no timeline but was created at a fork generation above the baseline — it "
            "was built while the generation stamp was up and no flow was switched in, so no take can say which "
@@ -115113,7 +115124,7 @@ int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
     for (int prefer = 1; prefer >= 0 && !n; prefer--) {
         if (!best_p[prefer]) continue;
         if (prefer) rt->orphan_preferred_takes++;
-        best_b[prefer]->entered = 1;   /* TAKEN: this body is now scheduled, so a second closure of it is not a second orphan */
+        js_body_mark_entered(ctx, best_b[prefer]);   /* TAKEN in this timeline: a second closure of it here is not a second orphan */
         took_script = best_b[prefer]->filename;
         visit(ctx, JS_MKPTR(JS_TAG_OBJECT, best_p[prefer]), best_b[prefer]->arg_count, opaque);
         n = 1;

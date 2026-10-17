@@ -709,7 +709,8 @@ static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
                     "the flow resumes on a sibling's evaluation and reads exports it never wrote");
         return blob;
     }
-    case COW_STATE_HOST: {
+    case COW_STATE_HOST:
+    case COW_STATE_BODY: {
         void *blob = reclaim_malloc(e->a_len);
         CHECK(blob, "cow: OOM saving a component's own state — a lost latch leaks one flow's read into another");
         memcpy(blob, e->target, e->a_len);
@@ -771,6 +772,7 @@ static void cow_state_restore(JSContext *ctx, const CowEntry *e, void *blob) {
     switch (e->state_kind) {
     case COW_STATE_MODULE: JS_ModuleEvalStateRestore(ctx, e->target, blob); break;
     case COW_STATE_HOST:
+    case COW_STATE_BODY:
         /* A re-apply reads what the UNAPPLY recorded, so reaching here with nothing recorded means this flow
            was switched INTO without ever having been switched out of — the swap is not a pair. The async arm
            tolerates a NULL blob; this one must not, because a byte copy from NULL is a segfault whose cause is
@@ -817,7 +819,8 @@ static void cow_state_restore(JSContext *ctx, const CowEntry *e, void *blob) {
 static void cow_state_free(JSRuntime *rt, const CowEntry *e, void *blob) {
     switch (e->state_kind) {
     case COW_STATE_MODULE: JS_ModuleEvalStateFree(rt, blob); break;
-    case COW_STATE_HOST: free(blob); break;   /* POD bytes: nothing in it holds a reference */
+    case COW_STATE_HOST:
+    case COW_STATE_BODY: free(blob); break;   /* POD bytes: nothing in it holds a reference */
     case COW_STATE_BUFFER: JS_BufferStateFree(rt, blob); break;   /* it holds real storage and view references */
     case COW_STATE_OBJECT: JS_ObjStateFree(rt, blob); break;   /* it holds a proto and an internal-slot value */
     case COW_STATE_ITER: JS_IterStateFree(rt, blob); break;   /* per arm: the parked candidate's ATOM, a walk's
@@ -1292,6 +1295,24 @@ void cow_capture_host_state_at(JSContext *ctx, JSValueConst owner, void *p, size
    before either and the dedup below makes them one entry. The ordering that used to decide everything (write
    then resize, or resize then write) decides nothing now: whichever comes first takes the baseline, and the
    baseline it takes describes the whole storage either way. */
+void cow_capture_body_mark(JSContext *ctx, JSValueConst body, uint8_t *mark) {
+    CowDelta *d = cow_state_ask(COW_STATE_BODY);
+    if (!d) return;
+    DCHECK(JS_VALUE_GET_TAG(body) == JS_TAG_FUNCTION_BYTECODE && mark != NULL && *mark == 0,
+           "a body mark was captured with no bytecode owner, or after it was set — the entry would hold nothing "
+           "alive under the byte, or record the set value as this timeline's baseline");
+    if (cow_hash_find(d, cow_key_state(COW_STATE_BODY, mark)) >= 0) return;
+    cow_capture_begin();
+    if (cow_room_for_one(d, "cow: OOM growing delta (body mark)"))
+        cow_hash_rebuild(d);
+    CowEntry *e = &d->e[d->n++];
+    cow_entry_init(e);
+    e->obj = JS_DupValue(ctx, body);
+    cow_state_entry_set(d, e, COW_STATE_BODY, mark); e->target = mark; e->a_len = 1;
+    e->a_base = cow_state_save(ctx, e);   /* 0: the mark as this timeline found it */
+    cow_capture_end();
+}
+
 void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
     CowDelta *d = cow_state_ask(COW_STATE_BUFFER);
     if (!d) return;
@@ -2219,7 +2240,7 @@ void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork, uint64_t (*time
         .map_add = cow_capture_map_add, .map_mutate = cow_capture_map_mutate,
         .async_state = cow_capture_async_state, .module_eval = cow_capture_module_eval,
         .obj_state = cow_capture_obj_state, .iter_state = cow_capture_iter_state,
-        .async_fork = cow_capture_async_fork };
+        .async_fork = cow_capture_async_fork, .body_mark = cow_capture_body_mark };
     DCHECK(gen_fork != NULL,
            "the time-travel hooks were installed with no generator-fork handler — a concolic branch inside a "
            "generator body would fork a sibling that shares the parent's execution state");

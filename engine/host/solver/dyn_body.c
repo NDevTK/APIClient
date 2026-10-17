@@ -291,10 +291,9 @@ void dyn_body_parse_hold(DynBody *b, JSContext *realm, const char *name, int fla
         /* ALREADY HELD, AND THE FIRST ONE STAYS — this is not a race to be asserted away. A flow may PARK
            mid-parse of a row (quickjs's JS_FlowCompileStep hands the parse back), a sibling may finish the
            same bytes while it is parked, and the parked flow then finishes its own parse and arrives here. Both
-           closures are correct and interchangeable for every purpose but ONE: `entered` is a mutable bit on the
-           JSFunctionBytecode and it IS the orphan identity, consumed destructively, so keeping the FIRST keeps
-           that population stable rather than letting it depend on which flow was picked last. The caller still
-           owns the reference it passed and frees it as it would have anyway. */
+           closures are correct and interchangeable; keeping the FIRST keeps one bytecode per text, so the
+           orphan population (per timeline, through each body's `entered` mark) does not depend on which flow
+           was picked last. The caller still owns the reference it passed and frees it as it would have anyway. */
         DCHECK((b->parse_realm == realm) && dyn_body_name_eq(b->parse_name, name) && (b->parse_flags == flags),
                "a second parse of one program text was offered under a DIFFERENT realm, name or flag set than "
                "the one already held — see dyn_body_parse_ref for why every reference to one body agrees about "

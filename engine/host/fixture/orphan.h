@@ -82,6 +82,16 @@ static const char HTML_ORPHAN[] =
        none — and this is the arm that carries §21.4.2.1 step 5.i MakeFullYear too. */
     "function orphanDate(e){ var t = new Date(e.n * 1000), u = new Date(e.y, 0, 1);"
     " fetch('/api/orphan/date1?t=' + t); fetch('/api/orphan/datef?u=' + u); }"
+    /* A BODY'S `entered` MARK IS PER TIMELINE. Driven, `orphanSibFork` forks on its unknown into two sibling
+       timelines, and each builds its own closure of `orphanSibBody`, kept alive in the array. Arm `a` runs its
+       closure; arm `b` never does. `b`'s closure must still be taken and driven in `b` (`sib-b-driven`), since
+       `a` running the body says nothing about `b`'s timeline, and `a`'s closure must never be driven
+       (`sib-a-driven`): it is entered in `a`, and no other timeline can reach it. */
+    "var orphanSibKeep = [];"
+    "function orphanSibBuild(tag){ return function orphanSibBody(run){"
+    " fetch('/api/orphan/sib-' + tag + (run === 7 ? '-ran' : '-driven')); }; }"
+    "function orphanSibFork(e){ var c = orphanSibBuild(e.t === 'a' ? 'a' : 'b'); orphanSibKeep.push(c);"
+    " if (e.t === 'a') c(7); }"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
