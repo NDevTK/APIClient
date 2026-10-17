@@ -5345,8 +5345,8 @@ async function hostSchedule(pool, ops) {
        loading-seat residual `_admissionHasHeadroom` names. */
     DCHECK(evicting || !Number.isFinite(bestW) || rd.cand === null || rd.cand.candUnserved === 0,
            "Level 1 stepped a served document (weight " + bestW + ") while the order it asked this round held " +
-           (rd.cand ? rd.cand.candUnserved : 0) + " never-served item(s) — an unserved item weighs +Infinity, so admission or " +
-           "eviction should have taken this round");
+           (rd.cand ? rd.cand.candUnserved : 0) + " never-served item(s) — an unserved item weighs +Infinity, " +
+           "so admission or eviction should have taken this round");
     DCHECK(bestW === Infinity || _un === 0,
            "Level 1 picked a served engine over " + _un + " never-served hot engine(s) — the pick is the " +
            "maximum and an unserved engine weighs +Infinity");
