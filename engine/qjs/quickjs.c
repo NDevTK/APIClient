@@ -69071,7 +69071,11 @@ static int js_create_module_function(JSContext *ctx, JSModuleDef *m)
    Nothing here runs the page's code: every operation the clause names is `!` or a walk over the module graph,
    which is what makes this half a plain C function while its successor is a CALL.
    It is its own function because the WALK around it is no longer C recursion, and because the caller has to be
-   able to STOP between it and the prologue — see js_module_link_advance below. */
+   able to STOP between it and the prologue — see js_module_link_advance below.
+   IT RUNS ONCE PER FLOW THAT LINKS `m`, not once per record: a module's status is per flow (the COW delta's
+   module_eval entry), so a sibling forked before the link links again. The cells it wires are shared baseline
+   state and resolve to the same cells every time, so a slot already wired keeps the one counted reference it
+   holds. */
 static int js_module_linking_bindings(JSContext *ctx, JSModuleDef *m)
 {
     int i;
@@ -69164,13 +69168,17 @@ static int js_module_linking_bindings(JSContext *ctx, JSModuleDef *m)
                     val = JS_GetModuleNamespace(ctx, m2);
                     if (JS_IsException(val))
                         goto fail;
-                    var_ref = js_create_module_var(ctx, true);
+                    /* A slot an earlier link wired keeps its cell: the namespace is m2's one object. */
+                    var_ref = var_refs[mi->var_idx];
                     if (!var_ref) {
-                        JS_FreeValue(ctx, val);
-                        goto fail;
+                        var_ref = js_create_module_var(ctx, true);
+                        if (!var_ref) {
+                            JS_FreeValue(ctx, val);
+                            goto fail;
+                        }
+                        var_refs[mi->var_idx] = var_ref;
                     }
                     set_value(ctx, &var_ref->value, val);
-                    var_refs[mi->var_idx] = var_ref;
 
                     module_trace(ctx, "namespace from\n");
 
@@ -69187,8 +69195,14 @@ static int js_module_linking_bindings(JSContext *ctx, JSModuleDef *m)
                             JS_AtomGetStr(ctx, buf3, sizeof(buf3), res_m->module_name));
                         goto fail;
                     }
-                    JS_REF_COUNT(var_ref)++;
-                    var_refs[mi->var_idx] = var_ref;
+                    DCHECK(var_refs[mi->var_idx] == NULL || var_refs[mi->var_idx] == var_ref,
+                           "a module's import slot is wired to a different cell than this link resolves it to — "
+                           "the exporting module's cells are shared baseline state, so every flow's link "
+                           "resolves one import to one cell");
+                    if (!var_refs[mi->var_idx]) {
+                        JS_REF_COUNT(var_ref)++;
+                        var_refs[mi->var_idx] = var_ref;
+                    }
 
                     module_trace(ctx, "local export (var_ref=%p)\n", (void *)var_ref);
                 }
@@ -69202,8 +69216,13 @@ static int js_module_linking_bindings(JSContext *ctx, JSModuleDef *m)
             JSExportEntry *me = &m->export_entries[i];
             if (me->export_type == JS_EXPORT_TYPE_LOCAL) {
                 var_ref = var_refs[me->u.local.var_idx];
-                JS_REF_COUNT(var_ref)++;
-                me->u.local.var_ref = var_ref;
+                DCHECK(me->u.local.var_ref == NULL || me->u.local.var_ref == var_ref,
+                       "a module's export entry holds a different cell than its own declaration's — the "
+                       "entry is written only here, from the module function's cell for that binding");
+                if (!me->u.local.var_ref) {
+                    JS_REF_COUNT(var_ref)++;
+                    me->u.local.var_ref = var_ref;
+                }
             }
         }
 
