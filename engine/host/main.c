@@ -1109,13 +1109,24 @@ QJS_EXPORT int qjs_step(void)
     return r;
 }
 
+/* The result document, composed between steps with the RAM floor's refusal loop: the composition walks the
+   frontier, so it cannot sell a flow mid-walk; a composition the allocator refused is dropped whole, one flow is
+   sold at rest, and it is composed again, until it fits or nothing is left to sell. */
+static char *result_json_at_rest(void)
+{
+    for (;;) {
+        char *js = result_json(g_ctx);
+        if (js || !engine_reclaim_at_rest()) return js;
+    }
+}
+
 /* The one result document, serialized directly from the C findings; the host does one JSON.parse of it. This entry
    owns the composition: the previous answer is released before a new one is asked for, and the last at teardown. */
 QJS_EXPORT const char *qjs_result(void)
 {
     DCHECK(g_begun, "qjs_result was asked of an engine that never ran");
     free(g_result);   /* the previous answer: the host has read it or not, and either way it asked again */
-    g_result = result_json(g_ctx);
+    g_result = result_json_at_rest();
     /* At the origin, where the composition failed: a null crosses this ABI as the empty string (the binding
        converts address zero to ""), which would read as an engine that ran and found nothing. result_json answers
        nothing only when the composition could not be allocated, which is always fatal. */
@@ -1868,7 +1879,7 @@ QJS_EXPORT void qjs_emit_partial(void)
     /* The document is this line's to free: it is composed per call on the host's cadence and grows with the
        finding set, and a leaked copy would count in HEAPU8.length, which every reply reports as
        `workingSetBytes`, so the pool would page out the most productive instance first. */
-    js = result_json(g_ctx);
+    js = result_json_at_rest();
     /* The same always-fatal allocation failure as qjs_result's, asserted rather than left to the printf: `%s` over
        a null pointer is undefined, and the host's JSON.parse would reject the line. */
     CHECK(js != NULL, "a partial result document could not be composed — the findings this engine has "

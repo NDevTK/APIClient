@@ -10056,6 +10056,21 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     return 1;
 }
 
+/* See engine.h. The same edge the allocator's refusal takes (JS_ReclaimMemory's latch and collector guard, then
+   engine_reclaim_tail), armed for this one ask: the caller is between steps and holds no position in the
+   frontier, which is what the safepoint protects. */
+int engine_reclaim_at_rest(void) {
+    int prev, sold;
+    if (!g_sess_live) return 0;   /* no frontier to sell: the floor, read at teardown */
+    DCHECK(!g_reclaim_allowed,
+           "a reclaim at rest was asked from inside a flow step — there the step's own allocation asks, armed, "
+           "and this would re-arm a safepoint the step may have closed around a frontier walk");
+    prev = engine_reclaim_set(1);
+    sold = JS_ReclaimMemory(JS_GetRuntime(g_sess_ctx), 0);
+    engine_reclaim_set(prev);
+    return sold;
+}
+
 /* The seam between two vocabularies for one fact. core/html/unhandled_rejection.h names the two spec steps it
    reports from (§8.1.4.7 step 4.1.3 and §8.1.6.4 step 7.4); solver/result.h names what its console does with them
    (a report stands, a report is taken back). A browser component may not include a solver header and a solver

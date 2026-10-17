@@ -430,6 +430,11 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
    ENGINE_STEP_DONE, and the flows' memory goes with the instance the host then tears down. Nothing is dropped:
    the residue comes back through the same admission step it left by. Requires a live session (asserted). */
 void engine_request_park(void);
+/* Sell the frontier's lowest-value flow as the RAM floor's reclaim does (engine_reclaim_tail), for an allocation
+   made between steps: the host's result composition, which walks the frontier and so runs with the safepoint
+   closed. The caller holds no position in the frontier. Returns 1 if a flow was sold, so the caller retries, and 0
+   at the floor or with no session, where its own CHECK is the answer. */
+int engine_reclaim_at_rest(void);
 /* Whether this whole frontier was written out rather than drained. The instance teardown's asserts (main.c)
    read it: owed replies and outstanding synchronous requests are re-issued by each recipe's replay, so neither
    is a dropped work item. It is engine-wide; a single flow's release asks the flow's own `paged`
