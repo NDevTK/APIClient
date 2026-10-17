@@ -157,6 +157,19 @@ async function readLock() {
   catch { return null; }
 }
 async function writeLock(data) { await fsp.writeFile(LOCK_FILE, JSON.stringify(data, null, 2), "utf8"); }
+/* A process's identity beyond its pid, which the kernel reuses: proc_pid_stat(5)'s field (22) starttime, "the
+   time the process started after system boot" in clock ticks, and its /proc/<pid>/cmdline. Field (2) comm is in
+   parentheses and may itself contain spaces and ')', so the fields after it are read past the LAST ')'.
+   null when /proc has no such pid. */
+function procIdentity(pid) {
+  let stat, cmdline;
+  try {
+    stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+  } catch { return null; }
+  const after = stat.slice(stat.lastIndexOf(")") + 2).split(" ");   // after[0] is field (3)
+  return { startTime: after[19], cmdline };
+}
 async function clearLock() { try { await fsp.unlink(LOCK_FILE); } catch {} }
 
 // ─── browser attach ────────────────────────────────────────────────────────
@@ -267,11 +280,25 @@ async function getPopupPage(browser) {
 async function cmdRestart(args, keepIdb) {
   const lock = await readLock();
   if (lock && lock.pid) {
-    try {
-      if (process.platform === "win32") execSync(`taskkill /F /T /PID ${lock.pid}`, { stdio: "ignore" });
-      else { try { process.kill(-lock.pid, "SIGKILL"); } catch { process.kill(lock.pid, "SIGKILL"); } }
-      log(`killed Chrome pid ${lock.pid}`);
-    } catch (e) { log(`kill pid ${lock.pid}: ${e.message || e} (may already be gone)`); }
+    /* The recorded pid is killed only while it is still the process the lock recorded: once that Chrome has
+       exited the kernel may hand its pid to anything, and its process group with it. A pid whose start time or
+       command line differs from the recorded identity, or a lock that recorded none, is refused; this lane's
+       own browser is still found by its profile in the reap below. */
+    const now = process.platform === "win32" ? undefined : procIdentity(lock.pid);
+    if (now === null) {
+      log(`Chrome pid ${lock.pid} is gone`);
+    } else if (now !== undefined && (!lock.identity || now.startTime !== lock.identity.startTime ||
+                                     now.cmdline !== lock.identity.cmdline)) {
+      log(`REFUSED to kill pid ${lock.pid}: it is not the Chrome ${LOCK_FILE} recorded (` +
+          (lock.identity ? "its start time or command line differs" : "the lock records no identity") +
+          "), so the pid has been reused or the lock is not this harness's");
+    } else {
+      try {
+        if (process.platform === "win32") execSync(`taskkill /F /T /PID ${lock.pid}`, { stdio: "ignore" });
+        else { try { process.kill(-lock.pid, "SIGKILL"); } catch { process.kill(lock.pid, "SIGKILL"); } }
+        log(`killed Chrome pid ${lock.pid}`);
+      } catch (e) { log(`kill pid ${lock.pid}: ${e.message || e} (may already be gone)`); }
+    }
   }
   /* Reap LEAKED harness Chromes not in the lock: a test script killed mid-restart (TaskStop) leaves its
      Chrome behind, and they accumulate until the grind wedges (measured: ~10 instances -> sentry barely
@@ -1035,7 +1062,13 @@ async function cmdStart(args) {
   assertRendererSandboxed(!!dropTo || (typeof process.getuid === "function" && process.getuid() !== 0),
                           chromeProc.pid);
 
-  await writeLock({ port, pid: chromeProc.pid, extId, startedAt: Date.now() });
+  /* The identity a later `restart` checks before it kills this pid (see procIdentity). Read now, after the port
+     answered, so a launcher that exec'd into Chrome is recorded as Chrome. */
+  const identity = process.platform === "win32" ? null : procIdentity(chromeProc.pid);
+  if (process.platform !== "win32" && identity === null)
+    throw new Error(`Chrome (pid ${chromeProc.pid}) answered on port ${port} but /proc has no such pid — the lock ` +
+                    `would record a process that is not running`);
+  await writeLock({ port, pid: chromeProc.pid, extId, startedAt: Date.now(), identity });
   /* THE ID SAYS WHERE IT CAME FROM, BECAUSE IT IS A CLAIM AND IT READ AS AN OBSERVATION. `extId` is
      `computeExtensionId(EXT_DIR)` — a pure function of the PATH STRING — so this line printed an extension id
      for a browser holding no extension at all, which is the state `assertExtDirReachable` above now refuses
