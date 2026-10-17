@@ -95448,15 +95448,16 @@ typedef struct JSConcolicCall {
     JSValue thrown;     /* owned: the exception the examples' run threw, raised on the throw arm */
     JSValue *cb;        /* [thisValue's example, func's example, each argument's example] */
     int ncb;
+    JSValue holder;     /* owned: where a replacer stand-in records a return with no example, or undefined */
 } JSConcolicCall;
 STEP_STATE_HDR_FIRST(JSConcolicCall);
 
-/* Named residual. Not covered: an Object operand other than a builtin-protocol RegExp (a replacer callback, a
-   method of an object example such as an array example's `map`, an unknown method's own `.call`, whose
-   receiver is the method); the result carries no example. Next diff: the builtin handed the unknown rather
-   than its example where its algorithm passes an operand on to the page's code, starting with a replacer
-   callback's matched substrings. How its absence shows: an address built through `.replace(/…/, fn)` over an
-   unknown is emitted as a shape where the same chain through a string replacement carries bytes.
+/* Named residual. Not covered: an Object operand other than a builtin-protocol RegExp or a replace callback (a
+   method of an object example such as an array example's `map`, a `.call` reached as a value rather than at a
+   call operator, a replacer over a pattern with named groups); the result carries no example. Next diff: the
+   same stand-in for an array example's callback methods, handing each element as an unknown derived from the
+   array. How its absence shows: an address built inside `cfg.items.map(fn)` over a fetched record is emitted as
+   a shape where the same address built from `cfg.items[0]` carries bytes.
    Named residual. Not covered: a throw another value of the unknown would reach while its example's run
    completes normally (`x.toFixed(d)` with an unknown `d`). Next diff: the outcome asked on every run, with the
    normal completion stated real, once a builtin whose throw no operand can reach declares so at its definition.
@@ -95557,14 +95558,134 @@ static JSValue js_concolic_call_operand(JSContext *ctx, JSValueConst v)
     return ex;
 }
 
+/* THE PAGE'S REPLACER, AS THE EXAMPLES' RUN CALLS IT. String.prototype.replace and replaceAll call a function
+   replaceValue with pieces of the receiver (§22.1.3.19 String.prototype.replace ( searchValue, replaceValue )
+   and §22.2.6.11 RegExp.prototype [ %Symbol.replace% ] ( string, replaceValue ) pass the matched substring,
+   the captures, the position and the whole string). In the examples' run those pieces are the example's bytes, so
+   this closure stands in for the page's function and hands it each string or number argument as an unknown
+   derived from the receiver and the pattern, carrying that piece as its example. The page's function runs on
+   the flow as a CALL request; what it returns is handed back to the builtin as bytes, its example where it is
+   unknown, and a return with no example marks the run's result as having none. Closure data:
+   [the page's function, the receiver, the pattern, the holder the call machine reads `lost` from]. */
+typedef struct JSConcolicReplacer {
+    JSStepHdr hdr;      /* first; hdr.func_obj is this closure */
+    JSValue result;     /* owned: the replacement the builtin receives */
+    JSValue *cb;        /* [undefined, the page's function, each argument as the page receives it] */
+    int ncb;
+} JSConcolicReplacer;
+STEP_STATE_HDR_FIRST(JSConcolicReplacer);
+
+#define CREPL_STAGES(X) \
+    X(CREPL_ENTRY,  "22.1.3.19 / 22.2.6.11: Call(replaceValue, undefined, the matched pieces)") \
+    X(CREPL_CALLED, "the replacer's return, as the replacement string's bytes")
+enum { CREPL_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_concolic_replacer_steps[] = { CREPL_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_concolic_replacer_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSConcolicReplacer *s = st;
+    int i, n = s->hdr.argc;
+
+    if (s->hdr.stage == CREPL_ENTRY) {
+        JS_FreeValue(ctx, cb_result);
+        s->result = JS_UNDEFINED;
+        s->cb = js_malloc(ctx, sizeof(JSValue) * (size_t)(n + 2));
+        if (unlikely(!s->cb)) return -1;
+        s->ncb = n + 2;
+        for (i = 0; i < n + 2; i++) s->cb[i] = JS_UNDEFINED;
+        s->cb[1] = js_dup(JS_StepClosureData(&s->hdr, 0));
+        for (i = 0; i < n; i++) {
+            JSValueConst a = s->hdr.argv[i];
+            if (JS_IsString(a) || JS_IsNumber(a)) {
+                JSValueConst ops[3] = { JS_StepClosureData(&s->hdr, 1), JS_StepClosureData(&s->hdr, 2),
+                                        js_int32(i) };
+                s->cb[2 + i] = g_concolic.derived(ctx, "String.prototype.replace replacer argument", ops, 3,
+                                                  js_dup(a));
+            } else {
+                s->cb[2 + i] = js_dup(a);
+            }
+        }
+        s->hdr.stage = CREPL_CALLED;
+        *out_cb = s->cb;
+        *out_argc = n;
+        return JS_STEP_CALL;
+    }
+    DCHECK(s->hdr.stage == CREPL_CALLED, "the replacer stand-in resumed at a stage it lacks");
+    if (g_concolic.is(cb_result)) {
+        JSValue ex = g_concolic.example(ctx, cb_result);
+        JS_FreeValue(ctx, cb_result);
+        if (JS_IsUndefined(ex) || JS_IsObject(ex)) {
+            JS_FreeValue(ctx, ex);
+            ex = JS_AtomToString(ctx, JS_ATOM_empty_string);
+            if (JS_DefinePropertyValue(ctx, JS_StepClosureData(&s->hdr, 3), JS_ATOM_value, JS_TRUE,
+                                       JS_PROP_C_W_E) < 0)
+                return -1;
+        }
+        cb_result = ex;
+    }
+    s->result = cb_result;
+    return 0;
+}
+
+static void js_concolic_replacer_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSConcolicReplacer *s = st;
+    v->val(ctx, &s->result);
+    v->array(ctx, (void **)&s->cb, sizeof(JSValue), s->ncb, s->ncb, js_step_visit_value_elem);
+}
+
+static JSValue js_concolic_replacer_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSConcolicReplacer *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+    if (take_result) s->result = JS_UNDEFINED;
+    return r;
+}
+
+static const JSTrampStepDef js_concolic_replacer_def = {
+    sizeof(JSConcolicReplacer), js_concolic_replacer_step, js_concolic_replacer_fini, 0,
+    .visit = js_concolic_replacer_visit,
+    .algorithm = "the page's replacer function, called by String.prototype.replace in the examples' run",
+    .steps = js_concolic_replacer_steps
+};
+
+/* The replace argument the examples' run takes for the page's function `fn` at operand index 1: the stand-in
+   above, when the callee's example is String.prototype.replace or replaceAll over an unknown receiver and the
+   pattern holds no named groups (§22.2.6.11's `groups` object would hand the page the example's bytes as
+   member values). JS_UNINITIALIZED where it does not apply. `pattern` is the run's own pattern operand. */
+static JSValue js_concolic_call_replacer(JSContext *ctx, JSConcolicCall *s, JSValueConst fex, JSValueConst pattern)
+{
+    JSObject *fp = JS_VALUE_GET_OBJ(fex);
+    JSValueConst fn = s->hdr.argv[1];
+    JSValue data[4], w;
+    int i;
+
+    if (!(fp->u.cfunc.cproto == JS_CFUNC_step &&
+          (fp->u.cfunc.magic == STEPDEF_STR_REPLACE || fp->u.cfunc.magic == STEPDEF_STR_REPLACE_ALL)) ||
+        !g_concolic.is(s->hdr.this_val) || g_concolic.is(fn) || !JS_IsFunction(ctx, fn))
+        return JS_UNINITIALIZED;
+    if (JS_IsRegExp(pattern) &&
+        (lre_get_flags(str8(JS_VALUE_GET_OBJ(pattern)->u.regexp.bytecode)) & LRE_FLAG_NAMED_GROUPS))
+        return JS_UNINITIALIZED;
+    s->holder = JS_NewObjectProto(ctx, JS_NULL);
+    if (JS_IsException(s->holder)) { s->holder = JS_UNDEFINED; return JS_EXCEPTION; }
+    data[0] = js_dup(fn);
+    data[1] = js_dup(s->hdr.this_val);
+    data[2] = js_dup(s->hdr.argv[0]);
+    data[3] = js_dup(s->holder);
+    w = js_new_c_function_data(ctx, NULL, &js_concolic_replacer_def, "", 0, 0, 4, data);
+    for (i = 0; i < 4; i++) JS_FreeValue(ctx, data[i]);
+    return w;
+}
+
 static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSConcolicCall *s = st;
     int i, n = s->hdr.argc, arm, r;
 
-    DCHECK(g_concolic.call != NULL && g_concolic.example != NULL,
-           "an unknown was called under a host that installed `.is` without `.call` and `.example` — the "
-           "machine has no way to mint the call's result");
+    DCHECK(g_concolic.call != NULL && g_concolic.example != NULL && g_concolic.derived != NULL,
+           "an unknown was called under a host that installed `.is` without `.call`, `.example` and `.derived` "
+           "— the machine has no way to mint the call's result or a replacer's arguments");
     if (s->hdr.stage == CCALL_ENTRY) {
         JSValue fex = g_concolic.example(ctx, s->hdr.func_obj);
         bool runs = JS_VALUE_GET_TAG(fex) == JS_TAG_OBJECT
@@ -95573,13 +95694,17 @@ static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JS
         JS_FreeValue(ctx, cb_result);
         s->result = JS_UNDEFINED;
         s->thrown = JS_UNDEFINED;
+        s->holder = JS_UNDEFINED;
         s->cb = js_malloc(ctx, sizeof(JSValue) * (size_t)(n + 2));
         if (unlikely(!s->cb)) { JS_FreeValue(ctx, fex); return -1; }
         s->ncb = n + 2;
         for (i = 0; i < n + 2; i++) s->cb[i] = JS_UNDEFINED;
         s->cb[1] = fex;
         for (i = -1; runs && i < n; i++) {
-            JSValue ex = js_concolic_call_operand(ctx, i < 0 ? s->hdr.this_val : s->hdr.argv[i]);
+            JSValue ex = i == 1 ? js_concolic_call_replacer(ctx, s, fex, s->cb[2]) : JS_UNINITIALIZED;
+            if (JS_IsException(ex)) return -1;
+            if (JS_IsUninitialized(ex))
+                ex = js_concolic_call_operand(ctx, i < 0 ? s->hdr.this_val : s->hdr.argv[i]);
             runs = !JS_IsUninitialized(ex);
             s->cb[i < 0 ? 0 : 2 + i] = runs ? ex : JS_UNDEFINED;
         }
@@ -95605,6 +95730,12 @@ static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JS
             }
             s->thrown = e;
             example = JS_UNDEFINED;
+        }
+        /* A replacer stand-in that met a return with no example: the run's bytes are not the call's. */
+        if (JS_IsObject(s->holder)) {
+            int lost = JS_GetOwnPropertyNoUserCode(ctx, NULL, s->holder, JS_ATOM_value);
+            DCHECK(lost >= 0, "an own-property query on the replacer's null-prototype holder threw");
+            if (lost > 0) { JS_FreeValue(ctx, example); example = JS_UNDEFINED; }
         }
         s->result = g_concolic.call(ctx, s->hdr.func_obj, s->hdr.this_val, n,
                                     (JSValueConst *)s->hdr.argv, example);
@@ -95634,6 +95765,7 @@ static void js_concolic_call_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSConcolicCall *s = st;
     v->val(ctx, &s->result);
     v->val(ctx, &s->thrown);
+    v->val(ctx, &s->holder);
     v->array(ctx, (void **)&s->cb, sizeof(JSValue), s->ncb, s->ncb, js_step_visit_value_elem);
 }
 

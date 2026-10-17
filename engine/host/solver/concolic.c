@@ -5698,6 +5698,7 @@ static JSConcolicHooks g_hooks = {
     .builtin = concolic_builtin_hook,
     .example = concolic_example,
     .call = concolic_call_hook,
+    .derived = concolic_new_derived,
     /* The ordinal half of a page-created value's name. With the member NULL the engine stamps 0,
        JS_CreationName answers absent for every value, and literal_ident's creation-name arm returns NULL: a host
        declining the edge, byte-identical to a build without the seam. */

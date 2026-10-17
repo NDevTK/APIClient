@@ -2806,6 +2806,9 @@ typedef struct JSConcolicHooks {
        through its step machine, never through the class's C [[Call]] entry. */
     JSValue (*call)(JSContext *ctx, JSValueConst callee, JSValueConst this_val, int argc, JSValueConst *argv,
                     JSValue example);
+    /* `op` over the `n` operands (at least one unknown), carrying `example` (consumed): the value a builtin
+       hands the page's code when that value is a piece of an unknown, such as a replacer's matched substring. */
+    JSValue (*derived)(JSContext *ctx, const char *op, const JSValueConst *operands, int n, JSValue example);
     /* THE FIRST CHARACTER THE BROWSER'S DELIVERY OF THIS SOURCE GUARANTEES, or 0 when it guarantees none.
        This is DOMAIN, not example: `location.hash` is either the empty string or `#` followed by the fragment
        — the component that owns the source declares that prefix — so a builtin can rule an outcome INFEASIBLE
