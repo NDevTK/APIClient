@@ -3,7 +3,7 @@
  * Refuses a diff that adds a comment block longer than LIMIT lines, or grows one that already is, and any added
  * comment line that cites a CLAUDE.md section by its section sign. It judges only what the diff ADDS, so standing blocks are untouched
  * until someone edits them; editing one that is over the limit is allowed as long as the edit does not make it
- * longer.
+ * longer, and moving one unchanged within its file is not adding it.
  *
  *   node engine/commentgate.mjs [--base <rev>] [--head <rev>]
  *
@@ -126,14 +126,29 @@ for (const f of files) {
     ? { added: new Set(src.split("\n").map((_, k) => k + 1)), dels: [] }
     : hunks(f);
   judged++;
+  /* A block whose exact text the base side of this file already held was MOVED, not added or grown: the diff
+     shows it as new lines only because the code around it moved. Each base copy excuses one head copy. */
+  const moved = new Map();
+  if (!untracked.has(f)) {
+    let baseSrc = null;
+    try {
+      baseSrc = execFileSync("git", ["show", `${forkPoint}:${f}`],
+                             { cwd: ROOT, encoding: "utf8", maxBuffer: 1 << 30, stdio: ["ignore", "pipe", "ignore"] });
+    } catch (e) { baseSrc = null; }   /* the file is new on this side: nothing in it can have moved */
+    const baseBlocks = baseSrc === null ? [] : ((/\.(c|h)$/.test(f) ? cComments(baseSrc) : jsComments(baseSrc)) || []);
+    for (const b of baseBlocks) moved.set(b.text, (moved.get(b.text) || 0) + 1);
+  }
   for (const b of blocks) {
     let plus = 0;
     for (let k = b.start; k <= b.end; k++) if (added.has(k)) plus++;
     if (!plus) continue;
     const minus = dels.filter((d) => d.at >= b.start - 1 && d.at <= b.end).reduce((s, d) => s + d.count, 0);
     const len = b.end - b.start + 1;
-    if (len > LIMIT && plus > minus)
+    const wasThere = (moved.get(b.text) || 0) > 0;
+    if (wasThere) moved.set(b.text, moved.get(b.text) - 1);
+    if (len > LIMIT && plus > minus && !wasThere)
       refusals.push(`${f}:${b.start}  a ${len}-line comment block was added or grown (+${plus} -${minus}); the limit is ${LIMIT}`);
+    if (wasThere) continue;
     const lines = b.text.split("\n");
     lines.forEach((t, k) => {
       if (added.has(b.start + k) && t.includes("CLAUDE.md §"))
