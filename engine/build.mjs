@@ -8547,7 +8547,7 @@ const QJS_ABI = ["qjs_init", "qjs_join", "qjs_unload", "qjs_check_request_policy
                  "qjs_bundle_id", "qjs_begin",
                  "qjs_step",
                  "qjs_result", "qjs_teardown",
-                 "qjs_pending", "qjs_provide", "qjs_decline", "qjs_top_weight", "qjs_set_yield_floor",
+                 "qjs_pending", "qjs_provide", "qjs_decline", "qjs_level1_account",
                  "qjs_request_park", "qjs_emit_partial", "qjs_novelty_learn", "qjs_request_dump", "qjs_dumps",
                  "qjs_host_requests", "qjs_host_answer", "qjs_host_decline", "qjs_host_notices", "qjs_route",
                  "qjs_set_referenced", "qjs_set_arrival", "qjs_referenced", "qjs_perform", "qjs_host_answer_remote", "qjs_host_answers_exhausted", "qjs_world_gone",

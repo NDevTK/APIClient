@@ -72,7 +72,7 @@
      correction: the validator now stands on the boundary the threat is on, and a record that does not match a
      declared type kills the CONNECTION (Mojo's ReportBadMessage) rather than being handed to a call.
      THE PARAMETER TYPES ARE FACTS, NOT CHOICES. Every one is read off `engine/host/main.c`'s own `QJS_EXPORT`
-     body — `qjs_top_weight` returns a C `double`, `qjs_bundle_id` an `unsigned` the wasm hands back as an i32,
+     body — `qjs_result` returns a C `const char *`, `qjs_bundle_id` an `unsigned` the wasm hands back as an i32,
      `qjs_provide` a `(const char *body, unsigned body_len)` PAIR — and `engine/build.mjs`'s QJS_ABI is the
      authoritative list of which entries exist. AN ORDINAL IS A METHOD'S IDENTITY ON THE WIRE AND NOTHING ELSE:
      it is APPENDED and never reused (the ordinal-8 hole below says the same thing from the deletion side), so
@@ -546,28 +546,17 @@
                  "is the network error — no body at all — which a zero-length body is not" }],
         reply: [WORKING_SET] },
 
-      { ordinal: 10, name: "GetTopWeight",
+      /* Ordinals 10 (`GetTopWeight`) and 11 (`SetYieldFloor`) are not reused: Level 1 no longer reads a flow
+         weight across documents, and its account is `GetLevel1Account` (30). */
+      { ordinal: 30, name: "GetLevel1Account",
         params: [],
         reply: [
-          { name: "weight", type: "double",
-            why: "the Level-1 WFQ's one input, and -Infinity is an ANSWER: engine_top_weight is " +
-                 "`flow_next_to_run(NULL) ? flow_weight(b) : -1.0/0.0`, the engine's positive statement that " +
-                 "its frontier holds no RUNNABLE flow — which this record has always claimed and which the C " +
-                 "side only now answers, since it used to ask flow_best over every member including the ones " +
-                 "waiting on the host — and the right statement, since that value ranks below every real " +
-                 "weight by arithmetic rather than by a branch. Refusing it destroyed and re-provisioned every " +
-                 "drained engine, 43279 times in one page load. NaN and +Infinity are still broken and the " +
-                 "READER says so, because which non-finite values are meaningful is the consumer's vocabulary" },
+          { name: "account", type: "string",
+            why: "`{\"runnable\":0|1,\"paid\":…,\"serviceUs\":…}` as qjs_level1_account composes it: whether " +
+                 "a member can take the thread now, the novel value this instance has paid, and the thread " +
+                 "measure of its service. The trusted zone ranks documents by value per CPU-second over these, " +
+                 "and ranks a non-runnable instance last" },
           WORKING_SET] },
-
-      { ordinal: 11, name: "SetYieldFloor",
-        params: [
-          { name: "floor", type: "double", retained: false,
-            why: "the runner-up engine's weight: this engine yields the instant its top flow is outranked, " +
-                 "which is what makes the Level-1 interleave a VALUE yield and not a fixed slice. -Infinity is " +
-                 "the floor for a pool with nobody else in it; a NaN would make every comparison false so the " +
-                 "top flow never yields at all, which the caller asserts against before it gets here" }],
-        reply: [WORKING_SET] },
 
       { ordinal: 12, name: "RequestPark",
         params: [],

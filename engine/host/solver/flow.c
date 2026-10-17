@@ -858,6 +858,8 @@ Flow *flow_running(void) { return g_running; }
  * A report, never a bound: no term, pick, cap or shed reads them. The record retires when a credit made outside a
  * slice has an account to land on, since the dropped arm is then unreachable. */
 static int64_t g_credit_calls = 0, g_credit_paid = 0, g_credit_dropped = 0;
+static double  g_credit_paid_value = 0.0;
+double flow_credit_paid_value(void) { return g_credit_paid_value; }
 
 /* Credit the running flow with newly emitted value (a new @H endpoint or @S PoC): its family's reward rises and its
    aging window resets, so a productive flow outranks fresh and starved flows. Called by the detectors (endpoint.c,
@@ -890,6 +892,7 @@ void flow_credit_emit(double v) {
            "that is still moving underneath it");
     g_running->family->earned += v;
     g_credit_paid++;   /* and the arm that reached an account: the ledger write and its count are one event */
+    g_credit_paid_value += v;
     /* And the frontier's clock, because the item in service is what the clock reads and its tag has just moved.
        This is frontier_vt_serve's one event, and it makes v(t) a continuing relation: without it every account
        never served would stand at the leader's coordinate when last picked, and be passed by the findings the
@@ -4147,7 +4150,7 @@ static void flow_count_plateau(const Flow *seed, const FlowIxAnswer *a) {
 }
 
 /* The runnable maximum: the members not host-owed, asked once per dispatch (flow_next_to_run), once per preempt-hook
-   rescan (flow_rival_of) and per host report (engine_top_weight), answered by the index. The incumbent is the seed,
+   rescan (flow_rival_of) and per host report (engine_runnable), answered by the index. The incumbent is the seed,
    not a candidate like the rest: the comparison is strict, so seeding it states the rule that the thread moves only
    for a strictly better flow, the rule the preempt hook's value clause applies at the other end. Without the seed
    the pick returns the first maximum in registry order, so a field of equal weights would hand the thread to the

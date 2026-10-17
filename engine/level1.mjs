@@ -7,14 +7,14 @@
  * WHY THIS FILE EXISTS, WHICH IS A MEASUREMENT GAP AND NOT A TEST GAP. §scheduler splits the WFQ in two.
  * Level-2 — the flows inside one document — is composed by the ENGINE, so its census rides the result
  * document and every gate that reads a result reads it. Level-1 is `engineWeight` per HOT INSTANCE against
- * `frontierWeight` per waiting address, declared route and cold row, and NO ENGINE CAN SEE ANOTHER ENGINE:
+ * `level1Weight` per waiting address, declared route and cold row, and NO ENGINE CAN SEE ANOTHER ENGINE:
  * this order is composed entirely in `bridge.js`, so no result document can ever carry it and no corpus run
  * touches it. test262 links five quickjs sources and not one line of this zone; WPT judges by a browser
  * oracle; solvergate compares a document against itself through one host. The Level-1 order is outside all
  * three by construction.
  *
  * WHAT THAT COST, MEASURED RATHER THAN SUSPECTED. Both Level-1 defects found this session were RANKS FROZEN
- * AT A CONSTANT. `frontierWeight(FRONTIER_UNSERVED)` was the literal 1.0 for every waiting document however
+ * AT A CONSTANT. The unserved weight was the literal 1.0 for every waiting document however
  * many times its address had already been admitted, fetched and found to demonstrate nothing — so an
  * address-varying cycle re-entered at the same rank as a page nobody had ever opened, for ever, and there was
  * no rank for a starvation to be expressed in. Beside it, a cold row excluded from the walk because a live
@@ -63,19 +63,31 @@ const EXT_DIR = join(ENGINE, '..', 'extension');
    driver comes to exercise a program the extension does not run.
    `module` IS WHAT OPENS THE DOOR. In `ast-worker.html` there is no `module`, so the export block at the foot
    of `bridge.js` does not run and this zone adds nothing to what ships. */
+/* This realm has no IndexedDB, so the zone's load-time restores (the egress table, the third-party-cookie
+   setting) reject through frontierFail's DFAIL on the first turn of the event loop. They are not the Level-1
+   order; each is counted and named, and any other rejection still kills the run. */
+let restoresRefused = 0;
+process.on('unhandledRejection', (e) => {
+  if (e && e.apiclientFatal && /IndexedDB preference read failed \(indexedDB is not defined\)/.test(e.message)) {
+    restoresRefused++;
+    return;
+  }
+  throw e;
+});
 const ZONE = (() => {
-  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout };
+  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, MessageChannel };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   sandbox.module = { exports: {} };
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/safe-fetch.js',
+  for (const f of ['check.js', 'lib/public-suffix-table.js', 'lib/site.js', 'lib/referrer-policy.js',
+                   'lib/request-identity.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/safe-fetch.js',
                    'bridge.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
   return sandbox;
 })();
 const B = ZONE.module.exports;
-for (const n of ['hostSchedule', 'engineWeight', 'frontierWeight', 'frontierReward', '_bestCandidate',
+for (const n of ['hostSchedule', 'engineWeight', 'level1Weight', 'level1ServiceTotal', '_bestCandidate',
                  '_candPopulation', '_level1Record', '_candCensus', 'CAND_KINDS', 'CAND_SPREAD'])
   if (B[n] === undefined)
     throw new Error('extension/bridge.js did not export `' + n + '` — this driver is the only reader of the ' +
@@ -123,9 +135,11 @@ const kindWMax = (cen, kind) => cen[kindOf(kind).wMax];
    waiting job is what `astDispatch` parks; a resident record is an engine holding an address and a frontier
    key; a seed is an address an application declared is a page of itself. */
 const job = (url, o = {}) => ({ msg: { sourceUrl: url, frameId: o.frameId || 0, origin: o.origin || '' } });
-const row = (key, url, emit, visits, o = {}) =>
-  ({ key, sourceUrl: url, emit, visits, shed: false, stranded: o.stranded === true,
+const row = (key, url, paid, serviceUs, o = {}) =>
+  ({ key, sourceUrl: url, paid, serviceUs, shed: false, stranded: o.stranded === true,
      bytes: 0, rederivable: true });
+/* The service total a walk over `P` uses, read through the shipped function. */
+const totalOf = (P) => B.level1ServiceTotal(P.resident, P.idx);
 const eng = (url, fkey) => ({ msg: { sourceUrl: url }, fkey: fkey || ('k|' + url) });
 const idxOf = (...rows) => new Map(rows.map((r) => [r.key, r]));
 const seedsOf = (...addrs) => new Map(addrs.map((a) => [a, { url: a, principalUrl: a,
@@ -138,13 +152,14 @@ const pop = (o = {}) => ({ resident: o.resident || [], waiting: o.waiting || [],
    scan produces; `cand` is what the walk answered, or the POSITIVE null that says the round never asked. */
 function record(poolArr, hot, census, asks) {
   ZONE._level1 = undefined;
-  B._level1Record(poolArr, { hot: hot, cand: census === undefined ? null : census, candAsk: asks || 0 });
+  B._level1Record(poolArr, { hot: hot, cand: census === undefined ? null : census, candAsk: asks || 0,
+                            shape: 'waited', stepCode: null });
   return ZONE._level1;
 }
 /* THE PRESENCE RULE, ASSERTED AS THE ONE RULE IT IS. §_level1Record: a COUNT is present whenever the walk
-   that produces it ran, because a count of zero is a reading; a WEIGHT is present only over a NON-EMPTY
-   population, because an extremum over nothing is not a number. Every conditional row of the non-resident
-   half obeys it, so it is checked over the declarations rather than over a list of names kept here. */
+   that produces it ran, because a count of zero is a reading; a WEIGHT is present only over SERVED members,
+   because an extremum over nothing is not a number and a never-served member weighs +Infinity, which is
+   counted in `candUnserved` instead. Checked over the declarations rather than over a list of names. */
 function checkPresence(r, asked) {
   must(('cands' in r) === asked,
        'the total is present exactly when the order was asked', r);
@@ -153,13 +168,28 @@ function checkPresence(r, asked) {
   for (const k of COUNT_ROWS)
     must((k in r) === asked,
          'the count row `' + k + '` is present exactly when the walk ran (a zero is a READING)', r);
-  const ranked = asked && r.cands > 0;
+  const ranked = asked && r.cands > r.candUnserved;
   for (const s of SPREAD_ROWS)
     must((s in r) === ranked,
-         'the spread row `' + s + '` exists exactly over a NON-EMPTY ranked set', r);
+         'the spread row `' + s + '` exists exactly over a ranked set with a served member', r);
   for (const k of B.CAND_KINDS)
-    must((k.wMax in r) === (asked && r[k.pop] > 0),
-         'the extremum `' + k.wMax + '` exists exactly over a non-empty `' + k.pop + '`', r);
+    must(!(k.wMax in r) || (asked && r[k.pop] > 0),
+         'the extremum `' + k.wMax + '` exists only over a non-empty `' + k.pop + '`', r);
+}
+
+console.log('[level1] ── the one weight ──');
+{
+  const U = B.LEVEL1_UNSERVED;
+  must(B.level1Weight(U, 0) === Infinity && B.level1Weight(U, 5e6) === Infinity,
+       'a document never served weighs +Infinity whatever the total, so it is handed a quantum first');
+  const a = { paid: 4, serviceUs: 2e6 }, b = { paid: 4, serviceUs: 4e6 }, c = { paid: 8, serviceUs: 2e6 };
+  const N = 10e6;
+  must(Number.isFinite(B.level1Weight(a, N)) && B.level1Weight(a, N) > B.level1Weight(b, N),
+       'at equal value, more service ranks lower: both the rate and the bonus fall with service');
+  must(B.level1Weight(c, N) > B.level1Weight(a, N),
+       'at equal service, more novel value ranks higher');
+  must(B.level1Weight(a, 2 * N) > B.level1Weight(a, N),
+       'the bonus grows with all service, so a document left unserved while others run regains rank');
 }
 
 console.log('[level1] ── the three facts `_level1Record` keeps apart ──');
@@ -169,9 +199,9 @@ console.log('[level1] ── the three facts `_level1Record` keeps apart ──'
    half would be a reading of a walk that did not run. */
 {
   const p = [eng('https://a.test/'), eng('https://b.test/')];
-  const r = record(p, { n: 2, drained: 0, wTop: 3, wMin: 1, wRunner: 1 });
+  const r = record(p, { n: 2, drained: 0, unserved: 0, wTop: 3, wMin: 1 });
   checkPresence(r, false);
-  must(r.wTop === 3 && r.wMin === 1 && r.wRunner === 1,
+  must(r.wTop === 3 && r.wMin === 1 && !('wRunner' in r),
        'the RESIDENT half is a full reading even when the non-resident order was never asked', r);
   console.log('[level1]   not asked        ' + JSON.stringify(r));
 }
@@ -186,7 +216,7 @@ console.log('[level1] ── the three facts `_level1Record` keeps apart ──'
   must(pick.best === null, 'a walk that ranked nothing picks nothing', pick.census);
   must(pick.census.cands === 0 && pick.census.exclSub === 1,
        'a sub-frame leaves the order as an EXCLUSION and not as a silence', pick.census);
-  const r = record([], { n: 0, drained: 0 }, pick.census, 1);
+  const r = record([], { n: 0, drained: 0, unserved: 0 }, pick.census, 1);
   checkPresence(r, true);
   console.log('[level1]   asked, empty     ' + JSON.stringify(r));
 }
@@ -200,69 +230,48 @@ console.log('[level1] ── the three facts `_level1Record` keeps apart ──'
 {
   const P = pop({ waiting: [job('https://a.test/')],
                   seeds: seedsOf('https://a.test/admin'),
-                  idx: idxOf(row('k1', 'https://c.test/', 6, 3)) });
+                  idx: idxOf(row('k1', 'https://c.test/', 6, 3e6)) });
   const pick = B._bestCandidate(P);
-  const r = record([], { n: 0, drained: 0 }, pick.census, 1);
+  const r = record([], { n: 0, drained: 0, unserved: 0 }, pick.census, 1);
   checkPresence(r, true);
   must(r.cands === 3 && KIND_POP.every((k) => r[k] === 1),
        'every declared kind reaches the census as its own population', r);
   must(r.cands === B.CAND_KINDS.reduce((n, k) => n + r[k.pop], 0),
        'the populations account for the total, summed over the DECLARED kinds', r);
-  must(pick.best.kind === 'cold' && kindWMax(r, 'cold') === B.frontierWeight(P.idx.get('k1')),
-       'the winner is the item with the highest weight and the census reports THAT weight', r);
+  must(pick.best.w === Infinity && pick.best.kind !== 'cold' && r.candUnserved === 2,
+       'a never-served item wins over a served one, and the census counts the never-served', r);
+  must(kindWMax(r, 'cold') === B.level1Weight(P.idx.get('k1'), totalOf(P)) && r.candWMax === kindWMax(r, 'cold'),
+       'the served item is reported at the weight the walk ranked it by', r);
   console.log('[level1]   full reading     ' + JSON.stringify(r));
 }
 
 console.log('[level1] ── the discriminator: which tie is this ──');
 
-/* TWO TIES, TWO READINGS. A spread over the WEIGHT can say that every candidate ties; it cannot say WHY, and
-   the two answers take opposite actions. On a profile whose store is empty every candidate is unserved and
-   every weight is 0 + 1/(0+1) = 1.0 — the order sitting correctly at its entry value. A tie ABOVE items that
-   have history is a rank that is not moving with what those items have demonstrated, which is the defect
-   class this instrument exists for. `candUnserved` and `candVisMax` are what separate them, and this drives
-   both populations so the separation is a property of the census rather than of the sentence describing it. */
-let entryTie, servedTie;
+/* TWO TIES, TWO READINGS. On a profile whose store is empty every candidate is unserved — the order sitting
+   correctly at its entry value, every member at +Infinity, which the census states as `candUnserved === cands`
+   with no spread at all. A tie between SERVED items is a reading of their accounts. */
 {
-  const P = pop({ waiting: [job('https://a.test/'), job('https://b.test/')] });
-  entryTie = B._bestCandidate(P).census;
-  must(entryTie.candWMax === entryTie.candWMin && entryTie.candWMax === 1,
-       'an empty store ranks every candidate at the entry value 1.0', entryTie);
-  must(entryTie.candUnserved === entryTie.cands && entryTie.candVisMax === 0,
-       'and says so: every member of the tie has never been served', entryTie);
+  const entryTie = B._bestCandidate(pop({ waiting: [job('https://a.test/'), job('https://b.test/')] })).census;
+  must(entryTie.candUnserved === entryTie.cands && !('candWMax' in entryTie),
+       'an empty store ranks every candidate as never served, and the census reports no finite spread', entryTie);
+  const servedTie = B._bestCandidate(pop({ idx: idxOf(row('k1', 'https://c.test/', 2, 1e6),
+                                                       row('k2', 'https://d.test/', 2, 1e6)) })).census;
+  must(servedTie.candWMax === servedTie.candWMin && servedTie.candUnserved === 0 && servedTie.candSvcMax === 1e6,
+       'two served candidates of equal account tie, and the census says this tie stands above service', servedTie);
+  console.log('[level1]   entry-value tie  ' + JSON.stringify(entryTie));
+  console.log('[level1]   served tie       ' + JSON.stringify(servedTie));
 }
-/* EQUAL VISITS AS WELL AS EQUAL REWARD, WHICH IS WHAT MAKES THIS A TIE AT ALL: the optimism term is
-   `1/(visits+1)`, so two items of the same emit-per-visit at DIFFERENT visit counts do not tie — they are
-   correctly separated by how much each has already been tried, which is the term doing its job. */
-{
-  const P = pop({ idx: idxOf(row('k1', 'https://c.test/', 2, 2), row('k2', 'https://d.test/', 2, 2)) });
-  servedTie = B._bestCandidate(P).census;
-  must(servedTie.candWMax === servedTie.candWMin,
-       'two served candidates of equal emit-per-visit tie as well', servedTie);
-  must(servedTie.candUnserved === 0 && servedTie.candVisMax > 0,
-       'and the census says THIS tie stands above items with history', servedTie);
-}
-must((entryTie.candWMax === entryTie.candWMin) && (servedTie.candWMax === servedTie.candWMin) &&
-     ((entryTie.candVisMax === 0) !== (servedTie.candVisMax === 0)) &&
-     ((entryTie.candUnserved === entryTie.cands) !== (servedTie.candUnserved === servedTie.cands)),
-     'the SAME tie in the weight is two different readings — this is the whole discriminating power of the ' +
-     'census, and it is what a rank frozen at a constant would erase',
-     { entry: entryTie, served: servedTie });
-console.log('[level1]   entry-value tie  ' + JSON.stringify(entryTie));
-console.log('[level1]   served tie       ' + JSON.stringify(servedTie));
 
-/* AND THE DEFECT ITSELF, DRIVEN. A waiting document whose ADDRESS this store already knows must rank by that
-   address's own history — the fetches spent there and the surface they demonstrated — and not by the
-   unserved constant. This is the exact shape that stood here: every waiting document at 1.0 for ever. */
+/* A waiting document whose ADDRESS this store already knows ranks by that address's own account, not as never
+   served. */
 {
-  const known = row('k1', 'https://a.test/', 9, 3);
+  const known = row('k1', 'https://a.test/', 9, 3e6);
   const P = pop({ waiting: [job('https://a.test/'), job('https://z.test/')], idx: idxOf(known) });
   const cen = B._bestCandidate(P).census;
-  must(kindWMax(cen, 'doc') === B.frontierWeight(known) && kindWMax(cen, 'doc') > 1,
-       'a waiting document ranks by what this profile has already spent and learned AT ITS ADDRESS — a ' +
-       '`candDocWMax` of exactly 1.0 beside a known address is the frozen constant back again', cen);
-  must(cen.candVisMax === known.visits && cen.candUnserved === 1,
-       'the census reports the history that produced that rank, so the number is checkable rather than ' +
-       'merely non-constant', cen);
+  must(kindWMax(cen, 'doc') === B.level1Weight(known, totalOf(P)),
+       'a waiting document ranks by what this profile has already spent and learned AT ITS ADDRESS', cen);
+  must(cen.candSvcMax === known.serviceUs && cen.candUnserved === 1,
+       'the census reports the service that produced that rank, beside the one never-served address', cen);
   console.log('[level1]   doc by history   ' + JSON.stringify(cen));
 }
 
@@ -273,24 +282,24 @@ console.log('[level1] ── the weight that leaves the order ──');
    worth. Each exclusion row is driven at least once here: a row nobody has ever produced is a row nobody
    knows works, and every one of them is a place a weight can leave the order in silence. */
 {
-  const held = row('k1', 'https://a.test/', 9, 3);
+  const held = row('k1', 'https://a.test/', 9, 3e6);
   const P = pop({ waiting: [job('https://a.test/')], idx: idxOf(held) });
   const cen = B._bestCandidate(P).census;
   must(cen.exclLive === 1 && kindPop(cen, 'cold') === 0,
        'a residue whose address a waiting document holds leaves the cold order', cen);
-  must(kindWMax(cen, 'doc') === B.frontierWeight(held),
+  must(kindWMax(cen, 'doc') === B.level1Weight(held, totalOf(P)),
        'and the document that excluded it carries exactly the weight that left', cen);
   console.log('[level1]   exclLive         ' + JSON.stringify(cen));
 }
 {
-  const r1 = row('k1', 'https://a.test/', 4, 2);
+  const r1 = row('k1', 'https://a.test/', 4, 2e6);
   const cen = B._bestCandidate(pop({ resident: [eng('https://b.test/', 'k1')], idx: idxOf(r1) })).census;
   must(cen.exclHeld === 1 && kindPop(cen, 'cold') === 0 && cen.cands === 0,
        'a residue an instance already holds by KEY is not a candidate for a second instance', cen);
   console.log('[level1]   exclHeld         ' + JSON.stringify(cen));
 }
 {
-  const cen = B._bestCandidate(pop({ idx: idxOf(row('k1', 'https://a.test/', 4, 2, { stranded: true })) })).census;
+  const cen = B._bestCandidate(pop({ idx: idxOf(row('k1', 'https://a.test/', 4, 2e6, { stranded: true })) })).census;
   must(cen.exclStranded === 1 && cen.cands === 0,
        'a stranded residue has no bytes to build an instance over, so it is excluded and COUNTED', cen);
   console.log('[level1]   exclStranded     ' + JSON.stringify(cen));
@@ -304,7 +313,7 @@ console.log('[level1] ── the weight that leaves the order ──');
 }
 {
   const cen = B._bestCandidate(pop({ seeds: seedsOf('https://a.test/admin'),
-                                     idx: idxOf(row('k1', 'https://a.test/admin', 3, 1)) })).census;
+                                     idx: idxOf(row('k1', 'https://a.test/admin', 3, 1e6)) })).census;
   must(cen.exclSeedParked === 1 && kindPop(cen, 'seed') === 0 && kindPop(cen, 'cold') === 1,
        'a declared route this profile already holds a residue for is admitted as THAT residue, once', cen);
   console.log('[level1]   exclSeedParked   ' + JSON.stringify(cen));
@@ -358,15 +367,15 @@ console.log('[level1] ── hostSchedule, driven with mock engines ──');
   const poolArr = [];
   const e1 = { state: 'hot', w: 5, _readyP: null };
   poolArr.push(e1);
-  const asked = pop({ waiting: [job('https://a.test/')],
-                      idx: idxOf(row('k1', 'https://c.test/', 6, 3)) });
+  /* Served rows only: an unserved candidate would spend the round on its admission (the `admitted` arm). */
+  const asked = pop({ idx: idxOf(row('k1', 'https://c.test/', 6, 3e6)) });
   let admits = 0, steps = 0;
   const ops = {
     weight: (e) => e.w,
+    serviceTotal: () => 0,
     /* THE ADMISSION ASKS THE ORDER ON THE FIRST ROUND AND ANSWERS THE POSITIVE `null` AFTERWARDS — the two
        shapes hostSchedule asserts at the seam, both driven. */
     admit: async () => (admits++ === 0 ? B._bestCandidate(asked).census : null),
-    setFloor: async () => {},
     /* AND THE EVICTION ASKS IT AGAIN IN THAT SAME ROUND, WITHOUT EVICTING — which is `candAsk === 2`, the
        state an assert that the two arms are exclusive would have fired on. */
     evictee: async () => (admits === 1 ? { evict: null, cand: B._bestCandidate(asked).census }
@@ -434,7 +443,67 @@ console.log('[level1] ── hostSchedule, driven with mock engines ──');
   for (const r of rounds) console.log('[level1]   round ' + r.round + '  ' + JSON.stringify(r));
 }
 
+console.log('[level1] ── the pick: new targets first, and the leader keeps the thread ──');
+
+/* A ROUND WHOSE ADMISSION OFFERED A NEVER-SERVED ITEM SPENDS ITS ADVANCE ON THAT ADMISSION, and a round that
+   steps a served engine beside one aborts. A yielded engine that outranks every hot one is waited for. */
+async function drive(poolArr, ops) {
+  const seen = [];
+  let published;
+  Object.defineProperty(ZONE, '_level1', { configurable: true, get: () => published,
+                                           set: (v) => { published = v; seen.push(v); } });
+  let died = null;
+  try { await B.hostSchedule(poolArr, ops); } catch (e) { died = e; }
+  delete ZONE._level1;
+  return { seen, died };
+}
+const baseOps = (poolArr, o) => Object.assign({
+  weight: (e) => e.w, serviceTotal: () => 0, admit: async () => null,
+  evictee: async () => ({ evict: null, cand: null }), requestPark: async () => {}, release: async () => {},
+  step: async () => 0, serviceFetch: async () => {},
+  finish: async (e) => { const i = poolArr.indexOf(e); if (i >= 0) poolArr.splice(i, 1); },
+}, o);
+{
+  const poolArr = [{ state: 'hot', w: 5, _readyP: null }];
+  const unserved = pop({ waiting: [job('https://n.test/')] });
+  let admits = 0, stepped = 0;
+  const ops = baseOps(poolArr, { admit: async () => (admits++ === 0 ? B._bestCandidate(unserved).census : null),
+                                 step: async () => { stepped++; return 0; } });
+  const { seen, died } = await drive(poolArr, ops);
+  must(died === null && seen[0].rAdmitted === 1 && seen[0].hot === 0 && stepped === 1,
+       'the round whose admission seated a never-served item stepped nothing; the next round stepped',
+       died ? String(died.message || died) : seen);
+}
+{
+  const poolArr = [{ state: 'hot', w: 5, _readyP: null }];
+  const unserved = pop({ waiting: [job('https://n.test/')] });
+  const ops = baseOps(poolArr, { evictee: async () => ({ evict: null, cand: B._bestCandidate(unserved).census }) });
+  const { died } = await drive(poolArr, ops);
+  must(died !== null && !!died.apiclientFatal,
+       'stepping a served engine while the order this round asked held a never-served item aborts');
+}
+{
+  /* B yields and its service round is in flight; it outranks A, so the round waits for B rather than
+     deepening A, and B takes the next slice. */
+  const poolArr = [];
+  const A = { state: 'hot', w: 1, name: 'A', _readyP: null };
+  const Bk = { state: 'hot', w: 9, name: 'B', _readyP: null };
+  poolArr.push(A, Bk);
+  const order = [];
+  let n = 0;
+  const ops = baseOps(poolArr, {
+    step: async (e) => { order.push(e.name); return ++n >= 3 ? 0 : 2; },
+    serviceFetch: () => new Promise((res) => setTimeout(res, 5)),
+  });
+  /* hostSchedule sets `state = "hot"` when the round lands; a finished engine leaves the pool. */
+  const { died } = await drive(poolArr, ops);
+  must(died === null && order[0] === 'B' && order[1] === 'B',
+       'the leader keeps the thread across its own service round instead of a lesser document deepening',
+       died ? String(died.message || died) : order);
+}
+
 console.log('[level1] ── verdict ──');
+console.log('[level1]   ' + restoresRefused + ' load-time IndexedDB restore(s) this realm cannot perform');
 console.log('[level1]   ' + checks + ' relation(s) checked over the shipped `self._level1`, ' +
             failures + ' broken');
 if (failures) {
@@ -443,3 +512,5 @@ if (failures) {
   process.exit(1);
 }
 console.log('[level1] OK');
+/* The zone's MessageChannel (bridge.js's macrotask source) holds the event loop open. */
+process.exit(0);

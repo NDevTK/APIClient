@@ -1103,12 +1103,8 @@ typedef struct {
      * charge is pure penalty: a served candidate ranks below an unserved one at the rate FLOW_AGE_RATE names.
      * Aging is absolute, while the scheduler's demotion of a monopolizer is comparative. flow.c's
      * flow_arrive_at_virtual_time applies SFQ's `max{v(t), F_prev}` to from-baseline entries as a continuing
-     * relation, so a created document or candidate is not placed ahead of the backlog.
-     * Named residual. Not covered: the aging term itself is not relative to the frontier, so engine_top_weight
-     * (Level 1) falls one point per second of unproductive CPU without bound. Next diff builds: a virtual-time
-     * frame of reference for the aging term. Absence shows as: a mature document permanently outranked by every
-     * newly booted page once it passes `(reward + 1)` seconds of silence; `svc_min`/`svc_fam_min` measure it.
-     * Every field of this struct is emitted; flow_wfq_census's accounting assertion keeps that true. */
+     * relation, so a created document or candidate is not placed ahead of the backlog. These weights order one
+     * document's flows only: Level 1 ranks documents in the trusted zone by value per CPU-second. Every field of this struct is emitted; flow_wfq_census's accounting assertion keeps that true. */
     /* The fitness term's range (@S distance, added by flow_weight). Its floor is the constant 0: a flow with no
        payload has no ladder and both fitness writers refuse to record one, so [0, dist_max] is the range. With
        `cands: 0` it is 0 by construction, which is a fact about the run's @S population. */
@@ -1417,8 +1413,8 @@ long flow_plateau_runs(void);
 long flow_plateau_held_idle(void);
 
 /* The highest-priority flow in the frontier, or NULL if empty: every member, whether or not it can currently
-   make progress. It answers the host's Level-1 question (this document's best weight) and the census's; the
-   scheduler's own pick is flow_next_to_run below. Does not remove it. */
+   make progress. It answers the census's question; the scheduler's own pick is flow_next_to_run below. Does not
+   remove it. */
 Flow *flow_best(void);
 
 /* Which flow should hold the thread, given the one that holds it now (NULL when nobody does): the dispatch
@@ -1428,7 +1424,7 @@ Flow *flow_best(void);
  *     hook's value clause makes, so a tie never swaps two COW deltas.
  * NULL means nothing can run: the frontier is empty or every member waits on the host (the stall, decided by
  * asking each member). `why` names the asker, because the dispatch loop (per step) and the host's Level-1 poll
- * (engine_top_weight) pass identical arguments at different cadences, and FLOW_SCANS counts them apart. */
+ * (engine_runnable) pass identical arguments at different cadences, and FLOW_SCANS counts them apart. */
 Flow *flow_next_to_run(const Flow *incumbent, FlowScan why);
 
 /* The best flow that could use the thread other than `cur`: what the preempt hook compares the running flow
@@ -1522,9 +1518,13 @@ uint64_t flow_running_switches(void);
 /* The running flow (scheduler-set). Detectors credit emitted value to it; the scheduler ages it. */
 void  flow_set_running(Flow *f);
 Flow *flow_running(void);
-void  flow_credit_emit(double v);
 /* A just-seeded drive's product count (flow.h's `orphan_seen`), re-keyed and raised as a rank change. */
-void  flow_set_orphan_seen(Flow *f, int64_t seen);   /* a new @H/@S from the running flow: raise reward, reset aging */
+void  flow_set_orphan_seen(Flow *f, int64_t seen);
+void  flow_credit_emit(double v);   /* a new @H/@S from the running flow: raise reward, reset aging */
+/* The sum of the values flow_credit_emit paid to an account over this instance's lifetime: the document's novel
+   value as Level 1 ranks it (the trusted zone divides it by engine_service_us). Raised on the paid arm only, so a
+   credit made on host time with no flow to pay is not in it. Never falls. */
+double flow_credit_paid_value(void);
 /* Where this candidate's own bytes stand on the @S ladder: the fitness term of flow_weight, composed from the
    rung fields rather than stored, `(cand_replay + cand_surv + cand_rung) / FLOW_RUNGS_N` in [0,1], and exactly
    0 for a flow that is not a candidate (both fitness writers assert they are asked only of one). */

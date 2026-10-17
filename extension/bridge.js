@@ -974,10 +974,13 @@ function clusterKeyOf(msg) {
    cluster emitted, which is what makes a resumed or second document's reward novelty against all of them.
    v5 adds `bodies` (lib/body-store.js): an entry names its document by digest (`doc`) and the bytes are stored
    once, counted by the entries naming them. Entries an older build wrote inline are converted once, after the
-   open, by frontierBodiesReady, since a digest cannot be computed inside the upgrade transaction. */
+   open, by frontierBodiesReady, since a digest cannot be computed inside the upgrade transaction.
+   v6 replaces an entry's `emit`/`visits` with its Level-1 account, `paid` and `serviceUs` (see level1Weight).
+   A v5 entry's counts are in another currency and its CPU of service was never recorded, so the account it
+   carries forward is the unserved one: its recipes are kept, and the order hands it a first quantum. */
 function idbOpen() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open("apiclient-frontier", 5);
+    const r = indexedDB.open("apiclient-frontier", 6);
     r.onupgradeneeded = (ev) => {
       const db = r.result;
       if (ev.oldVersion < 2) {   // v1's entry grammar cannot state its document's response; it is not resumable
@@ -987,6 +990,18 @@ function idbOpen() {
       if (ev.oldVersion < 3 && !db.objectStoreNames.contains("prefs")) db.createObjectStore("prefs");
       if (ev.oldVersion < 4 && !db.objectStoreNames.contains("novelty")) db.createObjectStore("novelty");
       if (ev.oldVersion < 5 && !db.objectStoreNames.contains("bodies")) db.createObjectStore("bodies");
+      if (ev.oldVersion >= 2 && ev.oldVersion < 6) {
+        const c = r.transaction.objectStore("frontier").openCursor();
+        c.onsuccess = () => {
+          const cur = c.result;
+          if (!cur) return;
+          const e = cur.value;
+          delete e.emit; delete e.visits;
+          e.paid = LEVEL1_UNSERVED.paid; e.serviceUs = LEVEL1_UNSERVED.serviceUs;
+          cur.update(e);
+          cur.continue();
+        };
+      }
     };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
@@ -1142,7 +1157,7 @@ function egressPolicyPersist() {
   return frontierPrefPut("exploreOrigins", self.safeFetchEgressTable());
 }
 /* A frontier entry: { key: address|bundle, sourceUrl, topLevelUrl, origin, responseHeaders, html, code,
-   recipes, emit, visits, credentialed, provenance }, plus `shed`/`stranded` for a shed entry. Rehydration
+   recipes, paid, serviceUs, credentialed, provenance }, plus `shed`/`stranded` for a shed entry. Rehydration
    rebuilds the document from (html, code) and resumes the recipes, so a parked flow on any site can advance
    later even when that page is not open. */
 /* The document half of a cold-tier entry, one speller for the store's writer and its reader. Recipes replay
@@ -1290,7 +1305,7 @@ function frontierDoc(e, when) {
    A share is not a cap: it decides how much finished work is stored rather than re-derived, never whether
    work happens. No flow, recipe or exploration is dropped; frontier membership is untouched at every share.
    There is no eviction policy beside the WFQ: the store keeps the document half of the highest-weight entries
-   (by `frontierWeight`, the same function `_hostOps.evictee` and admission ask) until the share is spent. The
+   (by `level1Weight`, the same function `_hostOps.evictee` and admission ask) until the share is spent. The
    store holds no clock, so the order cannot become a recency cap. Nothing polls or sweeps.
    A shed entry keeps recipes, counters, address, principal and policy: it resumes on the next visit as before
    (engineRoot seeds from `prior.recipes`) and cold-rehydrates by fetching its document back, so the
@@ -1354,7 +1369,7 @@ const _frontierStats = { shed: 0, rederived: 0, stranded: 0, docBytes: 0, docByt
 /* Residency, restored at the one door that can break it. "The stored document halves fit the share" is an
    invariant of the store and only `frontierPut` can falsify it, so it is re-established there; there is no
    pressure loop or trigger.
-   Sort by `frontierWeight`, keep documents from the top while the share lasts, shed the rest; within the tail
+   Sort by `level1Weight`, keep documents from the top while the share lasts, shed the rest; within the tail
    the re-derivable leave first. If what remains over the line is all unrecoverable, residency stops and the
    overage is reported: a disk preference is not worth the only copy of work nobody can recompute. */
 async function frontierResidency() {
@@ -1375,8 +1390,11 @@ async function frontierResidency() {
   _frontierStats.docBytesNamed = named;
   _frontierStats.overShare = 0;
   if (total <= share) return;
-  /* Highest weight first, so the share is spent on what the one order values most. */
-  rows.sort((a, b) => frontierWeight(b) - frontierWeight(a));
+  /* Highest weight first, so the share is spent on what the one order values most. A never-served row weighs
+     +Infinity, so the comparator compares rather than subtracts. */
+  const totalUs = level1ServiceTotal(_pool, _frontierIndex);
+  const w = new Map(rows.map((row) => [row, level1Weight(row, totalUs)]));
+  rows.sort((a, b) => (w.get(b) > w.get(a)) ? 1 : (w.get(b) < w.get(a)) ? -1 : 0);
   /* The resident set is a strict prefix of the order: the first entry that does not fit ends it. A best fit
      would keep a small low-weight document over a large high-weight one, a second policy nobody chose. */
   /* A body a kept entry already holds costs the next entry naming it only its inventory. */
@@ -1418,7 +1436,7 @@ async function frontierResidency() {
       /* `provenance` goes through frontierProvenance, so an entry predating the field leaves stating the word
          its population supports. */
       const shed = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
-                     responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit, visits: e.visits,
+                     responseHeaders: e.responseHeaders, recipes: e.recipes, paid: e.paid, serviceUs: e.serviceUs,
                      credentialed: e.credentialed, provenance: frontierProvenance(e), arrival: frontierArrival(e),
                      sandbox: frontierSandbox(e), addressSpace: frontierAddressSpace(e), shed: true };
       frontierRecord(shed, "was shed to the configured share");
@@ -1442,19 +1460,8 @@ async function frontierResidency() {
    their document. */
 function frontierRecord(e, when) {
   frontierPlace(e, when);
-  /* The two numbers the Level-1 order is made of, asserted at the door they are written through, not only at
-     the read (`frontierWeight`), where any non-negative number passes. A stored `visits` is at least one: an
-     entry exists because a run finished. `visits: 0` is legitimate only for a waiting work item
-     (`FRONTIER_UNSERVED`), which is never stored. */
-  DCHECK(typeof e.emit === "number" && e.emit >= 0 && Number.isFinite(e.emit),
-         "a cold-tier entry " + when + " with no emitted-value count (`" + String(e.emit) + "`) — it is the " +
-         "reward half of the ONE WFQ order at Level-1, so an entry without it is ranked by its optimism bonus " +
-         "alone and a productive parked frontier is admitted as one that has never found anything");
-  DCHECK(typeof e.visits === "number" && Number.isInteger(e.visits) && e.visits >= 1,
-         "a cold-tier entry " + when + " with no admission count (`" + String(e.visits) + "`) — a stored " +
-         "entry exists because a run finished, so its visits are at least one, and this is the divisor that " +
-         "amortises the demonstrated surface over the fetches spent on it; without it a document that has " +
-         "been re-fetched fifty times ranks exactly like one nobody has ever opened");
+  /* The account the Level-1 order is made of, asserted at the door it is written through. */
+  level1AccountCheck(e, "a cold-tier entry " + when);
   DCHECK((e.doc !== undefined) !== (e.shed === true),
          "a cold-tier entry " + when + " claiming `shed=" + String(e.shed) + "` while its document half is " +
          (e.doc === undefined ? "absent" : "present") + " — the two are complements, and a record that " +
@@ -1656,39 +1663,59 @@ async function frontierAll() {
     return await new Promise((res, rej) => { const t = db.transaction("frontier").objectStore("frontier").getAll(); t.onsuccess = () => res(t.result || []); t.onerror = () => rej(t.error); });
   } catch (e) { RETHROW_FATAL(e); frontierFail("scan", e); return []; }
 }
-/* The Level-1 weight of a work item that is not resident (a parked frontier, or a document waiting for an
-   instance). It shares the engine's WFQ policy (value plus an exploration bonus, never drop work) in the
-   engine's own currency: solver/flow.c gives a never-run flow its reward plus 1.0, and an unserved item here
-   is 0 + 1/(0+1) = 1.0, so the two levels form one order. There is no CPU aging, since nothing is running.
-   `emit` is the last run's demonstrated surface (one emission one point, as flow_credit_emit counts), so
-   `emit / visits` is the mean of new findings per admission and an unproductive document sinks. A zero-visit
-   row states "never served at this level", which is what a waiting document is. */
-const FRONTIER_UNSERVED = { emit: 0, visits: 0 };
-function frontierWeight(row) {
-  DCHECK(row && typeof row.emit === "number" && row.emit >= 0 && row.emit === row.emit,
-         "a Level-1 work item was ranked with no emission count — `emit` is written by every frontierPut and " +
-         "is the reward half of the one WFQ order, so an absent one would rank this item by its optimism " +
-         "bonus alone and report a productive parked frontier as one that has never found anything");
-  DCHECK(typeof row.visits === "number" && row.visits >= 0 && Number.isInteger(row.visits),
-         "a Level-1 work item was ranked with no service count — `visits` is both the divisor of the reward " +
-         "and the decay of the optimism bonus, so an absent one makes an item that has been rehydrated a " +
-         "hundred times indistinguishable from one that has never been tried");
-  DCHECK(row.visits > 0 || row.emit === 0,
-         "a work item that has never been served carries emissions — nothing can have emitted before it ran, " +
-         "so the rate below would be a total masquerading as a per-visit expectation");
-  return frontierReward(row) + 1 / (row.visits + 1);     // reward + optimism; no aging (nothing is burning CPU)
+/* Level 1: one order over documents, hot, parked and waiting alike, by UCB1 (Auer, Cesa-Bianchi and Fischer,
+   "Finite-time Analysis of the Multiarmed Bandit Problem", 2002) in one currency. A document's account is
+   `paid`, the novel value its instances' flows were paid (main.c's qjs_level1_account), and `serviceUs`, the
+   thread measure of the slices it was given; `totalUs` is the service of every document this zone knows. With C
+   and N those two in CPU-seconds the weight is
+     paid / C + LEVEL1_C * sqrt(ln(1 + N) / C),   and +Infinity at C = 0,
+   so a document never served takes its first quantum before any served one deepens. The unit is the CPU-second
+   the rate is priced in. ln(1 + N) stands for UCB1's ln n because N is measured service rather than a count of
+   pulls, below one second early in a session where ln N is negative; the two agree as N grows. LEVEL1_C is
+   UCB1's sqrt(2): a document's bonus then falls below a leader's rate lead r after about 2 ln(1 + N) / r^2
+   CPU-seconds, so a barren new document costs seconds against a leader making a finding per CPU-second, and a
+   leader whose rate decays loses the thread to the bonus. A slice the host's clock measures as 0 leaves the
+   document unserved; on emscripten that clock is coarse wall time inside the step (solver/quantum.h), and the
+   expected charge over many slices is still their duration. */
+const LEVEL1_C = Math.SQRT2;
+const LEVEL1_UNSERVED = Object.freeze({ paid: 0, serviceUs: 0 });
+function level1AccountCheck(a, what) {
+  DCHECK(a && typeof a.paid === "number" && Number.isFinite(a.paid) && a.paid >= 0,
+         what + " carries no Level-1 value (`" + String(a && a.paid) + "`) — `paid` is a sum of positive " +
+         "credits, and without it the order ranks this document by its optimism alone");
+  DCHECK(Number.isSafeInteger(a.serviceUs) && a.serviceUs >= 0,
+         what + " carries no Level-1 service (`" + String(a.serviceUs) + "`) — `serviceUs` is the divisor of " +
+         "the rate and of the bonus, and an absent one ranks a document served for an hour as a new one");
 }
-/* The reward term alone, named so the Level-1 census can report which half of the weight ordered the pick. A
-   spread over the sum cannot tell a rank frozen at a constant from the legitimate tie of an empty store, where
-   every candidate is unserved at 1.0. One definition, read by the weight and by the census. */
-function frontierReward(row) {
-  return row.visits ? row.emit / row.visits : 0;         // expected emit per admission — future productivity
+function level1Weight(a, totalUs) {
+  level1AccountCheck(a, "a ranked Level-1 work item");
+  DCHECK(Number.isSafeInteger(totalUs) && totalUs >= a.serviceUs,
+         "the Level-1 service total (" + totalUs + " us) is below one document's own service (" + a.serviceUs +
+         " us) — the total is summed over every document this zone knows, so a member outside it was ranked");
+  if (a.serviceUs === 0) return Infinity;
+  const c = a.serviceUs / 1e6;
+  const w = a.paid / c + LEVEL1_C * Math.sqrt(Math.log1p(totalUs / 1e6) / c);
+  DCHECK(Number.isFinite(w), "a served Level-1 work item weighed " + w + " — both terms are finite over a " +
+                             "positive service, so the arithmetic above was given something else");
+  return w;
+}
+/* The rate term alone, which the Level-1 census reports beside the weight; null for a document never served. */
+function level1Rate(a) {
+  return a.serviceUs === 0 ? null : a.paid / (a.serviceUs / 1e6);
+}
+/* N: each cold row's stored service plus each instance's own service since it booted (a resumed instance's
+   stored share is its row, so nothing is counted twice). An instance that has not reported has served nothing. */
+function level1ServiceTotal(resident, idx) {
+  let n = 0;
+  for (const row of idx.values()) n += row.serviceUs;
+  for (const e of resident) if (e.level1 !== undefined) n += e.level1.serviceUs;
+  return n;
 }
 /* The cold tier's ranking view, a projection of the store. The Level-1 order asks two numbers of a parked
    frontier on every scheduler round, and `getAll` would deserialize every parked document to answer them.
    This zone is the store's only writer and frontierPut updates the view on its way through, so a row and an
    entry cannot disagree; it is built once per zone lifetime from the store. */
-const _frontierIndex = new Map();   // key -> frontierRow(entry): { key, sourceUrl, emit, visits, shed, stranded, bytes, rederivable }
+const _frontierIndex = new Map();   // key -> frontierRow(entry): { key, sourceUrl, paid, serviceUs, shed, stranded, bytes, rederivable }
 let _frontierIndexBuilt = false;
 function frontierRow(e) {
   DCHECK(typeof e.key === "string" && e.key !== "",
@@ -1702,7 +1729,7 @@ function frontierRow(e) {
      means): `shed` has given its document up, `stranded` failed to re-derive it and is no longer a cold
      candidate (only a visit resumes it). The two residency numbers are computed here too, so residency never
      opens an entry to learn its size. */
-  return { key: e.key, sourceUrl: e.sourceUrl, emit: e.emit, visits: e.visits,
+  return { key: e.key, sourceUrl: e.sourceUrl, paid: e.paid, serviceUs: e.serviceUs,
            shed: e.shed === true, stranded: e.stranded === true,
            bytes: frontierDocBytes(e), rederivable: frontierRederivable(e),
            doc: e.shed === true ? null : e.doc, docBytes: e.shed === true ? 0 : e.docBytes };
@@ -1775,8 +1802,8 @@ async function frontierRederive(e) {
     return { bytes: r.body, headers: r.headers };
   }
   const strandedEntry = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
-                          responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit,
-                          visits: e.visits, credentialed: e.credentialed, provenance: frontierProvenance(e),
+                          responseHeaders: e.responseHeaders, recipes: e.recipes, paid: e.paid,
+                          serviceUs: e.serviceUs, credentialed: e.credentialed, provenance: frontierProvenance(e),
                           arrival: frontierArrival(e), sandbox: frontierSandbox(e),
                           addressSpace: frontierAddressSpace(e), shed: true, stranded: true };
   frontierRecord(strandedEntry, "was stranded");
@@ -1786,13 +1813,13 @@ async function frontierRederive(e) {
   return null;
 }
 /* ────────────────────────────────────────────────────────────────────────────────────────────────────
-   Host-level WFQ (Level 1 of the one attention): interleave the live document engines by value of
-   information, in slices, so no document or deep path monopolizes CPU. Each agent cluster is one wasm
-   instance (SECURITY.md: one per (browsing-context group, origin)). The engine exposes its best flow's weight
-   (qjs_top_weight) and yields hot after a slice (qjs_step -> 2); the host ranks all live engines by that
-   weight, advances the winner one slice and re-ranks, the same WFQ the engine runs over flows within a
-   document. The ranking does not ask: the weight and the working set are recorded by engineRecordFacts at the
-   end of every round, since an instance behind the frame boundary answers only by message.
+   Level 1 of the one attention: interleave the live document engines by novel value per CPU-second, in
+   slices, so no document or deep path monopolizes CPU. Each agent cluster is one wasm instance (SECURITY.md:
+   one per (browsing-context group, origin)). The engine states its account (qjs_level1_account) and yields hot
+   at the CPU quantum (qjs_step -> 2); the host ranks all live engines and every waiting and parked document by
+   one function (level1Weight), advances the winner one slice and re-ranks. The ranking does not ask: the
+   account and the working set are recorded by engineRecordFacts at the end of every round, since an instance
+   behind the frame boundary answers only by message.
    RAM is the floor: under HOT_RAM_BUDGET of summed working set new engines are admitted; at the floor
    `_hostOps.evictee` picks a resident engine to park (qjs_request_park, recipes to IndexedDB), and the cold
    tail is rehydrated into this same pool by admission. An engine awaiting a reply is `fetching` and skipped
@@ -1893,12 +1920,11 @@ const CAND_SHAPES = {
   map:  (v) => v !== null && typeof v === "object" && typeof v.get === "function" &&
                typeof v.keys === "function" && typeof v.values === "function" && typeof v.size === "number",
 };
-/* The spread rows, readings over the ranked set as a whole, declared once because they are attached at the
-   member that earns them and asserted at the record. A spread over the weight can show that every candidate
-   ties but not why: an empty store ties every unserved candidate at 1.0 correctly, while an address admitted n
-   times still at 1.0 is a frozen rank. `candVisMax` and `candUnserved` separate the two, and
-   `candRewardMax`/`candRewardMin` show whether the reward term orders anything. Each row exists only over a
-   non-empty ranked population; `candUnserved` is a count and lives with the populations.
+/* The spread rows, readings over the served members of the ranked set, declared once because they are attached
+   at the member that earns them and asserted at the record. A never-served member weighs +Infinity, which no
+   JSON row can carry, so it is counted in `candUnserved` and folded into no spread: each spread row exists
+   exactly when a served member was ranked. `candRateMax`/`candRateMin` show whether the rate term orders
+   anything, and `candSvcMax` how much service the most-served candidate has had.
    Each entry writes its row with a literal key, so engine/fieldgate.mjs and grep can see the writer; the
    DCHECK after the fold stops an entry naming one row and writing another. */
 const CAND_SPREAD = [
@@ -1906,12 +1932,12 @@ const CAND_SPREAD = [
     fold: (c, t) => { if (!("candWMax" in c) || t.w > c.candWMax) c.candWMax = t.w; } },
   { row: "candWMin",
     fold: (c, t) => { if (!("candWMin" in c) || t.w < c.candWMin) c.candWMin = t.w; } },
-  { row: "candRewardMax",
-    fold: (c, t) => { if (!("candRewardMax" in c) || t.reward > c.candRewardMax) c.candRewardMax = t.reward; } },
-  { row: "candRewardMin",
-    fold: (c, t) => { if (!("candRewardMin" in c) || t.reward < c.candRewardMin) c.candRewardMin = t.reward; } },
-  { row: "candVisMax",
-    fold: (c, t) => { if (!("candVisMax" in c) || t.visits > c.candVisMax) c.candVisMax = t.visits; } },
+  { row: "candRateMax",
+    fold: (c, t) => { if (!("candRateMax" in c) || t.rate > c.candRateMax) c.candRateMax = t.rate; } },
+  { row: "candRateMin",
+    fold: (c, t) => { if (!("candRateMin" in c) || t.rate < c.candRateMin) c.candRateMin = t.rate; } },
+  { row: "candSvcMax",
+    fold: (c, t) => { if (!("candSvcMax" in c) || t.serviceUs > c.candSvcMax) c.candSvcMax = t.serviceUs; } },
 ];
 /* The zeroed reading: the one statement of which rows a candidate walk produces. Counts start at 0 because a
    zero count is a reading; spread rows are absent because an extremum over nothing is not a number, and
@@ -1922,34 +1948,29 @@ function _candCensus() {
   for (const k of CAND_KINDS) cen[k.pop] = 0;
   return cen;
 }
-/* The one site that ranks a candidate: it takes the row and returns the weight, so a kind's total, population,
-   extrema and the weight the pick compares cannot part, and the census reports terms of the number the pick
-   used. Spread rows appear on the first member, enforcing the record's presence rule where numbers are made. */
-function _candRanked(cen, kind, row) {
+/* The one site that ranks a candidate: it takes the account and the service total and returns the weight, so a
+   kind's total, population, extrema and the weight the pick compares cannot part. Spread rows and a kind's
+   `wMax` appear on its first served member. */
+function _candRanked(cen, kind, row, totalUs) {
   const d = CAND_KINDS.find((k) => k.kind === kind);
   DCHECK(d !== undefined,
          "the Level-1 candidate walk ranked a work item of a kind that is not declared (`" + kind + "`) — " +
          "CAND_KINDS is what the record's accounting, the popup's columns and the admission's dispatch are " +
-         "all read from, so a kind ranked outside it is a work item that would be counted into the total, " +
-         "accounted for by no population, and built by whichever admission arm happened to be the fallback");
-  const t = { w: frontierWeight(row), reward: frontierReward(row), visits: row.visits };
-  DCHECK(Number.isFinite(t.w) && Number.isFinite(t.reward),
-         "the Level-1 candidate walk ranked a work item at a non-finite weight or reward — both are " +
-         "`frontierWeight`'s own terms over an emission count and a visit count, so a non-finite one is that " +
-         "weight's invariants having been bypassed, and it would win this order against every real number");
+         "all read from, so a kind ranked outside it would be counted into the total and accounted for by no " +
+         "population");
+  const w = level1Weight(row, totalUs);
   cen[d.pop]++;
   cen.cands++;
-  if (t.visits === 0) cen.candUnserved++;
+  if (w === Infinity) { cen.candUnserved++; return w; }
+  const t = { w: w, rate: level1Rate(row), serviceUs: row.serviceUs };
   if (!(d.wMax in cen) || t.w > cen[d.wMax]) cen[d.wMax] = t.w;
   for (const s of CAND_SPREAD) {
     s.fold(cen, t);
     DCHECK(s.row in cen,
            "a Level-1 spread row (`" + s.row + "`) was declared and its own fold did not write it — the " +
-           "declaration is what `_level1Record` asserts the record's presence rule against and what says a " +
-           "reading was taken over the ranked set, so an entry naming one row and writing another leaves the " +
-           "named row absent over a non-empty population, which this census reads as `nothing was ranked`");
+           "record asserts each spread row present exactly when a served member was ranked");
   }
-  return t.w;
+  return w;
 }
 /* The population the order is taken over, composed in one place and handed in, so the Level-1 order (which
    exists only in this zone) can be asked over a population a driver supplies. It is a composer, not accessors:
@@ -1993,11 +2014,10 @@ function _bestCandidate(pop) {
   for (const e of resident) if (e.msg && e.msg.sourceUrl) live.add(e.msg.sourceUrl);
   /* What the store already knows about the waiting addresses, which is the rank a waiting document is
      entitled to. The key's bundle half is the engine's, so the host cannot know which residue a visit resumes,
-     but every row carries its `sourceUrl`: "this address was admitted n times and demonstrates F findings" is a
-     fact about the address being admitted. This is also where a document request's cost rides the order:
-     `visits` counts the fetches spent at the address and divides the reward, so a document cycle (A names B,
-     B names A) sinks instead of re-entering at 1.0 for ever. Nothing refuses a second fetch; the order only
-     prefers other work first. One pass over the index, only for the addresses in question. */
+     but every row carries its `sourceUrl`: "this address has been served C CPU-seconds for F of novel value" is
+     a fact about the address being admitted, so a document cycle (A names B, B names A) sinks by its rate
+     instead of re-entering as never served. Nothing refuses a second fetch; the order only prefers other work
+     first. One pass over the index, only for the addresses in question. */
   const waitingAddrs = new Set();
   for (const job of waiting)
     if (!(job.msg.frameId && _isRealOrigin(job.msg.origin))) waitingAddrs.add(job.msg.sourceUrl);
@@ -2008,12 +2028,12 @@ function _bestCandidate(pop) {
   if (waitingAddrs.size) for (const row of idx.values()) {
     if (!waitingAddrs.has(row.sourceUrl)) continue;
     const a = byAddress.get(row.sourceUrl);
-    /* Summed across the bundles served at one address: a pooled mean, "what one admission of this address has
-       been worth", weighted by the admissions each bundle received. */
-    if (a) { a.emit += row.emit; a.visits += row.visits; }
-    else byAddress.set(row.sourceUrl, { emit: row.emit, visits: row.visits });
+    /* Summed across the bundles served at one address: one account for the address, value over service. */
+    if (a) { a.paid += row.paid; a.serviceUs += row.serviceUs; }
+    else byAddress.set(row.sourceUrl, { paid: row.paid, serviceUs: row.serviceUs });
   }
   let best = null;
+  const totalUs = level1ServiceTotal(resident, idx);
   /* The reading is accumulated by the walk that picks: each `w` is counted once where it is computed. */
   const cen = _candCensus();
   for (const job of waiting) {
@@ -2022,13 +2042,12 @@ function _bestCandidate(pop) {
        order found nothing". */
     if (job.msg.frameId && _isRealOrigin(job.msg.origin)) { live.add(job.msg.sourceUrl); cen.exclSub++; continue; }
     live.add(job.msg.sourceUrl);
-    /* An address with no rows has never been served, which is what `FRONTIER_UNSERVED` states. */
+    /* An address with no rows has never been served, which is what `LEVEL1_UNSERVED` states. */
     const known = byAddress.get(job.msg.sourceUrl);
-    const w = _candRanked(cen, "doc", known !== undefined ? known : FRONTIER_UNSERVED);
+    const w = _candRanked(cen, "doc", known !== undefined ? known : LEVEL1_UNSERVED, totalUs);
     if (!best || w > best.w) best = { kind: "doc", job, w };
   }
-  /* Declared routes: the third kind, ranked by the same weight over the same index; its cost is one fetch,
-     priced by the weight's `visits` divisor. An address a live or waiting document holds leaves the order
+  /* Declared routes: the third kind, ranked by the same weight over the same index. An address a live or waiting document holds leaves the order
      (that document is its exploration) and is counted, so "no route declared" and "every route already being
      explored" differ. Nothing is dropped: the entry stays in `_seeds`. */
   for (const addr of seeds.keys()) {
@@ -2038,7 +2057,7 @@ function _bestCandidate(pop) {
        drains (frontierPut deletes an entry with empty recipes) the address is admitted again. */
     if (byAddress.get(addr) !== undefined) { cen.exclSeedParked++; continue; }
     /* What is left has never been served: no live holder, no waiting document, no stored row. */
-    const w = _candRanked(cen, "seed", FRONTIER_UNSERVED);
+    const w = _candRanked(cen, "seed", LEVEL1_UNSERVED, totalUs);
     if (!best || w > best.w) best = { kind: "seed", addr, w };
   }
   for (const row of idx.values()) {
@@ -2046,7 +2065,7 @@ function _bestCandidate(pop) {
       /* The exclusion moves the row's weight, it does not delete it: a parked entry and the tab holding its
          address are one work item (the tab's engine resumes the residue), so a waiting document at that address
          must have been ranked by the row's history. A row excluded because a live instance holds its address is
-         carried by that engine's `engineWeight` instead. */
+         carried by that engine's `engineWeight` instead (its stored account plus its own service). */
       DCHECK(!waitingAddrs.has(row.sourceUrl) || byAddress.has(row.sourceUrl),
              "a parked residue was taken out of the Level-1 order because a waiting document holds its " +
              "address, and that document was not ranked by it — the row's weight has left the order with " +
@@ -2058,7 +2077,7 @@ function _bestCandidate(pop) {
     /* A stranded residue has no bytes to build an instance over, so it is not a candidate; its recipes remain
        and the next visit resumes them through engineRoot's frontierGet. */
     if (row.stranded) { cen.exclStranded++; continue; }
-    const w = _candRanked(cen, "cold", row);
+    const w = _candRanked(cen, "cold", row, totalUs);
     if (!best || w > best.w) best = { kind: "cold", row, w };
   }
   /* `candDocWMax`, `candSeedWMax` and `candColdWMax` stay apart because the Level-1 question is which kind is
@@ -2787,7 +2806,7 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, inherited,
    pass the `hostClusterOf` check and both build: two heaps for one similar-origin window agent are
    unrepresentable (a node inserted across them, a closure neither can call). The second arrival finds the
    record and joins it. The record carries only what is known without asking the instance: `residentBytes`
-   and `topWeight` are absent until engineRecordFacts states them, and readers check `state` first. */
+   and `level1` are absent until engineRecordFacts states them, and readers check `state` first. */
 function engineReserve(cluster, docId, msg, referenced) {
   /* `_readyP` is null here and filled by engineCreate on the next line; a placeholder promise would settle at
      a different moment from the provisioning. The wait arm asserts it is present. */
@@ -3058,8 +3077,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          "DIFFERENT address (" + (prior && prior.sourceUrl) + " vs " + msg.sourceUrl + ") — the engine seeds " +
          "from recipes instead of a boot flow, so this document would be replayed along another one's " +
          "decision vectors and never explored from its own first script");
-  // Phase 2: seed the frontier, fresh or from parked recipes. The host sets a value yield floor per step (the
-  // runner-up engine's weight), so this engine yields when outranked rather than after a fixed slice.
+  // Phase 2: seed the frontier, fresh or from parked recipes. Each step is one slice, ended at the CPU quantum.
   /* The residue handed over, named before it is sent: solver/engine.c seeds from recipes or a boot flow and
      never both, so "" is this zone's own statement that nothing was resumed. */
   const _residue = (prior && prior.recipes) ? prior.recipes : "";
@@ -3719,28 +3737,24 @@ async function engineRequestPolicyVerdict(documentId, url) {
          "naming its directive — main.c's qjs_check_request_policy writes one of those");
   return { verdict, directive: directive === undefined ? "" : directive };
 }
-/* The Level-1 ranking's two facts (top-flow weight and working set), recorded at the end of every round this
-   zone has with an instance (seed, step, service), because an instance behind the frame boundary answers only
-   by message and there is no value to read on the line that ranks. hostSchedule ranks, advances the winner and
-   re-ranks, so the engine that just worked has the freshest numbers and one that did none has numbers that
-   cannot have moved.
-   There is no unvisited arm: solver/flow.c's flow_weight gives a never-run flow its reward plus the full 1.0
-   bonus and qjs_top_weight reports it, so Level 1 inherits Level 2's optimism (one WFQ at both levels);
-   qjs_top_weight DCHECKs `g_begun`, which qjs_begin sets. */
+/* The Level-1 ranking's facts (the instance's account and its working set), recorded at the end of every round
+   this zone has with an instance (seed, step, service), because an instance behind the frame boundary answers
+   only by message and there is no value to read on the line that ranks. hostSchedule ranks, advances the
+   winner and re-ranks, so the engine that just worked has the freshest numbers and one that did none has
+   numbers that cannot have moved. qjs_level1_account DCHECKs `g_begun`, which qjs_begin sets. */
 async function engineRecordFacts(eng) {
-  /* -Infinity is an answer: `engine_top_weight` is `flow_next_to_run(NULL) ? flow_weight(b) : -1.0/0.0`
-     (solver/engine.c), the engine's statement that no flow is runnable, and it sorts below every real weight
-     by arithmetic, so a drained engine ranks last and its next step retires it through DONE. NaN and +Infinity
-     are broken and asserted: every comparison against NaN is false (the top flow would never yield), and no
-     flow_weight produces +Infinity. */
-  const _rank = await eng.r.renderer.getTopWeight();
-  const w = _rank.weight;
-  DCHECK(Number.isFinite(w) || w === -Infinity,
-         "the engine answered a top-flow weight of " + w + " — a weight is either a finite number or the " +
-         "-Infinity that says its frontier holds no runnable flow, and NaN or +Infinity is neither: every " +
-         "Level-1 ranking comparison against a NaN is false, so the pool would pick by array order and call " +
-         "it value-of-information");
-  eng.topWeight = w;
+  const _rank = await eng.r.renderer.getLevel1Account();
+  const a = JSON.parse(_rank.account);
+  DCHECK(a && (a.runnable === 0 || a.runnable === 1),
+         "the engine's Level-1 account states no runnability (`" + _rank.account + "`) — it is the one fact of " +
+         "the frontier's order Level 1 reads, and without it a drained engine would be stepped for ever");
+  level1AccountCheck(a, "an instance's Level-1 account");
+  /* Both are lifetime counters of the instance, so a reading below the last one is a second instance answering
+     under this record or a counter that was reset. */
+  DCHECK(eng.level1 === undefined || (a.paid >= eng.level1.paid && a.serviceUs >= eng.level1.serviceUs),
+         "an instance's Level-1 account fell (" + JSON.stringify(eng.level1) + " then " + _rank.account + ") — " +
+         "`paid` and `serviceUs` only climb within one instance");
+  eng.level1 = { runnable: a.runnable === 1, paid: a.paid, serviceUs: a.serviceUs };
   /* The working set as the frame stated it on the call above: `workingSetBytes` is a declared reply field of
      every `content.mojom.Renderer` method, and only a call can grow the memory, so the reply just awaited is
      the freshest value. WASM memory is a whole number of 64 KiB pages. */
@@ -3751,20 +3765,23 @@ async function engineRecordFacts(eng) {
          "outside that is a view onto something other than this engine's memory");
   eng.residentBytes = b;
 }
-/* The Level-1 WFQ's one input, read off the record. The finite-or-`-Infinity` shape is asserted where the
-   engine answers it; here only presence and state are. A non-hot engine is not ranked at all: hostSchedule
-   ranks the hot set it filtered, and answering `-Infinity` (the engine's word for a drained frontier) for a
-   reservation would send a booting engine down the DONE path. */
-function engineWeight(eng) {
-  DCHECK(eng.state === "hot",
-         "the Level-1 ranking was asked for the weight of an engine in state `" + eng.state + "` — it ranks " +
-         "the hot set it filtered a line earlier, so a fetching or BOOTING engine arriving here is that filter " +
-         "and this function disagreeing about which engines are rankable");
-  DCHECK(typeof eng.topWeight === "number",
-         "a hot engine carries no recorded top-flow weight — engineRecordFacts writes one at the end of every " +
-         "round this zone has with an instance, the first of them before the record ever reaches the pool, so " +
-         "an absent one is a round that stopped recording rather than an engine with nothing to do");
-  return eng.topWeight;
+/* The document's account: the stored row this instance resumed (engineRoot's `prior`) plus the instance's own
+   lifetime counters, so a document's service survives a park. */
+function engineAccount(eng) {
+  const p = eng.prior;
+  return { paid: (p ? p.paid : 0) + eng.level1.paid, serviceUs: (p ? p.serviceUs : 0) + eng.level1.serviceUs };
+}
+/* The Level-1 weight of an instance that has reported: `-Infinity` when no member can take the thread (it ranks
+   last, and its next step retires it through DONE or its service round pays it), otherwise level1Weight over
+   its account. A reservation or a loading seat has reported nothing and is never ranked. */
+function engineWeight(eng, totalUs) {
+  DCHECK(eng.state === "hot" || eng.state === "fetching",
+         "the Level-1 ranking was asked for the weight of an engine in state `" + eng.state + "` — only an " +
+         "instance that has stated its account can be ranked");
+  DCHECK(eng.level1 !== undefined,
+         "an engine that has been rooted carries no Level-1 account — engineRecordFacts writes one before the " +
+         "record first becomes hot and at the end of every round since");
+  return eng.level1.runnable ? level1Weight(engineAccount(eng), totalUs) : -Infinity;
 }
 /* One delivery, both channels, so no call site carries the record and forgets the bytes. `rep` is what
    `fetched` answered: `null` for a network error (the JSON `null` the engine rejects with a TypeError), or
@@ -5046,7 +5063,7 @@ function macroYield() {
 }
 /* ─── The Level-1 census ─────────────────────────────────────────────────────────────────────────────────
    The order the host took, written where it was taken: it is composed from `engineWeight` per hot instance and
-   `frontierWeight` per waiting address and cold row, and no engine can see another, so no result document can
+   `level1Weight` per waiting address and cold row, and no engine can see another, so no result document can
    carry it. The unit is a round, not a pick: a frozen rank or a deleted weight shows only in the spread and
    in what is absent; one round asks both the resident scan and `_bestCandidate`, whose comparison is the
    Level-1 question; and nothing suspends inside the scan, so a round's weights are consistent.
@@ -5054,33 +5071,33 @@ function macroYield() {
    round yet), `cands` absent (the round never asked the non-resident order; `booting` and `loading` say
    what held admission), `cands: 0` (asked, ranked nothing; the `excl*` rows say what was taken out), and
    `cands: n` with rows (a reading). Counts are present whenever their walk ran, weights only over a
-   non-empty population; `wRunner` follows that too. Each row is read at its own instant (candidates when
-   asked, the resident half at the rank, pool counts at round end), so `candDocs: 1` beside `waiting: 0` is the
-   round having seated that document. `-Infinity` never enters: it is the engine's statement that nothing is
-   runnable, reported as the `drained` population, and the record must be JSON-safe for
-   `chrome.runtime.sendMessage`. */
+   non-empty population of served members. Each row is read at its own instant (candidates when asked, the
+   resident half at the rank, pool counts at round end), so `candDocs: 1` beside `waiting: 0` is the round
+   having seated that document. No infinity enters, because the record must be JSON-safe for
+   `chrome.runtime.sendMessage`: `-Infinity` (nothing runnable) is counted as `drained` and `+Infinity` (never
+   served) as `unserved`. */
 let _level1Round = 0;
 /* The distribution over rounds. `_level1` holds the last round, a gauge at an instant this loop chose, and a
    round that steps an engine and takes the yield arm records `hot: 0` by construction. So round shapes are
    counted over the lifetime and ride every record: the gauge says where the loop is, these say what it has
    been doing. They are an exact partition: a round assigns `rd.shape` at its single exit and `_level1Record`
    is the only incrementer; a round that leaves by a throw has no shape and is counted as `rThrew`. */
-const _level1Shapes = { rNoPool: 0, rIdle: 0, rWaited: 0, rReleased: 0, rFinished: 0, rServiced: 0,
+const _level1Shapes = { rNoPool: 0, rIdle: 0, rWaited: 0, rReleased: 0, rFinished: 0, rServiced: 0, rAdmitted: 0,
                         /* A round that left by a throw (`rThrew`) and one whose exit named a shape with no arm
                            (`rUnknown`) are two arms. The second is reachable only in release, where the DCHECK
                            naming a new exit is compiled out; without it the increment would key a missing name
                            and store NaN. */
                         rUnknown: 0, rThrew: 0 };
 const _LEVEL1_SHAPE_KEY = { nopool: "rNoPool", idle: "rIdle", waited: "rWaited",
-                            released: "rReleased", finished: "rFinished", serviced: "rServiced" };
+                            released: "rReleased", finished: "rFinished", serviced: "rServiced",
+                            admitted: "rAdmitted" };
 /* The one arm that is two populations, split by the engine's own step code. `rServiced` counts every round
    that ended in a service round, reached for ENGINE_STEP_STALLED (nothing runnable, so leaving the hot set is
-   right) and for ENGINE_STEP_YIELD (a runnable frontier at a slice boundary, benched identically, though Level 1
-   should run the top until its best flow no longer outranks the runner-up). The two readings take opposite
-   work, so they are counted apart; `testing/corpus`'s report.mjs prints them per pass in its ENGINE SPAN block.
-   Keeping a yielding engine rankable while its payment is in flight would issue `ops.step` concurrently with
-   that engine's own in-flight `serviceFetch` on one renderer port, with `eng._inflight` mutated from two async
-   chains, so it is not a simple change.
+   right) and for ENGINE_STEP_YIELD (a runnable frontier at the CPU quantum, whose round returns at once and
+   which hostSchedule waits for while it outranks every hot engine). The two readings take opposite work, so
+   they are counted apart; `testing/corpus`'s report.mjs prints them per pass in its ENGINE SPAN block. A
+   yielding engine is not stepped while its payment is in flight: that would issue `ops.step` concurrently with
+   its own `serviceFetch` on one renderer port, with `eng._inflight` mutated from two async chains.
    The seat-kind partition that explains a pool of many engines for one document is `rendererPoolProbe`'s
    `reservations` lifetime counters; the corpus census (`testing/corpus/site.mjs`) does not yet record them.
    This is its own object, not two more `_level1Shapes` arms, because those sum to `round` and these sum to one
@@ -5124,9 +5141,8 @@ function _level1Record(pool, rd) {
               atFloor: _atRamFloor() ? 1 : 0 };
   if (rd.hot !== null && rd.hot.n > 0) {
     r.drained = rd.hot.drained;
-    const rank = rd.hot.n - rd.hot.drained;
-    if (rank > 0) { r.wTop = rd.hot.wTop; r.wMin = rd.hot.wMin; }
-    if (rank > 1) r.wRunner = rd.hot.wRunner;
+    r.unserved = rd.hot.unserved;
+    if (rd.hot.n - rd.hot.drained - rd.hot.unserved > 0) { r.wTop = rd.hot.wTop; r.wMin = rd.hot.wMin; }
   }
   /* The non-resident half arrives whole or not at all (`_bestCandidate` composes it in one walk). `candAsk`
      rides with it because a round can ask the order twice (an admission that reaches the RAM floor is followed
@@ -5171,14 +5187,10 @@ function _level1Record(pool, rd) {
          "in a pool of " + r.pool + " — all three are read at the same instant, at the end of the round, and " +
          "both populations are DISJOINT members of the pool they are counted against, so a sum that outruns it " +
          "is either a reading taken across a mutation or one seat counted as two reasons admission was held");
-  DCHECK(("wTop" in r) === ("wMin" in r) && ("wTop" in r) === (r.drained !== undefined && r.hot - r.drained > 0),
-         "the Level-1 census reports a resident order whose extrema and whose rankable population disagree — " +
-         "the weights exist exactly when there is a rankable engine to have them, and a `wTop` beside a " +
-         "wholly drained hot set is a rank invented for an order every member of which said it had none");
-  DCHECK(!("wRunner" in r) || (r.hot - r.drained > 1 && r.wRunner <= r.wTop && r.wRunner >= r.wMin),
-         "the Level-1 census reports a runner-up that is not one — it is the SECOND-highest rankable weight, " +
-         "which is the value yield floor the winner is handed, so a runner-up outside [wMin, wTop] or beside " +
-         "a rankable set of one is the scan that found it counting the winner as its own runner-up");
+  DCHECK(("wTop" in r) === ("wMin" in r) &&
+         ("wTop" in r) === (r.drained !== undefined && r.hot - r.drained - r.unserved > 0),
+         "the Level-1 census reports a resident order whose extrema and whose served, runnable population " +
+         "disagree — the weights exist exactly when a hot engine has a finite weight");
   DCHECK(!("wTop" in r) || r.wMin <= r.wTop,
          "the Level-1 census reports a resident order whose bottom outranks its top — these are the extrema " +
          "of one scan over one array of weights, so an inversion is two scans over two sets");
@@ -5204,34 +5216,24 @@ function _level1Record(pool, rd) {
          CAND_KINDS.map((k) => k.pop).join(" + ") + " of them — every work item with no instance is one of " +
          "the declared kinds, so a total that outruns them is an item counted into the order and accounted " +
          "for by no population, which the admission would then build through whichever arm is the fallback");
-  DCHECK(CAND_SPREAD.every((s) => (s.row in r) === ("cands" in r && r.cands > 0)) &&
-         CAND_KINDS.every((k) => (k.wMax in r) === ("cands" in r && r[k.pop] > 0)),
-         "the Level-1 census reports a spread over an empty candidate population, or omits one over a " +
-         "population that has members — the ABSENCE of a reading is how this record says there was nothing to " +
-         "rank, so a `candWMax: 0` beside `cands: 0` is a rank fabricated for an order with no members and a " +
-         "missing one beside `cands: 3` is three items ranked by nothing");
-  DCHECK(!("candWMax" in r) || (r.candWMin <= r.candWMax && r.candRewardMin <= r.candRewardMax),
+  DCHECK(CAND_SPREAD.every((s) => (s.row in r) === ("cands" in r && r.cands > r.candUnserved)) &&
+         CAND_KINDS.every((k) => !(k.wMax in r) || r[k.pop] > 0),
+         "the Level-1 census reports a spread over no served candidate, or omits one over a population that " +
+         "has served members — the absence of a reading is how this record says nothing finite was ranked");
+  DCHECK(!("candWMax" in r) || (r.candWMin <= r.candWMax && r.candRateMin <= r.candRateMax && r.candSvcMax > 0),
          "the Level-1 census reports a candidate order whose lowest-ranked item outranks its highest — one " +
          "walk produces both, so an inversion is the spread being taken over a different set from the pick, " +
          "and the spread is what can show a rank frozen at a constant");
-  /* The spread rows read one set: a never-served candidate contributes reward 0 and the full bonus, so
-     `candUnserved` is a subset of the ranked population and equals it exactly when `candVisMax === 0`. That
-     pair is what tells an order at its entry value (every item unserved, a tie at 1.0) from a frozen rank. */
-  DCHECK(!("cands" in r) || (r.candUnserved <= r.cands &&
-                             (r.cands === 0 || (r.candVisMax === 0) === (r.candUnserved === r.cands))),
+  DCHECK(!("cands" in r) || r.candUnserved <= r.cands,
          "the Level-1 census reports " + r.candUnserved + " never-served candidate(s) of " + r.cands +
-         " with a maximum visit count of " + r.candVisMax + " — those two rows are one walk's reading of one " +
-         "set, and they are what separates an order sitting at its entry value (every item unserved, so a tie " +
-         "at 1.0 is correct) from a rank frozen at a constant (an address with history ranking at that same " +
-         "1.0), so a disagreement makes the census unable to tell the healthy case from the defect");
+         " — one walk counts both, and the first is a subset of the second");
   self._level1 = r;
 }
 
-/* The scheduler policy, with engine ops injected so it is testable with mock engines. Each iteration admits
-   waiting documents while there is headroom (`ops.admit` gates creation), then advances the highest-weight hot
-   engine and re-ranks. Before stepping it the host sets the engine's value yield floor to the runner-up's
-   weight (`ops.setFloor`), so the engine runs until outranked and yields hot, with no fixed step count. At the
-   RAM floor `ops.evictee` chooses an engine to park to the cold tier (`ops.requestPark`). */
+/* The scheduler policy, with engine ops injected so it is testable with mock engines. Each iteration admits a
+   waiting document while there is headroom (`ops.admit` gates creation), then advances the highest-weight hot
+   engine by one slice, which ends at the CPU quantum, and re-ranks. At the RAM floor `ops.evictee` chooses an
+   engine to park to the cold tier (`ops.requestPark`). */
 async function hostSchedule(pool, ops) {
   for (;;) {
     /* The round's reading, collected by the round and written once in `finally`, so every exit records: the
@@ -5249,6 +5251,9 @@ async function hostSchedule(pool, ops) {
            "returns the census `_bestCandidate` composed, or null where it never asked the order, and an " +
            "undefined answer is an arm that returns nothing being read as an order that was never taken");
     if (rd.cand) rd.candAsk++;
+    /* A never-served item outweighs every served one, so admission seated it, and the round's advance is spent
+       on that admission: every new target is seated, and handed its first quantum, before a document deepens. */
+    if (rd.cand && rd.cand.candUnserved > 0) { rd.shape = "admitted"; continue; }
     if (!pool.length) { rd.shape = "nopool"; break; }
     const hot = pool.filter((e) => e.state === "hot");
     if (!hot.length) {   // every live engine is mid-something: wait for the earliest to become hot, then re-rank
@@ -5271,45 +5276,49 @@ async function hostSchedule(pool, ops) {
       await Promise.race(pending.map((e) => e._readyP));
       continue;
     }
-    /* The Level-1 pick and the runner-up's weight (the value yield floor), from one reading per engine (each
-       weight is what the last round with that instance recorded). The scan starts at index 1, so the winner is
-       never counted as its own runner-up: the engine yields when `flow_weight(cur) < g_yield_floor`
-       (engine.c), and its own top weight as the floor would hand the thread to a lesser document. */
-    /* Materialized, so the census below reads the same answers the pick ranked against. */
-    const ws = hot.map((e) => ops.weight(e));
-    let best = hot[0], bestW = ws[0], runner = -Infinity;
-    for (let i = 1; i < hot.length; i++) {
-      const w = ws[i];
-      if (w > bestW) { runner = bestW; best = hot[i]; bestW = w; }
-      else if (w > runner) runner = w;
-    }
-    /* The reading of the resident order over rankable engines: `-Infinity` (no runnable flow) is counted as
-       `drained`, never an extremum, and `wRunner` is the second-highest rankable weight. `_level1Record` attaches
-       each only over a non-empty population. */
-    let _rk = 0, _top = 0, _min = 0, _second = 0;
+    /* The Level-1 pick, from one reading per engine (each account is what the last round with that instance
+       recorded) over one service total. The ranking is synchronous: every account was recorded by an earlier
+       round, so the scan has no suspension. The calls below suspend, so the pick is as of the top of this
+       iteration, which is the policy (rank, advance, re-rank). */
+    const totalUs = ops.serviceTotal();
+    const ws = hot.map((e) => ops.weight(e, totalUs));
+    let best = hot[0], bestW = ws[0];
+    for (let i = 1; i < hot.length; i++) if (ws[i] > bestW) { best = hot[i]; bestW = ws[i]; }
+    /* The reading of the resident order: `-Infinity` (nothing runnable) is counted as `drained` and
+       `+Infinity` (never served) as `unserved`; the extrema are over the finite weights. */
+    let _fin = 0, _un = 0, _top = 0, _min = 0;
     for (const w of ws) {
-      if (!Number.isFinite(w)) continue;            // drained: a sentence, counted as one, never an extremum
-      if (_rk === 0) { _top = _min = _second = w; }
-      else {
-        if (w > _top) { _second = _top; _top = w; }
-        else if (_rk === 1 || w > _second) _second = w;
-        if (w < _min) _min = w;
-      }
-      _rk++;
+      if (w === -Infinity) continue;
+      if (w === Infinity) { _un++; continue; }
+      if (_fin === 0) { _top = _min = w; }
+      else { if (w > _top) _top = w; if (w < _min) _min = w; }
+      _fin++;
     }
-    rd.hot = { n: hot.length, drained: hot.length - _rk, wTop: _top, wMin: _min, wRunner: _second };
-    /* The ranking is synchronous: every weight was recorded by an earlier round, so the scan has no suspension.
-       The calls below suspend, so the pick is as of the top of this iteration, which is the policy (rank,
-       advance, re-rank). Only this loop moves an engine between hot and fetching, and a detached service round
-       touches only its own engine, which is not in `hot`. */
-    if (ops.setFloor) await ops.setFloor(best, hot.length > 1 ? runner : -1e300);   // outranked by the runner-up => yield; a lone engine runs on
+    rd.hot = { n: hot.length, drained: hot.length - _fin - _un, unserved: _un, wTop: _top, wMin: _min };
+    /* A yielded engine whose service round is in flight is ranked by the account it stated at its step. If it
+       outranks every hot engine the round waits for it rather than deepening a lesser document: its round
+       returns at once when it has runnable work, and a stalled one ranks `-Infinity`. */
+    let ahead = null, aheadW = bestW;
+    for (const e of pool) {
+      if (e.state !== "fetching") continue;
+      const w = ops.weight(e, totalUs);
+      if (w > aheadW) { ahead = e; aheadW = w; }
+    }
+    if (ahead !== null) {
+      DCHECK(ahead._readyP && typeof ahead._readyP.then === "function",
+             "an engine whose service round is in flight carries no readiness promise — it outranks every hot " +
+             "engine, and this round has nothing else to wait on");
+      rd.shape = "waited";
+      await ahead._readyP;
+      continue;
+    }
     /* Normally step `best`. At the RAM floor, step the engine the one order says must give up its memory, after
        flagging it to park (evicted to the cold tier as replay recipes) so the item that outranks it gets the
        RAM; parking needs a step (the flag is read inside qjs_step), so that engine is targeted directly. A lone
        engine is evictable too: a wasm Memory never shrinks, so exempting it would let the first instance at the
        floor close admission for the session. `ops.evictee` asks whether anything not resident is worth more than
        the worst resident engine. */
-    let target = best;
+    let target = best, evicting = false;
     DCHECK(typeof ops.evictee === "function" && typeof ops.requestPark === "function",
            "the pool was driven with no eviction op — the RAM floor is answered by the WFQ giving up the " +
            "lowest-value resident engine, so without it the floor is answered by refusing every admission " +
@@ -5328,7 +5337,19 @@ async function hostSchedule(pool, ops) {
            "against (or null where it never asked), so a bare answer is the round's one look at that order " +
            "at the floor going unrecorded, which is the instant it matters most");
     if (ev.cand) { rd.candAsk++; rd.cand = ev.cand; }
-    if (ev.evict) { target = ev.evict; await ops.requestPark(ev.evict); }
+    if (ev.evict) { target = ev.evict; evicting = true; await ops.requestPark(ev.evict); }
+    /* The rule the optimism term exists for, asserted at the pick: a served document deepens only when the
+       order asked this round held no never-served item. Admission seats one (the `admitted` arm above) and
+       eviction parks a served engine for one, so a step of a finite-weight engine beside an unserved candidate
+       is the order and the pick disagreeing. A round that asked no order (no headroom below the floor) is the
+       loading-seat residual `_admissionHasHeadroom` names. */
+    DCHECK(evicting || !Number.isFinite(bestW) || rd.cand === null || rd.cand.candUnserved === 0,
+           "Level 1 stepped a served document (weight " + bestW + ") while the order it asked this round held " +
+           (rd.cand ? rd.cand.candUnserved : 0) + " never-served item(s) — an unserved item weighs +Infinity, so admission or " +
+           "eviction should have taken this round");
+    DCHECK(bestW === Infinity || _un === 0,
+           "Level 1 picked a served engine over " + _un + " never-served hot engine(s) — the pick is the " +
+           "maximum and an unserved engine weighs +Infinity");
     /* The park flag and the step that reads it stay ordered: both are calls on one renderer's point-to-point
        port, which delivers in order, and this loop makes no other call into that instance between them. */
     const st = await ops.step(target);
@@ -5366,8 +5387,8 @@ async function hostSchedule(pool, ops) {
          notices this zone must act on, and synchronous requests only it can answer.
          Both codes take this arm by decision: engine.c states the schedule, paying at every slice boundary,
          because paying only at a stall makes one flow's reply wait for every other flow to block, worse as
-         forks multiply. The codes differ in what they say about rank, and rank is read from engine_top_weight
-         (-Infinity for a frontier whose every member is host-owed), not from the step code. An unknown code is
+         forks multiply. The codes differ in what they say about rank, and rank is read from the account's
+         `runnable` (-Infinity for a frontier whose every member is host-owed), not from the step code. An unknown code is
          refused above. Non-blocking: the engine leaves the hot set while its round runs, so a slow reply here
          never stalls another document. */
       rd.shape = "serviced";
@@ -5596,7 +5617,7 @@ async function admitSeatLand(seat) {
       if (!back) return null;
       doc = frontierDoc({ key: stored.key, sourceUrl: stored.sourceUrl, topLevelUrl: stored.topLevelUrl,
                           origin: stored.origin, responseHeaders: back.headers, html: back.bytes, code: "",
-                          recipes: stored.recipes, emit: stored.emit, visits: stored.visits,
+                          recipes: stored.recipes, paid: stored.paid, serviceUs: stored.serviceUs,
                           credentialed: stored.credentialed, provenance: frontierProvenance(stored),
                           arrival: frontierArrival(stored), sandbox: frontierSandbox(stored),
                           addressSpace: frontierAddressSpace(stored) },
@@ -5639,38 +5660,39 @@ async function admitSeatLand(seat) {
 }
 const _hostOps = {
   weight: engineWeight,
-  /* The value yield floor: run until outranked by the runner-up. Not caught: a rejection is the instance
-     crashing or this zone's transport contract breaking, and an unranked, unsteppable engine has no handling
-     in the pool, so it travels to hostSchedule's failure arm. */
-  setFloor: async (eng, floor) => {
-    DCHECK(Number.isFinite(floor) || floor === -Infinity,
-           "the pool set a yield floor that is not a number — the engine compares its top flow's weight " +
-           "against it, and a NaN floor makes every comparison false so the flow never yields");
-    await eng.r.renderer.setYieldFloor({ floor });
+  /* N, over the population the round ranks: admission builds the cold index on its first line, so it exists by
+     the time the pick asks. */
+  serviceTotal: () => {
+    DCHECK(_frontierIndexBuilt,
+           "the Level-1 service total was asked before the cold tier's index was built — admission builds it " +
+           "first in every round, and a total without the parked rows ranks every served document as newer " +
+           "than it is");
+    return level1ServiceTotal(_pool, _frontierIndex);
   },
   /* Which resident engine must give up its RAM, asked of the one order: admission asks it with room, this at
      the floor, and rehydration is a candidate that is not resident. The gate is the floor, not
      `_admissionHasHeadroom`: a reservation in flight blocks admission but is no reason to evict.
      Strictly greater, so a tie leaves the incumbent (solver/flow.c's flow_pick makes the same comparison), and
-     equal items never pay a park and a rehydration to swap places.
-     Named residual: a resident engine's weight ages by CPU without bound while a parked item's `emit/visits`
-     does not fall, so a productive document can park and win its slot straight back, which costs re-work but
-     starves nothing. Next diff applies start-time fair queueing's virtual time at Level 1 (solver/flow.h names
-     it), so a re-entering item enters at the resident set's virtual time. Absence shows as `evicted` and
-     `rehydrated` in _reserveStats rising together for the same items. */
+     equal items never pay a park and a rehydration to swap places. A resident engine and a parked item are
+     weighed by one function over one account, so a parked document re-enters at the rank its service earned. */
   /* It answers `evict` (the engine to give up its memory, or null) and `cand` (the reading of the non-resident
      order it decided against, or null), together, because this is where the Level-1 comparison
      `pick.best.w > engineWeight(worst)` happens and the census must see it. hostSchedule counts the asks, since
      admission may also have asked this round. */
   evictee: async (hot) => {
     if (!_atRamFloor()) return { evict: null, cand: null };   // there is room: nothing has to give anything up
-    const pick = _bestCandidate(_candPopulation(await frontierIndex()));
+    const idx = await frontierIndex();
+    const pick = _bestCandidate(_candPopulation(idx));
     if (!pick.best) return { evict: null, cand: pick.census };   // nothing is waiting for the memory
-    let worst = null;
-    for (const e of hot) if (!worst || engineWeight(e) < engineWeight(worst)) worst = e;
+    const totalUs = level1ServiceTotal(_pool, idx);
+    let worst = null, worstW = 0;
+    for (const e of hot) {
+      const w = engineWeight(e, totalUs);
+      if (!worst || w < worstW) { worst = e; worstW = w; }
+    }
     // every live engine is mid-round; the floor is re-asked next round
     if (!worst) return { evict: null, cand: pick.census };
-    if (!(pick.best.w > engineWeight(worst))) return { evict: null, cand: pick.census };
+    if (!(pick.best.w > worstW)) return { evict: null, cand: pick.census };
     _reserveStats.evicted++;
     return { evict: worst, cand: pick.census };
   },
@@ -6003,14 +6025,9 @@ const _hostOps = {
              "recipes and its endpoint count are what this origin's cross-session entry is MADE of, and a " +
              "missing one would erase a previous session's parked residue rather than extend it");
       const prior = result._prior;
-      /* The prior entry's ranking pair, asserted here because it came from engineRoot's frontierLookup, the one
-         read of this store that bypasses frontierIndex's record grammar; its `visits` is the divisor the next
-         admission of this address is amortised against. */
-      DCHECK(prior === null || prior === undefined ||
-             (typeof prior.visits === "number" && Number.isInteger(prior.visits) && prior.visits >= 1),
-             "the parked entry this run resumed carries no admission count (`" + String(prior && prior.visits) +
-             "`) — it is the divisor the next Level-1 rank of this address is computed from, and a count that " +
-             "restarts here is a document that has been re-fetched many times ranking as one nobody has opened");
+      /* The prior entry's account, asserted here because it came from engineRoot's frontierLookup, the one read
+         of this store that bypasses frontierIndex's record grammar; the entry written below adds to it. */
+      if (prior) level1AccountCheck(prior, "the parked entry this run resumed");
       /* The parked grade, asserted before the record is composed: frontierProvenance reads an absent field as
          `derived` only because every entry a live build writes states a word, which is this line. It is owed to
          the store, whose entries outlive their build, separately from engineRoot's assert, which is owed to the
@@ -6023,6 +6040,7 @@ const _hostOps = {
              "rehydration the word it was parked under), so an absent one is a composer nobody told, and the " +
              "entry it writes would read back as an older store's and be re-fetched as `derived`");
       const _parkProvenance = eng.msg.provenance;
+      const _account = engineAccount(eng);
       await frontierPut(result._fkey, {
         /* The recipe carries its environment: the top-level creation URL (HTML §8.1.3.5 Secure contexts decides
            from it which Web IDL §3.3.13 [SecureContext] members exist), the browser-stated principal (a resumed
@@ -6037,17 +6055,9 @@ const _hostOps = {
         provenance: _parkProvenance, arrival: eng.msg.arrival, sandbox: eng.msg.sandbox,
         addressSpace: eng.msg.addressSpace,
         credentialed: !!eng.msg.credentialed, recipes: result._park.join(";"),
-        /* `emit` is the surface this run demonstrated, both halves of what it emits (@H endpoints and @S sinks).
-           frontierWeight divides it by `visits`, so whenever the demonstrated surface is monotone the quotient is
-           the running mean of new findings per admission: a document that keeps growing keeps its rate, and one
-           that re-learns what it knew decays toward zero. A document demonstrating F findings and learning nothing
-           new ranks below a never-seen address (1.0) after exactly F+1 admissions, since `F/n + 1/(n+1)` first
-           falls under 1 at `n = F+1`. No constant or threshold enters. It is not a bound: the entry keeps its
-           recipes, address, principal and membership, and is re-fetched whenever nothing outranks it. */
-        emit: result.fetchCallSites.length + result.securitySinks.length,
-        /* `visits` counts admissions: an absent `prior` is the first admission, and the prior's count was
-           asserted above, since a restarted count would rank a much-fetched document as one never opened. */
-        visits: prior ? prior.visits + 1 : 1,
+        /* The document's Level-1 account: the resumed row's plus this instance's, so service and value are
+           carried across every park and session. */
+        paid: _account.paid, serviceUs: _account.serviceUs,
       });
     }
     if (!engineHasLiveCaller(eng)) {
@@ -6124,8 +6134,8 @@ self.rendererPoolProbe = function rendererPoolProbe() {
            "one is an untrusted instance built in this realm rather than in a sandboxed opaque-origin frame");
     /* A reservation is reported as a pool member, which it is: the record answering which instance holds this
        agent cluster while it boots. Its two Level-1 facts read `null`, because it has stated neither
-       (`heapBytes: 0` would admit another engine against RAM about to be spent; `topWeight: -Infinity` is the
-       engine's word for a drained frontier). `joined` counts callers waiting on its findings; `joinedDocIds`
+       (`heapBytes: 0` would admit another engine against RAM about to be spent, and a zero account would
+       claim a document that was never served). `joined` counts callers waiting on its findings; `joinedDocIds`
        names the documents the instance holds beyond its root (main.c's `g_joined_ctx`), so a pool of two
        entries can be a page of four documents. */
     /* A loading seat is reported as itself, with no renderer, cluster or document and every Level-1 fact
@@ -6137,7 +6147,7 @@ self.rendererPoolProbe = function rendererPoolProbe() {
              "the admission its fetch was spent on, and one that cannot say which kind of work it is holding " +
              "is a slot that blocks admission and can never be landed by anybody");
       return { name: null, docId: null, topDocId: null, state: "loading",
-               framed: false, routingId: null, heapBytes: null, topWeight: null,
+               framed: false, routingId: null, heapBytes: null, level1: null,
                cold: !engineHasLiveCaller(eng), joined: eng._resolvers.length, joinedDocIds: eng.joinedDocIds.slice(),
                loadKind: eng.what.kind, settled: !!eng.settled };
     }
@@ -6149,7 +6159,7 @@ self.rendererPoolProbe = function rendererPoolProbe() {
              "blocks admission while answering nobody");
       return { name: eng.cluster, docId: eng.docId, topDocId: eng.topDocId, state: "booting",
                framed: !!(eng.r && eng.r.frame.parentNode), routingId: eng.r ? eng.r.routingId : null,
-               heapBytes: null, topWeight: null, cold: !engineHasLiveCaller(eng), joined: eng._resolvers.length,
+               heapBytes: null, level1: null, cold: !engineHasLiveCaller(eng), joined: eng._resolvers.length,
                joinedDocIds: eng.joinedDocIds.slice() };
     }
     /* The working set is read where the pool recorded it (engineRecordFacts takes `workingSetBytes` from the
@@ -6167,7 +6177,8 @@ self.rendererPoolProbe = function rendererPoolProbe() {
            "created for itself");
     return { name: eng.r.name, docId: eng.docId, topDocId: eng.topDocId, state: eng.state,
              framed: !!eng.r.frame.parentNode,
-             routingId: eng.r.routingId, heapBytes: eng.residentBytes, topWeight: eng.topWeight,
+             routingId: eng.r.routingId, heapBytes: eng.residentBytes,
+             level1: Object.assign({ runnable: eng.level1.runnable }, engineAccount(eng)),
              cold: !engineHasLiveCaller(eng), joined: eng._resolvers.length, joinedDocIds: eng.joinedDocIds.slice() };
   });
   /* No reservation outlives its provisioning, asserted as arithmetic: a reservation is made once and takes one
@@ -6259,7 +6270,7 @@ async function hostClear() {
   /* The frame goes with the engine: nothing else will reach the renderer of an engine out of the pool, and an
      iframe nobody reaches is a whole WASM instance held resident.
      A round in flight keeps its frame until it lands, and the transport is asked (`outstandingCalls()`), not the
-     state: a `hot` engine has a call outstanding during every awaited scheduler op (setFloor, requestPark,
+     state: a `hot` engine has a call outstanding during every awaited scheduler op (requestPark,
      step, streamPartial), and destroying it would hit renderer-host's assert and make the Clear itself fail.
      `_dropped` is what the owning round reads on its way out (serviceFetch, hostSchedule's release). */
   /* A reservation keeps its frame too, hence the positive set: a booting engine has no `r` until rendererLaunch
@@ -6611,5 +6622,5 @@ console.debug("[ast-worker v2] bridge ready (self.astDispatch + self.rendererPoo
    declarations (`CAND_KINDS`, `CAND_SPREAD`, `_candCensus`) travel with it because the census's contract is
    stated in them, and a driver's own copy would go stale silently. */
 if (typeof module !== "undefined" && module.exports)
-  module.exports = { hostSchedule, engineWeight, frontierWeight, frontierReward,
+  module.exports = { hostSchedule, engineWeight, level1Weight, level1Rate, level1ServiceTotal, LEVEL1_UNSERVED,
                      _bestCandidate, _candPopulation, _level1Record, _candCensus, CAND_KINDS, CAND_SPREAD };

@@ -10374,15 +10374,10 @@ void engine_set_referenced(int referenced) {
 
 int engine_referenced(void) { return g_referenced; }
 
-static double g_yield_floor = -1.0 / 0.0;
-void engine_set_yield_floor(double w) { g_yield_floor = w; }
-
-/* The host's one input (engine.h). The pick is the scheduler's own: a weight the host ranks an engine by must be one
-   the engine could convert into work, and flow_best answers over members that have told the scheduler they cannot
-   run. A frontier whose every member is host-owed burns no CPU, so its weight never ages and the evictee picker
-   would never reach it. -Infinity is what an empty frontier already publishes, so a stalled engine sorts last
-   through the host's existing order. */
-double engine_top_weight(void) {
+/* Whether the scheduler could hand this frontier the thread now (engine.h). The pick is the scheduler's own, so the
+   answer is "a member can convert a slice into work": flow_best would answer over members that have told the
+   scheduler they cannot run, and a frontier whose every member is host-owed burns no CPU. */
+int engine_runnable(void) {
     Flow *b = flow_next_to_run(NULL, FLOW_SCAN_OTHER);
     /* Why the pick came back empty, asserted where the host is told. -inf from a non-empty frontier is a claim on
        the host ("I can convert no slice into work until you act"), so there must be something for the host to act
@@ -10400,11 +10395,13 @@ double engine_top_weight(void) {
        frontier whose marks rest on answered entries satisfies neither, because `pend_owed` is false for an
        answered entry. */
     DCHECK(b != NULL || flow_count() == 0 || engine_host_owes() || engine_frontier_settled() || g_referenced,
-           "this engine reported -inf (nobody can take the thread) while the host owes it nothing, no peer "
+           "this engine reported that nobody can take the thread while the host owes it nothing, no peer "
            "references it and no member is parked on a refusal — every member's mark rests on an answered register "
            "entry, which no host event can clear");
-    return b ? flow_weight(b) : -1.0 / 0.0;
+    return b != NULL;
 }
+
+int64_t engine_service_us(void) { return g_loop_us; }
 
 #if APICLIENT_DEV
 /* A printable, bounded excerpt of page bytes for a diagnostic. The source is whatever the page shipped, so a message
@@ -11077,65 +11074,21 @@ static int engine_sched_slice(void) {
                Clearing here would re-admit every marked flow after every step, wasting a step and two COW swaps per
                unit of real progress. */
         }
-        /* Thread-sharing, not value: the slice's budget is gone, so hand the thread back and keep the frontier. It
-         * is the question preempt_hook asks, one budget and one edge at the two levels it acts on (there the
-         * running flow parks, here the step returns), so a flow parked on the quantum and a step ended on it are
-         * one event.
-         *
-         * Value, in the two shapes below it: this engine's best is worth less than the runner-up engine's, or a
-         * better document is waiting. The flow keeps its snapshot and resumes where it stands. The document arm
-         * takes a finite weight only: engine_top_weight is the runnable pick, so -inf means this frontier can hand
-         * the thread to nobody, which is the stall rather than "the other document is worth more"; a yield asks
-         * to be outranked and a stall asks to be paid, and the stall is one iteration away (the pick returns NULL
-         * and breaks to it).
-         *
-         * The three are one decision read into one local, so the discharge below is spent on exactly the turns
-         * that return, with one spelling of "does this turn return", and `engine_top_weight` is asked at most
-         * once. */
-        {
-            int yielding = 0;
-
-            if (quantum_expired()) yielding = 1;
-            else if (cur && flow_weight(cur) < g_yield_floor) yielding = 1;
-            /* The third arm is asked only where it can disagree with the second; elsewhere it is a cost with an
-             * identical answer. Arm 2 reads the incumbent's weight, arm 3 the maximum over the pick's runnable
-             * candidates. flow_pick's only filter on a runnable entry is flow_host_owed (this call passes no seed
-             * and no exclusion), so a live unmarked incumbent is one of arm 3's candidates and
-             * `top >= flow_weight(cur)`; reaching arm 3 says `flow_weight(cur) >= g_yield_floor`, so
-             * `top < g_yield_floor` is unreachable and the scan cannot move `yielding`. Where the incumbent is not a
-             * candidate (`cur` NULL because the arm above finished it, or marked because the arm above marked it)
-             * the scan is the only answer. The filter is read (flow_host_owed is flow_pick's own predicate,
-             * published for this consumer), not re-derived from the step code that marks.
-             *
-             * What is contingent is membership, the half asserted: `cur` naming a flow the registry no longer
-             * holds, read in O(1) through its registry handle. flow_is_member compares addresses because it
-             * answers for a pointer that may dangle; `cur` was just stepped and arm 2 already dereferenced it, so
-             * reading its handle adds no exposure. `flow_running()` is no witness, since flow_remove does not clear
-             * it. The conclusion cannot be asserted: flow_pick raises `g_scan_runs` on every call, so a dev-only
-             * re-scan would change the census the dev build reports. engine_top_weight's DCHECK fires only on -inf,
-             * impossible when the incumbent is a candidate, so skipping the call loses no assert. The argument
-             * disappears if arm 2 reads the pick's maximum rather than the incumbent's weight. */
-            else if (cur == NULL || flow_host_owed(cur)) {
-                double top = engine_top_weight();
-                if (top > -1.0 / 0.0 && top < g_yield_floor) yielding = 1;
-            }
-            else {
-                DCHECK(flow_at(cur->reg_i) == cur,
-                       "the yield decision skipped its third arm on an incumbent the registry does not hold — the "
-                       "skip is sound only for a live member, so `cur` outlived its flow_remove or its registry "
-                       "handle is stale");
-            }
+        /* Thread-sharing: the slice's budget is gone, so hand the thread back and keep the frontier. It is the
+         * question preempt_hook asks, one budget and one edge at the two levels it acts on (there the running
+         * flow parks, here the step returns), so a flow parked on the quantum and a step ended on it are one
+         * event. The quantum is the only yield: Level 1 ranks documents in the trusted zone by their novel value
+         * per CPU-second, and no flow weight of this frontier is compared with another document's. */
+        if (quantum_expired()) {
             /* The other closing edge of a turn, discharged without buying a return (@PERWORLD): a yield hands the
                host this member standing, with its deltas applied and a step of real work behind it, which is the
                turn a picture is owed of, so a mark still up is paid by the return already happening. This is what
                photographs a member that never finishes (a flow looping for the rest of the session never reaches
-               the DONE arm but reaches slice boundaries constantly). The guard on `cur` is the weight arm's: a
-               slice can reach this line with no member standing. */
-            if (yielding) {
-                if (cur != NULL && flow_paint_owed(cur)) flow_clear_paint_owed(cur);
-                g_sess_cur = cur;
-                return ENGINE_STEP_YIELD;
-            }
+               the DONE arm but reaches slice boundaries constantly). A slice can reach this line with no member
+               standing, hence the guard on `cur`. */
+            if (cur != NULL && flow_paint_owed(cur)) flow_clear_paint_owed(cur);
+            g_sess_cur = cur;
+            return ENGINE_STEP_YIELD;
         }
     }
     g_sess_cur = cur;

@@ -1740,22 +1740,30 @@ QJS_EXPORT void qjs_host_answers_exhausted(unsigned req)
     engine_host_exhausted(g_ctx, (uint32_t)req);
 }
 
-QJS_EXPORT double qjs_top_weight(void)
+/* This instance's Level-1 account, the three facts the trusted zone ranks documents by:
+   `{"runnable":0|1,"paid":<novel value>,"serviceUs":<thread measure of service>}`. `paid` is
+   flow_credit_paid_value and `serviceUs` engine_service_us, both lifetime counters of this instance, so the zone
+   adds a parked document's stored account to them. No flow weight crosses: Level 1 compares documents by value per
+   CPU-second, never one frontier's order against another's. The buffer is this entry's and is overwritten by the
+   next call; the host copies the string out of linear memory before it asks again. */
+QJS_EXPORT const char *qjs_level1_account(void)
 {
-    DCHECK(g_begun, "qjs_top_weight was asked of an engine whose frontier was never seeded");
-    return engine_top_weight();
-}
+    static char buf[128];
+    double paid;
+    int64_t us;
+    int n;
 
-/* The value yield floor: the runner-up engine's weight, so the running flow yields the moment it is outranked
-   across documents. A NaN would make every comparison false, so the top flow would never yield and the host's
-   Level-1 interleave would stop silently. */
-QJS_EXPORT void qjs_set_yield_floor(double floor)
-{
-    DCHECK(g_begun, "a yield floor was set on an engine whose frontier was never seeded — there is no flow to "
-                    "rank against it");
-    DCHECK(!(floor != floor), "the host set a yield floor of NaN — every weight comparison against it is false, "
-                              "so the running flow is never outranked and the Level-1 interleave silently stops");
-    engine_set_yield_floor(floor);
+    DCHECK(g_begun, "qjs_level1_account was asked of an engine whose frontier was never seeded");
+    paid = flow_credit_paid_value();
+    us = engine_service_us();
+    DCHECKF(paid >= 0.0 && paid == paid && us >= 0,
+            "the Level-1 account is negative or NaN (paid %g, serviceUs %lld) — both are sums of non-negative "
+            "charges that only climb", paid, (long long)us);
+    n = snprintf(buf, sizeof buf, "{\"runnable\":%d,\"paid\":%.17g,\"serviceUs\":%lld}", engine_runnable(), paid,
+                 (long long)us);
+    CHECK(n > 0 && (size_t)n < sizeof buf, "the Level-1 account did not fit its buffer — the zone would parse a "
+                                           "truncated record");
+    return buf;
 }
 
 /* RAM pressure, from the one zone that can see it: the host holds every live engine and the summed working set,

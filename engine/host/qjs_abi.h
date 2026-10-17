@@ -116,9 +116,8 @@ QJS_EXPORT void qjs_perform(const char *token, const char *record);
 QJS_EXPORT int qjs_host_answer_remote(unsigned req, const char *world, const char *marks, const char *completion);
 QJS_EXPORT void qjs_host_answers_exhausted(unsigned req);
 
-/* LEVEL-1's two dials, RAM pressure, and the streamed partial. */
-QJS_EXPORT double qjs_top_weight(void);
-QJS_EXPORT void qjs_set_yield_floor(double floor);
+/* Level 1's account of this instance, RAM pressure, and the streamed partial. */
+QJS_EXPORT const char *qjs_level1_account(void);
 QJS_EXPORT void qjs_request_park(void);
 QJS_EXPORT void qjs_emit_partial(void);
 

@@ -461,23 +461,16 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
    `deliver` is called for a failure too, because HTML §4.6.8.12 step 14.1's `error` event and §4.6.8.20's
    network-error branch are the failure arm, and they live at the element. */
 void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const FetchRequest *req);
-/* The frontier's best weight, by which the host ranks this engine against every other live one. Level 1 and
-   level 2 are one policy, so this is flow_weight of the flow the scheduler would pick (flow_next_to_run with
-   no incumbent). It is -inf when no member can be handed the thread, for an empty frontier and a fully
-   host-owed one alike, since neither can convert a slice into work. It reads runnable members, not flow_best:
-   host-owed marks last until the host does something that could answer them, and a stall code says "pay me",
-   not what this engine is worth; ranking a blocked engine by an unrunnable flow's unaging weight would keep it
-   in the hot pool forever. -inf is the value extension/mojo.js declares the Level-1 input carries, so a
-   stalled engine sorts last through the existing order. */
-double engine_top_weight(void);
-/* The value yield's floor (level 1): the weight of the runner-up engine's best flow. The running flow hands the
-   thread back as soon as this engine's best no longer outranks it, because the other document's work is then
-   worth more. It orders only: nothing is dropped and the frontier resumes exactly where it was, which is what
-   separates a yield from a cap. -inf (the default) means the host named no rival, so only the cooperative
-   quantum yields. Declared twice below; both name the one definition. */
-void engine_set_yield_floor(double w);
-
-void engine_set_yield_floor(double floor);
+/* Whether a member can be handed the thread now (flow_next_to_run with no incumbent finds one): 0 for an empty
+   frontier and a fully host-owed one alike, since neither can convert a slice into work. It reads runnable
+   members, not flow_best, because a stall code says "pay me" and host-owed marks last until the host acts. The
+   trusted zone's Level-1 order ranks a non-runnable engine last (-Infinity) and reads nothing else of this
+   frontier's order: no flow weight crosses documents. */
+int engine_runnable(void);
+/* The thread measure this instance has spent inside engine_sched_step's bracket over every slice (`loop_us`
+   below, solver/quantum.h for what the measure is on each host): the CPU of service Level 1 divides a document's
+   novel value by. A lifetime counter, never reset at a session boundary. */
+int64_t engine_service_us(void);
 /* Issue a synchronous request only the host can answer (see engine.c) and return its id; the asking step
    machine returns JS_STEP_YIELD and the flow suspends until the answer lands while siblings run. The id is the
    rendezvous, never the request text: the answer is computed under the asking flow's world, so two identical

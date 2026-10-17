@@ -192,80 +192,29 @@ const PENDING_LINE_FIELDS = ["method", "destination", "initiator", "provenance",
                              "pinned", "driven", "credentials", "mode", "referrerPolicy", "referrer", "askers",
                              "url"];
 
-/* THE SCHEDULES, AND EACH ONE IS A TRIPLE RATHER THAN A NAME. Every knob is one the production host already
-   has and uses, so none of them is a test hook grown into the engine for this gate's benefit. A schedule
-   declares ALL THREE of its policies — when the ENGINE hands the thread back, when the HOST answers what it is
-   owed, and WHAT THE HOST ASKS OF THE ENGINE AT THE BOUNDARY — because those are three independent decisions
-   and this file used to let the second one be INHERITED from the first. That inheritance is what made the
-   gate's strongest-sounding axis its weakest, so it is worth the space to say exactly how, in the terms of the
-   two mechanisms rather than in the terms of the names:
+/* THE SCHEDULES, AND EACH ONE IS A PAIR RATHER THAN A NAME. Every knob is one the production host already has
+   and uses, so none of them is a test hook grown into the engine for this gate's benefit. A schedule declares
+   both of its policies — when the HOST answers what it is owed, and WHAT THE HOST ASKS OF THE ENGINE AT THE
+   BOUNDARY — because those are independent decisions. When the engine hands the thread back is not a knob: a
+   slice ends at the CPU quantum, at a stall or at DONE, and nothing the host states moves it.
  *
  * WHAT `_switches` COUNTS. solver/engine.c increments it at exactly ONE statement, inside engine_sched_slice's
  * dispatch loop: `if (best != cur) { flow_switch_out; flow_switch_in; solve_flow_begin; g_switches++; }`. It is
  * a FLOW context switch — the COW delta swap, the decide_suspend/decide_resume pair and the concolic pin swap —
  * and it happens only when flow_next_to_run returns something other than the flow already holding the thread.
  *
- * WHAT THE YIELD FLOOR CAUSES. qjs_set_yield_floor writes engine.c's `g_yield_floor`, which is read at the
- * BOTTOM of that same loop, AFTER the step: `if (cur && flow_weight(cur) < g_yield_floor) { g_sess_cur = cur;
- * return ENGINE_STEP_YIELD; }`. It ends the SLICE. The flow holding the thread is stored in `g_sess_cur` and
- * picked straight back up by the next slice — engine.c asserts precisely that where it does it ("the flow this
- * quantum resumes is no longer in the frontier" DCHECKs `flow_is_member(cur)`) — and flow_pick then takes that
- * same flow as its SEED, which it displaces only for a STRICTLY greater weight. So the floor moves nothing the
- * switch count is a function of: it cannot change which flow the pick returns, and therefore CANNOT BY
- * CONSTRUCTION change `_switches`. It is a HOST-yield knob, which is what main.c's own contract calls it — "the
- * runner-up ENGINE's weight, so the running flow yields the moment it is outranked ACROSS documents" — and this
- * file used to describe it as the thing that makes the engine "context-switch maximally… thousands of times
- * instead of a handful". That sentence was false about the mechanism and measurably false about the run.
- *
- * WHAT ACTUALLY MOVED, MEASURED (flag_fork.html, 2 flows, one build, four cells):
- *     floor -inf, reply paid at the reporting boundary   3 host turns   13 switches
- *     floor +inf, reply paid at the reporting boundary  25 host turns    2 switches
- *     floor +inf, reply paid where the engine is stuck  28 host turns   13 switches
- *     floor -inf, reply paid where the engine is stuck   3 host turns   13 switches
- * The floor is neutral across the pairs that hold the reply policy fixed, exactly as the mechanism above says.
- * What collapsed the run to 2 was the REPLY POLICY — and the floor changed it as a SIDE EFFECT, because a host
- * that pays at every boundary pays sooner when the boundaries are eight times closer together. Two switches is
- * NULL->A and then A->B after A finished: the frontier ran STRICTLY SERIALLY, which is the FIFO order this
- * gate's own counter exists to distinguish from an interleaving one (solver/engine.c says so where it counts).
- *
  * WHY THE REPLY POLICY IS THE ONLY LEVER A HOST HAS ON INTERLEAVING. flow_pick lets the incumbent keep the
  * thread unless something strictly outranks it, with ONE exception it writes into the seed test itself:
  * `!(runnable_only && flow_host_owed(seed))`. A host-owed mark is the one input to that pick a HOST can move,
  * and it moves it by choosing when to pay. Answer a flow's reply in the turn it is reported and the mark is
  * cleared before the pick is next made, so that flow never leaves the thread and no sibling ever takes it.
- * Hold it and the sibling runs. That is the whole of the mechanism, and it is why the reply policy is now a
+ * Hold it and the sibling runs. That is the whole of the mechanism, and it is why the reply policy is a
  * declared field instead of a consequence of how often the engine happens to return.
  *
- * WHAT WOULD BE NEEDED TO FORCE MORE SWITCHING THAN THIS, named precisely so nobody reads the axis as stronger
- * than it is: a LEVEL-2 floor — the same comparison flow_pick already makes, but with the incumbent given no
- * defence, i.e. the pick asked as flow_next_to_run(NULL) so an EQUAL sibling displaces the running flow instead
- * of only a strictly better one. No such knob exists, the engine's own VALUE yield is defined on strict
- * outranking (§scheduler: "suspend the moment a parked flow OUTRANKS"), and this gate must not grow one: a
- * schedule knob that no production host has is the test hook the first line of this comment refuses.
- *
- *   `direct`   — the reference, and it is production's own pair: default yield floor (-inf: run on) with the
- *                whole owed list answered at the boundary the engine reports it on (extension/bridge.js pays at
- *                EVERY slice boundary). Under this floor the engine returns only where it can make no further
- *                progress, so on a document that fits inside one cooperative quantum the reference's boundary
- *                IS the stuck one — which is why the reference has always been the most-interleaved schedule in
- *                the set, and why nobody noticed that the policy and the moment had come apart everywhere else.
- *   `preempt`  — qjs_set_yield_floor(+Infinity): the host's Level-1 VALUE yield with a rival this engine can
- *                never outrank, so the slice ends after EVERY unit of work. What that exercises is the SLICE
- *                BOUNDARY — §scheduler's razor, "the next step must resume the SAME top flow on the
- *                byte-identical frontier", asked once per unit of work instead of once per document — plus the
- *                quantum_begin/quantum_end bracket and the g_sess_cur carry at maximum frequency, with the
- *                frontier INTERLEAVED while that happens. It states "stuck" rather than inheriting the
- *                reference's word, and the two are not the same policy under this floor even though they are
- *                the same words: a boundary that arrives once per unit of work is not the boundary the
- *                reference pays at, so the schedule that maximises boundaries has to name its reply moment or
- *                it silently varies the reply LATENCY instead of the floor — which is what it did, and the
- *                order it delivered was `eager`'s.
- *   `eager`    — the same floor with the reply answered in the turn it is REPORTED: zero reply latency, which
- *                is a real host answer (a cache hit, a body already in memory) and produces the strictly serial
- *                FIFO frontier. It is kept as its own schedule rather than deleted, because an interleaved
- *                order and a FIFO order over one document is exactly the comparison a differential wants, and
- *                because this is the behaviour the name `preempt` used to carry — parked under a name that
- *                describes it instead of under one it contradicted.
+ *   `direct`   — the reference, and it is production's own pair: the whole owed list answered at the boundary
+ *                the engine reports it on (extension/bridge.js pays at EVERY slice boundary).
+ *   `stuck`    — the reply held until the engine says it can make no progress at all, so siblings run while a
+ *                flow's mark stands: reply LATENCY, the single-engine model of a reply landing in a later turn.
  *   `lastreply`— replies answered ONE PER TURN and in reverse arrival order. This does not change when a flow
  *                yields, it changes WHICH flow becomes runnable first — so the fork tree is built in a
  *                different order. §Learning-from-replies says the reply is the same reply whenever it lands.
@@ -274,107 +223,41 @@ const PENDING_LINE_FIELDS = ["method", "destination", "initiator", "provenance",
  *                SECOND INSTANCE resumes from it. §Time-travel-resume's whole claim, end to end, in one
  *                process. See the child's own comment for why the park is taken before the first pick and what
  *                the deeper park still needs.
- *   `stream`   — the reference's own (floor, reply) pair with `qjs_emit_partial` called at EVERY boundary: the
+ *   `stream`   — the reference's own reply policy with `qjs_emit_partial` called at EVERY boundary: the
  *                CONTROLLED TWIN of `direct`, differing from it in exactly one thing, so a mismatch row against
  *                the reference is attributable to that one call and to nothing else. What it tests is the
- *                contract main.c writes over that entry in as many words — "It READS: no flow is touched,
- *                nothing is drained, and the frontier the next step resumes is the one this was called on" —
- *                which is a SCHEDULE-INVARIANCE claim and had no reader anywhere in this tree. See the entry's
- *                own block below for why an entry the extension calls on a cadence for the whole of every long
- *                analysis had never once been driven by a gate.
- *   `eagerstream`— `eager`'s own (+inf, "reported") pair with that same call at every boundary: the CONTROLLED
- *                TWIN of `eager`, and the other end of the axis `stream` opens. The two streaming rows differ
- *                from each other in the FLOOR alone and each differs from its non-streaming pair in the third
- *                field alone, so a mismatch on either names one call or one floor and never a choice between
- *                them. It exists because the floor decides HOW OFTEN the entry is asked: at -inf the engine
- *                returns only where it is stuck, so `stream` asks it a handful of times per document, while at
- *                +inf the slice ends after every unit of work. A perturbation that needs more than a handful of
- *                reads to accumulate is visible to this row and to nothing else in the set.
- * `direct` is the reference because it is what the extension does when no other document is competing.
+ *                contract main.c writes over that entry — "It READS: no flow is touched, nothing is drained,
+ *                and the frontier the next step resumes is the one this was called on" — which is a
+ *                SCHEDULE-INVARIANCE claim.
+ * `direct` is the reference because it is what the extension does for one document.
  *
  * AND THE REPLY POLICIES ARE THREE, EACH NAMED FOR WHAT IT MODELS RATHER THAN FOR WHEN IT FIRES:
  *   "reported" — the whole owed list, in the turn the engine reports it. Zero latency.
  *   "stuck"    — the whole owed list, at the boundary where the engine says it can make no progress at all
- *                (ENGINE_STEP_STALLED). This is LATENCY, not laziness, and it is the honest single-engine model
- *                of the production round trip: extension/bridge.js takes the engine out of the hot set
- *                (`state = "fetching"`) and the reply lands from safeFetch in some LATER turn, never in the one
- *                that reported it, while other work runs meanwhile. This gate has one engine, so the work that
- *                runs meanwhile is this document's other flows — which is the point. It is NOT bridge.js's
- *                "pay only at a stall", the policy engine.c argues against: that argument is about withholding
- *                a reply that has ALREADY ARRIVED, and these replies are minted here and have never been in
- *                flight, so this driver has to choose an arrival moment and a network does not deliver into the
- *                turn that asked.
+ *                (ENGINE_STEP_STALLED). This is LATENCY, not laziness: extension/bridge.js takes the engine out
+ *                of the hot set (`state = "fetching"`) and the reply lands from safeFetch in some LATER turn,
+ *                never in the one that reported it, while other work runs meanwhile. This gate has one engine,
+ *                so the work that runs meanwhile is this document's other flows — which is the point.
  *   "last"     — one entry per turn, tail first. `lastreply`'s whole content.
  *
- * AND THE THIRD POLICY IS WHAT THE HOST ASKS OF THE ENGINE AT THE BOUNDARY, WHICH IS THE ONE THING PRODUCTION
- * DOES THAT THIS GATE'S OWN REFERENCE NEVER DID. `direct` is described three lines up as "production's own
- * pair", and it was a pair while production makes THREE decisions per round: extension/bridge.js's
- * `streamPartial` calls `qjs_emit_partial` on a `PARTIAL_MS` cadence for the whole of any analysis that
- * outlives it, "WITHOUT waiting for a finalize that an unbounded engine never reaches" — its words — so on
- * every real page the engine is asked for a mid-run document between steps, and the reference that claims to
- * model it never asked once. It is not a knob invented here (§the first line of this comment): it is a shipped
- * ABI entry with a production caller and, until this schedule, no driver caller at all — `engine/route.mjs`
- * does not call it and neither did this file, so the entry's contract was carried entirely by main.c's own
- * prose. That is the §Testing shape exactly: the shipped entry is the one that rots, and this one composes the
- * finding document the product's incremental merge is built out of.
- *   false — the host asks nothing between steps. Every schedule but `stream` and `eagerstream`, which are named
- *           rather than counted by position: this line read "every schedule above" while exactly one row
- *           declared `true`, and a second one landing below it would have made the sentence quietly false.
+ * AND THE SECOND POLICY IS WHAT THE HOST ASKS OF THE ENGINE AT THE BOUNDARY: extension/bridge.js's
+ * `streamPartial` calls `qjs_emit_partial` on a `PARTIAL_MS` cadence for the whole of any analysis that outlives
+ * it, so on every real page the engine is asked for a mid-run document between steps.
+ *   false — the host asks nothing between steps. Every schedule but `stream`.
  *   true  — `qjs_emit_partial` at EVERY boundary the engine reports, plus once more after the frontier answers
  *           DONE. The last of those is compared against `qjs_result`'s document (see the parent's row): both
  *           are `result_json(g_ctx)` with no step between them, so any difference is one of the two composers
- *           or this driver's capture of the print sink. `qjs_emit_partial` is named in exactly five files —
- *           engine/build.mjs's QJS_ABI list, main.c, qjs_abi.h, solver/result.h and extension/bridge.js — so
- *           the streamed @RESULT document had one producer, one production consumer, and no driver reading it
- *           at all. Read at the revision this landed against; grep it again before repeating it. */
+ *           or this driver's capture of the print sink. */
 const POLICY = new Map([
-  ["direct",    { floor: -Infinity, reply: "reported", partial: false }],
-  ["preempt",   { floor:  Infinity, reply: "stuck",    partial: false }],
-  ["eager",     { floor:  Infinity, reply: "reported", partial: false }],
-  ["lastreply", { floor: -Infinity, reply: "last",     partial: false }],
-  ["park",      { floor: -Infinity, reply: "reported", partial: false }],
-  /* THE CONTROLLED TWIN OF THE REFERENCE — the reference's own floor and reply, so the ONLY difference is the
-     third field and a mismatch has one candidate cause instead of two. IT IS DECLARED ON EVERY ROW ABOVE AND
-     NOT DEFAULTED HERE, which is this file's own lesson about the reply policy repeated rather than re-learned:
-     a field one schedule states and the others inherit is how the second decision came to be read off the
-     schedule's NAME.
-     AT FLOOR -inf THE ENGINE RETURNS ONLY WHERE IT CAN MAKE NO FURTHER PROGRESS, so this row asks the entry a
-     HANDFUL of times per document and cannot accumulate a perturbation that needs more calls than that. The row
-     below is the other end of that axis and is why this one is no longer alone. */
-  ["stream",    { floor: -Infinity, reply: "reported", partial: true  }],
-  /* THE CONTROLLED TWIN OF `eager` — its own (+inf, "reported") pair with the boundary question turned on, so
-     this row differs from `eager` in exactly the third field and from `stream` in exactly the first. That is
-     what makes a mismatch attributable: a row against `eager` accuses `qjs_emit_partial`, a row against
-     `stream` accuses the FLOOR, and neither has two candidate causes. It is the second half of one axis, not a
-     seventh name — at -inf the engine hands the thread back only where it is stuck, so `stream` asks the entry
-     a handful of times, while at +inf the slice ends after every unit of work and the same entry is asked once
-     per unit for the whole run.
-     WHY BOTH ROWS AND NOT THE +inf ONE ALONE: main.c's contract over that entry is that it READS — "no flow is
-     touched, nothing is drained, and the frontier the next step resumes is the one this was called on" — and a
-     read performed a handful of times and a read performed at every boundary are different amounts of exposure
-     to the same claim, while only the pair holds the floor as a controlled variable. Deleting `stream` would
-     buy one child per document and lose the single-variable attribution that makes either row diagnostic.
-     WHAT IT COSTS, stated because it is a real one: one more child process per document on every run of this
-     gate, which is the whole-corpus cost this row has to be worth.
-     MEASURED WHERE IT LANDED AND NOT PREDICTED, WITH ITS RUN COUNT AND ITS SPREAD — flag_fork.html against the
-     build stamped f6cbdd9b, on a 4-core box at load 4.4-7.4. That quantum is WALL-denominated on emscripten
-     (see the block beside REFERENCE), so this is a count the BOX moves and a single sample of it would state
-     nothing: `stream` took 3-8 snapshots over SEVEN runs (5/8/8/7 as a child, 6/4/3 under the parent) and this
-     row took 24-26 over SIX (24/25/25/26 as a child, 25/24 under the parent). What licenses the sentence above
-     about the two ends of the axis is that those two RANGES DO NOT OVERLAP — 3-8 against 24-26 — so the
-     separation is larger than the noise that was actually measured rather than larger than a noise nobody
-     looked at.
-     AND THE SPREAD IS THE FINDING, NOT A DISCLAIMER ON IT. A prediction stood here before those runs and gave
-     each end of this axis a SINGLE number, "~3" against "~25". The +inf end holds. The -inf end has no single
-     value to hold: its measured range is 3-8 over seven runs, so "~3" is not so much wrong as UNFALSIFIABLE AS
-     STATED — it names the bottom of a range it does not admit exists, and any one run can be quoted to confirm
-     it or to refute it. That is the shape to avoid here specifically, because the quantity is wall-denominated
-     and this box moves it: a point estimate of a noisy count reads as a measurement and is a draw. Every number
-     in this block therefore carries its run count and its range, and the only claim made from them is the one
-     two non-overlapping ranges support.
-     THE NUMBERS ARE A SPREAD AND NEVER A THRESHOLD — nothing in this file compares them, `midrun` is printed on
-     `_switches`' own ground, and a row that started asserting one would be a metric used as a target. */
-  ["eagerstream", { floor: Infinity, reply: "reported", partial: true  }],
+  ["direct",    { reply: "reported", partial: false }],
+  ["stuck",     { reply: "stuck",    partial: false }],
+  ["lastreply", { reply: "last",     partial: false }],
+  ["park",      { reply: "reported", partial: false }],
+  /* THE CONTROLLED TWIN OF THE REFERENCE — the reference's own reply policy, so the ONLY difference is the
+     second field and a mismatch has one candidate cause instead of two. IT IS DECLARED ON EVERY ROW ABOVE AND
+     NOT DEFAULTED HERE: a field one schedule states and the others inherit is how a decision comes to be read
+     off the schedule's NAME. */
+  ["stream",    { reply: "reported", partial: true  }],
 ]);
 const SCHEDULES = [...POLICY.keys()];
 const REFERENCE = "direct";
@@ -385,7 +268,7 @@ const REFERENCE = "direct";
    defect with the field this diff added. */
 const policyLabel = (s) => {
   const p = POLICY.get(s);
-  return `${s}(${p.floor === Infinity ? "+inf" : "-inf"}/${p.reply}${p.partial ? "/stream" : ""})`;
+  return `${s}(${p.reply}${p.partial ? "/stream" : ""})`;
 };
 
 /* THE REFERENCE IS ASKED TWICE, AND THAT IS NOT A FIFTH SCHEDULE. Every row this gate prints is a difference
@@ -424,13 +307,13 @@ const policyLabel = (s) => {
    second schedule involved at all. What is compared is the SET, never a sequence: the same canonical sets every
    other row compares.
 
-   WHY IT IS NOT IN SCHEDULES. Each entry there is a distinct (floor, reply) PAIR that moves a distinct
+   WHY IT IS NOT IN SCHEDULES. Each entry there is a distinct (reply, partial) PAIR that moves a distinct
    mechanism, and a duplicate of the reference moves none: putting it in that list would make the list untrue
    about itself, and would route a repeat failure through the MISMATCH message, which says "one of these two
    schedules dropped…" and would be a wrong diagnosis stated confidently. Two failures that read alike is the
    defect this file argues about @S candidates, performed by its own reporter. The verdicts are kept apart.
 
-   WHY THE REFERENCE AND NOT ANOTHER. Every other comparison is made AGAINST it. A noisy `preempt` costs one
+   WHY THE REFERENCE AND NOT ANOTHER. Every other comparison is made AGAINST it. A noisy `stuck` costs one
    row; a noisy `direct` costs the whole table, and the rows then have to say so — which is what refNoisy does.
 
    WHY LAST. The box is in a different state after the other children than before them, so the second sample's
@@ -858,15 +741,6 @@ async function child(docPath, schedName) {
        engine_set_arrival). */
     e.M.ccall("qjs_set_arrival", null, ["number"], [e.cs("observed,undriven,unpinned")]);
     e.M.ccall("qjs_begin", "void", ["number"], [e.cs(recipes)]);
-    /* THE HOST'S OWN LEVEL-1 YIELD, SET FROM THE DECLARED FLOOR AND NOT FROM A NAME. Nothing is dropped across
-       it — engine.c returns YIELD with `g_sess_cur` held and the frontier untouched — which is exactly the
-       claim under test: the next step must resume the SAME top flow on the byte-identical frontier. What it
-       does NOT do is change which flow the next pick returns; that flow is `g_sess_cur`, carried across the
-       return and handed to flow_pick as its seed, so the floor cannot move `_switches` (see the header).
-       -Infinity IS SET RATHER THAN SKIPPED, because it is the engine's own default and passing it makes every
-       schedule state its floor at the one line that sets one — a schedule that declares a floor this call does
-       not make would be the same silent inheritance this file just removed. */
-    e.M.ccall("qjs_set_yield_floor", "void", ["number"], [policy.floor]);
     if (sched === "park" && recipes === "")
       /* PARKED BEFORE THE FIRST PICK. engine_sched_slice takes the park at the top of the slice with no flow
          switched in, so this parks the frontier in its seeded state: one unstarted boot flow, whose recipe is
@@ -963,8 +837,8 @@ async function child(docPath, schedName) {
      had. */
   const policy = POLICY.get(schedName);
   if (!policy)
-    gateFail(`the schedule \`${schedName}\` declares no (floor, reply, partial) triple — a schedule is that ` +
-             "triple and nothing else, so a name without one is a run whose order nobody stated");
+    gateFail(`the schedule \`${schedName}\` declares no (reply, partial) pair — a schedule is that ` +
+             "pair and nothing else, so a name without one is a run whose order nobody stated");
   if (typeof policy.partial !== "boolean")
     gateFail(`the schedule \`${schedName}\` states no boundary policy — every row of POLICY declares ` +
              "`partial` because this file has already been bitten once by a decision that was INHERITED " +
@@ -1032,8 +906,8 @@ async function child(docPath, schedName) {
    allocated and forked differently. `snapshot` excludes them because THE COMPOSE ITSELF MOVES THEM: asked
    twice at one boundary with no step in between, `result_json` allocates to build the first document and the
    second document's `_heap`/`_swap` then report the larger arena. That is MEASURED and not predicted —
-   flag_fork.html under `stream` answered `"arenaKiB":1754` then `"arenaKiB":1758`, and under `eagerstream`
-   1746 then 1750, on the build stamped f6cbdd9b — and it is not a violation of anything: main.c's contract
+   flag_fork.html under `stream` answered `"arenaKiB":1754` then `"arenaKiB":1758` on the build stamped
+   f6cbdd9b — and it is not a violation of anything: main.c's contract
    over that entry promises that no flow is touched, that nothing is drained and that the frontier resumes as
    it was, and a self-measuring allocator figure is none of the three. So these four leave the two-call
    comparison.
@@ -1363,14 +1237,10 @@ const DROP = new Map([
      the scheduler's every switch-in of a candidate flow — and says so where it counts it: "IT IS SWITCH-INS AND
      NOT DISTINCT FLOWS, which is what makes it a scheduling fact rather than a second copy of `tried`: a
      candidate preempted and resumed twenty times has been given twenty turns". The schedules above choose it:
-     a reply held while a sibling runs (`preempt`) and a reply answered in the turn it was reported (`eager`)
+     a reply held while a sibling runs (`stuck`) and a reply answered in the turn it was reported (`direct`)
      give the same document a different number of switch-ins, and holding it invariant would fail one of them
      against the reference on healthy code — which is the one ground `_switches` is dropped on and the same
-     ground here. THE SENTENCE THIS REPLACES SAID `preempt` "is DEFINED as outranking the running flow after
-     every flow step, so it maximises exactly this number by construction", AND THAT WAS FALSE ABOUT THE
-     MECHANISM: the yield floor is a HOST yield that ends the slice and hands the same flow straight back
-     (header), so it outranks no flow and maximises no switch count. The row is right; its old reason was not,
-     and a right row resting on a wrong reason is the shape that survives review. Its NEIGHBOURS stay compared and that is the
+     ground here. Its NEIGHBOURS stay compared and that is the
      line: `reached`, `survived`/`survivedOf`, `escaped` and `fires` are observations of what a re-execution got
      through the page's own transforms, and on a frontier that DRAINS every seeded candidate runs, so each of
      them converges to a fact about the document. A count of how many times work was switched in never

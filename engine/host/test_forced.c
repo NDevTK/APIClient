@@ -15635,8 +15635,8 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
        what sent a reader to fixture_cold_moment to fix something that is not there. NO MOMENT THIS HOST CAN
        NAME CONTAINS ONE: the hook is asked between two slices, flow_perform appends the operation's program to
        a RUNNABLE row, and a runnable member is in neither the stall nor the exhausted exit — so the started
-       state is strictly intra-slice and the only exits that could end a slice over one are the CPU quantum and
-       the level-1 yield floor. The moment's own paragraph carries the argument in full.
+       state is strictly intra-slice and the only exit that could end a slice over one is the CPU quantum. The
+       moment's own paragraph carries the argument in full.
        SO THIS ROW IS NARROWER THAN engine_retract_span, BY EXACTLY ONE LOOP, and that is what a 0 here says.
        WHAT IS NOT COVERED: the `dyn_token` strip — the `g_retract_started++` loop — which no park this fixture
        takes has ever reached.
@@ -17238,8 +17238,8 @@ static int fixture_have_answers(void) {
  * gap it needs would have to be INSIDE a slice, and a slice does not end there: flow_perform moves the token
  * onto a program's row and APPENDS that program (DYN_POS_APPEND), which leaves the flow RUNNABLE, so a member
  * holding a started operation can never be part of a stall (engine_host_owes) and never reaches the exhausted
- * exit. Of the slice's exits only the CPU quantum and the level-1 yield floor can end one mid-operation, and
- * neither is a thing this fixture states — the quantum is a race, which §Testing names as the shape a loaded
+ * exit. Of the slice's exits only the CPU quantum can end one mid-operation, and it is not a thing this
+ * fixture states — the quantum is a race, which §Testing names as the shape a loaded
  * machine falsifies, so a row resting on it would be a flaky green rather than a measurement.
  * WHAT THE PARK THEREFORE EXERCISES HERE is engine_retract_span's ARRIVAL-SLOT half over every timeline the one
  * question was attached to, plus the last-holder rule that decides how many notices leave — which is the three
