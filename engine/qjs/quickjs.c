@@ -1856,6 +1856,8 @@ typedef struct JSAsyncFunctionData {
        slot early. What is dev-only is the READ. */
     uint8_t claim_arm;         /* JSAsyncClaimArm — 0 (NEVER-CLAIMED) until a resume claims it */
     uint32_t claim_fork_gen;   /* the claiming flow's fork generation at the instant of the claim */
+    uint64_t claim_timeline;   /* …and its timeline (0 with no timeline hook), so the abort can tell one flow
+                                  resuming an activation twice from two flows holding one */
     uint64_t mint_timeline;    /* the timeline its latest await continuation was minted in (written in dev) */
     JSAsyncFunctionState func_state;
 } JSAsyncFunctionData;
@@ -44577,8 +44579,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    THE `DO NOT RE-EXPAND THIS STRING` THAT STOOD HERE WAS A BOUND WITHOUT ITS NUMBER, WHICH IS
                    WHY IT WAS OBEYABLE ONLY BY NOT TOUCHING THE LINE. The expansion is arithmetic and it is
                    free: widest `%u` is 10 (uint32_t), widest arm name is `SKIPPED-PRIVATE` at 15, widest
-                   closure verdict is `PRIVATE` at 7, `%d` is 1, and the literal is 371 — WORST CASE 424
-                   BYTES against the 512 cap, 87 spare. Re-measure that sum before adding a field rather than
+                   closure verdict is `PRIVATE` at 7, `%d` is 1, each `%llx` timeline is 16, and the literal is 371 — WORST
+                   CASE 472 BYTES against the 512 cap, 40 spare. Re-measure that sum before adding a field rather than
                    deciding from the sentence; a bound stated as a prohibition is one nobody can satisfy
                    except by leaving the defect in.
                    AND THE COMPILER GUARDS THE LITERAL HALF OF THAT SUM AND NOT THE ARGUMENT HALF, WHICH IS A
@@ -44596,11 +44598,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    ON in `build.mjs` is not a promise about the half this abort actually grew in. */
                 DCHECKF(as->is_active,
                         "a flow resumed a suspended async continuation that was already consumed. "
-                        "consumedBy=%s@gen%u — that is the arm of js_async_resume_isolate that last claimed it "
-                        "and the ONLY reading here that indicts the CONSUMER; hook=%d closureGen=%u "
-                        "forkGen=%u closure=%s all describe the flow that ARRIVED. Read the paragraph above "
-                        "this DCHECKF, and coroSwapAsyncCalls/coroSwapAsyncMade beside it",
+                        "consumedBy=%s@gen%u in timeline %llx — the arm of js_async_resume_isolate that last "
+                        "claimed it, the ONLY reading here that indicts the CONSUMER; the activation's last await "
+                        "was minted in %llx and this resume arrives in %llx; hook=%d closureGen=%u forkGen=%u "
+                        "closure=%s describe the ARRIVING flow. See the paragraph above",
                         js_async_claim_arm_name(as->claim_arm), (unsigned)as->claim_fork_gen,
+                        (unsigned long long)as->claim_timeline, (unsigned long long)as->mint_timeline,
+                        (unsigned long long)(g_time_travel.timeline ? g_time_travel.timeline() : 0),
                         g_time_travel.async_fork != NULL,
                         (unsigned)JS_ObjFlowGen(rfunc), (unsigned)g_flow_fork_gen,
                         JS_IsFlowShared(rfunc) ? "SHARED" : "PRIVATE");
@@ -56235,6 +56239,7 @@ static JSAsyncFunctionData *js_async_resume_isolate(JSContext *ctx, JSValueConst
        already had, and the LAST claimer of any activation is by construction the one that consumed it. */
     s->claim_arm = arm;
     s->claim_fork_gen = g_flow_fork_gen;
+    s->claim_timeline = g_time_travel.timeline ? g_time_travel.timeline() : 0;
     return s;
 }
 
