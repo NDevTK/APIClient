@@ -708,6 +708,7 @@ char *result_wfq_json(void) {
     METRIC_SET(credits_paid_lifetime, w.credit_paid);
     METRIC_SET(credits_dropped_lifetime, w.credit_dropped);
     METRIC_SET_REAL(credits_paid_value_lifetime, flow_credit_paid_value());
+    METRIC_SET_REAL(novelty_landed_lifetime, novelty_landed_value());
     METRIC_SET(work_done, engine_work_done());
     METRIC_SET(rank_changes, flow_rank_changes());
     METRIC_SET(reach_bodies, nr.sites.bodies);

@@ -1520,7 +1520,9 @@ void  flow_set_running(Flow *f);
 Flow *flow_running(void);
 /* A just-seeded drive's product count (flow.h's `orphan_seen`), re-keyed and raised as a rank change. */
 void  flow_set_orphan_seen(Flow *f, int64_t seen);
-void  flow_credit_emit(double v);   /* a new @H/@S from the running flow: raise reward, reset aging */
+/* A new @H/@S from the running flow: raise reward, reset aging. Answers 1 when an account was paid and 0 on the
+   dropped arm (no flow holds the thread). */
+int   flow_credit_emit(double v);
 /* The sum of the values flow_credit_emit paid to an account over this instance's lifetime: the document's novel
    value as Level 1 ranks it (the trusted zone divides it by engine_service_us). Raised on the paid arm only, so a
    credit made on host time with no flow to pay is not in it. Never falls. */

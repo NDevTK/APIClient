@@ -39,6 +39,7 @@ static long g_paid[NOVELTY_KIND_N], g_unpaid[NOVELTY_KIND_N];
 typedef struct { NoveltyId id; unsigned seen; int64_t visits; } NoveltyDrive;
 static NoveltyDrive *g_drives;
 static long g_drives_n, g_drives_cap, g_drives_lowered;
+static double g_landed;
 
 static int id_eq(NoveltyId a, NoveltyId b) { return a.hi == b.hi && a.lo == b.lo; }
 
@@ -127,7 +128,17 @@ void novelty_credit(NoveltyKind kind, int novel) {
            "a credit was asked for a kind novelty.h does not list as a credit kind — a counted kind is read, not paid");
     if (!novel) { g_unpaid[kind]++; return; }
     g_paid[kind]++;
-    flow_credit_emit(1.0);
+    {
+        /* One credit event seen from both ledgers: the flow ledger's paid value moves by exactly what this site
+           counts as landed. */
+        double before = flow_credit_paid_value();
+        int landed = flow_credit_emit(1.0);
+        DCHECKF(flow_credit_paid_value() - before == (landed ? 1.0 : 0.0),
+                "a novel credit moved the flow ledger's paid value by %g while flow_credit_emit answered %d — the "
+                "Level-1 value and the ledger it is read beside counted one event two ways",
+                flow_credit_paid_value() - before, landed);
+        if (landed) g_landed += 1.0;
+    }
 }
 
 unsigned novelty_drive_note_at(NoveltyId id, int64_t visits, const char *file, int line) {
@@ -150,6 +161,7 @@ unsigned novelty_drive_note_at(NoveltyId id, int64_t visits, const char *file, i
     if (s->known_n) g_drives_lowered++;
     return s->known_n;
 }
+double novelty_landed_value(void) { return g_landed; }
 
 static int hex_digit(int c) {
     return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
@@ -241,6 +253,7 @@ char *novelty_json(void) {
     }
     json_buf_raw(&b, "],"); json_buf_key(&b, "asks"); json_long(&b, asks);
     json_buf_raw(&b, ","); json_buf_key(&b, "paid"); json_long(&b, paid);
+    json_buf_raw(&b, ","); json_buf_key(&b, "landed"); json_long(&b, (long)g_landed);
     json_buf_raw(&b, ","); json_buf_key(&b, "known"); json_long(&b, g_known_n);
     json_buf_raw(&b, ","); json_buf_key(&b, "own"); json_long(&b, g_own_n);
     json_buf_raw(&b, ","); json_buf_key(&b, "ownKnown"); json_long(&b, g_own_known_n);
@@ -288,4 +301,5 @@ void novelty_free(void) {
     memset(g_paid, 0, sizeof g_paid);
     memset(g_unpaid, 0, sizeof g_unpaid);
     free(g_drives); g_drives = NULL; g_drives_n = g_drives_cap = g_drives_lowered = 0;
+    g_landed = 0.0;
 }

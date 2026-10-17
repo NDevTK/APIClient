@@ -345,6 +345,8 @@ METRIC(credits_dropped_lifetime, "creditsDroppedLifetime", LIFETIME, "credit", P
 /* The values the paid credits carried, summed (a survival-ratchet credit is a fraction of a point): the novel
    value the trusted zone's Level-1 order divides by `loopUs`. A lifetime counter. */
 METRIC(credits_paid_value_lifetime, "creditsPaidValueLifetime", LIFETIME, "point", PROCESS, "solver/flow.c", FIXED3)
+/* The novel share of it, the value Level 1 ranks a document by (solver/novelty.h's novelty_landed_value). */
+METRIC(novelty_landed_lifetime, "noveltyLandedLifetime", LIFETIME, "point", PROCESS, "solver/novelty.c", FIXED3)
 /* `workDone` (`engine_work_done()`) dates this census in the clock every other stream of the
    run is cadenced by (`fixture_have_answers` samples on it, run_scheduler gates censuses on
    it), so rows of two lines are compared only within one sample: the @H sampler fires every

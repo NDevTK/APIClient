@@ -865,7 +865,7 @@ double flow_credit_paid_value(void) { return g_credit_paid_value; }
    aging window resets, so a productive flow outranks fresh and starved flows. Called by the detectors (endpoint.c,
    solve.c) when they record something new; this is what orders the WFQ by value of information rather than
    breadth-first by visit count. The rank change is raised through frontier_vt_serve. */
-void flow_credit_emit(double v) {
+int flow_credit_emit(double v) {
     int64_t own_us;   /* the emitter's own burn over the window this emission closes — see the bump below */
     /* One emission is one point, the unit the aging term's exchange rate is stated in. A credit of zero or less
        would reset a flow's aging without changing its rank, the one way a monopolizer could refresh its lead
@@ -877,7 +877,7 @@ void flow_credit_emit(double v) {
     /* And the arm with nobody to pay. Not an error, so no assert: a detector reached on host time (the root
        document's markup, inventoried by `qjs_init`'s parse before `qjs_begin` seeds the frontier) has no running
        flow because no flow discovered it. Counted, for the banner's reason. */
-    if (!g_running) { g_credit_dropped++; return; }
+    if (!g_running) { g_credit_dropped++; return 0; }
     /* The order's reward is the family's, so the credit lands on the family (FlowAcct's `val`): raised once, the
        silence charged to that family cancels exactly it, while raising every arm would present one emission as
        many times as the bundle branches against a debit charged once. A running flow is a member and owns its
@@ -990,6 +990,7 @@ void flow_credit_emit(double v) {
        on it, the preempt hook's rescan cadence first. An emission reaches the clock's writer unconditionally past
        the early return. The yield request is a bit polled at the next opcode, so raising it before `emit_gen` and
        `fam_us` are updated is observationally identical. */
+    return 1;
 }
 
 /* See flow.h: the seed's statement of how much of this body the product had explored. The drive was assembled as

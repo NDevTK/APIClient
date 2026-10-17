@@ -59,6 +59,10 @@ int  novelty_note_at(NoveltyKind kind, NoveltyId id, const char *file, int line)
 /* The credit site's one ask: pays the running flow 1.0 through flow_credit_emit when `novel`, and counts the
    ask as paid or known-unpaid under `kind` either way. */
 void novelty_credit(NoveltyKind kind, int novel);
+/* The novel value that reached an account: the sum over novelty_credit's paid asks whose flow_credit_emit paid a
+   flow, which is the document's novel value as Level 1 ranks it. A novel emission on host time (no flow holds
+   the thread) is counted paid in the census and is not in this sum. */
+double novelty_landed_value(void);
 
 /* Files a drive of uncalled code under `id` (NOVELTY_DRIVE) and answers how many drives of it the product had
    recorded before this one: the count the drive's optimism term reads (solver/flow.h's `orphan_seen`). A body is

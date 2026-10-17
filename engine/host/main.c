@@ -1742,7 +1742,7 @@ QJS_EXPORT void qjs_host_answers_exhausted(unsigned req)
 
 /* This instance's Level-1 account, the three facts the trusted zone ranks documents by:
    `{"runnable":0|1,"paid":<novel value>,"serviceUs":<thread measure of service>}`. `paid` is
-   flow_credit_paid_value and `serviceUs` engine_service_us, both lifetime counters of this instance, so the zone
+   novelty_landed_value and `serviceUs` engine_service_us, both lifetime counters of this instance, so the zone
    adds a parked document's stored account to them. No flow weight crosses: Level 1 compares documents by value per
    CPU-second, never one frontier's order against another's. The buffer is this entry's and is overwritten by the
    next call; the host copies the string out of linear memory before it asks again. */
@@ -1754,8 +1754,12 @@ QJS_EXPORT const char *qjs_level1_account(void)
     int n;
 
     DCHECK(g_begun, "qjs_level1_account was asked of an engine whose frontier was never seeded");
-    paid = flow_credit_paid_value();
+    paid = novelty_landed_value();
     us = engine_service_us();
+    /* The novel credits are a subset of the flow ledger's paid credits (the @S ladder's rungs are paid too). */
+    DCHECKF(paid <= flow_credit_paid_value(),
+            "the Level-1 novel value %g exceeds the flow ledger's paid value %g — every landed novel credit is one "
+            "flow_credit_emit paid", paid, flow_credit_paid_value());
     DCHECKF(paid >= 0.0 && paid == paid && us >= 0,
             "the Level-1 account is negative or NaN (paid %g, serviceUs %lld) — both are sums of non-negative "
             "charges that only climb", paid, (long long)us);
