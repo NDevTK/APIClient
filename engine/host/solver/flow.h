@@ -226,6 +226,13 @@ typedef struct Flow {
        crosses the tier, stamped when the drive is created and carried unchanged by every arm. 0 for a flow that
        is not a driven orphan, which the park asserts. */
     uint64_t orphan_hash;
+    /* How many drives of this body (solver/novelty.h's NOVELTY_DRIVE: script content and locator) the product
+       had recorded, in every other document and session of this cluster, when this drive was seeded. A term of
+       the optimism denominator, `1/(1 + visits + orphan_seen)`: explored code is lowered elsewhere and never
+       removed. Written once, at the seed (flow_set_orphan_seen), before the drive is dispatched, and copied by a
+       fork, so every arm of one drive reads one number at every instant; 0 for every flow that is not a seeded
+       drive, a resumed one included (its own recorded drive is not "elsewhere"). */
+    int64_t orphan_seen;
     /* Is this drive still waiting for its function? Set only by the cold tier's rebuild. A resumed session's
        heap holds the closure only once the document's own replay creates it and some flow takes it as an
        orphan; until then this flow replays the document like any other. `fn` tells the two states apart:
@@ -921,6 +928,9 @@ typedef struct {
        (engine.c's job arms are all under `frame == NULL`); the pair's spread says whether turns rotate. */
     int64_t vis_min;
     int64_t vis_max;
+    /* The extremes of the optimism denominator, `1 + visits + orphan_seen`, which the census's own spread bound
+       is taken over; not published, since `visMin`/`visMax` are the visit count's own rows. */
+    int64_t opt_den_min, opt_den_max;
     /* The family half of the aging in the same notches (flow.c's FlowAcct `fam_us`), which flow_weight reads.
        The reward lives on the same node, so a family presents it once however many arms it has. The ratio to
        `svc_max` is the widest family's fork factor, a fact about the document's branching;
@@ -1511,7 +1521,9 @@ uint64_t flow_running_switches(void);
 /* The running flow (scheduler-set). Detectors credit emitted value to it; the scheduler ages it. */
 void  flow_set_running(Flow *f);
 Flow *flow_running(void);
-void  flow_credit_emit(double v);   /* a new @H/@S from the running flow: raise reward, reset aging */
+void  flow_credit_emit(double v);
+/* A just-seeded drive's product count (flow.h's `orphan_seen`), re-keyed and raised as a rank change. */
+void  flow_set_orphan_seen(Flow *f, int64_t seen);   /* a new @H/@S from the running flow: raise reward, reset aging */
 /* Where this candidate's own bytes stand on the @S ladder: the fitness term of flow_weight, composed from the
    rung fields rather than stored, `(cand_replay + cand_surv + cand_rung) / FLOW_RUNGS_N` in [0,1], and exactly
    0 for a flow that is not a candidate (both fitness writers assert they are asked only of one). */

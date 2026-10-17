@@ -1,17 +1,17 @@
-/* Novelty against the product over two documents of one app: `node engine/noveltygate.mjs <binary>`.
- * Two documents of https://app.test, each its own `--abi` instance (two tabs are two agent clusters), share two
- * requests; the second adds one endpoint and one header. This file plays the zone with
- * extension/lib/novelty-set.js loaded verbatim: it absorbs each `@RESULT`'s `_novelty` into the cluster origin's
- * partition and hands it back as `novelty` records. Every fetch gets a network error so frontiers drain; requests
- * are recorded at Fetch §5.6 step 12, before the park. Rows, read off each instance's last `@RESULT`:
- *   A           handed nothing: every endpoint ask paid.
- *   B-alone     handed nothing: every ask paid (the behaviour without the channel).
- *   B-known     A's identities at boot (positive control): paid = |B - A|, knownUnpaid = |B ∩ A|, both nonzero,
- *               paid below B's recorded endpoints, and B's added header paid.
+/* Novelty against the product: `node engine/noveltygate.mjs <binary>`. Each document is its own `--abi` instance
+ * (two tabs are two agent clusters); this file plays the zone with extension/lib/novelty-set.js loaded verbatim,
+ * absorbing each `@RESULT`'s `_novelty` into the cluster origin's partition and handing it back as `novelty`
+ * records. Every fetch gets a network error so frontiers drain; requests are recorded at Fetch §5.6 step 12.
+ * Endpoints, over https://app.test where B adds one endpoint and one header to A's two requests:
+ *   A, B-alone  handed nothing: every ask paid.
+ *   B-known     A's identities at boot (positive control): paid = |B - A|, knownUnpaid = |B ∩ A|, B's header paid.
  *   B-invented  identities nothing emitted (negative control): nothing known-unpaid, the set's size counted.
- *   B-stale     A's lines under another spelling: refused whole, nothing known-unpaid.
- *   B-late      A's identities in its first round: requests minted after it are known-unpaid, the first is paid.
- * Exit status is 0 only when every row holds.
+ *   B-stale     A's lines under another spelling: refused whole.   B-late  handed in round 1: later mints unpaid.
+ * Drives of uncalled code, over C and D of https://shop.test sharing /bundle.js, D adding its own function:
+ *   C, D-alone  handed nothing: every drive reads a product count of 0.
+ *   D-known     C's identities (positive control): the bundle's drives read C's count, D's own read 0, all run.
+ *   D-invented  invented drive lines (negative control): no drive is lowered.
+ * Exit status is 0 only when every row holds; each row prints what it read.
  */
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -48,6 +48,14 @@ fetch('/api/users', { headers: { 'x-api-key': 'k', 'authorization': 'Bearer t' }
 });
 </script>`;
 
+/* One bundle both documents ship, holding a function nothing calls; D adds an uncalled function of its own. */
+const BUNDLE = `function shared() { fetch('/api/shared').catch(function () {}); }
+`;
+const DOC_C = `<!doctype html><script src="/bundle.js"></script>`;
+const DOC_D = `<!doctype html><script src="/bundle.js"></script><script>
+function only() { fetch('/api/only').catch(function () {}); }
+</script>`;
+
 const b64 = (s) => Buffer.from(s).toString('base64');
 
 /* One instance: `boot` is set text handed before the document (or null), `late` set text handed in its first
@@ -76,7 +84,16 @@ function run(tag, url, html, boot, late) {
           if (rounds++ === 0 && late !== null) say(`novelty\t${b64(late)}`);
           /* METHOD DESTINATION INITIATOR PROVENANCE PINNED DRIVEN CREDENTIALS MODE REFERRER_POLICY REFERRER
              ASKERS URL (solver/engine.h's engine_pending_split); a network error is JSON `null` and no body. */
-          for (const f of owed.splice(0)) say(['provide', f[0], f[7], f[8], f[9], f[11], b64('null'), '-'].join('\t'));
+          for (const f of owed.splice(0)) {
+            const abs = new URL(f[11], url).href;
+            /* The bundle is the one body this zone serves; every other request is a network error. */
+            const reply = new URL(abs).pathname === '/bundle.js'
+              ? [b64(JSON.stringify({ status: 200, statusText: 'OK', headers: [['content-type', 'text/javascript']],
+                                      urlList: [abs], computedType: 'text/javascript', type: 'basic' })),
+                 b64(BUNDLE)]
+              : [b64('null'), '-'];
+            say(['provide', f[0], f[7], f[8], f[9], f[11], ...reply].join('\t'));
+          }
           say('go');
           continue;
         }
@@ -111,7 +128,7 @@ const A = await run('a', ORIGIN + '/a', DOC_A, null, null);
 const a = A._novelty, aEp = kindOf(a, 'endpoint');
 row('A', aEp.asks > 0 && aEp.paid === aEp.asks && aEp.knownUnpaid === 0 && a.known === 0 && a.scope === ORIGIN,
     census(a));
-ZONE.noveltyAbsorb(ORIGIN, a);
+ZONE.noveltyAbsorb(ORIGIN, a, new Map());
 const known = ZONE.noveltyOwed(ORIGIN, { spelling: null, n: 0 });
 
 const B0 = await run('b-alone', ORIGIN + '/b', DOC_B, null, null);
@@ -155,5 +172,38 @@ const B1 = await run('b-known', ORIGIN + '/b', DOC_B, known, null);
       ` — ${ep.knownUnpaid} known-unpaid against ${ep1.knownUnpaid} when handed at boot`);
 }
 
+/* The drive rows, under an origin of their own so their partition holds only C's identities. A drive's optimism
+   is read off what the engine published at its seed. */
+const SHOP = 'https://shop.test';
+const opt = (d) => 1 / (1 + d.visits + d.seen);
+const dlist = (R) => R._novelty.drives.list;
+const dcensus = (R) => `drives ${R._novelty.drives.seeded} seeded, ${R._novelty.drives.lowered} lowered: ` +
+  dlist(R).map((d) => `${d.identity.slice(6, 14)} seen ${d.seen} visits ${d.visits}`).join(', ');
+const hasEndpoint = (R, path) => R.fetchCallSites.some((c) => c.url.endsWith(path));
+const C = await run('c', SHOP + '/c', DOC_C, null, null);
+const cDrives = new Set(dlist(C).map((d) => d.identity));
+row('C', dlist(C).length > 0 && dlist(C).every((d) => d.seen === 0) && hasEndpoint(C, '/api/shared'), dcensus(C));
+ZONE.noveltyAbsorb(SHOP, C._novelty, new Map());
+const shopKnown = ZONE.noveltyOwed(SHOP, { spelling: null, n: 0 });
+{
+  const D0 = await run('d-alone', SHOP + '/d', DOC_D, null, null);
+  row('D-alone', dlist(D0).every((d) => d.seen === 0), dcensus(D0));
+}
+{
+  const D1 = await run('d-known', SHOP + '/d', DOC_D, shopKnown, null);
+  const bundled = dlist(D1).filter((d) => cDrives.has(d.identity));
+  const own = dlist(D1).filter((d) => !cDrives.has(d.identity));
+  row('D-known', bundled.length > 0 && own.length > 0 && bundled.every((d) => d.seen >= 1) &&
+      own.every((d) => d.seen === 0) && Math.max(...bundled.map(opt)) < Math.min(...own.map(opt)) &&
+      hasEndpoint(D1, '/api/shared') && hasEndpoint(D1, '/api/only'),
+      dcensus(D1) + ` — bundle drive optimism ${bundled.map(opt).join('/')} against ${own.map(opt).join('/')}`);
+}
+{
+  const invented = new Set();
+  for (let i = 1; i <= 16; i++)
+    invented.add('drive ' + (BigInt(i) * 0x9e3779b97f4a7c15n).toString(16).padStart(32, 'e') + ' 7');
+  const D2 = await run('d-invented', SHOP + '/d', DOC_D, setText(C._novelty.spelling, invented), null);
+  row('D-invented', dlist(D2).every((d) => d.seen === 0) && D2._novelty.known === invented.size, dcensus(D2));
+}
 console.log(failed ? `${failed} row(s) FAILED` : 'every row holds');
 process.exit(failed ? 1 : 0);

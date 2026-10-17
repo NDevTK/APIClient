@@ -16,6 +16,7 @@
 #include "solver/flow.h"
 #include "solver/metrics.h"   /* detect_sink raises the arrival census */
 #include "solver/novelty.h"   /* what opening a search and proving it are worth against the product */
+#include "solver/compose.h"   /* a sender row's subject, spelled with its presence */
 #include "check.h"
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>
@@ -720,6 +721,28 @@ static int sender_pins_learn(SenderPins *sp) {
     return sp->n - before;
 }
 
+/* The NOVELTY_SENDER identity of search `e`'s sender row `i`: the search's (class, source) and every field
+   sender_pin_row's duplicate test compares, so one row of one search is one identity. */
+static NoveltyId sender_identity(const Cand *e, int i) {
+    const SenderPin *r = &e->snd.row[i];
+    char kind[16], loose[16];
+    const char *f[7];
+    snprintf(kind, sizeof kind, "%d", (int)r->pin.kind);
+    snprintf(loose, sizeof loose, "%d", (int)r->pin.loose);
+    f[0] = sink_name(e->sink); f[1] = e->src; f[2] = r->principal; f[3] = kind; f[4] = loose; f[5] = r->pin.tok;
+    /* A subject that is the empty string and an absent one are two rows to the duplicate test; the spelling
+       keeps them two by prefixing the present one. */
+    {
+        char *subj = r->pin.subject ? composef("s%s", r->pin.subject) : NULL;
+        NoveltyId id;
+        CHECK(!r->pin.subject || subj, "solve: OOM spelling a sender row's identity");
+        f[6] = subj ? subj : "n";
+        id = novelty_id(NOVELTY_SENDER, f, 7);
+        free(subj);
+        return id;
+    }
+}
+
 static void sender_pins_free(SenderPins *sp) {
     for (int i = 0; i < sp->n; i++) {
         free(sp->row[i].principal);
@@ -907,16 +930,18 @@ static void record_sink(int cls, const char *source, const char *poc) {
 
 /* A detection whose path pinned a principal (see detect_sink): the search learns the root the way add_pending
    does, so both doors agree on how these bytes arrive, and records the sender. It seeds nothing and freezes no
-   path. The flow is paid when the demand is new, since a new sender demand is new output.
-   Named residual. Not covered: the demand is new against this instance's table only. Next diff builds: a
-   NOVELTY_SENDER identity over the pin rows' (principal, pin) spelling, noted and credited as add_pending is.
-   Absence shows as: a second document of one app paid for a pinned sink's sender the product already holds. */
+   path. The flow is paid when the demand is new against the product (solver/novelty.h's NOVELTY_SENDER), since a
+   new sender demand is new output. One credit per detection that learned rows, as before. */
 static void park_on_sender(const char *src, const char *root, int sink) {
-    int created = 0;
+    int created = 0, had, novel = 0;
     Cand *e = sink_search(src, sink, &created);
 
     cand_learn_root(e, root);
-    if (sender_pins_learn(&e->snd)) flow_credit_emit(1.0);
+    had = e->snd.n;
+    if (sender_pins_learn(&e->snd)) {
+        for (int i = had; i < e->snd.n; i++) novel |= novelty_note(NOVELTY_SENDER, sender_identity(e, i));
+        novelty_credit(NOVELTY_SENDER, novel);
+    }
     DCHECK(e->snd.n > 0, "a detection behind a pinned principal recorded no sender for its search");
 }
 

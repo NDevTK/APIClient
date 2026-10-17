@@ -3100,6 +3100,10 @@ JS_EXTERN void JS_SetOrphanBornHook(JSRuntime *rt, JSOrphanBornFn *hook, void *o
    called from inside the object-list walk above. `fn` must be an object with a bytecode body; a C function, a
    bound function and a Proxy have no body to name and are never orphans. */
 JS_EXTERN uint64_t JS_OrphanHash(JSContext *ctx, JSValueConst fn);
+/* The name of the script an orphan's body was compiled from, the filename JS_OrphanHash folds first, so a host
+   holding the bytes it compiled under that name can name them by their content. Same precondition as
+   JS_OrphanHash; the string is the caller's to free with JS_FreeCString. */
+JS_EXTERN const char *JS_OrphanScriptName(JSContext *ctx, JSValueConst fn);
 /* WHERE THE PAGE'S OWN CODE IS STANDING, as a CALL SITE rather than as a body — the locator above folded over
    the nearest bytecode frame's body PLUS the byte offset of the opcode that frame is standing at, so two calls
    in one minified function are two names where JS_OrphanHash gives them one. Answers about the nearest frame

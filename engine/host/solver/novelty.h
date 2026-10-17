@@ -13,15 +13,18 @@
 
 #include <stdint.h>
 
-/* The emission kinds, each the identity of what one credit site pays for. The token is the wire spelling of the
-   kind on a set line and is part of the digested spelling. */
+/* The emission kinds, each the identity of what one credit site pays for, and one counted kind. The token is the
+   wire spelling of the kind on a set line and is part of the digested spelling. A counted kind's line carries a
+   count after the digest; it is not a credit but a fact the scheduler reads (NOVELTY_DRIVE). */
 #define NOVELTY_KINDS(X)                                                                                         \
-    X(NOVELTY_ENDPOINT, "endpoint")   /* solver/endpoint.c's record identity, scoped */                          \
-    X(NOVELTY_HEADER,   "header")     /* a header name on one endpoint identity */                               \
-    X(NOVELTY_SINK,     "sink")       /* solver/solve.c's search identity: sink class and injection source */    \
-    X(NOVELTY_FINDING,  "finding")    /* a fire-verified PoC for that same (class, source) */
+    X(NOVELTY_ENDPOINT, "endpoint", 0)   /* solver/endpoint.c's record identity, scoped */                       \
+    X(NOVELTY_HEADER,   "header",   0)   /* a header name on one endpoint identity */                            \
+    X(NOVELTY_SINK,     "sink",     0)   /* solver/solve.c's search identity: sink class and injection source */ \
+    X(NOVELTY_FINDING,  "finding",  0)   /* a fire-verified PoC for that same (class, source) */                 \
+    X(NOVELTY_SENDER,   "sender",   0)   /* a sender row a pinned detection demands of that search */            \
+    X(NOVELTY_DRIVE,    "drive",    1)   /* a drive of uncalled code: script content and function locator */
 typedef enum {
-#define NOVELTY_KIND_ENUM(id, token) id,
+#define NOVELTY_KIND_ENUM(id, token, counted) id,
     NOVELTY_KINDS(NOVELTY_KIND_ENUM)
 #undef NOVELTY_KIND_ENUM
     NOVELTY_KIND_N
@@ -57,14 +60,23 @@ int  novelty_note_at(NoveltyKind kind, NoveltyId id, const char *file, int line)
    ask as paid or known-unpaid under `kind` either way. */
 void novelty_credit(NoveltyKind kind, int novel);
 
+/* Files a drive of uncalled code under `id` (NOVELTY_DRIVE) and answers how many drives of it the product had
+   recorded before this one: the count the drive's optimism term reads (solver/flow.h's `orphan_seen`). A body is
+   taken once per runtime, so this instance filing one identity twice is asserted at the caller's `file`/`line`.
+   `visits` is the drive's completed-unit count at its seed, kept for the census beside the count. */
+unsigned novelty_drive_note_at(NoveltyId id, int64_t visits, const char *file, int line);
+#define novelty_drive_note(id, visits) novelty_drive_note_at((id), (visits), __FILE__, __LINE__)
+
 /* The zone's known identities, as serialized typed text: the line NOVELTY_SPELLING, then one line per identity,
-   `<kind token> <32 lowercase hex digits>`, newline-terminated. Additive; may be called any number of times,
+   `<kind token> <32 lowercase hex digits>`, and for a counted kind ` <count>` after it, newline-terminated; a
+   counted line raises the known count to its own, never lowers it. Additive; may be called any number of times,
    including before the agent's document exists. A text under another spelling is refused whole and counted. */
 void novelty_learn(const char *text);
 
 /* The `_novelty` member of the result document (owned): the spelling, the scope, the per-kind census of asks
-   (paid + knownUnpaid) and the set sizes, and `identities`, every identity this instance filed, as set lines
-   without their newline. */
+   (paid + knownUnpaid) and the set sizes, `identities`, every identity this instance filed, as set lines without
+   their newline (a counted one with this instance's own count), and `drives`, each drive filed with the count it
+   read. */
 char *novelty_json(void);
 
 /* Releases both sets and the census; the agent's release column calls it beside endpoint_free. */

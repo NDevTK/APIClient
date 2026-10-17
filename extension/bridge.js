@@ -1055,7 +1055,7 @@ function noveltyPersistSoon() {
 /* One result document's identities into the emitting instance's partition: the origin this zone stamped on
    its cluster (lib/novelty-set.js says why it is never the engine's word). */
 function noveltyTake(eng, result) {
-  if (noveltyAbsorb(eng.origin, result._novelty) > 0) noveltyPersistSoon();
+  if (noveltyAbsorb(eng.origin, result._novelty, eng._noveltyCounted) > 0) noveltyPersistSoon();
 }
 /* What `eng` is owed of its partition, handed now; called at its boot before Init and before each step, so
    it is serialized with the instance's other calls. */
@@ -2709,6 +2709,8 @@ function engineReserve(cluster, docId, msg, referenced) {
                 /* How much of its partition of the product's known identities this instance has been handed
                    (lib/novelty-set.js's noveltyOwed advances it). */
                 _novelty: { spelling: null, n: 0 },
+                /* …and the drive counts it last reported, so a repeated result adds each drive once. */
+                _noveltyCounted: new Map(),
                 /* Egress asked and refused, per rule, declared here so a run that refused nothing still carries
                    the map. `asked` is raised at the call and `declined` at the refusal in engineServiceFetch's
                    one loop, so the sum is bounded by `asked`. Both are lifetime counts of ask events, not of

@@ -114650,6 +114650,18 @@ uint64_t JS_OrphanHash(JSContext *ctx, JSValueConst fn)
     return orphan_hash_body(ctx->rt, p->u.func.function_bytecode);
 }
 
+const char *JS_OrphanScriptName(JSContext *ctx, JSValueConst fn)
+{
+    JSObject *p;
+
+    DCHECK(JS_VALUE_GET_TAG(fn) == JS_TAG_OBJECT,
+           "an orphan's script was asked of something that is not an object — only a function with a body is one");
+    p = JS_VALUE_GET_OBJ(fn);
+    DCHECK(js_class_has_bytecode(p->class_id) && p->u.func.function_bytecode,
+           "an orphan's script was asked of a function with no bytecode body — JS_OrphanTakeOne never hands one over");
+    return JS_AtomToCString(ctx, p->u.func.function_bytecode->filename);
+}
+
 /* ── WHERE THE PAGE'S OWN CODE IS STANDING ───────────────────────────────────────────────────────────────────
  *
  * THE LOCATOR OF A CALL SITE RATHER THAN OF A BODY, which is a different question from JS_OrphanHash's and not

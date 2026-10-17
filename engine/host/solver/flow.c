@@ -989,6 +989,19 @@ void flow_credit_emit(double v) {
        `fam_us` are updated is observationally identical. */
 }
 
+/* See flow.h: the seed's statement of how much of this body the product had explored. The drive was assembled as
+   a sibling, so flow_fork_inherit has already held it equal to its discoverer; this is the one term that differs,
+   and it is written before the drive is ever dispatched. Two drives seeded at two instants may read two counts:
+   the count is a fact about the product at the drive's arrival, as the clock it is placed at is, and not about any
+   executed prefix, so nothing on either drive's path could make them agree. */
+void flow_set_orphan_seen(Flow *f, int64_t seen) {
+    DCHECK(f != NULL && f->orphan && f->picks == 0 && seen >= 0,
+           "a product drive count was written on a flow that is not a just-seeded, never-dispatched drive");
+    f->orphan_seen = seen;
+    flow_ix_rekey(f);   /* the optimism denominator is an operand of the member's key */
+    frontier_rank_changed();
+}
+
 /* The other kind of quantity in the weight. flow_credit_emit is a ledger entry: it records that something was
  * learned, so it is paid once and adds. This is a comparator reading: it records where a candidate stands, so it
  * is written, not added, and says the same thing however many times it is taken. A distance paid into a ledger
@@ -1493,7 +1506,8 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
            "the branch and only grow, so this is a mark read off another flow or a bit that is not one");
     /* Nothing may have been credited or charged first, because the inheritance assigns both terms: a sibling run or
        credited before receiving its account ran at a rank nobody chose, and the assignment would erase the result. */
-    DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->cpu_gen == 0 && sib->visits == 0 && sib->picks == 0 &&
+    DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->cpu_gen == 0 && sib->visits == 0 && sib->orphan_seen == 0 &&
+           sib->picks == 0 &&
            sib->cand_replay == 0.0 && sib->cand_replay_of == 0 && sib->cand_replay_arms == 0 &&
            sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
            sib->path_pinned == 0 && sib->path_peer_driven == 0 && sib->path_peer_pinned == 0 &&
@@ -1524,6 +1538,11 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
        lifecycle stage its parent finished before the branch, because it is that execution with one more arm on it.
        The aging cannot correct a zero here, because a flow that never finishes a unit never decays. */
     sib->visits = parent->visits;
+    /* And the other operand of the optimism denominator. An arm of a drive drives the same body, and the count is
+       the one its seed read, so it is copied: two arms forked at two instants read it the same because the drive
+       never rewrites it. A non-drive copies zero to zero; a drive's own seed rewrites the copy it was assembled
+       with (flow_set_orphan_seen), after this equality, because the seed is an arrival and not a branch. */
+    sib->orphan_seen = parent->orphan_seen;
     /* And the distance, the term that is read rather than accumulated. An arm of a candidate carries the same payload
        to the same sink (engine.c copies the substitution to the sibling), so it stands where its parent stood: the
        bytes that survived to a sink, and the rungs they reached, did so on the prefix both share. A zero would let a
@@ -1925,7 +1944,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     /* `cpu_gen` beside `cpu` because they are one quantity (flow_own_silence): the burn and the account generation
        naming its window. Zero matches the fresh account minted below, whose `emit_gen` is also zero, so an
        uncharged flow reads a current window holding nothing. */
-    f->val = 0.0; f->cpu = 0; f->cpu_gen = 0; f->visits = 0;
+    f->val = 0.0; f->cpu = 0; f->cpu_gen = 0; f->visits = 0; f->orphan_seen = 0;
     /* And the dispatch count, which nothing else writes to zero: a member arrives never-chosen and the number only
        rises. */
     f->picks = 0;
@@ -2039,7 +2058,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
  * reader wanting the two sides of an example-free branch comparable is usually reading a throughput measurement as
  * an ordering one; the `neverPicked` block at the head of this file has the figures and their denominator. */
 static void flow_arrive_at_virtual_time(Flow *f) {
-    DCHECK(f->val == 0.0 && f->cpu == 0 && f->cpu_gen == 0 && f->visits == 0 &&
+    DCHECK(f->val == 0.0 && f->cpu == 0 && f->cpu_gen == 0 && f->visits == 0 && f->orphan_seen == 0 &&
            f->family == f->acct && f->family->fam_us == 0 && f->family->emit_gen == 0 &&
            f->family->base == 0.0 && f->family->earned == 0.0 && !f->family->placed,
            "a from-baseline flow was charged, credited or dispatched before it arrived — the arrival requires every "
@@ -3001,10 +3020,16 @@ static double flow_queue_nonreward(const Flow *f) {
    parent and flow_pick's strict comparison leaves the thread there; the parent finishes its unit, its count
    advances, and every arm and never-run member then outranks it. So a flow monopolises one unit of work; a unit
    that never ends is the aging's job. Its range is unchanged: flow_nonreward adds it back and FLOW_NONREWARD_MAX
-   prices it at zero visits. */
+   prices it at zero visits.
+   A seeded drive adds `orphan_seen` to the denominator: the product's count of drives of the same body elsewhere
+   (flow.h). It lowers and never removes, so a drive of explored code still runs, and its untouched floor is
+   `1/(1 + orphan_seen)`, which the never-starved guards in flow_pick_walk read as the reference instead of 1.0. */
 static double flow_optimism(const Flow *f) {
-    return 1.0 / (1.0 + (double)f->visits);
+    return 1.0 / (1.0 + (double)f->visits + (double)f->orphan_seen);
 }
+
+/* The optimism denominator as one integer: the coordinate the order's index classes members by. */
+static int64_t flow_optimism_den(const Flow *f) { return 1 + (int64_t)f->visits + f->orphan_seen; }
 
 /* The queue coordinate: the reward plus the remainder above, what an arrival is placed at
    (flow_arrive_at_virtual_time); every term is a tag a newcomer can stand at, not a reading of its own payload.
@@ -3501,7 +3526,7 @@ static void ix_t_stamp(Flow *f) {
     f->ix_t.key = flow_ix_member_key(f);
     f->ix_t.phase = flow_silence_phase(f);
     f->ix_t.notch = flow_service_notch(f);
-    f->ix_t.visits = (int64_t)f->visits;
+    f->ix_t.visits = flow_optimism_den(f);
     f->ix_t.replay = f->cand_replay;
     f->ix_t.surv = f->cand_surv;
     f->ix_t.rung = f->cand_rung;
@@ -3566,7 +3591,7 @@ static void flow_ix_rekey(Flow *f) {
     FlowIxTreap fresh;
     if (!f->ix_in) return;
     fresh.key = flow_ix_member_key(f); fresh.phase = flow_silence_phase(f); fresh.notch = flow_service_notch(f);
-    fresh.visits = (int64_t)f->visits; fresh.replay = f->cand_replay; fresh.surv = f->cand_surv;
+    fresh.visits = flow_optimism_den(f); fresh.replay = f->cand_replay; fresh.surv = f->cand_surv;
     fresh.rung = f->cand_rung;
     if (fresh.key == f->ix_t.key && ix_t_cmp(&fresh, &f->ix_t) == 0) return;
     flow_ix_remove(f);
@@ -3720,11 +3745,13 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
    optimism term keyed on something a never-run flow does not stand at zero of, each the shape a fix for a
    thrashing scheduler takes. `static inline` so release, where the DCHECK's condition is unevaluated, does not
    warn. */
-static inline int64_t flow_silence_us_to_sink(const Flow *f) {
+static inline int64_t flow_silence_us_to_sink(const Flow *f, double floor) {
     /* The reward is the one flow_queue_weight reads, the family's, the account the silence on the other side is
        charged to; read off the flow, the bound would be on a quantity the weight does not contain. `+ 2.0` is the
-       fitness fraction and the branch bonus, each in [0, 1], per the derivation above. */
-    return (int64_t)((acct_family_val(f) + 2.0) * (double)FLOW_SILENCE_US) + FLOW_SERVICE_US;
+       fitness fraction and the branch bonus, each in [0, 1], per the derivation above. `floor` is the untouched
+       member's optimism, 1.0 unless it is a drive of code explored elsewhere (`1/(1 + orphan_seen)`); the
+       derivation's `>= 1` becomes `>= floor`, which loosens the bound by `1 - floor`, under one point. */
+    return (int64_t)((acct_family_val(f) + 2.0 + (1.0 - floor)) * (double)FLOW_SILENCE_US) + FLOW_SERVICE_US;
 }
 
 /* Host-owed marks (flow.h says what a mark means and why the flow carries one). A generation rather than a per-flow
@@ -4017,7 +4044,7 @@ static Flow *flow_pick_walk(const Flow *exclude, int worst, FlowScan why) {
        and fires when an edit breaks the derivation (a clamped or capped aging term, an optimism ceiling no longer
        1, a reward allowed to grow with the CPU it is weighed against), each the shape a fix for thrash takes. */
     DCHECK(worst || !best || !unrun ||
-           flow_own_silence(best) + acct_family_us(best) < flow_silence_us_to_sink(best),  /* derivation there */
+           flow_own_silence(best) + acct_family_us(best) < flow_silence_us_to_sink(best, flow_optimism(unrun)),
            "the WFQ re-picked a flow whose own and family silence exceed what its reward is worth while a never-run "
            "flow waited — the aging term is no longer commensurate with the reward (flow_silence_us_to_sink derives "
            "the bound)");
@@ -4028,9 +4055,10 @@ static Flow *flow_pick_walk(const Flow *exclude, int worst, FlowScan why) {
        quantity a never-run flow does not stand at zero of (thread time, say, since an arrival once stood at the
        running flow's service), given a range other than 1.0, or made to depend on anything the aging already
        prices; each lets "never starved" stop meaning anything while every other assertion passes. */
-    DCHECK(worst || !best || !unrun || flow_weight(best) >= 1.0,
-           "the WFQ picked a flow worth less than an untouched member of its frontier — a never-run flow carries the "
-           "full optimism bonus and no aging, so the pick's maximum must be at least 1.0");
+    DCHECK(worst || !best || !unrun || flow_weight(best) >= flow_optimism(unrun),
+           "the WFQ picked a flow worth less than an untouched member of its frontier — a never-run flow carries its "
+           "whole optimism bonus (1.0, or 1/(1 + orphan_seen) for a drive explored elsewhere) and no aging, so the "
+           "pick's maximum must be at least that");
     /* The pairwise distance (`w(best) − w(unrun) <= R(best) − R(unrun) + 1.0`) is asked of one item at
        flow_nonreward, which needs no reference member. Its consequence remains: the inequality is tight in the
        reward and slack in everything else, so a frontier whose untouched members are unreachable has an
@@ -4257,7 +4285,7 @@ static void flow_ix_check(void) {
 static double wfq_accounted_spread(const WfqCensus *c) {
     return (c->val_max - c->val_min)
          + c->dist_max
-         + (1.0 / (double)(1 + c->vis_min) - 1.0 / (double)(1 + c->vis_max))
+         + (1.0 / (double)c->opt_den_min - 1.0 / (double)c->opt_den_max)
          /* And the branch bonus's range, the least-minting bucket against the most (the extrema invert, since the
             fewest arms carry the largest bonus). The mint pair, not the live pair, because flow_branch_bonus
             divides by `sub_born`, and the live pair bounds the mint range in neither direction: two buckets at one
@@ -4467,6 +4495,7 @@ void flow_wfq_census(WfqCensus *out) {
        is both a family and a branch and one field cannot record being counted once as each. */
     if (++g_wfq_census_gen == 0) g_wfq_census_gen = 1;
     out->vis_min = out->vis_max = 0;
+    out->opt_den_min = out->opt_den_max = 1;
     out->cand_members = out->cand_unrun = out->cand_dec_max = 0;
     out->cand_svc_max = 0;
     out->dec_max = 0;
@@ -4603,6 +4632,9 @@ void flow_wfq_census(WfqCensus *out) {
            counts say. */
         if (i == 0 || f->visits < out->vis_min) out->vis_min = f->visits;
         if (f->visits > out->vis_max) out->vis_max = f->visits;
+        /* And the denominator the term is read over, which a seeded drive raises past its visits. */
+        if (i == 0 || flow_optimism_den(f) < out->opt_den_min) out->opt_den_min = flow_optimism_den(f);
+        if (flow_optimism_den(f) > out->opt_den_max) out->opt_den_max = flow_optimism_den(f);
         /* And how many members stand at zero of it, which `vis_min` cannot say (flow.h). */
         if (f->visits == 0) out->vis_zero++;
         /* And how many hold no frame, taken here so it and `members` are one sample from one walk; it separates

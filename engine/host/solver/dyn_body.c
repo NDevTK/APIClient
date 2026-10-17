@@ -1,9 +1,11 @@
 /* solver/dyn_body.c — the shared immutable source text of a queued program. See dyn_body.h for what it is for
    and why it is a C allocation rather than a JS string. */
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "check.h"
+#include "core/crypto/secure_hash.h"
 #include "solver/dyn_body.h"
 
 struct DynBody {
@@ -28,6 +30,7 @@ struct DynBody {
     JSContext *parse_realm;  /* NULL when none is held; the realm the bytecode names and this file frees through */
     char      *parse_name;   /* the program NAME it was compiled under, owned here; NULL is a distinct key */
     int        parse_flags;  /* the eval flags it was compiled under */
+    char       digest[65];   /* dyn_body_digest's answer, written at the mint; the bytes never change */
 };
 
 /* THE INSTANCE'S TOTAL, kept incrementally rather than walked, because the walk that would answer it is the
@@ -59,6 +62,14 @@ static DynBody *dyn_body_wrap(char *text, size_t len, int own_decode)
     b->parse_realm = NULL;
     b->parse_name = NULL;
     b->parse_flags = 0;
+    {
+        SecureHash h;
+        uint8_t d[32];
+        secure_hash_init(&h, SECURE_HASH_SHA256);
+        secure_hash_update(&h, (const uint8_t *)text, len);
+        secure_hash_finish(&h, d, sizeof d);
+        for (int i = 0; i < 32; i++) snprintf(b->digest + 2 * i, 3, "%02x", d[i]);
+    }
     g_dyn_body_bytes += (long)len + 1;
     g_dyn_body_live++;
     return b;
@@ -321,3 +332,9 @@ void dyn_body_parse_hold(DynBody *b, JSContext *realm, const char *name, int fla
 long dyn_body_total_bytes(void) { return g_dyn_body_bytes; }
 long dyn_body_live_count(void)  { return g_dyn_body_live; }
 long dyn_body_parses_held(void) { return g_dyn_body_parses; }
+
+const char *dyn_body_digest(const DynBody *b)
+{
+    DCHECK(b != NULL && b->refs > 0, "a program's digest was asked of a body nobody holds");
+    return b->digest;
+}

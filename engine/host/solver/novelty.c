@@ -10,15 +10,20 @@
 #include <string.h>
 
 static const char *const novelty_kind_token[NOVELTY_KIND_N] = {
-#define NOVELTY_KIND_TOKEN(id, token) [id] = token,
+#define NOVELTY_KIND_TOKEN(id, token, counted) [id] = token,
     NOVELTY_KINDS(NOVELTY_KIND_TOKEN)
 #undef NOVELTY_KIND_TOKEN
+};
+static const int novelty_kind_counted[NOVELTY_KIND_N] = {
+#define NOVELTY_KIND_COUNTED(id, token, counted) [id] = counted,
+    NOVELTY_KINDS(NOVELTY_KIND_COUNTED)
+#undef NOVELTY_KIND_COUNTED
 };
 
 /* One slot of the open-addressed set. `kind` is kept beside the digest only for the emitted line; the digest
    alone is the identity, since the kind's token is its second digested field. */
 enum { SLOT_KNOWN = 1, SLOT_OWN = 2 };
-typedef struct { NoveltyId id; uint8_t flags; uint8_t kind; } NoveltySlot;
+typedef struct { NoveltyId id; uint8_t flags; uint8_t kind; uint32_t known_n, own_n; } NoveltySlot;
 
 /* Linear probing at a load factor of at most one half, so a lookup is O(1) expected at any size; the slot index
    is the digest's low word, which is already uniform. Grown by doubling, never shrunk, released at the agent's
@@ -30,6 +35,10 @@ static long g_refused_texts;
 static char *g_scope;
 /* The credit census, per kind: an ask is one novelty_credit call, which is paid or known-unpaid. */
 static long g_paid[NOVELTY_KIND_N], g_unpaid[NOVELTY_KIND_N];
+/* Every drive this instance filed, with the product's count it read and its completed units at the seed. */
+typedef struct { NoveltyId id; unsigned seen; int64_t visits; } NoveltyDrive;
+static NoveltyDrive *g_drives;
+static long g_drives_n, g_drives_cap, g_drives_lowered;
 
 static int id_eq(NoveltyId a, NoveltyId b) { return a.hi == b.hi && a.lo == b.lo; }
 
@@ -114,10 +123,32 @@ int novelty_note_at(NoveltyKind kind, NoveltyId id, const char *file, int line) 
 }
 
 void novelty_credit(NoveltyKind kind, int novel) {
-    DCHECK(kind >= 0 && kind < NOVELTY_KIND_N, "a credit was asked for an emission kind novelty.h does not list");
+    DCHECK(kind >= 0 && kind < NOVELTY_KIND_N && !novelty_kind_counted[kind],
+           "a credit was asked for a kind novelty.h does not list as a credit kind — a counted kind is read, not paid");
     if (!novel) { g_unpaid[kind]++; return; }
     g_paid[kind]++;
     flow_credit_emit(1.0);
+}
+
+unsigned novelty_drive_note_at(NoveltyId id, int64_t visits, const char *file, int line) {
+    NoveltySlot *s = slot_claim(id, NOVELTY_DRIVE);
+    DCHECKF(s->own_n == 0,
+            "%s:%d filed a drive of a body this instance already drove — JS_OrphanTakeOne consumes a body's "
+            "`entered` bit, so a second drive of one identity is two bodies sharing a key", file, line);
+    if (!(s->flags & SLOT_OWN)) {
+        s->flags |= SLOT_OWN;
+        g_own_n++;
+        if (s->flags & SLOT_KNOWN) g_own_known_n++;
+    }
+    s->own_n++;
+    if (g_drives_n >= g_drives_cap) {
+        g_drives_cap = g_drives_cap ? g_drives_cap * 2 : 16;
+        g_drives = realloc(g_drives, (size_t)g_drives_cap * sizeof *g_drives);
+        CHECK(g_drives, "novelty: OOM recording a drive");
+    }
+    g_drives[g_drives_n++] = (NoveltyDrive){ id, s->known_n, visits };
+    if (s->known_n) g_drives_lowered++;
+    return s->known_n;
 }
 
 static int hex_digit(int c) {
@@ -130,9 +161,25 @@ static void learn_line(const char *p, size_t n) {
     NoveltyId id = { 0, 0 };
     NoveltySlot *s;
     int kind = -1;
+    unsigned long count = 0;
     for (int k = 0; k < NOVELTY_KIND_N; k++) {
         size_t t = strlen(novelty_kind_token[k]);
-        if (n == t + 33 && !strncmp(p, novelty_kind_token[k], t) && p[t] == ' ') { kind = k; p += t + 1; break; }
+        if (n >= t + 33 && !strncmp(p, novelty_kind_token[k], t) && p[t] == ' ') { kind = k; break; }
+    }
+    if (kind >= 0) {
+        size_t t = strlen(novelty_kind_token[kind]);
+        if (novelty_kind_counted[kind]) {
+            /* A counted line is `<token> <32 hex> <count>`, the count a positive decimal. */
+            char *end = NULL;
+            int ok = n > t + 34 && p[t + 33] == ' ' && p[t + 34] >= '1' && p[t + 34] <= '9';
+            if (ok) count = strtoul(p + t + 34, &end, 10);
+            ok = ok && end == p + n && count <= UINT32_MAX;
+            DCHECKF(ok, "a counted known-identity line carries no count after its digest: [%.*s]", (int)n, p);
+            if (!ok) return;
+        } else if (n != t + 33) {
+            kind = -1;
+        }
+        if (kind >= 0) p += t + 1;
     }
     DCHECKF(kind >= 0, "a known-identity line names no emission kind novelty.h lists, or is not 32 hex digits: "
                        "[%.*s]", (int)n, p);
@@ -144,6 +191,7 @@ static void learn_line(const char *p, size_t n) {
         if (i < 16) id.hi = id.hi << 4 | (uint64_t)v; else id.lo = id.lo << 4 | (uint64_t)v;
     }
     s = slot_claim(id, (NoveltyKind)kind);
+    if (count > s->known_n) s->known_n = (uint32_t)count;
     if (s->flags & SLOT_KNOWN) return;
     s->flags |= SLOT_KNOWN;
     g_known_n++;
@@ -181,7 +229,8 @@ char *novelty_json(void) {
     if (g_scope) json_buf_str(&b, g_scope); else json_buf_raw(&b, "null");
     json_buf_raw(&b, ","); json_buf_key(&b, "kinds"); json_buf_raw(&b, "[");
     for (int k = 0; k < NOVELTY_KIND_N; k++) {
-        if (k) json_buf_raw(&b, ",");
+        if (novelty_kind_counted[k]) continue;
+        if (b.n && b.b[b.n - 1] != '[') json_buf_raw(&b, ",");
         json_buf_raw(&b, "{"); json_buf_key(&b, "kind"); json_buf_str(&b, novelty_kind_token[k]);
         json_buf_raw(&b, ","); json_buf_key(&b, "asks"); json_long(&b, g_paid[k] + g_unpaid[k]);
         json_buf_raw(&b, ","); json_buf_key(&b, "paid"); json_long(&b, g_paid[k]);
@@ -203,14 +252,32 @@ char *novelty_json(void) {
         char line[64];
         int w;
         if (!(g_slots[i].flags & SLOT_OWN)) continue;
-        w = snprintf(line, sizeof line, "%s %016llx%016llx", novelty_kind_token[g_slots[i].kind],
-                     (unsigned long long)g_slots[i].id.hi, (unsigned long long)g_slots[i].id.lo);
+        w = novelty_kind_counted[g_slots[i].kind]
+            ? snprintf(line, sizeof line, "%s %016llx%016llx %u", novelty_kind_token[g_slots[i].kind],
+                       (unsigned long long)g_slots[i].id.hi, (unsigned long long)g_slots[i].id.lo, g_slots[i].own_n)
+            : snprintf(line, sizeof line, "%s %016llx%016llx", novelty_kind_token[g_slots[i].kind],
+                       (unsigned long long)g_slots[i].id.hi, (unsigned long long)g_slots[i].id.lo);
         CHECK(w > 0 && (size_t)w < sizeof line, "novelty: an identity line did not fit its buffer");
         if (wrote++) json_buf_raw(&b, ",");
         json_buf_str(&b, line);
     }
     DCHECK(wrote == g_own_n, "the identity set's own flags do not number the identities this instance filed");
-    json_buf_raw(&b, "]}");
+    json_buf_raw(&b, "],"); json_buf_key(&b, "drives"); json_buf_raw(&b, "{");
+    json_buf_key(&b, "seeded"); json_long(&b, g_drives_n);
+    json_buf_raw(&b, ","); json_buf_key(&b, "lowered"); json_long(&b, g_drives_lowered);
+    json_buf_raw(&b, ","); json_buf_key(&b, "list"); json_buf_raw(&b, "[");
+    for (long i = 0; i < g_drives_n; i++) {
+        char line[64];
+        int w = snprintf(line, sizeof line, "drive %016llx%016llx", (unsigned long long)g_drives[i].id.hi,
+                         (unsigned long long)g_drives[i].id.lo);
+        CHECK(w > 0 && (size_t)w < sizeof line, "novelty: a drive line did not fit its buffer");
+        if (i) json_buf_raw(&b, ",");
+        json_buf_raw(&b, "{"); json_buf_key(&b, "identity"); json_buf_str(&b, line);
+        json_buf_raw(&b, ","); json_buf_key(&b, "seen"); json_long(&b, (long)g_drives[i].seen);
+        json_buf_raw(&b, ","); json_buf_key(&b, "visits"); json_long(&b, (long)g_drives[i].visits);
+        json_buf_raw(&b, "}");
+    }
+    json_buf_raw(&b, "]}}");
     return json_buf_take(&b);
 }
 
@@ -220,4 +287,5 @@ void novelty_free(void) {
     free(g_scope); g_scope = NULL;
     memset(g_paid, 0, sizeof g_paid);
     memset(g_unpaid, 0, sizeof g_unpaid);
+    free(g_drives); g_drives = NULL; g_drives_n = g_drives_cap = g_drives_lowered = 0;
 }

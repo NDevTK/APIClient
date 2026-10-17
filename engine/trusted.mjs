@@ -760,7 +760,7 @@ async function main() {
       ready: [], answered: new Map(), stalled: false, live: true, result: null, results: 0, quantum: null,
       /* How much of this cluster's partition of the product's known identities the child has been handed
          (extension/lib/novelty-set.js's noveltyOwed advances it). */
-      novelty: { spelling: null, n: 0 },
+      novelty: { spelling: null, n: 0 }, noveltyCounted: new Map(),
       /* WHAT THE FRONTIER LOOKED LIKE WHILE THIS INSTANCE WAS STILL RUNNING — see `onLine`'s census arm. The
          COUNT is the load-bearing member and not the numbers: a killed run's result document does not exist,
          so the only thing that separates a run that explored thousands of worlds from one wedged on a single
@@ -1674,7 +1674,7 @@ async function main() {
       e.result = line.slice('@RESULT '.length);
       e.results += 1;
       /* Its identities join the product under the origin this zone provisioned the cluster at. */
-      ZONE.noveltyAbsorb(e.origin, JSON.parse(e.result)._novelty);
+      ZONE.noveltyAbsorb(e.origin, JSON.parse(e.result)._novelty, e.noveltyCounted);
       console.error(`[trusted] [${e.tag}] @RESULT#${e.results} ${line}`);
       return;
     }
