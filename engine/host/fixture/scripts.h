@@ -61,6 +61,15 @@ static const char HTML_SCRIPTS[] =
     " (document.currentScript === null ? 'null' : 'LEAK'));</script>"
     "<script id=csC>fetch('/api/csend?el=' + __cs + '|' +"
     " document.currentScript.getAttribute('id'));</script>"
+    /* HTML §13.2.7 "The end" step 3 makes the readiness "interactive" before step 5 runs the list of scripts that
+       will execute when the document has finished parsing, a module script among them. `at` is the readiness a
+       parser-inserted inline script sees (the parse has not stopped), `ev` the readiness each `readystatechange`
+       before the module saw. */
+    "<script>window.__rsAt = document.readyState; window.__rsEv = '';"
+    " document.addEventListener('readystatechange', function () { window.__rsEv += document.readyState; });"
+    "</script>"
+    "<script type=module>fetch('/api/rsmod?rs=' + document.readyState + '&at=' + window.__rsAt +"
+    " '&ev=' + window.__rsEv);</script>"
     TF_CANVAS_INK
     "</body></html>";
 

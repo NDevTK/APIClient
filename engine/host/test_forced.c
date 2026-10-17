@@ -12848,6 +12848,21 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "§4.12.1.1's \"immediately execute the script element\" read the WRONG element: /api/csinj's "
              "`el` is not `csINJ`, so the injected program saw the element that injected it rather than its "
              "own — a slot written by the injecting program");
+    /* HTML §13.2.7 "The end": step 3's "interactive" precedes step 5's deferred scripts, and an inline script
+       the parser runs still sees "loading". `ev` empty is no `readystatechange` before the module. */
+    const char *rsmod_why = NULL; int rsmod_tt = 1;
+    fold_row(&rsmod_tt, &rsmod_why, !!strstr(js, "\"/api/rsmod\""),
+             "NOT REACHED: there is no /api/rsmod record at all, so the module script never ran. That is the "
+             "SCHEDULE");
+    fold_row(&rsmod_tt, &rsmod_why, param_value_is(js, "/api/rsmod", "at", "loading"),
+             "a parser-inserted inline script did not see \"loading\": /api/rsmod's `at` is not `loading`, so "
+             "the readiness moved before the parse stopped");
+    fold_row(&rsmod_tt, &rsmod_why, param_value_is(js, "/api/rsmod", "rs", "interactive"),
+             "§13.2.7 step 3 had not run when step 5 executed the module script: /api/rsmod's `rs` is not "
+             "`interactive` (`loading` is the readiness moved at DOMContentLoaded instead)");
+    fold_row(&rsmod_tt, &rsmod_why, param_value_is(js, "/api/rsmod", "ev", "interactive"),
+             "§3.1.5 step 4's `readystatechange` for step 3 did not reach the listener before the module ran: "
+             "/api/rsmod's `ev` is not `interactive`");
     /* §8.1.4.4's MODULE ENTRY AND ITS PARK SEAM — TWO ROWS, BECAUSE THEY ARE TWO DIFFERENT DIFFS.
        THIS DOCUMENT'S MODULE OBSERVATIONS WERE ALL BEHIND A RUNG ABOUT SOMETHING ELSE. `/api/csmod` above is
        rung TWO of `current-script-restore`, whose rung ONE is a TIMER record, so while the timer is unreached
@@ -15588,6 +15603,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "current-script", cscurrent_tt, "/api/csend", SESS_EXPLORE, cscurrent_why },
         { "current-script-restore", csrestore_tt, "/api/cstimer", SESS_EXPLORE, csrestore_why },
         { "current-script-inject", csinject_tt, "/api/csinj", SESS_EXPLORE, csinject_why },
+        { "readiness-interactive", rsmod_tt, "/api/rsmod", SESS_EXPLORE, rsmod_why },
         { "owfork", owfork_tt, "/api/owfork", SESS_EXPLORE, owfork_why },
         { "genfork", genfork_tt, "/api/genfork", SESS_EXPLORE, genfork_why },
         { "gen2fork", gen2fork_tt, "/api/gen2fork", SESS_EXPLORE, gen2fork_why },
