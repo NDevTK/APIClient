@@ -152,6 +152,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>   /* `abi_paint`'s file I/O — the one place this host's failures are the DISK's */
+#include <sys/resource.h>   /* RLIMIT_AS: the address-space ceiling native_ceiling_arm gives this host */
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 /* A FIXTURE UNIT: a selftest, a step of main, or one document's probe rows — called once and kept out of line.
@@ -29997,8 +29998,63 @@ TF_UNIT void second_agent_selftest(const char *origin)
     printf("@A2OK\n");
 }
 
+/* The tightest memory cgroup limit on this process's path, or UINT64_MAX: cgroup v1's `memory.limit_in_bytes` and
+   v2's `memory.max` at each ancestor, since a parent's limit binds its children. */
+static uint64_t native_cgroup_limit(void) {
+    uint64_t best = UINT64_MAX;
+    char line[1024];
+    FILE *cg = fopen("/proc/self/cgroup", "r");
+    if (!cg) return best;
+    while (fgets(line, sizeof line, cg)) {
+        char *c1 = strchr(line, ':'), *c2 = c1 ? strchr(c1 + 1, ':') : NULL, *nl;
+        const char *dir, *file;
+        if (!c2) continue;
+        if ((nl = strchr(c2, '\n'))) *nl = '\0';
+        *c2 = '\0';
+        if (strcmp(c1 + 1, "") == 0) { dir = "/sys/fs/cgroup"; file = "memory.max"; }
+        else if (strstr(c1 + 1, "memory")) { dir = "/sys/fs/cgroup/memory"; file = "memory.limit_in_bytes"; }
+        else continue;
+        for (char *path = c2 + 1;;) {
+            char fn[1400];
+            FILE *f;
+            unsigned long long v;
+            snprintf(fn, sizeof fn, "%s%s/%s", dir, path, file);
+            if ((f = fopen(fn, "r"))) {
+                if (fscanf(f, "%llu", &v) == 1 && v < best) best = v;   /* "max" reads nothing: no limit */
+                fclose(f);
+            }
+            char *slash = strrchr(path, '/');
+            if (!slash || slash == path) { if (path[0] && path[1]) { path[1] = '\0'; continue; } break; }
+            *slash = '\0';
+        }
+    }
+    fclose(cg);
+    return best;
+}
+
+/* The RAM floor engine_reclaim_tail sells the frontier's tail at is an allocation that fails, and a 64-bit host
+   under overcommit never fails one: a memory cgroup kills the process instead, with the tail unsold. So this
+   host refuses where the shipped vehicle does: wasm32's address space (build.mjs's WASM_ADDRESS_BYTES, its
+   `-sMAXIMUM_MEMORY`), or a tighter memory cgroup limit or RLIMIT_AS already on the process. A sanitized build
+   keeps its own reservation, which an address-space limit would refuse at start. */
+static void native_ceiling_arm(void) {
+#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+    return;
+#else
+    struct rlimit rl;
+    uint64_t ceiling = ENGINE_WASM_ADDRESS_BYTES, cg = native_cgroup_limit();
+    CHECK(getrlimit(RLIMIT_AS, &rl) == 0, "the native host could not read its address-space limit");
+    if (cg < ceiling) ceiling = cg;
+    if (rl.rlim_max != RLIM_INFINITY && rl.rlim_max < ceiling) ceiling = rl.rlim_max;
+    if (rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur < ceiling) return;
+    rl.rlim_cur = (rlim_t)ceiling;
+    CHECK(setrlimit(RLIMIT_AS, &rl) == 0, "the native host could not lower its address-space limit to its ceiling");
+#endif
+}
+
 int main(int argc, char **argv) {
     JSRuntime *rt;
+    native_ceiling_arm();
     /* THE ABI ARM IS TAKEN FIRST, BEFORE ANY OF THE FIXTURE'S OWN STATE EXISTS. `qjs_init` roots an agent —
        its runtime, its class registrations, its world namespace and its frontier — and the selftests below
        root a second one under the name "fixture". Two agents in one process is not a smaller version of one;

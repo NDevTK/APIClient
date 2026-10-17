@@ -6922,6 +6922,10 @@ function report(stages, findings) {
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const QJS = join(ENGINE, "qjs");
+/* wasm32's address space, which the shipped engine's allocator refuses at (`-sMAXIMUM_MEMORY` in CFLAGS). The
+   native host is handed the same number as the address-space ceiling it arms (test_forced.c's
+   native_ceiling_arm), so the RAM floor the engine sells its tail at exists on both vehicles. */
+const WASM_ADDRESS_BYTES = 4294967296;
 const HOST = join(ENGINE, "host");
 const OUT = join(HOST, "out");
 const EXT_QJS = join(ENGINE, "..", "extension", "lib", "qjs");   // where bridge.js imports the engine from
@@ -8240,6 +8244,7 @@ async function nativeProgram(kind, dev) {
        name different objects, which is the recorded defect that once relinked DEV objects into a green
        `release` build. */
     "-DAPICLIENT_DEV=" + (dev === "release" ? "0" : "1"),
+    "-DENGINE_WASM_ADDRESS_BYTES=" + WASM_ADDRESS_BYTES + "ull",
     "-Werror=implicit-function-declaration",
     "-I" + QJS, "-I" + HOST, "-I" + join(HOST, "browser"), "-I" + LEXBOR_INC,
   ];
@@ -8734,7 +8739,7 @@ const LDFLAGS_COMMON = [
      THE SANITIZED TARGET IS NOT HERE, and that is measured rather than assumed — see `sanitize` above: a wasm
      ASan link cannot reach the second context switch inside 4 GiB, so the flag that used to sit on this line
      was a mode that had never run. */
-  "-sALLOW_MEMORY_GROWTH=1", "-sMAXIMUM_MEMORY=4294967296",
+  "-sALLOW_MEMORY_GROWTH=1", "-sMAXIMUM_MEMORY=" + WASM_ADDRESS_BYTES,
   "-sSTACK_SIZE=8388608",
   /* THE MODULE NAMES ITS OWN FUNCTIONS, so a stack is readable without a second instrument. `wasm-ld` strips
      the name section by default — emscripten's own `building.py` says so in its own words, "wasm-ld can strip
