@@ -558,7 +558,8 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
     solve_init(g_ctx);
 
     /* The two hook sets the solver owns, each declared by its own component and shared with test_forced.c. */
-    cow_install_time_travel_hooks(engine_gen_fork, engine_flow_timeline);
+    cow_install_time_travel_hooks(engine_gen_fork, engine_flow_timeline, engine_flow_timeline_handle,
+                                  engine_flow_timeline_continues);
     concolic_install_hooks();
     concolic_install_source_overlay();   /* a solver host: attacker-controlled values are symbolic sources */
 

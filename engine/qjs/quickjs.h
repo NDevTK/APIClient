@@ -2234,6 +2234,13 @@ typedef struct JSTimeTravelHooks {
     /* The running flow's timeline (its world: a fork mints a fresh one for each arm), or 0 outside a flow. Read by
        the dev assert that a continuation the clone gate reads as private was minted in the timeline resuming it. */
     uint64_t (*timeline)(void);
+    /* The running flow's timeline as a nonzero handle, or 0 outside a flow: stamped on every function object
+       this engine builds (JS_FunctionTimeline). A function object is reachable only from the timeline that
+       built it and that timeline's continuations, so the orphan take hands over one only when
+       `timeline_continues` answers nonzero for its stamp: the running flow's timeline is that one or descends
+       from it. Both NULL, as in a host that installs no flows, stamps 0 and filters nothing. */
+    uint32_t (*timeline_handle)(void);
+    int (*timeline_continues)(uint32_t handle);
 } JSTimeTravelHooks;
 /* A BUFFER'S WHOLE STORAGE STATE, as an opaque owned blob — the buffer twin of JS_ObjStateSave, and engine-owned
    for the same reason: two of the things it holds are engine-internal and one of them is a REFERENCE.
@@ -3062,6 +3069,9 @@ JS_EXTERN int      JS_FlowIsProgram(const JSValue *flow);
    BORROWED. Returns 1 if one was handed over, 0 if this heap holds none. */
 typedef void JSOrphanVisitFn(JSContext *ctx, JSValueConst fn, int arg_count, void *opaque);
 JS_EXTERN int      JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque);
+/* The timeline handle a bytecode function object was built under (JSTimeTravelHooks.timeline_handle), 0 for one
+   built outside any flow. `fn` must be an object with a bytecode body. */
+JS_EXTERN uint32_t JS_FunctionTimeline(JSValueConst fn);
 /* WHAT THAT TAKE'S WALK COST AND HOW MANY CANDIDATES IT HAD TO CHOOSE FROM. FOUR NUMBERS AND TWO
  * DENOMINATORS: `entries / walks` is the mean heap length one take reads, and `full_candidates / walks_full`
  * is the mean candidate population over the walks that ran to the END of the list. The second denominator is

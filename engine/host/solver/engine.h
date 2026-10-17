@@ -851,6 +851,12 @@ void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *c
 /* Install as JSTimeTravelHooks.timeline: the running flow's world (solver/world.h) packed, or 0 when no flow runs.
    A fork mints a fresh world for each arm, so two readings are equal only inside one timeline since its last fork. */
 uint64_t engine_flow_timeline(void);
+/* Install as JSTimeTravelHooks.timeline_handle and .timeline_continues: the timeline engine_flow_timeline reads, as
+   its world's serial (every flow's world is minted by this instance in this session), or 0 when no flow runs; and
+   whether that timeline is the world a handle names or descends from it (world_descends_from). Host time
+   continues no timeline. */
+uint32_t engine_flow_timeline_handle(void);
+int      engine_flow_timeline_continues(uint32_t handle);
 
 /* How many times the dispatch loop context-switched between flows, reported because an interleaving scheduler
    and a FIFO one agree on easy pages, so the interleave has to be observable on its own. Then the jobs queued

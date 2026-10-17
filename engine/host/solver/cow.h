@@ -422,7 +422,8 @@ void      cow_install_baseline(JSContext *ctx);
    up the rest of it rather than at either entry. */
 /* `gen_fork` is the caller's: the ten other hooks are this file's capture points, and the eleventh belongs to
    whoever assembles the sibling flow. See the definition. */
-void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork, uint64_t (*timeline)(void));
+void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork, uint64_t (*timeline)(void),
+                                   uint32_t (*timeline_handle)(void), int (*timeline_continues)(uint32_t));
 
 /* THE STATE KINDS AS ONE LIST — each unit's id and the name a census prints it under. The list is in this
    header rather than beside the enum in cow.c for the reason solver/step_unit.h's list is in one: the ENUM,

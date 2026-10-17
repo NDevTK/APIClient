@@ -30560,7 +30560,8 @@ int main(int argc, char **argv) {
        selftests built must not land in a delta. Its twin — the concolic pair — is NOT here any more and is
        installed before the agent instead; see it for why the two halves of what used to be one line have
        different positions. */
-    cow_install_time_travel_hooks(engine_gen_fork, engine_flow_timeline);
+    cow_install_time_travel_hooks(engine_gen_fork, engine_flow_timeline, engine_flow_timeline_handle,
+                                  engine_flow_timeline_continues);
     /* The surface is installed, so every member the platform has is declared — a declaration from here on is a
        per-wrapper or per-flow mint, and that is what the pool asserts against. */
     idl_args_seal();

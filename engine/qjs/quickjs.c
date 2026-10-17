@@ -2162,6 +2162,11 @@ struct JSObject {
                build (two pointers and six bytes of tail), so this union is 16 there either way and `func` was
                the smaller member; on a 64-bit build it is four bytes the union did not have. */
             uint32_t creation_ord;
+            /* The timeline the running flow had when this function object was built (js_timeline_handle), 0
+               outside any flow. Its environment (`var_refs`, `home_object`) is that timeline's state, so only
+               that timeline and its continuations may call it; the orphan take reads this to keep a drive in a
+               timeline that can reach the closure. Free on both targets: the union is wider than `func`. */
+            uint32_t timeline;
         } func;
         struct { /* JS_CLASS_C_FUNCTION: 12/20 bytes */
             JSContext *realm;
@@ -9051,6 +9056,12 @@ uint32_t JS_ObjFlowGen(JSValueConst obj) {
    the field can never drift again." `{ 0 }` states no count, so it cannot state a stale one,
    and it is the spelling this tree already uses wherever a hook set means INSTALL NOTHING. */
 static _Thread_local JSTimeTravelHooks g_time_travel = { 0 };
+
+/* The running flow's timeline handle for a function object being built (JSTimeTravelHooks.timeline_handle). */
+static uint32_t js_timeline_handle(void)
+{
+    return g_time_travel.timeline_handle ? g_time_travel.timeline_handle() : 0;
+}
 /* forced-exec @S JS-CONTEXT SINK (see JSEvalSinkFunc in quickjs.h) — the host's detector, told that a value was
    offered to a program evaluation. Installed by JS_SetEvalSinkHook; NULL = no host is listening. */
 static _Thread_local JSEvalSinkFunc *g_eval_sink;
@@ -24342,9 +24353,10 @@ static JSValue js_closure2(JSContext *ctx, JSValue func_obj,
        and this is the one line every function object in this runtime passes through, whether it came from a
        fresh compile or from an enclosing body running for the first time and instantiating a body that had no
        closure until now. Nothing else can add one: executing a body only marks it entered, taking one only
-       marks it taken, and collecting one only removes it. So a host that walked the heap at generation G and
-       took what it found may SKIP the walk until this number moves, which is what keeps the enumeration off
-       the critical path of a frontier whose members each finish. One increment on the closure path. */
+       marks it taken, and collecting one only removes it. So a host that walked the heap at generation G from
+       one timeline and took what it found may SKIP that timeline's walk until this number moves (the take
+       answers per timeline: see orphan_candidate), which is what keeps the enumeration off the critical path
+       of a frontier whose members each finish. One increment on the closure path. */
     ctx->rt->orphan_gen++;
     /* AND THE OTHER HALF OF THIS CLOSURE'S NAME IS MINTED HERE, FOR THE SAME REASON THAT LINE IS HERE: this is
        the one place every closure in this runtime is built, so an ordinal minted here is minted once per
@@ -24355,6 +24367,7 @@ static JSValue js_closure2(JSContext *ctx, JSValue func_obj,
        a second copy of the contract beside one of them is the shape that drifts; what this comment owes is the
        reason the mint belongs at THIS line, which is the sentence above it. */
     p->u.func.creation_ord = js_mint_creation_ord(ctx);
+    p->u.func.timeline = js_timeline_handle();
     if (b->closure_var_count) {
         var_refs = js_mallocz(ctx, sizeof(var_refs[0]) * b->closure_var_count);
         if (!var_refs)
@@ -69227,6 +69240,7 @@ static int js_create_module_bytecode_function(JSContext *ctx, JSModuleDef *m)
        built once per module by the loader rather than by a body the page ran, and JS_CreationName's 0 answers
        ABSENT for it. Written rather than left alone because the allocation does not zero this field. */
     p->u.func.creation_ord = 0;
+    p->u.func.timeline = js_timeline_handle();
     if (b->closure_var_count) {
         var_refs = js_mallocz(ctx, sizeof(var_refs[0]) * b->closure_var_count);
         if (!var_refs)
@@ -114772,6 +114786,16 @@ static bool orphan_candidate(JSGCObjectHeader *gp, JSObject **pp, JSFunctionByte
     b = p->u.func.function_bytecode;
     if (!b || !b->byte_code_buf || b->entered) return false;
     if (b->is_program) return false;
+    /* A closure another timeline built is not reachable from this one: driving it would run that timeline's
+       environment under this flow's delta, whose capture skips objects created after its fork. A stamp of 0 is a
+       closure built outside every flow, which is the baseline every timeline shares. */
+    DCHECK(p->u.func.timeline != 0 || p->flow_gen == 0,
+           "a function object carries no timeline but was created at a fork generation above the baseline — it "
+           "was built while the generation stamp was up and no flow was switched in, so no take can say which "
+           "timeline its environment belongs to");
+    if (p->u.func.timeline != 0 && g_time_travel.timeline_continues &&
+        !g_time_travel.timeline_continues(p->u.func.timeline))
+        return false;
     *pp = p; *pb = b;
     return true;
 }
@@ -115060,6 +115084,17 @@ static uint64_t orphan_hash_body(JSRuntime *rt, JSFunctionBytecode *b)
     h = orphan_hash_u32(h, (uint32_t)b->col_num);
     b->locator = h;
     return h;
+}
+
+uint32_t JS_FunctionTimeline(JSValueConst fn)
+{
+    JSObject *p;
+
+    DCHECK(JS_VALUE_GET_TAG(fn) == JS_TAG_OBJECT && js_class_has_bytecode(JS_VALUE_GET_OBJ(fn)->class_id),
+           "the timeline of a function object was asked of a value with no bytecode body — only a closure "
+           "carries one");
+    p = JS_VALUE_GET_OBJ(fn);
+    return p->u.func.timeline;
 }
 
 uint64_t JS_OrphanHash(JSContext *ctx, JSValueConst fn)

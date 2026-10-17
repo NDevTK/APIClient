@@ -4670,6 +4670,38 @@ uint64_t engine_flow_timeline(void) {
     return ((uint64_t)f->world.session << 48) ^ ((uint64_t)f->world.doc << 32) ^ (uint64_t)f->world.serial;
 }
 
+/* The world a timeline handle names: this instance's document and session, since a flow's world is minted here. */
+static WorldId engine_timeline_world(uint32_t handle) {
+    WorldId w = { world_local_doc(), handle, world_session() };
+
+    DCHECK(handle != 0, "a timeline handle of 0 names the baseline, which is no world");
+    return w;
+}
+
+uint32_t engine_flow_timeline_handle(void) {
+    Flow *f = g_enqueue_owner ? g_enqueue_owner : flow_running();
+
+    if (!f) return 0;
+    DCHECK(f->world.doc == world_local_doc() && f->world.session == world_session() && f->world.serial != 0,
+           "a flow runs under a world this instance did not mint in this session, so its serial alone does not "
+           "name it and a function object stamped with it could be matched against another document's timeline");
+    return f->world.serial;
+}
+
+int engine_flow_timeline_continues(uint32_t handle) {
+    Flow *f = g_enqueue_owner ? g_enqueue_owner : flow_running();
+
+    return f != NULL && world_descends_from(f->world, engine_timeline_world(handle));
+}
+
+/* Whether a flow whose world is `w` can reach the closure `fn`: it was built outside every flow, or in `w`'s
+   timeline or one `w` descends from. A closure another timeline built holds that timeline's environment. */
+static int engine_world_reaches_fn(WorldId w, JSValueConst fn) {
+    uint32_t h = JS_FunctionTimeline(fn);
+
+    return h == 0 || world_descends_from(w, engine_timeline_world(h));
+}
+
 /* Generator-state fork stash: clone_deep_flow calls gen_fork for each generator body frame it clones (during
    JS_FlowClone), before engine_fork_finalize has the sibling's delta. Appended here; the finalize drains them onto
    the new sibling's delta and resets. Filled and fully drained within one fork. */
@@ -5463,11 +5495,13 @@ long engine_orphan_scripts(void) {
     return (long)JS_OrphanScriptsDrawn(JS_GetRuntime(g_sess_ctx));
 }
 
-/* The generation at which this document last walked the heap. Creating a function object is the only event that
-   can add to the orphan set (JS_OrphanGen), so a walk at an unchanged generation can only find what the previous
-   one took, and a walk is O(live objects). It is not a memo about any orphan, and its only error (a 2^32 wrap)
-   costs one redundant walk. */
+/* The generation at which this document last walked the heap empty, and the world that walked it. Creating a
+   function object is the only event that can add to the orphan set (JS_OrphanGen), so a walk at an unchanged
+   generation can only find what the previous one took; the take answers per timeline, so the memo holds for the
+   world that walked and no other, and a fork gives both arms new worlds. A walk is O(live objects). It is not a
+   memo about any orphan, and its only error (a 2^32 wrap) costs one redundant walk. */
 static uint32_t g_orphan_gen_seen;
+static WorldId  g_orphan_gen_world;
 static int      g_orphan_gen_valid;
 /* What each ask did. engine_orphan_seed has four exits past `g_orphan_asks++`, and solver/step_unit.h names only the
    two that produce work (`seed-one-orphan-flow`, `hand-a-parked-drive-its-function`), so the residue would be
@@ -5555,6 +5589,9 @@ static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64
         if (!fl->orphan_want || !JS_IsUndefined(fl->fn)) continue;
         open++;
         if (fl->orphan_hash != hash) continue;
+        /* A claimant in another timeline than the one that built this closure cannot reach it; a compile of the
+           same bytes in the claimant's own timeline is the body it waits for. */
+        if (!engine_world_reaches_fn(fl->world, fn)) continue;
         DCHECK(fl->orphan,
                "a flow waits for an orphan's body without being marked as a drive — the mark, the locator and the "
                "wait are written together by the cold tier's rebuild");
@@ -5588,6 +5625,10 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
 
     DCHECK(hash != 0, "a driven orphan's call was minted with no locator — the unknowns it supplies are named after "
                       "the function's identity");
+    DCHECK(flow_running() != NULL && engine_world_reaches_fn(flow_running()->world, fn),
+           "a driven orphan's call is being built in a timeline that cannot reach the closure — another timeline "
+           "built it, so its environment is state this flow's delta never captured; the take and the route both "
+           "filter by the closure's timeline");
     if (argc > 0) {
         args = (JSValue *)malloc((size_t)argc * sizeof(JSValue));
         CHECK(args, "engine: OOM minting a driven orphan's arguments");
@@ -5738,7 +5779,10 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
        consumer that can run under both regimes (the conformance host starts non-forking, the shipped host forking)
        must read `engine_session_forks()` before naming the schedule as the cause of a zero. */
     g_orphan_asks++;
-    if (g_orphan_gen_valid && gen == g_orphan_gen_seen) { g_orphan_asks_memo++; return 0; }
+    if (g_orphan_gen_valid && gen == g_orphan_gen_seen && world_eq(f->world, g_orphan_gen_world)) {
+        g_orphan_asks_memo++;
+        return 0;
+    }
     /* Named residual. An empty walk is not "this bundle ships no uncalled code": the take can hand over only a
        body with a live function object of its own (JS_OrphanTakeOne walks rt->gc_obj_list's JS_GC_OBJ_TYPE_JS_OBJECT
        entries and reads `p->u.func.function_bytecode`). Not covered: a body whose only closure was released, the
@@ -5764,7 +5808,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
        the same generation (seeding a flow creates no function object), so recording it after a successful take
        would declare a heap of untaken orphans empty for the session. */
     if (!JS_OrphanTakeOne(ctx, engine_orphan_record, &t)) {
-        g_orphan_gen_seen = gen; g_orphan_gen_valid = 1;
+        g_orphan_gen_seen = gen; g_orphan_gen_world = f->world; g_orphan_gen_valid = 1;
         g_orphan_asks_empty++;
         DCHECK(JS_IsUndefined(t.fn), "an orphan take that reported nothing still left a function on the record");
         return 0;
@@ -11832,7 +11876,7 @@ void solver_agent_free(JSContext *ctx)
     /* And the ask's partition with it: the parts sum to `g_orphan_asks`, so a summand a second session kept would
        break the equality at its first census. */
     g_orphan_asks_memo = 0; g_orphan_asks_empty = 0; g_orphan_asks_took = 0;
-    g_orphan_gen_seen = 0; g_orphan_gen_valid = 0;
+    g_orphan_gen_seen = 0; g_orphan_gen_world = WORLD_NONE; g_orphan_gen_valid = 0;
     /* And the round trip's three numbers, for the same reason: what an inherited drive did with its recipe is a
        fact about one session's residue, and the latch about one frontier's members; kept, they would report the
        first session's round trip and skip the routing walk on a frontier just rebuilt with claims in it. */
