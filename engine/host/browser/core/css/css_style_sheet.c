@@ -554,6 +554,7 @@ void css_style_sheet_set_rules_from_text(JSContext *ctx, JSValueConst sheet, con
         thread_work_begin(&tw);
         css_rule_build_sheet(ctx, s->rules, sheet, text, len);
         thread_work_end(&tw, THREAD_WORK_CSS_PARSE, len);
+        thread_work_charge(THREAD_WORK_CSS_PARSE, len);
     }
 }
 

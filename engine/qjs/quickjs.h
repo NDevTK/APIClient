@@ -2069,6 +2069,10 @@ typedef struct JSFlowControlHooks {
      * floating-point moment as it arrives: addition is not associative, so a folded moment would depend on how
      * the batches were SPLIT, and the split is the schedule-dependent poll count above. */
     void (*work)(JSContext *ctx, uint64_t units);
+    /* Work the tokenizer retires, in the same unit: each source byte the script or JSON tokenizer consumes is
+       this many units, added to the count `work` receives. 0 retires none. The conversion is the host's
+       (core/timing/thread_work.h states it), so the interpreter holds no rate of its own. */
+    uint32_t parse_units_per_byte;
 } JSFlowControlHooks;
 JS_EXTERN void JS_SetFlowControlHooks(const JSFlowControlHooks *hooks);
 /* THROW AWAY the retired-work count standing in the interpreter, attributing it to nobody — called by the
@@ -2079,6 +2083,11 @@ JS_EXTERN void JS_SetFlowControlHooks(const JSFlowControlHooks *hooks);
    so both are discarded rather than banked — which is what makes "the count `work` receives is the running
    flow's own" a property of the mechanism instead of a hope about call order. */
 JS_EXTERN uint64_t JS_FlowDiscardRetiredWork(void);   /* returns what it discarded */
+/* Retires `units` of work the host did on the running flow's behalf, into the count `work` receives next. */
+JS_EXTERN void JS_FlowRetireWork(uint64_t units);
+/* Takes the retired-work count, leaving it zero: the scheduler banks it on the running flow's clock where a
+   step ends with that flow still running, so work retired after the step's last poll is not lost. */
+JS_EXTERN uint64_t JS_FlowTakeRetiredWork(void);
 /* Source bytes quickjs's script and JSON tokenizers have consumed, over the process (a report). */
 JS_EXTERN uint64_t JS_FlowParseBytesLife(void);
 

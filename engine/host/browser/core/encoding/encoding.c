@@ -1366,6 +1366,7 @@ char *encoding_decode(const char *p, size_t n, int fallback_encoding, size_t *ou
     }
     if (out_n) *out_n = o.n;
     thread_work_end(&tw, THREAD_WORK_DECODE, in_n);
+    thread_work_charge(THREAD_WORK_DECODE, in_n);
     return o.b;
 }
 

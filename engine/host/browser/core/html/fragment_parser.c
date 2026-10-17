@@ -346,6 +346,7 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
             s->pc->fed++;
             return JS_STEP_YIELD;
         }
+        thread_work_charge(THREAD_WORK_HTML_PARSE, s->len);   /* the fragment's bytes, charged once, whole */
         s->frag = lxb_html_parse_fragment_chunk_end(s->pc->parser);
         /* AFTER the end and BEFORE the parser goes: `lxb_html_tree_end` runs the EOF token through the
            insertion modes, which is §13.2.6 writing this tree one last time, and `lxb_html_parser_destroy`

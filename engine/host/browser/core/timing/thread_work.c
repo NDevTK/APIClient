@@ -31,6 +31,21 @@ void thread_work_end(ThreadWorkSpan *s, ThreadWorkKind kind, uint64_t bytes)
     g_cpu_us[kind] += quantum_thread_us() - s->t0;
 }
 
+void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
+{
+    static const uint64_t PER_KIB[THREAD_WORK_N] = {
+        [THREAD_WORK_DECODE] = THREAD_WORK_UNITS_PER_KIB_DECODE,
+        [THREAD_WORK_HTML_PARSE] = THREAD_WORK_UNITS_PER_KIB_HTML,
+        [THREAD_WORK_CSS_PARSE] = THREAD_WORK_UNITS_PER_KIB_CSS,
+    };
+    uint64_t units;
+
+    DCHECK(kind != THREAD_WORK_SCRIPT_PARSE && kind < THREAD_WORK_N,
+           "a charge named script parse or no kind — quickjs's tokenizer charges script parse itself");
+    units = bytes * PER_KIB[kind] / 1024;
+    if (units != 0) JS_FlowRetireWork(units);
+}
+
 void thread_work_note_discarded(uint64_t units) { g_discarded += units; }
 
 void thread_work_census(ThreadWorkCensus *out)

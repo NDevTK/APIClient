@@ -9772,15 +9772,17 @@ static const JSFlowControlHooks FC_EXPLORE = { .branch = engine_branch_hook, .ou
                                                .fork = engine_fork_finalize, .preempt = preempt_hook,
                                                .budget = engine_budget_hook,
                                                .budget_period = ENGINE_QUANTUM_ASK_EVERY,
-                                               .work = engine_work_hook };
+                                               .work = engine_work_hook,
+                                               .parse_units_per_byte = THREAD_WORK_UNITS_PER_BYTE_SCRIPT };
 static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook,      /* candidate re-fire: no fork, still preemptible */
                                                .budget = engine_budget_hook, /* and the same slice: a candidate
                                                                                 holds the thread as any flow does */
                                                .budget_period = ENGINE_QUANTUM_ASK_EVERY,
-                                               .work = engine_work_hook };   /* and a verify's clock still runs: a
+                                               .work = engine_work_hook,     /* and a verify's clock still runs: a
                                                                                 candidate re-fires as a flow, and a
                                                                                 sink reading a duration must see the
                                                                                 one the explore run saw */
+                                               .parse_units_per_byte = THREAD_WORK_UNITS_PER_BYTE_SCRIPT };
 static const JSFlowControlHooks FC_OFF     = { 0 };
 
 /* The wall clock, which times nothing the scheduler decides on: the cooperative slice and the WFQ's aging charge
@@ -10611,6 +10613,14 @@ static int engine_sched_slice(void) {
                span in which no offer was possible and read as a missing seam (solver/engine.h's `over_gap_arms`). */
             g_gap_max_us = 0; g_gap_last_us = t_slice0;
             int r = flow_step(ctx, cur);
+            /* The work retired since the step's last poll is the step's own (core/timing/thread_work.h): banked on
+               its clock here, while it is still the running flow, so a task's end moment does not depend on
+               whether the next pick is this flow again. */
+            if (flow_running() == cur) {
+                uint64_t left = JS_FlowTakeRetiredWork();
+
+                if (left != 0) event_loop_work_advance(ctx, left);
+            }
             /* Where the step's answer goes onto the flow: the one point every arm of flow_step converges on, so a
                new arm cannot forget to be recorded. The arm declares its name; it is kept here, read by the `@COLD`
                histogram and the seamless-stretch aborts below, and decides nothing. flow_step resets to NONE at

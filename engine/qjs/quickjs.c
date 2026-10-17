@@ -34297,6 +34297,8 @@ uint64_t JS_FlowDiscardRetiredWork(void)
     g_flow_work_retired = 0;
     return u;
 }
+uint64_t JS_FlowTakeRetiredWork(void) { return JS_FlowDiscardRetiredWork(); }
+void JS_FlowRetireWork(uint64_t units) { g_flow_work_retired += units; }
 
 /* Source bytes the tokenizers have consumed, over the process: a report for the host's thread-work census.
    Each byte is counted once however often a lookahead rescans it, because only forward progress past
@@ -58494,7 +58496,10 @@ static JSAtom parse_ident(JSParseState *s, const uint8_t **pp,
 static void js_parse_count_bytes(JSParseState *s)
 {
     if (s->buf_ptr > s->counted_ptr) {
-        g_flow_parse_bytes += (uint64_t)(s->buf_ptr - s->counted_ptr);
+        uint64_t n = (uint64_t)(s->buf_ptr - s->counted_ptr);
+
+        g_flow_parse_bytes += n;
+        g_flow_work_retired += n * g_flow_control.parse_units_per_byte;
         s->counted_ptr = s->buf_ptr;
     }
 }

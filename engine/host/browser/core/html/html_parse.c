@@ -546,6 +546,7 @@ lxb_status_t html_parse_document_open(lxb_html_document_t *document, DomParseRoo
         thread_work_begin(&tw);
         st = lxb_html_document_parse_chunk(document, html, size);
         thread_work_end(&tw, THREAD_WORK_HTML_PARSE, size);
+        thread_work_charge(THREAD_WORK_HTML_PARSE, size);
     }
     document->opt = opt;
     DCHECK(st != LXB_STATUS_OK || html_parse_insertion_point_defined(doc),
@@ -603,6 +604,7 @@ lxb_status_t html_parse_document_write(lxb_html_document_t *document, const lxb_
         thread_work_begin(&tw);
         st = lxb_html_document_parse_chunk(document, text, size);
         thread_work_end(&tw, THREAD_WORK_HTML_PARSE, size);
+        thread_work_charge(THREAD_WORK_HTML_PARSE, size);
     }
     /* A `CHECK` AND NOT A `DCHECK`, for html_fire's reason one layer up: §13.2 tokenization and tree
        construction are error-RECOVERING and define no input they reject, so a non-OK status here is the
