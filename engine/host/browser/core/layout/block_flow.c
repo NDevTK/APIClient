@@ -474,6 +474,14 @@ bool block_flow_text_child_generates_box(const lxb_dom_node_t *n)
     style = lxb_dom_interface_element(n->parent);
     ws = bf_computed(style, "white-space");
     collapses = strcmp(ws, "normal") == 0 || strcmp(ws, "nowrap") == 0;
+    /* `pre-line` collapses spaces and tabs and preserves segment breaks (css-text-3 §4.1.3 "Segment Break
+       Transformation Rules"), so a run of only spaces and tabs collapses away and one holding a line feed is a
+       forced break with a line box. */
+    if (strcmp(ws, "pre-line") == 0) {
+        const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
+
+        collapses = cd->data.data == NULL || memchr(cd->data.data, '\n', cd->data.length) == NULL;
+    }
     free(ws);
     /* THE COLLAPSED ARM IS §9.2.2.1's SENTENCE AND NOT A SHORTCUT PAST ONE, and it is exact only because of
        what §16.6 makes `normal` and `nowrap` do: a collapsible run between two BLOCK-LEVEL boxes is removed

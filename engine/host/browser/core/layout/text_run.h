@@ -38,8 +38,9 @@
    other than where explicit line breaks occur"); min-content lines end at every break.
    Forced breaks are measured: "preserved segment breaks, and—regardless of the white-space value—any Unicode
    character with the BK and NL line breaking class, must be treated as forced line breaks" (§5.5); U+000C,
-   U+000B (BK) and U+0085 (NL) are not collapsible under `normal`. `white-space: pre` is refused (text_run.c's
-   `tr_wraps`). */
+   U+000B (BK) and U+0085 (NL) are not collapsible under `normal`. Under `pre` every space and tab is measured
+   and every segment break is a forced break; `pre-line` collapses as `normal` does and keeps its segment breaks;
+   `pre-wrap` and `break-spaces` are refused (text_run.c's `tr_white_space`). */
 
 /* §4.1.3's UA-defined choice takes the space branch ("in languages that use word separators, such as English
    and Korean, 'unbreaking' a line requires joining the two lines with a space"); the no-separator branch needs

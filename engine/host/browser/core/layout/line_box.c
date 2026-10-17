@@ -1600,6 +1600,8 @@ size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph 
             /* The other three kinds are refused by `text_run_measure_item_cp`, whose message says what a forced
                break's U+000A and an atomic's U+FFFC are for; this is the test every line walk makes. */
             if (!text_run_measure_item_is_text(&f->m, j)) continue;
+            /* css-text-3 §4.1.2 renders a preserved tab "as a horizontal shift", not as a glyph. */
+            if (text_run_measure_item_cp(&f->m, j) == 0x0009) continue;
             /* css-text-4 §7.3's distribution, read only where a character is placed, so a context whose lines
                all collapsed away never asks `lb_align_offset` for a computed `direction` and `text-align` (a
                crash surface, as core/layout/scrolling_area.c's origin read is). */

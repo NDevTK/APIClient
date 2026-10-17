@@ -2,6 +2,7 @@
    rules and the advance measures core/css/font_metrics.h reads off the first available font. See text_run.h for
    the two answers this produces, for why it is an accumulator, for why it collects before it measures, and for
    the one rule §4.1.2's trimming becomes once the lines are known. */
+#include <math.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,14 +13,16 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
+#include "core/layout/block_flow.h"
 #include "core/layout/line_break.h"
 #include "core/layout/text_run.h"
 
-/* ---- the `white-space` group this component measures --------------------------------------------------------
-   css-text-3 §3 "White Space and Wrapping: the white-space property" splits the values by two independent facts,
-   read separately here: whether white space collapses (what §4.1.1 leaves to measure) and whether the line
-   wraps (whether a soft wrap opportunity exists). `normal` and `nowrap` share the first and differ in the
-   second, so they are one arm with a boolean. */
+/* ---- the `white-space` value this component measures ------------------------------------------------------
+   css-text-3 §3 "White Space and Wrapping: the white-space property" is a longhand in this level (css-text-4
+   makes it a shorthand of `white-space-collapse` and `text-wrap-mode`, which lexbor's registry does not carry),
+   and its six values answer three independent questions §4.1 asks: whether spaces and tabs collapse (§4.1.1's
+   two bullets), whether segment breaks are preserved (§4.1.3 "Segment Break Transformation Rules"), and
+   whether lines wrap at soft wrap opportunities. */
 
 static char *tr_computed(lxb_dom_element_t *el, const char *name)
 {
@@ -30,46 +33,41 @@ static char *tr_computed(lxb_dom_element_t *el, const char *name)
     return v;
 }
 
-/* Whether a soft wrap opportunity exists in this inline: css-text-3 §5's "when wrapping is enabled (see
-   white-space), the UA must minimize the amount of content overflowing a line by wrapping the line at a soft
-   wrap opportunity". Under `nowrap` it is not, so the min-content size is the max-content size. Neither value
-   suppresses a forced break (§5.5 "Line Breaking Details": BK and NL are forced "regardless of the white-space
-   value"), so this gates only the opportunity.
-   It is read rather than derived from the collapsing arm because §3 makes the two independent (`pre-wrap`
-   collapses nothing and wraps). Every other value crashes here, in one predicate, because what those values
-   change is the set of characters §4.1.1 leaves to measure rather than this component's arithmetic. */
-static bool tr_wraps(lxb_dom_element_t *el)
+typedef struct {
+    bool collapse;          /* §4.1.1: "white space characters are considered collapsible" */
+    bool preserve_breaks;   /* §4.1.3: "segment breaks are not collapsible" */
+    bool wraps;             /* §3: "lines may wrap at allowed soft wrap opportunities" */
+} TrWhiteSpace;
+
+/* §3's value on `el`, as those three answers. `normal` collapses and wraps; `nowrap` "collapses white space;
+   but like pre, it does not allow wrapping"; `pre-line` collapses spaces and tabs while §4.1.3 preserves its
+   segment breaks, and wraps; `pre` "prevents user agents from collapsing sequences of white space", preserves
+   segment breaks "as forced line breaks", and "lines only break at forced line breaks".
+   NAMED RESIDUAL. Not covered: `pre-wrap` and `break-spaces`, whose preserved spaces wrap — §4.1.1's soft wrap
+   opportunity "at the end of a sequence of spaces and/or tabs" or "after every space and every tab" — and whose
+   trailing spaces §4.1.2 hangs, unconditionally or conditionally, so they are left out of a line's fit. Next
+   diff builds: those two opportunities and §4.1.2's hanging in the line fill. Absence shows as this crash on
+   the first `pre-wrap` element a page lays out. */
+static TrWhiteSpace tr_white_space(lxb_dom_element_t *el)
 {
     char *ws = tr_computed(el, "white-space");
-    bool normal = strcmp(ws, "normal") == 0, nowrap = strcmp(ws, "nowrap") == 0;
+    TrWhiteSpace w = { true, false, true };
+    bool known = true;
 
+    if (strcmp(ws, "nowrap") == 0) w.wraps = false;
+    else if (strcmp(ws, "pre-line") == 0) w.preserve_breaks = true;
+    else if (strcmp(ws, "pre") == 0) { w.collapse = false; w.preserve_breaks = true; w.wraps = false; }
+    else if (strcmp(ws, "normal") != 0) known = false;
     /* Freed before the crash, not inside it: a DFAIL is compiled out in release and control falls through it,
        so a `free` on each side would be a double free only a release build reaches. */
     free(ws);
-    if (!normal && !nowrap)
-        DFAIL("css-text-3 §4.1.1 \"Phase I: Collapsing and Transformation\" makes this element's white space "
-              "PRESERVED rather than collapsible — the computed `white-space` is one of `pre`, `pre-wrap`, "
-              "`pre-line` or `break-spaces`, and §4.1.1's second bullet states what each of them leaves to "
-              "measure: \"if white-space is set to pre, pre-wrap, or break-spaces, any sequence of spaces is "
-              "treated as a sequence of NON-BREAKING SPACES. However, for pre-wrap, a soft wrap opportunity "
-              "exists at the END of a sequence of spaces and/or tabs, while for break-spaces, a soft wrap "
-              "opportunity exists AFTER EVERY SPACE and every tab.\" So every one of the four is a different "
-              "answer to both of this component's questions, and none of them is the collapsed one. TWO THINGS "
-              "ARE NEEDED, and the FORCED-BREAK SPLIT IS NO LONGER ONE OF THEM: §4.1.3 \"Segment Break "
-              "Transformation Rules\" makes a preserved segment break a forced line break, and this file "
-              "already measures a run that a forced break cuts into pieces (CSS 2.2 §10.3.5's \"formatting the "
-              "content without breaking lines OTHER THAN WHERE EXPLICIT LINE BREAKS OCCUR\"), because [UAX14] "
-              "LB4's BK reaches it under `normal` through U+000C FORM FEED and LB5's LF reaches it through "
-              "HTML §15.3.4's `br`. What is missing is (1) the "
-              "PRESERVED SPACE — a sequence of spaces that is a sequence of NON-BREAKING spaces rather than "
-              "§4.1.1's one collapsed U+0020, with the per-value soft wrap opportunity above — and (2) §4.1.2's "
-              "preserved TAB, which is not an advance at all but \"a horizontal shift that lines up the start "
-              "edge of the next glyph with the next TAB STOP\" at multiples of `tab-size` from the nearest "
-              "block container ancestor's starting content edge — a position, so it cannot be summed and needs "
-              "the run's origin. `tab-size` itself is a third thing: core/css/css_computed_value.c derives no "
-              "computed value for it. BUILD the preserved space first; the tab needs an origin this component "
-              "is not given and that is a change to its interface");
-    return normal;
+    if (!known)
+        DFAIL("css-text-3 §3's `pre-wrap` or `break-spaces` reached the white space processing rules. Both "
+              "preserve spaces that WRAP: §4.1.1 puts a soft wrap opportunity \"at the end of a sequence of "
+              "spaces and/or tabs\" for pre-wrap and \"after every space and every tab\" for break-spaces, and "
+              "§4.1.2 hangs pre-wrap's trailing spaces. BUILD those opportunities and the hanging in the line "
+              "fill (see tr_white_space's residual)");
+    return w;
 }
 
 /* The three properties that would change this measurement's sum and that the cascade computes no value for:
@@ -118,7 +116,7 @@ static void tr_require_no_line_break_tailoring(void)
 
 /* ---- css-text-3 §4.1.1's collapsible characters ------------------------------------------------------------- */
 
-/* Whether §4.1.1 collapses this character, for an element in the `normal`/`nowrap` group. The four have
+/* Whether §4.1.1 collapses this character, for an element whose white space collapses. The four have
    different reasons:
      U+0020 SPACE: §4.1.1's "collapsible spaces".
      U+0009 TAB: §4.1.1 step 3, "every collapsible tab is converted to a collapsible space (U+0020)".
@@ -322,10 +320,23 @@ void text_run_measure_add_box_edge(TextRunMeasure *m, lxb_dom_element_t *style, 
    declaration. A constant rather than an argument, so callers cannot give two answers to what a `br` is. */
 #define TR_HTML_NEWLINE 0x000AU
 
+/* A forced break at the current position, from a `br` or a preserved segment break: one item, one U+000A. */
+static void tr_append_forced_break(TextRunMeasure *m, lxb_dom_element_t *style)
+{
+    TextRunItem *it = tr_append_item(m, TEXT_RUN_ITEM_FORCED_BREAK, style);
+
+    it->cp = TR_HTML_NEWLINE;
+    /* A forced break closes a collapsible white-space run: §4.1.1 step 4 collapses "any collapsible space
+       immediately following another collapsible space", and a break between two spaces separates them. The
+       choice is unobservable in the measurement: a forced break ends its line box, so a space beside it is at a
+       line's edge, which §4.1.2 "Phase II: Trimming and Positioning" removes (as does §4.1.1 step 1, "any
+       sequence of collapsible spaces and tabs immediately preceding or following a segment break is removed").
+       The flag follows step 4's wording. */
+    m->in_white_space_run = false;
+}
+
 void text_run_measure_add_forced_break(TextRunMeasure *m, lxb_dom_element_t *style)
 {
-    TextRunItem *it;
-
     DCHECK(m != NULL && style != NULL,
            "a forced line break was added with no accumulator or no element. CSS 2.2 §10.8's step 1 is over "
            "every inline-level box on the line and this is one of them, so its own `line-height` and first "
@@ -338,15 +349,7 @@ void text_run_measure_add_forced_break(TextRunMeasure *m, lxb_dom_element_t *sty
        word spacing sit beside character units and word separators, and a forced break is neither and has no
        advance. */
     tr_require_no_line_break_tailoring();
-    it = tr_append_item(m, TEXT_RUN_ITEM_FORCED_BREAK, style);
-    it->cp = TR_HTML_NEWLINE;
-    /* A forced break closes a collapsible white-space run: §4.1.1 step 4 collapses "any collapsible space
-       immediately following another collapsible space", and a break between two spaces separates them. The
-       choice is unobservable in the measurement: a forced break ends its line box, so a space beside it is at a
-       line's edge, which §4.1.2 "Phase II: Trimming and Positioning" removes (as does §4.1.1 step 1, "any
-       sequence of collapsible spaces and tabs immediately preceding or following a segment break is removed").
-       The flag follows step 4's wording. */
-    m->in_white_space_run = false;
+    tr_append_forced_break(m, style);
 }
 
 /* css-text-3 §5.5's atomic inline, as the one code point [UAX14] needs to decide its two boundaries: U+FFFC
@@ -418,7 +421,7 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
 {
     const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)text;
     const lxb_char_t *p, *end;
-    bool wraps;
+    TrWhiteSpace ws;
 
     DCHECK(m != NULL && style != NULL && text != NULL,
            "a text run was measured with no accumulator, no style element or no node");
@@ -437,10 +440,10 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
            "another one's typography");
     tr_require_no_spacing_model();
     tr_require_no_line_break_tailoring();
-    /* The `white-space` group is asked once per node, not once per white-space character: asking only where a
-       space appears would accept a `white-space: pre` run that happens to contain none, a correctness owed to
-       the string rather than to this component. The value is a fact about the inline. */
-    wraps = tr_wraps(style);
+    /* `white-space` is asked once per node, not once per white-space character: asking only where a space
+       appears would accept a `pre-wrap` run that happens to contain none, a correctness owed to the string
+       rather than to this component. The value is a fact about the inline. */
+    ws = tr_white_space(style);
     /* An empty text node (DOM §4.10's `data` may be the empty string) contributes nothing and leaves the
        collapsing state as it was, so a collapsible run split across it collapses as one run. */
     if (cd->data.data == NULL || cd->data.length == 0) return;
@@ -457,6 +460,22 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
                "a DOM string held bytes that are not well-formed UTF-8. Lexbor's parser replaces malformed "
                "input and every other writer of character data in this engine goes through quickjs's own "
                "encoder, so a tree containing one was built by something that did neither");
+        /* §4.1.3: under `pre` and `pre-line` "segment breaks are not collapsible and are instead transformed
+           into a preserved line feed (U+000A)", which §3 makes a forced line break — the same item
+           HTML §15.3.4's `br` adds. Spaces beside it are collapsible under `pre-line`, and §4.1.1 step 1's
+           removal of them is §4.1.2's trimming at the two line edges the break makes. */
+        if (cp == 0x000A && ws.preserve_breaks) {
+            tr_append_forced_break(m, style);
+            continue;
+        }
+        /* §4.1.1's second bullet: under `pre` "any sequence of spaces is treated as a sequence of non-breaking
+           spaces", each one measured, and a tab is preserved for §4.1.2 to position. A CR is "treated
+           identically to spaces (U+0020) in all respects" (§4). None is collapsible, so §4.1.2 trims none. */
+        if (!ws.collapse && tr_is_collapsible_white_space(cp)) {
+            m->in_white_space_run = false;
+            tr_append(m, cp == 0x0009 ? 0x0009 : 0x0020, style, ws.wraps, false);
+            continue;
+        }
         if (tr_is_collapsible_white_space(cp)) {
             /* §4.1.1's one surviving space of a run, opened at its first collapsible character and not reopened
                by the ones after it (step 4: "any collapsible space immediately following another collapsible
@@ -464,17 +483,59 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
                through §4.1.1 leaves (step 3's tab, §4.1.3's segment break, §4's CR), and carries the inline of
                the first white-space character, the box css-text-3 §5.5 says controls the break it creates. */
             if (!m->in_white_space_run) {
-                tr_append(m, 0x0020, style, wraps, true);
+                tr_append(m, 0x0020, style, ws.wraps, true);
                 m->in_white_space_run = true;
             }
             continue;
         }
         m->in_white_space_run = false;
-        tr_append(m, cp, style, wraps, false);
+        tr_append(m, cp, style, ws.wraps, false);
     }
 }
 
 /* ---- the measurement ---------------------------------------------------------------------------------------- */
+
+/* css-text-3 §4.1.2's preserved tab at `pos` along its line: "each preserved tab is rendered as a horizontal shift
+   that lines up the start edge of the next glyph with the next tab stop. If this distance is less than 0.5ch,
+   then the subsequent tab stop is used instead. Tab stops occur at points that are multiples of the tab size";
+   "if the tab size is zero, preserved tabs are not rendered". §4.2 makes a `<number>` tab size "a multiple of the
+   advance width of the space character (U+0020) of the nearest block container ancestor".
+   NAMED RESIDUAL. Not covered: §4.1.2 measures stops "from the starting content edge" of that block container,
+   and this measures them from the line box's start, which is that edge only for a line no float shortens.
+   Next diff builds: the line's offset from the content edge as an operand of the prefix sum. Absence shows as a
+   tab on a float-shortened `pre` line landing one stop off Chrome's. */
+static CssPx tr_tab_advance(lxb_dom_element_t *style, CssPx pos)
+{
+    CssTabSize ts = css_computed_tab_size(style);
+    lxb_dom_element_t *container = style;
+    CssPx size, half_ch, args[3];
+    double stop;
+
+    while (container != NULL && !block_flow_display_is_block_container(css_computed_display(container)))
+        container = css_parent_element(container);
+    DCHECK(container != NULL,
+           "a preserved tab has no block container ancestor. Text is laid out in an inline formatting context, "
+           "which CSS 2.2 §9.4.2 says a block container establishes, so the walk up from its inline box ends at "
+           "one");
+    if (ts.is_number) {
+        FontFallbackList faces;
+
+        css_font_fallback_list(container, &faces);
+        size = css_px_scale(css_font_advance_measure_px(container, font_matching_font_for_character(&faces, 0x20),
+                                                        0x0020),
+                            ts.number);
+    } else {
+        size = ts.px;
+    }
+    if (size.px <= 0.0) return css_px(0.0);
+    half_ch = css_px_scale(css_font_ch_px(style), 0.5);
+    stop = (floor(pos.px / size.px) + 1.0) * size.px;
+    if (stop - pos.px < half_ch.px) stop += size.px;
+    args[0] = pos;
+    args[1] = size;
+    args[2] = half_ch;
+    return css_px_atom("css-text-3 tab stop", args, 3, stop - pos.px);
+}
 
 /* How far along line `[lo, hi)` item `upto` begins: the sum of the sizes and advances of `[lo, upto)`, less
    css-text-3 §4.1.2 "Phase II: Trimming and Positioning"'s ends ("a sequence of collapsible spaces at the
@@ -521,8 +582,12 @@ static CssPx tr_line_prefix(const TextRunMeasure *m, size_t lo, size_t hi, size_
            a line's edge is neither kept nor removed. */
         if (m->items[i].kind == TEXT_RUN_ITEM_FORCED_BREAK) continue;
         if (i < keep_lo || i >= keep_hi) continue;   /* §4.1.2 removed it from this line */
-        advance = css_font_advance_measure_px(tr_char_at(m, i)->style, tr_char_at(m, i)->face,
-                                              tr_char_at(m, i)->cp);
+        /* A tab is preserved exactly when it is still U+0009: Phase I turns a collapsible one into a space. */
+        if (tr_char_at(m, i)->cp == 0x0009)
+            advance = tr_tab_advance(tr_char_at(m, i)->style, sum);
+        else
+            advance = css_font_advance_measure_px(tr_char_at(m, i)->style, tr_char_at(m, i)->face,
+                                                  tr_char_at(m, i)->cp);
         DCHECK(advance.px >= 0.0,
                "the first available font reported a NEGATIVE advance measure for a character on a line. "
                "OpenType 'hmtx' — Horizontal Metrics Table's advanceWidth is a UFWORD, .notdef's included, and "
@@ -617,7 +682,7 @@ static bool tr_opportunity_enabled(const TextRunMeasure *m, size_t left_item, si
        control the line breaking at that opportunity." */
     if (left->kind == TEXT_RUN_ITEM_CHAR && left->collapsible_space) return left->wraps;
     nca = tr_nearest_common_ancestor(left->style, right->style);
-    wraps = tr_wraps(nca);
+    wraps = tr_white_space(nca).wraps;
     /* Where both characters are in one inline box, that box is the nearest common ancestor, so this fresh read
        of `white-space` must equal the flag `tr_append` recorded at collection; a disagreement is a per-flow
        computed value read outside the flow that collected it, which would silently move a break. It is asked

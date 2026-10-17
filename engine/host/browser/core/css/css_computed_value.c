@@ -943,6 +943,16 @@ CssPx css_font_advance_measure_px(lxb_dom_element_t *el, InstalledFont face, uin
                                                         css_cv_advance_direction(el, codepoint)));
 }
 
+CssPx css_font_ch_px(lxb_dom_element_t *el)
+{
+    FontFallbackList faces;
+
+    css_font_fallback_list(el, &faces);
+    return css_px_scale(css_font_size_px(el), font_metrics_typical_advance_measure_em(
+                                                  font_matching_font_for_character(&faces, 0x0030), 0x0030,
+                                                  css_cv_advance_direction(el, 0x0030)));
+}
+
 /* §6.1.1's "THE COMPUTED METRICS CORRESPONDING TO THE INITIAL VALUES of the font and line-height properties",
    which is the answer for `lh` on an element with no parent and for `rlh` in a document with no root element.
    The initial `line-height` is `normal` (css-inline-3 §5.1) and the initial `font-size` is `medium`
@@ -1788,6 +1798,72 @@ static CssLineHeight cv_line_height(lxb_dom_element_t *el)
     return out;
 }
 
+/* `spec` by §4.2's rule. CONSUMES `spec`. FALSE outside §4.2's `<number [0,∞]> | <length [0,∞]>`, which
+   only a substitution can produce. The number arm is told apart by its missing unit, as `line-height`'s is. */
+static bool cv_tab_size_of(lxb_dom_element_t *el, char *spec, CssTabSize *out)
+{
+    CssLength len;
+
+    out->is_number = false;
+    out->number = 0.0;
+    out->px = css_px(0.0);
+    if (line_height_is_number(spec, &out->number)) {
+        free(spec);
+        out->is_number = true;
+        /* §4.2: "Negative values are not allowed." */
+        return out->number >= 0.0;
+    }
+    if (!css_length_is_length(spec)) { free(spec); return false; }
+    if (!computed_length(el, "tab-size", spec, &len)) return false;
+    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+           "a `tab-size` length did not absolutize. §4.2's grammar has no percentage and no keyword, so the "
+           "length parse answers an absolute length or refuses");
+    out->px = len.px;
+    return true;
+}
+
+static CssTabSize cv_tab_size(lxb_dom_element_t *el)
+{
+    CssTabSize out;
+    CssDefaulting defaulting;
+    char *cascaded;
+    bool ok;
+
+    css_cv_modelled(el, "tab-size");
+    cascaded = css_cv_cascaded(el, "tab-size");
+    defaulting = css_defaulting_of("tab-size", cascaded);
+    /* css-values-5 "Resolving in Properties"' invalid-at-computed-value-time rule, as cv_length states it. */
+    if (defaulting == CSS_DEFAULTING_DECLARED) {
+        if (cv_tab_size_of(el, cascaded, &out)) return out;
+        defaulting = css_defaulting_of("tab-size", "unset");
+    } else {
+        free(cascaded);
+    }
+    if (defaulting == CSS_DEFAULTING_INHERITED) {
+        lxb_dom_element_t *parent = css_parent_element(el);
+
+        if (parent != NULL) return css_computed_tab_size(parent);
+    }
+    /* §4.2's `Initial:` line is `8`. */
+    ok = cv_tab_size_of(el, cssom_initial_value("tab-size"), &out);
+    DCHECK(ok && out.is_number, "`tab-size`'s initial value is not css-text-3 §4.2's `8`");
+    return out;
+}
+
+CssTabSize css_computed_tab_size(lxb_dom_element_t *el)
+{
+    CssComputedStyleHold hold;
+    CssComputedValue v;
+
+    css_computed_style_hold_begin(&hold);
+    if (!css_computed_style_ask(el, CSS_PROPERTY_TAB_SIZE, &v)) {
+        v.tab_size = cv_tab_size(el);
+        css_computed_style_answer(el, CSS_PROPERTY_TAB_SIZE, &v);
+    }
+    css_computed_style_hold_end(&hold);
+    return v.tab_size;
+}
+
 CssLineHeight css_computed_line_height(lxb_dom_element_t *el)
 {
     CssComputedStyleHold hold;
@@ -2217,6 +2293,9 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
             "`%s`: css_computed_value was asked for a css-align-3 property, whose computed value is a typed "
             "alignment. Ask css_computed_align",
             name);
+    DCHECK(shape != CSS_COMPUTED_SHAPE_TAB_SIZE,
+           "`tab-size`'s computed value was asked for through the TEXT entry; it is a number or a length that "
+           "carries its facts. Ask css_computed_tab_size");
     DCHECKF(shape != CSS_COMPUTED_SHAPE_KEYWORD,
             "`%s`: css_computed_value was asked for a property whose computed value is a typed keyword. Ask "
             "css_computed_keyword, or css_computed_keyword_is at a call site that tests one keyword",
@@ -2369,6 +2448,18 @@ static JSValue css_resolved_computed(JSContext *ctx, lxb_dom_element_t *el, cons
 
         out = JS_NewString(ctx, a);
         free(a);
+        return out;
+    }
+    /* css-text-3 §4.2's two computed shapes: a number serializes by CSSOM §6.7.2's number rule, and a length
+       is minted, since it is a function of whatever facts its units read. */
+    if (strcmp(name, "tab-size") == 0) {
+        CssTabSize t = css_computed_tab_size(el);
+        char *n;
+
+        if (!t.is_number) return css_resolved_px(ctx, t.px);
+        n = css_length_serialize_number(t.number, "");
+        out = JS_NewString(ctx, n);
+        free(n);
         return out;
     }
     v = css_computed_models(name) ? css_computed_value(el, name) : css_cv_specified(el, name);

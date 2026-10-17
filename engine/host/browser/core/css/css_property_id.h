@@ -29,7 +29,9 @@ typedef enum {
     /* css-display-3 §2's "pair of keywords ... or a <display-internal> or <display-box> keyword": a CssDisplay */
     CSS_COMPUTED_SHAPE_DISPLAY,
     /* css-align-3's "specified keyword(s)": a CssAlign (core/css/css_align.h) */
-    CSS_COMPUTED_SHAPE_ALIGN
+    CSS_COMPUTED_SHAPE_ALIGN,
+    /* css-text-3 §4.2 "Tab Character Size: the tab-size property": "the specified number or absolute length" */
+    CSS_COMPUTED_SHAPE_TAB_SIZE
 } CssComputedShape;
 
 /* The range a property's grammar admits for its numeric values, which css-values-4 §9.1 "Numeric Functions"
@@ -83,6 +85,7 @@ typedef enum {
     X(FLEX_BASIS,          "flex-basis",          LXB_CSS_PROPERTY_FLEX_BASIS,     LENGTH, NON_NEGATIVE, FLEX_BASIS) \
     X(LINE_HEIGHT,         "line-height",         LXB_CSS_PROPERTY_LINE_HEIGHT,    LINE_HEIGHT, NON_NEGATIVE, NONE) \
     X(BORDER_SPACING,      "border-spacing",      LXB_CSS_PROPERTY__UNDEF,         BORDER_SPACING, NON_NEGATIVE, NONE) \
+    X(TAB_SIZE,            "tab-size",            LXB_CSS_PROPERTY_TAB_SIZE,       TAB_SIZE, NON_NEGATIVE, NONE)  \
     X(POSITION,            "position",            LXB_CSS_PROPERTY_POSITION,       KEYWORD, ALL, POSITION)        \
     X(DISPLAY,             "display",             LXB_CSS_PROPERTY_DISPLAY,        DISPLAY, ALL, DISPLAY)         \
     X(BOX_SIZING,          "box-sizing",          LXB_CSS_PROPERTY_BOX_SIZING,     KEYWORD, ALL, BOX_SIZING)      \

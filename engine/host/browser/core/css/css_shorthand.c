@@ -2903,7 +2903,7 @@ bool css_shorthand_complete_for(const char *longhand)
        whose flow-relative shorthands have no row in the table above. */
     static const char *const RECORDED[] = {
         "overflow-x", "overflow-y", "display", "float", "clear", "position", "box-sizing", "color",
-        "white-space",
+        "white-space", "tab-size",
         "direction", "writing-mode", "transform", "visibility",
         /* `pointer-events` — NO shorthand in CSS sets it. css-ui-4 §6.2 "Exclusion from Hit-testing: the
            pointer-events property" declares it as a standalone property with its own `Value:` line

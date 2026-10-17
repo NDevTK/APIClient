@@ -320,6 +320,18 @@ typedef struct {
    reason `css_computed_length` inherits a `CssLength` rather than a string. */
 CssLineHeight css_computed_line_height(lxb_dom_element_t *el);
 
+/* css-text-3 §4.2 "Tab Character Size: the tab-size property"'s computed value: "the specified number or
+   absolute length". A `<number>` is "a multiple of the advance width of the space character (U+0020) of the
+   nearest block container ancestor", which its consumer forms; a length is absolute and carries its facts. */
+typedef struct {
+    bool   is_number;
+    double number;   /* is_number only */
+    CssPx  px;       /* !is_number only */
+} CssTabSize;
+
+/* §4.2's computed value on `el`, with CSS Cascade §7's defaulting applied (the property is inherited). */
+CssTabSize css_computed_tab_size(lxb_dom_element_t *el);
+
 /* THE THREE TERMS CSS 2.2 §10.8 "Line height calculations: the 'line-height' and 'vertical-align' properties"
  * AND §10.8.1 "Leading and half-leading" ARE ARITHMETIC OVER, each for ONE element.
  *
@@ -376,6 +388,10 @@ CssPx css_font_size_px(lxb_dom_element_t *el);
    A VERTICAL WRITING MODE CRASHES in the direction resolution this shares with `ch` and `ic`, which is where
    css-writing-modes-4 §5.1's `text-orientation` is named as the row to add. */
 CssPx css_font_advance_measure_px(lxb_dom_element_t *el, InstalledFont face, uint32_t codepoint);
+
+/* css-values-4 §6.1.1's `ch` on `el`, in CSS pixels: the typical advance measure of "0" in the face that
+   renders it, at `el`'s own computed `font-size`. css-text-3 §4.1.2's 0.5ch tab threshold is its reader. */
+CssPx css_font_ch_px(lxb_dom_element_t *el);
 
 /* CSS 2.1 §17.6.1 "The separated borders model" — THE FOURTH SHAPE A COMPUTED VALUE COMES IN, and the reason
  * this property gets an entry of its own rather than a row in either list above. §17.6.1's `Computed value:`

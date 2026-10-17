@@ -29,6 +29,7 @@ typedef union {
     CssKeyword       keyword;         /* CSS_COMPUTED_SHAPE_KEYWORD */
     CssDisplay       display;         /* CSS_COMPUTED_SHAPE_DISPLAY */
     CssAlign         align;           /* CSS_COMPUTED_SHAPE_ALIGN */
+    CssTabSize       tab_size;        /* CSS_COMPUTED_SHAPE_TAB_SIZE */
 } CssComputedValue;
 
 typedef struct CssComputedStyle CssComputedStyle;
