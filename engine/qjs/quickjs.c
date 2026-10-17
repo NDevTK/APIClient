@@ -27781,6 +27781,7 @@ enum { ArrayFind, ArrayFindIndex, ArrayFindLast, ArrayFindLastIndex };
 typedef struct JSArrayFind {
     JSStepHdr hdr;           /* MUST be first: the generic driver casts the state to JSStepHdr * */
     JSValue obj, func, this_arg, val, result;
+    JSValue test;            /* the predicate's result while its ToBoolean is asked, else JS_UNINITIALIZED */
     int64_t len, k, end;
     int dir, mode;
     JSValue cb_args[5];      /* [thisArg, fn, val, index, O] */
@@ -91440,7 +91441,11 @@ static void js_array_find_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->func);
     v->val(ctx, &s->this_arg);
     v->val(ctx, &s->val);
+    v->val(ctx, &s->test);
 }
+
+/* step_tobool_run's `op` for FindViaPredicate's one ToBoolean (step 4.d); see ACB_TEST_OP. */
+#define AFIND_TEST_OP "23.1.3.12.1 step 4.d, ToBoolean of the predicate's result"
 
 /* find / findIndex / findLast / findLastIndex and their TypedArray twins: EIGHT algorithms whose whole body is
    23.1.3.12.1 FindViaPredicate, so the three stages inside the walk name ITS steps and only the receiver and
@@ -91505,6 +91510,7 @@ static const char *const js_ta_findLastIndex_steps[] = {
 
 static int js_array_find_recv(JSContext *ctx, JSArrayFind *s)
 {
+    s->test = JS_UNINITIALIZED;
     if (s->hdr.arg & FIND_TA) {
         s->obj = js_dup(s->hdr.this_val);   /* js_typed_array_get_length_unsafe VALIDATES the receiver + its length */
         s->len = js_typed_array_get_length_unsafe(ctx, s->obj);
@@ -91587,18 +91593,35 @@ static int js_array_find_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
             *out_cb = s->cb_args; *out_argc = 3;
             return JS_STEP_CALL;
 
-        case AFIND_CALL:
-            if (JS_ToBoolFree(ctx, cb_result)) {
-                cb_result = JS_UNDEFINED;
+        case AFIND_CALL: {
+            /* Step 4.d's ToBoolean over unknown input is a fork through the branch seam, as in the callback
+               walk above: §7.1.2 answers true for every concolic, which settled every world on the first
+               element. The operand is held on the state because the ask suspends and a sibling resumes here
+               with undefined placed. */
+            int testres = 0;
+
+            if (JS_IsUninitialized(s->test)) {
+                s->test = cb_result;
+            } else {
+                DCHECK(JS_IsUndefined(cb_result),
+                       "a find predicate's coercion was re-entered with a value placed while its operand is held");
+                JS_FreeValue(ctx, cb_result);
+            }
+            cb_result = JS_UNDEFINED;
+            r = step_tobool_run(ctx, &s->hdr, s->test, AFIND_TEST_OP, &testres);
+            if (r) return r < 0 ? -1 : r;
+            JS_FreeValue(ctx, s->test);
+            s->test = JS_UNINITIALIZED;
+            if (testres) {
                 s->result = is_index ? js_int64(s->k) : s->val;
                 if (!is_index) s->val = JS_UNDEFINED;   /* ownership moved into result */
                 return 0;
             }
-            cb_result = JS_UNDEFINED;
             JS_FreeValue(ctx, s->val); s->val = JS_UNDEFINED;
             s->k += s->dir;
             s->hdr.stage = AFIND_GET;
             continue;
+        }
 
         default:
             DFAIL("a FindViaPredicate walk resumed at a stage its algorithm does not have");
