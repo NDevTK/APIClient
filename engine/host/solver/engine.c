@@ -10065,6 +10065,11 @@ int engine_reclaim_at_rest(void) {
     DCHECK(!g_reclaim_allowed,
            "a reclaim at rest was asked from inside a flow step — there the step's own allocation asks, armed, "
            "and this would re-arm a safepoint the step may have closed around a frontier walk");
+    /* The flow left switched in between steps is the running flow, which flow_worst excludes: its delta is applied
+       to the heap, so it is the one member a sale may not write down or release. */
+    DCHECK(flow_running() == g_sess_cur,
+           "a reclaim at rest found a switched-in flow that is not the running one — the sale would pick it as the "
+           "tail and release a delta that is applied to the heap");
     prev = engine_reclaim_set(1);
     sold = JS_ReclaimMemory(JS_GetRuntime(g_sess_ctx), 0);
     engine_reclaim_set(prev);
