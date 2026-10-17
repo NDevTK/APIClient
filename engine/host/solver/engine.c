@@ -1719,20 +1719,6 @@ void engine_retract_census(long *flows, long *started, long *handed_back)
     *flows = g_retract_flows; *started = g_retract_started; *handed_back = g_retract_back;
 }
 
-/* How many program rows across the frontier still carry a rendezvous token (engine.h). Scanned, for
-   flow_owes_answer's reason. */
-long engine_operations_started(void)
-{
-    Flow *f;
-    int i, k;
-    long n = 0;
-
-    for (i = 0; (f = flow_at(i)) != NULL; i++)
-        for (k = 0; k < f->dyn_n; k++)
-            if (f->dyn_token[k]) n++;
-    return n;
-}
-
 /* Is this question still somebody's to answer? Asked of every member of the frontier, in both places a question
  * lives: queued on the arrival slot, or started with its token on a program's row.
  *

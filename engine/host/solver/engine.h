@@ -586,13 +586,6 @@ void        engine_retract_operations(JSContext *ctx);
    means the last-holder rule is not being applied. */
 void        engine_retract_census(long *flows, long *started, long *handed_back);
 
-/* How many program rows on the frontier still carry a peer's rendezvous token (a gauge); engine_retract_census's
- * `started` is the same number after the fact. Zero means every question this instance was asked is still
- * queued on an arrival slot or answered. flow_perform appends the operation's program to a runnable row, so
- * the started state survives a slice only when the slice ends at the CPU quantum or the level-1 yield floor;
- * a single-document host whose slices end only at a stall or exhaustion always reads 0 between slices. */
-long        engine_operations_started(void);
-
 /* Inbound: a peer says one of its worlds is gone, so the segment this instance holds for it can go. It seeds
    no work. */
 void engine_world_gone(JSContext *ctx, const char *world);

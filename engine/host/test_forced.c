@@ -493,7 +493,7 @@ static int  fixture_cold_moment_met(void);
    nothing, or a window that never closed so the token assert never ran at all.
    RETIREMENT: this entry goes when the engine states which of its park exits ran and the ladder reads
    that instead, because the fact is then the engine's rather than a flag this host sets beside it. */
-static int  fixture_park_requested(void);
+static int  fixture_op_asked(void);
 static void fixture_ask_remote_op(JSContext *ctx);
 static void fixture_route_peer_post(JSContext *ctx);
 /* The cross-origin peer posts of the messaging and two-message documents: fixture_provide raises a latch when
@@ -14070,32 +14070,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        BOTH ARE BUILT AND THEY LANDED AS ONE DIFF, for exactly the reason the sentence above gives: neither
        moves this row alone and the second REGRESSES three rungs alone, so there was no coherent smaller
        landing to make. The first is an external script at the end of HTML_COLD that fixture_provide
-       DECLINES; the second is one declined consultation at the tail of fixture_want_park, with an assert
-       beside it that a token is on a program row at the instant the park is requested.
+       DECLINES; the second is one declined consultation at the tail of fixture_want_park. The token claim
+       is asserted beside the census below, after the park, so it holds whichever exit took the park.
        WHAT IS STILL A RESIDUAL AFTER THEM, because building a precondition is not the same as discharging
        the question: this row reads the STRIP, and the two halves only make the strip REACHABLE. A 0 here
        means engine_retract_span walked a frontier that held a token and stripped nothing, which is a
-       DEFECT and no longer a named residual — ON THE RUNS WHERE THE ASSERT RAN.
-       AND THAT QUALIFIER IS THE CORRECTION, BECAUSE THE SENTENCE READ `that is the whole point of the
-       assert` AND THE ASSERT HAS A SECOND PATH AROUND IT. It is kept in its own words because the
-       reasoning is sound and a reader re-derives it: the assert really is at the tail of
-       fixture_want_park, it really does read the token off a program row, and it really does make a 0
-       here a statement about the strip — on the path where it RUNS. It runs only when this function
-       RETURNS 1, and solver/engine.c parks a second way: a session closed over survivors, every member
-       of the frontier parked on a request the zone REFUSED, reached without the host asking at all. The
-       FIRST half built above is what makes that exit reachable for this document — a declined external
-       script is exactly a member parked on a refusal — so the two halves did not merely compose, the
-       first one opened a route around the second one's assert. `engine_frontier_paged` is true on both
-       paths, so nothing downstream could tell them apart, and a dev assert that does not fire has two
-       readings (it held, or it was never reached) with no witness for the second.
-       `park-remoteop-window` IS THAT WITNESS; see where it is computed. IT IS NOT THIS LADDER'S LOWEST
-       RUNG, which this sentence used to claim and which is kept because the reasoning above makes a reader
-       re-derive it: `park-remoteop-arrived` stands below it and this rung's own gate names it, because a
-       park cannot be REQUESTED by this host without the peer's question having been performed first.
-       RETIREMENT: this record goes when the token claim is asserted where the park is TAKEN rather than
-       where it is REQUESTED, because the guarantee is then true as first written and needs no qualifier.
-       It is also why the
-       `unaskable` declaration below is left exactly as it is: it retires itself the moment the
+       DEFECT and no longer a named residual, and the census assert aborts on it in a dev build.
+       The `unaskable` declaration below is left exactly as it is: it retires itself the moment the
        cross-agent-operation arm of `stepUnitRuns` leaves 0, with no edit at that line.
        AND THE INDEPENDENT WITNESS FOR THE FIRST HALF ALONE IS `fork-over-a-declined-request`, which stands
        in this host's NEVER-run list beside `cross-agent-operation` and `await-a-refused-request`. A build
@@ -14189,7 +14170,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     long retract_flows = 0, retract_started = 0, retract_back = 0;
     long perform_asks = 0, perform_attached = 0;
     int cold_park_remoteop, cold_park_remoteop_once, cold_park_remoteop_asked, cold_park_remoteop_many;
-    int cold_park_remoteop_window, cold_park_remoteop_arrived, cold_park_remoteop_attached;
+    int cold_park_remoteop_arrived, cold_park_remoteop_attached;
 
     engine_retract_census(&retract_flows, &retract_started, &retract_back);
     /* AND WHAT THE ASK SIDE DID, which is a different pair of events from what the RETRACTION found and was
@@ -14206,6 +14187,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            "more members held a cross-agent question at this park than engine_perform ever ATTACHED — a "
            "question reached a flow's arrival slot or a program's row without going through the attach loop, "
            "so something other than engine_perform is writing the place the retraction walks");
+    /* The token claim, made after the park rather than where this host requests it: solver/engine.c parks by
+       two exits (the host's request, and a session closed over survivors resting on a refusal), both walk
+       engine_retract_span, and only the first passes through fixture_want_park. `started` is the strip's own
+       count, so it is the number of tokens on program rows at the instant the park walked. */
+    DCHECK(g_sess != SESS_PARK || !fixture_op_asked() || retract_started > 0,
+           "the peer's question was asked of this frontier and the park found no member holding its token on a "
+           "program row — either no member was resting behind HTML_COLD's declined external script when the "
+           "question arrived, or a member converted it and then completed it before the park. "
+           "`fork-over-a-declined-request` in `stepUnitRuns` says whether the decline forked at all");
     /* THE LADDER'S SENTENCES — ONE PER RUNG, AND DELIBERATELY NOT COUNTED HERE, because a count beside the
        list it counts is the half nobody adds up and this one read FOUR for as long as the ladder had four.
        WRITTEN WHERE THE RUNGS ARE COMPUTED AND PRINTED WHERE A ROW IS 0. They
@@ -14226,8 +14216,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        so a 0 here is a statement about the ASK PATH and can be about nothing else. It is also the rung that
        makes the three rungs above it statements rather than guesses: `retract_flows` is measured AT THE PARK
        and cannot distinguish a question that never came from one whose holders had gone.
-       NO GATE, for `park-remoteop-window`'s reason: nothing below implies it, so a gate would suppress it on
-       the one run that most needs it. */
+       NO GATE: nothing below it implies it, so a gate would suppress it on the one run that most needs
+       it. */
     const char *remoteop_arrived_why =
         "no cross-agent operation ever reached this instance — engine_perform was never called, so nothing was "
         "ever attached to any timeline and the park had nothing to walk. Read fixture_ask_remote_op and the "
@@ -14245,45 +14235,6 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         "build for it, which is that a document a peer still holds a reference into must keep the timelines it "
         "answered from alive. Nothing about the retraction walk is in question at this rung.";
     cold_park_remoteop_attached = g_sess == SESS_PARK && perform_attached > 0;
-    /* Rung 0c: THE PARK THIS FIXTURE TOOK IS THE ONE IT ASKED FOR, which is the rung every other one in this
-       ladder was resting on without saying so. Its observation site is strictly earlier than theirs — this
-       host's own decision, taken before the park walks anything.
-       IT IS NO LONGER THE LOWEST RUNG AND IT NOW CARRIES A GATE, both of which this paragraph used to deny.
-       It read `which is what makes it the lowest rung and makes the lowest 0 the localisation` and `IT HAS NO
-       GATE AND THAT IS DELIBERATE … a gate declares an ENTAILMENT, and `park-remoteop-asked` does not imply
-       this one — the engine's survivors exit runs the identical retract walk, so a frontier holding an arrival
-       slot reads 1 there with this rung at 0. A gate here would suppress a real row on the one run that most
-       needs it.` THAT ARGUMENT IS SOUND AND IT IS ABOUT THE WRONG ROW, and it is kept in its own words because
-       a reader who re-derives it from the survivors exit will re-add it: it establishes only that `-asked` does
-       not imply this rung, which remains true, and says nothing about a rung BELOW both of them.
-       `park-remoteop-arrived` IS THAT RUNG AND THIS ONE ENTAILS IT, BY CONTROL FLOW AND NOT BY ANALOGY.
-       `g_park_requested` is written at exactly one line, which `fixture_want_park` reaches only past
-       `if (!g_op_asked) { fixture_ask_remote_op(…); return 0; }`; `g_op_asked` has exactly ONE writer, which
-       sets it and then calls `engine_perform` with no `return` between the two (the one guard in that span is a
-       CHECK, fatal in both regimes, so it ends the process rather than skipping the ask). So a run that
-       REQUESTS the park has performed the ask, `fixture_park_requested() ⟹ perform_asks > 0`, and the gate
-       groups a 0 here under a 0 there rather than suppressing anything. Without it this ladder would have had
-       TWO independent bottom rungs on two axes, and "the lowest 0 localises" is a sentence about a graph with
-       one bottom.
-       WHAT IT REPLACES IS A GUARANTEE THAT DID NOT HOLD, recorded here rather than quietly repaired
-       because a reader who re-derives it writes it again. The banner above and `park-remoteop`'s own `why`
-       both said that fixture_want_park ASSERTS at the park that a token is on a row, "so a 0 here can no
-       longer be either half failing silently". The assert is real and it is on the REQUESTED path only;
-       the engine parks a second way, with that line never reached, and on that run a 0 is exactly "either
-       half failing silently" again. A guarantee whose assert a second exit bypasses is a finding about the
-       code and not a wording repair.
-       RETIREMENT: this rung goes when the token assert is reachable from BOTH park exits — when the claim
-       is made where the park is TAKEN rather than where it is REQUESTED — because the guarantee is then
-       true as originally written and there is nothing left for this rung to separate. */
-    const char *remoteop_window_why =
-        "this host never reached the consultation that REQUESTS the park, so the window it opens after the "
-        "peer's question never closed and the token assert at the tail of fixture_want_park never ran. The "
-        "engine parked by its OTHER exit — a session closed over survivors, every member parked on a "
-        "refusal (solver/engine.c) — which runs the same retract walk, so the three rungs above this one "
-        "read 0 about a walk that happened and this one reads 0 about a window that did not. Read "
-        "fixture_want_park's own control flow and the frontier's refusal state, and never "
-        "engine_retract_span: nothing below this rung is a statement about the strip while this reads 0.";
-    cold_park_remoteop_window = g_sess == SESS_PARK && fixture_park_requested();
     /* Rung 1: the park MET a peer's question at all. */
     const char *remoteop_asked_why =
         "every member a question was attached to had LEFT THE FRONTIER before this park walked, so the walk "
@@ -14318,11 +14269,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         "ROW WAITED FOR ARE BUILT: HTML_COLD ends in an external script fixture_provide DECLINES, so a member "
         "rests at the one cursor flow_step cannot pass and an appended row lands behind it; and this host now "
         "lets ONE slice of picks run between the ask and the park, so flow_perform can convert the question "
-        "to a program row at all. fixture_want_park ASSERTS at the park that a token is on a row — ON THE "
-        "PATH WHERE IT ASKED FOR ONE. READ `park-remoteop-window` FIRST: while that rung reads 0 this row "
-        "is NOT a statement about the strip, because the engine parked by its survivors exit and the "
-        "assert was never reached. With that rung at 1 a 0 here is the STRIP, which is what this row has "
-        "always been about. Read this row's banner, and never engine_retract_span. THIS ROW IS NOT ABOUT THE "
+        "to a program row at all. The census asserts after the park, by either exit, that a token was on a "
+        "row whenever the question was asked, so a 0 here beside `park-remoteop-arrived` at 1 is the STRIP. "
+        "Read this row's banner, and never engine_retract_span. THIS ROW IS NOT ABOUT THE "
         "RESIDUE KINDS: it reads engine_retract_census, so what "
         "park.recipes carries, and whether a resume rebuilt it, says nothing about it in either direction. "
         "The rungs printed beside this one are where what the park DID exercise is stated. THIS ROW IS "
@@ -14345,7 +14294,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        subproblems lands, this reads non-zero and a 0 here is a DEFECT once more with no diff at this line.
        That is the banner's own RETIREMENT condition, armed rather than described.
        IT IS THE ASK AND NOT THE OUTCOME, which is the distinction CLAUDE.md draws where an instrument sits
-       over a gate that may legitimately decline: `engine_operations_started()` reads the same fact the ROW
+       over a gate that may legitimately decline: a gauge of tokens on rows reads the same fact the ROW
        reads (is a token on a row NOW) and would answer 0 for both meanings at once, while this counts the
        step that PRODUCES one. The banner one function down already rejects that spelling as a conjunct for
        the same reason — a sampled value that is never true latches nothing.
@@ -15975,8 +15924,6 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "resumed-commit", cold_resumed_commit, "cfg.admin", SESS_RESUME, .gate = "resumed" },
         /* THE LADDER, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer. */
         { "park-remoteop-arrived", cold_park_remoteop_arrived, "cfg.admin", SESS_PARK, remoteop_arrived_why },
-        { "park-remoteop-window", cold_park_remoteop_window, "cfg.admin", SESS_PARK, remoteop_window_why,
-          .gate = "park-remoteop-arrived" },
         { "park-remoteop-attached", cold_park_remoteop_attached, "cfg.admin", SESS_PARK,
           remoteop_attached_why, .gate = "park-remoteop-arrived" },
         { "park-remoteop-asked", cold_park_remoteop_asked, "cfg.admin", SESS_PARK, remoteop_asked_why,
@@ -16758,7 +16705,7 @@ static int fixture_have_answers(void) {
  * rungs `park-remoteop-asked`, `park-remoteop-many` and `park-remoteop-once`, split apart because a single
  * folded row could not say which of those three a 0 was about. The last of them is the one a per-flow hand-back
  * would fail. The `dyn_token` half is named where its row is. */
-static int g_cold_moment, g_op_asked, g_post_routed, g_park_requested;
+static int g_cold_moment, g_op_asked, g_post_routed;
 
 static int fixture_cold_moment(void) {
     ColdPreview would;
@@ -16819,7 +16766,7 @@ static int fixture_cold_moment(void) {
 static int fixture_cold_moment_met(void) { return g_cold_moment; }
 
 /* AND THE WINDOW, READ THE SAME WAY — see the forward declaration. */
-static int fixture_park_requested(void) { return g_park_requested; }
+static int fixture_op_asked(void) { return g_op_asked; }
 
 /* A PEER'S POSTED MESSAGE, ROUTED IN AS THE TRUSTED ZONE ROUTES ONE — the other half of what this fixture
  * stands in for, and the only producer of an 'r' record there is on a host with one instance.
@@ -17004,17 +16951,17 @@ static void fixture_ask_remote_op(JSContext *ctx) {
 }
 
 /* THE MOMENT IS THE WHOLE PREDICATE, and the second conjunct that stood beside it is deleted rather than
-   latched. It asked `engine_operations_started() > 0`, and the paragraph above the latch says why no spelling of
+   latched. It asked whether a token stood on a program row, and the paragraph above the latch says why no spelling of
    that question can be answered here: a started operation lives strictly inside one slice, and this hook is only
    ever asked between two. Latching it would have been worse than leaving it, in two independent ways — the
    sampled value is never true, so a latch over it latches nothing; and even a latch that HAD caught one would
    park after the operation completed, when engine_retract_span has no token left to strip, so the row it was
    protecting would still read 0 with the park now claiming to have exercised it.
    BOTH REASONS WERE RIGHT ABOUT A DOCUMENT WITH NO UNREACHABLE ROW IN IT, AND HTML_COLD NOW HAS ONE, so the
-   question IS answerable at this hook and the value is read here as an ASSERT. It is still not a CONJUNCT,
-   and the second reason above is why: a conjunct that is never true never parks, which is furniture, where
-   an assert that is never true crashes and names the half that did not engage. See the window at the tail
-   of this function. */
+   question IS answerable, and it is asserted after the park rather than conjoined here: a conjunct that is
+   never true never parks, which is furniture, where an assert that is never true crashes and names the half
+   that did not engage. The assert sits beside the park-remoteop census, because the engine's survivors exit
+   can take the park without this hook returning 1. */
 static int fixture_want_park(void) {
     /* THE PEER'S POST, ROUTED AT THE EARLIEST INSTANT THIS HOST HAS, AND STRICTLY BEFORE THE MOMENT IS ASKED.
        This seam is the TOP of run_scheduler's loop, so it is the first thing the host does after
@@ -17063,30 +17010,6 @@ static int fixture_want_park(void) {
        set of live timelines engine_perform attaches to is identical. The ask moved in the LOOP and not in
        the FRONTIER. */
     if (!g_op_asked) { fixture_ask_remote_op(g_probe_ctx); return 0; }
-    DCHECK(engine_operations_started() > 0,
-           "a slice of picks ran between the peer's question and this park and NO member converted it to "
-           "a program row — so engine_retract_span will find no `dyn_token` to strip and `park-remoteop` "
-           "will read 0 with the window it needed already open. The two halves are HTML_COLD's declined "
-           "external script and this consultation order, and this abort says the FIRST one did not "
-           "engage: either no member was resting at that row when the question arrived, or a member "
-           "converted it and then COMPLETED it, which flow_step does on the next step of any member "
-           "whose sequence is exhausted. Read fixture_provide's decline branch and `seq_awaits`, and "
-           "never engine_retract_span. `fork-over-a-declined-request` in this run's `stepUnitRuns` says "
-           "whether the decline forked at all, which separates those two");
-    /* THE WINDOW CLOSED, RECORDED AT THE ACT AND NOT INFERRED FROM ITS OUTCOME. This line is the only
-       one that returns 1, so the flag is exactly "this host asked for the park" — and asking is a fact
-       about THIS HOST's decision, which is the recording point CLAUDE.md names for an invariant over an
-       operation something else may legitimately do another way. The outcome cannot stand in for it:
-       `engine_frontier_paged` is true for the survivors exit as well, so a frontier that was written
-       says nothing about whether this function ever got here.
-       IT IS ALSO THE REACHABILITY WITNESS FOR THE DCHECK ABOVE IT, which is the whole reason it is set
-       on this line rather than beside the ask. A dev-only assert that does not fire has two readings —
-       it held, or it was never reached — and nothing in the report could separate them, so the four
-       zeros below were being read as a statement about the strip on the strength of an assert that may
-       not have run.
-       RETIREMENT: this flag goes when the engine names the exit its park took, because the ladder then
-       reads that and nothing has to be remembered here. */
-    g_park_requested = 1;
     return 1;
 }
 
