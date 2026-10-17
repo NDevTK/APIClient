@@ -22,6 +22,7 @@
 #include "browser/core/fetch/response.h"
 #include "browser/core/fetch/request.h"
 #include "browser/core/url/url.h"
+#include "browser/core/json_buf.h"   /* json_buf_peak_take: the composition's measured footprint */
 #include "browser/core/url/origin.h"   /* §7.1.1's same origin: the one check that decides what may join this agent */
 #include "browser/core/frame/window_proxy.h"
 #include "browser/core/frame/remote_location.h"
@@ -1114,10 +1115,16 @@ QJS_EXPORT int qjs_step(void)
    sold at rest, and it is composed again, until it fits or nothing is left to sell. */
 static char *result_json_at_rest(void)
 {
+    static size_t need;   /* the previous composition's measured footprint */
+    char *js;
+    engine_headroom_at_rest(need);
+    (void)json_buf_peak_take();
     for (;;) {
-        char *js = result_json(g_ctx);
-        if (js || !engine_reclaim_at_rest()) return js;
+        js = result_json(g_ctx);
+        if (js || !engine_reclaim_at_rest()) break;
     }
+    need = json_buf_peak_take();
+    return js;
 }
 
 /* The one result document, serialized directly from the C findings; the host does one JSON.parse of it. This entry

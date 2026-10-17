@@ -435,6 +435,10 @@ void engine_request_park(void);
    closed. The caller holds no position in the frontier. Returns 1 if a flow was sold, so the caller retries, and 0
    at the floor or with no session, where its own CHECK is the answer. */
 int engine_reclaim_at_rest(void);
+/* Before a composition between steps, whose allocations cannot sell a flow: sell at rest (engine_reclaim_at_rest)
+   until `bytes`, the composition's footprint measured the last time it ran, can be allocated, or nothing is left
+   to sell. The caller holds no position in the frontier. */
+void engine_headroom_at_rest(size_t bytes);
 /* Whether this whole frontier was written out rather than drained. The instance teardown's asserts (main.c)
    read it: owed replies and outstanding synchronous requests are re-issued by each recipe's replay, so neither
    is a dropped work item. It is engine-wide; a single flow's release asks the flow's own `paged`

@@ -1,5 +1,6 @@
 /* The dispatch loop — see engine.h. */
 #include "core/fetch/fetch.h"
+#include "core/json_buf.h"   /* json_buf_peak_take: a census's measured footprint, bought at rest */
 #include "core/mime/mime_type.h"   /* §4.4 "Is a JavaScript MIME type": what makes a reply a program rather
                                        than a Response, asked at the fetch delivery below */
 #include "core/fetch/scheme_fetch.h"   /* Fetch §4.3 Scheme fetch: who answers a park's address — this agent
@@ -10076,6 +10077,18 @@ int engine_reclaim_at_rest(void) {
     return sold;
 }
 
+/* See engine.h. The probe is a plain allocation, freed at once: what it proves is that the address space holds
+   `bytes` now, which is what the composition after it spends. */
+void engine_headroom_at_rest(size_t bytes) {
+    for (;;) {
+        void *p;
+        if (bytes == 0) return;
+        p = malloc(bytes);
+        if (p) { free(p); return; }
+        if (!engine_reclaim_at_rest()) return;   /* the floor: the composition's own CHECK answers */
+    }
+}
+
 /* The seam between two vocabularies for one fact. core/html/unhandled_rejection.h names the two spec steps it
    reports from (§8.1.4.7 step 4.1.3 and §8.1.6.4 step 7.4); solver/result.h names what its console does with them
    (a report stands, a report is taken back). A browser component may not include a solver header and a solver
@@ -11626,6 +11639,7 @@ int engine_census_emit(void)
     /* The sample ordinal, static for the cadence's reason: an ordinal that restarted while the cadence it numbers
        did not would give two samples of one process one number. */
     static long seq = 0;
+    static size_t need;   /* the previous census's measured footprint (json_buf_peak_take) */
 
     /* The precondition that makes every line below legal: each composer walks state the session owns (the
        frontier, the pager's tables, the runtime behind `g_sess_ctx`), so a census outside a live session is about
@@ -11643,6 +11657,10 @@ int engine_census_emit(void)
        it rather than by arrival order. On its own statement, since an increment is a side effect a DCHECK
        condition may not have. */
     seq += 1;
+    /* The census's composers walk the frontier, so their allocations cannot sell a flow: room for what the last
+       census needed is bought at rest first, and this one's footprint is measured for the next. */
+    engine_headroom_at_rest(need);
+    (void)json_buf_peak_take();
 
     /* The censuses, each printed from the one composer that also puts it on the result document (solver/result.c's
        `result_swap_json`/`result_cold_json`/`result_heap_json`/`result_wfq_json`, solver/decide.c's
@@ -11705,6 +11723,7 @@ int engine_census_emit(void)
         printf("@FORKAT %s\n", forks);
         free(swap); free(cold); free(heap); free(wfq); free(forks);
     }
+    need = json_buf_peak_take();
     fflush(stdout);
     /* The sample happened, said after the flush, because a caller writes more of its own stream on this answer,
        and a `1` before these lines were on the wire would order the host's output by whichever printf ran first. */
