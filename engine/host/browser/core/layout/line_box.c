@@ -14,6 +14,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
+#include "core/layout/inline_run_walk.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/layout_job.h"   /* the line box record of the job whose activation holds the thread */
 #include "core/layout/line_box.h"
@@ -358,17 +359,6 @@ static bool lb_has_nonzero_box_edges(lxb_dom_element_t *el)
     }
     return false;
 }
-/* One run being filled. CSS 2.2 §9.2.1.1 breaks an inline box around an in-flow block-level box inside it, so
-   a run ends at a node the walk may meet at any depth, and `past_end` carries that back out of the descent. It
-   is read as well as written: "if a border had been set on the P element in the above example, the border
-   would be drawn around C1 (open at the end of the line) and C2 (open at the start of the line)", so an inline
-   box the run ends inside emits no closing edge onto this run's last line (the `past_end` test after the
-   descent), and its opening edge is not emitted onto the next run's first line. */
-typedef struct {
-    TextRunMeasure *m;
-    lxb_dom_node_t *end;   /* exclusive, and reachable at any depth; NULL runs to the end of the content */
-    bool past_end;
-} LbRun;
 
 
 /* ---- the two elements that break the line without putting a glyph on it ------------------------------------
@@ -381,11 +371,11 @@ typedef struct {
    fill divides the run there, and the `br` contributes its `line-height` to the line it ends. The opportunity
    (`wbr`) crashes, naming what it needs. The answer says whether the element was placed: a `br` emits no pair
    of edges and is not descended into, since §15.3.4's declaration replaces the box. */
-static bool lb_phrasing_break(LbRun *r, lxb_dom_element_t *el)
+static bool lb_phrasing_break(TextRunMeasure *m, lxb_dom_element_t *el)
 {
     switch (phrasing_break_of(el)) {
     case PHRASING_BREAK_FORCED:
-        text_run_measure_add_forced_break(r->m, el);
+        text_run_measure_add_forced_break(m, el);
         return true;
     case PHRASING_BREAK_OPPORTUNITY:
         DFAIL("HTML §15.3.4 \"Phrasing content\" gives `wbr` the UA declaration `display-outside: "
@@ -434,18 +424,13 @@ typedef enum { LB_CHILD_PLACED = 0, LB_CHILD_TEXT, LB_CHILD_INLINE_BOX } LbChild
    answers that once for every walk (core/layout/intrinsic_size.c asks the same), so this walk and §9.4.1's
    stack agree about white space. What survives goes in unchanged: css-text-3 §4.1.1 collapses over the
    formatting context, so the accumulator joins a run split across text nodes. */
-static LbChildNext lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c, lxb_dom_node_t **node)
+static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTreeChild c, lxb_dom_node_t **node)
 {
     lxb_dom_node_t *n;
     lxb_dom_element_t *el;
     CssDisplay d;
     bool atomic, inline_box, inline_block, on_the_line;
 
-    /* The run's end, tested at every depth and first: CSS 2.2 §9.2.1.1's in-flow block-level box, which
-       "becomes a sibling of those anonymous boxes", is on no line box of this run, and everything after it is
-       on a later box of §9.4.1's stack, so the walk stops. */
-    if (r->past_end) return LB_CHILD_PLACED;
-    if (box_tree_child_is_node(c, r->end)) { r->past_end = true; return LB_CHILD_PLACED; }
     /* css-lists-3 §3.5's outside marker box "is placed outside the principal block box", so it is on no line
        box of the list item's content; an inside one aborts at the classification.
        Named residual. §3.5 leaves undefined how "the size or contents of the marker box may affect … the
@@ -509,7 +494,7 @@ static LbChildNext lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c,
               "document tree, such as selector-matching, event handling, and property inheritance, are not "
               "affected\" — so only the CONTAINER's child enumeration moves to the box tree while every "
               "inherited property stays read off the node's document parent. AND THIS WALK DOES NOT LAND "
-              "ALONE: `LbRun`'s `end` is a `BlockFlowRun`'s `end`, so this walk is BOUNDED by one of "
+              "ALONE: the walk's `end` is a `BlockFlowRun`'s `end`, so this walk is BOUNDED by one of "
               "§9.2.1.1's anonymous block boxes, and that type reads its bounds as SIBLINGS of the container. "
               "core/layout/intrinsic_size.c's walk over the same content is bounded the same way. So the run "
               "type, core/layout/block_flow.c's five walks and both of these are ONE landing rather than "
@@ -652,7 +637,7 @@ static LbChildNext lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c,
            this walk's items apart from core/layout/intrinsic_size.c's §5.2 contributions. */
         CssPx used = used_value_margin_edge_px(el, false);
 
-        text_run_measure_add_atomic(r->m, el, used, used);
+        text_run_measure_add_atomic(m, el, used, used);
         return LB_CHILD_PLACED;
     }
     /* HTML §15.4 "Replaced elements" makes this a replaced element: css-text-3 §5.5's "each replaced element
@@ -668,12 +653,12 @@ static LbChildNext lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c,
            Sizes" would also give a replaced box two equal numbers, but that is not the reason that governs. */
         CssPx used = used_value_margin_edge_px(el, false);
 
-        text_run_measure_add_atomic(r->m, el, used, used);
+        text_run_measure_add_atomic(m, el, used, used);
         return LB_CHILD_PLACED;
     }
     /* The elements that change where the run breaks are placed before anything else is collected for them,
        since the fill is a function of the break positions. A phrasing break is not also an inline box. */
-    if (lb_phrasing_break(r, el)) return LB_CHILD_PLACED;
+    if (lb_phrasing_break(m, el)) return LB_CHILD_PLACED;
     /* css-text-3 §5.5 puts this box's two edges at its boundaries and not at every break inside it ("inline
        box boundaries do not introduce a forced line break or soft wrap opportunity in the flow"), so they are
        emitted around the descent and the run's break mapping decides each one's line: a box spanning three
@@ -687,7 +672,7 @@ static LbChildNext lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c,
        zero while a contribution is measured, and otherwise "the percentage is resolved against the containing
        block's size". A line is filled at a determined width (the one `lb_fill` reads), so `margin-left: 5%`
        occupies 5% of it here and contributes zero to §5.2's measurement. */
-    text_run_measure_add_box_edge(r->m, el, used_inline_box_edge_px(el, false));
+    text_run_measure_add_box_edge(m, el, used_inline_box_edge_px(el, false));
     /* §10.8's step 1 is over every inline-level box on the line, nested ones included (§10.8.1's "boxes of
        child elements do not influence this height" is about the parent's own height), so the walk descends
        and each box's items carry it onto their lines. */
@@ -850,155 +835,80 @@ static CssPx lb_available_width(lxb_dom_element_t *style, LineBoxAvailableWidth 
 /* ---- §9.4.2's content, collected and distributed — the half every answer below shares ----------------------
    One collection and one fill per question, shared by every answer, for core/layout/text_run.h's reason: the
    fill is a function of where [UAX14] says the run may break, so two collections could disagree about which
-   line a box is on. The collection is a walk held between steps: a stack of the boxes whose children are being
-   walked and, inside a text node, its character position. The caller owes the measurement exactly one
+   line a box is on. The collection is core/layout/inline_run_walk.h's walk held between steps and, inside a
+   text node, its character position. The caller owes the measurement exactly one
    `text_run_measure_release`, because the collection must live as long as the `TextRunLine`s index it. */
 typedef struct {
-    lxb_dom_element_t *el;
-    BoxTreeChild c;    /* the next child to take */
-    /* One of the run's open fragments, whose children run to the run's end (`block_flow_run_next`) and whose
-       end steps out to its box parent, rather than an inline box this walk descended into. */
-    bool fragment;
-} LbFrame;
-
-typedef struct {
-    LbRun r;
-    lxb_dom_node_t *root;
-    LbFrame *frames;   /* owned */
-    size_t n, cap;
+    TextRunMeasure *m;
+    InlineRunWalk walk;
     bool in_text;
     TextRunText text;
-    bool done;
 } LbCollect;
-
-static void lb_collect_push(LbCollect *k, lxb_dom_element_t *el, BoxTreeChild c, bool fragment)
-{
-    if (k->n == k->cap) {
-        size_t cap = k->cap != 0 ? k->cap * 2 : 8;
-        LbFrame *grown = realloc(k->frames, cap * sizeof *grown);
-
-        CHECK(grown != NULL, "out of memory holding the inline boxes one inline formatting context's walk is in");
-        k->frames = grown;
-        k->cap = cap;
-    }
-    k->frames[k->n].el = el;
-    k->frames[k->n].c = c;
-    k->frames[k->n].fragment = fragment;
-    k->n++;
-}
 
 static void lb_collect_begin(LbCollect *k, TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun run)
 {
-    BlockFlowRunStart start;
-
-    DCHECK(style != NULL, "CSS 2.2 §9.4.2's line boxes were asked for with no element");
-    k->root = lxb_dom_interface_node(style);
-    /* The run's open fragment, which `after` alone cannot name: §9.2.1.1 splits an inline box "into two boxes
-       (even if either side is empty)", so a run after a break inside one begins inside that box with no
-       opening edge of its own and may hold no node while still carrying the box's closing edge.
-       core/layout/block_flow.h answers the start, because css-display-3 §2.5 "Box Generation: the none and
-       contents keywords"' splice makes "the next sibling of `after` in `after`'s parent" wrong, and one owner
-       keeps every walk agreeing about where a box's content starts. */
-    start = block_flow_run_start(style, run);
     /* §9.4.2's content is collected before any of it is measured, because [UAX14]'s rules read past the
        boundary they decide (core/layout/text_run.h). */
     text_run_measure_init(m);
-    k->r.m = m;
-    k->r.end = run.end;
-    k->r.past_end = false;
-    k->frames = NULL;
-    k->n = 0;
-    k->cap = 0;
+    k->m = m;
     k->in_text = false;
-    k->done = false;
-    lb_collect_push(k, start.open, start.at, true);
+    inline_run_walk_begin(&k->walk, style, run);
 }
 
-/* One step of the walk: a character of the text node it is in, one child of the box on top, or the end of
-   that box. Answers the items it took, at least one, so a walk over content that adds no item still spends. */
+static bool lb_collect_done(const LbCollect *k)
+{
+    return k->walk.done && !k->in_text;
+}
+
+/* One step of the walk: a character of the text node it is in, one child, or the end of a box. Answers the
+   items it took, at least one, so a walk over content that adds no item still spends. */
 static size_t lb_collect_step(LbCollect *k)
 {
-    TextRunMeasure *m = k->r.m;
+    TextRunMeasure *m = k->m;
     size_t before = m->count;
-    LbFrame *top;
+    lxb_dom_element_t *parent;
+    lxb_dom_node_t *node = NULL;
+    BoxTreeChild c;
 
-    DCHECK(!k->done && k->n > 0, "an inline formatting context's collection was stepped after it ended");
+    DCHECK(!lb_collect_done(k), "an inline formatting context's collection was stepped after it ended");
     if (k->in_text) {
         text_run_measure_text_step(m, &k->text);
         k->in_text = !text_run_measure_text_done(&k->text);
         return m->count > before ? m->count - before : 1;
     }
-    /* The run's end was met at some depth: every box still open stays open on this run's last line. */
-    if (k->r.past_end) { k->done = true; return 1; }
-    top = &k->frames[k->n - 1];
-    if (box_tree_child_exists(top->c)) {
-        BoxTreeChild c = top->c;
-        lxb_dom_element_t *parent = top->el;
-        lxb_dom_node_t *node = NULL;
-
-        /* The inline box's box-tree children: css-display-3 §2.5 "Box Generation: the none and contents
-           keywords" puts a `contents` child's children in this box's content, and core/layout/box_tree.h never
-           yields the `contents` element itself. */
-        top->c = top->fragment ? block_flow_run_next(parent, c) : box_tree_next_sibling(parent, c);
-        switch (lb_child(&k->r, parent, c, &node)) {
-        case LB_CHILD_PLACED:
-            break;
-        case LB_CHILD_TEXT:
-            text_run_measure_text_begin(m, parent, node, &k->text);
-            k->in_text = !text_run_measure_text_done(&k->text);
-            break;
-        case LB_CHILD_INLINE_BOX:
-            lb_collect_push(k, lxb_dom_interface_element(node), box_tree_first_child(lxb_dom_interface_element(node)),
-                            false);
-            break;
-        }
-        return m->count > before ? m->count - before : 1;
-    }
-    if (!top->fragment) {
-        /* The inline box descended into is complete on this run, so its closing edge is on this run's last
-           line; a run that ended inside it returned above, §9.2.1.1's "open at the end of the line", and the
-           rest of the box is a later fragment on a later anonymous block box. */
-        lxb_dom_element_t *el = top->el;
-
-        k->n--;
-        text_run_measure_add_box_edge(m, el, used_inline_box_edge_px(el, true));
+    switch (inline_run_walk_next(&k->walk, &parent, &c)) {
+    case INLINE_RUN_END:
         return 1;
-    }
-    {
-        lxb_dom_node_t *box = lxb_dom_interface_node(top->el);
-        lxb_dom_element_t *up;
-
-        if (box == k->root) { k->done = true; return 1; }
-        /* Leaving a fragment that was already open, whose closing edge is on this run's last line (§9.2.1.1's
-           "C2 (open at the start of the line)"). The step out is to the ancestor's next sibling, never the
-           ancestor, which would re-fill the fragment just closed. */
-        text_run_measure_add_box_edge(m, top->el, used_inline_box_edge_px(top->el, true));
-        /* The step out is over the box tree, as both measurements of this run step out: css-display-3 §2.5's
-           splice makes a `contents` element between this fragment and its box parent no box to leave into. */
-        up = box_tree_parent(box_tree_child_of_node(box));
-        DCHECK(up != NULL,
-               "CSS 2.2 §9.2.1.1's run was inside a box with no BOX parent, so the fill cannot leave it — the "
-               "box ancestors of every position in a container's content are inline boxes up to the container "
-               "itself, and this chain does not reach it");
-        top->c = box_tree_next_sibling(up, box_tree_child_of_node(box));
-        top->el = up;
+    case INLINE_RUN_CLOSE:
+        /* The box's closing edge is on this run's last line. */
+        text_run_measure_add_box_edge(m, parent, used_inline_box_edge_px(parent, true));
         return 1;
+    case INLINE_RUN_CHILD:
+        break;
     }
+    switch (lb_child(m, parent, c, &node)) {
+    case LB_CHILD_PLACED:
+        inline_run_walk_take(&k->walk, NULL);
+        break;
+    case LB_CHILD_TEXT:
+        inline_run_walk_take(&k->walk, NULL);
+        text_run_measure_text_begin(m, parent, node, &k->text);
+        k->in_text = !text_run_measure_text_done(&k->text);
+        break;
+    case LB_CHILD_INLINE_BOX:
+        inline_run_walk_take(&k->walk, lxb_dom_interface_element(node));
+        break;
+    }
+    return m->count > before ? m->count - before : 1;
 }
 
 /* Close the collected content: the walk's end, and the checks over the whole of it. */
 static void lb_collect_end(LbCollect *k, lxb_dom_element_t *style, BlockFlowRun run)
 {
-    DCHECK(k->done, "an inline formatting context's collection was closed before its walk ended");
-    DCHECK(run.end == NULL || k->r.past_end,
-           "the run handed to CSS 2.2 §9.4.2's inline formatting context ran off the end of the container's "
-           "CONTENT without ever meeting its exclusive end, so the two came from different trees or the tree "
-           "changed under the walk — and the boxes just collected are some prefix of a formatting context no "
-           "box has");
-    free(k->frames);
-    k->frames = NULL;
-    k->n = k->cap = 0;
-    text_run_measure_finish_begin(k->r.m);
+    DCHECK(lb_collect_done(k), "an inline formatting context's collection was closed before its walk ended");
+    DCHECK(k->walk.end == run.end, "an inline formatting context's collection was closed over another run");
+    inline_run_walk_end(&k->walk);
+    text_run_measure_finish_begin(k->m);
     /* CSS 2.2 §9.5 "Floats" reaches every line box of a block formatting context, while the walk above sees
        only the run: "the current and subsequent line boxes created next to the float are shortened as
        necessary to make room for the margin box of the float", and §9.4.2 "Inline formatting contexts" says
@@ -1168,7 +1078,7 @@ static void lb_fill_release(LbFill *f)
 {
     if (f->phase == LB_FILL_COLLECT) {
         /* An abandoned collection is closed so the measurement can be released. */
-        free(f->col.frames);
+        inline_run_walk_release(&f->col.walk);
         text_run_measure_finish_begin(&f->m);
     }
     if (f->phase == LB_FILL_DISTRIBUTE) text_run_fill_release(&f->dist);
@@ -1332,7 +1242,7 @@ static bool lb_fill_lines_pull(LbFill *f)
            "an inline formatting context's fill was asked from inside its own collection, so its line boxes are "
            "an operand of themselves");
     if (f->phase == LB_FILL_COLLECT) {
-        while (!f->col.done) {
+        while (!lb_collect_done(&f->col)) {
             if (!lb_left()) return false;
             f->stepping = true;
             layout_job_line_items_spend(lb_collect_step(&f->col));
