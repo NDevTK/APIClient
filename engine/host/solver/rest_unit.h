@@ -81,7 +81,13 @@ typedef enum {
        (core/layout/line_box.h): css-sizing-3 §2.1's walk, CSS 2.2 §9.4.2's distribution or §10.8's line box
        extents. Past this many the fill is held and the drive rests. Cost: a few advance measures and one
        `white-space` read; bound (2) is asserted by the REST_UNIT_LAYOUT_DESCENDANTS bracket. */
-    REST_UNIT_LAYOUT_LINE_ITEMS
+    REST_UNIT_LAYOUT_LINE_ITEMS,
+    /* One inline box's CSS 2.2 §10.8.1 metrics derived by a resting drive's line box walks (core/layout/
+       line_box.h): a strut's `A'` and `D'` from the box's first available font and used `line-height`, or an
+       atomic inline's split margin box. Counted apart from REST_UNIT_LAYOUT_LINE_ITEMS because one costs what a
+       hundred of those do, and how many a line derives is the document's choice (a box per character).
+       Cost: three font metric derivations or one memoized layout answer; bound (2) as above. */
+    REST_UNIT_LAYOUT_LINE_METRICS
 } RestUnitKind;
 
 /* How many items of `kind` one rest point covers; at least 1 (asserted). It takes only the kind, which is

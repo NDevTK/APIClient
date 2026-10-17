@@ -720,15 +720,19 @@ static LbChildNext lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c,
    `<div>a<br><span></span></div>` is one line of text height. A line holds at most one forced break, asserted:
    LB5 `LF !` makes the boundary after every forced break mandatory. */
 /* The walk holds one line's §10.8 between items, so a line is taken one item at a time: `begin` seeds the strut,
-   `item` takes the next item and `end` closes the line. */
+   `item` takes the next item and `end` closes the line. Each answers the box metrics it derived (a strut's or an
+   atomic inline's extent). An inline box's strut is a function of its element alone, so the walk keeps the last
+   one it derived and a run of items in one box derives it once; `lb_take` of the same extent is the same take. */
 typedef struct {
     TextRunLine line;
     size_t      i, breaks, last_rendering;
     LbExtent    out;
     bool        exists;
+    lxb_dom_element_t *strut_of;   /* the element `strut` was derived for, or NULL */
+    LbExtent    strut;
 } LbLineWalk;
 
-static void lb_line_walk_begin(LbLineWalk *w, lxb_dom_element_t *style, TextRunLine line)
+static size_t lb_line_walk_begin(LbLineWalk *w, lxb_dom_element_t *style, TextRunLine line)
 {
     DCHECK(line.from < line.to,
            "CSS 2.2 §9.4.2's fill reported a line box holding NO items. \"Line boxes are created as needed to "
@@ -740,6 +744,8 @@ static void lb_line_walk_begin(LbLineWalk *w, lxb_dom_element_t *style, TextRunL
     w->last_rendering = line.to;
     w->out = lb_strut_extent(style);
     w->exists = false;
+    w->strut_of = NULL;
+    return 1;
 }
 
 static bool lb_line_walk_done(const LbLineWalk *w)
@@ -747,9 +753,9 @@ static bool lb_line_walk_done(const LbLineWalk *w)
     return w->i == w->line.to;
 }
 
-static void lb_line_walk_item(LbLineWalk *w, const TextRunMeasure *m)
+static size_t lb_line_walk_item(LbLineWalk *w, const TextRunMeasure *m)
 {
-    size_t i = w->i++;
+    size_t i = w->i++, derived = 0;
     lxb_dom_element_t *box = text_run_measure_item_style(m, i);
     bool text = text_run_measure_item_is_text(m, i);
     bool brk = text_run_measure_item_is_forced_break(m, i);
@@ -759,7 +765,17 @@ static void lb_line_walk_item(LbLineWalk *w, const TextRunMeasure *m)
     /* §10.8's step 1 has a semicolon: "for replaced elements, inline-block elements, and inline-table
        elements, this is the height of their margin box; for inline boxes, this is their 'line-height'." An
        atomic item's box is on the first side, every other item's on the second. */
-    lb_take(&w->out, atom ? lb_atomic_extent(box) : lb_strut_extent(box));
+    if (atom) {
+        lb_take(&w->out, lb_atomic_extent(box));
+        derived++;
+    } else {
+        if (w->strut_of != box) {
+            w->strut = lb_strut_extent(box);
+            w->strut_of = box;
+            derived++;
+        }
+        lb_take(&w->out, w->strut);
+    }
     /* The box-edges test runs last because `lb_has_nonzero_box_edges` reads used values, which crash for box
        types this engine does not lay out; asking it of a box an earlier conjunct answered for would turn a
        measured line into an abort. */
@@ -768,6 +784,7 @@ static void lb_line_walk_item(LbLineWalk *w, const TextRunMeasure *m)
     /* An atomic inline renders, so a line can end with one; that keeps the last conjunct from reading a forced
        break through a following image, though LB5 `LF !` already makes that unreachable. */
     if (text || brk || atom) w->last_rendering = i;
+    return derived;
 }
 
 static LbExtent lb_line_walk_end(const LbLineWalk *w, const TextRunMeasure *m, bool *exists)
@@ -1100,6 +1117,8 @@ typedef struct LbFill {
     LbSpanState    span;
     size_t         span_line, span_item;
     CssPx          span_lo, span_hi;
+    lxb_dom_element_t *span_strut_of;   /* the element `span_strut` was derived for, or NULL */
+    LbExtent       span_strut;
     CssPx         *align;      /* one per line, read where `aligned` */
     bool          *aligned;
     bool           checks;     /* a dev build re-derives this fill; false for that re-derivation */
@@ -1131,6 +1150,7 @@ static void lb_fill_init(LbFill *f, lxb_dom_element_t *style, BlockFlowRun run, 
     f->span = LB_SPAN_NONE;
     f->span_line = 0;
     f->span_item = 0;
+    f->span_strut_of = NULL;
     f->span_lo = css_px(0.0);
     f->span_hi = css_px(0.0);
     f->align = NULL;
@@ -1370,13 +1390,13 @@ static bool lb_fill_extents_pull(LbFill *f)
 
             if (!f->walking) {
                 if (!lb_left()) return false;
-                lb_line_walk_begin(&f->walk, f->style, f->lines[f->extents]);
+                layout_job_line_metrics_spend(lb_line_walk_begin(&f->walk, f->style, f->lines[f->extents]));
                 f->walking = true;
                 layout_job_line_items_spend(1);
             }
             while (!lb_line_walk_done(&f->walk)) {
                 if (!lb_left()) return false;
-                lb_line_walk_item(&f->walk, &f->m);
+                layout_job_line_metrics_spend(lb_line_walk_item(&f->walk, &f->m));
                 layout_job_line_items_spend(1);
             }
             v->e = lb_line_walk_end(&f->walk, &f->m, &v->exists);
@@ -1649,6 +1669,7 @@ static bool lb_span_pull(LbFill *f)
         f->span_hi = css_px(0.0);
         f->span_line = 0;
         f->span_item = 0;
+        f->span_strut_of = NULL;
         f->span = LB_SPAN_PART;
     }
     while (f->span_line < f->n) {
@@ -1677,7 +1698,14 @@ static bool lb_span_pull(LbFill *f)
                core/layout/scrolling_area.c). Deriving them from `A'` and `D'` would give a rectangle smaller
                than the rendered one. */
             if (!text_run_measure_item_is_text(&f->m, j)) continue;
-            b = lb_strut_extent(text_run_measure_item_style(&f->m, j));
+            /* The strut is a function of the element alone, kept for a run of items in one box as the line walk
+               keeps it. */
+            if (f->span_strut_of != text_run_measure_item_style(&f->m, j)) {
+                f->span_strut_of = text_run_measure_item_style(&f->m, j);
+                f->span_strut = lb_strut_extent(f->span_strut_of);
+                layout_job_line_metrics_spend(1);
+            }
+            b = f->span_strut;
             f->span_lo = css_px_min(f->span_lo, css_px_sub(css_px_add(top, e.above), b.above));
             f->span_hi = css_px_max(f->span_hi, css_px_add(css_px_add(top, e.above), b.below));
         }

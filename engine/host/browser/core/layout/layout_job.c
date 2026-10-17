@@ -52,6 +52,7 @@ struct LayoutJob {
     size_t    quota;     /* boxes a resting drive may still lay out in this activation */
     size_t    scan;      /* elements a resting drive's float search may still examine in this activation */
     size_t    line_items;   /* items a resting drive's line box fills may still take in this activation */
+    size_t    line_metrics; /* box metrics its line box walks may still derive in this activation */
     bool      resting;   /* a resting drive is open, as the job's outermost */
     LjSlot   *memo;
     LayoutBfAnswer **answers;   /* chunks of LJ_ANSWER_CHUNK answers, owned */
@@ -345,13 +346,14 @@ void layout_job_drive_begin_resting(LayoutJobDrive *d)
     job->quota = rest_unit_items(REST_UNIT_LAYOUT_BOXES);
     job->scan = rest_unit_items(REST_UNIT_LAYOUT_FLOAT_SCAN);
     job->line_items = rest_unit_items(REST_UNIT_LAYOUT_LINE_ITEMS);
+    job->line_metrics = rest_unit_items(REST_UNIT_LAYOUT_LINE_METRICS);
     job->resting = true;
 }
 
-/* Whether one of the activation's three allowances is spent. */
+/* Whether one of the activation's four allowances is spent. */
 static bool lj_allowance_spent(const LayoutJob *job)
 {
-    return job->quota == 0 || job->scan == 0 || job->line_items == 0;
+    return job->quota == 0 || job->scan == 0 || job->line_items == 0 || job->line_metrics == 0;
 }
 
 bool layout_job_drive_spent(const LayoutJobDrive *d)
@@ -383,6 +385,14 @@ void layout_job_line_items_spend(size_t n)
     if (!(job->resting && job->drives == 1)) return;
     job->line_items = n < job->line_items ? job->line_items - n : 0;
     METRIC_ADD(line_items, n);
+}
+
+void layout_job_line_metrics_spend(size_t n)
+{
+    LayoutJob *job = lj_current();
+
+    if (!(job->resting && job->drives == 1)) return;
+    job->line_metrics = n < job->line_metrics ? job->line_metrics - n : 0;
 }
 
 bool layout_job_scan_take(void)

@@ -42,9 +42,16 @@
 #define REST_UNIT_LAYOUT_FLOAT_SCAN_N   32u
 
 /* Items a resting drive's line box fill takes per rest point, 256. The floor is the rest's own cost: the body
-   holding the fill is replayed, which one item does not amortize. The ceiling is bound (2): an item costs a few
-   advance measures, tens of microseconds in a dev build, so 256 stay a few milliseconds. */
+   holding the fill is replayed, which one item does not amortize. The ceiling is bound (2): with box metrics
+   counted apart (REST_UNIT_LAYOUT_LINE_METRICS), an item costs at most a few advance measures; 256 measured
+   70-700 us of CPU in a dev build at load ~20. */
 #define REST_UNIT_LAYOUT_LINE_ITEMS_N   256u
+
+/* Box metrics a resting drive's line box walks derive per rest point, 32. The floor is the rest's cost, as for
+   the items. The ceiling is bound (2), measured on a 333-word paragraph under scrollIntoView at load ~20 in a dev
+   build: 256 items that each derived a strut cost 8.6-12.1 ms of CPU, about 40 us apiece, so 32 stay near
+   1.3 ms. */
+#define REST_UNIT_LAYOUT_LINE_METRICS_N   32u
 
 /* Descendants folded into a scrolling area per rest point. The floor is the cost of asking, which one
    node's edge does not amortize; the ceiling is bound (2), asserted around each unit. A node whose
@@ -64,6 +71,7 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_LAYOUT_FLOAT_SCAN: n = REST_UNIT_LAYOUT_FLOAT_SCAN_N; break;
     case REST_UNIT_LAYOUT_DESCENDANTS: n = REST_UNIT_LAYOUT_DESCENDANTS_N; break;
     case REST_UNIT_LAYOUT_LINE_ITEMS: n = REST_UNIT_LAYOUT_LINE_ITEMS_N; break;
+    case REST_UNIT_LAYOUT_LINE_METRICS: n = REST_UNIT_LAYOUT_LINE_METRICS_N; break;
     }
     /* No `default:` arm, so clang's -Wswitch (on by default) warns about a kind with no case here; such a
        kind, or an integer cast into the enum, leaves `n` at zero and fails the check below. */
