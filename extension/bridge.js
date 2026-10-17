@@ -1092,7 +1092,7 @@ function noveltyTake(eng, result) {
 /* What `eng` is owed of its partition, handed now; called at its boot before Init and before each step, so
    it is serialized with the instance's other calls. */
 async function noveltyHand(eng) {
-  const text = noveltyOwed(eng.origin, eng._novelty);
+  const text = noveltyOwed(eng.origin, eng._novelty, eng._noveltyCounted);
   if (text !== null) await eng.r.renderer.noveltyLearn({ text });
 }
 /* ─── The per-origin exploration widening, persisted ──────────────────────────────────────────────────

@@ -343,7 +343,7 @@ const ABSENT = '-';
    `abi_novelty`), written only into a round or a provisioning this zone is already writing: the record pays
    nothing, so it must never be the whole of a round a stalled child reads. */
 function noveltyHand(e) {
-  const text = ZONE.noveltyOwed(e.origin, e.novelty);
+  const text = ZONE.noveltyOwed(e.origin, e.novelty, e.noveltyCounted);
   if (text !== null) e.say(`novelty\t${b64(text)}`);
 }
 /* Referrer Policy §3 "Referrer Policies", the empty string included. */

@@ -64,8 +64,10 @@ void novelty_credit(NoveltyKind kind, int novel);
    the thread) is counted paid in the census and is not in this sum. */
 double novelty_landed_value(void);
 
-/* Files a drive of uncalled code under `id` (NOVELTY_DRIVE) and answers how many drives of it the product had
-   recorded before this one: the count the drive's optimism term reads (solver/flow.h's `orphan_seen`). One
+/* Files a drive of uncalled code under `id` (NOVELTY_DRIVE) and answers how many drives of it were known before
+   this one: the product's, which the zone hands this instance less its own (novelty_learn's text), plus this
+   instance's earlier drives of it. That is the count the drive's optimism term reads (solver/flow.h's
+   `orphan_seen`). One
    identity may be filed more than once: it names a script's content and a position, and each compile of the
    same bytes (a chunk each flow fetches and runs) makes a body of its own that the take hands over separately.
    The set's count column carries how many. `visits` is the drive's completed-unit count at its seed, kept for

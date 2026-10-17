@@ -143,6 +143,9 @@ void novelty_credit(NoveltyKind kind, int novel) {
 
 unsigned novelty_drive_note(NoveltyId id, int64_t visits) {
     NoveltySlot *s = slot_claim(id, NOVELTY_DRIVE);
+    /* Read before this drive is counted: the product's drives (handed less this instance's own) and this
+       instance's earlier ones are disjoint, so their sum counts each drive once. */
+    unsigned seen = s->known_n + s->own_n;
     if (!(s->flags & SLOT_OWN)) {
         s->flags |= SLOT_OWN;
         g_own_n++;
@@ -154,9 +157,9 @@ unsigned novelty_drive_note(NoveltyId id, int64_t visits) {
         g_drives = realloc(g_drives, (size_t)g_drives_cap * sizeof *g_drives);
         CHECK(g_drives, "novelty: OOM recording a drive");
     }
-    g_drives[g_drives_n++] = (NoveltyDrive){ id, s->known_n, visits };
-    if (s->known_n) g_drives_lowered++;
-    return s->known_n;
+    g_drives[g_drives_n++] = (NoveltyDrive){ id, seen, visits };
+    if (seen) g_drives_lowered++;
+    return seen;
 }
 double novelty_landed_value(void) { return g_landed; }
 

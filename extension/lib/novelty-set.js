@@ -70,11 +70,15 @@ function noveltyAbsorb(partition, nov, counted) {
 /* What an instance has not yet been handed of `partition`, as solver/novelty.h's set text, or null when it is
    owed nothing. `handed` is the instance's own record, `{spelling, n}`, `{spelling: null, n: 0}` before its
    first handover; it is advanced here, in the same turn the caller sends the text, so no line can be absorbed
-   between the read and the record. A count that rose is a later line; the engine keeps the largest. */
-function noveltyOwed(partition, handed) {
+   between the read and the record. `counted` is the same instance's absorb record: a counted line is handed
+   less what that instance reported, because the engine adds its own drives to what it is handed, and a line
+   left at zero is not handed. A count that rose is a later line; the engine keeps the largest. */
+function noveltyOwed(partition, handed, counted) {
   DCHECK(!!handed && (handed.spelling === null || typeof handed.spelling === "string") &&
          Number.isInteger(handed.n) && handed.n >= 0,
          "an instance's novelty handover record is not {spelling, n}");
+  DCHECK(!!counted && typeof counted.has === "function" && typeof counted.get === "function",
+         "a novelty handover was given no per-instance count record");
   const p = _noveltyParts.get(partition);
   if (p === undefined) return null;
   const from = handed.spelling === p.spelling ? handed.n : 0;
@@ -83,7 +87,14 @@ function noveltyOwed(partition, handed) {
   handed.spelling = p.spelling;
   handed.n = p.lines.length;
   let text = p.spelling + "\n";
-  for (let i = from; i < p.lines.length; i++) text += p.lines[i] + "\n";
+  for (let i = from; i < p.lines.length; i++) {
+    const line = p.lines[i];
+    if (p.plain.has(line)) { text += line + "\n"; continue; }
+    const cut = line.lastIndexOf(" "), key = line.slice(0, cut);
+    const others = Number(line.slice(cut + 1)) - (counted.has(key) ? counted.get(key) : 0);
+    DCHECK(others >= 0, "an instance reported more drives of " + key + " than its partition counts in all");
+    if (others > 0) text += key + " " + others + "\n";
+  }
   return text;
 }
 

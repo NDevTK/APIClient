@@ -231,12 +231,13 @@ typedef struct Flow {
        crosses the tier, stamped when the drive is created and carried unchanged by every arm. 0 for a flow that
        is not a driven orphan, which the park asserts. */
     uint64_t orphan_hash;
-    /* How many drives of this body (solver/novelty.h's NOVELTY_DRIVE: quickjs's content locator) the product
-       had recorded, in every other document and session of this cluster, when this drive was seeded. A term of
-       the optimism denominator, `1/(1 + visits + orphan_seen)`: explored code is lowered elsewhere and never
+    /* How many drives of this body's identity (solver/novelty.h's NOVELTY_DRIVE: quickjs's content locator)
+       were known when this drive was seeded: the product's, from every other document and session of this
+       cluster, and this instance's own earlier drives of it, a second compile of the same bytes included. A
+       term of the optimism denominator, `1/(1 + visits + orphan_seen)`: explored code is lowered and never
        removed. Written once, at the seed (flow_set_orphan_seen), before the drive is dispatched, and copied by a
        fork, so every arm of one drive reads one number at every instant; 0 for every flow that is not a seeded
-       drive, a resumed one included (its own recorded drive is not "elsewhere"). */
+       drive, a resumed one included (its own recorded drive is the drive it resumes). */
     int64_t orphan_seen;
     /* Is this drive still waiting for its function? Set only by the cold tier's rebuild. A resumed session's
        heap holds the closure only once the document's own replay creates it and some flow takes it as an

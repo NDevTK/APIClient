@@ -2,17 +2,17 @@
  * (two tabs are two agent clusters); this file plays the zone with extension/lib/novelty-set.js loaded verbatim,
  * absorbing each `@RESULT`'s `_novelty` into the origin's partition and handing it back as `novelty` records.
  * Every other fetch gets a network error so frontiers drain; requests are recorded at Fetch §5.6 step 12.
- * Endpoints, over https://app.test where B adds one endpoint and one header to A's two requests:
- *   A, B-alone  handed nothing: every ask paid.   B-stale  A's lines under another spelling: refused whole.
- *   B-known     A's identities at boot (positive control): paid = |B - A|, knownUnpaid = |B ∩ A|, B's header paid.
- *   B-invented  identities nothing emitted (negative control): nothing known-unpaid, the set's size counted.
- *   B-late      handed in round 1: later mints unpaid.
- * Drives of uncalled code, over C and D of https://shop.test sharing /bundle.js, D adding its own function, each
- * handed C's identities except C, D-alone (every drive reads a product count of 0) and D-invented (invented lines,
- * the negative control: nothing lowered). D-known: the bundle's drives read C's count, rank below their own
- * visits unlowered, and all run; D-rank: below D's own code at the same unit count. E-moved: the same bytes at
- * `/static/bundle.js?v=2` give C's identities; F-changed: one appended comment gives none of them.
- * Exit 0 when every row holds, 1 when one fails, 3 when none fails and a row's witness was not reached. */
+ * Endpoints, over https://app.test where B adds one endpoint and one header to A's two requests: A, B-alone are
+ * handed nothing (every ask paid); B-known A's identities (positive control: paid = |B - A|, knownUnpaid =
+ * |B ∩ A|, B's header paid); B-invented lines nothing emitted (negative control); B-stale A's lines under another
+ * spelling (refused whole); B-late A's identities in round 1 (later mints unpaid). Drives of uncalled code, over C
+ * and D of https://shop.test sharing /bundle.js, D adding its own function, each handed C's identities except C,
+ * D-alone (every count 0) and D-invented (negative control: nothing lowered). D-known: the bundle's drives read
+ * C's count and all run; D-rank: below D's own code at the same unit count. E-moved: the same bytes at
+ * `/static/bundle.js?v=2` give C's identities; F-changed: one appended comment gives none. G-twice: a script
+ * compiled twice drives one identity twice, the second lowered by the first. Z-own: the zone hands an instance
+ * its partition less its own drives. Exit 0 when every row holds, 1 when one fails, 3 when none fails and a
+ * row's witness was not reached. */
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
@@ -59,6 +59,10 @@ function only() { fetch('/api/only').catch(function () {}); }
 const DOC_E = `<!doctype html><script src="/static/bundle.js?v=2"></script>`;
 const BUNDLE_F = BUNDLE + '// v3\n';
 const DOC_F = `<!doctype html><script src="/bundle-f.js"></script>`;
+/* A script loaded twice: each load compiles its own body of one function, and the array keeps both alive. */
+const TWICE = `(window.keep = window.keep || []).push(function twice() { fetch('/api/twice').catch(function () {}); });
+`;
+const DOC_G = `<!doctype html><script src="/twice.js"></script><script src="/twice.js"></script>`;
 
 const b64 = (s) => Buffer.from(s).toString('base64');
 
@@ -93,7 +97,7 @@ function run(tag, url, html, boot, late) {
             /* The bundles are the only bodies this zone serves; every other request is a network error. */
             const path = new URL(abs).pathname;
             const js = path === '/bundle.js' || path === '/static/bundle.js' ? BUNDLE
-              : path === '/bundle-f.js' ? BUNDLE_F : null;
+              : path === '/bundle-f.js' ? BUNDLE_F : path === '/twice.js' ? TWICE : null;
             const reply = js !== null
               ? [b64(JSON.stringify({ status: 200, statusText: 'OK', headers: [['content-type', 'text/javascript']],
                                       urlList: [abs], computedType: 'text/javascript', type: 'basic' })),
@@ -142,7 +146,7 @@ const a = A._novelty, aEp = kindOf(a, 'endpoint');
 row('A', aEp.asks > 0 && aEp.paid === aEp.asks && aEp.knownUnpaid === 0 && a.known === 0 && a.scope === ORIGIN,
     census(a));
 ZONE.noveltyAbsorb(ORIGIN, a, new Map());
-const known = ZONE.noveltyOwed(ORIGIN, { spelling: null, n: 0 });
+const known = ZONE.noveltyOwed(ORIGIN, { spelling: null, n: 0 }, new Map());
 
 const B0 = await run('b-alone', ORIGIN + '/b', DOC_B, null, null);
 const b0 = B0._novelty, b0Ep = kindOf(b0, 'endpoint');
@@ -197,7 +201,7 @@ const C = await run('c', SHOP + '/c', DOC_C, null, null);
 const cDrives = new Set(dlist(C).map((d) => d.identity));
 row('C', dlist(C).length > 0 && dlist(C).every((d) => d.seen === 0) && hasEndpoint(C, '/api/shared'), dcensus(C));
 ZONE.noveltyAbsorb(SHOP, C._novelty, new Map());
-const shopKnown = ZONE.noveltyOwed(SHOP, { spelling: null, n: 0 });
+const shopKnown = ZONE.noveltyOwed(SHOP, { spelling: null, n: 0 }, new Map());
 {
   const D0 = await run('d-alone', SHOP + '/d', DOC_D, null, null);
   row('D-alone', dlist(D0).every((d) => d.seen === 0), dcensus(D0));
@@ -231,6 +235,27 @@ const shopKnown = ZONE.noveltyOwed(SHOP, { spelling: null, n: 0 });
   const F = await run('f-changed', SHOP + '/f', DOC_F, shopKnown, null);
   row('F-changed', dlist(F).length > 0 && dlist(F).every((d) => !cDrives.has(d.identity) && d.seen === 0) &&
       hasEndpoint(F, '/api/shared'), dcensus(F));
+}
+{
+  const G = await run('g-twice', SHOP + '/g', DOC_G, null, null);
+  const ids = dlist(G).map((d) => d.identity);
+  const twice = dlist(G).filter((d) => ids.indexOf(d.identity) !== ids.lastIndexOf(d.identity));
+  const [first, second] = twice;
+  rowReached('G-twice', twice.length === 2,
+             twice.length === 2 && first.seen === 0 && second.seen === 1 && opt(second) < 1 / (1 + second.visits) &&
+             opt(second) < opt(first) && hasEndpoint(G, '/api/twice'),
+             dcensus(G) + ` — ${twice.length} drive(s) of a repeated identity`);
+}
+{
+  /* The zone half of the same count: an instance that reported C's drives is handed none of them back, and a
+     fresh instance of the partition is handed every one. */
+  const OWN = 'https://own.test', mine = new Map();
+  ZONE.noveltyAbsorb(OWN, C._novelty, mine);
+  const back = ZONE.noveltyOwed(OWN, { spelling: null, n: 0 }, mine);
+  const fresh = ZONE.noveltyOwed(OWN, { spelling: null, n: 0 }, new Map());
+  const drives = (t) => t === null ? 0 : t.split('\n').filter((l) => l.startsWith('drive ')).length;
+  row('Z-own', drives(back) === 0 && drives(fresh) === cDrives.size && cDrives.size > 0,
+      `${drives(back)} drive line(s) handed back to the reporter, ${drives(fresh)} to a fresh instance`);
 }
 console.log(failed ? `${failed} row(s) FAILED` : unreached ? `${unreached} row(s) NOT REACHED` : 'every row holds');
 process.exit(failed ? 1 : unreached ? 3 : 0);
