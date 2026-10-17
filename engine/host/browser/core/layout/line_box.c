@@ -1051,11 +1051,12 @@ static void lb_fill_distribute_begin(TextRunFill *d, const TextRunMeasure *m, lx
 /* ---- one fill per layout job -------------------------------------------------------------------------------
    A fill, with the per-line facts every reduction reads, is held by the current layout job's record
    (`layout_job_line_boxes`) for the job's lifetime, so a container's line boxes are laid out once per job however
-   many of its descendants, passes and reductions ask. The key is every operand `lb_fill` reads besides the tree
+   many of its descendants, passes and reductions ask. The key is every operand the fill reads besides the tree
    and the cascade: `style`, the run's two bounds, and the stated width (a derived width is `style`'s own used
    content width, so it adds nothing). No baseline pass is an operand: both baselines come out of one reduction.
    The tree and the cascade are constant for the job's lifetime (core/layout/layout_job.h's validity argument).
-   With no record held, the fill is the caller's and `lb_layout_end` releases it. */
+   Every ask and reader is made under a drive or an entered job, so a record is always held (asserted). The
+   asks take the fill and its extents; a reader asserts they did. */
 typedef struct {
     LbExtent e;
     bool     exists;
@@ -1294,23 +1295,23 @@ static void lb_fill_compare_facts(const LbFill *held, const LbFill *fresh)
 }
 #endif
 
-/* Whether a step may be taken: always for a reader (`rest` false), which completes what it reads, and within the
-   resting drive's line box items for an ask. A step's items are spent either way. */
-static bool lb_left(bool rest)
+/* Whether an ask's next step fits the resting drive's line box items; outside one, or under a drive nested in a
+   body, it always does. */
+static bool lb_left(void)
 {
-    return !rest || layout_job_line_items_left();
+    return layout_job_line_items_left();
 }
 
 /* The fill's lines: css-sizing-3 §2.1's walk, then §9.4.2's distribution, then a dev build's second derivation.
-   False when `rest` and the allowance ran out first, with every walk holding its place. */
-static bool lb_fill_lines_pull(LbFill *f, bool rest)
+   False when the allowance ran out first, with every walk holding its place. */
+static bool lb_fill_lines_pull(LbFill *f)
 {
     DCHECK(!f->stepping,
            "an inline formatting context's fill was asked from inside its own collection, so its line boxes are "
            "an operand of themselves");
     if (f->phase == LB_FILL_COLLECT) {
         while (!f->col.done) {
-            if (!lb_left(rest)) return false;
+            if (!lb_left()) return false;
             f->stepping = true;
             layout_job_line_items_spend(lb_collect_step(&f->col));
             f->stepping = false;
@@ -1320,7 +1321,7 @@ static bool lb_fill_lines_pull(LbFill *f, bool rest)
     }
     if (f->phase == LB_FILL_WALK) {
         while (!text_run_measure_finish_done(&f->m)) {
-            if (!lb_left(rest)) return false;
+            if (!lb_left()) return false;
             layout_job_line_items_spend(text_run_measure_finish_step(&f->m));
         }
         lb_fill_distribute_begin(&f->dist, &f->m, f->style, f->avail);
@@ -1328,7 +1329,7 @@ static bool lb_fill_lines_pull(LbFill *f, bool rest)
     }
     if (f->phase == LB_FILL_DISTRIBUTE) {
         while (!text_run_fill_done(&f->dist)) {
-            if (!lb_left(rest)) return false;
+            if (!lb_left()) return false;
             layout_job_line_items_spend(text_run_fill_step(&f->dist, &f->m));
         }
         f->n = text_run_fill_end(&f->dist, &f->m, &f->lines);
@@ -1338,12 +1339,12 @@ static bool lb_fill_lines_pull(LbFill *f, bool rest)
 #if APICLIENT_DEV
     if (f->phase == LB_FILL_CHECK) {
         if (f->check == NULL) {
-            if (!lb_left(rest)) return false;
+            if (!lb_left()) return false;
             f->check = malloc(sizeof *f->check);
             CHECK(f->check != NULL, "out of memory re-deriving one inline formatting context's line boxes");
             lb_fill_init(f->check, f->style, f->run, f->avail, false);
         }
-        if (!lb_fill_lines_pull(f->check, rest)) return false;
+        if (!lb_fill_lines_pull(f->check)) return false;
         lb_fill_compare_lines(f, f->check);
         f->phase = LB_FILL_LINES;
     }
@@ -1355,7 +1356,7 @@ static bool lb_fill_lines_pull(LbFill *f, bool rest)
    vertical separation"; a zero-height line box advances by nothing), one item per step. Published only once
    complete, because every reduction that reads one line's reads all of them. A dev build's second derivation
    is walked to its own extents and compared, then released. */
-static bool lb_fill_extents_pull(LbFill *f, bool rest)
+static bool lb_fill_extents_pull(LbFill *f)
 {
     DCHECK(f->phase == LB_FILL_LINES, "CSS 2.2 §10.8's line box extents were taken before the fill's lines");
     if (f->facts == NULL && f->n != 0) {
@@ -1368,13 +1369,13 @@ static bool lb_fill_extents_pull(LbFill *f, bool rest)
             LbLineFacts *v = &f->partial[f->extents];
 
             if (!f->walking) {
-                if (!lb_left(rest)) return false;
+                if (!lb_left()) return false;
                 lb_line_walk_begin(&f->walk, f->style, f->lines[f->extents]);
                 f->walking = true;
                 layout_job_line_items_spend(1);
             }
             while (!lb_line_walk_done(&f->walk)) {
-                if (!lb_left(rest)) return false;
+                if (!lb_left()) return false;
                 lb_line_walk_item(&f->walk, &f->m);
                 layout_job_line_items_spend(1);
             }
@@ -1389,7 +1390,7 @@ static bool lb_fill_extents_pull(LbFill *f, bool rest)
     }
 #if APICLIENT_DEV
     if (f->check != NULL) {
-        if (!lb_fill_extents_pull(f->check, rest)) return false;
+        if (!lb_fill_extents_pull(f->check)) return false;
         lb_fill_compare_facts(f, f->check);
         lb_fill_release(f->check);
         free(f->check);
@@ -1399,22 +1400,19 @@ static bool lb_fill_extents_pull(LbFill *f, bool rest)
     return true;
 }
 
-/* The fill of `style`'s run at `avail`: the current job's when it holds a record, created on the first ask,
-   otherwise begun in `local`, which the caller ends with `lb_layout_end`. NULL for an ask (`rest`) that would
-   begin a fill with the resting drive's line box items spent. */
-static LbFill *lb_fill_of(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail, LbFill *local,
-                          bool rest)
+/* The fill of `style`'s run at `avail`, held by the current job's record and created on the first ask. NULL
+   when it would be begun with the resting drive's line box items spent. */
+static LbFill *lb_fill_of(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)
 {
     LineBoxRecord *r = layout_job_line_boxes();
     double px = avail.stated ? avail.px.px : 0.0;
     LbFill *f;
     size_t i;
 
-    DCHECK(style != NULL && local != NULL, "CSS 2.2 §9.4.2's line boxes were asked for with no element");
-    if (r == NULL) {
-        lb_fill_init(local, style, run, avail, false);
-        return local;
-    }
+    DCHECK(style != NULL, "CSS 2.2 §9.4.2's line boxes were asked for with no element");
+    DCHECK(r != NULL,
+           "CSS 2.2 §9.4.2's line boxes were asked with no layout job holding a record — no drive is open and no "
+           "job is entered, and every ask and every reader is made under one (core/layout/layout_job.h)");
     r->asks++;
     if (r->cap != 0) {
         i = lb_key_probe(r->tab, r->cap, style, run, avail.stated, px);
@@ -1425,7 +1423,7 @@ static LbFill *lb_fill_of(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAva
             return f;
         }
     }
-    if (!lb_left(rest)) {
+    if (!lb_left()) {
         r->deferred++;
         return NULL;
     }
@@ -1449,35 +1447,21 @@ static LbFill *lb_fill_of(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAva
     return f;
 }
 
-/* A reader's fill, with its lines complete. The caller reads it and ends every `lb_layout` with one
-   `lb_layout_end`. */
-/* Named residual. Not covered: a reader that is not an ask (`line_box_content_height`, `line_box_glyphs`,
-   `line_box_inline_fragments` and the asks' own readers once they have asked) completes a fill or its extents
-   that no ask took, in one activation. Next: every reader now asks first, so this completion is deleted and
-   the reader asserts the fill complete. How its absence shows: a reader's assert firing for a fill no ask
-   took. */
-static LbFill *lb_layout(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail, LbFill *local)
+/* A reader's fill, whose lines `line_box_atomics_ask` took for the same key. */
+static LbFill *lb_layout(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)
 {
-    LbFill *f = lb_fill_of(style, run, avail, local, false);
-    bool lines = lb_fill_lines_pull(f, false);
+    LbFill *f = lb_fill_of(style, run, avail);
 
-    DCHECK(lines, "a reader's fill stopped short of its lines, which it takes without resting");
+    DCHECK(f != NULL && f->phase == LB_FILL_LINES,
+           "a fill was read before `line_box_atomics_ask` took its lines for the same key");
     return f;
 }
 
-static void lb_layout_end(LbFill *f, LbFill *local)
-{
-    if (f == local) lb_fill_release(local);
-}
-
-/* A reader's extents, completed as `lb_layout` completes the lines. */
+/* A reader's extents, which `line_box_extents_ask` took. */
 static const LbLineFacts *lb_fill_facts(LbFill *f, lxb_dom_element_t *style)
 {
-    bool extents;
-
     DCHECK(f->style == style, "a fill's extents were read under an element that is not the fill's own");
-    extents = lb_fill_extents_pull(f, false);
-    DCHECK(extents, "a reader's extents stopped short, which it takes without resting");
+    DCHECK(f->facts != NULL || f->n == 0, "a fill's extents were read before `line_box_extents_ask` took them");
     return f->facts;
 }
 
@@ -1495,7 +1479,7 @@ static const LbLineFacts *lb_fill_facts(LbFill *f, lxb_dom_element_t *style)
    callers read `any` first. */
 static LbLines lb_reduce(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)
 {
-    LbFill local, *f = lb_layout(style, run, avail, &local);
+    LbFill *f = lb_layout(style, run, avail);
     const LbLineFacts *facts = lb_fill_facts(f, style);
     LbLines out;
     size_t i;
@@ -1533,14 +1517,13 @@ static LbLines lb_reduce(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvai
            heights, with no gap term. */
         out.height = css_px_add(out.height, lh);
     }
-    lb_layout_end(f, &local);
     return out;
 }
 
 bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail,
                           size_t *from)
 {
-    LbFill local, *f;
+    LbFill *f;
     size_t i, items;
     bool ready = true;
 
@@ -1553,9 +1536,8 @@ bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAva
         if (!block_flow_context_first_float_ask(style, &fl)) return false;
     }
 #endif
-    f = lb_fill_of(style, run, avail, &local, true);
-    if (f == NULL || !lb_fill_lines_pull(f, true)) {
-        DCHECK(f != &local, "a fill with no line box record held rested, and a local fill cannot be held");
+    f = lb_fill_of(style, run, avail);
+    if (f == NULL || !lb_fill_lines_pull(f)) {
         METRIC_ADD(fill_rests, 1);
         return false;
     }
@@ -1574,22 +1556,18 @@ bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAva
                 break;
             }
         }
-    lb_layout_end(f, &local);
     return ready;
 }
 
 bool line_box_extents_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)
 {
-    LbFill local, *f = lb_fill_of(style, run, avail, &local, true);
+    LbFill *f = lb_fill_of(style, run, avail);
     bool ready;
 
-    /* A local fill is begun afresh by every ask, so it is the one whose lines are taken here. */
-    DCHECK(f != NULL && (f == &local || f->phase == LB_FILL_LINES),
+    DCHECK(f != NULL && f->phase == LB_FILL_LINES,
            "CSS 2.2 §10.8's line box extents were asked before `line_box_atomics_ask` answered for the same key");
-    ready = lb_fill_lines_pull(f, true) && lb_fill_extents_pull(f, true);
-    DCHECK(ready || f != &local, "a fill with no line box record held rested, and a local fill cannot be held");
+    ready = lb_fill_extents_pull(f);
     if (!ready) METRIC_ADD(fill_rests, 1);
-    lb_layout_end(f, &local);
     return ready;
 }
 
@@ -1658,14 +1636,13 @@ static CssPx lb_widest_line(const TextRunLine *lines, size_t n)
    and CSSOM View §2's extreme is over "the element's descendants' boxes", of which the strut ("we call that
    imaginary box a 'strut'") is not one. A container whose `line-height` exceeds its content's has line boxes
    taller than anything in them. The walk is over the items, holds its place in the fill and is seeded at the
-   content box's beginning corner, for the inline axis's reason. Under `rest` it reads extents an ask took. */
-static bool lb_span_pull(LbFill *f, bool rest)
+   content box's beginning corner, for the inline axis's reason. It reads the extents `line_box_extents_ask`
+   took, which `lb_fill_facts` asserts. */
+static bool lb_span_pull(LbFill *f)
 {
     const LbLineFacts *facts;
 
     if (f->span == LB_SPAN_DONE) return true;
-    DCHECK(!rest || f->facts != NULL || f->n == 0,
-           "the block axis of `line_box_content_span_ask` was asked before `line_box_extents_ask` answered");
     facts = lb_fill_facts(f, f->style);
     if (f->span == LB_SPAN_NONE) {
         f->span_lo = css_px(0.0);
@@ -1689,7 +1666,7 @@ static bool lb_span_pull(LbFill *f, bool rest)
             LbExtent b;
             size_t j;
 
-            if (!lb_left(rest)) return false;
+            if (!lb_left()) return false;
             j = f->span_item++;
             layout_job_line_items_spend(1);
             /* Only a character item's box is taken: the anonymous inline box around a text run has no element to
@@ -1713,7 +1690,7 @@ static bool lb_span_pull(LbFill *f, bool rest)
 bool line_box_content_span_ask(lxb_dom_element_t *style, BlockFlowRun run,
                                bool vertical, CssPx *lo, CssPx *hi)
 {
-    LbFill local, *f;
+    LbFill *f;
     bool ready;
 
     DCHECK(lo != NULL && hi != NULL,
@@ -1721,7 +1698,7 @@ bool line_box_content_span_ask(lxb_dom_element_t *style, BlockFlowRun run,
            "two edges. They are two answers and not one: css-writing-modes-4 §6.2 \"Flow-relative Directions\" "
            "puts the ENDING edge of an axis at the lower coordinate for a `rtl` inline axis and at the higher "
            "one otherwise, and a caller that received only the far edge would have the wrong one half the time");
-    f = lb_layout(style, run, line_box_available_width_derived(), &local);
+    f = lb_layout(style, run, line_box_available_width_derived());
     if (!vertical) {
         /* §9.4.2's inline axis: "In general, the left edge of a line box touches the left edge of its
            containing block and the right edge touches the right edge of its containing block", and css-text-4
@@ -1751,18 +1728,15 @@ bool line_box_content_span_ask(lxb_dom_element_t *style, BlockFlowRun run,
                    "refused — asserted rather than read as \"not rtl\", which would quietly mean `ltr`");
             *hi = css_px_max(*hi, widest);
         }
-        lb_layout_end(f, &local);
         return true;
     }
-    ready = lb_span_pull(f, f != &local);
-    DCHECK(ready || f != &local, "a fill with no line box record held rested, and a local fill cannot be held");
+    ready = lb_span_pull(f);
     if (ready) {
         *lo = f->span_lo;
         *hi = f->span_hi;
     } else {
         METRIC_ADD(fill_rests, 1);
     }
-    lb_layout_end(f, &local);
     return ready;
 }
 
@@ -1908,7 +1882,7 @@ static LineBoxGlyph *lb_glyphs_room(LineBoxGlyph *v, size_t n, size_t *cap)
 size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph **out)
 {
     LayoutJobDrive d;
-    LbFill local, *f;
+    LbFill *f;
     const LbLineFacts *facts;
     LineBoxGlyph *v = NULL;
     size_t i, j, ng = 0, cap = 0;
@@ -1933,7 +1907,7 @@ size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph 
         while (!line_box_atomics_ask(style, run, avail, &from) || !line_box_extents_ask(style, run, avail))
             (void)block_flow_drive_deferred(&d);
     }
-    f = lb_layout(style, run, line_box_available_width_derived(), &local);
+    f = lb_layout(style, run, line_box_available_width_derived());
     facts = lb_fill_facts(f, style);
     for (i = 0; i < f->n; i++) {
         /* The line's baseline, `e.above` (its maximum `A'`) below its top edge: the coordinate
@@ -1963,7 +1937,6 @@ size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph 
             ng++;
         }
     }
-    lb_layout_end(f, &local);
     layout_job_drive_end(&d);
     *out = v;
     return ng;
@@ -2402,7 +2375,7 @@ static bool lb_atomic_item(const TextRunMeasure *m, lxb_dom_element_t *el, size_
 bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
                                    LineBoxFragment **out, size_t *count)
 {
-    LbFill local, *f;
+    LbFill *f;
     const LbLineFacts *facts;
     const TextRunLine *lines;
     /* NULL so the first growth is the same call as every later one (`realloc(NULL, n)` is `malloc(n)`). */
@@ -2540,7 +2513,7 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
         size_t lo_item, hi_item;
         bool has_open, has_close, present;
 
-        f = lb_layout(style, ctx.box[b].run, line_box_available_width_derived(), &local);
+        f = lb_layout(style, ctx.box[b].run, line_box_available_width_derived());
         n = f->n;
         lines = f->lines;
         DCHECK(n >= 1,
@@ -2565,7 +2538,7 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
             present = lb_box_items(&f->m, el, lines[n - 1].to, ctx.box[b].run,
                                    &lo_item, &hi_item, &has_open, &has_close);
         }
-        if (!present) { lb_layout_end(f, &local); continue; }
+        if (!present) continue;
         /* One entry per line of this box, appended to the earlier boxes' fragments; `nf + n` is an upper
            bound, so the array is grown to it rather than counted twice. */
         frags = realloc(frags, (nf + n) * sizeof *frags);
@@ -2646,7 +2619,6 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
                 nf++;
             }
         }
-        lb_layout_end(f, &local);
     }
     free(ctx.box);
     DCHECK(nf >= 1,
