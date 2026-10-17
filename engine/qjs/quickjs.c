@@ -33865,6 +33865,21 @@ static inline bool tramp_is_function_apply(JSValueConst method) {
     return mp->class_id == JS_CLASS_C_FUNCTION && mp->u.cfunc.cproto == JS_CFUNC_step
         && mp->u.cfunc.magic == STEPDEF_FUNCTION_APPLY;
 }
+/* An unknown callee whose example is `pred`'s builtin. `x.toFixed.call(y, 2)` reads `call` off an unknown, and
+   its example is %Function.prototype.call%, so the call a real session makes is that builtin's and the operator
+   resolves it exactly as it resolves the builtin itself: `x.toFixed` called on `y`, which js_concolic_call_def
+   then runs on the examples. */
+static bool tramp_concolic_example_is(JSContext *ctx, JSValueConst callee, bool (*pred)(JSValueConst))
+{
+    JSValue ex;
+    bool r;
+
+    if (!(g_concolic.is && g_concolic.is(callee))) return false;
+    ex = g_concolic.example(ctx, callee);
+    r = pred(ex);
+    JS_FreeValue(ctx, ex);
+    return r;
+}
 /* Reflect.apply(target, thisArg, argsList) — js_reflect_apply forwards to js_function_apply; route it into
    do_apply_tramp with the Reflect operand shape ([Reflect, apply, target, thisArg, argsList]). */
 /* Reflect.construct is CALL-SITE-RESOLVED, exactly as Reflect.apply already is: it holds no continuation, so the
@@ -36320,10 +36335,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 /* the iterable-consuming builtins (Array.from / Object.fromEntries / Iterator.from / it.* / s.union /
                    TypedArray.from / Promise.all|allSettled|any|race) are recognized in ONE place, do_consumer_dispatch,
                    which this opcode's convergence (goto do_generic_callee below) passes through — see that label. */
-                if (tramp_is_function_call(call_argv[-1])) {   /* f.call(thisArg,...) -> reslice + dispatch f here */
+                if (tramp_is_function_call(call_argv[-1]) ||   /* f.call(thisArg,...) -> reslice + dispatch f here */
+                    tramp_concolic_example_is(ctx, call_argv[-1], tramp_is_function_call)) {
                     tramp_is_tail = (opcode == OP_tail_call_method); goto do_forward_call;
                 }
-                if (tramp_is_function_apply(call_argv[-1])) {   /* target kind is NOT a call-site question */
+                if (tramp_is_function_apply(call_argv[-1]) ||   /* target kind is NOT a call-site question */
+                    tramp_concolic_example_is(ctx, call_argv[-1], tramp_is_function_apply)) {
                     /* only when arr is undefined/null (0 args) or an object (array-like); a primitive arr is
                        19.2.3.1 step 2's TypeError, which the opcode's residue below raises in spec order.
                        THIS ROUTE IS THE INTENDED DESIGN, not a debt: `.apply` is CALL-SITE-RESOLVED, so the
