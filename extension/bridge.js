@@ -1365,7 +1365,7 @@ async function frontierResidency() {
   let total = 0, named = 0;
   for (const row of (await frontierIndex()).values()) {
     named += row.bytes;
-    if (row.bytes > 0) rows.push(row);
+    if (row.doc !== null) rows.push(row);
     if (row.doc === null) { total += row.bytes; continue; }
     total += row.bytes - row.docBytes;
     if (!names.has(row.doc)) total += row.docBytes;
@@ -1379,41 +1379,60 @@ async function frontierResidency() {
   rows.sort((a, b) => frontierWeight(b) - frontierWeight(a));
   /* The resident set is a strict prefix of the order: the first entry that does not fit ends it. A best fit
      would keep a small low-weight document over a large high-weight one, a second policy nobody chose. */
+  /* A body a kept entry already holds costs the next entry naming it only its inventory. */
   let kept = 0;
   let cut = rows.length;
+  const keptDocs = new Set();
   for (let i = 0; i < rows.length; i++) {
-    if (kept + rows[i].bytes > share) { cut = i; break; }
-    kept += rows[i].bytes;
+    const cost = rows[i].bytes - (keptDocs.has(rows[i].doc) ? rows[i].docBytes : 0);
+    if (kept + cost > share) { cut = i; break; }
+    kept += cost;
+    keptDocs.add(rows[i].doc);
   }
-  const tail = rows.slice(cut);
+  /* What is shed is a body, with every tail entry naming it: an entry whose body a kept entry also names frees
+     nothing by leaving, and a body is shed only when every entry naming it can fetch it back, since otherwise it
+     is the only copy of an unrecomputable document. A unit is re-derivable when all its entries are. */
+  const units = new Map();
+  for (const row of rows.slice(cut)) {
+    if (keptDocs.has(row.doc)) continue;
+    if (!units.has(row.doc)) units.set(row.doc, { rows: [], rederivable: true });
+    units.get(row.doc).rows.push(row);
+    units.get(row.doc).rederivable = units.get(row.doc).rederivable && row.rederivable;
+  }
+  const tail = [...units.values()];
   /* The tiebreak orders the tail and changes nothing about who is in it. */
   tail.sort((a, b) => (a.rederivable === b.rederivable) ? 0 : (a.rederivable ? -1 : 1));
-  for (const row of tail) {
+  for (const unit of tail) {
     if (total <= share) break;
-    if (!row.rederivable) {
-      /* The sort put every re-derivable row first, so the rest of the tail is unrecoverable; stop here. */
+    if (!unit.rederivable) {
+      /* The sort put every re-derivable unit first, so the rest of the tail is unrecoverable; stop here. */
       _frontierStats.docBytes = total;
       _frontierStats.overShare = total - share;
       return;
     }
-    const e = await frontierGet(row.key);
-    DCHECK(e, "the cold tier's ranking view named an entry the store does not hold while residency was being " +
-              "restored — this zone is the store's only writer, so a row with no entry is the projection and " +
-              "the store having drifted apart, and shedding would be deciding about a residue nobody can read");
-    /* `provenance` goes through frontierProvenance, so an entry predating the field leaves stating the word
-       its population supports. */
-    const shed = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
-                   responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit, visits: e.visits,
-                   credentialed: e.credentialed, provenance: frontierProvenance(e), arrival: frontierArrival(e),
-                   sandbox: frontierSandbox(e), addressSpace: frontierAddressSpace(e), shed: true };
-    frontierRecord(shed, "was shed to the configured share");
-    await frontierWrite(e.key, shed, undefined);
-    if (_frontierIndexBuilt) _frontierIndex.set(e.key, frontierRow(shed));
-    /* The inventory always goes; the body only with its last name. */
-    total -= row.bytes - row.docBytes;
-    names.set(row.doc, names.get(row.doc) - 1);
-    if (names.get(row.doc) === 0) total -= row.docBytes;
-    _frontierStats.shed++;
+    for (const row of unit.rows) {
+      const e = await frontierGet(row.key);
+      DCHECK(e, "the cold tier's ranking view named an entry the store does not hold while residency was being " +
+                "restored — this zone is the store's only writer, so a row with no entry is the projection and " +
+                "the store having drifted apart, and shedding would be deciding about a residue nobody can read");
+      /* `provenance` goes through frontierProvenance, so an entry predating the field leaves stating the word
+         its population supports. */
+      const shed = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
+                     responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit, visits: e.visits,
+                     credentialed: e.credentialed, provenance: frontierProvenance(e), arrival: frontierArrival(e),
+                     sandbox: frontierSandbox(e), addressSpace: frontierAddressSpace(e), shed: true };
+      frontierRecord(shed, "was shed to the configured share");
+      await frontierWrite(e.key, shed, undefined);
+      if (_frontierIndexBuilt) _frontierIndex.set(e.key, frontierRow(shed));
+      /* The inventory goes with the entry; the body with its last name, which the unit's last entry is. */
+      total -= row.bytes - row.docBytes;
+      names.set(row.doc, names.get(row.doc) - 1);
+      if (names.get(row.doc) === 0) total -= row.docBytes;
+      _frontierStats.shed++;
+    }
+    DCHECK(names.get(unit.rows[0].doc) === 0,
+           "a body was shed with a resident entry still naming it — a unit is every entry naming a body no kept " +
+           "entry names, so its last shed is the body's last reference");
   }
   _frontierStats.docBytes = total;
 }
