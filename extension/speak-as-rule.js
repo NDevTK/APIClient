@@ -1,7 +1,8 @@
-// speak-as-rule.js — the service worker's half of a zone send that speaks as a document: one
-// declarativeNetRequest session rule per in-flight send, which sets the request headers the zone computed
-// (lib/speak-as.js) on exactly that request. Only the service worker can call declarativeNetRequest, and
-// background.js serves these arms to the offscreen document alone (`sender.url === OFFSCREEN_HREF`).
+// speak-as-rule.js — the service worker's half of a zone send that speaks as a document: declarativeNetRequest
+// session rules, one per (method, URL) the zone has sent to as a document, each setting the request headers
+// the zone computed (lib/speak-as.js) for that method and URL. Only the service worker can call
+// declarativeNetRequest, and background.js serves these arms to the offscreen document alone
+// (`sender.url === OFFSCREEN_HREF`).
 
 /* The rule family: session rule ids this file owns. The zone mints ids inside it from its own counter. */
 const SPEAK_AS_RULE_MIN = 1000000;
@@ -15,14 +16,20 @@ function speakAsDnrMethod(method) {
   return _DNR_METHODS.indexOf(m) >= 0 ? m : "other";
 }
 
-/* The condition that matches this one request and no other: the extension's own initiator, no tab, the
-   method, and the URL exactly. A URL holding urlFilter's own metacharacters (`*`, `^`, `|`) is matched by
-   an anchored, escaped regexFilter instead. */
+/* Whether the rule for `url` is a regexFilter rule, which declarativeNetRequest counts against a limit of its
+   own. */
+function speakAsUsesRegex(url) {
+  return /[*^|]/.test(url);
+}
+
+/* The condition that matches this extension's requests of one method to one URL: the extension's own
+   initiator, no tab, the method, and the URL exactly. A URL holding urlFilter's own metacharacters (`*`, `^`,
+   `|`) is matched by an anchored, escaped regexFilter instead. */
 function _speakAsCondition(method, url) {
   const c = { tabIds: [chrome.tabs.TAB_ID_NONE], initiatorDomains: [chrome.runtime.id],
               requestMethods: [speakAsDnrMethod(method)], resourceTypes: ["xmlhttprequest", "other"],
               isUrlFilterCaseSensitive: true };
-  if (/[*^|]/.test(url)) c.regexFilter = "^" + url.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&") + "$";
+  if (speakAsUsesRegex(url)) c.regexFilter = "^" + url.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&") + "$";
   else c.urlFilter = "|" + url + "|";
   return c;
 }
@@ -62,31 +69,46 @@ function speakAsCheckedRules(o) {
   });
 }
 
-/* Installs `speakAsCheckedRules(o)` as session rules. Returns the family's rule ids now installed for this
-   URL, whatever their method. */
-async function speakAsInstall(o) {
-  const addRules = speakAsCheckedRules(o).map((r) => ({ id: r.ruleId, priority: 1,
-    condition: _speakAsCondition(r.method, o.url),
-    action: { type: "modifyHeaders", requestHeaders: r.requestHeaders } }));
-  await chrome.declarativeNetRequest.updateSessionRules({ addRules });
-  const want = _speakAsCondition("get", o.url);
-  return (await chrome.declarativeNetRequest.getSessionRules())
-    .filter((r) => _speakAsInFamily(r.id) && r.condition.urlFilter === want.urlFilter &&
-                   r.condition.regexFilter === want.regexFilter)
-    .map((r) => r.id);
-}
-
-async function speakAsRelease(ruleIds) {
-  CHECK(ruleIds.every(_speakAsInFamily), "a speak-as rule id in " + JSON.stringify(ruleIds) + " is outside the family");
-  await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: ruleIds });
+/* One update of the family, in one updateSessionRules call: removes `o.removeRuleIds` (rules the zone
+   retires) and installs `speakAsCheckedRules(g)` for each `g` of `o.groups` (speakAsCheckedRules's argument,
+   one URL each). Answers, for each URL of `o.urls`, the family's rule ids installed for it afterwards,
+   whatever their method, as {url: [id]}. */
+async function speakAsUpdate(o) {
+  CHECK(Array.isArray(o.removeRuleIds) && o.removeRuleIds.every(_speakAsInFamily),
+        "a speak-as update removes " + JSON.stringify(o.removeRuleIds) + ", which is not a list of the family's ids");
+  CHECK(Array.isArray(o.groups) && Array.isArray(o.urls) && o.groups.every((g) => o.urls.indexOf(g.url) >= 0),
+        "a speak-as update installs rules for a URL it does not answer for");
+  const addRules = o.groups.flatMap((g) => speakAsCheckedRules(g).map((r) => ({ id: r.ruleId, priority: 1,
+    condition: _speakAsCondition(r.method, g.url),
+    action: { type: "modifyHeaders", requestHeaders: r.requestHeaders } })));
+  CHECK(addRules.length || o.removeRuleIds.length, "a speak-as update installs and removes nothing");
+  await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: o.removeRuleIds, addRules });
+  const family = (await chrome.declarativeNetRequest.getSessionRules()).filter((r) => _speakAsInFamily(r.id));
+  const out = {};
+  for (const url of o.urls) {
+    const want = _speakAsCondition("get", url);
+    out[url] = family.filter((r) => r.condition.urlFilter === want.urlFilter &&
+                                    r.condition.regexFilter === want.regexFilter).map((r) => r.id);
+  }
+  return out;
 }
 
 /* Session rules outlive the document that installed them, so the offscreen document removes every rule of
    the family when it starts, before its first send. Not at service-worker start: the worker is evicted when
    idle while a send in the offscreen document is still in flight, and clearing then would strip that
-   send's rule mid-request. */
+   send's rule mid-request. Answers {cleared, rules, regex}: how many it removed, and how many rules and
+   regexFilter rules the family may hold, which are declarativeNetRequest's session limits (a modifyHeaders
+   rule is an unsafe one) less the rules outside the family. */
 async function speakAsClearFamily() {
-  const ids = (await chrome.declarativeNetRequest.getSessionRules()).map((r) => r.id).filter(_speakAsInFamily);
-  if (ids.length) await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: ids });
-  return ids.length;
+  const dnr = chrome.declarativeNetRequest;
+  CHECK([dnr.MAX_NUMBER_OF_SESSION_RULES, dnr.MAX_NUMBER_OF_UNSAFE_SESSION_RULES, dnr.MAX_NUMBER_OF_REGEX_RULES]
+          .every((n) => Number.isInteger(n) && n > 0),
+        "declarativeNetRequest states no session, unsafe-session or regex rule limit");
+  const all = await dnr.getSessionRules();
+  const ids = all.map((r) => r.id).filter(_speakAsInFamily);
+  if (ids.length) await dnr.updateSessionRules({ removeRuleIds: ids });
+  const others = all.filter((r) => !_speakAsInFamily(r.id));
+  return { cleared: ids.length,
+           rules: Math.min(dnr.MAX_NUMBER_OF_SESSION_RULES, dnr.MAX_NUMBER_OF_UNSAFE_SESSION_RULES) - others.length,
+           regex: dnr.MAX_NUMBER_OF_REGEX_RULES - others.filter((r) => r.condition.regexFilter !== undefined).length };
 }

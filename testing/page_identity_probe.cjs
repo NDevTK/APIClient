@@ -76,11 +76,12 @@ async function main() {
   await page.bringToFront();
   const hasDnr = await sw.evaluate(() => typeof chrome.declarativeNetRequest === "object");
 
+  // The probe's own rule, 9001: the wire's nonce rule and the zone's speak-as family are not the probe's to
+  // remove, and the zone's record of its installed rules would no longer be what is installed.
   const setRule = (cond, headers) => sw.evaluate(async (c, h) => {
-    const old = (await chrome.declarativeNetRequest.getSessionRules()).map((r) => r.id);
     const addRules = c ? [{ id: 9001, priority: 1, condition: c, action: { type: "modifyHeaders",
       requestHeaders: Object.entries(h).map(([header, value]) => ({ header, operation: "set", value })) } }] : [];
-    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: old, addRules });
+    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [9001], addRules });
   }, cond, headers);
   const fetchExpr = (u, init) => `fetch(${JSON.stringify(u)}, ${JSON.stringify(init)})` +
                                  `.then(r => ({status: r.status}), e => ({error: String(e)}))`;

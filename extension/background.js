@@ -287,9 +287,8 @@ async function _swRpc(msg) {
     case "cookies.set": return _cookiesSet(args[0]);
     // The browser's registrable domains, which the zone's sites are (lib/site.js).
     case "site.registrableDomains": return _siteRegistrableDomains(args[0]);
-    // One declarativeNetRequest rule per zone send that speaks as a document (speak-as-rule.js).
-    case "speakAs.install": return speakAsInstall(args[0]);
-    case "speakAs.release": return speakAsRelease(args[0]);
+    // The declarativeNetRequest rules the zone's sends speak as documents with (speak-as-rule.js).
+    case "speakAs.update": return speakAsUpdate(args[0]);
     case "speakAs.clearFamily": return speakAsClearFamily();
     // chrome.storage.session.* RPC handlers removed — the brain no longer
     // mirrors request logs to session storage (the offscreen document's

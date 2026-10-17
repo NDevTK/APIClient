@@ -353,8 +353,8 @@ from a browser-initiated navigation, measured), where Fetch §3.1.3's same-site 
   - `Sec-Fetch-Site`/`-Mode`/`-Dest` by Fetch Metadata §2;
   - `Sec-Fetch-Storage-Access` by Storage Access Headers §4.1.
   A preflighted send's OPTIONS request gets Fetch §4.8's own set.
-- `speak-as-rule.js`, in the service worker, sets them through one `declarativeNetRequest` session rule per
-  method the send puts on the wire. The rule is scoped to `tabIds: [TAB_ID_NONE]`, `initiatorDomains` (this
+- `speak-as-rule.js`, in the service worker, sets them through `declarativeNetRequest` session rules, one per
+  method and URL the zone sends to as a document. The rule is scoped to `tabIds: [TAB_ID_NONE]`, `initiatorDomains` (this
   extension), the method, and the exact URL (an escaped, anchored `regexFilter` when the URL holds `*`, `^`
   or `|`). Measured, a tab's own request to the same URL during a rule arrives untouched, and rules scoped to
   another initiator, tab or method do not apply.
@@ -364,9 +364,14 @@ from a browser-initiated navigation, measured), where Fetch §3.1.3's same-site 
   only as an origin a document has. It cannot name an arbitrary site, which a bare rule can: measured, a
   rule set `Origin: https://bank.example`. The one exception is an operator send's stated `Origin` or
   `Referer` (above), which the install names as `stated`.
-- The zone runs one send per URL at a time. That send's rules are installed together, the zone CHECKs that
-  they are exactly the rules installed for the URL, and they are removed in a `finally`. So a preflight and
-  its request are one unit, and two identities never share a rule.
+- The zone runs one send per URL at a time. A rule is keyed by the identity, the stated pair, the method and
+  the header set (`lib/speak-as.js`). A send whose key is the installed rule's for its method and URL runs
+  under that rule; a new or changed key replaces it. The sends that start while an update is in flight share
+  the next `updateSessionRules` call (a preflight's rule and its request's always go together), and the zone
+  CHECKs that the rules then installed for each of their URLs are exactly its own record of them. A send that speaks as no document first retires the rule of its method and URL. So two
+  identities never share a rule, and no send carries headers it did not compute. Every
+  `updateSessionRules` call flushes the browser's whole back/forward cache (`CacheFlushed`, measured in
+  Chrome 155), which is why a rule outlives its send.
 - The offscreen document removes every rule of the family before its first send, because session rules
   outlive it. The service worker does not do this at its own start: it can be evicted while a send is in
   flight.
@@ -374,12 +379,13 @@ from a browser-initiated navigation, measured), where Fetch §3.1.3's same-site 
   table, checked by the same `speakAsCheckedRules`, and sets them on its own fetch, which sends any header.
 
 Residuals, each a difference from the document's own request:
-- At most 5000 speak-as rules are installed at once (one per send in flight, two for a preflighted one), and
-  at most 1000 for URLs that hold `*`, `^` or `|` (whose rule is a `regexFilter`): Chrome's declarativeNetRequest reference states "An extension can have
-  up to 5000 session rules" and "the total number of regular expression rules of each type cannot exceed
-  1000". Past either, `updateSessionRules` refuses the install ("Session rule count exceeded.", measured in
-  Chrome 148) and the send fails. The reference states no rate limit on `updateSessionRules`, and 3000
-  install-and-release pairs in a row were all accepted (6.0 s, measured).
+- The speak-as rules are held within `declarativeNetRequest`'s session limits, less the rules outside the
+  family: `MAX_NUMBER_OF_SESSION_RULES` and `MAX_NUMBER_OF_UNSAFE_SESSION_RULES` (a `modifyHeaders` rule is
+  unsafe), and `MAX_NUMBER_OF_REGEX_RULES` for URLs that hold `*`, `^` or `|` (whose rule is a
+  `regexFilter`). Past either, the update that installs a rule also retires the least recently used rules no
+  send is running under. With every rule under a send in flight the zone CHECK-fails, and a refused update
+  fails its send and makes the next send clear the family first. The reference states no rate limit on
+  `updateSessionRules`, and 3000 install-and-release pairs in a row were all accepted (6.0 s, measured).
 - A speak-as rule names its send by initiator, `tabIds: [-1]`, method and exact URL, since a rule condition
   cannot match a request header (Chrome's RuleCondition lists `responseHeaders` and `excludedResponseHeaders`
   and no request-header condition; `requestHeaders` in a condition is refused as "Unexpected property",

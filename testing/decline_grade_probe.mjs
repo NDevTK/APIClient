@@ -221,13 +221,15 @@ const FIXTURE_EDGE = {
       return args.partitionKey ? [] : [{ name: 'sid', value: 'probe', path: '/', sameSite: 'lax' }];
     if (api === 'cookies.set') { cookieWrites.push({ name: args.name, details: args, before: hits.length });
                                  return { refused: null }; }
-    if (api === 'speakAs.clearFamily') { speakAsRules.clear(); return 0; }
-    if (api === 'speakAs.install') {
-      for (const r of zf.speakAsCheckedRules(args))
-        speakAsRules.set(r.ruleId, { method: r.method, url: args.url, requestHeaders: r.requestHeaders });
-      return args.rules.map((r) => r.ruleId);
+    if (api === 'speakAs.clearFamily') { speakAsRules.clear(); return { cleared: 0, rules: Infinity, regex: Infinity }; }
+    if (api === 'speakAs.update') {
+      for (const id of args.removeRuleIds) speakAsRules.delete(id);
+      for (const g of args.groups)
+        for (const r of zf.speakAsCheckedRules(g))
+          speakAsRules.set(r.ruleId, { method: r.method, url: g.url, requestHeaders: r.requestHeaders });
+      return Object.fromEntries(args.urls.map((u) =>
+        [u, [...speakAsRules].filter(([, r]) => r.url === u).map(([id]) => id)]));
     }
-    if (api === 'speakAs.release') { for (const id of args) speakAsRules.delete(id); return undefined; }
     throw new Error(`the fixture relay was asked \`${api}\`, which no send on this probe makes`);
   },
 };

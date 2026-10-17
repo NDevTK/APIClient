@@ -1546,15 +1546,16 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
    observed state. The zone's own fetch omits credentials, so this extension's jar neither adds nor receives
    a cookie. `stated` is null, or the operator tier's Send-panel record (safeFetchStatedShape),
    whose Origin and Referer replace the identity's on every rule of the send. A request with no identity runs
-   `send` as this extension, uncredentialed. */
+   `send` as this extension, uncredentialed, with no speak-as rule left installed for its method and URL; a
+   host that loads no lib/speak-as.js installs none. */
 async function _speakAs(identity, urlList, method, mode, destination, credentialed, jarTakesReply, preflightNames,
                         stated, init, send) {
+  var href = urlList[urlList.length - 1];
   if (!identity) {
-    var bare = await send();
+    var bare = typeof withoutSpeakAsRules === "function" ? await withoutSpeakAsRules(href, method, send) : await send();
     if (bare.resp) bare.setCookies = [];
     return bare;
   }
-  var href = urlList[urlList.length - 1];
   CHECK(typeof withSpeakAsRules === "function",
         "a request states an identity on a host that loads no lib/speak-as.js — the identity's headers would " +
         "be dropped and the request would go out as this extension");
@@ -1773,9 +1774,10 @@ function _wireKey(href) {
   u.hash = "";
   return u.href;
 }
-/* One send at a time per URL, whatever its method or identity. A send's speak-as rules (lib/speak-as.js) match
-   by URL, so a second send to that URL while they are installed would carry the first one's headers, and the
-   3xx a send claims (`_redirectOf`) is told apart by URL. A send is its preflight and its request. */
+/* One send at a time per URL, whatever its method or identity. A speak-as rule (lib/speak-as.js) matches by
+   method and URL and no rule condition can match the wire's nonce, so a second send to that URL with another
+   identity would replace the rule under the first one, and the 3xx a send claims (`_redirectOf`) is told
+   apart by URL. A send is its preflight and its request. */
 var _sendTails = new Map();
 async function _sendSerialized(href, send) {
   var key = _wireKey(href);
