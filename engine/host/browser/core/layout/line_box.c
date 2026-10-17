@@ -1453,10 +1453,9 @@ static LbFill *lb_fill_of(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAva
    `lb_layout_end`. */
 /* Named residual. Not covered: a reader that is not an ask (`line_box_content_height`, `line_box_glyphs`,
    `line_box_inline_fragments` and the asks' own readers once they have asked) completes a fill or its extents
-   that no ask took, in one activation. Next: core/paint/box_paint.c's reads behind `line_box_atomics_ask` and
-   `line_box_extents_ask`, as core/layout/block_flow.c's, core/layout/intrinsic_block_size.c's and
-   core/layout/flex_cross_size.c's are. How its absence shows: a paint's activation completing a fill no
-   layout asked for, with `_layoutFillRests` flat. */
+   that no ask took, in one activation. Next: every reader now asks first, so this completion is deleted and
+   the reader asserts the fill complete. How its absence shows: a reader's assert firing for a fill no ask
+   took. */
 static LbFill *lb_layout(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail, LbFill *local)
 {
     LbFill *f = lb_fill_of(style, run, avail, local, false);
@@ -1908,6 +1907,7 @@ static LineBoxGlyph *lb_glyphs_room(LineBoxGlyph *v, size_t n, size_t *cap)
 
 size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph **out)
 {
+    LayoutJobDrive d;
     LbFill local, *f;
     const LbLineFacts *facts;
     LineBoxGlyph *v = NULL;
@@ -1923,6 +1923,16 @@ size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph 
        `line_box_inline_fragments`' two: this entry is handed the establishing container itself, so
        css-writing-modes-4 §7.3 "Orthogonal Flows" has no second element to compare here. */
     lb_require_horizontal_tb(style);
+    /* A paint answers synchronously, so this entry is a drive over the two asks, as
+       `line_box_inline_fragments` is over its own. */
+    {
+        LineBoxAvailableWidth avail = line_box_available_width_derived();
+        size_t from = 0;
+
+        layout_job_drive_begin(&d);
+        while (!line_box_atomics_ask(style, run, avail, &from) || !line_box_extents_ask(style, run, avail))
+            (void)block_flow_drive_deferred(&d);
+    }
     f = lb_layout(style, run, line_box_available_width_derived(), &local);
     facts = lb_fill_facts(f, style);
     for (i = 0; i < f->n; i++) {
@@ -1954,6 +1964,7 @@ size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph 
         }
     }
     lb_layout_end(f, &local);
+    layout_job_drive_end(&d);
     *out = v;
     return ng;
 }
