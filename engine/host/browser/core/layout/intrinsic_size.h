@@ -109,6 +109,15 @@ IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, BlockFlow
 bool intrinsic_inline_sizes_ask(lxb_dom_element_t *el);
 bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run);
 
+/* The place of a flex container's walk over its items (core/layout/flex_intrinsic_size.h's ask), held by the
+   job's record below between activations: whether it began, the next member to ask, and whether every member
+   is answered. Created zeroed on the first call for `el`; the record owns it. */
+typedef struct {
+    bool begun, answered;
+    lxb_dom_node_t *at;
+} IntrinsicSizeWalk;
+IntrinsicSizeWalk *intrinsic_size_walk_of(lxb_dom_element_t *el);
+
 /* A layout job's intrinsic size record: one held measurement per run of a container and one held walk per
    container's §9.4.1 stack, owned by the job and released with its memo, whose lifetime sees no DOM write.
    An ask finds its entry answered (`served`), creates it (`built`) or continues it (`resumed`); `release`

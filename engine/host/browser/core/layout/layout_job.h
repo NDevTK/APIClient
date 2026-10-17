@@ -166,6 +166,8 @@ bool layout_job_drive_spent(const LayoutJobDrive *d);
    box metrics a step took. Outside a resting drive, or under a drive nested inside a body, a fill runs to
    completion: `left` answers true and the spends count nothing. */
 bool layout_job_line_items_left(void);
+/* Whether a resting drive is innermost, the one condition under which the allowances above are spent. */
+bool layout_job_rests_innermost(void);
 void layout_job_line_items_spend(size_t n);
 void layout_job_line_metrics_spend(size_t n);
 

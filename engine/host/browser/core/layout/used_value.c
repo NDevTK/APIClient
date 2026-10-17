@@ -1903,6 +1903,39 @@ bool used_value_containing_block_is_rtl(lxb_dom_element_t *el)
  * of declarations above it, and §4.1 "Percentage Sizing"'s own worked example says so — a percentage height "is
  * itself definite because it's a percentage resolved against a definite length". A size-computing answer would
  * re-run each ancestor's layout once per level. */
+bool used_value_width_ask(lxb_dom_element_t *el)
+{
+    CssLength width;
+
+    DCHECK(el != NULL, "a width's intrinsic operands were asked with no element");
+    /* A replaced element is sized by its natural dimensions (`uv_replaced_size`). */
+    if (replaced_element_of(el).replaced) return true;
+    width = css_computed_length(el, "width");
+    switch (uv_box_kind(el)) {
+    case UV_BOX_FLOAT:
+    case UV_BOX_INLINE_BLOCK:
+    case UV_BOX_INLINE_FLEX_GRID:
+        return !uv_len_is_auto(width) || intrinsic_inline_sizes_ask(el);
+    case UV_BOX_ABS:
+        /* §10.3.7's first entry applies rule 3 or rule 1, and those are the two rules that shrink-to-fit: each
+           has `width` and one of `left`/`right` auto. */
+        if (!uv_len_is_auto(width)) return true;
+        if (!uv_len_is_auto(css_computed_length(el, "left")) && !uv_len_is_auto(css_computed_length(el, "right")))
+            return true;
+        return intrinsic_inline_sizes_ask(el);
+    case UV_BOX_TABLE:
+        /* A table-internal box's width is the grid's (`uv_pass_size`), so its operands are its table's. */
+        return intrinsic_inline_sizes_ask(table_box_kind_generates_table_box(uv_table_box_kind(el))
+                                              ? el : table_box_table_of(el));
+    case UV_BOX_INLINE:
+    case UV_BOX_BLOCK_FLOW:
+    case UV_BOX_ITEM:
+        return true;
+    }
+    DFAIL("used_value.c's box classification answered a value outside UvBox");
+    return true;
+}
+
 bool used_value_height_behaves_as_auto(lxb_dom_element_t *el)
 {
     CssLength h;

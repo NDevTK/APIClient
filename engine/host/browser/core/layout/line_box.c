@@ -637,11 +637,10 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
            width here. `text_run_fill_step` asserts the atomics it is handed carry one number, which keeps
            this walk's items apart from core/layout/intrinsic_size.c's §5.2 contributions.
            Shrink-to-fit reads the box's intrinsic sizes, so they are asked first and the read is served from
-           the job's record; they are asked whatever `width` says, since only the used value knows whether it
-           reads them. */
+           the job's record. */
         CssPx used;
 
-        if (!intrinsic_inline_sizes_ask(el)) return LB_CHILD_NOT_YET;
+        if (!used_value_width_ask(el)) return LB_CHILD_NOT_YET;
         used = used_value_margin_edge_px(el, false);
 
         text_run_measure_add_atomic(m, el, used, used);
@@ -1275,6 +1274,8 @@ static bool lb_fill_lines_pull(LbFill *f)
             if (!lb_left()) return false;
             layout_job_line_items_spend(text_run_measure_finish_step(&f->m));
         }
+        /* A derived width is `style`'s own used width, which may shrink-to-fit over its intrinsic sizes. */
+        if (!f->avail.stated && text_run_measure_splits(&f->m) && !used_value_width_ask(f->style)) return false;
         lb_fill_distribute_begin(&f->dist, &f->m, f->style, f->avail);
         f->phase = LB_FILL_DISTRIBUTE;
     }

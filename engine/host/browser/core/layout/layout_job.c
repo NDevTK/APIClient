@@ -379,6 +379,13 @@ static bool lj_quota_spent(const LayoutJob *job)
     return job->resting && job->drives == 1 && lj_allowance_spent(job);
 }
 
+bool layout_job_rests_innermost(void)
+{
+    LayoutJob *job = lj_current();
+
+    return job->resting && job->drives == 1;
+}
+
 bool layout_job_line_items_left(void)
 {
     LayoutJob *job = lj_current();

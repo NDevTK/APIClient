@@ -381,6 +381,12 @@ bool used_value_containing_block_height(lxb_dom_element_t *el, CssPx *out);
    and walks §10.1's chain, computing no size, so a caller can ask it before deciding to lay out. */
 bool used_value_height_behaves_as_auto(lxb_dom_element_t *el);
 
+/* The css-sizing-3 §5.1 intrinsic inline sizes `el`'s used width reads, asked (core/layout/intrinsic_size.h)
+   by a body that can answer "not yet" before it reads the width: §10.3.5's and §10.3.9's shrink-to-fit of an
+   `auto` width, §10.3.7's rules 1 and 3, and §17.5.2.2's table, whose cells' and captions' sizes are the
+   table's. True at once where the width reads none; it computes no size. */
+bool used_value_width_ask(lxb_dom_element_t *el);
+
 /* The same rectangle's `direction`, true for `rtl`. §10.3.3's over-constrained case ("if the 'direction'
    property of the containing block has the value 'ltr', the specified value of 'margin-right' is ignored") and
    CSS 2 §9.4.1's horizontal placement ("each box's left outer edge touches the left edge of the containing

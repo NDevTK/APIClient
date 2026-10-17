@@ -26,6 +26,11 @@
    here because §5's properties read off any other box answer their initial value. */
 IntrinsicInlineSizes flex_intrinsic_inline_sizes(lxb_dom_element_t *el);
 
+/* core/layout/intrinsic_size.h's ask for that pair: every item's inline sizes, or its text sequence's run,
+   asked in the read's order, false ("not yet") with the walk's place held when a resting drive's line box
+   items ran out first. */
+bool flex_intrinsic_inline_sizes_ask(lxb_dom_element_t *el);
+
 /* §9.9.1 "Flex Container Intrinsic Main Sizes"' max-content main size of the flex container `el`, as a
    content-box extent in CSS pixels, for a container whose main axis is its block axis (`column` or
    `column-reverse`, asserted). `el`'s computed `display` must be `flex` or `inline-flex`.

@@ -9,6 +9,7 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
+#include "core/layout/box_subject.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/flex_intrinsic_size.h"
@@ -431,31 +432,41 @@ typedef struct {
     bool collected;   /* the walk ended and the collection is closed */
 } IsMeasure;
 
+/* What an entry is about: one run's measurement, or the place of a walk over a container's members that
+   asks each one's sizes ahead of the read (§9.4.1's stack, a flex container's items, a table's cells and
+   captions). */
+typedef enum { IS_ENTRY_RUN = 0, IS_ENTRY_STACK, IS_ENTRY_FLEX, IS_ENTRY_TABLE } IsKind;
+
 /* What an entry holds, allocated apart so a pointer to it survives the table's growth under a nested ask. A
-   run entry's measurement lives from its first ask until it is answered; a stack entry holds its walk's
-   place. */
+   run entry's measurement lives from its first ask until it is answered; a walk entry holds its place, and a
+   table's its grid and captions until every member is answered. */
 typedef struct {
     bool answered;
     bool measuring;              /* a run's `meas` is begun and not yet released */
     IsMeasure meas;
     IntrinsicInlineSizes sizes;  /* a run's answer, once `answered` */
     lxb_dom_node_t *prev;        /* a stack's last break whose run and child are answered */
+    IntrinsicSizeWalk walk;      /* a flex container's place */
+    bool gridded;                /* a table's `grid` and `captions` are built and not yet released */
+    TableGrid grid;
+    lxb_dom_element_t **captions;
+    size_t ncaptions, at;        /* a table's next member: a cell index, then `ncells` plus a caption index */
 } IsHeld;
 
 typedef struct IsEntry {
     lxb_dom_element_t *el;          /* the container; NULL is empty, and nothing is removed */
-    bool stack;                     /* `is_block_context`'s walk of `el`'s stack, rather than one run */
-    lxb_dom_node_t *after, *end;    /* the run, for a run entry */
+    IsKind kind;
+    lxb_dom_node_t *after, *end;    /* the run, for a run entry; NULL for a walk */
     IsHeld *held;                   /* owned */
 } IsEntry;
 
-static size_t is_key_slot(lxb_dom_element_t *el, bool stack, BlockFlowRun run, size_t cap)
+static size_t is_key_slot(lxb_dom_element_t *el, IsKind kind, BlockFlowRun run, size_t cap)
 {
     uint64_t h = (uint64_t)(uintptr_t)el * 0x9E3779B97F4A7C15ull;
 
     h ^= (uint64_t)(uintptr_t)run.after * 0xC2B2AE3D27D4EB4Full;
     h ^= (uint64_t)(uintptr_t)run.end * 0x165667B19E3779F9ull;
-    h ^= (uint64_t)stack * 0x27D4EB2F165667C5ull;
+    h ^= ((uint64_t)kind + 1u) * 0x27D4EB2F165667C5ull;
     h ^= h >> 31;
     h *= 0xbf58476d1ce4e5b9ull;
     h ^= h >> 29;
@@ -463,12 +474,12 @@ static size_t is_key_slot(lxb_dom_element_t *el, bool stack, BlockFlowRun run, s
 }
 
 /* The slot the key occupies, or the empty slot it would be inserted at. */
-static size_t is_key_probe(const IsEntry *tab, size_t cap, lxb_dom_element_t *el, bool stack, BlockFlowRun run)
+static size_t is_key_probe(const IsEntry *tab, size_t cap, lxb_dom_element_t *el, IsKind kind, BlockFlowRun run)
 {
-    size_t i = is_key_slot(el, stack, run, cap);
+    size_t i = is_key_slot(el, kind, run, cap);
 
     while (tab[i].el != NULL &&
-           (tab[i].el != el || tab[i].stack != stack || tab[i].after != run.after || tab[i].end != run.end))
+           (tab[i].el != el || tab[i].kind != kind || tab[i].after != run.after || tab[i].end != run.end))
         i = (i + 1) & (cap - 1);
     return i;
 }
@@ -485,7 +496,7 @@ static void is_record_grow(IntrinsicSizeRecord *r)
         if (r->tab[i].el == NULL) continue;
         run.after = r->tab[i].after;
         run.end = r->tab[i].end;
-        tab[is_key_probe(tab, cap, r->tab[i].el, r->tab[i].stack, run)] = r->tab[i];
+        tab[is_key_probe(tab, cap, r->tab[i].el, r->tab[i].kind, run)] = r->tab[i];
     }
     free(r->tab);
     r->tab = tab;
@@ -502,6 +513,14 @@ static void is_measure_release(IsMeasure *k)
     text_run_measure_release(&k->m);
 }
 
+static void is_table_release(IsHeld *h)
+{
+    table_grid_release(&h->grid);
+    free(h->captions);
+    h->captions = NULL;
+    h->gridded = false;
+}
+
 void intrinsic_size_record_release(IntrinsicSizeRecord *r)
 {
     size_t i;
@@ -516,6 +535,7 @@ void intrinsic_size_record_release(IntrinsicSizeRecord *r)
     for (i = 0; i < r->cap; i++) {
         if (r->tab[i].el == NULL) continue;
         if (r->tab[i].held->measuring) is_measure_release(&r->tab[i].held->meas);
+        if (r->tab[i].held->gridded) is_table_release(r->tab[i].held);
         free(r->tab[i].held);
     }
     free(r->tab);
@@ -523,7 +543,7 @@ void intrinsic_size_record_release(IntrinsicSizeRecord *r)
 }
 
 /* The entry for the key in the current job's record, created on its first ask. */
-static IsHeld *is_held_of(lxb_dom_element_t *el, bool stack, BlockFlowRun run)
+static IsHeld *is_held_of(lxb_dom_element_t *el, IsKind kind, BlockFlowRun run)
 {
     IntrinsicSizeRecord *r = layout_job_intrinsic_sizes();
     IsHeld *h;
@@ -536,7 +556,7 @@ static IsHeld *is_held_of(lxb_dom_element_t *el, bool stack, BlockFlowRun run)
            "(core/layout/layout_job.h)");
     r->asks++;
     if (r->cap != 0) {
-        i = is_key_probe(r->tab, r->cap, el, stack, run);
+        i = is_key_probe(r->tab, r->cap, el, kind, run);
         if (r->tab[i].el != NULL) {
             h = r->tab[i].held;
             if (h->answered) r->served++;
@@ -547,15 +567,37 @@ static IsHeld *is_held_of(lxb_dom_element_t *el, bool stack, BlockFlowRun run)
     h = calloc(1, sizeof *h);
     CHECK(h != NULL, "out of memory holding one intrinsic inline size measurement");
     if (r->used * 2 >= r->cap) is_record_grow(r);
-    i = is_key_probe(r->tab, r->cap, el, stack, run);
+    i = is_key_probe(r->tab, r->cap, el, kind, run);
     r->tab[i].el = el;
-    r->tab[i].stack = stack;
+    r->tab[i].kind = kind;
     r->tab[i].after = run.after;
     r->tab[i].end = run.end;
     r->tab[i].held = h;
     r->used++;
     r->built++;
     return h;
+}
+
+#if APICLIENT_DEV
+/* The entry for the key if the current job's record holds one, counting nothing, for asserts. */
+static const IsHeld *is_held_peek(lxb_dom_element_t *el, IsKind kind, BlockFlowRun run)
+{
+    IntrinsicSizeRecord *r = layout_job_intrinsic_sizes();
+    size_t i;
+
+    if (r == NULL || r->cap == 0) return NULL;
+    i = is_key_probe(r->tab, r->cap, el, kind, run);
+    return r->tab[i].el != NULL ? r->tab[i].held : NULL;
+}
+#endif
+
+IntrinsicSizeWalk *intrinsic_size_walk_of(lxb_dom_element_t *el)
+{
+    BlockFlowRun none;
+
+    none.after = NULL;
+    none.end = NULL;
+    return &is_held_of(el, IS_ENTRY_FLEX, none)->walk;
 }
 
 /* One step of a run's collection: a character of the text node it is in, one child, or the end of a box. It
@@ -605,7 +647,7 @@ static size_t is_collect_step(IsMeasure *k)
 
 bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
 {
-    IsHeld *h = is_held_of(el, false, run);
+    IsHeld *h = is_held_of(el, IS_ENTRY_RUN, run);
     IsMeasure *k = &h->meas;
 
     if (h->answered) return true;
@@ -651,7 +693,8 @@ bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
     return true;
 }
 
-/* The reader is a drive over the ask, which answers at once where a body asked first. */
+/* The reader is a drive over the ask, which answers at once where a body asked first. Under a resting drive
+   it measures nothing: the body that reads asked first, so no activation measures what it did not ask for. */
 IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, BlockFlowRun run)
 {
     LayoutJobDrive d;
@@ -659,9 +702,21 @@ IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, BlockFlow
     IsHeld *h;
 
     DCHECK(el != NULL, "CSS 2.2 §9.4.2's context was measured with no block container to style it");
+#if APICLIENT_DEV
+    if (layout_job_rests_innermost()) {
+        const IsHeld *held = is_held_peek(el, IS_ENTRY_RUN, run);
+        char nbuf[160];
+
+        DCHECKF(held != NULL && held->answered,
+                "an intrinsic inline size of %s was read under a resting drive with no answered ask before it, so "
+                "its drive would measure the run inside this activation; the body whose read reaches here asks "
+                "`intrinsic_inline_sizes_ask` first and propagates \"not yet\", as core/layout/line_box.c's "
+                "atomic inline does", box_subject(el, nbuf, sizeof nbuf));
+    }
+#endif
     layout_job_drive_begin(&d);
     while (!intrinsic_inline_run_sizes_ask(el, run)) (void)block_flow_drive_deferred(&d);
-    h = is_held_of(el, false, run);
+    h = is_held_of(el, IS_ENTRY_RUN, run);
     DCHECK(h->answered, "an intrinsic inline size measurement answered its ask and holds no answer");
     out = h->sizes;
     layout_job_drive_end(&d);
@@ -958,7 +1013,7 @@ static bool is_block_context_ask(lxb_dom_element_t *el)
 
     none.after = NULL;
     none.end = NULL;
-    h = is_held_of(el, true, none);
+    h = is_held_of(el, IS_ENTRY_STACK, none);
     while (!h->answered) {
         lxb_dom_node_t *brk;
         BlockFlowRun run;
@@ -979,24 +1034,59 @@ static bool is_block_context_ask(lxb_dom_element_t *el)
     return true;
 }
 
-/* NAMED RESIDUAL, the asks a reader does not make. Not covered: a flex container's and a table's sizes ask
-   none of their items here, and a float's or an absolutely positioned box's shrink-to-fit
-   (core/layout/used_value.c) reads with no ask before it, so those readers' drives measure inside the
-   activation that reads. Next: the flex and table arms ask their items, and each such body asks before its
-   read as core/layout/line_box.c's atomic inline does. How its absence shows: a REST_UNIT_LAYOUT_DESCENDANTS
-   overrun whose samples sit under `intrinsic_inline_run_sizes` reached from a reader other than `lb_child`. */
+/* `is_table_sizes`' operands asked ahead of its read: CSS 2.1 §17.5.2.2's column widths read every cell's sizes
+   (core/layout/table_column_width.c) and CAPMIN every caption's (core/layout/table_width.c). The grid and the
+   caption list are held from the first ask until every member is answered.
+   NAMED RESIDUAL, the grid's own walk. Not covered: `table_grid_build` and `table_box_captions` run in the one
+   step that begins the ask, over every row of the table. Next: §17.5's grid built as a held walk over
+   core/layout/table_box.h's rows. How its absence shows: a REST_UNIT_LAYOUT_DESCENDANTS overrun whose samples
+   sit under `table_grid_build` reached from `is_table_ask`. */
+static bool is_table_ask(lxb_dom_element_t *el)
+{
+    BlockFlowRun none;
+    IsHeld *h;
+
+    none.after = NULL;
+    none.end = NULL;
+    h = is_held_of(el, IS_ENTRY_TABLE, none);
+    if (h->answered) return true;
+    if (!h->gridded) {
+        if (!layout_job_line_items_left()) return false;
+        table_grid_build(el, &h->grid);
+        h->ncaptions = table_box_captions(el, &h->captions);
+        DCHECK(h->captions != NULL || h->ncaptions == 0,
+               "CSS 2.1 §17.4's caption boxes came back as a non-zero count with no array");
+        h->gridded = true;
+        h->at = 0;
+        layout_job_line_items_spend(h->grid.ncells + h->ncaptions + 1);
+    }
+    while (h->at < h->grid.ncells + h->ncaptions) {
+        lxb_dom_element_t *box;
+
+        if (!layout_job_line_items_left()) return false;
+        box = h->at < h->grid.ncells ? h->grid.cells[h->at].element : h->captions[h->at - h->grid.ncells];
+        /* §17.2.1's anonymous cell has no element and holds nothing to measure; the read answers for it. */
+        if (box != NULL && !intrinsic_inline_sizes_ask(box)) return false;
+        h->at++;
+        layout_job_line_items_spend(1);
+    }
+    is_table_release(h);
+    h->answered = true;
+    return true;
+}
+
 bool intrinsic_inline_sizes_ask(lxb_dom_element_t *el)
 {
     CssDisplay d;
 
     DCHECK(el != NULL, "css-sizing-3 §5.1's intrinsic inline sizes were asked for with no element");
     /* The read's dispatch, in its order. A replaced element is sized by natural dimensions and measures no
-       run; a box neither of §9.4's contexts lays out is refused by the read. */
+       run; a box neither of §9.4's contexts nor a flex or table module lays out is refused by the read. */
     if (replaced_element_of(el).replaced) return true;
     d = css_computed_display(el);
-    if (flex_item_display_is_flex_container(d) || table_box_kind_generates_table_box(table_box_kind(d)) ||
-        !block_flow_display_is_block_container(d))
-        return true;
+    if (flex_item_display_is_flex_container(d)) return flex_intrinsic_inline_sizes_ask(el);
+    if (table_box_kind_generates_table_box(table_box_kind(d))) return is_table_ask(el);
+    if (!block_flow_display_is_block_container(d)) return true;
     if (block_flow_establishes_inline_context(el)) {
         BlockFlowRun whole;
 

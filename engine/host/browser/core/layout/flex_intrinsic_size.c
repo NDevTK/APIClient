@@ -14,6 +14,7 @@
 #include "core/layout/flex_item.h"
 #include "core/layout/intrinsic_block_size.h"
 #include "core/layout/intrinsic_size.h"
+#include "core/layout/layout_job.h"   /* the line box items an ask spends */
 
 /* css-writing-modes-4 §7.3 "Orthogonal Flows"' perpendicular case, refused ("When a box has a writing mode that
    is perpendicular to its containing block it is said to be in, or establish, an orthogonal flow."). §9.9 sums
@@ -510,6 +511,44 @@ IntrinsicInlineSizes flex_intrinsic_inline_sizes(lxb_dom_element_t *el)
     out.min_content = main.min_content;
     out.max_content = main.max_content;
     return out;
+}
+
+bool flex_intrinsic_inline_sizes_ask(lxb_dom_element_t *el)
+{
+    IntrinsicSizeWalk *w;
+
+    DCHECK(el != NULL, "css-flexbox-1 §9.9's intrinsic sizes were asked for with no element");
+    w = intrinsic_size_walk_of(el);
+    if (w->answered) return true;
+    /* §4's child list as both of the read's walks enumerate it (`fis_main_sizes`, `fis_cross_sizes`): each
+       reads an element item's inline sizes and a text sequence's run, so one walk asks for both. */
+    if (!w->begun) {
+        w->at = box_tree_child_node(box_tree_first_child(el));
+        w->begun = true;
+    }
+    while (w->at != NULL) {
+        lxb_dom_node_t *c = w->at;
+        lxb_dom_node_t *next = box_tree_child_node(box_tree_next_sibling(el, box_tree_child_of_node(c)));
+        FlexItemChildKind kind;
+
+        if (!layout_job_line_items_left()) return false;
+        kind = flex_item_child_kind(el, c);
+        if (kind == FLEX_ITEM_CHILD_TEXT) {
+            BlockFlowRun seq;
+
+            seq.after = box_tree_child_node(box_tree_prev_sibling(el, box_tree_child_of_node(c)));
+            seq.end = flex_item_text_sequence_end(el, c);
+            if (!intrinsic_inline_run_sizes_ask(el, seq)) return false;
+            next = seq.end;
+        } else if (kind == FLEX_ITEM_CHILD_ELEMENT) {
+            if (!intrinsic_inline_sizes_ask(lxb_dom_interface_element(c))) return false;
+        }
+        DCHECK(next != c, "a flex container's intrinsic size walk did not advance past a child");
+        w->at = next;
+        layout_job_line_items_spend(1);
+    }
+    w->answered = true;
+    return true;
 }
 
 CssPx flex_intrinsic_max_content_main_block_size(lxb_dom_element_t *el)

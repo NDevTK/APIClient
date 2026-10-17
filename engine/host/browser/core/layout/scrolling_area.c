@@ -185,11 +185,14 @@ static CssPx sa_edge_from_origin(lxb_dom_element_t *d, FlowPoint o, bool vertica
 }
 
 /* The same edge with its origin asked without a drive: false ("not yet") leaves `*out` unwritten and the
-   deferred question suspended on the current job (core/layout/flow_position.h). */
+   deferred question suspended on the current job (core/layout/flow_position.h). The width's intrinsic
+   operands are asked first: an absolutely positioned box's origin solves for an offset over its width, and
+   the far edge reads the width itself. */
 static bool sa_descendant_edge(lxb_dom_element_t *d, bool vertical, bool ending_at_hi, CssPx *out)
 {
     FlowPoint o;
 
+    if (!used_value_width_ask(d)) return false;
     if (!flow_border_box_origin_ask(d, &o)) return false;
     *out = sa_edge_from_origin(d, o, vertical, ending_at_hi);
     return true;
