@@ -711,18 +711,20 @@ static void navigator_install_realm(JSContext *ctx)
     global = JS_GetGlobalObject(ctx);
     idl_define_global_property_reference(ctx, global, "Navigator", idl_interface_object(ctx, "Navigator", proto));
 
-    nav = JS_NewObjectProtoClass(ctx, proto, g_nav_class);
-    JS_FreeValue(ctx, proto);
-    CHECK(!JS_IsException(nav), "the Window's associated Navigator could not be allocated");
-    /* THE RECORD, ATTACHED BEFORE THE OBJECT LEAVES THIS FUNCTION — which is what nav_environment's "a branded
-       object without one came from a second mint that does not exist" rests on, and there is no second mint.
-       The values are built HERE rather than on first read because a value minted lazily is built inside
-       whichever FLOW got there first, making that flow's baseline everyone's. */
+    /* The record is complete before the object exists, and nothing allocates between the object's allocation
+       and its JS_SetOpaque: an allocation there can run the GC, which marks the externally held `nav` through
+       nav_gc_mark while it has no record. `n->vals` is held by this C reference until then, so it is rooted.
+       nav_environment's "a branded object without one came from a second mint that does not exist" rests on
+       this attach. The values are built here rather than on first read because a value minted lazily is built
+       inside whichever flow got there first, making that flow's baseline everyone's. */
     n = calloc(1, sizeof *n);
     CHECK(n != NULL, "this realm's Navigator record could not be allocated");
     n->realm  = ctx;
     n->global = JS_DupValue(ctx, global);
     n->vals   = nav_build_values(ctx);
+    nav = JS_NewObjectProtoClass(ctx, proto, g_nav_class);
+    JS_FreeValue(ctx, proto);
+    CHECK(!JS_IsException(nav), "the Window's associated Navigator could not be allocated");
     JS_SetOpaque(nav, n);
     realm_value_set(ctx, g_obj_slot, nav);
 
