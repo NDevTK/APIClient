@@ -154,6 +154,12 @@
 #include <errno.h>   /* `abi_paint`'s file I/O — the one place this host's failures are the DISK's */
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
+/* A FIXTURE UNIT: a selftest, a step of main, or one document's probe rows — called once and kept out of line.
+   Inlined into their single caller they made main and probes_eval each one body holding every unit's
+   variables, and clang's per-function debug-variable passes (assignment tracking, live debug values) grow with
+   variables times blocks: that was most of this translation unit's compile memory and time. */
+#define TF_UNIT static __attribute__((noinline))
+
 /* THERE IS NO `eval` STAND-IN HERE, AND ITS ABSENCE IS THE POINT. This fixture used to install a C function
    named `eval` over the intrinsic, which funnelled its argument into solve_eval_sink and returned undefined —
    so the eval sink's every probe and every breakout was measured against a function that EVALUATED NOTHING,
@@ -1464,7 +1470,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
-static const char *tf_doc_named(const char *name) {
+TF_UNIT const char *tf_doc_named(const char *name) {
     size_t i;
 
     CHECKF(name != NULL,
@@ -1545,7 +1551,7 @@ static void tf_var_is(const char *in, const char *want)
     free(got);
 }
 
-static void css_var_selftest(void)
+TF_UNIT void css_var_selftest(void)
 {
     /* THE SCAN. A `var(` is a FUNCTION TOKEN, so it is one only at an ident boundary and only outside a
        string — and each of these would otherwise corrupt a value that has nothing to do with this file. */
@@ -1600,7 +1606,7 @@ static void css_var_selftest(void)
    places a real value reaches and is answered by the standard's rule there rather than by the property's own
    grammar — so the last two assertions go through the REAL serializer, which is the site this landing edited
    and the one where a regression would otherwise show up only as an author seeing a control character. */
-static void css_pending_selftest(void)
+TF_UNIT void css_pending_selftest(void)
 {
     const char *four[4], *mixed[4];
     char *v, *sh, *out;
@@ -1698,7 +1704,7 @@ static void css_pending_selftest(void)
     free(out);
 }
 
-static void trusted_types_selftest(void)
+TF_UNIT void trusted_types_selftest(void)
 {
     /* "No Content-Security-Policy" is the overwhelmingly common case, and a wrong default here would throw a
        TypeError out of every innerHTML assignment on the web. */
@@ -1779,7 +1785,7 @@ static void trusted_types_selftest(void)
  * EVERY PAIR OF LINES THAT MUST DISAGREE IS WRITTEN AS A PAIR. A matcher that answered "Matches" for
  * everything passes a suite that only checks the matches — the same shape of self-agreeing test §Security
  * names for the cross-origin filter — so each relation is stated in both directions. */
-static void csp_url_matching_selftest(void)
+TF_UNIT void csp_url_matching_selftest(void)
 {
     /* THE SELF-ORIGIN OF EVERY LIST BELOW, and the reason the fixture states TWO: `'self'` and a schemeless
        host-source are the two arms whose answer depends on it, and an http origin is what makes §6.7.2.9's
@@ -2133,7 +2139,7 @@ static bool csp_ok(const PolicyContainer *p, CspInlineType type)
     return policy_allows_inline(csp_reporter_none(), p, type, NULL, "", 0);
 }
 
-static void policy_container_selftest(void)
+TF_UNIT void policy_container_selftest(void)
 {
     PolicyContainer *none, *self_only, *inline_ok, *nonced, *evals, *child;
     /* CSP §2.2's SELF-ORIGIN for every list below. It is minted from a serialization rather than taken from
@@ -2424,7 +2430,7 @@ static void policy_container_selftest(void)
  * so SHA-1 and SHA-256 must pad into a SECOND block, which is the case an implementation gets wrong. TEST2_2
  * is 112 bytes and does the same to the 1024-bit block of SHA-384 and SHA-512. The empty message exercises the
  * path where the padding is the entire message. */
-static void secure_hash_selftest(void)
+TF_UNIT void secure_hash_selftest(void)
 {
     static const char T1[]  = "abc";
     static const char T21[] = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
@@ -2534,7 +2540,7 @@ static void secure_hash_selftest(void)
  *                          to equal what step 3 answers for the SAME key zero-extended to B, which is the one
  *                          statement steps 1 and 3 make about each other and needs no oracle.
  * A row per hash function is what makes B and L parameters rather than the constants 64 and 20. */
-static void hmac_selftest(void)
+TF_UNIT void hmac_selftest(void)
 {
     /* RFC 4231 §4.2/§4.3/§4.7 and RFC 2202 §3, as bytes. The repeated-byte keys and messages are FILLED rather
        than written out, because a 131-byte literal is a transcription error waiting to happen. */
@@ -2752,7 +2758,7 @@ static size_t kat_unhex(const char *hex, uint8_t *out, size_t out_size)
  * depending on where the scheduler happened to preempt the walk — a page's data would then decrypt or not
  * according to machine load. secure_hash_selftest takes every split of its 56-byte vector for exactly this
  * reason; this takes every split of the IV, of the additional data and of the text, independently. */
-static void aes_gcm_selftest(void)
+TF_UNIT void aes_gcm_selftest(void)
 {
     static const struct { const char *key, *iv, *pt, *aad, *ct, *tag; } KAT[] = {
         /* gcmEncryptExtIV128.rsp, [Keylen = 128] [IVlen = 96] [PTlen = 0] [AADlen = 0]
@@ -3069,7 +3075,7 @@ static lxb_dom_node_t *scripting_find_noscript(lxb_dom_node_t *n)
  * rejected, and would then report every corrupt image as a cut-off one. Each row is a VALID vector with one
  * byte changed, so what it establishes is that the change is what the refusal is about.
  */
-static void inflate_selftest(void)
+TF_UNIT void inflate_selftest(void)
 {
     static const uint8_t IN_STORED[] = {
         0x01,0x12,0x00,0xED,0xFF,0x48,0x45,0x4C,0x4C,0x4F,0x20,0x53,0x54,0x4F,0x52,0x45,0x44,0x20,0x42,0x4C,0x4F,0x43,0x4B
@@ -3563,7 +3569,7 @@ static void png_fx_refuse(const char *what, const uint8_t *vec, size_t vn, PngSt
            what, (int)st, (int)want);
     png_decode_free(&d);
 }
-static void png_decode_selftest(void)
+TF_UNIT void png_decode_selftest(void)
 {
     /* 9x5 colour type 2 bit depth 8; scanline i uses §9.2 Table 11's filter type i, so one vector
        exercises all five reconstruction functions. zlib-compressed by an encoder this tree did not
@@ -4206,7 +4212,7 @@ static void png_decode_selftest(void)
  * cannot see the half-pixel sample offset — both spellings floor to the same index, which a mutation run
  * established rather than argued — so the 3-wide destination is here because it is the ONLY shape that does.
  * Its columns sample source 0,1,1 with the offset and 0,0,1 without. */
-static void display_image_mark_selftest(void)
+TF_UNIT void display_image_mark_selftest(void)
 {
     /* 2x2, PNG §6.1 Table 9's colour type 2 at bit depth 8, no interlace: RED GREEN over BLUE WHITE. */
     static const uint8_t PNG_2x2[] = {
@@ -4355,7 +4361,7 @@ static void display_image_mark_selftest(void)
     display_list_free(&dl);     /* display_list.h: a double free is not reachable */
 }
 
-static void html_scripting_flag_selftest(void)
+TF_UNIT void html_scripting_flag_selftest(void)
 {
     /* The `</Link>` is not a typo: it is what a React `<Link>` component serializes into a `<noscript>`
        fallback, it is a BOGUS END TAG per §13.2.6.4.7, and it is why the `<a>` before it never closes. Under
@@ -4401,7 +4407,7 @@ static void html_scripting_flag_selftest(void)
           "assertion above would still pass for");
 }
 
-static void csp_element_matching_selftest(void)
+TF_UNIT void csp_element_matching_selftest(void)
 {
     static const char *SRC =
         "<html><head>"
@@ -4551,7 +4557,7 @@ static void csp_element_matching_selftest(void)
 /* WHAT MAKES THE CONTAINER LOAD-BEARING, which the parser test above does not reach: the parse can be perfect
    and still answer for nothing if neither of the document's two policy sources gets to it — the response's
    header and its own `<meta>`. Its own tree, because that is what makes it exercisable at all. */
-static void document_policy_selftest(void)
+TF_UNIT void document_policy_selftest(void)
 {
     static const char *SRC =
         "<html><head>"
@@ -4717,7 +4723,7 @@ static void document_policy_selftest(void)
    pointers — so the world's NAME travels and the peer builds its own segment.
    This exercises the peer's half against worlds minted as if by another document — the sender's half is
    exercised by every fork the fixture below performs, since flow_add mints and engine_fork_finalize forks. */
-static void world_registry_selftest(JSContext *ctx)
+TF_UNIT void world_registry_selftest(JSContext *ctx)
 {
     /* THE PEER'S DOCUMENT, INTERNED THROUGH THE ONE DOOR THAT MINTS A HANDLE. A `WorldId.doc` is this
        instance's INDEX into its own name table (solver/world.h), never a number a caller picks: every real
@@ -4947,7 +4953,7 @@ static int32_t tf_step_diff_run(JSContext *ctx, const char *src, const char *nam
     return got;
 }
 
-static void sort_merge_selftest(JSContext *ctx)
+TF_UNIT void sort_merge_selftest(JSContext *ctx)
 {
     int susp_off = 0, mach_off = 0, susp_on = 0, mach_on = 0;
     int32_t h_off, h_on;
@@ -5008,7 +5014,7 @@ static const char *TF_CONCAT_SRC =
     "   h = (h * 31 + a[i]) % 1000003; }"
     " return ok ? h : -1; })()";
 
-static void concat_keyed_selftest(JSContext *ctx)
+TF_UNIT void concat_keyed_selftest(JSContext *ctx)
 {
     int susp_off = 0, mach_off = 0, susp_on = 0, mach_on = 0;
     int32_t h_off, h_on;
@@ -5037,7 +5043,7 @@ static void concat_keyed_selftest(JSContext *ctx)
     JS_SetFlowControlHooks(&TF_DIFF_NONE);
 }
 
-static void flow_job_selftest(JSContext *ctx)
+TF_UNIT void flow_job_selftest(JSContext *ctx)
 {
     Flow a, b;
     JSValue e, r;
@@ -5787,7 +5793,7 @@ static void tf_declare_staged_page_errors(void) {
     fflush(stdout);
 }
 
-static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_level_url)
+TF_UNIT void tf_agent_init(JSContext *ctx, const char *origin, const char *top_level_url)
 {
     /* WHERE THIS DOCUMENT IS, RECORDED WHERE IT IS DECIDED — the page-error edge counter reads it to say which
        standing announcements carried this document's own address as their throw site, and deriving it from the
@@ -6017,7 +6023,7 @@ static JSValue tf_own_data_value(JSContext *ctx, JSValueConst obj, const char *i
  * ASSERTED before the loop instead of being a property of the host's call order.
  * RETIREMENT: this record goes when nothing in this function can name a realm a document has been installed
  * over, at which point the assertion before the loop can no longer fail and the reason cannot be re-derived. */
-static void exposure_selftest(JSContext *ctx, const char *top_level_url)
+TF_UNIT void exposure_selftest(JSContext *ctx, const char *top_level_url)
 {
     static const struct { const char *name; bool in_window, in_worker; } EXPECT[] = {
         { "DOMParser",      true, false },   /* [Exposed=Window] */
@@ -7766,7 +7772,7 @@ static void idb_upgrade_abort_selftest(JSContext *ctx, JSValueConst conn, JSValu
     idb_selftest_finish(ctx, tx);
 }
 
-static void idb_store_selftest(JSContext *ctx)
+TF_UNIT void idb_store_selftest(JSContext *ctx)
 {
     JSValue db, found, store, conn, tx;
 
@@ -7854,7 +7860,7 @@ static const char *arg_val(int argc, char **argv, const char *flag) {
  * cold_resume parses.
  * IT IS NOT A SECOND SCHEDULER, A REPLAY HARNESS OR A DRIVER. The resume is engine_sched_begin's own choice
  * between a residue and a boot flow; all this supplies is the two sessions and the shelf between them. */
-static void tf_park_store(const char *path, const char *recipes) {
+TF_UNIT void tf_park_store(const char *path, const char *recipes) {
     FILE *f = fopen(path, "wb");
     size_t n = strlen(recipes);
     size_t put;
@@ -7873,7 +7879,7 @@ static void tf_park_store(const char *path, const char *recipes) {
 /* …AND BACK. The residue is handed to engine_sched_begin exactly as read: no join, no split, no re-encode —
    the one translation the extension performs (an array joined by ';') exists because IndexedDB stores JSON,
    and a host with a file has no such boundary to translate across. */
-static char *tf_park_load(const char *path) {
+TF_UNIT char *tf_park_load(const char *path) {
     FILE *f = fopen(path, "rb");
     long n;
     char *buf;
@@ -8072,17 +8078,15 @@ static void fold_row(int *row, const char **why, int ok, const char *what) {
    also DEV-ONLY, so on the day a selection did exceed the cap the release build would not abort — it would write
    past the end of `probes_report`'s stack array, which is worse than the truncation a reader of
    `a buffer size with an abort behind it` would expect.
-   THE DERIVATION AND NOT THE FIGURES, so the next reader gets today's answer: the table's own length is read off
-   the ARRAY by the compiler rather than counted out of the text — put `_Static_assert(COUNTOF(probes) == 0, "");`
-   after the table and the diagnostic prints it — and the per-session maxima are the three `SESS_` counts of the
-   row openers inside the same array, which must sum to that length or the partition is about something else.
-   SO THE RELATIONSHIP IS ASSERTED WHERE BOTH FACTS ARE IN HAND, at the table rather than here, and the abort is
-   no longer load-bearing: that site states the whole argument and this one does not restate it.
-   THE CAPACITY IS NOT DERIVED FROM THE TABLE, AND THE REASON IS STRUCTURAL RATHER THAN A PREFERENCE: the table
-   is a LOCAL of probes_eval and its initializers name that function's OWN locals — read any row and the boolean
-   and the `why` it carries are both locals folded a few lines above it — so it cannot move to file scope, and
-   `probes_report`, which must size a stack array at compile time, cannot see its length. A constant is therefore
-   necessary and the assertion is what makes the two unable to disagree.
+   THE DERIVATION AND NOT THE FIGURES, so the next reader gets today's answer: the table's length is probes_eval's
+   `np` once every document's function has appended its entries, and the per-session maxima are the three `SESS_`
+   counts of the row openers, which must sum to that length or the partition is about something else.
+   SO THE RELATIONSHIP IS ASSERTED WHERE BOTH FACTS ARE IN HAND, in probes_append on every call, and the abort is
+   no longer load-bearing.
+   THE CAPACITY IS NOT DERIVED FROM THE TABLE, AND THE REASON IS STRUCTURAL RATHER THAN A PREFERENCE: each
+   document's entries are a LOCAL of its probe function and name that function's OWN locals, so they cannot move
+   to file scope, and `probes_report`, which must size a stack array at compile time, cannot see their length. A
+   constant is therefore necessary and the assertion is what makes the two unable to disagree.
    THE NUMBER IS RAISED BECAUSE THE INTENT IS REAL: the room is meant to sit far enough above the table that
    adding a statement is an edit to the table alone, and the NINE rows the 320 had left was not that. It costs a
    frame rather than an argument, which is why the raise is generous rather than the next round number up:
@@ -9499,15 +9503,23 @@ static int s_poc(const char *js, const char *sink, const char *src, const char *
     return strstr(js, pat) != NULL;
 }
 
-/* Fill `out` with the rows this invocation carries and answer how many. Every row's `ok` is computed here, so
-   the mid-run report and the final one are the same function of the same bytes. */
-static int probes_eval(const char *js, Probe *out, int cap) {
-    /* THE FRONTIER'S STANDING AT THE INSTANT THIS TABLE IS COMPOSED, taken ONCE and read by every row that
-       needs it — see probe_frontier_state for what the three states are, why a multi-world row's 0 has three
-       readings and not two, and why one scan per table rather than one per row. It is taken FIRST so that no
-       row can be composed against a reading of a different instant. */
-    flow_wfq_census(&g_probe_frontier);
-    g_probe_frontier_gen++;
+/* THE PROBE ROWS, ONE FUNCTION PER FIXTURE DOCUMENT. Each computes its document's rows from `js` and
+   appends their table entries to probes_eval's table; documents whose rows share a computation share one.
+   They are separate functions, and kept out of line, because a single body holding every row's locals was
+   most of this translation unit's compile memory: clang's debug-variable passes run per function and grow
+   with its variables times its blocks. Each entry and the statements that compute it are unchanged. */
+static void probes_append(Probe *tab, int *n, const Probe *rows, int k) {
+    /* THE TABLE FITS probes_report's Probe rows[PROBE_MAX]. Every function appends every one of its rows
+       on every call, so this fires on the first table that outgrows the cap, in dev and release alike. */
+    CHECK(*n + k <= PROBE_MAX,
+          "the probe table declares more rows than PROBE_MAX, which is the room probes_report's stack array "
+          "gives them — a run selecting them all would write past the end of that array. Raise PROBE_MAX");
+    memcpy(tab + *n, rows, (size_t)k * sizeof *rows);
+    *n += k;
+}
+
+/* The rows of the `navigator` document. */
+TF_UNIT void probes_navigator(const char *js, Probe *tab, int *n) {
     /* THE HEADLINE @H CLAIM, WHICH THREE UNSCOPED CLAUSES WERE ASSERTING AS THREE UNRELATED EXISTENCES. The
        statement is `fetch('/api/u?uid=' + state.id)`, so what this row is about is ONE param of ONE endpoint
        carrying ONE value: `uid` on `/api/u` is `{state}.id`. What it ASKED was whether `/api/u` appears, and
@@ -9526,7 +9538,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        AND THE EXISTENCE CLAUSE IS SPLIT OFF because the two failures take opposite actions: no record at all is
        the SCHEDULE not having reached the statement, and a record whose `uid` carries something else is the
        CONCOLIC having been lost between the source and the param. A single 0 named both. */
-    const char *uid_why = NULL; int has_uid_param = 1;
+    const char *uid_why = NULL;
+ int has_uid_param = 1;
     fold_row(&has_uid_param, &uid_why, strstr(js, "\"/api/u\"") != NULL,
              "NOT REACHED: there is no /api/u record at all, so this run never answered the statement "
              "`fetch('/api/u?uid=' + state.id)`. That is the SCHEDULE and says nothing about whether a "
@@ -9535,6 +9548,184 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the statement RAN and /api/u's `uid` does not carry `{state}.id` as a whole value: the record "
              "EXISTS and the SOURCE was lost between `state.id` and the param — a collapse to the bare "
              "example, or a shape derived from it where the row asks for the source itself");
+    /* THE HOLE THAT STANDS OVER SEVERAL EXAMPLE SEGMENTS — the claim `path-example` above cannot make,
+       because ITS hole covers exactly one and that is the case an equal-count aligner already answered. The
+       product's own spelling is the same shape one region to the left (`fetch(cfg.apiBase + "/v1/users/" +
+       id)`, where the run spans the scheme), and this document has no source whose example is a whole origin;
+       what it has is one whose example holds a `/`, which is the same question asked of the same walk.
+       THE VALUE IS COUNTED AND NOT SPELLED. It is `navigator.userAgent`'s example, a `#define` in
+       core/frame/navigator.c that no header exports, so asserting the bytes here would be a SECOND COPY of a
+       constant this file cannot include — and the day that constant is edited the row would redden for a
+       reason that is not about the engine. What the widening moves is a 0 to a 1: before it the alignment
+       failed on the segment counts alone, so every param on this address carried no value.
+       `path-example` AND `path-param` ARE THIS ROW'S NEGATIVE CONTROL and are deliberately not restated
+       here. Both of their holes cover exactly ONE segment, so `path_align`'s own equal-count assertion forces
+       their spans to 1 and their answers are the ones the equal-count matcher gave; a widening that moved
+       them reddens THOSE rows, which is what says whether a red here is this case or the whole aligner. */
+    const char *path_run_why = NULL;
+ int path_run = 1;
+    fold_row(&path_run, &path_run_why, !!strstr(js, "\"/api/ua/{navigator.userAgent}/v4\""),
+             "NOT REACHED: there is no /api/ua/{navigator.userAgent}/v4 record at all, so the multi-segment "
+             "statement never ran and the clause below is not being reported on. That is the SCHEDULE");
+    fold_row(&path_run, &path_run_why,
+             param_value_count(js, "/api/ua/{navigator.userAgent}/v4", "navigator.userAgent") >= 1,
+             "the record EXISTS and its PATH hole `navigator.userAgent` carries NO value — that hole stands "
+             "over a RUN of example segments because the value the code computed holds a `/`, so a valueless "
+             "param here is path_align refusing an address whose reading is unique, or path_scan reading the "
+             "run at the wrong boundary");
+    /* THE SAME HOLE ONE HALF OF THE ADDRESS OVER — A QUERY HOLE STANDING OVER A RUN OF EXAMPLE PAIRS, which
+       is the claim `query_align` landed WITHOUT A WITNESS and said so in its own commit. The row is here
+       rather than a clause of `path-run` because the two walks are two functions over two grammars: the path
+       aligns `/`-separated segments with no anchor, and the query aligns `&`-separated pairs whose run must
+       BEGIN at a pair carrying the shape pair's own name, which is a refusal the path half does not make.
+       THE EQUAL-COUNT POPULATION IS GUARDED BY AN ASSERT AND NOT BY A ROW, AND NO ROW CAN GUARD IT. The
+       widening's own landing commit named `path-example` and `path-param` as this case's negative controls,
+       and re-deriving that is what this paragraph is: BOTH halves of it are wrong, in two different ways,
+       and the second is the one worth keeping.
+       `path-param` HAS NO QUERY AT ALL — `fetch('/v1/users/' + state.id + '/posts', {…})`, and
+       `endpoint_record` calls `kv_pairs` only for a display holding a `?` with a byte after it — so it has
+       zero query params and controls nothing about this walk. That is an ordinary miscount.
+       `path-example`'s query pair IS equal-count (`deep=1` in the shape and `deep=1` in the example, ONE
+       pair each), and it STILL cannot be a control, which is the structural half: at equal counts the two
+       matchers emit the SAME BYTES. A literal pair like `deep` takes the shape's own value under every
+       alignment and under none, and a HOLE at equal counts is forced to span one, whose run end IS the first
+       pair's end — so `kv_pairs` writes `evn` either way. A row over such a param is the check whose two
+       sides cannot disagree, and this document has no query row that a regression at equal counts could
+       redden. What holds that case is `query_align`'s own `DCHECK(n != m || span[i] == 1)`, which ABORTS a
+       dev build; restating it as a probe row would be the second copy §AN-AUDITOR-DERIVES-THE-RULE forbids,
+       and it would read 1 in every build where the abort is compiled in.
+       `uid-param` IS A REAL CONTROL AND IS FOR A DIFFERENT ARM. `state.id` determines no example, so
+       `kv_pairs` never calls the aligner at all (`ex ? query_align(…) : NULL`) and the param carries its
+       SHAPE `{state}.id` — which says the widening left the exampleless query hole reporting what it always
+       reported. It is not restated here.
+       THE CORRECTION IS RECORDED HERE AND NOT AT `query_align`, WHOSE BANNER NEVER MADE THE CLAIM: it was
+       made in a commit message, which is durable, greppable and attributable, and a reader counting this
+       walk's controls off it would count two that do not exist and would conclude the equal-count case is
+       watched by rows when it is watched by an abort.
+       THE THREE CLAUSES ARE ENTAILED AND THE LOWEST 0 IS THE LOCALISATION. The third implies the second (a
+       param carrying the run's bytes carries a value the SHAPE does not spell, so its shape held a brace)
+       and the second implies the first. There is NO fourth clause over `tail`: its shape value holds no
+       brace, so `kv_pairs` emits the SHAPE for it under every alignment and under none, and an assertion
+       that reads `z` in every world is the check whose two sides cannot disagree. */
+    /* URL §4.4 "URL parsing" path state's two exits, one row each, over the navigator document's two statements.
+       A segment ends at a `/` the page wrote, so `{screen.width}/2`, whose `/` is the division's, is one hole: the
+       record is spelled `{screen.width/2}` and its param carries the quotient. The example is computed from
+       core/frame/screen.h's own answer, so this row holds no copy of the modelled width. */
+    const char *path_slash_why = NULL;
+ int path_slash = 1;
+    char path_slash_want[32];
+    snprintf(path_slash_want, sizeof path_slash_want, "%.17g", screen_width() / 2.0);
+    fold_row(&path_slash, &path_slash_why, !!strstr(js, "\"/api/pdiv/"),
+             "NOT REACHED: there is no /api/pdiv record at all, so the division statement never ran. That is "
+             "the SCHEDULE");
+    fold_row(&path_slash, &path_slash_why, !strstr(js, "\"/api/pdiv/{screen.width}/2\""),
+             "the division's `/` was read as a segment separator: the record splits one hole into `{screen.width}` "
+             "and a literal `2`, which is path_scan splitting on a byte the page did not write");
+    fold_row(&path_slash, &path_slash_why,
+             param_value_is(js, "/api/pdiv/{screen.width/2}", "screen.width/2", path_slash_want),
+             "the record is spelled as one hole and its param `screen.width/2` does not carry the quotient — "
+             "path_align did not line the example's one segment up with the hole");
+    /* And the path ends at a `?` no page byte wrote: the data block's `k/j?x=1` is one hole's value over two
+       segments and the query after them, so the param carries all of it. A value of `k/j` is the example cut at
+       its first `?` as though the page had written that `?`. */
+    const char *path_query_why = NULL;
+ int path_query = 1;
+    fold_row(&path_query, &path_query_why, !!strstr(js, "\"/api/pend/{script#pq}\""),
+             "NOT REACHED: there is no /api/pend/{script#pq} record at all, so the data-block statement never "
+             "ran. That is the SCHEDULE");
+    fold_row(&path_query, &path_query_why,
+             param_value_is(js, "/api/pend/{script#pq}", "script#pq", "k/j?x=1"),
+             "the record EXISTS and its hole does not carry `k/j?x=1` — the example was cut at a `?` the shape "
+             "does not have, so the hole lost the query its value carried on into");
+    const char *query_run_why = NULL;
+ int query_run = 1;
+    fold_row(&query_run, &query_run_why, !!strstr(js, "\"/api/qrun\""),
+             "NOT REACHED: there is no /api/qrun record at all, so the data-block statement never ran and "
+             "the clauses below are not being reported on. That is the SCHEDULE, and it says nothing "
+             "whatever about how a query hole is aligned");
+    fold_row(&query_run, &query_run_why,
+             emitted_record_has(js, "/api/qrun",
+                                "\"name\":\"f\",\"location\":\"query\",\"valueClass\":\"unknown\""),
+             "the record EXISTS and its `f` param is not a HOLE: `valueClass` is `concrete`, so "
+             "`document.getElementById('qrun').textContent` reached the address as a plain string and there "
+             "was no alignment question to ask. THAT IS THE §4.12.1 DATA-BLOCK MINT AND NOT THE ALIGNER — "
+             "core/loader/data_block.c wraps the child text content of a `script` whose type is none of the "
+             "four HTML §4.12.1.1 names, and this block's type is `application/x-www-form-urlencoded` — and "
+             "it is its own clause for exactly that reason");
+    fold_row(&query_run, &query_run_why,
+             param_value_is(js, "/api/qrun", "f", "a=1&page=2"),
+             "the `f` param IS a hole and does not carry the RUN it stands over. Two readings and they take "
+             "different work: `{script#qrun}` there is `query_align` refusing an address whose reading is "
+             "unique — the shape holds two pairs and the example three, which is the count difference the "
+             "widening exists for — while `a=1` alone is the alignment having succeeded and `kv_pairs` "
+             "reading the run at its FIRST pair's value instead of from that value's start to the end of "
+             "the last pair");
+    /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
+       both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
+       arm and the sibling is never reached. Both arms present is the whole claim.
+       AND `touch` WAS ENTAILED BY THIS ROW'S OWN FIRST CLAUSE. The world token is a substring of the very
+       endpoint the presence clause asks for — `"/api/touch"` CONTAINS `touch` — so the two-world row was a
+       one-clause row: reaching the statement at all satisfied both terms, and the `mouse` arm was the only
+       thing it could ever lose. `untouched`, which the §4.4 clone statement emits, satisfied it too.
+       THE OTHER TWO GO THE SAME WAY, and not because they were caught lying: `other` is a substring of the
+       `https://other.test/p` this document opens, and nothing in the layout pair collides today. A mint is a
+       claim about every token the document will EVER emit and scoping is the only proof of it, so a row that
+       is safe by inspection and one that is safe by construction must not sit in one block looking alike. */
+    const char *uafork_why = NULL;
+ int uafork_tt = 1;
+    FORK_ROW(js, &uafork_tt, &uafork_why, "/api/uafork", "v",
+             "the UA-sniff gate, whose concolic userAgent must fork rather than decide on its example",
+             "chrome", "other");
+    const char *touchfork_why = NULL;
+ int touchfork_tt = 1;
+    FORK_ROW(js, &touchfork_tt, &touchfork_why, "/api/touch", "v",
+             "the touch gate, whose concolic maxTouchPoints must fork rather than decide on its example",
+             "touch", "mouse");
+    const char *layoutfork_why = NULL;
+ int layoutfork_tt = 1;
+    FORK_ROW(js, &layoutfork_tt, &layoutfork_why, "/api/layout", "v",
+             "the viewport gate, whose concolic screen.width must fork rather than decide on its example",
+             "mobile", "desktop");
+    /* THE BITWISE/SHIFT FAMILY OVER UNKNOWN INPUT. Both arms present is the whole claim: a `&` whose result
+       collapsed to a bare number (or to NaN) decides the branch and the sibling is never reached, which is
+       precisely the coverage §Re-execution means by "opacity SURVIVES numeric coercion". `bwhash` asserts only
+       that the shift/xor chain COMPLETED — before the family had concolic semantics it aborted the document,
+       so the endpoint's existence is the measurement. `bwtramp` is the mixed shape: an unknown on the left and
+       the page's own suspending valueOf on the right. */
+    const char *bwfork_why = NULL;
+ int bwfork_tt = 1;
+    FORK_ROW(js, &bwfork_tt, &bwfork_why, "/api/bwfork", "v",
+             "a `&` over unknown input keeping its opacity — a result that collapsed to a bare number (or to "
+             "NaN) decides the branch and the sibling endpoint is never reached",
+             "bwwide", "bwnarrow");
+    int bwhash_tt  = (strstr(js, "\"/api/bwhash\"") != NULL);
+    const char *bwtramp_why = NULL;
+ int bwtramp_tt = 1;
+    FORK_ROW(js, &bwtramp_tt, &bwtramp_why, "/api/bwtramp", "v",
+             "the MIXED shape — an unknown on the left of the `&` and the page's own suspending valueOf on "
+             "the right, so the operand is resolved through the tramp and the result is still opaque",
+             "bwand", "bwzero");
+    const Probe rows[] = {
+        { "uid-param", has_uid_param, "/api/u?uid=", SESS_EXPLORE, uid_why },
+        { "path-run", path_run, "/api/ua/", SESS_EXPLORE, path_run_why },
+        { "path-slash", path_slash, "/api/pdiv/", SESS_EXPLORE, path_slash_why },
+        { "path-query", path_query, "/api/pend/", SESS_EXPLORE, path_query_why },
+        /* KEYED ON THE STATEMENT'S OWN SPELLING, for the reason `lazy` states: `/api/qrun` is composed by
+           a `+` over a data block's text and the record's address is the PATH half alone, so the key is the
+           `fetch` this document writes and not the answer it produces. */
+        { "query-run", query_run, "/api/qrun?f=", SESS_EXPLORE, query_run_why },
+        { "ua", uafork_tt, "/api/uafork", SESS_EXPLORE, uafork_why },
+        { "touch", touchfork_tt, "/api/touch", SESS_EXPLORE, touchfork_why },
+        { "layout", layoutfork_tt, "/api/layout", SESS_EXPLORE, layoutfork_why },
+        { "bitwise", bwfork_tt, "/api/bwfork", SESS_EXPLORE, bwfork_why },
+        { "bitwise-chain", bwhash_tt, "/api/bwhash", SESS_EXPLORE },
+        { "bitwise-tramp", bwtramp_tt, "/api/bwtramp", SESS_EXPLORE, bwtramp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `fetchreply` document. */
+TF_UNIT void probes_fetchreply(const char *js, Probe *tab, int *n) {
     /* THE PATH AND THE BODY, which this surface could not name at all. The address is RE-SPELLED so its hole
        is one the popup's `/\{([^{}]+)\}/` substitution can find — `{state}.id` has its braces around the root
        source and the member path OUTSIDE them, so the segment becomes `{state.id}` — and the param is that
@@ -9545,7 +9736,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        records, which is the shape this row exists to refuse. The emitter writes the two fields ADJACENT
        (`{"name":..,"location":..`), so asking for them as one needle INSIDE this record's own span is the join
        the row was always making, and it is one clause rather than two because the emitter joins them. */
-    const char *path_param_why = NULL; int path_param = 1;
+    const char *path_param_why = NULL;
+ int path_param = 1;
     fold_row(&path_param, &path_param_why, !!strstr(js, "\"/v1/users/{state.id}/posts\""),
              "NOT REACHED: there is no /v1/users/{state.id}/posts record at all, so the templated-address "
              "statement never ran and the clause below is not being reported on. That is the SCHEDULE");
@@ -9594,7 +9786,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* THE ALIGNED EXAMPLE: the shape's hole and the concolic's concrete URL line up segment for segment, so the
        path param carries `visible` — the value the document actually has. The query param on the same record is
        what proves all three locations coexist rather than one overwriting the others. */
-    const char *path_example_why = NULL; int path_example = 1;
+    const char *path_example_why = NULL;
+ int path_example = 1;
     fold_row(&path_example, &path_example_why, !!strstr(js, "\"/v1/vis/{hidden|visible}/reports\""),
              "NOT REACHED: there is no /v1/vis/{hidden|visible}/reports record at all, so this run did not "
              "answer the statement. That is the SCHEDULE");
@@ -9608,117 +9801,545 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the record EXISTS with its path hole filled and the QUERY param `deep` is not there carrying "
              "`1` — a path param and a query param on ONE record is the whole claim, so this says one "
              "location overwrote the other rather than coexisting with it");
-    /* THE HOLE THAT STANDS OVER SEVERAL EXAMPLE SEGMENTS — the claim `path-example` above cannot make,
-       because ITS hole covers exactly one and that is the case an equal-count aligner already answered. The
-       product's own spelling is the same shape one region to the left (`fetch(cfg.apiBase + "/v1/users/" +
-       id)`, where the run spans the scheme), and this document has no source whose example is a whole origin;
-       what it has is one whose example holds a `/`, which is the same question asked of the same walk.
-       THE VALUE IS COUNTED AND NOT SPELLED. It is `navigator.userAgent`'s example, a `#define` in
-       core/frame/navigator.c that no header exports, so asserting the bytes here would be a SECOND COPY of a
-       constant this file cannot include — and the day that constant is edited the row would redden for a
-       reason that is not about the engine. What the widening moves is a 0 to a 1: before it the alignment
-       failed on the segment counts alone, so every param on this address carried no value.
-       `path-example` AND `path-param` ARE THIS ROW'S NEGATIVE CONTROL and are deliberately not restated
-       here. Both of their holes cover exactly ONE segment, so `path_align`'s own equal-count assertion forces
-       their spans to 1 and their answers are the ones the equal-count matcher gave; a widening that moved
-       them reddens THOSE rows, which is what says whether a red here is this case or the whole aligner. */
-    const char *path_run_why = NULL; int path_run = 1;
-    fold_row(&path_run, &path_run_why, !!strstr(js, "\"/api/ua/{navigator.userAgent}/v4\""),
-             "NOT REACHED: there is no /api/ua/{navigator.userAgent}/v4 record at all, so the multi-segment "
-             "statement never ran and the clause below is not being reported on. That is the SCHEDULE");
-    fold_row(&path_run, &path_run_why,
-             param_value_count(js, "/api/ua/{navigator.userAgent}/v4", "navigator.userAgent") >= 1,
-             "the record EXISTS and its PATH hole `navigator.userAgent` carries NO value — that hole stands "
-             "over a RUN of example segments because the value the code computed holds a `/`, so a valueless "
-             "param here is path_align refusing an address whose reading is unique, or path_scan reading the "
-             "run at the wrong boundary");
-    /* THE SAME HOLE ONE HALF OF THE ADDRESS OVER — A QUERY HOLE STANDING OVER A RUN OF EXAMPLE PAIRS, which
-       is the claim `query_align` landed WITHOUT A WITNESS and said so in its own commit. The row is here
-       rather than a clause of `path-run` because the two walks are two functions over two grammars: the path
-       aligns `/`-separated segments with no anchor, and the query aligns `&`-separated pairs whose run must
-       BEGIN at a pair carrying the shape pair's own name, which is a refusal the path half does not make.
-       THE EQUAL-COUNT POPULATION IS GUARDED BY AN ASSERT AND NOT BY A ROW, AND NO ROW CAN GUARD IT. The
-       widening's own landing commit named `path-example` and `path-param` as this case's negative controls,
-       and re-deriving that is what this paragraph is: BOTH halves of it are wrong, in two different ways,
-       and the second is the one worth keeping.
-       `path-param` HAS NO QUERY AT ALL — `fetch('/v1/users/' + state.id + '/posts', {…})`, and
-       `endpoint_record` calls `kv_pairs` only for a display holding a `?` with a byte after it — so it has
-       zero query params and controls nothing about this walk. That is an ordinary miscount.
-       `path-example`'s query pair IS equal-count (`deep=1` in the shape and `deep=1` in the example, ONE
-       pair each), and it STILL cannot be a control, which is the structural half: at equal counts the two
-       matchers emit the SAME BYTES. A literal pair like `deep` takes the shape's own value under every
-       alignment and under none, and a HOLE at equal counts is forced to span one, whose run end IS the first
-       pair's end — so `kv_pairs` writes `evn` either way. A row over such a param is the check whose two
-       sides cannot disagree, and this document has no query row that a regression at equal counts could
-       redden. What holds that case is `query_align`'s own `DCHECK(n != m || span[i] == 1)`, which ABORTS a
-       dev build; restating it as a probe row would be the second copy §AN-AUDITOR-DERIVES-THE-RULE forbids,
-       and it would read 1 in every build where the abort is compiled in.
-       `uid-param` IS A REAL CONTROL AND IS FOR A DIFFERENT ARM. `state.id` determines no example, so
-       `kv_pairs` never calls the aligner at all (`ex ? query_align(…) : NULL`) and the param carries its
-       SHAPE `{state}.id` — which says the widening left the exampleless query hole reporting what it always
-       reported. It is not restated here.
-       THE CORRECTION IS RECORDED HERE AND NOT AT `query_align`, WHOSE BANNER NEVER MADE THE CLAIM: it was
-       made in a commit message, which is durable, greppable and attributable, and a reader counting this
-       walk's controls off it would count two that do not exist and would conclude the equal-count case is
-       watched by rows when it is watched by an abort.
-       THE THREE CLAUSES ARE ENTAILED AND THE LOWEST 0 IS THE LOCALISATION. The third implies the second (a
-       param carrying the run's bytes carries a value the SHAPE does not spell, so its shape held a brace)
-       and the second implies the first. There is NO fourth clause over `tail`: its shape value holds no
-       brace, so `kv_pairs` emits the SHAPE for it under every alignment and under none, and an assertion
-       that reads `z` in every world is the check whose two sides cannot disagree. */
-    /* URL §4.4 "URL parsing" path state's two exits, one row each, over the navigator document's two statements.
-       A segment ends at a `/` the page wrote, so `{screen.width}/2`, whose `/` is the division's, is one hole: the
-       record is spelled `{screen.width/2}` and its param carries the quotient. The example is computed from
-       core/frame/screen.h's own answer, so this row holds no copy of the modelled width. */
-    const char *path_slash_why = NULL; int path_slash = 1;
-    char path_slash_want[32];
-    DCHECK(screen_width() / 2.0 == floor(screen_width() / 2.0),
-           "the modelled screen width is odd, so its half has a fraction, and this row's C spelling of it is "
-           "no longer the one Number::toString writes");
-    snprintf(path_slash_want, sizeof path_slash_want, "%.17g", screen_width() / 2.0);
-    fold_row(&path_slash, &path_slash_why, !!strstr(js, "\"/api/pdiv/"),
-             "NOT REACHED: there is no /api/pdiv record at all, so the division statement never ran. That is "
-             "the SCHEDULE");
-    fold_row(&path_slash, &path_slash_why, !strstr(js, "\"/api/pdiv/{screen.width}/2\""),
-             "the division's `/` was read as a segment separator: the record splits one hole into `{screen.width}` "
-             "and a literal `2`, which is path_scan splitting on a byte the page did not write");
-    fold_row(&path_slash, &path_slash_why,
-             param_value_is(js, "/api/pdiv/{screen.width/2}", "screen.width/2", path_slash_want),
-             "the record is spelled as one hole and its param `screen.width/2` does not carry the quotient — "
-             "path_align did not line the example's one segment up with the hole");
-    /* And the path ends at a `?` no page byte wrote: the data block's `k/j?x=1` is one hole's value over two
-       segments and the query after them, so the param carries all of it. A value of `k/j` is the example cut at
-       its first `?` as though the page had written that `?`. */
-    const char *path_query_why = NULL; int path_query = 1;
-    fold_row(&path_query, &path_query_why, !!strstr(js, "\"/api/pend/{script#pq}\""),
-             "NOT REACHED: there is no /api/pend/{script#pq} record at all, so the data-block statement never "
-             "ran. That is the SCHEDULE");
-    fold_row(&path_query, &path_query_why,
-             param_value_is(js, "/api/pend/{script#pq}", "script#pq", "k/j?x=1"),
-             "the record EXISTS and its hole does not carry `k/j?x=1` — the example was cut at a `?` the shape "
-             "does not have, so the hole lost the query its value carried on into");
-    const char *query_run_why = NULL; int query_run = 1;
-    fold_row(&query_run, &query_run_why, !!strstr(js, "\"/api/qrun\""),
-             "NOT REACHED: there is no /api/qrun record at all, so the data-block statement never ran and "
-             "the clauses below are not being reported on. That is the SCHEDULE, and it says nothing "
-             "whatever about how a query hole is aligned");
-    fold_row(&query_run, &query_run_why,
-             emitted_record_has(js, "/api/qrun",
-                                "\"name\":\"f\",\"location\":\"query\",\"valueClass\":\"unknown\""),
-             "the record EXISTS and its `f` param is not a HOLE: `valueClass` is `concrete`, so "
-             "`document.getElementById('qrun').textContent` reached the address as a plain string and there "
-             "was no alignment question to ask. THAT IS THE §4.12.1 DATA-BLOCK MINT AND NOT THE ALIGNER — "
-             "core/loader/data_block.c wraps the child text content of a `script` whose type is none of the "
-             "four HTML §4.12.1.1 names, and this block's type is `application/x-www-form-urlencoded` — and "
-             "it is its own clause for exactly that reason");
-    fold_row(&query_run, &query_run_why,
-             param_value_is(js, "/api/qrun", "f", "a=1&page=2"),
-             "the `f` param IS a hole and does not carry the RUN it stands over. Two readings and they take "
-             "different work: `{script#qrun}` there is `query_align` refusing an address whose reading is "
-             "unique — the shape holds two pairs and the example three, which is the count difference the "
-             "widening exists for — while `a=1` alone is the alignment having succeeded and `kv_pairs` "
-             "reading the run at its FIRST pair's value instead of from that value's start to the end of "
-             "the last pair");
+    /* FETCH-AWAIT-RESULT: `await fetch('/api/config')` delivered the reply and §6.4.3 json() parsed it,
+       whose .region flowed into /api/user?region=us-west-2 as a CONCRETE example — a safe GET's result driving
+       API-value learning, through the Response the shipped fetch component actually hands back.
+       THE REGION CLAUSE WAS UNSCOPED AND ITS REFUTATION WAS TWELVE LINES BELOW IT. `us-west-2` is the field
+       of the reply this fixture's own host serves, so EVERY statement that reads that reply carries it:
+       `/api/chain`'s `chain2-us-west-2`, and `/api/bodyiso`'s `us-west-2-bodyADMIN` / `us-west-2-bodyPUBLIC`.
+       The `then_chain` comment below says so in as many words — "an unscoped match would find
+       `chain2-us-west-2` in any other statement that happens to carry the region" — and this row WAS that
+       other statement. So the term could not fail while any sibling reply-reader emitted, and what it appeared
+       to assert (that json()'s field reached THIS endpoint) was never measured. Scoped to the one param of the
+       one endpoint, which is what the claim was always about. */
+    /* AND THE EXISTENCE CLAUSE IS ITS OWN RUNG. Standing beside a scoped one in a single `&&`, it added
+       nothing a reader could act on — `param_value_is` returns 0 when the record is absent, so the scoped
+       clause already answers it, and folding them made "the await never delivered" and "the reply's field
+       did not reach this param" one 0 that named neither. */
+    /* THE CONTROL FOR THE FIVE REPLY ROWS — same reply, same await machinery, one difference: the
+       program issuing it ENDS in the step that starts it, so `f->frame` is released and the
+       delivery arm is reachable. See the frame-control <script> for why the pair is the
+       experiment and why either row alone answers nothing — AND for why this row has never yet
+       been about the frame at all: `deepest`, the highest program index any flow has ever compiled,
+       has stood below this program's own index in every run measured, so the statement has not
+       been executed and the message below says so instead of concluding.
+       THE MESSAGE IS WHERE THAT MATTERS RATHER THAN THE COMMENT, because a comment is read by
+       whoever opens this file and a row's own text is read by everyone who reads a report. The
+       one it replaced ended `and it says the frame is not what gates the delivery`, which is a
+       CONCLUSION drawn from a program that never ran — the same mistake the <script>'s own
+       paragraph records, emitted into every log instead of sitting in one file. */
+    const char *frame_ctl_why = NULL;
+ int frame_ctl = 1;
+    fold_row(&frame_ctl, &frame_ctl_why, !!strstr(js, "\"/api/framectl\""),
+             "NOT REACHED: there is no /api/framectl record — and this row cannot say WHY, because "
+             "its own program has not been started. Read `deepest` beside it, on the same @COLD "
+             "line: it is the highest program index this document has ever compiled across every "
+             "flow. Below this <script>'s own index this 0 is the row not running and says nothing "
+             "whatever about the frame, the queue, the rank or the reply path; only at or above it is "
+             "it about the subject. The cursor bucket at that index is this program's DOOR and not a "
+             "point short of it: those members have finished the long row above. Whether any of them is IDLE is a "
+             "second question the cursor does not answer — read `live` minus `framed` beside it, which "
+             "bounds the idle population of the whole frontier and has been smaller than this bucket");
+    fold_row(&frame_ctl, &frame_ctl_why, param_value_is(js, "/api/framectl", "r", "us-west-2"),
+             "the reply WAS delivered to a program that ended its own frame, and json()'s field did "
+             "not reach this endpoint — so the frame gate is not the whole of it");
+    /* AND THIS ROW'S NOT-REACHED ARM MADE THE SAME UNSUPPORTED CLAIM THE FRAME CONTROL'S DID, ONE ENDPOINT
+       OVER, SO IT IS RETIRED IN THE SAME BREATH. It read: so `await fetch('/api/config')` never delivered
+       its reply and json() never ran. That names a CAUSE from the absence of a record two steps downstream
+       of it, and the census refutes the cause outright — `deliver-one-reply` is non-zero in every run at
+       the artifact stamped 1d666bda. What the row can see is that /api/user is absent; what it cannot see
+       is which of three things produced that, and they take different work. See the frame control's own
+       residual for the row that would separate them rather than a second copy of it here. */
+    const char *fetch_await_why = NULL;
+ int fetch_await = 1;
+    fold_row(&fetch_await, &fetch_await_why, !!strstr(js, "\"/api/user\""),
+             "NOT REACHED: there is no /api/user record at all, and this row does not say why. Three "
+             "readings produce it and they are not shades of one: this flow's reply was never delivered "
+             "to it, or it was and json()'s own promise never settled (the then-chain row below names "
+             "that signature), or it settled and the continuation was never dispatched again. "
+             "`deliver-one-reply` on the same @COLD line refutes only the strongest form of the first — "
+             "it is non-zero, so replies ARE being delivered somewhere in this frontier, and the row "
+             "that would say whether any of them was a fetch() reply is not built");
+    fold_row(&fetch_await, &fetch_await_why, param_value_is(js, "/api/user", "region", "us-west-2"),
+             "the reply WAS delivered and /api/user's `region` does not carry `us-west-2` — §6.4.3 json() "
+             "parsed the host's bytes and its field did not flow into this endpoint as a concrete example");
+    /* THE SECOND REACTION OF `.then(r => r.json()).then(…)` — and the row is the PAIR, because either half
+       alone is a term that cannot localise. `chain1` alone says the reply was delivered and the first handler
+       ran; `chain2` is the only thing that says json()'s own promise ever SETTLED, and its absence beside a
+       present `chain1` is the exact signature of §27.5.1.3 CreateResolvingFunctions ( toResolve ) step 2.i
+       having taken its true arm over an unknown: the promise is adopted into a `then` this engine answers with
+       another unknown, so it settles neither way, no flow is blocked, nothing parks, and the run reports that
+       it completed. Measured on the built artifact through the production ABI: `arrayBuffer()` — whose value
+       is a container the reply's provenance is not wrapped around — settles and emits, while `json()` and
+       `text()` on the identical bytes emit nothing at all.
+       ASKED THROUGH THE PARAM READER AND NOT AN `strstr`, for the reason those helpers were written: both tags
+       are values of ONE param of ONE endpoint, and an unscoped match would find `chain2-us-west-2` in any
+       other statement that happens to carry the region. WHOLE-VALUE AND NOT `_has`, because each tag IS one
+       whole value the statement builds (`?at=chain1`, and `'chain2-' + c.region` with nothing after it), so
+       containment asserts strictly less than the claim and admits an `at` some later statement spells
+       `chain1b`. */
+    int then_chain = (param_value_is(js, "/api/chain", "at", "chain1") &&
+                      param_value_is(js, "/api/chain", "at", "chain2-us-west-2"));
+    /* §6.4 clone(): the copy read the body, the ORIGINAL still read it afterwards, and cloning a read body
+       threw where the page put its catch. A caching layer's first move is `res.clone()`, so without it the
+       reply — and every endpoint behind it — was lost at that line.
+       THE `used` CLAUSE WAS THE WORST UNSCOPED NEEDLE IN THIS FILE: `sync` is a substring of FIVE endpoints
+       this same document learns (`/api/abortsync`, `/api/asynccall`, `/api/asyncloop`, `/api/asyncmethod`,
+       `/api/ceasync`), of the value `issync` that `/api/abortsync` emits, of `asyncThrew`, and of the PARAM
+       NAME `sync` that `/api/insertsteps?sync=` puts in the document as `"name":"sync"`. So the term read 1
+       for any run in which ANY of those statements produced a record, whatever this one did — it could not
+       fail, and what it appeared to assert (the throw was synchronous) was never once measured. */
+    const char *clone_body_why = NULL;
+ int clone_body = 1;
+    fold_row(&clone_body, &clone_body_why, !!strstr(js, "\"/api/clonebody\""),
+             "NOT REACHED: there is no /api/clonebody record at all, so this run did not answer the statement");
+    /* THE TWO READS ARE TWO PARAMS OF THIS RECORD, AND THE OLD CLAUSES ASKED FOR THEIR NAMES. `"copy"` and
+       `"orig"` matched `"name":"copy"` anywhere in the document, so the pair stated that two params exist
+       somewhere and nothing about what either read BACK — and both are the region field of the reply this
+       fixture's own host serves, so asking for the VALUE is what says the clone and the original decoded the
+       same bytes rather than merely being registered. */
+    fold_row(&clone_body, &clone_body_why, param_value_is(js, "/api/clonebody", "copy", "us-west-2"),
+             "§6.4 the CLONE's json() did not reach this endpoint with the reply's own field: /api/clonebody's "
+             "`copy` does not carry `us-west-2`");
+    fold_row(&clone_body, &clone_body_why, param_value_is(js, "/api/clonebody", "orig", "us-west-2"),
+             "§6.4 the ORIGINAL's json() did not reach this endpoint with the reply's own field: "
+             "/api/clonebody's `orig` does not carry `us-west-2` — the clone consumed the body the original "
+             "still had to read");
+    fold_row(&clone_body, &clone_body_why, param_value_is(js, "/api/clonebody", "used", "sync"),
+             "§6.4 clone() on an already-read body did not throw SYNCHRONOUSLY: `used` is not `sync`");
+    /* §6.4.1/§6.4.2: the reply read as BYTES. 22 is the fixture reply's length and 123 is its leading '{' — the
+       two agreeing is what says arrayBuffer() and bytes() are two views of ONE byte sequence, and a length the
+       record carried rather than one a strlen guessed. */
+    /* AND `22` IS TWO FACTS, WHICH ONE `strstr` CANNOT BE. The claim is that arrayBuffer()'s `byteLength` and
+       bytes()'s `length` AGREE, and the statement puts them on two params — so a single whole-document
+       `strstr(js, "\"22\"")` was answered by EITHER of them, and a run in which the two DISAGREED satisfied
+       the row exactly as the correct one does. That is the join defect at its sharpest: the row's headline
+       claim is an equality between two params and the spelling could not see either param. */
+    const char *body_bytes_why = NULL;
+ int body_bytes = 1;
+    fold_row(&body_bytes, &body_bytes_why, !!strstr(js, "\"/api/bodybytes\""),
+             "NOT REACHED: there is no /api/bodybytes record at all, so this run did not answer the "
+             "statement. That is the SCHEDULE");
+    fold_row(&body_bytes, &body_bytes_why, param_value_only(js, "/api/bodybytes", "len", "22"),
+             "§6.4.1 arrayBuffer()'s `byteLength` is not exactly 22 — the record did not carry the reply's "
+             "own length");
+    fold_row(&body_bytes, &body_bytes_why, param_value_only(js, "/api/bodybytes", "n", "22"),
+             "§6.4.2 bytes()'s `length` is not exactly 22 — it disagrees with arrayBuffer()'s byteLength on "
+             "the SAME reply, so the two are not two views of one byte sequence");
+    fold_row(&body_bytes, &body_bytes_why, param_value_only(js, "/api/bodybytes", "b0", "123"),
+             "§6.4.2 the first byte is not exactly 123 (`{`) — the two reads agreed on a length and not on "
+             "the bytes");
+    fold_row(&body_bytes, &body_bytes_why, param_value_only(js, "/api/bodybytes", "kind", "truetrue"),
+             "§6.4.1/§6.4.2 the two results are not an ArrayBuffer and a Uint8Array");
+    /* THE SPAN REACHED THE @H SURFACE AS A NAMED FIELD -- the whole point of recording which BYTES of a body
+       came from an unknown, and the thing that turns "replay these bytes verbatim" into a field a reviewer can
+       vary. §10.4.5.18's store records the range; endpoint.c names it `body[<off>:<end>]` at location
+       "body"; this asks whether that survived to the record.
+       THE RUNGS ARE ENTAILED, WHICH IS WHAT MAKES THE LOWEST 0 THE LOCALISATION: the third implies the second
+       by construction (a param named `body[1:2]` at location "body" IS a param at location "body"), and the
+       second implies the first. A ladder whose rung does not imply its predecessor has a false contract and
+       the finding is the ladder.
+       ASKED INSIDE THIS RECORD'S OWN SPAN and never of the whole document, for the reason the path-param row
+       one screen down gives: `"location":"body"` asked of the document is answered by ANY param of ANY
+       record, including two different params of two different records, which is the join this is written to
+       refuse. The emitter writes the two fields ADJACENT, so one needle is the join. */
+    const char *body_span_why = NULL;
+ int body_span = 1;
+    fold_row(&body_span, &body_span_why, !!strstr(js, "\"/api/bodyspan\""),
+             "NOT REACHED: there is no /api/bodyspan record at all, so the typed-array-body statement never "
+             "ran and the clauses below are not being reported on. That is the SCHEDULE");
+    fold_row(&body_span, &body_span_why, emitted_record_has(js, "/api/bodyspan", "\"location\":\"body\""),
+             "the record carries no param at location \"body\" -- the body's bytes reached this surface with "
+             "no field named off them, so a reviewer is handed an opaque blob and §10.4.5.18's span record "
+             "bought nothing");
+    fold_row(&body_span, &body_span_why,
+             emitted_record_has(js, "/api/bodyspan", "\"name\":\"body[1:2]\",\"location\":\"body\""),
+             "a body param is named but not `body[1:2]` -- the unknown was written at ELEMENT 1 of a "
+             "Uint8Array with concrete neighbours either side, so the range is one byte at offset 1 and a "
+             "different one is the store's offset arithmetic disagreeing with the element that was written");
+    /* AND WHAT CURRENTLY STANDS AT THAT RANGE, WHICH IS A SEPARATE ROW BECAUSE THE TWO ARE NOT ENTAILED. The
+       ladder above asks whether the unknown byte RANGE reached the record as an addressable param; this asks
+       whether the bytes it addresses reached it too, and neither implies the other: a store that names the
+       ranges and drops the bytes hands a reviewer an address with nothing at it, and one that publishes the
+       bytes under a range nobody named hands them an opaque blob. Folded into one ladder they would put a 1
+       above a 0 the first time either half broke alone, which is the false contract the entailment note above
+       exists to refuse — so the same document answers two rows rather than one row with four rungs.
+       THE VALUE IS PREDICTED IN FULL AND THAT IS THE CLAIM. `u8` is [65, screen.width, 66, 67];
+       §10.4.5.18 TypedArraySetElement ( obj, index, value ) stores the unknown's OWN EXAMPLE through the real
+       coercion (core/frame/screen.c's SCREEN_WIDTH is 1920 and ToUint8 of 1920 is 128), so the data block
+       holds 0x41 0x80 0x42 0x43 and its base64 is `QYBCQw==`. A rung that asked only for the KEY would pass
+       over a store that published four zero bytes — which is exactly the value known only to satisfy a gate
+       that §@H forbids, and the one wrong answer this capability is able to give. The middle rung is kept
+       under it anyway so that a MISSING key and a WRONG value are two different localisations rather than one.
+       NOTHING HERE ASKS THAT THESE BYTES ARE NOT PUBLISHED AS `bodyBase64`, and that is a deliberate absence:
+       solver/endpoint.c asserts the three keys are exclusive at its own emit, and a probe row restating an
+       invariant a DCHECK already holds is the second copy §AN-AUDITOR-DERIVES-THE-RULE forbids — it would
+       read 1 in every build where the abort is compiled in and say nothing the abort has not already said. */
+    const char *body_ex_why = NULL;
+ int body_ex = 1;
+    fold_row(&body_ex, &body_ex_why, !!strstr(js, "\"/api/bodyspan\""),
+             "NOT REACHED: there is no /api/bodyspan record at all, so the typed-array-body statement never "
+             "ran and the clauses below are not being reported on. That is the SCHEDULE");
+    fold_row(&body_ex, &body_ex_why, emitted_record_has(js, "/api/bodyspan", "\"bodyExampleBase64\":\""),
+             "the record names the body's unknown byte range and carries no example bytes -- so a reviewer "
+             "is handed an ADDRESS with nothing at it and can change WHICH value the range carries without "
+             "seeing what it currently carries, which is the half the span params cannot state");
+    fold_row(&body_ex, &body_ex_why,
+             emitted_record_has(js, "/api/bodyspan", "\"bodyExampleBase64\":\"QYBCQw==\""),
+             "the example bytes are present and are not `QYBCQw==` -- the statement writes [65, screen.width, "
+             "66, 67] into a Uint8Array and screen.width's example is 1920, so the block is 0x41 0x80 0x42 "
+             "0x43. All-zero bytes here (`AAAAAA==`) are the store having INVENTED a byte for the unknown "
+             "rather than writing its example, and any other value is the example or the concrete "
+             "neighbours disagreeing with what the statement wrote");
+    /* THE LATCH TIME-TRAVELS: two arms forked BEFORE either read one shared reply, and BOTH read it. If the
+       body-used flag did not ride the COW delta, the second arm's read would throw and only one tag would be
+       here — which is exactly what it did, as a `body stream already read` page error. */
+    const char *body_iso_why = NULL;
+ int body_iso = 1;
+    FORK_ROW(js, &body_iso, &body_iso_why, "/api/bodyiso", "v",
+             "the COW capture of §6.4's body-used latch, which is what lets two arms forked before the read "
+             "both read one shared reply instead of the second throwing `body stream already read`",
+             "us-west-2-bodyADMIN", "us-west-2-bodyPUBLIC");
+    /* THE REQUEST'S IDENTITY IS THE PAIR: a GET and a POST of ONE address were listed as one request and
+       answered with one reply, so the POST's promise settled with the GET's. `p` is the method the fixture host
+       ECHOED onto the reply the POST's flow actually received, so `POST` here is the seam delivering each flow
+       the answer to its own question — and the old `p=GET` is exactly the wrong answer this probe exists for.
+       The `v` prefix is what makes the assert about THIS value: a bare `POST` also appears as an endpoint
+       record's own method field, so the probe would pass on a record that says nothing about which reply
+       arrived. `vPOST` can only have come through the header on the POST's own reply.
+       AND THE PREFIX IS NOT THE SCOPE — the two echoes are values of TWO DIFFERENT params of this one record
+       (`?g=v…&p=v…`), which is why this is a pair of whole-value reads and not a FORK_ROW: the worlds a
+       FORK_ROW folds are values of ONE param, and asking for `vPOST` on `g` would be a different claim from
+       the one this row makes. The `v` prefix stays because it is what distinguishes an ECHOED method from the
+       record's own method field; what it never was is a guarantee that no other statement spells it. */
+    int verb_key = (param_value_is(js, "/api/verb", "g", "vGET") &&
+                    param_value_is(js, "/api/verb", "p", "vPOST"));
+    /* §5 Headers: the record fill ran (acc), the list keeps repeats (sc=2 with both values), `get` combines
+       them (join=k1, k2), `set` replaces them all (set=k3), a name is matched case-insensitively (has=truefalse)
+       and an absent header is null rather than "".
+       SIX FACTS, SIX PARAMS, AND THEY WERE SIX WHOLE-DOCUMENT EXISTENCES. The statement builds
+       `?acc=&sc=&join=&set=&has=&miss=` on ONE record, so every clause here names one param of it — and asked
+       unscoped, none of them was about this endpoint at all. Two are reachable rather than merely possible.
+       `application/json` is a CONTENT TYPE, so any statement that sets a JSON content-type, and any header
+       record the ENGINE synthesises, spells it — and probegate's own footer puts engine-synthesised tokens
+       outside its universe, so the scan that reports this needle unique is the scan that cannot see the class
+       of token most likely to contain it. `"null"` is worse: it is the spelling of an ABSENT value, which is
+       the most widely emitted token there is, and the clause meant to prove that THIS header read back null
+       rather than `""` was satisfied by any absent value anywhere in the document.
+       ASKED AS `_only` AND NOT `_is`, FOR THE REASON THE SIBLING ROW BELOW IS: every one of these six is a
+       value the code DETERMINED — a real `Headers` object answering a real `get` — so a SECOND DISTINCT VALUE on
+       any of them means the flow forked where this statement cannot, which is a finding rather than a match.
+       AND THE EXISTENCE CLAUSE LEADS, so "§5 never ran" and "§5 ran and got one of these six wrong" are two
+       readings; folded, they were one 0 that named neither. */
+    const char *hdrs_why = NULL;
+ int hdrs = 1;
+    fold_row(&hdrs, &hdrs_why, strstr(js, "\"/api/hdrs\"") != NULL,
+             "NOT REACHED: there is no /api/hdrs record at all, so the §5 Headers statement never ran and none "
+             "of the six facts below is being reported on. That is the SCHEDULE");
+    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "acc", "application/json"),
+             "§5 the record fill: /api/hdrs' `acc` is not exactly `application/json` — the Headers record "
+             "constructor did not take the init bag's entry, or `get` did not read it back");
+    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "sc", "2:a=1:b=2"),
+             "§5 the list keeps REPEATS: /api/hdrs' `sc` is not exactly `2:a=1:b=2` — two `Set-Cookie` appends "
+             "did not stay two entries, so getSetCookie read a map rather than a header list");
+    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "join", "k1, k2"),
+             "§5 §2.2.2 `get` COMBINES: /api/hdrs' `join` is not exactly `k1, k2` — append did not keep both "
+             "entries, or get returned one instead of the combined value");
+    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "set", "k3"),
+             "§5 `set` REPLACES every entry with that name: /api/hdrs' `set` is not exactly `k3`");
+    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "has", "truefalse"),
+             "§5 a name is matched CASE-INSENSITIVELY: /api/hdrs' `has` is not exactly `truefalse` — `accept` "
+             "did not find the header stored as `Accept`, or `nope` found one that is not there");
+    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "miss", "null"),
+             "§5 an ABSENT header is null and not \"\": /api/hdrs' `miss` is not exactly `null`");
+    /* The record arm through a PROXY: its ownKeys and its get ran as the page's code (seen == 'trapped') and
+       the header still arrived.
+       THE TWO FACTS ARE TWO PARAMS OF ONE RECORD AND WERE TWO WHOLE-DOCUMENT EXISTENCES. The statement builds
+       `?v=&t=` on ONE record, and asked unscoped neither clause was about this endpoint: a run that put `tv`
+       on some other endpoint and `trapped` on a third satisfied the row exactly as the real one does, and so
+       did a seam that SWAPPED them onto each other's param. `trapped` is the worse of the two — a single
+       generic English word, satisfiable by any statement of any document that ever spells it, and one this
+       fixture is free to add tomorrow with nothing to say the row stopped meaning anything.
+       `_only` AND NOT `_is`: both values are DETERMINED here — the trap returns `t[k]` and `seen` is assigned
+       exactly once — so a second DISTINCT VALUE on either means the flow forked where this statement
+       cannot, which is a finding and not a match. AND THE EXISTENCE CLAUSE LEADS, so "the proxy statement
+       never ran" and "it ran and the trap or the header is wrong" are two messages rather than one 0
+       that named neither. */
+    const char *hdrproxy_why = NULL;
+ int hdrproxy = 1;
+    fold_row(&hdrproxy, &hdrproxy_why, strstr(js, "\"/api/hdrproxy\"") != NULL,
+             "NOT REACHED: there is no /api/hdrproxy record at all, so the §5 record-arm-through-a-Proxy "
+             "statement never ran and neither fact below is being reported on. That is the SCHEDULE");
+    fold_row(&hdrproxy, &hdrproxy_why, param_value_only(js, "/api/hdrproxy", "v", "tv"),
+             "§5.1 the record arm converts a PROXY like any other object: /api/hdrproxy' `v` is not exactly "
+             "`tv` — the header did not survive a trap-bearing init, so ownKeys or get did not deliver it");
+    fold_row(&hdrproxy, &hdrproxy_why, param_value_only(js, "/api/hdrproxy", "t", "trapped"),
+             "§5.1 the trap RAN as the page's code: /api/hdrproxy' `t` is not exactly `trapped` — the "
+             "conversion read the target behind the proxy instead of driving its get");
+    /* §5.2's iterable<>: sorted names, values combined per name, set-cookie NOT combined, and forEach handing
+       (value, key, headers) in that order. `for...of` over the Headers is entries, so e and f agree.
+       FOUR BEHAVIOURS, FOUR PARAMS OF ONE RECORD, ASKED AS FIVE WHOLE-DOCUMENT EXISTENCES. The statement
+       builds `?k=&v=&e=&f=` on ONE record, so each clause here names one param of it; unscoped, none of them
+       was about this endpoint, and the conjunction was satisfied by any run that emitted those four strings
+       anywhere — including one that put the `e` spelling on the `f` param and the `f` spelling on `e`, which
+       is precisely the confusion between `for...of` and `forEach` these two clauses exist to tell apart.
+       THE `BADTHIS` CLAUSE IS GONE BECAUSE THE EXACT `f` VALUE ALREADY REFUSES IT, and that is the whole
+       reason to say so here: the callback appends `BADTHIS` after any pair whose third argument is not the
+       headers object, so a run with a wrong `this` cannot produce an `f` equal to the string below. Asked as a
+       whole-document `!strstr` it was a weaker claim wearing the shape of an extra one — it could be defeated
+       by no statement of this fixture and satisfied by every one — and a reader who re-derives the missing
+       clause would re-introduce a check that `param_value_only` already subsumes.
+       `_only` throughout: every one of these four is a value the code DETERMINED from a real Headers list, so
+       a second DISTINCT VALUE means the flow forked where this statement cannot. AND THE EXISTENCE CLAUSE
+       LEADS. */
+    const char *hdriter_why = NULL;
+ int hdriter = 1;
+    fold_row(&hdriter, &hdriter_why, strstr(js, "\"/api/hdriter\"") != NULL,
+             "NOT REACHED: there is no /api/hdriter record at all, so the §5.2 iterable<> statement never ran "
+             "and none of the four behaviours below is being reported on. That is the SCHEDULE");
+    fold_row(&hdriter, &hdriter_why,
+             param_value_only(js, "/api/hdriter", "k", "set-cookie|set-cookie|x-a|x-b"),
+             "§5.2 keys() SORTS by name and keeps one entry per set-cookie VALUE: /api/hdriter' `k` is not "
+             "exactly `set-cookie|set-cookie|x-a|x-b` — the two x-a appends did not combine into one key, or "
+             "the two set-cookies did, or the names came back unsorted");
+    fold_row(&hdriter, &hdriter_why, param_value_only(js, "/api/hdriter", "v", "c1|c2|1, 9|2"),
+             "§5.2 values() COMBINES a name's values and does NOT combine set-cookie: /api/hdriter' `v` is not "
+             "exactly `c1|c2|1, 9|2` — x-a's two values did not join as `1, 9`, or set-cookie's two did");
+    fold_row(&hdriter, &hdriter_why,
+             param_value_only(js, "/api/hdriter", "e", "set-cookie=c1;set-cookie=c2;x-a=1, 9;x-b=2;"),
+             "§3.7.9 @@iterator and entries are the SAME function object, so `for...of` over the Headers walks "
+             "PAIRS: /api/hdriter' `e` is not exactly the entries spelling — for...of found no pair iterator, "
+             "or found one that is not entries");
+    fold_row(&hdriter, &hdriter_why,
+             param_value_only(js, "/api/hdriter", "f", "set-cookie:c1;set-cookie:c2;x-a:1, 9;x-b:2;"),
+             "§5.2 forEach hands the callback (value, key, headers) IN THAT ORDER: /api/hdriter' `f` is not "
+             "exactly the forEach spelling — the first two arguments arrived swapped, or the third was not the "
+             "headers object, which appends BADTHIS and is why no separate clause looks for it");
+    /* WEB IDL §3.7.9.1 "Default iterator objects"' ITERATOR AS A GC CYCLE — AND THIS ROW IS THE
+       REACHABILITY WITNESS AND NOT THE LEAK CLAIM, on `weak-reach`'s terms and for a harder reason than that
+       row has. It is a positive statement standing in front of four rows that CAN see their subject; this one
+       stands in front of an instrument no probe can read at all. A probe reads the emitted document; the leak the
+       class's gc_mark exists to prevent is named by JS_FreeRuntime's gc_obj_list walk at teardown, which runs
+       after this document is composed and is a `[gcleak]`/`[gcroot]` report and a DCHECK on the process rather
+       than a column of anything. So a 1 here says the cycle was BUILT and stepped, which is exactly what that
+       walk needs in order to have been asked anything at all, and it says nothing whatever about what the walk
+       then answered — that verdict is the run's own teardown, and a reader scoring this pair reads BOTH.
+       WHAT MAKES IT ABLE TO FAIL, WHICH A WITNESS OWES MORE THAN A TWO-WORLD ROW DOES. Delete the statement,
+       or let the flow park before it, and the first clause is 0. Build the engine on a runtime where a class
+       instance refuses an expando and `c` is `nocyc`: the pair exists, both walks answer, and there is no
+       cycle — the one state in which every other clause here is satisfied by a document that asked the walk
+       nothing. Give the header list a wrong order or lose the value and `v`/`w` names which half moved.
+       Return a pair where the list holds one and `d` is `more`.
+       ASKED AS `_only` AND NOT `_is` FOR THE REASON THE SIX HEADERS CLAUSES ABOVE ARE: every one of these four
+       is a value the code DETERMINED off a Headers this statement built out of literals, so a SECOND DISTINCT
+       value on any of them means the flow forked where this statement cannot, which is a finding rather than a
+       match.
+       NAMED RESIDUAL. WHAT IS NOT COVERED: whether the cycle this statement builds was COLLECTED. That is a
+       fact about the process's teardown and this row is a fact about the document, and the two are reported in
+       different places by different mechanisms, so a reader scoring core/idl_iter.c's gc_mark has to read both
+       and nothing says so in either. WHAT THE NEXT DIFF BUILDS: main's teardown already runs `JS_RunGC(rt)`
+       and `JS_FreeRuntime(rt)`, and JS_FreeRuntime already prints `[gcleak]` and `[gcroot]` and aborts on a
+       non-empty list — so what is missing is not a walk but a STATEMENT of its outcome in the stream this
+       table's verdict is composed into, on the clean day as well as the bad one, the way `@HUNASKED` states
+       what it could not ask. HOW ITS ABSENCE WOULD SHOW: a run that reports `=> OK` over this table having
+       collected the cycle and a run that reports it having never been able to is one line of output, and the
+       difference is recoverable only by knowing that a dev build would have aborted instead — which is an
+       inference about a build mode and not a reading of a result. */
+    const char *itercyc_why = NULL;
+ int itercyc_tt = 1;
+    fold_row(&itercyc_tt, &itercyc_why, strstr(js, "\"/api/itercycle\"") != NULL,
+             "NOT REACHED: there is no /api/itercycle record at all, so the statement that builds a pair "
+             "iterator into a cycle with its own target never ran — JS_FreeRuntime's gc_obj_list walk was "
+             "therefore asked NOTHING about core/idl_iter.c's gc_mark on this run, and a clean leak report "
+             "from it is not evidence about that entry either way. That is the SCHEDULE");
+    fold_row(&itercyc_tt, &itercyc_why, param_value_only(js, "/api/itercycle", "c", "cyc"),
+             "the statement RAN and `c` is not exactly `cyc`: the expando `h.it` did not read back as the "
+             "iterator it was assigned, so THERE IS NO CYCLE — the iterator holds its target and nothing "
+             "holds the iterator, the pair dies by refcount, and the gc_obj_list walk is asked nothing "
+             "however clean it reports. This is the clause the whole statement exists for");
+    fold_row(&itercyc_tt, &itercyc_why, param_value_only(js, "/api/itercycle", "v", "x-cyc"),
+             "the statement RAN and `v` is not exactly `x-cyc`: the first pair's KEY is not the name the "
+             "Headers was built with, so the iterator this cycle is made of is not stepping the list it "
+             "holds, and what the cycle reaches is not what this row believes it reaches");
+    fold_row(&itercyc_tt, &itercyc_why, param_value_only(js, "/api/itercycle", "w", "cv"),
+             "the statement RAN and `w` is not exactly `cv`: the first pair's VALUE is not the one the "
+             "Headers was built with");
+    fold_row(&itercyc_tt, &itercyc_why, param_value_only(js, "/api/itercycle", "d", "done"),
+             "the statement RAN and `d` is not exactly `done`: a one-header list answered a SECOND pair, so "
+             "the cursor is not bounded by the list it iterates");
+    /* §5.1's sequence arm: a generator init (the protocol, not an array walk), a Map (iterable, not an array),
+       an array, a malformed pair, and null — which is NOT "no init". */
+    int hdrseq = (param_value_only(js, "/api/hdrseq", "g", "g1, g2") &&
+                  param_value_only(js, "/api/hdrseq", "m", "m1") &&
+                  param_value_only(js, "/api/hdrseq", "a", "a1") &&
+                  param_value_only(js, "/api/hdrseq", "bad", "threw") &&
+                  param_value_only(js, "/api/hdrseq", "nul", "threw"));
+    /* §3.2.23's record dedup is by ByteString KEY and case-SENSITIVE, so both pairs of {'X-Rec','x-rec'} reach
+       the fill and both APPEND — `get` combines them into "r1, r2" over the one name the list holds. The fill's
+       old replace loop matched the lowercased HEADER name instead and answered "r2". */
+    int hdrrec = (param_value_only(js, "/api/hdrrec", "v", "r1, r2") &&
+                  param_value_only(js, "/api/hdrrec", "k", "x-rec"));
+    /* §4.10.22.8's escape over a field name written inside quotes: `a"\r\nb` is `a%22%0D%0Ab`, and the RAW
+       quote must be gone — a body that carried it would let a page's own field name close the quoted name and
+       forge a part header. */
+    int mpesc = (param_value_only(js, "/api/mpesc", "esc", "true") &&
+                 param_value_only(js, "/api/mpesc", "raw", "false"));
+    /* THE ENDPOINT CARRIES ITS HEADERS: the two literals as the strings the code computed, and the
+       Authorization as a SHAPE, because a value built out of unknown input is not one this engine may invent.
+       The method comes from the same init, so a POST recorded as a GET would fail here too. */
+    /* FIVE WHOLE-DOCUMENT EXISTENCES OVER ONE RECORD, AND THE METHOD CLAUSE IS THE ONE WORTH NAMING. The three
+       header needles are each unique bytes, so nothing CONTAINED them and the containment axis called them
+       clean — but `"POST"` is answered by EQUALITY from every other POST record this fixture emits, and there
+       are several, so the clause that read "this request was recorded as a POST" could not fail while any POST
+       existed anywhere. The headers were the same defect one step weaker: three tokens somewhere, on no stated
+       record, so a seam that filed them under a different endpoint satisfied the row. */
+    const char *needsauth_why = NULL;
+ int needsauth = 1;
+    fold_row(&needsauth, &needsauth_why, !!strstr(js, "\"/api/needsauth\""),
+             "NOT REACHED: there is no /api/needsauth record at all, so this run did not answer the "
+             "statement and none of the four facts below is being reported on. That is the SCHEDULE");
+    fold_row(&needsauth, &needsauth_why, emitted_record_method(js, "/api/needsauth", "POST"),
+             "the record EXISTS and its own `method` is not POST — the init bag's method did not reach the "
+             "record, so a request this page makes as a POST is reported as something a client may repeat");
+    fold_row(&needsauth, &needsauth_why,
+             emitted_record_has(js, "/api/needsauth", "\"x-api-version\":\"2024-11-01\""),
+             "/api/needsauth's own headers do not carry `x-api-version: 2024-11-01` — a literal the code "
+             "computed, so this is the header list not reaching the record rather than a value to supply");
+    fold_row(&needsauth, &needsauth_why,
+             emitted_record_has(js, "/api/needsauth", "\"content-type\":\"application/json\""),
+             "/api/needsauth's own headers do not carry `content-type: application/json`");
+    fold_row(&needsauth, &needsauth_why,
+             emitted_record_has(js, "/api/needsauth", "\"authorization\":\"Bearer {state}.token\""),
+             "/api/needsauth's own headers do not carry the Authorization as the SHAPE `Bearer "
+             "{state}.token` — a value built out of unknown input either collapsed to an invented example or "
+             "was dropped, and either way the surface stops saying what a caller must supply");
+    /* PENDING await: the awaited promise resolved LATER (via a microtask, standing in for the network); the flow
+       parked at the await and resumed when it settled -> /api/lazy?r=lazyRegion. The real fetch-parking path. */
+    const char *pending_await_why = NULL;
+ int pending_await = 1;
+    fold_row(&pending_await, &pending_await_why, !!strstr(js, "\"/api/lazy\""),
+             "NOT REACHED: there is no /api/lazy record at all, so the flow parked at the await and never "
+             "resumed. That is the SCHEDULE");
+    fold_row(&pending_await, &pending_await_why, param_value_is(js, "/api/lazy", "r", "lazyRegion"),
+             "the flow RESUMED and /api/lazy's `r` does not carry `lazyRegion` — the continuation was "
+             "delivered without the settled value, so the await resumed on something other than what the "
+             "promise settled with");
+    /* PER-FLOW PROMISE STATE: a promise created BEFORE a snapshot fork and settled per-flow with a DIFFERENT
+       value in each arm; both shBETA and shSTABLE present ⇒ the shared promise's settlement is isolated per
+       flow (no cross-flow contamination) — async STATE time-travels, not just async execution. */
+    const char *promise_state_why = NULL;
+ int promise_state = 1;
+    FORK_ROW(js, &promise_state, &promise_state_why, "/api/shared", "v",
+             "the COW capture of a promise's SETTLEMENT, which is what lets one pre-fork promise settle with a "
+             "different value in each arm instead of one arm's value surviving for both",
+             "shBETA", "shSTABLE");
+    /* ─── A JAVASCRIPT REPLY IS A PROGRAM, AND THE CONTROL THAT MAKES THAT READABLE ────────────────────────
+       Three clauses, in the order the fact is built, so a 0 names which of three things happened — and the
+       three are not all about the same thing, which is the point. The first two are about the REPLY DOOR
+       (`/api/progseen`, whose `ct` is the header this host served) and the third is about the PROGRAM
+       (`/api/progran`, which nothing but the served bytes can emit). Two records on purpose: "the reply
+       arrived" and "the reply was compiled" are the two facts this row exists to keep apart, and a row that
+       asked only the second would read 0 for a schedule that never delivered anything.
+       §AND-THE-SAME-HOLE-SWALLOWS-A-PREDICTION: a prediction that `/api/progran` is PRESENT is worth nothing
+       without evidence the delivery happened at all, and clauses 1-2 are that evidence. Clause 2 in
+       particular splits the one failure that is THIS FILE's rather than the engine's. */
+    const char *replyprog_why = NULL;
+ int replyprog_tt = 1;
+    fold_row(&replyprog_tt, &replyprog_why, !!strstr(js, "\"/api/progseen\""),
+             "NOT REACHED: there is no /api/progseen record at all, so the reply to `/chunk/replyprog.js` "
+             "never reached a reaction and the clauses below are not being reported on. That is the SCHEDULE, "
+             "and it says nothing whatever about whether a JavaScript reply becomes a program");
+    fold_row(&replyprog_tt, &replyprog_why,
+             param_value_is(js, "/api/progseen", "ct", "text/javascript"),
+             "the reply ARRIVED and this host did not serve it as a program: /api/progseen's `ct` is not "
+             "`text/javascript`, so fixture_provide's TF_SERVED lookup did not match the address the park "
+             "carried. THAT IS A DEFECT IN THIS FIXTURE AND NOT IN THE ENGINE — the delivery arm was never "
+             "asked the question — and it is its own clause for exactly that reason");
+    fold_row(&replyprog_tt, &replyprog_why, !!strstr(js, "\"/api/progran\""),
+             "A JAVASCRIPT REPLY WAS DELIVERED AND DID NOT BECOME A PROGRAM. The two clauses above say the "
+             "reply reached a reaction carrying `text/javascript`, so solver/engine.c's delivery arm was "
+             "asked and answered no — or it answered yes and the row engine_queue_fetched_script appended "
+             "never ran. §Solver's trust boundary requires the EXECUTED half: `fetch('/api/progran')` is the "
+             "served program's own body, and no statement of this document emits that address");
+    /* …AND THE CONTROL, ARMED. §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE: an absence asserted
+       over a statement that never ran is satisfied BY the statement never running, which is a row that cannot
+       fail and therefore is not a control. So the absence is the LAST clause and the two before it establish
+       that this host really did serve the same-shaped body as DATA, to a delivery that really happened. */
+    const char *replyctl_why = NULL;
+ int replyctl_tt = 1;
+    fold_row(&replyctl_tt, &replyctl_why, !!strstr(js, "\"/api/ctlseen\""),
+             "NOT REACHED: there is no /api/ctlseen record at all, so the control reply never reached a "
+             "reaction and the absence below is UNARMED — it would read green for a run that never asked the "
+             "question. That is the SCHEDULE");
+    fold_row(&replyctl_tt, &replyctl_why,
+             param_value_is(js, "/api/ctlseen", "ct", "application/json"),
+             "the control reply ARRIVED and was not served as DATA: /api/ctlseen's `ct` is not "
+             "`application/json`, so this host handed the delivery something other than the control it was "
+             "meant to hand it, and the absence below is a statement about some other experiment");
+    fold_row(&replyctl_tt, &replyctl_why, !strstr(js, "\"/api/ctlran\""),
+             "A REPLY SERVED AS `application/json` BECAME A PROGRAM. /api/ctlran is emitted by nothing but "
+             "the control body, so its presence says the delivery arm compiled bytes whose `computedType` is "
+             "not in MIME Sniffing §4.6's JavaScript group — the type gate is not a gate, and `reply-program` "
+             "above is therefore not evidence that a TYPE decided anything");
+    const Probe rows[] = {
+        { "path-param", path_param, "/v1/users/", SESS_EXPLORE, path_param_why },
+        { "body-param", body_param, "firstPost", SESS_EXPLORE, body_param_why },
+        { "path-example", path_example, "/v1/vis/", SESS_EXPLORE, path_example_why },
+        /* THE SAME RULE THE ROW ABOVE STATES, AT THE OTHER DOOR. `lazy`'s chunk arrives through `loadScript`,
+           which is this host calling engine_queue_fetched_script directly; these two arrive through `fetch()`,
+           are parked, answered and delivered, and become programs — or do not — at solver/engine.c's delivery
+           arm. The KEY is the `fetch` the document writes, for `lazy`'s reason exactly: `/api/progran` is in a
+           body this host serves and in no document at all, and `/api/progseen` is composed by a reaction. */
+        { "reply-program", replyprog_tt, "/chunk/replyprog.js", SESS_EXPLORE, replyprog_why },
+        { "reply-program-typed", replyctl_tt, "/chunk/replyctl.js", SESS_EXPLORE, replyctl_why },
+        { "frame-ctl", frame_ctl, "/api/framectl", SESS_EXPLORE, frame_ctl_why },
+        { "fetch", fetch_await, "/api/user?region=", SESS_EXPLORE, fetch_await_why },
+        { "then-chain", then_chain, "at=chain1", SESS_EXPLORE },
+        { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE, clone_body_why },
+        { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE, body_bytes_why },
+        { "body-span", body_span, "/api/bodyspan", SESS_EXPLORE, body_span_why },
+        { "body-example", body_ex, "/api/bodyspan", SESS_EXPLORE, body_ex_why },
+        { "body-iso", body_iso, "/api/bodyiso", SESS_EXPLORE, body_iso_why },
+        { "verb-key", verb_key, "/api/echo", SESS_EXPLORE },
+        { "hdrs", hdrs, "/api/hdrs?", SESS_EXPLORE, hdrs_why },
+        { "hdr-proxy", hdrproxy, "/api/hdrproxy", SESS_EXPLORE, hdrproxy_why },
+        { "needs-auth", needsauth, "/api/needsauth", SESS_EXPLORE, needsauth_why },
+        { "hdr-iter", hdriter, "/api/hdriter", SESS_EXPLORE, hdriter_why },
+        { "hdr-seq", hdrseq, "/api/hdrseq", SESS_EXPLORE },
+        { "hdr-record", hdrrec, "/api/hdrrec", SESS_EXPLORE },
+        { "mp-escape", mpesc, "/api/mpesc", SESS_EXPLORE },
+        /* THE REACHABILITY WITNESS FOR core/idl_iter.c's gc_mark, and NOT a claim that nothing leaked — a
+           probe reads the document and the leak walk runs at teardown. It sits after the `hdr-*` run rather
+           than inside it so that prefix grouping keeps the Headers family whole; its own prefix pairs it
+           with `iter-iso` below. See its computation. */
+        { "iter-cycle", itercyc_tt, "/api/itercycle", SESS_EXPLORE, itercyc_why },
+        { "pending", pending_await, "/api/lazy", SESS_EXPLORE, pending_await_why },
+        /* THE RUN OF ZEROES THAT OPENS HERE IS A ROW KIND AND NOT A POSITION, AND THIS TABLE HAS ALREADY
+           CAUSED THAT MISREADING. `pending` directly above is the last row before it that answers, and its
+           statement is the document line directly above this one — so the run reads as the document having
+           STOPPED EXECUTING after /api/lazy. IT HAS NOT. Every row from here to `floc-iso` is a FORK_ROW, and
+           a FORK_ROW's own `why` on a 0 opens `the statement RAN`: the record EXISTS and what is missing is
+           the SECOND WORLD. Statements far below these answer in the same census, `/api/conshape` and
+           `/api/xkspki` among them, which is what says the document did not stop.
+           THE DISCRIMINATOR IS THE ROW'S KIND AND IT IS HANDED OVER AS A DERIVATION, because a count written
+           here rots: `grep -n 'FORK_ROW(js' test_forced.c` is the two-world set, and a terminal `@H` line
+           scored against that set separates those rows from the `fold_row`/`param_value_only` ones they are
+           INTERLEAVED with in DECLARATION order. The adjacency is what makes the interleaving look like a
+           boundary, and a reader who stops at `floc-iso` never sees the single-world rows below it answering.
+           AND ONE CENSUS CANNOT SAY WHETHER THE LOST WORLDS ARE A BUDGET FACT, WHICH IS EXACTLY WHAT
+           fork_row_impl's third state refuses to claim. That refusal is honest about ONE reading and the
+           question is a SERIES: score the two sets against `workDone` across several runs and read whether
+           they move together. No column here can make that comparison about itself, which is why it is named
+           rather than left to be inferred from a value.
+           RETIREMENT: this record goes when a 0 row's diagnostic carries its own KIND, so a reader scanning
+           the values line can tell a lost world from an unexecuted statement without this paragraph. */
+        { "promise-state", promise_state, "/api/shared", SESS_EXPLORE, promise_state_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `isolation` and `operands` and `sort` documents. */
+TF_UNIT void probes_isolation_operands_sort(const char *js, Probe *tab, int *n) {
     /* ─── THE `if (cfg.admin)` FAMILY, AND THE RUNG IT NEVER HAD ────────────────────────────────────────────
        SEVEN rows hang off ONE statement — the fork and the three read-backs immediately after it — and every
        one of them was a CONJUNCTION OVER BOTH ARMS with nothing underneath it. So all seven read 0 for a
@@ -9804,7 +10425,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        and clause 2 red on a run whose `role-public` is 1 — a branch that demonstrably forked while this row
        says it did not, which is impossible if the composed key is right. That combination is the falsifier to
        check FIRST if this row ever reads 0 on a run where any arm of this gate emitted. */
-    const char *bootfork_why = NULL; int bootfork_tt = 1;
+    const char *bootfork_why = NULL;
+ int bootfork_tt = 1;
     /* THE ONE OF `boot-fork`'s FAILING STATES THAT SPEAKS FOR THE ROWS BELOW IT, hoisted because they
        must ROUTE on it rather than on the row. A branch this run DECIDED has no sibling, so every
        schedule sentence under `role-public` is about nothing; a branch that forked and was EVICTED
@@ -9929,7 +10551,6 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            filed as a site reads as one that never happened again. */
         free(key); free(mid); free(sid); free(fa);
     }
-
     int role_admin  = param_value_is(js, "/api/data", "role", "admin");
     int role_public = param_value_is(js, "/api/data", "role", "public");
     /* …AND THE RUNG THE OLDEST FAMILY IN THIS DOCUMENT NEVER HAD, WHICH IS THE SAME ONE EVERY `*fork` ROW GOT
@@ -10002,7 +10623,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                               "`if(__FLAGS.admin)` FORKS a true-arm sibling in the same run — is what this "
                               "row asserts, so the else arm either never forked or forked and lost its delta";
     }
-    int data_count = 0; for (const char *p = js; (p = strstr(p, "\"/api/data\"")); p++) data_count++;
+    int data_count = 0;
+ for (const char *p = js; (p = strstr(p, "\"/api/data\"")); p++) data_count++;
     /* AND THE MERGE, WHICH ONE RECORD ALONE DOES NOT PROVE. `data_count == 1` is what a merge across two flows
        produces AND what a SINGLE arm produces, so the row whose whole claim is the merge was satisfied by
        exactly the state that refutes it — measured, in 170 of one log's 171 samples: `merged=1` beside
@@ -10016,7 +10638,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        DELETED `dom-tt` for being "the AND of the two rows either side of it"; the difference here is that the
        extra conjunct is a real claim, so the repair is the ladder rather than the deletion. The last clause
        is the only one of the three that is about the merge. */
-    const char *merged_why = NULL; int merged = 1;
+    const char *merged_why = NULL;
+ int merged = 1;
     fold_row(&merged, &merged_why, role_admin,
              "the admin arm has not emitted, so there is no second value for a merge to have joined — this "
              "row is `role-admin` restated and is not about the merge");
@@ -10025,9 +10648,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "BOTH arms emitted and `/api/data` stands in this document MORE THAN ONCE — the two flows wrote "
              "SEPARATE records where the merge is one record carrying both values. This is the only clause "
              "of this row that is a finding about the merge");
-
-    int pinned = strstr(js, "/api/region/us-east-1") != NULL;   /* EQ gate concretized region to the REAL value */
-    int lazy = strstr(js, "/api/admin/audit-log") != NULL;   /* endpoint reachable ONLY via the admin-arm lazy chunk */
+    int pinned = strstr(js, "/api/region/us-east-1") != NULL;
+   /* EQ gate concretized region to the REAL value */
+    int lazy = strstr(js, "/api/admin/audit-log") != NULL;
+   /* endpoint reachable ONLY via the admin-arm lazy chunk */
 
     /* DOM TIME-TRAVEL: the two flows forked at if(cfg.admin) wrote 'data-tt' on the SHARED <body> to DIFFERENT
        values, then AFTER the fork each read it BACK into /api/whoami?tt=. Both ttADMIN and ttPUBLIC present ⇒
@@ -10057,7 +10681,6 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        undrained one states less than it says. */
     const char *domattr_why = NULL, *domnode_why = NULL, *accessor_why = NULL;
     int dom_attr = 1, dom_node = 1, accessor_tt = 1;
-
     fold_row(&dom_attr, &domattr_why, !!strstr(js, "\"/api/whoami\""),
              "the read-back statement never ran: there is no /api/whoami record at all, so the arm and value "
              "clauses below are about this fixture and not about the DOM delta");
@@ -10104,7 +10727,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "setter instead of reverting the backing _f slot, or the arms shared one _f");
     /* ASYNC-AS-FLOW: each flow's promise .then reaction fired under its OWN COW -> both thenADMIN and thenPUBLIC
        present ⇒ microtask reactions run as first-class per-flow flows (not a dropped/global-drained job). */
-    const char *async_why = NULL; int async_tt = 1;
+    const char *async_why = NULL;
+ int async_tt = 1;
     FORK_ROW(js, &async_tt, &async_why, "/api/then", "v",
              "the per-flow microtask reaction, which is what makes a `.then` fire under the COW of the flow "
              "that queued it rather than out of one globally drained job list",
@@ -10113,7 +10737,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        via a deep SNAPSHOT fork of the async body's live tramp chain (clone_deep_flow: the async frame's state is
        cloned from async_data->func_state.frame with a FRESH promise capability — never a re-run). Both awADMIN and
        awPUBLIC present ⇒ await suspend/resume works AND the deep async-branch fork is correct per flow. */
-    const char *await_why = NULL; int await_tt = 1;
+    const char *await_why = NULL;
+ int await_tt = 1;
     FORK_ROW(js, &await_tt, &await_why, "/api/await", "w",
              "clone_deep_flow's deep snapshot of the async body's live tramp chain, which is what forks a "
              "concolic branch INSIDE a suspended async frame with a fresh promise capability",
@@ -10121,14 +10746,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* ASYNC-AS-CALLER deep fork: the concolic branch is in a HELPER called by the async body (chain base->async->
        helper), so the async frame is a mid-chain CALLER whose func_state.frame is the deeper frame's caller buffer.
        Both acADMIN and acPUBLIC ⇒ clone_deep_flow sourced the async caller's stack correctly (tramp_buf_base). */
-    const char *asynccall_why = NULL; int asynccall_tt = 1;
+    const char *asynccall_why = NULL;
+ int asynccall_tt = 1;
     FORK_ROW(js, &asynccall_tt, &asynccall_why, "/api/asynccall", "w",
              "clone_deep_flow's sourcing of an async frame that is a mid-chain CALLER (tramp_buf_base), which "
              "is what forks a branch taken in a helper the async body called",
              "acADMIN", "acPUBLIC");
     /* ASYNC THROW: a heap-resident async body that throws becomes a REJECTED promise; the .catch reaction fires
        and records /api/caught — proving the exception unwind of an async tramp frame (reject, not propagate). */
-    const char *async_throw_why = NULL; int async_throw = 1;
+    const char *async_throw_why = NULL;
+ int async_throw = 1;
     fold_row(&async_throw, &async_throw_why, !!strstr(js, "\"/api/caught\""),
              "NOT REACHED: there is no /api/caught record at all, so the rejected promise's .catch reaction "
              "never ran. That is the SCHEDULE");
@@ -10137,7 +10764,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "frame's unwind rejected with something other than the value the body threw");
     /* ASYNC LOOP + PREEMPT: an async body with a loop is preempted mid-iteration; the deep-preempt stashes and
        rebuilds the whole TrampFrame chain (incl. async_data), so it resumes correctly. s=0+..+24=300. */
-    const char *async_preempt_why = NULL; int async_preempt = 1;
+    const char *async_preempt_why = NULL;
+ int async_preempt = 1;
     fold_row(&async_preempt, &async_preempt_why, !!strstr(js, "\"/api/asyncloop\""),
              "NOT REACHED: there is no /api/asyncloop record at all, so the preempted async body never "
              "reached its fetch. That is the SCHEDULE");
@@ -10146,6 +10774,817 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the TrampFrame chain at some other iteration, so the loop resumed short of its end or ran an "
              "iteration twice. Asked as `_only` because the sum is a value the code DETERMINED: a SECOND "
              "entry means the flow forked where this statement cannot");
+    /* DELETE ISOLATION: the gamma-true flow deletes a SHARED baseline object's key; the gamma-false flow must
+       still see keepVAL. Both present ⇒ the delete time-travels. FAILS under the snapshot fork (it shares the
+       flow_local object across siblings) — a real unsoundness this asserts LOUD rather than leaving unchecked. */
+    const char *delete_iso_why = NULL;
+ int delete_iso = 1;
+    FORK_ROW(js, &delete_iso, &delete_iso_why, "/api/tok", "t",
+             "the delta's capture of a slot REMOVAL on a shared baseline object, which is what leaves the "
+             "sibling arm still reading the key this arm deleted",
+             "wasDeleted", "keepVAL");
+    /* THE SAME ISOLATION OVER THE EXOTIC GLOBAL, which is a different code path and not a second spelling of the
+       row above. A slot removal on the global misses the shape (the name is not one of the Window class's
+       supported indices) and reaches the exotic [[Delete]] dispatch, which the swap must not consult: 10.5.10
+       [[Delete]] step 7's trap is the page's own code and every host class's hook is a VIEW over storage that is
+       captured on the object that owns it, so consulting either removes state the delta never named. gdSOLE on
+       BOTH arms says each flow read back its own creation AND that neither absent-slot delete left a slot
+       standing for the sibling. */
+    const char *global_delete_why = NULL;
+ int global_delete = 1;
+    FORK_ROW(js, &global_delete, &global_delete_why, "/api/gdel", "v",
+             "the delta's capture of a slot removal on the EXOTIC global, which reaches 10.5.10 [[Delete]] and "
+             "must not consult a hook that is a VIEW over storage the delta never named",
+             "gdADMINgdSOLE", "gdPUBLICgdSOLE");
+    /* FLOW-LOCAL post-fork isolation: an object created before a concolic fork (flow_local at creation) is SHARED
+       by the snapshot; each arm's mutation must be per-flow. Both values present ⇒ cow_delta_fork's forked=1 keeps
+       post-fork flow_local mutations captured — no leak (the older 'snapshot shares flow_local (unsound)' claim). */
+    /* THE SUBJECT NAMES WHAT A 0 HERE WOULD MEAN AND NO LONGER NAMES A CAPTURE, because this row cannot be
+       about one: its object is flow-PRIVATE in both arms (the statement says why), so no capture runs under
+       it and a leak has nothing to travel through. Both arms reaching their own fetch is what it establishes. */
+    const char *floc_iso_why = NULL;
+ int floc_iso = 1;
+    FORK_ROW(js, &floc_iso, &floc_iso_why, "/api/floc", "x",
+             "BOTH ARMS REACHING THIS STATEMENT AT ALL — and not a capture, which this row cannot be about",
+             "flocADMIN", "flocPUBLIC");
+    /* CONCOLIC FORK inside a forEach CALLBACK: the branch forks deep (base->iter-callback frame); clone_deep_flow
+       clones the JSArrayEvery cont_state so the sibling continues the iteration on its own. All four combinations
+       (feADMIN/fePUBLIC × elements 1,2) ⇒ both arms iterated independently over the full array.
+       FOUR WORLDS AND NOT TWO, so the row names all four: the old spelling also asked for the bare `feADMIN`
+       and `fePUBLIC`, which are substrings of the four it already required and asserted nothing on top of
+       them. What the four say is that EACH arm walked the WHOLE array — an arm that forked and then stopped
+       iterating shows up as its element-2 world missing, and the message names which. */
+    const char *fefork_why = NULL;
+ int fefork_tt = 1;
+    FORK_ROW(js, &fefork_tt, &fefork_why, "/api/fefork", "e",
+             "clone_deep_flow's clone of the JSArrayEvery cont_state, which is what lets a sibling forked "
+             "inside the callback go on iterating on its own",
+             "1feADMIN", "2feADMIN", "1fePUBLIC", "2fePUBLIC");
+    /* SHARED-ARRAY append isolation: each arm's push into the BASELINE array must be COW-isolated. The values
+       are matched WHOLE, so the contaminated join `pushA,pushB` satisfies neither world and the row says which
+       one it could not find — the quoted-`strstr` spelling was reaching for whole-value equality and this is
+       it, scoped to this endpoint's own param as well.
+       "PRE-FORK" IS NOW TRUE OF THE ARRAY AND USED TO BE TRUE OF NOTHING. `pfa` was minted one line above its
+       own `if`, ~2100 lines BELOW the document's first `cfg.admin` branch — and a second test of one predicate
+       is REFINED rather than forked (solver/decide.c's `decide_arm` asks `concolic_branch_decided` above the
+       replay and above the fork), so that `if` forked nothing, each arm minted its own `pfa`, cow.c's
+       flow-private test skipped every push, and this row read 1 with the append capture deleted. The array is
+       minted in the document's first <script> now, which is the only placement that makes it shared. */
+    const char *pushfork_why = NULL;
+ int pushfork_tt = 1;
+    FORK_ROW(js, &pushfork_tt, &pushfork_why, "/api/pushfork", "a",
+             "the fast-array-append capture, which is what isolates each arm's push into the pre-fork array "
+             "(a leak joins both arms into one value and neither world is then found)",
+             "pushA", "pushB");
+    /* SHARED-ARRAY element-overwrite isolation. THE WORLDS NAME BOTH SLOTS BECAUSE THE STATEMENT READS
+       BOTH, and what the previous pair asserted was reachability: `owA` and `owB` were each an arm reading
+       back the slot that arm had just written, which answers the same bytes whether or not the write was
+       captured. The pair below cannot be satisfied that way — a leak composes `owA-owP`, which is neither. */
+    const char *owfork_why = NULL;
+ int owfork_tt = 1;
+    FORK_ROW(js, &owfork_tt, &owfork_why, "/api/owfork", "a",
+             "the in-bounds element-overwrite capture, which is what isolates two arms writing one array",
+             "owA-ow2B", "ow1B-owP");
+    /* MAP fork: clean per-arm result arrays, no dropped element. The two canonical arms are matched WHOLE, so
+       a dropped element0 (`-mA2`) is no longer that arm's value and the row names the world it lost. The
+       leading-dash clause stays as its own fold because it is a claim about the WHOLE document — a third,
+       contaminated record existing beside two correct ones — which no per-endpoint value test can make. */
+    const char *mapfork_why = NULL;
+ int mapfork_tt = 1;
+    FORK_ROW(js, &mapfork_tt, &mapfork_why, "/api/mapfork", "r",
+             "clone_deep_flow's clone of the JSArrayEvery cont_state over the shared result array",
+             "mA1-mA2", "mP1-mP2");
+    fold_row(&mapfork_tt, &mapfork_why, !strstr(js, "\"-m"),
+             "a map-callback value BEGINNING with the join separator exists somewhere in this document: an arm "
+             "lost element 0 of the shared result array, which is the contamination the two world clauses "
+             "above cannot see because each of them is satisfied by a correct sibling");
+    /* CONCOLIC FORK inside a synchronously-driven GENERATOR body: the branch forks the tramp-driven generator
+       activation (the named nested-activation hold-out). Both ggADMIN and ggPUBLIC present ⇒ a branch inside a
+       generator body snapshot-forks per arm, never DFAILs / drives to completion. */
+    const char *genfork_why = NULL;
+ int genfork_tt = 1;
+    FORK_ROW(js, &genfork_tt, &genfork_why, "/api/genfork", "v",
+             "the snapshot fork of a tramp-driven generator activation (the alternative is a DFAIL or a "
+             "drive-to-completion, and neither leaves a second world)",
+             "ggADMIN", "ggPUBLIC");
+    /* TWO-BRANCH generator fork: the dedup-REPLACE path (a sibling with a gen_data swap re-forks the same
+       generator). All four gate combinations present ⇒ each fork advanced its own per-flow generator state. */
+    const char *gen2fork_why = NULL;
+ int gen2fork_tt = 1;
+    FORK_ROW(js, &gen2fork_tt, &gen2fork_why, "/api/gen2fork", "v",
+             "the dedup-REPLACE path, which is what lets a sibling carrying a gen_data swap re-fork the same "
+             "generator so each of the four gate combinations advances its own per-flow state",
+             "g2:AX", "g2:AY", "g2:PX", "g2:PY");
+    /* FOR-OF generator-body fork: the generator object is recovered from the caller stack (caller_sp[forof_off]),
+       not a held frame ref. Both ofA and ofP present ⇒ a branch inside a for-of-driven generator body forks per arm. */
+    const char *genofork_why = NULL;
+ int genofork_tt = 1;
+    FORK_ROW(js, &genofork_tt, &genofork_why, "/api/genofork", "v",
+             "recovery of the generator object from the caller stack rather than from a held frame reference",
+             "ofA", "ofP");
+    /* Array.from(GEN) consumer fork: the gen body branches while CONSUMED by Array.from on the tramp
+       (CONT_ITER_CONSUME) ⇒ clone_deep_flow's gen-branch cloned the JSIterConsume state so each fork arm
+       accumulated its own result independently.
+       THIS ROW WAS THE SECOND `mapmutfork`, AND THE COMMENT BELOW NAMED IT AS THE COUNTEREXAMPLE TO ITSELF.
+       `afA` and `afP` were matched with an unscoped `strstr` over the whole result document, and `/api/paffork`
+       — six statements after this one — emits `pafA` and `pafP`, which CONTAIN them. So both world clauses
+       were satisfiable by a DIFFERENT statement's records, and all this row asserted was that an
+       `/api/afromfork` record existed at all while `paffork` had produced both of ITS worlds. It could report
+       1 with the JSIterConsume clone broken. The token was minted; uniqueness was never a property of minting
+       it, only of SCOPING the comparison, which is what param_value_is does. */
+    const char *afromfork_why = NULL;
+ int afromfork_tt = 1;
+    FORK_ROW(js, &afromfork_tt, &afromfork_why, "/api/afromfork", "v",
+             "clone_deep_flow's clone of the JSIterConsume state Array.from holds across the generator's branch",
+             "afA", "afP");
+    /* [...GEN] spread consumer fork: the SPREAD-sink variant of CONT_ITER_CONSUME ⇒ the spread consumer forked
+       mid-consume and each arm appended to its own COW-isolated array. */
+    const char *spreadfork_why = NULL;
+ int spreadfork_tt = 1;
+    FORK_ROW(js, &spreadfork_tt, &spreadfork_why, "/api/spreadfork", "v",
+             "the SPREAD-sink variant of CONT_ITER_CONSUME, whose arms append to their own COW-isolated array",
+             "spA", "spP");
+    /* SHARED-SET record isolation: a BASELINE Set, each arm adds a different record ⇒ the map_add capture
+       isolated each arm's Set.add (JS_MapDeleteRecord on unapply, JS_MapAddRecord on apply). The read is
+       `[...(_sad)][0]`, a POSITION rather than a key, so it is the sibling's record that the second arm sees
+       when the capture is missing and one of the two worlds then never appears under either ordering.
+       THE SET IS MINTED IN THE DOCUMENT'S FIRST <script> AND USED TO BE MINTED BESIDE THIS `if`, which made
+       it flow-private in both arms and this row a reachability test — the placement paragraph is there and
+       the reading of `decide_arm` that forces it is at `pushfork` above. */
+    const char *setaddfork_why = NULL;
+ int setaddfork_tt = 1;
+    FORK_ROW(js, &setaddfork_tt, &setaddfork_why, "/api/setaddfork", "v",
+             "the map_add capture, which is what isolates two arms adding to one pre-fork Set",
+             "sadA", "sadP");
+    /* new Set(GEN) consumer fork: the Set iterator-consumer (SET sink) forks mid-consume — fork-safe via the
+       map_add COW capture ⇒ each arm consumed into its own COW-isolated Set. */
+    const char *setfork_why = NULL;
+ int setfork_tt = 1;
+    FORK_ROW(js, &setfork_tt, &setfork_why, "/api/setfork", "v",
+             "the SET-sink variant of CONT_ITER_CONSUME over the map_add capture",
+             "seA", "seP");
+    /* SHARED-MAP overwrite/delete isolation: one arm overwrites a BASELINE Map key, the other deletes a
+       DIFFERENT one, and the read renders BOTH. Worlds 'mmA-has' and 'base-gone' ⇒ the map_mutate undo-log
+       capture isolated each arm's mutation.
+       THIS ROW COULD NOT DETECT A LEAK AT ALL AND IT IS WHERE THE DEFECT SHAPE WAS NAMED, so the argument is
+       rewritten here rather than deleted — a reader who re-derives the old reasoning writes the old row back.
+       Both arms mutated ONE key `'k'` and each read back only `'k'`: the overwrite arm read its own write and
+       the delete arm read its own delete, so 'mmA' and 'gone' were both emitted under EITHER ordering with
+       the undo log deleted. What it measured was that both arms were REACHED, under a name claiming
+       isolation. §Solver-half's own repair for it is the weak family's and is now this row's: EACH ARM
+       MUTATES ITS OWN KEY AND READS BOTH, so whichever arm runs second sees the first arm's mutation the
+       instant the capture is missing and composes `mmA-gone`, which neither world names.
+       AND THE OBJECT IT MUTATES HAD TO MOVE FOR THE READ SHAPE TO MEAN ANYTHING. `_mm` was minted one line
+       above its own `if`, ~2100 lines below the document's first `cfg.admin` branch, and a second test of one
+       predicate is REFINED rather than forked — solver/decide.c's `decide_arm` asks `concolic_branch_decided`
+       above the replay and above the fork, because the other arm is contradicted by the flow's own record and
+       a bundle testing one flag in twenty places would otherwise cost a million flows. So that `if` forked
+       nothing, each arm minted its OWN Map, and cow.c's flow-private test (`JS_ObjFlowGen(obj) >
+       d->fork_gen`) skipped every mutation. A fixed read shape over a flow-private Map is still a
+       reachability test; the Map is minted in the document's first <script> now.
+       THE EARLIER REPAIRS TO THIS ROW STAND AND ARE WHAT MADE THE REST VISIBLE. `gone` is an ENGLISH WORD
+       four earlier statements emit — `/api/cegone?v=isgone`, `&removed=gone`, `&del=gone`, `made77gone` — so
+       an unscoped `strstr` for it could not fail here at all, and the three-state fold that separates "never
+       reached" from "a world was lost" is what stopped a truncated run reading as a COW regression. Both are
+       kept by going through FORK_ROW, which scopes every world to this endpoint's own `v` param with
+       `param_value_is` and composes the NOT-REACHED clause from the frontier's measured standing rather than
+       from a reader's comparison of neighbouring rows. The three hand-rolled folds this replaces were a
+       second spelling of exactly that. */
+    const char *mapmutfork_why = NULL;
+ int mapmutfork_tt = 1;
+    FORK_ROW(js, &mapmutfork_tt, &mapmutfork_why, "/api/mapmutfork", "v",
+             "the map_mutate undo-log capture, which is what isolates an overwrite in one arm from a delete "
+             "in the other over one baseline Map",
+             "mmA-has", "base-gone");
+    /* WEAK-COLLECTION ISOLATION — the claims the three rows above make for a STRONG Map and Set, made over a
+       WeakMap and a WeakSet, whose records are captured through a JSCowWeakRef cell (a BORROWED key and up to
+       two owned values) instead of through a dup of the key. The statement and its baseline collections are
+       in the document; the two paragraphs there carry why the collections are minted in the first <script>
+       and why each arm reads its SIBLING's key.
+       `weak-reach` STANDS FIRST FOR `td-reach`'s REASON, and it is the only row of the five that is not an
+       absence. The other four are two-world claims, and a two-world claim at 0 is "never reached" OR "a world
+       was lost" — which is exactly the pair §AND-THE-SAME-HOLE-SWALLOWS-A-PREDICTION says a run that never
+       entered the code satisfies for free. FORK_ROW separates those two at the row, and this one separates
+       them for the FAMILY: it is emitted by the PRE-FORK flow, so its 1 is a positive statement that the
+       baseline ran, and a family reading 0 across all five is a statement about the schedule and not about
+       the capture. */
+    const char *weakreach_why = NULL;
+ int weakreach_tt = 1;
+    fold_row(&weakreach_tt, &weakreach_why, !!strstr(js, "\"/api/weakreach\""),
+             "NOT REACHED: there is no /api/weakreach record at all, so the <script> that mints the baseline "
+             "weak collections did not run as far as its own fetch. The four rows below are then reporting on "
+             "the SCHEDULE and none of them is evidence about the weak-record capture either way");
+    fold_row(&weakreach_tt, &weakreach_why,
+             param_value_is(js, "/api/weakreach", "v", "wmWEAKMAPSETBASE"),
+             "the baseline <script> RAN and did not answer `wmWEAKMAPSETBASE`. A leading `wmSTRONG` is the "
+             "one that matters most: it says the collection ACCEPTED a string key, so it is not weak, "
+             "JS_IsWeakCollection answers 0 for it, and the four rows below are asserting the STRONG capture "
+             "under weak names. `NOMAP`/`NOSET` is the intrinsic itself missing. `NOBASE` is the overwrite "
+             "and delete baseline never written, which makes those two arms ADDs wearing another name and "
+             "collapses the three mutation kinds into one");
+    /* ADD — cow_capture_map_add's weak arm, whose cell has no BEFORE (its inverse deletes and needs no
+       value). A leak makes whichever arm runs second read `wa11`, which is neither world. */
+    const char *weakadd_why = NULL;
+ int weakadd_tt = 1;
+    FORK_ROW(js, &weakadd_tt, &weakadd_why, "/api/weakadd", "v",
+             "cow_capture_map_add's weak arm, which is what keeps one arm's NEW WeakMap record out of the "
+             "sibling that never set it",
+             "wa10", "wa01");
+    /* OVERWRITE — the one mutation whose cell holds BOTH values, because an overwrite has a before and an
+       after and each is a value the page associated with that key. A leak reads `wo1A-wo2P`. */
+    const char *weakover_why = NULL;
+ int weakover_tt = 1;
+    FORK_ROW(js, &weakover_tt, &weakover_why, "/api/weakover", "v",
+             "cow_capture_map_mutate's weak OVERWRITE arm, whose cell carries the before AND the after so a "
+             "sibling reads the baseline value under the arm that replaced it",
+             "wo1A-wo2B", "wo1B-wo2P");
+    /* DELETE — the arm that must carry JS_MAP_POS_TAIL and no position, a weak collection not being iterable;
+       JS_MapAddRecord asserts a weak restore never arrives carrying anything else. A leak reads `wd00`. */
+    const char *weakdel_why = NULL;
+ int weakdel_tt = 1;
+    FORK_ROW(js, &weakdel_tt, &weakdel_why, "/api/weakdel", "v",
+             "cow_capture_map_mutate's weak DELETE arm, which is what leaves the sibling still finding the "
+             "record this arm removed",
+             "wd01", "wd10");
+    /* THE WEAKSET, WHICH IS THE CLASS ID AND NOT A SECOND SPELLING — the one row that asks
+       JS_IsWeakCollection about JS_CLASS_WEAKSET, over an add and a delete in each arm. */
+    const char *weakset_why = NULL;
+ int weakset_tt = 1;
+    FORK_ROW(js, &weakset_tt, &weakset_why, "/api/weakset", "v",
+             "JS_IsWeakCollection answering for JS_CLASS_WEAKSET, without which a WeakSet record takes the "
+             "STRONG arm and its key is dup'd — pinned for the session rather than isolated",
+             "ws1001", "ws0110");
+    /* NAMED RESIDUAL — THE COLLECTED-KEY ARM.
+       WHAT IS NOT COVERED: every key these five rows use is a `var` of the baseline <script> and stays
+       strongly reachable for the whole run, so cow_map_live is TRUE at every apply and every unapply they
+       produce. The arm where it is FALSE — a weak key collected between the capture and the swap, which makes
+       both the apply and the unapply a no-op, exactly and not lossily, because an unreachable key cannot be
+       looked up — is reached by nothing in this fixture. The code is RIGHT for what it does and NARROWER than
+       the mechanism: a WeakMap entry exists to die with its key, and no entry these rows make ever does.
+       WHAT THE NEXT DIFF BUILDS: a runner-own `gc` on THIS fixture's realm, installed beside `hostRead` and
+       wrapping JS_RunGC the way wpt_runner.c installs its own `gc` for the WPT realm. That function is static
+       to its own file, so this is a SECOND one and not a call to it. It is a residual rather than a TODO
+       because the cost is a design question and not typing: the realm it would go on is the one the SOLVER
+       drives, so the name joins the surface a forced flow explores — and wpt_runner.c's own reason for
+       keeping it off the browser (a page-visible collector is fingerprintable and this engine does not ship
+       one) is a thing to weigh rather than to quote past.
+       HOW ITS ABSENCE WOULD SHOW: it is observable AT THESE ROWS — the four two-world rows answer identically
+       under a correct collected-key arm and under one that never runs, so a 1 from any of them is not
+       evidence about it. The only other instruments that have ever looked at a collected weak key are
+       JS_FreeCowWeakRef's neutralised-cell DCHECK and JS_FreeRuntime's gc_obj_list walk, and both run at
+       TEARDOWN and both report by staying silent, which is the shape this family was added to stop being the
+       whole of the evidence. */
+    /* WEB IDL §3.7.9.1 "Default iterator objects"' `index` ACROSS A FORK — the weak family's claim for a
+       record behind a CLASS OPAQUE, whose write is seen by no property hook and no engine hook and had to be
+       captured at the record's own accessor. One iterator, minted baseline in the document's first <script>,
+       stepped to exhaustion by BOTH arms.
+       A 0 HERE IS THE TWO STATES FORK_ROW SEPARATES AND NOTHING ELSE, which is why it is spelled as one and
+       not as a ladder: the statement is synchronous, it carries no reply and no timer, so "never reached" is
+       the schedule and "a world was lost" is the capture. There is no third reading — an arm that runs and
+       walks nothing emits its own tag with an EMPTY key string, which is neither world, so the row cannot
+       pass on the loss by either ordering.
+       ITS SUBJECT IS THE ACCESSOR AND NOT THE LAYOUT, and the difference is worth naming because the layout
+       invites the wrong reading: IDL_PAIR_ITER_VALS names `target` alone, and `index` is covered because
+       cow_state_save memcpy's the record's BYTES before it dups the named values. So this row is 0 when the
+       CAPTURE is missing and stays 1 under every correct reading of what the layout names — a second entry
+       added to that list would not make it pass and its absence is not what makes it fail. */
+    const char *iteriso_why = NULL;
+ int iteriso_tt = 1;
+    FORK_ROW(js, &iteriso_tt, &iteriso_why, "/api/iteriso", "v",
+             "idl_pair_iter_of's capture of the record Web IDL §3.7.9.1's `index` lives in, which lets two arms "
+             "sharing ONE iterator each walk the whole list instead of splitting one enumeration between them",
+             "itk1itk2-itADMIN", "itk1itk2-itPUBLIC");
+    /* for-await(GEN) consumer fork: the sync gen body branches while driven by the async-from-sync consumer
+       (CONT_ASYNC_FROM_SYNC) ⇒ clone_deep_flow cloned the JSAsyncFromSync state with a fresh wrapper promise
+       per arm, so each for-await arm delivered its OWN value. */
+    const char *afsfork_why = NULL;
+ int afsfork_tt = 1;
+    FORK_ROW(js, &afsfork_tt, &afsfork_why, "/api/afsfork", "v",
+             "clone_deep_flow's clone of the JSAsyncFromSync state, with a fresh wrapper promise per arm",
+             "afsA", "afsP");
+    /* Promise.all(GEN) consumer fork at index==0: the gen branches during the FIRST .next() before any element
+       .then is attached (CONT_PROMISE_ALL) ⇒ clone_deep_flow cloned the JSPromiseAll aggregate fresh per arm,
+       so each arm's aggregate resolved with its OWN element. */
+    const char *paffork_why = NULL;
+ int paffork_tt = 1;
+    FORK_ROW(js, &paffork_tt, &paffork_why, "/api/paffork", "v",
+             "clone_deep_flow's fresh-per-arm clone of the JSPromiseAll aggregate at index 0, before any "
+             "element .then is attached",
+             "pafA", "pafP");
+    /* Promise.all(GEN) consumer fork at index>0: the gen yields element 0 (p0) THEN branches ⇒ the retained
+       pre-fork element wrapper was RE-ATTACHED to the sibling aggregate (each arm's a[0]=='p0' shared, a[1] its
+       own) — the deep async-COW re-attach path, not just the index==0 base case. */
+    const char *paf2fork_why = NULL;
+ int paf2fork_tt = 1;
+    FORK_ROW(js, &paf2fork_tt, &paf2fork_why, "/api/paf2fork", "v",
+             "the deep async-COW RE-ATTACH of a retained pre-fork element wrapper onto the sibling aggregate, "
+             "which is the index>0 case and not paffork's base case",
+             "p0-pf2A", "p0-pf2P");
+    /* reduce ACCUMULATOR fork (CONT_ARRAY_REDUCE): the reducer branches on opaque state mid-fold ⇒
+       clone_deep_flow cloned the JSArrayReduce state so each arm threaded its OWN accumulator across both
+       elements (never a shared/contaminated acc). */
+    const char *redfork_why = NULL;
+ int redfork_tt = 1;
+    FORK_ROW(js, &redfork_tt, &redfork_why, "/api/redfork", "v",
+             "clone_deep_flow's clone of the JSArrayReduce accumulator, which is what threads a separate fold "
+             "through each arm rather than one contaminated accumulator through both",
+             "r:rA1rA2", "r:rP1rP2");
+    const char *rerepfork_why = NULL;
+ int rerepfork_tt = 1;
+    FORK_ROW(js, &rerepfork_tt, &rerepfork_why, "/api/rerepfork", "v",
+             "the JSReRep machine's three per-arm holdings across a @@replace callback — the collected match "
+             "array, the captures List and the StringBuffer with its nextSourcePosition",
+             "xrrA1yrrA2", "xrrP1yrrP2");
+    /* MACHINE-MODE ToPrimitive fork: the JSToPrim driving the page's toString has an OUTER requester (the
+       JSArrayJoin machine coercing its separator), and that machine owns no frame — it is reachable only
+       through `outer`, so nothing but the requester walk clones it. Each arm must finish its own join with
+       its own separator off its own machine. */
+    const char *toprimfork_why = NULL;
+ int toprimfork_tt = 1;
+    FORK_ROW(js, &toprimfork_tt, &toprimfork_why, "/api/toprimfork", "v",
+             "the requester walk, which is the only thing that clones a frameless JSArrayJoin machine reached "
+             "as the OUTER requester of the JSToPrim running the page's toString",
+             "xtpAy", "xtpPy");
+    /* SORT'S COMPARISON OVER UNKNOWN EXTERNAL INPUT, COLLAPSED RATHER THAN FORKED OR PROPAGATED. Each needle is
+       a string that can ONLY be composed from a real Array of real elements, so it is false in both directions
+       the collapse can be got wrong: the comparison forking (two arms, neither of which is the identity order)
+       and the machine's completion becoming a derived unknown (which has no [0], no .u and no .length the page
+       ever computed). `sc0sc1-2` is the direct concolic result; `sv0sv1` is the same through an ordinary object
+       whose valueOf answers unknown, which no pre-check on the comparator's result could have seen; `sr0sr1-2`
+       adds the REST PARAMETER, the one argument shape that can see a callback frame borrowing slots it does
+       not own; `sd1sd2-3` is the DEFAULT ordering, where the two concrete elements must still be ordered
+       against each other and the unknown must still be an element; `same-3-312` is the typed-array sort's
+       receiver coming back with its write-back performed. */
+    /* EACH OF THESE IS FOLDED AND NOT `&&`-ED, AND THE FIRST CLAUSE IS ALWAYS "THERE IS A RECORD AT ALL".
+       A bare conjunction reports ONE 0 for two findings that send a reader to opposite places: a statement this
+       run ANSWERED WRONGLY (the collapse, or the fork, is broken) and one it NEVER REACHED (the frontier had
+       not got here when the harness stopped it). Those are the two states CLAUDE.md's @S rule names — "a
+       candidate killed by a gate must be distinguishable from one a filter ate and from one that was never
+       scheduled" — and a sort row is where they were conflated.
+       MEASURED, AND IT COST A LANE A SESSION. A smoke that spent its whole CPU budget having answered 83 of
+       177 statements produced `sortcollapse=1 sortvalueof=1 sortrest=1 sortdefault=1 sortta=1 sortnan=1
+       sortdefctl=1 sortbranch=0`, which splits one-world-passes / two-world-fails and reads as a defect in
+       FORKING. In the same census `fefork owfork genfork setaddfork redfork rerepfork toprimfork gcallfork`
+       and every other two-world row were 0 too, because no second world had reached this block yet — but the
+       eight rows were read on their own and a lane was sent to find a fork-clone gap in Array.prototype.sort's
+       step machine that nothing in that run pointed at. The clause below is what the run had to say and could
+       not: there is no /api/sortbranch record AT ALL. */
+    const char *sortcollapse_why = NULL, *sortvalueof_why = NULL, *sortrest_why = NULL;
+    const char *sortdefault_why = NULL, *sortta_why = NULL;
+    int sortcollapse_tt = 1, sortvalueof_tt = 1, sortrest_tt = 1, sortdefault_tt = 1, sortta_tt = 1;
+    fold_row(&sortcollapse_tt, &sortcollapse_why, !!strstr(js, "\"/api/sortcollapse\""),
+             "NOT REACHED: no /api/sortcollapse record at all — this run did not answer the statement, which "
+             "is the SCHEDULE and says nothing about the collapse");
+    fold_row(&sortcollapse_tt, &sortcollapse_why, !!strstr(js, "sc0sc1-2"),
+             "the statement ran and did not compose sc0sc1-2: the comparison either FORKED (an ordering that "
+             "is not the identity) or the machine's completion became a derived unknown with no [0]/.u/.length");
+    fold_row(&sortvalueof_tt, &sortvalueof_why, !!strstr(js, "\"/api/sortvalueof\""),
+             "NOT REACHED: no /api/sortvalueof record at all — the SCHEDULE, not §7.1.1 ToPrimitive's report");
+    fold_row(&sortvalueof_tt, &sortvalueof_why, !!strstr(js, "sv0sv1"),
+             "the statement ran and did not compose sv0sv1: the unknown reached through valueOf did not "
+             "collapse to +0 the way the direct one does");
+    fold_row(&sortrest_tt, &sortrest_why, !!strstr(js, "\"/api/sortrest\""),
+             "NOT REACHED: no /api/sortrest record at all — the SCHEDULE, not the callback's argument frame");
+    fold_row(&sortrest_tt, &sortrest_why, !!strstr(js, "sr0sr1-2"),
+             "the statement ran and did not compose sr0sr1-2: either the collapse, or the REST parameter did "
+             "not receive both of CompareArrayElements' operands from slots the frame owns");
+    fold_row(&sortdefault_tt, &sortdefault_why, !!strstr(js, "\"/api/sortdefault\""),
+             "NOT REACHED: no /api/sortdefault record at all — the SCHEDULE, not the default ordering");
+    fold_row(&sortdefault_tt, &sortdefault_why, !!strstr(js, "sd1sd2-3"),
+             "the statement ran and did not compose sd1sd2-3: the two concrete elements lost their ordering "
+             "against each other, or the unknown stopped being an element");
+    fold_row(&sortta_tt, &sortta_why, !!strstr(js, "\"/api/sortta\""),
+             "NOT REACHED: no /api/sortta record at all — the SCHEDULE, not the typed-array sort");
+    fold_row(&sortta_tt, &sortta_why, !!strstr(js, "same-3-312"),
+             "the statement ran and did not compose same-3-312: the receiver did not come back as itself, or "
+             "§23.2.3.29 step 9's write-back did not run");
+    /* THE CONTROLS, which must read the same before and after that collapse exists. sortnan takes the very
+       predicate the collapse leaves through (23.1.3.30.2 step 4.b's +0 for NaN), sortdefctl is the default
+       ordering with nothing unknown in it, and sortbranch is THE FORK THAT MUST SURVIVE — the branch is inside
+       the comparator's BODY rather than over its result, so both orderings are still two worlds.
+       SORTBRANCH HAS THREE STATES AND NOT TWO, which is the whole reason it is folded per ORDERING: a run that
+       reached it and produced ONE ordering is a fork that was eaten, and the clause NAMES WHICH ARM SURVIVED —
+       cb0cb1 is the comparator's -1 and cb1cb0 its +1, so the surviving needle says which side of
+       `cfg.admin ? 1 : -1` the run kept. A run that produced NEITHER has not been here. Those are three
+       different next steps and they used to be one 0. */
+    const char *sortnan_why = NULL, *sortdefctl_why = NULL, *sortbranch_why = NULL;
+    int sortnan_tt = 1, sortdefctl_tt = 1, sortbranch_tt = 1;
+    fold_row(&sortnan_tt, &sortnan_why, !!strstr(js, "\"/api/sortnan\""),
+             "NOT REACHED: no /api/sortnan record at all — the SCHEDULE, not step 4.b's +0 for NaN");
+    fold_row(&sortnan_tt, &sortnan_why, !!strstr(js, "n1n2n3n4"),
+             "the statement ran and did not compose n1n2n3n4: a NaN comparison stopped keeping the earlier "
+             "element, which is the predicate the unknown-collapse leaves through");
+    fold_row(&sortdefctl_tt, &sortdefctl_why, !!strstr(js, "\"/api/sortdefctl\""),
+             "NOT REACHED: no /api/sortdefctl record at all — the SCHEDULE, not the default ordering");
+    fold_row(&sortdefctl_tt, &sortdefctl_why, !!strstr(js, "cdacdbcdc"),
+             "the statement ran and did not compose cdacdbcdc: the default ordering is wrong with nothing "
+             "unknown in it at all, so this is not about the collapse");
+    fold_row(&sortbranch_tt, &sortbranch_why,
+             !!strstr(js, "\"/api/sortbranch\""),
+             "NOT REACHED: no /api/sortbranch record at all — NEITHER ordering exists, so no world has run "
+             "this statement and this row says nothing whatever about forking inside the comparator. Read it "
+             "against the run's standing and against the other two-world rows (fefork, owfork, genfork, "
+             "redfork, rerepfork, toprimfork, gcallfork): 0 across all of them is a run that stopped");
+    fold_row(&sortbranch_tt, &sortbranch_why, !!strstr(js, "cb0cb1"),
+             "the statement ran and only the +1 ordering (cb1cb0) exists: the comparator's -1 arm was LOST — "
+             "one world reached the sort and its sibling did not survive the fork inside the comparator body");
+    fold_row(&sortbranch_tt, &sortbranch_why, !!strstr(js, "cb1cb0"),
+             "the statement ran and only the -1 ordering (cb0cb1) exists: the comparator's +1 arm was LOST — "
+             "one world reached the sort and its sibling did not survive the fork inside the comparator body");
+    /* generator .next() driven via .call (gci.next.call(gci)): the reflection bypass that previously DFAILed as a
+       drive-to-completion is now routed onto do_generator_tramp at do_forward_call. Both gcA and gcP present ⇒ the
+       branch inside the .call-driven generator body snapshot-forks per arm, never drives to completion. */
+    const char *gcallfork_why = NULL;
+ int gcallfork_tt = 1;
+    FORK_ROW(js, &gcallfork_tt, &gcallfork_why, "/api/gcallfork", "v",
+             "do_forward_call's reshape of `gci.next.call(gci)` onto do_generator_tramp — the alternative is "
+             "the drive-to-completion this bypass used to DFAIL as, which leaves one world",
+             "gcA", "gcP");
+    /* generator .next() via Function.prototype.apply and via Reflect.apply — the two apply-reflection bypasses,
+       reshaped at OP_call_method to the [this=gen, next, arg0] shape and routed onto do_generator_tramp. Both arms
+       of each ⇒ the apply-driven generator body snapshot-forks per arm, never drives to completion. */
+    const char *gapplyfork_why = NULL;
+ int gapplyfork_tt = 1;
+    FORK_ROW(js, &gapplyfork_tt, &gapplyfork_why, "/api/gapplyfork", "v",
+             "OP_call_method's reshape of Function.prototype.apply to [this=gen, next, arg0] onto "
+             "do_generator_tramp",
+             "gapA", "gapP");
+    const char *grefapplyfork_why = NULL;
+ int grefapplyfork_tt = 1;
+    FORK_ROW(js, &grefapplyfork_tt, &grefapplyfork_why, "/api/grefapplyfork", "v",
+             "OP_call_method's reshape of Reflect.apply to [this=gen, next, arg0] onto do_generator_tramp",
+             "graA", "graP");
+    /* ─── THE THREE OPERAND-SHAPE STATEMENTS (script id=stk) ───────────────────────────────────────────────
+       Each is TWO rows, never one, because each has two independent ways to be wrong and a folded row would
+       name neither: whether the path RAN, and whether the operand stack was where the next opcode expected it
+       when it came back. Every claim is an exactly-one value, because every one of these values is DETERMINED
+       by the code — a second DISTINCT VALUE means the flow forked where the statement says it cannot,
+       which is a finding rather than a match, and `param_value_only` is what says so. */
+
+    /* THE HEAD REJECTED AND ITS HANDLER RAN: `v` is the rethrown Error's own message, which no other statement
+       in this document produces. Nothing else here reaches the head's abrupt handler at all — every other
+       `for await` drives a generator that yields — so a 0 in this row is the handler being unreachable and not
+       a value being wrong. */
+    int faw_handler = param_value_only(js, "/api/faw", "v", "fawREJ");
+    /* AND THE HANDLER LEFT THE STACK WHERE THE NEXT OPCODE EXPECTS IT. `(1+2)*(3+4)` is evaluated in the same
+       frame AFTER the catch, so a handler that dropped one thing too few or too many either aborts on the
+       height assert or computes this from the wrong slots. It is a separate row from the one above because
+       "the handler ran" and "the handler balanced" are different failures with different fixes. */
+    int faw_depth = param_value_only(js, "/api/faw", "after", "21");
+    /* A CALLBACK FRAME OWNS ITS ARGUMENTS: the rest parameter is the only arg shape that BUILDS an object out
+       of the callee's argument slots, so it is the only one that can observe them being someone else's. `n`
+       and `t` are the length and the LAST of forEach's three arguments — a frame that lost the tail of its
+       arguments still answers `e` and fails these two. */
+    int rest_args = (param_value_only(js, "/api/rest", "n", "3") &&
+                     param_value_only(js, "/api/rest", "t", "object"));
+    /* AND THE DRIVE IS A LOOP: two invocations, two elements, so `e` carries exactly two values. One means the
+       machine ran its callback once; zero means the endpoint is absent and `rest_args` already said so. */
+    int rest_loop = (param_value_count(js, "/api/rest", "e") == 2);
+    /* ─── THE ACCESSOR, AS A LADDER RATHER THAN TWO ANSWERS ────────────────────────────────────────────────
+       THE FIRST VERSION OF THIS WAS TWO ROWS AND THEY CAME BACK 0 AND 0, WHICH IS THREE STATES BEHIND ONE
+       ANSWER — the defect this file already names and the one I reproduced building the instrument meant to
+       end it. `param_value_count` returns 0 for "no such endpoint" AND for "no such param on it", so a
+       collapsed row cannot tell an accessor that never ran from one that ran once from one that returned a
+       shape, and every one of those is a different thing to go fix. Four rungs, each with a strictly earlier
+       observation site than the one above it, so the LOWEST 0 is the localisation.
+       Rung 1 is asked WITHOUT param_values_in deliberately: the helper answers NULL for an absent endpoint
+       and for an absent param alike, so the endpoint's own presence has to be read off the document directly
+       or the bottom of the ladder collapses in exactly the way the ladder exists to prevent. */
+    int getter_url = strstr(js, "\"url\":\"/api/getfork\"") != NULL;
+    /* Rung 2: the getter returned a value the run DETERMINED. A 0 here with rung 1 at 1 says the ternary
+       propagated its operand instead of forking — the value is a shape, and no count of it is about the
+       clone.
+       AND THE TERM IS WHOLE-VALUE EQUALITY, BECAUSE THAT IS THE ONLY WAY THIS RUNG STATES ITS OWN CLAIM. The
+       failure it exists to report is "the value is a SHAPE", and a shape is composed OVER its operands, so a
+       containment test is satisfied by exactly the thing the rung is supposed to refuse. `?v=' + _gx.x` puts
+       the accessor's whole answer in the param, so `gxADMIN` is a value or it is not. */
+    int getter_concrete = (param_value_is(js, "/api/getfork", "v", "gxADMIN") ||
+                           param_value_is(js, "/api/getfork", "v", "gxPUBLIC"));
+    /* Rung 3: BOTH arms reached the sink, which is the claim (2b) is in the document to make. */
+    int getter_fork = (param_value_is(js, "/api/getfork", "v", "gxADMIN") &&
+                       param_value_is(js, "/api/getfork", "v", "gxPUBLIC"));
+    /* Rung 4: and exactly two — a third value is a flow that got there some way this fixture does not
+       describe, which is a finding rather than a stronger pass.
+       IT IS `ONE OF EACH` AND NOT `TWO OF ANYTHING`, AND THE DIFFERENCE IS VISIBLE WITHOUT RUNNING ANYTHING:
+       A LADDER'S TOP RUNG MUST IMPLY THE RUNG BELOW IT, or the lowest 0 stops being the localisation and the
+       rows stop being readable in order. `param_value_count(...) == 2` does not imply rung 3 — one arm's
+       literal beside a value that is neither arm satisfies it while rung 3 refuses — so the two rungs could
+       read 1 above 0, which is not a weaker claim standing on a stronger one but two claims about different
+       things printed as a ladder. Spelled as a count OF EACH ARM it implies rung 3 by construction, it says
+       what the sentence above it always said it said, and the state it used to certify is one this document
+       has been measured in: at one revision, in 38 consecutive censuses of one run, the OLD spelling of this
+       row read 1 while rung 3 read 0. That figure is a fact about that run and not about the tree — what is
+       durable is the implication, which needs no run and cannot go stale. */
+    int getter_arms = (param_value_count_of(js, "/api/getfork", "v", "gxADMIN") == 1 &&
+                       param_value_count_of(js, "/api/getfork", "v", "gxPUBLIC") == 1);
+    /* AND THE CONTROL, WHICH IS WHAT MAKES THE LADDER ABOVE MEAN THE ACCESSOR. The same ternary over the same
+       source in the same frame with no accessor in the way: `base_fork` at 1 while `getter_fork` is 0 isolates
+       the difference to the accessor, and `base_fork` at 0 says ONE of the two arms that already exist did not
+       REACH this statement — which is not one reading but three, because this statement forks nothing of its
+       own and so cannot indict a gate at all: see the rungs below for the split and for what the clause that
+       stood here ("`cfg.admin` is not two-armed at this point in the document at all") was wrong about.
+       Without this row those two are one number, and the wrong one gets worked on. A CONTROL
+       ASKS THE SAME QUESTION AS THE THING IT CONTROLS, so this is whole-value equality for rung 3's reason:
+       a control that could be satisfied by a shape while the claim could not is a control that answers a
+       different question and cannot isolate anything. */
+    /* AND IT CARRIES ITS OWN `why`, BECAUSE A CONTROL WHOSE ZERO CANNOT SPEAK CONTROLS NOTHING. The paragraph
+       above says the whole point of this row is that without it two states "are one number, and the wrong one
+       gets worked on" — and the row as it stood committed that same defect one level down: a bare conjunction
+       of two value tests is 0 when the endpoint was never emitted AT ALL, when it was emitted carrying only
+       the admin arm, and when it was emitted carrying only the public one, which are three states taking
+       three different actions. The first says the statement never ran and the ladder above is unreadable
+       rather than negative; the other two say the ternary was DECIDED and name which arm survived, which is
+       the concretized gate §Solver-half forbids and is the finding.
+       IT WAS THE ONLY ROW IN THIS FAMILY WITH NO TEXT, which is how it went unnoticed: `fold_row` asserts
+       that a 0 row carries a diagnostic, and a row that never folds never reaches that assert. */
+    /* AND THE RUNG THAT MADE THE SENTENCE BELOW A READING RATHER THAN A GUESS. The `exactly ONE of its two
+       arms` clause was folded on `adm && pub` over two MEMBERSHIP tests, and membership cannot see a third
+       entry: one arm's literal ALONE and that literal ALONGSIDE some other value both answer `adm=1, pub=0`,
+       so the row printed a DECIDED gate for a statement whose sink more than one thing had reached. The two
+       readings take opposite work — a decided gate is a branch that never forked, a third value beside one
+       arm is a branch that DID fork whose sibling's value never became a literal — and the second is the
+       state its own sibling statement was in while this sentence was being read as the first: `/api/getfork`
+       answered `getter-concrete` 1 with `getter-fork` 0 while its total stood at TWO — one arm's literal and
+       one entry that is neither arm — in the same document, over the same source, in the same run. (That
+       total was `getter-arms`' old spelling, which this diff retires, so the row no longer reads that way;
+       the STATE is what the sentence is about and the row that named it is not the one to grep for.)
+       So the fold counts instead of asking, and `other` is the quantity that separates them. */
+    const char *base_fork_why = NULL;
+    int base_fork = 1;
+    {
+        const int adm   = param_value_count_of(js, "/api/getbase", "v", "gbADMIN");
+        const int pub   = param_value_count_of(js, "/api/getbase", "v", "gbPUBLIC");
+        const int n     = param_value_count(js, "/api/getbase", "v");
+        const int other = n - adm - pub;
+
+        /* THE PARTS SUM TO THE TOTAL, which is the one property of this ladder a reader can check without
+           re-deriving it — and it is what makes `other` a count rather than an inference. Both counters walk
+           ONE array through ONE reader, so a negative residue is those two having stopped counting the same
+           thing and every rung below it would then be arithmetic over a quantity that means nothing. */
+        DCHECK(other >= 0,
+               "this statement's `v` entries matching the two arm literals OUTNUMBER its entries: "
+               "param_value_count and param_value_count_of walk one validValues array with one entry reader, "
+               "so the parts cannot exceed the total unless one of them has stopped counting what the other "
+               "counts, after which every rung of this ladder is arithmetic over a residue that is not a count");
+
+        fold_row(&base_fork, &base_fork_why, n > 0,
+                 "NOT REACHED: `/api/getbase` carries no `v` at all, so the control statement never ran. The "
+                 "`getter-*` ladder above cannot be read as being about the accessor OR about the fixture "
+                 "until this one does — a control that did not execute isolates nothing");
+        fold_row(&base_fork, &base_fork_why, adm || pub,
+                 "`/api/getbase` was emitted and its `v` is NEITHER arm's value: this control asks for whole-"
+                 "value equality on purpose (a shape could satisfy a laxer test while the claim above could "
+                 "not), so a `v` that is some third thing means the statement ran and produced a value this "
+                 "row cannot recognise, which is a claim about the fixture and not about the engine");
+        fold_row(&base_fork, &base_fork_why, other == 0,
+                 "`/api/getbase` carries an arm's literal AND at least one `v` that is neither arm's, so more "
+                 "than one thing reached this sink and only some of them are values this row can name. THIS "
+                 "IS NOT THE RUNG BELOW: a ternary that was DECIDED emits one arm and nothing else, so a "
+                 "third entry says the branch FORKED and a sibling's value never became a literal — a "
+                 "concretization failure, which is one mechanism further on than a gate that never forked and "
+                 "is fixed somewhere else. Read the unnamed entry itself: `param_value_count` counts it, no "
+                 "row prints it, and whether it is a derived display shape or a duplicate of the arm beside "
+                 "it is the question that decides which of the two mechanisms this is");
+        /* AND THE RUNG THAT STOOD HERE PUBLISHED THE STRONGEST VERDICT THIS FILE HAS WITHOUT READING THE
+           FRONTIER, WHICH IS THE ONE STATE `probe_frontier_state` EXISTS TO WITHHOLD. It read: "the same
+           ternary over the same source in the same frame, with NO accessor in the way, produced exactly ONE
+           of its two arms — so `cfg.admin` is not two-armed at this point in the document at all. That is the
+           concretized gate §Solver-half forbids for server-injected absent state". Its ENTAILMENT clause was
+           exact and is kept below — rung 3 really does establish that no entry here is anything but an arm's
+           literal — and the verdict drawn from that does not follow, for two separately fatal reasons.
+           (i) THIS STATEMENT FORKS NOTHING OF ITS OWN, which the paragraph beside it in the document says in
+           as many words: the ternary is decided inside each arm that already exists. So a missing arm here is
+           an arm that did not REACH the document's last `<script>`, and the gate it came from is UPSTREAM —
+           `boot-fork` and `role-public` are the rows that measure it, so this row restating their finding is
+           one observation under two names rather than a second one.
+           (ii) A MISSING WORLD IS THREE STATES AND THE FRONTIER IS WHAT SEPARATES THEM, which is the whole of
+           `role_public`'s ladder above and of `fork_row_impl`'s three messages: at a DRAINED frontier a
+           missing world was LOST, while members have never been handed the thread the answer is THIS RUN
+           CANNOT SAY WHY, and `probe_frontier_state`'s own DCHECK calls the drained verdict "the strongest of
+           the three verdicts this rung exists to withhold". The old rung named it at every sample.
+           MEASURED, at the terminal census of one dev build's native smoke: `boot-fork`, `role-admin`,
+           `role-public` and `merged` all read 1 on the SAME line as `base-fork`=0 — so both worlds existed,
+           both reached the branch and their records had merged — while the frontier stood at 83 of 175
+           members never once handed the thread. Four rows of one census contradicting a fifth's sentence is
+           the sibling diff rather than a run of anybody's, and it needs no build.
+           SO IT IS ROUTED AND NOT RE-WORDED. The DECIDED state names `boot-fork`; the two-world claim goes to
+           FORK_ROW, which is this file's canonical spelling for one — one reading of the frontier, no second
+           copy of its three sentences, and the MISSING ARM NAMED, which no version of this row has ever
+           printed and which is the one coordinate a reader of a 0 here most needs. Rungs 1-3 stay, because
+           FORK_ROW asks `param_value_is` and cannot see a third entry; rung 3 is the only thing in this file
+           that can, which is why this is a split and not a replacement.
+           RETIREMENT: this record goes when no rung in this file can name a verdict `probe_frontier_state`
+           withholds without having called it — the reading asserted at the fold rather than argued here. */
+        fold_row(&base_fork, &base_fork_why, !bootfork_decided,
+                 "an arm is missing and the branch BOTH of this control's arms come from was DECIDED rather "
+                 "than forked — `boot-fork` on this same line carries the diagnosis. This statement forks "
+                 "nothing of its own, so it has nothing to add to that finding and is not a second one. "
+                 "EXACTLY ONE ARM IS ENTAILED AND NOT ASSUMED: the rung above has established that no entry "
+                 "here is anything but an arm's literal, which is what a membership test could not say");
+        FORK_ROW(js, &base_fork, &base_fork_why, "/api/getbase", "v",
+                 "the rest of the document", "gbADMIN", "gbPUBLIC");
+        fold_row(&base_fork, &base_fork_why, adm == 1 && pub == 1,
+                 "BOTH arms reached the sink and one of them reached it MORE THAN ONCE: every `v` is an arm's "
+                 "literal and the two do not appear once each, so a flow got to this statement some way the "
+                 "fixture does not describe. That is a finding rather than a stronger pass, and it is the "
+                 "claim `getter-arms` makes about the accessor asked of the control — a control that "
+                 "accepts a document its subject's own ladder would refuse isolates nothing");
+    }
+    /* THE CONSTRUCT-TIME THROW HAPPENED. Without this row a green `con_shape` below is also what a statement
+       that never threw produces, which is the failure mode of asserting only the consequence. */
+    int con_threw = param_value_only(js, "/api/conshape", "c", "threw");
+    /* AND THE NEXT CONSTRUCT IN THE SAME FRAME COMPLETED — TWO RUNGS, AND THE FIRST ONE IS NEW BECAUSE THE
+       ROW BELOW CAME BACK 0 IN A STATE THAT CANNOT PRODUCE IT. `con_threw` is 1, so `/api/conshape` was
+       emitted and its `c` merged to exactly one value; every emission of that endpoint therefore also carried
+       an `s`, computed by `'' + 1 + 2` from two literals, which no flow can disagree about. And the pending-
+       call idle check did NOT fire, so the shape this statement is about was not left standing either. A 0
+       below under those three facts is not the defect this statement was written for and must not be read as
+       it — `param_value_only` is false for a value that is WRONG and for a param carrying more than one
+       value, and those are different findings. This rung separates them: 1 here says the construct produced
+       ONE answer across every flow and the row below is about WHICH answer; 0 here says it produced several
+       or none, which is a fact about the flows and not about the operand shape at all. */
+    int con_s_one = (param_value_count(js, "/api/conshape", "s") == 1);
+    /* AND IT IS THE RIGHT ONE. When the shape IS left standing the dev build never reaches this row at all —
+       the idle-register check fires at the first opcode boundary after the catch and names the register — so
+       a `@WHY` over the pending-call registers is this statement's signature and this row is the release-
+       shaped half of it. */
+    int con_shape = param_value_only(js, "/api/conshape", "s", "12");
+    /* (2d)'s FOUR ROWS, AND THE FIRST IS THE ONE THAT MAKES THE OTHER THREE READABLE. `td_reach` is emitted
+       by the statement's own first line, so it separates "the arm ran and answered wrongly" from "the
+       statement never began" — which for these three is a live possibility rather than a formality, since a
+       document reaches them only if this engine has AsyncDisposableStack at all. `td_reach` at 0 says the
+       fixture is what needs fixing; at 1 it says every 0 below is the engine's.
+       EACH ROW IS `param_value_only` AND NOT `_has`, because each of these three settlements is DETERMINED —
+       the dispose methods run no unknown and take no gate, so a param carrying two values means the flow
+       forked where this statement says it cannot, which is a finding rather than a match. `_has` would also
+       be the wrong instrument for a second reason: it is a SUBSTRING test, so an `ok` row would be satisfied
+       by the failure spelling of a value that contained it. */
+    int td_reach = param_value_only(js, "/api/tdreach", "d", "ok");
+    /* 27.5.4.7.1 step 2's build path with a plain thenable, then 27.5.1.3 step 2.f's `then` read. */
+    int td_plain = param_value_only(js, "/api/tdplain", "d", "ok");
+    /* THE SAME WALK WITH `then` BEHIND AN ACCESSOR — the page code a C activation has no flow base for, and
+       the exact shape the deleted selector refused. */
+    int td_acc = param_value_only(js, "/api/tdacc", "d", "ok");
+    /* AND THE CHAIN LINK'S OWN PromiseResolve, reached only under a previous error: `rej` rather than `ok`
+       because the stack must still reject once a dispose method has thrown. A row asserting `ok` here would
+       be asserting the bug. */
+    int td_prev = param_value_only(js, "/api/tdprev", "d", "rej");
+    /* THE BYOB READ'S THREE WORLDS, AND THE ROW THAT SAYS WHETHER THE STATEMENT RAN AT ALL. `bs-reach` is
+       emitted by the statement's own body BEFORE the read, so it separates "the arms answered wrongly" from
+       "the statement never began" — which here is a live possibility and not a formality, since a document
+       reaches the read only if this engine has ReadableStream, its byte controller and a BYOB reader.
+       IT IS ASKED WITH `param_value_only` AND NOT `_has`: `d` is `ok` on one path and `no` on the other, so a
+       containment test would read 1 for a statement that threw before it began. */
+    const char *bs_reach_why = NULL;
+ int bs_reach = 1;
+    fold_row(&bs_reach, &bs_reach_why, param_value_only(js, "/api/bsreach", "d", "ok"),
+             "the BYOB read statement did not begin. /api/bsreach's `d` is not exactly `ok`, and its TWO "
+             "readings are told apart by the record itself: NO /api/bsreach record at all means no flow "
+             "reached this statement in this run, so every `bs-min` clause below is about how far the run got "
+             "and not about Streams §4.5.3; a record whose `d` carries `no` means the try block threw before "
+             "the read, and its `n` param NAMES the constructor that is missing — that is this fixture asking "
+             "for a capability, not §4.5.3 answering wrongly");
+    /* THE THREE WORLDS THEMSELVES, in ONE row, because they are ONE claim: over an unknown `min` Streams
+       §4.5.3's two conditions have both completions feasible, so a run that reaches only one or two of them
+       has LOST a sibling — which is what a collapse of the unknown to its example, or a fork gated on whether
+       an example exists, looks like from outside. The reach clause is folded FIRST so that a run in which the
+       statement never began carries THAT diagnosis rather than FORK_ROW's, which is about the schedule. */
+    const char *bsmin_why = NULL;
+ int bsmin_tt = 1;
+    fold_row(&bsmin_tt, &bsmin_why, bs_reach, bs_reach_why);
+    FORK_ROW(js, &bsmin_tt, &bsmin_why, "/api/bsmin", "w",
+             /* SHORT ENOUGH THAT NONE OF fork_row_impl's FOUR MESSAGES IS CUT — the assert there is what
+                says so, and the fuller statement of the claim is the comment above rather than a longer
+                subject, because this string is the TAIL of every one of them and a tail is what a bounded
+                `snprintf` drops first. */
+             "Streams §4.5.3's read over an unknown `min`: step 4's TypeError, steps 5.1/6.1's RangeError and "
+             "the pull-into that survives both are three worlds of ONE read",
+             "read", "TypeError", "RangeError");
+    /* AND THE SURVIVING ARM DELIVERED A CHUNK RATHER THAN A CLOSE. `done` is the read result's own field and
+       is DETERMINED — this stream is never closed and eight bytes are queued — so exactly one value is the
+       whole assertion. A 0 here while `w` carries `read` says the pulling world reached §4.9.5 and came back
+       with no fill (or forked downstream of a read this statement does not fork); a 0 here while `w` does NOT
+       carry `read` is that world lost, and the clause above is the one that names it. */
+    fold_row(&bsmin_tt, &bsmin_why, param_value_only(js, "/api/bsdone", "d", "false"),
+             "the pulling world settled without a chunk: /api/bsdone's `d` is not exactly `false`. Read it "
+             "against /api/bsmin's `w` — with `read` present this is §4.9.5's fill answering `done` true or "
+             "answering twice, and with `read` absent it is the clause above's lost world showing up a "
+             "second time");
+    const Probe rows[] = {
+        /* KEYED ON THE STATEMENT AND NOT ON AN ENDPOINT, because this row is about a branch and a branch
+           emits nothing: `cfg.admin` is what a reader greps for to find the gate it is about. It stands
+           FIRST of this family for `td-reach`'s reason — it is the row that says whether the six below it
+           are about the schedule, the delta, or a fork that never happened. */
+        { "boot-fork", bootfork_tt, "/api/data?role=", SESS_EXPLORE, bootfork_why },
+        { "role-admin", role_admin, "/api/data?role=", SESS_EXPLORE },
+        { "role-public", role_public, "/api/data?role=", SESS_EXPLORE, role_public_why },
+        { "merged", merged, "/api/data?role=", SESS_EXPLORE, merged_why },
+        { "pinned", pinned, "/api/region/", SESS_EXPLORE },
+        /* THE KEY IS THE STATEMENT THAT REACHES THE ENDPOINT, WHICH IS NOT ALWAYS THE ENDPOINT. This row reads
+           `/api/admin/audit-log`, an address that is in a CHUNK the provider serves and in no document at all;
+           what the document has is the `loadScript` behind the admin arm. A key is a substring of the PROGRAM,
+           never of the answer. */
+        { "lazy", lazy, "/chunk/admin.js", SESS_EXPLORE },
+        /* EACH CARRIES ITS OWN `why` NOW — a 0 on any of the three names the clause it stopped at, so a reader
+           can tell an unscheduled sibling from a lost DOM delta without inferring one from the other.
+           `dom-tt` IS GONE and is not replaced: it was `dom_attr && dom_node`, the AND of the two rows either
+           side of it, so it was a THIRD zero for two facts and could never carry information they did not.
+           A census row that is the conjunction of its neighbours is the same conflation this family was just
+           split to end, one level up. */
+        { "dom-attr", dom_attr, "/api/whoami", SESS_EXPLORE, domattr_why },
+        { "dom-node", dom_node, "/api/kid", SESS_EXPLORE, domnode_why },
+        { "accessor", accessor_tt, "/api/flag", SESS_EXPLORE, accessor_why },
+        /* (2d)'s four. THE KEY IS A SUBSTRING OF THE PROGRAM, so it is the statement's own spelling rather
+           than the endpoint it reaches — `asyncDispose` is what a reader greps for to find the statement
+           these rows are about. `td-reach` first, because it is the row that says whether the other three
+           are about the engine or about the fixture. */
+        { "td-reach", td_reach, "Symbol.asyncDispose", SESS_EXPLORE },
+        { "td-plain", td_plain, "Symbol.asyncDispose", SESS_EXPLORE },
+        { "td-accessor", td_acc, "Object.defineProperty(_tdT", SESS_EXPLORE },
+        { "td-preverr", td_prev, "tdboom", SESS_EXPLORE },
+        /* THE BYOB READ'S TWO. The key is the statement's own spelling — `bsMin` is what a reader greps for
+           to find the statement these rows are about — and `bs-reach` is first for `td-reach`'s reason: it is
+           the row that says whether `bs-min`'s 0 is the engine's or this fixture's. */
+        { "bs-reach", bs_reach, "bsMin", SESS_EXPLORE, bs_reach_why },
+        { "bs-min", bsmin_tt, "bsMin", SESS_EXPLORE, bsmin_why },
+        { "async", async_tt, "/api/then", SESS_EXPLORE, async_why },
+        { "await", await_tt, "/api/await", SESS_EXPLORE, await_why },
+        { "asynccall", asynccall_tt, "/api/asynccall", SESS_EXPLORE, asynccall_why },
+        { "throw", async_throw, "/api/caught", SESS_EXPLORE, async_throw_why },
+        { "preempt", async_preempt, "/api/asyncloop", SESS_EXPLORE, async_preempt_why },
+        { "delete-iso", delete_iso, "/api/tok", SESS_EXPLORE, delete_iso_why },
+        { "global-delete", global_delete, "/api/gdel", SESS_EXPLORE, global_delete_why },
+        { "floc-iso", floc_iso, "/api/floc", SESS_EXPLORE, floc_iso_why },
+        { "pushfork", pushfork_tt, "/api/pushfork", SESS_EXPLORE, pushfork_why },
+        { "mapfork", mapfork_tt, "/api/mapfork", SESS_EXPLORE, mapfork_why },
+        { "fefork", fefork_tt, "/api/fefork", SESS_EXPLORE, fefork_why },
+        { "owfork", owfork_tt, "/api/owfork", SESS_EXPLORE, owfork_why },
+        { "genfork", genfork_tt, "/api/genfork", SESS_EXPLORE, genfork_why },
+        { "gen2fork", gen2fork_tt, "/api/gen2fork", SESS_EXPLORE, gen2fork_why },
+        { "genofork", genofork_tt, "/api/genofork", SESS_EXPLORE, genofork_why },
+        { "afromfork", afromfork_tt, "/api/afromfork", SESS_EXPLORE, afromfork_why },
+        { "spreadfork", spreadfork_tt, "/api/spreadfork", SESS_EXPLORE, spreadfork_why },
+        { "setaddfork", setaddfork_tt, "/api/setaddfork", SESS_EXPLORE, setaddfork_why },
+        { "setfork", setfork_tt, "/api/setfork", SESS_EXPLORE, setfork_why },
+        { "mapmutfork", mapmutfork_tt, "/api/mapmutfork", SESS_EXPLORE, mapmutfork_why },
+        /* THE WEAK SIBLINGS OF THE THREE ROWS ABOVE — one family, so `smokerows`' prefix-before-the-hyphen
+           groups them and a reader sees the five together rather than four claims and a stray. `weak-reach`
+           is FIRST and is the only one that is a positive statement: the other four are two-world claims and
+           cannot tell their own 0 from the family never having run, which is the whole reason this one is
+           emitted by the pre-fork flow. See their computation for the residual on the collected-key arm. */
+        { "weak-reach", weakreach_tt, "/api/weakreach", SESS_EXPLORE, weakreach_why },
+        { "weak-add", weakadd_tt, "/api/weakadd", SESS_EXPLORE, weakadd_why },
+        { "weak-over", weakover_tt, "/api/weakover", SESS_EXPLORE, weakover_why },
+        { "weak-del", weakdel_tt, "/api/weakdel", SESS_EXPLORE, weakdel_why },
+        { "weak-set", weakset_tt, "/api/weakset", SESS_EXPLORE, weakset_why },
+        /* THE SAME PER-FLOW-RECORD CLAIM THE FIVE ROWS ABOVE MAKE, over a record behind a CLASS OPAQUE rather
+           than one inside a collection. Its baseline is minted in the same <script> as theirs and for the
+           same reason. */
+        { "iter-iso", iteriso_tt, "/api/iteriso", SESS_EXPLORE, iteriso_why },
+        { "afsfork", afsfork_tt, "/api/afsfork", SESS_EXPLORE, afsfork_why },
+        { "paffork", paffork_tt, "/api/paffork?", SESS_EXPLORE, paffork_why },
+        { "paf2fork", paf2fork_tt, "/api/paf2fork", SESS_EXPLORE, paf2fork_why },
+        { "redfork", redfork_tt, "/api/redfork", SESS_EXPLORE, redfork_why },
+        { "rerepfork", rerepfork_tt, "/api/rerepfork", SESS_EXPLORE, rerepfork_why },
+        { "toprimfork", toprimfork_tt, "/api/toprimfork", SESS_EXPLORE, toprimfork_why },
+        /* EACH CARRIES ITS OWN `why`, and the first clause of every one is "there is a record at all" — a 0
+           on any of these names whether the run ANSWERED the statement wrongly or never REACHED it, which is
+           the distinction a bare `&&` folded away and a lane was dispatched on. */
+        { "sortcollapse", sortcollapse_tt, "/api/sortcollapse", SESS_EXPLORE, sortcollapse_why },
+        { "sortvalueof", sortvalueof_tt, "/api/sortvalueof", SESS_EXPLORE, sortvalueof_why },
+        { "sortrest", sortrest_tt, "/api/sortrest", SESS_EXPLORE, sortrest_why },
+        { "sortdefault", sortdefault_tt, "/api/sortdefault", SESS_EXPLORE, sortdefault_why },
+        { "sortta", sortta_tt, "/api/sortta", SESS_EXPLORE, sortta_why },
+        { "sortnan", sortnan_tt, "/api/sortnan", SESS_EXPLORE, sortnan_why },
+        { "sortdefctl", sortdefctl_tt, "/api/sortdefctl", SESS_EXPLORE, sortdefctl_why },
+        { "sortbranch", sortbranch_tt, "/api/sortbranch", SESS_EXPLORE, sortbranch_why },
+        { "gcallfork", gcallfork_tt, "/api/gcallfork", SESS_EXPLORE, gcallfork_why },
+        { "gapplyfork", gapplyfork_tt, "/api/gapplyfork", SESS_EXPLORE, gapplyfork_why },
+        { "grefapplyfork", grefapplyfork_tt, "/api/grefapplyfork", SESS_EXPLORE, grefapplyfork_why },
+        /* THE THREE OPERAND-SHAPE STATEMENTS. Each key is the piece of PROGRAM TEXT that only its own statement
+           puts in the document — the rejected head's error message, the rest parameter's own read, the accessor
+           read, the constructor's name — so a row selects on the statement it is about and on nothing else. */
+        { "faw-handler", faw_handler, "fawREJ", SESS_EXPLORE },
+        { "faw-depth", faw_depth, "fawREJ", SESS_EXPLORE },
+        { "rest-args", rest_args, "_fr.length", SESS_EXPLORE },
+        { "rest-loop", rest_loop, "_fr.length", SESS_EXPLORE },
+        /* THE ACCESSOR LADDER, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer. */
+        { "getter-url", getter_url, "_gx.x", SESS_EXPLORE },
+        { "getter-concrete", getter_concrete, "_gx.x", SESS_EXPLORE },
+        { "getter-fork", getter_fork, "_gx.x", SESS_EXPLORE },
+        { "getter-arms", getter_arms, "_gx.x", SESS_EXPLORE },
+        /* AND ITS CONTROL, keyed on its OWN statement — it is a different statement making a different claim,
+           so it carries its own key rather than borrowing the accessor's. */
+        { "base-fork", base_fork, "gbADMIN", SESS_EXPLORE, base_fork_why },
+        { "con-threw", con_threw, "_CShape", SESS_EXPLORE },
+        { "con-s-one", con_s_one, "_CShape", SESS_EXPLORE },
+        { "con-shape", con_shape, "_CShape", SESS_EXPLORE },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `modules` document. */
+TF_UNIT void probes_modules(const char *js, Probe *tab, int *n) {
     /* ─── THE DYNAMIC `import()` ROWS, AND THEY EXIST BECAUSE THE WITNESSES ALONE WERE NOT SCORABLE ───
      *
      * THE STATEMENTS WERE WRITTEN WITH `fetch()` WITNESSES AND NO ROWS, which made them readable only by a
@@ -10183,16 +11622,19 @@ static int probes_eval(const char *js, Probe *out, int cap) {
      * wrong", which is the three-states-behind-one-answer shape this table exists to refuse — and the two
      * readings are gated on the first for `orphan-gate`'s reason, since a statement that did not run emits
      * neither arm. */
-    const char *md_self_why = NULL; int md_self = 1;
+    const char *md_self_why = NULL;
+ int md_self = 1;
     fold_row(&md_self, &md_self_why, param_value_is(js, "/api/selfdefault", "w", "mdOK"),
              "a SCRIPT-level `const` read UNINITIALISED at the arrow's call — `mdWRONG` means the default "
              "parameter `m = mdSelf` saw the TDZ, which for a script-level binding is one cell written by one "
              "algorithm, so this is not the module phase and not a world the write is missing from");
-    const char *md_fork_ran_why = NULL; int md_fork_ran = 1;
+    const char *md_fork_ran_why = NULL;
+ int md_fork_ran = 1;
     fold_row(&md_fork_ran, &md_fork_ran_why, !!strstr(js, "\"/api/mdforkpath\""),
              "NOT REACHED: there is no /api/mdforkpath record at all, so the statement never ran and the two "
              "rows gated on this one are unaskable. That is the SCHEDULE");
-    const char *md_fork_reach_why = NULL; int md_fork_reach = 1;
+    const char *md_fork_reach_why = NULL;
+ int md_fork_reach = 1;
     fold_row(&md_fork_reach, &md_fork_reach_why,
              param_value_is(js, "/api/mdforkreach", "w", "A") &&
              param_value_is(js, "/api/mdforkreach", "w", "P"),
@@ -10201,7 +11643,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "flow of its own and was not handed the thread -- and it is why the binding rows gated on this "
              "one cannot be read as the fork collapsing. The letters carry the world and NO binding read, so "
              "this row moves for scheduling reasons alone");
-    const char *md_fork_both_why = NULL; int md_fork_both = 1;
+    const char *md_fork_both_why = NULL;
+ int md_fork_both = 1;
     fold_row(&md_fork_both, &md_fork_both_why,
              param_value_is(js, "/api/mdforkpath", "w", "AmdfOK") &&
              param_value_is(js, "/api/mdforkpath", "w", "PmdfOK"),
@@ -10212,7 +11655,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "§Learning-from-replies: a config field IS opaque-for-control-flow, and this statement is not "
              "the document's FIRST test of it, so the per-document branch key means the later tests are "
              "DECIDED inside the arm that already exists -- which is correct and is not this row's subject");
-    const char *md_fork_bind_why = NULL; int md_fork_bind = 1;
+    const char *md_fork_bind_why = NULL;
+ int md_fork_bind = 1;
     /* THE PRESENCE CLAUSE IS FOLDED FIRST, AND THAT IS WHAT MAKES THIS A ROW RATHER THAN A FALSE CLEAN BILL:
        A BARE NEGATIVE IS SATISFIED BY THE STATEMENT NOT RUNNING. `!strstr(js, "mdfWRONG")` reads 1 on a table
        composed before anything has happened, so this row published a 1 meaning "no arm read the `const`
@@ -10249,26 +11693,31 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "an arm of the forked path read the `const` UNINITIALISED — `mdfWRONG` is in the document. The "
              "binding is the PROGRAM's and neither world wrote it, so a world that reads it uninitialised is "
              "reading its own timeline wrongly rather than another world's state");
-    const char *mod_entered_why = NULL; int mod_entered = 1;
+    const char *mod_entered_why = NULL;
+ int mod_entered = 1;
     fold_row(&mod_entered, &mod_entered_why, param_value_is(js, "/api/modentered", "w", "mmENTER"),
              "NOT REACHED: there is no /api/modentered record, so the statement holding the dynamic "
              "`import()` never ran its FIRST and unconditional emission. That is the SCHEDULE and not the "
              "module subsystem — the two rows gated on this one are unaskable until it answers");
-    const char *mod_const_why = NULL; int mod_const = 1;
+    const char *mod_const_why = NULL;
+ int mod_const = 1;
     fold_row(&mod_const, &mod_const_why, param_value_is(js, "/api/modconst", "w", "mmOK"),
              "the module's top-level `const` read UNINITIALISED at the arrow's call — `mmBAD` is the real "
              "bundle's `<name> is not initialized` reproduced here, which means the §16.2.1.6.1.3 Evaluate ( ) "
              "body that writes that cell ran in a world this read is not in (solver/cow.c's module_eval)");
-    const char *mod_default_why = NULL; int mod_default = 1;
+    const char *mod_default_why = NULL;
+ int mod_default = 1;
     fold_row(&mod_default, &mod_default_why, param_value_is(js, "/api/moddefault", "w", "mmDEF"),
              "the module's namespace carries no usable `default` — `mmNODEF` is the ESM-interop read the real "
              "bundle also fails, which is a namespace whose exports were linked in one world and read in "
              "another rather than a defect in the export itself");
-    const char *mod_typeask_why = NULL; int mod_typeask = 1;
+    const char *mod_typeask_why = NULL;
+ int mod_typeask = 1;
     fold_row(&mod_typeask, &mod_typeask_why, param_value_is(js, "/api/modtypeask", "w", "mtASK"),
              "NOT REACHED: there is no /api/modtypeask record, so the statement that imports the "
              "`application/json`-served module never ran and the MIME gate was never asked");
-    const char *mod_type_why = NULL; int mod_type = 1;
+    const char *mod_type_why = NULL;
+ int mod_type = 1;
     fold_row(&mod_type, &mod_type_why, param_value_is(js, "/api/modtype", "w", "TypeError"),
              "the import of an `application/json`-served module did not reject with a TypeError. "
              "`SyntaxError` is a COMPILE of the bytes, which is HTML §8.1.4.2's gate not being asked; "
@@ -10278,74 +11727,92 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "engine compiled and evaluated a reply a browser refuses before any source text exists. That is "
              "the half a status or a parse error cannot report, and it is why this row is a conjunction");
     /* HTML §8.1.5.1 "The resolution algorithm" — core/loader/module_loader.c's module_normalize. */
-    const char *ms_bare_ask_why = NULL; int ms_bare_ask = 1;
+    const char *ms_bare_ask_why = NULL;
+ int ms_bare_ask = 1;
     fold_row(&ms_bare_ask, &ms_bare_ask_why, param_value_is(js, "/api/modbareask", "w", "msASK"),
              "NOT REACHED: there is no /api/modbareask record, so the bare-specifier statement never ran");
-    const char *ms_bare_why = NULL; int ms_bare = 1;
+    const char *ms_bare_why = NULL;
+ int ms_bare = 1;
     fold_row(&ms_bare, &ms_bare_why, param_value_is(js, "/api/modbare", "w", "TypeError")
                                      && !param_value_is(js, "/api/modbare", "w", "msLOADED"),
              "`import('chunk/mdmod.js')` did not reject with step 14's TypeError alone — `msLOADED` is the "
              "bare specifier fetched as a document-relative address, which no import map remapped");
-    const char *ms_same_ask_why = NULL; int ms_same_ask = 1;
+    const char *ms_same_ask_why = NULL;
+ int ms_same_ask = 1;
     fold_row(&ms_same_ask, &ms_same_ask_why, param_value_is(js, "/api/modsameask", "w", "muASK"),
              "NOT REACHED: there is no /api/modsameask record, so the two-spelling statement never ran");
-    const char *ms_same_why = NULL; int ms_same = 1;
+    const char *ms_same_why = NULL;
+ int ms_same = 1;
     fold_row(&ms_same, &ms_same_why, param_value_is(js, "/api/modsame", "w", "muSAME")
                                      && !param_value_is(js, "/api/modsame", "w", "muTWO"),
              "`/chunk/mdmod.js` and `./chunk/../chunk/mdmod.js` did not answer one namespace — `muTWO` is a "
              "module map keyed by the specifier rather than by the URL resolve a module specifier returns; an "
              "error name is a load of one spelling failing");
-    const char *ms_handler_ask_why = NULL; int ms_handler_ask = 1;
+    const char *ms_handler_ask_why = NULL;
+ int ms_handler_ask = 1;
     fold_row(&ms_handler_ask, &ms_handler_ask_why, param_value_is(js, "/api/modhandlerask", "w", "ehASK"),
              "NOT REACHED: there is no /api/modhandlerask record, so the dispatched click ran no handler body");
-    const char *ms_handler_why = NULL; int ms_handler = 1;
+    const char *ms_handler_why = NULL;
+ int ms_handler = 1;
     fold_row(&ms_handler, &ms_handler_why, param_value_is(js, "/api/modhandler", "w", "ehDEF"),
              "an `import()` inside an event handler, whose referrer is null, did not load the module its API "
              "base URL names");
-    const char *ms_eval_ask_why = NULL; int ms_eval_ask = 1;
+    const char *ms_eval_ask_why = NULL;
+ int ms_eval_ask = 1;
     fold_row(&ms_eval_ask, &ms_eval_ask_why, param_value_is(js, "/api/modevalask", "w", "meASK"),
              "NOT REACHED: there is no /api/modevalask record, so the dynamic-function statement never ran");
-    const char *ms_eval_why = NULL; int ms_eval = 1;
+    const char *ms_eval_why = NULL;
+ int ms_eval = 1;
     fold_row(&ms_eval, &ms_eval_why, param_value_is(js, "/api/modeval", "w", "meDEF"),
              "an `import()` inside a dynamic function's body did not load the module — its referrer is "
              "JS_EVAL_SCRIPT_NAME, which module_loader.c resolves against the API base URL");
     /* HTML §8.1.5.3 "Import map processing model" — core/loader/import_map.c. */
-    const char *im_ask_why = NULL; int im_ask = 1;
+    const char *im_ask_why = NULL;
+ int im_ask = 1;
     fold_row(&im_ask, &im_ask_why, param_value_is(js, "/api/imask", "w", "imASK"),
              "NOT REACHED: there is no /api/imask record, so the import-map statement never ran");
-    const char *im_map_why = NULL; int im_map = 1;
+    const char *im_map_why = NULL;
+ int im_map = 1;
     fold_row(&im_map, &im_map_why, param_value_is(js, "/api/immap", "w", "imDEF"),
              "a bare specifier the first import map maps did not load its module — `TypeError` is either no map "
              "registered or the second map's conflicting rule (to the JSON-served `/chunk/mdbad.js`) having "
              "replaced the first's");
-    const char *im_merge_why = NULL; int im_merge = 1;
+    const char *im_merge_why = NULL;
+ int im_merge = 1;
     fold_row(&im_merge, &im_merge_why, param_value_is(js, "/api/immerge", "w", "imgDEF"),
              "a bare specifier only the second import map maps did not load — the merge did not add a new map's "
              "rule for a specifier the existing map lacks");
-    const char *im_skip_why = NULL; int im_skip = 1;
+    const char *im_skip_why = NULL;
+ int im_skip = 1;
     fold_row(&im_skip, &im_skip_why, param_value_is(js, "/api/imskip", "w", "isGOOD"),
              "an import map whose other entries are invalid did not register its valid one — an invalid address, "
              "an empty key or an unknown top-level key is skipped or nulled, never thrown");
-    const char *im_null_why = NULL; int im_null = 1;
+    const char *im_null_why = NULL;
+ int im_null = 1;
     fold_row(&im_null, &im_null_why, param_value_is(js, "/api/imnull", "w", "TypeError"),
              "a specifier whose import map address is invalid did not reject with TypeError — sort and normalize a"
              " module specifier map sets it to null, and resolve an imports match throws on a null entry");
-    const char *im_scope_out_why = NULL; int im_scope_out = 1;
+    const char *im_scope_out_why = NULL;
+ int im_scope_out = 1;
     fold_row(&im_scope_out, &im_scope_out_why, param_value_is(js, "/api/imscopeout", "w", "TypeError"),
              "a mapping scoped to `/chunk/` applied to the document's own referrer");
-    const char *im_scope_in_why = NULL; int im_scope_in = 1;
+    const char *im_scope_in_why = NULL;
+ int im_scope_in = 1;
     fold_row(&im_scope_in, &im_scope_in_why, param_value_is(js, "/api/imscopein", "w", "siLOADED"),
              "a mapping scoped to `/chunk/` did not apply to a module served from under `/chunk/`");
-    const char *im_late1_why = NULL; int im_late1 = 1;
+    const char *im_late1_why = NULL;
+ int im_late1 = 1;
     fold_row(&im_late1, &im_late1_why, param_value_is(js, "/api/imlate1", "w", "TypeError"),
              "`/chunk/mdlate.js`, served as JSON, did not reject with TypeError — the reach witness for the resolved "
              "module set record the second import map is merged against");
-    const char *im_late2_why = NULL; int im_late2 = 1;
+    const char *im_late2_why = NULL;
+ int im_late2 = 1;
     fold_row(&im_late2, &im_late2_why, param_value_is(js, "/api/imlate2", "w", "TypeError"),
              "a later import map's rule for a specifier already in the resolved module set was merged — `ilLOADED` "
              "is `/chunk/mdlate.js` remapped to `/chunk/mdmod.js`, where the merge removes rules that impact an "
              "already resolved module");
-    const char *im_err_why = NULL; int im_err = 1;
+    const char *im_err_why = NULL;
+ int im_err = 1;
     fold_row(&im_err, &im_err_why, param_value_is(js, "/api/imerr", "w", "imSYNTAX")
                                    && !param_value_is(js, "/api/imerr", "w", "imNONE"),
              "an import map that does not parse was not reported at the global as its SyntaxError (HTML §8.1.4.8's"
@@ -10357,7 +11824,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        branch an unknown cannot decide and §Solver-half forks it, putting BOTH constant tokens in the
        document. Exactly one of them is the record having carried the EXAMPLE alone — a wrong answer rather
        than a lossy one, because the arm it deletes is the gated surface this tool exists to reach. */
-    const char *mod_world_reach_why = NULL; int mod_world_reach = 1;
+    const char *mod_world_reach_why = NULL;
+ int mod_world_reach = 1;
     fold_row(&mod_world_reach, &mod_world_reach_why,
              param_value_is(js, "/api/modworldreach", "w", "A") &&
              param_value_is(js, "/api/modworldreach", "w", "P"),
@@ -10365,7 +11833,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "arm letter of `cfg.admin` and not both. That is the SCHEDULE, and it is why the row gated on this "
              "one cannot be read as a module binding lost across worlds — the letters carry the world and no "
              "module read, so this row moves for scheduling reasons alone");
-    const char *mod_world_why = NULL; int mod_world = 1;
+    const char *mod_world_why = NULL;
+ int mod_world = 1;
     fold_row(&mod_world, &mod_world_why,
              param_value_is(js, "/api/modworld", "w", "AmmOK") &&
              param_value_is(js, "/api/modworld", "w", "PmmOK"),
@@ -10389,13 +11858,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
      * two-sided assert would abort on a 1 above a 0. A gate is an entailment or it is a label.
      * ALL THREE ARE POSITIVE ROWS, SO NONE OWES A `reach`: a row whose claim is a token being PRESENT reads 0
      * when its statement did not run, which is the correct polarity and is its own finding. */
-    const char *cj_ran_why = NULL; int cj_ran = 1;
+    const char *cj_ran_why = NULL;
+ int cj_ran = 1;
     fold_row(&cj_ran, &cj_ran_why, !!strstr(js, "\"/api/cjreach\""),
              "NOT REACHED: there is no /api/cjreach record at all, so no world ran the statement and the two "
              "rows gated on this one are unaskable. That is the SCHEDULE. This emission reads neither the "
              "closure cell nor the cached object's property, so entering the statement cannot have failed for "
              "the reason those rows are about");
-    const char *cj_reach_why = NULL; int cj_reach = 1;
+    const char *cj_reach_why = NULL;
+ int cj_reach = 1;
     fold_row(&cj_reach, &cj_reach_why,
              param_value_is(js, "/api/cjreach", "w", "A") &&
              param_value_is(js, "/api/cjreach", "w", "P"),
@@ -10403,7 +11874,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "both. That is the SCHEDULE, and it is why the row gated on this one cannot be read as the cache "
              "disagreeing across worlds — the letters carry the world and read neither write, so this row "
              "moves for scheduling reasons alone");
-    const char *cj_world_why = NULL; int cj_world = 1;
+    const char *cj_world_why = NULL;
+ int cj_world = 1;
     fold_row(&cj_world, &cj_world_why,
              param_value_is(js, "/api/cjworld", "w", "AcjOK") &&
              param_value_is(js, "/api/cjworld", "w", "PcjOK"),
@@ -10452,7 +11924,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
      * ALL THREE ARE POSITIVE ROWS, SO NONE OWES A `reach`. A row whose claim is a token being PRESENT reads 0
      * when its statement did not run, which is the correct polarity and is its own finding; `reach` exists for
      * a row that reads 1 then, and the band's own assert refuses a positive row declared with one. */
-    const char *mod_drive_ran_why = NULL; int mod_drive_ran = 1;
+    const char *mod_drive_ran_why = NULL;
+ int mod_drive_ran = 1;
     fold_row(&mod_drive_ran, &mod_drive_ran_why,
              param_value_is(js, "/api/moddriveran", "w", "mdrENTER"),
              "NOT REACHED: there is no /api/moddriveran record, so no drive of `mmDrive` ever entered its "
@@ -10462,7 +11935,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "rows' shared `why` splits with engine_orphan_census), no world linked `/chunk/mdmod.js` so the "
              "prologue minted no function object for the walk to find (read `mod-entered` and "
              "`mod-world-reach` beside this row), or the walk ran and took some other body");
-    const char *mod_drive_fn_why = NULL; int mod_drive_fn = 1;
+    const char *mod_drive_fn_why = NULL;
+ int mod_drive_fn = 1;
     fold_row(&mod_drive_fn, &mod_drive_fn_why,
              param_value_is(js, "/api/moddrivefn", "w", "mdrFN"),
              "the drive entered the body and could not read a module-level FUNCTION DECLARATION: §16.2.1.7.3.1 "
@@ -10471,7 +11945,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "would be the cell holding something that is not a function, which is a different defect; the "
              "token ABSENT with `mdrENTER` present is the read having THROWN, which is what "
              "engine_orphan_call's residual predicts for a drive");
-    const char *mod_drive_const_why = NULL; int mod_drive_const = 1;
+    const char *mod_drive_const_why = NULL;
+ int mod_drive_const = 1;
     fold_row(&mod_drive_const, &mod_drive_const_why,
              param_value_is(js, "/api/moddriveconst", "w", "mmOK"),
              "the drive read a module-level FUNCTION DECLARATION and could not read a module-level `const`: "
@@ -10522,12 +11997,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
      * on a run that never made the statement and owes a `reach` rather than a `gate`, which is the whole of what
      * that field is for. Its 0 and `mh-dep`'s are two facts and not one: one says the child never evaluated and
      * the other names why. */
-    const char *mh_ask_why = NULL; int mh_ask = 1;
+    const char *mh_ask_why = NULL;
+ int mh_ask = 1;
     fold_row(&mh_ask, &mh_ask_why, param_value_is(js, "/api/mhask", "w", "mhASK"),
              "NOT REACHED: there is no /api/mhask record, so the statement holding the only STATIC-import graph "
              "in this fixture never ran its FIRST and unconditional emission. That is the SCHEDULE and not the "
              "module graph — every row gated on this one is unaskable until it answers");
-    const char *mh_dep_why = NULL; int mh_dep = 1;
+    const char *mh_dep_why = NULL;
+ int mh_dep = 1;
     fold_row(&mh_dep, &mh_dep_why, param_value_is(js, "/api/mhdep", "w", "mhDEP"),
              "the statement RAN and the STATICALLY IMPORTED dependency never evaluated: no /api/mhdep record, so "
              "ECMAScript §16.2.1.6.1.1 \"LoadRequestedModules ( [ hostDefined ] )\" either never asked the host for "
@@ -10541,7 +12018,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "through the same serve path and the same park kind, so its 1 excludes both of those and leaves "
              "the static descent, while its 0 means this row is not about the graph at all. READ `mh-nofail` "
              "TOO: a 0 there says the load REJECTED and names the reason, where a 1 says it never settled");
-    const char *mh_host_why = NULL; int mh_host = 1;
+    const char *mh_host_why = NULL;
+ int mh_host = 1;
     fold_row(&mh_host, &mh_host_why, param_value_is(js, "/api/mhhost", "w", "mhHOST"),
              "the dependency evaluated and the IMPORTER did not: no /api/mhhost record. ECMAScript §16.2.1.6.1.3.1 "
              "\"InnerModuleEvaluation ( module, stack, index )\" evaluates a module's dependencies before the "
@@ -10549,7 +12027,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "which is a LINK failure rather than a load one, since ECMAScript §16.2.1.6.1.2 \"Link ( )\" runs in "
              "between and ECMAScript §16.2.1.7.3.1 \"InitializeEnvironment ( )\" throws a SyntaxError for an "
              "export it cannot resolve");
-    const char *mh_bind_why = NULL; int mh_bind = 1;
+    const char *mh_bind_why = NULL;
+ int mh_bind = 1;
     fold_row(&mh_bind, &mh_bind_why, param_value_is(js, "/api/mhbind", "w", "mhBIND"),
              "the importer's body ran and could not read the NAMED imported binding: ECMAScript §16.2.1.7.2.2 "
              "\"ResolveExport ( exportName [ , resolveSet ] )\" is the arm that answers it — \"ResolveExport "
@@ -10560,7 +12039,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "value, which is a resolution that answered the wrong module or the wrong name; the token ABSENT "
              "with `mhHOST` present is the read having THROWN, which is the real bundle's "
              "`<name> is not initialized` on an imported binding rather than on a local one");
-    const char *mh_default_why = NULL; int mh_default = 1;
+    const char *mh_default_why = NULL;
+ int mh_default = 1;
     fold_row(&mh_default, &mh_default_why, param_value_is(js, "/api/mhdefault", "w", "mhDEF"),
              "the importer's body ran and the STATIC DEFAULT import read back no usable value: `mhNODEF` is the "
              "ESM-interop read a real bundle also fails. It is a DIFFERENT cell from the one `mod-default` "
@@ -10568,7 +12048,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "\"GetModuleNamespace ( module )\" mints, and this one reads an imported BINDING resolved at link "
              "time — so the two reading differently localises the defect to whichever of the two mints the cell. "
              "The token ABSENT with `mh-bind` answered is the read having THROWN");
-    const char *mh_nofail_why = NULL; int mh_nofail = 1;
+    const char *mh_nofail_why = NULL;
+ int mh_nofail = 1;
     fold_row(&mh_nofail, &mh_nofail_why, !strstr(js, "\"/api/mhfail\""),
              "the graph load REJECTED: /api/mhfail is in this document, so `await import('/chunk/mdhost.js')` "
              "threw and its `w` carries the error NAME. A `TypeError` is HTML §8.1.6.7.3 "
@@ -10577,12 +12058,326 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "`SyntaxError` is ECMAScript §16.2.1.7.3.1 \"InitializeEnvironment ( )\" having failed to "
              "resolve an export, "
              "which is a LINK failure and the one state that reaches this row with `mh-dep` answered");
-    const char *sc_msg_ran_why = NULL; int sc_msg_ran = 1;
+    /* §8.1.4.4's MODULE ENTRY AND ITS PARK SEAM — TWO ROWS, BECAUSE THEY ARE TWO DIFFERENT DIFFS.
+       THIS DOCUMENT'S MODULE OBSERVATIONS WERE ALL BEHIND A RUNG ABOUT SOMETHING ELSE. `/api/csmod` above is
+       rung TWO of `current-script-restore`, whose rung ONE is a TIMER record, so while the timer is unreached
+       nothing reports on the module arm at all — it could stop running entirely and no row here would move.
+       That is the three-states-behind-one-answer this file's readers exist to refuse, and it is why the rows
+       below ask of an endpoint NO other statement in this document can emit.
+       THE STATEMENT COMPILES ONLY THROUGH THE MODULE ENTRY, which is what makes rung 1 a claim about
+       §8.1.4.4 rather than about a counter: it carries a TOP-LEVEL `await`, which ECMAScript §16.2.1.6
+       ParseModule accepts and §16.1.6 ParseScript refuses. A loader that classified the row CLASSIC would
+       fail the compile and emit neither record, so a record here IS the module algorithm having run.
+       THE TWO ROWS ARE ENTAILED AND ARE STILL TWO ROWS. `module-tla` implies `module-entry` — a body cannot
+       resume past an await it never reached — so folded they would read as one 0 for either of two opposite
+       repairs: the loader's classification of the row, and the flow machinery's park/resume of an async
+       module body. Split, the pair NAMES which. */
+    const char *modentry_why = NULL;
+ int modentry_tt = 1;
+    fold_row(&modentry_tt, &modentry_why, !!strstr(js, "\"/api/modreach\""),
+             "NOT REACHED: there is no /api/modreach record at all, so §8.1.4.4's MODULE entry never ran this "
+             "document's module. The source carries a top-level `await`, which §16.1.6 ParseScript refuses, so "
+             "a CLASSIC classification of this row fails the compile and emits nothing — read the "
+             "`program-did-not-compile` step-unit row beside this one to tell that from the SCHEDULE");
+    const char *modtla_why = NULL;
+ int modtla_tt = 1;
+    fold_row(&modtla_tt, &modtla_why, !!strstr(js, "\"/api/modreach\""),
+             "NOT REACHED: there is no /api/modreach record at all, so the module body never began and the "
+             "await below it was never reached. That is `module-entry`'s finding, not this row's");
+    fold_row(&modtla_tt, &modtla_why, param_value_is(js, "/api/modtla", "w", "resumed"),
+             "the module body BEGAN and did not come back from its top-level `await`: /api/modreach is here "
+             "and /api/modtla is not. §16.2.1.6.1.3.1's async-evaluated body parks into the slot "
+             "JS_ResumeParkedFlow drains at the top of the scheduler loop, so a continuation that never "
+             "resumed is the park seam dropping a module's frame where it carries every other flow's — and "
+             "a module whose evaluation never completes leaves its promise pending for ever");
+    /* §16.2.1.7.3.1 InitializeEnvironment's BINDING, asked at the module body's own level and again from two
+       closures down. The pair is entailed — the nested read cannot be reported on while the statement has not
+       run — and the statement that answers them names WHICH of two opposite repairs a 0 is: the prologue that
+       initializes the cell, or the closure-variable chain that reaches it. */
+    const char *mfdtop_why = NULL;
+ int mfdtop_tt = 1;
+    fold_row(&mfdtop_tt, &mfdtop_why, param_value_is(js, "/api/mfdtop", "d", "ok"),
+             "the module's top-level FUNCTION DECLARATION is not a function at the module body's own level. "
+             "§16.2.1.7.3.1's lexical pass runs InstantiateFunctionObject and InitializeBinding for it BEFORE "
+             "§16.2.1.7.3.2 ExecuteModule, so no point in this body can observe a pre-instantiation value — "
+             "read the `d` param: `undefined` is the binding born VAR-shaped and read as a plausible datum, "
+             "and an ABSENT record is the statement not having run at all, which this row cannot tell from a "
+             "document whose tail no program reached");
+    const char *mfdnest_why = NULL;
+ int mfdnest_tt = 1;
+    fold_row(&mfdnest_tt, &mfdnest_why, !!strstr(js, "\"/api/mfdtop\""),
+             "NOT REACHED: there is no /api/mfdtop record at all, so the module statement this row is about "
+             "never ran and the closure chain below it was never exercised. That is `mfd-top`'s finding, not "
+             "this row's");
+    fold_row(&mfdnest_tt, &mfdnest_why, param_value_is(js, "/api/mfdnest", "d", "Fok"),
+             "the module's top-level FUNCTION DECLARATION resolved at the module body's own level and NOT from "
+             "two FunctionExpression levels below it: /api/mfdtop carries `ok` and /api/mfdnest does not carry "
+             "`Fok`. The binding is one Module Environment Record cell either way, so the two reads cannot "
+             "disagree about §16.2.1.7.3.1 — what differs is the CHAIN get_closure_var builds from the use "
+             "down through each nesting level, which is where a lost or mis-indexed closure variable makes a "
+             "correctly-initialized cell read as `undefined` at a call the page then reports as `not a "
+             "function` arbitrarily far from the module. This is the shape a real ESM chunk's `@swc/helpers` "
+             "shim has, so a 0 here is a whole bundle's endpoints lost on line 1");
+    /* ─── HTML §4.12.1.1's PARK FOR A CONNECTED `<script src>`, AND THE PROGRAM ITS REPLY BECOMES ──────────
+       FOUR CLAUSES IN THE ORDER THE FACT IS BUILT, so a 0 names which of four things happened — and they are
+       four different repairs. (1) the injecting statement RAN at all, which is the SCHEDULE. (2) the `src` IDL
+       setter reflected to the content attribute, which is the one failure that is THIS FIXTURE's: with no `src`
+       on the element §4.12.1.1 takes its no-source arm and parks nothing, and every clause below would then
+       read zero for a defect in the document rather than in the engine. (3) the PARK happened — the endpoint
+       record for the served address is emitted by `pending_park_request` at the one park door, so its presence
+       says the post-connection steps ran over a CONNECTED element, `prepare` reached the as-soon-as-possible
+       destination, and `engine_pending_script_url` pushed the only `FLOW_PENDING_SCRIPT` record there is. (4)
+       the reply was DELIVERED and its bytes became a program of this flow.
+       CLAUSE 3 ASKS THE ABSOLUTE ADDRESS AND THAT IS THE WHOLE POINT OF THE SPELLING. The park carries the
+       result of §4.12.1.1's "encoding-parsing a URL given src, relative to el's node document", so the record
+       the door emits names `https://x.test/chunk/injsrc.js` and never the relative reference this document
+       wrote — a row asking the relative spelling would be asking for a string no park has ever held.
+       A 0 AT CLAUSE 4 HAS TWO READINGS AND THE RUN'S OWN STREAM SEPARATES THEM, which is why the text names
+       the command rather than a conclusion. Either this host served the address as DATA — `tf_served_at` did
+       not match, and the delivery compiled `{"region":"us-west-2"}`, which is not a Script — or the delivery
+       arm did not compile a JavaScript-typed reply at all. The first raises an UNCAUGHT page error at an
+       address this fixture declares nothing for, so it prints `@PAGEERR at=https://x.test/chunk/injsrc.js` in
+       the run's own stream and appears in no `@PAGEERR-STAGED` line; the second prints nothing. That is the
+       discriminator, and it is in the log rather than in the result document, which is why no clause here can
+       ask it: a clause over `pageErrors` would have to match the address inside a message this reader has
+       never been shown, and a clause that cannot fail is not a check. */
+    const char *injsrc_why = NULL;
+ int injsrc_tt = 1;
+    fold_row(&injsrc_tt, &injsrc_why, !!strstr(js, "\"/api/injmade\""),
+             "NOT REACHED: there is no /api/injmade record at all, so the statement that creates and appends "
+             "the `<script src>` never ran. That is the SCHEDULE, and it says nothing whatever about whether "
+             "§4.12.1.1's prepare reaches this engine's one injected-script park. Read `completed` on the "
+             "@COLD line beside it: this program stands at the TAIL of the document, so a `completed` below "
+             "its own index is this row not having been asked");
+    fold_row(&injsrc_tt, &injsrc_why, param_value_is(js, "/api/injmade", "d", "ok"),
+             "the statement RAN and `s.src = ...` did not reflect to the content attribute: /api/injmade's "
+             "`d` is `wrong`, so `s.getAttribute('src')` was not the address this line assigned. §4.12.1.1 "
+             "reads the ATTRIBUTE, so prepare would take the no-source arm and park nothing — THAT IS A "
+             "DEFECT IN THIS FIXTURE OR IN THE `src` REFLECTION AND NOT IN THE PARK, and it is its own clause "
+             "for exactly that reason");
+    fold_row(&injsrc_tt, &injsrc_why, !!strstr(js, "\"https://x.test/chunk/injsrc.js\""),
+             "THE ELEMENT WAS CONNECTED WITH A `src` AND NO PARK WAS TAKEN. The two clauses above say the "
+             "statement ran and the attribute was there before the append, so §4.12.1.1's post-connection "
+             "steps either did not run over this element or `prepare` did not reach the as-soon-as-possible "
+             "destination. The endpoint record is emitted by solver/engine.c's one park door, so its absence "
+             "is the absence of the park itself and not of a reply — read core/dom/element.c's insertion walk "
+             "and `script_block_schedule`, whose FIRST arm this element takes because `force async` is "
+             "initially true and nothing here writes `async`");
+    fold_row(&injsrc_tt, &injsrc_why, !!strstr(js, "\"/api/injran\""),
+             "AN INJECTED `<script src>` PARKED AND ITS REPLY DID NOT BECOME A PROGRAM. The clause above says "
+             "the park was taken, so either this host served the address as DATA (`tf_served_at` did not "
+             "match, and the delivery compiled `{\"region\":\"us-west-2\"}`, which is not a Script) or "
+             "solver/engine.c's FLOW_PENDING_SCRIPT delivery arm did not queue the bytes. THE RUN'S OWN "
+             "STREAM SAYS WHICH: the first raises an undeclared page error, so `@PAGEERR "
+             "at=https://x.test/chunk/injsrc.js` is printed and matches no `@PAGEERR-STAGED` line, and the "
+             "second prints nothing. `/api/injran` is emitted by the served body alone and by no statement of "
+             "any document here");
+    /* …AND §3.1.7 "DOM tree accessors"' `currentScript` FOR A PROGRAM THAT CAME OFF THE WIRE, WHICH IS THE ONE
+       THING NO HOST EDGE CAN BUY. A chunk queued by `loadScript` or by the `fetch()` delivery arm has no
+       element behind it, so the slot is null while it runs; this park carries the element (solver/pending.h's
+       `scriptEl`) and §4.12.1.1's classic arm sets the slot to it. A bundler's public-path preamble reads
+       exactly that member, so an engine answering null there computes every lazy-chunk URL wrong.
+       GATED ON THE ROW ABOVE AND THE ENTAILMENT IS BY PROGRAM ORDER, not by assertion: `/api/injran` is the
+       only record either clause here can be answered by, and nothing emits it but the served program — so a 0
+       up there is a 0 down here in every one of its four readings.
+       TWO CLAUSES, BECAUSE A WRONG ELEMENT AND AN EMPTY SLOT ARE DIFFERENT DEFECTS. The first is a slot that
+       answered the wrong element — `injhost` is the near-miss and is the program that INJECTED this one, which
+       is what a slot written by the injecting program rather than by the running one gives. The second is the
+       slot standing EMPTY, asked as an ABSENCE over the whole document for `current-script-restore`'s reason:
+       the served body emits `injnull` in place of an id when the slot is null, so the marker is a POSITIVE
+       statement about an empty slot and not the silence an absent param would be. It is armed by the clause
+       above it, which establishes that the observer ran at all. */
+    const char *injel_why = NULL;
+ int injel_tt = 1;
+    fold_row(&injel_tt, &injel_why, param_value_is(js, "/api/injran", "el", "injel"),
+             "§4.12.1.1's classic arm did not answer §3.1.7's `currentScript` for a program fetched off an "
+             "injected `<script src>`: /api/injran's `el` is not `injel`. `injhost` is the near-miss and names "
+             "the defect — that is the program which INJECTED this one, so the slot was written by the "
+             "injecting program rather than by the running one");
+    fold_row(&injel_tt, &injel_why, !strstr(js, "\"injnull\""),
+             "§4.12.1.1's classic arm left `currentScript` EMPTY for an injected program that ran: some arm "
+             "reached the served body with a null slot, which the body reports as `injnull` rather than as a "
+             "missing param. Asked of the WHOLE document deliberately — one arm seeing an empty slot is the "
+             "finding, and an absence is the only thing that can prove this half — and ARMED by the clause "
+             "above, which says the observer ran");
+    /* WEB CRYPTOGRAPHY §29.4.5 AES-GCM EXPORT KEY'S THREE ARMS, AND THE ROW THAT SAYS WHETHER ANY OF THEM RAN.
+       `xk-reach` stands FIRST for `td-reach`'s and `bs-reach`'s reason, and here it carries MORE than those
+       two do: it is emitted after §14.3.6 generateKey RESOLVES, so it is simultaneously the reachability
+       witness for the generateKey landing that preceded this one — which had none at all, and whose "no abort
+       fires" prediction was therefore satisfied identically by a correct implementation and by a statement
+       nobody executed.
+       ITS TWO ZEROS ARE TOLD APART BY THE RECORD ITSELF, which is why the arms below can be read at all. NO
+       /api/xkreach record means no flow reached this statement in this run — every row below is then about how
+       far the run got and not about §29.4.5. A record whose `d` carries `no` means generateKey itself rejected
+       and its `n` param NAMES the DOMException, which is this fixture asking for a capability rather than the
+       export answering wrongly.
+       EACH ARM IS `param_value_only` AND NOT `_has`: every one of these settlements is DETERMINED — the key's
+       length, its usages and its extractability are all fixed by the statement's own literals and §29.4.5
+       branches on nothing else — so a param carrying two values means the flow forked where this statement
+       says it cannot, which is a finding and not a match. `_has` is also a SUBSTRING test, so an `ok` row
+       would be satisfied by a failure spelling that happened to contain it. */
+    const char *xkreach_why = NULL;
+ int xk_reach = 1;
+    fold_row(&xk_reach, &xkreach_why, param_value_only(js, "/api/xkreach", "d", "ok"),
+             "§14.3.6 generateKey over §29.4.3 AES-GCM did not resolve, so NOTHING below is about §29.4.5. "
+             "Its TWO readings are told apart by the record: no /api/xkreach record at all means no flow "
+             "reached this statement — check `jobs run` before reading it as a defect, because every record "
+             "here is behind an await and settles through sc_resolve's JS_EnqueueCallJob, so a run with zero "
+             "jobs cannot answer it however much `workDone` it reports; a record whose `d` carries `no` means "
+             "generateKey REJECTED and its `n` param names the DOMException");
+    /* STEP 2's `raw` ARM, BOTH SUB-STEPS. The length is asked as a COMPARISON so the emitted byte is a literal
+       on both paths — a concolic byteLength would show as TWO values of `d` rather than as an absent record,
+       which is the failure this fixture must be able to SEE rather than be silenced by. */
+    const char *xkraw_why = NULL;
+ int xk_raw = 1;
+    fold_row(&xk_raw, &xkraw_why, xk_reach, xkreach_why);
+    fold_row(&xk_raw, &xkraw_why, param_value_only(js, "/api/xkraw", "d", "ok"),
+             "§29.4.5 step 2's `raw` arm did not hand back the key's 32 octets: `d` carries `wrong` (the "
+             "ArrayBuffer came back a different length than §29.4.3 step 3 drew), or a DOMException name (the "
+             "arm threw where the standard defines no throw for `raw`), or two values (the flow forked over a "
+             "length this statement pins with a literal)");
+    /* STEP 2's `jwk` ARM — ALL SEVEN SUB-STEPS, as four params of one record. `kty` and `alg` are the two
+       this chapter WRITES ("oct", and "A256GCM" for a 256-bit key); `ext` and `ops` are the two it copies off
+       the key, and `ops` asserts the ORDER as well as the membership, which core/crypto/crypto_key.h names as
+       the load-bearing half — §9's recognized order is `encrypt, decrypt, …`, so two walks agreeing on which
+       usages a key has could still disagree here and no membership test would report it. */
+    const char *xkjwk_why = NULL;
+ int xk_jwk = 1;
+    fold_row(&xk_jwk, &xkjwk_why, xk_reach, xkreach_why);
+    fold_row(&xk_jwk, &xkjwk_why, param_value_only(js, "/api/xkjwk", "kty", "oct"),
+             "§29.4.5 step 2's `jwk` arm did not set `kty` to \"oct\" — or it threw, in which case `kty` "
+             "carries the DOMException name instead, which is the same param deliberately so that a throw "
+             "cannot read as an absent record");
+    fold_row(&xk_jwk, &xkjwk_why, param_value_only(js, "/api/xkjwk", "alg", "A256GCM"),
+             "§29.4.5's `alg` sub-step answered the wrong clause for a 256-bit key. Its three clauses are "
+             "128/192/256 against A128GCM/A192GCM/A256GCM and it has NO Otherwise, so a wrong value here is "
+             "the length selector disagreeing with §29.4.3 step 8's `length`, not a page's input");
+    fold_row(&xk_jwk, &xkjwk_why, param_value_only(js, "/api/xkjwk", "ext", "true"),
+             "§29.4.5's `ext` sub-step did not copy the [[extractable]] slot this statement set to true");
+    fold_row(&xk_jwk, &xkjwk_why, param_value_only(js, "/api/xkjwk", "ops", "encrypt.decrypt"),
+             "§29.4.5's `key_ops` sub-step did not answer §9's recognized ORDER. The statement asked for "
+             "['encrypt','decrypt'] and §9 lists encrypt before decrypt, so `decrypt.encrypt` here is the two "
+             "walks core/crypto/crypto_key.h keeps as one having come apart, and a membership test would miss "
+             "it");
+    /* STEP 2's `Otherwise`, WHICH IS THE ONLY THROW §29.4.5 DEFINES. It is a separate row and not a clause of
+       the jwk one because it is the arm a page reaches with an ordinary call and the two DER formats are its
+       whole population: §14.1's KeyFormat has four values and Web IDL §3.2.18 refused every other string
+       before §14.3.10 step 1 ran, so `spki` is a page's own input and this is the refusal the standard names
+       for it. A row asserting `resolved` here would be asserting the bug. */
+    const char *xkspki_why = NULL;
+ int xk_spki = 1;
+    fold_row(&xk_spki, &xkspki_why, xk_reach, xkreach_why);
+    fold_row(&xk_spki, &xkspki_why, param_value_only(js, "/api/xkspki", "d", "NotSupportedError"),
+             "§29.4.5 step 2's `Otherwise: throw a NotSupportedError` did not fire for \"spki\": `d` carries "
+             "`resolved` (an AES-GCM key was exported in a format §29.4.5 defines no arm for) or another "
+             "DOMException name (the refusal happened for a different reason than the format)");
+    const Probe rows[] = {
+        /* THE SAME DELIVERY AT THE THIRD DOOR, and the KEY is this statement's own spelling for `lazy`'s
+           reason exactly: `/api/injran` is in a body this host serves and in no document at all, and
+           `/api/injmade` is composed by the statement rather than being its name. `/chunk/injsrc.js` is what
+           a reader greps for to find the `injhost` statement these two rows are about.
+           `injected-script-el` IS GATED ON `injected-script` because its only answerable record is the one
+           that row's last clause asserts: a 0 above it is a 0 here under every reading, and the declaration
+           is what stops a reader counting the pair as two independent findings. */
+        { "injected-script", injsrc_tt, "/chunk/injsrc.js", SESS_EXPLORE, injsrc_why },
+        { "injected-script-el", injel_tt, "/chunk/injsrc.js", SESS_EXPLORE, injel_why,
+          .gate = "injected-script" },
+        /* THE FIVE `import()` ROWS. The two entry rows are ungated — their 0 is a finding about the SCHEDULE —
+           and the three readings are gated on them, for `orphan-gate`'s reason: an unconditional first emission
+           that did not happen entails everything behind the `await` in the same statement. */
+        /* THE SCRIPT-LEVEL `const` ROWS, whose whole value is being read BESIDE `mod-const` — see where they
+           are folded for what each pairing localises. */
+        { "md-self", md_self, "/api/selfdefault", SESS_EXPLORE, md_self_why },
+        { "md-fork-ran", md_fork_ran, "/api/mdforkpath", SESS_EXPLORE, md_fork_ran_why },
+        { "md-fork-reach", md_fork_reach, "/api/mdforkreach", SESS_EXPLORE, md_fork_reach_why, .gate = "md-fork-ran" },
+        { "md-fork-both", md_fork_both, "/api/mdforkpath", SESS_EXPLORE, md_fork_both_why, .gate = "md-fork-reach" },
+        { "md-fork-bind", md_fork_bind, "/api/mdforkpath", SESS_EXPLORE, md_fork_bind_why, .gate = "md-fork-ran" },
+        { "mod-entered", mod_entered, "/api/modentered", SESS_EXPLORE, mod_entered_why },
+        { "mod-const", mod_const, "/api/modconst", SESS_EXPLORE, mod_const_why, .gate = "mod-entered" },
+        { "mod-default", mod_default, "/api/moddefault", SESS_EXPLORE, mod_default_why, .gate = "mod-entered" },
+        { "mod-typeask", mod_typeask, "/api/modtypeask", SESS_EXPLORE, mod_typeask_why },
+        { "mod-type", mod_type, "/api/modtype", SESS_EXPLORE, mod_type_why, .gate = "mod-typeask" },
+        { "im-ask", im_ask, "/api/imask", SESS_EXPLORE, im_ask_why },
+        { "im-map", im_map, "/api/imask", SESS_EXPLORE, im_map_why, .gate = "im-ask" },
+        { "im-merge", im_merge, "/api/imask", SESS_EXPLORE, im_merge_why, .gate = "im-ask" },
+        { "im-skip", im_skip, "/api/imask", SESS_EXPLORE, im_skip_why, .gate = "im-ask" },
+        { "im-null", im_null, "/api/imask", SESS_EXPLORE, im_null_why, .gate = "im-ask" },
+        { "im-scope-out", im_scope_out, "/api/imask", SESS_EXPLORE, im_scope_out_why, .gate = "im-ask" },
+        { "im-scope-in", im_scope_in, "/api/imask", SESS_EXPLORE, im_scope_in_why, .gate = "im-ask" },
+        { "im-late1", im_late1, "/api/imlate1", SESS_EXPLORE, im_late1_why },
+        { "im-late2", im_late2, "/api/imask", SESS_EXPLORE, im_late2_why, .gate = "im-ask" },
+        { "im-err", im_err, "/api/imerr", SESS_EXPLORE, im_err_why },
+        { "mod-spec-bare-ask", ms_bare_ask, "/api/modbareask", SESS_EXPLORE, ms_bare_ask_why },
+        { "mod-spec-bare", ms_bare, "/api/modbareask", SESS_EXPLORE, ms_bare_why, .gate = "mod-spec-bare-ask" },
+        { "mod-spec-same-ask", ms_same_ask, "/api/modsameask", SESS_EXPLORE, ms_same_ask_why },
+        { "mod-spec-same", ms_same, "/api/modsameask", SESS_EXPLORE, ms_same_why, .gate = "mod-spec-same-ask" },
+        { "mod-spec-handler-ask", ms_handler_ask, "/api/modhandlerask", SESS_EXPLORE, ms_handler_ask_why },
+        { "mod-spec-handler", ms_handler, "/api/modhandlerask", SESS_EXPLORE, ms_handler_why,
+          .gate = "mod-spec-handler-ask" },
+        { "mod-spec-eval-ask", ms_eval_ask, "/api/modevalask", SESS_EXPLORE, ms_eval_ask_why },
+        { "mod-spec-eval", ms_eval, "/api/modevalask", SESS_EXPLORE, ms_eval_why, .gate = "mod-spec-eval-ask" },
+        { "mod-world-reach", mod_world_reach, "/api/modworldreach", SESS_EXPLORE, mod_world_reach_why },
+        { "mod-world", mod_world, "/api/modworld", SESS_EXPLORE, mod_world_why, .gate = "mod-world-reach" },
+        /* THE TWO-WORLD CACHE ROWS, WHOSE WHOLE VALUE IS BEING READ BESIDE `mod-world`: that row's subject is a
+           module cell two spec phases write, and this one's is an ordinary closure cell and an ordinary
+           property. Both at 0 says a world reads ANY state it did not write itself; `mod-world` at 0 with
+           `cj-world` at 1 localises it to the module phases. */
+        { "cj-ran", cj_ran, "/api/cjreach", SESS_EXPLORE, cj_ran_why },
+        { "cj-reach", cj_reach, "/api/cjreach", SESS_EXPLORE, cj_reach_why, .gate = "cj-ran" },
+        { "cj-world", cj_world, "/api/cjworld", SESS_EXPLORE, cj_world_why, .gate = "cj-reach" },
+        /* THE DRIVE'S THREE, AND THE KEY IS `/chunk/mdmod.js` FOR `reply-program`'S REASON EXACTLY:
+           `/api/moddriveran` is in a body this host SERVES and in no document at all, and what the document
+           contributes is the `import()` that links the module and so mints the function object the orphan walk
+           can find. A key is a substring of the PROGRAM, never of the answer.
+           THE SAME KEY AS NO ROW ABOVE, DELIBERATELY. `mod-entered` and `mod-world-reach` are keyed on their
+           own emissions because those statements are the document's; these three are keyed on the chunk because
+           the statement is the module's, and the two importing statements are merely what makes it exist. */
+        { "mod-drive-ran", mod_drive_ran, "/chunk/mdmod.js", SESS_EXPLORE, mod_drive_ran_why },
+        { "mod-drive-fn", mod_drive_fn, "/chunk/mdmod.js", SESS_EXPLORE, mod_drive_fn_why,
+          .gate = "mod-drive-ran" },
+        { "mod-drive-const", mod_drive_const, "/chunk/mdmod.js", SESS_EXPLORE, mod_drive_const_why,
+          .gate = "mod-drive-fn" },
+        /* THE STATIC IMPORT'S FIVE. `mh-ask` is keyed on the DOCUMENT'S own emission because the statement is
+           the document's; the other four are keyed on `/chunk/mdhost.js` for the drive rows' reason exactly —
+           their emissions are in bodies this host SERVES and in no document at all, and what the document
+           contributes is the `import()` that makes the graph exist. A key is a substring of the PROGRAM, never
+           of the answer, and `/api/mhdep` appears in no document so a row keyed on it would be selected by no
+           run while the table it sits in read as complete.
+           `mh-nofail` IS KEYED ON ITS OWN ADDRESS BECAUSE ITS EMISSION IS THE DOCUMENT'S, in the `catch` arm,
+           so unlike the four above it names a statement this file writes rather than one it serves. */
+        { "mh-ask", mh_ask, "/api/mhask", SESS_EXPLORE, mh_ask_why },
+        { "mh-dep", mh_dep, "/chunk/mdhost.js", SESS_EXPLORE, mh_dep_why, .gate = "mh-ask" },
+        { "mh-host", mh_host, "/chunk/mdhost.js", SESS_EXPLORE, mh_host_why, .gate = "mh-dep" },
+        { "mh-bind", mh_bind, "/chunk/mdhost.js", SESS_EXPLORE, mh_bind_why, .gate = "mh-host" },
+        { "mh-default", mh_default, "/chunk/mdhost.js", SESS_EXPLORE, mh_default_why, .gate = "mh-host" },
+        { "mh-nofail", mh_nofail, "/api/mhfail", SESS_EXPLORE, mh_nofail_why, .reach = "mh-ask" },
+        /* §29.4.5's THREE ARMS AND THEIR REACH ROW. The key is each row's own endpoint, so a 0 is already a
+           localisation; `xk-reach` is keyed on the same statement and stands first because it is what says
+           whether the three below it are about §29.4.5 or about how far the run got. */
+        { "xk-reach", xk_reach, "/api/xkreach", SESS_EXPLORE, xkreach_why },
+        { "xk-raw", xk_raw, "/api/xkraw", SESS_EXPLORE, xkraw_why },
+        { "xk-jwk", xk_jwk, "/api/xkjwk", SESS_EXPLORE, xkjwk_why },
+        { "xk-spki", xk_spki, "/api/xkspki", SESS_EXPLORE, xkspki_why },
+        { "module-entry", modentry_tt, "/api/modreach", SESS_EXPLORE, modentry_why },
+        { "module-tla", modtla_tt, "/api/modtla", SESS_EXPLORE, modtla_why },
+        /* §16.2.1.7.3.1's BINDING. `mfd-top` stands first because it is what says whether the row below it is
+           about the closure chain or about how far the run got. */
+        { "mfd-top", mfdtop_tt, "/api/mfdtop", SESS_EXPLORE, mfdtop_why },
+        { "mfd-nest", mfdnest_tt, "/api/mfdnest", SESS_EXPLORE, mfdnest_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `messaging` document. */
+TF_UNIT void probes_messaging(const char *js, Probe *tab, int *n) {
+    const char *sc_msg_ran_why = NULL;
+ int sc_msg_ran = 1;
     fold_row(&sc_msg_ran, &sc_msg_ran_why, param_value_is(js, "/api/scmsg", "v", "scENTER"),
              "NOT REACHED: there is no /api/scmsg record, so §9.3.3 step 8's delivery task never ran its "
              "handler's FIRST and unconditional emission. That is the SCHEDULE and not the serializer — the "
              "row gated on this one is unaskable until it answers");
-    const char *sc_msg_fork_why = NULL; int sc_msg_fork = 1;
+    const char *sc_msg_fork_why = NULL;
+ int sc_msg_fork = 1;
     fold_row(&sc_msg_fork, &sc_msg_fork_why,
              param_value_is(js, "/api/scfork", "w", "scADMIN") &&
              param_value_is(js, "/api/scfork", "w", "scPUBLIC"),
@@ -10594,14 +12389,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "delivery (PQ_SYMBOLS in core/frame/window_message.c is the one slot that carries it)");
     /* An exact origin check in front of a sink: the routed peer post takes each handler's pinned arm, and the
        markup sink behind `https://a.example` must report a parked search whose sender demand is that origin. */
-    const char *xd_pin_a_why = NULL; int xd_pin_a = 1;
+    const char *xd_pin_a_why = NULL;
+ int xd_pin_a = 1;
     fold_row(&xd_pin_a, &xd_pin_a_why, param_value_is(js, "/api/xdgate", "v", "xdA"),
              "NOT REACHED: the `https://a.example` arm never ran, so the routed peer post was not delivered or "
              "its origin arrived concrete and decided the check");
-    const char *xd_pin_b_why = NULL; int xd_pin_b = 1;
+    const char *xd_pin_b_why = NULL;
+ int xd_pin_b = 1;
     fold_row(&xd_pin_b, &xd_pin_b_why, param_value_is(js, "/api/xdgate", "v", "xdB"),
              "NOT REACHED: the `https://b.example` arm never ran, so the negative row beside it is unarmed");
-    const char *xd_sender_why = NULL; int xd_sender = 1;
+    const char *xd_sender_why = NULL;
+ int xd_sender = 1;
     {
         char need[160];
 
@@ -10615,39 +12413,21 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                  "the parked search does not name `https://a.example` as the sender it waits on, through this "
                  "delivery's origin source, so a gadget search has no origin to look for");
     }
-    const char *xd_nosink_why = NULL; int xd_nosink = 1;
+    const char *xd_nosink_why = NULL;
+ int xd_nosink = 1;
     fold_row(&xd_nosink, &xd_nosink_why, !strstr(js, "\"equals\":\"https://b.example\""),
              "a sender demand names `https://b.example`, whose handler reaches no sink: a pin is recorded as a "
              "demand only where an attacker value arrives at a sink");
-    /* Two deliveries, one handler: the first's pinned arm opens the state the second's sink is behind, and the
-       second delivery's bytes must arrive at that sink as attacker input of their own. */
-    const char *xdm_set_why = NULL; int xdm_set = 1;
-    fold_row(&xdm_set, &xdm_set_why, param_value_is(js, "/api/xdmset", "v", "xdmSet"),
-             "NOT REACHED: the first delivery's `e.data === 'xdmstep'` arm never ran, so the routed posts were "
-             "not delivered or arrived concrete");
-    const char *xdm_second_why = NULL; int xdm_second = 1;
-    fold_row(&xdm_second, &xdm_second_why, param_value_is(js, "/api/xdmsecond", "v", "xdmSecond"),
-             "NOT REACHED: no timeline that set `_xdmOk` received the second delivery");
-    const char *xdm_sink_why = NULL; int xdm_sink = 1;
-    {
-        size_t span;
-        fold_row(&xdm_sink, &xdm_sink_why, *g_xdm2_dsrc && s_record(js, "innerHTML", g_xdm2_dsrc, &span) != NULL,
-                 "the second delivery reached the markup sink and no @S record names its data source there: its "
-                 "`e.data` read back the first delivery's pinned bytes, so one message's pin decided another's "
-                 "input");
-    }
-    const char *xdm_own_why = NULL; int xdm_own = 1;
-    fold_row(&xdm_own, &xdm_own_why, !param_value_is(js, "/api/xdmsecond", "d", "xdmstep"),
-             "the second delivery's `e.data` read as `xdmstep`, the value the FIRST delivery's equality pinned: "
-             "two messages shared one source identity, so one message's pin decided another's input");
-    const char *bc_msg_ran_why = NULL; int bc_msg_ran = 1;
+    const char *bc_msg_ran_why = NULL;
+ int bc_msg_ran = 1;
     fold_row(&bc_msg_ran, &bc_msg_ran_why, param_value_is(js, "/api/bcmsg", "v", "bcENTER"),
              "NOT REACHED: there is no /api/bcmsg record, so §9.5 postMessage step 9's delivery task never ran "
              "its handler's FIRST and unconditional emission. Three things ahead of the serializer answer for "
              "that and the row below cannot tell them apart, which is why it is gated on this one: the two "
              "channels were never constructed, the registry never matched them by name, or the task was "
              "queued and the destination's closed flag was up when it ran");
-    const char *bc_msg_fork_why = NULL; int bc_msg_fork = 1;
+    const char *bc_msg_fork_why = NULL;
+ int bc_msg_fork = 1;
     fold_row(&bc_msg_fork, &bc_msg_fork_why,
              param_value_is(js, "/api/bcfork", "w", "bcADMIN") &&
              param_value_is(js, "/api/bcfork", "w", "bcPUBLIC"),
@@ -10660,6 +12440,57 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "row would be unreachable along with every other — or that the array was dropped between the "
              "enqueue and the delivery. Compare with `sc-msg-fork`: the two reading differently localises the "
              "defect to §9.5's own carrier rather than to the serializer both posts share");
+    const Probe rows[] = {
+        { "sc-msg-ran", sc_msg_ran, "/api/scmsg", SESS_EXPLORE, sc_msg_ran_why },
+        { "sc-msg-fork", sc_msg_fork, "/api/scfork", SESS_EXPLORE, sc_msg_fork_why, .gate = "sc-msg-ran" },
+        { "xd-pin-a", xd_pin_a, "/api/xdgate", SESS_EXPLORE, xd_pin_a_why },
+        { "xd-pin-b", xd_pin_b, "/api/xdgate", SESS_EXPLORE, xd_pin_b_why },
+        { "xd-sender", xd_sender, "_xdSinkEl.innerHTML", SESS_EXPLORE, xd_sender_why, .gate = "xd-pin-a" },
+        { "xd-nosink", xd_nosink, "_xdSinkEl", SESS_EXPLORE, xd_nosink_why, .reach = "xd-pin-b" },
+        { "bc-msg-ran", bc_msg_ran, "/api/bcmsg", SESS_EXPLORE, bc_msg_ran_why },
+        { "bc-msg-fork", bc_msg_fork, "/api/bcfork", SESS_EXPLORE, bc_msg_fork_why, .gate = "bc-msg-ran" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `xdmulti` document. */
+TF_UNIT void probes_xdmulti(const char *js, Probe *tab, int *n) {
+    /* Two deliveries, one handler: the first's pinned arm opens the state the second's sink is behind, and the
+       second delivery's bytes must arrive at that sink as attacker input of their own. */
+    const char *xdm_set_why = NULL;
+ int xdm_set = 1;
+    fold_row(&xdm_set, &xdm_set_why, param_value_is(js, "/api/xdmset", "v", "xdmSet"),
+             "NOT REACHED: the first delivery's `e.data === 'xdmstep'` arm never ran, so the routed posts were "
+             "not delivered or arrived concrete");
+    const char *xdm_second_why = NULL;
+ int xdm_second = 1;
+    fold_row(&xdm_second, &xdm_second_why, param_value_is(js, "/api/xdmsecond", "v", "xdmSecond"),
+             "NOT REACHED: no timeline that set `_xdmOk` received the second delivery");
+    const char *xdm_sink_why = NULL;
+ int xdm_sink = 1;
+    {
+        size_t span;
+        fold_row(&xdm_sink, &xdm_sink_why, *g_xdm2_dsrc && s_record(js, "innerHTML", g_xdm2_dsrc, &span) != NULL,
+                 "the second delivery reached the markup sink and no @S record names its data source there: its "
+                 "`e.data` read back the first delivery's pinned bytes, so one message's pin decided another's "
+                 "input");
+    }
+    const char *xdm_own_why = NULL;
+ int xdm_own = 1;
+    fold_row(&xdm_own, &xdm_own_why, !param_value_is(js, "/api/xdmsecond", "d", "xdmstep"),
+             "the second delivery's `e.data` read as `xdmstep`, the value the FIRST delivery's equality pinned: "
+             "two messages shared one source identity, so one message's pin decided another's input");
+    const Probe rows[] = {
+        { "xdm-set", xdm_set, "/api/xdmset", SESS_EXPLORE, xdm_set_why },
+        { "xdm-second", xdm_second, "/api/xdmsecond", SESS_EXPLORE, xdm_second_why, .gate = "xdm-set" },
+        { "xdm-sink", xdm_sink, "_xdmSinkEl.innerHTML", SESS_EXPLORE, xdm_sink_why, .gate = "xdm-second" },
+        { "xdm-own", xdm_own, "_xdmSinkEl", SESS_EXPLORE, xdm_own_why, .reach = "xdm-second" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `orphan` document. */
+TF_UNIT void probes_orphan(const char *js, Probe *tab, int *n) {
     /* ORPHAN-INVOKE, IN TWO ROWS BECAUSE IT IS TWO CLAIMS. The first is that a function nothing in the document
        calls was RUN — with no driving there is no request at all, which is what a page holding only such a
        function measured. The second is that its parameter arrived as unknown external input: `role === 'admin'`
@@ -10825,837 +12656,58 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            "ladder's own descent count, and a count written into a message is a thing the next split makes "
            "wrong — so the branch it names is checked against the chain above rather than against this number");
     orphan_why = orphan_why_;
-    /* FETCH-AWAIT-RESULT: `await fetch('/api/config')` delivered the reply and §6.4.3 json() parsed it,
-       whose .region flowed into /api/user?region=us-west-2 as a CONCRETE example — a safe GET's result driving
-       API-value learning, through the Response the shipped fetch component actually hands back.
-       THE REGION CLAUSE WAS UNSCOPED AND ITS REFUTATION WAS TWELVE LINES BELOW IT. `us-west-2` is the field
-       of the reply this fixture's own host serves, so EVERY statement that reads that reply carries it:
-       `/api/chain`'s `chain2-us-west-2`, and `/api/bodyiso`'s `us-west-2-bodyADMIN` / `us-west-2-bodyPUBLIC`.
-       The `then_chain` comment below says so in as many words — "an unscoped match would find
-       `chain2-us-west-2` in any other statement that happens to carry the region" — and this row WAS that
-       other statement. So the term could not fail while any sibling reply-reader emitted, and what it appeared
-       to assert (that json()'s field reached THIS endpoint) was never measured. Scoped to the one param of the
-       one endpoint, which is what the claim was always about. */
-    /* AND THE EXISTENCE CLAUSE IS ITS OWN RUNG. Standing beside a scoped one in a single `&&`, it added
-       nothing a reader could act on — `param_value_is` returns 0 when the record is absent, so the scoped
-       clause already answers it, and folding them made "the await never delivered" and "the reply's field
-       did not reach this param" one 0 that named neither. */
-    /* THE CONTROL FOR THE FIVE REPLY ROWS — same reply, same await machinery, one difference: the
-       program issuing it ENDS in the step that starts it, so `f->frame` is released and the
-       delivery arm is reachable. See the frame-control <script> for why the pair is the
-       experiment and why either row alone answers nothing — AND for why this row has never yet
-       been about the frame at all: `deepest`, the highest program index any flow has ever compiled,
-       has stood below this program's own index in every run measured, so the statement has not
-       been executed and the message below says so instead of concluding.
-       THE MESSAGE IS WHERE THAT MATTERS RATHER THAN THE COMMENT, because a comment is read by
-       whoever opens this file and a row's own text is read by everyone who reads a report. The
-       one it replaced ended `and it says the frame is not what gates the delivery`, which is a
-       CONCLUSION drawn from a program that never ran — the same mistake the <script>'s own
-       paragraph records, emitted into every log instead of sitting in one file. */
-    const char *frame_ctl_why = NULL; int frame_ctl = 1;
-    fold_row(&frame_ctl, &frame_ctl_why, !!strstr(js, "\"/api/framectl\""),
-             "NOT REACHED: there is no /api/framectl record — and this row cannot say WHY, because "
-             "its own program has not been started. Read `deepest` beside it, on the same @COLD "
-             "line: it is the highest program index this document has ever compiled across every "
-             "flow. Below this <script>'s own index this 0 is the row not running and says nothing "
-             "whatever about the frame, the queue, the rank or the reply path; only at or above it is "
-             "it about the subject. The cursor bucket at that index is this program's DOOR and not a "
-             "point short of it: those members have finished the long row above. Whether any of them is IDLE is a "
-             "second question the cursor does not answer — read `live` minus `framed` beside it, which "
-             "bounds the idle population of the whole frontier and has been smaller than this bucket");
-    fold_row(&frame_ctl, &frame_ctl_why, param_value_is(js, "/api/framectl", "r", "us-west-2"),
-             "the reply WAS delivered to a program that ended its own frame, and json()'s field did "
-             "not reach this endpoint — so the frame gate is not the whole of it");
-    /* AND THIS ROW'S NOT-REACHED ARM MADE THE SAME UNSUPPORTED CLAIM THE FRAME CONTROL'S DID, ONE ENDPOINT
-       OVER, SO IT IS RETIRED IN THE SAME BREATH. It read: so `await fetch('/api/config')` never delivered
-       its reply and json() never ran. That names a CAUSE from the absence of a record two steps downstream
-       of it, and the census refutes the cause outright — `deliver-one-reply` is non-zero in every run at
-       the artifact stamped 1d666bda. What the row can see is that /api/user is absent; what it cannot see
-       is which of three things produced that, and they take different work. See the frame control's own
-       residual for the row that would separate them rather than a second copy of it here. */
-    const char *fetch_await_why = NULL; int fetch_await = 1;
-    fold_row(&fetch_await, &fetch_await_why, !!strstr(js, "\"/api/user\""),
-             "NOT REACHED: there is no /api/user record at all, and this row does not say why. Three "
-             "readings produce it and they are not shades of one: this flow's reply was never delivered "
-             "to it, or it was and json()'s own promise never settled (the then-chain row below names "
-             "that signature), or it settled and the continuation was never dispatched again. "
-             "`deliver-one-reply` on the same @COLD line refutes only the strongest form of the first — "
-             "it is non-zero, so replies ARE being delivered somewhere in this frontier, and the row "
-             "that would say whether any of them was a fetch() reply is not built");
-    fold_row(&fetch_await, &fetch_await_why, param_value_is(js, "/api/user", "region", "us-west-2"),
-             "the reply WAS delivered and /api/user's `region` does not carry `us-west-2` — §6.4.3 json() "
-             "parsed the host's bytes and its field did not flow into this endpoint as a concrete example");
-    /* THE SECOND REACTION OF `.then(r => r.json()).then(…)` — and the row is the PAIR, because either half
-       alone is a term that cannot localise. `chain1` alone says the reply was delivered and the first handler
-       ran; `chain2` is the only thing that says json()'s own promise ever SETTLED, and its absence beside a
-       present `chain1` is the exact signature of §27.5.1.3 CreateResolvingFunctions ( toResolve ) step 2.i
-       having taken its true arm over an unknown: the promise is adopted into a `then` this engine answers with
-       another unknown, so it settles neither way, no flow is blocked, nothing parks, and the run reports that
-       it completed. Measured on the built artifact through the production ABI: `arrayBuffer()` — whose value
-       is a container the reply's provenance is not wrapped around — settles and emits, while `json()` and
-       `text()` on the identical bytes emit nothing at all.
-       ASKED THROUGH THE PARAM READER AND NOT AN `strstr`, for the reason those helpers were written: both tags
-       are values of ONE param of ONE endpoint, and an unscoped match would find `chain2-us-west-2` in any
-       other statement that happens to carry the region. WHOLE-VALUE AND NOT `_has`, because each tag IS one
-       whole value the statement builds (`?at=chain1`, and `'chain2-' + c.region` with nothing after it), so
-       containment asserts strictly less than the claim and admits an `at` some later statement spells
-       `chain1b`. */
-    int then_chain = (param_value_is(js, "/api/chain", "at", "chain1") &&
-                      param_value_is(js, "/api/chain", "at", "chain2-us-west-2"));
-    /* §6.4 clone(): the copy read the body, the ORIGINAL still read it afterwards, and cloning a read body
-       threw where the page put its catch. A caching layer's first move is `res.clone()`, so without it the
-       reply — and every endpoint behind it — was lost at that line.
-       THE `used` CLAUSE WAS THE WORST UNSCOPED NEEDLE IN THIS FILE: `sync` is a substring of FIVE endpoints
-       this same document learns (`/api/abortsync`, `/api/asynccall`, `/api/asyncloop`, `/api/asyncmethod`,
-       `/api/ceasync`), of the value `issync` that `/api/abortsync` emits, of `asyncThrew`, and of the PARAM
-       NAME `sync` that `/api/insertsteps?sync=` puts in the document as `"name":"sync"`. So the term read 1
-       for any run in which ANY of those statements produced a record, whatever this one did — it could not
-       fail, and what it appeared to assert (the throw was synchronous) was never once measured. */
-    const char *clone_body_why = NULL; int clone_body = 1;
-    fold_row(&clone_body, &clone_body_why, !!strstr(js, "\"/api/clonebody\""),
-             "NOT REACHED: there is no /api/clonebody record at all, so this run did not answer the statement");
-    /* THE TWO READS ARE TWO PARAMS OF THIS RECORD, AND THE OLD CLAUSES ASKED FOR THEIR NAMES. `"copy"` and
-       `"orig"` matched `"name":"copy"` anywhere in the document, so the pair stated that two params exist
-       somewhere and nothing about what either read BACK — and both are the region field of the reply this
-       fixture's own host serves, so asking for the VALUE is what says the clone and the original decoded the
-       same bytes rather than merely being registered. */
-    fold_row(&clone_body, &clone_body_why, param_value_is(js, "/api/clonebody", "copy", "us-west-2"),
-             "§6.4 the CLONE's json() did not reach this endpoint with the reply's own field: /api/clonebody's "
-             "`copy` does not carry `us-west-2`");
-    fold_row(&clone_body, &clone_body_why, param_value_is(js, "/api/clonebody", "orig", "us-west-2"),
-             "§6.4 the ORIGINAL's json() did not reach this endpoint with the reply's own field: "
-             "/api/clonebody's `orig` does not carry `us-west-2` — the clone consumed the body the original "
-             "still had to read");
-    fold_row(&clone_body, &clone_body_why, param_value_is(js, "/api/clonebody", "used", "sync"),
-             "§6.4 clone() on an already-read body did not throw SYNCHRONOUSLY: `used` is not `sync`");
-    /* §6.4.1/§6.4.2: the reply read as BYTES. 22 is the fixture reply's length and 123 is its leading '{' — the
-       two agreeing is what says arrayBuffer() and bytes() are two views of ONE byte sequence, and a length the
-       record carried rather than one a strlen guessed. */
-    /* AND `22` IS TWO FACTS, WHICH ONE `strstr` CANNOT BE. The claim is that arrayBuffer()'s `byteLength` and
-       bytes()'s `length` AGREE, and the statement puts them on two params — so a single whole-document
-       `strstr(js, "\"22\"")` was answered by EITHER of them, and a run in which the two DISAGREED satisfied
-       the row exactly as the correct one does. That is the join defect at its sharpest: the row's headline
-       claim is an equality between two params and the spelling could not see either param. */
-    const char *body_bytes_why = NULL; int body_bytes = 1;
-    fold_row(&body_bytes, &body_bytes_why, !!strstr(js, "\"/api/bodybytes\""),
-             "NOT REACHED: there is no /api/bodybytes record at all, so this run did not answer the "
-             "statement. That is the SCHEDULE");
-    fold_row(&body_bytes, &body_bytes_why, param_value_only(js, "/api/bodybytes", "len", "22"),
-             "§6.4.1 arrayBuffer()'s `byteLength` is not exactly 22 — the record did not carry the reply's "
-             "own length");
-    fold_row(&body_bytes, &body_bytes_why, param_value_only(js, "/api/bodybytes", "n", "22"),
-             "§6.4.2 bytes()'s `length` is not exactly 22 — it disagrees with arrayBuffer()'s byteLength on "
-             "the SAME reply, so the two are not two views of one byte sequence");
-    fold_row(&body_bytes, &body_bytes_why, param_value_only(js, "/api/bodybytes", "b0", "123"),
-             "§6.4.2 the first byte is not exactly 123 (`{`) — the two reads agreed on a length and not on "
-             "the bytes");
-    fold_row(&body_bytes, &body_bytes_why, param_value_only(js, "/api/bodybytes", "kind", "truetrue"),
-             "§6.4.1/§6.4.2 the two results are not an ArrayBuffer and a Uint8Array");
-    /* THE SPAN REACHED THE @H SURFACE AS A NAMED FIELD -- the whole point of recording which BYTES of a body
-       came from an unknown, and the thing that turns "replay these bytes verbatim" into a field a reviewer can
-       vary. §10.4.5.18's store records the range; endpoint.c names it `body[<off>:<end>]` at location
-       "body"; this asks whether that survived to the record.
-       THE RUNGS ARE ENTAILED, WHICH IS WHAT MAKES THE LOWEST 0 THE LOCALISATION: the third implies the second
-       by construction (a param named `body[1:2]` at location "body" IS a param at location "body"), and the
-       second implies the first. A ladder whose rung does not imply its predecessor has a false contract and
-       the finding is the ladder.
-       ASKED INSIDE THIS RECORD'S OWN SPAN and never of the whole document, for the reason the path-param row
-       one screen down gives: `"location":"body"` asked of the document is answered by ANY param of ANY
-       record, including two different params of two different records, which is the join this is written to
-       refuse. The emitter writes the two fields ADJACENT, so one needle is the join. */
-    const char *body_span_why = NULL; int body_span = 1;
-    fold_row(&body_span, &body_span_why, !!strstr(js, "\"/api/bodyspan\""),
-             "NOT REACHED: there is no /api/bodyspan record at all, so the typed-array-body statement never "
-             "ran and the clauses below are not being reported on. That is the SCHEDULE");
-    fold_row(&body_span, &body_span_why, emitted_record_has(js, "/api/bodyspan", "\"location\":\"body\""),
-             "the record carries no param at location \"body\" -- the body's bytes reached this surface with "
-             "no field named off them, so a reviewer is handed an opaque blob and §10.4.5.18's span record "
-             "bought nothing");
-    fold_row(&body_span, &body_span_why,
-             emitted_record_has(js, "/api/bodyspan", "\"name\":\"body[1:2]\",\"location\":\"body\""),
-             "a body param is named but not `body[1:2]` -- the unknown was written at ELEMENT 1 of a "
-             "Uint8Array with concrete neighbours either side, so the range is one byte at offset 1 and a "
-             "different one is the store's offset arithmetic disagreeing with the element that was written");
-    /* AND WHAT CURRENTLY STANDS AT THAT RANGE, WHICH IS A SEPARATE ROW BECAUSE THE TWO ARE NOT ENTAILED. The
-       ladder above asks whether the unknown byte RANGE reached the record as an addressable param; this asks
-       whether the bytes it addresses reached it too, and neither implies the other: a store that names the
-       ranges and drops the bytes hands a reviewer an address with nothing at it, and one that publishes the
-       bytes under a range nobody named hands them an opaque blob. Folded into one ladder they would put a 1
-       above a 0 the first time either half broke alone, which is the false contract the entailment note above
-       exists to refuse — so the same document answers two rows rather than one row with four rungs.
-       THE VALUE IS PREDICTED IN FULL AND THAT IS THE CLAIM. `u8` is [65, screen.width, 66, 67];
-       §10.4.5.18 TypedArraySetElement ( obj, index, value ) stores the unknown's OWN EXAMPLE through the real
-       coercion (core/frame/screen.c's SCREEN_WIDTH is 1920 and ToUint8 of 1920 is 128), so the data block
-       holds 0x41 0x80 0x42 0x43 and its base64 is `QYBCQw==`. A rung that asked only for the KEY would pass
-       over a store that published four zero bytes — which is exactly the value known only to satisfy a gate
-       that §@H forbids, and the one wrong answer this capability is able to give. The middle rung is kept
-       under it anyway so that a MISSING key and a WRONG value are two different localisations rather than one.
-       NOTHING HERE ASKS THAT THESE BYTES ARE NOT PUBLISHED AS `bodyBase64`, and that is a deliberate absence:
-       solver/endpoint.c asserts the three keys are exclusive at its own emit, and a probe row restating an
-       invariant a DCHECK already holds is the second copy §AN-AUDITOR-DERIVES-THE-RULE forbids — it would
-       read 1 in every build where the abort is compiled in and say nothing the abort has not already said. */
-    const char *body_ex_why = NULL; int body_ex = 1;
-    fold_row(&body_ex, &body_ex_why, !!strstr(js, "\"/api/bodyspan\""),
-             "NOT REACHED: there is no /api/bodyspan record at all, so the typed-array-body statement never "
-             "ran and the clauses below are not being reported on. That is the SCHEDULE");
-    fold_row(&body_ex, &body_ex_why, emitted_record_has(js, "/api/bodyspan", "\"bodyExampleBase64\":\""),
-             "the record names the body's unknown byte range and carries no example bytes -- so a reviewer "
-             "is handed an ADDRESS with nothing at it and can change WHICH value the range carries without "
-             "seeing what it currently carries, which is the half the span params cannot state");
-    fold_row(&body_ex, &body_ex_why,
-             emitted_record_has(js, "/api/bodyspan", "\"bodyExampleBase64\":\"QYBCQw==\""),
-             "the example bytes are present and are not `QYBCQw==` -- the statement writes [65, screen.width, "
-             "66, 67] into a Uint8Array and screen.width's example is 1920, so the block is 0x41 0x80 0x42 "
-             "0x43. All-zero bytes here (`AAAAAA==`) are the store having INVENTED a byte for the unknown "
-             "rather than writing its example, and any other value is the example or the concrete "
-             "neighbours disagreeing with what the statement wrote");
+    const Probe rows[] = {
+        /* THE SEVEN ORPHAN ROWS SHARE ONE `why`, AND IT IS THE ONLY THING THAT MAKES THEIR 0 ACTIONABLE — see
+           where it is composed above. Each row still names its own endpoint; what the shared clause adds is
+           which of the schedule, the take and this drive the 0 belongs to, which no per-endpoint test can
+           reach because the answer is not in the document at all. */
+        { "orphan", orphan_driven, "orphanNeverCalled", SESS_EXPLORE, orphan_why },
+        /* `orphan-gate` IS GATED ON `orphan` FOR THE SAME REASON `injected-script-el` IS GATED ON ITS OWN PAIR,
+           and the entailment is stronger here than the one the two date rows already declare: those two are a
+           DIFFERENT BODY from this one, so `orphan == 0` reaches them only through the premise that no body was
+           driven at all — which `orphan == 0` does not establish, since the take could hand over `orphanDate`
+           and not this function. These two are ONE BODY. `/api/orphan/report` is its FIRST statement and
+           UNCONDITIONAL; `/api/orphan/admin-only` is behind `role === 'admin'` INSIDE it. So `orphan-gate == 1`
+           means the body ran, and a body that ran emitted the report first — the document's own comment says so
+           in as many words ("a driven orphan that received `undefined` would emit the first and never the
+           second"), and an abort between the two emits NEITHER, which is what every row here already relies on.
+           `orphan == 0` therefore entails this row's 0 under every reading.
+           IT WAS UNDECLARED, WHICH IS EVIDENCE INFLATION AND NOT UNTIDINESS: a reader meeting the orphan rows
+           at 0 counted these two as two findings where the mechanism is one, and this file's own table declares
+           the WEAKER entailment two rows down while leaving the stronger one implicit. A count of signals is
+           the denominator of everything a reader concludes about how much is wrong, so the declaration is worth
+           more than the row — and it costs nothing, because the gate only ever suppresses a zero: where the
+           body DID run, `orphan` is 1, the gate is open, and this row reports the fork independently, which is
+           the one thing it exists to say. */
+        { "orphan-gate", orphan_gate, "orphanNeverCalled", SESS_EXPLORE, orphan_why, .gate = "orphan" },
+        { "orphan-loop", orphan_loop, "orphanLoops", SESS_EXPLORE, orphan_why },
+        { "orphan-ident", orphan_ident, "orphanIdentity", SESS_EXPLORE, orphan_why },
+        { "orphan-ccode", orphan_ccode, "orphanCharCode", SESS_EXPLORE, orphan_why },
+        { "orphan-update", orphan_update, "orphanUpdate", SESS_EXPLORE, orphan_why },
+        { "orphan-clamp", orphan_clamp, "orphanClamp", SESS_EXPLORE, orphan_why },
+        /* THE ENTAILMENT IS BETWEEN THE TWO DATE ROWS AND IS ONE-DIRECTIONAL, BECAUSE IT IS A FACT ABOUT
+           THIS BODY'S ORDER. `orphanDate` constructs BOTH `Date`s first and then emits `date1` and `datef`
+           as two unconditional statements in that order, so `datef` cannot be answered by a run that did
+           not answer `date1`, and the converse is REACHABLE: a body that aborts between the two fetches, or
+           whose `'' + u` reaches a `toString` over an unknown year, emits the first and not the second. So
+           `datef` is gated on `date1` and `date1` is gated on NOTHING — its 0 is a finding of its own.
+           THIS READ `.gate = "orphan"` ON BOTH ROWS AND IS REWRITTEN RATHER THAN DELETED, because the
+           argument for it is the one a reader re-derives: it said that if no body was driven at all these
+           two are 0 for that reason and for no reason of their own, so summing them would be one fact
+           counted twice. That is sound about the PREMISE and false about the row that establishes it —
+           `orphan` is `orphanNeverCalled`, a DIFFERENT BODY, so `orphan == 0` never established "no body was
+           driven at all" and the take could hand over one body and not the other. It was not a latent
+           mis-declaration either: the entailment assert in probes_report ABORTED the native smoke on it,
+           naming both rows, on the first build that drove enough orphans to tell them apart.
+           `orphan_why` still carries the split between the schedule, the take and the row. */
+        { "orphan-date1", orphan_date1, "orphanDate", SESS_EXPLORE, orphan_why },
+        { "orphan-datef", orphan_datef, "orphanDate", SESS_EXPLORE, orphan_why, .gate = "orphan-date1" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
 
-    /* THE LATCH TIME-TRAVELS: two arms forked BEFORE either read one shared reply, and BOTH read it. If the
-       body-used flag did not ride the COW delta, the second arm's read would throw and only one tag would be
-       here — which is exactly what it did, as a `body stream already read` page error. */
-    const char *body_iso_why = NULL; int body_iso = 1;
-    FORK_ROW(js, &body_iso, &body_iso_why, "/api/bodyiso", "v",
-             "the COW capture of §6.4's body-used latch, which is what lets two arms forked before the read "
-             "both read one shared reply instead of the second throwing `body stream already read`",
-             "us-west-2-bodyADMIN", "us-west-2-bodyPUBLIC");
-    /* THE REQUEST'S IDENTITY IS THE PAIR: a GET and a POST of ONE address were listed as one request and
-       answered with one reply, so the POST's promise settled with the GET's. `p` is the method the fixture host
-       ECHOED onto the reply the POST's flow actually received, so `POST` here is the seam delivering each flow
-       the answer to its own question — and the old `p=GET` is exactly the wrong answer this probe exists for.
-       The `v` prefix is what makes the assert about THIS value: a bare `POST` also appears as an endpoint
-       record's own method field, so the probe would pass on a record that says nothing about which reply
-       arrived. `vPOST` can only have come through the header on the POST's own reply.
-       AND THE PREFIX IS NOT THE SCOPE — the two echoes are values of TWO DIFFERENT params of this one record
-       (`?g=v…&p=v…`), which is why this is a pair of whole-value reads and not a FORK_ROW: the worlds a
-       FORK_ROW folds are values of ONE param, and asking for `vPOST` on `g` would be a different claim from
-       the one this row makes. The `v` prefix stays because it is what distinguishes an ECHOED method from the
-       record's own method field; what it never was is a guarantee that no other statement spells it. */
-    int verb_key = (param_value_is(js, "/api/verb", "g", "vGET") &&
-                    param_value_is(js, "/api/verb", "p", "vPOST"));
-    /* §5 Headers: the record fill ran (acc), the list keeps repeats (sc=2 with both values), `get` combines
-       them (join=k1, k2), `set` replaces them all (set=k3), a name is matched case-insensitively (has=truefalse)
-       and an absent header is null rather than "".
-       SIX FACTS, SIX PARAMS, AND THEY WERE SIX WHOLE-DOCUMENT EXISTENCES. The statement builds
-       `?acc=&sc=&join=&set=&has=&miss=` on ONE record, so every clause here names one param of it — and asked
-       unscoped, none of them was about this endpoint at all. Two are reachable rather than merely possible.
-       `application/json` is a CONTENT TYPE, so any statement that sets a JSON content-type, and any header
-       record the ENGINE synthesises, spells it — and probegate's own footer puts engine-synthesised tokens
-       outside its universe, so the scan that reports this needle unique is the scan that cannot see the class
-       of token most likely to contain it. `"null"` is worse: it is the spelling of an ABSENT value, which is
-       the most widely emitted token there is, and the clause meant to prove that THIS header read back null
-       rather than `""` was satisfied by any absent value anywhere in the document.
-       ASKED AS `_only` AND NOT `_is`, FOR THE REASON THE SIBLING ROW BELOW IS: every one of these six is a
-       value the code DETERMINED — a real `Headers` object answering a real `get` — so a SECOND DISTINCT VALUE on
-       any of them means the flow forked where this statement cannot, which is a finding rather than a match.
-       AND THE EXISTENCE CLAUSE LEADS, so "§5 never ran" and "§5 ran and got one of these six wrong" are two
-       readings; folded, they were one 0 that named neither. */
-    const char *hdrs_why = NULL; int hdrs = 1;
-    fold_row(&hdrs, &hdrs_why, strstr(js, "\"/api/hdrs\"") != NULL,
-             "NOT REACHED: there is no /api/hdrs record at all, so the §5 Headers statement never ran and none "
-             "of the six facts below is being reported on. That is the SCHEDULE");
-    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "acc", "application/json"),
-             "§5 the record fill: /api/hdrs' `acc` is not exactly `application/json` — the Headers record "
-             "constructor did not take the init bag's entry, or `get` did not read it back");
-    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "sc", "2:a=1:b=2"),
-             "§5 the list keeps REPEATS: /api/hdrs' `sc` is not exactly `2:a=1:b=2` — two `Set-Cookie` appends "
-             "did not stay two entries, so getSetCookie read a map rather than a header list");
-    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "join", "k1, k2"),
-             "§5 §2.2.2 `get` COMBINES: /api/hdrs' `join` is not exactly `k1, k2` — append did not keep both "
-             "entries, or get returned one instead of the combined value");
-    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "set", "k3"),
-             "§5 `set` REPLACES every entry with that name: /api/hdrs' `set` is not exactly `k3`");
-    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "has", "truefalse"),
-             "§5 a name is matched CASE-INSENSITIVELY: /api/hdrs' `has` is not exactly `truefalse` — `accept` "
-             "did not find the header stored as `Accept`, or `nope` found one that is not there");
-    fold_row(&hdrs, &hdrs_why, param_value_only(js, "/api/hdrs", "miss", "null"),
-             "§5 an ABSENT header is null and not \"\": /api/hdrs' `miss` is not exactly `null`");
-    /* The record arm through a PROXY: its ownKeys and its get ran as the page's code (seen == 'trapped') and
-       the header still arrived.
-       THE TWO FACTS ARE TWO PARAMS OF ONE RECORD AND WERE TWO WHOLE-DOCUMENT EXISTENCES. The statement builds
-       `?v=&t=` on ONE record, and asked unscoped neither clause was about this endpoint: a run that put `tv`
-       on some other endpoint and `trapped` on a third satisfied the row exactly as the real one does, and so
-       did a seam that SWAPPED them onto each other's param. `trapped` is the worse of the two — a single
-       generic English word, satisfiable by any statement of any document that ever spells it, and one this
-       fixture is free to add tomorrow with nothing to say the row stopped meaning anything.
-       `_only` AND NOT `_is`: both values are DETERMINED here — the trap returns `t[k]` and `seen` is assigned
-       exactly once — so a second DISTINCT VALUE on either means the flow forked where this statement
-       cannot, which is a finding and not a match. AND THE EXISTENCE CLAUSE LEADS, so "the proxy statement
-       never ran" and "it ran and the trap or the header is wrong" are two messages rather than one 0
-       that named neither. */
-    const char *hdrproxy_why = NULL; int hdrproxy = 1;
-    fold_row(&hdrproxy, &hdrproxy_why, strstr(js, "\"/api/hdrproxy\"") != NULL,
-             "NOT REACHED: there is no /api/hdrproxy record at all, so the §5 record-arm-through-a-Proxy "
-             "statement never ran and neither fact below is being reported on. That is the SCHEDULE");
-    fold_row(&hdrproxy, &hdrproxy_why, param_value_only(js, "/api/hdrproxy", "v", "tv"),
-             "§5.1 the record arm converts a PROXY like any other object: /api/hdrproxy' `v` is not exactly "
-             "`tv` — the header did not survive a trap-bearing init, so ownKeys or get did not deliver it");
-    fold_row(&hdrproxy, &hdrproxy_why, param_value_only(js, "/api/hdrproxy", "t", "trapped"),
-             "§5.1 the trap RAN as the page's code: /api/hdrproxy' `t` is not exactly `trapped` — the "
-             "conversion read the target behind the proxy instead of driving its get");
-    /* §5.2's iterable<>: sorted names, values combined per name, set-cookie NOT combined, and forEach handing
-       (value, key, headers) in that order. `for...of` over the Headers is entries, so e and f agree.
-       FOUR BEHAVIOURS, FOUR PARAMS OF ONE RECORD, ASKED AS FIVE WHOLE-DOCUMENT EXISTENCES. The statement
-       builds `?k=&v=&e=&f=` on ONE record, so each clause here names one param of it; unscoped, none of them
-       was about this endpoint, and the conjunction was satisfied by any run that emitted those four strings
-       anywhere — including one that put the `e` spelling on the `f` param and the `f` spelling on `e`, which
-       is precisely the confusion between `for...of` and `forEach` these two clauses exist to tell apart.
-       THE `BADTHIS` CLAUSE IS GONE BECAUSE THE EXACT `f` VALUE ALREADY REFUSES IT, and that is the whole
-       reason to say so here: the callback appends `BADTHIS` after any pair whose third argument is not the
-       headers object, so a run with a wrong `this` cannot produce an `f` equal to the string below. Asked as a
-       whole-document `!strstr` it was a weaker claim wearing the shape of an extra one — it could be defeated
-       by no statement of this fixture and satisfied by every one — and a reader who re-derives the missing
-       clause would re-introduce a check that `param_value_only` already subsumes.
-       `_only` throughout: every one of these four is a value the code DETERMINED from a real Headers list, so
-       a second DISTINCT VALUE means the flow forked where this statement cannot. AND THE EXISTENCE CLAUSE
-       LEADS. */
-    const char *hdriter_why = NULL; int hdriter = 1;
-    fold_row(&hdriter, &hdriter_why, strstr(js, "\"/api/hdriter\"") != NULL,
-             "NOT REACHED: there is no /api/hdriter record at all, so the §5.2 iterable<> statement never ran "
-             "and none of the four behaviours below is being reported on. That is the SCHEDULE");
-    fold_row(&hdriter, &hdriter_why,
-             param_value_only(js, "/api/hdriter", "k", "set-cookie|set-cookie|x-a|x-b"),
-             "§5.2 keys() SORTS by name and keeps one entry per set-cookie VALUE: /api/hdriter' `k` is not "
-             "exactly `set-cookie|set-cookie|x-a|x-b` — the two x-a appends did not combine into one key, or "
-             "the two set-cookies did, or the names came back unsorted");
-    fold_row(&hdriter, &hdriter_why, param_value_only(js, "/api/hdriter", "v", "c1|c2|1, 9|2"),
-             "§5.2 values() COMBINES a name's values and does NOT combine set-cookie: /api/hdriter' `v` is not "
-             "exactly `c1|c2|1, 9|2` — x-a's two values did not join as `1, 9`, or set-cookie's two did");
-    fold_row(&hdriter, &hdriter_why,
-             param_value_only(js, "/api/hdriter", "e", "set-cookie=c1;set-cookie=c2;x-a=1, 9;x-b=2;"),
-             "§3.7.9 @@iterator and entries are the SAME function object, so `for...of` over the Headers walks "
-             "PAIRS: /api/hdriter' `e` is not exactly the entries spelling — for...of found no pair iterator, "
-             "or found one that is not entries");
-    fold_row(&hdriter, &hdriter_why,
-             param_value_only(js, "/api/hdriter", "f", "set-cookie:c1;set-cookie:c2;x-a:1, 9;x-b:2;"),
-             "§5.2 forEach hands the callback (value, key, headers) IN THAT ORDER: /api/hdriter' `f` is not "
-             "exactly the forEach spelling — the first two arguments arrived swapped, or the third was not the "
-             "headers object, which appends BADTHIS and is why no separate clause looks for it");
-    /* WEB IDL §3.7.9.1 "Default iterator objects"' ITERATOR AS A GC CYCLE — AND THIS ROW IS THE
-       REACHABILITY WITNESS AND NOT THE LEAK CLAIM, on `weak-reach`'s terms and for a harder reason than that
-       row has. It is a positive statement standing in front of four rows that CAN see their subject; this one
-       stands in front of an instrument no probe can read at all. A probe reads the emitted document; the leak the
-       class's gc_mark exists to prevent is named by JS_FreeRuntime's gc_obj_list walk at teardown, which runs
-       after this document is composed and is a `[gcleak]`/`[gcroot]` report and a DCHECK on the process rather
-       than a column of anything. So a 1 here says the cycle was BUILT and stepped, which is exactly what that
-       walk needs in order to have been asked anything at all, and it says nothing whatever about what the walk
-       then answered — that verdict is the run's own teardown, and a reader scoring this pair reads BOTH.
-       WHAT MAKES IT ABLE TO FAIL, WHICH A WITNESS OWES MORE THAN A TWO-WORLD ROW DOES. Delete the statement,
-       or let the flow park before it, and the first clause is 0. Build the engine on a runtime where a class
-       instance refuses an expando and `c` is `nocyc`: the pair exists, both walks answer, and there is no
-       cycle — the one state in which every other clause here is satisfied by a document that asked the walk
-       nothing. Give the header list a wrong order or lose the value and `v`/`w` names which half moved.
-       Return a pair where the list holds one and `d` is `more`.
-       ASKED AS `_only` AND NOT `_is` FOR THE REASON THE SIX HEADERS CLAUSES ABOVE ARE: every one of these four
-       is a value the code DETERMINED off a Headers this statement built out of literals, so a SECOND DISTINCT
-       value on any of them means the flow forked where this statement cannot, which is a finding rather than a
-       match.
-       NAMED RESIDUAL. WHAT IS NOT COVERED: whether the cycle this statement builds was COLLECTED. That is a
-       fact about the process's teardown and this row is a fact about the document, and the two are reported in
-       different places by different mechanisms, so a reader scoring core/idl_iter.c's gc_mark has to read both
-       and nothing says so in either. WHAT THE NEXT DIFF BUILDS: main's teardown already runs `JS_RunGC(rt)`
-       and `JS_FreeRuntime(rt)`, and JS_FreeRuntime already prints `[gcleak]` and `[gcroot]` and aborts on a
-       non-empty list — so what is missing is not a walk but a STATEMENT of its outcome in the stream this
-       table's verdict is composed into, on the clean day as well as the bad one, the way `@HUNASKED` states
-       what it could not ask. HOW ITS ABSENCE WOULD SHOW: a run that reports `=> OK` over this table having
-       collected the cycle and a run that reports it having never been able to is one line of output, and the
-       difference is recoverable only by knowing that a dev build would have aborted instead — which is an
-       inference about a build mode and not a reading of a result. */
-    const char *itercyc_why = NULL; int itercyc_tt = 1;
-    fold_row(&itercyc_tt, &itercyc_why, strstr(js, "\"/api/itercycle\"") != NULL,
-             "NOT REACHED: there is no /api/itercycle record at all, so the statement that builds a pair "
-             "iterator into a cycle with its own target never ran — JS_FreeRuntime's gc_obj_list walk was "
-             "therefore asked NOTHING about core/idl_iter.c's gc_mark on this run, and a clean leak report "
-             "from it is not evidence about that entry either way. That is the SCHEDULE");
-    fold_row(&itercyc_tt, &itercyc_why, param_value_only(js, "/api/itercycle", "c", "cyc"),
-             "the statement RAN and `c` is not exactly `cyc`: the expando `h.it` did not read back as the "
-             "iterator it was assigned, so THERE IS NO CYCLE — the iterator holds its target and nothing "
-             "holds the iterator, the pair dies by refcount, and the gc_obj_list walk is asked nothing "
-             "however clean it reports. This is the clause the whole statement exists for");
-    fold_row(&itercyc_tt, &itercyc_why, param_value_only(js, "/api/itercycle", "v", "x-cyc"),
-             "the statement RAN and `v` is not exactly `x-cyc`: the first pair's KEY is not the name the "
-             "Headers was built with, so the iterator this cycle is made of is not stepping the list it "
-             "holds, and what the cycle reaches is not what this row believes it reaches");
-    fold_row(&itercyc_tt, &itercyc_why, param_value_only(js, "/api/itercycle", "w", "cv"),
-             "the statement RAN and `w` is not exactly `cv`: the first pair's VALUE is not the one the "
-             "Headers was built with");
-    fold_row(&itercyc_tt, &itercyc_why, param_value_only(js, "/api/itercycle", "d", "done"),
-             "the statement RAN and `d` is not exactly `done`: a one-header list answered a SECOND pair, so "
-             "the cursor is not bounded by the list it iterates");
-    /* §5.1's sequence arm: a generator init (the protocol, not an array walk), a Map (iterable, not an array),
-       an array, a malformed pair, and null — which is NOT "no init". */
-    int hdrseq = (param_value_only(js, "/api/hdrseq", "g", "g1, g2") &&
-                  param_value_only(js, "/api/hdrseq", "m", "m1") &&
-                  param_value_only(js, "/api/hdrseq", "a", "a1") &&
-                  param_value_only(js, "/api/hdrseq", "bad", "threw") &&
-                  param_value_only(js, "/api/hdrseq", "nul", "threw"));
-    /* §3.2.23's record dedup is by ByteString KEY and case-SENSITIVE, so both pairs of {'X-Rec','x-rec'} reach
-       the fill and both APPEND — `get` combines them into "r1, r2" over the one name the list holds. The fill's
-       old replace loop matched the lowercased HEADER name instead and answered "r2". */
-    int hdrrec = (param_value_only(js, "/api/hdrrec", "v", "r1, r2") &&
-                  param_value_only(js, "/api/hdrrec", "k", "x-rec"));
-    /* §4.10.22.8's escape over a field name written inside quotes: `a"\r\nb` is `a%22%0D%0Ab`, and the RAW
-       quote must be gone — a body that carried it would let a page's own field name close the quoted name and
-       forge a part header. */
-    int mpesc = (param_value_only(js, "/api/mpesc", "esc", "true") &&
-                 param_value_only(js, "/api/mpesc", "raw", "false"));
-    /* THE ENDPOINT CARRIES ITS HEADERS: the two literals as the strings the code computed, and the
-       Authorization as a SHAPE, because a value built out of unknown input is not one this engine may invent.
-       The method comes from the same init, so a POST recorded as a GET would fail here too. */
-    /* FIVE WHOLE-DOCUMENT EXISTENCES OVER ONE RECORD, AND THE METHOD CLAUSE IS THE ONE WORTH NAMING. The three
-       header needles are each unique bytes, so nothing CONTAINED them and the containment axis called them
-       clean — but `"POST"` is answered by EQUALITY from every other POST record this fixture emits, and there
-       are several, so the clause that read "this request was recorded as a POST" could not fail while any POST
-       existed anywhere. The headers were the same defect one step weaker: three tokens somewhere, on no stated
-       record, so a seam that filed them under a different endpoint satisfied the row. */
-    const char *needsauth_why = NULL; int needsauth = 1;
-    fold_row(&needsauth, &needsauth_why, !!strstr(js, "\"/api/needsauth\""),
-             "NOT REACHED: there is no /api/needsauth record at all, so this run did not answer the "
-             "statement and none of the four facts below is being reported on. That is the SCHEDULE");
-    fold_row(&needsauth, &needsauth_why, emitted_record_method(js, "/api/needsauth", "POST"),
-             "the record EXISTS and its own `method` is not POST — the init bag's method did not reach the "
-             "record, so a request this page makes as a POST is reported as something a client may repeat");
-    fold_row(&needsauth, &needsauth_why,
-             emitted_record_has(js, "/api/needsauth", "\"x-api-version\":\"2024-11-01\""),
-             "/api/needsauth's own headers do not carry `x-api-version: 2024-11-01` — a literal the code "
-             "computed, so this is the header list not reaching the record rather than a value to supply");
-    fold_row(&needsauth, &needsauth_why,
-             emitted_record_has(js, "/api/needsauth", "\"content-type\":\"application/json\""),
-             "/api/needsauth's own headers do not carry `content-type: application/json`");
-    fold_row(&needsauth, &needsauth_why,
-             emitted_record_has(js, "/api/needsauth", "\"authorization\":\"Bearer {state}.token\""),
-             "/api/needsauth's own headers do not carry the Authorization as the SHAPE `Bearer "
-             "{state}.token` — a value built out of unknown input either collapsed to an invented example or "
-             "was dropped, and either way the surface stops saying what a caller must supply");
-    /* PENDING await: the awaited promise resolved LATER (via a microtask, standing in for the network); the flow
-       parked at the await and resumed when it settled -> /api/lazy?r=lazyRegion. The real fetch-parking path. */
-    const char *pending_await_why = NULL; int pending_await = 1;
-    fold_row(&pending_await, &pending_await_why, !!strstr(js, "\"/api/lazy\""),
-             "NOT REACHED: there is no /api/lazy record at all, so the flow parked at the await and never "
-             "resumed. That is the SCHEDULE");
-    fold_row(&pending_await, &pending_await_why, param_value_is(js, "/api/lazy", "r", "lazyRegion"),
-             "the flow RESUMED and /api/lazy's `r` does not carry `lazyRegion` — the continuation was "
-             "delivered without the settled value, so the await resumed on something other than what the "
-             "promise settled with");
-    /* PER-FLOW PROMISE STATE: a promise created BEFORE a snapshot fork and settled per-flow with a DIFFERENT
-       value in each arm; both shBETA and shSTABLE present ⇒ the shared promise's settlement is isolated per
-       flow (no cross-flow contamination) — async STATE time-travels, not just async execution. */
-    const char *promise_state_why = NULL; int promise_state = 1;
-    FORK_ROW(js, &promise_state, &promise_state_why, "/api/shared", "v",
-             "the COW capture of a promise's SETTLEMENT, which is what lets one pre-fork promise settle with a "
-             "different value in each arm instead of one arm's value surviving for both",
-             "shBETA", "shSTABLE");
-    /* DELETE ISOLATION: the gamma-true flow deletes a SHARED baseline object's key; the gamma-false flow must
-       still see keepVAL. Both present ⇒ the delete time-travels. FAILS under the snapshot fork (it shares the
-       flow_local object across siblings) — a real unsoundness this asserts LOUD rather than leaving unchecked. */
-    const char *delete_iso_why = NULL; int delete_iso = 1;
-    FORK_ROW(js, &delete_iso, &delete_iso_why, "/api/tok", "t",
-             "the delta's capture of a slot REMOVAL on a shared baseline object, which is what leaves the "
-             "sibling arm still reading the key this arm deleted",
-             "wasDeleted", "keepVAL");
-    /* THE SAME ISOLATION OVER THE EXOTIC GLOBAL, which is a different code path and not a second spelling of the
-       row above. A slot removal on the global misses the shape (the name is not one of the Window class's
-       supported indices) and reaches the exotic [[Delete]] dispatch, which the swap must not consult: 10.5.10
-       [[Delete]] step 7's trap is the page's own code and every host class's hook is a VIEW over storage that is
-       captured on the object that owns it, so consulting either removes state the delta never named. gdSOLE on
-       BOTH arms says each flow read back its own creation AND that neither absent-slot delete left a slot
-       standing for the sibling. */
-    const char *global_delete_why = NULL; int global_delete = 1;
-    FORK_ROW(js, &global_delete, &global_delete_why, "/api/gdel", "v",
-             "the delta's capture of a slot removal on the EXOTIC global, which reaches 10.5.10 [[Delete]] and "
-             "must not consult a hook that is a VIEW over storage the delta never named",
-             "gdADMINgdSOLE", "gdPUBLICgdSOLE");
-    /* FLOW-LOCAL post-fork isolation: an object created before a concolic fork (flow_local at creation) is SHARED
-       by the snapshot; each arm's mutation must be per-flow. Both values present ⇒ cow_delta_fork's forked=1 keeps
-       post-fork flow_local mutations captured — no leak (the older 'snapshot shares flow_local (unsound)' claim). */
-    /* THE SUBJECT NAMES WHAT A 0 HERE WOULD MEAN AND NO LONGER NAMES A CAPTURE, because this row cannot be
-       about one: its object is flow-PRIVATE in both arms (the statement says why), so no capture runs under
-       it and a leak has nothing to travel through. Both arms reaching their own fetch is what it establishes. */
-    const char *floc_iso_why = NULL; int floc_iso = 1;
-    FORK_ROW(js, &floc_iso, &floc_iso_why, "/api/floc", "x",
-             "BOTH ARMS REACHING THIS STATEMENT AT ALL — and not a capture, which this row cannot be about",
-             "flocADMIN", "flocPUBLIC");
-    /* CONCOLIC FORK inside a forEach CALLBACK: the branch forks deep (base->iter-callback frame); clone_deep_flow
-       clones the JSArrayEvery cont_state so the sibling continues the iteration on its own. All four combinations
-       (feADMIN/fePUBLIC × elements 1,2) ⇒ both arms iterated independently over the full array.
-       FOUR WORLDS AND NOT TWO, so the row names all four: the old spelling also asked for the bare `feADMIN`
-       and `fePUBLIC`, which are substrings of the four it already required and asserted nothing on top of
-       them. What the four say is that EACH arm walked the WHOLE array — an arm that forked and then stopped
-       iterating shows up as its element-2 world missing, and the message names which. */
-    const char *fefork_why = NULL; int fefork_tt = 1;
-    FORK_ROW(js, &fefork_tt, &fefork_why, "/api/fefork", "e",
-             "clone_deep_flow's clone of the JSArrayEvery cont_state, which is what lets a sibling forked "
-             "inside the callback go on iterating on its own",
-             "1feADMIN", "2feADMIN", "1fePUBLIC", "2fePUBLIC");
-    /* SHARED-ARRAY append isolation: each arm's push into the BASELINE array must be COW-isolated. The values
-       are matched WHOLE, so the contaminated join `pushA,pushB` satisfies neither world and the row says which
-       one it could not find — the quoted-`strstr` spelling was reaching for whole-value equality and this is
-       it, scoped to this endpoint's own param as well.
-       "PRE-FORK" IS NOW TRUE OF THE ARRAY AND USED TO BE TRUE OF NOTHING. `pfa` was minted one line above its
-       own `if`, ~2100 lines BELOW the document's first `cfg.admin` branch — and a second test of one predicate
-       is REFINED rather than forked (solver/decide.c's `decide_arm` asks `concolic_branch_decided` above the
-       replay and above the fork), so that `if` forked nothing, each arm minted its own `pfa`, cow.c's
-       flow-private test skipped every push, and this row read 1 with the append capture deleted. The array is
-       minted in the document's first <script> now, which is the only placement that makes it shared. */
-    const char *pushfork_why = NULL; int pushfork_tt = 1;
-    FORK_ROW(js, &pushfork_tt, &pushfork_why, "/api/pushfork", "a",
-             "the fast-array-append capture, which is what isolates each arm's push into the pre-fork array "
-             "(a leak joins both arms into one value and neither world is then found)",
-             "pushA", "pushB");
-    /* SHARED-ARRAY element-overwrite isolation. THE WORLDS NAME BOTH SLOTS BECAUSE THE STATEMENT READS
-       BOTH, and what the previous pair asserted was reachability: `owA` and `owB` were each an arm reading
-       back the slot that arm had just written, which answers the same bytes whether or not the write was
-       captured. The pair below cannot be satisfied that way — a leak composes `owA-owP`, which is neither. */
-    const char *owfork_why = NULL; int owfork_tt = 1;
-    FORK_ROW(js, &owfork_tt, &owfork_why, "/api/owfork", "a",
-             "the in-bounds element-overwrite capture, which is what isolates two arms writing one array",
-             "owA-ow2B", "ow1B-owP");
-    /* MAP fork: clean per-arm result arrays, no dropped element. The two canonical arms are matched WHOLE, so
-       a dropped element0 (`-mA2`) is no longer that arm's value and the row names the world it lost. The
-       leading-dash clause stays as its own fold because it is a claim about the WHOLE document — a third,
-       contaminated record existing beside two correct ones — which no per-endpoint value test can make. */
-    const char *mapfork_why = NULL; int mapfork_tt = 1;
-    FORK_ROW(js, &mapfork_tt, &mapfork_why, "/api/mapfork", "r",
-             "clone_deep_flow's clone of the JSArrayEvery cont_state over the shared result array",
-             "mA1-mA2", "mP1-mP2");
-    fold_row(&mapfork_tt, &mapfork_why, !strstr(js, "\"-m"),
-             "a map-callback value BEGINNING with the join separator exists somewhere in this document: an arm "
-             "lost element 0 of the shared result array, which is the contamination the two world clauses "
-             "above cannot see because each of them is satisfied by a correct sibling");
-    /* CONCOLIC FORK inside a synchronously-driven GENERATOR body: the branch forks the tramp-driven generator
-       activation (the named nested-activation hold-out). Both ggADMIN and ggPUBLIC present ⇒ a branch inside a
-       generator body snapshot-forks per arm, never DFAILs / drives to completion. */
-    const char *genfork_why = NULL; int genfork_tt = 1;
-    FORK_ROW(js, &genfork_tt, &genfork_why, "/api/genfork", "v",
-             "the snapshot fork of a tramp-driven generator activation (the alternative is a DFAIL or a "
-             "drive-to-completion, and neither leaves a second world)",
-             "ggADMIN", "ggPUBLIC");
-    /* TWO-BRANCH generator fork: the dedup-REPLACE path (a sibling with a gen_data swap re-forks the same
-       generator). All four gate combinations present ⇒ each fork advanced its own per-flow generator state. */
-    const char *gen2fork_why = NULL; int gen2fork_tt = 1;
-    FORK_ROW(js, &gen2fork_tt, &gen2fork_why, "/api/gen2fork", "v",
-             "the dedup-REPLACE path, which is what lets a sibling carrying a gen_data swap re-fork the same "
-             "generator so each of the four gate combinations advances its own per-flow state",
-             "g2:AX", "g2:AY", "g2:PX", "g2:PY");
-    /* FOR-OF generator-body fork: the generator object is recovered from the caller stack (caller_sp[forof_off]),
-       not a held frame ref. Both ofA and ofP present ⇒ a branch inside a for-of-driven generator body forks per arm. */
-    const char *genofork_why = NULL; int genofork_tt = 1;
-    FORK_ROW(js, &genofork_tt, &genofork_why, "/api/genofork", "v",
-             "recovery of the generator object from the caller stack rather than from a held frame reference",
-             "ofA", "ofP");
-    /* Array.from(GEN) consumer fork: the gen body branches while CONSUMED by Array.from on the tramp
-       (CONT_ITER_CONSUME) ⇒ clone_deep_flow's gen-branch cloned the JSIterConsume state so each fork arm
-       accumulated its own result independently.
-       THIS ROW WAS THE SECOND `mapmutfork`, AND THE COMMENT BELOW NAMED IT AS THE COUNTEREXAMPLE TO ITSELF.
-       `afA` and `afP` were matched with an unscoped `strstr` over the whole result document, and `/api/paffork`
-       — six statements after this one — emits `pafA` and `pafP`, which CONTAIN them. So both world clauses
-       were satisfiable by a DIFFERENT statement's records, and all this row asserted was that an
-       `/api/afromfork` record existed at all while `paffork` had produced both of ITS worlds. It could report
-       1 with the JSIterConsume clone broken. The token was minted; uniqueness was never a property of minting
-       it, only of SCOPING the comparison, which is what param_value_is does. */
-    const char *afromfork_why = NULL; int afromfork_tt = 1;
-    FORK_ROW(js, &afromfork_tt, &afromfork_why, "/api/afromfork", "v",
-             "clone_deep_flow's clone of the JSIterConsume state Array.from holds across the generator's branch",
-             "afA", "afP");
-    /* [...GEN] spread consumer fork: the SPREAD-sink variant of CONT_ITER_CONSUME ⇒ the spread consumer forked
-       mid-consume and each arm appended to its own COW-isolated array. */
-    const char *spreadfork_why = NULL; int spreadfork_tt = 1;
-    FORK_ROW(js, &spreadfork_tt, &spreadfork_why, "/api/spreadfork", "v",
-             "the SPREAD-sink variant of CONT_ITER_CONSUME, whose arms append to their own COW-isolated array",
-             "spA", "spP");
-    /* SHARED-SET record isolation: a BASELINE Set, each arm adds a different record ⇒ the map_add capture
-       isolated each arm's Set.add (JS_MapDeleteRecord on unapply, JS_MapAddRecord on apply). The read is
-       `[...(_sad)][0]`, a POSITION rather than a key, so it is the sibling's record that the second arm sees
-       when the capture is missing and one of the two worlds then never appears under either ordering.
-       THE SET IS MINTED IN THE DOCUMENT'S FIRST <script> AND USED TO BE MINTED BESIDE THIS `if`, which made
-       it flow-private in both arms and this row a reachability test — the placement paragraph is there and
-       the reading of `decide_arm` that forces it is at `pushfork` above. */
-    const char *setaddfork_why = NULL; int setaddfork_tt = 1;
-    FORK_ROW(js, &setaddfork_tt, &setaddfork_why, "/api/setaddfork", "v",
-             "the map_add capture, which is what isolates two arms adding to one pre-fork Set",
-             "sadA", "sadP");
-    /* new Set(GEN) consumer fork: the Set iterator-consumer (SET sink) forks mid-consume — fork-safe via the
-       map_add COW capture ⇒ each arm consumed into its own COW-isolated Set. */
-    const char *setfork_why = NULL; int setfork_tt = 1;
-    FORK_ROW(js, &setfork_tt, &setfork_why, "/api/setfork", "v",
-             "the SET-sink variant of CONT_ITER_CONSUME over the map_add capture",
-             "seA", "seP");
-    /* SHARED-MAP overwrite/delete isolation: one arm overwrites a BASELINE Map key, the other deletes a
-       DIFFERENT one, and the read renders BOTH. Worlds 'mmA-has' and 'base-gone' ⇒ the map_mutate undo-log
-       capture isolated each arm's mutation.
-       THIS ROW COULD NOT DETECT A LEAK AT ALL AND IT IS WHERE THE DEFECT SHAPE WAS NAMED, so the argument is
-       rewritten here rather than deleted — a reader who re-derives the old reasoning writes the old row back.
-       Both arms mutated ONE key `'k'` and each read back only `'k'`: the overwrite arm read its own write and
-       the delete arm read its own delete, so 'mmA' and 'gone' were both emitted under EITHER ordering with
-       the undo log deleted. What it measured was that both arms were REACHED, under a name claiming
-       isolation. §Solver-half's own repair for it is the weak family's and is now this row's: EACH ARM
-       MUTATES ITS OWN KEY AND READS BOTH, so whichever arm runs second sees the first arm's mutation the
-       instant the capture is missing and composes `mmA-gone`, which neither world names.
-       AND THE OBJECT IT MUTATES HAD TO MOVE FOR THE READ SHAPE TO MEAN ANYTHING. `_mm` was minted one line
-       above its own `if`, ~2100 lines below the document's first `cfg.admin` branch, and a second test of one
-       predicate is REFINED rather than forked — solver/decide.c's `decide_arm` asks `concolic_branch_decided`
-       above the replay and above the fork, because the other arm is contradicted by the flow's own record and
-       a bundle testing one flag in twenty places would otherwise cost a million flows. So that `if` forked
-       nothing, each arm minted its OWN Map, and cow.c's flow-private test (`JS_ObjFlowGen(obj) >
-       d->fork_gen`) skipped every mutation. A fixed read shape over a flow-private Map is still a
-       reachability test; the Map is minted in the document's first <script> now.
-       THE EARLIER REPAIRS TO THIS ROW STAND AND ARE WHAT MADE THE REST VISIBLE. `gone` is an ENGLISH WORD
-       four earlier statements emit — `/api/cegone?v=isgone`, `&removed=gone`, `&del=gone`, `made77gone` — so
-       an unscoped `strstr` for it could not fail here at all, and the three-state fold that separates "never
-       reached" from "a world was lost" is what stopped a truncated run reading as a COW regression. Both are
-       kept by going through FORK_ROW, which scopes every world to this endpoint's own `v` param with
-       `param_value_is` and composes the NOT-REACHED clause from the frontier's measured standing rather than
-       from a reader's comparison of neighbouring rows. The three hand-rolled folds this replaces were a
-       second spelling of exactly that. */
-    const char *mapmutfork_why = NULL; int mapmutfork_tt = 1;
-    FORK_ROW(js, &mapmutfork_tt, &mapmutfork_why, "/api/mapmutfork", "v",
-             "the map_mutate undo-log capture, which is what isolates an overwrite in one arm from a delete "
-             "in the other over one baseline Map",
-             "mmA-has", "base-gone");
-    /* WEAK-COLLECTION ISOLATION — the claims the three rows above make for a STRONG Map and Set, made over a
-       WeakMap and a WeakSet, whose records are captured through a JSCowWeakRef cell (a BORROWED key and up to
-       two owned values) instead of through a dup of the key. The statement and its baseline collections are
-       in the document; the two paragraphs there carry why the collections are minted in the first <script>
-       and why each arm reads its SIBLING's key.
-       `weak-reach` STANDS FIRST FOR `td-reach`'s REASON, and it is the only row of the five that is not an
-       absence. The other four are two-world claims, and a two-world claim at 0 is "never reached" OR "a world
-       was lost" — which is exactly the pair §AND-THE-SAME-HOLE-SWALLOWS-A-PREDICTION says a run that never
-       entered the code satisfies for free. FORK_ROW separates those two at the row, and this one separates
-       them for the FAMILY: it is emitted by the PRE-FORK flow, so its 1 is a positive statement that the
-       baseline ran, and a family reading 0 across all five is a statement about the schedule and not about
-       the capture. */
-    const char *weakreach_why = NULL; int weakreach_tt = 1;
-    fold_row(&weakreach_tt, &weakreach_why, !!strstr(js, "\"/api/weakreach\""),
-             "NOT REACHED: there is no /api/weakreach record at all, so the <script> that mints the baseline "
-             "weak collections did not run as far as its own fetch. The four rows below are then reporting on "
-             "the SCHEDULE and none of them is evidence about the weak-record capture either way");
-    fold_row(&weakreach_tt, &weakreach_why,
-             param_value_is(js, "/api/weakreach", "v", "wmWEAKMAPSETBASE"),
-             "the baseline <script> RAN and did not answer `wmWEAKMAPSETBASE`. A leading `wmSTRONG` is the "
-             "one that matters most: it says the collection ACCEPTED a string key, so it is not weak, "
-             "JS_IsWeakCollection answers 0 for it, and the four rows below are asserting the STRONG capture "
-             "under weak names. `NOMAP`/`NOSET` is the intrinsic itself missing. `NOBASE` is the overwrite "
-             "and delete baseline never written, which makes those two arms ADDs wearing another name and "
-             "collapses the three mutation kinds into one");
-    /* ADD — cow_capture_map_add's weak arm, whose cell has no BEFORE (its inverse deletes and needs no
-       value). A leak makes whichever arm runs second read `wa11`, which is neither world. */
-    const char *weakadd_why = NULL; int weakadd_tt = 1;
-    FORK_ROW(js, &weakadd_tt, &weakadd_why, "/api/weakadd", "v",
-             "cow_capture_map_add's weak arm, which is what keeps one arm's NEW WeakMap record out of the "
-             "sibling that never set it",
-             "wa10", "wa01");
-    /* OVERWRITE — the one mutation whose cell holds BOTH values, because an overwrite has a before and an
-       after and each is a value the page associated with that key. A leak reads `wo1A-wo2P`. */
-    const char *weakover_why = NULL; int weakover_tt = 1;
-    FORK_ROW(js, &weakover_tt, &weakover_why, "/api/weakover", "v",
-             "cow_capture_map_mutate's weak OVERWRITE arm, whose cell carries the before AND the after so a "
-             "sibling reads the baseline value under the arm that replaced it",
-             "wo1A-wo2B", "wo1B-wo2P");
-    /* DELETE — the arm that must carry JS_MAP_POS_TAIL and no position, a weak collection not being iterable;
-       JS_MapAddRecord asserts a weak restore never arrives carrying anything else. A leak reads `wd00`. */
-    const char *weakdel_why = NULL; int weakdel_tt = 1;
-    FORK_ROW(js, &weakdel_tt, &weakdel_why, "/api/weakdel", "v",
-             "cow_capture_map_mutate's weak DELETE arm, which is what leaves the sibling still finding the "
-             "record this arm removed",
-             "wd01", "wd10");
-    /* THE WEAKSET, WHICH IS THE CLASS ID AND NOT A SECOND SPELLING — the one row that asks
-       JS_IsWeakCollection about JS_CLASS_WEAKSET, over an add and a delete in each arm. */
-    const char *weakset_why = NULL; int weakset_tt = 1;
-    FORK_ROW(js, &weakset_tt, &weakset_why, "/api/weakset", "v",
-             "JS_IsWeakCollection answering for JS_CLASS_WEAKSET, without which a WeakSet record takes the "
-             "STRONG arm and its key is dup'd — pinned for the session rather than isolated",
-             "ws1001", "ws0110");
-    /* NAMED RESIDUAL — THE COLLECTED-KEY ARM.
-       WHAT IS NOT COVERED: every key these five rows use is a `var` of the baseline <script> and stays
-       strongly reachable for the whole run, so cow_map_live is TRUE at every apply and every unapply they
-       produce. The arm where it is FALSE — a weak key collected between the capture and the swap, which makes
-       both the apply and the unapply a no-op, exactly and not lossily, because an unreachable key cannot be
-       looked up — is reached by nothing in this fixture. The code is RIGHT for what it does and NARROWER than
-       the mechanism: a WeakMap entry exists to die with its key, and no entry these rows make ever does.
-       WHAT THE NEXT DIFF BUILDS: a runner-own `gc` on THIS fixture's realm, installed beside `hostRead` and
-       wrapping JS_RunGC the way wpt_runner.c installs its own `gc` for the WPT realm. That function is static
-       to its own file, so this is a SECOND one and not a call to it. It is a residual rather than a TODO
-       because the cost is a design question and not typing: the realm it would go on is the one the SOLVER
-       drives, so the name joins the surface a forced flow explores — and wpt_runner.c's own reason for
-       keeping it off the browser (a page-visible collector is fingerprintable and this engine does not ship
-       one) is a thing to weigh rather than to quote past.
-       HOW ITS ABSENCE WOULD SHOW: it is observable AT THESE ROWS — the four two-world rows answer identically
-       under a correct collected-key arm and under one that never runs, so a 1 from any of them is not
-       evidence about it. The only other instruments that have ever looked at a collected weak key are
-       JS_FreeCowWeakRef's neutralised-cell DCHECK and JS_FreeRuntime's gc_obj_list walk, and both run at
-       TEARDOWN and both report by staying silent, which is the shape this family was added to stop being the
-       whole of the evidence. */
-    /* WEB IDL §3.7.9.1 "Default iterator objects"' `index` ACROSS A FORK — the weak family's claim for a
-       record behind a CLASS OPAQUE, whose write is seen by no property hook and no engine hook and had to be
-       captured at the record's own accessor. One iterator, minted baseline in the document's first <script>,
-       stepped to exhaustion by BOTH arms.
-       A 0 HERE IS THE TWO STATES FORK_ROW SEPARATES AND NOTHING ELSE, which is why it is spelled as one and
-       not as a ladder: the statement is synchronous, it carries no reply and no timer, so "never reached" is
-       the schedule and "a world was lost" is the capture. There is no third reading — an arm that runs and
-       walks nothing emits its own tag with an EMPTY key string, which is neither world, so the row cannot
-       pass on the loss by either ordering.
-       ITS SUBJECT IS THE ACCESSOR AND NOT THE LAYOUT, and the difference is worth naming because the layout
-       invites the wrong reading: IDL_PAIR_ITER_VALS names `target` alone, and `index` is covered because
-       cow_state_save memcpy's the record's BYTES before it dups the named values. So this row is 0 when the
-       CAPTURE is missing and stays 1 under every correct reading of what the layout names — a second entry
-       added to that list would not make it pass and its absence is not what makes it fail. */
-    const char *iteriso_why = NULL; int iteriso_tt = 1;
-    FORK_ROW(js, &iteriso_tt, &iteriso_why, "/api/iteriso", "v",
-             "idl_pair_iter_of's capture of the record Web IDL §3.7.9.1's `index` lives in, which lets two arms "
-             "sharing ONE iterator each walk the whole list instead of splitting one enumeration between them",
-             "itk1itk2-itADMIN", "itk1itk2-itPUBLIC");
-    /* for-await(GEN) consumer fork: the sync gen body branches while driven by the async-from-sync consumer
-       (CONT_ASYNC_FROM_SYNC) ⇒ clone_deep_flow cloned the JSAsyncFromSync state with a fresh wrapper promise
-       per arm, so each for-await arm delivered its OWN value. */
-    const char *afsfork_why = NULL; int afsfork_tt = 1;
-    FORK_ROW(js, &afsfork_tt, &afsfork_why, "/api/afsfork", "v",
-             "clone_deep_flow's clone of the JSAsyncFromSync state, with a fresh wrapper promise per arm",
-             "afsA", "afsP");
-    /* Promise.all(GEN) consumer fork at index==0: the gen branches during the FIRST .next() before any element
-       .then is attached (CONT_PROMISE_ALL) ⇒ clone_deep_flow cloned the JSPromiseAll aggregate fresh per arm,
-       so each arm's aggregate resolved with its OWN element. */
-    const char *paffork_why = NULL; int paffork_tt = 1;
-    FORK_ROW(js, &paffork_tt, &paffork_why, "/api/paffork", "v",
-             "clone_deep_flow's fresh-per-arm clone of the JSPromiseAll aggregate at index 0, before any "
-             "element .then is attached",
-             "pafA", "pafP");
-    /* Promise.all(GEN) consumer fork at index>0: the gen yields element 0 (p0) THEN branches ⇒ the retained
-       pre-fork element wrapper was RE-ATTACHED to the sibling aggregate (each arm's a[0]=='p0' shared, a[1] its
-       own) — the deep async-COW re-attach path, not just the index==0 base case. */
-    const char *paf2fork_why = NULL; int paf2fork_tt = 1;
-    FORK_ROW(js, &paf2fork_tt, &paf2fork_why, "/api/paf2fork", "v",
-             "the deep async-COW RE-ATTACH of a retained pre-fork element wrapper onto the sibling aggregate, "
-             "which is the index>0 case and not paffork's base case",
-             "p0-pf2A", "p0-pf2P");
-    /* reduce ACCUMULATOR fork (CONT_ARRAY_REDUCE): the reducer branches on opaque state mid-fold ⇒
-       clone_deep_flow cloned the JSArrayReduce state so each arm threaded its OWN accumulator across both
-       elements (never a shared/contaminated acc). */
-    const char *redfork_why = NULL; int redfork_tt = 1;
-    FORK_ROW(js, &redfork_tt, &redfork_why, "/api/redfork", "v",
-             "clone_deep_flow's clone of the JSArrayReduce accumulator, which is what threads a separate fold "
-             "through each arm rather than one contaminated accumulator through both",
-             "r:rA1rA2", "r:rP1rP2");
-    const char *rerepfork_why = NULL; int rerepfork_tt = 1;
-    FORK_ROW(js, &rerepfork_tt, &rerepfork_why, "/api/rerepfork", "v",
-             "the JSReRep machine's three per-arm holdings across a @@replace callback — the collected match "
-             "array, the captures List and the StringBuffer with its nextSourcePosition",
-             "xrrA1yrrA2", "xrrP1yrrP2");
-    /* MACHINE-MODE ToPrimitive fork: the JSToPrim driving the page's toString has an OUTER requester (the
-       JSArrayJoin machine coercing its separator), and that machine owns no frame — it is reachable only
-       through `outer`, so nothing but the requester walk clones it. Each arm must finish its own join with
-       its own separator off its own machine. */
-    const char *toprimfork_why = NULL; int toprimfork_tt = 1;
-    FORK_ROW(js, &toprimfork_tt, &toprimfork_why, "/api/toprimfork", "v",
-             "the requester walk, which is the only thing that clones a frameless JSArrayJoin machine reached "
-             "as the OUTER requester of the JSToPrim running the page's toString",
-             "xtpAy", "xtpPy");
-    /* SORT'S COMPARISON OVER UNKNOWN EXTERNAL INPUT, COLLAPSED RATHER THAN FORKED OR PROPAGATED. Each needle is
-       a string that can ONLY be composed from a real Array of real elements, so it is false in both directions
-       the collapse can be got wrong: the comparison forking (two arms, neither of which is the identity order)
-       and the machine's completion becoming a derived unknown (which has no [0], no .u and no .length the page
-       ever computed). `sc0sc1-2` is the direct concolic result; `sv0sv1` is the same through an ordinary object
-       whose valueOf answers unknown, which no pre-check on the comparator's result could have seen; `sr0sr1-2`
-       adds the REST PARAMETER, the one argument shape that can see a callback frame borrowing slots it does
-       not own; `sd1sd2-3` is the DEFAULT ordering, where the two concrete elements must still be ordered
-       against each other and the unknown must still be an element; `same-3-312` is the typed-array sort's
-       receiver coming back with its write-back performed. */
-    /* EACH OF THESE IS FOLDED AND NOT `&&`-ED, AND THE FIRST CLAUSE IS ALWAYS "THERE IS A RECORD AT ALL".
-       A bare conjunction reports ONE 0 for two findings that send a reader to opposite places: a statement this
-       run ANSWERED WRONGLY (the collapse, or the fork, is broken) and one it NEVER REACHED (the frontier had
-       not got here when the harness stopped it). Those are the two states CLAUDE.md's @S rule names — "a
-       candidate killed by a gate must be distinguishable from one a filter ate and from one that was never
-       scheduled" — and a sort row is where they were conflated.
-       MEASURED, AND IT COST A LANE A SESSION. A smoke that spent its whole CPU budget having answered 83 of
-       177 statements produced `sortcollapse=1 sortvalueof=1 sortrest=1 sortdefault=1 sortta=1 sortnan=1
-       sortdefctl=1 sortbranch=0`, which splits one-world-passes / two-world-fails and reads as a defect in
-       FORKING. In the same census `fefork owfork genfork setaddfork redfork rerepfork toprimfork gcallfork`
-       and every other two-world row were 0 too, because no second world had reached this block yet — but the
-       eight rows were read on their own and a lane was sent to find a fork-clone gap in Array.prototype.sort's
-       step machine that nothing in that run pointed at. The clause below is what the run had to say and could
-       not: there is no /api/sortbranch record AT ALL. */
-    const char *sortcollapse_why = NULL, *sortvalueof_why = NULL, *sortrest_why = NULL;
-    const char *sortdefault_why = NULL, *sortta_why = NULL;
-    int sortcollapse_tt = 1, sortvalueof_tt = 1, sortrest_tt = 1, sortdefault_tt = 1, sortta_tt = 1;
-
-    fold_row(&sortcollapse_tt, &sortcollapse_why, !!strstr(js, "\"/api/sortcollapse\""),
-             "NOT REACHED: no /api/sortcollapse record at all — this run did not answer the statement, which "
-             "is the SCHEDULE and says nothing about the collapse");
-    fold_row(&sortcollapse_tt, &sortcollapse_why, !!strstr(js, "sc0sc1-2"),
-             "the statement ran and did not compose sc0sc1-2: the comparison either FORKED (an ordering that "
-             "is not the identity) or the machine's completion became a derived unknown with no [0]/.u/.length");
-    fold_row(&sortvalueof_tt, &sortvalueof_why, !!strstr(js, "\"/api/sortvalueof\""),
-             "NOT REACHED: no /api/sortvalueof record at all — the SCHEDULE, not §7.1.1 ToPrimitive's report");
-    fold_row(&sortvalueof_tt, &sortvalueof_why, !!strstr(js, "sv0sv1"),
-             "the statement ran and did not compose sv0sv1: the unknown reached through valueOf did not "
-             "collapse to +0 the way the direct one does");
-    fold_row(&sortrest_tt, &sortrest_why, !!strstr(js, "\"/api/sortrest\""),
-             "NOT REACHED: no /api/sortrest record at all — the SCHEDULE, not the callback's argument frame");
-    fold_row(&sortrest_tt, &sortrest_why, !!strstr(js, "sr0sr1-2"),
-             "the statement ran and did not compose sr0sr1-2: either the collapse, or the REST parameter did "
-             "not receive both of CompareArrayElements' operands from slots the frame owns");
-    fold_row(&sortdefault_tt, &sortdefault_why, !!strstr(js, "\"/api/sortdefault\""),
-             "NOT REACHED: no /api/sortdefault record at all — the SCHEDULE, not the default ordering");
-    fold_row(&sortdefault_tt, &sortdefault_why, !!strstr(js, "sd1sd2-3"),
-             "the statement ran and did not compose sd1sd2-3: the two concrete elements lost their ordering "
-             "against each other, or the unknown stopped being an element");
-    fold_row(&sortta_tt, &sortta_why, !!strstr(js, "\"/api/sortta\""),
-             "NOT REACHED: no /api/sortta record at all — the SCHEDULE, not the typed-array sort");
-    fold_row(&sortta_tt, &sortta_why, !!strstr(js, "same-3-312"),
-             "the statement ran and did not compose same-3-312: the receiver did not come back as itself, or "
-             "§23.2.3.29 step 9's write-back did not run");
-    /* THE CONTROLS, which must read the same before and after that collapse exists. sortnan takes the very
-       predicate the collapse leaves through (23.1.3.30.2 step 4.b's +0 for NaN), sortdefctl is the default
-       ordering with nothing unknown in it, and sortbranch is THE FORK THAT MUST SURVIVE — the branch is inside
-       the comparator's BODY rather than over its result, so both orderings are still two worlds.
-       SORTBRANCH HAS THREE STATES AND NOT TWO, which is the whole reason it is folded per ORDERING: a run that
-       reached it and produced ONE ordering is a fork that was eaten, and the clause NAMES WHICH ARM SURVIVED —
-       cb0cb1 is the comparator's -1 and cb1cb0 its +1, so the surviving needle says which side of
-       `cfg.admin ? 1 : -1` the run kept. A run that produced NEITHER has not been here. Those are three
-       different next steps and they used to be one 0. */
-    const char *sortnan_why = NULL, *sortdefctl_why = NULL, *sortbranch_why = NULL;
-    int sortnan_tt = 1, sortdefctl_tt = 1, sortbranch_tt = 1;
-
-    fold_row(&sortnan_tt, &sortnan_why, !!strstr(js, "\"/api/sortnan\""),
-             "NOT REACHED: no /api/sortnan record at all — the SCHEDULE, not step 4.b's +0 for NaN");
-    fold_row(&sortnan_tt, &sortnan_why, !!strstr(js, "n1n2n3n4"),
-             "the statement ran and did not compose n1n2n3n4: a NaN comparison stopped keeping the earlier "
-             "element, which is the predicate the unknown-collapse leaves through");
-    fold_row(&sortdefctl_tt, &sortdefctl_why, !!strstr(js, "\"/api/sortdefctl\""),
-             "NOT REACHED: no /api/sortdefctl record at all — the SCHEDULE, not the default ordering");
-    fold_row(&sortdefctl_tt, &sortdefctl_why, !!strstr(js, "cdacdbcdc"),
-             "the statement ran and did not compose cdacdbcdc: the default ordering is wrong with nothing "
-             "unknown in it at all, so this is not about the collapse");
-    fold_row(&sortbranch_tt, &sortbranch_why,
-             !!strstr(js, "\"/api/sortbranch\""),
-             "NOT REACHED: no /api/sortbranch record at all — NEITHER ordering exists, so no world has run "
-             "this statement and this row says nothing whatever about forking inside the comparator. Read it "
-             "against the run's standing and against the other two-world rows (fefork, owfork, genfork, "
-             "redfork, rerepfork, toprimfork, gcallfork): 0 across all of them is a run that stopped");
-    fold_row(&sortbranch_tt, &sortbranch_why, !!strstr(js, "cb0cb1"),
-             "the statement ran and only the +1 ordering (cb1cb0) exists: the comparator's -1 arm was LOST — "
-             "one world reached the sort and its sibling did not survive the fork inside the comparator body");
-    fold_row(&sortbranch_tt, &sortbranch_why, !!strstr(js, "cb1cb0"),
-             "the statement ran and only the -1 ordering (cb0cb1) exists: the comparator's +1 arm was LOST — "
-             "one world reached the sort and its sibling did not survive the fork inside the comparator body");
-    /* generator .next() driven via .call (gci.next.call(gci)): the reflection bypass that previously DFAILed as a
-       drive-to-completion is now routed onto do_generator_tramp at do_forward_call. Both gcA and gcP present ⇒ the
-       branch inside the .call-driven generator body snapshot-forks per arm, never drives to completion. */
-    const char *gcallfork_why = NULL; int gcallfork_tt = 1;
-    FORK_ROW(js, &gcallfork_tt, &gcallfork_why, "/api/gcallfork", "v",
-             "do_forward_call's reshape of `gci.next.call(gci)` onto do_generator_tramp — the alternative is "
-             "the drive-to-completion this bypass used to DFAIL as, which leaves one world",
-             "gcA", "gcP");
-    /* generator .next() via Function.prototype.apply and via Reflect.apply — the two apply-reflection bypasses,
-       reshaped at OP_call_method to the [this=gen, next, arg0] shape and routed onto do_generator_tramp. Both arms
-       of each ⇒ the apply-driven generator body snapshot-forks per arm, never drives to completion. */
-    const char *gapplyfork_why = NULL; int gapplyfork_tt = 1;
-    FORK_ROW(js, &gapplyfork_tt, &gapplyfork_why, "/api/gapplyfork", "v",
-             "OP_call_method's reshape of Function.prototype.apply to [this=gen, next, arg0] onto "
-             "do_generator_tramp",
-             "gapA", "gapP");
-    const char *grefapplyfork_why = NULL; int grefapplyfork_tt = 1;
-    FORK_ROW(js, &grefapplyfork_tt, &grefapplyfork_why, "/api/grefapplyfork", "v",
-             "OP_call_method's reshape of Reflect.apply to [this=gen, next, arg0] onto do_generator_tramp",
-             "graA", "graP");
+/* The rows of the `min` document. */
+TF_UNIT void probes_min(const char *js, Probe *tab, int *n) {
     /* OPAQUE ITERATION over unknown injected state. `state.items` has no length, so LengthOfArrayLike has no
        answer and every length is a world: the walk is a CHAIN of per-position outcome forks. Two facts are
        asserted and both are the point. (1) The two element reads are INDEPENDENT SOURCES — {state}.items.0 and
@@ -11685,7 +12737,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        out-running it. Today no arm emits `{state}.items.10` into the document, so the collision is REACHABLE
        IN PRINCIPLE and not reachable at this revision — the conversion is made for the per-param join above,
        and the prefix hazard is closed as a consequence rather than as the reason. */
-    const char *optiter_why = NULL; int optiter_tt = 1;
+    const char *optiter_why = NULL;
+ int optiter_tt = 1;
     fold_row(&optiter_tt, &optiter_why, strstr(js, "\"/api/optiter\"") != NULL,
              "NOT REACHED: there is no /api/optiter record at all, so this run never walked `state.items`. "
              "That is the SCHEDULE and says nothing about whether an opaque iteration forks per position");
@@ -11700,9 +12753,18 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the statement RAN and /api/optiter's `b` does not carry `{state}.items.1` as a whole value: "
              "position 1's read is not an independent source on its own param — the per-POSITION key in the "
              "outcome seam answered some other position here, or answered one source twice");
+    const Probe rows[] = {
+        { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE, optiter_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `navigation` document. */
+TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
     /* THE SYNCHRONOUS HOST READ resumed at its own call site, three times in a loop, each answer landing in
        the call that asked for it — hr0hr1hr2 in order, never interleaved or reused. */
-    const char *hostreq_why = NULL; int hostreq_tt = 1;
+    const char *hostreq_why = NULL;
+ int hostreq_tt = 1;
     fold_row(&hostreq_tt, &hostreq_why, !!strstr(js, "\"/api/hostreq\""),
              "NOT REACHED: there is no /api/hostreq record at all, so the three synchronous host reads never "
              "reached their fetch. That is the SCHEDULE");
@@ -11712,7 +12774,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "`_only` because the concatenation is a value the code DETERMINED: a second DISTINCT "
              "VALUE means the flow forked where this statement cannot");
     /* AND ACROSS A FORK: each arm re-issued its own request under its own world, so BOTH answers exist. */
-    const char *hostreqfork_why = NULL; int hostreqfork_tt = 1;
+    const char *hostreqfork_why = NULL;
+ int hostreqfork_tt = 1;
     FORK_ROW(js, &hostreqfork_tt, &hostreqfork_why, "/api/hostreqfork", "v",
              "the per-flow re-issue of a suspended host read, which is what gives each arm the answer to its "
              "own question instead of one arm's answer to both",
@@ -11722,7 +12785,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        §5 Headers proxy statement — so the old term read 1 whenever THAT endpoint existed, including on the
        run where `open()` answered nothing and this statement emitted `v=null`. The failing spelling is a
        value of this param, so asking for the value whole is what makes the row able to fail. */
-    const char *navopen_why = NULL; int navopen_tt = 1;
+    const char *navopen_why = NULL;
+ int navopen_tt = 1;
     fold_row(&navopen_tt, &navopen_why, !!strstr(js, "\"/api/navopen\""),
              "NOT REACHED: there is no /api/navopen record at all, so this run did not answer the statement");
     fold_row(&navopen_tt, &navopen_why, param_value_is(js, "/api/navopen", "v", "proxy"),
@@ -11734,7 +12798,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        callback over a symbolic reply forces nothing, so its row is `derived` and driven, which is the tool's
        act and a different fact. */
 #define NAV_DOOR_OWN "\"driven\":false,\"door\":\"navigation\""
-    const char *navdoor_why = NULL; int navdoor_tt = 1;
+    const char *navdoor_why = NULL;
+ int navdoor_tt = 1;
     fold_row(&navdoor_tt, &navdoor_why,
              emitted_record_graded_has(js, "https://x.test/navpage", "derived", NAV_DOOR_OWN),
              "NOT REACHED or not recorded: no `derived` `navigation` record for the unforked `open('/navpage')`, so "
@@ -11758,7 +12823,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "address is the peer's to load, and loading it here builds it in the wrong heap");
     /* A navigation response's Set-Cookie lands in the asking flow's jar: the Document it loaded reads the
        readable cookie and not the HttpOnly one, and the sibling arm, after three host round trips, reads none. */
-    const char *flowjar_why = NULL; int flowjar_tt = 1;
+    const char *flowjar_why = NULL;
+ int flowjar_tt = 1;
     fold_row(&flowjar_tt, &flowjar_why, !!strstr(js, "\"/api/cookieload\""),
              "NOT REACHED: no /api/cookieload record, so the arm that opens /cookieload never ran its Document");
     /* The value is recorded as the page sent it, encodeURIComponent'd. */
@@ -11772,119 +12838,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                                         !param_value_is(js, "/api/cookiesib", "c", "flowc%3D1"),
              "the sibling arm read a cookie only the other arm's navigation set — the jar write left that flow's "
              "COW delta");
-    /* HTML §7.2.2.1's close() over a same-origin popup this document opened: `closed` reads true on the next
-       line, since the incumbent is familiar with the popup by §7.3.2.2's first step. */
-    /* A flow forked while §13.4's parse is feeding bytes: both arms finish the parse, so the record carries the
-       whole text's length and the tail element's text. */
-    const char *fragfork_why = NULL; int fragfork_tt = 1;
-    fold_row(&fragfork_tt, &fragfork_why, !!strstr(js, "\"/api/fragfork\""),
-             "NOT REACHED: there is no /api/fragfork record at all, so no arm finished the fragment parse");
-    fold_row(&fragfork_tt, &fragfork_why,
-             param_value_is(js, "/api/fragfork", "v", "200004") && param_value_is(js, "/api/fragfork", "t", "tail"),
-             "the /api/fragfork record does not carry the whole parse — an arm finished it with bytes missing");
-    /* The same fork, asked after the feed while the setter clears its target, and inside §14.4's XML parse: both
-       arms finish the operation, so each record carries the whole result. */
-    const char *fragplace_why = NULL; int fragplace_tt = 1;
-    fold_row(&fragplace_tt, &fragplace_why, !!strstr(js, "\"/api/fragplace\""),
-             "NOT REACHED: there is no /api/fragplace record at all, so no arm finished the setter");
-    fold_row(&fragplace_tt, &fragplace_why,
-             param_value_is(js, "/api/fragplace", "v", "1") && param_value_is(js, "/api/fragplace", "t", "x"),
-             "the /api/fragplace record does not carry the replaced children — an arm finished the setter with "
-             "old children left or the new one missing");
-    const char *fragxml_why = NULL; int fragxml_tt = 1;
-    fold_row(&fragxml_tt, &fragxml_why, !!strstr(js, "\"/api/fragxml\""),
-             "NOT REACHED: there is no /api/fragxml record at all, so no arm finished the XML fragment parse");
-    fold_row(&fragxml_tt, &fragxml_why,
-             param_value_is(js, "/api/fragxml", "v", "50001") && param_value_is(js, "/api/fragxml", "t", "tail"),
-             "the /api/fragxml record does not carry the whole XML parse — an arm finished it with items missing");
-    /* A defined custom element written through a connected element's innerHTML: its constructor runs at the
-       setter's [CEReactions] epilogue, after the placement, so it sees every child and the element is upgraded. */
-    const char *fragce_why = NULL; int fragce_tt = 1;
-    fold_row(&fragce_tt, &fragce_why, !!strstr(js, "\"/api/fragce\""),
-             "NOT REACHED: there is no /api/fragce record at all, so no arm finished the setter");
-    fold_row(&fragce_tt, &fragce_why,
-             param_value_is(js, "/api/fragce", "v", "3") && param_value_is(js, "/api/fragce", "u", "true"),
-             "the /api/fragce record does not say the constructor ran once, after all three children were placed, "
-             "and upgraded the element");
-    /* The fragment members' two ways into the page's code, both after DOM §4.2.3 insert's per-node loop: a
-       `script` target's children changed steps, and setHTMLUnsafe's runScripts post-connection steps. */
-    const char *fragscript_why = NULL; int fragscript_tt = 1;
-    fold_row(&fragscript_tt, &fragscript_why, !!strstr(js, "\"/api/fragscript\""),
-             "NOT REACHED: there is no /api/fragscript record at all, so the script's children changed steps "
-             "never ran it");
-    fold_row(&fragscript_tt, &fragscript_why, param_value_is(js, "/api/fragscript", "v", "1"),
-             "the /api/fragscript record does not say the script ran with its one Text child in place");
-    fold_row(&fragscript_tt, &fragscript_why, param_value_is(js, "/api/fragscriptu", "w", "3"),
-             "the /api/fragscriptu record does not say the runScripts script ran after all three of its target's "
-             "children were inserted — DOM §4.2.3 insert runs the post-connection steps after its per-node loop");
-    /* A link placed in front of a base element by one innerHTML: its insertion steps run inside insert's per-node
-       loop, before the base is in the tree, so the preload resolves against the document's own address. */
-    const char *fragbase_why = NULL; int fragbase_tt = 1;
-    fold_row(&fragbase_tt, &fragbase_why, !!strstr(js, "\"/api/fragbase\"") && !!strstr(js, "fragbase.js"),
-             "NOT REACHED: there is no /api/fragbase record or no request for fragbase.js, so the setter or the "
-             "link's insertion steps never ran");
-    fold_row(&fragbase_tt, &fragbase_why, !!strstr(js, "fbsub") && !strstr(js, "/fbsub/fragbase.js"),
-             "the preload was resolved against the base element placed after it — DOM §4.2.3 insert runs the "
-             "link's insertion steps before the next node is inserted, so the base was not yet in the tree");
-    /* The same order inside one body call that inserts several nodes: `head.append(link, base)` and a
-       DocumentFragment's two children, each link resolved before the base after it is in the tree. */
-    const char *fragbasem_why = NULL; int fragbasem_tt = 1;
-    fold_row(&fragbasem_tt, &fragbasem_why, !!strstr(js, "fragbase2.js") && !!strstr(js, "fragbase3.js"),
-             "NOT REACHED: there is no request for fragbase2.js or fragbase3.js, so a link's insertion steps "
-             "never ran");
-    fold_row(&fragbasem_tt, &fragbasem_why,
-             !!strstr(js, "/fbsub/fragbase2.js") && !strstr(js, "/fbsub2/fragbase2.js") &&
-             !!strstr(js, "/fbsub2/fragbase3.js") && !strstr(js, "/fbsub3/fragbase3.js"),
-             "a link inserted with a base after it in one append or one DocumentFragment was resolved against "
-             "that base — DOM §4.2.3 insert runs each node's insertion steps before the next node is inserted");
-    /* `replaceChildren` removes an open dialog and inserts another: the removed one's close watcher is destroyed
-       before the inserted one's is established, so with a second group allowed the inserted dialog's group is
-       its own and the close request that closes it leaves `c` open. With one group allowed `c` and the inserted
-       dialog share it and close together, so `0open` is no page timeline's: it is the orphan drive of the
-       never-called `close` listener (`driven` true), run with `c` still open. */
-    const char *fragdialog_why = NULL; int fragdialog_tt = 1;
-    fold_row(&fragdialog_tt, &fragdialog_why,
-             param_value_is(js, "/api/fragdialogready", "a", "1") && !!strstr(js, "\"/api/fragdialog\""),
-             "NOT REACHED: no arm both gained the second close-watcher group (the picker resolved) and closed "
-             "the inserted dialog");
-    fold_row(&fragdialog_tt, &fragdialog_why,
-             param_value_is(js, "/api/fragdialog", "s", "1open") &&
-                 !emitted_record_has(js, "/api/fragdialog", "\"1shut\""),
-             "the close request that closed the inserted dialog also closed `c` on the arm with two groups "
-             "allowed — the inserted dialog's close watcher joined `c`'s group because the removed dialog's "
-             "was destroyed after it was established, where DOM §4.2.3's replace all removes before it inserts");
-    fold_row(&fragdialog_tt, &fragdialog_why,
-             !emitted_record_has_both(js, "/api/fragdialog", "\"driven\":false", "\"0open\""),
-             "a timeline that ran the page's own code saw the inserted dialog close with `c` open on the arm with "
-             "one group allowed — HTML §6.10.2's establish appended the inserted dialog's close watcher to `c`'s "
-             "group, so one close request closes both");
-    /* A frontier left parked on refusals: HTML_DECLINES's zone declines its XMLHttpRequest and every fetch()
-       but one GET, and the session parks the waiting arms, one of them suspended inside the XHR's send task
-       with a later task queued, rather than aborting. */
-    const char *declines_why = NULL; int declines_tt = 1;
-    fold_row(&declines_tt, &declines_why,
-             !!strstr(js, "\"/api/decl/redir\"") && !!strstr(js, "/api/decl/sub/rel-xhr"),
-             "NOT REACHED: there is no /api/decl/redir record or no record of the XMLHttpRequest to "
-             "/api/decl/sub/rel-xhr, so the document's program did not run to its XHR and its served GET");
-    const char *winclose_why = NULL; int winclose_tt = 1;
-    fold_row(&winclose_tt, &winclose_why, !!strstr(js, "\"/api/winclose\""),
-             "NOT REACHED: there is no /api/winclose record at all, so this run did not answer the statement");
-    fold_row(&winclose_tt, &winclose_why, param_value_is(js, "/api/winclose", "v", "S"),
-             "§7.2.2.1's close() did not close a same-origin popup this document opened — `v` is `S` when "
-             "`closed` reads true, `s` when close() was refused and `E<name>` when it threw");
-    /* And over a cross-origin popup, which the incumbent is familiar with only through its opener link. */
-    const char *winopclose_why = NULL; int winopclose_tt = 1;
-    fold_row(&winopclose_tt, &winopclose_why, !!strstr(js, "\"/api/winopclose\""),
-             "NOT REACHED: there is no /api/winopclose record at all, so this run did not answer the statement");
-    fold_row(&winopclose_tt, &winopclose_why, param_value_is(js, "/api/winopclose", "v", "X"),
-             "§7.2.2.1's close() did not close a cross-origin popup this document opened — `v` is `X` when "
-             "`closed` reads true, `x` when close() was refused and `E<name>` when it threw");
     /* §7.2.5.1: a cross-origin proxy answers `closed` and refuses `name`. */
     /* THE NEGATIVE STAYS WHOLE-DOCUMENT AND THE POSITIVES DO NOT, which is this file's own discriminator: a
        superstring or a neighbouring record can only make `!strstr` fail EARLY, never pass, so `LEAKED`
        anywhere really is the finding it claims to be — while `SecurityError:closedok` asked unscoped was
        satisfied by any record carrying those bytes and said nothing about THIS proxy. */
-    const char *sop_why = NULL; int sop_tt = 1;
+    const char *sop_why = NULL;
+ int sop_tt = 1;
     fold_row(&sop_tt, &sop_why, !!strstr(js, "\"/api/sop\""),
              "NOT REACHED: there is no /api/sop record at all, so the cross-origin read statement never ran. "
              "That is the SCHEDULE");
@@ -11896,7 +12856,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "§7.2.1 a cross-origin `name` was READ: `LEAKED` is in the document. Deliberately asked of the "
              "WHOLE document rather than of this record — a leak anywhere is the finding");
     /* A cross-document read suspended and resumed with the peer's answer. */
-    const char *xdocread_why = NULL; int xdocread_tt = 1;
+    const char *xdocread_why = NULL;
+ int xdocread_tt = 1;
     fold_row(&xdocread_tt, &xdocread_why, !!strstr(js, "\"/api/xdocread\""),
              "NOT REACHED: there is no /api/xdocread record at all, so the cross-document read never "
              "returned. That is the SCHEDULE");
@@ -11905,256 +12866,18 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "with something other than the peer's answer, so one of `closed`/`length` came back undefined "
              "or the wrong type");
     /* The same cross-document read reached from inside a QUEUED JOB, which parks the flow at a job root. */
-    const char *xdocjob_why = NULL; int xdocjob_tt = 1;
+    const char *xdocjob_why = NULL;
+ int xdocjob_tt = 1;
     fold_row(&xdocjob_tt, &xdocjob_why, !!strstr(js, "\"/api/xdocjob\""),
              "NOT REACHED: there is no /api/xdocjob record at all, so the flow parked at a job root and "
              "never resumed. That is the SCHEDULE");
     fold_row(&xdocjob_tt, &xdocjob_why, param_value_is(js, "/api/xdocjob", "v", "jobread"),
              "the job RESUMED and /api/xdocjob's `v` is not `jobread` — a cross-document read reached from "
              "inside a queued job answered something other than the peer's `closed`");
-    /* §8.7 Timers + §8.1.7: the microtask ran first, then the two timers in the order they were set.
-       A CONDITIONAL COLLISION, WHICH IS THE KIND A SCAN OF A PASSING RUN CANNOT SEE. No token this document
-       emits contains `ABC` while the document is RIGHT — but `/api/scriptorder`'s own failing spelling IS
-       `ABC` (see that row: `ABXC` is correct and `ABC` is the program pushed to the tail), so the moment the
-       script-order defect appears, this row stops being able to fail. Two rows entangled so that one's red
-       makes the other's green meaningless is worse than either being wrong alone, and it costs one param
-       lookup to sever. */
-    const char *timer_why = NULL; int timer_tt = 1;
-    fold_row(&timer_tt, &timer_why, !!strstr(js, "\"/api/timerfire\""),
-             "NOT REACHED: there is no /api/timerfire record at all, so this run did not answer the statement");
-    fold_row(&timer_tt, &timer_why, param_value_is(js, "/api/timerfire", "v", "ABC"),
-             "§8.1.7 the microtask and the two timers did not run in the order they were queued");
-    /* §8.7's string handler was compiled and RUN as a program, and the handle the two arms hand back comes
-       out of one per-global counter. Two endpoints because the two halves fail independently. */
-    const char *timerstr_why = NULL; int timerstr_tt = 1;
-    fold_row(&timerstr_tt, &timerstr_why, !!strstr(js, "\"/api/timerstr\""),
-             "NOT REACHED: there is no /api/timerstr record at all, so §8.7's string handler was never "
-             "compiled or never fired. That is the SCHEDULE");
-    fold_row(&timerstr_tt, &timerstr_why, param_value_is(js, "/api/timerstr", "v", "strran"),
-             "the timer FIRED and /api/timerstr's `v` is not `strran` — the string handler reached its fetch "
-             "without having been run as a program");
-    /* …AND THE TWO FACTS THAT MAKE A STRING HANDLER A TIMER RATHER THAN A SCRIPT. Separate rows from
-       `timer-string-handler` because they fail independently of it and of each other: the program can run
-       while being uncancellable, and it can be cancellable while ignoring its `timeout`. */
-    const char *timerclr_why = NULL; int timerclr_tt = 1;
-    fold_row(&timerclr_tt, &timerclr_why, !!strstr(js, "\"/api/timerclr\""),
-             "NOT REACHED: there is no /api/timerclr record at all, so no string-handled timer fired here. "
-             "That is the SCHEDULE and not the cancellation");
-    fold_row(&timerclr_tt, &timerclr_why, param_value_is(js, "/api/timerclr", "v", "cleared"),
-             "the surviving string-handled timer did not fire, so this run says nothing about the cleared one");
-    fold_row(&timerclr_tt, &timerclr_why, !param_value_is(js, "/api/timerclr", "v", "notcleared"),
-             "§8.7's clearTimeout did not remove a STRING handler's entry — the timer initialization steps "
-             "returned a handle that names nothing and the program ran anyway");
-    const char *timerdelay_why = NULL; int timerdelay_tt = 1;
-    fold_row(&timerdelay_tt, &timerdelay_why, !!strstr(js, "\"/api/timerdelay\""),
-             "NOT REACHED: there is no /api/timerdelay record at all. TWO claims share this row and it does "
-             "not separate them: either the 100ms string-handled timer never fired, or the event loop's "
-             "virtual clock never moved FORWARD in this document (core/timing/event_loop.c's "
-             "event_loop_may_advance declines while the host owes a reply) — this is the only statement in "
-             "this fixture with a nonzero delay. That is the SCHEDULE");
-    fold_row(&timerdelay_tt, &timerdelay_why, param_value_is(js, "/api/timerdelay", "v", "ba"),
-             "§8.7's `timeout` did not order two STRING handlers — the source order decided them, which is "
-             "what queueing the classic script at the SET rather than at the expiry does");
-    /* AND `next` IS NOT THIS STATEMENT'S ALONE. The @S URL sink's source renders as `{state}.next` in
-       `securitySinks` — the same spelling `s_poc`/`s_stage` ask for a few hundred lines down — so the old
-       unscoped term read 1 on every run that recorded the location sink at all, whatever the counter did.
-       It survived only because the sibling NEGATIVE (`reused`) happened to be the other spelling of the same
-       param; a defect that dropped the param instead of mis-numbering it would have passed both. */
-    const char *timerhandle_why = NULL; int timerhandle_tt = 1;
-    fold_row(&timerhandle_tt, &timerhandle_why, !!strstr(js, "\"/api/timerhandle\""),
-             "NOT REACHED: there is no /api/timerhandle record at all, so this run did not answer the statement");
-    fold_row(&timerhandle_tt, &timerhandle_why, param_value_is(js, "/api/timerhandle", "h", "next"),
-             "§8.7's handle counter did not give the second timer the identifier after the first's");
-    fold_row(&timerhandle_tt, &timerhandle_why, !param_value_is(js, "/api/timerhandle", "h", "reused"),
-             "§8.7's handle counter gave two LIVE timers one identifier, so clearTimeout would clear the wrong one");
-    /* §8.7 step 4 asked about an unknown `timeout`: the fork has a consumer, so the document survives it.
-       A 0 here is an ABORT at the fork seam and not a missing endpoint — see the statement that produces it. */
-    const char *unkdelay_why = NULL; int unkdelay_tt = 1;
-    fold_row(&unkdelay_tt, &unkdelay_why, !!strstr(js, "\"/api/unkdelay\""),
-             "NOT REACHED: there is no /api/unkdelay record at all — an ABORT at the fork seam and not a "
-             "missing endpoint. That is the SCHEDULE; see the statement that produces it");
-    fold_row(&unkdelay_tt, &unkdelay_why, param_value_is(js, "/api/unkdelay", "v", "forked"),
-             "the statement RAN and /api/unkdelay's `v` is not `forked` — §8.7 step 4's unknown `timeout` "
-             "handed back something that is not a number, so the fork had no consumer");
-    /* ONE UNKNOWN INDEX THROUGH TWO MEMBERS OF THE `unsigned long index` FAMILY: every flow's two answers agree.
-       THE NEGATIVE IS THE ROW AND THE POSITIVE IS ONLY ITS DENOMINATOR. `agree` says the statement ran and some
-       world reached the fetch; `split` is the claim, and it is one no consistent world can make — the NodeList
-       is built two longer than `document.styleSheets`, so an index inside the short one is inside the long one
-       whatever it is. A single `split` record is a flow that answered `index == k` at StyleSheetList and then
-       answered the SAME question differently at NodeList, which is what a constraint key naming the MEMBER
-       instead of the PREDICATE permits (core/idl_index_arg.h's IDL_INDEX_PREDICATE). */
-    const char *idxkey_why = NULL; int idxkey_tt = 1;
-    fold_row(&idxkey_tt, &idxkey_why, !!strstr(js, "\"/api/idxkey\""),
-             "NOT REACHED: there is no /api/idxkey record at all, so no world got through both `item(index)` "
-             "chains. That is the SCHEDULE, and it is also what an ABORT inside either chain looks like");
-    fold_row(&idxkey_tt, &idxkey_why, param_value_is(js, "/api/idxkey", "v", "agree"),
-             "/api/idxkey was recorded and never with `agree` — every world that reached it contradicted "
-             "itself, so this is the row below with nothing left to compare against");
-    fold_row(&idxkey_tt, &idxkey_why, !param_value_is(js, "/api/idxkey", "v", "split"),
-             "a flow read one unknown `index` as INSIDE document.styleSheets and PAST THE END of a NodeList "
-             "built two longer — no world admits both, so this flow answered `index == k` one way at CSSOM "
-             "§6.2.2's item(index) and another way at DOM §4.2.10's. The elimination chain's constraint key is "
-             "naming the MEMBER and not the PREDICATE (core/idl_index_arg.h's IDL_INDEX_PREDICATE)");
-    /* THE SAME TWO MEMBERS OVER AN INDEX THAT CARRIES AN EXAMPLE: the COMPLETION half of the fork key.
-       THE PREMISE IS MEASURED AND NOT ASSUMED, WHICH IS THE FIRST ROW. `split` is impossible only because both
-       collections are eight long, and a fixture whose two collections came out different lengths would emit a
-       `split` that means nothing — so the statement reports both lengths and this row refuses anything but
-       eight. That is the difference between an arithmetic impossibility and a length somebody guessed.
-       THE NEGATIVE IS THE ROW AND THE POSITIVE IS ONLY ITS DENOMINATOR, as above. `split` claims one index is
-       PAST THE END of an eight-element NodeList and INSIDE an eight-rule CSSRuleList at once. What
-       produces it is solver/decide.c's outcome walk asking about the machine's REAL completion first, so the
-       completion in the key is the operand's own EXAMPLE — and this seam's decide_note_forced_arm takes that
-       example away from the sibling it mints, after which the same flow composes the other spelling of a
-       question its own path has answered, re-forks it, and the arm minted there stands on both. */
-    const char *pkkey_why = NULL; int pkkey_tt = 1;
-    fold_row(&pkkey_tt, &pkkey_why, !!strstr(js, "\"/api/pkkey\""),
-             "NOT REACHED: there is no /api/pkkey record at all, so no world got through both `item(index)` "
-             "chains over an index carrying an example. That is the SCHEDULE, and it is also what an ABORT "
-             "inside either chain looks like — AND IT IS WHAT AN EXAMPLE-FREE `screen.width` LOOKS LIKE, "
-             "which is the one way the row below could pass while asserting nothing. That premise is not "
-             "checkable from the page (an unknown with an example and one without walk the same positions and "
-             "emit the same tokens; only the KEY differs, which is the thing under test), so it is carried by "
-             "the ReadableStream statement's own DFAIL further down: that arm aborts the instance if "
-             "`screen.width & 7` reaches it carrying no number, and a discarded instance records no /api/pkkey "
-             "at all, which is this row");
-    fold_row(&pkkey_tt, &pkkey_why,
-             param_value_is(js, "/api/pkkey", "n", "8") && param_value_is(js, "/api/pkkey", "c", "8"),
-             "the two collections this statement compares did NOT both come out eight long, so the claim below "
-             "is not an arithmetic impossibility and this row is asserting nothing — fix the statement's "
-             "construction rather than reading its verdict");
-    fold_row(&pkkey_tt, &pkkey_why, param_value_is(js, "/api/pkkey", "v", "agree"),
-             "/api/pkkey was recorded and never with `agree` — every world that reached it contradicted "
-             "itself, so this is the row below with nothing left to compare against");
-    fold_row(&pkkey_tt, &pkkey_why, !param_value_is(js, "/api/pkkey", "v", "split"),
-             "a flow read one unknown `index` as PAST THE END of an eight-element NodeList and INSIDE an "
-             "eight-rule CSSRuleList — no index admits both, so this flow answered `index == e` one way at "
-             "DOM §4.2.10 Old-style collections' item(index) and the other way at CSSOM §6.4.1 The CSSRuleList "
-             "Interface's. The "
-             "outcome walk's constraint key "
-             "is naming the machine's EXAMPLE and not the question (solver/decide.c's outcome_settle): at "
-             "n == 2 the completion asked about first IS `real`, so `is it completion 1` and `is it "
-             "completion 0` are one binary fact under two keys, and the seam's own contradicted-example drop "
-             "is what walks a single flow from one spelling to the other");
-    /* ONE UNKNOWN INDEX THROUGH THE TWO MEMBERS OF THAT FAMILY WHOSE COLLECTIONS HANG OFF ONE ELEMENT.
-       IT IS FIRST A ROW ABOUT THE MEMBERS EXISTING AT ALL. Both DOM §7.1's `item` and DOM §4.9.1's REFUSED an
-       unknown index by name until they became step machines, so a NOT REACHED here is the ordinary reading of
-       an unconverted member: the DCHECK fires, the document goes down, and nothing after it emits.
-       THE PREMISE IS MEASURED AND NOT ASSUMED, which is the second row. `split` is impossible only because the
-       token set is two long and the attribute list five; a run where they came out otherwise would emit a
-       `split` that means nothing, so the lengths are refused before the verdict is read.
-       THE NEGATIVE IS THE ROW AND THE POSITIVE IS ONLY ITS DENOMINATOR. `split` claims one index is INSIDE a
-       two-token set and PAST THE END of a five-attribute map — no index admits both, so a flow that emits it
-       answered `index == k` one way at §7.1's item(index) and another way at §4.9.1's, which is what a
-       constraint key naming the MEMBER instead of the PREDICATE permits (core/idl_index_arg.h's
-       IDL_INDEX_PREDICATE). */
-    const char *nnmkey_why = NULL; int nnmkey_tt = 1;
-    fold_row(&nnmkey_tt, &nnmkey_why, !!strstr(js, "\"/api/nnmkey\""),
-             "NOT REACHED: there is no /api/nnmkey record at all, so no world got through both `item(index)` "
-             "chains. That is the SCHEDULE, and it is also what an unconverted DOMTokenList or NamedNodeMap "
-             "looks like — each refused an unknown index with a DCHECK, which takes the document down");
-    fold_row(&nnmkey_tt, &nnmkey_why,
-             param_value_is(js, "/api/nnmkey", "t", "2") && param_value_is(js, "/api/nnmkey", "a", "5"),
-             "the two collections this statement compares did NOT come out two and five long, so the claim "
-             "below is not an arithmetic impossibility and this row is asserting nothing — fix the statement's "
-             "construction rather than reading its verdict");
-    fold_row(&nnmkey_tt, &nnmkey_why, param_value_is(js, "/api/nnmkey", "v", "agree"),
-             "/api/nnmkey was recorded and never with `agree` — every world that reached it contradicted "
-             "itself, so this is the row below with nothing left to compare against");
-    fold_row(&nnmkey_tt, &nnmkey_why, !param_value_is(js, "/api/nnmkey", "v", "split"),
-             "a flow read one unknown `index` as INSIDE a two-token DOMTokenList and PAST THE END of a "
-             "five-attribute NamedNodeMap — no index admits both, so this flow answered `index == k` one way "
-             "at DOM §7.1 Interface DOMTokenList's item(index) and another way at DOM §4.9.1 Interface "
-             "NamedNodeMap's. The elimination chain's constraint key is naming the MEMBER and not the "
-             "PREDICATE (core/idl_index_arg.h's IDL_INDEX_PREDICATE)");
-    /* CSSOM §6.6.1's item(index) OVER AN UNKNOWN INDEX, AND ITS TERMINAL — the one member of that family whose
-       past-the-end answer is the empty string rather than null.
-       THE ROW IS THE EMITTED SET AND NOT A VERDICT, so no length can make it pass while asserting nothing. One
-       value means the member DECIDED the index instead of forking it (or refused it, which is the NOT REACHED
-       above); several mean the chain walked, and `past` among them means the parent reached exhaustion and
-       answered §6.6.1's own empty string there. `null` among them is the wrong terminal spelled out — the
-       statement's `=== ''` is false for null, so a member answering the family's usual null lands in the
-       record as those four characters and cannot pass for the empty string. */
-    const char *cssditem_why = NULL; int cssditem_tt = 1;
-    fold_row(&cssditem_tt, &cssditem_why, !!strstr(js, "\"/api/cssditem\""),
-             "NOT REACHED: there is no /api/cssditem record at all. That is the SCHEDULE, and it is also what "
-             "an unconverted CSSStyleDeclaration looks like — its `item` refused an unknown index with a "
-             "DCHECK, which takes the document down");
-    fold_row(&cssditem_tt, &cssditem_why, param_value_is(js, "/api/cssditem", "n", "2"),
-             "the declaration block this statement asks about did not come out two long, so the emitted set "
-             "below cannot be read against it — fix the statement's construction rather than its verdict");
-    fold_row(&cssditem_tt, &cssditem_why, param_value_count(js, "/api/cssditem", "v") > 1,
-             "/api/cssditem's `v` carries ONE value, so §6.6.1's item(index) answered an unknown index from a "
-             "single world — the elimination chain either did not run or decided the index instead of asking "
-             "it (core/idl_index_arg.h's idl_index_chain_run)");
-    fold_row(&cssditem_tt, &cssditem_why, param_value_is(js, "/api/cssditem", "v", "past"),
-             "the chain forked and NO world reached the past-the-end answer, so the parent never walked its "
-             "two positions to exhaustion — §6.6.1's \"If there is no indexth object in the collection, then "
-             "the method must return the empty string\" is the terminal and nothing emitted it");
-    fold_row(&cssditem_tt, &cssditem_why, !param_value_is(js, "/api/cssditem", "v", "null"),
-             "a world past the end of the declaration block answered NULL where §6.6.1 says the empty string — "
-             "the chain's past-the-end flag was given this family's usual answer instead of this member's, "
-             "which is the one thing core/idl_index_arg.c does not decide and every caller states itself");
-    /* ONE UNKNOWN OFFSET THROUGH DOM §4.11's `splitText` AND DOM §4.10's `substringData`.
-       IT IS FIRST A ROW ABOUT THE MEMBERS EXISTING AT ALL. Both DFAILed on an unknown `unsigned long` until
-       they became step machines, so a NOT REACHED here is the ordinary reading of an unconverted member: the
-       abort fires, the document goes down, and nothing after it emits.
-       THE PREMISE IS MEASURED AND NOT ASSUMED. `split` is impossible only because the two Text nodes are two
-       and nine units long; a run where they came out otherwise would emit a `split` that means nothing, so the
-       lengths are refused before the verdict is read.
-       THE NEGATIVE IS THE ROW AND THE POSITIVE IS ONLY ITS DENOMINATOR. `split` claims one offset is WITHIN a
-       two-unit node and PAST THE END of a nine-unit one — no offset admits both, so a flow that emits it
-       answered `offset == k` one way at §4.11's step 2 and another way at §4.10's, which is what a constraint
-       key naming the MEMBER instead of the PREDICATE permits (core/idl_index_arg.h's IDL_INDEX_PREDICATE). */
-    const char *cdsplit_why = NULL; int cdsplit_tt = 1;
-    fold_row(&cdsplit_tt, &cdsplit_why, !!strstr(js, "\"/api/cdsplit\""),
-             "NOT REACHED: there is no /api/cdsplit record at all, so no world got through both step 2 chains. "
-             "That is the SCHEDULE, and it is also what an unconverted `splitText` or `substringData` looks "
-             "like — each refused an unknown offset with a DFAIL, which takes the document down");
-    fold_row(&cdsplit_tt, &cdsplit_why,
-             param_value_is(js, "/api/cdsplit", "a", "2") && param_value_is(js, "/api/cdsplit", "b", "9"),
-             "the two Text nodes this statement compares did NOT come out two and nine units long, so the "
-             "claim below is not an arithmetic impossibility and this row is asserting nothing — fix the "
-             "statement's construction rather than reading its verdict");
-    fold_row(&cdsplit_tt, &cdsplit_why, param_value_is(js, "/api/cdsplit", "v", "agree"),
-             "/api/cdsplit was recorded and never with `agree` — every world that reached it contradicted "
-             "itself, so this is the row below with nothing left to compare against");
-    fold_row(&cdsplit_tt, &cdsplit_why, !param_value_is(js, "/api/cdsplit", "v", "split"),
-             "a flow read one unknown `offset` as WITHIN a two-unit Text node and PAST THE END of a nine-unit "
-             "one — no offset admits both, so this flow answered `offset == k` one way at DOM §4.11 Interface "
-             "Text's split a Text node step 2 and another way at DOM §4.10 Interface CharacterData's substring "
-             "data step 2. The elimination chain's constraint key is naming the MEMBER and not the PREDICATE "
-             "(core/idl_index_arg.h's IDL_INDEX_PREDICATE)");
-    /* §4.10's `substringData(offset, count)` WITH BOTH OPERANDS UNKNOWN — the row for the SECOND chain.
-       THE ROW IS THE EMITTED SET AND NOT A VERDICT. Steps 3-4 make the returned string exactly
-       `min(count, length - offset)` code units long, so over a three-unit node the value `2` is reachable ONLY
-       from a world that answered `count == 2` — every world in which the count chain did not run carries step
-       3's clamp, which is `length - offset` and never 2 while offset is 0 or 1 and the count is unknown. So
-       `2` present is the count chain having run, and `throw` present is the OFFSET chain having reached step
-       2's IndexSizeError at exhaustion. One value alone means neither chain asked anything. */
-    const char *cdsub_why = NULL; int cdsub_tt = 1;
-    fold_row(&cdsub_tt, &cdsub_why, !!strstr(js, "\"/api/cdsub\""),
-             "NOT REACHED: there is no /api/cdsub record at all. That is the SCHEDULE, and it is also what an "
-             "unconverted `substringData` looks like — it refused an unknown operand with a DFAIL, which takes "
-             "the document down");
-    fold_row(&cdsub_tt, &cdsub_why, param_value_is(js, "/api/cdsub", "n", "3"),
-             "the Text node this statement asks about did not come out three units long, so the emitted set "
-             "below cannot be read against it — fix the statement's construction rather than its verdict");
-    fold_row(&cdsub_tt, &cdsub_why, param_value_count(js, "/api/cdsub", "v") > 1,
-             "/api/cdsub's `v` carries ONE value, so §4.10's substringData answered two unknown operands from "
-             "a single world — neither elimination chain ran, or one decided its operand instead of asking it "
-             "(core/idl_index_arg.h's idl_index_chain_run)");
-    fold_row(&cdsub_tt, &cdsub_why, param_value_is(js, "/api/cdsub", "v", "throw"),
-             "no world reached §4.10's substring data step 2 — the OFFSET chain never walked its four "
-             "positions to exhaustion, so \"If offset is greater than length, then throw an \"IndexSizeError\" "
-             "DOMException\" was never the answer and the past-the-end world is unexplored");
-    fold_row(&cdsub_tt, &cdsub_why, param_value_is(js, "/api/cdsub", "v", "2"),
-             "no world returned a TWO-unit substring of a three-unit node, which is reachable only from "
-             "`count == 2` — so the COUNT chain did not run and §4.10's second `unsigned long` was answered "
-             "from step 3's clamp alone. That operand names no position in any collection, which is exactly "
-             "the case core/idl_index_arg.c's banner had to state before it could be a member");
     /* §4.8.5: an inserted iframe got a child navigable, its proxy is STABLE across reads, and a read through it
        resolved to the peer's answer. */
-    const char *ifnav_why = NULL; int ifnav_tt = 1;
+    const char *ifnav_why = NULL;
+ int ifnav_tt = 1;
     fold_row(&ifnav_tt, &ifnav_why, !!strstr(js, "\"/api/iframenav\""),
              "NOT REACHED: there is no /api/iframenav record at all, so the inserted iframe statement never "
              "reached its fetch. That is the SCHEDULE");
@@ -12162,86 +12885,6 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the statement RAN and /api/iframenav's `v` is not `ifnav`: it is `claims` and one character per "
              "claim of the statement in its order (1 held, 0 did not, E threw), so the first non-1 names the "
              "§4.8.5 child navigable, proxy or §7.5.10 destroy claim that failed");
-    /* §4.8.5's SRCDOC DOCUMENTS — the class §2.4.3 step 1 is about, and the class this fixture could not build
-       until the markup above existed. The rows are ordered so that an earlier one surviving localises a later
-       one's absence; see that markup for what each separates. */
-    const char *sdrun_why = NULL; int sdrun_tt = 1;
-    fold_row(&sdrun_tt, &sdrun_why, !!strstr(js, "\"https://x.test/api/sdrun\""),
-             "NOT REACHED: there is no /api/sdrun record at all, and that address is ABSOLUTE — it depends on "
-             "no base resolution, so its absence is not §2.4.3 answering wrongly. Either the `<iframe srcdoc>` "
-             "built no Document or that Document's own script never ran, and every srcdoc row below this one "
-             "is unscored rather than failing");
-    fold_row(&sdrun_tt, &sdrun_why, param_value_is(js, "https://x.test/api/sdrun", "v", "ran"),
-             "the srcdoc Document's script ran and /api/sdrun's `v` is not `ran`, which is a literal in the "
-             "document — so the request was composed from something other than the constant beside it");
-    /* §2.4.3's FALLBACK BASE URL, asked of the one class whose step 1 is an assert. The resolution is Fetch
-       §5.4 step 5's parse of `sdbase` against the API base URL, read in the frame through `Request.url` — the
-       endpoint surface reports a fetch's address as the page wrote it, so it cannot carry this. */
-    const char *sdbase_why = NULL; int sdbase_tt = 1;
-    fold_row(&sdbase_tt, &sdbase_why, !!strstr(js, "\"https://x.test/api/sdbase\""),
-             "there is no /api/sdbase record: the ONLY relative reference in the srcdoc Document resolved to "
-             "nothing, so §4.2.3's freeze of `/api/` against §2.4.3's fallback base URL did not produce a "
-             "usable base. `about:srcdoc` has an opaque path and can be no base, so this is what a NULL about "
-             "base URL looks like from the page — read /api/sdrun first: if that row stands, the Document was "
-             "built and ran, and the about base URL is the thing that was missing when its tree was walked");
-    fold_row(&sdbase_tt, &sdbase_why, param_value_is(js, "https://x.test/api/sdbase", "v", "rel"),
-             "/api/sdbase's `v` is not `rel`: `new Request('sdbase').url` inside the srcdoc frame is not "
-             "https://x.test/api/sdbase, so the frame's base URL is not `/api/` frozen against its about base "
-             "URL (the parent's https://x.test/p)");
-    /* §4.8.5's CLASS IS NOT ITS ADDRESS — a Document built INSIDE the frame by an algorithm that is not a
-       navigation takes its source's URL and gets no about base URL, so it is addressed `about:srcdoc` with a
-       legitimately null one. A step 1 keyed on the address asserted on it, which is a page-reachable abort. */
-    const char *sdclone_why = NULL; int sdclone_tt = 1;
-    fold_row(&sdclone_tt, &sdclone_why, !!strstr(js, "\"https://x.test/api/sdclone\""),
-             "there is no /api/sdclone record: `document.cloneNode(true)` inside the srcdoc frame did not "
-             "reach its fetch. If /api/sdrun stands, the frame ran and this statement is where it stopped — "
-             "which is the shape a §2.4.3 step 1 keyed on the ADDRESS rather than on §4.8.5's class produces, "
-             "since the copy is addressed `about:srcdoc` and no clone is a navigation");
-    fold_row(&sdclone_tt, &sdclone_why, param_value_is(js, "https://x.test/api/sdclone", "v", "cloned"),
-             "the clone ran and /api/sdclone's `v` is not `cloned` — the copy is the same object as the "
-             "Document it was made from, which no reading of DOM §4.4's clone produces");
-    const char *sdparse_why = NULL; int sdparse_tt = 1;
-    fold_row(&sdparse_tt, &sdparse_why, !!strstr(js, "\"https://x.test/api/sdparse\""),
-             "there is no /api/sdparse record: `new DOMParser().parseFromString(...)` inside the srcdoc frame "
-             "did not reach its fetch. Read /api/sdclone first — it is the SAME creation reached by the other "
-             "of its two callers, so the pair says whether this is the creation or the member");
-    fold_row(&sdparse_tt, &sdparse_why, param_value_is(js, "https://x.test/api/sdparse", "v", "built"),
-             "the parse ran and /api/sdparse's `v` is not `built` — the parsed Document does not contain the "
-             "element its own markup names");
-    /* AND THE OTHER DIRECTION: `<iframe src=\"about:srcdoc\">` takes §4.8.5's `Otherwise` arm, so it is NOT of
-       the class, while §7.4.2.2 gives it an about base URL regardless. §2.4.3 must therefore reach step 3 and
-       answer its OWN address. `initial` is ACCEPTED by both rows: the navigation not having landed is a fact
-       about the schedule, and the claim here is only that the creator's base URL is never the answer. */
-    const char *sdsync_why = NULL; int sdsync_tt = 1;
-    fold_row(&sdsync_tt, &sdsync_why, !!strstr(js, "\"/api/sdsync\""),
-             "there is no /api/sdsync record: the parent never read through the `about:srcdoc` frame at all, "
-             "so both rows of this pair are unscored rather than failing");
-    fold_row(&sdsync_tt, &sdsync_why,
-             param_value_is(js, "/api/sdsync", "v", "ownaddr") ||
-             param_value_is(js, "/api/sdsync", "v", "initial"),
-             "the parent read through the `about:srcdoc` frame and got neither `ownaddr` nor `initial`. "
-             "`inherited` is the retired answer — §2.4.3 returning the CREATOR's base URL for a Document that "
-             "is not an iframe srcdoc document, which is what an address-shaped step 1 answers and what "
-             "§4.8.5's `Otherwise` arm forbids; `otheraddr` is a third address no reading predicts");
-    const char *sdother_why = NULL; int sdother_tt = 1;
-    fold_row(&sdother_tt, &sdother_why, !!strstr(js, "\"/api/sdotherwise\""),
-             "there is no /api/sdotherwise record: the timer that re-reads the `about:srcdoc` frame never "
-             "fired. That is the SCHEDULE and not §2.4.3");
-    fold_row(&sdother_tt, &sdother_why,
-             param_value_is(js, "/api/sdotherwise", "v", "ownaddr") ||
-             param_value_is(js, "/api/sdotherwise", "v", "initial"),
-             "the timer re-read the `about:srcdoc` frame and got neither `ownaddr` nor `initial` — see "
-             "/api/sdsync's row for what the two remaining tokens mean");
-    /* A FLOW'S FIRST CREATION BESIDE THE BASELINE'S: the baseline names its parse-created frames under a history
-       no flow's can begin with (solver/world.c's world_mint_doc), so the boot flow's script-created frame is a
-       document of its own and not one of theirs under a shared name. */
-    const char *sdmint_why = NULL; int sdmint_tt = 1;
-    fold_row(&sdmint_tt, &sdmint_why, !!strstr(js, "\"/api/sdmint\""),
-             "there is no /api/sdmint record: the parent's script never reached the fetch after creating its own "
-             "frame. Read /api/sdsync, the next statement's row, to tell the creation from the schedule");
-    fold_row(&sdmint_tt, &sdmint_why, param_value_is(js, "/api/sdmint", "v", "own"),
-             "/api/sdmint's `v` is not `own`: the frame the boot flow created answered with the Window of a frame "
-             "the baseline created, or its document is not its initial about:blank — one name, two creations");
     /* AND THE REALM THE ROW ABOVE BUILT CAME BACK — §A-CAPABILITY-MATERIALIZED-PER-FLOW's ceiling, asked as a
        measurement instead of read off a line by hand.
        WHAT WAS HERE BEFORE WAS A SENTENCE ADDRESSED TO A PERSON. The iframe statement's own note said "READ
@@ -12283,7 +12926,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        WHAT WOULD MAKE THE OUTCOME ASSERTABLE AGAIN is navigable.h's named residual: take-site attribution
        over a GC object, so a host record holding another realm's WINDOW is nameable the way JS_DupContext's
        callers already are. Until then this row can say the release ran and cannot say who kept the realm. */
-    const char *realmback_why = NULL; int realmback_tt = 1;
+    const char *realmback_why = NULL;
+ int realmback_tt = 1;
     fold_row(&realmback_tt, &realmback_why, navigable_realm_made() > 0,
              "NOT REACHED: this run recorded no child realm at all, so the removal had nothing to give back "
              "and this row says nothing about reclamation. The iframe statement's read THROUGH the proxy "
@@ -12342,19 +12986,6 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "and the table did not -- §7.4.1.1's classic slot pair is the entry's `classicStateSymbols` "
              "beside its `classicHistoryAPIState`, and the writer and the reader must take both from ONE "
              "record (core/frame/history.c step 3 and session_history.c's §7.4.6.2 restore)");
-    /* Web IDL §3.7.6 Attributes: an enumeration attribute's setter ignores a string outside the enumeration.
-       The fixture assigns 'manual' then 'bogus' to `history.scrollRestoration`; each value names one outcome. */
-    int scrign_tt = 1;
-    const char *scrign_why = NULL;
-    fold_row(&scrign_tt, &scrign_why, strstr(js, "\"/api/scrign\"") != NULL,
-             "NOT REACHED: there is no /api/scrign record, so the enumeration setter statement did not run");
-    fold_row(&scrign_tt, &scrign_why, !emitted_record_has(js, "/api/scrign", "threw"),
-             "Web IDL §3.7.6's setter THREW on a string outside the enumeration; an attribute setter ignores "
-             "it and only an operation argument throws");
-    fold_row(&scrign_tt, &scrign_why, !emitted_record_has(js, "/api/scrign", "changed"),
-             "Web IDL §3.7.6's setter STORED a string outside the enumeration; the attribute must keep 'manual'");
-    fold_row(&scrign_tt, &scrign_why, emitted_record_has(js, "/api/scrign", "isignored"),
-             "the /api/scrign record carries no `isignored` value");
     int navstate_tt = 1;
     const char *navstate_why = NULL;
     fold_row(&navstate_tt, &navstate_why, param_value_is(js, "/api/navstate", "v", "other"),
@@ -12368,229 +12999,626 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "pair is the entry's `navigationStateSymbols` beside its `navigationAPIState`, and §7.2.6.5's "
              "getState is a METHOD precisely because it deserializes afresh -- so this reads the table on "
              "every call and a one-shot loss is not a shape it can have");
-    /* DOM §7.1's `value` setter: §4.9's plain set rather than the update steps, and the source it carries.
-       TWO ROWS, because the two halves fail for different reasons in different components — one is the early
-       return belonging to a caller the standard gives none, the other is the taint shadow's write — and a
-       single marker would report both as one silence. */
-    int clsetempty_tt = 1;
-    const char *clsetempty_why = NULL;
-    fold_row(&clsetempty_tt, &clsetempty_why, !!strstr(js, "\"/api/clsetempty\""),
-             "NOT REACHED: the §7.1 `value` setter statement emitted nothing, so this row says nothing about "
-             "whether the setter is §4.9's plain set. The assignment itself cannot throw -- the empty string "
-             "needs no coercion -- so an absence here is the statements above it having ended the program");
-    fold_row(&clsetempty_tt, &clsetempty_why, param_value_is(js, "/api/clsetempty", "v", "created"),
-             "§7.1's `value` setter assigned \"\" to an element with NO `class` attribute and created none. The "
-             "setter steps are \"set an attribute value for this's element using this's attribute name and the "
-             "given value\" and have no early return; §7.1's UPDATE STEPS do, and their step 1 is what returns "
-             "for an absent attribute and an empty token set. A shared body gives the setter a guard the "
-             "standard does not, so `hasAttribute(\"class\")` reads false where a browser reads true");
-    int cltaint_tt = 1;
-    const char *cltaint_why = NULL;
-    fold_row(&cltaint_tt, &cltaint_why, param_value_is(js, "/api/cltaint", "v", "other"),
-             "NOT REACHED: the unknown-input `value` setter statement emitted neither arm, so this row says "
-             "nothing about the taint shadow. An unknown reaching the setter is converted by token_bytes to "
-             "its SHAPE rather than through a raw coercion, so this is not the C-boundary abort -- it is the "
-             "statement not having run");
-    fold_row(&cltaint_tt, &cltaint_why, param_value_is(js, "/api/cltaint", "v", "fork"),
-             "`el.classList.value = <an unknown>` ran and the attribute read back CONCRETE: the comparison was "
-             "DECIDED where this flow should have forked, so the (element, name) taint shadow holds no source "
-             "for this write. §7.1's setter writes ONE value and it is the whole of the attribute, so the "
-             "shadow's one JSValue per attribute is the right shape here -- the mutation family's is not, and "
-             "the residual at core/dom/dom_token_list.c's update steps says why. HOW THIS COSTS A FINDING: a "
-             "sink fed from the attribute afterwards reports concrete bytes with no source, so no @S search "
-             "starts for a breakout that is real");
-    /* …AND THE MUTATION FAMILY'S OWN COMPOSITION, IN TWO ROWS, because the two halves run different code in
-       one function and a single marker would report both as one silence. `tokenlist-add-taint' is the
-       one-token write, where the serialized value IS the argument's shape and the composition has nothing to
-       concatenate; `tokenlist-add-taint-joint' is a concrete run FOLLOWED BY the shape, which is the call
-       shape that actually reaches the engine's own concatenation. NEITHER GATES THE OTHER and that is a
-       refusal rather than an omission: a gate declares that its row's 0 ENTAILS this one's, and the one-token
-       path can fail while the composed path works (they share only the frame that calls them), so declaring
-       one would assert an implication this fixture cannot establish — which the table's own declaration check
-       is right to abort on. Each row's own control rung carries the not-reached reading instead. */
-    int cladd_tt = 1;
-    const char *cladd_why = NULL;
-    fold_row(&cladd_tt, &cladd_why, param_value_is(js, "/api/claddtaint", "v", "flat"),
-             "NOT REACHED: the one-token `classList.add(<an unknown>)` statement emitted neither arm, so this "
-             "row says nothing about the mutation family's provenance. An unknown reaching `add` is converted "
-             "by token_bytes to its SHAPE rather than through a raw coercion, so this is not the C-boundary "
-             "abort -- it is the statement not having run");
-    fold_row(&cladd_tt, &cladd_why, param_value_is(js, "/api/claddtaint", "v", "lone"),
-             "`el.classList.add(<an unknown>)` ran on an element with no `class` attribute and the attribute "
-             "read back CONCRETE: the comparison was DECIDED where this flow should have forked, so §7.1's "
-             "update steps wrote the argument's shape and no source beside it. The serialized value here is "
-             "that ONE argument's bytes, so there is nothing to compose -- the provenance is the source "
-             "itself, which makes this the rung that separates `the taint does not reach the write at all' "
-             "from `the composition is wrong'. HOW THIS COSTS A FINDING: a sink fed from the attribute "
-             "afterwards reports concrete bytes with no source, so no @S search starts for a breakout that "
-             "is real");
-    int claddj_tt = 1;
-    const char *claddj_why = NULL;
-    fold_row(&claddj_tt, &claddj_why, param_value_is(js, "/api/claddtaint", "v", "bare"),
-             "NOT REACHED: the `setAttribute` + `classList.add(<an unknown>)` pair emitted neither arm, so "
-             "this row says nothing about the composition. The statements above it are what did not run");
-    fold_row(&claddj_tt, &claddj_why, param_value_is(js, "/api/claddtaint", "v", "pair"),
-             "`el.classList.add(<an unknown>)` over an element ALREADY CARRYING a concrete token read back "
-             "CONCRETE where the one-token rung above it forked, so the write reached §7.1's update steps and "
-             "the COMPOSITION is what did not: the serialized value is a concrete run followed by the "
-             "argument's shape, and the provenance of it is that run concatenated with the source through "
-             "the interpreter's own `+` (solver/concolic.h's add hook, installed as JSConcolicHooks.add). A "
-             "value whose SHAPE is the attribute's bytes and whose IDENTITY names the source is what a sink "
-             "reading the whole attribute needs; a concrete read here means it was not minted, or was minted "
-             "and refused for a run whose round trip is not faithful");
-    /* §5.1's open through to `success`, §2.7 + §2.8's request inside it, and §2.5's LIST key path over the
-       store the same upgrade creates — the marker's own sentence-by-sentence account is beside the statement
-       that builds it.
-       THIS ROW READ AN ENDPOINT NOTHING EMITS. It was written for the `idbTransaction`/`idbGet` host edges the
-       fixture used before `indexedDB.open` existed, and the commit that replaced them with the page's own door
-       deleted both the edges and the `/api/idbreq` they fetched — and left this line reading it, and reading a
-       `readonly:` marker the upgrade transaction never produced. So it has been 0 for every full-document run
-       since, which is CLAUDE.md's greppable tell exactly: a name READ in one place and WRITTEN in none. The
-       whole marker is named here rather than a fragment of it, because a fragment is what let the first half
-       of this string go on looking right after the second half stopped existing. */
-    const char *idbopen_why = NULL; int idbopen_tt = 1;
-    fold_row(&idbopen_tt, &idbopen_why, !!strstr(js, "\"/api/idbopen\""),
-             "NOT REACHED: there is no /api/idbopen record at all, so §5.1's open never reached `success`. "
-             "That is the SCHEDULE");
-    fold_row(&idbopen_tt, &idbopen_why,
-             param_value_only(js, "/api/idbopen", "v",
-                              "0:1:versionchange:pending:a+b:same:plain:DataError:99:done:7:u-9"
-                              ":a+b:perhandle:1:fixture"),
-             "the open SUCCEEDED and /api/idbopen's `v` is not exactly the marker the statement composes — "
-             "§5.1's open, §2.7 + §2.8's request inside it, or §2.5's LIST key path over the store the same "
-             "upgrade creates answered differently. The WHOLE marker is asserted rather than a fragment, "
-             "because a fragment is what let the first half of this string go on looking right after the "
-             "second half stopped existing");
+    const Probe rows[] = {
+        { "hostreq", hostreq_tt, "/api/hostreq?", SESS_EXPLORE, hostreq_why },
+        { "hostreq-fork", hostreqfork_tt, "/api/hostreqfork", SESS_EXPLORE, hostreqfork_why },
+        { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE, navopen_why },
+        { "nav-door", navdoor_tt, "/navhidden", SESS_EXPLORE, navdoor_why },
+        { "flow-jar", flowjar_tt, "/api/ckgate", SESS_EXPLORE, flowjar_why },
+        { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
+        { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },
+        { "xdoc-job", xdocjob_tt, "/api/xdocjob", SESS_EXPLORE, xdocjob_why },
+        { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE, ifnav_why },
+        /* KEYED ON THE REMOVAL rather than on an endpoint, because this row is about a statement that emits
+           nothing: §7.5.10's release is observable as a COUNT and not as a fetch. */
+        { "realm-reclaim", realmback_tt, "document.body.removeChild(_if)", SESS_EXPLORE, realmback_why },
+        { "route-seed", routeseed_tt, "/api/routeseed", SESS_EXPLORE, routeseed_why },
+        /* THE TWO ARMS OF ONE COMPARISON, keyed on the control arm rather than on the subject: the key names
+           the endpoint whose absence means the statement did not run, and the ladder's second rung is what
+           says the triple was lost. */
+        { "hist-state-symbols", hstate_tt, "hstate?v=other", SESS_EXPLORE, hstate_why },
+        { "nav-state-symbols", navstate_tt, "navstate?v=other", SESS_EXPLORE, navstate_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
 
-    /* §6.1 AND §5.5 STEP 2 OVER RECORDS, from the page's own door — the four claims the in-C round-trip
-       fixture used to make before §6.1 became a step machine with no C entry. The taint term is read as the
-       CONCOLIC's own rendering in the emitted URL: a store that de-tainted would emit the example instead,
-       which is the one difference between a fork the solver keeps and one it silently loses. */
-    /* §2.6's INDEX end to end: §4.5's createIndex (both arms of §2.6's multiEntry flag), §4.6's attributes and
-       its one-handle-per-index note, §6.1 step 5's two write arms, §6.3's two retrievals and §6.5 over an
-       index source. `multi2` is the multiEntry key doing the thing it exists for — one record per subkey, so
-       both records answer for tag 'b' — which was dead code until §6.1 step 5 was built.
-       `popben` and `back2` are §4.5's NOTE: an index created over a store that ALREADY HOLDS RECORDS, whose
-       entries exist only because the population request §4.5 calls "an asynchronous request within the upgrade
-       transaction" walked them. Both would read empty if createIndex populated nothing. */
-    int idbidx_tt = strstr(js, "by_name:name:nu:me:own:same:refbob:pk2:popben:back2:multi2") != NULL;
+/* The rows of the `fragfork` document. */
+TF_UNIT void probes_fragfork(const char *js, Probe *tab, int *n) {
+    /* HTML §7.2.2.1's close() over a same-origin popup this document opened: `closed` reads true on the next
+       line, since the incumbent is familiar with the popup by §7.3.2.2's first step. */
+    /* A flow forked while §13.4's parse is feeding bytes: both arms finish the parse, so the record carries the
+       whole text's length and the tail element's text. */
+    const char *fragfork_why = NULL;
+ int fragfork_tt = 1;
+    fold_row(&fragfork_tt, &fragfork_why, !!strstr(js, "\"/api/fragfork\""),
+             "NOT REACHED: there is no /api/fragfork record at all, so no arm finished the fragment parse");
+    fold_row(&fragfork_tt, &fragfork_why,
+             param_value_is(js, "/api/fragfork", "v", "200004") && param_value_is(js, "/api/fragfork", "t", "tail"),
+             "the /api/fragfork record does not carry the whole parse — an arm finished it with bytes missing");
+    const Probe rows[] = {
+        { "frag-fork", fragfork_tt, "/api/fragfork", SESS_EXPLORE, fragfork_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
 
-    /* THE OTHER HALF OF THAT NOTE — §4.5's worked example, where the population's ConstraintError aborts the
-       whole UPGRADE TRANSACTION rather than failing one `put`. Two errors, from two objects, and neither is
-       derivable from the other: the transaction's is why it died, the open request's is §5.1 step 10.8's. */
-    const char *idbuniq_why = NULL; int idbuniq_tt = 1;
-    fold_row(&idbuniq_tt, &idbuniq_why, !!strstr(js, "\"/api/idbuniq\""),
-             "NOT REACHED: there is no /api/idbuniq record at all, so the open request's `error` handler "
-             "never ran. That is the SCHEDULE");
-    fold_row(&idbuniq_tt, &idbuniq_why,
-             param_value_only(js, "/api/idbuniq", "v", "ConstraintError:AbortError"),
-             "the handler RAN and /api/idbuniq's `v` is not exactly `ConstraintError:AbortError` — §4.5's "
-             "population failure did not abort the whole UPGRADE TRANSACTION, or the two errors are not the "
-             "two independent ones (the transaction's says why it died, §5.1 step 10.8's says what the open "
-             "request saw)");
+/* The rows of the `fragplace` document. */
+TF_UNIT void probes_fragplace(const char *js, Probe *tab, int *n) {
+    /* The same fork, asked after the feed while the setter clears its target, and inside §14.4's XML parse: both
+       arms finish the operation, so each record carries the whole result. */
+    const char *fragplace_why = NULL;
+ int fragplace_tt = 1;
+    fold_row(&fragplace_tt, &fragplace_why, !!strstr(js, "\"/api/fragplace\""),
+             "NOT REACHED: there is no /api/fragplace record at all, so no arm finished the setter");
+    fold_row(&fragplace_tt, &fragplace_why,
+             param_value_is(js, "/api/fragplace", "v", "1") && param_value_is(js, "/api/fragplace", "t", "x"),
+             "the /api/fragplace record does not carry the replaced children — an arm finished the setter with "
+             "old children left or the new one missing");
+    const Probe rows[] = {
+        { "frag-place", fragplace_tt, "/api/fragplace", SESS_EXPLORE, fragplace_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
 
-    /* §6.1's TWO CLAIMS, as the tokens the page's own comparison emitted. The expected bytes are in the
-       document (see `/api/cssprop` in HTML_CSS above) because that is where the read happens and where nothing
-       percent-encodes them; what reaches here is a verdict, and its failing spelling carries the actual value
-       so a red row names what answered instead of only that something did.
-       BOTH ARE ASKED OF THEIR OWN ENDPOINT'S OWN PARAM, because `CSSTEXTOK` is a SUFFIX of `CQCSSTEXTOK`,
-       the container-query statement's passing value of `/api/csscontainerText2`: a token is unique only until
-       some other statement chooses a longer name that contains it. */
-    const char *cssprop_why = NULL; int cssprop_tt = 1;
-    fold_row(&cssprop_tt, &cssprop_why, !!strstr(js, "\"/api/cssprop\""),
-             "NOT REACHED: there is no /api/cssprop record at all, so this run did not answer the statement");
-    fold_row(&cssprop_tt, &cssprop_why, param_value_is(js, "/api/cssprop", "v", "CSSPROPOK"),
-             "§6.1 the CSSPropertyRule members did not answer as the page compared them (the record carries "
-             "the CSSPROPBAD: spelling with the value that answered instead)");
-    const char *csspropText_why = NULL; int csspropText_tt = 1;
-    fold_row(&csspropText_tt, &csspropText_why, !!strstr(js, "\"/api/csspropText\""),
-             "NOT REACHED: there is no /api/csspropText record at all, so this run did not answer the statement");
-    fold_row(&csspropText_tt, &csspropText_why, param_value_is(js, "/api/csspropText", "v", "CSSTEXTOK"),
-             "§6.1 the @property cssText serialisation is not what the page compared it against (the record "
-             "carries the CSSTEXTBAD: spelling with the value that answered instead)");
+/* The rows of the `fragxml` document. */
+TF_UNIT void probes_fragxml(const char *js, Probe *tab, int *n) {
+    const char *fragxml_why = NULL;
+ int fragxml_tt = 1;
+    fold_row(&fragxml_tt, &fragxml_why, !!strstr(js, "\"/api/fragxml\""),
+             "NOT REACHED: there is no /api/fragxml record at all, so no arm finished the XML fragment parse");
+    fold_row(&fragxml_tt, &fragxml_why,
+             param_value_is(js, "/api/fragxml", "v", "50001") && param_value_is(js, "/api/fragxml", "t", "tail"),
+             "the /api/fragxml record does not carry the whole XML parse — an arm finished it with items missing");
+    const Probe rows[] = {
+        { "frag-xml", fragxml_tt, "/api/fragxml", SESS_EXPLORE, fragxml_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
 
-    /* CSS COMPATIBILITY STANDARD §3.1's ALIAS, as the two tokens the page's own comparisons emitted — see the
-       `<style id=kfsheet>` block in HTML above for what each one covers and why they are two. A red row here
-       is a document that BOOTED, which is itself the first thing this fixture is about: the at-rule these
-       cover used to abort at stage `create`, and a fixture that only proved the crash was gone would go green
-       on a build that dropped the rule instead of building it. */
-    int csswkkf_tt = strstr(js, "WKKFOK") != NULL;
-    int csswkkfText_tt = strstr(js, "WKKFTEXTOK") != NULL;
+/* The rows of the `fragce` document. */
+TF_UNIT void probes_fragce(const char *js, Probe *tab, int *n) {
+    /* A defined custom element written through a connected element's innerHTML: its constructor runs at the
+       setter's [CEReactions] epilogue, after the placement, so it sees every child and the element is upgraded. */
+    const char *fragce_why = NULL;
+ int fragce_tt = 1;
+    fold_row(&fragce_tt, &fragce_why, !!strstr(js, "\"/api/fragce\""),
+             "NOT REACHED: there is no /api/fragce record at all, so no arm finished the setter");
+    fold_row(&fragce_tt, &fragce_why,
+             param_value_is(js, "/api/fragce", "v", "3") && param_value_is(js, "/api/fragce", "u", "true"),
+             "the /api/fragce record does not say the constructor ran once, after all three children were placed, "
+             "and upgraded the element");
+    const Probe rows[] = {
+        { "frag-ce", fragce_tt, "/api/fragce", SESS_EXPLORE, fragce_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
 
-    /* CSS NESTING'S THREE CLAIMS, as the tokens the page's own comparisons emitted — the same arrangement the
-       two rows above have and for the same reason: §6 "CSSOM"'s absolutized `selectorText`, §4's `:is()`
-       specificity carried through the resolved cascade, and §3.3's nested group rule are three capabilities,
-       and one boolean over them would say only that one of three unrelated things is wrong. The failing
-       spelling of each carries the value that answered instead, so a red row names what to fix. */
-    int cssnestsel_tt = strstr(js, "NESTSELOK") != NULL;
-    int cssnest_tt = strstr(js, "NESTOK") != NULL;
-    int cssnestmedia_tt = strstr(js, "NESTMEDIAOK") != NULL;
+/* The rows of the `fragscript` document. */
+TF_UNIT void probes_fragscript(const char *js, Probe *tab, int *n) {
+    /* The fragment members' two ways into the page's code, both after DOM §4.2.3 insert's per-node loop: a
+       `script` target's children changed steps, and setHTMLUnsafe's runScripts post-connection steps. */
+    const char *fragscript_why = NULL;
+ int fragscript_tt = 1;
+    fold_row(&fragscript_tt, &fragscript_why, !!strstr(js, "\"/api/fragscript\""),
+             "NOT REACHED: there is no /api/fragscript record at all, so the script's children changed steps "
+             "never ran it");
+    fold_row(&fragscript_tt, &fragscript_why, param_value_is(js, "/api/fragscript", "v", "1"),
+             "the /api/fragscript record does not say the script ran with its one Text child in place");
+    fold_row(&fragscript_tt, &fragscript_why, param_value_is(js, "/api/fragscriptu", "w", "3"),
+             "the /api/fragscriptu record does not say the runScripts script ran after all three of its target's "
+             "children were inserted — DOM §4.2.3 insert runs the post-connection steps after its per-node loop");
+    const Probe rows[] = {
+        { "frag-script", fragscript_tt, "/api/fragscript", SESS_EXPLORE, fragscript_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
 
-    /* TWO ROWS BECAUSE THESE ARE TWO INDEPENDENT CLAIMS, and one boolean over both is not a measurement of
-       either — the same reason `deepest` and `completed` are two numbers a few hundred lines up. This was ONE
-       row, it has read 0 for as long as it has existed, and a 0 said only "one of two unrelated things is
-       wrong": either §6.1/§5.5's record semantics, or the taint round trip, and no run could tell them apart.
-       That is the shape §Offensive-programming calls a plausible datum — it has a value, and the value carries
-       no information about what to fix.
-       `idb-record` is the SEMANTICS chain, and it is one accumulating string in placement order, so the
-       longest prefix that matches localises which stage stopped: §6.1 step 2's ConstraintError on `add`, §2.2's
-       key ordering through §6.2, §6.1 step 3's overwrite, the two writes read back, then §5.5 step 2's revert
-       of both across a real `abort()`.
-       `idb-record-taint` is the half a browser's own suite cannot have: `location.hash` goes into a store and
-       has to come back out STILL CONCOLIC, because a page keeps its session in here and reads it into gated
-       code. It is a claim about §5.11's clone and §6.1 step 4's serialization, not about transactions at all —
-       a store that de-tainted on the way in would emit the EXAMPLE and read as a perfectly healthy endpoint.
-       AND IT IS A WHOLE-VALUE CLAIM, WHICH IS THE DIFFERENCE BETWEEN THE TWO WAYS THIS CAN GO WRONG. §5.11's
-       clone seeds §2.7.1's `memory` with the concolic itself — core/indexeddb/idb_database.c states it in as
-       many words, "the SAME symbol rather than a second one about which the flow's narrowing says nothing" —
-       so what comes back out has the source's own shape and `?t=` carries exactly it. A containment test
-       cannot tell that from a clone that DERIVED a new unknown from it, because a derived shape is composed
-       over its operand's (`"%s.%s()"`, solver/concolic.c) and therefore contains it: the row would read 1 for
-       a value carrying a narrowing this flow never made, which is the plausible datum the row exists to
-       refuse. Whole-value equality is what "the same symbol" means. */
-    int idbrec_tt = strstr(js, "ConstraintError:first1:over21:made77gone:undoneAD") != NULL;
-    int idbtaint_tt = param_value_is(js, "/api/idbrec", "t", LOCATION_HASH_SHAPE);
-    /* THE CONTROL, read off the same endpoint record: the same source, the same param list, no store in
-       between. A 0 on BOTH means the loss is upstream of Indexed Database and a 0 on `t` alone means §5.11's
-       clone or §6.1 step 4's serialization is where the triple collapses to its example.
-       AND THE SHAPE IS THE COMPONENT'S OWN TOKEN, WHICH IS WHY BOTH ROWS READ 0 FOR EVERY RUN THEY HAVE
-       EXISTED FOR. They asked for `{hash}` — a spelling nothing in this tree writes. It was the shape of the
-       in-C `concolic_new(ctx, "{hash}", "{hash}", …)` these two rows were first written over, and when the
-       fixture became the page's own `location.hash` the source's real shape (`{location.hash}`, and it is
-       core/frame/location.h that spells it) was never carried across. So the control's 0 did not localise the
-       loss upstream of the store: there was no loss. `location.hash` reached the @H param carrying its domain
-       the whole time, and a row asserting a name no producer writes reports a healthy mechanism as broken
-       forever — which is exactly the defect `idb-open` above is annotated for, one file away. Bound to the
-       macro now: a probe cannot ask about a spelling the component does not have. A CONTROL IS ONLY A CONTROL
-       IF IT ASKS THE SAME QUESTION: `?h=` is `location.hash` with nothing concatenated after it, so this is
-       the same whole-value equality `t` is, and a containment test here would have gone on passing for a
-       derived shape while `t`'s equality failed — the two rows would then disagree for a reason that is about
-       the instruments and not about the store. */
-    int lochash_tt = param_value_is(js, "/api/idbrec", "h", LOCATION_HASH_SHAPE);
+/* The rows of the `fragbase` document. */
+TF_UNIT void probes_fragbase(const char *js, Probe *tab, int *n) {
+    /* A link placed in front of a base element by one innerHTML: its insertion steps run inside insert's per-node
+       loop, before the base is in the tree, so the preload resolves against the document's own address. */
+    const char *fragbase_why = NULL;
+ int fragbase_tt = 1;
+    fold_row(&fragbase_tt, &fragbase_why, !!strstr(js, "\"/api/fragbase\"") && !!strstr(js, "fragbase.js"),
+             "NOT REACHED: there is no /api/fragbase record or no request for fragbase.js, so the setter or the "
+             "link's insertion steps never ran");
+    fold_row(&fragbase_tt, &fragbase_why, !!strstr(js, "fbsub") && !strstr(js, "/fbsub/fragbase.js"),
+             "the preload was resolved against the base element placed after it — DOM §4.2.3 insert runs the "
+             "link's insertion steps before the next node is inserted, so the base was not yet in the tree");
+    /* The same order inside one body call that inserts several nodes: `head.append(link, base)` and a
+       DocumentFragment's two children, each link resolved before the base after it is in the tree. */
+    const char *fragbasem_why = NULL;
+ int fragbasem_tt = 1;
+    fold_row(&fragbasem_tt, &fragbasem_why, !!strstr(js, "fragbase2.js") && !!strstr(js, "fragbase3.js"),
+             "NOT REACHED: there is no request for fragbase2.js or fragbase3.js, so a link's insertion steps "
+             "never ran");
+    fold_row(&fragbasem_tt, &fragbasem_why,
+             !!strstr(js, "/fbsub/fragbase2.js") && !strstr(js, "/fbsub2/fragbase2.js") &&
+             !!strstr(js, "/fbsub2/fragbase3.js") && !strstr(js, "/fbsub3/fragbase3.js"),
+             "a link inserted with a base after it in one append or one DocumentFragment was resolved against "
+             "that base — DOM §4.2.3 insert runs each node's insertion steps before the next node is inserted");
+    const Probe rows[] = {
+        { "frag-base", fragbase_tt, "/api/fragbase", SESS_EXPLORE, fragbase_why },
+        { "frag-base-multi", fragbasem_tt, "/api/fragbase", SESS_EXPLORE, fragbasem_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
 
-    /* §5.12's `count` OVER A VALUE NOBODY KNOWS, AND THE ORDER ITS TYPE DECIDES — four rows, because these are
-       four independent facts and a conjunction over them would name none of them.
-       `idb-count-known` is the CONTROL and it is read first for that reason: two records out of three for a
-       count of 2 is §6.2 Object store retrieval operations' "first count of store's list of records whose key
-       is in range" honouring a count it HAS. Without it `idb-count-unknown` cannot fail, since a `getAll` that
-       ignored `count` altogether answers all three for both.
-       `idb-count-unknown` is the claim: the unknown crossed `[EnforceRange] unsigned long` as itself, carried
-       no example, and §6.2 step 1's "If count is not given or is 0 (zero), let count be infinity" was the arm
-       taken — the SUPERSET, which is exploration. Its two other readings are the ones this row exists to
-       refuse: an invented number (one record, or two) is §RUN-DON'T-MATCH's fabricated observation, and a
-       coercion that decided the completion takes the endpoint away entirely.
-       EACH IS `param_value_only` AND NOT `_has`: nothing on this path branches on an unknown, so a second
-       value means the walk forked where this statement says it cannot, which is a finding and not a match.
-       `idb-range-throw` and `idb-range-order` are the dictionary half, and they are two rows because a
-       TypeError raised AFTER the page's `toString` ran is a different defect from no TypeError at all — the
-       first is a refusal in the wrong place (the consumer's, not the type's), the second is no refusal. Web
-       IDL §3.2.17 Dictionary types reads members "in lexicographical order" and converts each one where it
-       reads it, so `count` is refused before `direction` is fetched off the object at all. */
-    int idbcount_known_tt = param_value_only(js, "/api/idbcount", "k", "g1g2");
-    int idbcount_unk_tt   = param_value_only(js, "/api/idbcount", "u", "g1g2g3");
-    int idbrange_throw_tt = param_value_only(js, "/api/idbcount", "e", "TypeError");
-    int idbrange_order_tt = param_value_only(js, "/api/idbcount", "d", "unread");
+/* The rows of the `fragdialog` document. */
+TF_UNIT void probes_fragdialog(const char *js, Probe *tab, int *n) {
+    /* `replaceChildren` removes an open dialog and inserts another: the removed one's close watcher is destroyed
+       before the inserted one's is established, so with a second group allowed the inserted dialog's group is
+       its own and the close request that closes it leaves `c` open. With one group allowed `c` and the inserted
+       dialog share it and close together, so `0open` is no page timeline's: it is the orphan drive of the
+       never-called `close` listener (`driven` true), run with `c` still open. */
+    const char *fragdialog_why = NULL;
+ int fragdialog_tt = 1;
+    fold_row(&fragdialog_tt, &fragdialog_why,
+             param_value_is(js, "/api/fragdialogready", "a", "1") && !!strstr(js, "\"/api/fragdialog\""),
+             "NOT REACHED: no arm both gained the second close-watcher group (the picker resolved) and closed "
+             "the inserted dialog");
+    fold_row(&fragdialog_tt, &fragdialog_why,
+             param_value_is(js, "/api/fragdialog", "s", "1open") &&
+                 !emitted_record_has(js, "/api/fragdialog", "\"1shut\""),
+             "the close request that closed the inserted dialog also closed `c` on the arm with two groups "
+             "allowed — the inserted dialog's close watcher joined `c`'s group because the removed dialog's "
+             "was destroyed after it was established, where DOM §4.2.3's replace all removes before it inserts");
+    fold_row(&fragdialog_tt, &fragdialog_why,
+             !emitted_record_has_both(js, "/api/fragdialog", "\"driven\":false", "\"0open\""),
+             "a timeline that ran the page's own code saw the inserted dialog close with `c` open on the arm with "
+             "one group allowed — HTML §6.10.2's establish appended the inserted dialog's close watcher to `c`'s "
+             "group, so one close request closes both");
+    const Probe rows[] = {
+        { "frag-dialog", fragdialog_tt, "/api/fragdialog", SESS_EXPLORE, fragdialog_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
 
+/* The rows of the `declines` document. */
+TF_UNIT void probes_declines(const char *js, Probe *tab, int *n) {
+    /* A frontier left parked on refusals: HTML_DECLINES's zone declines its XMLHttpRequest and every fetch()
+       but one GET, and the session parks the waiting arms, one of them suspended inside the XHR's send task
+       with a later task queued, rather than aborting. */
+    const char *declines_why = NULL;
+ int declines_tt = 1;
+    fold_row(&declines_tt, &declines_why,
+             !!strstr(js, "\"/api/decl/redir\"") && !!strstr(js, "/api/decl/sub/rel-xhr"),
+             "NOT REACHED: there is no /api/decl/redir record or no record of the XMLHttpRequest to "
+             "/api/decl/sub/rel-xhr, so the document's program did not run to its XHR and its served GET");
+    const Probe rows[] = {
+        { "declines-park", declines_tt, "/api/decl/redir", SESS_EXPLORE, declines_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `windowclose` document. */
+TF_UNIT void probes_windowclose(const char *js, Probe *tab, int *n) {
+    const char *winclose_why = NULL;
+ int winclose_tt = 1;
+    fold_row(&winclose_tt, &winclose_why, !!strstr(js, "\"/api/winclose\""),
+             "NOT REACHED: there is no /api/winclose record at all, so this run did not answer the statement");
+    fold_row(&winclose_tt, &winclose_why, param_value_is(js, "/api/winclose", "v", "S"),
+             "§7.2.2.1's close() did not close a same-origin popup this document opened — `v` is `S` when "
+             "`closed` reads true, `s` when close() was refused and `E<name>` when it threw");
+    const Probe rows[] = {
+        { "win-close", winclose_tt, "/api/winclose", SESS_EXPLORE, winclose_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `windowopenerclose` document. */
+TF_UNIT void probes_windowopenerclose(const char *js, Probe *tab, int *n) {
+    /* And over a cross-origin popup, which the incumbent is familiar with only through its opener link. */
+    const char *winopclose_why = NULL;
+ int winopclose_tt = 1;
+    fold_row(&winopclose_tt, &winopclose_why, !!strstr(js, "\"/api/winopclose\""),
+             "NOT REACHED: there is no /api/winopclose record at all, so this run did not answer the statement");
+    fold_row(&winopclose_tt, &winopclose_why, param_value_is(js, "/api/winopclose", "v", "X"),
+             "§7.2.2.1's close() did not close a cross-origin popup this document opened — `v` is `X` when "
+             "`closed` reads true, `x` when close() was refused and `E<name>` when it threw");
+    const Probe rows[] = {
+        { "win-opener-close", winopclose_tt, "/api/winopclose", SESS_EXPLORE, winopclose_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `timers` document. */
+TF_UNIT void probes_timers(const char *js, Probe *tab, int *n) {
+    /* §8.7 Timers + §8.1.7: the microtask ran first, then the two timers in the order they were set.
+       A CONDITIONAL COLLISION, WHICH IS THE KIND A SCAN OF A PASSING RUN CANNOT SEE. No token this document
+       emits contains `ABC` while the document is RIGHT — but `/api/scriptorder`'s own failing spelling IS
+       `ABC` (see that row: `ABXC` is correct and `ABC` is the program pushed to the tail), so the moment the
+       script-order defect appears, this row stops being able to fail. Two rows entangled so that one's red
+       makes the other's green meaningless is worse than either being wrong alone, and it costs one param
+       lookup to sever. */
+    const char *timer_why = NULL;
+ int timer_tt = 1;
+    fold_row(&timer_tt, &timer_why, !!strstr(js, "\"/api/timerfire\""),
+             "NOT REACHED: there is no /api/timerfire record at all, so this run did not answer the statement");
+    fold_row(&timer_tt, &timer_why, param_value_is(js, "/api/timerfire", "v", "ABC"),
+             "§8.1.7 the microtask and the two timers did not run in the order they were queued");
+    /* §8.7's string handler was compiled and RUN as a program, and the handle the two arms hand back comes
+       out of one per-global counter. Two endpoints because the two halves fail independently. */
+    const char *timerstr_why = NULL;
+ int timerstr_tt = 1;
+    fold_row(&timerstr_tt, &timerstr_why, !!strstr(js, "\"/api/timerstr\""),
+             "NOT REACHED: there is no /api/timerstr record at all, so §8.7's string handler was never "
+             "compiled or never fired. That is the SCHEDULE");
+    fold_row(&timerstr_tt, &timerstr_why, param_value_is(js, "/api/timerstr", "v", "strran"),
+             "the timer FIRED and /api/timerstr's `v` is not `strran` — the string handler reached its fetch "
+             "without having been run as a program");
+    /* …AND THE TWO FACTS THAT MAKE A STRING HANDLER A TIMER RATHER THAN A SCRIPT. Separate rows from
+       `timer-string-handler` because they fail independently of it and of each other: the program can run
+       while being uncancellable, and it can be cancellable while ignoring its `timeout`. */
+    const char *timerclr_why = NULL;
+ int timerclr_tt = 1;
+    fold_row(&timerclr_tt, &timerclr_why, !!strstr(js, "\"/api/timerclr\""),
+             "NOT REACHED: there is no /api/timerclr record at all, so no string-handled timer fired here. "
+             "That is the SCHEDULE and not the cancellation");
+    fold_row(&timerclr_tt, &timerclr_why, param_value_is(js, "/api/timerclr", "v", "cleared"),
+             "the surviving string-handled timer did not fire, so this run says nothing about the cleared one");
+    fold_row(&timerclr_tt, &timerclr_why, !param_value_is(js, "/api/timerclr", "v", "notcleared"),
+             "§8.7's clearTimeout did not remove a STRING handler's entry — the timer initialization steps "
+             "returned a handle that names nothing and the program ran anyway");
+    const char *timerdelay_why = NULL;
+ int timerdelay_tt = 1;
+    fold_row(&timerdelay_tt, &timerdelay_why, !!strstr(js, "\"/api/timerdelay\""),
+             "NOT REACHED: there is no /api/timerdelay record at all. TWO claims share this row and it does "
+             "not separate them: either the 100ms string-handled timer never fired, or the event loop's "
+             "virtual clock never moved FORWARD in this document (core/timing/event_loop.c's "
+             "event_loop_may_advance declines while the host owes a reply) — this is the only statement in "
+             "this fixture with a nonzero delay. That is the SCHEDULE");
+    fold_row(&timerdelay_tt, &timerdelay_why, param_value_is(js, "/api/timerdelay", "v", "ba"),
+             "§8.7's `timeout` did not order two STRING handlers — the source order decided them, which is "
+             "what queueing the classic script at the SET rather than at the expiry does");
+    /* AND `next` IS NOT THIS STATEMENT'S ALONE. The @S URL sink's source renders as `{state}.next` in
+       `securitySinks` — the same spelling `s_poc`/`s_stage` ask for a few hundred lines down — so the old
+       unscoped term read 1 on every run that recorded the location sink at all, whatever the counter did.
+       It survived only because the sibling NEGATIVE (`reused`) happened to be the other spelling of the same
+       param; a defect that dropped the param instead of mis-numbering it would have passed both. */
+    const char *timerhandle_why = NULL;
+ int timerhandle_tt = 1;
+    fold_row(&timerhandle_tt, &timerhandle_why, !!strstr(js, "\"/api/timerhandle\""),
+             "NOT REACHED: there is no /api/timerhandle record at all, so this run did not answer the statement");
+    fold_row(&timerhandle_tt, &timerhandle_why, param_value_is(js, "/api/timerhandle", "h", "next"),
+             "§8.7's handle counter did not give the second timer the identifier after the first's");
+    fold_row(&timerhandle_tt, &timerhandle_why, !param_value_is(js, "/api/timerhandle", "h", "reused"),
+             "§8.7's handle counter gave two LIVE timers one identifier, so clearTimeout would clear the wrong one");
+    /* §8.7 step 4 asked about an unknown `timeout`: the fork has a consumer, so the document survives it.
+       A 0 here is an ABORT at the fork seam and not a missing endpoint — see the statement that produces it. */
+    const char *unkdelay_why = NULL;
+ int unkdelay_tt = 1;
+    fold_row(&unkdelay_tt, &unkdelay_why, !!strstr(js, "\"/api/unkdelay\""),
+             "NOT REACHED: there is no /api/unkdelay record at all — an ABORT at the fork seam and not a "
+             "missing endpoint. That is the SCHEDULE; see the statement that produces it");
+    fold_row(&unkdelay_tt, &unkdelay_why, param_value_is(js, "/api/unkdelay", "v", "forked"),
+             "the statement RAN and /api/unkdelay's `v` is not `forked` — §8.7 step 4's unknown `timeout` "
+             "handed back something that is not a number, so the fork had no consumer");
+    const Probe rows[] = {
+        { "timer-order", timer_tt, "/api/timerfire", SESS_EXPLORE, timer_why },
+        { "timer-string-handler", timerstr_tt, "/api/timerstr", SESS_EXPLORE, timerstr_why },
+        { "timer-string-clear", timerclr_tt, "/api/timerclr", SESS_EXPLORE, timerclr_why },
+        { "timer-string-delay", timerdelay_tt, "/api/timerdelay", SESS_EXPLORE, timerdelay_why },
+        { "timer-handle-counter", timerhandle_tt, "/api/timerhandle", SESS_EXPLORE, timerhandle_why },
+        { "timer-unknown-delay-fork", unkdelay_tt, "/api/unkdelay", SESS_EXPLORE, unkdelay_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `idlindex` document. */
+TF_UNIT void probes_idlindex(const char *js, Probe *tab, int *n) {
+    /* ONE UNKNOWN INDEX THROUGH TWO MEMBERS OF THE `unsigned long index` FAMILY: every flow's two answers agree.
+       THE NEGATIVE IS THE ROW AND THE POSITIVE IS ONLY ITS DENOMINATOR. `agree` says the statement ran and some
+       world reached the fetch; `split` is the claim, and it is one no consistent world can make — the NodeList
+       is built two longer than `document.styleSheets`, so an index inside the short one is inside the long one
+       whatever it is. A single `split` record is a flow that answered `index == k` at StyleSheetList and then
+       answered the SAME question differently at NodeList, which is what a constraint key naming the MEMBER
+       instead of the PREDICATE permits (core/idl_index_arg.h's IDL_INDEX_PREDICATE). */
+    const char *idxkey_why = NULL;
+ int idxkey_tt = 1;
+    fold_row(&idxkey_tt, &idxkey_why, !!strstr(js, "\"/api/idxkey\""),
+             "NOT REACHED: there is no /api/idxkey record at all, so no world got through both `item(index)` "
+             "chains. That is the SCHEDULE, and it is also what an ABORT inside either chain looks like");
+    fold_row(&idxkey_tt, &idxkey_why, param_value_is(js, "/api/idxkey", "v", "agree"),
+             "/api/idxkey was recorded and never with `agree` — every world that reached it contradicted "
+             "itself, so this is the row below with nothing left to compare against");
+    fold_row(&idxkey_tt, &idxkey_why, !param_value_is(js, "/api/idxkey", "v", "split"),
+             "a flow read one unknown `index` as INSIDE document.styleSheets and PAST THE END of a NodeList "
+             "built two longer — no world admits both, so this flow answered `index == k` one way at CSSOM "
+             "§6.2.2's item(index) and another way at DOM §4.2.10's. The elimination chain's constraint key is "
+             "naming the MEMBER and not the PREDICATE (core/idl_index_arg.h's IDL_INDEX_PREDICATE)");
+    /* THE SAME TWO MEMBERS OVER AN INDEX THAT CARRIES AN EXAMPLE: the COMPLETION half of the fork key.
+       THE PREMISE IS MEASURED AND NOT ASSUMED, WHICH IS THE FIRST ROW. `split` is impossible only because both
+       collections are eight long, and a fixture whose two collections came out different lengths would emit a
+       `split` that means nothing — so the statement reports both lengths and this row refuses anything but
+       eight. That is the difference between an arithmetic impossibility and a length somebody guessed.
+       THE NEGATIVE IS THE ROW AND THE POSITIVE IS ONLY ITS DENOMINATOR, as above. `split` claims one index is
+       PAST THE END of an eight-element NodeList and INSIDE an eight-rule CSSRuleList at once. What
+       produces it is solver/decide.c's outcome walk asking about the machine's REAL completion first, so the
+       completion in the key is the operand's own EXAMPLE — and this seam's decide_note_forced_arm takes that
+       example away from the sibling it mints, after which the same flow composes the other spelling of a
+       question its own path has answered, re-forks it, and the arm minted there stands on both. */
+    const char *pkkey_why = NULL;
+ int pkkey_tt = 1;
+    fold_row(&pkkey_tt, &pkkey_why, !!strstr(js, "\"/api/pkkey\""),
+             "NOT REACHED: there is no /api/pkkey record at all, so no world got through both `item(index)` "
+             "chains over an index carrying an example. That is the SCHEDULE, and it is also what an ABORT "
+             "inside either chain looks like — AND IT IS WHAT AN EXAMPLE-FREE `screen.width` LOOKS LIKE, "
+             "which is the one way the row below could pass while asserting nothing. That premise is not "
+             "checkable from the page (an unknown with an example and one without walk the same positions and "
+             "emit the same tokens; only the KEY differs, which is the thing under test), so it is carried by "
+             "the ReadableStream statement's own DFAIL further down: that arm aborts the instance if "
+             "`screen.width & 7` reaches it carrying no number, and a discarded instance records no /api/pkkey "
+             "at all, which is this row");
+    fold_row(&pkkey_tt, &pkkey_why,
+             param_value_is(js, "/api/pkkey", "n", "8") && param_value_is(js, "/api/pkkey", "c", "8"),
+             "the two collections this statement compares did NOT both come out eight long, so the claim below "
+             "is not an arithmetic impossibility and this row is asserting nothing — fix the statement's "
+             "construction rather than reading its verdict");
+    fold_row(&pkkey_tt, &pkkey_why, param_value_is(js, "/api/pkkey", "v", "agree"),
+             "/api/pkkey was recorded and never with `agree` — every world that reached it contradicted "
+             "itself, so this is the row below with nothing left to compare against");
+    fold_row(&pkkey_tt, &pkkey_why, !param_value_is(js, "/api/pkkey", "v", "split"),
+             "a flow read one unknown `index` as PAST THE END of an eight-element NodeList and INSIDE an "
+             "eight-rule CSSRuleList — no index admits both, so this flow answered `index == e` one way at "
+             "DOM §4.2.10 Old-style collections' item(index) and the other way at CSSOM §6.4.1 The CSSRuleList "
+             "Interface's. The "
+             "outcome walk's constraint key "
+             "is naming the machine's EXAMPLE and not the question (solver/decide.c's outcome_settle): at "
+             "n == 2 the completion asked about first IS `real`, so `is it completion 1` and `is it "
+             "completion 0` are one binary fact under two keys, and the seam's own contradicted-example drop "
+             "is what walks a single flow from one spelling to the other");
+    /* ONE UNKNOWN INDEX THROUGH THE TWO MEMBERS OF THAT FAMILY WHOSE COLLECTIONS HANG OFF ONE ELEMENT.
+       IT IS FIRST A ROW ABOUT THE MEMBERS EXISTING AT ALL. Both DOM §7.1's `item` and DOM §4.9.1's REFUSED an
+       unknown index by name until they became step machines, so a NOT REACHED here is the ordinary reading of
+       an unconverted member: the DCHECK fires, the document goes down, and nothing after it emits.
+       THE PREMISE IS MEASURED AND NOT ASSUMED, which is the second row. `split` is impossible only because the
+       token set is two long and the attribute list five; a run where they came out otherwise would emit a
+       `split` that means nothing, so the lengths are refused before the verdict is read.
+       THE NEGATIVE IS THE ROW AND THE POSITIVE IS ONLY ITS DENOMINATOR. `split` claims one index is INSIDE a
+       two-token set and PAST THE END of a five-attribute map — no index admits both, so a flow that emits it
+       answered `index == k` one way at §7.1's item(index) and another way at §4.9.1's, which is what a
+       constraint key naming the MEMBER instead of the PREDICATE permits (core/idl_index_arg.h's
+       IDL_INDEX_PREDICATE). */
+    const char *nnmkey_why = NULL;
+ int nnmkey_tt = 1;
+    fold_row(&nnmkey_tt, &nnmkey_why, !!strstr(js, "\"/api/nnmkey\""),
+             "NOT REACHED: there is no /api/nnmkey record at all, so no world got through both `item(index)` "
+             "chains. That is the SCHEDULE, and it is also what an unconverted DOMTokenList or NamedNodeMap "
+             "looks like — each refused an unknown index with a DCHECK, which takes the document down");
+    fold_row(&nnmkey_tt, &nnmkey_why,
+             param_value_is(js, "/api/nnmkey", "t", "2") && param_value_is(js, "/api/nnmkey", "a", "5"),
+             "the two collections this statement compares did NOT come out two and five long, so the claim "
+             "below is not an arithmetic impossibility and this row is asserting nothing — fix the statement's "
+             "construction rather than reading its verdict");
+    fold_row(&nnmkey_tt, &nnmkey_why, param_value_is(js, "/api/nnmkey", "v", "agree"),
+             "/api/nnmkey was recorded and never with `agree` — every world that reached it contradicted "
+             "itself, so this is the row below with nothing left to compare against");
+    fold_row(&nnmkey_tt, &nnmkey_why, !param_value_is(js, "/api/nnmkey", "v", "split"),
+             "a flow read one unknown `index` as INSIDE a two-token DOMTokenList and PAST THE END of a "
+             "five-attribute NamedNodeMap — no index admits both, so this flow answered `index == k` one way "
+             "at DOM §7.1 Interface DOMTokenList's item(index) and another way at DOM §4.9.1 Interface "
+             "NamedNodeMap's. The elimination chain's constraint key is naming the MEMBER and not the "
+             "PREDICATE (core/idl_index_arg.h's IDL_INDEX_PREDICATE)");
+    /* CSSOM §6.6.1's item(index) OVER AN UNKNOWN INDEX, AND ITS TERMINAL — the one member of that family whose
+       past-the-end answer is the empty string rather than null.
+       THE ROW IS THE EMITTED SET AND NOT A VERDICT, so no length can make it pass while asserting nothing. One
+       value means the member DECIDED the index instead of forking it (or refused it, which is the NOT REACHED
+       above); several mean the chain walked, and `past` among them means the parent reached exhaustion and
+       answered §6.6.1's own empty string there. `null` among them is the wrong terminal spelled out — the
+       statement's `=== ''` is false for null, so a member answering the family's usual null lands in the
+       record as those four characters and cannot pass for the empty string. */
+    const char *cssditem_why = NULL;
+ int cssditem_tt = 1;
+    fold_row(&cssditem_tt, &cssditem_why, !!strstr(js, "\"/api/cssditem\""),
+             "NOT REACHED: there is no /api/cssditem record at all. That is the SCHEDULE, and it is also what "
+             "an unconverted CSSStyleDeclaration looks like — its `item` refused an unknown index with a "
+             "DCHECK, which takes the document down");
+    fold_row(&cssditem_tt, &cssditem_why, param_value_is(js, "/api/cssditem", "n", "2"),
+             "the declaration block this statement asks about did not come out two long, so the emitted set "
+             "below cannot be read against it — fix the statement's construction rather than its verdict");
+    fold_row(&cssditem_tt, &cssditem_why, param_value_count(js, "/api/cssditem", "v") > 1,
+             "/api/cssditem's `v` carries ONE value, so §6.6.1's item(index) answered an unknown index from a "
+             "single world — the elimination chain either did not run or decided the index instead of asking "
+             "it (core/idl_index_arg.h's idl_index_chain_run)");
+    fold_row(&cssditem_tt, &cssditem_why, param_value_is(js, "/api/cssditem", "v", "past"),
+             "the chain forked and NO world reached the past-the-end answer, so the parent never walked its "
+             "two positions to exhaustion — §6.6.1's \"If there is no indexth object in the collection, then "
+             "the method must return the empty string\" is the terminal and nothing emitted it");
+    fold_row(&cssditem_tt, &cssditem_why, !param_value_is(js, "/api/cssditem", "v", "null"),
+             "a world past the end of the declaration block answered NULL where §6.6.1 says the empty string — "
+             "the chain's past-the-end flag was given this family's usual answer instead of this member's, "
+             "which is the one thing core/idl_index_arg.c does not decide and every caller states itself");
+    /* ONE UNKNOWN OFFSET THROUGH DOM §4.11's `splitText` AND DOM §4.10's `substringData`.
+       IT IS FIRST A ROW ABOUT THE MEMBERS EXISTING AT ALL. Both DFAILed on an unknown `unsigned long` until
+       they became step machines, so a NOT REACHED here is the ordinary reading of an unconverted member: the
+       abort fires, the document goes down, and nothing after it emits.
+       THE PREMISE IS MEASURED AND NOT ASSUMED. `split` is impossible only because the two Text nodes are two
+       and nine units long; a run where they came out otherwise would emit a `split` that means nothing, so the
+       lengths are refused before the verdict is read.
+       THE NEGATIVE IS THE ROW AND THE POSITIVE IS ONLY ITS DENOMINATOR. `split` claims one offset is WITHIN a
+       two-unit node and PAST THE END of a nine-unit one — no offset admits both, so a flow that emits it
+       answered `offset == k` one way at §4.11's step 2 and another way at §4.10's, which is what a constraint
+       key naming the MEMBER instead of the PREDICATE permits (core/idl_index_arg.h's IDL_INDEX_PREDICATE). */
+    const char *cdsplit_why = NULL;
+ int cdsplit_tt = 1;
+    fold_row(&cdsplit_tt, &cdsplit_why, !!strstr(js, "\"/api/cdsplit\""),
+             "NOT REACHED: there is no /api/cdsplit record at all, so no world got through both step 2 chains. "
+             "That is the SCHEDULE, and it is also what an unconverted `splitText` or `substringData` looks "
+             "like — each refused an unknown offset with a DFAIL, which takes the document down");
+    fold_row(&cdsplit_tt, &cdsplit_why,
+             param_value_is(js, "/api/cdsplit", "a", "2") && param_value_is(js, "/api/cdsplit", "b", "9"),
+             "the two Text nodes this statement compares did NOT come out two and nine units long, so the "
+             "claim below is not an arithmetic impossibility and this row is asserting nothing — fix the "
+             "statement's construction rather than reading its verdict");
+    fold_row(&cdsplit_tt, &cdsplit_why, param_value_is(js, "/api/cdsplit", "v", "agree"),
+             "/api/cdsplit was recorded and never with `agree` — every world that reached it contradicted "
+             "itself, so this is the row below with nothing left to compare against");
+    fold_row(&cdsplit_tt, &cdsplit_why, !param_value_is(js, "/api/cdsplit", "v", "split"),
+             "a flow read one unknown `offset` as WITHIN a two-unit Text node and PAST THE END of a nine-unit "
+             "one — no offset admits both, so this flow answered `offset == k` one way at DOM §4.11 Interface "
+             "Text's split a Text node step 2 and another way at DOM §4.10 Interface CharacterData's substring "
+             "data step 2. The elimination chain's constraint key is naming the MEMBER and not the PREDICATE "
+             "(core/idl_index_arg.h's IDL_INDEX_PREDICATE)");
+    /* §4.10's `substringData(offset, count)` WITH BOTH OPERANDS UNKNOWN — the row for the SECOND chain.
+       THE ROW IS THE EMITTED SET AND NOT A VERDICT. Steps 3-4 make the returned string exactly
+       `min(count, length - offset)` code units long, so over a three-unit node the value `2` is reachable ONLY
+       from a world that answered `count == 2` — every world in which the count chain did not run carries step
+       3's clamp, which is `length - offset` and never 2 while offset is 0 or 1 and the count is unknown. So
+       `2` present is the count chain having run, and `throw` present is the OFFSET chain having reached step
+       2's IndexSizeError at exhaustion. One value alone means neither chain asked anything. */
+    const char *cdsub_why = NULL;
+ int cdsub_tt = 1;
+    fold_row(&cdsub_tt, &cdsub_why, !!strstr(js, "\"/api/cdsub\""),
+             "NOT REACHED: there is no /api/cdsub record at all. That is the SCHEDULE, and it is also what an "
+             "unconverted `substringData` looks like — it refused an unknown operand with a DFAIL, which takes "
+             "the document down");
+    fold_row(&cdsub_tt, &cdsub_why, param_value_is(js, "/api/cdsub", "n", "3"),
+             "the Text node this statement asks about did not come out three units long, so the emitted set "
+             "below cannot be read against it — fix the statement's construction rather than its verdict");
+    fold_row(&cdsub_tt, &cdsub_why, param_value_count(js, "/api/cdsub", "v") > 1,
+             "/api/cdsub's `v` carries ONE value, so §4.10's substringData answered two unknown operands from "
+             "a single world — neither elimination chain ran, or one decided its operand instead of asking it "
+             "(core/idl_index_arg.h's idl_index_chain_run)");
+    fold_row(&cdsub_tt, &cdsub_why, param_value_is(js, "/api/cdsub", "v", "throw"),
+             "no world reached §4.10's substring data step 2 — the OFFSET chain never walked its four "
+             "positions to exhaustion, so \"If offset is greater than length, then throw an \"IndexSizeError\" "
+             "DOMException\" was never the answer and the past-the-end world is unexplored");
+    fold_row(&cdsub_tt, &cdsub_why, param_value_is(js, "/api/cdsub", "v", "2"),
+             "no world returned a TWO-unit substring of a three-unit node, which is reachable only from "
+             "`count == 2` — so the COUNT chain did not run and §4.10's second `unsigned long` was answered "
+             "from step 3's clamp alone. That operand names no position in any collection, which is exactly "
+             "the case core/idl_index_arg.c's banner had to state before it could be a member");
+    const Probe rows[] = {
+        { "idl-index-key-one-predicate", idxkey_tt, "/api/idxkey", SESS_EXPLORE, idxkey_why },
+        { "outcome-key-one-predicate", pkkey_tt, "/api/pkkey", SESS_EXPLORE, pkkey_why },
+        { "idl-index-one-element-two-members", nnmkey_tt, "/api/nnmkey", SESS_EXPLORE, nnmkey_why },
+        { "idl-index-empty-string-terminal", cssditem_tt, "/api/cssditem", SESS_EXPLORE, cssditem_why },
+        { "chardata-offset-two-members", cdsplit_tt, "/api/cdsplit", SESS_EXPLORE, cdsplit_why },
+        { "chardata-count-chain", cdsub_tt, "/api/cdsub", SESS_EXPLORE, cdsub_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `srcdoc` document. */
+TF_UNIT void probes_srcdoc(const char *js, Probe *tab, int *n) {
+    /* §4.8.5's SRCDOC DOCUMENTS — the class §2.4.3 step 1 is about, and the class this fixture could not build
+       until the markup above existed. The rows are ordered so that an earlier one surviving localises a later
+       one's absence; see that markup for what each separates. */
+    const char *sdrun_why = NULL;
+ int sdrun_tt = 1;
+    fold_row(&sdrun_tt, &sdrun_why, !!strstr(js, "\"https://x.test/api/sdrun\""),
+             "NOT REACHED: there is no /api/sdrun record at all, and that address is ABSOLUTE — it depends on "
+             "no base resolution, so its absence is not §2.4.3 answering wrongly. Either the `<iframe srcdoc>` "
+             "built no Document or that Document's own script never ran, and every srcdoc row below this one "
+             "is unscored rather than failing");
+    fold_row(&sdrun_tt, &sdrun_why, param_value_is(js, "https://x.test/api/sdrun", "v", "ran"),
+             "the srcdoc Document's script ran and /api/sdrun's `v` is not `ran`, which is a literal in the "
+             "document — so the request was composed from something other than the constant beside it");
+    /* §2.4.3's FALLBACK BASE URL, asked of the one class whose step 1 is an assert. The resolution is Fetch
+       §5.4 step 5's parse of `sdbase` against the API base URL, read in the frame through `Request.url` — the
+       endpoint surface reports a fetch's address as the page wrote it, so it cannot carry this. */
+    const char *sdbase_why = NULL;
+ int sdbase_tt = 1;
+    fold_row(&sdbase_tt, &sdbase_why, !!strstr(js, "\"https://x.test/api/sdbase\""),
+             "there is no /api/sdbase record: the ONLY relative reference in the srcdoc Document resolved to "
+             "nothing, so §4.2.3's freeze of `/api/` against §2.4.3's fallback base URL did not produce a "
+             "usable base. `about:srcdoc` has an opaque path and can be no base, so this is what a NULL about "
+             "base URL looks like from the page — read /api/sdrun first: if that row stands, the Document was "
+             "built and ran, and the about base URL is the thing that was missing when its tree was walked");
+    fold_row(&sdbase_tt, &sdbase_why, param_value_is(js, "https://x.test/api/sdbase", "v", "rel"),
+             "/api/sdbase's `v` is not `rel`: `new Request('sdbase').url` inside the srcdoc frame is not "
+             "https://x.test/api/sdbase, so the frame's base URL is not `/api/` frozen against its about base "
+             "URL (the parent's https://x.test/p)");
+    /* §4.8.5's CLASS IS NOT ITS ADDRESS — a Document built INSIDE the frame by an algorithm that is not a
+       navigation takes its source's URL and gets no about base URL, so it is addressed `about:srcdoc` with a
+       legitimately null one. A step 1 keyed on the address asserted on it, which is a page-reachable abort. */
+    const char *sdclone_why = NULL;
+ int sdclone_tt = 1;
+    fold_row(&sdclone_tt, &sdclone_why, !!strstr(js, "\"https://x.test/api/sdclone\""),
+             "there is no /api/sdclone record: `document.cloneNode(true)` inside the srcdoc frame did not "
+             "reach its fetch. If /api/sdrun stands, the frame ran and this statement is where it stopped — "
+             "which is the shape a §2.4.3 step 1 keyed on the ADDRESS rather than on §4.8.5's class produces, "
+             "since the copy is addressed `about:srcdoc` and no clone is a navigation");
+    fold_row(&sdclone_tt, &sdclone_why, param_value_is(js, "https://x.test/api/sdclone", "v", "cloned"),
+             "the clone ran and /api/sdclone's `v` is not `cloned` — the copy is the same object as the "
+             "Document it was made from, which no reading of DOM §4.4's clone produces");
+    const char *sdparse_why = NULL;
+ int sdparse_tt = 1;
+    fold_row(&sdparse_tt, &sdparse_why, !!strstr(js, "\"https://x.test/api/sdparse\""),
+             "there is no /api/sdparse record: `new DOMParser().parseFromString(...)` inside the srcdoc frame "
+             "did not reach its fetch. Read /api/sdclone first — it is the SAME creation reached by the other "
+             "of its two callers, so the pair says whether this is the creation or the member");
+    fold_row(&sdparse_tt, &sdparse_why, param_value_is(js, "https://x.test/api/sdparse", "v", "built"),
+             "the parse ran and /api/sdparse's `v` is not `built` — the parsed Document does not contain the "
+             "element its own markup names");
+    /* AND THE OTHER DIRECTION: `<iframe src=\"about:srcdoc\">` takes §4.8.5's `Otherwise` arm, so it is NOT of
+       the class, while §7.4.2.2 gives it an about base URL regardless. §2.4.3 must therefore reach step 3 and
+       answer its OWN address. `initial` is ACCEPTED by both rows: the navigation not having landed is a fact
+       about the schedule, and the claim here is only that the creator's base URL is never the answer. */
+    const char *sdsync_why = NULL;
+ int sdsync_tt = 1;
+    fold_row(&sdsync_tt, &sdsync_why, !!strstr(js, "\"/api/sdsync\""),
+             "there is no /api/sdsync record: the parent never read through the `about:srcdoc` frame at all, "
+             "so both rows of this pair are unscored rather than failing");
+    fold_row(&sdsync_tt, &sdsync_why,
+             param_value_is(js, "/api/sdsync", "v", "ownaddr") ||
+             param_value_is(js, "/api/sdsync", "v", "initial"),
+             "the parent read through the `about:srcdoc` frame and got neither `ownaddr` nor `initial`. "
+             "`inherited` is the retired answer — §2.4.3 returning the CREATOR's base URL for a Document that "
+             "is not an iframe srcdoc document, which is what an address-shaped step 1 answers and what "
+             "§4.8.5's `Otherwise` arm forbids; `otheraddr` is a third address no reading predicts");
+    const char *sdother_why = NULL;
+ int sdother_tt = 1;
+    fold_row(&sdother_tt, &sdother_why, !!strstr(js, "\"/api/sdotherwise\""),
+             "there is no /api/sdotherwise record: the timer that re-reads the `about:srcdoc` frame never "
+             "fired. That is the SCHEDULE and not §2.4.3");
+    fold_row(&sdother_tt, &sdother_why,
+             param_value_is(js, "/api/sdotherwise", "v", "ownaddr") ||
+             param_value_is(js, "/api/sdotherwise", "v", "initial"),
+             "the timer re-read the `about:srcdoc` frame and got neither `ownaddr` nor `initial` — see "
+             "/api/sdsync's row for what the two remaining tokens mean");
+    /* A FLOW'S FIRST CREATION BESIDE THE BASELINE'S: the baseline names its parse-created frames under a history
+       no flow's can begin with (solver/world.c's world_mint_doc), so the boot flow's script-created frame is a
+       document of its own and not one of theirs under a shared name. */
+    const char *sdmint_why = NULL;
+ int sdmint_tt = 1;
+    fold_row(&sdmint_tt, &sdmint_why, !!strstr(js, "\"/api/sdmint\""),
+             "there is no /api/sdmint record: the parent's script never reached the fetch after creating its own "
+             "frame. Read /api/sdsync, the next statement's row, to tell the creation from the schedule");
+    fold_row(&sdmint_tt, &sdmint_why, param_value_is(js, "/api/sdmint", "v", "own"),
+             "/api/sdmint's `v` is not `own`: the frame the boot flow created answered with the Window of a frame "
+             "the baseline created, or its document is not its initial about:blank — one name, two creations");
+    const Probe rows[] = {
+        /* §4.8.5's srcdoc documents. `srcdoc-fallback-base` is KEYED ON THE FETCH'S OWN ARGUMENT and not on
+           the address it produces, because the address is what the ENGINE composes out of the frame's
+           `<base href>` and this literal — the key names a statement the document makes, exactly as
+           `realm-reclaim` above does. */
+        { "srcdoc-script-ran", sdrun_tt, "/api/sdrun", SESS_EXPLORE, sdrun_why },
+        { "srcdoc-fallback-base", sdbase_tt, "/api/sdbase", SESS_EXPLORE, sdbase_why },
+        { "srcdoc-clone-not-class", sdclone_tt, "/api/sdclone", SESS_EXPLORE, sdclone_why },
+        { "srcdoc-domparser-not-class", sdparse_tt, "/api/sdparse", SESS_EXPLORE, sdparse_why },
+        { "srcdoc-otherwise-sync", sdsync_tt, "/api/sdsync", SESS_EXPLORE, sdsync_why },
+        { "srcdoc-otherwise-timer", sdother_tt, "/api/sdotherwise", SESS_EXPLORE, sdother_why },
+        { "srcdoc-script-child-own", sdmint_tt, "/api/sdmint", SESS_EXPLORE, sdmint_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `dom` document. */
+TF_UNIT void probes_dom(const char *js, Probe *tab, int *n) {
+    /* Web IDL §3.7.6 Attributes: an enumeration attribute's setter ignores a string outside the enumeration.
+       The fixture assigns 'manual' then 'bogus' to `history.scrollRestoration`; each value names one outcome. */
+    int scrign_tt = 1;
+    const char *scrign_why = NULL;
+    fold_row(&scrign_tt, &scrign_why, strstr(js, "\"/api/scrign\"") != NULL,
+             "NOT REACHED: there is no /api/scrign record, so the enumeration setter statement did not run");
+    fold_row(&scrign_tt, &scrign_why, !emitted_record_has(js, "/api/scrign", "threw"),
+             "Web IDL §3.7.6's setter THREW on a string outside the enumeration; an attribute setter ignores "
+             "it and only an operation argument throws");
+    fold_row(&scrign_tt, &scrign_why, !emitted_record_has(js, "/api/scrign", "changed"),
+             "Web IDL §3.7.6's setter STORED a string outside the enumeration; the attribute must keep 'manual'");
+    fold_row(&scrign_tt, &scrign_why, emitted_record_has(js, "/api/scrign", "isignored"),
+             "the /api/scrign record carries no `isignored` value");
     /* DOM §7.1 Interface DOMTokenList's `contains` OVER AN UNKNOWN TOKEN, in the three rows the three states
        need. `cl-unknown-ran` is
        the member answering a token the document DETERMINED, so its 0 is "this statement did not run" and
@@ -12607,37 +13635,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int clunk_tt     = emitted_record_has(js, "/api/clunknown",
                                           "\"name\":\"v\",\"location\":\"query\",\"valueClass\":\"unknown\"") &&
                        param_value_is(js, "/api/clunknown", "v", "false");
-
-    /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
-       both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
-       arm and the sibling is never reached. Both arms present is the whole claim.
-       AND `touch` WAS ENTAILED BY THIS ROW'S OWN FIRST CLAUSE. The world token is a substring of the very
-       endpoint the presence clause asks for — `"/api/touch"` CONTAINS `touch` — so the two-world row was a
-       one-clause row: reaching the statement at all satisfied both terms, and the `mouse` arm was the only
-       thing it could ever lose. `untouched`, which the §4.4 clone statement emits, satisfied it too.
-       THE OTHER TWO GO THE SAME WAY, and not because they were caught lying: `other` is a substring of the
-       `https://other.test/p` this document opens, and nothing in the layout pair collides today. A mint is a
-       claim about every token the document will EVER emit and scoping is the only proof of it, so a row that
-       is safe by inspection and one that is safe by construction must not sit in one block looking alike. */
-    const char *uafork_why = NULL; int uafork_tt = 1;
-    FORK_ROW(js, &uafork_tt, &uafork_why, "/api/uafork", "v",
-             "the UA-sniff gate, whose concolic userAgent must fork rather than decide on its example",
-             "chrome", "other");
-    const char *touchfork_why = NULL; int touchfork_tt = 1;
-    FORK_ROW(js, &touchfork_tt, &touchfork_why, "/api/touch", "v",
-             "the touch gate, whose concolic maxTouchPoints must fork rather than decide on its example",
-             "touch", "mouse");
-    const char *layoutfork_why = NULL; int layoutfork_tt = 1;
-    FORK_ROW(js, &layoutfork_tt, &layoutfork_why, "/api/layout", "v",
-             "the viewport gate, whose concolic screen.width must fork rather than decide on its example",
-             "mobile", "desktop");
     /* §2.7's FLATTENING OVER AN UNKNOWN OPTIONS BAG, and it is the SAME claim one level below the union arm:
        Web IDL §3.2.25 picks the arm, DOM §2.7's flatten options step 2 reads `capture` off it, and the value
        it reads is another unknown — so ONE registration is a capturing listener AND a bubbling one, which the
        dispatch distinguishes by the phase each runs at. Both phases present is the whole claim; either alone
        is a ToBoolean pinning the flag at the boundary, which is what the plain reader did and which made the
        arm fork above it half-useless. */
-    const char *aelunk_why = NULL; int aelunk_tt = 1;
+    const char *aelunk_why = NULL;
+ int aelunk_tt = 1;
     FORK_ROW(js, &aelunk_tt, &aelunk_why, "/api/aelunk", "v",
              "DOM §2.7's flatten-options step 2 reading `capture` off an UNKNOWN options bag, which is one "
              "registration that must be both a capturing listener and a bubbling one",
@@ -12652,16 +13657,19 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        `boolctl` IS THE NEGATIVE CONTROL AND IT ASSERTS AN ABSENCE: `toggle('bctl', true)` is a value the page
        determined, so §3.2.3 runs the real coercion and no fork happens — `ctloff` appearing at all would mean
        the conversion forks concrete values too, which passes every positive row above while being wrong. */
-    const char *boolarg_why = NULL; int boolarg_tt = 1;
+    const char *boolarg_why = NULL;
+ int boolarg_tt = 1;
     FORK_ROW(js, &boolarg_tt, &boolarg_why, "/api/boolarg", "v",
              "Web IDL §3.2.3 boolean at a TYPE-LIST ARGUMENT position over an unknown — ECMAScript §7.1.2 "
              "ToBoolean answers true for every concolic, so a single world is the collapse",
              "boolon", "booloff");
-    const char *boolattr_why = NULL; int boolattr_tt = 1;
+    const char *boolattr_why = NULL;
+ int boolattr_tt = 1;
     FORK_ROW(js, &boolattr_tt, &boolattr_why, "/api/boolattr", "v",
              "Web IDL §3.2.3 boolean at a [Reflect]ed CONTENT ATTRIBUTE's setter over an unknown",
              "attrset", "attrclear");
-    const char *boolclone_why = NULL; int boolclone_tt = 1;
+    const char *boolclone_why = NULL;
+ int boolclone_tt = 1;
     FORK_ROW(js, &boolclone_tt, &boolclone_why, "/api/boolclone", "v",
              "Web IDL §3.2.3 boolean at an argument of a STEP MACHINE (cloneNode's `deep`) over an unknown",
              "clonedeep", "cloneshallow");
@@ -12670,7 +13678,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        appearing at all would mean the conversion forks concrete values too, which passes every positive row
        above while being wrong. The positive half is scoped like every other world clause; the negative half
        stays whole-document, because a superstring or a neighbouring record can only make it fail EARLY. */
-    const char *boolctl_why = NULL; int boolctl_tt = 1;
+    const char *boolctl_why = NULL;
+ int boolctl_tt = 1;
     fold_row(&boolctl_tt, &boolctl_why, !!strstr(js, "\"/api/boolctl\""),
              "NOT REACHED: there is no /api/boolctl record at all, so the negative control did not run and "
              "says nothing about §3.2.3. That is the SCHEDULE");
@@ -12681,42 +13690,6 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "§3.2.3 forked a CONCRETE boolean: `ctloff` is in the document, so the conversion forks values "
              "the page determined and every positive boolean row above is passing for the wrong reason. "
              "Deliberately asked of the WHOLE document — that world existing anywhere is the finding");
-    /* THE BITWISE/SHIFT FAMILY OVER UNKNOWN INPUT. Both arms present is the whole claim: a `&` whose result
-       collapsed to a bare number (or to NaN) decides the branch and the sibling is never reached, which is
-       precisely the coverage §Re-execution means by "opacity SURVIVES numeric coercion". `bwhash` asserts only
-       that the shift/xor chain COMPLETED — before the family had concolic semantics it aborted the document,
-       so the endpoint's existence is the measurement. `bwtramp` is the mixed shape: an unknown on the left and
-       the page's own suspending valueOf on the right. */
-    const char *bwfork_why = NULL; int bwfork_tt = 1;
-    FORK_ROW(js, &bwfork_tt, &bwfork_why, "/api/bwfork", "v",
-             "a `&` over unknown input keeping its opacity — a result that collapsed to a bare number (or to "
-             "NaN) decides the branch and the sibling endpoint is never reached",
-             "bwwide", "bwnarrow");
-    int bwhash_tt  = (strstr(js, "\"/api/bwhash\"") != NULL);
-    const char *bwtramp_why = NULL; int bwtramp_tt = 1;
-    FORK_ROW(js, &bwtramp_tt, &bwtramp_why, "/api/bwtramp", "v",
-             "the MIXED shape — an unknown on the left of the `&` and the page's own suspending valueOf on "
-             "the right, so the operand is resolved through the tramp and the result is still opaque",
-             "bwand", "bwzero");
-    /* the controller's `abort` listener actually ran, and the timeout's unknown flag forked both ways.
-       SCOPED: `fired` is a substring of `/api/unkdelay/fired`, the endpoint the §8.7 unknown-timeout statement
-       learns from its own timer callback — so a bare `fired` term reads 1 out of THAT record's url and cannot
-       tell a listener that ran from one that never did. */
-    const char *abortfire_why = NULL; int abortfire_tt = 1;
-    fold_row(&abortfire_tt, &abortfire_why, !!strstr(js, "\"/api/aborted\""),
-             "NOT REACHED: there is no /api/aborted record at all, so this run did not answer the statement");
-    fold_row(&abortfire_tt, &abortfire_why, param_value_is(js, "/api/aborted", "v", "fired"),
-             "the AbortSignal's `abort` listener did not run as a real event on this flow — `v` is not `fired`");
-    /* a DOMString argument coerced through the PAGE's toString (with a loop in it), then used as the real
-       event type — the listener firing proves the coerced value was the one it registered under */
-    const char *idlcoerce_why = NULL; int idlcoerce_tt = 1;
-    fold_row(&idlcoerce_tt, &idlcoerce_why, !!strstr(js, "\"/api/idlcoerce\""),
-             "NOT REACHED: there is no /api/idlcoerce record at all, so the listener registered under the "
-             "coerced type never fired. That is the SCHEDULE");
-    fold_row(&idlcoerce_tt, &idlcoerce_why, param_value_is(js, "/api/idlcoerce", "v", "coerced"),
-             "the listener FIRED and /api/idlcoerce's `v` is not `coerced` — the DOMString argument was "
-             "registered under something other than what the page's own toString returned, so the machine "
-             "did not park on step_tostring_run and resume at the exact stage");
     /* THE DOM INTERFACES. Each is one spec sentence the components used to get wrong, and each answers with a
        token that only the correct behaviour can produce — `percopy`/`wrong`/`child` are what the old code said.
        TWO OF THE FIVE COULD NOT FAIL. `shared` is a substring of `/api/shared`, the endpoint the promise-state
@@ -12725,7 +13698,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        calling it five. Each is now asked of its own endpoint's own param, and the negatives are asked of that
        param too: a value that is neither spelling is what a fork or a dropped param produces, and that is a
        finding, not a match. */
-    const char *domproto_why = NULL; int domproto_tt = 1;
+    const char *domproto_why = NULL;
+ int domproto_tt = 1;
     fold_row(&domproto_tt, &domproto_why, !!strstr(js, "\"/api/protoid\""),
              "NOT REACHED: there is no /api/protoid record at all, so this run did not answer the statement");
     fold_row(&domproto_tt, &domproto_why, param_value_is(js, "/api/protoid", "v", "shared"),
@@ -12734,7 +13708,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&domproto_tt, &domproto_why, !param_value_is(js, "/api/protoid", "v", "percopy"),
              "§4.4 a per-element copy of the member EXISTS: /api/protoid's `v` carries `percopy`, which is "
              "the answer the old code gave and must not be one this run can still produce");
-    const char *cdnull_why = NULL; int cdnull_tt = 1;
+    const char *cdnull_why = NULL;
+ int cdnull_tt = 1;
     fold_row(&cdnull_tt, &cdnull_why, !!strstr(js, "\"/api/cdnull\""),
              "NOT REACHED: there is no /api/cdnull record at all, so this run did not answer the statement");
     fold_row(&cdnull_tt, &cdnull_why, param_value_is(js, "/api/cdnull", "v", "empty"),
@@ -12745,7 +13720,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        document it was answered by any absent value anywhere, and what it appeared to assert (that THIS node's
        `nodeValue` read back null) was never measured. `nochild` and `tcSET` were unique bytes and still named
        no record, so a seam that filed either under another endpoint satisfied the row. */
-    const char *tcnull_why = NULL; int tcnull_tt = 1;
+    const char *tcnull_why = NULL;
+ int tcnull_tt = 1;
     fold_row(&tcnull_tt, &tcnull_why, !!strstr(js, "\"/api/tcnull\""),
              "NOT REACHED: there is no /api/tcnull record at all, so this run did not answer the statement");
     fold_row(&tcnull_tt, &tcnull_why, param_value_is(js, "/api/tcnull", "v", "nochild"),
@@ -12754,12 +13730,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&tcnull_tt, &tcnull_why, !param_value_is(js, "/api/tcnull", "v", "child"),
              "§4.9.3 textContent set to null left a child behind — /api/tcnull's `v` carries `child`, which "
              "is the four-character string `null` having been inserted as a text node");
-    const char *nodeval_why = NULL; int nodeval_tt = 1;
+    const char *nodeval_why = NULL;
+ int nodeval_tt = 1;
     fold_row(&nodeval_tt, &nodeval_why, !!strstr(js, "\"/api/nodeval\""),
              "NOT REACHED: there is no /api/nodeval record at all, so this run did not answer the statement");
     fold_row(&nodeval_tt, &nodeval_why, param_value_is(js, "/api/nodeval", "v", "null"),
              "§4.4 `nodeValue` on an ELEMENT is not null: /api/nodeval's `v` does not carry `null`");
-    const char *tcset_why = NULL; int tcset_tt = 1;
+    const char *tcset_why = NULL;
+ int tcset_tt = 1;
     fold_row(&tcset_tt, &tcset_why, !!strstr(js, "\"/api/tcset\""),
              "NOT REACHED: there is no /api/tcset record at all, so this run did not answer the statement");
     fold_row(&tcset_tt, &tcset_why, param_value_is(js, "/api/tcset", "v", "tcSET"),
@@ -12790,145 +13768,23 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        address, and a check that counted RECORDS refused the statement it was written to read — offering two
        remedies neither of which exists, since one `fetch` cannot be named apart and the whole address reaches
        both arms exactly as the prefix does. */
-    const char *addfork_why = NULL; int addfork_tt = 1;
+    const char *addfork_why = NULL;
+ int addfork_tt = 1;
     FORK_ROW(js, &addfork_tt, &addfork_why, "/api/addfork", "v",
              "§13.15.3 step 1.c keeping the SUM unknown — an arm that answered with a bare number would "
              "decide the branch and lose one of the two endpoints",
              "addpos", "addneg");
-    const char *addnum_why = NULL; int addnum_tt = 1;
+    const char *addnum_why = NULL;
+ int addnum_tt = 1;
     fold_row(&addnum_tt, &addnum_why, emitted_record_prefix_has(js, "/api/addnum/", "\"v1000000\""),
              "§6.1.6.1.7 Number::add ( x, y ) did not leave `v1000000` on the /api/addnum/ record: either "
              "there is no such record at all (the statement never ran) or the segment came back "
              "`v19200998080`, which is what a STRING concatenation leaves when `num` did not cancel");
-    const char *addstr_why = NULL; int addstr_tt = 1;
+    const char *addstr_why = NULL;
+ int addstr_tt = 1;
     fold_row(&addstr_tt, &addstr_why, emitted_record_prefix_has(js, "/api/addstr/", "\"r1920\""),
              "§13.15.3 step 1.c's STRING arm did not leave `r1920` on the /api/addstr/ record — a String on "
              "either side takes step 1.c whatever the other side's example is, so this must not move");
-    /* HTML §4.12.1.1's "immediately execute the script element", inside the appendChild that connects it (see
-       the statement). The match is exact: `ABXC` (deferred to after the injector) and `ABC` (taken to the
-       tail) are the two wrong orders, and neither may satisfy the row. */
-    const char *scriptorder_why = NULL; int scriptorder_tt = 1;
-    fold_row(&scriptorder_tt, &scriptorder_why, !!strstr(js, "\"/api/scriptorder\""),
-             "NOT REACHED: there is no /api/scriptorder record at all, so the reporting <script> never ran. "
-             "That is the SCHEDULE");
-    fold_row(&scriptorder_tt, &scriptorder_why, param_value_only(js, "/api/scriptorder", "seq", "AXBC"),
-             "§4.12.1.1 the injected inline script did not run inside the appendChild that connected it: "
-             "/api/scriptorder's `seq` is not exactly `AXBC`. `ABXC` is it deferred to after the <script> "
-             "that injected it, `ABC` is it taken to the tail. Asked as `_only` because the sequence is a "
-             "value the document determined");
-
-    /* HTML §3.1.7's `currentScript`, in THREE rows because these are three independent claims and one boolean
-       over them would say only that one of three unrelated things is wrong.
-       `current-script` is the GETTER: the running element, answered per element, with §4.12.1.1's classic arm
-       having set it — `csA:inline|csC` is script A's own id and the absence of a `src` on it, reported by
-       script C under C's own id. A slot that leaked between programs reads `csA:inline|csA`; a slot that leaked
-       between FLOWS reads `csINJ` for the arm that did not inject.
-       `current-script-restore` is STEP 4 observed from outside the bracket — the timer task and the module arm
-       both have to see null, and they are one row because they are one claim about the slot being empty when
-       no script element is executing.
-       `current-script-inject` is the arm that INJECTED: §4.12.1.1's "immediately execute the script element"
-       runs `csINJ` at the slot after the program that appended it, and the element that program reads is its
-       OWN — not the one that injected it, which is what a slot written by the injecting program would give. */
-    const char *cscurrent_why = NULL; int cscurrent_tt = 1;
-    fold_row(&cscurrent_tt, &cscurrent_why, !!strstr(js, "\"/api/csend\""),
-             "NOT REACHED: there is no /api/csend record at all, so script C never ran. That is the SCHEDULE");
-    fold_row(&cscurrent_tt, &cscurrent_why, param_value_is(js, "/api/csend", "el", "csA:inline|csC"),
-             "§4.12.1.1's classic arm did not answer `currentScript` per element: /api/csend's `el` is not "
-             "`csA:inline|csC`. `csA:inline|csA` is a slot that leaked between PROGRAMS and `csINJ` is one "
-             "that leaked between FLOWS — both are this clause failing, and the value it carries says which");
-    /* TWO RECORDS AND A WHOLE-DOCUMENT ABSENCE, WHICH IS THREE CLAUSES AND WAS ONE BYTE. The timer task and
-       the module arm are two different observers of step 4, and either one missing is a different machine —
-       folded, the row said only that one of three unrelated things was wrong. */
-    const char *csrestore_why = NULL; int csrestore_tt = 1;
-    fold_row(&csrestore_tt, &csrestore_why, !!strstr(js, "\"/api/cstimer\""),
-             "NOT REACHED: there is no /api/cstimer record at all, so §4.12.1.1 step 4 was never observed "
-             "from a TIMER TASK. That is the SCHEDULE");
-    fold_row(&csrestore_tt, &csrestore_why, !!strstr(js, "\"/api/csmod\""),
-             "NOT REACHED: there is no /api/csmod record at all, so §4.12.1.1 step 4 was never observed from "
-             "the MODULE arm. That is the SCHEDULE, and it is a different observer from the timer above");
-    fold_row(&csrestore_tt, &csrestore_why, !strstr(js, "\"LEAK\""),
-             "§4.12.1.1 step 4 did not empty the slot: one of the two observers saw an element while no "
-             "script was executing. Deliberately asked of the WHOLE document — a leak seen by either "
-             "observer is the finding, and an absence is the only thing that can prove this half");
-    const char *csinject_why = NULL; int csinject_tt = 1;
-    fold_row(&csinject_tt, &csinject_why, !!strstr(js, "\"/api/csinj\""),
-             "NOT REACHED: there is no /api/csinj record at all, so the injected program never ran. That is "
-             "the SCHEDULE");
-    fold_row(&csinject_tt, &csinject_why, param_value_is(js, "/api/csinj", "el", "csINJ"),
-             "§4.12.1.1's \"immediately execute the script element\" read the WRONG element: /api/csinj's "
-             "`el` is not `csINJ`, so the injected program saw the element that injected it rather than its "
-             "own — a slot written by the injecting program");
-    /* HTML §13.2.7 "The end": step 3's "interactive" precedes step 5's deferred scripts, and an inline script
-       the parser runs still sees "loading". `ev` empty is no `readystatechange` before the module. */
-    const char *rsmod_why = NULL; int rsmod_tt = 1;
-    fold_row(&rsmod_tt, &rsmod_why, !!strstr(js, "\"/api/rsmod\""),
-             "NOT REACHED: there is no /api/rsmod record at all, so the module script never ran. That is the "
-             "SCHEDULE");
-    fold_row(&rsmod_tt, &rsmod_why, param_value_is(js, "/api/rsmod", "at", "loading"),
-             "a parser-inserted inline script did not see \"loading\": /api/rsmod's `at` is not `loading`, so "
-             "the readiness moved before the parse stopped");
-    fold_row(&rsmod_tt, &rsmod_why, param_value_is(js, "/api/rsmod", "rs", "interactive"),
-             "§13.2.7 step 3 had not run when step 5 executed the module script: /api/rsmod's `rs` is not "
-             "`interactive` (`loading` is the readiness moved at DOMContentLoaded instead)");
-    fold_row(&rsmod_tt, &rsmod_why, param_value_is(js, "/api/rsmod", "ev", "interactive"),
-             "§3.1.5 step 4's `readystatechange` for step 3 did not reach the listener before the module ran: "
-             "/api/rsmod's `ev` is not `interactive`");
-    /* §8.1.4.4's MODULE ENTRY AND ITS PARK SEAM — TWO ROWS, BECAUSE THEY ARE TWO DIFFERENT DIFFS.
-       THIS DOCUMENT'S MODULE OBSERVATIONS WERE ALL BEHIND A RUNG ABOUT SOMETHING ELSE. `/api/csmod` above is
-       rung TWO of `current-script-restore`, whose rung ONE is a TIMER record, so while the timer is unreached
-       nothing reports on the module arm at all — it could stop running entirely and no row here would move.
-       That is the three-states-behind-one-answer this file's readers exist to refuse, and it is why the rows
-       below ask of an endpoint NO other statement in this document can emit.
-       THE STATEMENT COMPILES ONLY THROUGH THE MODULE ENTRY, which is what makes rung 1 a claim about
-       §8.1.4.4 rather than about a counter: it carries a TOP-LEVEL `await`, which ECMAScript §16.2.1.6
-       ParseModule accepts and §16.1.6 ParseScript refuses. A loader that classified the row CLASSIC would
-       fail the compile and emit neither record, so a record here IS the module algorithm having run.
-       THE TWO ROWS ARE ENTAILED AND ARE STILL TWO ROWS. `module-tla` implies `module-entry` — a body cannot
-       resume past an await it never reached — so folded they would read as one 0 for either of two opposite
-       repairs: the loader's classification of the row, and the flow machinery's park/resume of an async
-       module body. Split, the pair NAMES which. */
-    const char *modentry_why = NULL; int modentry_tt = 1;
-    fold_row(&modentry_tt, &modentry_why, !!strstr(js, "\"/api/modreach\""),
-             "NOT REACHED: there is no /api/modreach record at all, so §8.1.4.4's MODULE entry never ran this "
-             "document's module. The source carries a top-level `await`, which §16.1.6 ParseScript refuses, so "
-             "a CLASSIC classification of this row fails the compile and emits nothing — read the "
-             "`program-did-not-compile` step-unit row beside this one to tell that from the SCHEDULE");
-    const char *modtla_why = NULL; int modtla_tt = 1;
-    fold_row(&modtla_tt, &modtla_why, !!strstr(js, "\"/api/modreach\""),
-             "NOT REACHED: there is no /api/modreach record at all, so the module body never began and the "
-             "await below it was never reached. That is `module-entry`'s finding, not this row's");
-    fold_row(&modtla_tt, &modtla_why, param_value_is(js, "/api/modtla", "w", "resumed"),
-             "the module body BEGAN and did not come back from its top-level `await`: /api/modreach is here "
-             "and /api/modtla is not. §16.2.1.6.1.3.1's async-evaluated body parks into the slot "
-             "JS_ResumeParkedFlow drains at the top of the scheduler loop, so a continuation that never "
-             "resumed is the park seam dropping a module's frame where it carries every other flow's — and "
-             "a module whose evaluation never completes leaves its promise pending for ever");
-    /* §16.2.1.7.3.1 InitializeEnvironment's BINDING, asked at the module body's own level and again from two
-       closures down. The pair is entailed — the nested read cannot be reported on while the statement has not
-       run — and the statement that answers them names WHICH of two opposite repairs a 0 is: the prologue that
-       initializes the cell, or the closure-variable chain that reaches it. */
-    const char *mfdtop_why = NULL; int mfdtop_tt = 1;
-    fold_row(&mfdtop_tt, &mfdtop_why, param_value_is(js, "/api/mfdtop", "d", "ok"),
-             "the module's top-level FUNCTION DECLARATION is not a function at the module body's own level. "
-             "§16.2.1.7.3.1's lexical pass runs InstantiateFunctionObject and InitializeBinding for it BEFORE "
-             "§16.2.1.7.3.2 ExecuteModule, so no point in this body can observe a pre-instantiation value — "
-             "read the `d` param: `undefined` is the binding born VAR-shaped and read as a plausible datum, "
-             "and an ABSENT record is the statement not having run at all, which this row cannot tell from a "
-             "document whose tail no program reached");
-    const char *mfdnest_why = NULL; int mfdnest_tt = 1;
-    fold_row(&mfdnest_tt, &mfdnest_why, !!strstr(js, "\"/api/mfdtop\""),
-             "NOT REACHED: there is no /api/mfdtop record at all, so the module statement this row is about "
-             "never ran and the closure chain below it was never exercised. That is `mfd-top`'s finding, not "
-             "this row's");
-    fold_row(&mfdnest_tt, &mfdnest_why, param_value_is(js, "/api/mfdnest", "d", "Fok"),
-             "the module's top-level FUNCTION DECLARATION resolved at the module body's own level and NOT from "
-             "two FunctionExpression levels below it: /api/mfdtop carries `ok` and /api/mfdnest does not carry "
-             "`Fok`. The binding is one Module Environment Record cell either way, so the two reads cannot "
-             "disagree about §16.2.1.7.3.1 — what differs is the CHAIN get_closure_var builds from the use "
-             "down through each nesting level, which is where a lost or mis-indexed closure variable makes a "
-             "correctly-initialized cell read as `undefined` at a call the page then reports as `not a "
-             "function` arbitrarily far from the module. This is the shape a real ESM chunk's `@swc/helpers` "
-             "shim has, so a 0 here is a whole bundle's endpoints lost on line 1");
     /* The §4.4 algorithms, each proved by its own endpoint carrying a token only the right answer produces.
        READ INSIDE THE ENDPOINT'S OWN RECORD, which is what the address column is for and is the whole reason
        it is no longer written quoted. Spelled as two whole-document `strstr`s this was a hundred-odd
@@ -13034,7 +13890,548 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
         fold_row(&nodealgo_tt, &nodealgo_why,
                  emitted_record_has(js, NODE_ALGOS[ai][0], NODE_ALGOS[ai][1]), NODE_ALGOS[ai][0]);
+    /* §8.1.4.6'S ERROR-REPORTING-MODE GUARD, READ FROM THE OUTSIDE — the half `/api/reporterrormode` cannot
+     * see. That rung asserts the inner `reportError` fired NOTHING and returned `undefined`; this one asserts
+     * the consequence that makes the guard observable to a page at all, which is that the inner exception is
+     * REPORTED. Both are facts about one condition, and a build that skipped the fire and then ALSO swallowed
+     * the exception would pass the inside rung and fail this one — which is precisely the regression a
+     * fixture with only the inside rung cannot distinguish from correct behaviour.
+     * IT IS NOT A NEW CAPABILITY AND WAS NOT A NEW DEFECT. This announcement has been in every run of this
+     * fixture, counted as `1 UNSTAGED UNCAUGHT PAGE ERROR` because the edge table declared no pair for it, so
+     * what landed here is a row where a standing unexplained line was — which is the better trade by this
+     * file's own rule: a declaration EXCUSES an error and a row CHECKS it, and the two cost the same. */
+    const TfErrEdges *e_remode = tf_err_edges("reentrant");
+    const char *remodereport_why = NULL;
+ int remodereport_tt = 1;
+    fold_row(&remodereport_tt, &remodereport_why, e_remode->stands > 0,
+             "NOT REACHED: the stream never announced `reentrant`, so the exception the INNER `reportError` "
+             "was handed went unreported — HTML §8.1.4.6 \"Runtime script errors\" encloses the whole fire in "
+             "\"if global is not in error reporting mode\", so a call made from inside an `error` listener "
+             "offers no listener the chance to cancel and reaches the report with notHandled still true. An "
+             "absent announcement is therefore either the inner call not running at all — which "
+             "`/api/reporterrormode`'s own rung would also fail — or this engine swallowing an exception the "
+             "standard reports");
+    fold_row(&remodereport_tt, &remodereport_why, e_remode->retracted == 0,
+             "the stream printed a CORRECTION for `reentrant` — a reported exception is not a rejection and "
+             "has no handler that could arrive later, so a retraction here is this engine withdrawing a "
+             "report §8.1.4.6 requires it to make");
+    fold_row(&remodereport_tt, &remodereport_why, e_remode->stands_here == e_remode->stands,
+             "`reentrant` was announced from an address that is NOT this document's own — the value is "
+             "constructed and reported by a listener this document installs, so §8.1.4.6's throw site is this "
+             "document and a different one means the position was derived from something other than the "
+             "reported value's own backtrace");
+    fold_row(&remodereport_tt, &remodereport_why, tf_err_listed(js, "pageErrors", "reentrant"),
+             "the stream announced `reentrant` and the result document does not carry it in `pageErrors` — "
+             "the two routes disagree about an error that stands, and a consumer reading only the document "
+             "would be told this page reported nothing");
+    /* FIVE INDEPENDENT SPEC SENTENCES UNDER ONE NAME, FOLDED so the 0 names which one. They are five different
+       components and five different endpoints, so a bare `&&` chain printed one byte for five findings — the
+       same count-with-no-name-in-it this file's own banner refuses one level up.
+       EACH SUB-ROW'S OWN TEXT IS WHAT TRAVELS, not a summary of it written here. A one-line restatement at
+       this level is a SECOND copy of the sub-row's claim, and the copy is the one that rots — it also cannot
+       carry what the sub-row now separates, which is "the statement never ran" against "it ran and answered
+       wrongly". Forwarding the inner `why` is sound because a 0 row always carries one, and `fold_row`'s own
+       DCHECK is where that is asserted rather than assumed. */
+    const char *domidl_why = NULL;
+ int domidl_tt = 1;
+    fold_row(&domidl_tt, &domidl_why, domproto_tt, domproto_why);
+    fold_row(&domidl_tt, &domidl_why, cdnull_tt,   cdnull_why);
+    fold_row(&domidl_tt, &domidl_why, tcnull_tt,   tcnull_why);
+    fold_row(&domidl_tt, &domidl_why, nodeval_tt,  nodeval_why);
+    fold_row(&domidl_tt, &domidl_why, tcset_tt,    tcset_why);
+    /* §State-isolation's PER-FLOW COW DELTA OVER THE EDGE THE DELTA CANNOT SEE — the `nwisoel` statement,
+       whose own banner in HTML_COLD holds the four-state verdict table these two rows are one reading of.
+       THE `ok` IS THE ABSENCE OF A `-sees-` PATH, AND THE ASYMMETRY IS WHAT KEEPS THIS OFF THE FURNITURE
+       LIST. A `-sees-` record is emitted only by an arm that RAN and found an expando it never wrote, so the
+       record's own presence proves BOTH arms reached the statement — the first to arrive always reads
+       undefined — and a red here is therefore a SCORED leak that can never be a reading about the schedule.
+       THE GREEN DIRECTION IS THE WEAK ONE AND IS STATED AS SUCH rather than patched: an absence satisfies it
+       identically to a fix, which is §Testing's prediction-of-an-absence, and `/api/nwiso/reach` is the
+       reachability witness that separates the two. It is deliberately NOT folded in — folding it would make
+       this row RED on any session that does not reach the statement, which is the furniture the statement's
+       author declined to land and which this row exists to avoid re-creating.
+       WHOLE-DOCUMENT AND UNSCOPED ON PURPOSE: both clauses are NEGATIVE, where a needle can only fire EARLY
+       (a superstring makes it unable to pass, never unable to fail), which is the sign this file's own
+       `strstr` rule names as correct for the whole-document form — and each is wrapped in its own JSON
+       quotes, so it is a whole-token match besides. */
+    /* §4.2.4'S VALUE SEAM, AS A TWO-RUNG LADDER, AND THE RUNGS ARE ENTAILED. `byid-seam-reach` is the
+       statement having run at all and `byid-seam` is the fork having been taken, so the lower rung is implied
+       by the upper one and the LOWEST 0 is the localisation — which is the whole reason this is two rows and
+       not one. A folded row would read 0 for "the document never reached the statement" and for "the seam
+       decided one arm" alike, and those take opposite work: the first is a schedule reading and the second is
+       a defect in core/dom/node.c's byid_id_is.
+       WHY `isnot` IS THE REACHABLE ONE rather than an arbitrary choice of control: it is outcome 0, so it is
+       the arm a run with no forking policy takes, AND it is the answer every build gave before the seam
+       existed — the tree holds concolic_shape_c's display shape for a concolic attribute write, so the
+       comparison was against `{location.hash}.slice(1)` and answered false. A build with the seam compiled out
+       therefore reads `reach 1 / seam 0`, which is a scored pre-seam reading and not a lost statement.
+       THE UPPER RUNG IS BANDED BY THE LOWER, so a session that never reached the statement reports the row as
+       unaskable rather than as red — the furniture `#nwisoel`'s author declined to land. */
+    int byid_seam_reach = param_value_is(js, "/api/byidseam", "arm", "isnot");
+    int byid_seam       = param_value_is(js, "/api/byidseam", "arm", "is");
+    const Probe rows[] = {
+        /* THE SAME QUESTION ONE MEMBER OVER: a gate the bundle asks of the DOM rather than of the navigator. */
+        { "cl-unknown-ran", clunk_ran_tt, "/api/clunknown", SESS_EXPLORE },
+        { "cl-unknown-src", clunk_src_tt, "/api/clunknown", SESS_EXPLORE },
+        { "cl-unknown", clunk_tt, "/api/clunknown", SESS_EXPLORE },
+        { "listener-options", aelunk_tt, "/api/aelunk", SESS_EXPLORE, aelunk_why },
+        /* WEB IDL §3.2.3 boolean OVER UNKNOWN INPUT — one row per ROUTE to the one conversion, plus the
+           control that says the fork is not firing on values the page determined. */
+        { "bool-arg", boolarg_tt, "/api/boolarg", SESS_EXPLORE, boolarg_why },
+        { "bool-reflect", boolattr_tt, "/api/boolattr", SESS_EXPLORE, boolattr_why },
+        { "bool-stepmachine", boolclone_tt, "/api/boolclone", SESS_EXPLORE, boolclone_why },
+        { "bool-concrete", boolctl_tt, "/api/boolctl", SESS_EXPLORE, boolctl_why },
+        { "dom-idl", domidl_tt, "/api/protoid", SESS_EXPLORE, domidl_why },
+        { "node-algo", nodealgo_tt, "/api/nodeconst", SESS_EXPLORE, nodealgo_why },
+        /* …AND THE SECOND DOCUMENT-RAISED ONE, whose address column is the document's for the same reason. */
+        { "remode-report", remodereport_tt, "https://x.test/p", SESS_EXPLORE, remodereport_why },
+        { "add-fork", addfork_tt, "/api/addfork", SESS_EXPLORE, addfork_why },
+        { "add-number", addnum_tt, "/api/addnum", SESS_EXPLORE, addnum_why },
+        { "add-string", addstr_tt, "/api/addstr", SESS_EXPLORE, addstr_why },
+        { "idl-enum-setter-ignores", scrign_tt, "/api/scrign", SESS_EXPLORE, scrign_why },
+        /* §4.2.4's id comparison asked about an element whose `id` is a source. The lower rung FIRST, which
+           is this table's own reading convention and what lets the gate below resolve. Keyed on the fetch
+           this statement makes, which is the needle that says the document carrying it is this one. */
+        { "byid-seam-reach", byid_seam_reach, "/api/byidseam?arm=", SESS_EXPLORE,
+          "no `/api/byidseam?arm=isnot` record: the statement that writes a source into `#bidseed`'s `id` and "
+          "then calls getElementById did not run, or ran and emitted nothing. That is a reading about the "
+          "SCHEDULE and not about core/dom/node.c's value seam — `isnot` is outcome 0 and is also the answer "
+          "every build gave before the seam existed, so its absence is the statement missing rather than the "
+          "fork missing" },
+        { "byid-seam", byid_seam, "/api/byidseam?arm=", SESS_EXPLORE,
+          "`/api/byidseam?arm=is` is absent while `arm=isnot` is present: the walk met an element whose `id` "
+          "THIS FLOW HAS NOT DETERMINED and DECIDED the comparison instead of forking it, so the world in "
+          "which that source is `bidwant` was deleted along with every endpoint and sink behind "
+          "`getElementById('bidwant').…`. core/dom/node.c's byid_id_is is the seam: check that "
+          "attr_shadow_count is non-zero (the `setAttribute('id', bidu)` records the taint), that "
+          "dom_cow_attr_taint answers a concolic for the `id` slot, and that concolic_pin_bytes answers NULL "
+          "— a non-NULL pin DECIDES the comparison correctly and legitimately, and would mean this flow's own "
+          "predicate had already fixed the hash, which nothing in this statement does",
+          .gate = "byid-seam-reach" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
 
+/* The rows of the `tokenlist` document. */
+TF_UNIT void probes_tokenlist(const char *js, Probe *tab, int *n) {
+    /* DOM §7.1's `value` setter: §4.9's plain set rather than the update steps, and the source it carries.
+       TWO ROWS, because the two halves fail for different reasons in different components — one is the early
+       return belonging to a caller the standard gives none, the other is the taint shadow's write — and a
+       single marker would report both as one silence. */
+    int clsetempty_tt = 1;
+    const char *clsetempty_why = NULL;
+    fold_row(&clsetempty_tt, &clsetempty_why, !!strstr(js, "\"/api/clsetempty\""),
+             "NOT REACHED: the §7.1 `value` setter statement emitted nothing, so this row says nothing about "
+             "whether the setter is §4.9's plain set. The assignment itself cannot throw -- the empty string "
+             "needs no coercion -- so an absence here is the statements above it having ended the program");
+    fold_row(&clsetempty_tt, &clsetempty_why, param_value_is(js, "/api/clsetempty", "v", "created"),
+             "§7.1's `value` setter assigned \"\" to an element with NO `class` attribute and created none. The "
+             "setter steps are \"set an attribute value for this's element using this's attribute name and the "
+             "given value\" and have no early return; §7.1's UPDATE STEPS do, and their step 1 is what returns "
+             "for an absent attribute and an empty token set. A shared body gives the setter a guard the "
+             "standard does not, so `hasAttribute(\"class\")` reads false where a browser reads true");
+    int cltaint_tt = 1;
+    const char *cltaint_why = NULL;
+    fold_row(&cltaint_tt, &cltaint_why, param_value_is(js, "/api/cltaint", "v", "other"),
+             "NOT REACHED: the unknown-input `value` setter statement emitted neither arm, so this row says "
+             "nothing about the taint shadow. An unknown reaching the setter is converted by token_bytes to "
+             "its SHAPE rather than through a raw coercion, so this is not the C-boundary abort -- it is the "
+             "statement not having run");
+    fold_row(&cltaint_tt, &cltaint_why, param_value_is(js, "/api/cltaint", "v", "fork"),
+             "`el.classList.value = <an unknown>` ran and the attribute read back CONCRETE: the comparison was "
+             "DECIDED where this flow should have forked, so the (element, name) taint shadow holds no source "
+             "for this write. §7.1's setter writes ONE value and it is the whole of the attribute, so the "
+             "shadow's one JSValue per attribute is the right shape here -- the mutation family's is not, and "
+             "the residual at core/dom/dom_token_list.c's update steps says why. HOW THIS COSTS A FINDING: a "
+             "sink fed from the attribute afterwards reports concrete bytes with no source, so no @S search "
+             "starts for a breakout that is real");
+    /* …AND THE MUTATION FAMILY'S OWN COMPOSITION, IN TWO ROWS, because the two halves run different code in
+       one function and a single marker would report both as one silence. `tokenlist-add-taint' is the
+       one-token write, where the serialized value IS the argument's shape and the composition has nothing to
+       concatenate; `tokenlist-add-taint-joint' is a concrete run FOLLOWED BY the shape, which is the call
+       shape that actually reaches the engine's own concatenation. NEITHER GATES THE OTHER and that is a
+       refusal rather than an omission: a gate declares that its row's 0 ENTAILS this one's, and the one-token
+       path can fail while the composed path works (they share only the frame that calls them), so declaring
+       one would assert an implication this fixture cannot establish — which the table's own declaration check
+       is right to abort on. Each row's own control rung carries the not-reached reading instead. */
+    int cladd_tt = 1;
+    const char *cladd_why = NULL;
+    fold_row(&cladd_tt, &cladd_why, param_value_is(js, "/api/claddtaint", "v", "flat"),
+             "NOT REACHED: the one-token `classList.add(<an unknown>)` statement emitted neither arm, so this "
+             "row says nothing about the mutation family's provenance. An unknown reaching `add` is converted "
+             "by token_bytes to its SHAPE rather than through a raw coercion, so this is not the C-boundary "
+             "abort -- it is the statement not having run");
+    fold_row(&cladd_tt, &cladd_why, param_value_is(js, "/api/claddtaint", "v", "lone"),
+             "`el.classList.add(<an unknown>)` ran on an element with no `class` attribute and the attribute "
+             "read back CONCRETE: the comparison was DECIDED where this flow should have forked, so §7.1's "
+             "update steps wrote the argument's shape and no source beside it. The serialized value here is "
+             "that ONE argument's bytes, so there is nothing to compose -- the provenance is the source "
+             "itself, which makes this the rung that separates `the taint does not reach the write at all' "
+             "from `the composition is wrong'. HOW THIS COSTS A FINDING: a sink fed from the attribute "
+             "afterwards reports concrete bytes with no source, so no @S search starts for a breakout that "
+             "is real");
+    int claddj_tt = 1;
+    const char *claddj_why = NULL;
+    fold_row(&claddj_tt, &claddj_why, param_value_is(js, "/api/claddtaint", "v", "bare"),
+             "NOT REACHED: the `setAttribute` + `classList.add(<an unknown>)` pair emitted neither arm, so "
+             "this row says nothing about the composition. The statements above it are what did not run");
+    fold_row(&claddj_tt, &claddj_why, param_value_is(js, "/api/claddtaint", "v", "pair"),
+             "`el.classList.add(<an unknown>)` over an element ALREADY CARRYING a concrete token read back "
+             "CONCRETE where the one-token rung above it forked, so the write reached §7.1's update steps and "
+             "the COMPOSITION is what did not: the serialized value is a concrete run followed by the "
+             "argument's shape, and the provenance of it is that run concatenated with the source through "
+             "the interpreter's own `+` (solver/concolic.h's add hook, installed as JSConcolicHooks.add). A "
+             "value whose SHAPE is the attribute's bytes and whose IDENTITY names the source is what a sink "
+             "reading the whole attribute needs; a concrete read here means it was not minted, or was minted "
+             "and refused for a run whose round trip is not faithful");
+    const Probe rows[] = {
+        /* §7.1's `value` setter, keyed on the control arm for the taint row and on the claim for the other:
+           `clsetempty` has ONE arm, so its endpoint IS its claim, while `cltaint` has two and the key names
+           the one whose absence means the statement did not run. */
+        { "tokenlist-value-creates", clsetempty_tt, "/api/clsetempty", SESS_EXPLORE, clsetempty_why },
+        { "tokenlist-value-taint", cltaint_tt, "cltaint?v=other", SESS_EXPLORE, cltaint_why },
+        { "tokenlist-add-taint", cladd_tt, "claddtaint?v=flat", SESS_EXPLORE, cladd_why },
+        { "tokenlist-add-taint-joint", claddj_tt, "claddtaint?v=bare", SESS_EXPLORE, claddj_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `idb` document. */
+TF_UNIT void probes_idb(const char *js, Probe *tab, int *n) {
+    /* §5.1's open through to `success`, §2.7 + §2.8's request inside it, and §2.5's LIST key path over the
+       store the same upgrade creates — the marker's own sentence-by-sentence account is beside the statement
+       that builds it.
+       THIS ROW READ AN ENDPOINT NOTHING EMITS. It was written for the `idbTransaction`/`idbGet` host edges the
+       fixture used before `indexedDB.open` existed, and the commit that replaced them with the page's own door
+       deleted both the edges and the `/api/idbreq` they fetched — and left this line reading it, and reading a
+       `readonly:` marker the upgrade transaction never produced. So it has been 0 for every full-document run
+       since, which is CLAUDE.md's greppable tell exactly: a name READ in one place and WRITTEN in none. The
+       whole marker is named here rather than a fragment of it, because a fragment is what let the first half
+       of this string go on looking right after the second half stopped existing. */
+    const char *idbopen_why = NULL;
+ int idbopen_tt = 1;
+    fold_row(&idbopen_tt, &idbopen_why, !!strstr(js, "\"/api/idbopen\""),
+             "NOT REACHED: there is no /api/idbopen record at all, so §5.1's open never reached `success`. "
+             "That is the SCHEDULE");
+    fold_row(&idbopen_tt, &idbopen_why,
+             param_value_only(js, "/api/idbopen", "v",
+                              "0:1:versionchange:pending:a+b:same:plain:DataError:99:done:7:u-9"
+                              ":a+b:perhandle:1:fixture"),
+             "the open SUCCEEDED and /api/idbopen's `v` is not exactly the marker the statement composes — "
+             "§5.1's open, §2.7 + §2.8's request inside it, or §2.5's LIST key path over the store the same "
+             "upgrade creates answered differently. The WHOLE marker is asserted rather than a fragment, "
+             "because a fragment is what let the first half of this string go on looking right after the "
+             "second half stopped existing");
+    /* §6.1 AND §5.5 STEP 2 OVER RECORDS, from the page's own door — the four claims the in-C round-trip
+       fixture used to make before §6.1 became a step machine with no C entry. The taint term is read as the
+       CONCOLIC's own rendering in the emitted URL: a store that de-tainted would emit the example instead,
+       which is the one difference between a fork the solver keeps and one it silently loses. */
+    /* §2.6's INDEX end to end: §4.5's createIndex (both arms of §2.6's multiEntry flag), §4.6's attributes and
+       its one-handle-per-index note, §6.1 step 5's two write arms, §6.3's two retrievals and §6.5 over an
+       index source. `multi2` is the multiEntry key doing the thing it exists for — one record per subkey, so
+       both records answer for tag 'b' — which was dead code until §6.1 step 5 was built.
+       `popben` and `back2` are §4.5's NOTE: an index created over a store that ALREADY HOLDS RECORDS, whose
+       entries exist only because the population request §4.5 calls "an asynchronous request within the upgrade
+       transaction" walked them. Both would read empty if createIndex populated nothing. */
+    int idbidx_tt = strstr(js, "by_name:name:nu:me:own:same:refbob:pk2:popben:back2:multi2") != NULL;
+    /* THE OTHER HALF OF THAT NOTE — §4.5's worked example, where the population's ConstraintError aborts the
+       whole UPGRADE TRANSACTION rather than failing one `put`. Two errors, from two objects, and neither is
+       derivable from the other: the transaction's is why it died, the open request's is §5.1 step 10.8's. */
+    const char *idbuniq_why = NULL;
+ int idbuniq_tt = 1;
+    fold_row(&idbuniq_tt, &idbuniq_why, !!strstr(js, "\"/api/idbuniq\""),
+             "NOT REACHED: there is no /api/idbuniq record at all, so the open request's `error` handler "
+             "never ran. That is the SCHEDULE");
+    fold_row(&idbuniq_tt, &idbuniq_why,
+             param_value_only(js, "/api/idbuniq", "v", "ConstraintError:AbortError"),
+             "the handler RAN and /api/idbuniq's `v` is not exactly `ConstraintError:AbortError` — §4.5's "
+             "population failure did not abort the whole UPGRADE TRANSACTION, or the two errors are not the "
+             "two independent ones (the transaction's says why it died, §5.1 step 10.8's says what the open "
+             "request saw)");
+    /* TWO ROWS BECAUSE THESE ARE TWO INDEPENDENT CLAIMS, and one boolean over both is not a measurement of
+       either — the same reason `deepest` and `completed` are two numbers a few hundred lines up. This was ONE
+       row, it has read 0 for as long as it has existed, and a 0 said only "one of two unrelated things is
+       wrong": either §6.1/§5.5's record semantics, or the taint round trip, and no run could tell them apart.
+       That is the shape §Offensive-programming calls a plausible datum — it has a value, and the value carries
+       no information about what to fix.
+       `idb-record` is the SEMANTICS chain, and it is one accumulating string in placement order, so the
+       longest prefix that matches localises which stage stopped: §6.1 step 2's ConstraintError on `add`, §2.2's
+       key ordering through §6.2, §6.1 step 3's overwrite, the two writes read back, then §5.5 step 2's revert
+       of both across a real `abort()`.
+       `idb-record-taint` is the half a browser's own suite cannot have: `location.hash` goes into a store and
+       has to come back out STILL CONCOLIC, because a page keeps its session in here and reads it into gated
+       code. It is a claim about §5.11's clone and §6.1 step 4's serialization, not about transactions at all —
+       a store that de-tainted on the way in would emit the EXAMPLE and read as a perfectly healthy endpoint.
+       AND IT IS A WHOLE-VALUE CLAIM, WHICH IS THE DIFFERENCE BETWEEN THE TWO WAYS THIS CAN GO WRONG. §5.11's
+       clone seeds §2.7.1's `memory` with the concolic itself — core/indexeddb/idb_database.c states it in as
+       many words, "the SAME symbol rather than a second one about which the flow's narrowing says nothing" —
+       so what comes back out has the source's own shape and `?t=` carries exactly it. A containment test
+       cannot tell that from a clone that DERIVED a new unknown from it, because a derived shape is composed
+       over its operand's (`"%s.%s()"`, solver/concolic.c) and therefore contains it: the row would read 1 for
+       a value carrying a narrowing this flow never made, which is the plausible datum the row exists to
+       refuse. Whole-value equality is what "the same symbol" means. */
+    int idbrec_tt = strstr(js, "ConstraintError:first1:over21:made77gone:undoneAD") != NULL;
+    int idbtaint_tt = param_value_is(js, "/api/idbrec", "t", LOCATION_HASH_SHAPE);
+    /* THE CONTROL, read off the same endpoint record: the same source, the same param list, no store in
+       between. A 0 on BOTH means the loss is upstream of Indexed Database and a 0 on `t` alone means §5.11's
+       clone or §6.1 step 4's serialization is where the triple collapses to its example.
+       AND THE SHAPE IS THE COMPONENT'S OWN TOKEN, WHICH IS WHY BOTH ROWS READ 0 FOR EVERY RUN THEY HAVE
+       EXISTED FOR. They asked for `{hash}` — a spelling nothing in this tree writes. It was the shape of the
+       in-C `concolic_new(ctx, "{hash}", "{hash}", …)` these two rows were first written over, and when the
+       fixture became the page's own `location.hash` the source's real shape (`{location.hash}`, and it is
+       core/frame/location.h that spells it) was never carried across. So the control's 0 did not localise the
+       loss upstream of the store: there was no loss. `location.hash` reached the @H param carrying its domain
+       the whole time, and a row asserting a name no producer writes reports a healthy mechanism as broken
+       forever — which is exactly the defect `idb-open` above is annotated for, one file away. Bound to the
+       macro now: a probe cannot ask about a spelling the component does not have. A CONTROL IS ONLY A CONTROL
+       IF IT ASKS THE SAME QUESTION: `?h=` is `location.hash` with nothing concatenated after it, so this is
+       the same whole-value equality `t` is, and a containment test here would have gone on passing for a
+       derived shape while `t`'s equality failed — the two rows would then disagree for a reason that is about
+       the instruments and not about the store. */
+    int lochash_tt = param_value_is(js, "/api/idbrec", "h", LOCATION_HASH_SHAPE);
+    /* §5.12's `count` OVER A VALUE NOBODY KNOWS, AND THE ORDER ITS TYPE DECIDES — four rows, because these are
+       four independent facts and a conjunction over them would name none of them.
+       `idb-count-known` is the CONTROL and it is read first for that reason: two records out of three for a
+       count of 2 is §6.2 Object store retrieval operations' "first count of store's list of records whose key
+       is in range" honouring a count it HAS. Without it `idb-count-unknown` cannot fail, since a `getAll` that
+       ignored `count` altogether answers all three for both.
+       `idb-count-unknown` is the claim: the unknown crossed `[EnforceRange] unsigned long` as itself, carried
+       no example, and §6.2 step 1's "If count is not given or is 0 (zero), let count be infinity" was the arm
+       taken — the SUPERSET, which is exploration. Its two other readings are the ones this row exists to
+       refuse: an invented number (one record, or two) is §RUN-DON'T-MATCH's fabricated observation, and a
+       coercion that decided the completion takes the endpoint away entirely.
+       EACH IS `param_value_only` AND NOT `_has`: nothing on this path branches on an unknown, so a second
+       value means the walk forked where this statement says it cannot, which is a finding and not a match.
+       `idb-range-throw` and `idb-range-order` are the dictionary half, and they are two rows because a
+       TypeError raised AFTER the page's `toString` ran is a different defect from no TypeError at all — the
+       first is a refusal in the wrong place (the consumer's, not the type's), the second is no refusal. Web
+       IDL §3.2.17 Dictionary types reads members "in lexicographical order" and converts each one where it
+       reads it, so `count` is refused before `direction` is fetched off the object at all. */
+    int idbcount_known_tt = param_value_only(js, "/api/idbcount", "k", "g1g2");
+    int idbcount_unk_tt   = param_value_only(js, "/api/idbcount", "u", "g1g2g3");
+    int idbrange_throw_tt = param_value_only(js, "/api/idbcount", "e", "TypeError");
+    int idbrange_order_tt = param_value_only(js, "/api/idbcount", "d", "unread");
+    const Probe rows[] = {
+        { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE, idbopen_why },
+        { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },
+        { "idb-record-taint", idbtaint_tt, "/api/idbrec", SESS_EXPLORE },
+        { "loc-hash-param", lochash_tt, "/api/idbrec", SESS_EXPLORE },
+        { "idb-count-known", idbcount_known_tt, "/api/idbcount", SESS_EXPLORE },
+        { "idb-count-unknown", idbcount_unk_tt, "/api/idbcount", SESS_EXPLORE },
+        { "idb-range-throw", idbrange_throw_tt, "/api/idbcount", SESS_EXPLORE },
+        { "idb-range-order", idbrange_order_tt, "/api/idbcount", SESS_EXPLORE },
+        { "idb-index", idbidx_tt, "/api/idbidx", SESS_EXPLORE },
+        { "idb-index-uniq", idbuniq_tt, "/api/idbuniq", SESS_EXPLORE, idbuniq_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `css` document. */
+TF_UNIT void probes_css(const char *js, Probe *tab, int *n) {
+    /* §6.1's TWO CLAIMS, as the tokens the page's own comparison emitted. The expected bytes are in the
+       document (see `/api/cssprop` in HTML_CSS above) because that is where the read happens and where nothing
+       percent-encodes them; what reaches here is a verdict, and its failing spelling carries the actual value
+       so a red row names what answered instead of only that something did.
+       BOTH ARE ASKED OF THEIR OWN ENDPOINT'S OWN PARAM, because `CSSTEXTOK` is a SUFFIX of `CQCSSTEXTOK`,
+       the container-query statement's passing value of `/api/csscontainerText2`: a token is unique only until
+       some other statement chooses a longer name that contains it. */
+    const char *cssprop_why = NULL;
+ int cssprop_tt = 1;
+    fold_row(&cssprop_tt, &cssprop_why, !!strstr(js, "\"/api/cssprop\""),
+             "NOT REACHED: there is no /api/cssprop record at all, so this run did not answer the statement");
+    fold_row(&cssprop_tt, &cssprop_why, param_value_is(js, "/api/cssprop", "v", "CSSPROPOK"),
+             "§6.1 the CSSPropertyRule members did not answer as the page compared them (the record carries "
+             "the CSSPROPBAD: spelling with the value that answered instead)");
+    const char *csspropText_why = NULL;
+ int csspropText_tt = 1;
+    fold_row(&csspropText_tt, &csspropText_why, !!strstr(js, "\"/api/csspropText\""),
+             "NOT REACHED: there is no /api/csspropText record at all, so this run did not answer the statement");
+    fold_row(&csspropText_tt, &csspropText_why, param_value_is(js, "/api/csspropText", "v", "CSSTEXTOK"),
+             "§6.1 the @property cssText serialisation is not what the page compared it against (the record "
+             "carries the CSSTEXTBAD: spelling with the value that answered instead)");
+    /* CSS COMPATIBILITY STANDARD §3.1's ALIAS, as the two tokens the page's own comparisons emitted — see the
+       `<style id=kfsheet>` block in HTML above for what each one covers and why they are two. A red row here
+       is a document that BOOTED, which is itself the first thing this fixture is about: the at-rule these
+       cover used to abort at stage `create`, and a fixture that only proved the crash was gone would go green
+       on a build that dropped the rule instead of building it. */
+    int csswkkf_tt = strstr(js, "WKKFOK") != NULL;
+    int csswkkfText_tt = strstr(js, "WKKFTEXTOK") != NULL;
+    /* CSS NESTING'S THREE CLAIMS, as the tokens the page's own comparisons emitted — the same arrangement the
+       two rows above have and for the same reason: §6 "CSSOM"'s absolutized `selectorText`, §4's `:is()`
+       specificity carried through the resolved cascade, and §3.3's nested group rule are three capabilities,
+       and one boolean over them would say only that one of three unrelated things is wrong. The failing
+       spelling of each carries the value that answered instead, so a red row names what to fix. */
+    int cssnestsel_tt = strstr(js, "NESTSELOK") != NULL;
+    int cssnest_tt = strstr(js, "NESTOK") != NULL;
+    int cssnestmedia_tt = strstr(js, "NESTMEDIAOK") != NULL;
+    const Probe rows[] = {
+        { "cssprop", cssprop_tt, "/api/cssprop?", SESS_EXPLORE, cssprop_why },
+        { "cssprop-text", csspropText_tt, "/api/csspropText", SESS_EXPLORE, csspropText_why },
+        { "css-webkit-keyframes", csswkkf_tt, "/api/csswkkf?", SESS_EXPLORE },
+        { "css-webkit-keyframes-text", csswkkfText_tt, "/api/csswkkfText", SESS_EXPLORE },
+        { "css-nesting-selectortext", cssnestsel_tt, "/api/cssnestsel", SESS_EXPLORE },
+        { "css-nesting-cascade", cssnest_tt, "/api/cssnest?", SESS_EXPLORE },
+        { "css-nesting-group-rule", cssnestmedia_tt, "/api/cssnestmedia", SESS_EXPLORE },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `abort` document. */
+TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
+    /* the controller's `abort` listener actually ran, and the timeout's unknown flag forked both ways.
+       SCOPED: `fired` is a substring of `/api/unkdelay/fired`, the endpoint the §8.7 unknown-timeout statement
+       learns from its own timer callback — so a bare `fired` term reads 1 out of THAT record's url and cannot
+       tell a listener that ran from one that never did. */
+    const char *abortfire_why = NULL;
+ int abortfire_tt = 1;
+    fold_row(&abortfire_tt, &abortfire_why, !!strstr(js, "\"/api/aborted\""),
+             "NOT REACHED: there is no /api/aborted record at all, so this run did not answer the statement");
+    fold_row(&abortfire_tt, &abortfire_why, param_value_is(js, "/api/aborted", "v", "fired"),
+             "the AbortSignal's `abort` listener did not run as a real event on this flow — `v` is not `fired`");
+    /* a DOMString argument coerced through the PAGE's toString (with a loop in it), then used as the real
+       event type — the listener firing proves the coerced value was the one it registered under */
+    const char *idlcoerce_why = NULL;
+ int idlcoerce_tt = 1;
+    fold_row(&idlcoerce_tt, &idlcoerce_why, !!strstr(js, "\"/api/idlcoerce\""),
+             "NOT REACHED: there is no /api/idlcoerce record at all, so the listener registered under the "
+             "coerced type never fired. That is the SCHEDULE");
+    fold_row(&idlcoerce_tt, &idlcoerce_why, param_value_is(js, "/api/idlcoerce", "v", "coerced"),
+             "the listener FIRED and /api/idlcoerce's `v` is not `coerced` — the DOMString argument was "
+             "registered under something other than what the page's own toString returned, so the machine "
+             "did not park on step_tostring_run and resume at the exact stage");
+    /* THE DEADLINE GATE. `live` was the single worst-scoped world token in this file after `sync`: it is a
+       substring of the endpoints `/api/live` and `/api/cssidxlive`, of the value `islive` that BOTH of those
+       emit, and it is the whole of a PARAM NAME (`/api/gbn?…&live=`) that reaches the document as
+       `"name":"live"` — so the fallback arm read 1 out of four other statements and this row could report a
+       fork it had never seen. */
+    const char *deadline_why = NULL;
+ int deadline_tt = 1;
+    FORK_ROW(js, &deadline_tt, &deadline_why, "/api/deadline", "v",
+             "the timeout gate, whose UNKNOWN aborted flag must fork so the fallback path's endpoint is "
+             "learned too",
+             "expired", "live");
+    /* DOM §3.2 STEP 2'S THREE ROWS — see their statements for which of the parking form's three slots each one
+       is the assertion for. One row per STATEMENT and not one for the member, because the three differ in WHERE
+       step 2's fork happens (element 0, element 1, and after an iterator park) and a fold would report any one
+       of them as the member working.
+       THE WORLD TOKENS ARE SCOPED THE WAY THE DEADLINE ROW ABOVE SAYS THEY MUST BE: each of the six occurs
+       EXACTLY ONCE in this file, so no arm of one of these rows can read its match out of another statement. */
+    const char *anyfork_why = NULL;
+ int anyfork_tt = 1;
+    FORK_ROW(js, &anyfork_tt, &anyfork_why, "/api/anyfork", "v",
+             "DOM §3.2 create-a-dependent-abort-signal step 2 over an UNKNOWN flag at its FIRST element — the "
+             "ask that had no resume point from a plain C body, so both arms prove it parks",
+             "anyhot", "anycold");
+    const char *anylate_why = NULL;
+ int anylate_tt = 1;
+    FORK_ROW(js, &anylate_tt, &anylate_why, "/api/anylate", "v",
+             "the same ask with the unknown at element ONE, which is what the step-2 cursor is load-bearing "
+             "for: a resume that restarted the loop would be asked about the other signal's flag",
+             "latehot", "latecold");
+    const char *anyiter_why = NULL;
+ int anyiter_tt = 1;
+    FORK_ROW(js, &anyiter_tt, &anyiter_why, "/api/anyiter", "v",
+             "the same ask after the SAME machine has already parked on the page's iterator, which is what says "
+             "the held flag and the iterator cursor's values are separate slots each surviving one clone",
+             "iterhot", "itercold");
+    const Probe rows[] = {
+        { "abort", abortfire_tt, "/api/aborted", SESS_EXPLORE, abortfire_why },
+        { "deadline", deadline_tt, "/api/deadline", SESS_EXPLORE, deadline_why },
+        { "any-step2", anyfork_tt, "/api/anyfork", SESS_EXPLORE, anyfork_why },
+        { "any-step2-cursor", anylate_tt, "/api/anylate", SESS_EXPLORE, anylate_why },
+        { "any-step2-after-park", anyiter_tt, "/api/anyiter", SESS_EXPLORE, anyiter_why },
+        { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE, idlcoerce_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `scripts` document. */
+TF_UNIT void probes_scripts(const char *js, Probe *tab, int *n) {
+    /* HTML §4.12.1.1's "immediately execute the script element", inside the appendChild that connects it (see
+       the statement). The match is exact: `ABXC` (deferred to after the injector) and `ABC` (taken to the
+       tail) are the two wrong orders, and neither may satisfy the row. */
+    const char *scriptorder_why = NULL;
+ int scriptorder_tt = 1;
+    fold_row(&scriptorder_tt, &scriptorder_why, !!strstr(js, "\"/api/scriptorder\""),
+             "NOT REACHED: there is no /api/scriptorder record at all, so the reporting <script> never ran. "
+             "That is the SCHEDULE");
+    fold_row(&scriptorder_tt, &scriptorder_why, param_value_only(js, "/api/scriptorder", "seq", "AXBC"),
+             "§4.12.1.1 the injected inline script did not run inside the appendChild that connected it: "
+             "/api/scriptorder's `seq` is not exactly `AXBC`. `ABXC` is it deferred to after the <script> "
+             "that injected it, `ABC` is it taken to the tail. Asked as `_only` because the sequence is a "
+             "value the document determined");
+    /* HTML §3.1.7's `currentScript`, in THREE rows because these are three independent claims and one boolean
+       over them would say only that one of three unrelated things is wrong.
+       `current-script` is the GETTER: the running element, answered per element, with §4.12.1.1's classic arm
+       having set it — `csA:inline|csC` is script A's own id and the absence of a `src` on it, reported by
+       script C under C's own id. A slot that leaked between programs reads `csA:inline|csA`; a slot that leaked
+       between FLOWS reads `csINJ` for the arm that did not inject.
+       `current-script-restore` is STEP 4 observed from outside the bracket — the timer task and the module arm
+       both have to see null, and they are one row because they are one claim about the slot being empty when
+       no script element is executing.
+       `current-script-inject` is the arm that INJECTED: §4.12.1.1's "immediately execute the script element"
+       runs `csINJ` at the slot after the program that appended it, and the element that program reads is its
+       OWN — not the one that injected it, which is what a slot written by the injecting program would give. */
+    const char *cscurrent_why = NULL;
+ int cscurrent_tt = 1;
+    fold_row(&cscurrent_tt, &cscurrent_why, !!strstr(js, "\"/api/csend\""),
+             "NOT REACHED: there is no /api/csend record at all, so script C never ran. That is the SCHEDULE");
+    fold_row(&cscurrent_tt, &cscurrent_why, param_value_is(js, "/api/csend", "el", "csA:inline|csC"),
+             "§4.12.1.1's classic arm did not answer `currentScript` per element: /api/csend's `el` is not "
+             "`csA:inline|csC`. `csA:inline|csA` is a slot that leaked between PROGRAMS and `csINJ` is one "
+             "that leaked between FLOWS — both are this clause failing, and the value it carries says which");
+    /* TWO RECORDS AND A WHOLE-DOCUMENT ABSENCE, WHICH IS THREE CLAUSES AND WAS ONE BYTE. The timer task and
+       the module arm are two different observers of step 4, and either one missing is a different machine —
+       folded, the row said only that one of three unrelated things was wrong. */
+    const char *csrestore_why = NULL;
+ int csrestore_tt = 1;
+    fold_row(&csrestore_tt, &csrestore_why, !!strstr(js, "\"/api/cstimer\""),
+             "NOT REACHED: there is no /api/cstimer record at all, so §4.12.1.1 step 4 was never observed "
+             "from a TIMER TASK. That is the SCHEDULE");
+    fold_row(&csrestore_tt, &csrestore_why, !!strstr(js, "\"/api/csmod\""),
+             "NOT REACHED: there is no /api/csmod record at all, so §4.12.1.1 step 4 was never observed from "
+             "the MODULE arm. That is the SCHEDULE, and it is a different observer from the timer above");
+    fold_row(&csrestore_tt, &csrestore_why, !strstr(js, "\"LEAK\""),
+             "§4.12.1.1 step 4 did not empty the slot: one of the two observers saw an element while no "
+             "script was executing. Deliberately asked of the WHOLE document — a leak seen by either "
+             "observer is the finding, and an absence is the only thing that can prove this half");
+    const char *csinject_why = NULL;
+ int csinject_tt = 1;
+    fold_row(&csinject_tt, &csinject_why, !!strstr(js, "\"/api/csinj\""),
+             "NOT REACHED: there is no /api/csinj record at all, so the injected program never ran. That is "
+             "the SCHEDULE");
+    fold_row(&csinject_tt, &csinject_why, param_value_is(js, "/api/csinj", "el", "csINJ"),
+             "§4.12.1.1's \"immediately execute the script element\" read the WRONG element: /api/csinj's "
+             "`el` is not `csINJ`, so the injected program saw the element that injected it rather than its "
+             "own — a slot written by the injecting program");
+    /* HTML §13.2.7 "The end": step 3's "interactive" precedes step 5's deferred scripts, and an inline script
+       the parser runs still sees "loading". `ev` empty is no `readystatechange` before the module. */
+    const char *rsmod_why = NULL;
+ int rsmod_tt = 1;
+    fold_row(&rsmod_tt, &rsmod_why, !!strstr(js, "\"/api/rsmod\""),
+             "NOT REACHED: there is no /api/rsmod record at all, so the module script never ran. That is the "
+             "SCHEDULE");
+    fold_row(&rsmod_tt, &rsmod_why, param_value_is(js, "/api/rsmod", "at", "loading"),
+             "a parser-inserted inline script did not see \"loading\": /api/rsmod's `at` is not `loading`, so "
+             "the readiness moved before the parse stopped");
+    fold_row(&rsmod_tt, &rsmod_why, param_value_is(js, "/api/rsmod", "rs", "interactive"),
+             "§13.2.7 step 3 had not run when step 5 executed the module script: /api/rsmod's `rs` is not "
+             "`interactive` (`loading` is the readiness moved at DOMContentLoaded instead)");
+    fold_row(&rsmod_tt, &rsmod_why, param_value_is(js, "/api/rsmod", "ev", "interactive"),
+             "§3.1.5 step 4's `readystatechange` for step 3 did not reach the listener before the module ran: "
+             "/api/rsmod's `ev` is not `interactive`");
+    const Probe rows[] = {
+        { "script-order", scriptorder_tt, "/api/scriptorder", SESS_EXPLORE, scriptorder_why },
+        { "current-script", cscurrent_tt, "/api/csend", SESS_EXPLORE, cscurrent_why },
+        { "current-script-restore", csrestore_tt, "/api/cstimer", SESS_EXPLORE, csrestore_why },
+        { "current-script-inject", csinject_tt, "/api/csinj", SESS_EXPLORE, csinject_why },
+        { "readiness-interactive", rsmod_tt, "/api/rsmod", SESS_EXPLORE, rsmod_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `platform` document. */
+TF_UNIT void probes_platform(const char *js, Probe *tab, int *n) {
     /* The platform document's algorithms, each asked inside its own endpoint's record as NODE_ALGOS's are. */
     static const char *const PLATFORM_ALGOS[][2] = {
         { "/api/docnode",     "isnode"  },   /* Document IS a Node: nodeType 9, and contains() walks */
@@ -13232,7 +14629,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "/api/prereq",    "isreq"   },   /* a `required` dictionary member, enforced by the declaration */
         { "/api/prector",   "isctor"  },
     };
-    const char *platalgo_why = NULL; int platalgo_tt = 1;
+    const char *platalgo_why = NULL;
+ int platalgo_tt = 1;
     /* The whole-document negative over this document's `wrong` tokens, as node-algo's is over its own. */
     fold_row(&platalgo_tt, &platalgo_why, !strstr(js, "wrong"),
              "some statement of the platform document recorded its `wrong` token — or a §4.13.3 refusal "
@@ -13316,7 +14714,6 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              param_value_only(js, "/api/importarm", "bool", "2") &&
              param_value_only(js, "/api/importarm", "attr", "impattr"),
              "/api/importarm");
-
     /* ---- §8.1.6.4 step 7.4: A REPORT THIS ENGINE TAKES BACK -------------------------------------------------
      *
      * THE FOUR STATES ARE FOUR ROWS AND NOT ONE, because they take four different actions. `node-algo` above is
@@ -13386,7 +14783,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
      * from the thrown value's own backtrace is FOR — a regression that reports a document throw from nowhere,
      * or from a chunk, passes a token check and fails this one. */
     const TfErrEdges *e_move = tf_err_edges("synmove");
-    const char *movethrow_why = NULL; int movethrow_tt = 1;
+    const char *movethrow_why = NULL;
+ int movethrow_tt = 1;
     fold_row(&movethrow_tt, &movethrow_why, e_move->stands > 0,
              "NOT REACHED: the stream never announced `synmove`, so `x-throwmoved`'s disconnectedCallback "
              "did not throw on `moveBefore` — DOM §4.2.3 step 24.3 enqueues the reaction and HTML §4.13.6's "
@@ -13407,49 +14805,26 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the stream announced `synmove` and the result document does not carry it in `pageErrors` — the "
              "two routes disagree about an error that stands, and a consumer reading only the document would "
              "be told this page raised nothing");
+    const Probe rows[] = {
+        { "platform-algo", platalgo_tt, "/api/docnode", SESS_EXPLORE, platalgo_why },
+        /* THE UNSTAGED ONE, AND ITS ADDRESS COLUMN IS THE DOCUMENT'S BECAUSE THAT IS WHERE IT IS RAISED —
+           the five rows above name a chunk, and naming one here would be the relocation this row exists to
+           refuse. See its fold_row block for why staging it is measured to be wrong. */
+        { "move-throw", movethrow_tt, "new Error('synmove')", SESS_EXPLORE, movethrow_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
 
-    /* §8.1.4.6'S ERROR-REPORTING-MODE GUARD, READ FROM THE OUTSIDE — the half `/api/reporterrormode` cannot
-     * see. That rung asserts the inner `reportError` fired NOTHING and returned `undefined`; this one asserts
-     * the consequence that makes the guard observable to a page at all, which is that the inner exception is
-     * REPORTED. Both are facts about one condition, and a build that skipped the fire and then ALSO swallowed
-     * the exception would pass the inside rung and fail this one — which is precisely the regression a
-     * fixture with only the inside rung cannot distinguish from correct behaviour.
-     * IT IS NOT A NEW CAPABILITY AND WAS NOT A NEW DEFECT. This announcement has been in every run of this
-     * fixture, counted as `1 UNSTAGED UNCAUGHT PAGE ERROR` because the edge table declared no pair for it, so
-     * what landed here is a row where a standing unexplained line was — which is the better trade by this
-     * file's own rule: a declaration EXCUSES an error and a row CHECKS it, and the two cost the same. */
-    const TfErrEdges *e_remode = tf_err_edges("reentrant");
-    const char *remodereport_why = NULL; int remodereport_tt = 1;
-    fold_row(&remodereport_tt, &remodereport_why, e_remode->stands > 0,
-             "NOT REACHED: the stream never announced `reentrant`, so the exception the INNER `reportError` "
-             "was handed went unreported — HTML §8.1.4.6 \"Runtime script errors\" encloses the whole fire in "
-             "\"if global is not in error reporting mode\", so a call made from inside an `error` listener "
-             "offers no listener the chance to cancel and reaches the report with notHandled still true. An "
-             "absent announcement is therefore either the inner call not running at all — which "
-             "`/api/reporterrormode`'s own rung would also fail — or this engine swallowing an exception the "
-             "standard reports");
-    fold_row(&remodereport_tt, &remodereport_why, e_remode->retracted == 0,
-             "the stream printed a CORRECTION for `reentrant` — a reported exception is not a rejection and "
-             "has no handler that could arrive later, so a retraction here is this engine withdrawing a "
-             "report §8.1.4.6 requires it to make");
-    fold_row(&remodereport_tt, &remodereport_why, e_remode->stands_here == e_remode->stands,
-             "`reentrant` was announced from an address that is NOT this document's own — the value is "
-             "constructed and reported by a listener this document installs, so §8.1.4.6's throw site is this "
-             "document and a different one means the position was derived from something other than the "
-             "reported value's own backtrace");
-    fold_row(&remodereport_tt, &remodereport_why, tf_err_listed(js, "pageErrors", "reentrant"),
-             "the stream announced `reentrant` and the result document does not carry it in `pageErrors` — "
-             "the two routes disagree about an error that stands, and a consumer reading only the document "
-             "would be told this page reported nothing");
-
+/* The rows of the `rejection` document. */
+TF_UNIT void probes_rejection(const char *js, Probe *tab, int *n) {
     const TfErrEdges *e_take = tf_err_edges("rejTAKEBACK");
     const TfErrEdges *e_mute = tf_err_edges("rejMUTE");
     const TfErrEdges *e_lapse = tf_err_edges("rejRELAPSE");
     const TfErrEdges *e_twice = tf_err_edges("rejTWICE");
     const TfErrEdges *e_none = tf_err_edges("rejNOHANDLER");
-
     /* (1) REPORTED AND THEN TAKEN BACK — the state the whole mechanism exists for. */
-    const char *rejtake_why = NULL; int rejtake_tt = 1;
+    const char *rejtake_why = NULL;
+ int rejtake_tt = 1;
     fold_row(&rejtake_tt, &rejtake_why, e_take->stands >= 1,
              "§8.1.4.7 step 4.1.3 never REPORTED the rejection that is handled a task later: the stream "
              "announced no `rejTAKEBACK` at all, so there was nothing for §8.1.6.4 step 7.4 to take back and "
@@ -13459,7 +14834,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "§8.1.6.4 step 7.4 fired no CORRECTION for a pair the stream had announced: the report stands for "
              "the life of the run, which is the fabricated finding about a page that did nothing wrong that "
              "the retraction exists to remove");
-    const char *rejtakedoc_why = NULL; int rejtakedoc_tt = 1;
+    const char *rejtakedoc_why = NULL;
+ int rejtakedoc_tt = 1;
     fold_row(&rejtakedoc_tt, &rejtakedoc_why, tf_err_listed(js, "pageErrorsRetracted", "rejTAKEBACK"),
              "the document does not name `rejTAKEBACK` in `pageErrorsRetracted` — `this engine named an error "
              "and withdrew it` and `the page raised nothing` are back to being the same absence");
@@ -13467,14 +14843,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the document still names `rejTAKEBACK` in `pageErrors` after every occurrence of it was taken "
              "back — the two arrays are DISJOINT by construction, so a message in both renders once under two "
              "opposite claims and the withdrawal did not reach the composer");
-
     /* (2) CANCELLED AND THEN HANDLED — the no-op arm, which is ROUTINE and spec-mandated. §8.1.4.7 step 4.1.3
        is gated on notCanceled while step 4.1.4's append is gated on [[PromiseIsHandled]] alone, so this
        promise is never reported AND is still appended, and step 7.4 fires for it. The retraction finds no
        standing occurrence and must mint nothing: a row here would say this engine had named an error it never
        named. THE EVENT IS THE PREMISE — without it `nothing was announced` is equally satisfied by a step 7.4
        that never ran, which is the other defect entirely. */
-    const char *rejmute_why = NULL; int rejmute_tt = 1;
+    const char *rejmute_why = NULL;
+ int rejmute_tt = 1;
     fold_row(&rejmute_tt, &rejmute_why, param_value_is(js, "/api/rejmute", "v", "ismute"),
              "§8.1.6.4 step 7.4 did not fire `rejectionhandled` for a rejection the page CANCELLED: there is "
              "no /api/rejmute record carrying `ismute`. §8.1.4.7 step 4.1.4 appends on [[PromiseIsHandled]] "
@@ -13490,7 +14866,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "standing occurrence is a no-op, and a correction here means solver/result.c minted a row on the "
              "retraction path and immediately withdrew it, which states that this engine named an error it "
              "never named");
-    const char *rejmutedoc_why = NULL; int rejmutedoc_tt = 1;
+    const char *rejmutedoc_why = NULL;
+ int rejmutedoc_tt = 1;
     /* THE PREMISE IS FOLDED FIRST HERE TOO, AND ITS ABSENCE WAS THE SAME DEFECT ITS OWN SIBLING NAMES ONE
        PARAGRAPH UP. `rej-mute` folds `param_value_is(js, "/api/rejmute", "v", "ismute")` ahead of its
        negatives and says why — "THE EVENT IS THE PREMISE — without it `nothing was announced` is equally
@@ -13519,11 +14896,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&rejmutedoc_tt, &rejmutedoc_why, !tf_err_listed(js, "pageErrorsRetracted", "rejMUTE"),
              "the document names `rejMUTE` in `pageErrorsRetracted` — the retraction had NOTHING to take back, "
              "so this row is the engine claiming to have withdrawn a report it never made");
-
     /* (3) REPORTED, TAKEN BACK, REPORTED AGAIN — the latch's RISING edge, which is required rather than
        optional: a correction is the stream's last word on a pair, and a pair that stands again has made that
        last word false. */
-    const char *rejlapse_why = NULL; int rejlapse_tt = 1;
+    const char *rejlapse_why = NULL;
+ int rejlapse_tt = 1;
     fold_row(&rejlapse_tt, &rejlapse_why, e_lapse->retracted >= 1,
              "§8.1.6.4 step 7.4 never CORRECTED `rejRELAPSE`, so the run never reached the state this row is "
              "about — the rising edge is only asserted once a falling one has happened");
@@ -13532,7 +14909,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "corrected, so the stream's last word on it is a withdrawal of a report that has since been made "
              "again. Asked as a RATIO because the flow count is the scheduler's answer — every flow that runs "
              "the statement announces once more than it corrects, so equality is the latch staying down");
-    const char *rejlapsedoc_why = NULL; int rejlapsedoc_tt = 1;
+    const char *rejlapsedoc_why = NULL;
+ int rejlapsedoc_tt = 1;
     fold_row(&rejlapsedoc_tt, &rejlapsedoc_why, tf_err_listed(js, "pageErrors", "rejRELAPSE"),
              "the document does not name `rejRELAPSE` in `pageErrors` — the second rejection was never taken "
              "back, so a message with a STANDING occurrence is missing from the console");
@@ -13540,13 +14918,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the document names `rejRELAPSE` in BOTH arrays — `pageErrorsRetracted` carries only messages "
              "with no standing occurrence anywhere, so this is the disjointness the composer decides per "
              "MESSAGE having been decided per row instead");
-
     /* (4) TWO OCCURRENCES, ONE HANDLED — the row that says the COUNT is real rather than decorative. Before
        the row counted, a second occurrence of one pair was dropped at insert, so a single retraction would
        have erased the report belonging to the occurrence nobody handled. The retraction here must decrement
        to ONE and stop: no correction, and the message never leaves `pageErrors`. THE EVENT IS AGAIN THE
        PREMISE — `no correction was printed` is equally satisfied by a retraction that never ran. */
-    const char *rejcount_why = NULL; int rejcount_tt = 1;
+    const char *rejcount_why = NULL;
+ int rejcount_tt = 1;
     fold_row(&rejcount_tt, &rejcount_why, param_value_is(js, "/api/rejtwice", "v", "istwice"),
              "§8.1.6.4 step 7.4 never fired for one of two identically-reasoned rejections: there is no "
              "/api/rejtwice record carrying `istwice`, so no retraction ran and the two clauses below are "
@@ -13559,7 +14937,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the occurrence nobody handled, so the falling edge fired while the pair was still true. That is "
              "the report of the second rejection being withdrawn by the first one's handler — the erasure the "
              "occurrence count exists to make impossible");
-    const char *rejcountdoc_why = NULL; int rejcountdoc_tt = 1;
+    const char *rejcountdoc_why = NULL;
+ int rejcountdoc_tt = 1;
     fold_row(&rejcountdoc_tt, &rejcountdoc_why, tf_err_listed(js, "pageErrors", "rejTWICE"),
              "the document dropped `rejTWICE` out of `pageErrors` after ONE of its two occurrences was taken "
              "back — the row was treated as a single fact and deleted, so the rejection nobody handled is no "
@@ -13568,11 +14947,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the document names `rejTWICE` in `pageErrorsRetracted` while an occurrence of it still stands — "
              "the two arrays are disjoint per MESSAGE, and a message that still went wrong belongs in the "
              "console");
-
     /* (5) AND THE CONTROL: NEVER HANDLED. It shares the stream signature of (4) — announced once, never
        corrected — and is told apart from it by (4)'s `rejectionhandled` premise. Without this row a
        retraction path that fired for EVERYTHING would go unseen at the one pair that is owed none. */
-    const char *rejnone_why = NULL; int rejnone_tt = 1;
+    const char *rejnone_why = NULL;
+ int rejnone_tt = 1;
     fold_row(&rejnone_tt, &rejnone_why, e_none->stands >= 1,
              "the stream never announced `rejNOHANDLER` — the rejection nobody handles is the premise of every "
              "row above and this run did not make it");
@@ -13585,6 +14964,26 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&rejnone_tt, &rejnone_why, !tf_err_listed(js, "pageErrorsRetracted", "rejNOHANDLER"),
              "the document names `rejNOHANDLER` in `pageErrorsRetracted` — nothing handled that rejection, so "
              "this engine is reporting that it withdrew a finding that is still true");
+    const Probe rows[] = {
+        /* §8.1.6.4 step 7.4's FOUR STATES, one row per state per ROUTE — see their computation for why the
+           document and the stream each answer half of each state, and why the stream clauses are ratios. Keyed
+           on the chunk that stages them, which is the statement these rows are about; the control below is
+           keyed on its own chunk because a rejection nobody handles is a different statement. */
+        { "rej-retract", rejtake_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejtake_why },
+        { "rej-retract-doc", rejtakedoc_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejtakedoc_why },
+        { "rej-mute", rejmute_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejmute_why },
+        { "rej-mute-doc", rejmutedoc_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejmutedoc_why },
+        { "rej-relapse", rejlapse_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejlapse_why },
+        { "rej-relapse-doc", rejlapsedoc_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejlapsedoc_why },
+        { "rej-count", rejcount_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejcount_why },
+        { "rej-count-doc", rejcountdoc_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejcountdoc_why },
+        { "rej-nohandler", rejnone_tt, "/chunk/rejthrow.js", SESS_EXPLORE, rejnone_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `hashsinks` and `statesinks` documents. */
+TF_UNIT void probes_hashsinks_statesinks(const char *js, Probe *tab, int *n) {
     /* THE OUTCOME FORK, both halves. Positive: ONE run reached BOTH completions of `JSON.parse` over unknown
        text, which can only happen by a snapshot fork taken inside the builtin — the throw arm carries the real
        SyntaxError, so `catch` ran with a real Error object rather than a shape. Negative: the same builtin over
@@ -13595,7 +14994,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        fourth clause is a claim about `/api/jsonthrew`'s own param and was spelled as a whole-document
        `strstr` for a `validValues` array, so ANY endpoint anywhere whose param carried exactly one
        `SyntaxError` satisfied it — including the raw-source arm two lines below, which emits the same name. */
-    const char *jsonfork_why = NULL; int jsonfork_tt = 1;
+    const char *jsonfork_why = NULL;
+ int jsonfork_tt = 1;
     fold_row(&jsonfork_tt, &jsonfork_why, !!strstr(js, "\"/api/jsonok\""),
              "the SUCCESS completion of JSON.parse over unknown text was never reached: there is no "
              "/api/jsonok record. Both completions from ONE run is the claim, so this half alone is the "
@@ -13613,53 +15013,6 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "JSON.parse over the RAW source FABRICATED a success completion no value of that source can "
              "produce: /api/jsonrawok is in the document. Deliberately asked of the WHOLE document — that "
              "endpoint existing at all is the finding, and only an absence can prove this half");
-    /* FIVE INDEPENDENT SPEC SENTENCES UNDER ONE NAME, FOLDED so the 0 names which one. They are five different
-       components and five different endpoints, so a bare `&&` chain printed one byte for five findings — the
-       same count-with-no-name-in-it this file's own banner refuses one level up.
-       EACH SUB-ROW'S OWN TEXT IS WHAT TRAVELS, not a summary of it written here. A one-line restatement at
-       this level is a SECOND copy of the sub-row's claim, and the copy is the one that rots — it also cannot
-       carry what the sub-row now separates, which is "the statement never ran" against "it ran and answered
-       wrongly". Forwarding the inner `why` is sound because a 0 row always carries one, and `fold_row`'s own
-       DCHECK is where that is asserted rather than assumed. */
-    const char *domidl_why = NULL; int domidl_tt = 1;
-    fold_row(&domidl_tt, &domidl_why, domproto_tt, domproto_why);
-    fold_row(&domidl_tt, &domidl_why, cdnull_tt,   cdnull_why);
-    fold_row(&domidl_tt, &domidl_why, tcnull_tt,   tcnull_why);
-    fold_row(&domidl_tt, &domidl_why, nodeval_tt,  nodeval_why);
-    fold_row(&domidl_tt, &domidl_why, tcset_tt,    tcset_why);
-    /* THE DEADLINE GATE. `live` was the single worst-scoped world token in this file after `sync`: it is a
-       substring of the endpoints `/api/live` and `/api/cssidxlive`, of the value `islive` that BOTH of those
-       emit, and it is the whole of a PARAM NAME (`/api/gbn?…&live=`) that reaches the document as
-       `"name":"live"` — so the fallback arm read 1 out of four other statements and this row could report a
-       fork it had never seen. */
-    const char *deadline_why = NULL; int deadline_tt = 1;
-    FORK_ROW(js, &deadline_tt, &deadline_why, "/api/deadline", "v",
-             "the timeout gate, whose UNKNOWN aborted flag must fork so the fallback path's endpoint is "
-             "learned too",
-             "expired", "live");
-
-    /* DOM §3.2 STEP 2'S THREE ROWS — see their statements for which of the parking form's three slots each one
-       is the assertion for. One row per STATEMENT and not one for the member, because the three differ in WHERE
-       step 2's fork happens (element 0, element 1, and after an iterator park) and a fold would report any one
-       of them as the member working.
-       THE WORLD TOKENS ARE SCOPED THE WAY THE DEADLINE ROW ABOVE SAYS THEY MUST BE: each of the six occurs
-       EXACTLY ONCE in this file, so no arm of one of these rows can read its match out of another statement. */
-    const char *anyfork_why = NULL; int anyfork_tt = 1;
-    FORK_ROW(js, &anyfork_tt, &anyfork_why, "/api/anyfork", "v",
-             "DOM §3.2 create-a-dependent-abort-signal step 2 over an UNKNOWN flag at its FIRST element — the "
-             "ask that had no resume point from a plain C body, so both arms prove it parks",
-             "anyhot", "anycold");
-    const char *anylate_why = NULL; int anylate_tt = 1;
-    FORK_ROW(js, &anylate_tt, &anylate_why, "/api/anylate", "v",
-             "the same ask with the unknown at element ONE, which is what the step-2 cursor is load-bearing "
-             "for: a resume that restarted the loop would be asked about the other signal's flag",
-             "latehot", "latecold");
-    const char *anyiter_why = NULL; int anyiter_tt = 1;
-    FORK_ROW(js, &anyiter_tt, &anyiter_why, "/api/anyiter", "v",
-             "the same ask after the SAME machine has already parked on the page's iterator, which is what says "
-             "the held flag and the iterator cursor's values are separate slots each surviving one clone",
-             "iterhot", "itercold");
-
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified. Read from the
        ONE document above — there is no second line to keep in step with it. */
     const char *ss = js;
@@ -13696,7 +15049,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        THE NEGATIVE STAYS WHOLE-DOCUMENT and is the one clause here that should be: a PoC from this source
        into a markup sink anywhere is the finding, and a superstring or a neighbouring record can only make an
        absence fail EARLY. */
-    const char *s_park_why = NULL; int s_park = 1;
+    const char *s_park_why = NULL;
+ int s_park = 1;
     fold_row(&s_park, &s_park_why, s_field(ss, "innerHTML", LOCATION_HASH_SRC, "\"search\":\"parked\""),
              "the innerHTML <- location.hash search is not recorded as PARKED — either the sink was never "
              "detected (which is the false negative the whole row exists to catch, and `s-loc-park-stage` is "
@@ -13841,7 +15195,6 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int s_attr_dprobe = s_delivery_probed(ss, "innerHTML", ATTR_SRC);
     int s_park_dmeas  = s_field(ss, "innerHTML", LOCATION_HASH_SRC, ",\"sourceDelivers\":");
     int s_attr_dmeas  = s_field(ss, "innerHTML", ATTR_SRC,          ",\"sourceDelivers\":");
-
     /* …AND THE TWO SETS ARE HELD AGAINST EACH OTHER, WHICH IS WHAT WOULD HAVE CAUGHT THE FALSE GREEN THE DAY
        IT APPEARED. A verdict row and its stage row are computed from the SAME bytes about the SAME record, so
        "this PoC is fire-verified" and "this record carries no PoC" cannot both be true — and they stood side
@@ -13900,1842 +15253,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            "the markup sink fed the RAW fragment produced a fire-verified PoC — §13.2.5.1's data state is left "
            "only through `<`, which the fragment percent-encode set holds, so a PoC there means a candidate "
            "was delivered without the source's own transform being applied to it");
-
-    /* THE PROBES, DECLARED ONCE. This was a 46-term conjunction and a separate printf listing 43 of them, which
-       is two hand-maintained lists of the same thing — so a probe could be computed and joined to NEITHER, and
-       one immediately was: `clone_body` asserted §6.4 clone() and the gate never read it, so the fixture
-       reported PASS on a result nothing had checked. A row here is what makes a probe a probe: the gate walks
-       it and the report walks it, and a probe that is not declared does not exist rather than silently passing.
-       THE @S VERDICTS ARE ROWS TOO, for the same reason — they were a second conjunction with its own printf
-       below this table. One table, one gate, one report, one selector.*/
-    /* THE CROSS-SESSION ROUND TRIP'S OWN STATEMENTS, one per record kind at each end, because "it resumed" is
-       the observation that cannot distinguish an exercised tier from an unexercised one. The park's four
-       numbers and the resume's four are the SAME four, so a kind written at one end and not rebuilt at the
-       other is visible as a pair rather than inferred from a total.
-       A ROW THAT READS 0 IS THE FORCING FUNCTION, NOT A FLAKE. `park-deep` at 0 means the eviction landed
-       before any flow had forked, so the residue is the `f-,<val>` a park before the first pick already writes
-       and the segment rebuild did not run. `park-cand` at 0 means no @S candidate session was live when the
-       park was taken, so no attacker text crossed and park_hex/park_unhex did not. Neither is a reason to
-       soften the row — each names exactly which arm went unexercised, which is the whole reason the census is
-       per kind, and fixture_want_park is where the moment is chosen. */
-    int cold_park_wrote = g_sess == SESS_PARK && cold_park_records() > 0;
-    int cold_park_deep  = g_sess == SESS_PARK && g_cp.segs > 0;
-    int cold_park_cand  = g_sess == SESS_PARK && g_cp.cands > 0;
-    /* AND BENEATH ALL THREE OF THEM, THE PARK'S REACHABILITY LADDER — because every row above is an OUTCOME
-       row and `park-wrote=0` is ONE column over a CONJUNCTION. solver/cold.h has already counted what that
-       column folds: FOUR conjuncts, hence fifteen non-satisfying states, every one of them reported as the
-       same 0. They do not take the same work — a conjunct that NEVER ROSE wants its producer built, and
-       conjuncts that each rose and never COINCIDED want a different moment — so they may not share a number.
-       THE DISCRIMINATOR ALREADY EXISTED AND THIS TABLE COULD NOT SEE IT, which is the whole of what this
-       closes. cold_preview_census is raised INSIDE cold_park_preview, BEFORE any host's conjunction runs, and
-       it is published on the RESULT document's `_cold` line — a DIFFERENT document from this one, which this
-       stage's verdict never reads. So a build can FAIL on `park-wrote=0` while the three rows that attribute
-       that 0 are printed by the same process, a few hundred bytes away, and joined to nothing: the
-       write-with-no-reader half of the defaulted-field defect, with the reader one document over.
-       IT DERIVES FROM THAT ACCESSOR AND RESTATES NOTHING. Every row here is read off ColdPreviewCensus, so a
-       conjunct added to the moment grows a counter there and this ladder goes stale LOUDLY; a second walk of
-       the frontier written here would be the second copy an auditor may not keep.
-       THE THREE OUTER RUNGS ARE A CHAIN AND THE CHAIN IS ASSERTED BELOW RATHER THAN DESCRIBED. `park-asked`
-       is the REACHABILITY clause — did any host consult this tier at all — and a 0 there makes every park row
-       beside it UNATTRIBUTABLE rather than false. `park-residue` says some consultation stood at a residue
-       the park would have WRITTEN, as against found EMPTY or REFUSED; that is the TIER'S own verdict on the
-       ask and restates no host's moment. `park-moment` says this host's conjunction held at one of them.
-       Each implies the one below it, and `park-wrote` implies all three, so the LOWEST 0 localises.
-       AND THE THREE CONJUNCT ROWS BETWEEN THEM ARE SIBLINGS AND NOT RUNGS, said plainly because reading them
-       as a ladder is exactly the error a ladder's discipline exists to prevent. They are the three facts the
-       moment is a conjunction OF: each may rise without the others, none implies another, and `park-moment`
-       is 1 only when all three stood at ONE ask. A row that does not imply its neighbour is a finding, so
-       these are not dressed as one. The fourth conjunct (`refuses == 0`) has no row of its own because it
-       already has one: a REFUSING ask is the arm `park-residue` excludes, so a park moment that fails only on
-       that conjunct is a `park-residue` of 0. */
-    ColdPreviewCensus pvc;
-    int cold_park_asked, cold_park_residue, cold_park_moment;
-    int cold_park_mom_deep, cold_park_mom_orphan, cold_park_mom_commit;
-    const char *park_asked_why =
-        "no host consulted the cold tier in this session — `previewAsks` is 0. That counter is raised inside "
-        "cold_park_preview BEFORE any host's conjunction runs, so this is the positive statement that the "
-        "seam was never reached, and every park row printed beside it is UNATTRIBUTABLE rather than false. "
-        "Read engine_set_park_hook's call site and run_scheduler's loop; nothing in cold_park is implicated.";
-    const char *park_residue_why =
-        "the tier was consulted and NO consultation stood at a residue it would have WRITTEN — every ask took "
-        "its EMPTY or its REFUSING arm, which are the two `previewAsks` arms `previewAsksWritable` is not "
-        "(cold.c asserts the three partition it). That is a statement about this DOCUMENT and about "
-        "cold_park_flow's refusal, never about a moment: a park taken at any of those asks would have written "
-        "no bytes at all, or aborted at the member holding a task a replay will not re-cause.";
-    const char *park_mom_deep_why =
-        "no consultation stood at a CANDIDATE SESSION ON A FROZEN DECISION SEGMENT (`previewAsksWithDeepCands` "
-        "is 0) — the one member whose record carries attacker text AND names a segment ordinal, which is what "
-        "makes one residue cross park_hex and the 's' ordinals at once. `previewAsksWithCands` and "
-        "`previewAsksWithDeep` on the same line say whether either half ever stood alone, and this row is "
-        "bounded by both of them rather than by their conjunction.";
-    const char *park_mom_orphan_why =
-        "no consultation stood at a DRIVEN ORPHAN (`previewAsksWithOrphans` is 0), so no ask would have "
-        "written an 'o' record and the next session would inherit this document's explored paths and none of "
-        "its uncalled code. A drive is seeded when a flow has run out of everything else, so a 0 here is a "
-        "moment standing AHEAD of the drives rather than a document that has none.";
-    const char *park_mom_commit_why =
-        "no consultation stood at a member HOLDING a commitment (`previewAsksWithCommits` is 0), so no ask "
-        "would have written an 'r' record. READ IT WITH THE TWO ROWS solver/cold.h NAMES FOR IT AND NEVER "
-        "ALONE: `previewCommitRowsWritten` and `previewAsksAfterCommit` on the same `_cold` line separate its "
-        "THREE states, and they take three different actions. No ledger row at all is a document in which no "
-        "timeline ever received from a peer, and the work is the ROUTING (fixture_route_peer_post). Rows "
-        "written with `previewAsksAfterCommit` 0 is a producer that ran entirely AFTER the last consultation, "
-        "and the work is the MOMENT (fixture_cold_moment) — the tier is consulted BETWEEN slices, so a "
-        "document whose receivers are born, commit and depart inside ONE of them reads here exactly like a "
-        "document where nothing ever received. Asks taken after a row was written with this still 0 is the "
-        "only one of the three that is a defect in the engine: a commitment left the frontier, which no walk "
-        "of the registry can otherwise see.";
-    const char *park_moment_why =
-        "this host's conjunction never held at any consultation, so engine_request_park was never called, no "
-        "park was taken, and every OUTCOME row beside this one is 0 about that rather than about the tier. "
-        "The three conjunct rows printed with it say which of the facts it is a conjunction of never rose; a "
-        "run in which all three read 1 and this reads 0 is three facts that never COINCIDED, and the fix for "
-        "that is the moment and never the park.";
-
-    /* READ AND NOT ASKED, exactly as the latch beside it is: this call is a copy of a static plus one
-       monotonicity check, and cold_park_preview — the thing that would move these counters — is not on it. */
-    cold_preview_census(&pvc);
-    cold_park_asked      = g_sess == SESS_PARK && pvc.asks > 0;
-    cold_park_residue    = g_sess == SESS_PARK && pvc.asks_writable > 0;
-    cold_park_mom_deep   = g_sess == SESS_PARK && pvc.asks_with_deepcands > 0;
-    cold_park_mom_orphan = g_sess == SESS_PARK && pvc.asks_with_orphans > 0;
-    cold_park_mom_commit = g_sess == SESS_PARK && pvc.asks_with_commits > 0;
-    cold_park_moment     = g_sess == SESS_PARK && fixture_cold_moment_met();
-    /* THE CHAIN, ASSERTED AND NOT DESCRIBED — which is what makes "the lowest 0 localises" a contract rather
-       than a reading convention, and it is the one claim neither file can make alone: cold.h holds the census
-       and says outright that it never has to know what any host asked for, and this host holds the latch. */
-    DCHECKF(!cold_park_moment ||
-            (pvc.asks_with_deepcands > 0 && pvc.asks_with_orphans > 0 &&
-             pvc.asks_with_commits > 0 && pvc.asks_writable > 0),
-            "this host latched its park moment and the tier's own ask census did not record the conjuncts it "
-            "latched on: deepcands at %ld ask(s), orphans at %ld, commits at %ld, writable %ld of %ld ask(s). "
-            "The latch is set from ONE cold_park_preview call and that same call raises every one of those "
-            "counters before returning, so they cannot disagree unless a conjunct was read from somewhere "
-            "other than the preview — which makes this row a statement about a frontier the census never saw",
-            pvc.asks_with_deepcands, pvc.asks_with_orphans, pvc.asks_with_commits,
-            pvc.asks_writable, pvc.asks);
-    DCHECKF(!cold_park_wrote || cold_park_moment,
-            "this session wrote %ld park record(s) and its own moment never latched. engine_request_park has "
-            "exactly one caller reachable from this program — run_scheduler's park hook, which is "
-            "fixture_want_park — so a residue written without the latch is a second door into cold_park, and "
-            "the ladder printed above it stops being able to say why a park did or did not happen",
-            cold_park_records());
-    int cold_resumed_any   = g_sess == SESS_RESUME && (g_cr.flows + g_cr.cands) > 0;
-    int cold_resumed_segs  = g_sess == SESS_RESUME && g_cr.segs > 0;
-    int cold_resumed_cand  = g_sess == SESS_RESUME && g_cr.cands > 0;
-    /* AND THE 'w' ARM AT BOTH ENDS, WHICH THE PASS SENTENCE HAS BEEN CLAIMING WITHOUT A ROW BEHIND IT. That
-       sentence says the residue is "every record kind this document can produce", and solver/cold.h declares
-       'w' A KIND for a reason it states outright — "there are as many as this instance answered peers, and zero
-       is a real and different answer" — so the claim was true of four kinds and asserted of five. The columns
-       for it were ADDED to @COLDPARK/@COLDRESUME with the note that a kind written and never reported is a kind
-       "whose absence and whose zero read alike", and then nothing read them: `g_cp.worlds` and `g_cr.worlds`
-       were printed and joined to no row, which is the write-with-no-reader half of the same defect the probe
-       table exists to close. TWO ROWS AND NOT ONE, because the ends fail differently and independently: a park
-       that carried no peer segment is a fixture that never materialized one, and a resume that re-materialized
-       none out of a residue that carried one is cold_resume's 'w' arm — and those were the same absent number
-       until these columns existed. */
-    int cold_park_world    = g_sess == SESS_PARK && g_cp.worlds > 0;
-    int cold_resumed_world = g_sess == SESS_RESUME && g_cr.worlds > 0;
-    /* AND THE 'r' ARM AT BOTH ENDS — the LAST kind of this grammar that had a counter at each end and no
-       producer anywhere, which is a different absence from the one the 'w' rows closed and reads identically.
-       A commitment is a fact about a RECEIVER (solver/flow.h), and the only host that had ever taken a park
-       stood in for a SENDER — so both halves were written, both were counted, and the pair `commits 0→0` was
-       a residue of nothing rather than a tier that works. What produces one is a peer's posted message routed
-       in (fixture_route_peer_post) and a timeline of this document taking it; what makes the park MEET one is
-       that the moment now asks the residue rather than the clock.
-       TWO ROWS AND NOT ONE, for the reason the 'w' pair gives: the ends fail differently and independently. A
-       park carrying no commitment is a fixture whose peer never posted or whose frontier never received; a
-       resume that rebuilt none out of a residue that carried one is cold_resume's 'r' arm, and those were the
-       same absent number until these rows existed.
-       AND THERE IS NO 'm' PAIR BESIDE THEM, WHICH IS NOW A STATEMENT ABOUT WHAT A ROW CAN ASSERT AND NOT
-       ABOUT WHAT THE TIER CAN DO. The 'm' ROUND TRIP IS WHOLE — solver/cold.c rebuilds one through the entry
-       that registers its arrival, so the moment no longer excludes it and the residue carries whatever the
-       frontier had not yet received. What it may not do is ASSERT one: whether any member still holds an
-       undelivered record at the instant the park is taken is a property of the SCHEDULE, so a row demanding
-       `delivers > 0` would be a green that depends on the interleaving, which §Testing names as the shape a
-       loaded machine falsifies. The `delivers p→r` pair the round-trip report prints says what crossed
-       without claiming a number this fixture can guarantee. */
-    int cold_park_commit    = g_sess == SESS_PARK && g_cp.commits > 0;
-    int cold_resumed_commit = g_sess == SESS_RESUME && g_cr.commits > 0;
-    /* AND THE ARM THAT CARRIES CODE THE PAGE NEVER RAN. `park-orphan` says the residue names a FUNCTION and not
-       only paths; `resumed-orphan` says the rebuild turned that name back into a drive waiting for its body;
-       `resumed-orphan-met` says a take in this session actually handed one over, which is the only one of the
-       three that can distinguish a locator that works from a locator that merely round-trips as text.
-       AND THE FOURTH IS THE ONE THAT CANNOT BE PASSED BY A LOCATOR THAT NAMES THE WRONG THING: no waiting drive
-       FINISHED without a body. The document's uncalled function forks arms, so several flows carry ONE locator
-       and every one of them has to be handed the body — a route that satisfied the first and left the rest
-       would pass `resumed-orphan-met` and fail only here. It is the engine's own count, asked of it rather than
-       parsed back out of a log line. */
-    long orphan_met = 0, orphan_unmet = 0;
-    int cold_park_orphan, cold_res_orphan, cold_res_orphan_met, cold_res_orphan_all;
-
-    engine_orphan_claims(&orphan_met, &orphan_unmet);
-    cold_park_orphan    = g_sess == SESS_PARK && g_cp.orphans > 0;
-    cold_res_orphan     = g_sess == SESS_RESUME && g_cr.orphans > 0;
-    cold_res_orphan_met = g_sess == SESS_RESUME && orphan_met > 0;
-    /* AND IT IS CONJOINED WITH THE REBUILD THAT MAKES IT A STATEMENT, because `orphan_unmet == 0` ALONE is
-       VACUOUSLY TRUE in exactly the session where every row beside it reads 0. The proof needs no run and is
-       already asserted one file over: solver/result.c's `resumed.orphans > 0 || (claims_met == 0 &&
-       claims_unmet == 0)` says a rebuild that carried no locator cannot have lost a claim — so a resume
-       handed NO residue read 1 here while `resumed`, `resumed-orphan` and `resumed-orphan-met` all read 0,
-       and that 1 read as a pass in the one state where it was a statement about nothing.
-       IT IS THE MIRROR OF THE ROWS AROUND IT AND SO THE ONE THIS TABLE COULD NOT SEE. A row whose sides
-       cannot disagree while its own precondition is shut is not a weak assertion, it is a NON-assertion
-       wearing a row's clothes, and it is invisible precisely because it is GREEN — every mechanism here for
-       a 0 read past it.
-       THE CONJUNCT MAKES IT SAY WHAT THE PARAGRAPH ABOVE SAYS IT SAYS — drives came back AND not one of them
-       finished without a body — and makes it GATEABLE on the row that says drives came back, so its 0 is
-       published as entailed rather than counted as a second finding. It changes no verdict: the state it
-       turns from 1 to 0 is one in which `resumed-orphan` is already 0 and the run already fails there. */
-    cold_res_orphan_all = g_sess == SESS_RESUME && g_cr.orphans > 0 && orphan_unmet == 0;
-    /* AND THE QUESTION A PEER ASKED, HANDED BACK RATHER THAN CARRIED. `park-remoteop` is the row about the
-       refusal that used to abort here: a park that MET a STARTED cross-agent operation — a program mid-run with
-       the zone's rendezvous token on its row — and returned it. A 0 is not a flake and not a reason to soften
-       the row, AND IT IS NOT A MOMENT THAT WAS CHOSEN BADLY EITHER, which is what this comment used to say and
-       what sent a reader to fixture_cold_moment to fix something that is not there. NO MOMENT THIS HOST CAN
-       NAME CONTAINS ONE: the hook is asked between two slices, flow_perform appends the operation's program to
-       a RUNNABLE row, and a runnable member is in neither the stall nor the exhausted exit — so the started
-       state is strictly intra-slice and the only exits that could end a slice over one are the CPU quantum and
-       the level-1 yield floor. The moment's own paragraph carries the argument in full.
-       SO THIS ROW IS NARROWER THAN engine_retract_span, BY EXACTLY ONE LOOP, and that is what a 0 here says.
-       WHAT IS NOT COVERED: the `dyn_token` strip — the `g_retract_started++` loop — which no park this fixture
-       takes has ever reached.
-       WHAT THE NEXT DIFF BUILDS IS TWO INDEPENDENT THINGS, AND THE CLAUSE THAT STOOD HERE NAMED ONE. It is
-       recorded rather than deleted because the half it named is CORRECT about this engine, so a reader who
-       re-derives it will re-derive that half and stop exactly where its author stopped. It read: a provider
-       payment that asks the operation and does NOT answer the replies its members are parked on, so each
-       member converts the arrival to a row and then re-blocks at the cursor it was already owed a reply at,
-       leaving the token on an un-run appended row while every member is host-owed. That is the condition
-       under which a token SURVIVES a slice, and it says nothing about the condition under which one comes to
-       EXIST — which is the half this host fails, and the half no provider schedule can reach.
-       THE TWO ARE LABELLED BY WHEN THEY LAND AND NOT BY THE ORDER THEY WERE DERIVED IN, which is a repair
-       to this paragraph rather than to the argument under it. They were numbered (1) and (2) in the order
-       above, with the LANDING order stated in the sentence beneath them — and a numbered list is read as
-       an instruction while a sentence under one is read as commentary, so the labels said to build the
-       window first and the sentence said not to. The cost of taking the labels is named below and is not
-       hypothetical: three rungs that pass today go to 0.
-       (SECOND TO LAND) A PICK MUST HAPPEN BETWEEN THE ASK AND THE PARK, AND ON THIS HOST NONE DOES. run_scheduler's loop
-       is hook, engine_sched_step, payment; `fixture_ask_remote_op` is called from the PAYMENT; and
-       engine_sched_slice honours engine_request_park BEFORE its pick loop. The moment is LATCHED, so the
-       consultation after the one that asked returns 1 and the park is taken with the frontier untouched —
-       ZERO picks, so flow_perform cannot run whatever the provider does about replies. fixture_cold_moment's
-       own paragraph states that seam correctly ("there is no gap for the scheduler to work in"), and the
-       clause above was written as though the gap an ASK needs were the gap that paragraph denies. They are
-       two different gaps: that paragraph is about a STARTED operation surviving a slice, this is about one
-       ever starting, and the second is upstream of everything the clause described.
-       (FIRST TO LAND) AND THE CURSOR MUST STAND AT A ROW THE MEMBER CANNOT PASS, WHICH IS ONE KIND AND THIS DOCUMENT HAS
-       NONE OF IT. flow_step's sequence arm stands ABOVE every resting arm, so a member whose sequence was
-       EXHAUSTED and which gains one appended row has `script_i < dyn_n` at a compilable row, sets
-       `seq_compiles` and RUNS the operation on its very next step — after which flow_answer_perform has
-       cleared the token and the strip finds nothing. The only cursor this engine cannot pass is a
-       DYN_SCRIPT_SRC row whose bytes have not come back: that arm sets `seq_awaits`, compiles nothing and
-       rests. HTML_COLD's fetches are UNAWAITED, so its members rest on `pending_outstanding` with the
-       sequence exhausted, which is precisely the shape that runs the appended row. "The replies its members
-       are parked on" is true of this document and is the wrong KIND of reply.
-       SO THE ORDERED SUBPROBLEMS ARE, AND THE ORDER IS A LANDING ORDER: first a row in this document whose
-       reply the provider withholds across the park, so a member rests at a cursor the append lands BEHIND;
-       then the ask moved one consultation ahead of the park request, so a slice runs between them. NEITHER
-       IS LANDABLE ALONE and the second is the dangerous one — the window without the blocked cursor lets the
-       operation COMPLETE in that slice, which takes `park-remoteop-asked`, `-many` and `-once` from 1 to 0,
-       so a diff that builds the window first regresses the three rungs that currently pass.
-       BOTH ARE BUILT AND THEY LANDED AS ONE DIFF, for exactly the reason the sentence above gives: neither
-       moves this row alone and the second REGRESSES three rungs alone, so there was no coherent smaller
-       landing to make. The first is an external script at the end of HTML_COLD that fixture_provide
-       DECLINES; the second is one declined consultation at the tail of fixture_want_park. The token claim
-       is asserted beside the census below, after the park, so it holds whichever exit took the park.
-       WHAT IS STILL A RESIDUAL AFTER THEM, because building a precondition is not the same as discharging
-       the question: this row reads the STRIP, and the two halves only make the strip REACHABLE. A 0 here
-       means engine_retract_span walked a frontier that held a token and stripped nothing, which is a
-       DEFECT and no longer a named residual, and the census assert aborts on it in a dev build.
-       The `unaskable` declaration below is left exactly as it is: it retires itself the moment the
-       cross-agent-operation arm of `stepUnitRuns` leaves 0, with no edit at that line.
-       AND THE INDEPENDENT WITNESS FOR THE FIRST HALF ALONE IS `fork-over-a-declined-request`, which stands
-       in this host's NEVER-run list beside `cross-agent-operation` and `await-a-refused-request`. A build
-       that moves one and not the other is diagnosable: the decline arm running with this row still 0 says
-       the window did not open, and this row moving with that arm silent is not a reading this diff can
-       produce at all.
-       AND THE `SCOPE OF THE FIRST IS SHORT BY ONE FILE` CLAUSE IS REFUTED AT THE ONE FILE IT NAMES. It is
-       REWRITTEN RATHER THAN DELETED because every step of its reasoning is sound and a reader who re-derives
-       it reaches the same conclusion: it read that
-       `the provider withholds` names a thing fixture_provide MAY NOT DO, that the first park to try it would
-       abort in dev at run_scheduler's `engine_pending_fetches() == ` empty DCHECK, and that what the first
-       subproblem needs is a DELIBERATE decline the provider STATES — "That is a change in solver/engine.c".
-       THE DECLINE IS ALREADY BUILT AND NOTHING IN solver/engine.c HAS TO MOVE.
-       `engine_decline(ctx, method, url, reason)` answers the SAME (method, url) pair `engine_provide` answers
-       and is declared beside it; `engine_pending_fetches` SKIPS a refused entry, reading
-       `pending_entry_declined` in the same expression that skips an ANSWERED one, so the assert the clause
-       names cannot fire on one; a refusal leaves `haveValue` CLEAR, so the flow stays PARKED rather than
-       being handed a network error it never observed; and `flow_decline_fork` already names THIS document's
-       shape in its own words — "a document's own external script parks at its sequence row with no frame at
-       all". That waiting arm is FRAMELESS, which is what carries it past the `if (!f->frame)` block head and
-       in front of flow_perform_pending, and its cursor stands at the DYN_SCRIPT_SRC row that sets
-       `seq_awaits` — the one cursor this engine cannot pass, which is exactly what the first subproblem asked
-       for and reported as absent.
-       SO THE SCOPE OF THE FIRST IS ONE FILE AND IT IS THIS ONE: fixture_provide DECLINES one address this
-       document names instead of providing it. A diff that obeyed the retired clause would have built a SECOND
-       spelling of a decline beside engine_decline, which is the dual-system rot a superseded system may not
-       be kept as, reached by a reader who had no reason to grep for a mechanism the clause told them was
-       absent.
-       WHETHER IT WAS STALE OR FALSE AT BIRTH IS NOT ESTABLISHABLE FROM THIS CHECKOUT, which is a result and
-       not a failure to look: `git rev-parse --is-shallow-repository` answers true here, so a pickaxe reports
-       the graft commit for every pre-existing line and cannot tell the two apart. What is recorded instead is
-       the METHOD, because that is the half which predicts the next one: the clause reasoned from ONE register
-       and ONE assert and never asked what ELSE a record may carry, so it enumerated TWO states of a field
-       that has THREE — answered, outstanding, and REFUSED.
-       THE DERIVATION RATHER THAN THE COORDINATE, because the lines move:
-       `git grep -n 'int engine_decline' engine/host/solver/engine.c` names the entry,
-       `git grep -n pending_entry_declined engine/host/solver/engine.c` names the skip that keeps a refused
-       entry out of the join that assert reads, and
-       `git grep -n 'external script parks at its sequence row' engine/host/solver/engine.c` names the fork
-       arm that already takes this document's own external script as one of its two shapes.
-       RETIREMENT: this record goes when fixture_provide declines an address of this document, because the
-       clause is then built rather than described.
-       AND THE OTHER HALF IS STRONGER THAN IT WAS STATED, WHICH IS WORTH THE SAME AS THE CORRECTION: the
-       zero-pick window is not a property of this host's schedule that a cleverer moment could dodge, it is
-       FORCED. The conjunction fixture_cold_moment latches reads state that only a STEP changes; the loop is
-       hook, step, payment, so the payment is the FIRST consultation after any step and the hook is the
-       SECOND — the latch can only ever be taken at a payment, and fixture_provide asks the operation on the
-       very line that takes it. `on this host none does` is therefore `none can, while the moment is a
-       function of post-step state`, and fixture_want_park now asserts the consequence at the seam rather than
-       leaving it to be re-derived from three rows reading 0.
-       (The seam the surviving half rests on is flow_step's own order, and it is RE-DERIVED here rather than
-       inherited: the `flow_perform_pending` branch sits under `if (!f->frame)` and ABOVE both the networking
-       delivery and the sequence arm, so a member with no live frame that is owed a reply converts an arrival
-       to a row on one step and reports OWED on a later one. A member parked MID-FRAME never reaches that
-       branch at all — JS_ResumeParkedFlow answers first — which is why the clause says "at the cursor it was
-       already owed a reply at" and not "mid-expression".)
-       RETIREMENT: this record goes when a park this fixture takes raises `g_retract_started`, because what
-       is described above is then held by the assert at fixture_want_park rather than by this paragraph.
-       HOW ITS ABSENCE SHOWS: this row reads 0 while all three rungs below it read 1 — the arrival-slot half of
-       the same call having run over many timelines, handed back once, without the row half ever existing.
-       AND THE THREE RUNGS BELOW IT ARE A LADDER FOR THE ACCESSOR'S REASON, WHICH IS THE CORRECTION THIS
-       PARAGRAPH NEEDED MOST. The clause above says a 0 here shows "while `park-remoteop-once` reads 1" — and
-       that clause was resting on a row which, at 0, could not have told the reader which of THREE things had
-       happened. `flows > 1 && back == 1` folded the last-holder rule together with the precondition that makes
-       it say anything, so a 0 was "the question was never asked" (nothing called engine_perform, or it attached
-       to nothing), "it was asked and this document held it on ONE timeline" (a fixture problem — the row below
-       asserts nothing over a single holder), and "it was asked, many timelines held it, and MORE THAN ONE
-       notice left" (the per-flow hand-back, an engine defect). Those take three different fixes and had one
-       column. Each rung has a strictly earlier observation site than the one above it, so the LOWEST 0 is the
-       localisation, and every one of them is read off the same census — no rung is a new fact, which is what
-       makes this a split rather than an addition.
-       `park-remoteop-once` is the LAST-HOLDER rule and is the only rung a per-flow hand-back would fail.
-       engine_perform attaches one question to EVERY live timeline, so a notice per holder would be one
-       hand-back repeated once per member — and worse than noisy: the zone would be told to forget a token a
-       surviving timeline is about to answer under, which its own assert catches one seam away from the engine
-       that caused it. One question asked, many holders, exactly one notice.
-       AND THE RUNGS ARE NOT ENTAILED, WHICH WAS CONSIDERED AND DECLINED RATHER THAN MISSED — recorded so
-       the next reader does not "fix" it. A ladder is supposed to be a chain of implications, each rung
-       implying the one below, and `-many` implies `-asked` while `-once` does NOT imply `-many` (one
-       holder handing back once satisfies `back == 1` with `flows == 1`) and `park-remoteop` does not imply
-       `-once` (two tokens last-held give `back == 2`; it holds today only because this fixture asks ONE
-       operation, which is a property of the fixture and not of the ladder). So a 1 can stand above a 0.
-       WHAT MAKES THAT SAFE IS THE SENTENCE ABOVE IT: each `why` states what ITS OWN rung observed and
-       nothing about its neighbours, so the reader who takes the lowest 0 is correctly localised anyway —
-       `-many`'s own text says in as many words that the rung above it decides a last-holder rule over a
-       single holder and states NOTHING. All three available repairs are worse: folding `flows > 1 && back
-       == 1` re-introduces the exact conflation this ladder was split apart to end, asserting the
-       entailment aborts on a document that legitimately does not fork, and relaxing `== 1` destroys the
-       last-holder rule the row exists for. A finding about a contract is a finding; it is not a licence to
-       change the contract. */
-    long retract_flows = 0, retract_started = 0, retract_back = 0;
-    long perform_asks = 0, perform_attached = 0;
-    int cold_park_remoteop, cold_park_remoteop_once, cold_park_remoteop_asked, cold_park_remoteop_many;
-    int cold_park_remoteop_arrived, cold_park_remoteop_attached;
-
-    engine_retract_census(&retract_flows, &retract_started, &retract_back);
-    /* AND WHAT THE ASK SIDE DID, which is a different pair of events from what the RETRACTION found and was
-       unpublished until there was a rung that needed it. Both are lifetime counts; see solver/engine.h. */
-    engine_perform_census(&perform_asks, &perform_attached);
-    /* THE CONTAINMENT, ASSERTED WHERE BOTH NUMBERS ARE IN ONE HAND rather than restated in either producer's
-       header. A member cannot hold a question that was never attached to it, so the park's `flows` is bounded
-       by the ask side's `attached` — and that bound is the whole of why the ladder's lowest 0 is a
-       LOCALISATION rather than three readings of one number.
-       IT IS ONE-SIDED ON PURPOSE. `attached <= perform_asks` is FALSE and asserting it would fire on the
-       ordinary case: one arrival is attached to EVERY live timeline, so a forked document makes `attached`
-       many times `asks` and no order between those two means anything at all. */
-    DCHECK(retract_flows <= perform_attached,
-           "more members held a cross-agent question at this park than engine_perform ever ATTACHED — a "
-           "question reached a flow's arrival slot or a program's row without going through the attach loop, "
-           "so something other than engine_perform is writing the place the retraction walks");
-    /* The token claim, made after the park rather than where this host requests it: solver/engine.c parks by
-       two exits (the host's request, and a session closed over survivors resting on a refusal), both walk
-       engine_retract_span, and only the first passes through fixture_want_park. `started` is the strip's own
-       count, so it is the number of tokens on program rows at the instant the park walked. */
-    DCHECK(g_sess != SESS_PARK || !fixture_op_asked() || retract_started > 0,
-           "the peer's question was asked of this frontier and the park found no member holding its token on a "
-           "program row — either no member was resting behind HTML_COLD's declined external script when the "
-           "question arrived, or a member converted it and then completed it before the park. "
-           "`fork-over-a-declined-request` in `stepUnitRuns` says whether the decline forked at all");
-    /* THE LADDER'S SENTENCES — ONE PER RUNG, AND DELIBERATELY NOT COUNTED HERE, because a count beside the
-       list it counts is the half nobody adds up and this one read FOUR for as long as the ladder had four.
-       WRITTEN WHERE THE RUNGS ARE COMPUTED AND PRINTED WHERE A ROW IS 0. They
-       stood here as comments, which is the one place a reader of a LOG never looks: probes_report narrates a
-       0 row only when it carries a `why`, and this ladder carried none — so the lowest rung, whose 0 is a
-       NAMED RESIDUAL and not a defect, printed a bare `park-remoteop=0` that a reader then has to localise
-       out of a 28k-line file. MEASURED, and it cost a dispatched lane: that 0 was read as `the last zero`
-       and briefed with three candidate mechanisms, every one of them about the park RESIDUE KINDS, when this
-       row reads engine_retract_census and no park record at all. The printer's own comment already states
-       the rule this follows — a 0 has two readings, answered-wrongly and never-reached, and per row the
-       split is what a `why` and a ladder's lowest rung are for. The ladder was half of that pair.
-       EACH SENTENCE STATES WHAT ITS OWN RUNG OBSERVED AND NOTHING ABOUT ITS NEIGHBOURS, because a rung
-       cannot read them: probes_report prints the `why` of every 0 row, so a sentence asserting that another
-       rung is 1 would be printed on the run where it is not.
-       RETIREMENT: these go when a probe row's 0 cannot be printed without a diagnostic beside it. */
-    /* Rung 0a: A PEER QUESTION REACHED THIS INSTANCE AT ALL. Its observation site is engine_perform's own
-       first statement, which is strictly earlier than every rung above it and strictly earlier than the park,
-       so a 0 here is a statement about the ASK PATH and can be about nothing else. It is also the rung that
-       makes the three rungs above it statements rather than guesses: `retract_flows` is measured AT THE PARK
-       and cannot distinguish a question that never came from one whose holders had gone.
-       NO GATE: nothing below it implies it, so a gate would suppress it on the one run that most needs
-       it. */
-    const char *remoteop_arrived_why =
-        "no cross-agent operation ever reached this instance — engine_perform was never called, so nothing was "
-        "ever attached to any timeline and the park had nothing to walk. Read fixture_ask_remote_op and the "
-        "moment that gates it, and the zone's routing; never engine_retract_span and never the attach loop, "
-        "neither of which ran.";
-    cold_park_remoteop_arrived = g_sess == SESS_PARK && perform_asks > 0;
-    /* Rung 0b: AND IT WAS ATTACHED TO A TIMELINE. This is the one state neither of its neighbours can
-       separate: engine_perform skips every live flow whose world CONTRADICTS the addressee the peer named, and
-       its own `attached > 0` DCHECK is what fires in a dev build when that empties the loop — so a 0 here in
-       RELEASE is that abort's silent form, and a 0 here in dev means the abort was bypassed and is itself the
-       finding. Gated on the rung below, which it entails: nothing can be attached that never arrived. */
-    const char *remoteop_attached_why =
-        "a cross-agent operation ARRIVED and was attached to NO live timeline — every member's world "
-        "CONTRADICTS the addressee the peer named. engine_perform's own `attached > 0` DCHECK carries what to "
-        "build for it, which is that a document a peer still holds a reference into must keep the timelines it "
-        "answered from alive. Nothing about the retraction walk is in question at this rung.";
-    cold_park_remoteop_attached = g_sess == SESS_PARK && perform_attached > 0;
-    /* Rung 1: the park MET a peer's question at all. */
-    const char *remoteop_asked_why =
-        "every member a question was attached to had LEFT THE FRONTIER before this park walked, so the walk "
-        "found nobody holding one. This row is gated on `park-remoteop-attached`, so for it to be printed a "
-        "question DID arrive and WAS attached — what its 0 says is that the timelines it was attached to are "
-        "gone, which is the same capability engine_perform's `attached > 0` abort names from the other end. "
-        "THIS SENTENCE USED TO READ `nothing was attached to any member at all — no peer question reached this "
-        "frontier, so the walk's arrival-slot half never ran`, and it is kept because a reader who re-derives "
-        "it from `retract_flows` will write it again: that is an assertion about the ASK SIDE, which this "
-        "rung's predicate cannot make at all — `retract_flows` is measured AT THE PARK and reads 0 for three "
-        "reasons that take opposite work. The two rungs below this one are what separate them. Read "
-        "fixture_ask_remote_op only when `park-remoteop-arrived` is the lowest 0; never engine_retract_span.";
-    cold_park_remoteop_asked = g_sess == SESS_PARK && retract_flows > 0;
-    /* Rung 2: MANY timelines held the one question — the precondition that makes rung 3 a statement about a
-       RULE rather than about a single free(). */
-    const char *remoteop_many_why =
-        "at most one member held a question, so the rung above decides a last-holder rule over a single "
-        "holder and states nothing about a RULE. That is this DOCUMENT not forking, so the fix is in this "
-        "fixture and not in the hand-back.";
-    cold_park_remoteop_many = g_sess == SESS_PARK && retract_flows > 1;
-    /* Rung 3: and exactly ONE notice left for it. */
-    const char *remoteop_once_why =
-        "the notice count is not 1. engine_perform attaches ONE question to EVERY live timeline, so above 1 "
-        "is a per-flow hand-back — the zone told to forget a token a surviving timeline is about to answer "
-        "under — and 0 is a question that left no notice at all.";
-    cold_park_remoteop_once = g_sess == SESS_PARK && retract_back == 1;
-    /* Rung 4: the named residual — a STARTED operation was met and its row stripped. */
-    const char *remoteop_why =
-        "no member carried a peer's rendezvous token on a PROGRAM ROW at this park. That is the `dyn_token` "
-        "strip, and for a single-instance host it is a NAMED RESIDUAL rather than a defect — but the FIRST "
-        "cause is not the one this string used to name, and is no longer the one that holds. BOTH HALVES THIS "
-        "ROW WAITED FOR ARE BUILT: HTML_COLD ends in an external script fixture_provide DECLINES, so a member "
-        "rests at the one cursor flow_step cannot pass and an appended row lands behind it; and this host now "
-        "lets ONE slice of picks run between the ask and the park, so flow_perform can convert the question "
-        "to a program row at all. The census asserts after the park, by either exit, that a token was on a "
-        "row whenever the question was asked, so a 0 here beside `park-remoteop-arrived` at 1 is the STRIP. "
-        "Read this row's banner, and never engine_retract_span. THIS ROW IS NOT ABOUT THE "
-        "RESIDUE KINDS: it reads engine_retract_census, so what "
-        "park.recipes carries, and whether a resume rebuilt it, says nothing about it in either direction. "
-        "The rungs printed beside this one are where what the park DID exercise is stated. THIS ROW IS "
-        "DECLARED UNASKABLE while the cross-agent-operation arm of `stepUnitRuns` stands at 0, so it is "
-        "reported as a HOLE and never as a finding; the day a flow converts a queued operation to a program "
-        "row it is a finding again, with no edit at that declaration.";
-    cold_park_remoteop      = g_sess == SESS_PARK && retract_started > 0;
-    /* AND WHETHER THIS RUN COULD PUT THE QUESTION AT ALL, READ OFF THE ENGINE RATHER THAN DECLARED BESIDE THE
-       ROW. `g_retract_started` is raised in exactly ONE loop — engine_retract_span's `dyn_token` strip — and a
-       row carries a token only through engine_queue_into, whose one call site passing a non-NULL token is
-       flow_perform, which flow_step reaches through its STEP_UNIT_CROSS_AGENT_OP arm and nowhere else (a fork
-       copies a token its parent already held, so it needs a parent that ran that arm). So
-       `arms[STEP_UNIT_CROSS_AGENT_OP] == 0` is NECESSARY for this row's 0: no flow was ever stepped while
-       holding a queued operation, so no row anywhere ever carried a token, so the strip had nothing to find.
-       The row is then not a finding — it is a question this host could not put, which is what the banner above
-       has said in prose since it was written and what nothing in the report could see.
-       IT IS NOT SUFFICIENT AND MUST NOT BE, WHICH IS WHAT MAKES THIS A PRECONDITION AND NOT AN EXCUSE. Above
-       0 the row is a STATEMENT again — a token reached a program row at some point, and whether one SURVIVED
-       to the park is exactly what the row measures — so the day either of the banner's two ordered
-       subproblems lands, this reads non-zero and a 0 here is a DEFECT once more with no diff at this line.
-       That is the banner's own RETIREMENT condition, armed rather than described.
-       IT IS THE ASK AND NOT THE OUTCOME, which is the distinction CLAUDE.md draws where an instrument sits
-       over a gate that may legitimately decline: a gauge of tokens on rows reads the same fact the ROW
-       reads (is a token on a row NOW) and would answer 0 for both meanings at once, while this counts the
-       step that PRODUCES one. The banner one function down already rejects that spelling as a conjunct for
-       the same reason — a sampled value that is never true latches nothing.
-       A LIFETIME COUNTER, so "ever" is what it answers: solver/engine.h's EngineStepUnitRuns is a lifetime
-       histogram and engine.c refuses to reset it at a session boundary, which is the one property that makes
-       a reading taken at the park a statement about the whole run rather than about this instant. */
-    EngineStepUnitRuns remoteop_steps;
-    int cold_park_remoteop_unaskable;
-
-    engine_step_unit_runs(&remoteop_steps);
-    cold_park_remoteop_unaskable =
-        g_sess == SESS_PARK && remoteop_steps.arms[STEP_UNIT_CROSS_AGENT_OP] == 0;
-    /* AND THE REPLAY REACHED ITS SINK AGAIN — the strongest thing a resumed residue can be asked to say, and a
-       correction of what this row used to ask. It read BOTH ARMS of the branch out of the @H surface, and that
-       is a statement about a program this session does not run: the moment fixture_want_park picks is the moment
-       the @S search is live, so the residue is mostly CANDIDATE SESSIONS. solve_flow_begin suppresses endpoint
-       recording for exactly those, because a request built out of an injected breakout is an @S artifact and not
-       an observed endpoint — so a residue of candidates emits no endpoints BY DESIGN, and the old row could
-       only ever have passed because a candidate's fork used to drop its substitution and leave one arm behaving
-       like an exploration flow (engine_sibling_assemble now carries it).
-       WHAT THIS ASSERTS IS THE WHOLE ROUND TRIP AT ONCE, and nothing weaker satisfies it: the payload crossed as
-       hex and came back through park_unhex, the sink class crossed as a NAME and was re-bound to solve.c's own
-       table pointer by solve_resume_candidate, the flow replayed its recorded arms over the segments cold_resume
-       rebuilt, re-reached the eval sink and X9 FIRED there — which §@S says is the only thing that proves a PoC.
-       A session that rebuilt its flows and then went nowhere reports nothing here.
-       AND IT WAS THREE LOOSE `strstr`s FOR A CLAIM THAT IS ONE RECORD. The sink class, the source shape and
-       the payload text were asked of the whole document independently, so three DIFFERENT records answered
-       them between them — and the record that answers all three is the one `s-eval` already asserts a few
-       hundred lines up (`s_poc(ss, "eval", "{state}.code", "';X9()//")`), which is an EXPLORE row. A resume
-       whose replay went nowhere while an exploring flow in the same document fired the same sink satisfied
-       this row exactly as the round trip does. `s_poc` is that same join, spelled once: the record shape
-       solve.h declares, in order, with the payload anchored to its own `poc` key, so a candidate list cannot
-       answer it and neither can another sink's entry. */
-    int cold_fired = s_poc(js, "eval", "{state}.code", "';X9()//");
-    /* §State-isolation's PER-FLOW COW DELTA OVER THE EDGE THE DELTA CANNOT SEE — the `nwisoel` statement,
-       whose own banner in HTML_COLD holds the four-state verdict table these two rows are one reading of.
-       THE `ok` IS THE ABSENCE OF A `-sees-` PATH, AND THE ASYMMETRY IS WHAT KEEPS THIS OFF THE FURNITURE
-       LIST. A `-sees-` record is emitted only by an arm that RAN and found an expando it never wrote, so the
-       record's own presence proves BOTH arms reached the statement — the first to arrive always reads
-       undefined — and a red here is therefore a SCORED leak that can never be a reading about the schedule.
-       THE GREEN DIRECTION IS THE WEAK ONE AND IS STATED AS SUCH rather than patched: an absence satisfies it
-       identically to a fix, which is §Testing's prediction-of-an-absence, and `/api/nwiso/reach` is the
-       reachability witness that separates the two. It is deliberately NOT folded in — folding it would make
-       this row RED on any session that does not reach the statement, which is the furniture the statement's
-       author declined to land and which this row exists to avoid re-creating.
-       WHOLE-DOCUMENT AND UNSCOPED ON PURPOSE: both clauses are NEGATIVE, where a needle can only fire EARLY
-       (a superstring makes it unable to pass, never unable to fail), which is the sign this file's own
-       `strstr` rule names as correct for the whole-document form — and each is wrapped in its own JSON
-       quotes, so it is a whole-token match besides. */
-    /* §4.2.4'S VALUE SEAM, AS A TWO-RUNG LADDER, AND THE RUNGS ARE ENTAILED. `byid-seam-reach` is the
-       statement having run at all and `byid-seam` is the fork having been taken, so the lower rung is implied
-       by the upper one and the LOWEST 0 is the localisation — which is the whole reason this is two rows and
-       not one. A folded row would read 0 for "the document never reached the statement" and for "the seam
-       decided one arm" alike, and those take opposite work: the first is a schedule reading and the second is
-       a defect in core/dom/node.c's byid_id_is.
-       WHY `isnot` IS THE REACHABLE ONE rather than an arbitrary choice of control: it is outcome 0, so it is
-       the arm a run with no forking policy takes, AND it is the answer every build gave before the seam
-       existed — the tree holds concolic_shape_c's display shape for a concolic attribute write, so the
-       comparison was against `{location.hash}.slice(1)` and answered false. A build with the seam compiled out
-       therefore reads `reach 1 / seam 0`, which is a scored pre-seam reading and not a lost statement.
-       THE UPPER RUNG IS BANDED BY THE LOWER, so a session that never reached the statement reports the row as
-       unaskable rather than as red — the furniture `#nwisoel`'s author declined to land. */
-    int byid_seam_reach = param_value_is(js, "/api/byidseam", "arm", "isnot");
-    int byid_seam       = param_value_is(js, "/api/byidseam", "arm", "is");
-
-    const char *nwiso_why = NULL; int nwiso_iso = 1;
-    fold_row(&nwiso_iso, &nwiso_why, !strstr(js, "\"/api/nwiso/t-sees-f\""),
-             "the TRUE arm read back an expando the FALSE arm wrote: `/api/nwiso/t-sees-f` is in this run's "
-             "records, so a write to `#nwisoel` crossed a fork boundary PAGE-OBSERVABLY. That record is "
-             "itself proof both arms reached the statement, so this is a scored leak and not a reading about "
-             "the schedule. §State-isolation's skip is decided on the AGE of the object written (cow.c's "
-             "`JS_ObjFlowGen(obj) > d->fork_gen`) and core/dom/node.c's identity table hands ONE wrapper to "
-             "both arms with no property write for a hook to see: check that `node_wrap` still mints inside "
-             "its `JS_SetFlowGen` baseline bracket");
-    fold_row(&nwiso_iso, &nwiso_why, !strstr(js, "\"/api/nwiso/f-sees-t\""),
-             "the FALSE arm read back an expando the TRUE arm wrote: `/api/nwiso/f-sees-t` is in this run's "
-             "records. The two directions are separate clauses because they are separate observations — one "
-             "arm leaking and both arms leaking are different facts about which world minted the wrapper, "
-             "and a folded row would name neither");
-    /* ─── THE THREE OPERAND-SHAPE STATEMENTS (script id=stk) ───────────────────────────────────────────────
-       Each is TWO rows, never one, because each has two independent ways to be wrong and a folded row would
-       name neither: whether the path RAN, and whether the operand stack was where the next opcode expected it
-       when it came back. Every claim is an exactly-one value, because every one of these values is DETERMINED
-       by the code — a second DISTINCT VALUE means the flow forked where the statement says it cannot,
-       which is a finding rather than a match, and `param_value_only` is what says so. */
-
-    /* THE HEAD REJECTED AND ITS HANDLER RAN: `v` is the rethrown Error's own message, which no other statement
-       in this document produces. Nothing else here reaches the head's abrupt handler at all — every other
-       `for await` drives a generator that yields — so a 0 in this row is the handler being unreachable and not
-       a value being wrong. */
-    int faw_handler = param_value_only(js, "/api/faw", "v", "fawREJ");
-    /* AND THE HANDLER LEFT THE STACK WHERE THE NEXT OPCODE EXPECTS IT. `(1+2)*(3+4)` is evaluated in the same
-       frame AFTER the catch, so a handler that dropped one thing too few or too many either aborts on the
-       height assert or computes this from the wrong slots. It is a separate row from the one above because
-       "the handler ran" and "the handler balanced" are different failures with different fixes. */
-    int faw_depth = param_value_only(js, "/api/faw", "after", "21");
-
-    /* A CALLBACK FRAME OWNS ITS ARGUMENTS: the rest parameter is the only arg shape that BUILDS an object out
-       of the callee's argument slots, so it is the only one that can observe them being someone else's. `n`
-       and `t` are the length and the LAST of forEach's three arguments — a frame that lost the tail of its
-       arguments still answers `e` and fails these two. */
-    int rest_args = (param_value_only(js, "/api/rest", "n", "3") &&
-                     param_value_only(js, "/api/rest", "t", "object"));
-    /* AND THE DRIVE IS A LOOP: two invocations, two elements, so `e` carries exactly two values. One means the
-       machine ran its callback once; zero means the endpoint is absent and `rest_args` already said so. */
-    int rest_loop = (param_value_count(js, "/api/rest", "e") == 2);
-
-    /* ─── THE ACCESSOR, AS A LADDER RATHER THAN TWO ANSWERS ────────────────────────────────────────────────
-       THE FIRST VERSION OF THIS WAS TWO ROWS AND THEY CAME BACK 0 AND 0, WHICH IS THREE STATES BEHIND ONE
-       ANSWER — the defect this file already names and the one I reproduced building the instrument meant to
-       end it. `param_value_count` returns 0 for "no such endpoint" AND for "no such param on it", so a
-       collapsed row cannot tell an accessor that never ran from one that ran once from one that returned a
-       shape, and every one of those is a different thing to go fix. Four rungs, each with a strictly earlier
-       observation site than the one above it, so the LOWEST 0 is the localisation.
-       Rung 1 is asked WITHOUT param_values_in deliberately: the helper answers NULL for an absent endpoint
-       and for an absent param alike, so the endpoint's own presence has to be read off the document directly
-       or the bottom of the ladder collapses in exactly the way the ladder exists to prevent. */
-    int getter_url = strstr(js, "\"url\":\"/api/getfork\"") != NULL;
-    /* Rung 2: the getter returned a value the run DETERMINED. A 0 here with rung 1 at 1 says the ternary
-       propagated its operand instead of forking — the value is a shape, and no count of it is about the
-       clone.
-       AND THE TERM IS WHOLE-VALUE EQUALITY, BECAUSE THAT IS THE ONLY WAY THIS RUNG STATES ITS OWN CLAIM. The
-       failure it exists to report is "the value is a SHAPE", and a shape is composed OVER its operands, so a
-       containment test is satisfied by exactly the thing the rung is supposed to refuse. `?v=' + _gx.x` puts
-       the accessor's whole answer in the param, so `gxADMIN` is a value or it is not. */
-    int getter_concrete = (param_value_is(js, "/api/getfork", "v", "gxADMIN") ||
-                           param_value_is(js, "/api/getfork", "v", "gxPUBLIC"));
-    /* Rung 3: BOTH arms reached the sink, which is the claim (2b) is in the document to make. */
-    int getter_fork = (param_value_is(js, "/api/getfork", "v", "gxADMIN") &&
-                       param_value_is(js, "/api/getfork", "v", "gxPUBLIC"));
-    /* Rung 4: and exactly two — a third value is a flow that got there some way this fixture does not
-       describe, which is a finding rather than a stronger pass.
-       IT IS `ONE OF EACH` AND NOT `TWO OF ANYTHING`, AND THE DIFFERENCE IS VISIBLE WITHOUT RUNNING ANYTHING:
-       A LADDER'S TOP RUNG MUST IMPLY THE RUNG BELOW IT, or the lowest 0 stops being the localisation and the
-       rows stop being readable in order. `param_value_count(...) == 2` does not imply rung 3 — one arm's
-       literal beside a value that is neither arm satisfies it while rung 3 refuses — so the two rungs could
-       read 1 above 0, which is not a weaker claim standing on a stronger one but two claims about different
-       things printed as a ladder. Spelled as a count OF EACH ARM it implies rung 3 by construction, it says
-       what the sentence above it always said it said, and the state it used to certify is one this document
-       has been measured in: at one revision, in 38 consecutive censuses of one run, the OLD spelling of this
-       row read 1 while rung 3 read 0. That figure is a fact about that run and not about the tree — what is
-       durable is the implication, which needs no run and cannot go stale. */
-    int getter_arms = (param_value_count_of(js, "/api/getfork", "v", "gxADMIN") == 1 &&
-                       param_value_count_of(js, "/api/getfork", "v", "gxPUBLIC") == 1);
-    /* AND THE CONTROL, WHICH IS WHAT MAKES THE LADDER ABOVE MEAN THE ACCESSOR. The same ternary over the same
-       source in the same frame with no accessor in the way: `base_fork` at 1 while `getter_fork` is 0 isolates
-       the difference to the accessor, and `base_fork` at 0 says ONE of the two arms that already exist did not
-       REACH this statement — which is not one reading but three, because this statement forks nothing of its
-       own and so cannot indict a gate at all: see the rungs below for the split and for what the clause that
-       stood here ("`cfg.admin` is not two-armed at this point in the document at all") was wrong about.
-       Without this row those two are one number, and the wrong one gets worked on. A CONTROL
-       ASKS THE SAME QUESTION AS THE THING IT CONTROLS, so this is whole-value equality for rung 3's reason:
-       a control that could be satisfied by a shape while the claim could not is a control that answers a
-       different question and cannot isolate anything. */
-    /* AND IT CARRIES ITS OWN `why`, BECAUSE A CONTROL WHOSE ZERO CANNOT SPEAK CONTROLS NOTHING. The paragraph
-       above says the whole point of this row is that without it two states "are one number, and the wrong one
-       gets worked on" — and the row as it stood committed that same defect one level down: a bare conjunction
-       of two value tests is 0 when the endpoint was never emitted AT ALL, when it was emitted carrying only
-       the admin arm, and when it was emitted carrying only the public one, which are three states taking
-       three different actions. The first says the statement never ran and the ladder above is unreadable
-       rather than negative; the other two say the ternary was DECIDED and name which arm survived, which is
-       the concretized gate §Solver-half forbids and is the finding.
-       IT WAS THE ONLY ROW IN THIS FAMILY WITH NO TEXT, which is how it went unnoticed: `fold_row` asserts
-       that a 0 row carries a diagnostic, and a row that never folds never reaches that assert. */
-    /* AND THE RUNG THAT MADE THE SENTENCE BELOW A READING RATHER THAN A GUESS. The `exactly ONE of its two
-       arms` clause was folded on `adm && pub` over two MEMBERSHIP tests, and membership cannot see a third
-       entry: one arm's literal ALONE and that literal ALONGSIDE some other value both answer `adm=1, pub=0`,
-       so the row printed a DECIDED gate for a statement whose sink more than one thing had reached. The two
-       readings take opposite work — a decided gate is a branch that never forked, a third value beside one
-       arm is a branch that DID fork whose sibling's value never became a literal — and the second is the
-       state its own sibling statement was in while this sentence was being read as the first: `/api/getfork`
-       answered `getter-concrete` 1 with `getter-fork` 0 while its total stood at TWO — one arm's literal and
-       one entry that is neither arm — in the same document, over the same source, in the same run. (That
-       total was `getter-arms`' old spelling, which this diff retires, so the row no longer reads that way;
-       the STATE is what the sentence is about and the row that named it is not the one to grep for.)
-       So the fold counts instead of asking, and `other` is the quantity that separates them. */
-    const char *base_fork_why = NULL;
-    int base_fork = 1;
-    {
-        const int adm   = param_value_count_of(js, "/api/getbase", "v", "gbADMIN");
-        const int pub   = param_value_count_of(js, "/api/getbase", "v", "gbPUBLIC");
-        const int n     = param_value_count(js, "/api/getbase", "v");
-        const int other = n - adm - pub;
-
-        /* THE PARTS SUM TO THE TOTAL, which is the one property of this ladder a reader can check without
-           re-deriving it — and it is what makes `other` a count rather than an inference. Both counters walk
-           ONE array through ONE reader, so a negative residue is those two having stopped counting the same
-           thing and every rung below it would then be arithmetic over a quantity that means nothing. */
-        DCHECK(other >= 0,
-               "this statement's `v` entries matching the two arm literals OUTNUMBER its entries: "
-               "param_value_count and param_value_count_of walk one validValues array with one entry reader, "
-               "so the parts cannot exceed the total unless one of them has stopped counting what the other "
-               "counts, after which every rung of this ladder is arithmetic over a residue that is not a count");
-
-        fold_row(&base_fork, &base_fork_why, n > 0,
-                 "NOT REACHED: `/api/getbase` carries no `v` at all, so the control statement never ran. The "
-                 "`getter-*` ladder above cannot be read as being about the accessor OR about the fixture "
-                 "until this one does — a control that did not execute isolates nothing");
-        fold_row(&base_fork, &base_fork_why, adm || pub,
-                 "`/api/getbase` was emitted and its `v` is NEITHER arm's value: this control asks for whole-"
-                 "value equality on purpose (a shape could satisfy a laxer test while the claim above could "
-                 "not), so a `v` that is some third thing means the statement ran and produced a value this "
-                 "row cannot recognise, which is a claim about the fixture and not about the engine");
-        fold_row(&base_fork, &base_fork_why, other == 0,
-                 "`/api/getbase` carries an arm's literal AND at least one `v` that is neither arm's, so more "
-                 "than one thing reached this sink and only some of them are values this row can name. THIS "
-                 "IS NOT THE RUNG BELOW: a ternary that was DECIDED emits one arm and nothing else, so a "
-                 "third entry says the branch FORKED and a sibling's value never became a literal — a "
-                 "concretization failure, which is one mechanism further on than a gate that never forked and "
-                 "is fixed somewhere else. Read the unnamed entry itself: `param_value_count` counts it, no "
-                 "row prints it, and whether it is a derived display shape or a duplicate of the arm beside "
-                 "it is the question that decides which of the two mechanisms this is");
-        /* AND THE RUNG THAT STOOD HERE PUBLISHED THE STRONGEST VERDICT THIS FILE HAS WITHOUT READING THE
-           FRONTIER, WHICH IS THE ONE STATE `probe_frontier_state` EXISTS TO WITHHOLD. It read: "the same
-           ternary over the same source in the same frame, with NO accessor in the way, produced exactly ONE
-           of its two arms — so `cfg.admin` is not two-armed at this point in the document at all. That is the
-           concretized gate §Solver-half forbids for server-injected absent state". Its ENTAILMENT clause was
-           exact and is kept below — rung 3 really does establish that no entry here is anything but an arm's
-           literal — and the verdict drawn from that does not follow, for two separately fatal reasons.
-           (i) THIS STATEMENT FORKS NOTHING OF ITS OWN, which the paragraph beside it in the document says in
-           as many words: the ternary is decided inside each arm that already exists. So a missing arm here is
-           an arm that did not REACH the document's last `<script>`, and the gate it came from is UPSTREAM —
-           `boot-fork` and `role-public` are the rows that measure it, so this row restating their finding is
-           one observation under two names rather than a second one.
-           (ii) A MISSING WORLD IS THREE STATES AND THE FRONTIER IS WHAT SEPARATES THEM, which is the whole of
-           `role_public`'s ladder above and of `fork_row_impl`'s three messages: at a DRAINED frontier a
-           missing world was LOST, while members have never been handed the thread the answer is THIS RUN
-           CANNOT SAY WHY, and `probe_frontier_state`'s own DCHECK calls the drained verdict "the strongest of
-           the three verdicts this rung exists to withhold". The old rung named it at every sample.
-           MEASURED, at the terminal census of one dev build's native smoke: `boot-fork`, `role-admin`,
-           `role-public` and `merged` all read 1 on the SAME line as `base-fork`=0 — so both worlds existed,
-           both reached the branch and their records had merged — while the frontier stood at 83 of 175
-           members never once handed the thread. Four rows of one census contradicting a fifth's sentence is
-           the sibling diff rather than a run of anybody's, and it needs no build.
-           SO IT IS ROUTED AND NOT RE-WORDED. The DECIDED state names `boot-fork`; the two-world claim goes to
-           FORK_ROW, which is this file's canonical spelling for one — one reading of the frontier, no second
-           copy of its three sentences, and the MISSING ARM NAMED, which no version of this row has ever
-           printed and which is the one coordinate a reader of a 0 here most needs. Rungs 1-3 stay, because
-           FORK_ROW asks `param_value_is` and cannot see a third entry; rung 3 is the only thing in this file
-           that can, which is why this is a split and not a replacement.
-           RETIREMENT: this record goes when no rung in this file can name a verdict `probe_frontier_state`
-           withholds without having called it — the reading asserted at the fold rather than argued here. */
-        fold_row(&base_fork, &base_fork_why, !bootfork_decided,
-                 "an arm is missing and the branch BOTH of this control's arms come from was DECIDED rather "
-                 "than forked — `boot-fork` on this same line carries the diagnosis. This statement forks "
-                 "nothing of its own, so it has nothing to add to that finding and is not a second one. "
-                 "EXACTLY ONE ARM IS ENTAILED AND NOT ASSUMED: the rung above has established that no entry "
-                 "here is anything but an arm's literal, which is what a membership test could not say");
-        FORK_ROW(js, &base_fork, &base_fork_why, "/api/getbase", "v",
-                 "the rest of the document", "gbADMIN", "gbPUBLIC");
-        fold_row(&base_fork, &base_fork_why, adm == 1 && pub == 1,
-                 "BOTH arms reached the sink and one of them reached it MORE THAN ONCE: every `v` is an arm's "
-                 "literal and the two do not appear once each, so a flow got to this statement some way the "
-                 "fixture does not describe. That is a finding rather than a stronger pass, and it is the "
-                 "claim `getter-arms` makes about the accessor asked of the control — a control that "
-                 "accepts a document its subject's own ladder would refuse isolates nothing");
-    }
-
-    /* THE CONSTRUCT-TIME THROW HAPPENED. Without this row a green `con_shape` below is also what a statement
-       that never threw produces, which is the failure mode of asserting only the consequence. */
-    int con_threw = param_value_only(js, "/api/conshape", "c", "threw");
-    /* AND THE NEXT CONSTRUCT IN THE SAME FRAME COMPLETED — TWO RUNGS, AND THE FIRST ONE IS NEW BECAUSE THE
-       ROW BELOW CAME BACK 0 IN A STATE THAT CANNOT PRODUCE IT. `con_threw` is 1, so `/api/conshape` was
-       emitted and its `c` merged to exactly one value; every emission of that endpoint therefore also carried
-       an `s`, computed by `'' + 1 + 2` from two literals, which no flow can disagree about. And the pending-
-       call idle check did NOT fire, so the shape this statement is about was not left standing either. A 0
-       below under those three facts is not the defect this statement was written for and must not be read as
-       it — `param_value_only` is false for a value that is WRONG and for a param carrying more than one
-       value, and those are different findings. This rung separates them: 1 here says the construct produced
-       ONE answer across every flow and the row below is about WHICH answer; 0 here says it produced several
-       or none, which is a fact about the flows and not about the operand shape at all. */
-    int con_s_one = (param_value_count(js, "/api/conshape", "s") == 1);
-    /* AND IT IS THE RIGHT ONE. When the shape IS left standing the dev build never reaches this row at all —
-       the idle-register check fires at the first opcode boundary after the catch and names the register — so
-       a `@WHY` over the pending-call registers is this statement's signature and this row is the release-
-       shaped half of it. */
-    int con_shape = param_value_only(js, "/api/conshape", "s", "12");
-
-    /* (2d)'s FOUR ROWS, AND THE FIRST IS THE ONE THAT MAKES THE OTHER THREE READABLE. `td_reach` is emitted
-       by the statement's own first line, so it separates "the arm ran and answered wrongly" from "the
-       statement never began" — which for these three is a live possibility rather than a formality, since a
-       document reaches them only if this engine has AsyncDisposableStack at all. `td_reach` at 0 says the
-       fixture is what needs fixing; at 1 it says every 0 below is the engine's.
-       EACH ROW IS `param_value_only` AND NOT `_has`, because each of these three settlements is DETERMINED —
-       the dispose methods run no unknown and take no gate, so a param carrying two values means the flow
-       forked where this statement says it cannot, which is a finding rather than a match. `_has` would also
-       be the wrong instrument for a second reason: it is a SUBSTRING test, so an `ok` row would be satisfied
-       by the failure spelling of a value that contained it. */
-    int td_reach = param_value_only(js, "/api/tdreach", "d", "ok");
-    /* 27.5.4.7.1 step 2's build path with a plain thenable, then 27.5.1.3 step 2.f's `then` read. */
-    int td_plain = param_value_only(js, "/api/tdplain", "d", "ok");
-    /* THE SAME WALK WITH `then` BEHIND AN ACCESSOR — the page code a C activation has no flow base for, and
-       the exact shape the deleted selector refused. */
-    int td_acc = param_value_only(js, "/api/tdacc", "d", "ok");
-    /* AND THE CHAIN LINK'S OWN PromiseResolve, reached only under a previous error: `rej` rather than `ok`
-       because the stack must still reject once a dispose method has thrown. A row asserting `ok` here would
-       be asserting the bug. */
-    int td_prev = param_value_only(js, "/api/tdprev", "d", "rej");
-
-    /* THE BYOB READ'S THREE WORLDS, AND THE ROW THAT SAYS WHETHER THE STATEMENT RAN AT ALL. `bs-reach` is
-       emitted by the statement's own body BEFORE the read, so it separates "the arms answered wrongly" from
-       "the statement never began" — which here is a live possibility and not a formality, since a document
-       reaches the read only if this engine has ReadableStream, its byte controller and a BYOB reader.
-       IT IS ASKED WITH `param_value_only` AND NOT `_has`: `d` is `ok` on one path and `no` on the other, so a
-       containment test would read 1 for a statement that threw before it began. */
-    const char *bs_reach_why = NULL; int bs_reach = 1;
-    fold_row(&bs_reach, &bs_reach_why, param_value_only(js, "/api/bsreach", "d", "ok"),
-             "the BYOB read statement did not begin. /api/bsreach's `d` is not exactly `ok`, and its TWO "
-             "readings are told apart by the record itself: NO /api/bsreach record at all means no flow "
-             "reached this statement in this run, so every `bs-min` clause below is about how far the run got "
-             "and not about Streams §4.5.3; a record whose `d` carries `no` means the try block threw before "
-             "the read, and its `n` param NAMES the constructor that is missing — that is this fixture asking "
-             "for a capability, not §4.5.3 answering wrongly");
-    /* THE THREE WORLDS THEMSELVES, in ONE row, because they are ONE claim: over an unknown `min` Streams
-       §4.5.3's two conditions have both completions feasible, so a run that reaches only one or two of them
-       has LOST a sibling — which is what a collapse of the unknown to its example, or a fork gated on whether
-       an example exists, looks like from outside. The reach clause is folded FIRST so that a run in which the
-       statement never began carries THAT diagnosis rather than FORK_ROW's, which is about the schedule. */
-    const char *bsmin_why = NULL; int bsmin_tt = 1;
-    fold_row(&bsmin_tt, &bsmin_why, bs_reach, bs_reach_why);
-    FORK_ROW(js, &bsmin_tt, &bsmin_why, "/api/bsmin", "w",
-             /* SHORT ENOUGH THAT NONE OF fork_row_impl's FOUR MESSAGES IS CUT — the assert there is what
-                says so, and the fuller statement of the claim is the comment above rather than a longer
-                subject, because this string is the TAIL of every one of them and a tail is what a bounded
-                `snprintf` drops first. */
-             "Streams §4.5.3's read over an unknown `min`: step 4's TypeError, steps 5.1/6.1's RangeError and "
-             "the pull-into that survives both are three worlds of ONE read",
-             "read", "TypeError", "RangeError");
-    /* AND THE SURVIVING ARM DELIVERED A CHUNK RATHER THAN A CLOSE. `done` is the read result's own field and
-       is DETERMINED — this stream is never closed and eight bytes are queued — so exactly one value is the
-       whole assertion. A 0 here while `w` carries `read` says the pulling world reached §4.9.5 and came back
-       with no fill (or forked downstream of a read this statement does not fork); a 0 here while `w` does NOT
-       carry `read` is that world lost, and the clause above is the one that names it. */
-    fold_row(&bsmin_tt, &bsmin_why, param_value_only(js, "/api/bsdone", "d", "false"),
-             "the pulling world settled without a chunk: /api/bsdone's `d` is not exactly `false`. Read it "
-             "against /api/bsmin's `w` — with `read` present this is §4.9.5's fill answering `done` true or "
-             "answering twice, and with `read` absent it is the clause above's lost world showing up a "
-             "second time");
-
-    /* ─── HTML §6.12 The popover attribute → §6.10.1 Close requests → §6.10.2 Close watcher infrastructure ────
-       ONE ROW PER JOIN OF ONE ROAD, LOWEST FIRST, because a single folded row would say "the popover did not
-       close" for a failure at any of them and every one of those failures is a different file. See
-       HTML_POPOVER for why this document has one flow and what each of its three no-fork properties is doing
-       there.
-
-       THE STEP COUNT IS READ OFF THE ENGINE AND NOT OFF THE RESULT DOCUMENT, even though result.c composes the
-       same histogram into `stepUnitRuns`. The document is a STRING this function is handed, and a row that
-       located a row of a nested object inside it by `strstr` would be answered by the `stepUnits` GAUGE that
-       carries the identical key — two censuses, one name, opposite meanings (solver/result.c says so where it
-       writes them). The accessor is unambiguous and is the producer itself. */
-    EngineStepUnitRuns cw_runs;
-    long cw_modelled;
-
-    engine_step_unit_runs(&cw_runs);
-    cw_modelled = cw_runs.arms[STEP_UNIT_CLOSE_REQUEST];
-
-    /* RUNG 1 — the show ran and its step 9 `beforetoggle` reached the page. Everything below it is unreadable
-       without this: a chain that never established a watcher cannot close one. */
-    const char *pop_show_why = NULL; int pop_show = 1;
-    /* THE ADDRESS AS THE EMITTER WRITES IT — the PATH, with no query on it: endpoint_json_array splits the
-       query into `params`, so a needle carrying `?` matches nothing this file has ever emitted, which is the
-       term-that-cannot-pass shape the record locators above were written for. */
-    fold_row(&pop_show, &pop_show_why, !!strstr(js, "\"/api/popover\""),
-             "NOT REACHED: there is no /api/popover record at all, so `pv.showPopover()` never reached HTML "
-             "§6.12 The popover attribute's show popover step 9 (fire an event named beforetoggle, using "
-             "ToggleEvent, with oldState \"closed\" and newState \"open\") — or the listener registration "
-             "itself never ran. That is the SCHEDULE or the member, and says nothing about §6.10");
-    fold_row(&pop_show, &pop_show_why, param_value_is(js, "/api/popover", "state", "open"),
-             "the statement RAN and no record carries `state` = `open` — show popover step 9 fired something "
-             "at the listener whose ToggleEvent newState is not \"open\", which is core/html/toggle_event.c's "
-             "two slots or §6.12's own arguments to them rather than anything in §6.10");
-    fold_row(&pop_show, &pop_show_why, param_value_is(js, "/api/popover", "old", "closed"),
-             "the show fired and its ToggleEvent's `oldState` is not \"closed\" — the pair is ONE struct and "
-             "§6.12 states both, so one right and one wrong is the two slots crossed");
-    /* RUNG 2 — the listener's frame OWNED its arguments. §C-stack's rest-parameter rule: every other argument
-       shape takes the borrowed path and cannot see this. */
-    const char *pop_rest_why = NULL; int pop_rest = 1;
-    fold_row(&pop_rest, &pop_rest_why, pop_show, pop_show_why);
-    fold_row(&pop_rest, &pop_rest_why, param_value_is(js, "/api/popover", "n", "1"),
-             "the `beforetoggle` listener ran and its REST ARRAY does not hold exactly the one argument DOM "
-             "§2.9's inner invoke passes — a callback frame that BORROWS its argument slots (narg_alloc == 0) "
-             "builds the rest array out of storage it does not own, which is the ownership bug §C-stack's "
-             "fixture rule exists to reach and which no other listener in this fixture can find");
-    /* RUNG 3 — the ARRIVAL was modelled at all. This is the one rung that is about the SCHEDULER rather than
-       about §6.10 or §6.12: a 0 here is `g_sess_forking` false, or a ladder that returned above the close-
-       request arm (an outstanding reply, a queued job, an orphan still to take), and neither says anything
-       about the watcher. */
-    const char *pop_model_why = NULL; int pop_model = 1;
-    fold_row(&pop_model, &pop_model_why, cw_modelled >= 1,
-             "no flow of this document ever modelled a potential close request — solver/step_unit.h's "
-             "`model-a-potential-close-request` is 0, so engine_close_request_fork was never taken. It is the "
-             "LAST arm of flow_step's ladder, so either the session does not fork (g_sess_forking, which "
-             "engine_run sets) or every member returned through an arm above it and no flow in this document "
-             "ever reached the end of its own work");
-    /* RUNG 4 — THE TRAVERSAL. The modelled arrival reached §6.10.1's step 7, §6.10.2's process close watchers
-       took the last group, requested to close its one member, ran §6.12's cancel action, closed it, and the
-       close-action dispatch called hide a popover, whose step 12 fired the second `beforetoggle`. */
-    const char *pop_close_why = NULL; int pop_close = 1;
-    fold_row(&pop_close, &pop_close_why, pop_model, pop_model_why);
-    fold_row(&pop_close, &pop_close_why, param_value_is(js, "/api/popover", "state", "closed"),
-             "an arrival WAS modelled and no record carries `state` = `closed` — the road from HTML §6.10.1 "
-             "Close requests' step 7 to HTML §6.12 The popover attribute's hide a popover step 12 did not "
-             "complete. Read it against the run's aborts first: a §6.10.1 step 1 DFAIL is a fullscreen "
-             "element, a close_watcher.c CW_ASSERT_WINDOW is the establishing realm not being the document's, "
-             "and a popover.c DFAIL at the focusing steps is an `autofocus` this document does not have. With "
-             "NO abort, the walk ran and answered: either show popover step 15.10 established no watcher (the "
-             "element's `popover` state is not Auto, or step 15 was never entered), or §6.10.2's request to "
-             "close returned true at one of its steps 1-3 and 5, or its close returned at one of ITS steps "
-             "1-3, or the close-action dispatch reached §6.12's hide a popover and that algorithm returned "
-             "before its step 12 (its step 1's check popover validity, or `fireEvents` false)");
-    fold_row(&pop_close, &pop_close_why, param_value_is(js, "/api/popover", "old", "open"),
-             "the hide fired and its ToggleEvent's `oldState` is not \"open\" — §6.12's hide a popover step 12 "
-             "states oldState \"open\" and newState \"closed\", so one right and one wrong is the two slots "
-             "crossed on the hide's side only");
-    /* RUNG 5 — AND THE STATE ACTUALLY CHANGED. §6.12's hide a popover clears the popover trigger, the opened-in
-       -popover mode and the popover VISIBILITY STATE at its steps 14, 15 and 16 and queues the `toggle` at its
-       step 18, so a `toggle` carrying newState "closed" is the first observation downstream of those clears —
-       and the row above it, which is about step 12, cannot see any of them. The show's own `toggle` (step 26)
-       is asked first as the control: without it a 0 here is the toggle TASK never running rather than the hide
-       stage never finishing, and those are two different files. */
-    const char *pop_hidden_why = NULL; int pop_hidden = 1;
-    fold_row(&pop_hidden, &pop_hidden_why, pop_close, pop_close_why);
-    fold_row(&pop_hidden, &pop_hidden_why, param_value_is(js, "/api/popovertoggle", "state", "open"),
-             "the SHOW's queued `toggle` never reached the page — HTML §6.12 The popover attribute's show "
-             "popover step 26 queues a popover toggle event task, and a flow runs its own task queue before it "
-             "can reach the end of its work, so this is the task pump and not the hide");
-    fold_row(&pop_hidden, &pop_hidden_why, param_value_is(js, "/api/popovertoggle", "state", "closed"),
-             "the hide fired its step 12 `beforetoggle` and never queued its step 18 `toggle` — the machine "
-             "left the stage that holds steps 13 through 20.1 without finishing it, so the popover's "
-             "VISIBILITY STATE (step 16) and its opened-in-popover mode (step 15) are the things to read: a "
-             "close request that fires the event and leaves the popover showing is the one failure a "
-             "`beforetoggle` listener cannot see");
-    /* RUNG 6 — WHAT THE ARRIVAL COST THE PROVENANCE. Nobody performed the gesture, so CLAUDE.md
-       §A-REQUEST-CARRIES-THE-PROVENANCE grades every request built past it FORCED — and the SHOW's fetch is
-       not forced, so the one address carries two records that differ by grade. That split is asserted by
-       emitted_recs_one_statement above (two records of one address sharing a grade is a DCHECK); this row is
-       the positive half, that the forced grade is the one the CLOSE's request carries. */
-    const char *pop_forced_why = NULL; int pop_forced = 1;
-    fold_row(&pop_forced, &pop_forced_why, pop_close, pop_close_why);
-    fold_row(&pop_forced, &pop_forced_why,
-             emitted_record_has(js, "/api/popover", "\"provenance\":\"" PENDING_PROVENANCE_FORCED "\""),
-             "the close's `beforetoggle` fetch reached the surface and NO record of /api/popover is graded "
-             "`forced` — the flow modelled an arrival no user performed and went on to build a request that "
-             "says a real load of this document makes it. flow_mark_forced_arm is taken in the same operation "
-             "as the task frame (engine.c), so a derived grade here is that mark not reaching "
-             "pending_prov_compose rather than a policy decision");
-    /* RUNG 7 — §6.10.1's STEP 9, AND THE ARITHMETIC THAT IS THE WHOLE REASON THIS DOCUMENT IS ITS OWN. A run
-       that closes a group answers `closedSomething` TRUE and does not latch, so the manager is asked ONCE MORE
-       and that second task is the one that reaches "Alternative processing: Otherwise, there was nothing
-       watching for a close request" — which is the fact engine_close_request_fork latches and the reason it
-       stops with no counter and no seen-set. One group therefore costs TWO steps, and this document has one
-       group: establish's step 4 takes the new-group branch exactly once, because a realm's manager is born
-       with an allowed number of groups of 1 and its groups empty (0 < 1), and nothing here interacts with the
-       page, so §6.10.2's notify never raises it again. */
-    const char *pop_alt_why = NULL; int pop_alt = 1;
-    fold_row(&pop_alt, &pop_alt_why, pop_close, pop_close_why);
-    fold_row(&pop_alt, &pop_alt_why, cw_modelled >= 2,
-             "the popover was closed by a modelled arrival and no SECOND arrival was ever modelled — the flow "
-             "that closed the group answered HTML §6.10.1 Close requests' step 8 and returned, so it must be "
-             "asked again and answer step 9. A 0 here with the close green means the flow finished between "
-             "the two (it did not come back to the ladder), or `close_req_none` was latched by the run that "
-             "CLOSED something, which would be step 8's answer written into step 9's fact");
-    /* …AND THE COUNT IS EXACTLY THAT, which is a statement about the FRONTIER and not about §6.10: N+1 per
-       flow that reaches exhaustion, one group, one flow. It is a separate row from the one above because the
-       two fail for opposite reasons — that one is the chain not finishing, this one is the document having
-       more members than it was written to have — and a single row would report both as "the popover". */
-    const char *pop_once_why = NULL; int pop_once = 1;
-    fold_row(&pop_once, &pop_once_why, pop_alt, pop_alt_why);
-    fold_row(&pop_once, &pop_once_why, cw_modelled == 2,
-             "the chain traversed and `model-a-potential-close-request` is not exactly 2. MORE means a second "
-             "member of this frontier reached the end of its own work — a fork this document was written not "
-             "to have (see HTML_POPOVER for the three it refuses), or a second group in one manager, and "
-             "neither is a defect in §6.10 or §6.12; the number itself is in the @RESULT line's "
-             "`stepUnitRuns`. FEWER cannot reach this row, because the clause above it is >= 2");
-
-    /* ─── WEB IDL §3.7.2's THREE FACTORIES AND §3.6's "missing", AS ELEVEN ROWS ──────────────────────────────
-     *
-     * ONE ADDRESS PER ALGORITHM, so a 0 names a spec section, and the record's own `v` names the CLAUSE. Every
-     * one of these is a fold of exactly the two questions this table keeps apart everywhere else: is there a
-     * record at all (the SCHEDULE, which says nothing about the engine), and does that record's `v` carry the
-     * statement's success token.
-     * THE THIRD READING IS IN THE VALUE AND NOT IN A ROW, which is the one design choice here worth stating.
-     * `absent` — the `typeof` guard having refused — must never read as the same 0 as a wrong answer, and it
-     * cannot be a row of its own because the two are mutually exclusive answers to ONE statement rather than two
-     * statements. So the failure branch emits it, the wrong-value message below names it, and a reader with the
-     * result document in hand can tell an unbuilt name from a built one that lies.
-     * `param_value_is` AND NOT A WHOLE-DOCUMENT `strstr`: the success tokens share no bytes with each other,
-     * but `absent` and the clause letters are emitted by EVERY one of these statements, so an unscoped test
-     * would be answerable out of a neighbour's record — the join defect this file's readers exist to refuse. */
-    const char *lfafnaud_why = NULL; int lfafnaud_tt = 1;
-    fold_row(&lfafnaud_tt, &lfafnaud_why, !!strstr(js, "\"/api/lfafnaud\""),
-             "NOT REACHED: there is no /api/lfafnaud record at all, so Web IDL §3.7.2's `Audio` function "
-             "object was never asked about. That is the SCHEDULE");
-    fold_row(&lfafnaud_tt, &lfafnaud_why, param_value_is(js, "/api/lfafnaud", "v", "isfnaud"),
-             "Web IDL §3.7.2's `Audio` FUNCTION OBJECT is wrong, or `Audio`/`HTMLAudioElement` is not on the "
-             "global at all — the record's `v` says WHICH: `faabsent` is the guard having refused, and `fa` "
-             "followed by `lpcdt` with the failing letters UPPERCASED names the clause. l=`Audio.length` is 0 "
-             "(every position of the factory is optional, so §3.7.2's \"length of the shortest argument list\" "
-             "is 0); p=`Audio.prototype` IS `HTMLAudioElement.prototype`; c=`HTMLAudioElement.prototype."
-             "constructor` is still `HTMLAudioElement` and NOT the factory (§3.7.2 defines no back-pointer, so "
-             "a JS_SetConstructor here would answer `Audio` and nothing else would notice); d=the `prototype` "
-             "descriptor's writable/enumerable/configurable are all false; t=`Audio()` without `new` throws a "
-             "TypeError, which is step 1 of the function's steps");
-    const char *lfafnimg_why = NULL; int lfafnimg_tt = 1;
-    fold_row(&lfafnimg_tt, &lfafnimg_why, !!strstr(js, "\"/api/lfafnimg\""),
-             "NOT REACHED: there is no /api/lfafnimg record at all, so Web IDL §3.7.2's `Image` function "
-             "object was never asked about. That is the SCHEDULE");
-    fold_row(&lfafnimg_tt, &lfafnimg_why, param_value_is(js, "/api/lfafnimg", "v", "isfnimg"),
-             "Web IDL §3.7.2's `Image` FUNCTION OBJECT is wrong, or `Image`/`HTMLImageElement` is not on the "
-             "global — `fiabsent` is the guard, and `fi` + `lpcdt` uppercased names the clause; the letters "
-             "are the ones spelled out under /api/lfafnaud, read against HTMLImageElement");
-    const char *lfafnopt_why = NULL; int lfafnopt_tt = 1;
-    fold_row(&lfafnopt_tt, &lfafnopt_why, !!strstr(js, "\"/api/lfafnopt\""),
-             "NOT REACHED: there is no /api/lfafnopt record at all, so Web IDL §3.7.2's `Option` function "
-             "object was never asked about. That is the SCHEDULE");
-    fold_row(&lfafnopt_tt, &lfafnopt_why, param_value_is(js, "/api/lfafnopt", "v", "isfnopt"),
-             "Web IDL §3.7.2's `Option` FUNCTION OBJECT is wrong, or `Option`/`HTMLOptionElement` is not on "
-             "the global — `foabsent` is the guard, and `fo` + `lpcdt` uppercased names the clause; the "
-             "letters are the ones spelled out under /api/lfafnaud, read against HTMLOptionElement. `l` is "
-             "the one worth naming twice here: `Option` declares FOUR positions and all four are optional, so "
-             "its length is 0 and not 4");
-    /* §4.8.9's own five steps, and §3.6's "missing" at the one optional position. */
-    const char *lfaudio_why = NULL; int lfaudio_tt = 1;
-    fold_row(&lfaudio_tt, &lfaudio_why, !!strstr(js, "\"/api/lfaudio\""),
-             "NOT REACHED: there is no /api/lfaudio record at all, so HTML §4.8.9 \"The audio element\"'s "
-             "factory steps were never observed. That is the SCHEDULE");
-    fold_row(&lfaudio_tt, &lfaudio_why, param_value_is(js, "/api/lfaudio", "v", "islfaudio"),
-             "HTML §4.8.9 \"The audio element\"'s legacy factory function answered wrong — `auabsent` is the "
-             "`typeof` guard, and `au` + `iapsrhm` with the failing letters UPPERCASED names the step. "
-             "i=`new Audio()` is an HTMLAudioElement; a=step 3 put the `preload` CONTENT ATTRIBUTE at `auto` "
-             "UNCONDITIONALLY (this is what tells the factory apart from createElement('audio')); p=§4.8.11's "
-             "reflection of that attribute reads `auto` (a separate question from `a`, so an absent member "
-             "cannot redden a row about step 3); s=`new Audio()` has NO `src` attribute — step 4 is \"if src "
-             "is given\"; r=`new Audio('a.mp3')` set it; h=the serialization is byte-for-byte "
-             "`<audio preload=\"auto\"></audio>`; m=`new Audio(undefined)` serializes IDENTICALLY to "
-             "`new Audio()`, which is Web IDL §3.6 step 15.4.2's \"missing\" — an `argc` test answers "
-             "\"given\" for exactly that call and puts `src=\"undefined\"` on the element, and M is that "
-             "regression returning");
-    /* §4.8.3's five steps, and §3.6's "missing" at BOTH of its optional positions. */
-    const char *lfaimage_why = NULL; int lfaimage_tt = 1;
-    fold_row(&lfaimage_tt, &lfaimage_why, !!strstr(js, "\"/api/lfaimage\""),
-             "NOT REACHED: there is no /api/lfaimage record at all, so HTML §4.8.3 \"The img element\"'s "
-             "factory steps were never observed. That is the SCHEDULE");
-    fold_row(&lfaimage_tt, &lfaimage_why, param_value_is(js, "/api/lfaimage", "v", "islfaimage"),
-             "HTML §4.8.3 \"The img element\"'s legacy factory function answered wrong — `imabsent` is the "
-             "guard, and `im` + `inmwh` uppercased names the step. i=`new Image()` is an HTMLImageElement; "
-             "n=it serializes as `<img>` with NO attribute, where a defaulted 0 would write `width=\"0\"`; "
-             "m=`new Image(undefined)` serializes IDENTICALLY — the §3.6 \"missing\" clause, which read "
-             "`<img width=\"undefined\">` while the body tested `argc`; w=`new Image(5, undefined)` is ONE "
-             "attribute and not two, which is the mixed call a count cannot express at all; h=`new Image(5,6)` "
-             "writes both, in that order");
-    /* §4.10.10's SEVEN steps, its step 6 override, and §3.6's "missing" at `value`. */
-    const char *lfaoption_why = NULL; int lfaoption_tt = 1;
-    fold_row(&lfaoption_tt, &lfaoption_why, !!strstr(js, "\"/api/lfaoption\""),
-             "NOT REACHED: there is no /api/lfaoption record at all, so HTML §4.10.10 \"The option element\"'s "
-             "factory steps were never observed. That is the SCHEDULE");
-    fold_row(&lfaoption_tt, &lfaoption_why, param_value_is(js, "/api/lfaoption", "v", "islfaoption"),
-             "HTML §4.10.10 \"The option element\"'s legacy factory function answered wrong — `opabsent` is "
-             "the guard, and `op` + `ievudasf` uppercased names the step. i=`new Option()` is an "
-             "HTMLOptionElement; e=step 3's \"if text is not the empty string\" left NO child node; "
-             "v=`new Option('a','b')` serializes `<option value=\"b\">a</option>`; u=`new Option('a',undefined)` "
-             "serializes `<option>a</option>` — §3.6's \"missing\", and a `value=\"undefined\"` is U; "
-             "d/a=step 5 set `defaultSelected` and the `selected` ATTRIBUTE for a third argument of true; "
-             "s=STEP 6, the whole reason this component exists — selectedness is set EXPLICITLY after step 5 "
-             "added the attribute whose change steps set it, so `new Option('a','b',true).selected` is FALSE; "
-             "f=the fourth argument is what sets it true. S is the one to read first: it means step 5's "
-             "attribute write decided selectedness and step 6 never overrode it");
-    /* §4.10.10's dirtiness, both halves. */
-    const char *lfadirty_why = NULL; int lfadirty_tt = 1;
-    fold_row(&lfadirty_tt, &lfadirty_why, !!strstr(js, "\"/api/lfadirty\""),
-             "NOT REACHED: there is no /api/lfadirty record at all, so §4.10.10's DIRTINESS was never "
-             "observed. That is the SCHEDULE");
-    fold_row(&lfadirty_tt, &lfadirty_why, param_value_is(js, "/api/lfadirty", "v", "islfadirty"),
-             "§4.10.10's DIRTINESS is wrong — `dyabsent` is the guard, and `dy` + `abcde` uppercased names "
-             "the clause. a=the `selected` SETTER set selectedness; b=it wrote NO content attribute (B means "
-             "one appeared, which is the setter reaching for the attribute instead of the slot); c=the option "
-             "is now DIRTY, so a later add AND remove of `selected` do not move selectedness; d/e=a CLEAN "
-             "option DOES track the attribute at an add and at a remove. Both halves are asserted because "
-             "either alone is unfalsifiable: an engine whose selectedness never tracked the attribute at all "
-             "satisfies `c` while being wrong about everything, and `d`/`e` are what refuse that");
-    /* §4.10.7's two steps through §4.10.10's member. */
-    const char *lfareset_why = NULL; int lfareset_tt = 1;
-    fold_row(&lfareset_tt, &lfareset_why, !!strstr(js, "\"/api/lfareset\""),
-             "NOT REACHED: there is no /api/lfareset record at all, so §4.10.7 \"The select element\"'s "
-             "selectedness setting algorithm was never observed through the member. That is the SCHEDULE");
-    fold_row(&lfareset_tt, &lfareset_why, param_value_is(js, "/api/lfareset", "v", "islfareset"),
-             "§4.10.7's SELECTEDNESS SETTING ALGORITHM is wrong — `seabsent` is the guard, and `se` + `pqrs` "
-             "uppercased names the step. p=step 1 made the FIRST non-disabled option selected on a select "
-             "whose display size is 1 with nothing selected; q=it did so WITHOUT any `selected` attribute "
-             "appearing (Q means the algorithm wrote a content attribute, which it never names); r/s=step 2 — "
-             "assigning `selected = true` to the SECOND option leaves it true and the first FALSE, because "
-             "\"all but the last\" are cleared. S is the interesting failure: two options selected at once on "
-             "a single-select is the state step 2 exists to make unreachable");
-    /* …and the same two steps as §4.10.22.4's ENTRY LIST, which is the half a member read cannot state. The
-       negative clause is the assertion in each: step 1 picks `a` AND NOT `b`, step 2 keeps `b` AND NOT `a`. It
-       is spelled as an equality plus a refusal rather than as param_value_only, because two provenance grades
-       of ONE statement legitimately carry the same value twice and `only` would read that as a fork. The
-       address is the resolved one, which is what a form submission requests. */
-    const char *lfasel1_why = NULL; int lfasel1_tt = 1;
-    fold_row(&lfasel1_tt, &lfasel1_why, !!strstr(js, "\"https://x.test/api/lfasel1\""),
-             "NOT REACHED: there is no /api/lfasel1 record at all, so the select's ENTRY LIST was never "
-             "derived — `submit()` did not run, or the form was not connected. That is the SCHEDULE");
-    fold_row(&lfasel1_tt, &lfasel1_why, param_value_is(js, "https://x.test/api/lfasel1", "sc", "a"),
-             "§4.10.7 step 1 + §4.10.22.4 step 5.6: `<select name=x><option>a<option>b</select>` must submit "
-             "`x=a` with no `selected` attribute anywhere, and this record's `sc` does not carry `a` — either "
-             "step 1 selected nothing (the entry list is then EMPTY, which is the same 0 as selecting the "
-             "wrong option and is why the clause below is separate) or the option's value did not fall back "
-             "to its collected text");
-    fold_row(&lfasel1_tt, &lfasel1_why, !param_value_is(js, "https://x.test/api/lfasel1", "sc", "b"),
-             "§4.10.7 step 1 selected MORE than the first option, or the wrong one: `sc` carries `b`, so the "
-             "entry list has an option step 1 never names — it selects the FIRST non-disabled one and returns");
-    const char *lfasel2_why = NULL; int lfasel2_tt = 1;
-    fold_row(&lfasel2_tt, &lfasel2_why, !!strstr(js, "\"https://x.test/api/lfasel2\""),
-             "NOT REACHED: there is no /api/lfasel2 record at all, so step 2's entry list was never derived. "
-             "That is the SCHEDULE");
-    fold_row(&lfasel2_tt, &lfasel2_why, param_value_is(js, "https://x.test/api/lfasel2", "sd", "b"),
-             "§4.10.7 step 2 + §4.10.22.4 step 5.6: with BOTH options made selected by the factory's fourth "
-             "argument, a single-select submits the LAST one alone, and this record's `sd` does not carry "
-             "`b` — step 2 cleared the wrong end of the list, or it cleared everything");
-    fold_row(&lfasel2_tt, &lfasel2_why, !param_value_is(js, "https://x.test/api/lfasel2", "sd", "a"),
-             "§4.10.7 step 2 did not run: `sd` carries `a` as well as `b`, so TWO options were selected on a "
-             "select with no `multiple` attribute — \"set the selectedness of all but the last option element "
-             "with its selectedness set to true … to false\" is exactly what did not happen");
-    /* THE CONTROL — Web IDL §3.6's DECLARED-DEFAULT arm, whose answers must NOT have moved. */
-    const char *lfadefault_why = NULL; int lfadefault_tt = 1;
-    fold_row(&lfadefault_tt, &lfadefault_why, !!strstr(js, "\"/api/lfadefault\""),
-             "NOT REACHED: there is no /api/lfadefault record at all, so Web IDL §3.6's DECLARED-DEFAULT arm "
-             "was never observed. That is the SCHEDULE");
-    fold_row(&lfadefault_tt, &lfadefault_why, param_value_is(js, "/api/lfadefault", "v", "islfadefault"),
-             "Web IDL §3.6's DECLARED-DEFAULT arm moved — `tdabsent` is the guard, and `td` + `abcd` "
-             "uppercased names the clause. a/b=`new TextEncoder().encode()` and `.encode(undefined)` are BOTH "
-             "the empty result, because `encode(optional USVString input = \"\")` sends both of §3.6 steps "
-             "16.1 and 15.4.1 to the DECLARED default and neither to 15.4.2's \"missing\"; c/d=`new "
-             "TextDecoder().encoding` and `new TextDecoder(undefined).encoding` are BOTH `utf-8`, for the same "
-             "reason at `constructor(optional DOMString label = \"utf-8\", …)`. THIS ROW ASSERTS AN EQUALITY "
-             "AND NOT A DIFFERENCE: it is the control for the three above, and it reddens when the \"missing\" "
-             "primitive has been mistaken for a rule about every optional position");
-
-    /* ENCODING §7.2's decode() AS A STEP MACHINE — see the fixture row for why each clause is here. The rungs
-       are ordered so the FIRST failure names the most fundamental thing that went wrong: the record existing
-       at all, then the page-sized walk, then the state the object keeps between calls, then the two abrupt
-       exits. They are INDEPENDENT clauses and not an entailed ladder, so a 0 names the clause it is about and
-       says nothing about the ones below it. */
-    const char *tdstep_why = NULL; int tdstep_tt = 1;
-    fold_row(&tdstep_tt, &tdstep_why, !!strstr(js, "\"/api/tdstep\""),
-             "NOT REACHED: there is no /api/tdstep record at all, so Encoding §7.2's decode() was never "
-             "observed from this document. That is the SCHEDULE and not the member — the row below cannot be "
-             "read until this one is 1");
-    fold_row(&tdstep_tt, &tdstep_why, param_value_is(js, "/api/tdstep", "big", "isbig"),
-             "Encoding §7.2's decode() did not survive its own rest points. 196,608 bytes of `E4 B8 AD` is "
-             "196,608 items of step 5's \"While true:\", and EVERY one of them is mid-sequence — a lead or a "
-             "continuation — so §8.1.1's bytes-needed/bytes-seen/code-point/bound machine has to be carried "
-             "across all of them. `len` names what came back: SHORT means the step state lost its cursor into "
-             "the copy §7.2 step 3 took, LONG means a resume re-walked from the top, and a right length with "
-             "0xFFFD at `x` means the decoder record on the receiver was reset or shared rather than carried");
-    fold_row(&tdstep_tt, &tdstep_why, param_value_is(js, "/api/tdstep", "split", "issplit"),
-             "a three-byte sequence cut across two `stream: true` calls did not resume in the middle. §7.2 "
-             "step 1 rebuilds the decoder only when `do not flush` is FALSE, and the standard's own note says "
-             "why — \"in a subsequent invocation this's decoder is not set anew in the first step of the "
-             "algorithm and its state is preserved\". This is the clause that reddens if `this's decoder` was "
-             "moved into the step machine's own state, where each call would start with a fresh one");
-    fold_row(&tdstep_tt, &tdstep_why, param_value_is(js, "/api/tdstep", "item", "isitem"),
-             "§7.2 step 5.3.3's TypeError did not arrive for a lone 0xFF in \"fatal\" error mode — \"otherwise, "
-             "if result is error, throw a TypeError\". `nothrow` means the machine's mid-queue error arm "
-             "returned a string instead of an abrupt completion; `other` means it threw something that is not "
-             "a TypeError");
-    fold_row(&tdstep_tt, &tdstep_why, param_value_is(js, "/api/tdstep", "end", "isend"),
-             "the same TypeError did not arrive for `E4 B8` with no third byte, which is the OTHER stage: the "
-             "END-OF-QUEUE item being processed rather than a byte of the input. §8.1.1 answers error for it "
-             "(\"if byte is end-of-queue and UTF-8 bytes needed is not 0, then set UTF-8 bytes needed to 0 "
-             "and return error\"), and a machine that threw from only the mid-queue arm would pass the clause "
-             "above and fail this one");
-
-    /* ENCODING §7.1's SERIALIZE I/O QUEUE — see the fixture row for why each clause is here. They are
-       INDEPENDENT clauses and not an entailed ladder, so a 0 names the clause it is about and says nothing
-       about the ones below it. The first rung is the REACHABILITY WITNESS: without it an absent abort and an
-       absent record read alike, and a clause that never ran would be read as a correct value. */
-    const char *tdbom_why = NULL; int tdbom_tt = 1;
-    fold_row(&tdbom_tt, &tdbom_why, !!strstr(js, "\"/api/tdbom\""),
-             "NOT REACHED: there is no /api/tdbom record at all, so Encoding §7.1's serialize I/O queue was "
-             "never observed from this document. That is the SCHEDULE and not the member — no clause below "
-             "can be read until this one is 1, and an absent abort is not a correct value");
-    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "gb", "iskept"),
-             "a U+FEFF this engine DECODED was deleted. §7.1 drops a leading BOM only \"if decoder's "
-             "encoding is UTF-8 or UTF-16BE/LE\", and gb18030 is none of the three — `84 31 95 33` is that "
-             "encoding's four-byte form for U+FEFF, so a conforming decode answers ONE character. `len0` is "
-             "the strip running for an encoding the standard excludes, which is what a test over the OUTPUT "
-             "BYTES does and what a test over `d->enc` cannot: the output is UTF-8 whatever went in, so a "
-             "produced U+FEFF and a BOM are the same three bytes and only the encoding separates them");
-    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "u8", "isu8"),
-             "the UTF-8 arm of that same test stopped stripping. `EF BB BF 41` under `utf-8` is the case the "
-             "standard's own list admits, so this is the control that reddens when the strip was DELETED "
-             "rather than conditioned — the over-wide repair of the clause above. `len2` is a BOM that "
-             "survived into the string");
-    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "le", "isle"),
-             "the UTF-16LE arm is missing. §14.2 \"Common infrastructure for UTF-16BE/LE\" says "
-             "\"UTF-16BE/LE is UTF-16BE or UTF-16LE\", so the admitted set is THREE encodings and not "
-             "one: `FF FE 41 00` decodes to U+FEFF then U+0041 and the BOM goes. This clause and the one "
-             "below are what redden when the encoding test was written too NARROW, which is the opposite "
-             "error from the clause above and is why they are not folded together");
-    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "be", "isbe"),
-             "the UTF-16BE arm is missing, for the same reason and from the other byte order: `FE FF 00 41` "
-             "is U+FEFF then U+0041. A test that named UTF-16LE alone would pass the clause above and fail "
-             "this one, which is the whole reason §14.2's two ids are asserted separately");
-    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "ig", "isignore"),
-             "`ignoreBOM: true` stopped being honoured. It is the SECOND of §7.1's three conjuncts — "
-             "\"and decoder's ignore BOM and BOM seen are false\" — so a decoder built with it keeps the "
-             "BOM it was handed and answers TWO characters. `len1` is the BOM stripped from a decoder that "
-             "asked for it, which is the conjunct a diff rewriting this condition drops while adding the "
-             "encoding one");
-    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "seen", "isseen"),
-             "`BOM seen` is not carried between two `stream: true` calls. §7.1 sets the flag on the first "
-             "item it tests and tests it on every item after, so a SECOND chunk's leading U+FEFF is a "
-             "character rather than a BOM: `A`, then U+FEFF followed by `B`. `a1b1` means the second "
-             "strip ran too — the flag was lost, reset, or written where this decoder's encoding no "
-             "longer reaches it; `a2b2` means the first one did not run at all either");
-
-    /* ─── A JAVASCRIPT REPLY IS A PROGRAM, AND THE CONTROL THAT MAKES THAT READABLE ────────────────────────
-       Three clauses, in the order the fact is built, so a 0 names which of three things happened — and the
-       three are not all about the same thing, which is the point. The first two are about the REPLY DOOR
-       (`/api/progseen`, whose `ct` is the header this host served) and the third is about the PROGRAM
-       (`/api/progran`, which nothing but the served bytes can emit). Two records on purpose: "the reply
-       arrived" and "the reply was compiled" are the two facts this row exists to keep apart, and a row that
-       asked only the second would read 0 for a schedule that never delivered anything.
-       §AND-THE-SAME-HOLE-SWALLOWS-A-PREDICTION: a prediction that `/api/progran` is PRESENT is worth nothing
-       without evidence the delivery happened at all, and clauses 1-2 are that evidence. Clause 2 in
-       particular splits the one failure that is THIS FILE's rather than the engine's. */
-    const char *replyprog_why = NULL; int replyprog_tt = 1;
-    fold_row(&replyprog_tt, &replyprog_why, !!strstr(js, "\"/api/progseen\""),
-             "NOT REACHED: there is no /api/progseen record at all, so the reply to `/chunk/replyprog.js` "
-             "never reached a reaction and the clauses below are not being reported on. That is the SCHEDULE, "
-             "and it says nothing whatever about whether a JavaScript reply becomes a program");
-    fold_row(&replyprog_tt, &replyprog_why,
-             param_value_is(js, "/api/progseen", "ct", "text/javascript"),
-             "the reply ARRIVED and this host did not serve it as a program: /api/progseen's `ct` is not "
-             "`text/javascript`, so fixture_provide's TF_SERVED lookup did not match the address the park "
-             "carried. THAT IS A DEFECT IN THIS FIXTURE AND NOT IN THE ENGINE — the delivery arm was never "
-             "asked the question — and it is its own clause for exactly that reason");
-    fold_row(&replyprog_tt, &replyprog_why, !!strstr(js, "\"/api/progran\""),
-             "A JAVASCRIPT REPLY WAS DELIVERED AND DID NOT BECOME A PROGRAM. The two clauses above say the "
-             "reply reached a reaction carrying `text/javascript`, so solver/engine.c's delivery arm was "
-             "asked and answered no — or it answered yes and the row engine_queue_fetched_script appended "
-             "never ran. §Solver's trust boundary requires the EXECUTED half: `fetch('/api/progran')` is the "
-             "served program's own body, and no statement of this document emits that address");
-
-    /* …AND THE CONTROL, ARMED. §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE: an absence asserted
-       over a statement that never ran is satisfied BY the statement never running, which is a row that cannot
-       fail and therefore is not a control. So the absence is the LAST clause and the two before it establish
-       that this host really did serve the same-shaped body as DATA, to a delivery that really happened. */
-    const char *replyctl_why = NULL; int replyctl_tt = 1;
-    fold_row(&replyctl_tt, &replyctl_why, !!strstr(js, "\"/api/ctlseen\""),
-             "NOT REACHED: there is no /api/ctlseen record at all, so the control reply never reached a "
-             "reaction and the absence below is UNARMED — it would read green for a run that never asked the "
-             "question. That is the SCHEDULE");
-    fold_row(&replyctl_tt, &replyctl_why,
-             param_value_is(js, "/api/ctlseen", "ct", "application/json"),
-             "the control reply ARRIVED and was not served as DATA: /api/ctlseen's `ct` is not "
-             "`application/json`, so this host handed the delivery something other than the control it was "
-             "meant to hand it, and the absence below is a statement about some other experiment");
-    fold_row(&replyctl_tt, &replyctl_why, !strstr(js, "\"/api/ctlran\""),
-             "A REPLY SERVED AS `application/json` BECAME A PROGRAM. /api/ctlran is emitted by nothing but "
-             "the control body, so its presence says the delivery arm compiled bytes whose `computedType` is "
-             "not in MIME Sniffing §4.6's JavaScript group — the type gate is not a gate, and `reply-program` "
-             "above is therefore not evidence that a TYPE decided anything");
-
-    /* ─── HTML §4.12.1.1's PARK FOR A CONNECTED `<script src>`, AND THE PROGRAM ITS REPLY BECOMES ──────────
-       FOUR CLAUSES IN THE ORDER THE FACT IS BUILT, so a 0 names which of four things happened — and they are
-       four different repairs. (1) the injecting statement RAN at all, which is the SCHEDULE. (2) the `src` IDL
-       setter reflected to the content attribute, which is the one failure that is THIS FIXTURE's: with no `src`
-       on the element §4.12.1.1 takes its no-source arm and parks nothing, and every clause below would then
-       read zero for a defect in the document rather than in the engine. (3) the PARK happened — the endpoint
-       record for the served address is emitted by `pending_park_request` at the one park door, so its presence
-       says the post-connection steps ran over a CONNECTED element, `prepare` reached the as-soon-as-possible
-       destination, and `engine_pending_script_url` pushed the only `FLOW_PENDING_SCRIPT` record there is. (4)
-       the reply was DELIVERED and its bytes became a program of this flow.
-       CLAUSE 3 ASKS THE ABSOLUTE ADDRESS AND THAT IS THE WHOLE POINT OF THE SPELLING. The park carries the
-       result of §4.12.1.1's "encoding-parsing a URL given src, relative to el's node document", so the record
-       the door emits names `https://x.test/chunk/injsrc.js` and never the relative reference this document
-       wrote — a row asking the relative spelling would be asking for a string no park has ever held.
-       A 0 AT CLAUSE 4 HAS TWO READINGS AND THE RUN'S OWN STREAM SEPARATES THEM, which is why the text names
-       the command rather than a conclusion. Either this host served the address as DATA — `tf_served_at` did
-       not match, and the delivery compiled `{"region":"us-west-2"}`, which is not a Script — or the delivery
-       arm did not compile a JavaScript-typed reply at all. The first raises an UNCAUGHT page error at an
-       address this fixture declares nothing for, so it prints `@PAGEERR at=https://x.test/chunk/injsrc.js` in
-       the run's own stream and appears in no `@PAGEERR-STAGED` line; the second prints nothing. That is the
-       discriminator, and it is in the log rather than in the result document, which is why no clause here can
-       ask it: a clause over `pageErrors` would have to match the address inside a message this reader has
-       never been shown, and a clause that cannot fail is not a check. */
-    const char *injsrc_why = NULL; int injsrc_tt = 1;
-    fold_row(&injsrc_tt, &injsrc_why, !!strstr(js, "\"/api/injmade\""),
-             "NOT REACHED: there is no /api/injmade record at all, so the statement that creates and appends "
-             "the `<script src>` never ran. That is the SCHEDULE, and it says nothing whatever about whether "
-             "§4.12.1.1's prepare reaches this engine's one injected-script park. Read `completed` on the "
-             "@COLD line beside it: this program stands at the TAIL of the document, so a `completed` below "
-             "its own index is this row not having been asked");
-    fold_row(&injsrc_tt, &injsrc_why, param_value_is(js, "/api/injmade", "d", "ok"),
-             "the statement RAN and `s.src = ...` did not reflect to the content attribute: /api/injmade's "
-             "`d` is `wrong`, so `s.getAttribute('src')` was not the address this line assigned. §4.12.1.1 "
-             "reads the ATTRIBUTE, so prepare would take the no-source arm and park nothing — THAT IS A "
-             "DEFECT IN THIS FIXTURE OR IN THE `src` REFLECTION AND NOT IN THE PARK, and it is its own clause "
-             "for exactly that reason");
-    fold_row(&injsrc_tt, &injsrc_why, !!strstr(js, "\"https://x.test/chunk/injsrc.js\""),
-             "THE ELEMENT WAS CONNECTED WITH A `src` AND NO PARK WAS TAKEN. The two clauses above say the "
-             "statement ran and the attribute was there before the append, so §4.12.1.1's post-connection "
-             "steps either did not run over this element or `prepare` did not reach the as-soon-as-possible "
-             "destination. The endpoint record is emitted by solver/engine.c's one park door, so its absence "
-             "is the absence of the park itself and not of a reply — read core/dom/element.c's insertion walk "
-             "and `script_block_schedule`, whose FIRST arm this element takes because `force async` is "
-             "initially true and nothing here writes `async`");
-    fold_row(&injsrc_tt, &injsrc_why, !!strstr(js, "\"/api/injran\""),
-             "AN INJECTED `<script src>` PARKED AND ITS REPLY DID NOT BECOME A PROGRAM. The clause above says "
-             "the park was taken, so either this host served the address as DATA (`tf_served_at` did not "
-             "match, and the delivery compiled `{\"region\":\"us-west-2\"}`, which is not a Script) or "
-             "solver/engine.c's FLOW_PENDING_SCRIPT delivery arm did not queue the bytes. THE RUN'S OWN "
-             "STREAM SAYS WHICH: the first raises an undeclared page error, so `@PAGEERR "
-             "at=https://x.test/chunk/injsrc.js` is printed and matches no `@PAGEERR-STAGED` line, and the "
-             "second prints nothing. `/api/injran` is emitted by the served body alone and by no statement of "
-             "any document here");
-
-    /* …AND §3.1.7 "DOM tree accessors"' `currentScript` FOR A PROGRAM THAT CAME OFF THE WIRE, WHICH IS THE ONE
-       THING NO HOST EDGE CAN BUY. A chunk queued by `loadScript` or by the `fetch()` delivery arm has no
-       element behind it, so the slot is null while it runs; this park carries the element (solver/pending.h's
-       `scriptEl`) and §4.12.1.1's classic arm sets the slot to it. A bundler's public-path preamble reads
-       exactly that member, so an engine answering null there computes every lazy-chunk URL wrong.
-       GATED ON THE ROW ABOVE AND THE ENTAILMENT IS BY PROGRAM ORDER, not by assertion: `/api/injran` is the
-       only record either clause here can be answered by, and nothing emits it but the served program — so a 0
-       up there is a 0 down here in every one of its four readings.
-       TWO CLAUSES, BECAUSE A WRONG ELEMENT AND AN EMPTY SLOT ARE DIFFERENT DEFECTS. The first is a slot that
-       answered the wrong element — `injhost` is the near-miss and is the program that INJECTED this one, which
-       is what a slot written by the injecting program rather than by the running one gives. The second is the
-       slot standing EMPTY, asked as an ABSENCE over the whole document for `current-script-restore`'s reason:
-       the served body emits `injnull` in place of an id when the slot is null, so the marker is a POSITIVE
-       statement about an empty slot and not the silence an absent param would be. It is armed by the clause
-       above it, which establishes that the observer ran at all. */
-    const char *injel_why = NULL; int injel_tt = 1;
-    fold_row(&injel_tt, &injel_why, param_value_is(js, "/api/injran", "el", "injel"),
-             "§4.12.1.1's classic arm did not answer §3.1.7's `currentScript` for a program fetched off an "
-             "injected `<script src>`: /api/injran's `el` is not `injel`. `injhost` is the near-miss and names "
-             "the defect — that is the program which INJECTED this one, so the slot was written by the "
-             "injecting program rather than by the running one");
-    fold_row(&injel_tt, &injel_why, !strstr(js, "\"injnull\""),
-             "§4.12.1.1's classic arm left `currentScript` EMPTY for an injected program that ran: some arm "
-             "reached the served body with a null slot, which the body reports as `injnull` rather than as a "
-             "missing param. Asked of the WHOLE document deliberately — one arm seeing an empty slot is the "
-             "finding, and an absence is the only thing that can prove this half — and ARMED by the clause "
-             "above, which says the observer ran");
-
-    /* WEB CRYPTOGRAPHY §29.4.5 AES-GCM EXPORT KEY'S THREE ARMS, AND THE ROW THAT SAYS WHETHER ANY OF THEM RAN.
-       `xk-reach` stands FIRST for `td-reach`'s and `bs-reach`'s reason, and here it carries MORE than those
-       two do: it is emitted after §14.3.6 generateKey RESOLVES, so it is simultaneously the reachability
-       witness for the generateKey landing that preceded this one — which had none at all, and whose "no abort
-       fires" prediction was therefore satisfied identically by a correct implementation and by a statement
-       nobody executed.
-       ITS TWO ZEROS ARE TOLD APART BY THE RECORD ITSELF, which is why the arms below can be read at all. NO
-       /api/xkreach record means no flow reached this statement in this run — every row below is then about how
-       far the run got and not about §29.4.5. A record whose `d` carries `no` means generateKey itself rejected
-       and its `n` param NAMES the DOMException, which is this fixture asking for a capability rather than the
-       export answering wrongly.
-       EACH ARM IS `param_value_only` AND NOT `_has`: every one of these settlements is DETERMINED — the key's
-       length, its usages and its extractability are all fixed by the statement's own literals and §29.4.5
-       branches on nothing else — so a param carrying two values means the flow forked where this statement
-       says it cannot, which is a finding and not a match. `_has` is also a SUBSTRING test, so an `ok` row
-       would be satisfied by a failure spelling that happened to contain it. */
-    const char *xkreach_why = NULL; int xk_reach = 1;
-    fold_row(&xk_reach, &xkreach_why, param_value_only(js, "/api/xkreach", "d", "ok"),
-             "§14.3.6 generateKey over §29.4.3 AES-GCM did not resolve, so NOTHING below is about §29.4.5. "
-             "Its TWO readings are told apart by the record: no /api/xkreach record at all means no flow "
-             "reached this statement — check `jobs run` before reading it as a defect, because every record "
-             "here is behind an await and settles through sc_resolve's JS_EnqueueCallJob, so a run with zero "
-             "jobs cannot answer it however much `workDone` it reports; a record whose `d` carries `no` means "
-             "generateKey REJECTED and its `n` param names the DOMException");
-    /* STEP 2's `raw` ARM, BOTH SUB-STEPS. The length is asked as a COMPARISON so the emitted byte is a literal
-       on both paths — a concolic byteLength would show as TWO values of `d` rather than as an absent record,
-       which is the failure this fixture must be able to SEE rather than be silenced by. */
-    const char *xkraw_why = NULL; int xk_raw = 1;
-    fold_row(&xk_raw, &xkraw_why, xk_reach, xkreach_why);
-    fold_row(&xk_raw, &xkraw_why, param_value_only(js, "/api/xkraw", "d", "ok"),
-             "§29.4.5 step 2's `raw` arm did not hand back the key's 32 octets: `d` carries `wrong` (the "
-             "ArrayBuffer came back a different length than §29.4.3 step 3 drew), or a DOMException name (the "
-             "arm threw where the standard defines no throw for `raw`), or two values (the flow forked over a "
-             "length this statement pins with a literal)");
-    /* STEP 2's `jwk` ARM — ALL SEVEN SUB-STEPS, as four params of one record. `kty` and `alg` are the two
-       this chapter WRITES ("oct", and "A256GCM" for a 256-bit key); `ext` and `ops` are the two it copies off
-       the key, and `ops` asserts the ORDER as well as the membership, which core/crypto/crypto_key.h names as
-       the load-bearing half — §9's recognized order is `encrypt, decrypt, …`, so two walks agreeing on which
-       usages a key has could still disagree here and no membership test would report it. */
-    const char *xkjwk_why = NULL; int xk_jwk = 1;
-    fold_row(&xk_jwk, &xkjwk_why, xk_reach, xkreach_why);
-    fold_row(&xk_jwk, &xkjwk_why, param_value_only(js, "/api/xkjwk", "kty", "oct"),
-             "§29.4.5 step 2's `jwk` arm did not set `kty` to \"oct\" — or it threw, in which case `kty` "
-             "carries the DOMException name instead, which is the same param deliberately so that a throw "
-             "cannot read as an absent record");
-    fold_row(&xk_jwk, &xkjwk_why, param_value_only(js, "/api/xkjwk", "alg", "A256GCM"),
-             "§29.4.5's `alg` sub-step answered the wrong clause for a 256-bit key. Its three clauses are "
-             "128/192/256 against A128GCM/A192GCM/A256GCM and it has NO Otherwise, so a wrong value here is "
-             "the length selector disagreeing with §29.4.3 step 8's `length`, not a page's input");
-    fold_row(&xk_jwk, &xkjwk_why, param_value_only(js, "/api/xkjwk", "ext", "true"),
-             "§29.4.5's `ext` sub-step did not copy the [[extractable]] slot this statement set to true");
-    fold_row(&xk_jwk, &xkjwk_why, param_value_only(js, "/api/xkjwk", "ops", "encrypt.decrypt"),
-             "§29.4.5's `key_ops` sub-step did not answer §9's recognized ORDER. The statement asked for "
-             "['encrypt','decrypt'] and §9 lists encrypt before decrypt, so `decrypt.encrypt` here is the two "
-             "walks core/crypto/crypto_key.h keeps as one having come apart, and a membership test would miss "
-             "it");
-    /* STEP 2's `Otherwise`, WHICH IS THE ONLY THROW §29.4.5 DEFINES. It is a separate row and not a clause of
-       the jwk one because it is the arm a page reaches with an ordinary call and the two DER formats are its
-       whole population: §14.1's KeyFormat has four values and Web IDL §3.2.18 refused every other string
-       before §14.3.10 step 1 ran, so `spki` is a page's own input and this is the refusal the standard names
-       for it. A row asserting `resolved` here would be asserting the bug. */
-    const char *xkspki_why = NULL; int xk_spki = 1;
-    fold_row(&xk_spki, &xkspki_why, xk_reach, xkreach_why);
-    fold_row(&xk_spki, &xkspki_why, param_value_only(js, "/api/xkspki", "d", "NotSupportedError"),
-             "§29.4.5 step 2's `Otherwise: throw a NotSupportedError` did not fire for \"spki\": `d` carries "
-             "`resolved` (an AES-GCM key was exported in a format §29.4.5 defines no arm for) or another "
-             "DOMException name (the refusal happened for a different reason than the format)");
-
-    /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
-       the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
-    Probe probes[] = {
-        { "uid-param", has_uid_param, "/api/u?uid=", SESS_EXPLORE, uid_why },
-        /* KEYED ON THE STATEMENT AND NOT ON AN ENDPOINT, because this row is about a branch and a branch
-           emits nothing: `cfg.admin` is what a reader greps for to find the gate it is about. It stands
-           FIRST of this family for `td-reach`'s reason — it is the row that says whether the six below it
-           are about the schedule, the delta, or a fork that never happened. */
-        { "boot-fork", bootfork_tt, "/api/data?role=", SESS_EXPLORE, bootfork_why },
-        { "role-admin", role_admin, "/api/data?role=", SESS_EXPLORE },
-        { "path-param", path_param, "/v1/users/", SESS_EXPLORE, path_param_why },
-        { "body-param", body_param, "firstPost", SESS_EXPLORE, body_param_why },
-        { "path-example", path_example, "/v1/vis/", SESS_EXPLORE, path_example_why },
-        { "path-run", path_run, "/api/ua/", SESS_EXPLORE, path_run_why },
-        { "path-slash", path_slash, "/api/pdiv/", SESS_EXPLORE, path_slash_why },
-        { "path-query", path_query, "/api/pend/", SESS_EXPLORE, path_query_why },
-        /* KEYED ON THE STATEMENT'S OWN SPELLING, for the reason `lazy` states: `/api/qrun` is composed by
-           a `+` over a data block's text and the record's address is the PATH half alone, so the key is the
-           `fetch` this document writes and not the answer it produces. */
-        { "query-run", query_run, "/api/qrun?f=", SESS_EXPLORE, query_run_why },
-        { "role-public", role_public, "/api/data?role=", SESS_EXPLORE, role_public_why },
-        { "merged", merged, "/api/data?role=", SESS_EXPLORE, merged_why },
-        { "pinned", pinned, "/api/region/", SESS_EXPLORE },
-        /* THE KEY IS THE STATEMENT THAT REACHES THE ENDPOINT, WHICH IS NOT ALWAYS THE ENDPOINT. This row reads
-           `/api/admin/audit-log`, an address that is in a CHUNK the provider serves and in no document at all;
-           what the document has is the `loadScript` behind the admin arm. A key is a substring of the PROGRAM,
-           never of the answer. */
-        { "lazy", lazy, "/chunk/admin.js", SESS_EXPLORE },
-        /* THE SAME RULE THE ROW ABOVE STATES, AT THE OTHER DOOR. `lazy`'s chunk arrives through `loadScript`,
-           which is this host calling engine_queue_fetched_script directly; these two arrive through `fetch()`,
-           are parked, answered and delivered, and become programs — or do not — at solver/engine.c's delivery
-           arm. The KEY is the `fetch` the document writes, for `lazy`'s reason exactly: `/api/progran` is in a
-           body this host serves and in no document at all, and `/api/progseen` is composed by a reaction. */
-        { "reply-program", replyprog_tt, "/chunk/replyprog.js", SESS_EXPLORE, replyprog_why },
-        { "reply-program-typed", replyctl_tt, "/chunk/replyctl.js", SESS_EXPLORE, replyctl_why },
-        /* THE SAME DELIVERY AT THE THIRD DOOR, and the KEY is this statement's own spelling for `lazy`'s
-           reason exactly: `/api/injran` is in a body this host serves and in no document at all, and
-           `/api/injmade` is composed by the statement rather than being its name. `/chunk/injsrc.js` is what
-           a reader greps for to find the `injhost` statement these two rows are about.
-           `injected-script-el` IS GATED ON `injected-script` because its only answerable record is the one
-           that row's last clause asserts: a 0 above it is a 0 here under every reading, and the declaration
-           is what stops a reader counting the pair as two independent findings. */
-        { "injected-script", injsrc_tt, "/chunk/injsrc.js", SESS_EXPLORE, injsrc_why },
-        { "injected-script-el", injel_tt, "/chunk/injsrc.js", SESS_EXPLORE, injel_why,
-          .gate = "injected-script" },
-        /* EACH CARRIES ITS OWN `why` NOW — a 0 on any of the three names the clause it stopped at, so a reader
-           can tell an unscheduled sibling from a lost DOM delta without inferring one from the other.
-           `dom-tt` IS GONE and is not replaced: it was `dom_attr && dom_node`, the AND of the two rows either
-           side of it, so it was a THIRD zero for two facts and could never carry information they did not.
-           A census row that is the conjunction of its neighbours is the same conflation this family was just
-           split to end, one level up. */
-        { "dom-attr", dom_attr, "/api/whoami", SESS_EXPLORE, domattr_why },
-        { "dom-node", dom_node, "/api/kid", SESS_EXPLORE, domnode_why },
-        { "accessor", accessor_tt, "/api/flag", SESS_EXPLORE, accessor_why },
-        /* (2d)'s four. THE KEY IS A SUBSTRING OF THE PROGRAM, so it is the statement's own spelling rather
-           than the endpoint it reaches — `asyncDispose` is what a reader greps for to find the statement
-           these rows are about. `td-reach` first, because it is the row that says whether the other three
-           are about the engine or about the fixture. */
-        { "td-reach", td_reach, "Symbol.asyncDispose", SESS_EXPLORE },
-        { "td-plain", td_plain, "Symbol.asyncDispose", SESS_EXPLORE },
-        { "td-accessor", td_acc, "Object.defineProperty(_tdT", SESS_EXPLORE },
-        { "td-preverr", td_prev, "tdboom", SESS_EXPLORE },
-        /* THE BYOB READ'S TWO. The key is the statement's own spelling — `bsMin` is what a reader greps for
-           to find the statement these rows are about — and `bs-reach` is first for `td-reach`'s reason: it is
-           the row that says whether `bs-min`'s 0 is the engine's or this fixture's. */
-        { "bs-reach", bs_reach, "bsMin", SESS_EXPLORE, bs_reach_why },
-        { "bs-min", bsmin_tt, "bsMin", SESS_EXPLORE, bsmin_why },
-        { "async", async_tt, "/api/then", SESS_EXPLORE, async_why },
-        { "await", await_tt, "/api/await", SESS_EXPLORE, await_why },
-        { "asynccall", asynccall_tt, "/api/asynccall", SESS_EXPLORE, asynccall_why },
-        { "throw", async_throw, "/api/caught", SESS_EXPLORE, async_throw_why },
-        { "preempt", async_preempt, "/api/asyncloop", SESS_EXPLORE, async_preempt_why },
-        /* THE FIVE `import()` ROWS. The two entry rows are ungated — their 0 is a finding about the SCHEDULE —
-           and the three readings are gated on them, for `orphan-gate`'s reason: an unconditional first emission
-           that did not happen entails everything behind the `await` in the same statement. */
-        /* THE SCRIPT-LEVEL `const` ROWS, whose whole value is being read BESIDE `mod-const` — see where they
-           are folded for what each pairing localises. */
-        { "md-self", md_self, "/api/selfdefault", SESS_EXPLORE, md_self_why },
-        { "md-fork-ran", md_fork_ran, "/api/mdforkpath", SESS_EXPLORE, md_fork_ran_why },
-        { "md-fork-reach", md_fork_reach, "/api/mdforkreach", SESS_EXPLORE, md_fork_reach_why, .gate = "md-fork-ran" },
-        { "md-fork-both", md_fork_both, "/api/mdforkpath", SESS_EXPLORE, md_fork_both_why, .gate = "md-fork-reach" },
-        { "md-fork-bind", md_fork_bind, "/api/mdforkpath", SESS_EXPLORE, md_fork_bind_why, .gate = "md-fork-ran" },
-        { "mod-entered", mod_entered, "/api/modentered", SESS_EXPLORE, mod_entered_why },
-        { "mod-const", mod_const, "/api/modconst", SESS_EXPLORE, mod_const_why, .gate = "mod-entered" },
-        { "mod-default", mod_default, "/api/moddefault", SESS_EXPLORE, mod_default_why, .gate = "mod-entered" },
-        { "mod-typeask", mod_typeask, "/api/modtypeask", SESS_EXPLORE, mod_typeask_why },
-        { "mod-type", mod_type, "/api/modtype", SESS_EXPLORE, mod_type_why, .gate = "mod-typeask" },
-        { "im-ask", im_ask, "/api/imask", SESS_EXPLORE, im_ask_why },
-        { "im-map", im_map, "/api/imask", SESS_EXPLORE, im_map_why, .gate = "im-ask" },
-        { "im-merge", im_merge, "/api/imask", SESS_EXPLORE, im_merge_why, .gate = "im-ask" },
-        { "im-skip", im_skip, "/api/imask", SESS_EXPLORE, im_skip_why, .gate = "im-ask" },
-        { "im-null", im_null, "/api/imask", SESS_EXPLORE, im_null_why, .gate = "im-ask" },
-        { "im-scope-out", im_scope_out, "/api/imask", SESS_EXPLORE, im_scope_out_why, .gate = "im-ask" },
-        { "im-scope-in", im_scope_in, "/api/imask", SESS_EXPLORE, im_scope_in_why, .gate = "im-ask" },
-        { "im-late1", im_late1, "/api/imlate1", SESS_EXPLORE, im_late1_why },
-        { "im-late2", im_late2, "/api/imask", SESS_EXPLORE, im_late2_why, .gate = "im-ask" },
-        { "im-err", im_err, "/api/imerr", SESS_EXPLORE, im_err_why },
-        { "mod-spec-bare-ask", ms_bare_ask, "/api/modbareask", SESS_EXPLORE, ms_bare_ask_why },
-        { "mod-spec-bare", ms_bare, "/api/modbareask", SESS_EXPLORE, ms_bare_why, .gate = "mod-spec-bare-ask" },
-        { "mod-spec-same-ask", ms_same_ask, "/api/modsameask", SESS_EXPLORE, ms_same_ask_why },
-        { "mod-spec-same", ms_same, "/api/modsameask", SESS_EXPLORE, ms_same_why, .gate = "mod-spec-same-ask" },
-        { "mod-spec-handler-ask", ms_handler_ask, "/api/modhandlerask", SESS_EXPLORE, ms_handler_ask_why },
-        { "mod-spec-handler", ms_handler, "/api/modhandlerask", SESS_EXPLORE, ms_handler_why,
-          .gate = "mod-spec-handler-ask" },
-        { "mod-spec-eval-ask", ms_eval_ask, "/api/modevalask", SESS_EXPLORE, ms_eval_ask_why },
-        { "mod-spec-eval", ms_eval, "/api/modevalask", SESS_EXPLORE, ms_eval_why, .gate = "mod-spec-eval-ask" },
-        { "mod-world-reach", mod_world_reach, "/api/modworldreach", SESS_EXPLORE, mod_world_reach_why },
-        { "mod-world", mod_world, "/api/modworld", SESS_EXPLORE, mod_world_why, .gate = "mod-world-reach" },
-        /* THE TWO-WORLD CACHE ROWS, WHOSE WHOLE VALUE IS BEING READ BESIDE `mod-world`: that row's subject is a
-           module cell two spec phases write, and this one's is an ordinary closure cell and an ordinary
-           property. Both at 0 says a world reads ANY state it did not write itself; `mod-world` at 0 with
-           `cj-world` at 1 localises it to the module phases. */
-        { "cj-ran", cj_ran, "/api/cjreach", SESS_EXPLORE, cj_ran_why },
-        { "cj-reach", cj_reach, "/api/cjreach", SESS_EXPLORE, cj_reach_why, .gate = "cj-ran" },
-        { "cj-world", cj_world, "/api/cjworld", SESS_EXPLORE, cj_world_why, .gate = "cj-reach" },
-        /* THE DRIVE'S THREE, AND THE KEY IS `/chunk/mdmod.js` FOR `reply-program`'S REASON EXACTLY:
-           `/api/moddriveran` is in a body this host SERVES and in no document at all, and what the document
-           contributes is the `import()` that links the module and so mints the function object the orphan walk
-           can find. A key is a substring of the PROGRAM, never of the answer.
-           THE SAME KEY AS NO ROW ABOVE, DELIBERATELY. `mod-entered` and `mod-world-reach` are keyed on their
-           own emissions because those statements are the document's; these three are keyed on the chunk because
-           the statement is the module's, and the two importing statements are merely what makes it exist. */
-        { "mod-drive-ran", mod_drive_ran, "/chunk/mdmod.js", SESS_EXPLORE, mod_drive_ran_why },
-        { "mod-drive-fn", mod_drive_fn, "/chunk/mdmod.js", SESS_EXPLORE, mod_drive_fn_why,
-          .gate = "mod-drive-ran" },
-        { "mod-drive-const", mod_drive_const, "/chunk/mdmod.js", SESS_EXPLORE, mod_drive_const_why,
-          .gate = "mod-drive-fn" },
-        /* THE STATIC IMPORT'S FIVE. `mh-ask` is keyed on the DOCUMENT'S own emission because the statement is
-           the document's; the other four are keyed on `/chunk/mdhost.js` for the drive rows' reason exactly —
-           their emissions are in bodies this host SERVES and in no document at all, and what the document
-           contributes is the `import()` that makes the graph exist. A key is a substring of the PROGRAM, never
-           of the answer, and `/api/mhdep` appears in no document so a row keyed on it would be selected by no
-           run while the table it sits in read as complete.
-           `mh-nofail` IS KEYED ON ITS OWN ADDRESS BECAUSE ITS EMISSION IS THE DOCUMENT'S, in the `catch` arm,
-           so unlike the four above it names a statement this file writes rather than one it serves. */
-        { "mh-ask", mh_ask, "/api/mhask", SESS_EXPLORE, mh_ask_why },
-        { "mh-dep", mh_dep, "/chunk/mdhost.js", SESS_EXPLORE, mh_dep_why, .gate = "mh-ask" },
-        { "mh-host", mh_host, "/chunk/mdhost.js", SESS_EXPLORE, mh_host_why, .gate = "mh-dep" },
-        { "mh-bind", mh_bind, "/chunk/mdhost.js", SESS_EXPLORE, mh_bind_why, .gate = "mh-host" },
-        { "mh-default", mh_default, "/chunk/mdhost.js", SESS_EXPLORE, mh_default_why, .gate = "mh-host" },
-        { "mh-nofail", mh_nofail, "/api/mhfail", SESS_EXPLORE, mh_nofail_why, .reach = "mh-ask" },
-        { "sc-msg-ran", sc_msg_ran, "/api/scmsg", SESS_EXPLORE, sc_msg_ran_why },
-        { "sc-msg-fork", sc_msg_fork, "/api/scfork", SESS_EXPLORE, sc_msg_fork_why, .gate = "sc-msg-ran" },
-        { "xd-pin-a", xd_pin_a, "/api/xdgate", SESS_EXPLORE, xd_pin_a_why },
-        { "xd-pin-b", xd_pin_b, "/api/xdgate", SESS_EXPLORE, xd_pin_b_why },
-        { "xd-sender", xd_sender, "_xdSinkEl.innerHTML", SESS_EXPLORE, xd_sender_why, .gate = "xd-pin-a" },
-        { "xd-nosink", xd_nosink, "_xdSinkEl", SESS_EXPLORE, xd_nosink_why, .reach = "xd-pin-b" },
-        { "xdm-set", xdm_set, "/api/xdmset", SESS_EXPLORE, xdm_set_why },
-        { "xdm-second", xdm_second, "/api/xdmsecond", SESS_EXPLORE, xdm_second_why, .gate = "xdm-set" },
-        { "xdm-sink", xdm_sink, "_xdmSinkEl.innerHTML", SESS_EXPLORE, xdm_sink_why, .gate = "xdm-second" },
-        { "xdm-own", xdm_own, "_xdmSinkEl", SESS_EXPLORE, xdm_own_why, .reach = "xdm-second" },
-        { "bc-msg-ran", bc_msg_ran, "/api/bcmsg", SESS_EXPLORE, bc_msg_ran_why },
-        { "bc-msg-fork", bc_msg_fork, "/api/bcfork", SESS_EXPLORE, bc_msg_fork_why, .gate = "bc-msg-ran" },
-        /* THE SEVEN ORPHAN ROWS SHARE ONE `why`, AND IT IS THE ONLY THING THAT MAKES THEIR 0 ACTIONABLE — see
-           where it is composed above. Each row still names its own endpoint; what the shared clause adds is
-           which of the schedule, the take and this drive the 0 belongs to, which no per-endpoint test can
-           reach because the answer is not in the document at all. */
-        { "orphan", orphan_driven, "orphanNeverCalled", SESS_EXPLORE, orphan_why },
-        /* `orphan-gate` IS GATED ON `orphan` FOR THE SAME REASON `injected-script-el` IS GATED ON ITS OWN PAIR,
-           and the entailment is stronger here than the one the two date rows already declare: those two are a
-           DIFFERENT BODY from this one, so `orphan == 0` reaches them only through the premise that no body was
-           driven at all — which `orphan == 0` does not establish, since the take could hand over `orphanDate`
-           and not this function. These two are ONE BODY. `/api/orphan/report` is its FIRST statement and
-           UNCONDITIONAL; `/api/orphan/admin-only` is behind `role === 'admin'` INSIDE it. So `orphan-gate == 1`
-           means the body ran, and a body that ran emitted the report first — the document's own comment says so
-           in as many words ("a driven orphan that received `undefined` would emit the first and never the
-           second"), and an abort between the two emits NEITHER, which is what every row here already relies on.
-           `orphan == 0` therefore entails this row's 0 under every reading.
-           IT WAS UNDECLARED, WHICH IS EVIDENCE INFLATION AND NOT UNTIDINESS: a reader meeting the orphan rows
-           at 0 counted these two as two findings where the mechanism is one, and this file's own table declares
-           the WEAKER entailment two rows down while leaving the stronger one implicit. A count of signals is
-           the denominator of everything a reader concludes about how much is wrong, so the declaration is worth
-           more than the row — and it costs nothing, because the gate only ever suppresses a zero: where the
-           body DID run, `orphan` is 1, the gate is open, and this row reports the fork independently, which is
-           the one thing it exists to say. */
-        { "orphan-gate", orphan_gate, "orphanNeverCalled", SESS_EXPLORE, orphan_why, .gate = "orphan" },
-        { "orphan-loop", orphan_loop, "orphanLoops", SESS_EXPLORE, orphan_why },
-        { "orphan-ident", orphan_ident, "orphanIdentity", SESS_EXPLORE, orphan_why },
-        { "orphan-ccode", orphan_ccode, "orphanCharCode", SESS_EXPLORE, orphan_why },
-        { "orphan-update", orphan_update, "orphanUpdate", SESS_EXPLORE, orphan_why },
-        { "orphan-clamp", orphan_clamp, "orphanClamp", SESS_EXPLORE, orphan_why },
-        /* THE ENTAILMENT IS BETWEEN THE TWO DATE ROWS AND IS ONE-DIRECTIONAL, BECAUSE IT IS A FACT ABOUT
-           THIS BODY'S ORDER. `orphanDate` constructs BOTH `Date`s first and then emits `date1` and `datef`
-           as two unconditional statements in that order, so `datef` cannot be answered by a run that did
-           not answer `date1`, and the converse is REACHABLE: a body that aborts between the two fetches, or
-           whose `'' + u` reaches a `toString` over an unknown year, emits the first and not the second. So
-           `datef` is gated on `date1` and `date1` is gated on NOTHING — its 0 is a finding of its own.
-           THIS READ `.gate = "orphan"` ON BOTH ROWS AND IS REWRITTEN RATHER THAN DELETED, because the
-           argument for it is the one a reader re-derives: it said that if no body was driven at all these
-           two are 0 for that reason and for no reason of their own, so summing them would be one fact
-           counted twice. That is sound about the PREMISE and false about the row that establishes it —
-           `orphan` is `orphanNeverCalled`, a DIFFERENT BODY, so `orphan == 0` never established "no body was
-           driven at all" and the take could hand over one body and not the other. It was not a latent
-           mis-declaration either: the entailment assert in probes_report ABORTED the native smoke on it,
-           naming both rows, on the first build that drove enough orphans to tell them apart.
-           `orphan_why` still carries the split between the schedule, the take and the row. */
-        { "orphan-date1", orphan_date1, "orphanDate", SESS_EXPLORE, orphan_why },
-        { "orphan-datef", orphan_datef, "orphanDate", SESS_EXPLORE, orphan_why, .gate = "orphan-date1" },
-        /* §29.4.5's THREE ARMS AND THEIR REACH ROW. The key is each row's own endpoint, so a 0 is already a
-           localisation; `xk-reach` is keyed on the same statement and stands first because it is what says
-           whether the three below it are about §29.4.5 or about how far the run got. */
-        { "xk-reach", xk_reach, "/api/xkreach", SESS_EXPLORE, xkreach_why },
-        { "xk-raw", xk_raw, "/api/xkraw", SESS_EXPLORE, xkraw_why },
-        { "xk-jwk", xk_jwk, "/api/xkjwk", SESS_EXPLORE, xkjwk_why },
-        { "xk-spki", xk_spki, "/api/xkspki", SESS_EXPLORE, xkspki_why },
-        { "module-entry", modentry_tt, "/api/modreach", SESS_EXPLORE, modentry_why },
-        { "module-tla", modtla_tt, "/api/modtla", SESS_EXPLORE, modtla_why },
-        /* §16.2.1.7.3.1's BINDING. `mfd-top` stands first because it is what says whether the row below it is
-           about the closure chain or about how far the run got. */
-        { "mfd-top", mfdtop_tt, "/api/mfdtop", SESS_EXPLORE, mfdtop_why },
-        { "mfd-nest", mfdnest_tt, "/api/mfdnest", SESS_EXPLORE, mfdnest_why },
-        { "frame-ctl", frame_ctl, "/api/framectl", SESS_EXPLORE, frame_ctl_why },
-        { "fetch", fetch_await, "/api/user?region=", SESS_EXPLORE, fetch_await_why },
-        { "then-chain", then_chain, "at=chain1", SESS_EXPLORE },
-        { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE, clone_body_why },
-        { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE, body_bytes_why },
-        { "body-span", body_span, "/api/bodyspan", SESS_EXPLORE, body_span_why },
-        { "body-example", body_ex, "/api/bodyspan", SESS_EXPLORE, body_ex_why },
-        { "body-iso", body_iso, "/api/bodyiso", SESS_EXPLORE, body_iso_why },
-        { "verb-key", verb_key, "/api/echo", SESS_EXPLORE },
-        { "hdrs", hdrs, "/api/hdrs?", SESS_EXPLORE, hdrs_why },
-        { "hdr-proxy", hdrproxy, "/api/hdrproxy", SESS_EXPLORE, hdrproxy_why },
-        { "needs-auth", needsauth, "/api/needsauth", SESS_EXPLORE, needsauth_why },
-        { "hdr-iter", hdriter, "/api/hdriter", SESS_EXPLORE, hdriter_why },
-        { "hdr-seq", hdrseq, "/api/hdrseq", SESS_EXPLORE },
-        { "hdr-record", hdrrec, "/api/hdrrec", SESS_EXPLORE },
-        { "mp-escape", mpesc, "/api/mpesc", SESS_EXPLORE },
-        /* THE REACHABILITY WITNESS FOR core/idl_iter.c's gc_mark, and NOT a claim that nothing leaked — a
-           probe reads the document and the leak walk runs at teardown. It sits after the `hdr-*` run rather
-           than inside it so that prefix grouping keeps the Headers family whole; its own prefix pairs it
-           with `iter-iso` below. See its computation. */
-        { "iter-cycle", itercyc_tt, "/api/itercycle", SESS_EXPLORE, itercyc_why },
-        { "pending", pending_await, "/api/lazy", SESS_EXPLORE, pending_await_why },
-        /* THE RUN OF ZEROES THAT OPENS HERE IS A ROW KIND AND NOT A POSITION, AND THIS TABLE HAS ALREADY
-           CAUSED THAT MISREADING. `pending` directly above is the last row before it that answers, and its
-           statement is the document line directly above this one — so the run reads as the document having
-           STOPPED EXECUTING after /api/lazy. IT HAS NOT. Every row from here to `floc-iso` is a FORK_ROW, and
-           a FORK_ROW's own `why` on a 0 opens `the statement RAN`: the record EXISTS and what is missing is
-           the SECOND WORLD. Statements far below these answer in the same census, `/api/conshape` and
-           `/api/xkspki` among them, which is what says the document did not stop.
-           THE DISCRIMINATOR IS THE ROW'S KIND AND IT IS HANDED OVER AS A DERIVATION, because a count written
-           here rots: `grep -n 'FORK_ROW(js' test_forced.c` is the two-world set, and a terminal `@H` line
-           scored against that set separates those rows from the `fold_row`/`param_value_only` ones they are
-           INTERLEAVED with in DECLARATION order. The adjacency is what makes the interleaving look like a
-           boundary, and a reader who stops at `floc-iso` never sees the single-world rows below it answering.
-           AND ONE CENSUS CANNOT SAY WHETHER THE LOST WORLDS ARE A BUDGET FACT, WHICH IS EXACTLY WHAT
-           fork_row_impl's third state refuses to claim. That refusal is honest about ONE reading and the
-           question is a SERIES: score the two sets against `workDone` across several runs and read whether
-           they move together. No column here can make that comparison about itself, which is why it is named
-           rather than left to be inferred from a value.
-           RETIREMENT: this record goes when a 0 row's diagnostic carries its own KIND, so a reader scanning
-           the values line can tell a lost world from an unexecuted statement without this paragraph. */
-        { "promise-state", promise_state, "/api/shared", SESS_EXPLORE, promise_state_why },
-        { "delete-iso", delete_iso, "/api/tok", SESS_EXPLORE, delete_iso_why },
-        { "global-delete", global_delete, "/api/gdel", SESS_EXPLORE, global_delete_why },
-        { "floc-iso", floc_iso, "/api/floc", SESS_EXPLORE, floc_iso_why },
-        { "ua", uafork_tt, "/api/uafork", SESS_EXPLORE, uafork_why },
-        { "touch", touchfork_tt, "/api/touch", SESS_EXPLORE, touchfork_why },
-        /* THE SAME QUESTION ONE MEMBER OVER: a gate the bundle asks of the DOM rather than of the navigator. */
-        { "cl-unknown-ran", clunk_ran_tt, "/api/clunknown", SESS_EXPLORE },
-        { "cl-unknown-src", clunk_src_tt, "/api/clunknown", SESS_EXPLORE },
-        { "cl-unknown", clunk_tt, "/api/clunknown", SESS_EXPLORE },
-        { "layout", layoutfork_tt, "/api/layout", SESS_EXPLORE, layoutfork_why },
-        { "listener-options", aelunk_tt, "/api/aelunk", SESS_EXPLORE, aelunk_why },
-        /* WEB IDL §3.2.3 boolean OVER UNKNOWN INPUT — one row per ROUTE to the one conversion, plus the
-           control that says the fork is not firing on values the page determined. */
-        { "bool-arg", boolarg_tt, "/api/boolarg", SESS_EXPLORE, boolarg_why },
-        { "bool-reflect", boolattr_tt, "/api/boolattr", SESS_EXPLORE, boolattr_why },
-        { "bool-stepmachine", boolclone_tt, "/api/boolclone", SESS_EXPLORE, boolclone_why },
-        { "bool-concrete", boolctl_tt, "/api/boolctl", SESS_EXPLORE, boolctl_why },
-        { "bitwise", bwfork_tt, "/api/bwfork", SESS_EXPLORE, bwfork_why },
-        { "bitwise-chain", bwhash_tt, "/api/bwhash", SESS_EXPLORE },
-        { "bitwise-tramp", bwtramp_tt, "/api/bwtramp", SESS_EXPLORE, bwtramp_why },
-        { "abort", abortfire_tt, "/api/aborted", SESS_EXPLORE, abortfire_why },
-        { "deadline", deadline_tt, "/api/deadline", SESS_EXPLORE, deadline_why },
-        { "any-step2", anyfork_tt, "/api/anyfork", SESS_EXPLORE, anyfork_why },
-        { "any-step2-cursor", anylate_tt, "/api/anylate", SESS_EXPLORE, anylate_why },
-        { "any-step2-after-park", anyiter_tt, "/api/anyiter", SESS_EXPLORE, anyiter_why },
-        { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE, idlcoerce_why },
-        { "dom-idl", domidl_tt, "/api/protoid", SESS_EXPLORE, domidl_why },
-        { "node-algo", nodealgo_tt, "/api/nodeconst", SESS_EXPLORE, nodealgo_why },
-        { "platform-algo", platalgo_tt, "/api/docnode", SESS_EXPLORE, platalgo_why },
-        /* Web IDL §3.7.2's three legacy factory functions and §3.6's "missing" — one row per algorithm, keyed
-           on the address of its own statement. See their computation for why `absent` is in the VALUE and not
-           in a row of its own, and for what each letter of the emitted code is. */
-        { "lfa-fn-audio", lfafnaud_tt, "/api/lfafnaud", SESS_EXPLORE, lfafnaud_why },
-        { "lfa-fn-image", lfafnimg_tt, "/api/lfafnimg", SESS_EXPLORE, lfafnimg_why },
-        { "lfa-fn-option", lfafnopt_tt, "/api/lfafnopt", SESS_EXPLORE, lfafnopt_why },
-        { "lfa-audio", lfaudio_tt, "/api/lfaudio", SESS_EXPLORE, lfaudio_why },
-        { "lfa-image", lfaimage_tt, "/api/lfaimage", SESS_EXPLORE, lfaimage_why },
-        { "lfa-option", lfaoption_tt, "/api/lfaoption", SESS_EXPLORE, lfaoption_why },
-        { "lfa-dirty", lfadirty_tt, "/api/lfadirty", SESS_EXPLORE, lfadirty_why },
-        { "lfa-reset", lfareset_tt, "/api/lfareset", SESS_EXPLORE, lfareset_why },
-        { "lfa-select-1", lfasel1_tt, "/api/lfasel1", SESS_EXPLORE, lfasel1_why },
-        { "lfa-select-2", lfasel2_tt, "/api/lfasel2", SESS_EXPLORE, lfasel2_why },
-        { "lfa-default", lfadefault_tt, "/api/lfadefault", SESS_EXPLORE, lfadefault_why },
-        /* Encoding §7.2's decode() resting at its own back-edge — four clauses on one record, because they are
-           four facts about ONE member and a reader wants them to redden together or not at all. */
-        { "td-step", tdstep_tt, "/api/tdstep", SESS_EXPLORE, tdstep_why },
-        /* §7.1's serialize I/O queue — SEVEN clauses on one record because they are seven facts about one
-           algorithm's single conjunction, and a reader wants the encoding clause and its three controls to
-           be readable against each other rather than spread over rows that can be scored apart. */
-        { "td-bom", tdbom_tt, "/api/tdbom", SESS_EXPLORE, tdbom_why },
-        /* §8.1.6.4 step 7.4's FOUR STATES, one row per state per ROUTE — see their computation for why the
-           document and the stream each answer half of each state, and why the stream clauses are ratios. Keyed
-           on the chunk that stages them, which is the statement these rows are about; the control below is
-           keyed on its own chunk because a rejection nobody handles is a different statement. */
-        { "rej-retract", rejtake_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejtake_why },
-        { "rej-retract-doc", rejtakedoc_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejtakedoc_why },
-        { "rej-mute", rejmute_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejmute_why },
-        { "rej-mute-doc", rejmutedoc_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejmutedoc_why },
-        { "rej-relapse", rejlapse_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejlapse_why },
-        { "rej-relapse-doc", rejlapsedoc_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejlapsedoc_why },
-        { "rej-count", rejcount_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejcount_why },
-        { "rej-count-doc", rejcountdoc_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejcountdoc_why },
-        { "rej-nohandler", rejnone_tt, "/chunk/rejthrow.js", SESS_EXPLORE, rejnone_why },
-        /* THE UNSTAGED ONE, AND ITS ADDRESS COLUMN IS THE DOCUMENT'S BECAUSE THAT IS WHERE IT IS RAISED —
-           the five rows above name a chunk, and naming one here would be the relocation this row exists to
-           refuse. See its fold_row block for why staging it is measured to be wrong. */
-        { "move-throw", movethrow_tt, "new Error('synmove')", SESS_EXPLORE, movethrow_why },
-        /* …AND THE SECOND DOCUMENT-RAISED ONE, whose address column is the document's for the same reason. */
-        { "remode-report", remodereport_tt, "https://x.test/p", SESS_EXPLORE, remodereport_why },
-        { "pushfork", pushfork_tt, "/api/pushfork", SESS_EXPLORE, pushfork_why },
-        { "mapfork", mapfork_tt, "/api/mapfork", SESS_EXPLORE, mapfork_why },
-        { "fefork", fefork_tt, "/api/fefork", SESS_EXPLORE, fefork_why },
-        { "add-fork", addfork_tt, "/api/addfork", SESS_EXPLORE, addfork_why },
-        { "add-number", addnum_tt, "/api/addnum", SESS_EXPLORE, addnum_why },
-        { "add-string", addstr_tt, "/api/addstr", SESS_EXPLORE, addstr_why },
-        { "script-order", scriptorder_tt, "/api/scriptorder", SESS_EXPLORE, scriptorder_why },
-        { "current-script", cscurrent_tt, "/api/csend", SESS_EXPLORE, cscurrent_why },
-        { "current-script-restore", csrestore_tt, "/api/cstimer", SESS_EXPLORE, csrestore_why },
-        { "current-script-inject", csinject_tt, "/api/csinj", SESS_EXPLORE, csinject_why },
-        { "readiness-interactive", rsmod_tt, "/api/rsmod", SESS_EXPLORE, rsmod_why },
-        { "owfork", owfork_tt, "/api/owfork", SESS_EXPLORE, owfork_why },
-        { "genfork", genfork_tt, "/api/genfork", SESS_EXPLORE, genfork_why },
-        { "gen2fork", gen2fork_tt, "/api/gen2fork", SESS_EXPLORE, gen2fork_why },
-        { "genofork", genofork_tt, "/api/genofork", SESS_EXPLORE, genofork_why },
-        { "afromfork", afromfork_tt, "/api/afromfork", SESS_EXPLORE, afromfork_why },
-        { "spreadfork", spreadfork_tt, "/api/spreadfork", SESS_EXPLORE, spreadfork_why },
-        { "setaddfork", setaddfork_tt, "/api/setaddfork", SESS_EXPLORE, setaddfork_why },
-        { "setfork", setfork_tt, "/api/setfork", SESS_EXPLORE, setfork_why },
-        { "mapmutfork", mapmutfork_tt, "/api/mapmutfork", SESS_EXPLORE, mapmutfork_why },
-        /* THE WEAK SIBLINGS OF THE THREE ROWS ABOVE — one family, so `smokerows`' prefix-before-the-hyphen
-           groups them and a reader sees the five together rather than four claims and a stray. `weak-reach`
-           is FIRST and is the only one that is a positive statement: the other four are two-world claims and
-           cannot tell their own 0 from the family never having run, which is the whole reason this one is
-           emitted by the pre-fork flow. See their computation for the residual on the collected-key arm. */
-        { "weak-reach", weakreach_tt, "/api/weakreach", SESS_EXPLORE, weakreach_why },
-        { "weak-add", weakadd_tt, "/api/weakadd", SESS_EXPLORE, weakadd_why },
-        { "weak-over", weakover_tt, "/api/weakover", SESS_EXPLORE, weakover_why },
-        { "weak-del", weakdel_tt, "/api/weakdel", SESS_EXPLORE, weakdel_why },
-        { "weak-set", weakset_tt, "/api/weakset", SESS_EXPLORE, weakset_why },
-        /* THE SAME PER-FLOW-RECORD CLAIM THE FIVE ROWS ABOVE MAKE, over a record behind a CLASS OPAQUE rather
-           than one inside a collection. Its baseline is minted in the same <script> as theirs and for the
-           same reason. */
-        { "iter-iso", iteriso_tt, "/api/iteriso", SESS_EXPLORE, iteriso_why },
-        { "afsfork", afsfork_tt, "/api/afsfork", SESS_EXPLORE, afsfork_why },
-        { "paffork", paffork_tt, "/api/paffork?", SESS_EXPLORE, paffork_why },
-        { "paf2fork", paf2fork_tt, "/api/paf2fork", SESS_EXPLORE, paf2fork_why },
-        { "redfork", redfork_tt, "/api/redfork", SESS_EXPLORE, redfork_why },
-        { "rerepfork", rerepfork_tt, "/api/rerepfork", SESS_EXPLORE, rerepfork_why },
-        { "toprimfork", toprimfork_tt, "/api/toprimfork", SESS_EXPLORE, toprimfork_why },
-        /* EACH CARRIES ITS OWN `why`, and the first clause of every one is "there is a record at all" — a 0
-           on any of these names whether the run ANSWERED the statement wrongly or never REACHED it, which is
-           the distinction a bare `&&` folded away and a lane was dispatched on. */
-        { "sortcollapse", sortcollapse_tt, "/api/sortcollapse", SESS_EXPLORE, sortcollapse_why },
-        { "sortvalueof", sortvalueof_tt, "/api/sortvalueof", SESS_EXPLORE, sortvalueof_why },
-        { "sortrest", sortrest_tt, "/api/sortrest", SESS_EXPLORE, sortrest_why },
-        { "sortdefault", sortdefault_tt, "/api/sortdefault", SESS_EXPLORE, sortdefault_why },
-        { "sortta", sortta_tt, "/api/sortta", SESS_EXPLORE, sortta_why },
-        { "sortnan", sortnan_tt, "/api/sortnan", SESS_EXPLORE, sortnan_why },
-        { "sortdefctl", sortdefctl_tt, "/api/sortdefctl", SESS_EXPLORE, sortdefctl_why },
-        { "sortbranch", sortbranch_tt, "/api/sortbranch", SESS_EXPLORE, sortbranch_why },
-        { "gcallfork", gcallfork_tt, "/api/gcallfork", SESS_EXPLORE, gcallfork_why },
-        { "gapplyfork", gapplyfork_tt, "/api/gapplyfork", SESS_EXPLORE, gapplyfork_why },
-        { "grefapplyfork", grefapplyfork_tt, "/api/grefapplyfork", SESS_EXPLORE, grefapplyfork_why },
-        { "hostreq", hostreq_tt, "/api/hostreq?", SESS_EXPLORE, hostreq_why },
-        { "hostreq-fork", hostreqfork_tt, "/api/hostreqfork", SESS_EXPLORE, hostreqfork_why },
+    const Probe rows[] = {
         { "json-fork", jsonfork_tt, "/api/jsonok", SESS_EXPLORE, jsonfork_why },
-        { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE, navopen_why },
-        { "nav-door", navdoor_tt, "/navhidden", SESS_EXPLORE, navdoor_why },
-        { "flow-jar", flowjar_tt, "/api/ckgate", SESS_EXPLORE, flowjar_why },
-        { "win-close", winclose_tt, "/api/winclose", SESS_EXPLORE, winclose_why },
-        { "frag-fork", fragfork_tt, "/api/fragfork", SESS_EXPLORE, fragfork_why },
-        { "frag-place", fragplace_tt, "/api/fragplace", SESS_EXPLORE, fragplace_why },
-        { "frag-xml", fragxml_tt, "/api/fragxml", SESS_EXPLORE, fragxml_why },
-        { "frag-ce", fragce_tt, "/api/fragce", SESS_EXPLORE, fragce_why },
-        { "frag-script", fragscript_tt, "/api/fragscript", SESS_EXPLORE, fragscript_why },
-        { "frag-base", fragbase_tt, "/api/fragbase", SESS_EXPLORE, fragbase_why },
-        { "frag-base-multi", fragbasem_tt, "/api/fragbase", SESS_EXPLORE, fragbasem_why },
-        { "frag-dialog", fragdialog_tt, "/api/fragdialog", SESS_EXPLORE, fragdialog_why },
-        { "declines-park", declines_tt, "/api/decl/redir", SESS_EXPLORE, declines_why },
-        { "win-opener-close", winopclose_tt, "/api/winopclose", SESS_EXPLORE, winopclose_why },
-        { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
-        { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },
-        { "xdoc-job", xdocjob_tt, "/api/xdocjob", SESS_EXPLORE, xdocjob_why },
-        { "timer-order", timer_tt, "/api/timerfire", SESS_EXPLORE, timer_why },
-        { "timer-string-handler", timerstr_tt, "/api/timerstr", SESS_EXPLORE, timerstr_why },
-        { "timer-string-clear", timerclr_tt, "/api/timerclr", SESS_EXPLORE, timerclr_why },
-        { "timer-string-delay", timerdelay_tt, "/api/timerdelay", SESS_EXPLORE, timerdelay_why },
-        { "timer-handle-counter", timerhandle_tt, "/api/timerhandle", SESS_EXPLORE, timerhandle_why },
-        { "timer-unknown-delay-fork", unkdelay_tt, "/api/unkdelay", SESS_EXPLORE, unkdelay_why },
-        { "idl-index-key-one-predicate", idxkey_tt, "/api/idxkey", SESS_EXPLORE, idxkey_why },
-        { "outcome-key-one-predicate", pkkey_tt, "/api/pkkey", SESS_EXPLORE, pkkey_why },
-        { "idl-index-one-element-two-members", nnmkey_tt, "/api/nnmkey", SESS_EXPLORE, nnmkey_why },
-        { "idl-index-empty-string-terminal", cssditem_tt, "/api/cssditem", SESS_EXPLORE, cssditem_why },
-        { "chardata-offset-two-members", cdsplit_tt, "/api/cdsplit", SESS_EXPLORE, cdsplit_why },
-        { "chardata-count-chain", cdsub_tt, "/api/cdsub", SESS_EXPLORE, cdsub_why },
-        { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE, ifnav_why },
-        /* §4.8.5's srcdoc documents. `srcdoc-fallback-base` is KEYED ON THE FETCH'S OWN ARGUMENT and not on
-           the address it produces, because the address is what the ENGINE composes out of the frame's
-           `<base href>` and this literal — the key names a statement the document makes, exactly as
-           `realm-reclaim` above does. */
-        { "srcdoc-script-ran", sdrun_tt, "/api/sdrun", SESS_EXPLORE, sdrun_why },
-        { "srcdoc-fallback-base", sdbase_tt, "/api/sdbase", SESS_EXPLORE, sdbase_why },
-        { "srcdoc-clone-not-class", sdclone_tt, "/api/sdclone", SESS_EXPLORE, sdclone_why },
-        { "srcdoc-domparser-not-class", sdparse_tt, "/api/sdparse", SESS_EXPLORE, sdparse_why },
-        { "srcdoc-otherwise-sync", sdsync_tt, "/api/sdsync", SESS_EXPLORE, sdsync_why },
-        { "srcdoc-otherwise-timer", sdother_tt, "/api/sdotherwise", SESS_EXPLORE, sdother_why },
-        { "srcdoc-script-child-own", sdmint_tt, "/api/sdmint", SESS_EXPLORE, sdmint_why },
-        /* KEYED ON THE REMOVAL rather than on an endpoint, because this row is about a statement that emits
-           nothing: §7.5.10's release is observable as a COUNT and not as a fetch. */
-        { "realm-reclaim", realmback_tt, "document.body.removeChild(_if)", SESS_EXPLORE, realmback_why },
-        { "route-seed", routeseed_tt, "/api/routeseed", SESS_EXPLORE, routeseed_why },
-        /* THE TWO ARMS OF ONE COMPARISON, keyed on the control arm rather than on the subject: the key names
-           the endpoint whose absence means the statement did not run, and the ladder's second rung is what
-           says the triple was lost. */
-        { "hist-state-symbols", hstate_tt, "hstate?v=other", SESS_EXPLORE, hstate_why },
-        { "nav-state-symbols", navstate_tt, "navstate?v=other", SESS_EXPLORE, navstate_why },
-        { "idl-enum-setter-ignores", scrign_tt, "/api/scrign", SESS_EXPLORE, scrign_why },
-        /* §7.1's `value` setter, keyed on the control arm for the taint row and on the claim for the other:
-           `clsetempty` has ONE arm, so its endpoint IS its claim, while `cltaint` has two and the key names
-           the one whose absence means the statement did not run. */
-        { "tokenlist-value-creates", clsetempty_tt, "/api/clsetempty", SESS_EXPLORE, clsetempty_why },
-        { "tokenlist-value-taint", cltaint_tt, "cltaint?v=other", SESS_EXPLORE, cltaint_why },
-        { "tokenlist-add-taint", cladd_tt, "claddtaint?v=flat", SESS_EXPLORE, cladd_why },
-        { "tokenlist-add-taint-joint", claddj_tt, "claddtaint?v=bare", SESS_EXPLORE, claddj_why },
-        { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE, idbopen_why },
-        { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },
-        { "idb-record-taint", idbtaint_tt, "/api/idbrec", SESS_EXPLORE },
-        { "loc-hash-param", lochash_tt, "/api/idbrec", SESS_EXPLORE },
-        { "idb-count-known", idbcount_known_tt, "/api/idbcount", SESS_EXPLORE },
-        { "idb-count-unknown", idbcount_unk_tt, "/api/idbcount", SESS_EXPLORE },
-        { "idb-range-throw", idbrange_throw_tt, "/api/idbcount", SESS_EXPLORE },
-        { "idb-range-order", idbrange_order_tt, "/api/idbcount", SESS_EXPLORE },
-        { "idb-index", idbidx_tt, "/api/idbidx", SESS_EXPLORE },
-        { "idb-index-uniq", idbuniq_tt, "/api/idbuniq", SESS_EXPLORE, idbuniq_why },
-        { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE, optiter_why },
-        { "cssprop", cssprop_tt, "/api/cssprop?", SESS_EXPLORE, cssprop_why },
-        { "cssprop-text", csspropText_tt, "/api/csspropText", SESS_EXPLORE, csspropText_why },
-        { "css-webkit-keyframes", csswkkf_tt, "/api/csswkkf?", SESS_EXPLORE },
-        { "css-webkit-keyframes-text", csswkkfText_tt, "/api/csswkkfText", SESS_EXPLORE },
-        { "css-nesting-selectortext", cssnestsel_tt, "/api/cssnestsel", SESS_EXPLORE },
-        { "css-nesting-cascade", cssnest_tt, "/api/cssnest?", SESS_EXPLORE },
-        { "css-nesting-group-rule", cssnestmedia_tt, "/api/cssnestmedia", SESS_EXPLORE },
         { "s-eval", s_eval, "state.code", SESS_EXPLORE },
         { "s-evalc", s_evalc, "state.note", SESS_EXPLORE },
         { "s-html", s_html, "setInnerHTML('<div>' + state.html + '</div>')", SESS_EXPLORE },
@@ -15918,35 +15437,523 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            the document, so these two select on it and on nothing else. */
         { "aclick-ran", aclick_ran, "lhLink.click()", SESS_EXPLORE },
         { "aclick-seen", st_aclick >= S_SEEN, "lhLink.click()", SESS_EXPLORE },
-        /* THE THREE OPERAND-SHAPE STATEMENTS. Each key is the piece of PROGRAM TEXT that only its own statement
-           puts in the document — the rejected head's error message, the rest parameter's own read, the accessor
-           read, the constructor's name — so a row selects on the statement it is about and on nothing else. */
-        { "faw-handler", faw_handler, "fawREJ", SESS_EXPLORE },
-        { "faw-depth", faw_depth, "fawREJ", SESS_EXPLORE },
-        { "rest-args", rest_args, "_fr.length", SESS_EXPLORE },
-        { "rest-loop", rest_loop, "_fr.length", SESS_EXPLORE },
-        /* THE ACCESSOR LADDER, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer. */
-        { "getter-url", getter_url, "_gx.x", SESS_EXPLORE },
-        { "getter-concrete", getter_concrete, "_gx.x", SESS_EXPLORE },
-        { "getter-fork", getter_fork, "_gx.x", SESS_EXPLORE },
-        { "getter-arms", getter_arms, "_gx.x", SESS_EXPLORE },
-        /* AND ITS CONTROL, keyed on its OWN statement — it is a different statement making a different claim,
-           so it carries its own key rather than borrowing the accessor's. */
-        { "base-fork", base_fork, "gbADMIN", SESS_EXPLORE, base_fork_why },
-        { "con-threw", con_threw, "_CShape", SESS_EXPLORE },
-        { "con-s-one", con_s_one, "_CShape", SESS_EXPLORE },
-        { "con-shape", con_shape, "_CShape", SESS_EXPLORE },
-        /* THE CLOSE-REQUEST ROAD, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer.
-           Every one is keyed on `pv.showPopover()`, which is the statement they are all about and which only
-           HTML_POPOVER contains, so this whole family is selected by that document and by no other. */
-        { "popover-show", pop_show, "pv.showPopover()", SESS_EXPLORE, pop_show_why },
-        { "popover-rest", pop_rest, "pv.showPopover()", SESS_EXPLORE, pop_rest_why },
-        { "popover-modelled", pop_model, "pv.showPopover()", SESS_EXPLORE, pop_model_why },
-        { "popover-closed", pop_close, "pv.showPopover()", SESS_EXPLORE, pop_close_why },
-        { "popover-hidden", pop_hidden, "pv.showPopover()", SESS_EXPLORE, pop_hidden_why },
-        { "popover-forced", pop_forced, "pv.showPopover()", SESS_EXPLORE, pop_forced_why },
-        { "popover-alternative", pop_alt, "pv.showPopover()", SESS_EXPLORE, pop_alt_why },
-        { "popover-once", pop_once, "pv.showPopover()", SESS_EXPLORE, pop_once_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the park and resume sessions. */
+TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
+    /* THE PROBES, DECLARED ONCE. This was a 46-term conjunction and a separate printf listing 43 of them, which
+       is two hand-maintained lists of the same thing — so a probe could be computed and joined to NEITHER, and
+       one immediately was: `clone_body` asserted §6.4 clone() and the gate never read it, so the fixture
+       reported PASS on a result nothing had checked. A row here is what makes a probe a probe: the gate walks
+       it and the report walks it, and a probe that is not declared does not exist rather than silently passing.
+       THE @S VERDICTS ARE ROWS TOO, for the same reason — they were a second conjunction with its own printf
+       below this table. One table, one gate, one report, one selector.*/
+    /* THE CROSS-SESSION ROUND TRIP'S OWN STATEMENTS, one per record kind at each end, because "it resumed" is
+       the observation that cannot distinguish an exercised tier from an unexercised one. The park's four
+       numbers and the resume's four are the SAME four, so a kind written at one end and not rebuilt at the
+       other is visible as a pair rather than inferred from a total.
+       A ROW THAT READS 0 IS THE FORCING FUNCTION, NOT A FLAKE. `park-deep` at 0 means the eviction landed
+       before any flow had forked, so the residue is the `f-,<val>` a park before the first pick already writes
+       and the segment rebuild did not run. `park-cand` at 0 means no @S candidate session was live when the
+       park was taken, so no attacker text crossed and park_hex/park_unhex did not. Neither is a reason to
+       soften the row — each names exactly which arm went unexercised, which is the whole reason the census is
+       per kind, and fixture_want_park is where the moment is chosen. */
+    int cold_park_wrote = g_sess == SESS_PARK && cold_park_records() > 0;
+    int cold_park_deep  = g_sess == SESS_PARK && g_cp.segs > 0;
+    int cold_park_cand  = g_sess == SESS_PARK && g_cp.cands > 0;
+    /* AND BENEATH ALL THREE OF THEM, THE PARK'S REACHABILITY LADDER — because every row above is an OUTCOME
+       row and `park-wrote=0` is ONE column over a CONJUNCTION. solver/cold.h has already counted what that
+       column folds: FOUR conjuncts, hence fifteen non-satisfying states, every one of them reported as the
+       same 0. They do not take the same work — a conjunct that NEVER ROSE wants its producer built, and
+       conjuncts that each rose and never COINCIDED want a different moment — so they may not share a number.
+       THE DISCRIMINATOR ALREADY EXISTED AND THIS TABLE COULD NOT SEE IT, which is the whole of what this
+       closes. cold_preview_census is raised INSIDE cold_park_preview, BEFORE any host's conjunction runs, and
+       it is published on the RESULT document's `_cold` line — a DIFFERENT document from this one, which this
+       stage's verdict never reads. So a build can FAIL on `park-wrote=0` while the three rows that attribute
+       that 0 are printed by the same process, a few hundred bytes away, and joined to nothing: the
+       write-with-no-reader half of the defaulted-field defect, with the reader one document over.
+       IT DERIVES FROM THAT ACCESSOR AND RESTATES NOTHING. Every row here is read off ColdPreviewCensus, so a
+       conjunct added to the moment grows a counter there and this ladder goes stale LOUDLY; a second walk of
+       the frontier written here would be the second copy an auditor may not keep.
+       THE THREE OUTER RUNGS ARE A CHAIN AND THE CHAIN IS ASSERTED BELOW RATHER THAN DESCRIBED. `park-asked`
+       is the REACHABILITY clause — did any host consult this tier at all — and a 0 there makes every park row
+       beside it UNATTRIBUTABLE rather than false. `park-residue` says some consultation stood at a residue
+       the park would have WRITTEN, as against found EMPTY or REFUSED; that is the TIER'S own verdict on the
+       ask and restates no host's moment. `park-moment` says this host's conjunction held at one of them.
+       Each implies the one below it, and `park-wrote` implies all three, so the LOWEST 0 localises.
+       AND THE THREE CONJUNCT ROWS BETWEEN THEM ARE SIBLINGS AND NOT RUNGS, said plainly because reading them
+       as a ladder is exactly the error a ladder's discipline exists to prevent. They are the three facts the
+       moment is a conjunction OF: each may rise without the others, none implies another, and `park-moment`
+       is 1 only when all three stood at ONE ask. A row that does not imply its neighbour is a finding, so
+       these are not dressed as one. The fourth conjunct (`refuses == 0`) has no row of its own because it
+       already has one: a REFUSING ask is the arm `park-residue` excludes, so a park moment that fails only on
+       that conjunct is a `park-residue` of 0. */
+    ColdPreviewCensus pvc;
+    int cold_park_asked, cold_park_residue, cold_park_moment;
+    int cold_park_mom_deep, cold_park_mom_orphan, cold_park_mom_commit;
+    const char *park_asked_why =
+        "no host consulted the cold tier in this session — `previewAsks` is 0. That counter is raised inside "
+        "cold_park_preview BEFORE any host's conjunction runs, so this is the positive statement that the "
+        "seam was never reached, and every park row printed beside it is UNATTRIBUTABLE rather than false. "
+        "Read engine_set_park_hook's call site and run_scheduler's loop; nothing in cold_park is implicated.";
+    const char *park_residue_why =
+        "the tier was consulted and NO consultation stood at a residue it would have WRITTEN — every ask took "
+        "its EMPTY or its REFUSING arm, which are the two `previewAsks` arms `previewAsksWritable` is not "
+        "(cold.c asserts the three partition it). That is a statement about this DOCUMENT and about "
+        "cold_park_flow's refusal, never about a moment: a park taken at any of those asks would have written "
+        "no bytes at all, or aborted at the member holding a task a replay will not re-cause.";
+    const char *park_mom_deep_why =
+        "no consultation stood at a CANDIDATE SESSION ON A FROZEN DECISION SEGMENT (`previewAsksWithDeepCands` "
+        "is 0) — the one member whose record carries attacker text AND names a segment ordinal, which is what "
+        "makes one residue cross park_hex and the 's' ordinals at once. `previewAsksWithCands` and "
+        "`previewAsksWithDeep` on the same line say whether either half ever stood alone, and this row is "
+        "bounded by both of them rather than by their conjunction.";
+    const char *park_mom_orphan_why =
+        "no consultation stood at a DRIVEN ORPHAN (`previewAsksWithOrphans` is 0), so no ask would have "
+        "written an 'o' record and the next session would inherit this document's explored paths and none of "
+        "its uncalled code. A drive is seeded when a flow has run out of everything else, so a 0 here is a "
+        "moment standing AHEAD of the drives rather than a document that has none.";
+    const char *park_mom_commit_why =
+        "no consultation stood at a member HOLDING a commitment (`previewAsksWithCommits` is 0), so no ask "
+        "would have written an 'r' record. READ IT WITH THE TWO ROWS solver/cold.h NAMES FOR IT AND NEVER "
+        "ALONE: `previewCommitRowsWritten` and `previewAsksAfterCommit` on the same `_cold` line separate its "
+        "THREE states, and they take three different actions. No ledger row at all is a document in which no "
+        "timeline ever received from a peer, and the work is the ROUTING (fixture_route_peer_post). Rows "
+        "written with `previewAsksAfterCommit` 0 is a producer that ran entirely AFTER the last consultation, "
+        "and the work is the MOMENT (fixture_cold_moment) — the tier is consulted BETWEEN slices, so a "
+        "document whose receivers are born, commit and depart inside ONE of them reads here exactly like a "
+        "document where nothing ever received. Asks taken after a row was written with this still 0 is the "
+        "only one of the three that is a defect in the engine: a commitment left the frontier, which no walk "
+        "of the registry can otherwise see.";
+    const char *park_moment_why =
+        "this host's conjunction never held at any consultation, so engine_request_park was never called, no "
+        "park was taken, and every OUTCOME row beside this one is 0 about that rather than about the tier. "
+        "The three conjunct rows printed with it say which of the facts it is a conjunction of never rose; a "
+        "run in which all three read 1 and this reads 0 is three facts that never COINCIDED, and the fix for "
+        "that is the moment and never the park.";
+    /* READ AND NOT ASKED, exactly as the latch beside it is: this call is a copy of a static plus one
+       monotonicity check, and cold_park_preview — the thing that would move these counters — is not on it. */
+    cold_preview_census(&pvc);
+    cold_park_asked      = g_sess == SESS_PARK && pvc.asks > 0;
+    cold_park_residue    = g_sess == SESS_PARK && pvc.asks_writable > 0;
+    cold_park_mom_deep   = g_sess == SESS_PARK && pvc.asks_with_deepcands > 0;
+    cold_park_mom_orphan = g_sess == SESS_PARK && pvc.asks_with_orphans > 0;
+    cold_park_mom_commit = g_sess == SESS_PARK && pvc.asks_with_commits > 0;
+    cold_park_moment     = g_sess == SESS_PARK && fixture_cold_moment_met();
+    /* THE CHAIN, ASSERTED AND NOT DESCRIBED — which is what makes "the lowest 0 localises" a contract rather
+       than a reading convention, and it is the one claim neither file can make alone: cold.h holds the census
+       and says outright that it never has to know what any host asked for, and this host holds the latch. */
+    DCHECKF(!cold_park_moment ||
+            (pvc.asks_with_deepcands > 0 && pvc.asks_with_orphans > 0 &&
+             pvc.asks_with_commits > 0 && pvc.asks_writable > 0),
+            "this host latched its park moment and the tier's own ask census did not record the conjuncts it "
+            "latched on: deepcands at %ld ask(s), orphans at %ld, commits at %ld, writable %ld of %ld ask(s). "
+            "The latch is set from ONE cold_park_preview call and that same call raises every one of those "
+            "counters before returning, so they cannot disagree unless a conjunct was read from somewhere "
+            "other than the preview — which makes this row a statement about a frontier the census never saw",
+            pvc.asks_with_deepcands, pvc.asks_with_orphans, pvc.asks_with_commits,
+            pvc.asks_writable, pvc.asks);
+    DCHECKF(!cold_park_wrote || cold_park_moment,
+            "this session wrote %ld park record(s) and its own moment never latched. engine_request_park has "
+            "exactly one caller reachable from this program — run_scheduler's park hook, which is "
+            "fixture_want_park — so a residue written without the latch is a second door into cold_park, and "
+            "the ladder printed above it stops being able to say why a park did or did not happen",
+            cold_park_records());
+    int cold_resumed_any   = g_sess == SESS_RESUME && (g_cr.flows + g_cr.cands) > 0;
+    int cold_resumed_segs  = g_sess == SESS_RESUME && g_cr.segs > 0;
+    int cold_resumed_cand  = g_sess == SESS_RESUME && g_cr.cands > 0;
+    /* AND THE 'w' ARM AT BOTH ENDS, WHICH THE PASS SENTENCE HAS BEEN CLAIMING WITHOUT A ROW BEHIND IT. That
+       sentence says the residue is "every record kind this document can produce", and solver/cold.h declares
+       'w' A KIND for a reason it states outright — "there are as many as this instance answered peers, and zero
+       is a real and different answer" — so the claim was true of four kinds and asserted of five. The columns
+       for it were ADDED to @COLDPARK/@COLDRESUME with the note that a kind written and never reported is a kind
+       "whose absence and whose zero read alike", and then nothing read them: `g_cp.worlds` and `g_cr.worlds`
+       were printed and joined to no row, which is the write-with-no-reader half of the same defect the probe
+       table exists to close. TWO ROWS AND NOT ONE, because the ends fail differently and independently: a park
+       that carried no peer segment is a fixture that never materialized one, and a resume that re-materialized
+       none out of a residue that carried one is cold_resume's 'w' arm — and those were the same absent number
+       until these columns existed. */
+    int cold_park_world    = g_sess == SESS_PARK && g_cp.worlds > 0;
+    int cold_resumed_world = g_sess == SESS_RESUME && g_cr.worlds > 0;
+    /* AND THE 'r' ARM AT BOTH ENDS — the LAST kind of this grammar that had a counter at each end and no
+       producer anywhere, which is a different absence from the one the 'w' rows closed and reads identically.
+       A commitment is a fact about a RECEIVER (solver/flow.h), and the only host that had ever taken a park
+       stood in for a SENDER — so both halves were written, both were counted, and the pair `commits 0→0` was
+       a residue of nothing rather than a tier that works. What produces one is a peer's posted message routed
+       in (fixture_route_peer_post) and a timeline of this document taking it; what makes the park MEET one is
+       that the moment now asks the residue rather than the clock.
+       TWO ROWS AND NOT ONE, for the reason the 'w' pair gives: the ends fail differently and independently. A
+       park carrying no commitment is a fixture whose peer never posted or whose frontier never received; a
+       resume that rebuilt none out of a residue that carried one is cold_resume's 'r' arm, and those were the
+       same absent number until these rows existed.
+       AND THERE IS NO 'm' PAIR BESIDE THEM, WHICH IS NOW A STATEMENT ABOUT WHAT A ROW CAN ASSERT AND NOT
+       ABOUT WHAT THE TIER CAN DO. The 'm' ROUND TRIP IS WHOLE — solver/cold.c rebuilds one through the entry
+       that registers its arrival, so the moment no longer excludes it and the residue carries whatever the
+       frontier had not yet received. What it may not do is ASSERT one: whether any member still holds an
+       undelivered record at the instant the park is taken is a property of the SCHEDULE, so a row demanding
+       `delivers > 0` would be a green that depends on the interleaving, which §Testing names as the shape a
+       loaded machine falsifies. The `delivers p→r` pair the round-trip report prints says what crossed
+       without claiming a number this fixture can guarantee. */
+    int cold_park_commit    = g_sess == SESS_PARK && g_cp.commits > 0;
+    int cold_resumed_commit = g_sess == SESS_RESUME && g_cr.commits > 0;
+    /* AND THE ARM THAT CARRIES CODE THE PAGE NEVER RAN. `park-orphan` says the residue names a FUNCTION and not
+       only paths; `resumed-orphan` says the rebuild turned that name back into a drive waiting for its body;
+       `resumed-orphan-met` says a take in this session actually handed one over, which is the only one of the
+       three that can distinguish a locator that works from a locator that merely round-trips as text.
+       AND THE FOURTH IS THE ONE THAT CANNOT BE PASSED BY A LOCATOR THAT NAMES THE WRONG THING: no waiting drive
+       FINISHED without a body. The document's uncalled function forks arms, so several flows carry ONE locator
+       and every one of them has to be handed the body — a route that satisfied the first and left the rest
+       would pass `resumed-orphan-met` and fail only here. It is the engine's own count, asked of it rather than
+       parsed back out of a log line. */
+    long orphan_met = 0, orphan_unmet = 0;
+    int cold_park_orphan, cold_res_orphan, cold_res_orphan_met, cold_res_orphan_all;
+    engine_orphan_claims(&orphan_met, &orphan_unmet);
+    cold_park_orphan    = g_sess == SESS_PARK && g_cp.orphans > 0;
+    cold_res_orphan     = g_sess == SESS_RESUME && g_cr.orphans > 0;
+    cold_res_orphan_met = g_sess == SESS_RESUME && orphan_met > 0;
+    /* AND IT IS CONJOINED WITH THE REBUILD THAT MAKES IT A STATEMENT, because `orphan_unmet == 0` ALONE is
+       VACUOUSLY TRUE in exactly the session where every row beside it reads 0. The proof needs no run and is
+       already asserted one file over: solver/result.c's `resumed.orphans > 0 || (claims_met == 0 &&
+       claims_unmet == 0)` says a rebuild that carried no locator cannot have lost a claim — so a resume
+       handed NO residue read 1 here while `resumed`, `resumed-orphan` and `resumed-orphan-met` all read 0,
+       and that 1 read as a pass in the one state where it was a statement about nothing.
+       IT IS THE MIRROR OF THE ROWS AROUND IT AND SO THE ONE THIS TABLE COULD NOT SEE. A row whose sides
+       cannot disagree while its own precondition is shut is not a weak assertion, it is a NON-assertion
+       wearing a row's clothes, and it is invisible precisely because it is GREEN — every mechanism here for
+       a 0 read past it.
+       THE CONJUNCT MAKES IT SAY WHAT THE PARAGRAPH ABOVE SAYS IT SAYS — drives came back AND not one of them
+       finished without a body — and makes it GATEABLE on the row that says drives came back, so its 0 is
+       published as entailed rather than counted as a second finding. It changes no verdict: the state it
+       turns from 1 to 0 is one in which `resumed-orphan` is already 0 and the run already fails there. */
+    cold_res_orphan_all = g_sess == SESS_RESUME && g_cr.orphans > 0 && orphan_unmet == 0;
+    /* AND THE QUESTION A PEER ASKED, HANDED BACK RATHER THAN CARRIED. `park-remoteop` is the row about the
+       refusal that used to abort here: a park that MET a STARTED cross-agent operation — a program mid-run with
+       the zone's rendezvous token on its row — and returned it. A 0 is not a flake and not a reason to soften
+       the row, AND IT IS NOT A MOMENT THAT WAS CHOSEN BADLY EITHER, which is what this comment used to say and
+       what sent a reader to fixture_cold_moment to fix something that is not there. NO MOMENT THIS HOST CAN
+       NAME CONTAINS ONE: the hook is asked between two slices, flow_perform appends the operation's program to
+       a RUNNABLE row, and a runnable member is in neither the stall nor the exhausted exit — so the started
+       state is strictly intra-slice and the only exits that could end a slice over one are the CPU quantum and
+       the level-1 yield floor. The moment's own paragraph carries the argument in full.
+       SO THIS ROW IS NARROWER THAN engine_retract_span, BY EXACTLY ONE LOOP, and that is what a 0 here says.
+       WHAT IS NOT COVERED: the `dyn_token` strip — the `g_retract_started++` loop — which no park this fixture
+       takes has ever reached.
+       WHAT THE NEXT DIFF BUILDS IS TWO INDEPENDENT THINGS, AND THE CLAUSE THAT STOOD HERE NAMED ONE. It is
+       recorded rather than deleted because the half it named is CORRECT about this engine, so a reader who
+       re-derives it will re-derive that half and stop exactly where its author stopped. It read: a provider
+       payment that asks the operation and does NOT answer the replies its members are parked on, so each
+       member converts the arrival to a row and then re-blocks at the cursor it was already owed a reply at,
+       leaving the token on an un-run appended row while every member is host-owed. That is the condition
+       under which a token SURVIVES a slice, and it says nothing about the condition under which one comes to
+       EXIST — which is the half this host fails, and the half no provider schedule can reach.
+       THE TWO ARE LABELLED BY WHEN THEY LAND AND NOT BY THE ORDER THEY WERE DERIVED IN, which is a repair
+       to this paragraph rather than to the argument under it. They were numbered (1) and (2) in the order
+       above, with the LANDING order stated in the sentence beneath them — and a numbered list is read as
+       an instruction while a sentence under one is read as commentary, so the labels said to build the
+       window first and the sentence said not to. The cost of taking the labels is named below and is not
+       hypothetical: three rungs that pass today go to 0.
+       (SECOND TO LAND) A PICK MUST HAPPEN BETWEEN THE ASK AND THE PARK, AND ON THIS HOST NONE DOES. run_scheduler's loop
+       is hook, engine_sched_step, payment; `fixture_ask_remote_op` is called from the PAYMENT; and
+       engine_sched_slice honours engine_request_park BEFORE its pick loop. The moment is LATCHED, so the
+       consultation after the one that asked returns 1 and the park is taken with the frontier untouched —
+       ZERO picks, so flow_perform cannot run whatever the provider does about replies. fixture_cold_moment's
+       own paragraph states that seam correctly ("there is no gap for the scheduler to work in"), and the
+       clause above was written as though the gap an ASK needs were the gap that paragraph denies. They are
+       two different gaps: that paragraph is about a STARTED operation surviving a slice, this is about one
+       ever starting, and the second is upstream of everything the clause described.
+       (FIRST TO LAND) AND THE CURSOR MUST STAND AT A ROW THE MEMBER CANNOT PASS, WHICH IS ONE KIND AND THIS DOCUMENT HAS
+       NONE OF IT. flow_step's sequence arm stands ABOVE every resting arm, so a member whose sequence was
+       EXHAUSTED and which gains one appended row has `script_i < dyn_n` at a compilable row, sets
+       `seq_compiles` and RUNS the operation on its very next step — after which flow_answer_perform has
+       cleared the token and the strip finds nothing. The only cursor this engine cannot pass is a
+       DYN_SCRIPT_SRC row whose bytes have not come back: that arm sets `seq_awaits`, compiles nothing and
+       rests. HTML_COLD's fetches are UNAWAITED, so its members rest on `pending_outstanding` with the
+       sequence exhausted, which is precisely the shape that runs the appended row. "The replies its members
+       are parked on" is true of this document and is the wrong KIND of reply.
+       SO THE ORDERED SUBPROBLEMS ARE, AND THE ORDER IS A LANDING ORDER: first a row in this document whose
+       reply the provider withholds across the park, so a member rests at a cursor the append lands BEHIND;
+       then the ask moved one consultation ahead of the park request, so a slice runs between them. NEITHER
+       IS LANDABLE ALONE and the second is the dangerous one — the window without the blocked cursor lets the
+       operation COMPLETE in that slice, which takes `park-remoteop-asked`, `-many` and `-once` from 1 to 0,
+       so a diff that builds the window first regresses the three rungs that currently pass.
+       BOTH ARE BUILT AND THEY LANDED AS ONE DIFF, for exactly the reason the sentence above gives: neither
+       moves this row alone and the second REGRESSES three rungs alone, so there was no coherent smaller
+       landing to make. The first is an external script at the end of HTML_COLD that fixture_provide
+       DECLINES; the second is one declined consultation at the tail of fixture_want_park. The token claim
+       is asserted beside the census below, after the park, so it holds whichever exit took the park.
+       WHAT IS STILL A RESIDUAL AFTER THEM, because building a precondition is not the same as discharging
+       the question: this row reads the STRIP, and the two halves only make the strip REACHABLE. A 0 here
+       means engine_retract_span walked a frontier that held a token and stripped nothing, which is a
+       DEFECT and no longer a named residual, and the census assert aborts on it in a dev build.
+       The `unaskable` declaration below is left exactly as it is: it retires itself the moment the
+       cross-agent-operation arm of `stepUnitRuns` leaves 0, with no edit at that line.
+       AND THE INDEPENDENT WITNESS FOR THE FIRST HALF ALONE IS `fork-over-a-declined-request`, which stands
+       in this host's NEVER-run list beside `cross-agent-operation` and `await-a-refused-request`. A build
+       that moves one and not the other is diagnosable: the decline arm running with this row still 0 says
+       the window did not open, and this row moving with that arm silent is not a reading this diff can
+       produce at all.
+       AND THE `SCOPE OF THE FIRST IS SHORT BY ONE FILE` CLAUSE IS REFUTED AT THE ONE FILE IT NAMES. It is
+       REWRITTEN RATHER THAN DELETED because every step of its reasoning is sound and a reader who re-derives
+       it reaches the same conclusion: it read that
+       `the provider withholds` names a thing fixture_provide MAY NOT DO, that the first park to try it would
+       abort in dev at run_scheduler's `engine_pending_fetches() == ` empty DCHECK, and that what the first
+       subproblem needs is a DELIBERATE decline the provider STATES — "That is a change in solver/engine.c".
+       THE DECLINE IS ALREADY BUILT AND NOTHING IN solver/engine.c HAS TO MOVE.
+       `engine_decline(ctx, method, url, reason)` answers the SAME (method, url) pair `engine_provide` answers
+       and is declared beside it; `engine_pending_fetches` SKIPS a refused entry, reading
+       `pending_entry_declined` in the same expression that skips an ANSWERED one, so the assert the clause
+       names cannot fire on one; a refusal leaves `haveValue` CLEAR, so the flow stays PARKED rather than
+       being handed a network error it never observed; and `flow_decline_fork` already names THIS document's
+       shape in its own words — "a document's own external script parks at its sequence row with no frame at
+       all". That waiting arm is FRAMELESS, which is what carries it past the `if (!f->frame)` block head and
+       in front of flow_perform_pending, and its cursor stands at the DYN_SCRIPT_SRC row that sets
+       `seq_awaits` — the one cursor this engine cannot pass, which is exactly what the first subproblem asked
+       for and reported as absent.
+       SO THE SCOPE OF THE FIRST IS ONE FILE AND IT IS THIS ONE: fixture_provide DECLINES one address this
+       document names instead of providing it. A diff that obeyed the retired clause would have built a SECOND
+       spelling of a decline beside engine_decline, which is the dual-system rot a superseded system may not
+       be kept as, reached by a reader who had no reason to grep for a mechanism the clause told them was
+       absent.
+       WHETHER IT WAS STALE OR FALSE AT BIRTH IS NOT ESTABLISHABLE FROM THIS CHECKOUT, which is a result and
+       not a failure to look: `git rev-parse --is-shallow-repository` answers true here, so a pickaxe reports
+       the graft commit for every pre-existing line and cannot tell the two apart. What is recorded instead is
+       the METHOD, because that is the half which predicts the next one: the clause reasoned from ONE register
+       and ONE assert and never asked what ELSE a record may carry, so it enumerated TWO states of a field
+       that has THREE — answered, outstanding, and REFUSED.
+       THE DERIVATION RATHER THAN THE COORDINATE, because the lines move:
+       `git grep -n 'int engine_decline' engine/host/solver/engine.c` names the entry,
+       `git grep -n pending_entry_declined engine/host/solver/engine.c` names the skip that keeps a refused
+       entry out of the join that assert reads, and
+       `git grep -n 'external script parks at its sequence row' engine/host/solver/engine.c` names the fork
+       arm that already takes this document's own external script as one of its two shapes.
+       RETIREMENT: this record goes when fixture_provide declines an address of this document, because the
+       clause is then built rather than described.
+       AND THE OTHER HALF IS STRONGER THAN IT WAS STATED, WHICH IS WORTH THE SAME AS THE CORRECTION: the
+       zero-pick window is not a property of this host's schedule that a cleverer moment could dodge, it is
+       FORCED. The conjunction fixture_cold_moment latches reads state that only a STEP changes; the loop is
+       hook, step, payment, so the payment is the FIRST consultation after any step and the hook is the
+       SECOND — the latch can only ever be taken at a payment, and fixture_provide asks the operation on the
+       very line that takes it. `on this host none does` is therefore `none can, while the moment is a
+       function of post-step state`, and fixture_want_park now asserts the consequence at the seam rather than
+       leaving it to be re-derived from three rows reading 0.
+       (The seam the surviving half rests on is flow_step's own order, and it is RE-DERIVED here rather than
+       inherited: the `flow_perform_pending` branch sits under `if (!f->frame)` and ABOVE both the networking
+       delivery and the sequence arm, so a member with no live frame that is owed a reply converts an arrival
+       to a row on one step and reports OWED on a later one. A member parked MID-FRAME never reaches that
+       branch at all — JS_ResumeParkedFlow answers first — which is why the clause says "at the cursor it was
+       already owed a reply at" and not "mid-expression".)
+       RETIREMENT: this record goes when a park this fixture takes raises `g_retract_started`, because what
+       is described above is then held by the assert at fixture_want_park rather than by this paragraph.
+       HOW ITS ABSENCE SHOWS: this row reads 0 while all three rungs below it read 1 — the arrival-slot half of
+       the same call having run over many timelines, handed back once, without the row half ever existing.
+       AND THE THREE RUNGS BELOW IT ARE A LADDER FOR THE ACCESSOR'S REASON, WHICH IS THE CORRECTION THIS
+       PARAGRAPH NEEDED MOST. The clause above says a 0 here shows "while `park-remoteop-once` reads 1" — and
+       that clause was resting on a row which, at 0, could not have told the reader which of THREE things had
+       happened. `flows > 1 && back == 1` folded the last-holder rule together with the precondition that makes
+       it say anything, so a 0 was "the question was never asked" (nothing called engine_perform, or it attached
+       to nothing), "it was asked and this document held it on ONE timeline" (a fixture problem — the row below
+       asserts nothing over a single holder), and "it was asked, many timelines held it, and MORE THAN ONE
+       notice left" (the per-flow hand-back, an engine defect). Those take three different fixes and had one
+       column. Each rung has a strictly earlier observation site than the one above it, so the LOWEST 0 is the
+       localisation, and every one of them is read off the same census — no rung is a new fact, which is what
+       makes this a split rather than an addition.
+       `park-remoteop-once` is the LAST-HOLDER rule and is the only rung a per-flow hand-back would fail.
+       engine_perform attaches one question to EVERY live timeline, so a notice per holder would be one
+       hand-back repeated once per member — and worse than noisy: the zone would be told to forget a token a
+       surviving timeline is about to answer under, which its own assert catches one seam away from the engine
+       that caused it. One question asked, many holders, exactly one notice.
+       AND THE RUNGS ARE NOT ENTAILED, WHICH WAS CONSIDERED AND DECLINED RATHER THAN MISSED — recorded so
+       the next reader does not "fix" it. A ladder is supposed to be a chain of implications, each rung
+       implying the one below, and `-many` implies `-asked` while `-once` does NOT imply `-many` (one
+       holder handing back once satisfies `back == 1` with `flows == 1`) and `park-remoteop` does not imply
+       `-once` (two tokens last-held give `back == 2`; it holds today only because this fixture asks ONE
+       operation, which is a property of the fixture and not of the ladder). So a 1 can stand above a 0.
+       WHAT MAKES THAT SAFE IS THE SENTENCE ABOVE IT: each `why` states what ITS OWN rung observed and
+       nothing about its neighbours, so the reader who takes the lowest 0 is correctly localised anyway —
+       `-many`'s own text says in as many words that the rung above it decides a last-holder rule over a
+       single holder and states NOTHING. All three available repairs are worse: folding `flows > 1 && back
+       == 1` re-introduces the exact conflation this ladder was split apart to end, asserting the
+       entailment aborts on a document that legitimately does not fork, and relaxing `== 1` destroys the
+       last-holder rule the row exists for. A finding about a contract is a finding; it is not a licence to
+       change the contract. */
+    long retract_flows = 0, retract_started = 0, retract_back = 0;
+    long perform_asks = 0, perform_attached = 0;
+    int cold_park_remoteop, cold_park_remoteop_once, cold_park_remoteop_asked, cold_park_remoteop_many;
+    int cold_park_remoteop_arrived, cold_park_remoteop_attached;
+    engine_retract_census(&retract_flows, &retract_started, &retract_back);
+    /* AND WHAT THE ASK SIDE DID, which is a different pair of events from what the RETRACTION found and was
+       unpublished until there was a rung that needed it. Both are lifetime counts; see solver/engine.h. */
+    engine_perform_census(&perform_asks, &perform_attached);
+    /* THE CONTAINMENT, ASSERTED WHERE BOTH NUMBERS ARE IN ONE HAND rather than restated in either producer's
+       header. A member cannot hold a question that was never attached to it, so the park's `flows` is bounded
+       by the ask side's `attached` — and that bound is the whole of why the ladder's lowest 0 is a
+       LOCALISATION rather than three readings of one number.
+       IT IS ONE-SIDED ON PURPOSE. `attached <= perform_asks` is FALSE and asserting it would fire on the
+       ordinary case: one arrival is attached to EVERY live timeline, so a forked document makes `attached`
+       many times `asks` and no order between those two means anything at all. */
+    DCHECK(retract_flows <= perform_attached,
+           "more members held a cross-agent question at this park than engine_perform ever ATTACHED — a "
+           "question reached a flow's arrival slot or a program's row without going through the attach loop, "
+           "so something other than engine_perform is writing the place the retraction walks");
+    /* The token claim, made after the park rather than where this host requests it: solver/engine.c parks by
+       two exits (the host's request, and a session closed over survivors resting on a refusal), both walk
+       engine_retract_span, and only the first passes through fixture_want_park. `started` is the strip's own
+       count, so it is the number of tokens on program rows at the instant the park walked. */
+    DCHECK(g_sess != SESS_PARK || !fixture_op_asked() || retract_started > 0,
+           "the peer's question was asked of this frontier and the park found no member holding its token on a "
+           "program row — either no member was resting behind HTML_COLD's declined external script when the "
+           "question arrived, or a member converted it and then completed it before the park. "
+           "`fork-over-a-declined-request` in `stepUnitRuns` says whether the decline forked at all");
+    /* THE LADDER'S SENTENCES — ONE PER RUNG, AND DELIBERATELY NOT COUNTED HERE, because a count beside the
+       list it counts is the half nobody adds up and this one read FOUR for as long as the ladder had four.
+       WRITTEN WHERE THE RUNGS ARE COMPUTED AND PRINTED WHERE A ROW IS 0. They
+       stood here as comments, which is the one place a reader of a LOG never looks: probes_report narrates a
+       0 row only when it carries a `why`, and this ladder carried none — so the lowest rung, whose 0 is a
+       NAMED RESIDUAL and not a defect, printed a bare `park-remoteop=0` that a reader then has to localise
+       out of a 28k-line file. MEASURED, and it cost a dispatched lane: that 0 was read as `the last zero`
+       and briefed with three candidate mechanisms, every one of them about the park RESIDUE KINDS, when this
+       row reads engine_retract_census and no park record at all. The printer's own comment already states
+       the rule this follows — a 0 has two readings, answered-wrongly and never-reached, and per row the
+       split is what a `why` and a ladder's lowest rung are for. The ladder was half of that pair.
+       EACH SENTENCE STATES WHAT ITS OWN RUNG OBSERVED AND NOTHING ABOUT ITS NEIGHBOURS, because a rung
+       cannot read them: probes_report prints the `why` of every 0 row, so a sentence asserting that another
+       rung is 1 would be printed on the run where it is not.
+       RETIREMENT: these go when a probe row's 0 cannot be printed without a diagnostic beside it. */
+    /* Rung 0a: A PEER QUESTION REACHED THIS INSTANCE AT ALL. Its observation site is engine_perform's own
+       first statement, which is strictly earlier than every rung above it and strictly earlier than the park,
+       so a 0 here is a statement about the ASK PATH and can be about nothing else. It is also the rung that
+       makes the three rungs above it statements rather than guesses: `retract_flows` is measured AT THE PARK
+       and cannot distinguish a question that never came from one whose holders had gone.
+       NO GATE: nothing below it implies it, so a gate would suppress it on the one run that most needs
+       it. */
+    const char *remoteop_arrived_why =
+        "no cross-agent operation ever reached this instance — engine_perform was never called, so nothing was "
+        "ever attached to any timeline and the park had nothing to walk. Read fixture_ask_remote_op and the "
+        "moment that gates it, and the zone's routing; never engine_retract_span and never the attach loop, "
+        "neither of which ran.";
+    cold_park_remoteop_arrived = g_sess == SESS_PARK && perform_asks > 0;
+    /* Rung 0b: AND IT WAS ATTACHED TO A TIMELINE. This is the one state neither of its neighbours can
+       separate: engine_perform skips every live flow whose world CONTRADICTS the addressee the peer named, and
+       its own `attached > 0` DCHECK is what fires in a dev build when that empties the loop — so a 0 here in
+       RELEASE is that abort's silent form, and a 0 here in dev means the abort was bypassed and is itself the
+       finding. Gated on the rung below, which it entails: nothing can be attached that never arrived. */
+    const char *remoteop_attached_why =
+        "a cross-agent operation ARRIVED and was attached to NO live timeline — every member's world "
+        "CONTRADICTS the addressee the peer named. engine_perform's own `attached > 0` DCHECK carries what to "
+        "build for it, which is that a document a peer still holds a reference into must keep the timelines it "
+        "answered from alive. Nothing about the retraction walk is in question at this rung.";
+    cold_park_remoteop_attached = g_sess == SESS_PARK && perform_attached > 0;
+    /* Rung 1: the park MET a peer's question at all. */
+    const char *remoteop_asked_why =
+        "every member a question was attached to had LEFT THE FRONTIER before this park walked, so the walk "
+        "found nobody holding one. This row is gated on `park-remoteop-attached`, so for it to be printed a "
+        "question DID arrive and WAS attached — what its 0 says is that the timelines it was attached to are "
+        "gone, which is the same capability engine_perform's `attached > 0` abort names from the other end. "
+        "THIS SENTENCE USED TO READ `nothing was attached to any member at all — no peer question reached this "
+        "frontier, so the walk's arrival-slot half never ran`, and it is kept because a reader who re-derives "
+        "it from `retract_flows` will write it again: that is an assertion about the ASK SIDE, which this "
+        "rung's predicate cannot make at all — `retract_flows` is measured AT THE PARK and reads 0 for three "
+        "reasons that take opposite work. The two rungs below this one are what separate them. Read "
+        "fixture_ask_remote_op only when `park-remoteop-arrived` is the lowest 0; never engine_retract_span.";
+    cold_park_remoteop_asked = g_sess == SESS_PARK && retract_flows > 0;
+    /* Rung 2: MANY timelines held the one question — the precondition that makes rung 3 a statement about a
+       RULE rather than about a single free(). */
+    const char *remoteop_many_why =
+        "at most one member held a question, so the rung above decides a last-holder rule over a single "
+        "holder and states nothing about a RULE. That is this DOCUMENT not forking, so the fix is in this "
+        "fixture and not in the hand-back.";
+    cold_park_remoteop_many = g_sess == SESS_PARK && retract_flows > 1;
+    /* Rung 3: and exactly ONE notice left for it. */
+    const char *remoteop_once_why =
+        "the notice count is not 1. engine_perform attaches ONE question to EVERY live timeline, so above 1 "
+        "is a per-flow hand-back — the zone told to forget a token a surviving timeline is about to answer "
+        "under — and 0 is a question that left no notice at all.";
+    cold_park_remoteop_once = g_sess == SESS_PARK && retract_back == 1;
+    /* Rung 4: the named residual — a STARTED operation was met and its row stripped. */
+    const char *remoteop_why =
+        "no member carried a peer's rendezvous token on a PROGRAM ROW at this park. That is the `dyn_token` "
+        "strip, and for a single-instance host it is a NAMED RESIDUAL rather than a defect — but the FIRST "
+        "cause is not the one this string used to name, and is no longer the one that holds. BOTH HALVES THIS "
+        "ROW WAITED FOR ARE BUILT: HTML_COLD ends in an external script fixture_provide DECLINES, so a member "
+        "rests at the one cursor flow_step cannot pass and an appended row lands behind it; and this host now "
+        "lets ONE slice of picks run between the ask and the park, so flow_perform can convert the question "
+        "to a program row at all. The census asserts after the park, by either exit, that a token was on a "
+        "row whenever the question was asked, so a 0 here beside `park-remoteop-arrived` at 1 is the STRIP. "
+        "Read this row's banner, and never engine_retract_span. THIS ROW IS NOT ABOUT THE "
+        "RESIDUE KINDS: it reads engine_retract_census, so what "
+        "park.recipes carries, and whether a resume rebuilt it, says nothing about it in either direction. "
+        "The rungs printed beside this one are where what the park DID exercise is stated. THIS ROW IS "
+        "DECLARED UNASKABLE while the cross-agent-operation arm of `stepUnitRuns` stands at 0, so it is "
+        "reported as a HOLE and never as a finding; the day a flow converts a queued operation to a program "
+        "row it is a finding again, with no edit at that declaration.";
+    cold_park_remoteop      = g_sess == SESS_PARK && retract_started > 0;
+    /* AND WHETHER THIS RUN COULD PUT THE QUESTION AT ALL, READ OFF THE ENGINE RATHER THAN DECLARED BESIDE THE
+       ROW. `g_retract_started` is raised in exactly ONE loop — engine_retract_span's `dyn_token` strip — and a
+       row carries a token only through engine_queue_into, whose one call site passing a non-NULL token is
+       flow_perform, which flow_step reaches through its STEP_UNIT_CROSS_AGENT_OP arm and nowhere else (a fork
+       copies a token its parent already held, so it needs a parent that ran that arm). So
+       `arms[STEP_UNIT_CROSS_AGENT_OP] == 0` is NECESSARY for this row's 0: no flow was ever stepped while
+       holding a queued operation, so no row anywhere ever carried a token, so the strip had nothing to find.
+       The row is then not a finding — it is a question this host could not put, which is what the banner above
+       has said in prose since it was written and what nothing in the report could see.
+       IT IS NOT SUFFICIENT AND MUST NOT BE, WHICH IS WHAT MAKES THIS A PRECONDITION AND NOT AN EXCUSE. Above
+       0 the row is a STATEMENT again — a token reached a program row at some point, and whether one SURVIVED
+       to the park is exactly what the row measures — so the day either of the banner's two ordered
+       subproblems lands, this reads non-zero and a 0 here is a DEFECT once more with no diff at this line.
+       That is the banner's own RETIREMENT condition, armed rather than described.
+       IT IS THE ASK AND NOT THE OUTCOME, which is the distinction CLAUDE.md draws where an instrument sits
+       over a gate that may legitimately decline: a gauge of tokens on rows reads the same fact the ROW
+       reads (is a token on a row NOW) and would answer 0 for both meanings at once, while this counts the
+       step that PRODUCES one. The banner one function down already rejects that spelling as a conjunct for
+       the same reason — a sampled value that is never true latches nothing.
+       A LIFETIME COUNTER, so "ever" is what it answers: solver/engine.h's EngineStepUnitRuns is a lifetime
+       histogram and engine.c refuses to reset it at a session boundary, which is the one property that makes
+       a reading taken at the park a statement about the whole run rather than about this instant. */
+    EngineStepUnitRuns remoteop_steps;
+    int cold_park_remoteop_unaskable;
+    engine_step_unit_runs(&remoteop_steps);
+    cold_park_remoteop_unaskable =
+        g_sess == SESS_PARK && remoteop_steps.arms[STEP_UNIT_CROSS_AGENT_OP] == 0;
+    /* AND THE REPLAY REACHED ITS SINK AGAIN — the strongest thing a resumed residue can be asked to say, and a
+       correction of what this row used to ask. It read BOTH ARMS of the branch out of the @H surface, and that
+       is a statement about a program this session does not run: the moment fixture_want_park picks is the moment
+       the @S search is live, so the residue is mostly CANDIDATE SESSIONS. solve_flow_begin suppresses endpoint
+       recording for exactly those, because a request built out of an injected breakout is an @S artifact and not
+       an observed endpoint — so a residue of candidates emits no endpoints BY DESIGN, and the old row could
+       only ever have passed because a candidate's fork used to drop its substitution and leave one arm behaving
+       like an exploration flow (engine_sibling_assemble now carries it).
+       WHAT THIS ASSERTS IS THE WHOLE ROUND TRIP AT ONCE, and nothing weaker satisfies it: the payload crossed as
+       hex and came back through park_unhex, the sink class crossed as a NAME and was re-bound to solve.c's own
+       table pointer by solve_resume_candidate, the flow replayed its recorded arms over the segments cold_resume
+       rebuilt, re-reached the eval sink and X9 FIRED there — which §@S says is the only thing that proves a PoC.
+       A session that rebuilt its flows and then went nowhere reports nothing here.
+       AND IT WAS THREE LOOSE `strstr`s FOR A CLAIM THAT IS ONE RECORD. The sink class, the source shape and
+       the payload text were asked of the whole document independently, so three DIFFERENT records answered
+       them between them — and the record that answers all three is the one `s-eval` already asserts a few
+       hundred lines up (`s_poc(ss, "eval", "{state}.code", "';X9()//")`), which is an EXPLORE row. A resume
+       whose replay went nowhere while an exploring flow in the same document fired the same sink satisfied
+       this row exactly as the round trip does. `s_poc` is that same join, spelled once: the record shape
+       solve.h declares, in order, with the payload anchored to its own `poc` key, so a candidate list cannot
+       answer it and neither can another sink's entry. */
+    int cold_fired = s_poc(js, "eval", "{state}.code", "';X9()//");
+    const char *nwiso_why = NULL;
+ int nwiso_iso = 1;
+    fold_row(&nwiso_iso, &nwiso_why, !strstr(js, "\"/api/nwiso/t-sees-f\""),
+             "the TRUE arm read back an expando the FALSE arm wrote: `/api/nwiso/t-sees-f` is in this run's "
+             "records, so a write to `#nwisoel` crossed a fork boundary PAGE-OBSERVABLY. That record is "
+             "itself proof both arms reached the statement, so this is a scored leak and not a reading about "
+             "the schedule. §State-isolation's skip is decided on the AGE of the object written (cow.c's "
+             "`JS_ObjFlowGen(obj) > d->fork_gen`) and core/dom/node.c's identity table hands ONE wrapper to "
+             "both arms with no property write for a hook to see: check that `node_wrap` still mints inside "
+             "its `JS_SetFlowGen` baseline bracket");
+    fold_row(&nwiso_iso, &nwiso_why, !strstr(js, "\"/api/nwiso/f-sees-t\""),
+             "the FALSE arm read back an expando the TRUE arm wrote: `/api/nwiso/f-sees-t` is in this run's "
+             "records. The two directions are separate clauses because they are separate observations — one "
+             "arm leaking and both arms leaking are different facts about which world minted the wrapper, "
+             "and a folded row would name neither");
+    const Probe rows[] = {
         /* THE TWO COLD SESSIONS. Their key is the @S sink whose candidate sessions are what makes a park write
            a 'c' record at all, so the row still names a statement of the document it runs over; the SESSION is
            what tells the two apart, because they run the SAME document and one is about what a park WROTE while
@@ -16015,54 +16022,514 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            HTML_COLD alone names. */
         { "nwiso-park", nwiso_iso, "nwisoel", SESS_PARK, nwiso_why },
         { "nwiso-resume", nwiso_iso, "nwisoel", SESS_RESUME, nwiso_why },
-        /* §4.2.4's id comparison asked about an element whose `id` is a source. The lower rung FIRST, which
-           is this table's own reading convention and what lets the gate below resolve. Keyed on the fetch
-           this statement makes, which is the needle that says the document carrying it is this one. */
-        { "byid-seam-reach", byid_seam_reach, "/api/byidseam?arm=", SESS_EXPLORE,
-          "no `/api/byidseam?arm=isnot` record: the statement that writes a source into `#bidseed`'s `id` and "
-          "then calls getElementById did not run, or ran and emitted nothing. That is a reading about the "
-          "SCHEDULE and not about core/dom/node.c's value seam — `isnot` is outcome 0 and is also the answer "
-          "every build gave before the seam existed, so its absence is the statement missing rather than the "
-          "fork missing" },
-        { "byid-seam", byid_seam, "/api/byidseam?arm=", SESS_EXPLORE,
-          "`/api/byidseam?arm=is` is absent while `arm=isnot` is present: the walk met an element whose `id` "
-          "THIS FLOW HAS NOT DETERMINED and DECIDED the comparison instead of forking it, so the world in "
-          "which that source is `bidwant` was deleted along with every endpoint and sink behind "
-          "`getElementById('bidwant').…`. core/dom/node.c's byid_id_is is the seam: check that "
-          "attr_shadow_count is non-zero (the `setAttribute('id', bidu)` records the taint), that "
-          "dom_cow_attr_taint answers a concolic for the `id` slot, and that concolic_pin_bytes answers NULL "
-          "— a non-NULL pin DECIDES the comparison correctly and legitimately, and would mean this flow's own "
-          "predicate had already fixed the hash, which nothing in this statement does",
-          .gate = "byid-seam-reach" },
     };
-    /* THE DECLARATION FITS THE CALLER'S BUFFER, ASSERTED WHERE BOTH FACTS ARE IN HAND. This is the one place in
-       the translation unit that can see the table's length AND the constant its rows are copied into, which is
-       why it expands here and not in a checker: `probes_report` sizes `Probe rows[PROBE_MAX]` at compile time
-       and cannot see this array at all, for the structural reason PROBE_MAX's own comment gives: the array is a
-       LOCAL whose initializers name this function's own locals, so it cannot move to file scope.
-       IT IS A COMPILE-TIME CHECK AND THEREFORE NOT A DCHECK, on check.h's own argument for COUNTOF: it costs
-       nothing at runtime, it reads identically in dev and release, and there is no build in which it is
-       compiled out. That distinction is the whole point here. The runtime guard below bounds the SELECTION —
-       `n` is the rows of ONE session whose key is in ONE document — and what a lane grows is the TABLE, so it
-       fires only on a document that selects more rows than the cap, which is strictly later than the day this
-       declaration outgrows it and later by however far the biggest session sits below the table. It is also
-       DEV-ONLY: at `-DAPICLIENT_DEV=0` it is not in the program, so the overflow it names would be an
-       out-of-bounds write into the caller's stack array rather than an abort. This assertion makes
-       `n <= COUNTOF(probes) <= PROBE_MAX` a property of the unit, so that write is unreachable by construction
-       and the guard below is the invariant it always read as rather than a bound release has lost.
-       `COUNTOF` AND NOT THE NAKED `sizeof/sizeof`, because check.h's version REFUSES at compile time to be
-       applied to a pointer — the naked idiom answers 1 rather than failing — and a table is exactly the operand
-       that decays. `<=` AND NOT `<`: the i-th selected row is written at index i and the guard asserts i < cap,
-       so a full selection of COUNTOF(probes) rows needs COUNTOF(probes) <= PROBE_MAX and no more.
-       RETIREMENT: this record goes when the caller's room is derived from this table, because the assertion is
-       then a tautology and the reasoning for why a constant was necessary has nothing left to be about. */
-    _Static_assert(COUNTOF(probes) <= PROBE_MAX,
-                   "the probe table declares more rows than PROBE_MAX, which is the room probes_report's stack "
-                   "array gives them — a run selecting them all would write past the end of that array, and in "
-                   "release the guard that would have named it is compiled out. Raise PROBE_MAX");
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `popover` document. */
+TF_UNIT void probes_popover(const char *js, Probe *tab, int *n) {
+    /* ─── HTML §6.12 The popover attribute → §6.10.1 Close requests → §6.10.2 Close watcher infrastructure ────
+       ONE ROW PER JOIN OF ONE ROAD, LOWEST FIRST, because a single folded row would say "the popover did not
+       close" for a failure at any of them and every one of those failures is a different file. See
+       HTML_POPOVER for why this document has one flow and what each of its three no-fork properties is doing
+       there.
+
+       THE STEP COUNT IS READ OFF THE ENGINE AND NOT OFF THE RESULT DOCUMENT, even though result.c composes the
+       same histogram into `stepUnitRuns`. The document is a STRING this function is handed, and a row that
+       located a row of a nested object inside it by `strstr` would be answered by the `stepUnits` GAUGE that
+       carries the identical key — two censuses, one name, opposite meanings (solver/result.c says so where it
+       writes them). The accessor is unambiguous and is the producer itself. */
+    EngineStepUnitRuns cw_runs;
+    long cw_modelled;
+    engine_step_unit_runs(&cw_runs);
+    cw_modelled = cw_runs.arms[STEP_UNIT_CLOSE_REQUEST];
+    /* RUNG 1 — the show ran and its step 9 `beforetoggle` reached the page. Everything below it is unreadable
+       without this: a chain that never established a watcher cannot close one. */
+    const char *pop_show_why = NULL;
+ int pop_show = 1;
+    /* THE ADDRESS AS THE EMITTER WRITES IT — the PATH, with no query on it: endpoint_json_array splits the
+       query into `params`, so a needle carrying `?` matches nothing this file has ever emitted, which is the
+       term-that-cannot-pass shape the record locators above were written for. */
+    fold_row(&pop_show, &pop_show_why, !!strstr(js, "\"/api/popover\""),
+             "NOT REACHED: there is no /api/popover record at all, so `pv.showPopover()` never reached HTML "
+             "§6.12 The popover attribute's show popover step 9 (fire an event named beforetoggle, using "
+             "ToggleEvent, with oldState \"closed\" and newState \"open\") — or the listener registration "
+             "itself never ran. That is the SCHEDULE or the member, and says nothing about §6.10");
+    fold_row(&pop_show, &pop_show_why, param_value_is(js, "/api/popover", "state", "open"),
+             "the statement RAN and no record carries `state` = `open` — show popover step 9 fired something "
+             "at the listener whose ToggleEvent newState is not \"open\", which is core/html/toggle_event.c's "
+             "two slots or §6.12's own arguments to them rather than anything in §6.10");
+    fold_row(&pop_show, &pop_show_why, param_value_is(js, "/api/popover", "old", "closed"),
+             "the show fired and its ToggleEvent's `oldState` is not \"closed\" — the pair is ONE struct and "
+             "§6.12 states both, so one right and one wrong is the two slots crossed");
+    /* RUNG 2 — the listener's frame OWNED its arguments. §C-stack's rest-parameter rule: every other argument
+       shape takes the borrowed path and cannot see this. */
+    const char *pop_rest_why = NULL;
+ int pop_rest = 1;
+    fold_row(&pop_rest, &pop_rest_why, pop_show, pop_show_why);
+    fold_row(&pop_rest, &pop_rest_why, param_value_is(js, "/api/popover", "n", "1"),
+             "the `beforetoggle` listener ran and its REST ARRAY does not hold exactly the one argument DOM "
+             "§2.9's inner invoke passes — a callback frame that BORROWS its argument slots (narg_alloc == 0) "
+             "builds the rest array out of storage it does not own, which is the ownership bug §C-stack's "
+             "fixture rule exists to reach and which no other listener in this fixture can find");
+    /* RUNG 3 — the ARRIVAL was modelled at all. This is the one rung that is about the SCHEDULER rather than
+       about §6.10 or §6.12: a 0 here is `g_sess_forking` false, or a ladder that returned above the close-
+       request arm (an outstanding reply, a queued job, an orphan still to take), and neither says anything
+       about the watcher. */
+    const char *pop_model_why = NULL;
+ int pop_model = 1;
+    fold_row(&pop_model, &pop_model_why, cw_modelled >= 1,
+             "no flow of this document ever modelled a potential close request — solver/step_unit.h's "
+             "`model-a-potential-close-request` is 0, so engine_close_request_fork was never taken. It is the "
+             "LAST arm of flow_step's ladder, so either the session does not fork (g_sess_forking, which "
+             "engine_run sets) or every member returned through an arm above it and no flow in this document "
+             "ever reached the end of its own work");
+    /* RUNG 4 — THE TRAVERSAL. The modelled arrival reached §6.10.1's step 7, §6.10.2's process close watchers
+       took the last group, requested to close its one member, ran §6.12's cancel action, closed it, and the
+       close-action dispatch called hide a popover, whose step 12 fired the second `beforetoggle`. */
+    const char *pop_close_why = NULL;
+ int pop_close = 1;
+    fold_row(&pop_close, &pop_close_why, pop_model, pop_model_why);
+    fold_row(&pop_close, &pop_close_why, param_value_is(js, "/api/popover", "state", "closed"),
+             "an arrival WAS modelled and no record carries `state` = `closed` — the road from HTML §6.10.1 "
+             "Close requests' step 7 to HTML §6.12 The popover attribute's hide a popover step 12 did not "
+             "complete. Read it against the run's aborts first: a §6.10.1 step 1 DFAIL is a fullscreen "
+             "element, a close_watcher.c CW_ASSERT_WINDOW is the establishing realm not being the document's, "
+             "and a popover.c DFAIL at the focusing steps is an `autofocus` this document does not have. With "
+             "NO abort, the walk ran and answered: either show popover step 15.10 established no watcher (the "
+             "element's `popover` state is not Auto, or step 15 was never entered), or §6.10.2's request to "
+             "close returned true at one of its steps 1-3 and 5, or its close returned at one of ITS steps "
+             "1-3, or the close-action dispatch reached §6.12's hide a popover and that algorithm returned "
+             "before its step 12 (its step 1's check popover validity, or `fireEvents` false)");
+    fold_row(&pop_close, &pop_close_why, param_value_is(js, "/api/popover", "old", "open"),
+             "the hide fired and its ToggleEvent's `oldState` is not \"open\" — §6.12's hide a popover step 12 "
+             "states oldState \"open\" and newState \"closed\", so one right and one wrong is the two slots "
+             "crossed on the hide's side only");
+    /* RUNG 5 — AND THE STATE ACTUALLY CHANGED. §6.12's hide a popover clears the popover trigger, the opened-in
+       -popover mode and the popover VISIBILITY STATE at its steps 14, 15 and 16 and queues the `toggle` at its
+       step 18, so a `toggle` carrying newState "closed" is the first observation downstream of those clears —
+       and the row above it, which is about step 12, cannot see any of them. The show's own `toggle` (step 26)
+       is asked first as the control: without it a 0 here is the toggle TASK never running rather than the hide
+       stage never finishing, and those are two different files. */
+    const char *pop_hidden_why = NULL;
+ int pop_hidden = 1;
+    fold_row(&pop_hidden, &pop_hidden_why, pop_close, pop_close_why);
+    fold_row(&pop_hidden, &pop_hidden_why, param_value_is(js, "/api/popovertoggle", "state", "open"),
+             "the SHOW's queued `toggle` never reached the page — HTML §6.12 The popover attribute's show "
+             "popover step 26 queues a popover toggle event task, and a flow runs its own task queue before it "
+             "can reach the end of its work, so this is the task pump and not the hide");
+    fold_row(&pop_hidden, &pop_hidden_why, param_value_is(js, "/api/popovertoggle", "state", "closed"),
+             "the hide fired its step 12 `beforetoggle` and never queued its step 18 `toggle` — the machine "
+             "left the stage that holds steps 13 through 20.1 without finishing it, so the popover's "
+             "VISIBILITY STATE (step 16) and its opened-in-popover mode (step 15) are the things to read: a "
+             "close request that fires the event and leaves the popover showing is the one failure a "
+             "`beforetoggle` listener cannot see");
+    /* RUNG 6 — WHAT THE ARRIVAL COST THE PROVENANCE. Nobody performed the gesture, so CLAUDE.md
+       §A-REQUEST-CARRIES-THE-PROVENANCE grades every request built past it FORCED — and the SHOW's fetch is
+       not forced, so the one address carries two records that differ by grade. That split is asserted by
+       emitted_recs_one_statement above (two records of one address sharing a grade is a DCHECK); this row is
+       the positive half, that the forced grade is the one the CLOSE's request carries. */
+    const char *pop_forced_why = NULL;
+ int pop_forced = 1;
+    fold_row(&pop_forced, &pop_forced_why, pop_close, pop_close_why);
+    fold_row(&pop_forced, &pop_forced_why,
+             emitted_record_has(js, "/api/popover", "\"provenance\":\"" PENDING_PROVENANCE_FORCED "\""),
+             "the close's `beforetoggle` fetch reached the surface and NO record of /api/popover is graded "
+             "`forced` — the flow modelled an arrival no user performed and went on to build a request that "
+             "says a real load of this document makes it. flow_mark_forced_arm is taken in the same operation "
+             "as the task frame (engine.c), so a derived grade here is that mark not reaching "
+             "pending_prov_compose rather than a policy decision");
+    /* RUNG 7 — §6.10.1's STEP 9, AND THE ARITHMETIC THAT IS THE WHOLE REASON THIS DOCUMENT IS ITS OWN. A run
+       that closes a group answers `closedSomething` TRUE and does not latch, so the manager is asked ONCE MORE
+       and that second task is the one that reaches "Alternative processing: Otherwise, there was nothing
+       watching for a close request" — which is the fact engine_close_request_fork latches and the reason it
+       stops with no counter and no seen-set. One group therefore costs TWO steps, and this document has one
+       group: establish's step 4 takes the new-group branch exactly once, because a realm's manager is born
+       with an allowed number of groups of 1 and its groups empty (0 < 1), and nothing here interacts with the
+       page, so §6.10.2's notify never raises it again. */
+    const char *pop_alt_why = NULL;
+ int pop_alt = 1;
+    fold_row(&pop_alt, &pop_alt_why, pop_close, pop_close_why);
+    fold_row(&pop_alt, &pop_alt_why, cw_modelled >= 2,
+             "the popover was closed by a modelled arrival and no SECOND arrival was ever modelled — the flow "
+             "that closed the group answered HTML §6.10.1 Close requests' step 8 and returned, so it must be "
+             "asked again and answer step 9. A 0 here with the close green means the flow finished between "
+             "the two (it did not come back to the ladder), or `close_req_none` was latched by the run that "
+             "CLOSED something, which would be step 8's answer written into step 9's fact");
+    /* …AND THE COUNT IS EXACTLY THAT, which is a statement about the FRONTIER and not about §6.10: N+1 per
+       flow that reaches exhaustion, one group, one flow. It is a separate row from the one above because the
+       two fail for opposite reasons — that one is the chain not finishing, this one is the document having
+       more members than it was written to have — and a single row would report both as "the popover". */
+    const char *pop_once_why = NULL;
+ int pop_once = 1;
+    fold_row(&pop_once, &pop_once_why, pop_alt, pop_alt_why);
+    fold_row(&pop_once, &pop_once_why, cw_modelled == 2,
+             "the chain traversed and `model-a-potential-close-request` is not exactly 2. MORE means a second "
+             "member of this frontier reached the end of its own work — a fork this document was written not "
+             "to have (see HTML_POPOVER for the three it refuses), or a second group in one manager, and "
+             "neither is a defect in §6.10 or §6.12; the number itself is in the @RESULT line's "
+             "`stepUnitRuns`. FEWER cannot reach this row, because the clause above it is >= 2");
+    const Probe rows[] = {
+        /* THE CLOSE-REQUEST ROAD, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer.
+           Every one is keyed on `pv.showPopover()`, which is the statement they are all about and which only
+           HTML_POPOVER contains, so this whole family is selected by that document and by no other. */
+        { "popover-show", pop_show, "pv.showPopover()", SESS_EXPLORE, pop_show_why },
+        { "popover-rest", pop_rest, "pv.showPopover()", SESS_EXPLORE, pop_rest_why },
+        { "popover-modelled", pop_model, "pv.showPopover()", SESS_EXPLORE, pop_model_why },
+        { "popover-closed", pop_close, "pv.showPopover()", SESS_EXPLORE, pop_close_why },
+        { "popover-hidden", pop_hidden, "pv.showPopover()", SESS_EXPLORE, pop_hidden_why },
+        { "popover-forced", pop_forced, "pv.showPopover()", SESS_EXPLORE, pop_forced_why },
+        { "popover-alternative", pop_alt, "pv.showPopover()", SESS_EXPLORE, pop_alt_why },
+        { "popover-once", pop_once, "pv.showPopover()", SESS_EXPLORE, pop_once_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `forms` document. */
+TF_UNIT void probes_forms(const char *js, Probe *tab, int *n) {
+    /* ─── WEB IDL §3.7.2's THREE FACTORIES AND §3.6's "missing", AS ELEVEN ROWS ──────────────────────────────
+     *
+     * ONE ADDRESS PER ALGORITHM, so a 0 names a spec section, and the record's own `v` names the CLAUSE. Every
+     * one of these is a fold of exactly the two questions this table keeps apart everywhere else: is there a
+     * record at all (the SCHEDULE, which says nothing about the engine), and does that record's `v` carry the
+     * statement's success token.
+     * THE THIRD READING IS IN THE VALUE AND NOT IN A ROW, which is the one design choice here worth stating.
+     * `absent` — the `typeof` guard having refused — must never read as the same 0 as a wrong answer, and it
+     * cannot be a row of its own because the two are mutually exclusive answers to ONE statement rather than two
+     * statements. So the failure branch emits it, the wrong-value message below names it, and a reader with the
+     * result document in hand can tell an unbuilt name from a built one that lies.
+     * `param_value_is` AND NOT A WHOLE-DOCUMENT `strstr`: the success tokens share no bytes with each other,
+     * but `absent` and the clause letters are emitted by EVERY one of these statements, so an unscoped test
+     * would be answerable out of a neighbour's record — the join defect this file's readers exist to refuse. */
+    const char *lfafnaud_why = NULL;
+ int lfafnaud_tt = 1;
+    fold_row(&lfafnaud_tt, &lfafnaud_why, !!strstr(js, "\"/api/lfafnaud\""),
+             "NOT REACHED: there is no /api/lfafnaud record at all, so Web IDL §3.7.2's `Audio` function "
+             "object was never asked about. That is the SCHEDULE");
+    fold_row(&lfafnaud_tt, &lfafnaud_why, param_value_is(js, "/api/lfafnaud", "v", "isfnaud"),
+             "Web IDL §3.7.2's `Audio` FUNCTION OBJECT is wrong, or `Audio`/`HTMLAudioElement` is not on the "
+             "global at all — the record's `v` says WHICH: `faabsent` is the guard having refused, and `fa` "
+             "followed by `lpcdt` with the failing letters UPPERCASED names the clause. l=`Audio.length` is 0 "
+             "(every position of the factory is optional, so §3.7.2's \"length of the shortest argument list\" "
+             "is 0); p=`Audio.prototype` IS `HTMLAudioElement.prototype`; c=`HTMLAudioElement.prototype."
+             "constructor` is still `HTMLAudioElement` and NOT the factory (§3.7.2 defines no back-pointer, so "
+             "a JS_SetConstructor here would answer `Audio` and nothing else would notice); d=the `prototype` "
+             "descriptor's writable/enumerable/configurable are all false; t=`Audio()` without `new` throws a "
+             "TypeError, which is step 1 of the function's steps");
+    const char *lfafnimg_why = NULL;
+ int lfafnimg_tt = 1;
+    fold_row(&lfafnimg_tt, &lfafnimg_why, !!strstr(js, "\"/api/lfafnimg\""),
+             "NOT REACHED: there is no /api/lfafnimg record at all, so Web IDL §3.7.2's `Image` function "
+             "object was never asked about. That is the SCHEDULE");
+    fold_row(&lfafnimg_tt, &lfafnimg_why, param_value_is(js, "/api/lfafnimg", "v", "isfnimg"),
+             "Web IDL §3.7.2's `Image` FUNCTION OBJECT is wrong, or `Image`/`HTMLImageElement` is not on the "
+             "global — `fiabsent` is the guard, and `fi` + `lpcdt` uppercased names the clause; the letters "
+             "are the ones spelled out under /api/lfafnaud, read against HTMLImageElement");
+    const char *lfafnopt_why = NULL;
+ int lfafnopt_tt = 1;
+    fold_row(&lfafnopt_tt, &lfafnopt_why, !!strstr(js, "\"/api/lfafnopt\""),
+             "NOT REACHED: there is no /api/lfafnopt record at all, so Web IDL §3.7.2's `Option` function "
+             "object was never asked about. That is the SCHEDULE");
+    fold_row(&lfafnopt_tt, &lfafnopt_why, param_value_is(js, "/api/lfafnopt", "v", "isfnopt"),
+             "Web IDL §3.7.2's `Option` FUNCTION OBJECT is wrong, or `Option`/`HTMLOptionElement` is not on "
+             "the global — `foabsent` is the guard, and `fo` + `lpcdt` uppercased names the clause; the "
+             "letters are the ones spelled out under /api/lfafnaud, read against HTMLOptionElement. `l` is "
+             "the one worth naming twice here: `Option` declares FOUR positions and all four are optional, so "
+             "its length is 0 and not 4");
+    /* §4.8.9's own five steps, and §3.6's "missing" at the one optional position. */
+    const char *lfaudio_why = NULL;
+ int lfaudio_tt = 1;
+    fold_row(&lfaudio_tt, &lfaudio_why, !!strstr(js, "\"/api/lfaudio\""),
+             "NOT REACHED: there is no /api/lfaudio record at all, so HTML §4.8.9 \"The audio element\"'s "
+             "factory steps were never observed. That is the SCHEDULE");
+    fold_row(&lfaudio_tt, &lfaudio_why, param_value_is(js, "/api/lfaudio", "v", "islfaudio"),
+             "HTML §4.8.9 \"The audio element\"'s legacy factory function answered wrong — `auabsent` is the "
+             "`typeof` guard, and `au` + `iapsrhm` with the failing letters UPPERCASED names the step. "
+             "i=`new Audio()` is an HTMLAudioElement; a=step 3 put the `preload` CONTENT ATTRIBUTE at `auto` "
+             "UNCONDITIONALLY (this is what tells the factory apart from createElement('audio')); p=§4.8.11's "
+             "reflection of that attribute reads `auto` (a separate question from `a`, so an absent member "
+             "cannot redden a row about step 3); s=`new Audio()` has NO `src` attribute — step 4 is \"if src "
+             "is given\"; r=`new Audio('a.mp3')` set it; h=the serialization is byte-for-byte "
+             "`<audio preload=\"auto\"></audio>`; m=`new Audio(undefined)` serializes IDENTICALLY to "
+             "`new Audio()`, which is Web IDL §3.6 step 15.4.2's \"missing\" — an `argc` test answers "
+             "\"given\" for exactly that call and puts `src=\"undefined\"` on the element, and M is that "
+             "regression returning");
+    /* §4.8.3's five steps, and §3.6's "missing" at BOTH of its optional positions. */
+    const char *lfaimage_why = NULL;
+ int lfaimage_tt = 1;
+    fold_row(&lfaimage_tt, &lfaimage_why, !!strstr(js, "\"/api/lfaimage\""),
+             "NOT REACHED: there is no /api/lfaimage record at all, so HTML §4.8.3 \"The img element\"'s "
+             "factory steps were never observed. That is the SCHEDULE");
+    fold_row(&lfaimage_tt, &lfaimage_why, param_value_is(js, "/api/lfaimage", "v", "islfaimage"),
+             "HTML §4.8.3 \"The img element\"'s legacy factory function answered wrong — `imabsent` is the "
+             "guard, and `im` + `inmwh` uppercased names the step. i=`new Image()` is an HTMLImageElement; "
+             "n=it serializes as `<img>` with NO attribute, where a defaulted 0 would write `width=\"0\"`; "
+             "m=`new Image(undefined)` serializes IDENTICALLY — the §3.6 \"missing\" clause, which read "
+             "`<img width=\"undefined\">` while the body tested `argc`; w=`new Image(5, undefined)` is ONE "
+             "attribute and not two, which is the mixed call a count cannot express at all; h=`new Image(5,6)` "
+             "writes both, in that order");
+    /* §4.10.10's SEVEN steps, its step 6 override, and §3.6's "missing" at `value`. */
+    const char *lfaoption_why = NULL;
+ int lfaoption_tt = 1;
+    fold_row(&lfaoption_tt, &lfaoption_why, !!strstr(js, "\"/api/lfaoption\""),
+             "NOT REACHED: there is no /api/lfaoption record at all, so HTML §4.10.10 \"The option element\"'s "
+             "factory steps were never observed. That is the SCHEDULE");
+    fold_row(&lfaoption_tt, &lfaoption_why, param_value_is(js, "/api/lfaoption", "v", "islfaoption"),
+             "HTML §4.10.10 \"The option element\"'s legacy factory function answered wrong — `opabsent` is "
+             "the guard, and `op` + `ievudasf` uppercased names the step. i=`new Option()` is an "
+             "HTMLOptionElement; e=step 3's \"if text is not the empty string\" left NO child node; "
+             "v=`new Option('a','b')` serializes `<option value=\"b\">a</option>`; u=`new Option('a',undefined)` "
+             "serializes `<option>a</option>` — §3.6's \"missing\", and a `value=\"undefined\"` is U; "
+             "d/a=step 5 set `defaultSelected` and the `selected` ATTRIBUTE for a third argument of true; "
+             "s=STEP 6, the whole reason this component exists — selectedness is set EXPLICITLY after step 5 "
+             "added the attribute whose change steps set it, so `new Option('a','b',true).selected` is FALSE; "
+             "f=the fourth argument is what sets it true. S is the one to read first: it means step 5's "
+             "attribute write decided selectedness and step 6 never overrode it");
+    /* §4.10.10's dirtiness, both halves. */
+    const char *lfadirty_why = NULL;
+ int lfadirty_tt = 1;
+    fold_row(&lfadirty_tt, &lfadirty_why, !!strstr(js, "\"/api/lfadirty\""),
+             "NOT REACHED: there is no /api/lfadirty record at all, so §4.10.10's DIRTINESS was never "
+             "observed. That is the SCHEDULE");
+    fold_row(&lfadirty_tt, &lfadirty_why, param_value_is(js, "/api/lfadirty", "v", "islfadirty"),
+             "§4.10.10's DIRTINESS is wrong — `dyabsent` is the guard, and `dy` + `abcde` uppercased names "
+             "the clause. a=the `selected` SETTER set selectedness; b=it wrote NO content attribute (B means "
+             "one appeared, which is the setter reaching for the attribute instead of the slot); c=the option "
+             "is now DIRTY, so a later add AND remove of `selected` do not move selectedness; d/e=a CLEAN "
+             "option DOES track the attribute at an add and at a remove. Both halves are asserted because "
+             "either alone is unfalsifiable: an engine whose selectedness never tracked the attribute at all "
+             "satisfies `c` while being wrong about everything, and `d`/`e` are what refuse that");
+    /* §4.10.7's two steps through §4.10.10's member. */
+    const char *lfareset_why = NULL;
+ int lfareset_tt = 1;
+    fold_row(&lfareset_tt, &lfareset_why, !!strstr(js, "\"/api/lfareset\""),
+             "NOT REACHED: there is no /api/lfareset record at all, so §4.10.7 \"The select element\"'s "
+             "selectedness setting algorithm was never observed through the member. That is the SCHEDULE");
+    fold_row(&lfareset_tt, &lfareset_why, param_value_is(js, "/api/lfareset", "v", "islfareset"),
+             "§4.10.7's SELECTEDNESS SETTING ALGORITHM is wrong — `seabsent` is the guard, and `se` + `pqrs` "
+             "uppercased names the step. p=step 1 made the FIRST non-disabled option selected on a select "
+             "whose display size is 1 with nothing selected; q=it did so WITHOUT any `selected` attribute "
+             "appearing (Q means the algorithm wrote a content attribute, which it never names); r/s=step 2 — "
+             "assigning `selected = true` to the SECOND option leaves it true and the first FALSE, because "
+             "\"all but the last\" are cleared. S is the interesting failure: two options selected at once on "
+             "a single-select is the state step 2 exists to make unreachable");
+    /* …and the same two steps as §4.10.22.4's ENTRY LIST, which is the half a member read cannot state. The
+       negative clause is the assertion in each: step 1 picks `a` AND NOT `b`, step 2 keeps `b` AND NOT `a`. It
+       is spelled as an equality plus a refusal rather than as param_value_only, because two provenance grades
+       of ONE statement legitimately carry the same value twice and `only` would read that as a fork. The
+       address is the resolved one, which is what a form submission requests. */
+    const char *lfasel1_why = NULL;
+ int lfasel1_tt = 1;
+    fold_row(&lfasel1_tt, &lfasel1_why, !!strstr(js, "\"https://x.test/api/lfasel1\""),
+             "NOT REACHED: there is no /api/lfasel1 record at all, so the select's ENTRY LIST was never "
+             "derived — `submit()` did not run, or the form was not connected. That is the SCHEDULE");
+    fold_row(&lfasel1_tt, &lfasel1_why, param_value_is(js, "https://x.test/api/lfasel1", "sc", "a"),
+             "§4.10.7 step 1 + §4.10.22.4 step 5.6: `<select name=x><option>a<option>b</select>` must submit "
+             "`x=a` with no `selected` attribute anywhere, and this record's `sc` does not carry `a` — either "
+             "step 1 selected nothing (the entry list is then EMPTY, which is the same 0 as selecting the "
+             "wrong option and is why the clause below is separate) or the option's value did not fall back "
+             "to its collected text");
+    fold_row(&lfasel1_tt, &lfasel1_why, !param_value_is(js, "https://x.test/api/lfasel1", "sc", "b"),
+             "§4.10.7 step 1 selected MORE than the first option, or the wrong one: `sc` carries `b`, so the "
+             "entry list has an option step 1 never names — it selects the FIRST non-disabled one and returns");
+    const char *lfasel2_why = NULL;
+ int lfasel2_tt = 1;
+    fold_row(&lfasel2_tt, &lfasel2_why, !!strstr(js, "\"https://x.test/api/lfasel2\""),
+             "NOT REACHED: there is no /api/lfasel2 record at all, so step 2's entry list was never derived. "
+             "That is the SCHEDULE");
+    fold_row(&lfasel2_tt, &lfasel2_why, param_value_is(js, "https://x.test/api/lfasel2", "sd", "b"),
+             "§4.10.7 step 2 + §4.10.22.4 step 5.6: with BOTH options made selected by the factory's fourth "
+             "argument, a single-select submits the LAST one alone, and this record's `sd` does not carry "
+             "`b` — step 2 cleared the wrong end of the list, or it cleared everything");
+    fold_row(&lfasel2_tt, &lfasel2_why, !param_value_is(js, "https://x.test/api/lfasel2", "sd", "a"),
+             "§4.10.7 step 2 did not run: `sd` carries `a` as well as `b`, so TWO options were selected on a "
+             "select with no `multiple` attribute — \"set the selectedness of all but the last option element "
+             "with its selectedness set to true … to false\" is exactly what did not happen");
+    /* THE CONTROL — Web IDL §3.6's DECLARED-DEFAULT arm, whose answers must NOT have moved. */
+    const char *lfadefault_why = NULL;
+ int lfadefault_tt = 1;
+    fold_row(&lfadefault_tt, &lfadefault_why, !!strstr(js, "\"/api/lfadefault\""),
+             "NOT REACHED: there is no /api/lfadefault record at all, so Web IDL §3.6's DECLARED-DEFAULT arm "
+             "was never observed. That is the SCHEDULE");
+    fold_row(&lfadefault_tt, &lfadefault_why, param_value_is(js, "/api/lfadefault", "v", "islfadefault"),
+             "Web IDL §3.6's DECLARED-DEFAULT arm moved — `tdabsent` is the guard, and `td` + `abcd` "
+             "uppercased names the clause. a/b=`new TextEncoder().encode()` and `.encode(undefined)` are BOTH "
+             "the empty result, because `encode(optional USVString input = \"\")` sends both of §3.6 steps "
+             "16.1 and 15.4.1 to the DECLARED default and neither to 15.4.2's \"missing\"; c/d=`new "
+             "TextDecoder().encoding` and `new TextDecoder(undefined).encoding` are BOTH `utf-8`, for the same "
+             "reason at `constructor(optional DOMString label = \"utf-8\", …)`. THIS ROW ASSERTS AN EQUALITY "
+             "AND NOT A DIFFERENCE: it is the control for the three above, and it reddens when the \"missing\" "
+             "primitive has been mistaken for a rule about every optional position");
+    const Probe rows[] = {
+        /* Web IDL §3.7.2's three legacy factory functions and §3.6's "missing" — one row per algorithm, keyed
+           on the address of its own statement. See their computation for why `absent` is in the VALUE and not
+           in a row of its own, and for what each letter of the emitted code is. */
+        { "lfa-fn-audio", lfafnaud_tt, "/api/lfafnaud", SESS_EXPLORE, lfafnaud_why },
+        { "lfa-fn-image", lfafnimg_tt, "/api/lfafnimg", SESS_EXPLORE, lfafnimg_why },
+        { "lfa-fn-option", lfafnopt_tt, "/api/lfafnopt", SESS_EXPLORE, lfafnopt_why },
+        { "lfa-audio", lfaudio_tt, "/api/lfaudio", SESS_EXPLORE, lfaudio_why },
+        { "lfa-image", lfaimage_tt, "/api/lfaimage", SESS_EXPLORE, lfaimage_why },
+        { "lfa-option", lfaoption_tt, "/api/lfaoption", SESS_EXPLORE, lfaoption_why },
+        { "lfa-dirty", lfadirty_tt, "/api/lfadirty", SESS_EXPLORE, lfadirty_why },
+        { "lfa-reset", lfareset_tt, "/api/lfareset", SESS_EXPLORE, lfareset_why },
+        { "lfa-select-1", lfasel1_tt, "/api/lfasel1", SESS_EXPLORE, lfasel1_why },
+        { "lfa-select-2", lfasel2_tt, "/api/lfasel2", SESS_EXPLORE, lfasel2_why },
+        { "lfa-default", lfadefault_tt, "/api/lfadefault", SESS_EXPLORE, lfadefault_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `decoder` document. */
+TF_UNIT void probes_decoder(const char *js, Probe *tab, int *n) {
+    /* ENCODING §7.2's decode() AS A STEP MACHINE — see the fixture row for why each clause is here. The rungs
+       are ordered so the FIRST failure names the most fundamental thing that went wrong: the record existing
+       at all, then the page-sized walk, then the state the object keeps between calls, then the two abrupt
+       exits. They are INDEPENDENT clauses and not an entailed ladder, so a 0 names the clause it is about and
+       says nothing about the ones below it. */
+    const char *tdstep_why = NULL;
+ int tdstep_tt = 1;
+    fold_row(&tdstep_tt, &tdstep_why, !!strstr(js, "\"/api/tdstep\""),
+             "NOT REACHED: there is no /api/tdstep record at all, so Encoding §7.2's decode() was never "
+             "observed from this document. That is the SCHEDULE and not the member — the row below cannot be "
+             "read until this one is 1");
+    fold_row(&tdstep_tt, &tdstep_why, param_value_is(js, "/api/tdstep", "big", "isbig"),
+             "Encoding §7.2's decode() did not survive its own rest points. 196,608 bytes of `E4 B8 AD` is "
+             "196,608 items of step 5's \"While true:\", and EVERY one of them is mid-sequence — a lead or a "
+             "continuation — so §8.1.1's bytes-needed/bytes-seen/code-point/bound machine has to be carried "
+             "across all of them. `len` names what came back: SHORT means the step state lost its cursor into "
+             "the copy §7.2 step 3 took, LONG means a resume re-walked from the top, and a right length with "
+             "0xFFFD at `x` means the decoder record on the receiver was reset or shared rather than carried");
+    fold_row(&tdstep_tt, &tdstep_why, param_value_is(js, "/api/tdstep", "split", "issplit"),
+             "a three-byte sequence cut across two `stream: true` calls did not resume in the middle. §7.2 "
+             "step 1 rebuilds the decoder only when `do not flush` is FALSE, and the standard's own note says "
+             "why — \"in a subsequent invocation this's decoder is not set anew in the first step of the "
+             "algorithm and its state is preserved\". This is the clause that reddens if `this's decoder` was "
+             "moved into the step machine's own state, where each call would start with a fresh one");
+    fold_row(&tdstep_tt, &tdstep_why, param_value_is(js, "/api/tdstep", "item", "isitem"),
+             "§7.2 step 5.3.3's TypeError did not arrive for a lone 0xFF in \"fatal\" error mode — \"otherwise, "
+             "if result is error, throw a TypeError\". `nothrow` means the machine's mid-queue error arm "
+             "returned a string instead of an abrupt completion; `other` means it threw something that is not "
+             "a TypeError");
+    fold_row(&tdstep_tt, &tdstep_why, param_value_is(js, "/api/tdstep", "end", "isend"),
+             "the same TypeError did not arrive for `E4 B8` with no third byte, which is the OTHER stage: the "
+             "END-OF-QUEUE item being processed rather than a byte of the input. §8.1.1 answers error for it "
+             "(\"if byte is end-of-queue and UTF-8 bytes needed is not 0, then set UTF-8 bytes needed to 0 "
+             "and return error\"), and a machine that threw from only the mid-queue arm would pass the clause "
+             "above and fail this one");
+    /* ENCODING §7.1's SERIALIZE I/O QUEUE — see the fixture row for why each clause is here. They are
+       INDEPENDENT clauses and not an entailed ladder, so a 0 names the clause it is about and says nothing
+       about the ones below it. The first rung is the REACHABILITY WITNESS: without it an absent abort and an
+       absent record read alike, and a clause that never ran would be read as a correct value. */
+    const char *tdbom_why = NULL;
+ int tdbom_tt = 1;
+    fold_row(&tdbom_tt, &tdbom_why, !!strstr(js, "\"/api/tdbom\""),
+             "NOT REACHED: there is no /api/tdbom record at all, so Encoding §7.1's serialize I/O queue was "
+             "never observed from this document. That is the SCHEDULE and not the member — no clause below "
+             "can be read until this one is 1, and an absent abort is not a correct value");
+    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "gb", "iskept"),
+             "a U+FEFF this engine DECODED was deleted. §7.1 drops a leading BOM only \"if decoder's "
+             "encoding is UTF-8 or UTF-16BE/LE\", and gb18030 is none of the three — `84 31 95 33` is that "
+             "encoding's four-byte form for U+FEFF, so a conforming decode answers ONE character. `len0` is "
+             "the strip running for an encoding the standard excludes, which is what a test over the OUTPUT "
+             "BYTES does and what a test over `d->enc` cannot: the output is UTF-8 whatever went in, so a "
+             "produced U+FEFF and a BOM are the same three bytes and only the encoding separates them");
+    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "u8", "isu8"),
+             "the UTF-8 arm of that same test stopped stripping. `EF BB BF 41` under `utf-8` is the case the "
+             "standard's own list admits, so this is the control that reddens when the strip was DELETED "
+             "rather than conditioned — the over-wide repair of the clause above. `len2` is a BOM that "
+             "survived into the string");
+    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "le", "isle"),
+             "the UTF-16LE arm is missing. §14.2 \"Common infrastructure for UTF-16BE/LE\" says "
+             "\"UTF-16BE/LE is UTF-16BE or UTF-16LE\", so the admitted set is THREE encodings and not "
+             "one: `FF FE 41 00` decodes to U+FEFF then U+0041 and the BOM goes. This clause and the one "
+             "below are what redden when the encoding test was written too NARROW, which is the opposite "
+             "error from the clause above and is why they are not folded together");
+    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "be", "isbe"),
+             "the UTF-16BE arm is missing, for the same reason and from the other byte order: `FE FF 00 41` "
+             "is U+FEFF then U+0041. A test that named UTF-16LE alone would pass the clause above and fail "
+             "this one, which is the whole reason §14.2's two ids are asserted separately");
+    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "ig", "isignore"),
+             "`ignoreBOM: true` stopped being honoured. It is the SECOND of §7.1's three conjuncts — "
+             "\"and decoder's ignore BOM and BOM seen are false\" — so a decoder built with it keeps the "
+             "BOM it was handed and answers TWO characters. `len1` is the BOM stripped from a decoder that "
+             "asked for it, which is the conjunct a diff rewriting this condition drops while adding the "
+             "encoding one");
+    fold_row(&tdbom_tt, &tdbom_why, param_value_is(js, "/api/tdbom", "seen", "isseen"),
+             "`BOM seen` is not carried between two `stream: true` calls. §7.1 sets the flag on the first "
+             "item it tests and tests it on every item after, so a SECOND chunk's leading U+FEFF is a "
+             "character rather than a BOM: `A`, then U+FEFF followed by `B`. `a1b1` means the second "
+             "strip ran too — the flag was lost, reset, or written where this decoder's encoding no "
+             "longer reaches it; `a2b2` means the first one did not run at all either");
+    const Probe rows[] = {
+        /* Encoding §7.2's decode() resting at its own back-edge — four clauses on one record, because they are
+           four facts about ONE member and a reader wants them to redden together or not at all. */
+        { "td-step", tdstep_tt, "/api/tdstep", SESS_EXPLORE, tdstep_why },
+        /* §7.1's serialize I/O queue — SEVEN clauses on one record because they are seven facts about one
+           algorithm's single conjunction, and a reader wants the encoding clause and its three controls to
+           be readable against each other rather than spread over rows that can be scored apart. */
+        { "td-bom", tdbom_tt, "/api/tdbom", SESS_EXPLORE, tdbom_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* Fill `out` with the rows this invocation carries and answer how many. Every row's `ok` is computed by the
+   functions above from the same bytes, so the mid-run report and the final one are the same function of
+   them. */
+static int probes_eval(const char *js, Probe *out, int cap) {
+    /* THE FRONTIER'S STANDING AT THE INSTANT THIS TABLE IS COMPOSED, taken ONCE and read by every row that
+       needs it — see probe_frontier_state for what the three states are, why a multi-world row's 0 has three
+       readings and not two, and why one scan per table rather than one per row. It is taken FIRST so that no
+       row can be composed against a reading of a different instant. */
+    flow_wfq_census(&g_probe_frontier);
+    g_probe_frontier_gen++;
+    DCHECK(screen_width() / 2.0 == floor(screen_width() / 2.0),
+           "the modelled screen width is odd, so its half has a fraction, and this row's C spelling of it is "
+           "no longer the one Number::toString writes");
+    /* The table, in one function per document; each document's entries keep their order. */
+    Probe probes[PROBE_MAX];
+    int np = 0;
+
+    probes_navigator(js, probes, &np);
+    probes_fetchreply(js, probes, &np);
+    probes_isolation_operands_sort(js, probes, &np);
+    probes_modules(js, probes, &np);
+    probes_messaging(js, probes, &np);
+    probes_xdmulti(js, probes, &np);
+    probes_orphan(js, probes, &np);
+    probes_min(js, probes, &np);
+    probes_navigation(js, probes, &np);
+    probes_fragfork(js, probes, &np);
+    probes_fragplace(js, probes, &np);
+    probes_fragxml(js, probes, &np);
+    probes_fragce(js, probes, &np);
+    probes_fragscript(js, probes, &np);
+    probes_fragbase(js, probes, &np);
+    probes_fragdialog(js, probes, &np);
+    probes_declines(js, probes, &np);
+    probes_windowclose(js, probes, &np);
+    probes_windowopenerclose(js, probes, &np);
+    probes_timers(js, probes, &np);
+    probes_idlindex(js, probes, &np);
+    probes_srcdoc(js, probes, &np);
+    probes_dom(js, probes, &np);
+    probes_tokenlist(js, probes, &np);
+    probes_idb(js, probes, &np);
+    probes_css(js, probes, &np);
+    probes_abort(js, probes, &np);
+    probes_scripts(js, probes, &np);
+    probes_platform(js, probes, &np);
+    probes_rejection(js, probes, &np);
+    probes_hashsinks_statesinks(js, probes, &np);
+    probes_park_resume(js, probes, &np);
+    probes_popover(js, probes, &np);
+    probes_forms(js, probes, &np);
+    probes_decoder(js, probes, &np);
+    /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
+       the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
+
     /* WHICH ROWS THIS INVOCATION CARRIES — its SESSION, and whether its document contains the statement. */
     int n = 0;
-    for (unsigned pi = 0; pi < sizeof(probes) / sizeof(probes[0]); pi++) {
+    for (unsigned pi = 0; pi < (unsigned)np; pi++) {
         /* A KEY NO DOCUMENT CONTAINS IS A PROBE ABOUT A PROGRAM THAT DOES NOT EXIST, and it CRASHES rather than
            being quietly dropped from every run — which is the one failure mode a derived selector introduces and
            the same defect as a corpus file the collector does not collect: the total looks complete. The message
@@ -17100,7 +17567,7 @@ static int fixture_want_park(void) {
  * IT IS PURE C AND NEEDS NO REALM. This layer holds no JSValue, allocates nothing and has no flow — the reader
  * is a value, which is the property the parse above it will need in order to peek, fork and park, so a copy
  * round trip is exercised here rather than asserted in prose. */
-static void xml_char_selftest(void)
+TF_UNIT void xml_char_selftest(void)
 {
     static const struct { uint32_t cp; bool ch, s; const char *why; } CLASS[] = {
         { 0x0000, false, false,
@@ -17275,7 +17742,7 @@ static void xml_char_selftest(void)
  * folding; `&#xD;` is a REAL carriage return, which is the whole reason core/xml/xml_char.h keeps #xD in [3]
  * `S` after §2.11 has removed every literal one. Each of those is a document that parses one way under this
  * standard and another way under a tokenizer written from memory. */
-static void xml_ref_selftest(void)
+TF_UNIT void xml_ref_selftest(void)
 {
     static const struct { const char *in; size_t n; XmlRefError err;
                           XmlRefKind kind; uint32_t cp; const char *name; size_t after;
@@ -17530,7 +17997,7 @@ static void xml_markup_text_selftest(const XmlMarkupText *t, const char *why)
  * not-well-formed case, and `<!--a-b-->` is the contrast that makes the rule "no two ADJACENT hyphens" rather
  * than "no hyphen". `<!--->` is the one that separates the two answers: it has no `-->` at all, so it is the
  * unterminated report and not the double-hyphen one. */
-static void xml_markup_selftest(void)
+TF_UNIT void xml_markup_selftest(void)
 {
     static const struct { const char *in; size_t n; XmlMarkupError err;
                           const char *raw; size_t raw_len; size_t after; const char *why; } CD[] = {
@@ -17929,7 +18396,7 @@ static void xml_markup_selftest(void)
  * other: wherever a declaration IS permitted, the PI scan reports [17]'s reserved target — so a caller that
  * asked §2.6 first would report a fatal error about a well-formed document — and the rows where the PI scan
  * SUCCEEDS are exactly the ones whose target is more than the three characters [17] subtracts. */
-static void xml_decl_selftest(void)
+TF_UNIT void xml_decl_selftest(void)
 {
     static const struct { const char *in; size_t n; bool text_decl; XmlDeclError err;
                           const char *version, *encoding; XmlStandalone standalone; size_t after;
@@ -18241,7 +18708,7 @@ static void xml_decl_selftest(void)
  * public identifier `O` and then characters that are not part of it — the same bytes read two ways by two
  * alternatives of one production. And the quotation mark is in NEITHER alternative, because [13]'s set has no
  * quotation mark in it at all, which is why `'a"b'` reports the class rather than the delimiter. */
-static void xml_literal_selftest(void)
+TF_UNIT void xml_literal_selftest(void)
 {
     /* [13]'s FOUR ALTERNATIVES WRITTEN OUT AS A SET — a second spelling of the same production, against which
        the component's own transcription is swept. It is deliberately not the same arrangement as the file
@@ -18487,7 +18954,7 @@ static void xml_literal_selftest(void)
  * built out of anything a document names — which is what makes an XXE unreachable rather than filtered. A
  * later increment that reads [28] and forgets §3.1's [WFC: No External Entity References] would turn this row
  * green while turning the parser into one that fetches what a page's markup tells it to. */
-static void xml_tag_selftest(void)
+TF_UNIT void xml_tag_selftest(void)
 {
 #define XML_TAG_FIXTURE_ATTS 3
     static const struct { const char *in; size_t n; XmlTagError err; XmlRefError ref;
@@ -18853,7 +19320,7 @@ static void xml_tag_selftest(void)
  * Declared] rather than a resolved entity, which is the same closed external-entity surface xml_tag_selftest
  * checks from the attribute-value side: nothing in this build reads a DTD, so no entity outside §4.6's five
  * resolves in EITHER position. */
-static void xml_element_selftest(void)
+TF_UNIT void xml_element_selftest(void)
 {
     /* ONE EXPECTED ITEM. `s` is the element type for the two element kinds, the BORROWED run for the three
        text kinds, [17]'s PITarget for a processing instruction, and NULL for a reference — whose whole payload
@@ -19230,7 +19697,7 @@ static void xml_element_selftest(void)
  * §2.8's [28b] `intSubset` HAS NO ROW AND CANNOT HAVE ONE: it is a CHECK_FAIL, and a row for it would be a row
  * for an abort. The boundary beside it is checkable and is checked — a declaration with no bracket group is a
  * WHOLE reading of [28] and is scanned end to end. */
-static void xml_doctype_selftest(void)
+TF_UNIT void xml_doctype_selftest(void)
 {
     static const struct { const char *in; XmlDoctypeError err; const char *name; bool has_ext;
                           const char *pub; const char *sys; const char *why; } DT[] = {
@@ -19383,7 +19850,7 @@ static void xml_doctype_selftest(void)
  * `<!DOCTYPE` is a document's own mistake (§2.8 puts every markup declaration inside [28]'s intSubset), so
  * `<!ENTITY x "y">` standing loose is XML_DOCUMENT_ERR_PROLOG; and [22] writes `(doctypedecl Misc*)?` with no
  * star, so a SECOND declaration is not a declaration at all and gets the same answer. */
-static void xml_document_selftest(void)
+TF_UNIT void xml_document_selftest(void)
 {
     typedef struct { XmlContentKind kind; const char *s; uint32_t cp; } XmlDocItemExp;
     static const XmlDocItemExp D_ROOT[] = {
@@ -19726,7 +20193,7 @@ static void xml_document_selftest(void)
  * as well against a builder that rejected every repeated local part, which is the wrong rule and would break
  * ordinary documents; the legal row is what distinguishes the two, and it is the row an implementation gets
  * wrong by expanding attribute names with XML_NS_NAME_ELEMENT. */
-static void xml_tree_selftest(void)
+TF_UNIT void xml_tree_selftest(void)
 {
     static const char *SRC =
         "<?xml version='1.0'?><!--m--><r xmlns='urn:d' xmlns:p='urn:p' p:k='1' k='2'>"
@@ -19900,7 +20367,7 @@ static void xml_tree_selftest(void)
  * the two places that can see them: the GRAMMARS here, where the parsing risk actually is and where one fixture
  * exercises one contract; and the four ATTRIBUTES from the fixture document's own JavaScript, where every other
  * page read in this engine happens (see `/api/cssprop` in HTML_CSS above and the two probe rows over it). */
-static void css_property_grammar_selftest(void)
+TF_UNIT void css_property_grammar_selftest(void)
 {
     static const struct { const char *s; bool valid, universal; const char *why; } SYNTAX[] = {
         { "*", true, true, "§5.4.2 step 3: a lone `*` IS the universal syntax definition" },
@@ -20285,7 +20752,7 @@ static bool css_math_close(double got, double want)
     return (d < 0.0 ? -d : d) < 1e-9;
 }
 
-static void css_math_selftest(void)
+TF_UNIT void css_math_selftest(void)
 {
     /* §10.9's LAST RULE, asked with no resolver at all: does this math function resolve to this production? */
     static const struct { const char *v; CssMathProduction want; bool match; const char *why; } TYPE[] = {
@@ -20640,7 +21107,7 @@ static void css_math_selftest(void)
  * nine branches ARE css-values-4 §10.9 Type Checking's terminal rule for a dimension over the same tables, and
  * the type MAP each branch returns is core/css/css_math.c's — so a failure in the algebra must be read as that
  * component's, not as this one's, and it is already reported one call earlier. */
-static void css_numeric_type_selftest(void)
+TF_UNIT void css_numeric_type_selftest(void)
 {
     /* Every row states the type §4.3.2 gives the unit: `exp` is the exponent of `base`, and `base` is
        CSS_MATH_BASE_COUNT for the "number" branch, which is the empty map and the only one with no entry. */
@@ -20925,7 +21392,7 @@ static void tf_union_row(JSContext *ctx, const char *type, const char *tmpl, con
     free(got);
 }
 
-static void union_arm_selftest(JSContext *ctx)
+TF_UNIT void union_arm_selftest(JSContext *ctx)
 {
     /* `(ReadableStream or XMLHttpRequestBodyInit)?` at Fetch §5.5 Response class' constructor — declared
        IDL_BODYINIT_NULLABLE. XMLHttpRequestBodyInit flattens to Blob, BufferSource, FormData, URLSearchParams
@@ -21274,7 +21741,7 @@ static void union_arm_selftest(JSContext *ctx)
 #define TF_CANVAS_S_JS "var s=M([255,0,0,255,0,255,0,255,0,0,255,255,255,255,255,255]);"
 #define TF_CANVAS_T_JS "var t=M([255,255,255,0,255,255,255,0,255,255,255,0,255,255,255,0]);"
 
-static void canvas_pixel_selftest(JSContext *ctx)
+TF_UNIT void canvas_pixel_selftest(JSContext *ctx)
 {
     static const char WANT_PIXEL[] =
         "1111|..../..../..../....|RG../BW../..../....|.../.RG/.BW|..../..../..../....|"
@@ -21642,7 +22109,7 @@ static void canvas_pixel_selftest(JSContext *ctx)
  * unspecified ("Better specify how the DataURL is generated. [Issue #104]") and the corpus pins the
  * interoperable answer; and the BOM row is Encoding §6.1 Legacy hooks for standards' `decode`, whose BOM
  * sniff overrules the label and the charset parameter alike. */
-static void file_reader_package_selftest(JSContext *ctx)
+TF_UNIT void file_reader_package_selftest(JSContext *ctx)
 {
     static const char UTF16BE_H[] = { (char)0xFE, (char)0xFF, 0x00, 'h' };
     static const char WIN1252_EURO[] = { (char)0x80 };
@@ -21757,7 +22224,7 @@ static void file_reader_package_selftest(JSContext *ctx)
  * all: a character reference is tokenized as its own run, so `a&amp;b` is three character tokens and one Text
  * node, and `&#65;&#66;` is two references that must coalesce to `AB`. A single-token text would take step 3's
  * "Otherwise" arm and never merge. */
-static void tree_construction_write_selftest(void)
+TF_UNIT void tree_construction_write_selftest(void)
 {
     static const char *SRC = "<html><body><p>a&amp;b &#65;&#66; c</p></body></html>";
     static const char *WANT = "a&b AB c";
@@ -22034,7 +22501,7 @@ static void tf_go_expect_stream(const RasterPath *p, const double *want, size_t 
                what, i, p->v[i], want[i]);
 }
 
-static void glyph_outline_selftest(void)
+TF_UNIT void glyph_outline_selftest(void)
 {
     GlyphOutlines shortf, longf, bad;
     RasterPath unit, again, placed, empty, resolved;
@@ -22351,7 +22818,7 @@ static void tf_gc_same(const double *a, size_t an, const double *b, size_t bn, c
            "%s — %zu values against %zu", what, bn, an);
 }
 
-static void glyph_composite_selftest(void)
+TF_UNIT void glyph_composite_selftest(void)
 {
     GlyphOutlines g;
     RasterPath base, small, ident, moved, two, unscaled, scaled, both, xy, turned, nested, stacked, inner,
@@ -22574,7 +23041,7 @@ static void glyph_composite_selftest(void)
  *
  * IT TAKES NO `JSContext`, like every other row in this neighbourhood, which is what makes the whole road
  * exercisable before any document exists. */
-static void face_outline_selftest(void)
+TF_UNIT void face_outline_selftest(void)
 {
     OpenTypeMetrics face, bad;
     GlyphOutlines g, bad_g;
@@ -22969,7 +23436,7 @@ static void face_outline_selftest(void)
     raster_path_free(&viaface);
 }
 
-static void raster_selftest(void)
+TF_UNIT void raster_selftest(void)
 {
     RasterPath p, q;
     RasterEdges e;
@@ -23212,7 +23679,7 @@ static void raster_selftest(void)
  * not about anything the rasterizer computed. That is also exactly why it is the right operand for the
  * transport claim: the first byte is already the byte a NUL-terminated reader stops at.
  * ------------------------------------------------------------------------------------------------------- */
-static void raster_bytes_selftest(void)
+TF_UNIT void raster_bytes_selftest(void)
 {
     RasterSurface s;
     RasterSurface zero_w, zero_h;
@@ -23401,7 +23868,7 @@ static void tf_dlr_pixel(const DisplayList *dl, double scale, int w, int h, int 
  * compute, so fixing one would be a change detector; what IS asserted is that two rasterizations of ONE list
  * agree, which is the determinism core/graphics/rasterizer.h states as its requirement and is a thing a run
  * can fail. */
-static void display_list_raster_selftest(void)
+TF_UNIT void display_list_raster_selftest(void)
 {
     static const int W = 16, H = 8;
     DisplayList rect_list, canvas_list, both;
@@ -23913,7 +24380,7 @@ static void tf_glyph_append(DisplayList *dl, uint32_t cp, double em, double x, d
  * of core/graphics/raster_path.h's flattening tolerance, so fixing one would be a change detector; they are
  * PRINTED so that a reader comparing two artifacts can see which of them moved. What IS asserted is arithmetic
  * over them that holds for any face with ink at both sizes. */
-static void glyph_mark_selftest(void)
+TF_UNIT void glyph_mark_selftest(void)
 {
     static const int W = 64, H = 64;
     DisplayList one;
@@ -24032,7 +24499,7 @@ static void glyph_mark_selftest(void)
 #define TF_DL_MARKS 20u
 #define TF_DL_KINDS 4u
 
-static void display_list_selftest(JSContext *ctx)
+TF_UNIT void display_list_selftest(JSContext *ctx)
 {
     DisplayList dl;
     DisplayMark m;
@@ -24486,7 +24953,7 @@ static void tf_pt_run(const DisplayList *dl, size_t base, size_t n, const uint32
     }
 }
 
-static void box_paint_text_selftest(JSContext *ctx, lxb_html_document_t *dom)
+TF_UNIT void box_paint_text_selftest(JSContext *ctx, lxb_html_document_t *dom)
 {
     /* css-text-3 §4.1.1's Phase I over `"  Hi  Bo  "` — see the banner for the step-by-step. */
     static const uint32_t CP_ONE[] = { 0x20, 'H', 'i', 0x20, 'B', 'o', 0x20 };
@@ -24721,7 +25188,7 @@ static void box_paint_text_selftest(JSContext *ctx, lxb_html_document_t *dom)
  * marks — so the text arm is discharged and the two this record names are what is left. A COUNT OF ARMS IN A
  * RETIREMENT CONDITION IS THE SAME DEFECT THE ASSERTIONS BELOW WERE REPAIRED FOR, one level up: it is a fact
  * about how many arms the painter HAS, which a peer moves without reading this record at all. */
-static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
+TF_UNIT void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
 {
     /* A VALUE THE ENTRY CANNOT PRODUCE — its counter starts at zero and rises by one per visit, so no walk of
        any document reaches it and a survivor is the write not having happened. */
@@ -25257,7 +25724,7 @@ static lxb_html_document_t *bp_scratch_document(JSContext *ctx, const char *html
  * obeyed it would have built the geometry road in order to lay a mark that needs none of it.
  * HOW ITS ABSENCE WOULD SHOW: no run of this host lays a `DISPLAY_MARK_BORDER` anywhere.
  * RETIREMENT: this record goes when `bp_border` has appended a mark this file asserts. */
-static void box_paint_scratch_selftest(JSContext *ctx)
+TF_UNIT void box_paint_scratch_selftest(JSContext *ctx)
 {
     /* A VALUE THE ENTRY CANNOT PRODUCE, for `box_paint_selftest`'s reason above: the counter starts at zero
        and rises by one per visit, so a survivor is the write not having happened rather than a small answer. */
@@ -25675,7 +26142,7 @@ static bool tf_ib_paint_nested(JSContext *ctx, lxb_html_document_t *dom, const c
  *
  * NOT RUN. The move above is derived and not measured; no number below has been observed, and the first
  * build is what turns them into measurements. */
-static void box_paint_inline_box_selftest(JSContext *ctx, lxb_html_document_t *dom)
+TF_UNIT void box_paint_inline_box_selftest(JSContext *ctx, lxb_html_document_t *dom)
 {
     /* THE ONE DECLARATION THE STYLED PARAGRAPH AND ITS TWIN DIFFER BY. The paragraph `tf_ib_paint_flat`
        builds is `<p>ab<span style="background-color:#00ffff">cd</span>ef</p>` and its twin is the same bytes
@@ -26251,7 +26718,7 @@ static size_t tf_bb_count(const DisplayList *dl, size_t from, DisplayMarkKind ki
     return n;
 }
 
-static void box_paint_inline_break_selftest(JSContext *ctx, lxb_html_document_t *dom)
+TF_UNIT void box_paint_inline_break_selftest(JSContext *ctx, lxb_html_document_t *dom)
 {
     DisplayList base, text, box;
     unsigned obase = 0, text_offers = 0, box_offers = 0;
@@ -26488,7 +26955,7 @@ static void tf_wm_partner(lxb_dom_element_t *el, const char *mode, const char *f
     (*held)++;
 }
 
-static void css_logical_writing_mode_selftest(lxb_html_document_t *dom)
+TF_UNIT void css_logical_writing_mode_selftest(lxb_html_document_t *dom)
 {
     lxb_dom_document_t *d = lxb_dom_interface_document(dom);
     lxb_dom_node_t *body = tf_ib_body(dom);
@@ -26642,7 +27109,7 @@ static void css_logical_writing_mode_selftest(lxb_html_document_t *dom)
  * `box_paint_selftest` takes — and the counts are `unsigned` and `size_t` fields. None of them crosses to JS,
  * so none can become concolic and silently fail to be written, which is what a row of this kind must be made
  * of to mean anything. */
-static void document_paint_boxless_root_selftest(JSContext *ctx)
+TF_UNIT void document_paint_boxless_root_selftest(JSContext *ctx)
 {
     /* A VALUE THE ENTRY CANNOT PRODUCE — `box_paint_selftest`'s own sentinel and for its reason: the entry
        writes every field of the count before any arm can return, so a survivor is the write not having
@@ -26944,7 +27411,7 @@ static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const
  * literal in this file, through the four entries this landing routed. A row that needed a viewport or a face
  * would be measuring those as well, and the block above already records what a scratch document's rectangle
  * is and is not. */
-static void flex_contents_splice_selftest(JSContext *ctx)
+TF_UNIT void flex_contents_splice_selftest(JSContext *ctx)
 {
     /* TWO MARKUPS THAT DIFFER IN ONE KEYWORD AND IN NOTHING ELSE. The container's children are, in DOM order,
        the text `A`, the element carrying that keyword (holding `B`, an element, and `C`) and the text `D`. */
@@ -27030,7 +27497,7 @@ static void message_principal_pin_is(const char *principal, const char *subject,
           why);
 }
 
-static void message_source_selftest(void)
+TF_UNIT void message_source_selftest(void)
 {
     static const char REC1[] = "windowproxy.post\ttfdoc\ttfworld\t*\tAAAA";
     static const char REC2[] = "windowproxy.post\ttfdoc\ttfworld\t*\tAAAB";
@@ -27143,7 +27610,7 @@ static void pin_subject_example_is(JSContext *ctx, JSValueConst v, const char *w
     JS_FreeValue(ctx, ex);
 }
 
-static void pin_subject_selftest(JSContext *ctx)
+TF_UNIT void pin_subject_selftest(JSContext *ctx)
 {
     JSValue t, d, cmp, v, sp[2];
 
@@ -27210,7 +27677,7 @@ static void pin_subject_selftest(JSContext *ctx)
  *
  * IT DRIVES `concolic_new` BECAUSE THAT IS THE READ-BACK A SOURCE GOES THROUGH — the same entry every
  * declared source's per-read mint reaches, so what this asserts is the production path and not a helper. */
-static void pin_kind_selftest(JSContext *ctx)
+TF_UNIT void pin_kind_selftest(JSContext *ctx)
 {
     JSValue v;
 
@@ -27283,7 +27750,7 @@ static void pins_each_count(const char *src, ConcolicLit kind, const char *val, 
     else if (!strcmp(src, "{pinseach.c}")) t->c_seen++;
 }
 
-static void pins_each_selftest(void)
+TF_UNIT void pins_each_selftest(void)
 {
     PinsEachTally t = { 0, 0, 0, 0, NULL };
     void *frozen;
@@ -27327,7 +27794,7 @@ static void pins_each_selftest(void)
  * IT DRIVES `concolic_new` FOR pin_kind_selftest's REASON — that is the read-back a declared source's own
  * per-read mint goes through, so what this asserts is the production path and not a helper. A refused pin
  * leaves a CONCOLIC standing there, which is the observable: the next gate over it forks. */
-static void pin_algo_selftest(JSContext *ctx)
+TF_UNIT void pin_algo_selftest(JSContext *ctx)
 {
     JSValue v;
 
@@ -27396,7 +27863,7 @@ static void pin_algo_selftest(JSContext *ctx)
  * under test here is the RECORD and its keying, and a fixture that reached it through a branch would be
  * asserting the branch as well and could not tell which of the two had failed. The arm-selection half is
  * decide.c's `eq_holds`/`eq_fails` pair, which its own DCHECK states. */
-static void looseeq_selftest(void)
+TF_UNIT void looseeq_selftest(void)
 {
     const ConcolicLooseEq *rows;
     const char *const *ex;
@@ -28777,7 +29244,7 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
    traversable's answers are now written by the ZONE (which is what knows this document is one) rather than
    assumed by the reader. `abi_take` refuses an ABSENT field, so a zone that stopped writing one is a record
    that stops rather than a peer seated on ten silent defaults. */
-static int abi_main(int argc, char **argv)
+TF_UNIT int abi_main(int argc, char **argv)
 {
     /* WHERE AN IMAGE OF THIS DOCUMENT GOES, OR NULL FOR A RUN THAT IS NOT ASKED FOR ONE — stated by
        the party that SPAWNED this process rather than picked up from its environment, which is
@@ -29370,7 +29837,7 @@ static int abi_main(int argc, char **argv)
  * discriminator is the abort's own `at` — a file:line inside this function means the block ran whatever the
  * markers say. A witness establishes reachability only while something guarantees its channel outlives the
  * thing being witnessed. */
-static void second_agent_selftest(const char *origin)
+TF_UNIT void second_agent_selftest(const char *origin)
 {
     JSRuntime *rt2;
     JSContext *ctx2;
