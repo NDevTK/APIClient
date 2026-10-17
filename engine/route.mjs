@@ -534,7 +534,7 @@ async function service(e) {
            `\`document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer policy>` +
            `<TAB><initiator><TAB><url>\`: ${op} — core/frame/navigable.c writes all eight fields on every ` +
            'path, the policy possibly empty');
-    e.answer(id, { url: fetchArgs.slice(initTab + 1), headers: "" }, HTML_B);
+    e.answer(id, { url: fetchArgs.slice(initTab + 1), headers: "", setCookies: [] }, HTML_B);
   }
   return { step: r };
 }
