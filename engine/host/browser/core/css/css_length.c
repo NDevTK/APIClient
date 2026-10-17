@@ -601,7 +601,8 @@ static const struct { double lo, hi; } CSS_ENV_RANGE[CSS_ENV_FACT_COUNT] = {
     /* CSS 2.2 §10.8.1 Leading and half-leading: "a characteristic height above the baseline and a depth below
        it". */
 #define CSS_ENV_FONT_FACT_RANGE(id, family, fact, bytes) \
-    [CSS_ENV_FONT_ASCENT_##id] = { 0.0, INFINITY }, [CSS_ENV_FONT_DESCENT_##id] = { 0.0, INFINITY },
+    [CSS_ENV_FONT_ASCENT_##id] = { 0.0, INFINITY }, [CSS_ENV_FONT_DESCENT_##id] = { 0.0, INFINITY }, \
+    [CSS_ENV_FONT_LINE_GAP_##id] = { 0.0, INFINITY },
     INSTALLED_FONT_LIST(CSS_ENV_FONT_FACT_RANGE)
 #undef CSS_ENV_FONT_FACT_RANGE
 };

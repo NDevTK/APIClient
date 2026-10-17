@@ -2,6 +2,8 @@
    rather than a face's, for why the ascent is the other kind of answer, and for what is deliberately absent.
    The faces and their parsed tables are core/fonts/installed_font.h's; which face an element has is
    core/fonts/font_matching.h's. */
+#include <math.h>
+
 #include "check.h"
 #include "core/css/css_length.h"
 #include "core/css/font_metrics.h"
@@ -10,23 +12,40 @@
 #include "core/fonts/open_type_metrics.h"
 
 /* Each face's two environment facts, CSS 2.1 §10.8.1's `A` and `D` (core/css/css_length.h's rows). */
-static const struct { CssEnvFact ascent, descent; } FONT_METRICS_FACT[INSTALLED_FONT_COUNT] = {
-#define FONT_METRICS_FACT_ROW(id, family, fact, bytes) { CSS_ENV_FONT_ASCENT_##id, CSS_ENV_FONT_DESCENT_##id },
+static const struct { CssEnvFact ascent, descent, line_gap; } FONT_METRICS_FACT[INSTALLED_FONT_COUNT] = {
+#define FONT_METRICS_FACT_ROW(id, family, fact, bytes) \
+    { CSS_ENV_FONT_ASCENT_##id, CSS_ENV_FONT_DESCENT_##id, CSS_ENV_FONT_LINE_GAP_##id },
     INSTALLED_FONT_LIST(FONT_METRICS_FACT_ROW)
 #undef FONT_METRICS_FACT_ROW
 };
 
-bool font_metrics_fact_face(CssEnvFact fact, InstalledFont *face, bool *descent)
+bool font_metrics_fact_face(CssEnvFact fact, InstalledFont *face, FontMetricsFaceFact *which)
 {
     int f;
 
     for (f = 0; f < INSTALLED_FONT_COUNT; f++) {
-        if (FONT_METRICS_FACT[f].ascent != fact && FONT_METRICS_FACT[f].descent != fact) continue;
+        if (FONT_METRICS_FACT[f].ascent == fact) *which = FONT_METRICS_FACE_ASCENT;
+        else if (FONT_METRICS_FACT[f].descent == fact) *which = FONT_METRICS_FACE_DESCENT;
+        else if (FONT_METRICS_FACT[f].line_gap == fact) *which = FONT_METRICS_FACE_LINE_GAP;
+        else continue;
         *face = (InstalledFont)f;
-        *descent = FONT_METRICS_FACT[f].descent == fact;
         return true;
     }
     return false;
+}
+
+/* Real Chrome's line metrics, which are this user agent's `normal`: CSS 2.2 §10.8 leaves its used value to the
+   user agent ("a 'reasonable' value based on the font of the element"), and real Chrome is the oracle for which.
+   Chromium 0842759f third_party/blink/renderer/platform/fonts/font_metrics.cc's
+   FontMetrics::AscentDescentWithHacks rounds the face's ascent and descent at the used size to whole pixels
+   (`SkScalarRoundToScalar`), and simple_font_data.cc's SimpleFontData::PlatformInit makes the line spacing
+   `lroundf(ascent) + lroundf(descent) + lroundf(line_gap)`. Its Linux arm moving a pixel from the ascent to the
+   descent applies only under subpixel glyph positioning, which this host's Chrome does not use: 16px Liberation
+   Serif puts its baseline 14px down an 18px line, not 13px. Each rounding is an atom over the unrounded
+   product, so a branch on it still forks over the face and the size. */
+static CssPx font_metrics_blink_round(const char *op, CssPx v)
+{
+    return css_px_atom(op, &v, 1, floor(v.px + 0.5));
 }
 
 /* §6.1.1's ASSUMED X-HEIGHT, in the section's own words: "in the cases where it is impossible or impractical
@@ -205,6 +224,16 @@ double font_metrics_descent_em(InstalledFont font)
     return (double)-face->hhea_descender / face->units_per_em;
 }
 
+double font_metrics_line_gap_em(InstalledFont font)
+{
+    const OpenTypeMetrics *face = installed_font_metrics(font);
+
+    DCHECK(face->hhea_line_gap >= 0,
+           "an installed face's 'hhea'.lineGap is negative — the line spacing adds it, so a negative gap "
+           "would set lines closer than their own ascent and descent");
+    return (double)face->hhea_line_gap / face->units_per_em;
+}
+
 CssPx font_metrics_ascent_px(JSContext *realm, InstalledFont font, CssPx font_size)
 {
     if (realm == NULL)
@@ -227,7 +256,8 @@ CssPx font_metrics_ascent_px(JSContext *realm, InstalledFont font, CssPx font_si
     /* THE PRODUCT IS FORMED HERE so the two facts are unioned by css_length.h's arithmetic rather than by
        whichever caller remembered to: the answer is a joint function of the reader's font size, which the
        operand already carries, and of this user agent's face. */
-    return css_px_mul(font_size, css_px_fact(FONT_METRICS_FACT[font].ascent, realm));
+    return font_metrics_blink_round("Blink SimpleFontData ascent: round(size * ascent)",
+                                    css_px_mul(font_size, css_px_fact(FONT_METRICS_FACT[font].ascent, realm)));
 }
 
 CssPx font_metrics_normal_line_height_px(JSContext *realm, InstalledFont font, CssPx font_size)
@@ -253,12 +283,16 @@ CssPx font_metrics_normal_line_height_px(JSContext *realm, InstalledFont font, C
            "statement about an installed FACE, and a face outside the range is a "
            "face this user agent should not be installing — or a `normal` this engine states its "
            "disagreement about on purpose, here");
-    /* §10.8.1: "we also define AD = A + D, the distance from the top to the bottom". The sum is formed over
-       the two lengths rather than over the two ratios so that BOTH facts reach the result — a page reads the
-       ascent through `1cap` and the sum through `1lh`, and a domain naming only one of them would leave the
-       arm where the other reader's face differs unexplored. */
+    /* §10.8.1's "AD = A + D, the distance from the top to the bottom", plus the face's line gap, each rounded
+       as font_metrics_blink_round says. The sum is formed over lengths rather than ratios so that every fact
+       reaches the result — a page reads the ascent through `1cap` and the sum through `1lh`, and a domain
+       naming only one of them would leave the arm where the other reader's face differs unexplored. */
     descent = font_metrics_descent_px(realm, font, font_size);
-    return css_px_add(font_metrics_ascent_px(realm, font, font_size), descent);
+    return css_px_add(css_px_add(font_metrics_ascent_px(realm, font, font_size), descent),
+                      font_metrics_blink_round("Blink SimpleFontData line gap: round(size * lineGap)",
+                                               css_px_mul(font_size,
+                                                          css_px_fact(FONT_METRICS_FACT[font].line_gap,
+                                                                      realm))));
 }
 
 CssPx font_metrics_descent_px(JSContext *realm, InstalledFont font, CssPx font_size)
@@ -277,7 +311,8 @@ CssPx font_metrics_descent_px(JSContext *realm, InstalledFont font, CssPx font_s
            "an installed face's `D` is NEGATIVE. CSS 2.2 §10.8.1 defines it as \"a depth below\" "
            "the baseline, so a negative one puts the baseline below the bottom of the face and makes every "
            "half-leading split in core/layout/line_box.c place a box above a line it sits below");
-    return css_px_mul(font_size, css_px_fact(FONT_METRICS_FACT[font].descent, realm));
+    return font_metrics_blink_round("Blink SimpleFontData descent: round(size * descent)",
+                                    css_px_mul(font_size, css_px_fact(FONT_METRICS_FACT[font].descent, realm)));
 }
 
 /* ---- the SHAPE of a glyph, out of the same face -------------------------------------------------------- */

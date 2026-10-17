@@ -191,17 +191,21 @@ static bool lb_close(double a, double b)
    above `A` and the other half below `D`." Every inline box this component measures is measured this way.
    `A' + D'` is `line-height` by construction ("the height of the inline box … is thus exactly 'line-height'"),
    asserted rather than substituted: deriving the pair from the line height would lose where the baseline
-   sits. `L` may be negative (§10.8.1's note), so `line-height: 0` contributes negative half-leading. */
+   sits. `L` may be negative (§10.8.1's note), so `line-height: 0` contributes negative half-leading.
+   The half above is floored to a whole pixel and the rest goes below, as real Chrome splits it (Chromium
+   0842759f third_party/blink/renderer/core/layout/inline/line_utils.cc's CalculateLeadingSpace): a 24px line of
+   16px Liberation Serif has its baseline 17px down, not 17.5px. */
 static LbExtent lb_strut_extent(lxb_dom_element_t *el)
 {
     CssPx a = css_font_ascent_px(el);
     CssPx d = css_font_descent_px(el);
     CssPx lh = css_used_line_height_px(el);
-    CssPx half = css_px_scale(css_px_sub(lh, css_px_add(a, d)), 0.5);
+    CssPx lead = css_px_sub(lh, css_px_add(a, d));
+    CssPx half = css_px_atom("Blink CalculateLeadingSpace: floor(leading / 2)", &lead, 1, floor(lead.px / 2.0));
     LbExtent out;
 
     out.above = css_px_add(a, half);
-    out.below = css_px_add(d, half);
+    out.below = css_px_add(d, css_px_sub(lead, half));
     /* §10.8.1's consequence, asserted: "the height of the inline box encloses all glyphs and their
        half-leading on each side and is thus exactly 'line-height'". It catches the three operands read for
        different elements, which is off by whole pixels; the tolerance is IEEE-754's for one real number

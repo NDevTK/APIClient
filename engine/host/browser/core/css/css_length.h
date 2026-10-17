@@ -185,8 +185,11 @@ typedef enum {
        refinement of it: the size is the reader's preference and the ascent is the FACE, so a page that
        measures `1cap` against `fontSize` is reading the ratio between them. `A` and `D` are two rows because a
        page reads `1cap` for one and `1lh` for their sum, so their difference is independently observable; and
-       each face has its own pair because two elements of one page that select two faces read two ascents. */
-#define CSS_ENV_FONT_FACT_ROWS(id, family, fact, bytes) CSS_ENV_FONT_ASCENT_##id, CSS_ENV_FONT_DESCENT_##id,
+       each face has its own pair because two elements of one page that select two faces read two ascents.
+       The face's line gap is a third row: `normal` adds it (core/css/font_metrics.h), so `1lh` against `1cap`
+       reads it apart from the pair. */
+#define CSS_ENV_FONT_FACT_ROWS(id, family, fact, bytes) \
+    CSS_ENV_FONT_ASCENT_##id, CSS_ENV_FONT_DESCENT_##id, CSS_ENV_FONT_LINE_GAP_##id,
     INSTALLED_FONT_LIST(CSS_ENV_FONT_FACT_ROWS)
 #undef CSS_ENV_FONT_FACT_ROWS
     CSS_ENV_FACT_COUNT

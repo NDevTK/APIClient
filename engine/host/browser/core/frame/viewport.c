@@ -139,10 +139,12 @@ double viewport_env_fact_value(JSContext *realm, CssEnvFact fact)
     case CSS_ENV_DEFAULT_FONT_SIZE:       return css_default_font_size_px();
     default: {
         InstalledFont face;
-        bool descent;
+        FontMetricsFaceFact which;
 
-        if (font_metrics_fact_face(fact, &face, &descent))
-            return descent ? font_metrics_descent_em(face) : font_metrics_ascent_em(face);
+        if (font_metrics_fact_face(fact, &face, &which))
+            return which == FONT_METRICS_FACE_DESCENT  ? font_metrics_descent_em(face)
+                 : which == FONT_METRICS_FACE_LINE_GAP ? font_metrics_line_gap_em(face)
+                                                       : font_metrics_ascent_em(face);
         DFAILF("environment fact %d has no value source", (int)fact);
         return 0.0;
     }
@@ -237,7 +239,8 @@ static const struct { const char *member; bool presented; } VIEWPORT_FACT[CSS_EN
        whether a page can read them APART, and `1cap` against `1lh` is exactly that subtraction. */
 #define VIEWPORT_FONT_FACT_NAMES(id, family, fact, bytes)            \
     [CSS_ENV_FONT_ASCENT_##id]  = { "fontAscent." fact,  false },    \
-    [CSS_ENV_FONT_DESCENT_##id] = { "fontDescent." fact, false },
+    [CSS_ENV_FONT_DESCENT_##id] = { "fontDescent." fact, false },    \
+    [CSS_ENV_FONT_LINE_GAP_##id] = { "fontLineGap." fact, false },
     INSTALLED_FONT_LIST(VIEWPORT_FONT_FACT_NAMES)
 #undef VIEWPORT_FONT_FACT_NAMES
 };

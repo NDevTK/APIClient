@@ -140,10 +140,8 @@
  * a check on two typed numbers and became a check on the SHIPPED FACE — a face whose `AD` leaves the range is
  * one this user agent should not be defaulting to, and it crashes at the point the number would first be
  * reported. §6.1.1's assumed x-height bounds `A` from below in the same way.
- * WHAT IS STILL ABSENT IS THE LINE GAP. §10.8.1's note names sTypoAscender and sTypoDescender for `A` and `D`
- * and names no third term, so `AD` is the whole of what this file needs for `normal`; a face's 'hhea'.lineGap
- * (or `sTypoLineGap`) would be a third metric with no sentence of §10.8 asking for it and nothing here
- * reading it, which is the same reason `D` waited. */
+ * THE LINE GAP IS THE THIRD METRIC. §10.8.1's note names no third term, but §10.8 leaves `normal` to the user
+ * agent, and the value real Chrome picks adds the face's 'hhea'.lineGap to `A` and `D` (font_metrics.c). */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_FONT_METRICS_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_FONT_METRICS_H
 
@@ -154,9 +152,12 @@
 #include "core/fonts/installed_font.h"
 #include "quickjs.h"
 
-/* Which face and which of its two metrics an environment fact is: CSS 2.1 §10.8.1's `A` (`*descent` false) or
-   `D` of `*face`. False for a fact that is no face's. core/frame/viewport.c answers a font fact's value here. */
-bool font_metrics_fact_face(CssEnvFact fact, InstalledFont *face, bool *descent);
+/* Which of a face's three metrics an environment fact is: CSS 2.1 §10.8.1's `A` or `D`, or the face's line gap. */
+typedef enum { FONT_METRICS_FACE_ASCENT, FONT_METRICS_FACE_DESCENT, FONT_METRICS_FACE_LINE_GAP } FontMetricsFaceFact;
+
+/* Which face and which of its metrics an environment fact is. False for a fact that is no face's.
+   core/frame/viewport.c answers a font fact's value here. */
+bool font_metrics_fact_face(CssEnvFact fact, InstalledFont *face, FontMetricsFaceFact *which);
 
 /* §6.1.1's ASSUMED X-HEIGHT, as a MULTIPLE OF THE EM — the form the section states it in, and the form that
    makes it independent of any element's computed `font-size`. The caller multiplies. It is a HEIGHT of the
@@ -229,16 +230,19 @@ double font_metrics_typical_advance_measure_em(InstalledFont font, uint32_t code
    (core/frame/viewport.h): the source key is keyed on the document that read it. A document no navigable
    presents CRASHES rather than being handed a bare number, exactly as core/css/font_size_functions.h does. */
 CssPx font_metrics_ascent_px(JSContext *realm, InstalledFont font, CssPx font_size);
+/* Both `A` above and `D` below are rounded to whole CSS pixels at the size, as real Chrome rounds them. */
 
 /* `font`'s CSS 2.1 §10.8.1 `A` and `D` as fractions of the em: the values of the face's two environment facts
    that core/frame/viewport.h's `viewport_env_fact_value` answers. */
 double font_metrics_ascent_em(InstalledFont font);
 double font_metrics_descent_em(InstalledFont font);
+/* `font`'s 'hhea'.lineGap as a fraction of the em, the value of its line-gap environment fact. */
+double font_metrics_line_gap_em(InstalledFont font);
 
-/* CSS 2.1 §10.8.1's `AD = A + D` — `font`'s height above the baseline plus its depth below,
-   at `font_size`, in CSS pixels. It is CSS 2.1 §10.8's used value for `line-height: normal` ("tells user
-   agents to set the used value to a 'reasonable' value BASED ON THE FONT of the element"), which css-inline-3
-   §5.1 states as "determine the preferred line height automatically based on the metrics of the used font",
+/* `font`'s line spacing at `font_size`, in CSS pixels: the rounded `A` and `D` below plus the face's rounded line
+   gap, which is real Chrome's choice (font_metrics.c cites it). It is CSS 2.1 §10.8's used value for
+   `line-height: normal` ("tells user agents to set the used value to a 'reasonable' value BASED ON THE FONT of
+   the element"), which css-inline-3 §5.1 states as "determine the preferred line height automatically based on the metrics of the used font",
    and it is css-values-4 §6.1.1's `lh` conversion ("converting normal to an absolute length by using only the
    metrics of the first available font"). Three sentences, one number, one entry — so a page cannot read two
    different answers for `line-height: normal` through `getComputedStyle` and through `1lh`. */

@@ -499,6 +499,7 @@ bool open_type_metrics_read(OpenTypeMetrics *m, const unsigned char *sfnt, size_
        cast because that is what a big-endian FWORD is: the two's-complement bit pattern in the file. */
     m->hhea_ascender = (int16_t)ot_u16(m, hhea.off + 4);
     m->hhea_descender = (int16_t)ot_u16(m, hhea.off + 6);
+    m->hhea_line_gap = (int16_t)ot_u16(m, hhea.off + 8);
     m->number_of_h_metrics = ot_u16(m, hhea.off + 34);
     if (m->number_of_h_metrics == 0)
         OT_REJECT(m, "the 'hhea' table's numberOfHMetrics is ZERO. OpenType 'hmtx' — Horizontal Metrics Table "

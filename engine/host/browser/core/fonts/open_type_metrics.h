@@ -74,6 +74,9 @@ typedef struct {
        with no 'OS/2', which is why the flag below exists rather than a comment saying to remember. */
     int16_t  hhea_ascender;
     int16_t  hhea_descender;
+    /* 'hhea'.lineGap, the FWORD after the descender: the third term of the line spacing core/css/font_metrics.c
+       builds `normal` from. */
+    int16_t  hhea_line_gap;
 
     /* DOES THIS FACE CARRY 'OS/2' — OS/2 and Windows Metrics Table. It is the one table this component notices
        and does not read, and the asymmetry is deliberate: a reader of the pair above is taking §10.8.1's note's
