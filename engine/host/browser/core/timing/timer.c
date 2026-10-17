@@ -835,7 +835,7 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
            instead of throwing — so IsCallable is TRUE over EVERY unknown external input, for a reason that is
            a fact about this engine's value class and not about the page's value. Asking it first therefore
            chooses an arm from the MODEL, which is the collapse §@S forbids, and it does not choose neutrally:
-           the callback arm over an unknown callee runs no page code and emits nothing (concolic_call mints a
+           the callback arm over an unknown callee runs no page code and emits nothing (concolic_call_hook mints a
            derived unknown and returns), while the string arm is the code-execution sink this file exists to
            announce. Measured on the shipped artifact: `eval(location.hash.substr(1))` produced a fire-verified
            @S PoC and `setTimeout(location.hash.substr(1), 1)` on the same page shape produced no @S entry at

@@ -8989,7 +8989,7 @@ static int param_value_only(const char *js, const char *url, const char *pname, 
 /* THE ATTRIBUTE-VALUE SEARCH'S SOURCE, SPELLED ONCE. `location.hash.slice(1)` composes this identity byte for
  * byte (concolic.h states the derivation), and four rows plus a stage read it — four copies of one string, each
  * free to drift from concolic.c's composition on its own.
- * THE ARGUMENT IS IN IT, and that is the composition and not a decoration on it: concolic_call renders every
+ * THE ARGUMENT IS IN IT, and that is the composition and not a decoration on it: concolic_call_hook renders every
  * argument it composes into the call's IDENTITY, because a shape must separate every pair of operands its
  * identity separates — `h.slice(1)` and `h.slice(2)` are two derivations and were one shape, which made them
  * one property atom (keyname_record, solver/concolic.c). This define is the one place in the tree that names a

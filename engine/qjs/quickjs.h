@@ -2777,6 +2777,12 @@ typedef struct JSConcolicHooks {
        propagates — the engine runs the real op on the concrete, never a rule that predicts what it would have
        produced. Returns JS_UNDEFINED when the operand carries no example yet. */
     JSValue (*example)(JSContext *ctx, JSValueConst v);
+    /* §7.3.13 Call ( func, thisValue [ , argList ] ) where func is unknown: the derived unknown the call
+       answers. `example` is what the engine got by running func's example on the operands' (consumed), or
+       JS_UNDEFINED where it ran nothing. Installed with `.is`: the engine routes every call of an unknown here
+       through its step machine, never through the class's C [[Call]] entry. */
+    JSValue (*call)(JSContext *ctx, JSValueConst callee, JSValueConst this_val, int argc, JSValueConst *argv,
+                    JSValue example);
     /* THE FIRST CHARACTER THE BROWSER'S DELIVERY OF THIS SOURCE GUARANTEES, or 0 when it guarantees none.
        This is DOMAIN, not example: `location.hash` is either the empty string or `#` followed by the fragment
        — the component that owns the source declares that prefix — so a builtin can rule an outcome INFEASIBLE

@@ -2772,34 +2772,43 @@ static int example_slot(JSContext *ctx, JSValueConst parent_example, JSAtom atom
     return 1;
 }
 
-/* The member's example, read off the parent's: 1 with `*out` owned (`undefined` included) where one is held, 0
-   where none is. An own data slot is its value. A member no object on an Object example's prototype chain holds
-   is `undefined`, §10.1.8.1 OrdinaryGet ( O, P, Receiver ) step 2.b's answer at a null prototype. An inherited
-   member and an accessor hold none: their value is a method or the page's code, not the record's bytes. */
+/* The member's example, read off the parent's by §10.1.8.1 OrdinaryGet ( obj, propertyKey, receiver ): 1 with
+   `*out` owned (`undefined` included) where one is held, 0 where none is. The walk decides where the member is:
+   the parent's own slot, then each [[Prototype]], a primitive's being its realm's %Number.prototype% and kin
+   (§6.2.5.5 GetValue ( refRecord ) step 3.a, §7.1.20 ToObject ( arg )). A data property found anywhere is its
+   value, so `x.toFixed` over a Number example carries %Number.prototype.toFixed% for the call over it to run.
+   A member no object on the chain holds is `undefined`, step 2.b's answer at a null prototype. An accessor
+   holds none: step 7 would call the page's getter, which this read has no flow to run. A Proxy link holds none
+   for the same reason; it is refused rather than asserted because a primitive's chain is the page's to change. */
 static int example_member(JSContext *ctx, JSValueConst parent_example, JSAtom atom, JSValue *out)
 {
-    JSValue o, proto, v;
-    int flags;
+    JSValue o, proto;
+    int flags = 0, found, held;
 
-    if (example_slot(ctx, parent_example, atom, out, &flags))
-        return !(flags & JS_PROP_GETSET);
-    if (!JS_IsObject(parent_example))
-        return 0;
-    for (o = JS_GetPrototype(ctx, parent_example); JS_IsObject(o); o = proto) {
-        DCHECK(!JS_IsProxy(o), "an example's prototype chain reached a Proxy — its [[GetPrototypeOf]] and "
-                               "[[GetOwnProperty]] are the page's code, which no example read may run");
-        if (example_slot(ctx, o, atom, &v, &flags)) {
-            JS_FreeValue(ctx, v);
+    *out = JS_UNDEFINED;
+    if (JS_IsUndefined(parent_example) || JS_IsNull(parent_example))
+        return 0;   /* GetValue step 3.a's ToObject throws here: a real read has no member to answer */
+    found = example_slot(ctx, parent_example, atom, out, &flags);
+    o = found ? JS_NULL : JS_GetPrototype(ctx, parent_example);
+    while (!found && JS_IsObject(o)) {
+        if (JS_IsProxy(o)) {
             JS_FreeValue(ctx, o);
             return 0;
         }
-        proto = JS_GetPrototype(ctx, o);
+        found = example_slot(ctx, o, atom, out, &flags);
+        proto = found ? JS_NULL : JS_GetPrototype(ctx, o);
         JS_FreeValue(ctx, o);
-        CHECK(!JS_IsException(proto), "concolic: an example's prototype could not be read");
+        o = proto;
     }
     CHECK(!JS_IsException(o), "concolic: an example's prototype could not be read");
-    *out = JS_UNDEFINED;
-    return 1;
+    /* Where the walk stopped and what the presence bit will say are one fact: a held example is a data
+       property's value or the chain's end, never an accessor, and the chain's end holds `undefined`. */
+    held = !found || !(flags & JS_PROP_GETSET);
+    DCHECK(held ? (found || JS_IsUndefined(*out)) : JS_IsUndefined(*out),
+           "a member's example disagrees with where OrdinaryGet found the member — an accessor must hold no "
+           "bytes and a member absent along the whole chain must hold `undefined`, or the presence bit the "
+           "mint sets from this answer states a value the walk never read");
+    return held;
 }
 
 /* Exotic [[Get]]: reading any field of a concolic value yields a derived concolic carrying the field-path
@@ -2997,7 +3006,7 @@ static void pred_set_bound(JSValueConst pred, RelOp rel, const char *tok, double
     CHECK(c->rel_subj, "concolic: OOM recording the hole an ordering is a fact about");
 }
 
-/* The call predicate's observation, stamped on the result concolic_call has just minted; a second call for
+/* The call predicate's observation, stamped on the result concolic_call_hook has just minted; a second call for
    pred_set_bound's reason. The facts are written here together. `args` is consumed (the array and every
    string), because the caller has just built the only copy. */
 static void pred_set_strpred(JSValueConst v, const char *method, char **args, int nargs, const char *subj) {
@@ -3530,9 +3539,11 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
    (another concolic) and calls it; a non-callable concolic would throw "not a function" and make every
    statement after the first method call on an unknown string unreachable. The result is concolic because
    nothing here knows what indexOf returns over a cookie jar this engine never saw, so the comparison after it
-   forks. The arguments already ran: they are the page's own expressions. */
-static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst this_val,
-                             int argc, JSValueConst *argv, int flags)
+   forks. The arguments already ran: they are the page's own expressions. `example` is what quickjs.c's
+   js_concolic_call_def got by running the callee's example on the operands' examples, or JS_UNDEFINED for
+   none; it is consumed. */
+static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValueConst this_val,
+                                  int argc, JSValueConst *argv, JSValue example)
 {
     Concolic *c = JS_GetOpaque(func_obj, g_concolic_class);
     char *shape, *ident, **owned;
@@ -3541,13 +3552,6 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
     int i;
 
     DCHECK(c != NULL, "the concolic call handler ran on something that is not a concolic value");
-    /* `this_val` is the receiver: under JS_CALL_FLAG_CONSTRUCTOR it would be new.target, but quickjs.h's
-       JSClassDef makes a constructor call only where the object's constructor bit is set, which this class
-       never sets. Asserted rather than branched on, so the day something sets the bit this names the line. */
-    DCHECK(!(flags & JS_CALL_FLAG_CONSTRUCTOR),
-           "a concolic value was called as a CONSTRUCTOR — this class never sets the constructor bit, so "
-           "`this_val` here is the receiver and nothing else, and a new.target arriving in that slot would "
-           "be filed as the object a page's own predicate tested");
     /* The arguments are part of the call's identity and therefore of its shape. `x.startsWith("/api")` and
        `x.startsWith("javascript:")` are two gates over one source, and a shape is also the field path an @S
        candidate is injected at and the atom keyname_record buys: `h.slice(1)` and `h.slice(2)` must not share
@@ -3578,7 +3582,7 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
     /* The result of calling an unknown is a new injection identity (nothing here knows what the call returned,
        so a candidate substitutes at the call), and not new bytes: whatever carried the callee's bytes in
        carried these. */
-    r = concolic_derived(ctx, shape, shape, c->root, c->root_whose, ident, JS_UNDEFINED);
+    r = concolic_derived(ctx, shape, shape, c->root, c->root_whose, ident, example);
     /* …and the predicate the page just wrote, if this result can name one. `if (path.startsWith("/api"))`
        gates `path` as `path === "/api"` does, but determines no value, so it pins nothing and carries no bound.
        (A `!`-spelled gate reaches no branch here; concolic.h's residual beside concolic_strpred names why.)
@@ -3624,6 +3628,20 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
     }
     free(shape);
     return r;
+}
+
+/* The class's [[Call]] entry, which only a C caller invoking an unknown off the trampoline reaches: the
+   interpreter's dispatch runs the call as quickjs.c's js_concolic_call_def, whose run of the callee's example
+   is a request this entry has no flow to park. The release arm answers the unknown without that example. */
+static JSValue concolic_call_c_entry(JSContext *ctx, JSValueConst func_obj, JSValueConst this_val,
+                                     int argc, JSValueConst *argv, int flags)
+{
+    DCHECK(!(flags & JS_CALL_FLAG_CONSTRUCTOR),
+           "a concolic value was called as a constructor — this class never sets the constructor bit, so "
+           "`this_val` here is the receiver, and a new.target in that slot would be filed as one");
+    DFAIL("an unknown was called from C rather than through the interpreter's dispatch — its [[Call]] is "
+          "js_concolic_call_def, reached through tramp_step_def_of; route this caller onto step_call_run");
+    return concolic_call_hook(ctx, func_obj, this_val, argc, argv, JS_UNDEFINED);
 }
 
 /* Ordering over an unknown is unknown. < <= > >= coerce with ToPrimitive, which a concolic cannot satisfy, so
@@ -4236,7 +4254,7 @@ static void keyname_record(const char *atom, const char *shape, const char *src,
            a shape separates every pair of operands its identity separates, wherever the shape is an
            expression. concolic_add_hook's shape is not an expression but the string the concatenation produced
            (`/api/{x}`), so `x + 5` and `x + "5"` share one shape there by design. The expression spellers are
-           concolic_call, derived_operand_shape, concolic_key_read_hook, concolic_typeof_hook and
+           concolic_call_hook, derived_operand_shape, concolic_key_read_hook, concolic_typeof_hook and
            concolic_arith_hook, all routed through derived_operand_shape and ident_of_operand. */
         /* Named residual: the assert is blind where the identity is absent (an Object or Symbol operand):
            every field it compares agrees, yet the values differ. keyname_atom separates most of that
@@ -4926,7 +4944,7 @@ void concolic_init(JSContext *ctx) {
     }
     if (!JS_IsRegisteredClass(rt, g_concolic_class)) {
         JSClassDef def = { "Concolic", .finalizer = concolic_finalizer, .gc_mark = concolic_gc_mark,
-                           .call = concolic_call, .exotic = &g_concolic_exotic };
+                           .call = concolic_call_c_entry, .exotic = &g_concolic_exotic };
         int r = JS_NewClass(rt, g_concolic_class, &def);
         CHECK(r == 0, "concolic: JS_NewClass failed — cannot register the solver's value type");
     }
@@ -5125,11 +5143,10 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, Concoli
     /* The pin arm answers a bare primitive, so an address composed from a source re-read after its pin is not
        concolic and endpoint.h's bar reads it as concrete, while the same source held in a page variable stays
        concolic. Deleting the arm is not the fix: the primitive concretizes every later operation, not only
-       branches (concolic_call's results carry no example, so a pinned `.slice(1)` would lose its bytes), and
-       decide.c's refinement is keyed by the predicate, so a later `x === "guest"` is still forked. `concrete` is
-       the right class for such an address: the pin's bytes are a literal the page's own predicate spelled, which
-       a parse can state (endpoint.h's ENDPOINT_WITNESS_CLASSES banner), so the work that banner poses is the
-       solver keeping more values unknown. */
+       branches, and decide.c's refinement is keyed by the predicate, so a later `x === "guest"` is still forked.
+       `concrete` is the right class for such an address: the pin's bytes are a literal the page's own predicate
+       spelled, which a parse can state (endpoint.h's ENDPOINT_WITNESS_CLASSES banner), so the work that banner
+       poses is the solver keeping more values unknown. */
     /* Named residual. Not covered: a pin whose operand is concrete by this engine's design rather than spelled
        by the page (the principal, `location.origin`, is concrete for URL building), whose bytes no parse of the
        bundle states. Next diff: a mark at `literal_tok` separating an operand this engine models as concrete
@@ -5647,6 +5664,7 @@ static JSConcolicHooks g_hooks = {
     .key_value = concolic_key_value_hook,
     .builtin = concolic_builtin_hook,
     .example = concolic_example,
+    .call = concolic_call_hook,
     /* The ordinal half of a page-created value's name. With the member NULL the engine stamps 0,
        JS_CreationName answers absent for every value, and literal_ident's creation-name arm returns NULL: a host
        declining the edge, byte-identical to a build without the seam. */

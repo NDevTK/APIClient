@@ -95353,6 +95353,153 @@ STEP_STATE_HDR_FIRST(JSNumberFmt);
 STEP_STATE_HDR_FIRST(JSNumCtor);
 STEP_STATE_HDR_FIRST(JSPrimArgs);
 
+/* §7.3.13 Call ( func, thisValue [ , argList ] ) WHERE func IS UNKNOWN. The engine runs the real call on the
+   examples (func's is the function its member read resolved, see solver/concolic.c's example_member) and hands
+   what that run produced to the host's `.call` as the derived unknown's example, so `x.toFixed(2)` carries its
+   bytes and a branch over it still forks. The run is a CALL request, so a builtin that is itself a step machine
+   is driven from the one dispatch. Only a builtin runs, over primitive operands: a page function, or a builtin
+   handed an Object, could pass an example to the page's code, which would compute with bytes that carry no
+   provenance. A run that throws forks the completion: the throw arm raises the run's own exception, and the
+   normal arm answers the unknown without an example. */
+typedef struct JSConcolicCall {
+    JSStepHdr hdr;      /* first; hdr.func_obj is the unknown callee, hdr.this_val its thisValue */
+    JSValue result;     /* owned: the derived unknown */
+    JSValue thrown;     /* owned: the exception the examples' run threw, raised on the throw arm */
+    JSValue *cb;        /* [thisValue's example, func's example, each argument's example] */
+    int ncb;
+} JSConcolicCall;
+STEP_STATE_HDR_FIRST(JSConcolicCall);
+
+/* Named residual. Not covered: an Object operand (a RegExp handed to replace/split/match, a replacer callback,
+   a method of an object example such as an array example's `map`, an unknown method's own `.call`, whose
+   receiver is the method); the result carries no example. Next diff: the builtin handed the unknown rather
+   than its example where its algorithm passes an operand on to the page's code, starting with the RegExp
+   methods' exec of the receiver. How its absence shows: an address built through `.replace(/…/, …)` over an
+   unknown is emitted as a shape where the same chain through a string pattern carries bytes.
+   Named residual. Not covered: a throw another value of the unknown would reach while its example's run
+   completes normally (`x.toFixed(d)` with an unknown `d`). Next diff: the outcome asked on every run, with the
+   normal completion stated real, once a builtin whose throw no operand can reach declares so at its definition.
+   How its absence shows: a `catch` after a call over an unknown is reached on no flow. */
+#define CCALL_STAGES(X) \
+    X(CCALL_ENTRY,   "7.3.13 Call over the examples (func's, thisValue's and each argument's)") \
+    X(CCALL_RUN,     "7.3.13 step 3 (Return ? func.[[Call]](thisValue, argList)), run on the examples") \
+    X(CCALL_OUTCOME, "the call's completion over the unknown: normal, or the throw the examples' run reached")
+enum { CCALL_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_concolic_call_steps[] = { CCALL_STAGES(JS_STEP_STAGE_LABEL) NULL };
+enum { CCALL_NORMAL, CCALL_THROW };   /* the outcome fork's completions; the normal one is numbered first */
+
+/* One operand's stand-in for the examples' run: a primitive as itself, an unknown by its example when that is
+   a primitive, and JS_UNINITIALIZED where there is none (no example, or an Object). Owned. */
+static JSValue js_concolic_call_operand(JSContext *ctx, JSValueConst v)
+{
+    JSValue ex;
+
+    if (!g_concolic.is(v))
+        return JS_IsObject(v) ? JS_UNINITIALIZED : js_dup(v);
+    ex = g_concolic.example(ctx, v);
+    if (JS_IsUndefined(ex) || JS_IsObject(ex)) {
+        JS_FreeValue(ctx, ex);
+        return JS_UNINITIALIZED;
+    }
+    return ex;
+}
+
+static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSConcolicCall *s = st;
+    int i, n = s->hdr.argc, arm, r;
+
+    DCHECK(g_concolic.call != NULL && g_concolic.example != NULL,
+           "an unknown was called under a host that installed `.is` without `.call` and `.example` — the "
+           "machine has no way to mint the call's result");
+    if (s->hdr.stage == CCALL_ENTRY) {
+        JSValue fex = g_concolic.example(ctx, s->hdr.func_obj);
+        bool runs = JS_VALUE_GET_TAG(fex) == JS_TAG_OBJECT
+                    && JS_VALUE_GET_OBJ(fex)->class_id == JS_CLASS_C_FUNCTION;
+
+        JS_FreeValue(ctx, cb_result);
+        s->result = JS_UNDEFINED;
+        s->thrown = JS_UNDEFINED;
+        s->cb = js_malloc(ctx, sizeof(JSValue) * (size_t)(n + 2));
+        if (unlikely(!s->cb)) { JS_FreeValue(ctx, fex); return -1; }
+        s->ncb = n + 2;
+        for (i = 0; i < n + 2; i++) s->cb[i] = JS_UNDEFINED;
+        s->cb[1] = fex;
+        for (i = -1; runs && i < n; i++) {
+            JSValue ex = js_concolic_call_operand(ctx, i < 0 ? s->hdr.this_val : s->hdr.argv[i]);
+            runs = !JS_IsUninitialized(ex);
+            s->cb[i < 0 ? 0 : 2 + i] = runs ? ex : JS_UNDEFINED;
+        }
+        if (!runs) {
+            s->result = g_concolic.call(ctx, s->hdr.func_obj, s->hdr.this_val, n,
+                                        (JSValueConst *)s->hdr.argv, JS_UNDEFINED);
+            return 0;
+        }
+        s->hdr.stage = CCALL_RUN;
+        *out_cb = s->cb;
+        *out_argc = n;
+        return JS_STEP_CALL;
+    }
+    if (s->hdr.stage == CCALL_RUN) {
+        JSValue example = cb_result;
+
+        cb_result = JS_UNDEFINED;
+        if (JS_IsException(example)) {
+            JSValue e = JS_GetException(ctx);
+            if (JS_IsUncatchableError(e)) {
+                JS_Throw(ctx, e);
+                return -1;
+            }
+            s->thrown = e;
+            example = JS_UNDEFINED;
+        }
+        s->result = g_concolic.call(ctx, s->hdr.func_obj, s->hdr.this_val, n,
+                                    (JSValueConst *)s->hdr.argv, example);
+        /* A candidate re-fire answers the attacker's payload, which is not unknown: that run takes the normal
+           completion, the one a run with no forking policy takes. */
+        if (JS_IsUndefined(s->thrown) || !g_concolic.is(s->result))
+            return 0;
+        s->hdr.stage = CCALL_OUTCOME;
+    }
+    DCHECK(s->hdr.stage == CCALL_OUTCOME, "the unknown-callee [[Call]] machine resumed at a stage it lacks");
+    /* Keyed over the result, whose identity is the callee and the arguments, so two calls of one unknown with
+       different arguments are two questions. */
+    JS_FreeValue(ctx, cb_result);
+    r = step_fork_run(ctx, &s->hdr, s->result, "Call", 2, CCALL_THROW, &arm);
+    if (r) return r;
+    if (arm == CCALL_THROW) {
+        JSValue e = s->thrown;
+        s->thrown = JS_UNDEFINED;
+        JS_Throw(ctx, e);
+        return -1;
+    }
+    return 0;
+}
+
+static void js_concolic_call_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSConcolicCall *s = st;
+    v->val(ctx, &s->result);
+    v->val(ctx, &s->thrown);
+    v->array(ctx, (void **)&s->cb, sizeof(JSValue), s->ncb, s->ncb, js_step_visit_value_elem);
+}
+
+static JSValue js_concolic_call_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSConcolicCall *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+    if (take_result) s->result = JS_UNDEFINED;
+    return r;
+}
+
+/* catches_abrupt: the examples' run throwing is this algorithm's outcome to fork, not the page's throw. */
+static const JSTrampStepDef js_concolic_call_def = {
+    sizeof(JSConcolicCall), js_concolic_call_step, js_concolic_call_fini, 0,
+    .catches_abrupt = 1, .visit = js_concolic_call_visit,
+    .algorithm = "7.3.13 Call ( func, thisValue [ , argList ] ) where func is unknown input",
+    .steps = js_concolic_call_steps
+};
+
 static const JSTrampStepDef *tramp_step_def_of(JSValueConst func)
 {
     JSObject *fp;
@@ -95383,6 +95530,10 @@ static const JSTrampStepDef *tramp_step_def_of(JSValueConst func)
            two it performs is the CLASS, not a def. Its `Get(resolution, "then")` is the page's code, and the
            class `call` hook read it with JS_GetProperty from C. */
         return &js_promise_resolvefn_def;
+    }
+    if (g_concolic.is && g_concolic.is(func)) {
+        /* an unknown IS a step machine: its [[Call]] runs the callee's example as a request. */
+        return &js_concolic_call_def;
     }
     if (fp->class_id != JS_CLASS_C_FUNCTION) return NULL;
     if (fp->u.cfunc.cproto != JS_CFUNC_step && fp->u.cfunc.cproto != JS_CFUNC_step_ctor) return NULL;
@@ -115963,7 +116114,7 @@ static int js_promise_resolvefn_step(JSContext *ctx, void *st, JSValue cb_result
         /* §27.5.2.2's JOB OVER A `then` THIS ENGINE CANNOT CALL — steps 2.j-2.l with the CALL at the end of
            them replaced by a fork over what it does. That job's step 1.b calls `then`, and calling an unknown
            mints a derived unknown for the RESULT while modelling no effect on the arguments at all
-           (solver/concolic.c's concolic_call is where the result is minted and where that absence lives), so
+           (js_concolic_call_def is where the result is minted and where that absence lives), so
            the two capabilities it was handed would be invoked by nothing and this promise would settle NEVER.
            The capability that world needs sits one level below the promise — what an unknown CALLEE does with
            a capability it was handed — and it is an OUTCOME FORK rather than a model of the callee, asked
