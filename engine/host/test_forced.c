@@ -8474,6 +8474,24 @@ static int emitted_record_graded_has(const char *js, const char *url, const char
     return 0;
 }
 
+/* Does ONE record of the statement at `url` carry both `a` and `b` — a claim joining two of one arm's facts
+   (a value and the timeline kind that produced it), which two separate scoped tests cannot make. */
+static int emitted_record_has_both(const char *js, const char *url, const char *a, const char *b) {
+    EmittedRec r[EMITTED_REC_MAX];
+    size_t am = strlen(a), bm = strlen(b);
+    int n = emitted_records(js, url, r, EMITTED_REC_MAX), i;
+    const char *p;
+
+    for (i = 0; i < n; i++) {
+        int ha = 0, hb = 0;
+
+        for (p = r[i].b; p + am <= r[i].b + r[i].n && !ha; p++) ha = memcmp(p, a, am) == 0;
+        for (p = r[i].b; p + bm <= r[i].b + r[i].n && !hb; p++) hb = memcmp(p, b, bm) == 0;
+        if (ha && hb) return 1;
+    }
+    return 0;
+}
+
 /* ONE ENDPOINT'S REQUEST METHOD — the one field of a record that no reader above can reach, because it is the
    one field that sits BEFORE the address. `endpoint_json_array` writes `{"method":..,"url":..,"params":[..`
    (solver/endpoint.c), and an `EmittedRec`'s readable span deliberately begins PAST the url because an address
@@ -11774,17 +11792,25 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "that base — DOM §4.2.3 insert runs each node's insertion steps before the next node is inserted");
     /* `replaceChildren` removes an open dialog and inserts another: the removed one's close watcher is destroyed
        before the inserted one's is established, so with a second group allowed the inserted dialog's group is
-       its own and the close request that closes it leaves `c` open. */
+       its own and the close request that closes it leaves `c` open. With one group allowed `c` and the inserted
+       dialog share it and close together, so `0open` is no page timeline's: it is the orphan drive of the
+       never-called `close` listener (`driven` true), run with `c` still open. */
     const char *fragdialog_why = NULL; int fragdialog_tt = 1;
     fold_row(&fragdialog_tt, &fragdialog_why,
              param_value_is(js, "/api/fragdialogready", "a", "1") && !!strstr(js, "\"/api/fragdialog\""),
              "NOT REACHED: no arm both gained the second close-watcher group (the picker resolved) and closed "
              "the inserted dialog");
     fold_row(&fragdialog_tt, &fragdialog_why,
-             param_value_is(js, "/api/fragdialog", "s", "1open") && !strstr(js, "\"1shut\""),
+             param_value_is(js, "/api/fragdialog", "s", "1open") &&
+                 !emitted_record_has(js, "/api/fragdialog", "\"1shut\""),
              "the close request that closed the inserted dialog also closed `c` on the arm with two groups "
              "allowed — the inserted dialog's close watcher joined `c`'s group because the removed dialog's "
              "was destroyed after it was established, where DOM §4.2.3's replace all removes before it inserts");
+    fold_row(&fragdialog_tt, &fragdialog_why,
+             !emitted_record_has_both(js, "/api/fragdialog", "\"driven\":false", "\"0open\""),
+             "a timeline that ran the page's own code saw the inserted dialog close with `c` open on the arm with "
+             "one group allowed — HTML §6.10.2's establish appended the inserted dialog's close watcher to `c`'s "
+             "group, so one close request closes both");
     /* A frontier left parked on refusals: HTML_DECLINES's zone declines its XMLHttpRequest and every fetch()
        but one GET, and the session parks the waiting arms, one of them suspended inside the XHR's send task
        with a later task queued, rather than aborting. */
