@@ -10,6 +10,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/intrinsic_block_size.h"
+#include "core/layout/layout_job.h"
 #include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
 
@@ -82,7 +83,21 @@ CssPx intrinsic_block_run_size(lxb_dom_element_t *style, BlockFlowRun run)
            "such a box its properties from the enclosing non-anonymous box, so the run's content is styled by "
            "an element even where the box is not");
     ibs_require_horizontal_tb(style);
-    /* The three out-parameters are discarded: §10.6.3's first bullet is a distance, and baselines are
-       CSS 2.1 §10.8's question. A run with no line box answers the zero that entry returns. */
-    return line_box_content_height(style, run, line_box_available_width_derived(), &any_line_box, &first, &last);
+    {
+        LayoutJobDrive d;
+        LineBoxAvailableWidth avail = line_box_available_width_derived();
+        size_t from = 0;
+        CssPx h;
+
+        /* This entry answers synchronously, so it is a drive: the asks computed, with what they defer computed
+           beneath it, before the reduction reads them, as `block_flow_auto_height` drives its own walk. The
+           three out-parameters are discarded: §10.6.3's first bullet is a distance, and baselines are CSS 2.1
+           §10.8's question. A run with no line box answers the zero that entry returns. */
+        layout_job_drive_begin(&d);
+        while (!line_box_atomics_ask(style, run, avail, &from) || !line_box_extents_ask(style, run, avail))
+            (void)block_flow_drive_deferred(&d);
+        h = line_box_content_height(style, run, avail, &any_line_box, &first, &last);
+        layout_job_drive_end(&d);
+        return h;
+    }
 }
