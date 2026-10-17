@@ -208,11 +208,16 @@ function _wrSettle(d, r, w) {
                  " is a request that failed (" + r.failed + ")");
     return;
   }
-  if (r.status !== w.capture.observedStatus) {
+  /* The capture is compared with the status the page's own fetch exposed. Fetch §4.1 "Main fetch" hands a
+     request whose response tainting is "opaque" an opaque filtered response, which Fetch §2.2.6 "Responses"
+     gives status 0 whatever the browser's record of the internal response says; every other response the page
+     reads exposes the internal status. The type is the page's Response's (intercept.js reads `clone.type`). */
+  var exposed = w.capture.transport === "fetch" && w.capture.responseType === "opaque" ? 0 : r.status;
+  if (exposed !== w.capture.observedStatus) {
     webRequestCensus.statusMismatch++;
     console.warn("[web-request] " + r.method + " " + r.url + " capture refused (status-mismatch): the page " +
-                 "observed " + String(w.capture.observedStatus) + " and the browser reports " + r.status +
-                 " for ordinal " + r.ordinal);
+                 "observed " + String(w.capture.observedStatus) + " and its response exposes " + exposed +
+                 " (the browser reports " + r.status + ") for ordinal " + r.ordinal);
     return;
   }
   webRequestCensus.joined++;
