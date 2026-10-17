@@ -58,8 +58,8 @@ void  json_buf_str(JsonBuf *b, const char *s);
 /* The bytes, NUL-terminated, transferred to the caller (who frees them). The buffer is empty afterwards. */
 char *json_buf_take(JsonBuf *b);
 void  json_buf_free(JsonBuf *b);
-/* The most bytes the process's live buffers held at once since the previous call (a growth's old and new blocks
-   counted together), and the mark restarts from what they hold now: a composition's measured footprint. */
-size_t json_buf_peak_take(void);
+/* Every block size the process's buffers grew to since the previous call, which bounds from above what a
+   composition's buffers held at once: a composition's measured footprint. */
+size_t json_buf_grown_take(void);
 
 #endif

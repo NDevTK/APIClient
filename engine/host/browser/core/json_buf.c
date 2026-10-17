@@ -6,28 +6,26 @@
 #include "check.h"
 #include "core/json_buf.h"
 
-/* The bytes every live buffer holds, and the most they have held at once since json_buf_peak_take, counting a
-   growth's old and new blocks together as realloc may hold both. */
-static size_t g_json_live, g_json_peak;
+/* Every block size a growth asked for since json_buf_grown_take: an upper bound on what the buffers grown in that
+   span held at any instant, since it counts a growth's old and new blocks both and a taken buffer's bytes stay
+   counted while its caller holds them. */
+static size_t g_json_grown;
 
 static void json_buf_ensure(JsonBuf *b, size_t extra)
 {
-    size_t old = b->cap;
     if (b->n + extra + 1 <= b->cap) return;
     while (b->n + extra + 1 > b->cap) b->cap = b->cap ? b->cap * 2 : 256;
-    g_json_live += b->cap;
-    if (g_json_live > g_json_peak) g_json_peak = g_json_live;
+    g_json_grown += b->cap;
     b->b = realloc(b->b, b->cap);
     CHECK(b->b != NULL, "json_buf: OOM growing a JSON buffer — a dropped record is a report that lies by "
                         "omission");
-    g_json_live -= old;
 }
 
-size_t json_buf_peak_take(void)
+size_t json_buf_grown_take(void)
 {
-    size_t p = g_json_peak;
-    g_json_peak = g_json_live;
-    return p;
+    size_t g = g_json_grown;
+    g_json_grown = 0;
+    return g;
 }
 
 void json_buf_raw(JsonBuf *b, const char *s)
@@ -86,8 +84,6 @@ char *json_buf_take(JsonBuf *b)
     } else {
         out[b->n] = 0;
     }
-    DCHECK(g_json_live >= b->cap, "json_buf: a buffer was taken holding more than every live buffer holds");
-    g_json_live -= b->cap;   /* the caller owns it now */
     b->b = NULL;
     b->n = b->cap = 0;
     return out;
@@ -95,8 +91,6 @@ char *json_buf_take(JsonBuf *b)
 
 void json_buf_free(JsonBuf *b)
 {
-    DCHECK(g_json_live >= b->cap, "json_buf: a buffer was freed holding more than every live buffer holds");
-    g_json_live -= b->cap;
     free(b->b);
     b->b = NULL;
     b->n = b->cap = 0;
