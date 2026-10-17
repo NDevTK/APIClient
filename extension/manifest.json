@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "API Security Researcher",
   "version": "1.0.0",
+  "minimum_chrome_version": "153",
   "description": "API discovery, protocol reverse-engineering, JavaScript security code review, and request export.",
   "permissions": [
     "offscreen",
@@ -9,6 +10,7 @@
     "webRequest",
     "declarativeNetRequestWithHostAccess",
     "webNavigation",
+    "publicSuffix",
     "scripting",
     "tabs",
     "unlimitedStorage"

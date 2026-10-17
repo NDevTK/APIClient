@@ -142,6 +142,7 @@ import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import { topLevelFactFields as topLevelFacts } from './top_level_facts.mjs';
 import { NAVIGABLE_NOTICE, navigableNoticeField } from './noticegen.mjs';
+import { siteRegistrableDomains } from './psl.mjs';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const EXT_DIR = join(ENGINE, '..', 'extension');
@@ -150,7 +151,8 @@ const EXT_DIR = join(ENGINE, '..', 'extension');
    headers with one declarativeNetRequest rule per request, which a process has no equivalent of. This host
    keeps the same rules in a table instead, checked by the same `speakAsCheckedRules`, and applies them to its
    own fetch, which (unlike a browser's) sends any header it is given. `swRpc` answers the three speak-as
-   calls lib/speak-as.js makes, and nothing else. */
+   calls lib/speak-as.js makes and lib/site.js's site question, which a process with no browser answers from
+   the engine's own list (engine/psl.mjs), and nothing else. */
 function speakAsHost(sandbox) {
   const rules = new Map();   // ruleId -> { method, url, requestHeaders }
   sandbox.swRpc = async (api, arg) => {
@@ -161,7 +163,8 @@ function speakAsHost(sandbox) {
       return [...rules].filter(([, r]) => r.url === arg.url).map(([id]) => id);
     }
     if (api === 'speakAs.release') { for (const id of arg) rules.delete(id); return undefined; }
-    throw new Error('engine/trusted.mjs serves no rpc ' + JSON.stringify(api) + ' — only speak-as rules');
+    if (api === 'site.registrableDomains') return siteRegistrableDomains(arg);
+    throw new Error('engine/trusted.mjs serves no rpc ' + JSON.stringify(api) + ' — only speak-as rules and sites');
   };
   sandbox.fetch = (input, init) => {
     const u = new URL(String(input));
@@ -192,7 +195,7 @@ const ZONE = (() => {
   sandbox.globalThis = sandbox;
   createContext(sandbox);
   speakAsHost(sandbox);
-  for (const f of ['check.js', 'lib/public-suffix-table.js', 'lib/site.js', 'lib/referrer-policy.js',
+  for (const f of ['check.js', 'lib/site.js', 'lib/referrer-policy.js',
                    'lib/request-identity.js', 'lib/cookie-store.js', 'speak-as-rule.js', 'lib/speak-as.js',
                    'lib/navigable-notice.js',
                    'lib/document-record.js',
@@ -999,7 +1002,7 @@ async function main() {
                                             actor: 'page', doc, credentialed: false,
                                             credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
                                             headers: q.headers.length ? q.headers : undefined,
-                                            identity: ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, abs,
+                                            identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, abs,
                                                                                q.credentials, q.mode,
                                                                                q.referrerPolicy, q.referrer) });
     if (raw.refusal && raw.refusal.kind === 'decline') {
@@ -1129,7 +1132,7 @@ async function main() {
                                             provenance, pinned, driven, credentials, useCorsPreflight: false,
                                             actor: 'page',
                                             doc, credentialed: false,
-                                            identity: ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, abs,
+                                            identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, abs,
                                                                                credentials, mode,
                                                                                referrerPolicy, referrer) });
     /* A REFUSAL THIS ZONE'S OWN POLICY MADE IS A DECLINE AND NOT A NETWORK ERROR, and the difference is what

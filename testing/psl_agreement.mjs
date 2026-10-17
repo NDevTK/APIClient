@@ -1,21 +1,22 @@
 // testing/psl_agreement.mjs — whether this tree's Public Suffix List answers agree with the browser's.
 //
-// The zone (extension/lib/site.js) and the engine (engine/host/browser/core/url/public_suffix.c) answer URL §3.2
-// "public suffix" and "obtain the registrable domain" over one bundled snapshot, which engine/pslgen.mjs writes
-// into extension/lib/public-suffix-table.js and engine/host/browser/core/url/public_suffix_table.h from one PSL
-// commit. The browser answers from its own list through chrome.publicSuffix (Chrome 153 and later, the
-// `publicSuffix` permission, privileged extension contexts only). This tool launches the Chrome it is given with a
-// throwaway extension holding that permission, asks both for every host it builds from the snapshot's own rules
-// (each rule, one label under it and two under it) and from a fixed list of hard hosts, and prints each
-// disagreement with the class it falls in. The host is serialized by the URL parser first, which is what
-// every caller of lib/site.js hands it.
+// The engine (engine/host/browser/core/url/public_suffix.c) and the native host's site oracle (engine/psl.mjs)
+// answer public suffixes and registrable domains over one bundled list, which engine/pslgen.mjs writes into
+// engine/host/browser/core/url/public_suffix_table.h and engine/public_suffix_table.mjs. The extension's zone
+// asks the browser instead (extension/lib/site.js), which answers from its own list through chrome.publicSuffix
+// (Chrome 153 and later, the `publicSuffix` permission, privileged extension contexts only). This tool launches
+// the Chrome it is given with a throwaway extension holding that permission, asks both for every host it builds
+// from the bundled list's own rules (each rule, one label under it and two under it) and from a fixed list of
+// hard hosts, and prints each disagreement with the class it falls in. The host is serialized by the URL parser
+// first, which is what every caller hands a site question.
 //
 // Usage: node testing/psl_agreement.mjs <chrome binary> [--json <out>]
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import vm from "node:vm";
 import { createRequire } from "node:module";
+import * as table from "../engine/public_suffix_table.mjs";
+import * as zone from "../engine/psl.mjs";
 
 const require = createRequire(import.meta.url);
 const puppeteer = require("puppeteer");
@@ -32,17 +33,10 @@ const HARD = ["www.example.co.uk", "co.uk", "EXAMPLE.COM", "example.com.", "gith
   "192.168.1.1", "[::1]", "127.0.0.1", "localhost", "printer.internal-network", "foo.local", "foo.invalid",
   "a.b.c.example", "例え.テスト", "münchen.de", "bücher.münchen.de", "a.中国", "_dmarc.example.com"];
 
-// The zone's answers: lib/site.js over the generated table, in a context of their own, as ast-worker.html
-// loads them.
-const zone = { URL, DCHECK: (c, m) => { if (!c) throw new Error("DCHECK: " + m); } };
-vm.createContext(zone);
-for (const f of ["extension/lib/public-suffix-table.js", "extension/lib/site.js"])
-  vm.runInContext(fs.readFileSync(path.join(REPO, f), "utf8"), zone, { filename: f });
-// The table's `const`s are bindings of the scripts' shared lexical scope, not properties of the context.
-const table = vm.runInContext("({ PSL_VERSION, PSL_COMMIT, PSL_NORMAL, PSL_WILDCARD, PSL_EXCEPTION })", zone);
 const engineHeader = fs.readFileSync(path.join(REPO, "engine/host/browser/core/url/public_suffix_table.h"), "utf8");
 if (!engineHeader.includes("commit " + table.PSL_COMMIT)) {
-  console.error("the engine's table and the zone's are not one PSL commit — re-run engine/pslgen.mjs");
+  console.error("the engine's C table and engine/public_suffix_table.mjs are not one PSL commit — re-run " +
+                "engine/pslgen.mjs");
   process.exit(1);
 }
 

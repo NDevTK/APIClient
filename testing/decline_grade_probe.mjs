@@ -33,6 +33,7 @@ import { createServer } from 'node:http';
 import { createContext, runInContext } from 'node:vm';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { siteRegistrableDomains } from '../engine/psl.mjs';
 
 const EXT = join(dirname(fileURLToPath(import.meta.url)), '..', 'extension');
 const REACHED = 'DECLINE_GRADE_PROBE_REACHED_THE_WIRE';
@@ -47,11 +48,15 @@ const NO_EDGE = {
 };
 
 function zone(edge, table) {
-  const sandbox = { console, URL, TextDecoder, TextEncoder, Headers, fetch: edge.fetch, swRpc: edge.swRpc };
+  /* A site question is no edge: the zone asks its oracle, which for a process is the engine's own list
+     (engine/psl.mjs), as engine/trusted.mjs answers it. */
+  const swRpc = (api, args) => api === 'site.registrableDomains' ? Promise.resolve(siteRegistrableDomains(args))
+                                                                 : edge.swRpc(api, args);
+  const sandbox = { console, URL, TextDecoder, TextEncoder, Headers, fetch: edge.fetch, swRpc };
   sandbox.self = sandbox; sandbox.globalThis = sandbox;
   createContext(sandbox);
   /* The ast-worker.html order for the files a credentialed navigation's identity is built and spoken by. */
-  for (const f of ['check.js', 'lib/public-suffix-table.js', 'lib/site.js', 'lib/referrer-policy.js',
+  for (const f of ['check.js', 'lib/site.js', 'lib/referrer-policy.js',
                    'lib/request-identity.js', 'lib/cookie-store.js', 'speak-as-rule.js', 'lib/speak-as.js',
                    'lib/navigable-notice.js',
                    'lib/document-record.js', 'lib/safe-fetch.js'])
@@ -79,9 +84,9 @@ function zone(edge, table) {
    with no referrer and no policy; the ambient seed's is the browser frame's (seedSpeaker), which this realm
    has no browser to ask, so it states the same engine identity. No gate before the edge reads the identity's
    source. */
-function navOpts(Z, principal, url, over) {
+async function navOpts(Z, principal, url, over) {
   const origin = new URL(principal).origin;
-  const identity = Z.identityFor(Z.engineIdentity(origin, principal),
+  const identity = await Z.identityFor(await Z.engineIdentity(origin, principal),
                                  { url, requestInit: { credentials: 'include', mode: 'navigate',
                                                        destination: 'document',
                                                        referrer: '', referrerPolicy: null } },
@@ -228,18 +233,18 @@ const FIXTURE_EDGE = {
 };
 /* A navigation whose speaker sends a Referer (a sub-frame's, `referrer: "client"`), and the page's own
    `fetch()` (bridge.js's `fetched`: uncredentialed, `cors`, the engine's referrer). */
-const REFERRING = (Z) => ({ identity: Z.identityFor(Z.engineIdentity(A, `${A}/page`),
+const REFERRING = async (Z) => ({ identity: await Z.identityFor(await Z.engineIdentity(A, `${A}/page`),
                                                      { url: `${A}/hop/1b`, requestInit: { credentials: 'include',
                                                        mode: 'navigate', destination: 'document', referrer: null,
                                                        referrerPolicy: null } },
                                                      'strict-origin-when-cross-origin') });
-const PAGE_FETCH = (Z, url) => ({ destination: '', mode: 'cors', credentials: 'same-origin', credentialed: false,
+const PAGE_FETCH = async (Z, url) => ({ destination: '', mode: 'cors', credentials: 'same-origin', credentialed: false,
                                   useCorsPreflight: false,
-                                  identity: Z.pageRequestIdentity(A, `${A}/page`, url, 'same-origin', 'cors',
+                                  identity: await Z.pageRequestIdentity(A, `${A}/page`, url, 'same-origin', 'cors',
                                                                   'strict-origin-when-cross-origin', `${A}/page`) });
 /* A credentialed `cors` request of the page's own, which is not a navigation (RFC 6265bis §5.7 step 18). */
-const CREDENTIALED_FETCH = (Z, url) => ({ destination: '', mode: 'cors', credentials: 'include', useCorsPreflight: false,
-  identity: Z.identityFor(Z.engineIdentity(A, `${A}/page`), { url, requestInit: { credentials: 'include', mode: 'cors',
+const CREDENTIALED_FETCH = async (Z, url) => ({ destination: '', mode: 'cors', credentials: 'include', useCorsPreflight: false,
+  identity: await Z.identityFor(await Z.engineIdentity(A, `${A}/page`), { url, requestInit: { credentials: 'include', mode: 'cors',
                           referrer: '', referrerPolicy: null } }, 'strict-origin-when-cross-origin') });
 const wrote = (name) => cookieWrites.find((w) => w.name === name);
 const FIXTURE_ROWS = [
@@ -272,8 +277,12 @@ const FIXTURE_ROWS = [
                   wrote('lax1').details.sameSite === 'lax' && wrote('host1').details.sameSite === 'unspecified' &&
                   wrote('host1').details.expirationDate === undefined) },
   { label: 'COOKIES, a navigation of 127.0.0.1 (potentially trustworthy): prefixes, Partitioned, lifetimes',
-    url: `${A}/sc/2`, want: 'ANSWERED', stored: ['__Host-ok', 'p1', 'gone', 'old', 'cap'],
-    ignored: ['__Host-bad', 'p2'],
+    /* `__Host-bad` carries `Domain=127.0.0.1`. On an IP host Chrome makes a Domain equal to the host a host
+       cookie (net/cookies/cookie_util.cc's GetCookieDomainWithString) and accepts it under the __Host- prefix
+       (HasValidHostPrefixAttributes: "Non-empty is only valid for IP addresses where domain matches host"),
+       so it is stored, as Chrome 155 stores it. */
+    url: `${A}/sc/2`, want: 'ANSWERED', stored: ['__Host-ok', '__Host-bad', 'p1', 'gone', 'old', 'cap'],
+    ignored: ['p2'],
     check: () => (JSON.stringify(wrote('p1').details.partitionKey) ===
                     JSON.stringify({ topLevelSite: 'http://127.0.0.1', hasCrossSiteAncestor: false }) &&
                   wrote('__Host-ok').details.partitionKey === undefined && wrote('gone').details.expirationDate === 0 &&
@@ -349,14 +358,14 @@ const census = new Map();
 async function run(Z, principal, row) {
   let got, detail, r = null;
   try {
-    const over = typeof row.over === 'function' ? row.over(Z) : row.over;
+    const over = typeof row.over === 'function' ? await row.over(Z) : row.over;
     cookieWrites.length = 0;
     /* The host's restore with nothing stored, unless the row states the person's setting. */
     if (Z === zf) Z.identityThirdPartyCookiesStated(row.thirdPartyAllowed === undefined
       ? Z.identityThirdPartyCookiesRestored(null) : row.thirdPartyAllowed);
     if (Z === zf) Z.safeFetchSetSiteSetting('http://127.0.0.1', 'third-party-cookies', row.siteException || null);
     r = row.ask ? await row.ask(Z, row)
-      : await Z.safeFetch(row.url, navOpts(Z, row.principal || principal, row.url, over));
+      : await Z.safeFetch(row.url, await navOpts(Z, row.principal || principal, row.url, over));
     if (r && r.refusal) { got = r.refusal.kind === 'decline' ? 'DECLINE' : 'REFUSE:' + r.refusal.kind;
                           detail = r.refusal.reason; }
     else { got = 'ANSWERED'; detail = 'status ' + (r && r.status); }

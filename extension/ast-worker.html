@@ -74,8 +74,7 @@
 <script src="render-process-host.js"></script>
 <!-- THE single external-fetch function (GET only, no cookies, http(s) only). -->
 
-<!-- Sites (URL §3.2, HTML §7.1.1.1) over the Public Suffix List engine/pslgen.mjs generates for both halves. -->
-<script src="lib/public-suffix-table.js"></script>
+<!-- Sites (HTML §7.1.1.1) as the browser computes them, asked of the service worker's chrome.publicSuffix. -->
 <script src="lib/site.js"></script>
 <!-- The Referer a send that speaks as a document carries (Referrer Policy §8.3). -->
 <script src="lib/referrer-policy.js"></script>

@@ -132,7 +132,11 @@ async function cookieStorageModel(cookie, url, facts) {
   var domainAttr = _cookieLast(attrs, "Domain");
   var domain = domainAttr === null ? "" : domainAttr.value;
   if (/[^\x01-\x7F]/.test(domain)) return { ignored: "a Domain outside CHAR (RFC 6265bis §5.7 step 8)" };
-  if (domain !== "" && publicSuffixOf(domain) === domain) {
+  /* RFC 6265bis §5.7 step 9, as Chrome decides it (net/cookies/cookie_util.cc's GetCookieDomainWithString): a
+     Domain with no registrable domain of its own (a public suffix, a wildcard rule's parent included, or a
+     single-label or IP host) sets a host cookie when it is the request's host and nothing otherwise. */
+  await siteAsk(domain === "" ? [host] : [host, domain]);
+  if (domain !== "" && registrableDomainOf(domain) === null) {
     if (domain !== host) return { ignored: "Domain=" + domain + " is a public suffix (RFC 6265bis §5.7 step 9)" };
     domain = "";
   }

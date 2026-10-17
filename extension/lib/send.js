@@ -831,7 +831,7 @@ async function operatorSendAsFrame(sender, tabId, documentId, initiator, url, op
   if (!URL.canParse(url)) return { error: "blocked: invalid URL" };
   const who = await _operatorIdentity(tabId, documentId, opts.stated);
   if (who.error !== null) return { error: who.error };
-  const { facts, mode } = _operatorFacts(who.identity, url, opts.requestInit);
+  const { facts, mode } = await _operatorFacts(who.identity, url, opts.requestInit);
   const body = opts.body === null ? null : opts.bodyEncoding === "base64" ? base64ToUint8(opts.body) : opts.body;
   const r = await safeFetchOperator(url, { sender, identity: facts, method: opts.method, mode, body,
                                           headers: Object.keys(opts.headers).map((k) => [k, String(opts.headers[k])]),
@@ -857,8 +857,8 @@ async function operatorSendAsFrame(sender, tabId, documentId, initiator, url, op
 
 /* The facts an operator send as `identity` applies to `url`, and its logical mode: what the send and its
    preview both compute, so the preview cannot describe another request. */
-function _operatorFacts(identity, url, requestInit) {
-  return { facts: identityFor(identity, { url, requestInit }, "strict-origin-when-cross-origin"),
+async function _operatorFacts(identity, url, requestInit) {
+  return { facts: await identityFor(identity, { url, requestInit }, "strict-origin-when-cross-origin"),
            mode: requestInit.mode === null ? "cors" : requestInit.mode };
 }
 
@@ -912,7 +912,7 @@ async function operatorIdentityPreview(sender, tabId, documentId, url, method, r
     return { error: "the address is not an http(s) URL, so the send path will refuse it" };
   const who = await _operatorIdentity(tabId, documentId, stated);
   if (who.error !== null) return { error: who.error };
-  const { facts, mode } = _operatorFacts(who.identity, url, requestInit);
+  const { facts, mode } = await _operatorFacts(who.identity, url, requestInit);
   const origin = speakAsOrigin(facts.origin, method, mode, url, facts.referrerPolicy);
   const sent = { origin: stated.origin !== null ? stated.origin.header : origin,
                  referer: stated.referer !== null ? stated.referer : facts.referrer };
@@ -931,7 +931,7 @@ async function operatorIdentityPreview(sender, tabId, documentId, url, method, r
     sent, statedRefusal, credentials: facts.credentials, cookieArm: cookies.arm, cookieNames: cookies.names,
     excluded: cookies.excluded,
     producibleBy: statedRefusal !== null ? null
-      : identityProducibleBy(who.identity, who.frame.partitionKey, facts, speaking, sent, method, mode, url),
+      : await identityProducibleBy(who.identity, who.frame.partitionKey, facts, speaking, sent, method, mode, url),
   };
   checkIdentityPreview(preview, "operatorIdentityPreview");
   return preview;

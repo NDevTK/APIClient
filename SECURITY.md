@@ -335,7 +335,8 @@ flow's own engine jar (core/frame/navigable.c), a write in its COW delta that no
 is `lib/cookie-store.js`'s: RFC 6265bis (draft 22) §5.6 parses each field and §5.7 "Storage Model" decides, on
 the request URL's host and the identity's site for cookies, whether the cookie is kept; CHIPS §2.3 makes a
 `Partitioned` one the request's partition's. A cookie the model ignores is never written: a `Domain` that
-the request host does not domain-match or that is a public suffix, `Secure` from a URL that is not
+the request host does not domain-match or that has no registrable domain of its own in the browser's
+list (a public suffix) and is not the request host, `Secure` from a URL that is not
 potentially trustworthy, a non-secure cookie that would overlay a secure one, a SameSite cookie from a
 cross-site request that is not a top-level navigation, `SameSite=None` or `Partitioned` without `Secure`,
 a prefix whose conditions fail, and an unpartitioned cookie this extension's third-party-cookie setting
@@ -575,8 +576,14 @@ arm. The mark can only narrow `actor`, never widen it, and a `page` caller must 
   page-settable headers alone. A document's records are reclaimed when Chrome closes its `doc-lifetime.js`
   port with no reason (a closure for the back/forward cache carries one), and at its tab's close. The port's
   sender is the browser's, so a renderer can end or prolong only its own document's records.
+- `publicSuffix` exists so the zone's sites are the browser's own: a site, a SameSite status, a cookie
+  partition and a cookie's `Domain` are decided over the registrable domain Chrome's cookie jar uses
+  (`GetDomainAndRegistry`), which the service worker reads from `chrome.publicSuffix` and the zone memoizes
+  per host and per browser version (`lib/site.js`). It reads the browser's list and nothing else, and it
+  needs Chrome 153 (`minimum_chrome_version`). The native host's zone, which has no browser, answers from
+  the engine's own list (`engine/psl.mjs`).
 - `manifest.json` requests `offscreen`, `cookies`, `declarativeNetRequestWithHostAccess`, `webNavigation`,
-  `scripting`, `tabs`, `webRequest` and `unlimitedStorage`, and not `storage`, so `chrome.storage` is
+  `publicSuffix`, `scripting`, `tabs`, `webRequest` and `unlimitedStorage`, and not `storage`, so `chrome.storage` is
   undefined in every context and a compromised renderer cannot read
   keys through it. `unlimitedStorage` lifts the origin's quota and grants no read API. The security claim is that
   `git grep -n 'chrome\.storage' extension/` finds no call site, only comments.

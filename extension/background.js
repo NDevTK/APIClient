@@ -239,6 +239,34 @@ async function _cookiesSet(d) {
   catch (e) { return { refused: String((e && e.message) || e) }; }
 }
 
+/* net::registry_controlled_domains::GetDomainAndRegistry(host, INCLUDE_PRIVATE_REGISTRIES), on which Chrome's
+   cookie jar and SchemefulSite are built, from chrome.publicSuffix. getDomain composes it from the same call
+   (extensions/renderer/api/public_suffix_util.cc, Chrome 155), with three answers GetDomainAndRegistry does
+   not give, each null here: an IP literal, a host that is itself a known suffix (a wildcard rule's parent
+   included), and a single-label unknown host, which allowUnknownSuffix answers with the host itself. */
+function _registrableDomain(host) {
+  const ps = chrome.publicSuffix;
+  if (ps.getKnownSuffix(host) === host) return null;
+  const d = ps.getDomain(host, { allowUnknownSuffix: true });
+  if (d === null || (d === host && host.indexOf(".") < 0)) return null;
+  return d;
+}
+
+/* `site.registrableDomains`: each host's registrable domain or null, and the browser's full version they are
+   Chrome's for, which the zone keys its memo by (the user agent string carries only the major version). */
+async function _siteRegistrableDomains(hosts) {
+  CHECK(Array.isArray(hosts) && hosts.every((h) => typeof h === "string"),
+        "site.registrableDomains was asked for something that is not a list of hosts");
+  CHECK(typeof chrome.publicSuffix === "object", "chrome.publicSuffix is absent — it exists from Chrome 153, " +
+        "which manifest.json's minimum_chrome_version states");
+  const { uaFullVersion } = await navigator.userAgentData.getHighEntropyValues(["uaFullVersion"]);
+  CHECK(typeof uaFullVersion === "string" && uaFullVersion !== "",
+        "the service worker's user agent data names no full browser version");
+  const domains = {};
+  for (const h of hosts) domains[h] = _registrableDomain(h);
+  return { version: uaFullVersion, domains };
+}
+
 async function _swRpc(msg) {
   const api = msg.api, args = msg.args || [];
   switch (api) {
@@ -257,6 +285,8 @@ async function _swRpc(msg) {
     case "cookies.getAll": return chrome.cookies.getAll(...args);
     case "cookies.getPartitionKey": return chrome.cookies.getPartitionKey(...args);
     case "cookies.set": return _cookiesSet(args[0]);
+    // The browser's registrable domains, which the zone's sites are (lib/site.js).
+    case "site.registrableDomains": return _siteRegistrableDomains(args[0]);
     // One declarativeNetRequest rule per zone send that speaks as a document (speak-as-rule.js).
     case "speakAs.install": return speakAsInstall(args[0]);
     case "speakAs.release": return speakAsRelease(args[0]);

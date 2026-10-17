@@ -189,8 +189,8 @@ async function main() {
    request, and the identity's document referrer policy. The page sets `Referrer-Policy: unsafe-url`. */
 function zoneSend(off, spec) {
   return off.evaluate(async (s) => {
-    const id = s.engine ? engineIdentity(s.engine.origin, s.engine.docUrl) : await frameIdentity(s.tabId, s.documentId);
-    const facts = identityFor(id, { url: s.url, requestInit: s.requestInit }, s.documentPolicy);
+    const id = s.engine ? await engineIdentity(s.engine.origin, s.engine.docUrl) : await frameIdentity(s.tabId, s.documentId);
+    const facts = await identityFor(id, { url: s.url, requestInit: s.requestInit }, s.documentPolicy);
     const c = await cookieHeaderFor(facts, s.url);
     const mode = s.requestInit.mode === null ? "cors" : s.requestInit.mode;
     const rules = [{ method: s.method, headers: speakAsHeaders(facts, s.method, mode, "", s.url, c) }];

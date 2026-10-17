@@ -93,6 +93,7 @@ Each permission in `extension/manifest.json` and what it is for:
 | `declarativeNetRequestWithHostAccess` | One session rule per in-flight send that speaks as a document, which sets the `Origin`, `Referer`, `Sec-Fetch-*` and `Cookie` headers the zone computed on exactly that request (`speak-as-rule.js`). |
 | `cookies` | Reading a document's cookies and its partition key, so a credentialed send carries that document's jar (`lib/request-identity.js`). |
 | `webNavigation` | Frame identities (`getAllFrames`) for the document a send speaks as, and navigation events the popup follows. |
+| `publicSuffix` | The browser's own registrable domains, which the zone's sites, SameSite statuses, cookie partitions and cookie `Domain` checks are computed over (`lib/site.js`), so they agree with Chrome's cookie jar. Read-only. It exists from Chrome 153, which `minimum_chrome_version` states. |
 | `tabs` | The active tab, the live-verify attacker tab, and messages to content scripts. |
 | `scripting` | Arming the live-verify attacker tab: a predefined injector run in that tab's main world, refused for any tab the service worker did not open. |
 | `webRequest` | The browser's own record of each fetch() and XHR a document makes (request line, headers, body, status), joined by `documentId` to the response body `intercept.js` captures (`lib/web-request.js`). It blocks and modifies nothing. |

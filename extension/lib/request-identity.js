@@ -33,20 +33,22 @@ async function frameIdentityOf(f) {
    loaded. Not covered: a document nested in a cross-site one, whose partition key has a cross-site
    ancestor; the next diff passes the ancestor origins engineCreate already holds. Its absence shows as
    such a document's cross-site sends carrying no partitioned cookies. */
-function engineIdentity(origin, docUrl) {
+async function engineIdentity(origin, docUrl) {
   /* An opaque cluster ("null", a sandboxed document) speaks as "null" whatever its URL; a document whose URL
      has no origin of its own (about:blank, data:) speaks as the origin it inherited. */
   CHECK(typeof origin === "string" && URL.canParse(docUrl) &&
         (origin === "null" || [origin, "null"].indexOf(new URL(docUrl).origin) >= 0),
         "an engine identity's document URL " + JSON.stringify(docUrl) + " is not of its cluster origin " +
         JSON.stringify(origin) + " — the zone speaks as the origin it assigned, never as one a URL names");
+  await siteAsk(siteHostsOf([origin === "null" ? docUrl : origin]));
   const site = origin === "null" ? siteOf(docUrl) : siteOf(origin + "/");
   return { origin, docUrl, partitionKey: { topLevelSite: site, hasCrossSiteAncestor: false } };
 }
 
 /* RFC 6265bis §5.2 "Same-site" and "cross-site" Requests: same-site when the request URL's origin is same
    site with the client's "site for cookies", which §5.2.1 makes the top-level origin when every ancestor
-   is same site with it and an opaque origin otherwise. chrome.cookies.getPartitionKey states both halves. */
+   is same site with it and an opaque origin otherwise. chrome.cookies.getPartitionKey states both halves.
+   Its caller has asked `url`'s site. */
 function cookieSiteStatus(identity, url) {
   if (identity.partitionKey.hasCrossSiteAncestor) return "cross-site";
   return siteOf(url) === identity.partitionKey.topLevelSite ? "same-site" : "cross-site";
@@ -67,7 +69,10 @@ const IDENTITY_CREDENTIALS_MODES = ["omit", "same-origin", "include"];
    localhost was stored under {http://localhost, false}). CHIPS (draft-cutler-httpbis-partitioned-cookies-01)
    §2.2 "Computing the cookie partition key" says otherwise: "Let "cookie-partition-key" be the site of the
    top-document when the user agent made the request", the navigation's client's. */
-function identityFor(identity, request, documentPolicy) {
+async function identityFor(identity, request, documentPolicy) {
+  /* The sites the facts are read for: the request's, and the identity's own, which speak-as.js's Sec-Fetch-Site
+     and redirect taint compare against. */
+  await siteAsk(siteHostsOf([request.url, identity.origin]));
   const ri = request.requestInit;
   const credentials = ri.credentials === null ? "same-origin" : ri.credentials;
   CHECK(IDENTITY_CREDENTIALS_MODES.indexOf(credentials) >= 0, "a request names the credentials mode " +
@@ -95,7 +100,7 @@ function identityFor(identity, request, documentPolicy) {
    (Fetch §4.5 "HTTP-redirect fetch"): the same client and credentials mode, the referrer policy `policy` (the
    one Referrer Policy §8.2 left), the referrer §8.3 determines again from the request's referrer for `url`,
    and the cookie site status of `url`. */
-function identityForRedirect(facts, url, policy) {
+async function identityForRedirect(facts, url, policy) {
   CHECK(!!facts.client && typeof facts.client.origin === "string",
         "a redirect hop was asked to speak as facts identityFor did not mint — the hop re-derives its referrer " +
         "and cookie site from the client those facts were computed for");
@@ -114,11 +119,11 @@ function identityForRedirect(facts, url, policy) {
    the engine resolved "client" to. They are input from the untrusted half, so identityFor still makes a
    referrer that is not the identity's origin "client" (Fetch §5.4). An empty policy left after §4.1 is
    Referrer Policy §3's default. */
-function pageRequestIdentity(origin, docUrl, url, credentials, mode, referrerPolicy, referrer) {
+async function pageRequestIdentity(origin, docUrl, url, credentials, mode, referrerPolicy, referrer) {
   CHECK(typeof referrerPolicy === "string" && (referrer === "no-referrer" || URL.canParse(referrer)),
         "a page request reached its identity with no referrer policy, or a referrer that is neither " +
         "\"no-referrer\" nor a URL — both hosts CHECK the engine's record before this");
-  return identityFor(engineIdentity(origin, docUrl),
+  return identityFor(await engineIdentity(origin, docUrl),
                      { url, requestInit: { credentials, mode, referrer: referrer === "no-referrer" ? "" : referrer,
                                            referrerPolicy } },
                      "strict-origin-when-cross-origin");
@@ -267,7 +272,8 @@ async function cookieNamesFor(identityFacts, url) {
      an ancestor is not same site with the top-level origin; the key's hasCrossSiteAncestor states that.
    - Origin and Sec-Fetch-Site: speakAsOrigin's and speakAsFetchSite's answers for a document of `speaking`.
    - Referer: Fetch §5.4 "Request class" makes a referrer of another origin "client". */
-function identityProducibleBy(identity, frameKey, facts, speaking, sent, method, mode, url) {
+async function identityProducibleBy(identity, frameKey, facts, speaking, sent, method, mode, url) {
+  await siteAsk(siteHostsOf([speaking, identity.origin, url]));
   const pk = identity.partitionKey;
   const jarHeld = pk.topLevelSite === frameKey.topLevelSite && pk.hasCrossSiteAncestor === frameKey.hasCrossSiteAncestor;
   const reasons = [];

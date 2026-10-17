@@ -1762,7 +1762,7 @@ async function frontierRederive(e) {
                                                   credentialed: navigationCarriesSession(e.sourceUrl, e.origin),
                                                   /* A parked document is one only this zone holds. */
                                                   identity: navigationCarriesSession(e.sourceUrl, e.origin)
-                                                    ? navigationIdentity({ identity: engineIdentity(e.origin, e.sourceUrl),
+                                                    ? await navigationIdentity({ identity: await engineIdentity(e.origin, e.sourceUrl),
                                                                            referrer: "none", policy: null,
                                                                            request: null },
                                                                          e.sourceUrl, DOCUMENT_REQUEST_UNSTATED)
@@ -2125,7 +2125,7 @@ function responseFieldLines(h) {
 function documentSpeaker(msg) {
   return async () => {
     const live = typeof msg.documentId === "string" && typeof msg.groupId === "number";
-    const identity = live ? await frameIdentity(msg.groupId, msg.documentId) : engineIdentity(msg.origin, msg.sourceUrl);
+    const identity = live ? await frameIdentity(msg.groupId, msg.documentId) : await engineIdentity(msg.origin, msg.sourceUrl);
     if (identity === null) return null;
     return { identity, referrer: "client", policy: live ? await documentReferrerPolicy(msg.documentId) : null,
              request: null };
@@ -2363,7 +2363,7 @@ function navigationCarriesSession(absUrl, principalOrigin) {
    `request` is the request's own facts as its composer states them (DOCUMENT_REQUEST_UNSTATED or a
    `document.fetch` record): where it states a referrer policy, Fetch §4.1 Main fetch has already put the policy
    container's in place of "", so the speaker's policy is not read. */
-function navigationIdentity(speaker, absUrl, request) {
+async function navigationIdentity(speaker, absUrl, request) {
   DCHECK(!!speaker && !!speaker.identity && typeof speaker.identity.origin === "string" &&
          !!speaker.identity.partitionKey && (speaker.referrer === "client" || speaker.referrer === "none"),
          "a credentialed document load was handed no {identity, referrer} to speak as");
@@ -2514,7 +2514,7 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, ref
          "a document load's speaker states request facts " + JSON.stringify(speaker && speaker.request) +
          " that are neither null nor a navigation destination and a referrer policy");
   if (speaker !== null && speaker.request !== null) request = speaker.request;
-  const identity = credentialed ? navigationIdentity(speaker, abs, request) : null;
+  const identity = credentialed ? await navigationIdentity(speaker, abs, request) : null;
   try {
     // Never `as: "script"`: these bytes are parsed as a document, not run as code.
     /* The session is carried where a browser's navigation would carry it; the chokepoint re-decides on the
@@ -3205,7 +3205,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       const opts = { pageOrigin: eng.origin, destination, mode, provenance, pinned,
                      driven, credentials, actor: "page", useCorsPreflight: false,
                      doc, credentialed: false,
-                     identity: pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, abs, credentials, mode,
+                     identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, abs, credentials, mode,
                                                    referrerPolicy, referrer) };
       const r = await self.safeFetch(abs, opts);
       /* The chokepoint's record is fixed: safe-fetch.js returns {ok,status,statusText,headers,body,urlList} on
@@ -3435,7 +3435,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
                                             doc, actor: "page",
                                             credentialed: false, useCorsPreflight: q.useCorsPreflight,
                                             credentials: q.credentials, headers: q.headers,
-                                            identity: pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, abs,
+                                            identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, abs,
                                                                           q.credentials, q.mode,
                                                                           q.referrerPolicy, q.referrer) });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
@@ -5933,7 +5933,7 @@ const _hostOps = {
                                               mark says whether a drive of uncalled code ran them. */
                                            /*actor*/"page", seed.driven, seed.pinned, DOCUMENT_REQUEST_UNSTATED,
                                            /* A declared route is a document only this zone holds. */
-                                           async () => ({ identity: engineIdentity(stampOrigin(seed.principalOrigin),
+                                           async () => ({ identity: await engineIdentity(stampOrigin(seed.principalOrigin),
                                                                                    seed.principalUrl),
                                                           referrer: "none", policy: null, request: null }),
                                            docRecordOpaque(seed.doc)));
@@ -6309,6 +6309,7 @@ self.astDispatch = async function astDispatch(msg) {
       await _thirdPartyCookiesReady;
       DCHECK(typeof msg.subject === "string",
              "the third-party-cookie command carried no subject — the popup states the origin it is showing");
+      if (self.safeFetchWidenable(msg.subject) === null) await siteAsk(siteHostsOf([msg.subject]));
       const _site = self.safeFetchWidenable(msg.subject) === null ? siteOf(msg.subject + "/") : null;
       let _persistError = null;
       if (msg.allowed !== undefined || msg.exception !== undefined)

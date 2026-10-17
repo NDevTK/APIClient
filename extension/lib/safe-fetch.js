@@ -2035,6 +2035,10 @@ async function safeFetch(url, opts) {
   var _setCookieList = [];
   for (;;) {
     var _hop = _urlList.length > 1;
+    /* The sites this pass asks about (the redirect taint, the speak-as Sec-Fetch-Site, the hop's identity),
+       in one round trip: the URL it sends, the page that reads the reply and the identity it speaks as. */
+    await siteAsk(siteHostsOf([_current.href, _isRealOrigin(_pageOrigin) ? _pageOrigin : "null",
+                               _identity ? _identity.origin : "null"]));
     /* Fetch §4.1 "Main fetch"' switch: `basic` while the current URL is the page's origin and nothing has
        tainted the request; then a network error in `same-origin` mode, `opaque` in `no-cors`, `cors`
        otherwise. Tainting never returns to `basic`. */
@@ -2137,7 +2141,7 @@ async function safeFetch(url, opts) {
     _current = _next.url;
     _headerList = _next.headerList;
     if (_identity)
-      _identity = identityForRedirect(_identity, _current.href,
+      _identity = await identityForRedirect(_identity, _current.href,
                                       _next.referrerPolicy === "" ? _identity.referrerPolicy : _next.referrerPolicy);
   }
   /* The URL the bytes came from: Fetch §2.2.5 "Requests": "A request has an associated current URL. It is a
@@ -2409,6 +2413,9 @@ async function safeFetchOperator(url, opts) {
   var urlList = [parsed.href], current = parsed, tainting = "basic", method = opts.method, body = opts.body;
   var headerList = opts.headers, identity = opts.identity, resp;
   for (;;) {
+    /* The sites this pass asks about, as safeFetch's pass asks them, and the Origin the person stated. */
+    await siteAsk(siteHostsOf([current.href, identity.origin,
+                               stated.origin !== null && stated.origin.header !== null ? stated.origin.header : "null"]));
     var sameOrigin = current.origin === identity.origin;
     if (!(tainting === "basic" && sameOrigin)) {
       if (opts.mode === "same-origin")
@@ -2455,7 +2462,7 @@ async function safeFetchOperator(url, opts) {
     method = next.method;
     body = next.body;
     headerList = next.headerList;
-    identity = identityForRedirect(identity, current.href,
+    identity = await identityForRedirect(identity, current.href,
                                    next.referrerPolicy === "" ? identity.referrerPolicy : next.referrerPolicy);
   }
   var headers = {};
