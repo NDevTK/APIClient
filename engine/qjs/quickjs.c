@@ -33467,6 +33467,8 @@ typedef struct JSArrayJoin {
     JSValue el;           /* the element, held across its coercion (owned) */
     JSValue result;       /* DONE (owned) */
     JSValue cb[2];        /* [element, its toLocaleString] */
+    JSValue unknown;      /* the first element this engine was never given (owned), or UNDEFINED */
+    bool example_lost;    /* an unknown element had no example the join could be run on */
     StringBuffer b;
     int64_t len, i;
     int64_t oldlen;       /* TypedArray only: the count before a separator coercion could resize the buffer */
@@ -95470,6 +95472,7 @@ static int js_array_join_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
         /* FIRST, before anything that can throw: the teardown frees exactly what the state holds. */
         string_buffer_init(ctx, &s->b, 0);
         s->sep = JS_UNDEFINED; s->el = JS_UNDEFINED; s->result = JS_UNDEFINED;
+        s->unknown = JS_UNDEFINED; s->example_lost = false;
         if (is_ta) {
             JSObject *p = get_typed_array(ctx, s->hdr.this_val);
             if (!p) { s->obj = JS_UNDEFINED; return -1; }
@@ -95576,19 +95579,30 @@ static int js_array_join_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
             s->hdr.stage = JOIN_STR;
         }
         DCHECK(s->hdr.stage == JOIN_STR, "Array.prototype.join: unknown stage");
-        /* AN UNKNOWN ELEMENT MAKES THE WHOLE JOIN UNKNOWN. The result is a string built out of the elements,
-           so one element this engine was never given is one the result cannot be known without — and the
-           coercion below owes C a real string, which over a concolic is the crash this answers instead. The
-           concrete prefix collected so far is subsumed by the unknown rather than kept: a partial string would
-           be a value the page never computes, and the source identity is what a later sink solves for. */
+        /* AN UNKNOWN ELEMENT MAKES THE WHOLE JOIN UNKNOWN, derived from the first such element after the loop.
+           The coercion below owes C a real string, which over a concolic is a crash, so the element's EXAMPLE
+           is what the join appends: the engine runs the real join over the examples, and the result carries
+           that string as its own example. An element with no example, or one whose example is not a primitive
+           (ToString would run page code with no flow), leaves the result with none. */
         {
-            JSValue c = js_concolic_derive(ctx, s->el, "Array.join", JS_UNDEFINED);
-            if (!JS_IsUninitialized(c)) {
-                JS_FreeValue(ctx, cb_result);
+            JSValue ex = js_concolic_operand(ctx, s->el);
+            if (!JS_IsUninitialized(ex)) {
+                if (JS_IsUndefined(s->unknown)) s->unknown = js_dup(s->el);
+                if (JS_IsUndefined(ex) || JS_IsObject(ex) || JS_IsSymbol(ex)) {
+                    s->example_lost = true;
+                } else {
+                    str = JS_ToString(ctx, ex);
+                    if (JS_IsException(str) || string_buffer_concat_value_free(&s->b, str)) {
+                        JS_FreeValue(ctx, ex);
+                        return -1;
+                    }
+                }
+                JS_FreeValue(ctx, ex);
+                JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
                 JS_FreeValue(ctx, s->el); s->el = JS_UNDEFINED;
-                JS_FreeValue(ctx, string_buffer_end(&s->b));
-                s->result = c;
-                return 0;
+                s->i++;
+                s->hdr.stage = JOIN_HEAD;
+                continue;
             }
         }
         r = step_tostring_run(ctx, &s->hdr, s->el, cb_result, &str, out_cb, out_argc);
@@ -95616,7 +95630,16 @@ static int js_array_join_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
     /* string_buffer_end NULLs the buffer on every path that consumed it and leaves it intact on the error
        path, so the teardown's string_buffer_free is right either way. */
     s->result = string_buffer_end(&s->b);
-    return JS_IsException(s->result) ? -1 : 0;
+    if (JS_IsException(s->result)) return -1;
+    if (!JS_IsUndefined(s->unknown)) {
+        JSValue real = s->result;
+
+        if (s->example_lost) { JS_FreeValue(ctx, real); real = JS_UNDEFINED; }
+        s->result = js_concolic_derive(ctx, s->unknown, "Array.join", real);
+        DCHECK(!JS_IsUninitialized(s->result), "a join element that was unknown when appended is not one now");
+        JS_FreeValue(ctx, s->unknown); s->unknown = JS_UNDEFINED;
+    }
+    return 0;
 }
 
 /* WHAT THIS MACHINE OWNS (JSTrampStepDef.visit), the accumulator included — an element's toString is the page's
@@ -95633,6 +95656,7 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->obj);
     v->val(ctx, &s->sep);
     v->val(ctx, &s->el);
+    v->val(ctx, &s->unknown);
     for (i = 0; i < 2; i++) v->val(ctx, &s->cb[i]);
 }
 
