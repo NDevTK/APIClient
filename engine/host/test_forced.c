@@ -9928,6 +9928,24 @@ TF_UNIT void probes_fetchreply(const char *js, Probe *tab, int *n) {
     fold_row(&fetch_await, &fetch_await_why, param_value_is(js, "/api/user", "region", "us-west-2"),
              "the reply WAS delivered and /api/user's `region` does not carry `us-west-2` — §6.4.3 json() "
              "parsed the host's bytes and its field did not flow into this endpoint as a concrete example");
+    /* AN EXAMPLE THAT IS `undefined`, per site class (fixture/fetchreply.h's __UDX statement). */
+    const char *udarith_why = NULL, *udcoerce_why = NULL, *udcodec_why = NULL;
+    int udarith_tt = 1, udcoerce_tt = 1, udcodec_tt = 1;
+    fold_row(&udarith_tt, &udarith_why, !!strstr(js, "\"/api/udarith\""),
+             "there is no /api/udarith record: the statement over the served `__UDX.a` never ran");
+    fold_row(&udarith_tt, &udarith_why, param_value_is(js, "/api/udarith", "v", "NaN"),
+             "/api/udarith's `v` is not `NaN`: `__UDX.a * 2` over an example of `undefined` did not run §6.1.6.1.4 "
+             "on it, so the arithmetic hook read the example as absent");
+    fold_row(&udcoerce_tt, &udcoerce_why, !!strstr(js, "\"/api/udcoerce\""),
+             "there is no /api/udcoerce record: the statement over the served `__UDX.a` never ran");
+    fold_row(&udcoerce_tt, &udcoerce_why, param_value_is(js, "/api/udcoerce", "v", "undefined-true"),
+             "/api/udcoerce's `v` is not `undefined-true`: String() or `!` over an example of `undefined` did "
+             "not run §7.1.19 or §7.1.2 on it, so a coercion hook read the example as absent");
+    fold_row(&udcodec_tt, &udcodec_why, !!strstr(js, "\"/api/udcodec\""),
+             "there is no /api/udcodec record: the statement over the served `__UDX.a` never ran");
+    fold_row(&udcodec_tt, &udcodec_why, param_value_is(js, "/api/udcodec", "v", "undefined"),
+             "/api/udcodec's `v` is not `undefined`: encodeURIComponent over an example of `undefined` did not "
+             "run the codec on it, so the builtin read the example as absent");
     /* THE SECOND REACTION OF `.then(r => r.json()).then(…)` — and the row is the PAIR, because either half
        alone is a term that cannot localise. `chain1` alone says the reply was delivered and the first handler
        ran; `chain2` is the only thing that says json()'s own promise ever SETTLED, and its absence beside a
@@ -10359,6 +10377,9 @@ TF_UNIT void probes_fetchreply(const char *js, Probe *tab, int *n) {
         { "reply-program-typed", replyctl_tt, "/chunk/replyctl.js", SESS_EXPLORE, replyctl_why },
         { "frame-ctl", frame_ctl, "/api/framectl", SESS_EXPLORE, frame_ctl_why },
         { "fetch", fetch_await, "/api/user?region=", SESS_EXPLORE, fetch_await_why },
+        { "undef-example-arith", udarith_tt, "/api/udarith", SESS_EXPLORE, udarith_why },
+        { "undef-example-coerce", udcoerce_tt, "/api/udcoerce", SESS_EXPLORE, udcoerce_why },
+        { "undef-example-codec", udcodec_tt, "/api/udcodec", SESS_EXPLORE, udcodec_why },
         { "then-chain", then_chain, "at=chain1", SESS_EXPLORE },
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE, clone_body_why },
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE, body_bytes_why },

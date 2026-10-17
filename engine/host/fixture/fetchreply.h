@@ -13,6 +13,16 @@ static const char HTML_FETCHREPLY[] =
     /* The boot fork: `cfg.admin` forks here, so every later test of it in this document is decided inside the
        two arms that already exist rather than forking where it stands. */
     "<script>var cfg = { admin: state.admin }; if (cfg.admin) { cfg.arm = 'A'; } else { cfg.arm = 'P'; }</script>"
+    /* A SERVED RECORD THAT HOLDS A MEMBER AS `undefined`. The miss on `zz` publishes the record, so `a` reads as
+       a served unknown whose example is `undefined` — bytes, not an absence. Each fetch runs one site class over
+       it: /api/udarith the arithmetic hook (`NaN`), /api/udcoerce §7.1.19 String and §7.1.2 ToBoolean
+       (`undefined-true`), /api/udcodec an engine codec (`encodeURIComponent` gives `undefined`). With the
+       example read as absent, each address has no example and is never sent. */
+    "<script>window.__UDX = { a: undefined, k: 1 };</script>"
+    "<script>var _udz = __UDX.zz;"
+    " fetch('/api/udarith?v=' + (__UDX.a * 2));"
+    " fetch('/api/udcoerce?v=' + String(__UDX.a) + '-' + (!__UDX.a));"
+    " fetch('/api/udcodec?v=' + encodeURIComponent(__UDX.a));</script>"
     "<script>"
     "(async function(){ var c = await (await fetch('/api/config')).json(); fetch('/api/user?region=' + c.region); })();"   /* FETCH-AWAIT-RESULT: await a safe GET, then §6.4.3 json() over the host's bytes — the parsed body's field flows into a later endpoint as a concrete example */
     /* THE SAME REPLY THROUGH THE OTHER SPELLING, AND THE ROW IS THE SECOND REACTION. Every statement above
