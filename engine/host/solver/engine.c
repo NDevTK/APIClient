@@ -4092,18 +4092,17 @@ static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, Scri
                                  TaskSource src, DynPos pos, lxb_dom_element_t *el, int parser_inserted);
 
 /* HTML §13.2.7 "The end": the parse's own scripts run before step 5's list, and step 5 runs before the
-   DOMContentLoaded task is queued, so a parser-inserted script's bytes reach a document that is still "loading".
-   A failed load counts: §4.12.1.1 step 4's `error` is that script's execution. Asserted at the arrival, where
-   both its document and its park are in hand, against the readiness core/dom/document.c moved. A macro so each
-   arm reports its own line; under the dev guard because the read interns an atom. */
+   DOMContentLoaded task is queued, so a parser-inserted script row's bytes reach a document whose
+   DOMContentLoaded has not run. The readiness cannot say so: step 3 makes it "interactive" before step 5. A
+   failed load counts: §4.12.1.1 step 4's `error` is that script's execution. Asserted at the arrival, where both
+   its document and its park are in hand. A macro so each arm reports its own line; under the dev guard because
+   the read interns an atom. */
 #if APICLIENT_DEV
 #define ENGINE_DCHECK_PARSER_SCRIPT_BEFORE_DCL(p, doc) do {                                                    \
         uint32_t pdoc_ = (doc);                                                                          \
-        const char *pready_ = document_readiness_of(                                                     \
-            lxb_dom_interface_node(document_associated(doc_realm(pdoc_))));                             \
-        DCHECKF(!pending_get_int((p), PEND_PARSER_INS) || strcmp(pready_, "loading") == 0,               \
-                "a parser-inserted script's bytes arrived for document %u, whose readiness is \"%s\": the " \
-                "parser's scripts hold DOMContentLoaded, so it fired while this one was owed", pdoc_, pready_); \
+        DCHECKF(!pending_get_int((p), PEND_PARSER_INS) || !document_dcl_queued(doc_realm(pdoc_)),        \
+                "a parser-inserted script's bytes arrived for document %u after its DOMContentLoaded: the " \
+                "parser's scripts hold DOMContentLoaded, so it fired while this one was owed", pdoc_);   \
     } while (0)
 #else
 #define ENGINE_DCHECK_PARSER_SCRIPT_BEFORE_DCL(p, doc) do { } while (0)

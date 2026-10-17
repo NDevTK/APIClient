@@ -177,6 +177,10 @@ int document_lifecycle_step(JSContext *ctx);
    "interactive" as in a browser. */
 int document_parse_end_step(JSContext *ctx);
 
+/* Whether §13.2.7 step 6's DOMContentLoaded task has run for this realm's document in the running timeline,
+   since the last §8.4.1 reset. */
+bool document_dcl_queued(JSContext *ctx);
+
 /* HTML §3.1.5's CURRENT DOCUMENT READINESS of ONE DOCUMENT, as the string `readyState` answers with —
    "loading", "interactive" or "complete". Asked of this component because it owns the load lifecycle that
    moves it; the member itself is core/dom/document_metadata.c's, and there is exactly one statement of the

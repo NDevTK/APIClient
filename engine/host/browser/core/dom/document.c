@@ -2127,9 +2127,9 @@ void document_set_readiness_loading(JSContext *ctx)
     document_set_dcl_queued(ctx, false);   /* the reopened stream reaches §13.2.7 again */
 }
 
-/* Whether §13.2.7 step 6's DOMContentLoaded task has run for this parse. It is its own fact because step 3 makes
-   the readiness "interactive" before step 5 runs the deferred scripts, so the readiness cannot say it. */
-static bool document_dcl_queued(JSContext *ctx)
+/* See document.h. It is its own fact because step 3 makes the readiness "interactive" before step 5 runs the
+   deferred scripts, so the readiness cannot say it. */
+bool document_dcl_queued(JSContext *ctx)
 {
     JSValue rec = realm_value_get(ctx, g_ready_slot), v;
     bool on;
