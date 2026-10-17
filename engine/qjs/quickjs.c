@@ -21269,6 +21269,19 @@ static JSValue js_concolic_operand(JSContext *ctx, JSValueConst v)
     return g_concolic.example ? g_concolic.example(ctx, v) : JS_UNDEFINED;
 }
 
+/* Whether js_concolic_operand's answer for `v` is bytes — `undefined` included — rather than the absence it also
+   spells JS_UNDEFINED. A site running its algorithm on the example asks this, never the value's tag. */
+static bool js_concolic_held(JSValueConst v)
+{
+    return g_concolic.example_held && g_concolic.example_held(v);
+}
+/* The codecs' rule: the real function runs over a held example that is a primitive, whose §7.1.19 ToString runs
+   no page code; an Object or a Symbol example, or none, leaves the result with none. */
+static bool js_concolic_codec_operand(JSValueConst v, JSValueConst ex)
+{
+    return js_concolic_held(v) && !JS_IsObject(ex) && !JS_IsSymbol(ex);
+}
+
 /* The derived unknown, carrying whatever the REAL operation produced from that example (consumed).
    THE MODEL RUN'S THROW IS CONSUMED HERE, at the one point every site converges on. `real` is what the
    operator got by running the operation on an example THIS ENGINE chose; it is not the page's operation,
@@ -119855,7 +119868,7 @@ static JSValue js_global_decodeURI(JSContext *ctx, JSValueConst this_val,
         JSValue ex = js_concolic_operand(ctx, argv[0]);
         if (!JS_IsUninitialized(ex)) {
             JSValue real = JS_UNDEFINED;
-            if (JS_IsString(ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_global_decodeURI(ctx, this_val, 1, a2, isComponent); }
+            if (js_concolic_codec_operand(argv[0], ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_global_decodeURI(ctx, this_val, 1, a2, isComponent); }
             JS_FreeValue(ctx, ex);
             return js_concolic_derive(ctx, argv[0],
                                       isComponent ? "decodeURIComponent" : "decodeURI", real);
@@ -119980,7 +119993,7 @@ static JSValue js_global_encodeURI(JSContext *ctx, JSValueConst this_val,
         JSValue ex = js_concolic_operand(ctx, argv[0]);
         if (!JS_IsUninitialized(ex)) {
             JSValue real = JS_UNDEFINED;
-            if (JS_IsString(ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_global_encodeURI(ctx, this_val, 1, a2, isComponent); }
+            if (js_concolic_codec_operand(argv[0], ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_global_encodeURI(ctx, this_val, 1, a2, isComponent); }
             JS_FreeValue(ctx, ex);
             return js_concolic_derive(ctx, argv[0],
                                       isComponent ? "encodeURIComponent" : "encodeURI", real);
@@ -120057,7 +120070,7 @@ static JSValue js_global_escape(JSContext *ctx, JSValueConst this_val,
         JSValue ex = js_concolic_operand(ctx, argv[0]);
         if (!JS_IsUninitialized(ex)) {
             JSValue real = JS_UNDEFINED;
-            if (JS_IsString(ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_global_escape(ctx, this_val, 1, a2); }
+            if (js_concolic_codec_operand(argv[0], ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_global_escape(ctx, this_val, 1, a2); }
             JS_FreeValue(ctx, ex);
             return js_concolic_derive(ctx, argv[0], "escape", real);
         }
@@ -120095,7 +120108,7 @@ static JSValue js_global_unescape(JSContext *ctx, JSValueConst this_val,
         JSValue ex = js_concolic_operand(ctx, argv[0]);
         if (!JS_IsUninitialized(ex)) {
             JSValue real = JS_UNDEFINED;
-            if (JS_IsString(ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_global_unescape(ctx, this_val, 1, a2); }
+            if (js_concolic_codec_operand(argv[0], ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_global_unescape(ctx, this_val, 1, a2); }
             JS_FreeValue(ctx, ex);
             return js_concolic_derive(ctx, argv[0], "unescape", real);
         }
@@ -121081,7 +121094,7 @@ static JSValue js_Date_parse(JSContext *ctx, JSValueConst this_val,
         JSValue ex = js_concolic_operand(ctx, argv[0]);
         if (!JS_IsUninitialized(ex)) {
             JSValue real = JS_UNDEFINED;
-            if (JS_IsString(ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_Date_parse(ctx, this_val, 1, a2); }
+            if (js_concolic_codec_operand(argv[0], ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_Date_parse(ctx, this_val, 1, a2); }
             JS_FreeValue(ctx, ex);
             return js_concolic_derive(ctx, argv[0], "Date.parse", real);
         }
@@ -128453,7 +128466,7 @@ static JSValue js_btoa(JSContext *ctx, JSValueConst this_val,
         JSValue ex = js_concolic_operand(ctx, argv[0]);
         if (!JS_IsUninitialized(ex)) {
             JSValue real = JS_UNDEFINED;
-            if (JS_IsString(ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_btoa(ctx, this_val, 1, a2); }
+            if (js_concolic_codec_operand(argv[0], ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_btoa(ctx, this_val, 1, a2); }
             JS_FreeValue(ctx, ex);
             return js_concolic_derive(ctx, argv[0], "btoa", real);
         }
@@ -128525,7 +128538,7 @@ static JSValue js_atob(JSContext *ctx, JSValueConst this_val,
         JSValue ex = js_concolic_operand(ctx, argv[0]);
         if (!JS_IsUninitialized(ex)) {
             JSValue real = JS_UNDEFINED;
-            if (JS_IsString(ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_atob(ctx, this_val, 1, a2); }
+            if (js_concolic_codec_operand(argv[0], ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_atob(ctx, this_val, 1, a2); }
             JS_FreeValue(ctx, ex);
             return js_concolic_derive(ctx, argv[0], "atob", real);
         }

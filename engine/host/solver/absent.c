@@ -1430,6 +1430,8 @@ JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JS
        on a member of a record no element of the served markup spells, reading as a class that says a parse
        of the markup could have stated it. */
     r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_SERVED, JS_DupValue(ctx, value));
+    /* The record holds the member and its value is `undefined`: those are its bytes, not an absence. */
+    if (JS_IsUndefined(value) && concolic_is(r)) concolic_hold_undefined(r);
 done:
     free(shape);
     free(src);

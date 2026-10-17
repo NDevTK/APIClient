@@ -204,6 +204,15 @@ int         concolic_branch_neg(JSValueConst v);
    decide.c builds its constraint keys with this, which is why the solver has ONE speller and not three. */
 char       *concolic_ident_compose(const char *tag, const char *const *fields, int n);
 JSValue     concolic_example(JSContext *ctx, JSValueConst v);   /* the concrete example (dup'd) or JS_UNDEFINED */
+/* 1 when `v` has bytes this flow may compute with — an example it holds (HELD) or a value it determined
+   (DETERMINED), either of which may be `undefined` — and 0 otherwise, including for a value that is not a
+   concolic. Side-effect-free.
+   Named residual. Not covered: the browser components' own example reads (fetch's address, the URL parser,
+   XHR, the DOM members) besides idl_args.c's numeric conversion still test the example for `undefined`. Next
+   diff builds: each component asking this before running its algorithm on the example. Absence shows as: a
+   component's result over an operand whose example is `undefined` carrying no example, where §7.1.19 or §7.1.4
+   over `undefined` would have computed one. */
+int         concolic_example_present(JSValueConst v);
 
 /* WHY THAT ANSWER IS NOT ENOUGH, AND WHAT THE READ BELOW IS FOR. `concolic_example` spends JS_UNDEFINED on
  * FOUR distinct facts, and its callers each wrote down their own account of which one they were acting on

@@ -2828,7 +2828,6 @@ static int example_member(JSContext *ctx, JSValueConst parent_example, JSAtom at
    lets a candidate inject at a precise source. The derived value carries the parent's example read through,
    so a field the record holds arrives with the server's bytes; either way it stays opaque for control flow,
    because a loaded `features.admin:false` must not concretize the gate or the admin endpoint is lost. */
-static int example_present(JSValueConst v);
 static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
     (void)receiver;
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
@@ -2865,7 +2864,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     /* §6.2.5.5 GetValue ( refRecord ) step 3.a: ToObject throws a TypeError on an undefined or null base. Where
        this session's own value here is one of those, the session stops at this read, and a flow reading on
        stands on a world this engine chose. */
-    if (example_present(obj)) {
+    if (concolic_example_present(obj)) {
         JSValue bex = concolic_example(ctx, obj);
 
         if (JS_IsUndefined(bex) || JS_IsNull(bex)) flow_mark_forced_arm();
@@ -3409,13 +3408,10 @@ static int example_operable(JSValueConst v) {
 }
 
 static ConcolicExState example_state_of(const Concolic *c, const Cons **ppin);
-/* Whether a concolic operand has bytes this flow may compute with: an example it holds, or a value it
-   determined, either of which may be `undefined`. concolic_example answers JS_UNDEFINED for absence too, so a
-   site that must tell `"a" + undefined` from an operand with no bytes asks this. Named residual. Not covered:
-   the arithmetic, builtin and call sites still read JS_UNDEFINED from concolic_example as absence. Next diff
-   builds: each of them asking this instead. Absence shows as: a value derived from an operand whose example is
-   `undefined` carrying no example where its operands' examples compute one. */
-static int example_present(JSValueConst v) {
+/* See concolic.h. concolic_example answers JS_UNDEFINED for absence too, so every site that runs an operation
+   over a concolic operand's example — `"a" + x`, `x * 2`, String(x), !x, the engine's builtins through
+   `example_held`, the IDL conversions — asks this rather than testing the example for `undefined`. */
+int concolic_example_present(JSValueConst v) {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
     const Cons *pin;
     ConcolicExState st = example_state_of(c, &pin);
@@ -3437,8 +3433,8 @@ static JSValue cmp_example(JSContext *ctx, JSValueConst a, JSValueConst b, int c
                            int is_neq, JSConcolicEqOp op) {
     JSValue exa = ca ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
     JSValue exb = cb ? concolic_example(ctx, b) : JS_DupValue(ctx, b);
-    int hava = ca ? example_present(a) : 1;
-    int havb = cb ? example_present(b) : 1;
+    int hava = ca ? concolic_example_present(a) : 1;
+    int havb = cb ? concolic_example_present(b) : 1;
     JSValue out = JS_UNDEFINED;
 
     if (hava && havb && example_operable(exa) && example_operable(exb)) {
@@ -3744,7 +3740,7 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
             JSValue exa = ca ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
             JSValue exb = cb ? concolic_example(ctx, b) : JS_DupValue(ctx, b);
 
-            if ((!ca || example_present(a)) && (!cb || example_present(b)) &&
+            if ((!ca || concolic_example_present(a)) && (!cb || concolic_example_present(b)) &&
                 example_operable(exa) && example_operable(exb)) {
                 int holds = JS_IsRelated(ctx, exa, exb, op);
 
@@ -3975,8 +3971,8 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
                "a CONCRETE Object operand reached the arithmetic hook unconverted — §7.1.4 ToNumber over it runs "
                "the page's valueOf, which belongs on the operator's ToPrimitive trampoline before the hook");
 
-        if (!JS_IsUndefined(exa) && (nops == 1 || !JS_IsUndefined(exb)) && example_operable(exa) &&
-            (nops == 1 || example_operable(exb))) {
+        if ((!ca || concolic_example_present(a)) && (nops == 1 || !cb || concolic_example_present(b)) &&
+            example_operable(exa) && (nops == 1 || example_operable(exb))) {
             if (carith_is_32bit(op)) {
                 JSValue r32 = JS_UNDEFINED;
                 if (carith_apply32(ctx, op, exa, exb, &r32))
@@ -4075,7 +4071,7 @@ JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
     ident = concolic_ident_compose("String", f, 1);
     ex = concolic_example(ctx, v);
     /* §7.1.19 over an Object or a Symbol example runs ToPrimitive or throws, so the result has none. */
-    if (!JS_IsUndefined(ex) && example_operable(ex)) {
+    if (concolic_example_present(v) && example_operable(ex)) {
         const char *p = JS_ToCString(ctx, ex);
         if (p) { example = JS_NewString(ctx, p); JS_FreeCString(ctx, p); }
     }
@@ -4118,7 +4114,7 @@ JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
     f[0] = negate ? "!" : "ToBoolean"; f[1] = concolic_ident_c(v);
     ident = concolic_ident_compose("tb", f, 2);
     ex = concolic_example(ctx, v);
-    if (!JS_IsUndefined(ex)) {
+    if (concolic_example_present(v)) {
         int b = JS_ToBool(ctx, ex);
         DCHECK(b == 0 || b == 1,
                "§7.1.2 ToBoolean over a concolic's example answered neither true nor false — it answers -1 "
@@ -5650,8 +5646,8 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
        `"aundefined"` and `1 + undefined` is NaN, so absence is asked of the concolic side only. A concolic
        operand's structured example is absent here too: steps 1.a and 1.b would run §7.1.1 ToPrimitive over it,
        which is the page's code (example_operable). */
-    int hava = ca ? example_present(a) && example_operable(exa) : 1;
-    int havb = cb ? example_present(b) && example_operable(exb) : 1;
+    int hava = ca ? concolic_example_present(a) && example_operable(exa) : 1;
+    int havb = cb ? concolic_example_present(b) && example_operable(exb) : 1;
     JSValue example = JS_UNDEFINED;
     /* A concrete operand is a primitive by the time it reaches here: §7.1.1 over a raw Object runs the page's
        valueOf/toString, which belongs on the ToPrimitive trampoline (js_toprim_operand / do_toprim_tramp)
@@ -5815,6 +5811,7 @@ static JSConcolicHooks g_hooks = {
     .example = concolic_example,
     .call = concolic_call_hook,
     .derived = concolic_new_derived,
+    .example_held = concolic_example_present,
     /* The ordinal half of a page-created value's name. With the member NULL the engine stamps 0,
        JS_CreationName answers absent for every value, and literal_ident's creation-name arm returns NULL: a host
        declining the edge, byte-identical to a build without the seam. */

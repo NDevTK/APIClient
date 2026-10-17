@@ -272,7 +272,7 @@ int idl_number_of(JSContext *ctx, IdlArgType t, JSValueConst v, double *out)
         return 1;
     }
     ex = concolic_example(ctx, v);
-    if (JS_IsUndefined(ex)) {
+    if (!concolic_example_present(v)) {
         JS_FreeValue(ctx, ex);
         return 0;
     }
