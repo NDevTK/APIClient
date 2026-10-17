@@ -98,29 +98,44 @@ var _IDEMPOTENT_METHODS = ["GET", "HEAD", "OPTIONS", "TRACE", "PUT", "DELETE"];
    30 s with no message, measured in Chrome 148). A worker that ends the port before the answer's head is
    RFC 9110 §9.2.2's "communication failure ... before the client is able to read the server's response": an
    idempotent send goes again on a new port, and any other is Fetch §5.6's network error, a TypeError naming
-   the worker, as is an end after the head. An abort disconnects the port. */
-function _wireRelay(href, init) {
+   the worker, as is an end after the head. An abort disconnects the port.
+   The wire is handed the URL without its fragment, since Fetch never sends one and the worker's fetch carries
+   the send's own (wire.js). A send that speaks as a document (`init.speakAs`, `_speakAs`'s) runs under its
+   document's rule for its headers (lib/speak-as.js's speakAsAcquire), held until the send settles. */
+async function _wireRelay(href, init) {
   CHECK(typeof init.method === "string" && init.credentials === "omit" && init.redirect === "manual" &&
-        (init.headers === undefined || Array.isArray(init.headers)),
-        "a send reached the wire without a method, credentials \"omit\", redirect \"manual\" and a header list of " +
-        "pairs — cookies are the speak-as rule's, every hop is this zone's to follow, and a message carries JSON");
+        (init.headers === undefined || Array.isArray(init.headers)) &&
+        (init.speakAs === undefined || init.speakAs === null || typeof init.speakAs === "object"),
+        "a send reached the wire without a method, credentials \"omit\", redirect \"manual\", a header list of " +
+        "pairs and a speak-as or none — cookies are the speak-as rule's, every hop is this zone's to follow, and " +
+        "a message carries JSON");
+  var u = new URL(href);
+  u.hash = "";
+  var speak = init.speakAs === undefined ? null : init.speakAs;
+  var held = speak === null ? null : await speakAsAcquire(u.href, init.method, speak);
+  return _wireRelaySend(u.href, init, held);
+}
+function _wireRelaySend(href, init, held) {
   var body = init.body === undefined ? null
     : typeof init.body === "string" ? { text: init.body } : { b64: _b64OfBytes(init.body) };
   return new Promise(function (resolve, reject) {
     var port = chrome.runtime.connect({ name: "wire" });
     var stream = null, headSeen = false, settled = false, received = 0;
     var ping = setInterval(function () { port.postMessage({ ping: true }); }, 10000);
-    function fail(why) {
-      if (settled) return;
+    function settle() {
       settled = true;
       clearInterval(ping);
+      if (held !== null) held.release();
+    }
+    function fail(why) {
+      if (settled) return;
+      settle();
       var e = new TypeError("wire: " + why);
       if (!headSeen) reject(e); else if (stream) stream.error(e);
     }
     port.onDisconnect.addListener(function () {
       if (!settled && !headSeen && _IDEMPOTENT_METHODS.indexOf(init.method) >= 0) {
-        settled = true;
-        clearInterval(ping);
+        settle();
         resolve(_wireRelay(href, init));
         return;
       }
@@ -138,7 +153,7 @@ function _wireRelay(href, init) {
         var nullBody = _NULL_BODY_STATUSES.indexOf(m.head.status) >= 0;
         var rs = nullBody ? null : new ReadableStream({
           start: function (c) { stream = c; },
-          cancel: function () { settled = true; clearInterval(ping); port.disconnect(); }
+          cancel: function () { settle(); port.disconnect(); }
         });
         DCHECK(Array.isArray(m.head.setCookie) &&
                m.head.setCookie.every(function (v) { return v === null || typeof v === "string"; }),
@@ -156,8 +171,7 @@ function _wireRelay(href, init) {
         return;
       }
       if (m.end) {
-        settled = true;
-        clearInterval(ping);
+        settle();
         if (stream) stream.close();
         port.disconnect();
         return;
@@ -166,8 +180,8 @@ function _wireRelay(href, init) {
       fail(m.error);
       port.disconnect();
     });
-    port.postMessage({ href: href, init: { method: init.method, headers: init.headers === undefined ? null : init.headers,
-                                           body: body } });
+    port.postMessage({ href: href, scope: held === null ? null : held.scope,
+                       init: { method: init.method, headers: init.headers === undefined ? null : init.headers, body: body } });
   });
 }
 
@@ -1512,12 +1526,14 @@ function _extractTokenList(headers, name) {
    the name of the step that failed, which is a network error. The preflight is uncredentialed and does not
    follow a redirect: a 3xx is not an ok status. This zone provides no CORS-preflight cache, so the step "If
    the user agent does not provide for a cache, then return response" ends it and `Access-Control-Max-Age` is
-   not read. */
-async function _corsPreflight(href, method, headerList, credentialsMode, usePreflightFlag, origin, signal) {
+   not read. `speak` is the OPTIONS request's speak-as (`_speakAs`). */
+async function _corsPreflight(href, method, headerList, credentialsMode, usePreflightFlag, origin, signal, speak) {
   var unsafe = _corsUnsafeRequestHeaderNames(headerList);
   /* `Access-Control-Request-Method` and `-Headers` are forbidden request-headers (§2.2.2), which a script's
-     fetch cannot set; the OPTIONS rule speakAsPreflightHeaders composes (lib/speak-as.js) supplies both. */
-  var init = { method: "OPTIONS", headers: [["Accept", "*/*"]], credentials: "omit", redirect: "manual" };
+     fetch cannot set; the OPTIONS headers speakAsPreflightHeaders composes (lib/speak-as.js) supply both. */
+  CHECK(!!speak, "a CORS preflight was sent speaking as no document — Fetch §4.8's preflight carries the " +
+        "request's origin, and safeFetch preflights only a request with an identity");
+  var init = { method: "OPTIONS", headers: [["Accept", "*/*"]], credentials: "omit", redirect: "manual", speakAs: speak };
   if (signal) init.signal = signal;
   var resp = await _wire(href, init);
   /* A 3xx is not an ok status and is not followed. */
@@ -1547,29 +1563,31 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
       return "header-not-allowed:" + unsafe[j];
   return null;
 }
-/* A request that speaks as an identity (lib/request-identity.js's identityFor answer) runs `send` under
-   lib/speak-as.js's rules for the last URL of `urlList` (Fetch §2.2.5's URL list, which a redirect grows): one
-   for its own method and, when `preflightNames` is a list, one for its OPTIONS request. Its cookies are the
+/* A request that speaks as an identity (lib/request-identity.js's identityFor answer) runs `send(speak)`, where
+   `speak` is {request, preflight}: the speak-as ({docKey, origin, stated, headers}) its own wire send carries,
+   and, when `preflightNames` is a list, its OPTIONS send's, for the last URL of `urlList` (Fetch §2.2.5's URL
+   list, which a redirect grows). Its cookies are the
    identity's (cookieHeaderFor's Cookie) only where this zone is willing (`credentialed`); otherwise it carries
    none. Where it carries them and the request is the page's act or the person's (`jarTakesReply`), its
    reply's Set-Cookie is stored in the identity's jar (lib/cookie-store.js) before anything reads the reply;
    a reply to this tool's own act never reaches the person's jar, since a forced reply is never merged into
    observed state. The zone's own fetch omits credentials, so this extension's jar neither adds nor receives
    a cookie. `stated` is null, or the operator tier's Send-panel record (safeFetchStatedShape),
-   whose Origin and Referer replace the identity's on every rule of the send. A request with no identity runs
-   `send` as this extension, uncredentialed, with no speak-as rule left installed for its method and URL; a
-   host that loads no lib/speak-as.js installs none. */
+   whose Origin and Referer replace the identity's on every header set of the send. A request with no identity
+   runs `send(null)` as this extension, uncredentialed. */
 async function _speakAs(identity, urlList, method, mode, destination, credentialed, jarTakesReply, preflightNames,
                         stated, init, send) {
   var href = urlList[urlList.length - 1];
   if (!identity) {
-    var bare = typeof withoutSpeakAsRules === "function" ? await withoutSpeakAsRules(href, method, send) : await send();
+    var bare = await send(null);
     if (bare.resp) bare.setCookies = [];
     return bare;
   }
-  CHECK(typeof withSpeakAsRules === "function",
+  CHECK(typeof speakAsHeaders === "function",
         "a request states an identity on a host that loads no lib/speak-as.js — the identity's headers would " +
         "be dropped and the request would go out as this extension");
+  CHECK(!!identity.client && typeof identity.client.docKey === "string",
+        "a request speaks as facts with no document key — a speak-as rule is scoped to one document's sends");
   var facts = credentialed ? identity : Object.assign({}, identity, { credentials: "omit" });
   var cookie = await cookieHeaderFor(facts, href);
   init.credentials = "omit";
@@ -1585,7 +1603,10 @@ async function _speakAs(identity, urlList, method, mode, destination, credential
      a header needs no admission. */
   var admitted = stated === null ? null
     : { origin: stated.origin === null ? null : stated.origin.header, referer: stated.referer };
-  var sent = await withSpeakAsRules(identity.origin, href, rules, admitted, send);
+  var speakOf = function (r) {
+    return { docKey: identity.client.docKey, origin: identity.origin, stated: admitted, headers: r.headers };
+  };
+  var sent = await send({ request: speakOf(rules[0]), preflight: rules.length > 1 ? speakOf(rules[1]) : null });
   if (!sent.resp) return sent;
   /* Fetch §4.7 "HTTP-network fetch": "If includeCredentials is true, then the user agent should parse and store
      response `Set-Cookie` headers", which cookieArmFor's "listed" arm is. The fields also ride the reply as
@@ -1778,32 +1799,6 @@ function _destructiveToken(u) {
 
 /* Fetch §2.2.3 "Statuses"' redirect statuses. */
 var _REDIRECT_STATUSES = [301, 302, 303, 307, 308];
-/* The URL a send goes on the wire as, which carries no fragment: the key a send is serialized by and its 3xx is
-   claimed under. */
-function _wireKey(href) {
-  var u = new URL(href);
-  u.hash = "";
-  return u.href;
-}
-/* One send at a time per URL, whatever its method or identity. A speak-as rule (lib/speak-as.js) matches by
-   method and URL and no rule condition can match the wire's nonce, so a second send to that URL with another
-   identity would replace the rule under the first one, and the 3xx a send claims (`_redirectOf`) is told
-   apart by URL. A send is its preflight and its request. */
-var _sendTails = new Map();
-async function _sendSerialized(href, send) {
-  var key = _wireKey(href);
-  var prev = _sendTails.has(key) ? _sendTails.get(key) : Promise.resolve();
-  var done;
-  var mine = new Promise(function (resolve) { done = resolve; });
-  var tail = prev.then(function () { return mine; });
-  _sendTails.set(key, tail);
-  await prev;
-  try { return await send(); }
-  finally {
-    done();
-    if (_sendTails.get(key) === tail) _sendTails.delete(key);
-  }
-}
 /* The redirect a response is, as {status, headers}, or null for a response that is not one (a 3xx with no
    `Location` is Fetch §4.5 "HTTP-redirect fetch"'s "If locationURL is null, then return response"). Every send
    asks the wire for redirect "manual", so nothing follows a redirect but this zone, and the wire answers the
@@ -2118,18 +2113,16 @@ async function safeFetch(url, opts) {
        sent. Credentials ride where Fetch §4.4 includes them: mode `include`, or `same-origin` while the
        tainting is `basic`. */
     var _cookies = credentialed && (!_identity || _identity.credentials === "include" || _tainting === "basic");
-    var _sent = await _sendSerialized(_current.href, function () {
-      return _speakAs(_identity, _urlList, _method, mode, destination, _cookies, _isPageAct(_signalFacts),
-                      _preflight ? _unsafeNames : null,
-                      null, init, async function () {
-        if (_preflight) {
-          var _pf = await _corsPreflight(_current.href, _method, _headerList || [], opts.credentials,
-                                         opts.useCorsPreflight, _serializedOrigin, opts.signal);
-          if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + _current.origin,
-                                              [parsed.href], {}) };
-        }
-        return { resp: await _wire(_current.href, init) };
-      });
+    var _sent = await _speakAs(_identity, _urlList, _method, mode, destination, _cookies, _isPageAct(_signalFacts),
+                               _preflight ? _unsafeNames : null, null, init, async function (speak) {
+      if (_preflight) {
+        var _pf = await _corsPreflight(_current.href, _method, _headerList || [], opts.credentials,
+                                       opts.useCorsPreflight, _serializedOrigin, opts.signal, speak.preflight);
+        if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + _current.origin,
+                                            [parsed.href], {}) };
+      }
+      init.speakAs = speak === null ? null : speak.request;
+      return { resp: await _wire(_current.href, init) };
     });
     if (_sent.refusal) return _sent.refusal;
     resp = _sent.resp;
@@ -2441,26 +2434,25 @@ async function safeFetchOperator(url, opts) {
     if (body !== null) init.body = body;
     var checkedOrigin = stated.origin !== null && stated.origin.header !== null ? stated.origin.header
       : requestRedirectTaint(identity.origin, urlList) === "same-origin" ? identity.origin : "null";
-    var sent = await _sendSerialized(current.href, function () {
-      /* The person's own act, speaking as a frame they picked: its reply's cookies are theirs to keep. */
-      return _speakAs(identity, urlList, method, opts.mode, "", true, true, preflight ? unsafe : null, stated, init,
-                      async function () {
-        /* A fetch that rejects is Fetch §5.6's network error, an answer the person is shown; an invariant
-           abort travels on. */
-        try {
-          if (preflight) {
-            var pf = await _corsPreflight(current.href, method, headerList, identity.credentials, false,
-                                          checkedOrigin, undefined);
-            if (pf) return { refusal: _refused("network", "blocked-cors-preflight:" + pf + ":" + current.origin,
-                                               [parsed.href], {}) };
-          }
-          return { resp: await _wire(current.href, init) };
-        } catch (e) {
-          RETHROW_FATAL(e);
-          return { refusal: _refused("network", "network-error:" + ((e && e.message) || String(e)),
-                                     [parsed.href], {}) };
+    /* The person's own act, speaking as a frame they picked: its reply's cookies are theirs to keep. */
+    var sent = await _speakAs(identity, urlList, method, opts.mode, "", true, true, preflight ? unsafe : null, stated,
+                              init, async function (speak) {
+      /* A fetch that rejects is Fetch §5.6's network error, an answer the person is shown; an invariant abort
+         travels on. */
+      try {
+        if (preflight) {
+          var pf = await _corsPreflight(current.href, method, headerList, identity.credentials, false,
+                                        checkedOrigin, undefined, speak.preflight);
+          if (pf) return { refusal: _refused("network", "blocked-cors-preflight:" + pf + ":" + current.origin,
+                                             [parsed.href], {}) };
         }
-      });
+        init.speakAs = speak.request;
+        return { resp: await _wire(current.href, init) };
+      } catch (e) {
+        RETHROW_FATAL(e);
+        return { refusal: _refused("network", "network-error:" + ((e && e.message) || String(e)),
+                                   [parsed.href], {}) };
+      }
     });
     if (sent.refusal) return sent.refusal;
     resp = sent.resp;

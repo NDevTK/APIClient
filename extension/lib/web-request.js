@@ -301,8 +301,10 @@ function _wrReclaim(documentId, d) {
 }
 
 /* The document `documentId` was destroyed (see webRequestDocumentPort): its records and waiting captures
-   are reclaimed, and it stays known as left until its tab closes. */
+   are reclaimed, it stays known as left until its tab closes, and the speak-as rules of sends that spoke as
+   it go (lib/speak-as.js). */
 function webRequestDocumentLeft(documentId, tabId) {
+  speakAsDocumentEnded("frame:" + documentId);
   var d = _wrDocs.get(documentId);
   if (d !== undefined && d.left) return;
   if (d !== undefined) _wrReclaim(documentId, d);
@@ -348,6 +350,7 @@ function webRequestTabRemoved(tabId) {
   for (var [id, d] of _wrDocs) {
     if (d.tabId !== tabId) continue;
     if (!d.left) _wrReclaim(id, d);
+    speakAsDocumentEnded("frame:" + id);
     _wrDocs.delete(id);
   }
 }

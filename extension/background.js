@@ -290,6 +290,7 @@ async function _swRpc(msg) {
     // The declarativeNetRequest rules the zone's sends speak as documents with (speak-as-rule.js).
     case "speakAs.update": return speakAsUpdate(args[0]);
     case "speakAs.clearFamily": return speakAsClearFamily();
+    case "speakAs.installed": return speakAsInstalledIds();
     // chrome.storage.session.* RPC handlers removed — the brain no longer
     // mirrors request logs to session storage (the offscreen document's
     // stable lifetime makes the in-memory log authoritative). If a caller

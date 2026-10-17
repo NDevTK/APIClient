@@ -16,55 +16,99 @@
 
 const _WIRE_ORIGIN = new URL(chrome.runtime.getURL("")).origin;
 const _WIRE_SENDER = chrome.runtime.getURL("ast-worker.html");
-/* The header that names a send to webRequest. onBeforeSendHeaders reports a request's headers before
-   declarativeNetRequest modifies them, and onSendHeaders after (measured in Chrome 148), so the session rule
-   `_WIRE_NONCE_RULE` removes it from every request of this worker and neither the server nor a page sees it;
-   a rule condition cannot match a request header ("Unexpected property: 'requestHeaders'", measured). */
-const _WIRE_NONCE_HEADER = "x-apiclient-wire";
-const _WIRE_NONCE_RULE = 1;
-const _wireRuleReady = chrome.declarativeNetRequest.updateSessionRules({
-  removeRuleIds: [_WIRE_NONCE_RULE],
-  addRules: [{ id: _WIRE_NONCE_RULE, priority: 1,
-               action: { type: "modifyHeaders", requestHeaders: [{ header: _WIRE_NONCE_HEADER, operation: "remove" }] },
-               condition: { initiatorDomains: [chrome.runtime.id], tabIds: [chrome.tabs.TAB_ID_NONE] } }],
-});
-/* nonce -> the send's record {redirect: a promise of its 3xx, resolveRedirect, setCookie: a promise of its
-   reply's Set-Cookie fields, resolveSetCookie}; requestId -> the same record, bound when onBeforeSendHeaders
-   shows the nonce. The requestId holds across the request's life. */
-const _wireByNonce = new Map();
-const _wireByRequest = new Map();
-/* The keys of the sends this worker has on the network. A speak-as rule matches by method and URL (a rule
-   condition cannot match the nonce), so lib/safe-fetch.js sends one request per URL at a time
-   (`_sendSerialized`), hops included, which this asserts. */
-const _wireInFlight = new Set();
+speakAsInstalledReady();
 
-function _wireKey(method, url) {
-  const u = new URL(url);
-  u.hash = "";
-  return method + " " + u.href;
-}
+/* A send's fragment, which names it to webRequest (whose URLs keep the fragment, measured in Chrome 155) and
+   never reaches a server: `t=<nonce>`, or `t=<scope>.<nonce>` for a send that speaks as a document, whose
+   rule (speak-as-rule.js) matches the URL up to the nonce. The zone's own fragment is not the wire's: Fetch
+   never sends one, and the zone keeps its URLs. */
 function _wireNonce() {
   const b = new Uint8Array(16);
   crypto.getRandomValues(b);
   return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
+function _wireNonceOf(url) {
+  const m = /#t=(?:[0-9a-f]{32}\.[0-9]+\.)?([0-9a-f]{32})$/.exec(url);
+  return m === null ? null : m[1];
+}
 
-/* Which context and which request. Every other extension context is sealed or has `connect-src 'none'`, so
-   a request initiated by this extension in no tab and no document is this worker's; a page's service worker
-   is also in no tab and no document, and its initiator is the page's origin. The nonce names the send. */
-const _WIRE_FILTER = { urls: ["http://*/*", "https://*/*"], types: ["xmlhttprequest"], tabId: chrome.tabs.TAB_ID_NONE };
+/* nonce -> the send's record {url, scope, redirect: a promise of its 3xx, resolveRedirect, setCookie: a promise
+   of its reply's Set-Cookie fields, resolveSetCookie, requestId}; requestId -> the same record, bound when
+   onBeforeSendHeaders reports the send's URL, once, since a "manual" redirect never sends its hop. */
+const _wireBySend = new Map();
+const _wireByRequest = new Map();
+/* requestId -> the speak-as headers onBeforeSendHeaders reported, which precede declarativeNetRequest's
+   changes (onSendHeaders reports after them, measured in Chrome 148 and 155). */
+const _wireBefore = new Map();
+
+/* Which context and which request. Every other extension context is sealed or has `connect-src 'none'`, so a
+   request initiated by this extension in no tab and no document is this worker's; a page's service worker is
+   also in no tab and no document, and its initiator is the page's origin. A filter's `tabId` of TAB_ID_NONE
+   matches every tab's requests too (measured in Chrome 155: a tab's fetch reached such a listener), so each
+   listener reads `tabId` itself. The types are every type a speak-as rule's condition names. */
+const _WIRE_FILTER = { urls: ["http://*/*", "https://*/*"], types: ["xmlhttprequest", "other"] };
+function _wireSpeakAsHeaders(list) {
+  const out = {};
+  for (const h of list) {
+    const n = h.name.toLowerCase();
+    if (SPEAK_AS_HEADER_NAMES.indexOf(n) >= 0) out[n] = h.value;
+  }
+  return out;
+}
 chrome.webRequest.onBeforeSendHeaders.addListener((d) => {
-  const nonce = d.requestHeaders.filter((h) => h.name.toLowerCase() === _WIRE_NONCE_HEADER).map((h) => h.value);
-  if (nonce.length === 0) return;
-  CHECK(d.initiator === _WIRE_ORIGIN && d.tabId === chrome.tabs.TAB_ID_NONE && d.documentId === undefined,
-        "a request carrying the wire's nonce was initiated by " + d.initiator + " in tab " + d.tabId +
-        " document " + d.documentId + " — only this worker's own fetch carries it");
-  const rec = _wireByNonce.get(nonce[0]);
-  CHECK(nonce.length === 1 && !!rec, "webRequest reported a wire nonce no send of this worker holds");
-  DCHECK(!_wireByRequest.has(d.requestId) || _wireByRequest.get(d.requestId) === rec,
-         "webRequest's request " + d.requestId + " is bound to two sends");
+  const nonce = _wireNonceOf(d.url), rec = nonce === null ? undefined : _wireBySend.get(nonce);
+  if (d.tabId === chrome.tabs.TAB_ID_NONE) _wireBefore.set(d.requestId, _wireSpeakAsHeaders(d.requestHeaders));
+  if (d.tabId !== chrome.tabs.TAB_ID_NONE || d.initiator !== _WIRE_ORIGIN) {
+    CHECK(rec === undefined, "a request of tab " + d.tabId + " initiated by " + d.initiator + " carries a live " +
+          "wire send's nonce — only this worker's own fetch carries it");
+    return;
+  }
+  CHECK(rec !== undefined && d.documentId === undefined,
+        "this extension sent " + d.url + " in no tab and no document, and it is not a live wire send — only " +
+        "this worker's fetch sends, and every send carries its own nonce");
+  CHECK(rec.requestId === null, "the wire send of " + d.url + " went out twice — a \"manual\" redirect never " +
+        "sends its hop, so a second request carrying the send's fragment is a hop the platform followed");
+  DCHECK(rec.url === d.url, "webRequest reported the wire send of " + rec.url + " as " + d.url);
+  rec.requestId = d.requestId;
   _wireByRequest.set(d.requestId, rec);
 }, _WIRE_FILTER, ["requestHeaders", "extraHeaders"]);
+
+/* What a no-tab request finally carries, after declarativeNetRequest: exactly the speak-as headers it carried
+   before, changed by the one rule of its own send's scope and by no other. A request that is not a send
+   speaking as a document matches no rule and carries its own headers unchanged. This is the boundary that
+   a rule changes only the sends it was installed for, so it is a CHECK; a rule's condition names no tab. */
+chrome.webRequest.onSendHeaders.addListener((d) => {
+  if (d.tabId !== chrome.tabs.TAB_ID_NONE) return;
+  const before = _wireBefore.get(d.requestId);
+  _wireBefore.delete(d.requestId);
+  const rec = _wireByRequest.get(d.requestId);
+  const matched = speakAsInstalled.filter((r) => speakAsRuleMatches(r, d));
+  /* A request already on the network when this worker started has no record before its rules ran, so what
+     is checked is that no rule matched it; this worker's own sends end with the worker that made them. */
+  if (before === undefined) {
+    CHECK(rec === undefined && matched.length === 0, "the request " + d.method + " " + d.url + " (initiator " +
+          d.initiator + ") reached onSendHeaders with no onBeforeSendHeaders record and matched the speak-as " +
+          "rules " + JSON.stringify(matched.map((r) => r.id)));
+    return;
+  }
+  // A rule's prefix holds its scope, so the one rule that matches a send's URL is its own scope's.
+  CHECK(matched.length === (rec !== undefined && rec.scope !== null ? 1 : 0),
+        "the request " + d.method + " " + d.url + " (initiator " + d.initiator + ") matched the speak-as rules " +
+        JSON.stringify(matched.map((r) => r.id)) + ", not exactly its own send's — a rule changed a request it " +
+        "was not installed for");
+  const expect = Object.assign({}, before);
+  if (matched.length === 1)
+    for (const h of matched[0].action.requestHeaders) {
+      const n = h.header.toLowerCase();
+      if (h.operation === "remove") delete expect[n]; else expect[n] = h.value;
+    }
+  const after = _wireSpeakAsHeaders(d.requestHeaders);
+  for (const n of SPEAK_AS_HEADER_NAMES)
+    CHECK(after[n] === expect[n], "the request " + d.method + " " + d.url + " carries " + n + ": " +
+          JSON.stringify(after[n]) + " where its own headers and its rule make " + JSON.stringify(expect[n]));
+}, _WIRE_FILTER, ["requestHeaders", "extraHeaders"]);
+chrome.webRequest.onErrorOccurred.addListener((d) => { _wireBefore.delete(d.requestId); }, _WIRE_FILTER);
+
 chrome.webRequest.onBeforeRedirect.addListener((d) => {
   const rec = _wireByRequest.get(d.requestId);
   if (!rec) return;
@@ -102,34 +146,41 @@ function _wireBytes(b64) {
   return u;
 }
 
-/* One send: `m` is {href, init: {method, headers: [[name, value]] | null, body: null | {text} | {b64}}}. The
-   port is answered {head: {status, statusText, headers, setCookie}}, then {chunk: base64} per body chunk, then
-   {end}; or {error} for Fetch §5.6's network error. A 3xx's head is the record webRequest reported and its body
-   is none. A data: URL has no webRequest event and no Set-Cookie. */
+/* One send: `m` is {href, scope, init: {method, headers: [[name, value]] | null, body: null | {text} | {b64}}},
+   `href` fragment-less and `scope` its speak-as rule's or null. The port is answered {head: {status,
+   statusText, headers, setCookie}}, then {chunk: base64} per body chunk, then {end}; or {error} for Fetch
+   §5.6's network error. A 3xx's head is the record webRequest reported and its body is none. A data: URL has
+   no webRequest event, no fragment and no Set-Cookie. No answer carries the send's fragment. */
 async function _wireSend(port, m, signal) {
-  CHECK(typeof m.href === "string" && /^(https?|data):/.test(m.href) && !!m.init && typeof m.init.method === "string",
-        "a wire send names no http(s) or data: URL and method — lib/safe-fetch.js's _wire states both");
-  CHECK(m.init.headers === null || m.init.headers.every((h) => String(h[0]).toLowerCase() !== _WIRE_NONCE_HEADER),
-        "a wire send states the wire's own nonce header");
-  const key = _wireKey(m.init.method, m.href);
-  DCHECK(!_wireInFlight.has(key),
-         "two sends of " + key + " are on the network at once — lib/safe-fetch.js sends one per URL at a time, " +
-         "and a speak-as rule names its send by method and URL alone");
-  _wireInFlight.add(key);
+  CHECK(typeof m.href === "string" && /^(https?|data):/.test(m.href) && !m.href.includes("#") && !!m.init &&
+        typeof m.init.method === "string",
+        "a wire send names no fragment-less http(s) or data: URL and method — lib/safe-fetch.js's _wire states both");
+  CHECK(m.scope === null || (typeof m.scope === "string" && SPEAK_AS_SCOPE.test(m.scope) && !m.href.startsWith("data:")),
+        "a wire send names the scope " + JSON.stringify(m.scope) + ", which is not a document token and an index");
+  const data = m.href.startsWith("data:");
   const nonce = _wireNonce();
-  const rec = {};
+  const url = data ? m.href : m.href + "#t=" + (m.scope === null ? "" : m.scope + ".") + nonce;
+  const rec = { url, scope: m.scope, nonce, requestId: null };
   rec.redirect = new Promise((resolve) => { rec.resolveRedirect = resolve; });
   rec.setCookie = new Promise((resolve) => { rec.resolveSetCookie = resolve; });
-  _wireByNonce.set(nonce, rec);
-  const post = (msg) => { try { port.postMessage(msg); } catch (e) { /* the zone ended the send */ } };
+  if (!data) _wireBySend.set(nonce, rec);
+  const post = (msg) => {
+    CHECK(!JSON.stringify(msg).includes(nonce), "a wire answer carries the send's fragment nonce");
+    try { port.postMessage(msg); } catch (e) { /* the zone ended the send */ }
+  };
   try {
-    await _wireRuleReady;
-    const headers = (m.init.headers || []).concat([[_WIRE_NONCE_HEADER, nonce]]);
-    const init = { method: m.init.method, headers, credentials: "omit", redirect: "manual", signal };
+    await speakAsInstalledReady();
+    /* Cache mode "no-store" (Fetch §2.2.5 "Requests": "Fetch behaves as if there is no HTTP cache at all"):
+       the worker's one cache is keyed by the URL without its fragment, so it would answer one document's
+       send with another's reply, and "default" revalidates a stale-while-revalidate entry with a request of
+       its own, which carries the send's fragment after the send has ended (in Chrome 155 such a request of a
+       `stale-while-revalidate` reply reached the header CHECK below as no live send). */
+    const init = { method: m.init.method, headers: m.init.headers || [], credentials: "omit", redirect: "manual",
+                   cache: "no-store", signal };
     if (m.init.body !== null)
       init.body = m.init.body.text !== undefined ? m.init.body.text : _wireBytes(m.init.body.b64);
     let resp;
-    try { resp = await fetch(m.href, init); }
+    try { resp = await fetch(url, init); }
     catch (e) { post({ error: String((e && e.message) || e) }); return; }
     if (resp.type === "opaqueredirect") {
       const r = await rec.redirect;
@@ -141,7 +192,7 @@ async function _wireSend(port, m, signal) {
     }
     const out = [];
     resp.headers.forEach((v, k) => out.push([k, v]));
-    const setCookie = m.href.startsWith("data:") ? [] : await rec.setCookie;
+    const setCookie = data ? [] : await rec.setCookie;
     post({ head: { status: resp.status, statusText: resp.statusText, headers: out, setCookie } });
     if (resp.body) {
       const reader = resp.body.getReader();
@@ -155,9 +206,8 @@ async function _wireSend(port, m, signal) {
   } catch (e) {
     post({ error: String((e && e.message) || e) });
   } finally {
-    _wireInFlight.delete(key);
-    _wireByNonce.delete(nonce);
-    for (const [id, r] of _wireByRequest) if (r === rec) _wireByRequest.delete(id);
+    _wireBySend.delete(nonce);
+    if (rec.requestId !== null) _wireByRequest.delete(rec.requestId);
   }
 }
 

@@ -1,6 +1,7 @@
 // lib/speak-as.js — the zone's half of a send that speaks as a document: the request headers that make the
-// zone's own fetch the request a document of that identity would send, and the lifetime of the one
-// declarativeNetRequest rule (speak-as-rule.js, in the service worker) that sets them on that request alone.
+// zone's own fetch the request a document of that identity would send, and the lifetime of the
+// declarativeNetRequest rules (speak-as-rule.js, in the service worker) that set them on that document's sends
+// alone.
 
 /* Fetch §3.2 "`Origin` header", append a request `Origin` header, for a request whose origin is the
    identity's. Response tainting is Fetch §4.1 "Main fetch"'s: "basic" same-origin, "cors" for a cross-origin
@@ -89,169 +90,157 @@ function speakAsPreflightHeaders(facts, method, destination, urlList, unsafeName
   return h;
 }
 
-/* The rules this document has installed, by slot: a slot is a declarativeNetRequest method and a fragment-less
-   URL (`get https://a.example/x`), which is all a rule condition tells apart, so a slot holds one rule and
-   every send of that slot shares it or replaces it. An entry is {url, ruleId, key, regex, inFlight}: `key` is
-   the identity origin, the stated pair, the method and the header set, so two sends with one key set the same
-   headers; `inFlight` counts the sends running under it. The Map's order is the order of last use. The
-   family's only writer after `speakAs.clearFamily` is this document, and one batch of settles runs at a time
-   (`_speakAsFlush`), so the Map is what is installed. lib/safe-fetch.js sends one request per URL at a time
-   (`_sendSerialized`), so a slot's rule is never replaced under a send in flight, and a batch holds each URL
-   once. */
-const _speakAsSlots = new Map();
-const _speakAsIds = new Set();
+
+/* The documents this zone's sends speak as, by the identity's `docKey`: {token, next, keys}. `token` is the
+   document's secret, minted at its first send that speaks as it; `keys` maps a send's (method, URL, identity
+   origin, stated pair, header set) to the rule that sets those headers, {docKey, key, ruleId, scope, regex,
+   inFlight, installed, ended}, whose `scope` `<token>.<k>` names it in the URL's fragment. Two header sets for
+   one method and URL are two scopes, so no send waits for another. `_speakAsRules` holds every entry by rule
+   id in the order of last use; an entry is `installed` once its update succeeded. The family's only writer
+   after `speakAs.clearFamily` is this document, and one update runs at a time (`_speakAsFlush`). */
+const _speakAsDocs = new Map();
+const _speakAsRules = new Map();
 let _speakAsNextId = SPEAK_AS_RULE_MIN;
 let _speakAsFamily = null;
-let _speakAsPending = [];
+let _speakAsAdds = [];
+let _speakAsRemoves = [];
 let _speakAsFlushing = false;
 
 function _speakAsMintId() {
-  CHECK(_speakAsIds.size <= SPEAK_AS_RULE_MAX - SPEAK_AS_RULE_MIN,
-        "every id of the speak-as rule family is installed");
+  CHECK(_speakAsRules.size <= SPEAK_AS_RULE_MAX - SPEAK_AS_RULE_MIN, "every id of the speak-as rule family is installed");
   for (;;) {
     const id = _speakAsNextId;
     _speakAsNextId = id === SPEAK_AS_RULE_MAX ? SPEAK_AS_RULE_MIN : id + 1;
-    if (!_speakAsIds.has(id)) return id;
+    if (!_speakAsRules.has(id)) return id;
   }
 }
 
-function _speakAsSlot(method, url) {
-  return speakAsDnrMethod(method) + " " + url;
+function _speakAsToken() {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-/* The least recently used rule no send is running under, of a regexFilter rule only when `regexOnly`, as
-   [slot, entry]; undefined when every one is in flight. */
-function _speakAsLeastRecent(regexOnly) {
-  for (const [slot, e] of _speakAsSlots)
-    if (e.inFlight === 0 && (!regexOnly || e.regex)) return [slot, e];
-  return undefined;
+/* Forgets entry `e`, and removes its rule when one is installed. */
+function _speakAsRetire(e) {
+  if (_speakAsRules.get(e.ruleId) !== e) return;
+  _speakAsRules.delete(e.ruleId);
+  const doc = _speakAsDocs.get(e.docKey);
+  if (doc !== undefined && doc.keys.get(e.key) === e) doc.keys.delete(e.key);
+  if (e.installed) _speakAsRemoves.push(e.ruleId);
 }
 
-/* Makes the slots of `url` that `wanted` names ({method, headers, key}, headers null for a send that speaks as
-   no document) hold exactly those rules. Settles that arrive while a batch's update is in flight join the
-   next batch, so a burst of sends costs one updateSessionRules call per batch. Answers the entries the send
-   runs under, each counted in flight. */
-function _speakAsSettle(origin, url, wanted, stated) {
-  return new Promise((resolve, reject) => {
-    _speakAsPending.push({ origin, url, wanted, stated, resolve, reject });
-    if (!_speakAsFlushing) _speakAsFlush();
-  });
+function _speakAsKick() {
+  if (!_speakAsFlushing && (_speakAsAdds.length || _speakAsRemoves.length)) _speakAsFlush();
 }
 
+/* Sends the pending adds and removes in one speakAs.update at a time; the adds that arrive while one is in
+   flight go in the next. Rules no send is running under are retired, least recently used first, while the
+   family is over declarativeNetRequest's session limits. A failed update leaves what is installed unknown,
+   so the record is reconciled with the worker's answer. */
 async function _speakAsFlush() {
   _speakAsFlushing = true;
-  while (_speakAsPending.length) {
-    const batch = _speakAsPending;
-    _speakAsPending = [];
-    let runs;
+  while (_speakAsAdds.length || _speakAsRemoves.length) {
+    const adds = _speakAsAdds;
+    _speakAsAdds = [];
+    const regexCount = () => [..._speakAsRules.values()].filter((e) => e.regex).length;
+    for (const e of [..._speakAsRules.values()]) {
+      const overRules = _speakAsRules.size > _speakAsFamily.rules, overRegex = regexCount() > _speakAsFamily.regex;
+      if (!overRules && !overRegex) break;
+      if (e.inFlight === 0 && (overRules || e.regex)) _speakAsRetire(e);
+    }
+    CHECK(_speakAsRules.size <= _speakAsFamily.rules && regexCount() <= _speakAsFamily.regex,
+          "the speak-as rules exceed declarativeNetRequest's session limits (" + _speakAsFamily.rules + " rules, " +
+          _speakAsFamily.regex + " regexFilter rules) with every one under a send in flight");
+    const remove = _speakAsRemoves;
+    _speakAsRemoves = [];
+    let installed, failure = null;
     try {
-      runs = await _speakAsSettleBatch(batch);
-    } catch (e) {
-      // Every settle of the batch shared the update that failed.
-      for (const b of batch) b.reject(e);
+      installed = await swRpc("speakAs.update", { add: adds.map((a) => a.rule), remove });
+    } catch (err) {
+      failure = err;
+      installed = await swRpc("speakAs.installed");
+    }
+    const there = new Set(installed);
+    for (const a of adds) a.entry.installed = there.has(a.entry.ruleId);
+    if (failure !== null) {
+      for (const e of [..._speakAsRules.values()]) if (e.installed && !there.has(e.ruleId)) e.installed = false;
+      for (const id of installed) if (!_speakAsRules.has(id) || !_speakAsRules.get(id).installed) _speakAsRemoves.push(id);
+      for (const a of adds) a.reject(failure);
       continue;
     }
-    batch.forEach((b, i) => b.resolve(runs[i]));
+    const mine = [..._speakAsRules.values()].filter((e) => e.installed).map((e) => e.ruleId).sort((a, b) => a - b);
+    CHECK(installed.length === mine.length && installed.every((id, i) => id === mine[i]),
+          "the speak-as rules installed are " + JSON.stringify(installed) + ", not this document's record " +
+          JSON.stringify(mine) + " — a rule would set headers no send of this zone computed");
+    for (const a of adds) a.resolve();
   }
   _speakAsFlushing = false;
 }
 
-/* One batch, in at most one speakAs.update: a slot whose key is unchanged keeps its rule, and only a new or
-   changed key installs one. Rules nothing is running under are retired, least recently used first, while
-   the family is over declarativeNetRequest's session limits. */
-async function _speakAsSettleBatch(batch) {
-  if (_speakAsFamily === null) _speakAsFamily = await swRpc("speakAs.clearFamily");
-  const family = _speakAsFamily;
-  const urls = batch.map((b) => b.url);
-  DCHECK(new Set(urls).size === urls.length, "one batch of speak-as settles names a URL twice — " +
-         "lib/safe-fetch.js's _sendSerialized runs one send per URL");
-  const removeRuleIds = [], groups = [], runs = [];
-  const retire = (slot, e) => {
-    _speakAsSlots.delete(slot);
-    _speakAsIds.delete(e.ruleId);
-    removeRuleIds.push(e.ruleId);
-  };
-  for (const b of batch) {
-    const add = [], running = [];
-    for (const w of b.wanted) {
-      const slot = _speakAsSlot(w.method, b.url), had = _speakAsSlots.get(slot);
-      if (had !== undefined && w.headers !== null && had.key === w.key) {
-        _speakAsSlots.delete(slot);
-        _speakAsSlots.set(slot, had);
-        running.push(had);
-        continue;
-      }
-      if (had !== undefined) {
-        DCHECK(had.inFlight === 0, "the speak-as rule of " + slot + " is replaced under a send in flight — " +
-               "lib/safe-fetch.js's _sendSerialized runs one send per URL");
-        retire(slot, had);
-      }
-      if (w.headers === null) continue;
-      const e = { url: b.url, ruleId: _speakAsMintId(), key: w.key, regex: speakAsUsesRegex(b.url), inFlight: 0 };
-      _speakAsSlots.set(slot, e);
-      _speakAsIds.add(e.ruleId);
-      add.push({ ruleId: e.ruleId, method: w.method, headers: w.headers });
-      running.push(e);
+/* The scope a send of `method` to the fragment-less `url` speaking as `speak` ({docKey, origin, stated,
+   headers}) runs under, as {scope, release}: the rule of its document and key, installed if it is not, and
+   counted in flight until `release()`. */
+async function speakAsAcquire(url, method, speak) {
+  CHECK(typeof speak.docKey === "string" && speak.docKey !== "",
+        "a send speaks as an identity with no document key — a rule is scoped to one document's sends");
+  if (_speakAsFamily === null) _speakAsFamily = swRpc("speakAs.clearFamily");
+  _speakAsFamily = await _speakAsFamily;
+  let doc = _speakAsDocs.get(speak.docKey);
+  if (doc === undefined) {
+    doc = { token: _speakAsToken(), next: 0, keys: new Map() };
+    _speakAsDocs.set(speak.docKey, doc);
+  }
+  const key = JSON.stringify([method, url, speak.origin, speak.stated, speak.headers]);
+  let e = doc.keys.get(key), installing = null;
+  if (e === undefined) {
+    e = { docKey: speak.docKey, key, ruleId: _speakAsMintId(), scope: doc.token + "." + doc.next++,
+          regex: /[*^|]/.test(url), inFlight: 0, installed: false, ended: false };
+    doc.keys.set(key, e);
+    const entry = e;
+    installing = new Promise((resolve, reject) => {
+      _speakAsAdds.push({ entry, resolve, reject, rule: { ruleId: entry.ruleId, url, scope: entry.scope,
+        origin: speak.origin, stated: speak.stated, method, headers: speak.headers } });
+    });
+  }
+  _speakAsRules.delete(e.ruleId);
+  _speakAsRules.set(e.ruleId, e);
+  e.inFlight++;
+  if (installing === null && !e.installed) installing = e.installing;
+  if (installing !== null) {
+    e.installing = installing;
+    _speakAsKick();
+    try {
+      await installing;
+    } catch (err) {
+      e.inFlight--;
+      _speakAsRetire(e);
+      _speakAsKick();
+      throw err;
     }
-    for (const e of running) e.inFlight++;
-    runs.push(running);
-    if (add.length) groups.push({ url: b.url, origin: b.origin, stated: b.stated, rules: add });
   }
-  for (let regexCount = [..._speakAsSlots.values()].filter((e) => e.regex).length; ; ) {
-    const over = _speakAsSlots.size > family.rules ? _speakAsLeastRecent(false)
-      : regexCount > family.regex ? _speakAsLeastRecent(true) : null;
-    if (over === null) break;
-    CHECK(over !== undefined, "the speak-as rules exceed declarativeNetRequest's session limits (" + family.rules +
-          " rules, " + family.regex + " regexFilter rules) with every one under a send in flight");
-    if (over[1].regex) regexCount--;
-    retire(over[0], over[1]);
-  }
-  if (groups.length === 0 && removeRuleIds.length === 0) return runs;
-  let installed;
-  try {
-    installed = await swRpc("speakAs.update", { groups, removeRuleIds, urls });
-  } catch (e) {
-    // What a failed update left installed is unknown, so the next batch clears the family and starts over.
-    _speakAsSlots.clear();
-    _speakAsIds.clear();
-    _speakAsFamily = null;
-    throw e;
-  }
-  for (const url of urls) {
-    const mine = [..._speakAsSlots.values()].filter((e) => e.url === url).map((e) => e.ruleId);
-    const there = installed[url];
-    CHECK(Array.isArray(there) && there.length === mine.length && mine.every((id) => there.indexOf(id) >= 0),
-          "the speak-as rules installed for " + url + " are " + JSON.stringify(there) + ", not exactly " +
-          JSON.stringify(mine) + " — another rule would set another identity's headers on this send");
-  }
-  return runs;
+  let released = false;
+  return { scope: e.scope, release: () => {
+    DCHECK(!released, "a speak-as scope was released twice");
+    released = true;
+    e.inFlight--;
+    if (e.inFlight === 0 && e.ended) {
+      _speakAsRetire(e);
+      _speakAsKick();
+    }
+  } };
 }
 
-function _speakAsUrl(url) {
-  const u = new URL(url);
-  u.hash = "";
-  return u.href;
-}
-
-/* Runs `send()` (the zone's fetches of `url`) with one rule per entry of `rules` ({method, headers}) for the
-   identity `origin` installed, which stay installed for the next send of the same key. `stated` is the
-   operator tier's person-typed {origin, referer}, or null; speak-as-rule.js admits an Origin or Referer
-   outside the identity only as it. Rules a previous offscreen document left are removed before this
-   document's first send. */
-async function withSpeakAsRules(origin, url, rules, stated, send) {
-  const wanted = rules.map((r) => ({ method: r.method, headers: r.headers,
-                                     key: JSON.stringify([origin, stated, r.method, r.headers]) }));
-  const running = await _speakAsSettle(origin, _speakAsUrl(url), wanted, stated);
-  try {
-    return await send();
-  } finally {
-    for (const e of running) e.inFlight--;
+/* The document `docKey` ended (HTML §7.5.10 "Destroying documents", or its instance ended): the token of
+   every scope it is part of (a frame's origin over another frame's jar is `<frame>+<jar>`) is forgotten, and
+   their rules are removed, each once no send runs under it. */
+function speakAsDocumentEnded(docKey) {
+  for (const [k, doc] of [..._speakAsDocs]) {
+    if (k.split("+").indexOf(docKey) < 0) continue;
+    _speakAsDocs.delete(k);
+    for (const e of [...doc.keys.values()]) {
+      if (e.inFlight === 0) _speakAsRetire(e); else e.ended = true;
+    }
   }
-}
-
-/* Runs `send()`, a request of `method` to `url` that speaks as no document, with no speak-as rule installed
-   for its slot, so it carries none of a previous send's headers. */
-async function withoutSpeakAsRules(url, method, send) {
-  await _speakAsSettle(null, _speakAsUrl(url), [{ method, headers: null, key: null }], null);
-  return send();
+  _speakAsKick();
 }

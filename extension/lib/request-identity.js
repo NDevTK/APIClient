@@ -1,5 +1,6 @@
 // lib/request-identity.js — who a request the trusted zone sends speaks as. An identity is a document: its
-// origin and URL, and its cookie partition key. identityFor turns an identity and a request into the
+// origin and URL, its cookie partition key, and `docKey`, this zone's name for the document, which scopes the
+// speak-as rules its sends run under (lib/speak-as.js) and ends with it (speakAsDocumentEnded). identityFor turns an identity and a request into the
 // facts a send applies (Origin, Referer, credentials, partition key); cookieHeaderFor computes the Cookie
 // a document of that identity would send (RFC 6265bis §5.2 and §5.8.3), and cookieNamesFor and
 // identityProducibleBy state the same facts for the operator's preview. Loaded after lib/site.js and
@@ -17,7 +18,8 @@ async function frameIdentity(tabId, documentId) {
 }
 
 /* frameIdentity for one entry of webNavigation.getAllFrames' answer: null for a document that is not
-   http(s), which no send speaks as. */
+   http(s), which no send speaks as. Its docKey is `frame:<documentId>`, which ends when the browser destroys
+   the document (lib/web-request.js's webRequestDocumentLeft). */
 async function frameIdentityOf(f) {
   const documentId = f.documentId;
   const u = new URL(f.url);
@@ -26,14 +28,20 @@ async function frameIdentityOf(f) {
   DCHECK(!!partitionKey && typeof partitionKey.topLevelSite === "string" &&
          typeof partitionKey.hasCrossSiteAncestor === "boolean",
          "chrome.cookies.getPartitionKey answered no {topLevelSite, hasCrossSiteAncestor} for an http(s) frame");
-  return { origin: u.origin, docUrl: f.url, partitionKey };
+  return { origin: u.origin, docUrl: f.url, partitionKey, docKey: "frame:" + documentId };
 }
 
-/* An engine instance's document: the cluster origin this zone assigned at engineCreate and the URL it
-   loaded. Not covered: a document nested in a cross-site one, whose partition key has a cross-site
+/* An engine instance's document: the cluster origin this zone assigned at engineCreate, the URL it loaded,
+   and `docKey`, this zone's name for it (`engine:<docId>` for an instance's document, which ends with the
+   document or the instance; `held:` for one only this zone holds).
+   Named residual: a `held:` document has no end event. The next diff ends it when its frontier entry or
+   route is retired. Its absence shows as such a document's speak-as rules leaving only by retirement under
+   declarativeNetRequest's session limits. Not covered: a document nested in a cross-site one, whose partition key has a cross-site
    ancestor; the next diff passes the ancestor origins engineCreate already holds. Its absence shows as
    such a document's cross-site sends carrying no partitioned cookies. */
-async function engineIdentity(origin, docUrl) {
+async function engineIdentity(origin, docUrl, docKey) {
+  CHECK(typeof docKey === "string" && /^(engine|held|probe):./.test(docKey),
+        "an engine identity was asked with no document key — a speak-as rule is scoped to one document's sends");
   /* An opaque cluster ("null", a sandboxed document) speaks as "null" whatever its URL; a document whose URL
      has no origin of its own (about:blank, data:) speaks as the origin it inherited. */
   CHECK(typeof origin === "string" && URL.canParse(docUrl) &&
@@ -42,7 +50,7 @@ async function engineIdentity(origin, docUrl) {
         JSON.stringify(origin) + " — the zone speaks as the origin it assigned, never as one a URL names");
   await siteAsk(siteHostsOf([origin === "null" ? docUrl : origin]));
   const site = origin === "null" ? siteOf(docUrl) : siteOf(origin + "/");
-  return { origin, docUrl, partitionKey: { topLevelSite: site, hasCrossSiteAncestor: false } };
+  return { origin, docUrl, partitionKey: { topLevelSite: site, hasCrossSiteAncestor: false }, docKey };
 }
 
 /* RFC 6265bis §5.2 "Same-site" and "cross-site" Requests: same-site when the request URL's origin is same
@@ -118,12 +126,12 @@ async function identityForRedirect(facts, url, policy) {
    §4.1 "Main fetch" gave an empty one the policy container's, and `referrer` either "no-referrer" or the URL
    the engine resolved "client" to. They are input from the untrusted half, so identityFor still makes a
    referrer that is not the identity's origin "client" (Fetch §5.4). An empty policy left after §4.1 is
-   Referrer Policy §3's default. */
-async function pageRequestIdentity(origin, docUrl, url, credentials, mode, referrerPolicy, referrer) {
+   Referrer Policy §3's default. `docKey` is engineIdentity's. */
+async function pageRequestIdentity(origin, docUrl, docKey, url, credentials, mode, referrerPolicy, referrer) {
   CHECK(typeof referrerPolicy === "string" && (referrer === "no-referrer" || URL.canParse(referrer)),
         "a page request reached its identity with no referrer policy, or a referrer that is neither " +
         "\"no-referrer\" nor a URL — both hosts CHECK the engine's record before this");
-  return identityFor(await engineIdentity(origin, docUrl),
+  return identityFor(await engineIdentity(origin, docUrl, docKey),
                      { url, requestInit: { credentials, mode, referrer: referrer === "no-referrer" ? "" : referrer,
                                            referrerPolicy } },
                      "strict-origin-when-cross-origin");

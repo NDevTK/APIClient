@@ -874,7 +874,9 @@ async function _operatorIdentity(tabId, documentId, stated) {
   const holder = await frameIdentity(stated.jar.tabId, stated.jar.documentId);
   if (holder === null) return { error: "the frame whose cookie jar was picked is gone (document " +
                                        stated.jar.documentId + ")" };
-  return { error: null, identity: { origin: frame.origin, docUrl: frame.docUrl, partitionKey: holder.partitionKey },
+  /* Its speak-as rules are scoped to the pair, and end with either document (lib/speak-as.js). */
+  return { error: null, identity: { origin: frame.origin, docUrl: frame.docUrl, partitionKey: holder.partitionKey,
+                                    docKey: frame.docKey + "+" + holder.docKey },
            frame, holder };
 }
 

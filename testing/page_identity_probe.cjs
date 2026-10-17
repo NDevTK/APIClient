@@ -185,26 +185,26 @@ async function main() {
   printTable(results, log);
 }
 
-/* The zone send: the offscreen document's own fetch speaking as an identity, through lib/request-identity.js
+/* The zone send: the wire (lib/safe-fetch.js's _wire) speaking as an identity, through lib/request-identity.js
    and lib/speak-as.js. `spec` names the identity (a frame by documentId, or an engine origin and URL), the
    request, and the identity's document referrer policy. The page sets `Referrer-Policy: unsafe-url`. */
 function zoneSend(off, spec) {
   return off.evaluate(async (s) => {
-    const id = s.engine ? await engineIdentity(s.engine.origin, s.engine.docUrl) : await frameIdentity(s.tabId, s.documentId);
+    const id = s.engine ? await engineIdentity(s.engine.origin, s.engine.docUrl, "probe:" + s.engine.docUrl)
+      : await frameIdentity(s.tabId, s.documentId);
     const facts = await identityFor(id, { url: s.url, requestInit: s.requestInit }, s.documentPolicy);
     const c = await cookieHeaderFor(facts, s.url);
     const mode = s.requestInit.mode === null ? "cors" : s.requestInit.mode;
-    const rules = [{ method: s.method, headers: speakAsHeaders(facts, s.method, mode, "", s.url, c) }];
-    // A preflighted send: the OPTIONS rule rides with the request's, as Fetch §4.8 sends it first.
-    if (s.preflightUnsafe) rules.push({ method: "OPTIONS",
-      headers: speakAsPreflightHeaders(facts, s.method, "", s.url, s.preflightUnsafe) });
-    if (s.forceOrigin) rules[0].headers.Origin = s.forceOrigin;
-    return withSpeakAsRules(facts.origin, s.url, rules, null, async () => {
-      if (s.pageFetchDuring) await new Promise((r) => setTimeout(r, 1500));   // the tab's own fetch lands here
-      if (s.preflightUnsafe) await fetch(s.url, { method: "OPTIONS", credentials: "omit" });
-      const r = await fetch(s.url, { method: s.method, credentials: "omit", headers: s.headers, body: s.body });
-      return { status: r.status };
-    });
+    const speak = (headers) => ({ docKey: id.docKey, origin: facts.origin, stated: null, headers });
+    const own = speakAsHeaders(facts, s.method, mode, "", [s.url], c);
+    if (s.forceOrigin) own.Origin = s.forceOrigin;
+    // A preflighted send: its OPTIONS send goes first, as Fetch §4.8 sends it, with its own headers.
+    if (s.preflightUnsafe)
+      await _wire(s.url, { method: "OPTIONS", credentials: "omit", redirect: "manual", headers: [],
+                           speakAs: speak(speakAsPreflightHeaders(facts, s.method, "", [s.url], s.preflightUnsafe)) });
+    const r = await _wire(s.url, { method: s.method, credentials: "omit", redirect: "manual",
+                                   headers: Object.entries(s.headers || {}), body: s.body, speakAs: speak(own) });
+    return { status: r.status };
   }, spec).catch((e) => ({ error: String(e) }));
 }
 
@@ -245,11 +245,11 @@ async function zoneRows({ browser, page, sw, off, extId, route, results }) {
   results["zone.concurrent"] = { first: r1, second: r2 };
   // The tab's own fetch of a URL while a rule for it is installed must arrive untouched.
   const during = echo("B", "zone.duringrule");
-  const zp = zoneSend(off, Object.assign(asTop("B", "x"), { url: during, pageFetchDuring: true }));
-  await sleep(500);
+  // The document's rule outlives its send, so the tab's fetch after it lands while the rule is installed.
+  const zp = await zoneSend(off, Object.assign(asTop("B", "x"), { url: during }));
   results["zone.duringrule.page"] = await page.evaluate((u) => fetch(u, { credentials: "include" })
     .then((r) => r.status), during).catch((e) => String(e));
-  results["zone.duringrule"] = await zp;
+  results["zone.duringrule"] = zp;
   // A rule a killed offscreen document left: installed directly, then the offscreen document reloads and
   // its first send must remove it.
   await sw.evaluate(() => chrome.declarativeNetRequest.updateSessionRules({ addRules: [{ id: 1500000, priority: 1,

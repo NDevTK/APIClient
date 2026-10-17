@@ -1839,7 +1839,7 @@ async function frontierRederive(e) {
                                                   credentialed: navigationCarriesSession(e.sourceUrl, e.origin),
                                                   /* A parked document is one only this zone holds. */
                                                   identity: navigationCarriesSession(e.sourceUrl, e.origin)
-                                                    ? await navigationIdentity({ identity: await engineIdentity(e.origin, e.sourceUrl),
+                                                    ? await navigationIdentity({ identity: await engineIdentity(e.origin, e.sourceUrl, "held:" + e.key),
                                                                            referrer: "none", policy: null,
                                                                            request: null },
                                                                          e.sourceUrl, DOCUMENT_REQUEST_UNSTATED)
@@ -2196,7 +2196,9 @@ function responseFieldLines(h) {
 function documentSpeaker(msg) {
   return async () => {
     const live = typeof msg.documentId === "string" && typeof msg.groupId === "number";
-    const identity = live ? await frameIdentity(msg.groupId, msg.documentId) : await engineIdentity(msg.origin, msg.sourceUrl);
+    const identity = live ? await frameIdentity(msg.groupId, msg.documentId)
+      : await engineIdentity(msg.origin, msg.sourceUrl, typeof msg.documentId === "string" && msg.documentId !== ""
+                               ? "engine:" + msg.documentId : "held:" + msg.origin + " " + msg.sourceUrl);
     if (identity === null) return null;
     return { identity, referrer: "client", policy: live ? await documentReferrerPolicy(msg.documentId) : null,
              request: null };
@@ -2845,7 +2847,7 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, inherited,
                        openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags);
       /* A Clear that landed mid-boot is honoured here: hostClear cannot destroy a renderer with a call
          outstanding, so it marks the record and the owner of that call removes the frame. */
-      if (eng._dropped) eng.r.destroy();
+      if (eng._dropped) engineFrameDestroy(eng);
       _reserveStats.rooted++;
     } catch (e) {
       engineBootFailed(eng, e);
@@ -2932,7 +2934,7 @@ function engineBootFailed(eng, e) {
   if (_documentReferrerPolicies.has(eng.docId)) documentPolicySettle(eng.docId, null);
   /* The frame goes with it. renderer-host.js reclaims its own frame (and frees the cluster in the registry)
      when the boot handshake fails, so `r` is null exactly when there is nothing to remove. */
-  if (eng.r) eng.r.destroy();
+  if (eng.r) engineFrameDestroy(eng);
   /* One instance failing is one crash however many documents were waiting on it: the banner fires once and a
      record is built per caller. */
   const m = String((e && e.message) || e);
@@ -3278,7 +3280,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       const opts = { pageOrigin: eng.origin, destination, mode, provenance, pinned,
                      driven, credentials, actor: "page", useCorsPreflight: false,
                      doc, credentialed: false,
-                     identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, abs, credentials, mode,
+                     identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, "engine:" + eng.docId, abs, credentials, mode,
                                                    referrerPolicy, referrer) };
       const r = await self.safeFetch(abs, opts);
       /* The chokepoint's record is fixed: safe-fetch.js returns {ok,status,statusText,headers,body,urlList} on
@@ -3508,7 +3510,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
                                             doc, actor: "page",
                                             credentialed: false, useCorsPreflight: q.useCorsPreflight,
                                             credentials: q.credentials, headers: q.headers,
-                                            identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, abs,
+                                            identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, "engine:" + eng.docId, abs,
                                                                           q.credentials, q.mode,
                                                                           q.referrerPolicy, q.referrer) });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
@@ -3737,6 +3739,12 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
    does not wait: the engine attaches the unload to every live timeline, each fires that document's `pagehide`
    and `unload` listeners under its own delta when next scheduled (an unload `sendBeacon` is an endpoint), and
    nothing is dropped. */
+/* An instance's frame is removed, and every document it held ends with it (HTML §7.5.10 "Destroying
+   documents"): their speak-as rules go (lib/speak-as.js). */
+function engineFrameDestroy(eng) {
+  for (const name of [eng.docId].concat(eng.joinedDocIds)) if (name !== null) speakAsDocumentEnded("engine:" + name);
+  eng.r.destroy();
+}
 async function engineUnload(eng, docName, incomingDocName) {
   DCHECK(eng.state === "hot" || eng.state === "fetching",
          "a document was reported replaced to an instance in state `" + eng.state + "` — §7.5.9's unload is a " +
@@ -3769,6 +3777,7 @@ async function engineUnload(eng, docName, incomingDocName) {
      (what HTML §7.2.2.1's `closed` reads). Removing it would let the next arrival re-join that name and hit
      the engine's one-realm-per-document CHECK. */
   await eng.r.renderer.unload({ docId: docName });
+  speakAsDocumentEnded("engine:" + docName);
   /* The round ends here, so it records: an unload attaches a job to every live timeline. */
   await engineRecordFacts(eng);
 }
@@ -5135,7 +5144,7 @@ async function engineFinalize(eng) {
     try { await eng.r.renderer.teardown(); }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "teardown", e); }
   }
-  eng.r.destroy();
+  engineFrameDestroy(eng);
   /* A crashed run's findings stay and the run is labelled: streamPartial has already merged every snapshot into
      the cumulative store, and hiding them from the analysis would show the document that learned them as
      clean. The completeness claims a crash invalidates are refused where each is made: no cost counters in the
@@ -5941,7 +5950,7 @@ const _hostOps = {
      threw leaves the same iframe behind. */
   serviceFetch: async (eng, stalled) => {
     try { await engineServiceFetch(eng, stalled); await engineRecordFacts(eng); }
-    finally { if (eng._dropped) eng.r.destroy(); }
+    finally { if (eng._dropped) engineFrameDestroy(eng); }
   },
   /* The round's half of a Clear: give back the frame the Clear could not take, and nothing else. No result is
      asked for, no residue persisted (the Clear emptied the frontier), and no waiter answered (hostClear
@@ -5955,7 +5964,7 @@ const _hostOps = {
            "a cleared engine's round landed with " + eng.r.outstandingCalls() + " call(s) still outstanding — " +
            "this is the round that owns the frame, so a call still in flight here is a second op driving an " +
            "instance the user wiped, and the teardown below would abort inside renderer-host instead");
-    eng.r.destroy();
+    engineFrameDestroy(eng);
   },
   /* Admission, the one order asked where there is room (evictee asks it where there is not), in two parts:
      (1) Routing, which costs no RAM and is neither ranked nor gated: a waiting document whose agent cluster
@@ -6123,6 +6132,8 @@ const _hostOps = {
                                            /*actor*/"page", seed.driven, seed.pinned, DOCUMENT_REQUEST_UNSTATED,
                                            /* A declared route is a document only this zone holds. */
                                            async () => ({ identity: await engineIdentity(stampOrigin(seed.principalOrigin),
+                                                                                   seed.principalUrl,
+                                                                                   "held:" + seed.principalOrigin + " " +
                                                                                    seed.principalUrl),
                                                           referrer: "none", policy: null, request: null }),
                                            docRecordOpaque(seed.doc)));
@@ -6454,7 +6465,7 @@ async function hostClear() {
   /* A reservation keeps its frame too, hence the positive set: a booting engine has no `r` until rendererLaunch
      answers and an ABI call outstanding from then until engineRoot finishes; engineCreate reads `_dropped` when
      its provisioning lands and removes the frame. */
-  for (const eng of dropped) { eng._dropped = true; if (eng.state === "hot" && eng.r.outstandingCalls() === 0) eng.r.destroy(); }
+  for (const eng of dropped) { eng._dropped = true; if (eng.state === "hot" && eng.r.outstandingCalls() === 0) engineFrameDestroy(eng); }
   for (const eng of dropped) childRequestsClose(eng);
   /* Every outstanding rendezvous belonged to a dropped instance; left behind, each would hold its asking
      engine's record for the life of the offscreen. */

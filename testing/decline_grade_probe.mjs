@@ -86,7 +86,7 @@ function zone(edge, table) {
    source. */
 async function navOpts(Z, principal, url, over) {
   const origin = new URL(principal).origin;
-  const identity = await Z.identityFor(await Z.engineIdentity(origin, principal),
+  const identity = await Z.identityFor(await Z.engineIdentity(origin, principal, 'probe:' + principal),
                                  { url, requestInit: { credentials: 'include', mode: 'navigate',
                                                        destination: 'document',
                                                        referrer: '', referrerPolicy: null } },
@@ -194,7 +194,6 @@ const cookieWrites = [];   // [{name, details, before: the number of server hits
 /* C's jar: an unpartitioned None and Lax cookie, and one of whichever partition is asked for. */
 const C_JAR = [{ name: 'tp', value: '1', path: '/', sameSite: 'no_restriction' },
                { name: 'tl', value: '1', path: '/', sameSite: 'lax' }];
-const speakAsRules = new Map();   // ruleId -> { method, url, requestHeaders }
 let zf = null;
 const FIXTURE_EDGE = {
   fetch: (u, init) => {
@@ -202,13 +201,13 @@ const FIXTURE_EDGE = {
     if (s.startsWith('data:')) return fetch(u, init);
     if (![A, B, C, D].some((o) => s.startsWith(o + '/'))) throw new Error(REACHED);
     const headers = new Headers(init && init.headers ? init.headers : undefined);
-    const method = zf.speakAsDnrMethod(init && init.method ? init.method : 'GET');
-    for (const r of speakAsRules.values()) {
-      if (r.url !== s || zf.speakAsDnrMethod(r.method) !== method) continue;
-      for (const h of r.requestHeaders)
+    const speak = init && init.speakAs ? init.speakAs : null;
+    if (speak !== null)
+      for (const h of zf.speakAsCheckedHeaders(Object.assign({ url: s, method: init.method }, speak)))
         if (h.operation === 'remove') headers.delete(h.header); else headers.set(h.header, h.value);
-    }
-    return fetch(s.startsWith(D + '/') ? A + s.slice(D.length) : s, Object.assign({}, init, { headers }));
+    const rest = Object.assign({}, init, { headers });
+    delete rest.speakAs;
+    return fetch(s.startsWith(D + '/') ? A + s.slice(D.length) : s, rest);
   },
   swRpc: async (api, args) => {
     if (api === 'cookies.getAll' && args.name !== undefined)
@@ -221,32 +220,23 @@ const FIXTURE_EDGE = {
       return args.partitionKey ? [] : [{ name: 'sid', value: 'probe', path: '/', sameSite: 'lax' }];
     if (api === 'cookies.set') { cookieWrites.push({ name: args.name, details: args, before: hits.length });
                                  return { refused: null }; }
-    if (api === 'speakAs.clearFamily') { speakAsRules.clear(); return { cleared: 0, rules: Infinity, regex: Infinity }; }
-    if (api === 'speakAs.update') {
-      for (const id of args.removeRuleIds) speakAsRules.delete(id);
-      for (const g of args.groups)
-        for (const r of zf.speakAsCheckedRules(g))
-          speakAsRules.set(r.ruleId, { method: r.method, url: g.url, requestHeaders: r.requestHeaders });
-      return Object.fromEntries(args.urls.map((u) =>
-        [u, [...speakAsRules].filter(([, r]) => r.url === u).map(([id]) => id)]));
-    }
     throw new Error(`the fixture relay was asked \`${api}\`, which no send on this probe makes`);
   },
 };
 /* A navigation whose speaker sends a Referer (a sub-frame's, `referrer: "client"`), and the page's own
    `fetch()` (bridge.js's `fetched`: uncredentialed, `cors`, the engine's referrer). */
-const REFERRING = async (Z) => ({ identity: await Z.identityFor(await Z.engineIdentity(A, `${A}/page`),
+const REFERRING = async (Z) => ({ identity: await Z.identityFor(await Z.engineIdentity(A, `${A}/page`, 'probe:page'),
                                                      { url: `${A}/hop/1b`, requestInit: { credentials: 'include',
                                                        mode: 'navigate', destination: 'document', referrer: null,
                                                        referrerPolicy: null } },
                                                      'strict-origin-when-cross-origin') });
 const PAGE_FETCH = async (Z, url) => ({ destination: '', mode: 'cors', credentials: 'same-origin', credentialed: false,
                                   useCorsPreflight: false,
-                                  identity: await Z.pageRequestIdentity(A, `${A}/page`, url, 'same-origin', 'cors',
+                                  identity: await Z.pageRequestIdentity(A, `${A}/page`, 'probe:page', url, 'same-origin', 'cors',
                                                                   'strict-origin-when-cross-origin', `${A}/page`) });
 /* A credentialed `cors` request of the page's own, which is not a navigation (RFC 6265bis §5.7 step 18). */
 const CREDENTIALED_FETCH = async (Z, url) => ({ destination: '', mode: 'cors', credentials: 'include', useCorsPreflight: false,
-  identity: await Z.identityFor(await Z.engineIdentity(A, `${A}/page`), { url, requestInit: { credentials: 'include', mode: 'cors',
+  identity: await Z.identityFor(await Z.engineIdentity(A, `${A}/page`, 'probe:page'), { url, requestInit: { credentials: 'include', mode: 'cors',
                           referrer: '', referrerPolicy: null } }, 'strict-origin-when-cross-origin') });
 const wrote = (name) => cookieWrites.find((w) => w.name === name);
 const FIXTURE_ROWS = [

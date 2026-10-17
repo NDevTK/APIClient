@@ -147,18 +147,23 @@ Which extension context can open a connection at all is enforced by CSP in all b
   `--renderer-client-id`; a listener in an isolated extension tab saw the offscreen document's fetches). The
   offscreen document has no `chrome.webRequest` at all (it holds `chrome.runtime` alone).
 - The zone follows every redirect itself (Fetch §4.5 "HTTP-redirect fetch"), so each hop is judged by every
-  gate before it is sent and goes out as its own request, under its own speak-as rule. The worker's fetch is
-  asked for `redirect: "manual"`, which never sends the hop and answers an opaque-redirect without
-  `Location`; the worker answers the zone the 3xx `webRequest.onBeforeRedirect` reported of its own fetch. A
-  webRequest event is linked to its send in two steps. Which context: every other extension context is sealed
-  or has `connect-src 'none'`, so a request initiated by the extension origin in no tab and no document is the
+  gate before it is sent and goes out as its own request, with its own nonce. The worker's fetch is asked for
+  `redirect: "manual"`, which never sends the hop and answers an opaque-redirect without `Location`; the
+  worker answers the zone the 3xx `webRequest.onBeforeRedirect` reported of its own fetch. A webRequest event
+  is linked to its send in two steps. Which context: every other extension context is sealed or has
+  `connect-src 'none'`, so a request initiated by the extension origin in no tab and no document is the
   worker's own (a page's service worker is also in no tab and no document, and its initiator is the page's
-  origin); the worker CHECKs all three. Which request: each send carries a 128-bit nonce header that
-  `onBeforeSendHeaders` (with `extraHeaders`) reads, binding the browser's `requestId`, which holds across the
-  request's life, to the send; a session rule removes the header from every request of the worker, and
-  `onBeforeSendHeaders` reports headers before declarativeNetRequest modifies them and `onSendHeaders` after
-  (measured in Chrome 148: the server never saw the nonce). A process host (`engine/trusted.mjs`) reads the 3xx
-  off its own fetch.
+  origin); the worker CHECKs that each such request is a live send. Which request: the worker fetches the
+  send's URL with the fragment `#t=<nonce>` (or `#t=<token>.<k>.<nonce>`, below), a fresh 128-bit nonce;
+  webRequest reports URLs with their fragment and a server never receives one (measured in Chrome 155: the
+  server's request line held no fragment and no header held the token). `onBeforeSendHeaders` binds the
+  browser's `requestId`, which holds across the request's life, to the send by the nonce, once: a second
+  request carrying it would be a hop the platform followed, which is a CHECK. No answer to the zone carries
+  the nonce (CHECKed), and the zone keeps its own URLs, fragments included. The worker's fetch uses cache
+  mode `no-store`: its one HTTP cache is keyed without the fragment, so it would answer one document's send
+  with another's reply, and a `stale-while-revalidate` revalidation is a request of its own after the send
+  ended. A process host
+  (`engine/trusted.mjs`) reads the 3xx off its own fetch.
 - Runtime messages carry JSON only (a `Uint8Array` arrives as an object of indices, an `ArrayBuffer` as `{}`;
   one message is refused past 64 MiB, measured in Chrome 148), so a body crosses as base64 chunks, one per
   read of the worker's fetch. A worker with no message for 30 s is ended even with its fetch pending (measured:
@@ -369,30 +374,43 @@ from a browser-initiated navigation, measured), where Fetch §3.1.3's same-site 
   - `Sec-Fetch-Site`/`-Mode`/`-Dest` by Fetch Metadata §2;
   - `Sec-Fetch-Storage-Access` by Storage Access Headers §4.1.
   A preflighted send's OPTIONS request gets Fetch §4.8's own set.
-- `speak-as-rule.js`, in the service worker, sets them through `declarativeNetRequest` session rules, one per
-  method and URL the zone sends to as a document. The rule is scoped to `tabIds: [TAB_ID_NONE]`, `initiatorDomains` (this
-  extension), the method, and the exact URL (an escaped, anchored `regexFilter` when the URL holds `*`, `^`
-  or `|`). Measured, a tab's own request to the same URL during a rule arrives untouched, and rules scoped to
-  another initiator, tab or method do not apply.
+- `speak-as-rule.js`, in the service worker, sets them through `declarativeNetRequest` session rules, each
+  scoped to one document's sends. A document (`docKey` on the identity: `frame:<documentId>`,
+  `engine:<docId>`, `held:` for one only this zone holds, and `<frame>+<jar>` for a frame speaking with
+  another frame's cookie partition) gets a fresh 128-bit token at its first send that speaks as it. A rule
+  carries one send's computed headers and matches this extension's initiator, `tabIds: [TAB_ID_NONE]`, the
+  method, and a URL that begins with the send's fragment-less URL and `#t=<token>.<k>.`, where `k` numbers
+  the document's distinct (method, URL, header set) keys; a left-anchored `urlFilter`, or an escaped,
+  anchored `regexFilter` when the URL holds `*`, `^` or `|`. Only the worker's fetch of that document's send
+  carries the token, so a rule changes no other request: not a tab's, not a page service worker's, not
+  another document's send to the same URL, not a send with no identity. Measured in Chrome 155 on the
+  extension: concurrent sends to one URL as document A, as document B and as no document each arrived with
+  their own headers; a request carrying A's scope arrived unmodified as a POST, from a tab, and with
+  another token or no fragment; the worker's own GET forging A's scope was modified, and the header CHECK
+  below fired on it.
 - Only the offscreen document reaches the install arm (`__rpc`, `sender.url === OFFSCREEN_HREF`), and it
   sends the computed headers with the identity's origin. The service worker CHECKs that `Origin` equals that
   origin (or is `null`), and that `Referer` is absent or same-origin with it. A send can therefore speak
   only as an origin a document has. It cannot name an arbitrary site, which a bare rule can: measured, a
   rule set `Origin: https://bank.example`. The one exception is an operator send's stated `Origin` or
   `Referer` (above), which the install names as `stated`.
-- The zone runs one send per URL at a time. A rule is keyed by the identity, the stated pair, the method and
-  the header set (`lib/speak-as.js`). A send whose key is the installed rule's for its method and URL runs
-  under that rule; a new or changed key replaces it. The sends that start while an update is in flight share
-  the next `updateSessionRules` call (a preflight's rule and its request's always go together), and the zone
-  CHECKs that the rules then installed for each of their URLs are exactly its own record of them. A send that speaks as no document first retires the rule of its method and URL. So two
-  identities never share a rule, and no send carries headers it did not compute. Every
-  `updateSessionRules` call flushes the browser's whole back/forward cache (`CacheFlushed`, measured in
-  Chrome 155), which is why a rule outlives its send.
+- A later send of the same document with the same method, URL and header set reuses the rule; another header
+  set is another `k`, so concurrent sends of one document never wait for each other, and nothing serializes
+  across documents. The sends that start while an update is in flight share the next `updateSessionRules`
+  call, and the zone CHECKs that the family then installed is exactly its own record. A document's rules
+  are removed when it ends (an engine document's navigation away or its instance's teardown, a browser
+  document's destruction), each once no send runs under it. Every `updateSessionRules` call flushes the
+  browser's whole back/forward cache (`CacheFlushed`, measured in Chrome 155), which is why a rule outlives
+  its send.
+- The worker checks every no-tab request a rule could match (`onSendHeaders`, which reports after
+  declarativeNetRequest; `onBeforeSendHeaders` reports before): its final value of every header a rule may
+  name equals its own value changed by its own send's one rule, or by none for a request that is not a send
+  speaking as a document. It is a CHECK, the runtime form of the rule that a rule changes only the sends it
+  was installed for.
 - The offscreen document removes every rule of the family before its first send, because session rules
-  outlive it. The service worker does not do this at its own start: it can be evicted while a send is in
-  flight.
-- `engine/trusted.mjs` has no service worker and no `declarativeNetRequest`. It keeps the same rules in a
-  table, checked by the same `speakAsCheckedRules`, and sets them on its own fetch, which sends any header.
+  outlive it.
+- `engine/trusted.mjs` has no service worker and no `declarativeNetRequest`. It sets a send's headers on that
+  send (`init.speakAs`), checked by the same `speakAsCheckedHeaders`; its fetch sends any header.
 
 Residuals, each a difference from the document's own request:
 - The speak-as rules are held within `declarativeNetRequest`'s session limits, less the rules outside the
@@ -400,15 +418,16 @@ Residuals, each a difference from the document's own request:
   unsafe), and `MAX_NUMBER_OF_REGEX_RULES` for URLs that hold `*`, `^` or `|` (whose rule is a
   `regexFilter`). Past either, the update that installs a rule also retires the least recently used rules no
   send is running under. With every rule under a send in flight the zone CHECK-fails, and a refused update
-  fails its send and makes the next send clear the family first. The reference states no rate limit on
+  fails its sends and the zone reconciles its record with what the worker reports installed. The reference states no rate limit on
   `updateSessionRules`, and 3000 install-and-release pairs in a row were all accepted (6.0 s, measured).
-- A speak-as rule names its send by initiator, `tabIds: [-1]`, method and exact URL, since a rule condition
-  cannot match a request header (Chrome's RuleCondition lists `responseHeaders` and `excludedResponseHeaders`
-  and no request-header condition; `requestHeaders` in a condition is refused as "Unexpected property",
-  measured). So `safeFetch` sends one request per URL at a time (`_sendSerialized`), hops included, and a second
-  send to a URL waits for the first; same-URL sends are not concurrent. Measured in Chrome 148: an
-  uncredentialed request whose hop landed on a URL a credentialed send had in flight waited for it and went
-  out without its Cookie.
+- A rule cannot condition on a request header (Chrome's RuleCondition lists `responseHeaders` and
+  `excludedResponseHeaders` and no request-header condition; `requestHeaders` in a condition is refused as
+  "Unexpected property", measured), so the document's token rides in the URL fragment, which webRequest
+  reports and a server never receives. `initiatorDomains` matches a host and not a scheme, so a no-tab request
+  from a document whose host is this extension's id would satisfy the initiator condition; it cannot carry a
+  live token, and the worker's header CHECK covers it.
+- A document only this zone holds (`held:`, a frontier entry or a declared route) has no end event, so its
+  rules leave only by the session limits' retirement.
 - The header names a rule adds arrive lower-case and after the browser's own headers.
 - The order between unpartitioned and partitioned cookies of equal path length is not the browser's.
   `chrome.cookies` states no creation time.

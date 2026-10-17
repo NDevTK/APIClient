@@ -148,40 +148,27 @@ const ENGINE = dirname(fileURLToPath(import.meta.url));
 const EXT_DIR = join(ENGINE, '..', 'extension');
 
 /* A page request speaks as its document (extension/lib/speak-as.js): the extension sets the identity's
-   headers with declarativeNetRequest rules by method and URL, which a process has no equivalent of. This
-   host keeps the same rules in a table instead, checked by the same `speakAsCheckedRules`, and applies them
-   to its own fetch, which (unlike a browser's) sends any header it is given; the table has no limit. `swRpc`
-   answers the two speak-as calls lib/speak-as.js makes and lib/site.js's site question, which a process with
-   no browser answers from the engine's own list (engine/psl.mjs), and nothing else. */
+   headers with declarativeNetRequest rules scoped to the document's sends, which a process has no
+   equivalent of. This host's own fetch (unlike a browser's) sends any header it is given, so it sets a
+   send's headers (`init.speakAs`, checked by the same `speakAsCheckedHeaders`) on that send itself. `swRpc`
+   answers lib/site.js's site question, which a process with no browser answers from the engine's own list
+   (engine/psl.mjs), and nothing else. */
 function speakAsHost(sandbox) {
-  const rules = new Map();   // ruleId -> { method, url, requestHeaders }
   sandbox.swRpc = async (api, arg) => {
-    if (api === 'speakAs.clearFamily') {
-      const n = rules.size;
-      rules.clear();
-      return { cleared: n, rules: Infinity, regex: Infinity };
-    }
-    if (api === 'speakAs.update') {
-      for (const id of arg.removeRuleIds) rules.delete(id);
-      for (const g of arg.groups)
-        for (const r of sandbox.speakAsCheckedRules(g))
-          rules.set(r.ruleId, { method: r.method, url: g.url, requestHeaders: r.requestHeaders });
-      return Object.fromEntries(arg.urls.map((u) => [u, [...rules].filter(([, r]) => r.url === u).map(([id]) => id)]));
-    }
     if (api === 'site.registrableDomains') return siteRegistrableDomains(arg);
-    throw new Error('engine/trusted.mjs serves no rpc ' + JSON.stringify(api) + ' — only speak-as rules and sites');
+    throw new Error('engine/trusted.mjs serves no rpc ' + JSON.stringify(api) + ' — only sites');
   };
   sandbox.fetch = (input, init) => {
     const u = new URL(String(input));
     u.hash = '';
-    const method = sandbox.speakAsDnrMethod(init && init.method ? init.method : 'GET');
     const headers = new Headers(init && init.headers ? init.headers : undefined);
-    for (const r of rules.values()) {
-      if (r.url !== u.href || sandbox.speakAsDnrMethod(r.method) !== method) continue;
-      for (const h of r.requestHeaders)
+    const speak = init && init.speakAs ? init.speakAs : null;
+    if (speak !== null)
+      for (const h of sandbox.speakAsCheckedHeaders(Object.assign({ url: u.href, method: init.method }, speak)))
         if (h.operation === 'remove') headers.delete(h.header); else headers.set(h.header, h.value);
-    }
-    return fetch(u.href, Object.assign({}, init, { headers }));
+    const rest = Object.assign({}, init, { headers });
+    delete rest.speakAs;
+    return fetch(u.href, rest);
   };
 }
 
@@ -1007,7 +994,7 @@ async function main() {
                                             actor: 'page', doc, credentialed: false,
                                             credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
                                             headers: q.headers.length ? q.headers : undefined,
-                                            identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, abs,
+                                            identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, 'engine:' + e.docId, abs,
                                                                                q.credentials, q.mode,
                                                                                q.referrerPolicy, q.referrer) });
     if (raw.refusal && raw.refusal.kind === 'decline') {
@@ -1137,7 +1124,7 @@ async function main() {
                                             provenance, pinned, driven, credentials, useCorsPreflight: false,
                                             actor: 'page',
                                             doc, credentialed: false,
-                                            identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, abs,
+                                            identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, 'engine:' + e.docId, abs,
                                                                                credentials, mode,
                                                                                referrerPolicy, referrer) });
     /* A REFUSAL THIS ZONE'S OWN POLICY MADE IS A DECLINE AND NOT A NETWORK ERROR, and the difference is what
