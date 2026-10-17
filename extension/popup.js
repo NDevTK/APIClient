@@ -1056,7 +1056,8 @@ async function renderFrontierShare(bytes) {
   document.getElementById("frontier-share-status").textContent =
     mb(r.docBytes) + " MB stored across " + r.entries + " parked page(s)" +
     (r.overShare > 0 ? "; " + mb(r.overShare) + " MB over the share is the only copy there is and was kept" : "") +
-    "; " + r.shed + " shed, " + r.rederived + " fetched back, " + r.stranded + " could not be";
+    "; " + r.shed + " shed, " + r.rederived + " fetched back, " + r.stranded + " could not be" +
+    (r.persistError ? "; NOT SAVED for the next session (" + r.persistError + ")" : "");
 }
 
 /* This extension's third-party-cookie setting and the exception for the shown document's site, as the host
@@ -1067,7 +1068,8 @@ async function renderThirdPartyCookies(act) {
   const r = await chrome.runtime.sendMessage(act === undefined ? { type: "THIRD_PARTY_COOKIES", subject }
     : Object.assign({ type: "THIRD_PARTY_COOKIES", initiator: "user-initiated", subject }, act));
   DCHECK(r && typeof r.allowed === "boolean" && typeof r.defaultAllowed === "boolean" &&
-         (r.site === null || typeof r.site === "string") && (r.exception === null || typeof r.exception === "string"),
+         (r.site === null || typeof r.site === "string") && (r.exception === null || typeof r.exception === "string") &&
+         (r.persistError === null || typeof r.persistError === "string"),
          "the third-party-cookie command answered without the setting and exception now in force");
   document.getElementById("third-party-cookies").checked = r.allowed;
   document.getElementById("third-party-cookies-site").textContent =
@@ -1079,7 +1081,8 @@ async function renderThirdPartyCookies(act) {
     (r.allowed ? "On" : "Off") + (r.allowed === r.defaultAllowed ? " (default)" : "") +
     ": when off, a request this tool sends with your cookies to a site other than the page's (not a page " +
     "navigation) carries and stores only partitioned cookies. This is the extension's own setting; Chrome's " +
-    "third-party cookie setting is separate and is not read.";
+    "third-party cookie setting is separate and is not read." +
+    (r.persistError ? " NOT SAVED for the next session (" + r.persistError + ")." : "");
 }
 
 /* ─── THE PER-ORIGIN EGRESS WIDENING ─────────────────────────────────────────────────────────────────────
@@ -1149,6 +1152,7 @@ async function renderEgressPolicy(act) {
     msg = "refused on " + r.subjectRefusal + " — the row named there is the one holding it; this app's own "
         + "scripts, modules and lazy chunks load at every setting";
   if (r.refused) msg = "not permitted (" + r.refused + ") — " + msg;
+  if (r.persistError) msg = "NOT SAVED for the next session (" + r.persistError + ") — " + msg;
   status.textContent = msg;
   /* WHAT THE PERSON IS DECIDING ABOUT. Every row is the POLICY'S, read back — this surface computes no value
      and decides no combination, because a control that worked out for itself what would fire would be the

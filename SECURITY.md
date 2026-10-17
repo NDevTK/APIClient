@@ -401,7 +401,9 @@ Residuals, each a difference from the document's own request:
   site it names; it is the `third-party-cookies` row of that site in the per-origin egress table, persisted
   with it, set from the popup's control for the shown document's site through the same admitted message, and
   no egress grant (revoking an origin's egress leaves it). Both survive the offscreen document's recreation
-  and a browser restart (measured in Chrome 148).
+  and a browser restart (measured in Chrome 148). A setting's write, like the egress table's and the page
+  cache share's, is a "strict" IndexedDB transaction that counts as saved only on its `complete` event; a
+  write that aborts leaves the setting in force for the session and the popup says it was not saved.
 - An operator's frame policy is not observable from this zone, so an operator send that states none uses the
   default policy, strict-origin-when-cross-origin. An engine page request carries the referrer and policy the
   engine states on its request record, and a referrer not of the identity's origin is "client" (Fetch §5.4).

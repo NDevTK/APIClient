@@ -428,7 +428,8 @@ async function handlePopupMessage(msg, sender, sendResponse) {
       DCHECK(reply && reply.success === true && reply.result && typeof reply.result.allowed === "boolean" &&
              typeof reply.result.defaultAllowed === "boolean" &&
              (reply.result.site === null || typeof reply.result.site === "string") &&
-             (reply.result.exception === null || typeof reply.result.exception === "string"),
+             (reply.result.exception === null || typeof reply.result.exception === "string") &&
+             (reply.result.persistError === null || typeof reply.result.persistError === "string"),
              "the host answered the third-party-cookie command without the setting now in force");
       sendResponse(reply.result);
       return;

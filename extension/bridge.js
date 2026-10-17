@@ -993,16 +993,31 @@ function frontierPref(name) {
     }, rej);
   }).catch((e) => { RETHROW_FATAL(e); frontierFail("preference read", e); return null; });
 }
+/* One readwrite transaction over `store`, whose requests `write(objectStore)` issues, settled by the
+   transaction: resolved on `complete` and rejected on `abort`. A request's `success` is not a commit: IndexedDB
+   3 §5.4 "Committing a transaction" writes the changes after every request is processed, and "Only after the
+   transaction has been successfully written is the complete event fired"; a failed write, or anything else,
+   aborts it (§5.5 "Aborting a transaction"), which reverts every change. `durability` is §2.7
+   "Transactions"' hint. */
+function idbWrite(store, durability, write) {
+  return idbOpen().then((db) => new Promise((res, rej) => {
+    const tx = db.transaction(store, "readwrite", { durability });
+    tx.oncomplete = () => res();
+    tx.onabort = () => rej(tx.error || new DOMException("the " + store + " transaction was aborted", "AbortError"));
+    write(tx.objectStore(store));
+  }));
+}
+/* A person's setting, written "strict": §2.7 asks for "strict" "in cases where reducing the risk of data loss
+   outweighs the impact to performance and power", and a setting is written once per act. Rejects with the
+   transaction's failure, which the caller reports (prefWriteOutcome). */
 function frontierPrefPut(name, value) {
-  return new Promise((res, rej) => {
-    idbOpen().then((db) => {
-      const tx = db.transaction("prefs", "readwrite");
-      const t = tx.objectStore("prefs").put(value, name);
-      t.onsuccess = () => res();
-      t.onerror = () => rej(t.error || tx.error);
-      tx.onabort = () => rej(tx.error || t.error);
-    }, rej);
-  }).catch((e) => { RETHROW_FATAL(e); frontierFail("preference write", e); });
+  return idbWrite("prefs", "strict", (s) => s.put(value, name));
+}
+/* A setting write's outcome for the reply that shows it: null once committed, or the failure. The setting is
+   in force for this session either way; the reply says whether the next one will have it. */
+async function prefWriteOutcome(write) {
+  try { await write; return null; }
+  catch (e) { RETHROW_FATAL(e); return String((e && e.name) || "Error") + ": " + String((e && e.message) || e); }
 }
 /* ─── The per-origin exploration widening, persisted ──────────────────────────────────────────────────
    The decision lives in lib/safe-fetch.js (the table, what a widening means, the refusal). This file holds
@@ -1452,20 +1467,11 @@ function coldLookupOf(fkey, look) {
   }
   return { state: others > 0 ? "other-bundle" : "unvisited", others: others };
 }
-/* The one write. It rejects on failure like every edge here; there is no quota arm (`unlimitedStorage`), and
-   residency is asked by frontierPut after the write. The transaction's abort is listened for as well as the
-   request's error, since a write can fail on either and a promise settling only on `t.onerror` would hang. */
+/* The one write, settled when its transaction commits (idbWrite). It rejects on failure like every edge here;
+   there is no quota arm (`unlimitedStorage`), and residency is asked by frontierPut after the write lands. The
+   durability hint is the storage bucket's default: entries are rewritten on every park. */
 function frontierWrite(key, entry) {
-  return new Promise((res, rej) => {
-    idbOpen().then((db) => {
-      const tx = db.transaction("frontier", "readwrite");
-      const s = tx.objectStore("frontier");
-      const t = (entry && entry.recipes) ? s.put(entry, key) : s.delete(key);
-      t.onsuccess = () => res();
-      t.onerror = () => rej(t.error || tx.error);
-      tx.onabort = () => rej(tx.error || t.error);
-    }, rej);
-  });
+  return idbWrite("frontier", "default", (s) => { if (entry && entry.recipes) s.put(entry, key); else s.delete(key); });
 }
 async function frontierPut(key, entry) {
   if (entry && entry.recipes) frontierRecord(entry, "was written");   // before the edge: the grammar, not the storage
@@ -6042,8 +6048,7 @@ self.rendererPoolProbe = function rendererPoolProbe() {
    "cleared", which _dispatchDocument reads to abandon its tail without recording a page failure. */
 async function frontierClear() {
   try {
-    const db = await idbOpen();
-    await new Promise((res, rej) => { const t = db.transaction("frontier", "readwrite").objectStore("frontier").clear(); t.onsuccess = () => res(); t.onerror = () => rej(t.error); });
+    await idbWrite("frontier", "default", (s) => s.clear());
     _frontierIndex.clear();   // the ranking view is the store's projection: a cleared store ranks nothing
   } catch (e) { RETHROW_FATAL(e); frontierFail("clear", e); }
 }
@@ -6109,6 +6114,7 @@ self.astDispatch = async function astDispatch(msg) {
       DCHECK(typeof msg.subject === "string",
              "the third-party-cookie command carried no subject — the popup states the origin it is showing");
       const _site = self.safeFetchWidenable(msg.subject) === null ? siteOf(msg.subject + "/") : null;
+      let _persistError = null;
       if (msg.allowed !== undefined || msg.exception !== undefined)
         CHECK(msg.initiator === PAGE_CONTEXT_USER_INITIATED,
               "the third-party-cookie setting was asked to change by " + JSON.stringify(msg.initiator) +
@@ -6116,17 +6122,17 @@ self.astDispatch = async function astDispatch(msg) {
       if (msg.allowed !== undefined) {
         CHECK(typeof msg.allowed === "boolean", "the third-party-cookie setting was asked to become " +
               JSON.stringify(msg.allowed) + ", not a boolean");
-        await frontierPrefPut("thirdPartyCookies", msg.allowed);
         self.identityThirdPartyCookiesStated(msg.allowed);
+        _persistError = await prefWriteOutcome(frontierPrefPut("thirdPartyCookies", msg.allowed));
       }
       if (msg.exception !== undefined) {
         CHECK(_site !== null && (msg.exception === null || msg.exception === "allow" || msg.exception === "block"),
               "a third-party-cookie exception " + JSON.stringify(msg.exception) + " was asked for the subject " +
               JSON.stringify(msg.subject) + ", which has no site or is not allow, block or null");
         self.safeFetchSetSiteSetting(_site, "third-party-cookies", msg.exception);
-        await egressPolicyPersist();
+        if (_persistError === null) _persistError = await prefWriteOutcome(egressPolicyPersist());
       }
-      return { success: true, result: { allowed: self.identityThirdPartyCookiesAllowed(),
+      return { success: true, result: { allowed: self.identityThirdPartyCookiesAllowed(), persistError: _persistError,
                                         defaultAllowed: THIRD_PARTY_COOKIES_DEFAULT, site: _site,
                                         exception: _site === null ? null
                                           : self.safeFetchSiteSetting(_site, "third-party-cookies") } };
@@ -6141,9 +6147,10 @@ self.astDispatch = async function astDispatch(msg) {
              "a frontier-share setting arrived that is not a byte count (`" + String(msg.bytes) + "`) — it is " +
              "compared against the stored document halves, and a value no comparison is true of is an " +
              "UNLIMITED store wearing the appearance of a configured one");
+      let _persistError = null;
       if (typeof msg.bytes === "number" && Number.isFinite(msg.bytes) && msg.bytes >= 0) {
-        await frontierPrefPut("share", msg.bytes);
         _frontierShare = msg.bytes;
+        _persistError = await prefWriteOutcome(frontierPrefPut("share", msg.bytes));
         /* The setting takes effect immediately: residency is an invariant of the store and this is one of the
            two things that can break it (the other is a write). */
         await frontierResidency();
@@ -6154,6 +6161,7 @@ self.astDispatch = async function astDispatch(msg) {
       const _share = await frontierShare();
       const _index = await frontierIndex();
       return { success: true, result: { share: _share, defaultShare: frontierDefaultShare(),
+                                        persistError: _persistError,
                                         docBytes: _frontierStats.docBytes, overShare: _frontierStats.overShare,
                                         shed: _frontierStats.shed, stranded: _frontierStats.stranded,
                                         rederived: _frontierStats.rederived,
@@ -6227,7 +6235,7 @@ self.astDispatch = async function astDispatch(msg) {
       }
       /* The store moves only where the table did, written from the table, so it never holds a permission the
          chokepoint refused. */
-      if (changed) await egressPolicyPersist();
+      const _persistError = changed ? await prefWriteOutcome(egressPolicyPersist()) : null;
       /* A subject the chokepoint could not widen is not probed: `safeFetchFiringRefusal` takes an absolute URL and
          throws on an unparseable one. `null` states "this origin cannot be the subject", rendered as the reason. */
       const _subjectUsable = self.safeFetchWidenable(msg.subject);
@@ -6254,7 +6262,7 @@ self.astDispatch = async function astDispatch(msg) {
         vector: _subjectUsable === null ? self.safeFetchSignalVector(_probe) : null,
         defaults: self.safeFetchDefaultArms(),
         legacyDropped: _egressLegacyDropped,
-        refused, changed } };
+        refused, changed, persistError: _persistError } };
     }
     if (msg.type !== "AST_ANALYZE") return { success: false, error: "unknown type " + msg.type };
     /* Enqueue this document into the live host WFQ pool: its instance interleaves in slices with every other

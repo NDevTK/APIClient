@@ -48,9 +48,11 @@ function _idbSet(key, value) {
           db.close();
           resolve();
         };
-        tx.onerror = () => {
+        // Settled by the transaction's `abort`, not a request's `error`: IndexedDB 3 §5.5 "Aborting a transaction"
+        // fires no error event for an abort while committing.
+        tx.onabort = () => {
           db.close();
-          reject(tx.error);
+          reject(tx.error || new DOMException("the transaction was aborted", "AbortError"));
         };
       }),
   );
@@ -67,9 +69,11 @@ function _idbClear() {
           db.close();
           resolve();
         };
-        tx.onerror = () => {
+        // Settled by the transaction's `abort`, not a request's `error`: IndexedDB 3 §5.5 "Aborting a transaction"
+        // fires no error event for an abort while committing.
+        tx.onabort = () => {
           db.close();
-          reject(tx.error);
+          reject(tx.error || new DOMException("the transaction was aborted", "AbortError"));
         };
       }),
   );
