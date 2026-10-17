@@ -401,11 +401,9 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
  * about with the GLOBAL as base partition into exactly four, and all four are emitted:
  *   owed        — a standard owns the name and this realm has none: the rows below, summed.
  *   removed     — a standard removed the name (browser/obsolete_names.h); absent, and nothing is owed.
- *   index       — an integer key on the global, refused by the arm that cites HTML §7.2.2.2 Indexed access on
- *                 the Window object.
+ *   index       — an integer key on the global (HTML §7.2.2.2 Indexed access on the Window object).
  *   app state   — everything else: no vocabulary claimed the name.
- * `owed + removed + index + appState == globalReads` is asserted in the composer, where all five are in one
- * hand.
+ * `owed + removed + index + appState == globalReads` is asserted in the composer, where all are in hand.
  * THE APP-STATE ARM IS NAMED FOR THE DECISION AND NOT FOR THE MINT, which it used to be and which stopped being
  * true the day a second entry reached this partition, and is MORE true with every entry since: a read that
  * performs no [[Get]] is classified by these same three arms and mints nothing, so a counter called "mints"
@@ -725,10 +723,9 @@ static void owed_note(const char *name, AbsentVocab vocab, AbsentEntry entry)
    and that difference is not cosmetic — js_absent_ask FILTERS, the typeof arm has the identifier grammar and
    ASSERTS, and every OTHER no-[[Get]] arm FILTERS because its key is the page's own ToPropertyKey result.
    One rule, three reasons; a reader who takes the reason for the rule will put an assert on a page's bytes.
-   Returns 1 when the read is LEFT ALONE — a standard owes the name, a standard removed it, or it is an
-   integer key on the global —
-   and 0 when no vocabulary claimed it, which is the arm the read hook mints an unknown on and the two
-   operator entries simply record. `key` is the atom already spelled by ns_key_str.
+   Returns 1 when the read is LEFT ALONE — a standard owes or removed the name, or it is an integer key on
+   the global — and 0 when no vocabulary claimed it, the arm the read hook mints an unknown on and the
+   operator entries record. `key` is the atom already spelled by ns_key_str.
    `entry` IS WHICH OF THE THREE ASKED AND IS THE CALLER'S TO STATE, for the reason the engine's own operator
    enum is the engine's to state: this function cannot infer it, because the classification it performs is a
    question about the NAME and the name is identical at every entry. It is carried rather than derived

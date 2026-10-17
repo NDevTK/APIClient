@@ -2,9 +2,9 @@
  * Every interface name a standard's own removed-interface text names, minus every name a live vocabulary
  * (browser/platform_names.h, language_names.h, i18n_names.h) holds. solver/absent.c answers a global read of
  * one of these as a browser does, absent, and neither as a component this engine owes nor as app state.
- * DOM §11 Historical, https://dom.spec.whatwg.org/, 9 October 2026: 17
+ * DOM §11 Historical, https://dom.spec.whatwg.org/, 16 October 2026: 17
  * SVG 2 Appendix K Changes from SVG 1.1, https://svgwg.org/svg2-draft/changes.html, Last-Modified Sun, 14 Sep 2025 00:27:32 GMT: 32 (SVGPathSeg* expanded against https://www.w3.org/TR/SVG11/idl.html)
- * CSSOM §11 Change History, https://drafts.csswg.org/cssom/, 31 August 2026: 2
+ * CSSOM §11 Change History, https://drafts.csswg.org/cssom/, 13 October 2026: 2
  * CSSOM View §17 Changes, https://drafts.csswg.org/cssom-view/, 8 October 2026: 1
  * Still defined by a live standard, so not here: DOMRectList */
 #ifndef APICLIENT_OBSOLETE_NAMES_H

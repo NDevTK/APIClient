@@ -1,25 +1,10 @@
-/* THE INTERFACE NAMES STANDARDS HAVE REMOVED, read from each standard's own removed-interface text and never
- * typed — the fourth table solver/absent.c answers a global miss from.
+/* The interface names standards have removed, read from each standard's own removed-interface text, minus
+ * every name a live vocabulary holds — the fourth table solver/absent.c answers a global miss from.
  *
- * absent.c asks of a global name that resolves nowhere whether a standard owns it (a component this engine
- * owes) or nothing does (server-injected app state, so the gate forks). A name a standard REMOVED is
- * neither: a browser answers `typeof MutationEvent` with "undefined", so a bundle's feature detect on it
- * takes the false arm in every real visit and is not a fork. Without this table such a name falls through to
- * app state.
- *
- * THE SOURCES, each a fetched document and each read by its own rule, because the four state removal in
- * four shapes:
- *   DOM §11 Historical — the list after "These interfaces have been removed:".
- *   SVG 2 Appendix K Changes from SVG 1.1 — each item that begins "Removed the" and names interfaces, and
- *     the "'X' interface is removed." item; the names are the SVG-prefixed words before "interface(s)" that
- *     are not links (a link is a live interface the item mentions). `SVGPathSeg*` is expanded against SVG
- *     1.1's own IDL appendix, the document that defined those interfaces.
- *   CSSOM §11 Change History and CSSOM View §17 Changes — each item containing "removed", taking its
- *     unlinked <code> words that start with a capital and carry no "()" (a member or a method is lowercase or
- *     parenthesised; a linked <code> is a live definition).
- * MINUS every name a live vocabulary holds: a standard that removed an interface another standard still
- * defines (CSSOM View's DOMRectList, now Geometry Interfaces') has not removed it from the platform.
- * PaintRequestList is in none of these texts and so is not here: it was never in a standard.
+ * A removed name is neither a component this engine owes nor app state: a browser answers
+ * `typeof MutationEvent` with "undefined", so a feature detect on it takes the false arm and is not a fork.
+ * A standard that removed an interface another standard still defines (CSSOM View's DOMRectList) has not
+ * removed it from the platform, hence the subtraction. Each source is read by its own rule, at its block.
  *
  * Run: node engine/obsoletegen.mjs   (writes engine/host/browser/obsolete_names.h) */
 import { readFileSync, writeFileSync } from "node:fs";
@@ -65,7 +50,7 @@ const add = (name, key) => {
 };
 const sources = [];
 
-/* DOM §11 Historical. */
+/* DOM §11 Historical: the list after "These interfaces have been removed:". */
 {
   const url = "https://dom.spec.whatwg.org/";
   const html = curl(url);
@@ -80,7 +65,9 @@ const sources = [];
   sources.push(`DOM §11 Historical, ${url}, ${dtUpdated(url, html)}: ${names.length}`);
 }
 
-/* SVG 2 Appendix K Changes from SVG 1.1, with SVG 1.1's IDL appendix for the one wildcard. */
+/* SVG 2 Appendix K Changes from SVG 1.1: the SVG-prefixed words before "interface(s)" in each "Removed the"
+   item, and the "'X' interface is removed." item. A linked name is a live interface the item mentions.
+   `SVGPathSeg*` is expanded against SVG 1.1's IDL appendix, which defined those interfaces. */
 {
   const url = "https://svgwg.org/svg2-draft/changes.html";
   const idlUrl = "https://www.w3.org/TR/SVG11/idl.html";
@@ -110,7 +97,9 @@ const sources = [];
                `${found.size - n0} (SVGPathSeg* expanded against ${idlUrl})`);
 }
 
-/* CSSOM §11 Change History and CSSOM View §17 Changes. */
+/* CSSOM §11 Change History and CSSOM View §17 Changes: in each item saying "removed", the unlinked <code>
+   words that start with a capital and carry no "()" (a member is lowercase or parenthesised; a linked
+   <code> is a live definition). */
 for (const [key, url, id, title, label] of [
   ["cssom", "https://drafts.csswg.org/cssom/", "change-history", "Change History", "CSSOM §11 Change History"],
   ["cssomview", "https://drafts.csswg.org/cssom-view/", "changes", "Changes", "CSSOM View §17 Changes"],
