@@ -623,6 +623,8 @@ function linesToAnalysis(lines, msg, outcome, eng) {
   /* The instance's routed posts enter the join on every document that carries them, before this one's own
      findings are joined, so a page that posts to itself through a peer is joined on the row it arrives on. */
   if (result && eng) routedPostsTake(eng, msg, result);
+  /* …and the identities it emitted join the product, partial or final, so a sibling's next step reads them. */
+  if (result && eng) noveltyTake(eng, result);
   /* A complete run with an empty `_park` must have no live members. `finish` joins `_park` into the recipe
      string and frontierWrite deletes the origin's cross-session entry when it is empty, which is right for a
      drained frontier (solver/cold.h) and an erasure of earlier parked flows otherwise. solver/engine.c asserts
@@ -967,10 +969,12 @@ function clusterKeyOf(msg) {
    v2 added `responseHeaders` (see frontierDoc): a v1 entry cannot state the response its document came from,
    so it cannot resume under the right policy container and is deleted rather than defaulted to no CSP.
    v3 adds `prefs` (the configured device share, see residency, and the egress table): this zone's state lives
-   in IndexedDB, never `chrome.storage.local`, beside the store it is about. */
+   in IndexedDB, never `chrome.storage.local`, beside the store it is about.
+   v4 adds `novelty`, lib/novelty-set.js's partitions keyed by origin: the identities every session of a
+   cluster emitted, which is what makes a resumed or second document's reward novelty against all of them. */
 function idbOpen() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open("apiclient-frontier", 3);
+    const r = indexedDB.open("apiclient-frontier", 4);
     r.onupgradeneeded = (ev) => {
       const db = r.result;
       if (ev.oldVersion < 2) {   // v1's entry grammar cannot state its document's response; it is not resumable
@@ -978,6 +982,7 @@ function idbOpen() {
         db.createObjectStore("frontier");
       }
       if (ev.oldVersion < 3 && !db.objectStoreNames.contains("prefs")) db.createObjectStore("prefs");
+      if (ev.oldVersion < 4 && !db.objectStoreNames.contains("novelty")) db.createObjectStore("novelty");
     };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
@@ -1018,6 +1023,45 @@ function frontierPrefPut(name, value) {
 async function prefWriteOutcome(write) {
   try { await write; return null; }
   catch (e) { RETHROW_FATAL(e); return String((e && e.name) || "Error") + ": " + String((e && e.message) || e); }
+}
+/* ─── The product's known identities, persisted (lib/novelty-set.js holds the set) ─────────────────────
+   Restored once, before the first instance is handed its partition, so a session's first engine is judged
+   against every earlier session; written back whenever a result grows a partition. The write is "relaxed":
+   a lost write costs a later session one point per identity it re-finds, and the next result rewrites it. */
+let _noveltyRestored = null;
+function noveltyReady() {
+  if (_noveltyRestored === null) _noveltyRestored = (async () => {
+    try {
+      const db = await idbOpen();
+      const recs = await new Promise((res, rej) => {
+        const t = db.transaction("novelty").objectStore("novelty").getAll();
+        t.onsuccess = () => res(t.result); t.onerror = () => rej(t.error);
+      });
+      for (const rec of recs) noveltyRestore(rec);
+    } catch (e) { RETHROW_FATAL(e); frontierFail("novelty read", e); }
+  })();
+  return _noveltyRestored;
+}
+let _noveltySaveTimer = null;
+function noveltyPersistSoon() {
+  if (_noveltySaveTimer !== null) return;
+  _noveltySaveTimer = setTimeout(() => {
+    _noveltySaveTimer = null;
+    const recs = noveltyTakeDirty();
+    idbWrite("novelty", "relaxed", (s) => { for (const rec of recs) s.put(rec, rec.partition); })
+      .catch((e) => { RETHROW_FATAL(e); frontierFail("novelty write", e); });
+  }, 2000);
+}
+/* One result document's identities into the emitting instance's partition: the origin this zone stamped on
+   its cluster (lib/novelty-set.js says why it is never the engine's word). */
+function noveltyTake(eng, result) {
+  if (noveltyAbsorb(eng.origin, result._novelty) > 0) noveltyPersistSoon();
+}
+/* What `eng` is owed of its partition, handed now; called at its boot before Init and before each step, so
+   it is serialized with the instance's other calls. */
+async function noveltyHand(eng) {
+  const text = noveltyOwed(eng.origin, eng._novelty);
+  if (text !== null) await eng.r.renderer.noveltyLearn({ text });
 }
 /* ─── The per-origin exploration widening, persisted ──────────────────────────────────────────────────
    The decision lives in lib/safe-fetch.js (the table, what a widening means, the refusal). This file holds
@@ -2657,6 +2701,9 @@ function engineReserve(cluster, docId, msg, referenced) {
                    drives the same ABI with the same table and keys (see engineIssue). */
                 _inflight: new Map(),
                 _epoch: self.frontierEpoch(), r: null, _readyP: null,
+                /* How much of its partition of the product's known identities this instance has been handed
+                   (lib/novelty-set.js's noveltyOwed advances it). */
+                _novelty: { spelling: null, n: 0 },
                 /* Egress asked and refused, per rule, declared here so a run that refused nothing still carries
                    the map. `asked` is raised at the call and `declined` at the refusal in engineServiceFetch's
                    one loop, so the sum is bounded by `asked`. Both are lifetime counts of ask events, not of
@@ -2808,6 +2855,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* The parent navigable and the container answer are relayed beside the container: they are what only this
      zone knows about a document it did not root (whether it is nested in another instance's navigable), and
      engineCreate asserts them. */
+  /* What the product already holds for this cluster, handed before Init so the root's own parse is judged
+     against it too: qjs_novelty_learn is valid before qjs_init. */
+  await noveltyReady();
+  await noveltyHand(eng);
   const _init = await rend.renderer.init({
     document: _doc, url: msg.sourceUrl, docId: eng.docId, headers: _headers, topLevelUrl: _tlu,
     inheritedCsp: inherited ? inherited.csp : "",
@@ -5544,6 +5595,9 @@ const _hostOps = {
   },
   step: async (eng) => {
     let st;
+    /* The identities other instances of this cluster emitted since this one was last handed its partition. */
+    try { await noveltyHand(eng); }
+    catch (e) { RETHROW_FATAL(e); engineCrash(eng, "novelty", e); return 0; }
     try { st = (await eng.r.renderer.step()).code; }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "step", e); return 0; }   // crashed instance: finalize it (loud) rather than keep stepping a dead engine
     /* The round ends here, so the re-rank reads what this step left: the frontier it advanced and the memory it
@@ -6050,6 +6104,9 @@ async function frontierClear() {
   try {
     await idbWrite("frontier", "default", (s) => s.clear());
     _frontierIndex.clear();   // the ranking view is the store's projection: a cleared store ranks nothing
+    /* And the product's known identities, which name what every cleared session found. */
+    noveltyClear();
+    await idbWrite("novelty", "default", (s) => s.clear());
   } catch (e) { RETHROW_FATAL(e); frontierFail("clear", e); }
 }
 async function hostClear() {

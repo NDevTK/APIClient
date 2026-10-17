@@ -196,7 +196,7 @@ const ZONE = (() => {
                    'lib/request-identity.js', 'lib/cookie-store.js', 'speak-as-rule.js', 'lib/speak-as.js',
                    'lib/navigable-notice.js',
                    'lib/document-record.js',
-                   'lib/safe-fetch.js'])
+                   'lib/safe-fetch.js', 'lib/novelty-set.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
   if (typeof sandbox.safeFetch !== 'function')
     throw new Error('extension/lib/safe-fetch.js did not install `safeFetch` — this zone loads that file ' +
@@ -230,7 +230,7 @@ const ZONE = (() => {
                    'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque',
                    'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordAskerRefusal',
                    'docRecordAddressSpace', 'docRecordWithAddressSpace', 'safeFetchSchemeData',
-                   'safeFetchDocumentAddressSpace'])
+                   'safeFetchDocumentAddressSpace', 'noveltyAbsorb', 'noveltyOwed'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js did not install \`${n}\` — the firing decision and its ` +
                       'per-origin widening are that file\'s, read by this host and by the offscreen from the ' +
@@ -331,6 +331,13 @@ function fieldLines(entries) {
 const CENSUS_MARKERS = ['@SWAP', '@COLD', '@HEAP', '@WFQ', '@FORKAT'];
 const b64 = (x) => Buffer.from(x === undefined ? '' : x).toString('base64');
 const ABSENT = '-';
+/* What instance `e` is owed of its cluster's known identities, as a `novelty` record (test_forced.c's
+   `abi_novelty`), written only into a round or a provisioning this zone is already writing: the record pays
+   nothing, so it must never be the whole of a round a stalled child reads. */
+function noveltyHand(e) {
+  const text = ZONE.noveltyOwed(e.origin, e.novelty);
+  if (text !== null) e.say(`novelty\t${b64(text)}`);
+}
 /* Referrer Policy §3 "Referrer Policies", the empty string included. */
 const REFERRER_POLICIES = ['', 'no-referrer', 'no-referrer-when-downgrade', 'same-origin', 'origin',
                            'strict-origin', 'origin-when-cross-origin', 'strict-origin-when-cross-origin',
@@ -751,6 +758,9 @@ async function main() {
       tag: `${docId}/s${++serial}`,
       say: (rec) => child.stdin.write(rec + '\n'),
       ready: [], answered: new Map(), stalled: false, live: true, result: null, results: 0, quantum: null,
+      /* How much of this cluster's partition of the product's known identities the child has been handed
+         (extension/lib/novelty-set.js's noveltyOwed advances it). */
+      novelty: { spelling: null, n: 0 },
       /* WHAT THE FRONTIER LOOKED LIKE WHILE THIS INSTANCE WAS STILL RUNNING — see `onLine`'s census arm. The
          COUNT is the load-bearing member and not the numbers: a killed run's result document does not exist,
          so the only thing that separates a run that explored thousands of worlds from one wedged on a single
@@ -791,6 +801,8 @@ async function main() {
                     'this line — its stderr is this process\'s — and they are the diagnosis; this is the ' +
                     'pipe noticing afterwards.');
     });
+    /* What every earlier instance of this cluster emitted, ahead of the document so its parse is judged too. */
+    noveltyHand(e);
     /* The arrival rides last (solver/engine.h's engine_set_arrival) and is the record itself, so the marks every
        timeline starts with and the floor this zone holds its requests to are one statement. */
     e.say(['document', url, docId, b64(fieldLines(headers)), b64(bytes), ...facts,
@@ -1201,6 +1213,7 @@ async function main() {
      zone has not answered — see `track`. It is drained WHOLE, exactly as `ready` is and in the same step,
      because every key on it accompanies a record that has just gone out. */
   const payRound = (i) => {
+    noveltyHand(i);
     for (const rec of i.ready.splice(0, i.ready.length)) i.say(rec);
     for (const key of i.releaseOnWrite.splice(0, i.releaseOnWrite.length)) i.answered.delete(key);
     i.say('go');
@@ -1660,6 +1673,8 @@ async function main() {
     if (line.startsWith('@RESULT ')) {
       e.result = line.slice('@RESULT '.length);
       e.results += 1;
+      /* Its identities join the product under the origin this zone provisioned the cluster at. */
+      ZONE.noveltyAbsorb(e.origin, JSON.parse(e.result)._novelty);
       console.error(`[trusted] [${e.tag}] @RESULT#${e.results} ${line}`);
       return;
     }

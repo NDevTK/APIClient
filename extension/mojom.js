@@ -678,6 +678,16 @@
                  "the standby the asking family keeps for later timelines' answers retires" }],
         reply: [WORKING_SET] },
 
+      { ordinal: 29, name: "NoveltyLearn",
+        params: [
+          { name: "text", type: "string", retained: false,
+            why: "the identities this instance's cluster has already emitted, in solver/novelty.h's set text " +
+                 "(the spelling line, then `<kind> <32 hex>` per line), unioned by this zone from the " +
+                 "`_novelty.identities` of every result of that cluster in every session. The engine pays a " +
+                 "credit only for an identity absent from it, so a set handed late pays a second document for " +
+                 "what the first found; the entry parses and copies every line inside the call" }],
+        reply: [WORKING_SET] },
+
       { ordinal: 20, name: "WorldGone",
         params: [
           { name: "world", type: "string", retained: false,

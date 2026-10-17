@@ -124,6 +124,9 @@
      hands it the engine program, and relays the qjs_* ABI to it. This is where the WASM load moves to, so it
      is loaded before the bridge that will call it. -->
 <script src="renderer-host.js"></script>
+<!-- the product's known identities per cluster origin (engine/host/solver/novelty.h spells them; this keeps
+     their union and what each instance is owed of it), loaded before the bridge that hands them over. -->
+<script src="lib/novelty-set.js"></script>
 <!-- the v2 host bridge: the ONLY irreducible trusted-zone JS (SECURITY.md) — dynamic-import()s the
      engine WASM lib/qjs/qjs.mjs, drives qjs_step, safe-fetches, persists IDB, installs self.astDispatch. -->
 <script src="bridge.js"></script>
