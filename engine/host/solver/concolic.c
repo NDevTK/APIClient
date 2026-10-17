@@ -4294,16 +4294,17 @@ static void keyname_record(const char *atom, const char *shape, const char *src,
            residual). How its absence shows: a page writing an unknown key inside a loop loses members off its
            own object (`Object.keys(o).length` short by one per collision) while this assert stays silent. */
 #if APICLIENT_DEV
-        DCHECK(keyname_str_same(g_keynames[i].shape, shape) &&
-               keyname_str_same(g_keynames[i].src, src) &&
-               keyname_str_same(g_keynames[i].root, root) &&
-               keyname_str_same(g_keynames[i].ident, ident),
-               "two different unknowns denote ONE property name — a display shape is what this engine spends "
-               "to buy an atom, so two values that spell one shape land in one slot and the name->value "
-               "restore answers one of them for a key that was the other. The repair is at whichever SPELLER "
-               "composed this value: a shape must separate every pair of operands its identity separates. Read "
-               "the paragraph above before reaching for a function name — this message used to carry one and "
-               "it was the wrong one");
+        DCHECKF(keyname_str_same(g_keynames[i].shape, shape) &&
+                keyname_str_same(g_keynames[i].src, src) &&
+                keyname_str_same(g_keynames[i].root, root) &&
+                keyname_str_same(g_keynames[i].ident, ident),
+                "two different unknowns bought one property name — fix the speller that composed them, so the "
+                "shape separates what the identity separates. atom=[%s] stored: shape=[%s] src=[%s] root=[%s] "
+                "ident=[%s]; incoming: shape=[%s] src=[%s] root=[%s] ident=[%s]",
+                atom, g_keynames[i].shape, g_keynames[i].src ? g_keynames[i].src : "(null)",
+                g_keynames[i].root ? g_keynames[i].root : "(null)",
+                g_keynames[i].ident ? g_keynames[i].ident : "(null)", shape, src ? src : "(null)",
+                root ? root : "(null)", ident ? ident : "(null)");
 #endif
         return;
     }
