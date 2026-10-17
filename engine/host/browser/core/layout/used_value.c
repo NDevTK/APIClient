@@ -4049,42 +4049,29 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
         if (table_box_kind_generates_table_box(kind)) return uv_table_used_width(el);
         uv_table_non_cell_width_fail(el, kind);
     }
-    if (box == UV_BOX_ITEM)
-        DFAIL("a FLEX or GRID ITEM with `width: auto` that the css-flexbox-1 §9.4 \"Cross Size "
-              "Determination\"' step 11 route above DECLINED. Its INLINE size is its CONTAINER's algorithm "
-              "and CSS 2.1 §10.3.3's constraint equation is not it. css-grid-1 §11 "
-              "\"Grid Layout Algorithm\" sizes a grid item to its TRACK, which is itself sized from the items "
-              "in it, and that is an intrinsic size rather than §10.3.3's equation. THE FLEX HALF OF THE "
-              "SENTENCE THAT STOOD HERE IS RETIRED AND IS WRITTEN OUT SO IT IS NOT REBUILT: it said "
-              "css-flexbox-1 §9.2 \"Line Length Determination\" makes the flex base size the item's "
-              "max-content contribution and §9.7 \"Resolving Flexible Lengths\" then flexes it, and both of "
-              "those are built (core/layout/flex_line.h). What reaches this line from a FLEX container is now "
-              "only what that route DECLINES, WHICH IS NOT THE SET THE SENTENCE THAT STOOD HERE NAMED: it "
-              "read that core/layout/flex_line.c \"names each of those refusals at the site it makes them\", "
-              "and that component REFUSES NOTHING ABOUT A `column` CONTAINER any more — it reads "
-              "css-writing-modes-4 §7.2 \"Dimensional Mapping\"' BLOCK dimension and ANSWERS such an item's "
-              "MAIN size. "
-              "A THIRD REMEDY HAS NOW BEEN RETIRED AND IT IS WRITTEN OUT FOR THE SAME REASON, because its "
-              "own worked example is one a reader re-derives in one step: it read that a `column` "
-              "container's item arrives here because its INLINE size is its CROSS size, that §9.4's step 11 "
-              "\"answers a `row` container's item on its CROSS axis, which is the BLOCK axis\" and refuses "
-              "a `column` container by name, and that what core/layout/flex_cross_size.c was missing was an "
-              "INLINE-AXIS reading of §9.4's steps 7, 8 and 11 because \"every edge it adds is "
-              "`margin-top`, `padding-top` and the top border width\". THE DIAGNOSIS WAS EXACTLY RIGHT AND "
-              "IS SPENT: those edges come from css-writing-modes-4 §7.2 through that component's own "
-              "`fx_cross_props` now, step 7 reads css-sizing-3 §5.1 \"Intrinsic Sizes\"' pair in the "
-              "inline dimension where css-sizing-3 §3.2's fit-content formula needs two terms rather than "
-              "one, and STEP 11 ANSWERS A `column` CONTAINER'S ITEM — so the route above takes that box and "
-              "a reader who follows the old sentence builds it a second time. Its STEP 8 half is "
-              "deliberately NOT built in the inline dimension and that component's own refusal says why: "
-              "§9.6 \"Cross-Axis Alignment\"' step asks for a content-based cross size only where the "
-              "formatting context needs one, and a block-level `column` container's width is §10.3.3's "
-              "equation. "
-              "WHAT IS LEFT REACHING THIS LINE IS TWO SECTIONS AND NEITHER IS §9.4's. A GRID item is "
-              "css-grid-1 §11's. An item whose BOX parent is not its DOM parent is css-display-3 §2.5 "
-              "\"Box Generation: the none and contents keywords\"' `contents` splice, where §9's algorithms "
-              "are stated over the CONTAINER's items and the item list this box is in is not its parent's "
-              "child list. BUILD the one the box in front of you is");
+    /* A FLEX ITEM NEVER REACHES THIS LINE: `uv_flex_item_main_size` and `uv_flex_item_cross_axis` answer both of
+       its axes from its box-tree container. So an item here is one of two things, told apart by the container
+       its box parent is, and each crash names its own missing capability. */
+    if (box == UV_BOX_ITEM) {
+        CssDisplay pd;
+        bool have = css_box_parent_display(lxb_dom_interface_node(el), &pd);
+
+        DCHECK(have, "a box classified as a flex or grid item has no box parent with a `display` — uv_box_kind "
+                     "read that same parent to classify it");
+        if (css_display_spells(pd, CSS_KEYWORD_GRID) || css_display_spells(pd, CSS_KEYWORD_INLINE_GRID))
+            DFAIL("a GRID ITEM with `width: auto`. css-grid-1 §6.2 \"Grid Item Sizing\": \"A grid item is "
+                  "sized within the containing block defined by its grid area\", and for `normal` or `stretch` "
+                  "self-alignment a non-replaced item takes the stretch-fit size of that area. The area's width "
+                  "is the sum of its columns, which css-grid-1 §11.1 \"Grid Sizing Algorithm\" sizes through "
+                  "§11.3 \"Track Sizing Algorithm\". BUILD the track sizing algorithm for the container's "
+                  "columns and answer the item from its grid area");
+        DFAIL("a FLEX ITEM spliced into its container by `display: contents` whose box-tree container "
+              "(core/layout/box_tree.h's box_tree_parent) is not the flex container its box parent's `display` "
+              "names. css-display-3 §2.5 \"Box Generation: the none and contents keywords\": the element with "
+              "`contents` \"must be treated as if it had been replaced in the element tree by its contents\", so "
+              "css-flexbox-1's algorithms see this box among the flex container's items. BUILD the splice in the "
+              "box tree so its parent is that container");
+    }
     if (box == UV_BOX_INLINE_FLEX_GRID)
         DFAIL("an INLINE-LEVEL FLEX OR GRID CONTAINER with `width: auto`. It is CSS 2.2 §9.2.2's ATOMIC "
               "INLINE-LEVEL box, so its own module sends it to the section this file already runs for an "
