@@ -137,6 +137,15 @@ static const char HTML_NAVIGATION[] =
     "<script>fetch('/api/navgate').then(function(r){ return r.json(); }).then(function(c){"
     " if (c.region !== 'us-west-2') open('/navhidden'); });"
     "open('/navpage'); open('https://other.test/navxsite');</script>"
+    /* A navigation response's Set-Cookie, in the asking flow's jar only (Fetch §4.7 "HTTP-network fetch"). The
+       `!==` arm contradicts the reply and opens `/cookieload`, whose answer sets `flowc` and an HttpOnly `hoc`;
+       its Document reads document.cookie. The other arm waits three host round trips and reads its own; the
+       `flow-jar` row reads both. */
+    "<script>fetch('/api/ckgate').then(function(r){ return r.json(); }).then(function(c){"
+    " if (c.region !== 'us-west-2') { open('/cookieload'); return; }"
+    " fetch('/api/ckwait').then(function(){ return fetch('/api/ckwait'); }).then(function(){"
+    " return fetch('/api/ckwait'); }).then(function(){"
+    " fetch('/api/cookiesib?c=' + encodeURIComponent(document.cookie || 'none')); }); });</script>"
     TF_CANVAS_INK
     "</body></html>";
 

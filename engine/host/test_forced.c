@@ -5438,6 +5438,11 @@ static int hostreq_answer_all(JSContext *ctx)
                 static const char DOC[] =
                     "<!doctype html><html><head></head><body>"
                     "<script>fetch('/api/iframesrc?v=loaded');</script></body></html>";
+                /* The `flow-jar` row's document: it reports the cookies its own response set. */
+                static const char DOC_COOKIE[] =
+                    "<!doctype html><html><head></head><body><script>"
+                    "fetch('/api/cookieload?c=' + encodeURIComponent(document.cookie || 'none'));"
+                    "</script></body></html>";
                 /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer
                    policy><TAB><initiator><TAB><url>` — the ADDRESS IS THE REMAINDER, past the SEVENTH tab. This
                    fixture reads the six fields before it nowhere: it stands in
@@ -5472,6 +5477,10 @@ static int hostreq_answer_all(JSContext *ctx)
                 if ((size_t)(end - asked) >= sizeof FIXTURE_CROSS_SITE - 1 &&
                     !memcmp(asked, FIXTURE_CROSS_SITE, sizeof FIXTURE_CROSS_SITE - 1))
                     g_docfetch_cross_site++;
+                bool cookie_doc = false;
+                size_t ask_len = (size_t)(end - asked), ak;
+                for (ak = 0; ak + 11 <= ask_len && !cookie_doc; ak++)
+                    cookie_doc = !memcmp(asked + ak, "/cookieload", 11);
                 JS_DefinePropertyValueStr(ctx, v, "url",
                                           JS_NewStringLen(ctx, asked, (size_t)(end - asked)), JS_PROP_C_W_E);
                 /* AS BYTES: §2.2.5's body is a byte sequence, and a Document is parsed from one.
@@ -5485,13 +5494,34 @@ static int hostreq_answer_all(JSContext *ctx)
                    be CALLED here, where no flow is running and a park may be outstanding, and a frozen
                    prototype would make the write refuse by throwing into a region that has no owner for it. */
                 JS_DefinePropertyValueStr(ctx, v, "body",
-                                          JS_NewArrayBufferCopy(ctx, (const uint8_t *)DOC, sizeof DOC - 1),
+                                          cookie_doc
+                                            ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)DOC_COOKIE,
+                                                                    sizeof DOC_COOKIE - 1)
+                                            : JS_NewArrayBufferCopy(ctx, (const uint8_t *)DOC, sizeof DOC - 1),
                                           JS_PROP_C_W_E);
                 /* THE RESPONSE'S HEADER LIST, as the field lines §7.4 step 14's answer carries — EMPTY here,
                    which is a response that carried no headers and is the statement this fixture can honestly
                    make: it serves these bytes out of a string literal. It was `csp: null`, one narrowed
                    field, which is the shape that kept §7.1.3's opener policy out of a navigated Document. */
                 JS_DefinePropertyValueStr(ctx, v, "headers", JS_NewString(ctx, ""), JS_PROP_C_W_E);
+                /* The response's Set-Cookie fields, each beside the URL it answered: none, except the `flow-jar`
+                   row's load, which sets one cookie a document can read and one HttpOnly cookie it cannot. */
+                {
+                    JSValue cookies = JS_NewArray(ctx);
+                    if (cookie_doc) {
+                        static const char *const FIELDS[] = { "flowc=1; Path=/", "hoc=1; HttpOnly; Path=/" };
+                        uint32_t ci;
+                        for (ci = 0; ci < 2; ci++) {
+                            JSValue pair = JS_NewArray(ctx);
+                            JS_DefinePropertyValueUint32(ctx, pair, 0, JS_NewStringLen(ctx, asked,
+                                                         (size_t)(end - asked)), JS_PROP_C_W_E);
+                            JS_DefinePropertyValueUint32(ctx, pair, 1, JS_NewString(ctx, FIELDS[ci]),
+                                                         JS_PROP_C_W_E);
+                            JS_DefinePropertyValueUint32(ctx, cookies, ci, pair, JS_PROP_C_W_E);
+                        }
+                    }
+                    JS_DefinePropertyValueStr(ctx, v, "setCookies", cookies, JS_PROP_C_W_E);
+                }
             } else {
                 v = JS_NewStringLen(ctx, tab + 1, (size_t)(end - tab - 1));
             }
@@ -11726,6 +11756,22 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&navdoor_tt, &navdoor_why, g_docfetch_cross_site == 0,
              "this instance was asked to load a cross-site document — a navigable created at another agent's "
              "address is the peer's to load, and loading it here builds it in the wrong heap");
+    /* A navigation response's Set-Cookie lands in the asking flow's jar: the Document it loaded reads the
+       readable cookie and not the HttpOnly one, and the sibling arm, after three host round trips, reads none. */
+    const char *flowjar_why = NULL; int flowjar_tt = 1;
+    fold_row(&flowjar_tt, &flowjar_why, !!strstr(js, "\"/api/cookieload\""),
+             "NOT REACHED: no /api/cookieload record, so the arm that opens /cookieload never ran its Document");
+    /* The value is recorded as the page sent it, encodeURIComponent'd. */
+    fold_row(&flowjar_tt, &flowjar_why, param_value_is(js, "/api/cookieload", "c", "flowc%3D1"),
+             "the loaded Document's document.cookie is not `flowc=1`: the answer's Set-Cookie was not received into "
+             "the agent's jar (core/frame/navigable.c's nav_receive_set_cookies), or the HttpOnly `hoc` was read by "
+             "a non-HTTP API");
+    fold_row(&flowjar_tt, &flowjar_why, !!strstr(js, "\"/api/cookiesib\""),
+             "NOT REACHED: no /api/cookiesib record, so the sibling arm's read is unscored");
+    fold_row(&flowjar_tt, &flowjar_why, param_value_is(js, "/api/cookiesib", "c", "none") &&
+                                        !param_value_is(js, "/api/cookiesib", "c", "flowc%3D1"),
+             "the sibling arm read a cookie only the other arm's navigation set — the jar write left that flow's "
+             "COW delta");
     /* HTML §7.2.2.1's close() over a same-origin popup this document opened: `closed` reads true on the next
        line, since the incumbent is familiar with the popup by §7.3.2.2's first step. */
     /* A flow forked while §13.4's parse is feeding bytes: both arms finish the parse, so the record carries the
@@ -15590,6 +15636,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "json-fork", jsonfork_tt, "/api/jsonok", SESS_EXPLORE, jsonfork_why },
         { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE, navopen_why },
         { "nav-door", navdoor_tt, "/navhidden", SESS_EXPLORE, navdoor_why },
+        { "flow-jar", flowjar_tt, "/api/ckgate", SESS_EXPLORE, flowjar_why },
         { "win-close", winclose_tt, "/api/winclose", SESS_EXPLORE, winclose_why },
         { "frag-fork", fragfork_tt, "/api/fragfork", SESS_EXPLORE, fragfork_why },
         { "frag-place", fragplace_tt, "/api/fragplace", SESS_EXPLORE, fragplace_why },

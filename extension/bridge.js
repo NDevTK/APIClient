@@ -2379,9 +2379,9 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, ref
   if (new URL(abs).protocol === "data:") {
     const d = await self.safeFetchSchemeData(abs);
     if (d.refusal)
-      return { url: abs, headers: {}, bytes: null, declined: null,
+      return { url: abs, headers: {}, bytes: null, declined: null, setCookies: [],
                unavailable: { kind: "network", detail: d.statusText } };
-    return { url: abs, headers: d.headers, bytes: d.body, unavailable: null, declined: null };
+    return { url: abs, headers: d.headers, bytes: d.body, unavailable: null, declined: null, setCookies: [] };
   }
   const speaker = !readerOpaque && navigationCarriesSession(abs, principalOrigin) ? await speakerOf() : null;
   const credentialed = speaker !== null;
@@ -2481,26 +2481,31 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, ref
         /* The third outcome: `bytes` and `unavailable` are both null, and `declined` is the reason, the only
            field telling "no load attempted" (creator-origin `about:blank`) from "a load failed" (opaque error
            page). */
-        return { url: finalUrl, headers: {}, bytes: null, unavailable: null, declined: r.refusal.reason };
+        return { url: finalUrl, headers: {}, bytes: null, unavailable: null, declined: r.refusal.reason,
+                 setCookies: [] };
       }
     }
     if (r.status === 0)
-      return { url: finalUrl, headers: {}, bytes: null, declined: null,
+      return { url: finalUrl, headers: {}, bytes: null, declined: null, setCookies: [],
                unavailable: { kind: "network", detail: r.statusText } };
+    /* The response's credentialed Set-Cookie fields, each with the URL it answered, for the asking flow's own
+       jar: stored during the fetch (Fetch §4.7), so an error response's count too. */
+    DCHECK(Array.isArray(r.setCookies), "safeFetch answered a document load with no Set-Cookie list");
     /* Not OK is a load that did not load: the navigable shows an error page at the URL the response came from.
        An error response's body is never used as the document. */
     if (!r.ok)
-      return { url: finalUrl, headers: {}, bytes: null, declined: null,
+      return { url: finalUrl, headers: {}, bytes: null, declined: null, setCookies: r.setCookies,
                unavailable: { kind: "status", status: r.status } };
     /* The bytes, because a Document is parsed from a byte sequence: HTML §13.2.3.2 Determining the character
        encoding is the engine's algorithm. And the whole header list: which names matter (opener policy,
        embedder policy, `Origin-Agent-Cluster`) is the engine's question. */
-    return { url: finalUrl, headers: r.headers, bytes: r.body, unavailable: null, declined: null };
+    return { url: finalUrl, headers: r.headers, bytes: r.body, unavailable: null, declined: null,
+             setCookies: r.setCookies };
   } catch (e) {
     /* A thrown fetch is a network error (Fetch §5.6 Fetch methods) and a real outcome; an invariant abort
        thrown through this catch is not, so it is rethrown. */
     RETHROW_FATAL(e);
-    return { url: abs, headers: {}, bytes: null, declined: null,
+    return { url: abs, headers: {}, bytes: null, declined: null, setCookies: [],
              unavailable: { kind: "network", detail: String((e && e.message) || e) } };
   }
 }
@@ -3194,7 +3199,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
            "whole of what this check replaces: a load arm that forgot to state it read as a load this zone " +
            "fetched, so a frame the chokepoint had refused would be answered with its bytes-less reply through " +
            "the ANSWER path and the engine would park on a rendezvous nothing would ever refuse");
-    return { url: r.url, headers: r.headers, bytes: r.bytes, declined: r.declined };
+    return { url: r.url, headers: r.headers, bytes: r.bytes, declined: r.declined, setCookies: r.setCookies };
   };
   /* The routing table is the pool. `docId` (which document this instance holds) and `origin` (the value
      stamped on everything it sends) are read only by the notice router below: SECURITY.md makes this zone
@@ -4783,7 +4788,11 @@ async function engineDeliverDocument(eng, id, r) {
      created it holding, and fires once the origin is widened), the other takes the network error and becomes
      the error-page document with its path marked forced. Both worlds are explored. */
   if (r.declined) return engineDeclineRendezvous(eng, id, r.declined);
-  await engineAnswer(eng, id, { url: r.url, headers: responseFieldLines(r.headers) }, r.bytes);
+  DCHECK(Array.isArray(r.setCookies) && r.setCookies.every((c) => Array.isArray(c) && c.length === 2 &&
+                                                              typeof c[0] === "string" && typeof c[1] === "string"),
+         "a document load answered no [URL, Set-Cookie field] list — navigationLoad states one on every arm");
+  await engineAnswer(eng, id, { url: r.url, headers: responseFieldLines(r.headers), setCookies: r.setCookies },
+                     r.bytes);
 }
 /* A refusal of a synchronous request (a document load or an XHR fetch), recorded on the rendezvous it names.
    A refusal matching no parked flow is asserted: this zone issued the request against an id the engine had

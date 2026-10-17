@@ -26,18 +26,15 @@
  *                       Path changed no answer. Shared between `/a/x.html` and `/b/y.html` it changes many.
  *   host-only-flag    — §5.3 step 6, and the first branch of §5.4 step 1.
  *   secure-only-flag  — §5.4 step 1's third bullet.
+ *   http-only-flag    — set by an HTTP receive (cookie_jar_receive_http, a response's Set-Cookie). A
+ *                       "non-HTTP" read (§5.4 step 1's fourth bullet) never sees an entry carrying it, and a
+ *                       "non-HTTP" write abandons an HttpOnly cookie (§5.3 step 10) or one replacing an
+ *                       HttpOnly cookie (step 11.2).
  *   expiry-time       — §5.3's "A cookie is expired if the cookie has an expiry date in the past. The user
  *                       agent MUST evict all expired cookies from the cookie store if, at any time, an expired
  *                       cookie exists in the cookie store."
  *
  * WHAT IS NOT, AND WHY EACH IS A STATEMENT ABOUT THE STANDARD RATHER THAN A GAP:
- *   http-only-flag    — §5.3 step 10 abandons a set-cookie-string carrying HttpOnly when it arrives from a
- *                       "non-HTTP" API, and this API is the only writer this store has, so step 10 runs on
- *                       every arrival. No entry can therefore carry the flag: step 11.2 ("if the old-cookie's
- *                       http-only-flag is set") and §5.4 step 1's fourth bullet are unreachable, and a field
- *                       that is false for every entry is not a field. The moment a Set-Cookie RESPONSE HEADER
- *                       writes this store — a second receive, whose §5.3 step 10 does not fire — the flag and
- *                       both of those steps arrive together, in one diff, because they are one mechanism.
  *   persistent-flag   — its only reader is "When the current session is over, the user agent MUST remove from
  *                       the cookie store all cookies with the persistent-flag set to false". The session and
  *                       this store have the SAME lifetime: the store is the agent's and is released with it, so
@@ -335,7 +332,7 @@ static void cj_assert_one_principal(const UrlRecord *u)
  *         as everything up to the first "=" and a path as everything up to the next ";", so any separator
  *         character can occur inside one and only a length can delimit them. It begins with a digit and
  *         contains a colon, so it is never an array index and the store's property order stays insertion order.
- * ENTRY = <secure><host-only><expiry> ":" value      — the flags are one character each, and the expiry is a
+ * ENTRY = <secure><host-only><http-only><expiry> ":" value — the flags are one character each, and the expiry is a
  *         decimal epoch second or "*" for §5.3 step 3's "latest representable date". */
 
 static char *cj_key(const char *name, size_t nlen, const char *dom, size_t dlen,
@@ -391,7 +388,7 @@ static void cj_key_parse(const char *k, size_t klen, const char **name, size_t *
    real epoch can collide with it. */
 #define CJ_NEVER "*"
 
-static char *cj_entry(bool secure, bool host_only, long long expiry, bool persistent,
+static char *cj_entry(bool secure, bool host_only, bool http_only, long long expiry, bool persistent,
                       const char *value, size_t vlen, size_t *out_len)
 {
     char hdr[48];
@@ -400,9 +397,11 @@ static char *cj_entry(bool secure, bool host_only, long long expiry, bool persis
     char *e;
 
     if (persistent)
-        hn = snprintf(hdr, sizeof hdr, "%c%c%lld:", secure ? '1' : '0', host_only ? '1' : '0', expiry);
+        hn = snprintf(hdr, sizeof hdr, "%c%c%c%lld:", secure ? '1' : '0', host_only ? '1' : '0',
+                      http_only ? '1' : '0', expiry);
     else
-        hn = snprintf(hdr, sizeof hdr, "%c%c" CJ_NEVER ":", secure ? '1' : '0', host_only ? '1' : '0');
+        hn = snprintf(hdr, sizeof hdr, "%c%c%c" CJ_NEVER ":", secure ? '1' : '0', host_only ? '1' : '0',
+                      http_only ? '1' : '0');
     CHECK(hn > 0 && (size_t)hn < sizeof hdr, "a cookie entry's header did not fit");
     total = (size_t)hn + vlen;
     e = malloc(total + 1);
@@ -414,17 +413,19 @@ static char *cj_entry(bool secure, bool host_only, long long expiry, bool persis
     return e;
 }
 
-static void cj_entry_parse(const char *e, size_t elen, bool *secure, bool *host_only, bool *expired,
-                           const char **value, size_t *vlen)
+static void cj_entry_parse(const char *e, size_t elen, bool *secure, bool *host_only, bool *http_only,
+                           bool *expired, const char **value, size_t *vlen)
 {
-    const char *p = e + 2, *end = e + elen;
+    const char *p = e + 3, *end = e + elen;
     long long expiry = 0;
     bool persistent;
 
-    DCHECK(elen >= 4 && (e[0] == '0' || e[0] == '1') && (e[1] == '0' || e[1] == '1'),
+    DCHECK(elen >= 5 && (e[0] == '0' || e[0] == '1') && (e[1] == '0' || e[1] == '1') &&
+           (e[2] == '0' || e[2] == '1'),
            "a cookie store entry has no flag header — the two halves of one codec disagree");
     *secure = e[0] == '1';
     *host_only = e[1] == '1';
+    *http_only = e[2] == '1';
     persistent = *p != CJ_NEVER[0];
     if (persistent) {
         const char *start = p;
@@ -660,7 +661,10 @@ static void cj_parse_attrs(const char *attrs, size_t attrs_len, CookieJarAttribu
 /* §5.2's PARSE A SET-COOKIE-STRING — THIS ENTRY'S WHOLE JOB, with §5.3 reached through cookie_jar_store below.
    Splitting the two is the other standard's own seam and not a refactor for its convenience; the argument for
    it, and what routing around it would manufacture, are at cookie_jar_store's declaration in cookie_jar.h. */
-void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, const char *s, size_t len)
+static void cj_store(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,
+                     const char *value, size_t value_len, const CookieJarAttributes *attrs, bool http_api);
+
+static void cj_receive(JSContext *ctx, const UrlRecord *uri, const char *s, size_t len, bool http_api)
 {
     const char *nv = s, *attrs = NULL, *name, *value, *eq;
     size_t nvlen = len, attrs_len = 0, name_len, value_len;
@@ -690,11 +694,28 @@ void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, const char *s, siz
        `value` still point into the caller's string, which outlives this call, and so do `a.domain` and
        `a.path` — which is the borrowing cookie_jar.h states and the reason this is not a tail call by
        accident but by contract. */
-    cookie_jar_store(ctx, uri, name, name_len, value, value_len, &a);
+    cj_store(ctx, uri, name, name_len, value, value_len, &a, http_api);
+}
+
+void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, const char *s, size_t len)
+{
+    cj_receive(ctx, uri, s, len, false);
+}
+
+void cookie_jar_receive_http(JSContext *ctx, const UrlRecord *uri, const char *s, size_t len)
+{
+    cj_receive(ctx, uri, s, len, true);
 }
 
 void cookie_jar_store(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,
                       const char *value, size_t value_len, const CookieJarAttributes *attrs)
+{
+    cj_store(ctx, uri, name, name_len, value, value_len, attrs, false);
+}
+
+/* §5.3 for one cookie, from an HTTP API (`http_api`, a response's Set-Cookie) or a "non-HTTP" one. */
+static void cj_store(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,
+                     const char *value, size_t value_len, const CookieJarAttributes *attrs, bool http_api)
 {
     size_t dlen = 0, plen, klen, hostlen;
     char *host, *dom = NULL, *path = NULL, *key;
@@ -706,11 +727,10 @@ void cookie_jar_store(JSContext *ctx, const UrlRecord *uri, const char *name, si
        own argument: an invariant is asserted at the origin of the value, and the origin of this one is this
        caller. Both spellings route to the one predicate rather than restating it. */
     cj_assert_one_principal(uri);
-    /* §5.3 STEP 10: a cookie carrying HttpOnly is ABANDONED when it arrives through a "non-HTTP" API, which is
-       the only kind of arrival this store has. Cookie Store API §7.2 states no HttpOnly attribute at all — its
-       CookieInit has no member for one — so that caller reaches this step with the flag clear and needs no
-       special case here. */
-    if (attrs->http_only) return;
+    /* §5.3 STEP 10: a cookie carrying HttpOnly is ABANDONED when it arrives through a "non-HTTP" API. Cookie
+       Store API §7.2 states no HttpOnly attribute at all — its CookieInit has no member for one — so that
+       caller reaches this step with the flag clear and needs no special case here. */
+    if (!http_api && attrs->http_only) return;
 
     host = cj_request_host(uri, &host_is_name);
     hostlen = strlen(host);
@@ -780,6 +800,34 @@ void cookie_jar_store(JSContext *ctx, const UrlRecord *uri, const char *name, si
     key = cj_key(name, name_len, dom, dlen, path, plen, &klen);
     atom = JS_NewAtomLen(ctx, key, klen);
     CHECK(atom != JS_ATOM_NULL, "document.cookie: a cookie's store key could not be interned");
+    /* §5.3 STEP 11.2: "If the newly created cookie was received from a "non-HTTP" API and the old-cookie's
+       http-only-flag is set, abort these steps and ignore the newly created cookie entirely." */
+    if (!http_api) {
+        JSValue old = JS_GetProperty(ctx, jar, atom);
+        bool old_http_only = false;
+
+        CHECK(!JS_IsException(old), "a stored cookie could not be read back");
+        if (JS_IsString(old)) {
+            size_t olen = 0;
+            const char *oe = JS_ToCStringLen(ctx, &olen, old);
+            bool osec, ohost, oexp;
+            const char *ov;
+            size_t ovlen;
+
+            CHECK(oe != NULL, "a stored cookie could not be read as a string");
+            cj_entry_parse(oe, olen, &osec, &ohost, &old_http_only, &oexp, &ov, &ovlen);
+            JS_FreeCString(ctx, oe);
+        }
+        JS_FreeValue(ctx, old);
+        if (old_http_only) {
+            JS_FreeAtom(ctx, atom);
+            free(key);
+            free(path);
+            free(dom);
+            free(host);
+            return;
+        }
+    }
     /* §5.3 STEPS 11 and 12, then the standard's eviction rule in the one place a cookie can become expired
        without time passing: "The user agent MUST evict all expired cookies from the cookie store if, at any
        time, an expired cookie exists in the cookie store." Step 11.4 removes the old cookie either way; when
@@ -790,8 +838,8 @@ void cookie_jar_store(JSContext *ctx, const UrlRecord *uri, const char *name, si
        to match the creation-time of the old-cookie", since that order IS this store's creation-time. */
     {
         size_t elen;
-        char *entry = cj_entry(attrs->secure, host_only, attrs->expiry, attrs->have_expiry, value, value_len,
-                              &elen);
+        char *entry = cj_entry(attrs->secure, host_only, http_api && attrs->http_only, attrs->expiry,
+                               attrs->have_expiry, value, value_len, &elen);
         bool immediately_evicted = attrs->have_expiry && attrs->expiry <= (long long)time(NULL);
 
         if (immediately_evicted) {
@@ -891,15 +939,17 @@ static CjHit *cj_collect(JSContext *ctx, const UrlRecord *uri, uint32_t *out_nhi
         const char *e;
         const char *name, *dom, *path, *value;
         size_t nlen, dlen, plen, vlen;
-        bool secure, host_only, expired, keep;
+        bool secure, host_only, http_only, expired, keep;
 
         CHECK(!JS_IsException(v), "a stored cookie could not be read back");
         e = JS_ToCStringLen(ctx, &elen, v);
         JS_FreeValue(ctx, v);
         CHECK(k != NULL && e != NULL, "a stored cookie could not be read as a string");
         cj_key_parse(k, klen, &name, &nlen, &dom, &dlen, &path, &plen);
-        cj_entry_parse(e, elen, &secure, &host_only, &expired, &value, &vlen);
-        keep = !expired &&
+        cj_entry_parse(e, elen, &secure, &host_only, &http_only, &expired, &value, &vlen);
+        /* Every read of this store is a "non-HTTP" API's, so §5.4 step 1's fourth bullet excludes an HttpOnly
+           cookie from every one. */
+        keep = !expired && !http_only &&
                (host_only ? (hostlen == dlen && memcmp(host, dom, dlen) == 0)
                           : cj_domain_match(host, hostlen, dom, dlen, host_is_name)) &&
                cj_path_match(req_path, req_len, path, plen) &&
@@ -1050,7 +1100,7 @@ JSValue cookie_jar_observable_changes(JSContext *ctx, const UrlRecord *uri)
         const char *k, *e;
         const char *name, *dom, *path, *value;
         size_t nlen, dlen, plen, vlen;
-        bool secure, host_only, expired;
+        bool secure, host_only, http_only, expired;
         int32_t type = 0;
 
         CHECK(JS_IsArray(rec), "a member of §7.4's change set is not a « key, entry, type » record — every "
@@ -1070,9 +1120,10 @@ JSValue cookie_jar_observable_changes(JSContext *ctx, const UrlRecord *uri)
                "a cookie change carries a type that is neither of §7.4's two — the enumeration is this store's "
                "own and cj_record_change is the only writer of it");
         cj_key_parse(k, klen, &name, &nlen, &dom, &dlen, &path, &plen);
-        cj_entry_parse(e, elen, &secure, &host_only, &expired, &value, &vlen);
-        /* §5.4 STEP 1's REQUIREMENTS, and `expired` is deliberately not consulted — see cookie_jar.h. */
-        if (!((host_only ? (hostlen == dlen && memcmp(host, dom, dlen) == 0)
+        cj_entry_parse(e, elen, &secure, &host_only, &http_only, &expired, &value, &vlen);
+        /* §5.4 STEP 1's REQUIREMENTS, the http-only exclusion among them, and `expired` is deliberately not
+           consulted — see cookie_jar.h. */
+        if (http_only || !((host_only ? (hostlen == dlen && memcmp(host, dom, dlen) == 0)
                          : cj_domain_match(host, hostlen, dom, dlen, host_is_name)) &&
               cj_path_match(req_path, req_len, path, plen) &&
               (!secure || secure_ok))) {

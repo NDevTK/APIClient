@@ -30,6 +30,7 @@
 #include "core/loader/document_scripts.h"  /* §4.12.1's script inventory: what a parsed Document's programs ARE */
 #include "core/loader/document_load_type.h"  /* §7.4.5: a response's COMPUTED TYPE, and which document it loads as */
 #include "core/loader/document_load.h"       /* §7.4.5's load-a-document: the §7.5 subsection that arm runs */
+#include "core/loader/cookie_jar.h"          /* the agent's jar, which a navigation response's Set-Cookie writes */
 #include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
 #include "core/url/url.h"
 #include "core/encoding/encoding.h"   /* §6's UTF-8 decode, which §7.4.2.3.2 step 3 runs on a percent-decoding */
@@ -475,6 +476,35 @@ static void navigable_record_destination(JSContext *ctx, const char *addr, int p
 static bool child_in_this_agent(const Origin *child_origin)
 {
     return origin_same(origin_agent(), child_origin);
+}
+
+/* Each [URL, Set-Cookie field] of a navigation's answer whose URL is this agent's origin, received into the
+   agent's jar as an HTTP API's cookie (cookie_jar_receive_http). `list` is the answer's array, BORROWED. */
+static void nav_receive_set_cookies(JSContext *ctx, JSValueConst list)
+{
+    int64_t n = 0, i;
+
+    CHECK(JS_GetLength(ctx, list, &n) >= 0, "a navigation answer's Set-Cookie list has no length");
+    for (i = 0; i < n; i++) {
+        JSValue pair = JS_GetPropertyInt64(ctx, list, i);
+        JSValue urlv = JS_GetPropertyUint32(ctx, pair, 0), fieldv = JS_GetPropertyUint32(ctx, pair, 1);
+        size_t ulen = 0, flen = 0;
+        const char *u = JS_IsString(urlv) ? JS_ToCStringLen(ctx, &ulen, urlv) : NULL;
+        const char *f = JS_IsString(fieldv) ? JS_ToCStringLen(ctx, &flen, fieldv) : NULL;
+        UrlRecord rec;
+
+        DCHECK(u != NULL && f != NULL, "a navigation answer's Set-Cookie entry is not a [URL, field] pair of "
+               "strings — the trusted zone writes each as one");
+        url_record_init(&rec);
+        if (u && f && url_parse(&rec, u, ulen, NULL) && origin_same_as_url(origin_agent(), &rec))
+            cookie_jar_receive_http(ctx, &rec, f, flen);
+        url_record_free(&rec);
+        JS_FreeCString(ctx, u);
+        JS_FreeCString(ctx, f);
+        JS_FreeValue(ctx, urlv);
+        JS_FreeValue(ctx, fieldv);
+        JS_FreeValue(ctx, pair);
+    }
 }
 
 /* A TOP-LEVEL traversable's navigation whose response origin is another agent's, with §7.1.3.2 having kept the
@@ -1617,7 +1647,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        for every response that sends no `sandbox` directive, and that is exactly the coincidence this frame
        used to rest on. */
     char *response_self = NULL;
-    JSValue bodyv = JS_UNDEFINED, headersv = JS_UNDEFINED, urlv = JS_UNDEFINED;
+    JSValue bodyv = JS_UNDEFINED, headersv = JS_UNDEFINED, urlv = JS_UNDEFINED, cookiesv = JS_UNDEFINED;
     /* §7.1.7's CLONE OF THE INITIATOR'S CONTAINER, carried on the job because whose clone it is belongs to the
        OPERATION — the CREATOR's when §7.4 creates a navigable, the INITIATOR's when §7.4.2.2 navigates one —
        and by the time this job runs the only document it could ask is the one being replaced. It is ALWAYS
@@ -1883,6 +1913,12 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                "opener policy and no CSP-derived sandboxing flags, with nothing to say so");
         field_lines = JS_ToCString(ctx, headersv);
         header_list_parse_field_lines(&response_headers, field_lines);
+        /* The response's credentialed Set-Cookie fields, each beside the URL it answered (a redirect hop's
+           included), which the trusted zone states on every answer — `[]` for a load that carried no cookies. */
+        cookiesv = JS_GetPropertyStr(ctx, answer, "setCookies");
+        DCHECK(JS_IsArray(cookiesv),
+               "§7.4 step 14's response answer carries no `setCookies` list — the trusted zone states one on every "
+               "answer, and a missing one would leave this flow's jar without the cookies its response set");
         /* Fetch §2.2.2's `get`, which JOINS repeated headers with ", " — CSP §2.2's own serialization of a
            policy LIST, which policy_container.c splits apart again. The zone that used to extract this read
            one map entry and could not express two `Content-Security-Policy` headers at all. */
@@ -2286,6 +2322,16 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        joined) and that read belongs INSIDE the component that runs the algorithm, not to this frame. The list
        is therefore released beside the other bytes this frame owns, after the creation below has taken what
        it needs — see the free at the end of this function. */
+    /* Fetch §4.7 "HTTP-network fetch" stores a credentialed response's Set-Cookie before anything reads the
+       response, so the jar this flow's Document reads has them before the Document exists. The write lands in
+       the asking flow's COW delta, so no sibling flow sees it. A field answered from another origin belongs to
+       that origin's agent and is not applied here.
+       Named residual. Not covered: a field of another origin's hop, a Document created in a peer, and an
+       instance's root Document (qjs_init takes no Set-Cookie list). The next diff routes the first two to the
+       peer's jar and gives qjs_init the list. Its absence shows as a document whose document.cookie lacks a
+       cookie its own response, or a redirect hop of it, set. */
+    if (!swapped && in_agent && fetches)
+        nav_receive_set_cookies(ctx, cookiesv);
     if (!swapped && in_agent) {
         /* HTML §7.4.5 "Populating a session history entry", from the list of conditions that block a navigation
            before its Document is created: "navigationParams's RESERVED ENVIRONMENT is non-null and the result
@@ -2387,6 +2433,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        lifetime is that value's — which is why the release below must stay AFTER nav_create_begin, which is
        where §13.2.3.2's decode copies the bytes into a buffer the creation record owns. */
     JS_FreeValue(ctx, headersv);
+    JS_FreeValue(ctx, cookiesv);
     JS_FreeValue(ctx, bodyv);
     JS_FreeValue(ctx, urlv);
     if (s->req) {

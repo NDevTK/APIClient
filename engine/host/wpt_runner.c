@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "check.h"
 #include "quickjs.h"
@@ -1151,6 +1152,23 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
                           body ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)body, len) : JS_NULL);
         JS_SetPropertyStr(ctx, v, "headers", JS_NewString(ctx, field_lines));
         free(field_lines);
+        /* Each Set-Cookie field beside the URL it answered, which the navigated Document's jar receives (Fetch
+           §4.7 "HTTP-network fetch"); this runner follows no redirect, so every field answered `r->url`. */
+        {
+            JSValue cookies = JS_NewArray(ctx);
+            uint32_t nc = 0;
+            int hi;
+
+            for (hi = 0; hi < r->hdrs.n; hi++) {
+                JSValue pair;
+                if (strcasecmp(r->hdrs.e[hi].name, "set-cookie") != 0) continue;
+                pair = JS_NewArray(ctx);
+                JS_SetPropertyUint32(ctx, pair, 0, JS_NewString(ctx, r->url));
+                JS_SetPropertyUint32(ctx, pair, 1, JS_NewString(ctx, r->hdrs.e[hi].value));
+                JS_SetPropertyUint32(ctx, cookies, nc++, pair);
+            }
+            JS_SetPropertyStr(ctx, v, "setCookies", cookies);
+        }
         /* The host's own answer, so a normal completion: this zone fetched bytes rather than running a peer's
            program, and a load that did not load is `{body: null}` rather than a throw. */
         engine_host_answer(ctx, r->id, NULL, NULL, v, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);

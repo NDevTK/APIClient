@@ -1549,7 +1549,11 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
    `send` as this extension, uncredentialed. */
 async function _speakAs(identity, urlList, method, mode, destination, credentialed, jarTakesReply, preflightNames,
                         stated, init, send) {
-  if (!identity) return send();
+  if (!identity) {
+    var bare = await send();
+    if (bare.resp) bare.setCookies = [];
+    return bare;
+  }
   var href = urlList[urlList.length - 1];
   CHECK(typeof withSpeakAsRules === "function",
         "a request states an identity on a host that loads no lib/speak-as.js — the identity's headers would " +
@@ -1570,14 +1574,15 @@ async function _speakAs(identity, urlList, method, mode, destination, credential
   var admitted = stated === null ? null
     : { origin: stated.origin === null ? null : stated.origin.header, referer: stated.referer };
   var sent = await withSpeakAsRules(identity.origin, href, rules, admitted, send);
+  if (!sent.resp) return sent;
   /* Fetch §4.7 "HTTP-network fetch": "If includeCredentials is true, then the user agent should parse and store
-     response `Set-Cookie` headers", which cookieArmFor's "listed" arm is.
-     Named residual. Not covered: a tool act's reply Set-Cookie applied to the asking flow's own jar (the
-     engine's per-flow cookie_jar). The next diff carries the fields on the reply record and builds the jar's
-     HTTP receive. Its absence shows as a flow whose probe reply set a cookie reading none of it in
-     document.cookie. */
-  if (sent.resp && jarTakesReply && cookieArmFor(facts, href).arm === "listed")
-    await cookieStoreSetCookies(_setCookiesOf(sent.resp), href, facts);
+     response `Set-Cookie` headers", which cookieArmFor's "listed" arm is. The fields also ride the reply as
+     [request URL, field] pairs (`setCookies`), which the asking flow's own jar applies (the engine's
+     cookie_jar), whoever's act the request was; a field webRequest reported as bytes is text to neither. */
+  var listed = cookieArmFor(facts, href).arm === "listed";
+  var fields = listed ? _setCookiesOf(sent.resp) : [];
+  sent.setCookies = fields.filter(function (f) { return f !== null; }).map(function (f) { return [href, f]; });
+  if (listed && jarTakesReply) await cookieStoreSetCookies(fields, href, facts);
   return sent;
 }
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
@@ -2026,6 +2031,8 @@ async function safeFetch(url, opts) {
      hop is sent as its own request, speaking as the identity under its own rule. */
   var _urlList = [parsed.href], _current = parsed, _tainting = "basic", _headerList = opts.headers;
   var _identity = opts.identity, resp;
+  /* Every hop's credentialed Set-Cookie, in order, for the asking flow's jar (`_speakAs`). */
+  var _setCookieList = [];
   for (;;) {
     var _hop = _urlList.length > 1;
     /* Fetch §4.1 "Main fetch"' switch: `basic` while the current URL is the page's origin and nothing has
@@ -2109,6 +2116,8 @@ async function safeFetch(url, opts) {
     });
     if (_sent.refusal) return _sent.refusal;
     resp = _sent.resp;
+    DCHECK(Array.isArray(_sent.setCookies), "a send answered no Set-Cookie list — _speakAs states one for every reply");
+    _setCookieList = _setCookieList.concat(_sent.setCookies);
     var _redirect = await _redirectOf(resp);
     if (_redirect === null) break;
     /* Fetch §4.4 "HTTP fetch": a `cors`-tainted request's every response, a 3xx included, passes §4.10 "CORS
@@ -2200,7 +2209,7 @@ async function safeFetch(url, opts) {
       try { await resp.body.cancel(); } catch (e) { RETHROW_FATAL(e); }
     }
     return { ok: resp.ok, status: resp.status, statusText: "", headers: {}, body: _NO_BYTES(),
-             urlList: _exposed, computedType: "", refusal: null, type: _type };
+             urlList: _exposed, computedType: "", refusal: null, type: _type, setCookies: _setCookieList };
   }
   /* The body, as bytes, after every hop's SSRF check, so nothing internal is ingested before the target is judged.
      There is no decode: the engine decodes with the response's charset and BOM (see the header), so it
@@ -2251,7 +2260,7 @@ async function safeFetch(url, opts) {
          "opaque filtered response cannot arise, so a 0 here is a reply and a refusal wearing one number");
   return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: body,
            urlList: _exposed, computedType: _computed,
-           refusal: null, type: _type };
+           refusal: null, type: _type, setCookies: _setCookieList };
 }
 
 /* The IP address space of the policy container a document at `url` is created with, HTML §7.1.7 "Policy
@@ -2302,7 +2311,7 @@ async function safeFetchSchemeData(url) {
   var computed = _computedType(headers["content-type"], _determineNosniff(headers["x-content-type-options"]),
                                _sniff(body));
   return { ok: true, status: resp.status, statusText: resp.statusText, headers: headers, body: body,
-           urlList: [parsed.href], computedType: computed, refusal: null, type: "basic" };
+           urlList: [parsed.href], computedType: computed, refusal: null, type: "basic", setCookies: [] };
 }
 
 /* Fetch §2.2.2 "Headers": a forbidden request-header is one "forbidden so the user agent remains in full

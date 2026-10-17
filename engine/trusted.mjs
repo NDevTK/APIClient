@@ -1914,7 +1914,8 @@ async function main() {
              completion: this zone fetched bytes rather than relaying another instance's program, so it has
              nothing to have thrown with. */
           e.ready.push(['answer', String(id),
-                        b64(JSON.stringify({ url: loaded.url, headers: fieldLines(loaded.headers) })),
+                        /* `setCookies` is empty: this host's loads carry no cookie jar (see the header). */
+                        b64(JSON.stringify({ url: loaded.url, headers: fieldLines(loaded.headers), setCookies: [] })),
                         '0', b64(loaded.bytes)].join('\t'));
         })());
       } else if (op.startsWith('xhr.send\t')) {

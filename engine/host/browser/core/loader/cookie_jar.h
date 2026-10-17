@@ -56,6 +56,12 @@ void cookie_jar_free(void);
    standard says to ignore leaves the store untouched. */
 void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, const char *set_cookie, size_t len);
 
+/* §5.3 "RECEIVE A COOKIE" from `uri` for an HTTP API — a response's Set-Cookie field, which Fetch §4.7
+   "HTTP-network fetch" stores when its request included credentials. The same parse and store as
+   cookie_jar_receive, except that an HttpOnly cookie is kept, flagged, and hidden from every read this store
+   serves (all of them "non-HTTP"). `uri` is the URL that response answered. */
+void cookie_jar_receive_http(JSContext *ctx, const UrlRecord *uri, const char *set_cookie, size_t len);
+
 /* §5.3's COOKIE-ATTRIBUTE-LIST as §5.3 ITSELF READS IT — the four attributes its steps ask for by
    attribute-name, plus the two flags, in the parsed shape rather than as the list of byte-sequence pairs a
    Set-Cookie header spells. `domain` and `path` are BORROWED and must outlive the store call; every field is
@@ -202,9 +208,8 @@ void cookie_jar_set_process_changes(CookieJarProcessChanges run);
  * walk applies inline because a LIVE read may not answer with a cookie that has expired. Apply it here and the
  * deleted-by-expiry change is filtered out of its own notification, so §2.2's second condition would process an
  * empty set for ever and its whole population would be unobservable.
- * THE HTTP-ONLY REQUIREMENT IS VACUOUS IN THIS STORE RATHER THAN SKIPPED: §5.3 step 10 abandons an HttpOnly
- * cookie arriving through a "non-HTTP" API, which is the only arrival this store has, so no stored cookie
- * carries the flag and no cookie change can name one.
+ * THE HTTP-ONLY REQUIREMENT IS APPLIED: a cookie cookie_jar_receive_http stored with the flag is no
+ * observable change, since every observer of this store is a "non-HTTP" API.
  *
  * THE SHAPE IS A JS ARRAY OF « name, value, type » — the two strings §7.4's "prepare lists from changes" hands
  * to Cookie Store API §7.1 "Query cookies"' `create a CookieListItem`, and the `CookieChangeType` deciding
