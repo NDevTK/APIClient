@@ -16939,12 +16939,13 @@ static void fixture_route_gadget_post(JSContext *ctx) {
     }
 }
 
-/* THE QUESTION, ASKED ONCE, THROUGH THE PRODUCTION DOOR. `windowproxy.get … length` is HTML §7.2.1.3.1
-   "CrossOriginProperties ( O )"'s `{ [[Property]]: "length", [[NeedsGetter]]: true }` — a member a cross-origin
-   WindowProxy really does expose — and §7.2.2.2 "Indexed access on the Window object" says what answering it
-   costs ("The length getter steps are to return this's associated Document's document-tree child navigables's
-   size"), which is why it is the cheapest real operation to ask: it reads, it allocates no navigable, and it
-   cannot fork. */
+/* THE QUESTION, ASKED ONCE, THROUGH THE PRODUCTION DOOR. `windowproxy.get … window` is HTML §7.2.1.3.1
+   "CrossOriginProperties ( O )"'s `{ [[Property]]: "window", [[NeedsGetter]]: true }`, a member a cross-origin
+   WindowProxy really does expose, whose getter returns this's relevant WindowProxy: it reads, allocates no
+   navigable and cannot fork. It must be a member solver/engine.c's flow_perform answers by RUNNING A PROGRAM,
+   because the park rows below are about the token that program's row carries; `length` and `closed` are
+   answered from §7.2.3's record at arrival (window_proxy_record_member_of_document) and leave no row. */
+#define TF_REMOTEOP_MEMBER "window"
 static void fixture_ask_remote_op(JSContext *ctx) {
     WorldId peer = { world_doc_intern("opeer"), 1, 0 };
     const char *const *carried;
@@ -16982,8 +16983,19 @@ static void fixture_ask_remote_op(JSContext *ctx) {
         EngineArrival clear = { PROV_DERIVED, 0, 0 };
 
         engine_arrival_token(clear, marks, sizeof marks);
-        snprintf(rec, sizeof rec, "windowproxy.get\t%s\t%s\t%s\t%s\tlength",
-                 world_doc_name(world_local_doc()), vector, marks, ENGINE_ADDRESSEE_NONE);
+        snprintf(rec, sizeof rec, "windowproxy.get\t%s\t%s\t%s\t%s\t%s",
+                 world_doc_name(world_local_doc()), vector, marks, ENGINE_ADDRESSEE_NONE, TF_REMOTEOP_MEMBER);
+    }
+    {
+        JSValue answer = JS_UNDEFINED;
+        int from_record = window_proxy_record_member_of_document(ctx, world_local_doc(), TF_REMOTEOP_MEMBER,
+                                                                 &answer);
+
+        JS_FreeValue(ctx, answer);
+        DCHECK(!from_record,
+               "the peer's question names a member flow_perform answers from §7.2.3's record at arrival, so no "
+               "member will hold its token on a program row and every park-remoteop row is unanswerable — ask a "
+               "member whose getter only the document's program can run");
     }
     /* THE TOKEN IS THE TRUSTED ZONE'S NAME and this fixture is standing in for the zone, so it mints one. It is
        the thing that may never enter a recipe (solver/engine.h), which is the whole reason the park hands the
