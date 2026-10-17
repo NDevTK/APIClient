@@ -181,42 +181,22 @@ void result_page_error_value(JSContext *ctx, JSValueConst err);
  * Returns JS_EXCEPTION so a caller can `return result_explored_throw(ctx);`. */
 JSValue result_explored_throw(JSContext *ctx);
 /* …AND THE QUESTION THAT ANSWERS, asked with the same (message, throw site) pair every other reader of this
-   surface is keyed by. 1 = this engine declared the throw its own exploration; 0 = it did not, which is the
-   positive statement that the pair came from the page's own program and is the population a regression lands
-   in. A host printing a page-error stream asks this at the moment it prints, because a stream's reader has no
-   second chance to reclassify a line it has already consumed.
-   THE DOCUMENT ROUTE ASKS IT TOO, AND ASKS IT HERE RATHER THAN CARRYING A COLUMN. `pageErrorsExplored` is
-   composed by walking the reported rows and asking this function per pair, so there is one declaration in one
-   place and nothing to keep in step — a field on the row would be a second copy of a fact that is established
-   strictly before any row exists. A DECLARED PAIR WITH NO ROW IS IN NO ARRAY: an exploration throw the page
-   CAUGHT was declared and never reported, and the three arrays are three readings of the REPORTED set. */
+   surface is keyed by. 1 = the pair is this engine's exploration: a site declared it at the raise, or every
+   occurrence of it ever reported was raised on a forced path (engine_prov_of_running_path, read by
+   result_page_error at the report). 0 = some occurrence stood on a path nothing forced, which makes the pair
+   the page's own; that is the population a regression lands in. The provenance half is a must-rest-on over
+   every occurrence, never decremented by a retraction, because claiming forced wrongly hides a real page error.
+   A stream host asks this when it prints STANDS and is told of a later reversal by RESULT_PAGE_ERROR_OWNED.
+   `pageErrorsExplored` asks it per reported row. A declared pair with no row is in no array: an exploration
+   throw the page caught was declared and never reported. */
 int result_page_error_explored(const char *msg, const char *filename);
-/* NAMED RESIDUAL — `result_page_error_explored` IS EXACT FOR WHAT IT DECLARES AND NARROWER THAN THE FACT A READER
-   OF `pageErrors` NEEDS, BECAUSE ITS DECLARATION IS MADE BY A COMPONENT AND THE COMMONER FORCED THROW HAS NONE.
-   NOT COVERED: an uncaught throw the PAGE'S OWN PROGRAM performs while standing on an arm this engine FORCED. A
-   fork over a missed read on the global (solver/absent.c's mint) decides nothing at the fork; the page runs on
-   into the forced world, and the throw that ends it is the interpreter's own property read on a base that world
-   made undefined, frames later. No component raised it, so `result_explored_throw` — whose one caller is
-   core/events/event_target.c — cannot declare it, and the pair stands in `pageErrors` exactly as a throw on the
-   observed path does. MEASURED with no network, `node engine/one_document.mjs engine/host/out/qjs-native-none
-   <file> <url> -` over a document applying a bundler's ESM-interop helper to the global object: its
-   `!mod.__esModule` test forks, the truthy arm defines no `default`, the page's next `.default.x` raises "cannot
-   read property 'x' of undefined", and the sibling arm completes. A COHERENT world — `window.__esModule = true`
-   written for real — throws byte-identically with no fork, so the throw is a faithful consequence of a sound
-   arm and NOT a fidelity defect; what is wrong is only that it is filed as the page's own.
-   WHAT THE NEXT DIFF BUILDS: the raise reads `engine_prov_of_running_path()` (solver/engine.h, which reads the
-   standing flow itself) and the row folds it as a MUST-REST-ON — a pair is forced only if EVERY standing
-   occurrence was raised on a forced path — because the cheap direction here is the reverse of the witness
-   mark's: over-claiming forced hides a real page error, and that is not found by acting on it. Its reader lands
-   with it (the document's partition and the trusted zone's reader of it), so it is a BUILD, cross-boundary, and
-   the coordinator's to perform.
-   HOW ITS ABSENCE SHOWS: a `pageErrors` row that `pageErrorsExplored` does not name and that DISAPPEARS when the
-   same document is re-run with the missed global written concretely — the error table reads as a platform gap
-   while nothing on the path the page really takes ever threw.
-   RETIREMENT: this record goes when a page-error row carries the provenance of the paths its occurrences were
-   raised on. MEASURED ABSENT, so it is not born met: `grep -cE '^(int|void) result_page_error_(forced|prov)'
-   engine/host/solver/result.c` answers 0 against `grep -cE '^int result_page_error_explored\('` over the same
-   file answering 1 as the armed control. */
+/* Named residual. Not covered: a throw on an arm forked without a contradiction mark. `flow_path_forced` marks
+   an arm the concrete example disagrees with, and an example-less fork marks nothing, so solver/absent.c's
+   fork over a missed global read (whose truthy arm makes `mod.default` undefined and the page's next
+   `.default.x` throw) is still filed as the page's. Next diff builds: a per-flow mark for "this path took an
+   arm whose premise no example supports", raised at the example-less forks and folded beside `path_forced`
+   here. Absence shows as: a `pageErrors` row that `pageErrorsExplored` does not name and that disappears when
+   the same document is re-run with the missed global written concretely. */
 
 /* ---- TAKING ONE BACK ---------------------------------------------------------------------------------------
  *
@@ -300,7 +280,12 @@ void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz
    made again. */
 typedef enum {
     RESULT_PAGE_ERROR_STANDS = 0,      /* this (message, throw site) now stands — nothing of it stood before */
-    RESULT_PAGE_ERROR_RETRACTED = 1    /* …and its last standing occurrence has been taken back */
+    RESULT_PAGE_ERROR_RETRACTED = 1,   /* …and its last standing occurrence has been taken back */
+    /* …and the pair, which result_page_error_explored answered as this engine's exploration because every
+       occurrence so far stood on a forced path, has now been raised on a path nothing forced: it is the page's
+       own from here on. Fired once per pair, whether or not it stands, since a reader's classification is per
+       pair and outlives a retraction. */
+    RESULT_PAGE_ERROR_OWNED = 2
 } ResultPageErrorEdge;
 void result_set_page_error_hook(void (*fn)(const char *msg, const char *filename, ResultPageErrorEdge edge));
 /* The other half of that declaration: this host PUBLISHES result_json unconditionally and reads `pageErrors`

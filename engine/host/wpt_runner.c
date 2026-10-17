@@ -2213,6 +2213,8 @@ static void wpt_page_error(const char *msg, const char *filename, ResultPageErro
         fprintf(report_out(), "@WPTERR %s at=%s: %s\n", doc, at, msg); break;
     case RESULT_PAGE_ERROR_RETRACTED:
         fprintf(report_out(), "@WPTERR-RETRACTED %s at=%s: %s\n", doc, at, msg); break;
+    /* This host prints no exploration classification at STANDS, so a reversal of one has nothing to correct. */
+    case RESULT_PAGE_ERROR_OWNED: break;
     }
 }
 

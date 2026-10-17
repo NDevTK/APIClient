@@ -5864,13 +5864,23 @@ function pageErrorText(out) {
      .mjs tree getting no hit at all is how a two-site key gets to disagree unobserved in the first place. */
   const pairKey = (at, msg) => at + "\0" + msg;
   const explored = new Set();
-  for (const m of out.matchAll(/^@PAGEERR-EXPLORED at=(\S+) (.*)$/gm)) {
-    const msg = m[2].trim();
+  /* In stream order, because @PAGEERR-OWNED reverses an earlier @PAGEERR-EXPLORED: solver/result.h's
+     classification is a must-rest-on over a pair's occurrences, and the occurrence that breaks it can arrive
+     after the line that announced it. The producer fires OWNED only for a pair it had classified the engine's,
+     so one naming a pair not in the set is a broken contract, refused like the two below. */
+  for (const m of out.matchAll(/^@PAGEERR-(EXPLORED|OWNED) at=(\S+) (.*)$/gm)) {
+    const msg = m[3].trim();
     /* THE SAME ACCEPTANCE RULE AS THE ANNOUNCEMENT LOOP BELOW, which drops an empty message. A side that keeps
        what the other drops mints a key nothing can ever match, and would fire the contract check below on a
        disagreement between two readers rather than on anything the producer did. */
     if (!msg) continue;
-    explored.add(pairKey(m[1], msg));
+    const k = pairKey(m[2], msg);
+    if (m[1] === "EXPLORED") { explored.add(k); continue; }
+    if (!explored.delete(k))
+      throw new Error("[build] an @PAGEERR-OWNED line names a (message, throw site) pair no earlier " +
+                      "@PAGEERR-EXPLORED line classified — solver/result.c fires OWNED only when a pair it " +
+                      "answered as this engine's exploration is raised on an unforced path: " +
+                      JSON.stringify(msg.slice(0, 160)) + " at " + m[2]);
   }
   const errs = [];
   /* EVERY PAIR EVER ANNOUNCED, WHICH IS NOT `errs` — a retraction splices the pair out of what STANDS, and an

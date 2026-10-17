@@ -5722,6 +5722,8 @@ static void tf_err_edge_seen(const char *msg, const char *filename, ResultPageEr
                 g_tf_err_edges[i].stands_here++;
             return;
         case RESULT_PAGE_ERROR_RETRACTED: g_tf_err_edges[i].retracted++; return;
+        /* A classification edge, not an occurrence: the token's stands and retractions are what its rows read. */
+        case RESULT_PAGE_ERROR_OWNED: return;
         }
     }
 }
@@ -5759,6 +5761,8 @@ static void tf_page_error(const char *msg, const char *filename, ResultPageError
             printf("@PAGEERR-EXPLORED at=%s %s\n", at, msg);
         break;
     case RESULT_PAGE_ERROR_RETRACTED: printf("@PAGEERR-RETRACTED at=%s %s\n", at, msg); break;
+    /* The reversal of an @PAGEERR-EXPLORED this printer wrote on the provenance half (solver/result.h). */
+    case RESULT_PAGE_ERROR_OWNED: printf("@PAGEERR-OWNED at=%s %s\n", at, msg); break;
     }
     fflush(stdout);
 }
@@ -13193,8 +13197,23 @@ TF_UNIT void probes_declines(const char *js, Probe *tab, int *n) {
              !!strstr(js, "\"/api/decl/redir\"") && !!strstr(js, "/api/decl/sub/rel-xhr"),
              "NOT REACHED: there is no /api/decl/redir record or no record of the XMLHttpRequest to "
              "/api/decl/sub/rel-xhr, so the document's program did not run to its XHR and its served GET");
+    /* The declined POST's failure arm (flow_decline_fork) takes Fetch §5.6's network error on a path marked
+       forced, and the page attaches no handler, so HTML §8.1.4.7 reports the rejection there and nowhere else.
+       It is this engine's exploration and solver/result.c files it so. The invented message is the control that
+       the explored array is not every message. */
+    const char *declerr_why = NULL; int declerr_tt = 1;
+    fold_row(&declerr_tt, &declerr_why, tf_err_listed(js, "pageErrors", "TypeError: Failed to fetch"),
+             "NOT REACHED: `pageErrors` names no `TypeError: Failed to fetch`, so no failure arm of the declined "
+             "POST reached a microtask checkpoint with its rejection unhandled");
+    fold_row(&declerr_tt, &declerr_why, tf_err_listed(js, "pageErrorsExplored", "TypeError: Failed to fetch"),
+             "the declined POST's rejection, raised only on flow_decline_fork's forced failure arm, is not in "
+             "`pageErrorsExplored` — result_page_error did not read the arm's forced provenance, or an "
+             "occurrence of the same pair stood on a path nothing forced");
+    fold_row(&declerr_tt, &declerr_why, !tf_err_listed(js, "pageErrorsExplored", "declINVENTED"),
+             "`pageErrorsExplored` names a message no program of this document raises");
     const Probe rows[] = {
         { "declines-park", declines_tt, "/api/decl/redir", SESS_EXPLORE, declines_why },
+        { "declines-forced-pageerr", declerr_tt, "/api/decl/redir", SESS_EXPLORE, declerr_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -14814,6 +14833,12 @@ TF_UNIT void probes_platform(const char *js, Probe *tab, int *n) {
              "the stream announced `synmove` and the result document does not carry it in `pageErrors` — the "
              "two routes disagree about an error that stands, and a consumer reading only the document would "
              "be told this page raised nothing");
+    /* The negative half of `declines-forced-pageerr`: a throw the page's own code raises on its observed path
+       is the page's, so the provenance fold must not file it as this engine's exploration. */
+    fold_row(&movethrow_tt, &movethrow_why, !tf_err_listed(js, "pageErrorsExplored", "synmove"),
+             "`synmove` is in `pageErrorsExplored` — the page's own throw was filed as this engine's "
+             "exploration, so solver/result.c read every occurrence of it as raised on a forced path; read "
+             "result_page_error's provenance read and engine_prov_of_running_path");
     const Probe rows[] = {
         { "platform-algo", platalgo_tt, "/api/docnode", SESS_EXPLORE, platalgo_why },
         /* THE UNSTAGED ONE, AND ITS ADDRESS COLUMN IS THE DOCUMENT'S BECAUSE THAT IS WHERE IT IS RAISED —

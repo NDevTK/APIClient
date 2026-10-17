@@ -10,6 +10,7 @@
 #include "solver/rung_entry.h"  /* the invoker rungs' denominator, read beside `stepUnitRuns` */
 #include "solver/solve.h"
 #include "solver/engine.h"
+#include "solver/pending.h"   /* PROV_FORCED, the grade engine_prov_of_running_path answers a page error's path with */
 #include "solver/flow.h"
 #include "solver/net_reach.h"   /* how far the frontier stands from the request sites it has not run */
 #include "solver/world.h"   /* what the cross-instance seam materialized here — see world_segment_stats */
@@ -41,13 +42,16 @@
    one message stay two rows. `at` is "" for a thrown value with no backtrace, which is §8.1.4.6's own answer.
    A row counts occurrences so a report is revocable: `standing` were reported and not taken back, `retracted`
    were taken back, and their sum is how many were reported. A row at standing 0 is a pair named and withdrawn,
-   a different fact from a pair never recorded (no row).
+   a different fact from a pair never recorded (no row). `unforced` counts the occurrences reported on a path
+   engine_prov_of_running_path did not answer forced; a retraction does not lower it, since which occurrence it
+   took back is unknown and the cheap error is to call the pair the page's.
    One array of rows rather than parallel columns, so a growth failure cannot leave a half-grown row. */
 typedef struct {
     char *msg;
     char *at;
     int   standing;
     int   retracted;
+    int   unforced;
 } PageErrorRow;
 static PageErrorRow *g_errs; static int g_errs_n, g_errs_cap;
 
@@ -67,18 +71,29 @@ static PageErrorRow *errs_find(const char *msg, const char *filename) {
 typedef struct { char *msg; char *at; } ExploredPair;
 static ExploredPair *g_expl; static int g_expl_n, g_expl_cap;
 
-int result_page_error_explored(const char *msg, const char *filename) {
-    DCHECK(msg != NULL && filename != NULL,
-           "the exploration question was asked with half a key — a page-error row is identified by (message, "
-           "throw site) and a null half would answer about whichever row happened to carry the other, which is "
-           "a wrong classification rather than a missing one");
+/* Whether a raising site declared this pair. The declaration half of result_page_error_explored, kept apart
+   because explored_add dedupes on it: deduping on the whole answer would skip the declaration of a pair whose
+   occurrences so far were all forced, and a later unforced one would then file it as the page's. */
+static int explored_declared(const char *msg, const char *filename) {
     for (int i = 0; i < g_expl_n; i++)
         if (!strcmp(g_expl[i].msg, msg) && !strcmp(g_expl[i].at, filename)) return 1;
     return 0;
 }
 
+int result_page_error_explored(const char *msg, const char *filename) {
+    PageErrorRow *row;
+
+    DCHECK(msg != NULL && filename != NULL,
+           "the exploration question was asked with half a key — a page-error row is identified by (message, "
+           "throw site) and a null half would answer about whichever row happened to carry the other, which is "
+           "a wrong classification rather than a missing one");
+    if (explored_declared(msg, filename)) return 1;
+    row = errs_find(msg, filename);
+    return row != NULL && row->unforced == 0;
+}
+
 static void explored_add(const char *msg, const char *filename) {
-    if (result_page_error_explored(msg, filename)) return;
+    if (explored_declared(msg, filename)) return;
     if (g_expl_n >= g_expl_cap) {
         int c = g_expl_cap ? g_expl_cap * 2 : 8;
         ExploredPair *a = realloc(g_expl, (size_t)c * sizeof(*g_expl));
@@ -112,6 +127,11 @@ void result_set_page_error_hook(void (*fn)(const char *msg, const char *filename
 void result_page_errors_ride_the_document(void) { g_err_route_declared = 1; }
 
 void result_page_error(const char *msg, const char *filename) {
+    /* The occurrence's provenance, read off the standing flow at the report: HTML §8.1.4.6 and §8.1.4.7 report
+       in the flow whose script or checkpoint raised it, and a report outside any flow answers derived, which
+       files the pair as the page's. */
+    int forced = engine_prov_of_running_path() == PROV_FORCED;
+
     if (!msg || !*msg) return;
     /* Never NULL: "" is §8.1.4.6's answer for no backtrace, and NULL would be a caller that never asked. */
     DCHECK(filename != NULL,
@@ -135,19 +155,27 @@ void result_page_error(const char *msg, const char *filename) {
             /* The pair's latch, rising (see result.h): silent while it already stands, announced again after a
                retraction, because the retraction was the stream's last word on this pair. */
             int was_standing = row->standing;
+            /* The classification falling, before the latch, so a STANDS printed below is asked after it. */
+            int owned_now = !forced && row->unforced == 0 && !explored_declared(msg, filename);
+
             row->standing++;
+            if (!forced) row->unforced++;
+            if (owned_now && g_err_hook) g_err_hook(msg, filename, RESULT_PAGE_ERROR_OWNED);
             if (!was_standing && g_err_hook) g_err_hook(msg, filename, RESULT_PAGE_ERROR_STANDS);
             return;
         }
     }
-    /* Routes between the two declared answers. Announced before the row is committed, so an allocation failure
-       below loses the row and not the announcement. */
-    if (g_err_hook) g_err_hook(msg, filename, RESULT_PAGE_ERROR_STANDS);
+    /* Committed before it is announced, so the printer's exploration question reads this occurrence's
+       provenance. An allocation failure still announces: it loses the row (and with it the provenance half of
+       the classification, which then reads the page's) and not the line. */
     if (g_errs_n >= g_errs_cap) {
         int c = g_errs_cap ? g_errs_cap * 2 : 8;
         PageErrorRow *a = realloc(g_errs, (size_t)c * sizeof(*g_errs));
         /* One allocation, so there is no half-grown row; a lost diagnostic is not worth failing a run over. */
-        if (!a) return;
+        if (!a) {
+            if (g_err_hook) g_err_hook(msg, filename, RESULT_PAGE_ERROR_STANDS);
+            return;
+        }
         g_errs = a;
         g_errs_cap = c;
     }
@@ -155,9 +183,14 @@ void result_page_error(const char *msg, const char *filename) {
     g_errs[g_errs_n].at = strdup(filename);
     g_errs[g_errs_n].standing = 1;
     g_errs[g_errs_n].retracted = 0;
-    if (g_errs[g_errs_n].msg && g_errs[g_errs_n].at) { g_errs_n++; return; }
-    free(g_errs[g_errs_n].msg); free(g_errs[g_errs_n].at);
-    g_errs[g_errs_n].msg = NULL; g_errs[g_errs_n].at = NULL;
+    g_errs[g_errs_n].unforced = !forced;
+    if (g_errs[g_errs_n].msg && g_errs[g_errs_n].at) {
+        g_errs_n++;
+    } else {
+        free(g_errs[g_errs_n].msg); free(g_errs[g_errs_n].at);
+        g_errs[g_errs_n].msg = NULL; g_errs[g_errs_n].at = NULL;
+    }
+    if (g_err_hook) g_err_hook(msg, filename, RESULT_PAGE_ERROR_STANDS);
 }
 
 /* Takes one occurrence back — result.h states the algorithm this serves and why a no-op is a positive answer. */
@@ -396,11 +429,10 @@ static void errs_append(char **buf, size_t *cap, size_t *len, const char *s) {
    the rejection handled; disjoint from the first, since a message still standing somewhere did go wrong. A
    message in neither was never recorded. A retracted message is still a capability the page reached for, so
    the message is kept, not a count.
-   `pageErrorsExplored` is orthogonal: messages this engine minted on its own exploration (a browser component
-   forking completions over unknown input and reaching a spec step whose answer is a throw), asked of
-   `result_page_error_explored` rather than a row field. Evidence, still reported, but not a page error, so a
-   consumer renders it apart. A declared pair with no row (an exploration throw the page caught) is in no
-   array, since this walks what was reported. */
+   `pageErrorsExplored` is orthogonal: messages this engine's exploration produced (a throw a raising site
+   declared, or one whose every occurrence stood on a forced path), asked of `result_page_error_explored`.
+   Evidence, still reported, but not a page error, so a consumer renders it apart. A declared pair with no row
+   (an exploration throw the page caught) is in no array, since this walks what was reported. */
 typedef enum {
     /* the page raised it and nothing took it back */
     ERRS_STANDING,
@@ -415,7 +447,7 @@ static char *errs_json_array(ErrsArray which) {
     int emitted = 0;
     errs_raw(&b, &cap, &len, "[");
     for (int i = 0; i < g_errs_n; i++) {
-        int seen = 0, stands_somewhere = 0, retracted_somewhere = 0, explored_somewhere = 0;
+        int seen = 0, stands_somewhere = 0, retracted_somewhere = 0, owned_somewhere = 0;
         int want = 0;   /* the answer for a value outside ErrsArray — see the switch below */
         /* Per message, across every row carrying it: a message standing at one site is not retracted because
            another site withdrew it. */
@@ -424,8 +456,10 @@ static char *errs_json_array(ErrsArray which) {
             if (j < i) seen = 1;
             if (g_errs[j].standing) stands_somewhere = 1;
             if (g_errs[j].retracted) retracted_somewhere = 1;
-            /* Asked with the row's own pair, since the declaration is keyed per (message, throw site). */
-            if (result_page_error_explored(g_errs[j].msg, g_errs[j].at)) explored_somewhere = 1;
+            /* Asked with the row's own pair, since the classification is keyed per (message, throw site). A
+               message is the engine's only when no site raising it is the page's: the same must-rest-on
+               result_page_error_explored applies over occurrences, one level up. */
+            if (!result_page_error_explored(g_errs[j].msg, g_errs[j].at)) owned_somewhere = 1;
         }
         if (seen) continue;
         /* Every row stands for at least one occurrence: minted at standing 1, and a retraction moves an occurrence
@@ -441,7 +475,7 @@ static char *errs_json_array(ErrsArray which) {
         switch (which) {
         case ERRS_STANDING:  want = stands_somewhere; break;
         case ERRS_RETRACTED: want = !stands_somewhere && retracted_somewhere; break;
-        case ERRS_EXPLORED:  want = explored_somewhere; break;
+        case ERRS_EXPLORED:  want = !owned_somewhere; break;
         }
         if (!want) continue;
         if (emitted++) errs_raw(&b, &cap, &len, ",");
