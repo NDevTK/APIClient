@@ -1,10 +1,11 @@
 /* THE GRID ITEM DOCUMENT: css-grid-1 §6.2 "Grid Item Sizing" for a `width: auto` item. One of test_forced.c's
-   exploring documents (its TF_DOCS table), alone because its row is the one core/layout/used_value.c's
-   grid-item DFAIL refuses, and an abort costs only this document. The container is 300px wide with no explicit
-   columns, so its one implicit `auto` column takes the free space (§11.8 "Stretch auto Tracks") and the item,
-   stretch-fit for `normal` alignment, is 300px. The container's definite height keeps its own row sizing out
-   of the question. It ends with TF_CANVAS_INK, which test_forced.c defines before
-   including it. */
+   exploring documents (its TF_DOCS table), alone because core/layout/used_value.c's grid-item DFAILs refuse
+   it, and an abort costs only this document. The host's paint of the presented document asks the item's
+   containing block (css-grid-1 §3.3 "Grid Areas") before the row asks its `auto` width; both are the grid
+   area that §11's track sizing produces. The container is 300px wide with no explicit columns, so its one
+   implicit `auto` column takes the free space (§11.8 "Stretch auto Tracks") and the item, stretch-fit for
+   `normal` alignment, is 300px. The container's definite height keeps its own row sizing out of the question.
+   It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_GRIDITEM_H
 #define ENGINE_HOST_FIXTURE_GRIDITEM_H
 #ifndef TF_CANVAS_INK
