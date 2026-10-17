@@ -66,6 +66,7 @@ struct LayoutJob {
     FlowPlacementRecord placement;   /* core/layout/flow_placement.h's three facts, for this job */
     CssCascadeRecord    cascade;     /* core/css/css_cascade_pass.h's cascaded values, for this job */
     LineBoxRecord       line_boxes;  /* core/layout/line_box.h's fills, for this job */
+    IntrinsicSizeRecord intrinsic;   /* core/layout/intrinsic_size.h's measurements, for this job */
 };
 
 /* The job whose activation holds the thread when a driver entered one, and the thread's synchronous job.
@@ -131,6 +132,7 @@ static void lj_memo_shed(LayoutJob *job)
     flow_placement_record_release(&job->placement);
     css_cascade_record_release(&job->cascade);
     line_box_record_release(&job->line_boxes);
+    intrinsic_size_record_release(&job->intrinsic);
 }
 
 /* The storage for the next memoized answer, from the job's chunks; it lives until the memo is emptied. */
@@ -223,6 +225,7 @@ void layout_job_free(LayoutJob *job)
     flow_placement_record_release(&job->placement);
     css_cascade_record_release(&job->cascade);
     line_box_record_release(&job->line_boxes);
+    intrinsic_size_record_release(&job->intrinsic);
     free(job->stack);
     free(job->memo);
     lj_answers_free(job);
@@ -310,6 +313,12 @@ LineBoxRecord *layout_job_line_boxes(void)
 {
     if (g_entered != NULL) return &g_entered->line_boxes;
     return g_sync.drives != 0 ? &g_sync.line_boxes : NULL;
+}
+
+IntrinsicSizeRecord *layout_job_intrinsic_sizes(void)
+{
+    if (g_entered != NULL) return &g_entered->intrinsic;
+    return g_sync.drives != 0 ? &g_sync.intrinsic : NULL;
 }
 
 /* ---- the drive ------------------------------------------------------------------------------------------ */

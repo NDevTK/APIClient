@@ -1,5 +1,6 @@
 /* css-sizing-3 §5.1's intrinsic inline sizes over a box's own content. See intrinsic_size.h. */
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -12,7 +13,9 @@
 #include "core/layout/box_tree.h"
 #include "core/layout/flex_intrinsic_size.h"
 #include "core/layout/flex_item.h"
+#include "core/layout/inline_run_walk.h"
 #include "core/layout/intrinsic_size.h"
+#include "core/layout/layout_job.h"   /* the intrinsic size record of the job holding the thread */
 #include "core/layout/phrasing_break.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/table_box.h"
@@ -250,50 +253,25 @@ static void is_atomic_replaced(TextRunMeasure *m, lxb_dom_element_t *el)
     text_run_measure_add_atomic(m, el, outer, outer);
 }
 
-/* One child node of the box being measured. The shape mirrors core/layout/line_box.c's child walk: both
-   iterate the same inline formatting context and must agree on which children are in it. */
-/* A block-level child is unreachable from either origin (a direct child of the measured box, or reached through
-   a `display: inline` box): core/layout/block_flow.h enumerates CSS 2.2 §9.2.1.1's box list in content order,
-   so a run ends at a block-level box at any depth. One assertion states it in `is_child`. */
+/* What `is_child` left for its caller, as core/layout/line_box.c's `lb_child` answers it: nothing more, a text
+   node whose characters are the next items, an inline box whose opening edge it emitted and whose box-tree
+   children are next, or "not yet" for an atomic inline whose own sizes are not ready, with nothing added. Both
+   classify the same inline formatting context and must agree on which children are in it; a block-level child
+   is unreachable from either, because core/layout/block_flow.h's run ends before one at any depth. */
+typedef enum { IS_CHILD_PLACED = 0, IS_CHILD_TEXT, IS_CHILD_INLINE_BOX, IS_CHILD_NOT_YET } IsChildNext;
 
-/* One run being measured. Its `end` can be met at any depth (§9.2.1.1 breaks an inline box around a block-level
-   box inside it), so `past_end` carries that out of the descent. It also suppresses the trailing edge of an
-   inline box the run ends inside, per §9.2.1.1: "the border would be drawn around C1 (open at the end of the
-   line) and C2 (open at the start of the line)". */
-typedef struct {
-    TextRunMeasure *m;
-    lxb_dom_node_t *end;   /* EXCLUSIVE, and reachable at any depth; NULL runs to the end of the content */
-    bool past_end;
-} IsRun;
-
-static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c);
 /* css-sizing-3 §5.2's declared-size step, defined with §9.4.1's stack: §9.4.2's walk applies the same steps
    to an atomic inline-level box, and one definition keeps them agreeing. */
 static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, IntrinsicInlineSizes measured);
 
-static void is_walk(IsRun *r, lxb_dom_element_t *el)
-{
-    BoxTreeChild c;
-
-    /* Called only for the inline-box descent below. The sequence is core/layout/box_tree.h's, which applies
-       css-display-3 §2.5 "Box Generation: the none and contents keywords"' splice and never yields a
-       `contents` element. */
-    for (c = box_tree_first_child(el); box_tree_child_exists(c) && !r->past_end;
-         c = box_tree_next_sibling(el, c))
-        is_child(r, el, c);
-}
-
-static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
+static IsChildNext is_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTreeChild c,
+                            lxb_dom_node_t **node)
 {
     lxb_dom_node_t *n;
     lxb_dom_element_t *el;
     CssDisplay d;
     bool inline_box;
 
-    /* The run's end, tested first at every depth: it is §9.2.1.1's block-level box that "becomes a sibling of
-       those anonymous boxes", and everything after it belongs to a later box on §9.4.1's stack. */
-    if (r->past_end) return;
-    if (box_tree_child_is_node(c, r->end)) { r->past_end = true; return; }
     /* css-lists-3 §3.5's outside marker box "is placed outside the principal block box", so it contributes
        nothing to the content's css-sizing-3 §5.1 "Intrinsic Sizes", as core/layout/line_box.c's fill skips
        it. */
@@ -302,20 +280,21 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
                "a pseudo-element member of a list item's inline formatting context was classified as something "
                "other than css-lists-3 §3.5's outside marker, which is the one arm core/layout/block_flow.h "
                "answers for it");
-        return;
+        return IS_CHILD_PLACED;
     }
     n = c.node;
     switch (n->type) {
     case LXB_DOM_NODE_TYPE_TEXT:
         /* CSS 2.2 §9.2.2.1 "Anonymous inline boxes": collapsible white space "does not generate any anonymous
            inline boxes". core/layout/block_flow.h answers that for every walk. */
-        if (block_flow_text_child_generates_box(n)) text_run_measure_add_text(r->m, parent, n);
-        return;
+        if (!block_flow_text_child_generates_box(n)) return IS_CHILD_PLACED;
+        *node = n;
+        return IS_CHILD_TEXT;
     case LXB_DOM_NODE_TYPE_COMMENT:
     case LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION:
     case LXB_DOM_NODE_TYPE_DOCUMENT_TYPE:
         /* CSS 2.2 §9.2 generates boxes for elements and text only. */
-        return;
+        return IS_CHILD_PLACED;
     case LXB_DOM_NODE_TYPE_ELEMENT:
         break;
     default:
@@ -323,16 +302,18 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
               "measured — the tree this walk iterates holds elements, text, comments, processing instructions "
               "and a doctype, and a CDATA section, a document or a fragment is not a child any parser this "
               "engine runs produces there. Find the writer that inserted it");
-        return;
+        return IS_CHILD_PLACED;
     }
     el = lxb_dom_interface_element(n);
     /* css-display-3 §2.5 "Box Generation: the none and contents keywords": with `display: none`, "The element
        and its descendants generate no boxes or text sequences." */
-    if (css_computed_display_is(el, CSS_KEYWORD_NONE)) return;
+    if (css_computed_display_is(el, CSS_KEYWORD_NONE)) return IS_CHILD_PLACED;
     /* Out of flow contributes nothing and introduces no break ("out-of-flow boxes and inline box boundaries do
        not introduce a forced line break or soft wrap opportunity in the flow"): CSS 2.2 §9.3.1 takes it out of
        normal flow, as core/layout/line_box.c also skips it. */
-    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) return;
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) ||
+        css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED))
+        return IS_CHILD_PLACED;
     if (block_flow_is_floated(el))
         DFAIL("CSS 2.2 §9.5 \"Floats\" takes this child out of the line, and css-sizing-3 §5.2 \"Intrinsic "
               "Contributions\" still counts it: CSS 2.2 §10.3.5 \"Floating, non-replaced elements\" computes "
@@ -350,7 +331,7 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
        It is asked after the out-of-flow and float tests, CSS 2.2 §9.7 "Relationships between 'display',
        'position', and 'float'"' order as in core/layout/block_flow.c, so a floated `img` is not put in the
        run. */
-    if (replaced_element_of(el).replaced) { is_atomic_replaced(r->m, el); return; }
+    if (replaced_element_of(el).replaced) { is_atomic_replaced(m, el); return IS_CHILD_PLACED; }
     d = css_computed_display(el);
     inline_box = css_display_spells(d, CSS_KEYWORD_INLINE);
     /* Freed before either crash: a `DFAIL` compiles out in release and control falls through, so a `free` on
@@ -362,8 +343,8 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
            longest line. core/layout/line_box.c asks the same component. */
         switch (phrasing_break_of(el)) {
         case PHRASING_BREAK_FORCED:
-            text_run_measure_add_forced_break(r->m, el);
-            return;
+            text_run_measure_add_forced_break(m, el);
+            return IS_CHILD_PLACED;
         case PHRASING_BREAK_OPPORTUNITY:
             DFAIL("HTML §15.3.4 \"Phrasing content\" gives `wbr` the UA declaration `display-outside: "
                   "break-opportunity`, which puts a SOFT WRAP OPPORTUNITY inside this run — and css-sizing-3 "
@@ -379,7 +360,7 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
                   "needs §5.5's enabling question answered from the `wbr`'s OWN computed `white-space`, which "
                   "is neither of the two cases `tr_opportunity_enabled` implements. BUILD both in "
                   "core/layout/text_run.c, where core/layout/line_box.c's own `wbr` crash names the same two");
-            return;
+            return IS_CHILD_PLACED;
         case PHRASING_BREAK_NONE:
             break;
         }
@@ -393,14 +374,9 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
         /* The two edges bracket the descent in call order, and the run's break mapping puts each on its
            fragment's line. They are emitted even when zero: an edge's position says which line an empty
            inline box is on. */
-        text_run_measure_add_box_edge(r->m, el, is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, false));
-        is_walk(r, el);
-        /* §9.2.1.1's "open at the end of the line": the run ended inside this box, so no closing edge here and
-           no opening edge on the next fragment. A run resumed mid-tree never calls this arm for an already-open
-           ancestor, so its leading edge is withheld too. */
-        if (r->past_end) return;
-        text_run_measure_add_box_edge(r->m, el, is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, true));
-        return;
+        text_run_measure_add_box_edge(m, el, is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, false));
+        *node = n;
+        return IS_CHILD_INLINE_BOX;
     }
     /* Every child reaching here is inline-level. For a direct child, CSS 2.2 §9.2.1 "Block-level elements and
        block boxes"' dispatch ("A block container box either contains only block-level boxes or establishes an
@@ -433,77 +409,263 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, BoxTreeChild c)
        No re-entry: `intrinsic_inline_sizes` reads no real containing block and descends a cycle-free tree, and
        an inline-block table reaches `table_intrinsic_inline_sizes`, never `table_widths` (table_width.h).
        Cyclic percentages are already substituted, so `is_require_acyclic` is not owed. */
+    if (!intrinsic_inline_sizes_ask(el)) return IS_CHILD_NOT_YET;
     {
         IntrinsicInlineSizes inner = is_declared_inline_sizes(el, intrinsic_inline_sizes(el));
         IntrinsicInlineSizes outer = intrinsic_outer_contribution(el, inner);
 
-        text_run_measure_add_atomic(r->m, el, outer.min_content, outer.max_content);
+        text_run_measure_add_atomic(m, el, outer.min_content, outer.max_content);
     }
+    return IS_CHILD_PLACED;
 }
 
-/* CSS 2.2 §9.4.2's inline formatting context, measured over one run of `el`'s content, given as the inline box
-   open where it starts, the first node to measure, and the node it ends before. The entry below composes these
-   from core/layout/block_flow.h's `BlockFlowRun`; private because the open box and first node derive from one
-   break.
-   Open ancestors are closed on the way out, per §9.2.1.1 ("the border would be drawn around C1 (open at the end
-   of the line) and C2 (open at the start of the line)"): a fragment the run starts inside gets no leading edge
-   (this loop never calls `is_child` on it) and its trailing edge here; one it ends inside gets `past_end`.
-   The step out goes to the ancestor's next sibling, never back to the ancestor, which would re-walk the closed
-   fragment. `at` may be absent: an ancestor with nothing after it still gets its closing edge. */
-static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_element_t *open, BoxTreeChild at,
-                                         lxb_dom_node_t *end)
-{
+/* ---- the record: CSS 2.2 §9.4.2's measurements and §9.4.1's stack walks, held by the layout job ----------- */
+
+/* One run's measurement held between steps: core/layout/inline_run_walk.h's walk over the run and, inside a
+   text node, its character position, then text_run.h's steps over the closed collection. */
+typedef struct {
     TextRunMeasure m;
-    IsRun r;
-    IntrinsicInlineSizes out;
-    lxb_dom_node_t *root = lxb_dom_interface_node(el);
+    InlineRunWalk walk;
+    bool in_text;
+    TextRunText text;
+    bool collected;   /* the walk ended and the collection is closed */
+} IsMeasure;
 
-    text_run_measure_init(&m);
-    r.m = &m;
-    r.end = end;
-    r.past_end = false;
-    for (;;) {
-        BoxTreeChild c;
-        lxb_dom_node_t *box;
+/* What an entry holds, allocated apart so a pointer to it survives the table's growth under a nested ask. A
+   run entry's measurement lives from its first ask until it is answered; a stack entry holds its walk's
+   place. */
+typedef struct {
+    bool answered;
+    bool measuring;              /* a run's `meas` is begun and not yet released */
+    IsMeasure meas;
+    IntrinsicInlineSizes sizes;  /* a run's answer, once `answered` */
+    lxb_dom_node_t *prev;        /* a stack's last break whose run and child are answered */
+} IsHeld;
 
-        lxb_dom_element_t *up;
+typedef struct IsEntry {
+    lxb_dom_element_t *el;          /* the container; NULL is empty, and nothing is removed */
+    bool stack;                     /* `is_block_context`'s walk of `el`'s stack, rather than one run */
+    lxb_dom_node_t *after, *end;    /* the run, for a run entry */
+    IsHeld *held;                   /* owned */
+} IsEntry;
 
-        for (c = at; box_tree_child_exists(c) && !r.past_end; c = block_flow_run_next(open, c))
-            is_child(&r, open, c);
-        if (r.past_end) break;
-        box = lxb_dom_interface_node(open);
-        if (box == root) break;
-        text_run_measure_add_box_edge(&m, open, is_intrinsic_edge_px(open, INTRINSIC_AXIS_HORIZONTAL, true));
-        /* The step out is over the box tree (box parent, then next box sibling): under css-display-3 §2.5's
-           splice neither is a DOM pointer. */
-        up = box_tree_parent(box_tree_child_of_node(box));
-        DCHECK(up != NULL,
-               "CSS 2.2 §9.2.1.1's run was inside a box with no BOX parent, so the walk cannot leave it — the "
-               "box ancestors of every position in a container's content are inline boxes up to the container "
-               "itself, and this chain does not reach it");
-        at = box_tree_next_sibling(up, box_tree_child_of_node(box));
-        open = up;
-    }
-    /* The measurement exists only after this: [UAX14]'s rules read forward past the boundary they decide (LB25 by
-       three characters, LB9 across any number of marks); see core/layout/text_run.h. It retains the items, so
-       this function releases them after reading the two numbers. */
-    text_run_measure_finish(&m);
-    out.min_content = text_run_measure_min_content(&m);
-    out.max_content = text_run_measure_max_content(&m);
-    /* §5.1's answer is two numbers, so the measurement ends here. */
-    text_run_measure_release(&m);
-    return out;
+static size_t is_key_slot(lxb_dom_element_t *el, bool stack, BlockFlowRun run, size_t cap)
+{
+    uint64_t h = (uint64_t)(uintptr_t)el * 0x9E3779B97F4A7C15ull;
+
+    h ^= (uint64_t)(uintptr_t)run.after * 0xC2B2AE3D27D4EB4Full;
+    h ^= (uint64_t)(uintptr_t)run.end * 0x165667B19E3779F9ull;
+    h ^= (uint64_t)stack * 0x27D4EB2F165667C5ull;
+    h ^= h >> 31;
+    h *= 0xbf58476d1ce4e5b9ull;
+    h ^= h >> 29;
+    return (size_t)h & (cap - 1);
 }
 
+/* The slot the key occupies, or the empty slot it would be inserted at. */
+static size_t is_key_probe(const IsEntry *tab, size_t cap, lxb_dom_element_t *el, bool stack, BlockFlowRun run)
+{
+    size_t i = is_key_slot(el, stack, run, cap);
+
+    while (tab[i].el != NULL &&
+           (tab[i].el != el || tab[i].stack != stack || tab[i].after != run.after || tab[i].end != run.end))
+        i = (i + 1) & (cap - 1);
+    return i;
+}
+
+static void is_record_grow(IntrinsicSizeRecord *r)
+{
+    size_t cap = r->cap != 0 ? r->cap * 2 : 64, i;
+    IsEntry *tab = calloc(cap, sizeof *tab);
+
+    CHECK(tab != NULL, "the layout job's intrinsic size record could not grow");
+    for (i = 0; i < r->cap; i++) {
+        BlockFlowRun run;
+
+        if (r->tab[i].el == NULL) continue;
+        run.after = r->tab[i].after;
+        run.end = r->tab[i].end;
+        tab[is_key_probe(tab, cap, r->tab[i].el, r->tab[i].stack, run)] = r->tab[i];
+    }
+    free(r->tab);
+    r->tab = tab;
+    r->cap = cap;
+}
+
+static void is_measure_release(IsMeasure *k)
+{
+    if (!k->collected) {
+        /* An abandoned collection is closed so the measurement can be released. */
+        inline_run_walk_release(&k->walk);
+        text_run_measure_finish_begin(&k->m);
+    }
+    text_run_measure_release(&k->m);
+}
+
+void intrinsic_size_record_release(IntrinsicSizeRecord *r)
+{
+    size_t i;
+
+    DCHECKF(r->asks == r->served + r->built + r->resumed,
+            "a layout job's intrinsic size record does not close: %lld asks against %lld served, %lld begun and "
+            "%lld continued; every ask has exactly one of the three outcomes, so a gap is a return between the "
+            "ask and its outcome", r->asks, r->served, r->built, r->resumed);
+    DCHECKF(r->built >= 0 && (size_t)r->built == r->used,
+            "a layout job's intrinsic size record holds %zu entries after %lld were begun; each records exactly "
+            "one new key", r->used, r->built);
+    for (i = 0; i < r->cap; i++) {
+        if (r->tab[i].el == NULL) continue;
+        if (r->tab[i].held->measuring) is_measure_release(&r->tab[i].held->meas);
+        free(r->tab[i].held);
+    }
+    free(r->tab);
+    memset(r, 0, sizeof *r);
+}
+
+/* The entry for the key in the current job's record, created on its first ask. */
+static IsHeld *is_held_of(lxb_dom_element_t *el, bool stack, BlockFlowRun run)
+{
+    IntrinsicSizeRecord *r = layout_job_intrinsic_sizes();
+    IsHeld *h;
+    size_t i;
+
+    DCHECK(el != NULL, "css-sizing-3 §5.1's intrinsic inline sizes were asked for with no element");
+    DCHECK(r != NULL,
+           "css-sizing-3 §5.1's intrinsic inline sizes were asked with no layout job holding a record — no drive "
+           "is open and no job is entered, and every ask and every reader is made under one "
+           "(core/layout/layout_job.h)");
+    r->asks++;
+    if (r->cap != 0) {
+        i = is_key_probe(r->tab, r->cap, el, stack, run);
+        if (r->tab[i].el != NULL) {
+            h = r->tab[i].held;
+            if (h->answered) r->served++;
+            else             r->resumed++;
+            return h;
+        }
+    }
+    h = calloc(1, sizeof *h);
+    CHECK(h != NULL, "out of memory holding one intrinsic inline size measurement");
+    if (r->used * 2 >= r->cap) is_record_grow(r);
+    i = is_key_probe(r->tab, r->cap, el, stack, run);
+    r->tab[i].el = el;
+    r->tab[i].stack = stack;
+    r->tab[i].after = run.after;
+    r->tab[i].end = run.end;
+    r->tab[i].held = h;
+    r->used++;
+    r->built++;
+    return h;
+}
+
+/* One step of a run's collection: a character of the text node it is in, one child, or the end of a box. It
+   answers the items it took, at least one, or zero for an atomic inline whose sizes are not ready, with the
+   walk still naming it. */
+static size_t is_collect_step(IsMeasure *k)
+{
+    TextRunMeasure *m = &k->m;
+    size_t before = m->count;
+    lxb_dom_element_t *parent;
+    lxb_dom_node_t *node = NULL;
+    BoxTreeChild c;
+
+    if (k->in_text) {
+        text_run_measure_text_step(m, &k->text);
+        k->in_text = !text_run_measure_text_done(&k->text);
+        return m->count > before ? m->count - before : 1;
+    }
+    switch (inline_run_walk_next(&k->walk, &parent, &c)) {
+    case INLINE_RUN_END:
+        return 1;
+    case INLINE_RUN_CLOSE:
+        /* The box is complete on this run, so its closing edge is here; a box the run ends inside gets none
+           (§9.2.1.1's "open at the end of the line"). */
+        text_run_measure_add_box_edge(m, parent, is_intrinsic_edge_px(parent, INTRINSIC_AXIS_HORIZONTAL, true));
+        return 1;
+    case INLINE_RUN_CHILD:
+        break;
+    }
+    switch (is_child(m, parent, c, &node)) {
+    case IS_CHILD_NOT_YET:
+        return 0;
+    case IS_CHILD_PLACED:
+        inline_run_walk_take(&k->walk, NULL);
+        break;
+    case IS_CHILD_TEXT:
+        inline_run_walk_take(&k->walk, NULL);
+        text_run_measure_text_begin(m, parent, node, &k->text);
+        k->in_text = !text_run_measure_text_done(&k->text);
+        break;
+    case IS_CHILD_INLINE_BOX:
+        inline_run_walk_take(&k->walk, lxb_dom_interface_element(node));
+        break;
+    }
+    return m->count > before ? m->count - before : 1;
+}
+
+bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
+{
+    IsHeld *h = is_held_of(el, false, run);
+    IsMeasure *k = &h->meas;
+
+    if (h->answered) return true;
+    if (!h->measuring) {
+        /* Collected before any of it is measured: [UAX14]'s rules read forward past the boundary they decide
+           (LB25 by three characters, LB9 across any number of marks); see core/layout/text_run.h. */
+        if (!layout_job_line_items_left()) return false;
+        text_run_measure_init(&k->m);
+        inline_run_walk_begin(&k->walk, el, run);
+        k->in_text = false;
+        k->collected = false;
+        h->measuring = true;
+    }
+    while (!k->collected) {
+        size_t n;
+
+        if (!layout_job_line_items_left()) return false;
+        if (k->walk.done && !k->in_text) {
+            inline_run_walk_end(&k->walk);
+            text_run_measure_finish_begin(&k->m);
+            k->collected = true;
+            break;
+        }
+        n = is_collect_step(k);
+        if (n == 0) {
+            DCHECK(!layout_job_line_items_left(),
+                   "an atomic inline's intrinsic sizes answered \"not yet\" with the line box items unspent; the "
+                   "ask defers nothing else, so its only \"not yet\" is the allowance");
+            return false;
+        }
+        layout_job_line_items_spend(n);
+    }
+    while (!text_run_measure_finish_done(&k->m)) {
+        if (!layout_job_line_items_left()) return false;
+        layout_job_line_items_spend(text_run_measure_finish_step(&k->m));
+    }
+    h->sizes.min_content = text_run_measure_min_content(&k->m);
+    h->sizes.max_content = text_run_measure_max_content(&k->m);
+    /* §5.1's answer is two numbers, so the collection is freed once they are read. */
+    text_run_measure_release(&k->m);
+    h->measuring = false;
+    h->answered = true;
+    return true;
+}
+
+/* The reader is a drive over the ask, which answers at once where a body asked first. */
 IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, BlockFlowRun run)
 {
-    BlockFlowRunStart start;
+    LayoutJobDrive d;
+    IntrinsicInlineSizes out;
+    IsHeld *h;
 
     DCHECK(el != NULL, "CSS 2.2 §9.4.2's context was measured with no block container to style it");
-    /* Where the run begins is `block_flow_run_start`'s answer (core/layout/block_flow.h), shared with the fill so
-       css-display-3 §2.5's splice is handled once. `open` is the element whose fragment the run continues. */
-    start = block_flow_run_start(el, run);
-    return is_run_sizes(el, start.open, start.at, run.end);
+    layout_job_drive_begin(&d);
+    while (!intrinsic_inline_run_sizes_ask(el, run)) (void)block_flow_drive_deferred(&d);
+    h = is_held_of(el, false, run);
+    DCHECK(h->answered, "an intrinsic inline size measurement answered its ask and holds no answer");
+    out = h->sizes;
+    layout_job_drive_end(&d);
+    return out;
 }
 
 /* css-sizing-3 §5.2's contribution of one box from its two inner sizes and edges (§2.2 "Intrinsic Size
@@ -785,6 +947,64 @@ static IntrinsicInlineSizes is_table_sizes(lxb_dom_element_t *el)
     out = table_intrinsic_inline_sizes(el, &grid);
     table_grid_release(&grid);
     return out;
+}
+
+/* `is_block_context`'s walk asked ahead of its read, in the read's order: each anonymous block box's run, then
+   each block-level child's own sizes, its place held from one ask to the next. */
+static bool is_block_context_ask(lxb_dom_element_t *el)
+{
+    BlockFlowRun none;
+    IsHeld *h;
+
+    none.after = NULL;
+    none.end = NULL;
+    h = is_held_of(el, true, none);
+    while (!h->answered) {
+        lxb_dom_node_t *brk;
+        BlockFlowRun run;
+
+        if (!layout_job_line_items_left()) return false;
+        brk = block_flow_next_block_box(el, h->prev);
+        run.after = h->prev;
+        run.end = brk;
+        if (block_flow_run_generates_box(el, run) && !intrinsic_inline_run_sizes_ask(el, run)) return false;
+        if (brk == NULL) {
+            h->answered = true;
+            break;
+        }
+        if (!intrinsic_inline_sizes_ask(lxb_dom_interface_element(brk))) return false;
+        h->prev = brk;
+        layout_job_line_items_spend(1);
+    }
+    return true;
+}
+
+/* NAMED RESIDUAL, the asks a reader does not make. Not covered: a flex container's and a table's sizes ask
+   none of their items here, and a float's or an absolutely positioned box's shrink-to-fit
+   (core/layout/used_value.c) reads with no ask before it, so those readers' drives measure inside the
+   activation that reads. Next: the flex and table arms ask their items, and each such body asks before its
+   read as core/layout/line_box.c's atomic inline does. How its absence shows: a REST_UNIT_LAYOUT_DESCENDANTS
+   overrun whose samples sit under `intrinsic_inline_run_sizes` reached from a reader other than `lb_child`. */
+bool intrinsic_inline_sizes_ask(lxb_dom_element_t *el)
+{
+    CssDisplay d;
+
+    DCHECK(el != NULL, "css-sizing-3 §5.1's intrinsic inline sizes were asked for with no element");
+    /* The read's dispatch, in its order. A replaced element is sized by natural dimensions and measures no
+       run; a box neither of §9.4's contexts lays out is refused by the read. */
+    if (replaced_element_of(el).replaced) return true;
+    d = css_computed_display(el);
+    if (flex_item_display_is_flex_container(d) || table_box_kind_generates_table_box(table_box_kind(d)) ||
+        !block_flow_display_is_block_container(d))
+        return true;
+    if (block_flow_establishes_inline_context(el)) {
+        BlockFlowRun whole;
+
+        whole.after = NULL;
+        whole.end = NULL;
+        return intrinsic_inline_run_sizes_ask(el, whole);
+    }
+    return is_block_context_ask(el);
 }
 
 IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)

@@ -9,7 +9,7 @@
  * It is an accumulator over a formatting context, not one text node: §4.1.1 "Phase I: Collapsing and
  * Transformation" collapses spaces "even one outside the boundary of the inline containing that space, provided
  * both spaces are within the same inline formatting context", and `foo`/`bar` in adjacent nodes are one word.
- * It collects and measures at `text_run_measure_finish` because [UAX14] reads forward past the boundary it
+ * It collects, then measures from `text_run_measure_finish_begin`, because [UAX14] reads forward past the boundary it
  * decides (see line_break.h); Blink likewise collects an inline formatting context's text. The collection and
  * the one [UAX14] pass live until `text_run_measure_release`; nothing is cached across that (per-flow state
  * solver/dom_cow.h does not swap). */
@@ -207,14 +207,11 @@ typedef struct {
 /* Begin a formatting context's measurement. Every field is written. */
 void text_run_measure_init(TextRunMeasure *m);
 
-/* Add one text node's characters, in tree order. `style` is the text node's parent, the inline box they are
-   in. Nodes of one formatting context must be added in document order (§4.1.1 and [UAX14] are stated over
-   adjacent characters). The caller has established that the run generates a box (CSS 2.2 §9.2.2.1 "Anonymous
-   inline boxes", answered by core/layout/block_flow.h). */
-void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text);
-
-/* The same node added one code point per `step`, held between them so a caller that rests can stop inside a
-   node; `add_text` is the three run to the node's end. Nothing else may be added to `m` until `done`. */
+/* Add one text node's characters, in tree order, one code point per `step`, held between them so a caller
+   that rests can stop inside a node. Nothing else may be added to `m` until `done`. `style` is the text node's
+   parent, the inline box they are in. Nodes of one formatting context must be added in document order (§4.1.1
+   and [UAX14] are stated over adjacent characters). The caller has established that the run generates a box
+   (CSS 2.2 §9.2.2.1 "Anonymous inline boxes", answered by core/layout/block_flow.h). */
 typedef struct {
     lxb_dom_element_t *style;
     const lxb_char_t *p, *end;              /* the node's bytes still to decode */
@@ -231,7 +228,7 @@ void text_run_measure_text_step(TextRunMeasure *m, TextRunText *t);
    argument: the caller emits the opening edge before the content and the closing edge after, and the run's
    break mapping puts each on its line. `size` may be zero; a zero edge still has a position, which decides the
    line an otherwise-empty inline box is on. It may be negative (a declared negative margin, CSS 2.2 §8.3
-   "Margin properties"); text_run_measure_finish floors the two answers, so no sum is asked to be positive. */
+   "Margin properties"); the measurement floors the two answers, so no sum is asked to be positive. */
 void text_run_measure_add_box_edge(TextRunMeasure *m, lxb_dom_element_t *style, CssPx size);
 
 /* Add one forced line break at the current position: HTML §15.3.4 "Phrasing content"'s `br { display-outside:
@@ -259,12 +256,11 @@ void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, Cs
 
 /* Close the collection; nothing may be added afterwards. Each `step` then takes one item or position: the code
    points copied out, [UAX14]'s pass, §5.5's tailoring, and css-sizing-3 §2.1's walk; it answers how many items
-   it took, and `done` says the two answers are readable. `finish` is the three run to completion. The pass is
-   kept for the fill; each caller owes `text_run_measure_release` exactly once, complete or not. */
+   it took, and `done` says the two answers are readable. The pass is kept for the fill; each caller owes
+   `text_run_measure_release` exactly once, complete or not. */
 void text_run_measure_finish_begin(TextRunMeasure *m);
 bool text_run_measure_finish_done(const TextRunMeasure *m);
 size_t text_run_measure_finish_step(TextRunMeasure *m);
-void text_run_measure_finish(TextRunMeasure *m);
 
 /* End the measurement and free the collection and the [UAX14] pass. Nothing may be read afterwards; the
    accessors crash rather than answer from freed memory. */

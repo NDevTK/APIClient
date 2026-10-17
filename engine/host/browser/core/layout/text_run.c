@@ -299,7 +299,7 @@ void text_run_measure_add_box_edge(TextRunMeasure *m, lxb_dom_element_t *style, 
            "a fact about one box, so there is no edge without the box it belongs to");
     DCHECK(!m->finished,
            "an inline box edge was added to a measurement that has already produced its answers. "
-           "text_run_measure_finish releases the collection those answers were derived from, so this is one "
+           "text_run_measure_finish_begin closed the collection those answers are derived from, so this is one "
            "accumulator being used for two runs");
     {
         /* One number under both of css-sizing-3 §2.1's constraints, written here so no caller can state a
@@ -432,8 +432,8 @@ void text_run_measure_text_begin(TextRunMeasure *m, lxb_dom_element_t *style, co
     DCHECK(m != NULL && style != NULL && text != NULL && t != NULL,
            "a text run was measured with no accumulator, no style element, no node or nowhere to hold it");
     DCHECK(!m->finished, "a text node was added to a measurement that has already produced its two answers. "
-                         "text_run_measure_finish releases the collection those answers were derived from, so "
-                         "this is one accumulator being used for two runs");
+                         "text_run_measure_finish_begin closed the collection those answers are derived from, "
+                         "so this is one accumulator being used for two runs");
     DCHECK(text->type == LXB_DOM_NODE_TYPE_TEXT,
            "something that is not a TEXT node was handed to css-text-3 §4.1's white space processing. The rules "
            "are stated over character data, and CSS 2.2 §9.2's box generation makes an element a BOX rather "
@@ -511,14 +511,6 @@ void text_run_measure_text_step(TextRunMeasure *m, TextRunText *t)
     }
     m->in_white_space_run = false;
     tr_append(m, cp, t->style, t->wraps, false);
-}
-
-void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text)
-{
-    TextRunText t;
-
-    text_run_measure_text_begin(m, style, text, &t);
-    while (!text_run_measure_text_done(&t)) text_run_measure_text_step(m, &t);
 }
 
 /* ---- the measurement ---------------------------------------------------------------------------------------- */
@@ -1082,12 +1074,6 @@ size_t text_run_measure_finish_step(TextRunMeasure *m)
     m->cps = NULL;
     m->answered = true;
     return k;
-}
-
-void text_run_measure_finish(TextRunMeasure *m)
-{
-    text_run_measure_finish_begin(m);
-    while (!text_run_measure_finish_done(m)) (void)text_run_measure_finish_step(m);
 }
 
 void text_run_measure_release(TextRunMeasure *m)

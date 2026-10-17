@@ -102,6 +102,25 @@ bool intrinsic_declared_sizing_px(lxb_dom_element_t *el, IntrinsicAxis axis, con
    0"; §4: "the anonymous item's box is unstyleable"), so its outer size is its inner size. */
 IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, BlockFlowRun run);
 
+/* Whether `el`'s intrinsic inline sizes, or one run's, are ready to read: false ("not yet") when a resting
+   drive's line box items (core/layout/layout_job.h) ran out first, with the measurement held for the next
+   ask. Outside a resting drive, or under a drive nested in a body, each answers true. The two readers above
+   are drives over these asks, so a body that can propagate "not yet" asks first and the read is served. */
+bool intrinsic_inline_sizes_ask(lxb_dom_element_t *el);
+bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run);
+
+/* A layout job's intrinsic size record: one held measurement per run of a container and one held walk per
+   container's §9.4.1 stack, owned by the job and released with its memo, whose lifetime sees no DOM write.
+   An ask finds its entry answered (`served`), creates it (`built`) or continues it (`resumed`); `release`
+   asserts the three sum to `asks` and frees every entry. */
+struct IsEntry;
+typedef struct {
+    struct IsEntry *tab;   /* a power-of-two table, NULL with `cap` 0 before the first entry */
+    size_t          cap, used;
+    long long       asks, served, built, resumed;
+} IntrinsicSizeRecord;
+void intrinsic_size_record_release(IntrinsicSizeRecord *r);
+
 /* The outer size of `el`'s box over inner sizes the caller computed. css-sizing-3 §2 "Terminology": an outer
    size is "the margin-box size of a box", an inner size "the content-box size of a box"; §2.2 "Intrinsic Size
    Contributions" makes it every contribution's operand, "auto margins are treated as zero". css-sizing-3 §5.2.1

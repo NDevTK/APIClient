@@ -368,7 +368,7 @@ ReplacedElement replaced_element_of(lxb_dom_element_t *el)
               "this one, and its walk measures a box's CHILDREN while an `input` has none — the label is the "
               "`alt` attribute's value, a string that is nowhere in the tree. What is genuinely needed is an "
               "advance measure over a STRING, and core/layout/text_run.h's collection takes DOM TEXT NODES "
-              "(`text_run_measure_add_text` asserts its node's type and its parent), so BUILD that entry "
+              "(`text_run_measure_text_begin` asserts its node's type and its parent), so BUILD that entry "
               "there — one run over supplied characters carrying a style element — which §15.5.12's button "
               "label needs too and is the reason it belongs in that component rather than here");
     }

@@ -414,9 +414,10 @@ static bool lb_phrasing_break(TextRunMeasure *m, lxb_dom_element_t *el)
 
 /* ---- the walk over the formatting context's content ------------------------------------------------------- */
 
-/* What `lb_child` left for its caller: nothing, a text node whose characters are the next items, or an inline
-   box whose opening edge it emitted and whose box-tree children are next, with its closing edge after them. */
-typedef enum { LB_CHILD_PLACED = 0, LB_CHILD_TEXT, LB_CHILD_INLINE_BOX } LbChildNext;
+/* What `lb_child` left for its caller: nothing, a text node whose characters are the next items, an inline
+   box whose opening edge it emitted and whose box-tree children are next, with its closing edge after them, or
+   "not yet" for an atomic inline whose intrinsic sizes are not ready, with nothing added. */
+typedef enum { LB_CHILD_PLACED = 0, LB_CHILD_TEXT, LB_CHILD_INLINE_BOX, LB_CHILD_NOT_YET } LbChildNext;
 
 /* One member of the inline formatting context; `*node` receives the text node or inline box the answer names.
    A wholly collapsible text node is not content: CSS 2.2 §9.2.2.1 "Anonymous inline boxes" says white space
@@ -634,8 +635,14 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
         /* One used width, stated as both of css-sizing-3 §2.1's members: the line is filled at an available
            width its containing block has determined, so §10.3.9's shrink-to-fit is resolved and the box has one
            width here. `text_run_fill_step` asserts the atomics it is handed carry one number, which keeps
-           this walk's items apart from core/layout/intrinsic_size.c's §5.2 contributions. */
-        CssPx used = used_value_margin_edge_px(el, false);
+           this walk's items apart from core/layout/intrinsic_size.c's §5.2 contributions.
+           Shrink-to-fit reads the box's intrinsic sizes, so they are asked first and the read is served from
+           the job's record; they are asked whatever `width` says, since only the used value knows whether it
+           reads them. */
+        CssPx used;
+
+        if (!intrinsic_inline_sizes_ask(el)) return LB_CHILD_NOT_YET;
+        used = used_value_margin_edge_px(el, false);
 
         text_run_measure_add_atomic(m, el, used, used);
         return LB_CHILD_PLACED;
@@ -861,7 +868,8 @@ static bool lb_collect_done(const LbCollect *k)
 }
 
 /* One step of the walk: a character of the text node it is in, one child, or the end of a box. Answers the
-   items it took, at least one, so a walk over content that adds no item still spends. */
+   items it took, at least one, so a walk over content that adds no item still spends; or zero for a child that
+   is not ready, which the walk still names. */
 static size_t lb_collect_step(LbCollect *k)
 {
     TextRunMeasure *m = k->m;
@@ -887,6 +895,8 @@ static size_t lb_collect_step(LbCollect *k)
         break;
     }
     switch (lb_child(m, parent, c, &node)) {
+    case LB_CHILD_NOT_YET:
+        return 0;
     case LB_CHILD_PLACED:
         inline_run_walk_take(&k->walk, NULL);
         break;
@@ -1243,10 +1253,19 @@ static bool lb_fill_lines_pull(LbFill *f)
            "an operand of themselves");
     if (f->phase == LB_FILL_COLLECT) {
         while (!lb_collect_done(&f->col)) {
+            size_t n;
+
             if (!lb_left()) return false;
             f->stepping = true;
-            layout_job_line_items_spend(lb_collect_step(&f->col));
+            n = lb_collect_step(&f->col);
             f->stepping = false;
+            if (n == 0) {
+                DCHECK(!lb_left(),
+                       "an atomic inline's intrinsic sizes answered \"not yet\" with the line box items unspent; "
+                       "that ask defers nothing else, so its only \"not yet\" is the allowance");
+                return false;
+            }
+            layout_job_line_items_spend(n);
         }
         lb_collect_end(&f->col, f->style, f->run);
         f->phase = LB_FILL_WALK;
