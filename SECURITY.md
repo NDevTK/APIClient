@@ -187,8 +187,14 @@ Which extension context can open a connection at all is enforced by CSP in all b
 | a script-like body is never streamed, so CORB always reads the whole body | `_bodyGated` | `blocked-stream-body-gated:` |
 | a request or provisioning notice is judged by a document of the instance that sent it (the zones, before `safeFetch`) | `docRecordOfAsker`, `docRecordAskerRefusal` | `blocked-asker:<role>-<reason>`, `blocked-asker:child-not-minted`, `blocked-asker:document-not-minted` |
 
-Each refusal is graded by `_refused`: `network` where a real browser would also fail the request, `decline`
-where only this tool declines, so the flow parks instead of running its failure path.
+Each refusal is graded by `_refused`: `network` where a real browser would also fail the request, so the reply
+is that failure; `decline` where only this tool declines, so the request parks unanswered. The engine declines
+on the same grade a request whose address holds a value it has no bytes for (`pending_park_request`). A
+declined request's outcome is unobserved, so the engine runs both outcomes (`flow_decline_fork`): one arm stays
+parked on the request, a search that fires when the origin is widened or the address is grounded; the other
+takes Fetch §5.6's network error and runs the page's failure path with its path marked forced, so nothing it
+builds is graded `observed` or `derived`, and a page error raised only on forced paths is the engine's
+exploration rather than the page's own.
 
 What the page may read of a reply is decided here from the request's Fetch §2.2.5 mode, which the engine states
 for every request (the pending line's `MODE` field, the XHR record's `mode`) and `_modeOf` CHECKs. A host-permission
