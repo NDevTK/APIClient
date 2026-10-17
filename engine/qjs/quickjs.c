@@ -1851,42 +1851,8 @@ typedef struct JSAsyncFunctionData {
     uint8_t claim_arm;         /* JSAsyncClaimArm — 0 (NEVER-CLAIMED) until a resume claims it */
     uint32_t claim_fork_gen;   /* the claiming flow's fork generation at the instant of the claim */
     uint64_t mint_timeline;    /* the timeline its latest await continuation was minted in (written in dev) */
-    /* The last JS_ASYNC_TRAIL lifecycle events (js_async_trail), oldest first once the ring wraps: which
-       timeline created, cloned, minted for, claimed and tore down this activation. Written in dev. */
-    uint8_t trail_n;
-    struct { char ev; uint8_t arm; uint32_t gen; uint64_t tl; } trail[6];
     JSAsyncFunctionState func_state;
 } JSAsyncFunctionData;
-
-#define JS_ASYNC_TRAIL 6
-/* Events: n created, b born as a clone, k cloned from, m continuation minted, c claimed (arm), x torn down.
-   `gen` is the global generation for n/b/m and the running flow's fork generation otherwise. */
-static uint64_t js_flow_timeline_now(void);
-static void js_async_trail(JSAsyncFunctionData *s, char ev, uint8_t arm, uint32_t gen)
-{
-#if APICLIENT_DEV
-    int i = s->trail_n % JS_ASYNC_TRAIL;
-    s->trail[i].ev = ev; s->trail[i].arm = arm; s->trail[i].gen = gen; s->trail[i].tl = js_flow_timeline_now();
-    s->trail_n++;
-#else
-    (void)s; (void)ev; (void)arm; (void)gen;
-#endif
-}
-/* `buf` receives the trail as `ev[arm]gen:timeline` entries, oldest first. */
-static const char *js_async_trail_text(const JSAsyncFunctionData *s, char *buf, size_t cap)
-{
-    size_t o = 0;
-    int k, n = s->trail_n < JS_ASYNC_TRAIL ? s->trail_n : JS_ASYNC_TRAIL;
-    buf[0] = 0;
-    for (k = 0; k < n && o < cap; k++) {
-        int i = (s->trail_n - n + k) % JS_ASYNC_TRAIL;
-        int w = snprintf(buf + o, cap - o, "%s%c%u@%u:%llx", k ? " " : "", s->trail[i].ev,
-                         (unsigned)s->trail[i].arm, (unsigned)s->trail[i].gen, (unsigned long long)s->trail[i].tl);
-        if (w < 0) break;
-        o += (size_t)w;
-    }
-    return buf;
-}
 
 typedef enum JSGeneratorStateEnum {
     JS_GENERATOR_STATE_SUSPENDED_START,
@@ -9082,7 +9048,6 @@ uint32_t JS_ObjFlowGen(JSValueConst obj) {
    the field can never drift again." `{ 0 }` states no count, so it cannot state a stale one,
    and it is the spelling this tree already uses wherever a hook set means INSTALL NOTHING. */
 static _Thread_local JSTimeTravelHooks g_time_travel = { 0 };
-static uint64_t js_flow_timeline_now(void) { return g_time_travel.timeline ? g_time_travel.timeline() : 0; }
 /* forced-exec @S JS-CONTEXT SINK (see JSEvalSinkFunc in quickjs.h) — the host's detector, told that a value was
    offered to a program evaluation. Installed by JS_SetEvalSinkHook; NULL = no host is listening. */
 static _Thread_local JSEvalSinkFunc *g_eval_sink;
@@ -44298,7 +44263,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     if (ainit) { JS_FreeValue(ctx, aprom); js_async_function_free(rt, as); goto exception; }
                 }
                 as->is_active = true;
-                js_async_trail(as, 'n', 0, g_flow_gen);
                 /* THE STATE BELONGS TO `as`, whoever ends up driving it — and after an await that is normally
                    another frame on another flow's chain (do_async_resume_tramp), not a base at all. What still
                    needs the mark is the case where nothing is running above the resume and the SCHEDULER drives
@@ -44491,8 +44455,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    THE `DO NOT RE-EXPAND THIS STRING` THAT STOOD HERE WAS A BOUND WITHOUT ITS NUMBER, WHICH IS
                    WHY IT WAS OBEYABLE ONLY BY NOT TOUCHING THE LINE. The expansion is arithmetic and it is
                    free: widest `%u` is 10 (uint32_t), widest arm name is `SKIPPED-PRIVATE` at 15, widest
-                   closure verdict is `PRIVATE` at 7, `%d` is 1, `%llx` is 16, the trail is at most 159, and
-                   the literal is 257 — WORST CASE 485 BYTES against the 512 cap, 27 spare. Re-measure that sum before adding a field rather than
+                   closure verdict is `PRIVATE` at 7, `%d` is 1, and the literal is 371 — WORST CASE 424
+                   BYTES against the 512 cap, 87 spare. Re-measure that sum before adding a field rather than
                    deciding from the sentence; a bound stated as a prohibition is one nobody can satisfy
                    except by leaving the defect in.
                    AND THE COMPILER GUARDS THE LITERAL HALF OF THAT SUM AND NOT THE ARGUMENT HALF, WHICH IS A
@@ -44508,19 +44472,16 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    bound are guarded by the arithmetic above and by nothing else. A control that fires
                    somewhere else in the translation unit is not a control for this line, and the flag being
                    ON in `build.mjs` is not a promise about the half this abort actually grew in. */
-                char trail_buf[160];
-                trail_buf[0] = 0;
-                if (!as->is_active) js_async_trail_text(as, trail_buf, sizeof trail_buf);
                 DCHECKF(as->is_active,
                         "a flow resumed a suspended async continuation that was already consumed. "
-                        "consumedBy=%s@gen%u is the last claim (the CONSUMER); hook=%d closureGen=%u "
-                        "forkGen=%u closure=%s tl=%llx describe the flow that ARRIVED; the activation's trail "
-                        "(js_async_trail, ev+arm@gen:timeline): %s",
+                        "consumedBy=%s@gen%u — that is the arm of js_async_resume_isolate that last claimed it "
+                        "and the ONLY reading here that indicts the CONSUMER; hook=%d closureGen=%u "
+                        "forkGen=%u closure=%s all describe the flow that ARRIVED. Read the paragraph above "
+                        "this DCHECKF, and coroSwapAsyncCalls/coroSwapAsyncMade beside it",
                         js_async_claim_arm_name(as->claim_arm), (unsigned)as->claim_fork_gen,
                         g_time_travel.async_fork != NULL,
                         (unsigned)JS_ObjFlowGen(rfunc), (unsigned)g_flow_fork_gen,
-                        JS_IsFlowShared(rfunc) ? "SHARED" : "PRIVATE",
-                        (unsigned long long)js_flow_timeline_now(), trail_buf);
+                        JS_IsFlowShared(rfunc) ? "SHARED" : "PRIVATE");
                 /* AND ONLY A SUSPENDED ACTIVATION CAN BE RE-ENTERED. §9.4.7 pushes a context that was suspended;
                    a finished one has no frame to push, and the entry below would read cur_sp/cur_pc off a torn-
                    down frame and run whatever bytecode those bytes named. */
@@ -53111,8 +53072,6 @@ void JS_FlowFree(JSContext *ctx, JSValue *flow) {
         JSAsyncFunctionData *d = flow_async_data(s);
         if (s->frame.cur_sp == NULL)
             d->is_active = false;   /* completed via `done:`, which already released the frame's contents */
-        if (s->frame.cur_sp == NULL)
-            js_async_trail(d, 'x', 1, g_flow_fork_gen);
         js_async_function_free(ctx->rt, d);
         return;
     }
@@ -53327,8 +53286,6 @@ static JSAsyncFunctionState *flow_clone_state_alloc(JSContext *ctx, JSAsyncFunct
         d->resolving_funcs[0] = js_dup(sd->resolving_funcs[0]);
         d->resolving_funcs[1] = js_dup(sd->resolving_funcs[1]);
         d->is_active = true;   /* the frame is filled in by the caller; a failure path releases it through here */
-        js_async_trail(d, 'b', 2, g_flow_gen);
-        js_async_trail(sd, 'k', 2, g_flow_fork_gen);
         c = &d->func_state;
         /* THE CLONE'S FRAME IS OWNED BY THE CLONE, and it is written here because here is where the owner is
            minted — a clone built field by field from a source is exactly where an owner-shaped field gets
@@ -53920,8 +53877,6 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
             JS_REF_COUNT(as2) = 1;
             add_gc_object(ctx->rt, &as2->header, JS_GC_OBJ_TYPE_ASYNC_FUNCTION);
             as2->is_active = true;
-            js_async_trail(as2, 'b', 1, g_flow_gen);
-            js_async_trail(as, 'k', 1, g_flow_fork_gen);
             /* A CLONE COMPLETES THE WAY ITS ORIGINAL DOES — flow_clone_state_alloc's own sentence, carried here
                because this arm is the FOURTH constructor of a JSAsyncFunctionData and the only one that builds
                its state field by field. js_mallocz zeroes base_kind, and 0 is FLOW_BASE_BYTECODE, so a deeply
@@ -55239,7 +55194,6 @@ static void js_async_function_terminate(JSRuntime *rt, JSAsyncFunctionData *s)
            release lands here while `async_func_free` is halfway through the frame. Clearing first is what makes
            the second entry a no-op rather than a second walk of a frame whose values are already gone. */
         s->is_active = false;
-        js_async_trail(s, 'x', 0, g_flow_fork_gen);
         async_func_free(rt, &s->func_state);
     }
 }
@@ -55336,19 +55290,13 @@ static JSValue js_async_function_resolve_one(JSContext *ctx, JSAsyncFunctionData
 #if APICLIENT_DEV
     if (g_time_travel.timeline) s->mint_timeline = g_time_travel.timeline();
 #endif
-    js_async_trail(s, 'm', 0, g_flow_gen);
 #if APICLIENT_DEV
-    {
-        char trail_buf[160];
-        trail_buf[0] = 0;
-        if (!s->is_active) js_async_trail_text(s, trail_buf, sizeof trail_buf);
-        /* An await suspends a RUNNING activation, so the one minting its continuation is live: a dead one here
-           is a frame still executing after its activation completed in some timeline. */
-        DCHECKF(s->is_active,
-                "an await is minting a continuation for an async activation that was already torn down — this "
-                "timeline (%llx) is running a frame another resume completed; trail: %s",
-                (unsigned long long)js_flow_timeline_now(), trail_buf);
-    }
+    /* An await suspends a RUNNING activation, so the one minting its continuation is live: a dead one here is a
+       frame still executing after its activation completed in some timeline. */
+    DCHECKF(s->is_active,
+            "an await is minting a continuation for an async activation that was already torn down — this "
+            "timeline (%llx) is running a frame another resume completed",
+            (unsigned long long)(g_time_travel.timeline ? g_time_travel.timeline() : 0));
 #endif
     return f;
 }
@@ -55853,7 +55801,6 @@ static JSAsyncFunctionData *js_async_resume_isolate(JSContext *ctx, JSValueConst
            one line up and a second question could answer differently. */
         g_time_travel.async_fork(ctx, func_obj, s, c);
         arm = (p->u.async_function_data == s) ? JS_ASYNC_CLAIM_HOST_DECLINED : JS_ASYNC_CLAIM_CLONED;
-        if (arm == JS_ASYNC_CLAIM_CLONED) js_async_trail(s, 'k', 0, g_flow_fork_gen);
         s = p->u.async_function_data;
     }
     /* THE CLAIM IS STAMPED ON WHAT THIS RESUME WILL RUN, which is the clone when one was installed and the
@@ -55861,7 +55808,6 @@ static JSAsyncFunctionData *js_async_resume_isolate(JSContext *ctx, JSValueConst
        already had, and the LAST claimer of any activation is by construction the one that consumed it. */
     s->claim_arm = arm;
     s->claim_fork_gen = g_flow_fork_gen;
-    js_async_trail(s, 'c', arm, g_flow_fork_gen);
     return s;
 }
 
@@ -55919,7 +55865,6 @@ static JSValue js_async_function_start(JSContext *ctx, JSValueConst func_obj,
         return JS_EXCEPTION;
     }
     s->is_active = true;
-    js_async_trail(s, 'n', 1, g_flow_gen);
     s->func_state.base_kind = FLOW_BASE_ASYNC_CALL;   /* this state belongs to `s`, and a fork must say so */
     /* AND SO DOES THE FRAME — recorded BEFORE the body runs, which is the one coroutine kind where that is
        possible: an async function's activation exists before its first opcode, so there is no window in which a
