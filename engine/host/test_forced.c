@@ -1046,6 +1046,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/absentarm.h"
 #include "fixture/griditem.h"
 #include "fixture/contentsflex.h"
+#include "fixture/custommedia.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1475,6 +1476,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "absentarm", HTML_ABSENTARM },
     { "griditem", HTML_GRIDITEM },
     { "contentsflex", HTML_CONTENTSFLEX },
+    { "custommedia", HTML_CUSTOMMEDIA },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -13298,6 +13300,28 @@ TF_UNIT void probes_contentsflex(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `custommedia` document. */
+TF_UNIT void probes_custommedia(const char *js, Probe *tab, int *n) {
+    /* CSS Syntax 3 §8 discards an at-rule the user agent does not recognize, and Chrome 155 does not recognize
+       Media Queries 5's `@custom-media`, so the sheet holds two rules and `(--n)` is unknown
+       (fixture/custommedia.h). */
+    const char *cmedia_why = NULL; int cmedia_tt = 1;
+    fold_row(&cmedia_tt, &cmedia_why, !!strstr(js, "\"/api/cmedia\""),
+             "NOT REACHED: there is no /api/cmedia record at all — the document aborted before its script ran");
+    fold_row(&cmedia_tt, &cmedia_why, param_value_is(js, "/api/cmedia", "n", "2"),
+             "CSS Syntax 3 §8: the unrecognized `@custom-media` is not discarded, so `cssRules` is not 2 long");
+    fold_row(&cmedia_tt, &cmedia_why, param_value_is(js, "/api/cmedia", "m", "false"),
+             "Media Queries 4 §3.2: `(--n)` is general-enclosed and unknown, yet matchMedia matched it");
+    fold_row(&cmedia_tt, &cmedia_why, param_value_is(js, "/api/cmedia", "c", "true"),
+             "the `@media (--n)` block applied to `#a`, which an unknown condition leaves unstyled");
+    fold_row(&cmedia_tt, &cmedia_why, param_value_is(js, "/api/cmedia", "i", "undefined"),
+             "CSSCustomMediaRule is exposed, which Chrome 155 does not ship");
+    const Probe rows[] = {
+        { "custom-media-unrecognized", cmedia_tt, "/api/cmedia", SESS_EXPLORE, cmedia_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `windowclose` document. */
 TF_UNIT void probes_windowclose(const char *js, Probe *tab, int *n) {
     const char *winclose_why = NULL;
@@ -16624,6 +16648,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_absentarm(js, probes, &np);
     probes_griditem(js, probes, &np);
     probes_contentsflex(js, probes, &np);
+    probes_custommedia(js, probes, &np);
     probes_windowclose(js, probes, &np);
     probes_windowopenerclose(js, probes, &np);
     probes_timers(js, probes, &np);

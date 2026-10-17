@@ -1596,34 +1596,22 @@ static void rule_alias_unbuilt_fail(const char *written, const char *target)
            written, target, target);
 }
 
-/* THE AT-KEYWORDS A CSS SPECIFICATION DEFINES — the registry CSS Syntax Level 3 §8 "CSS stylesheets"'s "not
- * recognized" is asked against, and the ONE place that question is answered.
- *
- * IT IS TRANSCRIBED FROM THE CSS WORKING GROUP's OWN CROSS-SPEC AT-RULES INDEX (drafts.csswg.org/indexes/,
- * section "At-rules"), which is where every CSSWG specification's at-rule definitions are collected. That is
- * what makes the table a READING rather than a recollection, and it is what makes each row CHECKABLE: the
- * index links every name to `<spec>/#at-ruledef-<name>`, so the shortname in the second column plus the name in
- * the first reconstructs the exact URL the definition lives at, and one fetch settles any row. The spec
- * SHORTNAME is carried and a section NUMBER deliberately is not — the index publishes the first and not the
- * second, so a number here would be a number nobody read, which §Browser half rates as WORSE than none because
- * it reads as authoritative and sends the next reader to the wrong clause. A number belongs on this row only
- * when it arrives with the interface, which is where `rule_unbuilt_fail`'s list carries them.
- *
- * A ROW IS NOT A CLAIM THAT THIS BUILD IMPLEMENTS THE RULE, and that split is the whole reason the table
- * exists. In the registry with no arm in `rule_from_parse` = a capability this build is missing, and it crashes
- * by name so the next reader builds it. NOT in the registry = no user agent has anything to build, ever, and
- * CSS Syntax 3 §8 says DISCARD. `@counter-style` and `@medium` were one set before this table, and they are
- * opposite facts.
- *
- * `@-webkit-keyframes` IS IN THE INDEX AND IS DELIBERATELY NOT A ROW HERE: CSS Compatibility §3.1 aliases it
- * onto `keyframes` in front of the dispatch, so the resolved name is what reaches this table. `at_rule_dropped`
- * asserts that from the other side, which is what keeps the omission an invariant instead of a hole. */
+/* The at-keywords this user agent recognizes, which is the set CSS Syntax 3 §8 "CSS stylesheets" asks about:
+ * "If any style rule is invalid, or any at-rule is not recognized or is invalid according to its grammar or
+ * context, it's a parse error. Discard that rule." Recognition belongs to the user agent, so the set is the
+ * reference browser's: Blink's CssAtRuleID (core/css/parser/css_at_rule_id.cc) at Chrome 155.0.8059.84, its
+ * unconditional table plus the runtime-flagged rows whose feature status is "stable". A rule a specification
+ * defines that this browser does not ship (`@custom-media`, `@when`, `@apply`) is discarded there and here, so
+ * a page's `cssRules` indices and its media queries read as they do in Chrome. The second column names the
+ * specification defining the rule. A name here with no arm in rule_from_parse is a capability this build is
+ * missing and crashes by name in rule_unbuilt_fail.
+ * `@-webkit-keyframes` is in Blink's table and not here: CSS Compatibility §3.1 aliases it onto `keyframes` in
+ * front of the dispatch, which `at_rule_dropped` asserts. */
 static bool at_rule_defined(const char *name)
 {
-    /* SORTED BY NAME (ASCII), which the lookup below depends on and the DCHECK re-establishes on every call. */
+    /* Sorted by name (ASCII), which the lookup below depends on and the DCHECK re-establishes on every call. */
     static const struct { const char *name; const char *spec; } AT_RULES[] = {
         { "annotation",          "css-fonts-4" },
-        { "apply",               "css-mixins-1" },
         { "bottom-center",       "css-page-3" },
         { "bottom-left",         "css-page-3" },
         { "bottom-left-corner",  "css-page-3" },
@@ -1631,33 +1619,23 @@ static bool at_rule_defined(const char *name)
         { "bottom-right-corner", "css-page-3" },
         { "character-variant",   "css-fonts-4" },
         { "charset",             "css-syntax-3" },
-        { "color-profile",       "css-color-5" },
         { "container",           "css-conditional-5" },
-        { "contents",            "css-mixins-1" },
         { "counter-style",       "css-counter-styles-3" },
-        { "custom-media",        "mediaqueries-5" },
-        { "custom-selector",     "css-extensions-1" },
-        { "else",                "css-conditional-5" },
         { "font-face",           "css-fonts-5" },
         { "font-feature-values", "css-fonts-4" },
         { "font-palette-values", "css-fonts-4" },
         { "function",            "css-mixins-1" },
-        { "historical-forms",    "css-fonts-4" },
         { "import",              "css-cascade-6" },
         { "keyframes",           "css-animations-1" },
         { "layer",               "css-cascade-5" },
         { "left-bottom",         "css-page-3" },
         { "left-middle",         "css-page-3" },
         { "left-top",            "css-page-3" },
-        { "location",            "css-navigation-1" },
         { "media",               "css-conditional-3" },
-        { "mixin",               "css-mixins-1" },
         { "namespace",           "css-namespaces-3" },
-        { "navigation",          "css-navigation-1" },
         { "ornaments",           "css-fonts-4" },
         { "page",                "css-page-3" },
         { "position-try",        "css-anchor-position-1" },
-        { "private",             "css-mixins-1" },
         { "property",            "css-properties-values-api-1" },
         { "right-bottom",        "css-page-3" },
         { "right-middle",        "css-page-3" },
@@ -1667,7 +1645,6 @@ static bool at_rule_defined(const char *name)
         { "styleset",            "css-fonts-4" },
         { "stylistic",           "css-fonts-4" },
         { "supports",            "css-conditional-3" },
-        { "supports-condition",  "css-conditional-5" },
         { "swash",               "css-fonts-4" },
         { "top-center",          "css-page-3" },
         { "top-left",            "css-page-3" },
@@ -1675,7 +1652,6 @@ static bool at_rule_defined(const char *name)
         { "top-right",           "css-page-3" },
         { "top-right-corner",    "css-page-3" },
         { "view-transition",     "css-view-transitions-2" },
-        { "when",                "css-conditional-5" },
     };
     const unsigned n = (unsigned)(sizeof AT_RULES / sizeof AT_RULES[0]);
     unsigned i;
@@ -1685,10 +1661,9 @@ static bool at_rule_defined(const char *name)
     for (i = 0; i < n; i++) {
         DCHECK(i == 0 || strcmp(AT_RULES[i - 1].name, AT_RULES[i].name) < 0,
                "the CSS at-rule registry is not sorted by name, or holds one at-keyword twice. It is "
-               "transcribed from the CSS Working Group's cross-spec at-rules index and a row inserted out of "
-               "order is a row inserted without reading its neighbours — which is exactly how a duplicate or a "
-               "misspelling gets in, and a misspelled row silently DISCARDS every rule the standard requires "
-               "to be supported under the name it should have carried");
+               "transcribed from Blink's CssAtRuleID, and a row out of order is a row inserted without reading "
+               "its neighbours, which is how a duplicate or a misspelling gets in; a misspelled row discards "
+               "every rule the reference browser keeps under the name it should have carried");
         DCHECK(AT_RULES[i].name[0] != '-' && AT_RULES[i].name[0] != '_',
                "the CSS at-rule registry holds a VENDOR-PREFIXED at-keyword. The only prefixed spelling any "
                "standard defines is CSS Compatibility §3.1's `-webkit-keyframes`, and that is resolved to its "
@@ -1701,45 +1676,17 @@ static bool at_rule_defined(const char *name)
     return found;
 }
 
-/* THE AT-RULES THAT ARE DROPPED RATHER THAN CRASHED ON, AND BOTH ARMS ARE POSITIVE STATEMENTS ABOUT THE PLATFORM
- * rather than gaps. `name` is the at-keyword as the builder resolved it — the aliases of
- * CSS Compatibility Standard §3.1 "CSS At-rules" have already been taken out of it, which is why this function never
- * has to ask about one.
+/* The at-rules dropped rather than crashed on. `name` is the at-keyword as the builder resolved it: the aliases
+ * of CSS Compatibility Standard §3.1 "CSS At-rules" have already been taken out of it.
  *
- * `@charset`: CSSOM keeps the historical constant `CHARSET_RULE = 2` and declares NO CSSCharsetRule interface at all,
- * so there is no object an `@charset` could become and every user agent leaves it out of `cssRules`. IT IS ASKED FIRST
- * AND THE ORDER IS LOAD-BEARING: CSS Syntax Level 3 DOES define `@charset`, so it is a row of the registry below, and
- * an arm that ran after it would report a rule the standard defines and this build has no interface for — which is
- * true and is the wrong answer, because there is no interface to build.
+ * `@charset`: CSSOM keeps the historical constant `CHARSET_RULE = 2` and declares no CSSCharsetRule interface,
+ * so there is no object an `@charset` could become and every user agent leaves it out of `cssRules`. It is asked
+ * first because `charset` is a row of the registry, and after it would read as a rule this build is missing.
  *
- * AN AT-KEYWORD NO CSS SPECIFICATION DEFINES: CSS Syntax Level 3 §8 "CSS stylesheets" states the outcome in one
- * sentence — "If any style rule is invalid, or any at-rule is NOT RECOGNIZED or is invalid according to its grammar or
- * context, it's a parse error. DISCARD THAT RULE." CSS 2.1 §4.2 "Rules for handling parsing errors" says the same
- * thing under the heading "At-rules with unknown at-keywords" ("User agents must ignore an invalid at-keyword together
- * with everything following it, up to the end of the block that contains the invalid at-keyword") — and its WORKED
- * EXAMPLE is `@three-dee`, an at-keyword with no dash and no underscore which "is not part of CSS 2.1. Therefore, the
- * whole at-rule … is ignored." A vendor-prefixed at-keyword is one member of that set and not a category of its own:
- * `@-moz-keyframes`, `@-ms-viewport` and `@-moz-document` are dropped because no specification defines them for THIS
- * user agent, which is the same reason `@three-dee` is. (`@-webkit-keyframes` is the one exception and it never
- * reaches here: CSS Compatibility §3.1 aliases it onto `keyframes` in front of the dispatch, which the DCHECK below
- * asserts.)
- *
- * THIS REPLACES A TEST ON THE SHAPE OF THE NAME, WHICH WAS SPEC-WRONG AND KILLED WHOLE DOCUMENTS. The deleted
- * predicate dropped an at-keyword beginning with `-` or `_` and crashed on every other unknown one, inferring from
- * CSS 2.1 §4.2's other half ("CSS 2.1 reserves for future updates of CSS all … @-keywords that do not contain an
- * identifier beginning with dash or underscore") that an unprefixed unknown at-keyword must be a specification's
- * interface missing here. That inference reads a sentence about WHO MAY DEFINE the keyword as a sentence about WHAT A
- * UA DOES when it meets one, and CSS 2.1 §4.2's own `@three-dee` example refutes it directly. The cost was not
- * theoretical: CSS-in-JS runtimes emit breakpoint at-keywords verbatim when a theme token fails to resolve, so a live
- * site's inline `<style>` carrying `@medium{…}` beside its `@media` rules aborted the instance at sheet-build time,
- * with ZERO flows run and therefore zero endpoints and zero sinks — the whole document lost to a rule real Chrome
- * discards without comment.
- *
- * AND IT IS STILL NOT AN UNKNOWN-AT-RULE FALLBACK. The set is closed by a REGISTRY of the at-keywords CSS
- * specifications define (`at_rule_defined`), not by a fallback: a name IN that registry with no arm in
- * `rule_from_parse` is a capability this build is missing and goes on crashing by name below, which is the signal that
- * crash exists to deliver. What changed is only that a name NO standard defines is no longer mistaken for one — the
- * two were one set wearing one predicate, and separating them is what lets each keep its own answer. */
+ * An at-keyword this user agent does not recognize (`at_rule_defined`): CSS Syntax 3 §8 "CSS stylesheets" says
+ * "Discard that rule", and CSS 2.1 §4.2 "Rules for handling parsing errors" says the same under "At-rules with
+ * unknown at-keywords", with `@three-dee` as its example. A vendor prefix is no category of its own, and an
+ * unknown unprefixed name such as a CSS-in-JS runtime's unresolved `@medium` is dropped for the same reason. */
 static bool at_rule_dropped(const char *name)
 {
     if (strcmp(name, "charset") == 0) return true;
@@ -1815,7 +1762,7 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
         return keyframe_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude, pr->block ? pr->block : "");
     }
     /* AND THE MIRROR: a margin at-rule is only a rule INSIDE an `@page`. Anywhere else `@top-left { }` is an
-       at-rule no specification defines, which CSS Syntax drops — so it is dropped here rather than reaching
+       at-rule invalid in its context, which CSS Syntax drops — so it is dropped here rather than reaching
        the crash below, which would name a capability that is already built. */
     if (pr->at_name && css_page_margin_at_rule(pr->at_name)) return JS_UNDEFINED;
     /* AND THE SAME MIRROR FOR CSS Fonts 4 §6.9.1 "Basic syntax"'s SEVEN FEATURE VALUE BLOCKS, which are
@@ -1829,9 +1776,9 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        and dropped here for the same reason they are: reaching the crash below would name a CSSOM interface to
        build for a rule no user agent represents in that position.
        IT IS THE CONTEXT HALF OF CSS Syntax 3 §8'S SENTENCE AND NOT THE RECOGNITION HALF, and the two are
-       separate questions this file deliberately answers from separate places. All seven ARE in
-       `at_rule_defined`'s registry — a CSS specification defines each of them — so that predicate answers yes
-       and must; what decides them here is WHERE they were written. Reading the seven as unrecognized instead
+       separate questions this file deliberately answers from separate places. Six of the seven are in
+       `at_rule_defined`'s registry (the reference browser does not recognize `@historical-forms`), so that
+       predicate answers yes for them; what decides them here is where they were written. Reading the seven as unrecognized instead
        would have been the shape-of-the-name inference `at_rule_dropped`'s own note records as spec-wrong.
        THEY HAD SEVEN ROWS IN THE UNBUILT-INTERFACE TABLE BELOW AND THE ROWS WERE NOT WRONG — every one named
        CSS Fonts 4 §12.2 "The CSSFontFeatureValuesRule interface" correctly, because inside a
@@ -2102,125 +2049,43 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
     return build_push(b, rule);
 }
 
-/* WHAT CSSOM §6.4 DECLARES FOR AN AT-RULE THIS BUILD HAS NO ARM FOR — one row per at-keyword that REACHES the
- * crash below, and the reason that crash is a LOOKUP rather than a paragraph.
- *
- * REACHING IT IS A NARROWER SET THAN `at_rule_defined`'s REGISTRY MINUS WHAT `rule_from_parse` MINTS, and the
- * difference is a CONTEXT rather than a missing interface. This sentence used to draw the set the wider way, and
- * it is corrected rather than deleted because the wider reading is the one a reader arrives at from the second
- * assert below and would send them to add a row for every one of them: `@top-left` and CSS Fonts 4 §6.9.1
- * "Basic syntax"'s seven feature value blocks are all in the registry and none of them is minted, and every one
- * is DROPPED by an arm above — a margin at-rule is only a rule inside an `@page` and a feature value block only
- * inside a `@font-feature-values`, so outside those they are invalid IN CONTEXT and CSS Syntax 3 §8 "CSS
- * stylesheets" discards them. A row for one of those would be a row for a rule that never arrives, which is the
- * state the second assert below calls a recollection rather than a reading. What the two assertions bracket is
- * therefore exactly this: a row must name a registry at-keyword, and a name that gets here must have a row.
- *
- * THE PARAGRAPH WAS A CLAIM AND IT HAD ALREADY BEEN WRONG IN THE DIRECTION THAT COSTS MOST — TWICE. It once
- * named four interfaces and omitted the one that fires: a single `@property --x { … }` in a shipping site's
- * stylesheet aborted that instance at stage `create` with ZERO flows run, and the reader standing at that abort
- * was told to build one of four things, none of them the one in front of them. It was then rewritten to name
- * three that remain — CSSScopeRule, CSSCounterStyleRule, CSSFontFeatureValuesRule — while the registry beside
- * it recognised TWENTY-EIGHT at-keywords this builder had no arm for. Every one of the other twenty-five was a
- * page whose `@WHY` would have said "what remains is" and then listed three things that were not it. That is
- * the stale-`DFAIL` failure mode with a spec behind it: authoritative, wrong, and followed.
- *
- * A PROSE LIST CANNOT BE CHECKED AGAINST THE REGISTRY AND A TABLE CAN, WHICH IS THE WHOLE CHANGE. The two
- * assertions below are what make this a mechanism instead of a better-maintained sentence: every row here names
- * an at-keyword `at_rule_defined` recognises (so a row cannot be invented), and every at-keyword that REACHES
- * the crash has a row (so the list cannot silently under-report — the miss fires at the exact page that
- * exposed it). A name comes off this table in the same diff that builds its interface, and the second assert
- * is what makes forgetting that impossible rather than merely discouraged.
- *
- * THE THIRD STATE IS THE ONE A LIST OF INTERFACES CANNOT EXPRESS, AND IT IS NOT RARE. `@when`, `@else`,
- * `@private`, `@navigation`, `@location` and `@custom-selector` are at-rules a CSS specification DEFINES — so
- * CSS Syntax 3 §8 forbids discarding them and `at_rule_defined` correctly answers yes — for which NO
- * specification declares a CSSOM interface at all. CSS Extensions 1 §3.2 "CSSOM" is, in its entirety, the words
- * "Fill in." Telling that reader to "build the interface" sends them looking for one that does not exist, which
- * is the same wrong-and-authoritative failure one level down; so those rows carry a NULL interface and the
- * crash says what is actually true — there is nothing to build until the standard says what.
- *
- * EVERY SECTION NUMBER HERE CARRIES ITS SECTION TITLE AND WAS READ OFF THE SPECIFICATION, never recalled.
- * Numbers renumber and titles survive, so a row whose two halves stop agreeing is visible instead of silent.
- * The registry deliberately carries a spec SHORTNAME and no number, because the CSSWG index it is transcribed
- * from publishes the first and not the second; a number belongs to the row that arrives WITH the interface,
- * which is this one. */
+/* What CSSOM §6.4 declares for an at-rule this build recognizes and has no arm for: one row per at-keyword
+ * that reaches rule_unbuilt_fail, so the crash is a lookup. Rule_unbuilt_fail asserts both directions: every row
+ * names a registry at-keyword, and every at-keyword reaching the crash has a row. A name comes off this table in
+ * the same diff that builds its interface. Reaching the crash is narrower than the registry minus what
+ * rule_from_parse mints: a margin at-rule outside `@page` and a feature value block outside
+ * `@font-feature-values` are invalid in context and dropped by the arms above, so they have no row.
+ * Every section number carries its title, read off the specification. */
 static const struct {
     const char *at;          /* the at-keyword, spelled as `at_rule_defined`'s registry spells it */
-    const char *interface;   /* the CSSOM interface a standard declares for it, or NULL when none does */
+    const char *interface;   /* the CSSOM interface its specification declares */
     const char *where;       /* that declaration's spec, section NUMBER and section TITLE */
 } RULE_UNBUILT[] = {
     /* SORTED BY at-keyword (ASCII), which the DCHECK below re-establishes on every crash. */
-    { "apply",              "CSSApplyBlockRule / CSSApplyStatementRule",
-      "CSS Mixins 1 §7.4 \"The CSSApplyBlockRule Interface\" and §7.5 \"The CSSApplyStatementRule Interface\" — "
-      "TWO interfaces, chosen by whether the `@apply` the page wrote has a block" },
-    { "color-profile",      "CSSColorProfileRule",
-      "CSS Color 5 §12.1 \"The CSSColorProfileRule interface\"" },
-    { "contents",           "CSSContentsBlockRule / CSSContentsStatementRule",
-      "CSS Mixins 1 §7.6 \"The CSSContentsBlockRule Interface\" and CSS Mixins 1 §7.7 \"The CSSContentsStatementRule "
-      "Interface\" — two, split by the block exactly as `@apply`'s pair is" },
     { "counter-style",      "CSSCounterStyleRule",
-      "CSS Counter Styles 3 §9.2 \"The CSSCounterStyleRule interface\" — and it is one of only TWO rows here "
-      "whose CSSOM §6.4.2 TYPE NUMBER is already declared (COUNTER_STYLE_RULE = 11) with no interface behind it" },
-    { "custom-media",       "CSSCustomMediaRule",
-      "Media Queries 5 §11 \"CSSOM\"" },
-    { "custom-selector",    NULL,
-      "CSS Extensions 1 §3 \"Custom Selectors\" defines `@custom-selector`, and "
-      "CSS Extensions 1 §3.2 \"CSSOM\" is the two "
-      "words \"Fill in.\" — there is no interface to build and none to wait for but the standard's" },
-    { "else",               NULL,
-      "CSS Conditional 5 §4 \"Chained Conditionals: the @else rule\" defines the rule; CSS Conditional 5 §9 "
-      "\"APIs\" declares CSSContainerRule and CSSSupportsConditionRule and NOTHING for `@else`" },
+      "CSS Counter Styles 3 §9.2 \"The CSSCounterStyleRule interface\" — whose CSSOM §6.4.2 type number is "
+      "already declared (COUNTER_STYLE_RULE = 11) with no interface behind it" },
     { "font-palette-values","CSSFontPaletteValuesRule",
       "CSS Fonts 4 §12.3 \"The CSSFontPaletteValuesRule interface\"" },
     { "function",           "CSSFunctionRule",
       "CSS Mixins 1 §7.1 \"The CSSFunctionRule Interface\" — and its body's declarations are CSS Mixins 1 §7.2 \"The "
       "CSSFunctionDeclarations Interface\", which is a second object this one has to mint" },
-    { "location",           NULL,
-      "CSS Navigation 1 §1.2 \"Declaring named URL patterns: the @location rule\" defines the rule; that "
-      "specification declares no IDL whatever" },
-    { "mixin",              "CSSMixinRule",
-      "CSS Mixins 1 §7.3 \"The CSSMixinRule Interface\"" },
-    { "navigation",         NULL,
-      "CSS Navigation 1 §3.1 \"Navigation queries: the @navigation rule\" defines the rule; that specification "
-      "declares no IDL whatever" },
     { "position-try",       "CSSPositionTryRule",
       "CSS Anchor Positioning 1 §8.1 \"The CSSPositionTryRule interface\" — whose descriptors are that same "
       "section's CSSPositionTryDescriptors" },
-    { "private",            NULL,
-      "CSS Mixins 1 §6 \"Private Custom Properties: the @private rule\" defines the rule; that specification's "
-      "CSS Mixins 1 §7 \"CSSOM\" declares seven interfaces and none of them is for `@private`" },
     { "scope",              "CSSScopeRule",
       "CSS Cascade 6 §4.1 \"The CSSScopeRule interface\" — no CSSOM §6.4.2 type number at all (that table is frozen, "
       "so its `type` is 0, like the CSSLayer*, CSSProperty and CSSContainer rules already built)" },
-    { "supports-condition", "CSSSupportsConditionRule",
-      "CSS Conditional 5 §9.2 \"The CSSSupportsConditionRule interface\"" },
     { "view-transition",    "CSSViewTransitionRule",
       "CSS View Transitions 2 §8.3.3 \"Accessing the @view-transition rule using CSSOM\"" },
-    { "when",               NULL,
-      "CSS Conditional 5 §3 \"Generalized Conditional Rules: the @when rule\" defines the rule; "
-      "CSS Conditional 5 §9 \"APIs\" declares CSSContainerRule and CSSSupportsConditionRule and nothing for it" },
 };
 
-/* THE CRASH THAT NAMES WHAT TO BUILD. It is a function so that the at-rule's own name is in the message: the
-   reader of a `@WHY` is standing at the rule the page shipped, and "an at-rule" tells them nothing about which
-   interface to write. It now names THAT rule's interface and the clause it is declared in, rather than reciting
-   a list the reader has to find their own rule in — which is what let the list be wrong twice without anybody
-   noticing, because a reader who cannot find their rule reads the omission as "not covered yet" either way.
-   TRUNCATION IS ASSERTED RATHER THAN ARITHMETIC. The buffer used to be sized as `sizeof` the format literal
-   plus the name bound, which was right until a substitution stopped being the name: these rows are prose and
-   `sizeof` a `%s` is two. A fixed 600 had already truncated the 839-byte text once, silently deleting the one
-   sentence the crash exists to deliver, at the one moment somebody was reading it. `snprintf` returns the
-   length it WANTED, so the check is exact and cannot go stale when the next row is longer than this one. */
+/* The crash that names what to build: the at-rule the page shipped, its interface and the clause declaring it.
+   The DFAILF format is asserted not to truncate (snprintf returns the length it wanted), because these rows
+   are prose and a fixed bound had already cut the one sentence the crash exists to deliver. */
 static void rule_unbuilt_fail(const char *name)
 {
-/* TWO SHAPES, ONE FORMAT, AND THE CITATION IS THE SAME FIELD IN BOTH — which is what stops the no-interface
-   arm from being the arm that quietly loses its section number. The four substitutions after the name are the
-   lead-in, the interface (empty in the second shape), the `where` citation both shapes end on, and the ACTION.
-   THE ACTION IS PER SHAPE AND THAT IS THE POINT OF SPLITTING IT OUT. A single trailing "mint it in
-   rule_from_parse" told the reader of a `@when` — for which no standard declares an interface — to go and
-   build one, which is the wrong-and-authoritative failure this whole table exists to end, reproduced at the
-   last sentence of the very crash that ends it. */
+/* The substitutions after the name are the interface, its `where` citation and the action. */
 #define RULE_UNBUILT_FMT                                                                                       \
     "CSSOM §6.4 has no interface built for the at-rule `@%s`, so a stylesheet containing one cannot be "        \
     "represented. CSSOM §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.7's CSSPageRule, " \
@@ -2232,17 +2097,12 @@ static void rule_unbuilt_fail(const char *name)
     "CSSFontFaceRule, CSS Animations 1 §6.2's CSSKeyframeRule and CSS Animations 1 §6.3's CSSKeyframesRule, "      \
     "CSS Cascade 5 §8.1's CSSLayerBlockRule and CSS Cascade 5 §8.2's CSSLayerStatementRule, " \
     "CSS Properties and Values API 1 §6.1's "    \
-    "CSSPropertyRule and CSS Fonts 4 §12.2's CSSFontFeatureValuesRule are built. %s%s — %s. %s"
+    "CSSPropertyRule and CSS Fonts 4 §12.2's CSSFontFeatureValuesRule are built. The interface to build is %s — %s. %s"
 
     static const char ACT_BUILD[] =
         "Mint it in rule_from_parse and strike its row off RULE_UNBUILT in the SAME diff — the second of this "
         "function's two asserts is what makes forgetting that half impossible. Do NOT skip the rule, because "
         "every index after it would then name a different rule than the page's";
-    static const char ACT_NONE[] =
-        "This is a STANDARDS gap and not a gap here, so there is no arm to write in rule_from_parse: the rule "
-        "is recognised (CSS Syntax 3 §8 forbids discarding it) and has no object it can become. Do NOT invent an "
-        "interface, and do NOT skip the rule — skipping renumbers every rule after it. What this needs is the "
-        "standard, so take it there";
     const unsigned n = (unsigned)(sizeof RULE_UNBUILT / sizeof RULE_UNBUILT[0]);
     unsigned i, hit = n;
 
@@ -2263,18 +2123,13 @@ static void rule_unbuilt_fail(const char *name)
         DFAILF("`@%s` is in CSS Syntax 3 §8's recognized-at-rule registry, has no arm in rule_from_parse, and "
                "has NO ROW in the CSSOM §6.4 unbuilt-interface table — so this crash cannot say what to build. Add "
                "the row (interface, spec, section NUMBER and section TITLE, read off the specification and "
-               "never recalled; a NULL interface where no standard declares one) in the same diff that finds "
+               "never recalled) in the same diff that finds "
                "this. THIS assert is the half that stops the list under-reporting, which it has done twice: "
                "it fires at the exact page that exposed the gap, which is the only moment anybody is looking",
                name);
         return;
     }
-    DFAILF(RULE_UNBUILT_FMT, name,
-           RULE_UNBUILT[hit].interface ? "The interface to build is "
-                                       : "NO specification declares a CSSOM interface for it",
-           RULE_UNBUILT[hit].interface ? RULE_UNBUILT[hit].interface : "",
-           RULE_UNBUILT[hit].where,
-           RULE_UNBUILT[hit].interface ? ACT_BUILD : ACT_NONE);
+    DFAILF(RULE_UNBUILT_FMT, name, RULE_UNBUILT[hit].interface, RULE_UNBUILT[hit].where, ACT_BUILD);
 #undef RULE_UNBUILT_FMT
 }
 
