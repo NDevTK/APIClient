@@ -1,31 +1,21 @@
-/* THE PUBLIC SUFFIX LIST, generated from publicsuffix.org's own `public_suffix_list.dat`.
+/* The Public Suffix List, generated from Chromium's `net/base/registry_controlled_domains/effective_tld_names.dat`
+ * at a pinned Chromium release into core/url/public_suffix_table.h and engine/public_suffix_table.mjs. Real
+ * Chrome is the oracle for the sites and cookies a page sees, so the engine carries the list Chrome carries,
+ * matched as Chrome matches it (core/url/public_suffix.c); testing/psl_agreement.mjs measures the two against
+ * the running browser. HTML §7.1.1.2's `document.domain` setter and the cookie jar ask it, and a hand-written
+ * TLD table gets exactly their cases wrong (`compute.amazonaws.com`, `github.io`, `*.ck`).
  *
- * WHY THIS EXISTS. HTML §7.1.1.2's `document.domain` setter step 4 asks whether the assigned value "is a
- * registrable domain suffix of or is equal to" the document's effective domain, and two of that algorithm's own
- * steps are stated over a host's PUBLIC SUFFIX (URL §3.2). There is no way to answer them without the list: a
- * hand-written table of TLDs answers `com` and gets `compute.amazonaws.com`, `github.io` and `*.ck` wrong, and
- * the whole point of the condition is those cases — it is what stops `www.example.com` claiming `com`.
- *
- * WHY IT IS VENDORED AND PINNED RATHER THAN FETCHED. §Testing's frozen-snapshot rule: a gate whose INPUT can
- * change under it is not a gate, and this list changes several times a week. A build that downloaded it would
- * make every measurement a fact about the day it ran — the same defect as running a gate from the working tree,
- * one layer out. So it is pinned by the list's own COMMIT line, generated into a committed header, and re-pinned
- * DELIBERATELY as a commit of its own, exactly the way idnagen.mjs pins Unicode and wpt.mjs pins WPT_REV. The
- * build has no network and this table is not optional.
- *
- * WHY THE RULES ARE PUNYCODED HERE AND NOT AT LOOKUP TIME. The list is "Unicode, not Punycode ... encoded using
- * UTF-8", and the PSL's own formal algorithm requires that "the domain, as well as all rules from the Public
- * Suffix List, must be canonicalized in the normal way for hostnames - lower-case, Punycode (RFC 3492) - prior
- * to being compared". A host reaching public_suffix.c has already been through URL §3.3 IDNA's domain parser, so it
- * is an A-label; a rule left as a U-label would then match NOTHING, and it would fail SILENTLY for exactly the
- * IDN domains the condition matters most for. Canonicalizing at generation time makes the two sides one
- * representation, and a rule this generator cannot canonicalize STOPS it rather than being dropped.
+ * The list changes several times a week and a build has no network, so it is pinned by a Chromium release tag
+ * and the file's SHA-256, generated into committed files, and re-pinned deliberately as a commit of its own,
+ * as idnagen.mjs pins Unicode and wpt.mjs pins WPT_REV. Rules are canonicalized to A-labels at generation
+ * (engine/psl_list.mjs), since every host reaching the lookup has been through URL §3.3's domain-to-ASCII.
  *
  * Usage:  node engine/pslgen.mjs
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { domainToASCII } from "node:url";
+import { createHash } from "node:crypto";
+import { parseList } from "./psl_list.mjs";
 
 const ENGINE = import.meta.dirname;
 const OUT = join(ENGINE, "host", "browser", "core", "url", "public_suffix_table.h");
@@ -34,18 +24,20 @@ const OUT = join(ENGINE, "host", "browser", "core", "url", "public_suffix_table.
    list; the extension's zone asks the browser (extension/lib/site.js). */
 const JS_OUT = join(ENGINE, "public_suffix_table.mjs");
 
-/* THE PIN. publicsuffix.org serves one URL and no versioned directories ("Please pull this list from, and only
-   from https://publicsuffix.org/list/public_suffix_list.dat"), so the pin is the ASSERTION below over the list's
-   own COMMIT header — if the list has moved, this generator STOPS instead of silently re-pinning the table under
-   a build that was checked against the old one. */
-const URL_SRC = "https://publicsuffix.org/list/public_suffix_list.dat";
-const COMMIT = "a77cfe0674a4b05c6e2448c01f3cb2c965a1b6d8";
+/* THE PIN: Chromium's copy of the list at the first release that exposes chrome.publicSuffix (153, the
+   extension's minimum_chrome_version), read from Chromium's own repository at that tag, and the SHA-256 of
+   its bytes. Chromium's copy carries no VERSION or COMMIT line, so the hash is what this generator asserts;
+   bytes that differ STOP it. */
+const CHROMIUM_TAG = "153.0.8010.52";
+const LIST_PATH = "net/base/registry_controlled_domains/effective_tld_names.dat";
+const URL_SRC = `https://chromium.googlesource.com/chromium/src/+/refs/tags/${CHROMIUM_TAG}/${LIST_PATH}`;
+const SHA256 = "4155611645690529d1bbea0cfe653b0c45f63b028e0ba039de29a97edc3204ca";
 
 /* `--js-from-header` writes the native host's table from the committed header without re-pinning: it parses the three
    arrays back, and refuses unless re-rendering them reproduces the header byte for byte. */
 if (process.argv.includes("--js-from-header")) {
   const h = readFileSync(OUT, "utf8");
-  const v = /#define PSL_VERSION "([^"]+)"/.exec(h), c = /#define PSL_COMMIT  "([^"]+)"/.exec(h);
+  const v = /#define PSL_VERSION "([^"]+)"/.exec(h), c = /#define PSL_SHA256  "([^"]+)"/.exec(h);
   const n = /\* (\d+) rules in §Divisions' ICANN section and (\d+) in its PRIVATE/.exec(h);
   const arr = (name) => JSON.parse("[" + new RegExp("static const char \\*const " + name +
     "\\[\\] = \\{([^}]*)\\};").exec(h)[1].trim().replace(/,$/, "") + "]");
@@ -61,101 +53,27 @@ if (process.argv.includes("--js-from-header")) {
   process.exit(0);
 }
 
-const res = await fetch(URL_SRC);
+/* Gitiles serves a file's bytes base64-encoded under `?format=TEXT`. */
+const res = await fetch(URL_SRC + "?format=TEXT");
 if (!res.ok) { console.error(`[pslgen] ${URL_SRC}: HTTP ${res.status}`); process.exit(1); }
-const text = await res.text();
-const commit = /^\/\/\s*COMMIT:\s*(\S+)/m.exec(text);
-const version = /^\/\/\s*VERSION:\s*(\S+)/m.exec(text);
-if (!commit || !version) {
-  console.error("[pslgen] the list carries no VERSION/COMMIT header — that header IS the pin, so a list " +
-                "without one cannot be vendored at a revision anyone can reproduce.");
+const bytes = Buffer.from(await res.text(), "base64");
+const sha = createHash("sha256").update(bytes).digest("hex");
+if (sha !== SHA256) {
+  console.error(`[pslgen] ${LIST_PATH} at ${CHROMIUM_TAG} hashes to ${sha} and this generator is pinned to ` +
+                `${SHA256} — re-pin deliberately, as a commit of its own, so the diff in results has one cause.`);
   process.exit(1);
 }
-if (commit[1] !== COMMIT) {
-  console.error(`[pslgen] the list is at ${commit[1]} and this generator is pinned to ${COMMIT} — re-pin ` +
-                `deliberately, as a commit of its own, so the diff in results has one cause.`);
-  process.exit(1);
-}
+const text = bytes.toString("utf8");
+const version = [null, "Chromium " + CHROMIUM_TAG];
+const commit = [null, SHA256];
 
-/* §Divisions' TWO SECTIONS, PARSED AND ASSERTED BUT NOT SPLIT — and both halves of that are deliberate.
- *
- * PARSED, because the markers are the only structure the file has: a truncated or half-served download is a
- * list that still parses into rules and quietly answers `com` while missing `github.io`, and the missing END
- * marker is what catches it. A section that never opens or never closes stops this generator.
- *
- * NOT SPLIT, because the caller is HTML §7.1.1.2 and it is one of the applications §Divisions itself names as
- * treating all entries the same ("some applications, such as browsers when considering cookie-setting, treat
- * all entries the same"). URL §3.2 says "the public suffix determined by running the Public Suffix List
- * algorithm" over the list, with no section argument, and HTML's own worked table for the `document.domain`
- * condition turns on `*.compute.amazonaws.com` — a PRIVATE entry. Emitting the division as per-rule data no
- * caller reads would be a field written here and read nowhere; the counts below are the artifact's PROVENANCE,
- * stated with the commit that produced it. */
-const SECTIONS = { ICANN: 0, PRIVATE: 0 };
-let section = null;
-
-/* §Format: "Each line is only read up to the first whitespace; entire lines can also be commented using //."
-   A rule may begin with "!" (an exception rule) or contain "*" as a whole leftmost label (a wildcard rule). */
-const normal = [], wildcard = [], exception = [];
-for (const raw of text.split("\n")) {
-  const marker = /^\/\/\s*===(BEGIN|END) (ICANN|PRIVATE) DOMAINS===/.exec(raw);
-  if (marker) {
-    const opening = marker[1] === "BEGIN";
-    if (opening === (section !== null)) {
-      console.error(`[pslgen] §Divisions' markers are not nested: ${marker[1]} ${marker[2]} inside ` +
-                    `${section ?? "no section"} — this list is truncated or interleaved, and a rule set built ` +
-                    `from it would be missing entries with nothing to say so.`);
-      process.exit(1);
-    }
-    section = opening ? marker[2] : null;
-    continue;
-  }
-  const line = raw.split(/\s/)[0];
-  if (!line || line.startsWith("//")) continue;
-  if (section === null) {
-    console.error(`[pslgen] rule ${JSON.stringify(line)} lies outside both of §Divisions' sections`);
-    process.exit(1);
-  }
-  SECTIONS[section]++;
-  let kind = normal, body = line;
-  if (body.startsWith("!")) { kind = exception; body = body.slice(1); }
-  else if (body.startsWith("*.")) { kind = wildcard; body = body.slice(2); }
-  /* §Format's INVALID forms, refused rather than mis-stored: a wildcard anywhere but the leftmost whole label
-     would be matched here as a literal "*" byte, which no host can ever contain, so the rule would be dead
-     weight that reads as coverage. */
-  if (body.includes("*") || body.includes("!") || !body) {
-    console.error(`[pslgen] rule ${JSON.stringify(line)} is not one of the three forms §Format defines`);
-    process.exit(1);
-  }
-  /* The PSL's own canonicalization requirement — lower-case, Punycode — run through the same IDNA the URL
-     parser runs, so the two sides of every comparison are one representation. */
-  const ascii = domainToASCII(body);
-  if (!ascii) {
-    console.error(`[pslgen] rule ${JSON.stringify(line)} has no A-label form — domain-to-ASCII refused it, so ` +
-                  `no host the URL parser produces could ever be compared against it`);
-    process.exit(1);
-  }
-  kind.push(ascii);
-}
-if (section !== null) {
-  console.error(`[pslgen] §Divisions' ${section} section never closed — the download is truncated`);
-  process.exit(1);
-}
-if (!SECTIONS.ICANN || !SECTIONS.PRIVATE) {
-  console.error(`[pslgen] the list carries ${SECTIONS.ICANN} ICANN and ${SECTIONS.PRIVATE} PRIVATE rules — ` +
-                `HTML §7.1.1.2's own worked table turns on a PRIVATE entry, so a list missing either section ` +
-                `answers that table wrong.`);
-  process.exit(1);
-}
-
-/* SORTED AND DEDUPED, because the lookup is a binary search: public_suffix.c asks "is this exact suffix a rule
-   of this kind" three times per label boundary, and a sorted array of strings answers it with no index to keep
-   in step with the data. */
-const prep = (a) => [...new Set(a)].sort();
-const N = prep(normal), W = prep(wildcard), E = prep(exception);
+let N, W, E, SECTIONS;
+try { ({ N, W, E, sections: SECTIONS } = parseList(text)); }
+catch (e) { console.error("[pslgen] " + e.message); process.exit(1); }
 
 writeFileSync(OUT, headerText(N, W, E, version[1], commit[1], SECTIONS));
 writeFileSync(JS_OUT, jsText(N, W, E, version[1], commit[1]));
-console.log(`[pslgen] PSL ${version[1]} (${commit[1]}): ${N.length} ordinary + ${W.length} wildcard + ` +
+console.log(`[pslgen] ${version[1]} ${LIST_PATH} (sha256 ${commit[1]}): ${N.length} ordinary + ${W.length} wildcard + ` +
             `${E.length} exception rules -> ` + OUT.replace(ENGINE + "/", "engine/") +
             " and engine/public_suffix_table.mjs");
 
@@ -169,8 +87,8 @@ function emitC(name, rules) {
 
 function headerText(N, W, E, version, commit, sections) {
   const lines = [];
-  lines.push("/* GENERATED by engine/pslgen.mjs — DO NOT EDIT. Public Suffix List " + version + ",");
-  lines.push(" * commit " + commit + ", from " + URL_SRC + " —");
+  lines.push("/* GENERATED by engine/pslgen.mjs — DO NOT EDIT. The Public Suffix List as " + version + " carries it,");
+  lines.push(" * sha256 " + commit + ", from " + URL_SRC + " —");
   lines.push(` * ${sections.ICANN} rules in §Divisions' ICANN section and ${sections.PRIVATE} in its PRIVATE` +
              " section, unified here");
   lines.push(" * because URL §3.2 runs the algorithm over the list and HTML §7.1.1.2's own table turns on a");
@@ -187,18 +105,18 @@ function headerText(N, W, E, version, commit, sections) {
   lines.push("#define ENGINE_HOST_BROWSER_CORE_URL_PUBLIC_SUFFIX_TABLE_H");
   lines.push("");
   lines.push(`#define PSL_VERSION "${version}"`);
-  lines.push(`#define PSL_COMMIT  "${commit}"`);
+  lines.push(`#define PSL_SHA256  "${commit}"`);
   lines.push("");
   lines.push("/* An ordinary rule: it matches a domain whose right-most labels are exactly these. */");
   lines.push(...emitC("PSL_NORMAL", N));
   lines.push("");
-  lines.push("/* A wildcard rule `*.BODY`: it matches a domain whose right-most labels are BODY preceded by ONE");
-  lines.push("   more label of any content — §Format restricts the wildcard to the leftmost position and to a");
-  lines.push("   whole label, which is why the body alone is enough to express it. */");
+  lines.push("/* A wildcard rule `*.BODY`, stored as Chromium stores it, as the entry BODY with a wildcard tag: a");
+  lines.push("   host that is BODY is itself a public suffix, and a longer one's public suffix is BODY and the");
+  lines.push("   label before it (core/url/public_suffix.c). */");
   lines.push(...emitC("PSL_WILDCARD", W));
   lines.push("");
-  lines.push("/* An exception rule `!BODY`: it matches the same domains an ordinary rule with this body would, and");
-  lines.push("   §Algorithm gives it priority over every other matching rule. */");
+  lines.push("/* An exception rule `!BODY`, stored as the entry BODY with an exception tag: when it is the longest");
+  lines.push("   entry a host ends in, the public suffix is BODY without its leftmost label. */");
   lines.push(...emitC("PSL_EXCEPTION", E));
   lines.push("");
   lines.push("#endif");
@@ -213,11 +131,11 @@ function jsText(N, W, E, version, commit) {
     return out;
   };
   return [
-    `// GENERATED by engine/pslgen.mjs — DO NOT EDIT. Public Suffix List ${version}, commit ${commit}.`,
+    `// GENERATED by engine/pslgen.mjs — DO NOT EDIT. The Public Suffix List as ${version} carries it, sha256 ${commit}.`,
     "// The same three sorted arrays engine/host/browser/core/url/public_suffix_table.h carries (see its",
     "// header for what each kind of rule matches); engine/psl.mjs answers registrable domains over them.",
     `export const PSL_VERSION = ${JSON.stringify(version)};`,
-    `export const PSL_COMMIT = ${JSON.stringify(commit)};`,
+    `export const PSL_SHA256 = ${JSON.stringify(commit)};`,
     ...arr("PSL_NORMAL", N), ...arr("PSL_WILDCARD", W), ...arr("PSL_EXCEPTION", E), "",
   ].join("\n");
 }

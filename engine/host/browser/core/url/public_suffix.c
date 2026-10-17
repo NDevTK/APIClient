@@ -1,5 +1,5 @@
-/* URL §3.2's PUBLIC SUFFIX, over the PSL's own §Algorithm. See public_suffix.h for why this is a component and
- * why the table is vendored rather than fetched. */
+/* URL §3.2's PUBLIC SUFFIX, with Chromium's matching over Chromium's list. See public_suffix.h for why this is a
+ * component and why the table is vendored rather than fetched. */
 #include <string.h>
 
 #include "check.h"
@@ -46,56 +46,63 @@ static size_t psl_next_label(const char *d, size_t core, size_t at)
     return at < core ? at + 1 : core;
 }
 
+/* Which arrays hold `s` (n bytes) as a rule body: the tags Chromium's list stores for one entry. */
+static void psl_tags(const char *s, size_t n, bool *normal, bool *wildcard, bool *exception)
+{
+    *normal = psl_has(PSL_NORMAL, PSL_N(PSL_NORMAL), s, n);
+    *wildcard = psl_has(PSL_WILDCARD, PSL_N(PSL_WILDCARD), s, n);
+    *exception = psl_has(PSL_EXCEPTION, PSL_N(PSL_EXCEPTION), s, n);
+}
+
 const char *public_suffix_of(const UrlHost *h)
 {
     const char *d;
-    size_t n, core, i, next, last;
+    size_t n, core, i, next, last, match = 0;
+    bool found = false, normal = false, wildcard = false, exception = false;
 
     DCHECK(h != NULL, "URL §3.2 was asked for the public suffix of no host");
-    /* STEP 1 — "if host is not a domain, then return null". An IPv4 or IPv6 address, an opaque host and the
-       empty host have no labels for a rule to match, and this is the answer §7.1.1.2's own table gives for
-       `[0::1]`: not a failure, a null. */
+    /* STEP 1 — "if host is not a domain, then return null": an IP address, an opaque host and the empty host
+       have no labels for a rule to match. */
     if (h->kind != URL_HOST_DOMAIN) return NULL;
     DCHECK(h->domain != NULL, "a host parsed as a DOMAIN carries no domain string — url.c's §4.2 parser sets "
                               "the two together and a host with one and not the other came from neither");
     d = h->domain;
     n = strlen(d);
-    /* STEP 2's trailingDot, held OUT of the matching and back IN by the return. §Note 3: "looking up
-       example.com should yield com while looking up example.com. should yield com." — and because the answer is
-       a pointer into `d`, the dot comes back for free rather than by building a second string. */
+    /* STEP 2's trailingDot is held out of the matching and comes back with the returned pointer into `d`
+       (§Note 3: `example.com.` answers `com.`). */
     core = (n > 0 && d[n - 1] == '.') ? n - 1 : n;
-
-    /* §Algorithm's THIRD bullet FIRST: "if more than one rule matches, the prevailing rule is the one which is
-       an exception rule". An exception outranks every ordinary and wildcard match at every label depth, so no
-       ordinary rule may even be considered until every exception has been. Within this pass the LEFTMOST start
-       is the match with the most labels, which is the fourth bullet's tie-break. */
-    for (i = 0; i < core; i = next) {
-        next = psl_next_label(d, core, i);
-        if (psl_has(PSL_EXCEPTION, PSL_N(PSL_EXCEPTION), d + i, core - i)) {
-            /* "If the prevailing rule is a exception rule, modify it by removing the leftmost label", and the
-               public suffix is then the labels of the domain that match what is left. */
-            DCHECK(next < core, "an exception rule matched a domain's LAST label — §Format defines an exception "
-                                "as \"an exception to a previous wildcard rule\", so its body always carries "
-                                "the label the wildcard consumed and cannot be one label long");
-            return d + next;
-        }
-    }
-    /* Then the ordinary and wildcard rules, most labels first for the same reason. */
+    /* The longest entry of the list that is the whole host or follows a dot, as Chromium's
+       LookupSuffixInReversedSet finds it: a wildcard rule `*.X` and an exception rule `!X` are stored as the
+       entry X with a tag, so they are matched by their bodies. The leftmost start is the longest. */
     for (i = 0, last = 0; i < core; i = next) {
         next = psl_next_label(d, core, i);
         last = i;
-        if (psl_has(PSL_NORMAL, PSL_N(PSL_NORMAL), d + i, core - i))
-            return d + i;
-        /* A WILDCARD RULE `*.X` MATCHES HERE when X is exactly the labels to the RIGHT of this one: §Format
-           restricts the wildcard to the leftmost position and to a whole label, so it consumes THIS label and
-           nothing else. It therefore needs a label to consume, which is what `next < core` says. */
-        if (next < core && psl_has(PSL_WILDCARD, PSL_N(PSL_WILDCARD), d + next, core - next))
-            return d + i;
+        if (found) continue;
+        psl_tags(d + i, core - i, &normal, &wildcard, &exception);
+        if (normal || wildcard || exception) { found = true; match = i; }
     }
-    /* §Algorithm's SECOND bullet: "if no rules match, the prevailing rule is `*`" — one label, so the public
-       suffix is the domain's right-most one. This is the answer for every made-up TLD a page can invent, and it
-       is why `document.domain = "example"` on the host `example` is allowed while `= "com"` is not. */
-    return d + last;
+    /* No rule matches: the last label, as Chromium answers with INCLUDE_UNKNOWN_REGISTRIES, which
+       GetDomainAndRegistry uses (the PSL's prevailing rule "*"). */
+    if (!found) return d + last;
+    /* Chromium's GetRegistryInTrimmedHost (net/base/registry_controlled_domains/registry_controlled_domain.cc),
+       in its order. A wildcard entry X: a host that is X is itself a public suffix, which the PSL Format's
+       matching would not say (a rule matches only a domain with "as many or more labels than the rule"), and
+       Chrome's cookie jar and sites follow Chromium; otherwise the label before X joins it. */
+    if (wildcard) {
+        if (match == 0) return d;
+        for (i = 0; ; i = next) {
+            next = psl_next_label(d, core, i);
+            if (next == match) return d + i;
+        }
+    }
+    /* An exception entry X: the public suffix is X without its leftmost label. */
+    if (exception) {
+        next = psl_next_label(d, core, match);
+        DCHECK(next < core, "an exception rule matched a domain's last label — an exception names the label its "
+                            "wildcard consumed, so its body is at least two labels");
+        return d + next;
+    }
+    return d + match;
 }
 
 /* THE PREVAILING RULE `*` IS WHY THIS PREDICATE ANSWERS TRUE FOR A SINGLE-LABEL HOST. `localhost`, an intranet

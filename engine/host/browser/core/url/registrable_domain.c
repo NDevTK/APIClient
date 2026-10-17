@@ -62,6 +62,6 @@ bool registrable_domain_suffix_or_equal(const char *s, size_t n, const UrlHost *
     DCHECK(dot_suffix_of(ps, sd),
            "§7.1.1.2 step 4.4's assert failed: the original host's public suffix is not a dotted suffix of the "
            "value, after the three tests that make it one. The public suffix table and this algorithm disagree "
-           "— re-read engine/pslgen.mjs's matching against §Algorithm before trusting either");
+           "— re-read core/url/public_suffix.c's matching against Chromium's before trusting either");
     return true;                                                     /* step 5 */
 }

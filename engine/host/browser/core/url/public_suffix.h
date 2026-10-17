@@ -1,12 +1,12 @@
-/* THE PUBLIC SUFFIX LIST — URL §3.2's "obtain the public suffix of a host", over the list itself.
+/* THE PUBLIC SUFFIX LIST — URL §3.2's "obtain the public suffix of a host", as Chrome answers it.
  *
- * WHY IT IS A COMPONENT AND NOT A LINE IN url.c. §3.2 defines the algorithm; the PSL defines the MATCHING (its
- * own §Format and §Algorithm: ordinary rules, wildcard rules that consume one whole leftmost label, exception
- * rules that outrank every other match, the most-labels tie-break, and the prevailing rule `*` when nothing
- * matches at all). That is one assertable contract with one fixture, and the DATA it is stated over is a
- * 10239-rule table that changes several times a week — so it is vendored at a pinned revision and generated
- * into public_suffix_table.h by engine/pslgen.mjs, for the reason §Testing gives about frozen snapshots: a gate
- * whose input can change under it is measuring the day it ran.
+ * WHY IT IS A COMPONENT AND NOT A LINE IN url.c. §3.2 defines the algorithm; the list defines the MATCHING.
+ * Real Chrome is the oracle, since the cookie jar and sites a page sees are Chrome's, so both the DATA and the
+ * MATCHING are Chromium's: the list is net/base/registry_controlled_domains/effective_tld_names.dat at a
+ * pinned Chromium release, generated into public_suffix_table.h by engine/pslgen.mjs, and the matching is
+ * registry_controlled_domain.cc's longest-entry lookup, which departs from the PSL Format's in one place (a
+ * wildcard rule's parent is itself a public suffix). testing/psl_agreement.mjs measures it against the
+ * browser.
  *
  * WHO ASKS. HTML §7.1.1.2's `document.domain` setter, through the "is a registrable domain suffix of or is
  * equal to" algorithm that is the whole of its step 4 — the condition that lets `www.example.com` relax to
@@ -31,7 +31,7 @@
    determined by running the Public Suffix List algorithm with host as domain. 4. Assert: publicSuffix is an
    ASCII string that ends with trailingDot. 5. Return publicSuffix."
    NULL is step 1 — an IP address and an opaque host have no public suffix, which is a real answer and the one
-   §7.1.1.2's table gives for `[0::1]`.
+   §7.1.1.2's table gives for `[0::1]`. Step 3's "Public Suffix List algorithm" is Chromium's (see above).
    OTHERWISE IT POINTS INTO `h`'s OWN DOMAIN STRING and is borrowed for as long as that host lives. The public
    suffix is by construction "the set of labels FROM THE DOMAIN which match the labels of the prevailing rule",
    so it is always a suffix of the input — including its trailing dot, which is how step 4's assertion holds
