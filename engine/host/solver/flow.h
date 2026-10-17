@@ -382,6 +382,9 @@ typedef struct Flow {
      * since a row an ancestor interposed also carries DYN_POS_IMMEDIATE. A fork carries it. */
     int   imm_at;          /* the base slot `imm_next` was computed from; -1 while no run is open */
     int   imm_next;        /* the slot the next immediate row of that run takes */
+    /* The `dyn_id` of the row whose HTML §13.2.7 step 5.1 spin of the event loop has run, so the row's own
+       continuation is not spun again; 0 names no row. A fork carries it; a replay re-derives it. */
+    uint64_t spin_row;
     /* This flow's own program rows (a lazily loaded chunk, a queued document script), or, while the row's kind
        is DYN_SCRIPT_SRC, the address of a script whose source has not arrived: one column, because it is one
        queue. The row is this flow's; the bytes are not. Source text is fixed once decoded, so every timeline
@@ -411,8 +414,9 @@ typedef struct Flow {
        pending register names rows by (PEND_SCRIPT_ROW).
        Two writers: engine_queue_into mints it equal to `dyn_id`, and the two lines that take a row out of
        DYN_SCRIPT_SRC (flow_deliver_one_reply's program arm and its null arm, §4.12.1.1 step 4's `error`)
-       re-mint it. It is written once per readiness and never moved, so the set of items outranking a job is
-       fixed at the job's birth: an order, not a bound. Zero is no stamp (flow.c's g_work_seq starts at 1), which
+       re-mint it, and so does §13.2.7 step 5.1's spin (flow_step, once per row, `spin_row`), whose
+       continuation is a new task. It is written once per readiness and never moved, so the set of items
+       outranking a job is fixed at the job's birth: an order, not a bound. Zero is no stamp (flow.c's g_work_seq starts at 1), which
        lets the ladder DCHECK a live row's stamp. Not parked, for `dyn_id`'s reason. */
     uint64_t *dyn_run;
     /* The rendezvous token of the peer parked on the row, for the one kind of row that owes an answer: a

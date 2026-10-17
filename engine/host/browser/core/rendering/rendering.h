@@ -59,7 +59,9 @@ void rendering_free(JSRuntime *rt);
    expires before the next frame: the clock is one clock, and a rendering opportunity that stepped over a due
    timer would run the page's frame before the work the page scheduled ahead of it.
    Returns 1 when a rendering task was queued (the driver has work again), 0 when no navigable might have a
-   rendering opportunity or a timer is due first. */
-int rendering_run_opportunity(JSContext *ctx);
+   rendering opportunity or a timer is due first.
+   `due_only` is the ask from a spin of the event loop whose continuation is already runnable: the frame is
+   taken only if its moment is not after the current one, and the clock never moves to reach it. */
+int rendering_run_opportunity(JSContext *ctx, bool due_only);
 
 #endif

@@ -1194,7 +1194,7 @@ static bool rendering_any_opportunity(JSContext *ctx)
     return n > 0;
 }
 
-int rendering_run_opportunity(JSContext *ctx)
+int rendering_run_opportunity(JSContext *ctx, bool due_only)
 {
     JSValue now, last, ms, next;
     JSContext *topctx;
@@ -1225,6 +1225,14 @@ int rendering_run_opportunity(JSContext *ctx)
     if (event_loop_before(ctx, next, now)) {
         JS_FreeValue(ctx, next);
         next = JS_DupValue(ctx, now);
+    }
+    /* A SPIN'S ASK: the continuation it waits for is runnable now, so a frame whose moment is still ahead
+       arrives after it and is not this boundary's. Where the clamp fired, `next` is `now` and this costs no
+       predicate. */
+    if (due_only && event_loop_before(ctx, now, next)) {
+        JS_FreeValue(ctx, next);
+        JS_FreeValue(ctx, now);
+        return 0;
     }
     /* ONE CLOCK, TWO SOURCES. §8.1.7.3 step 2.1 gives the scheduler exactly one freedom — which task queue to
        take a task from — and it is not a freedom to run a task before the moment it becomes due. A timer that

@@ -75,6 +75,8 @@
     X(RESUME_PARKED,      "resume-parked-continuation")                           \
     X(LINK_CONNECTED,     "link-connected-time")                                  \
     X(PARSE_END,          "the-end-readiness-interactive")                        \
+    X(PARSE_SPIN,         "the-end-spin-before-a-deferred-script")                \
+    X(PARSE_SPIN_RENDERING, "the-end-spin-queued-a-rendering-opportunity")        \
     X(ROUTED_DELIVERY,    "routed-delivery")                                      \
     X(ROUTED_NOT_MINE,    "routed-delivery-not-this-timeline")                    \
     /* AND THE OTHER REFUSAL, WHICH IS A DIFFERENT FACT AND NOT A SHADE OF   */ \

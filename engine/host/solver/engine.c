@@ -757,8 +757,8 @@ void engine_set_timer_hook(int (*fn)(JSContext *ctx))
    task on the rendering task source when a navigable has a rendering opportunity. Registered by the rendering
    component, like the timer step. It is asked immediately before the timer step and yields to a timer that
    expires first, so the one virtual clock runs its two sources in the order their moments fall. */
-static int (*g_rendering_hook)(JSContext *ctx);
-void engine_set_rendering_hook(int (*fn)(JSContext *ctx))
+static int (*g_rendering_hook)(JSContext *ctx, bool due_only);
+void engine_set_rendering_hook(int (*fn)(JSContext *ctx, bool due_only))
 {
     DCHECK(fn == NULL || g_rendering_hook == NULL,
            "a second component claimed §8.1.7.3's in-parallel half — there is one rendering task source per event "
@@ -794,7 +794,7 @@ static long g_clock_render_asks, g_clock_timer_asks, g_clock_idle_asks;
    counting them separately is what lets the identity pin the chain's order. */
 static int engine_clock_render_asked(JSContext *ctx) {
     g_clock_render_asks++;
-    return g_rendering_hook != NULL && g_rendering_hook(ctx);
+    return g_rendering_hook != NULL && g_rendering_hook(ctx, false);
 }
 static int engine_clock_timer_asked(JSContext *ctx) {
     g_clock_timer_asks++;
@@ -4764,6 +4764,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        and so their interpositions; without this pair it would compute its next immediate slot as if none had
        happened. A pair, because `imm_next` means nothing without the cursor it was computed against. */
     sib->imm_at = parent->imm_at; sib->imm_next = parent->imm_next;
+    sib->spin_row = parent->spin_row;
     sib->delta = cow_delta_fork(ctx, (CowDelta *)parent->delta);   /* O(1) shared base segment, then diverges */
     /* Generator-state swaps built by clone_deep_flow for this fork, recorded on the sibling's delta so the shared
        generator object resolves to the sibling's own cloned execution state while it runs. */
@@ -6439,23 +6440,28 @@ int engine_document_dcl_scripts_held(uint32_t doc)
     return 0;
 }
 
-/* See engine.h. Rows at or past the cursor are running or unstarted. A row's element is the parser's unless
-   §4.12.1.1 recorded it as not parser-inserted: an inventory element answers unstated, because the parse never
-   ran preparation over it (html_script.h's html_script_parser_inserted residual). */
+/* §13.2.7's run rank of row k's element (core/loader/script_type.h's script_sched_run_rank), or -1 for a row no
+   element the parser placed. A row's element is the parser's unless §4.12.1.1 recorded it as not
+   parser-inserted: an inventory element answers unstated, because the parse never ran preparation over it
+   (html_script.h's html_script_parser_inserted residual). Rows at or past the cursor are running or unstarted. */
+static int flow_row_parse_rank(const Flow *f, int k)
+{
+    lxb_dom_element_t *el = f->dyn_el[k];
+
+    if (el == NULL || html_script_parser_metadata(el) == HTML_SCRIPT_PARSER_METADATA_NOT_PARSER_INSERTED)
+        return -1;
+    return script_sched_run_rank(script_block_schedule(el, (ScriptType)f->dyn_type[k], /*parser_inserted*/true,
+                                                       /*force_async*/false));
+}
+
 lxb_dom_element_t *engine_document_parse_position(uint32_t doc)
 {
     const Flow *f = flow_running();
 
     DCHECK(f != NULL, "a document's parse position was asked with no running flow to hold its rows");
-    for (int k = f->script_i; k < f->dyn_n; k++) {
-        lxb_dom_element_t *el = f->dyn_el[k];
-
-        if (f->dyn_doc[k] != doc || el == NULL) continue;
-        if (html_script_parser_metadata(el) == HTML_SCRIPT_PARSER_METADATA_NOT_PARSER_INSERTED) continue;
-        if (script_sched_run_rank(script_block_schedule(el, (ScriptType)f->dyn_type[k], /*parser_inserted*/true,
-                                                        /*force_async*/false)) == 0)
-            return el;
-    }
+    for (int k = f->script_i; k < f->dyn_n; k++)
+        if (f->dyn_doc[k] == doc && flow_row_parse_rank(f, k) == 0)
+            return f->dyn_el[k];
     return NULL;
 }
 
@@ -8255,6 +8261,24 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    so control reaches that one compile. The one statement is a report (`g_task_held_seq`): the arrival
                    comparison answered no, so a task on the queue here is one the sequence went in front of. */
                 if (jobs_here > 0) g_task_held_seq++;
+                /* HTML §13.2.7 "The end" step 5.1, "Spin the event loop until the first script in the list of
+                   scripts that will execute when the document has finished parsing has its ready to be
+                   parser-executed set to true …", once per such row. §8.1.7.3's spin stops the parser's task and
+                   queues a new one to continue, so the row's arrival is re-minted, and a rendering task whose frame
+                   is already due on the clock arrived first: it is queued ahead of the re-mint, and the arrival
+                   comparison runs it before the row. A frame still ahead belongs after the continuation.
+                   Named residual. Not covered: a timer already due at the spin, and §13.2.6.4.8's spin for a
+                   parser-blocking script that is ready. Next diff builds: the timer source asked at the spin
+                   through the same due-only rule. How its absence would show: a `setTimeout(f, 0)` from a
+                   parser-inserted script running after a deferred script. */
+                if (f->spin_row != f->dyn_id[f->script_i] && flow_row_parse_rank(f, f->script_i) == 1) {
+                    int queued = g_rendering_hook != NULL && g_rendering_hook(ctx, true);
+
+                    f->spin_row = f->dyn_id[f->script_i];
+                    f->dyn_run[f->script_i] = flow_work_seq_next();
+                    g_step_unit = queued ? STEP_UNIT_PARSE_SPIN_RENDERING : STEP_UNIT_PARSE_SPIN;
+                    return 0;
+                }
             }
             else if (jobs_here > 0) {
                 /* What is left on the queue is a task (HTML §8.1.7.3 Processing model step 2, whose 2.3 takes "the

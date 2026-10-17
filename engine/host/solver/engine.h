@@ -160,7 +160,7 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
 void engine_set_timer_hook(int (*fn)(JSContext *ctx));
 /* HTML §8.1.7.3's in-parallel half, the rendering task source (rendering.h). Asked immediately before the timer
    step: both are due on the one virtual clock, and this one defers to a timer that expires first. */
-void engine_set_rendering_hook(int (*fn)(JSContext *ctx));
+void engine_set_rendering_hook(int (*fn)(JSContext *ctx, bool due_only));
 /* The event loop's idle rung: Cooperative Scheduling of Background Tasks §5.1 Start an idle period algorithm
    and §5.2 Invoke idle callbacks algorithm (core/scheduling/idle_callback.h). Asked below rendering and timers,
    because §5.1's note runs it when the event loop is "otherwise idle". Answers 1 when it started a period or

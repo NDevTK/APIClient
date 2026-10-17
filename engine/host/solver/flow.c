@@ -1956,6 +1956,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     /* Nothing interposed yet; flow.h says why the pair is what says so and why -1 is a cursor no program can stand
        at. */
     f->imm_at = -1; f->imm_next = 0;
+    f->spin_row = 0;
     f->world = w;
     /* The slot and the member are written as one statement, because they are one fact (flow.h's `reg_i`) and this
        is the one line the frontier gains a member on. Assigned here and not at the calloc: `reclaim_calloc` can
