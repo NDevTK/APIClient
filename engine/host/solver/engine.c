@@ -11713,21 +11713,19 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                        "flow that issued this fetch keeps its snapshot and its continuation and is never handed "
                        "the body, so everything the page does behind that reply is missing from the run");
             }
-            /* Nobody can supply it, so this driver stops driving, which is not the session ending (the close is
-               below): the remaining frontier is real, every flow parked on a reply that never came, and goes to the
-               teardown as snapshots. A stall the payment could not move, with nothing filled, is a frontier waiting
-               on something outside this host's tables; in the smoke driver, the referenced-document case, which no
-               reply can answer. */
-            if (r == ENGINE_STEP_STALLED && filled == 0)
-                break;
+            /* A stall the payment could not move, with nothing filled, is a frontier waiting on something outside
+               this host's tables: a document another agent holds a reference into, which no reply answers. Its
+               members are real work, so this driver parks them (engine.h's park hook: there is no "stop driving"
+               exit) and the next step answers DONE through the park. */
+            if (r == ENGINE_STEP_STALLED && filled == 0) {
+                engine_request_park();
+                continue;
+            }
         }
         engine_census_emit();
     }
-    /* The session is closed on every exit, not only on the one that drained: engine_sched_step closes it when it
-       answers DONE, and the other way out (a stall nobody can supply) would leave the hooks installed over a
-       frontier about to be torn down, with a flow switched in. engine_sched_end answers "did this exit already
-       close the session?" once, so a host's rule is to call it when it stops stepping. */
-    engine_sched_end();
+    /* The loop leaves only on DONE, and both DONE exits (a drained frontier, a park) close the session. */
+    DCHECK(!g_sess_live, "the one-call driver stopped stepping over a live session");
 }
 
 /* Explore: seed the boot flow or a parked residue, then drain the frontier, forking at every concolic branch. */

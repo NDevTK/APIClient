@@ -1699,9 +1699,7 @@ void flow_release(JSContext *ctx, Flow *f) {
        not written out may hold none of them, and they are one assert, not one assert plus silent frees. It asks the
        flow, not the engine: `engine_frontier_paged` answers for the whole session, and a partial self-park writes a
        tail while flows above it run on unwritten, so only the per-flow answer is exact.
-       The smoke host's give-up path fires this: a provider that answers nothing ends run_scheduler, main.c tears the
-       instance down, and flow_registry_free releases survivors suspended mid-frame with replies outstanding. The
-       abort names the flows a run threw away at the moment it threw them. */
+       A driver that stops stepping without the park fires this, naming the flows it threw away. */
     DCHECK(f->paged || f->retired || (f->parked == NULL && f->frame == NULL && flow_job_pending(f) == 0 &&
                         pending_count(f->pending) == 0 && flow_deliver_pending(f) == 0),
            "a flow was released holding work (a parked continuation, a suspended frame, queued reactions, replies "
