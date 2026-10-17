@@ -5,8 +5,9 @@
 #include "quickjs.h"
 
 /* Install as JSConcolicHooks.absent. `obj` is the base the read missed on — the global object, or a published
-   record (the engine has already established it is one of the two). */
-JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name);
+   record (the engine has already established it is one of the two). `answer` is what the standard answers
+   there, which the minted unknown records as this session's own reading. */
+JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name, JSConcolicAbsentAnswer answer);
 
 /* Install as JSConcolicHooks.absent_unresolved — THE SAME QUESTION REACHED BY AN OPERATION THAT PERFORMS NO
    [[Get]], of which `op` says which. `typeof X` on a name nothing binds is answered at the

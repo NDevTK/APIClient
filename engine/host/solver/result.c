@@ -1039,6 +1039,7 @@ char *result_cold_json(void) {
     /* The refinement pair, in one call (decide.h): decide_arm's third arm, beside `replayHits` and `_forkAt`. */
     long rf_asked, rf_refined;
     long fk_total, fk_pinned;
+    long fo_total, fo_observed, fo_unobserved, fo_mechanism;
     long orph_pref;
     long orph_scripts;
     /* The clock licence's pair — see core/timing/event_loop.h. Both or neither at the accessor. */
@@ -1207,6 +1208,11 @@ char *result_cold_json(void) {
     /* The fork pair's containment, at the one moment both are in one hand (solver/decide.h); decide.c raises
        them at two lines. `fk_total` is read only for this assert. */
     decide_fork_pinned_stats(&fk_total, &fk_pinned);
+    /* …and which arms those forks minted that no observation of this session picked (solver/decide.h). */
+    decide_fork_observation_stats(&fo_total, &fo_observed, &fo_unobserved, &fo_mechanism);
+    DCHECK(fo_total == fk_total,
+           "the two fork censuses read in one moment disagree about how many forks there were — both are "
+           "decide.c's `g_fork_total`, so the observation split is about a different set of forks");
     /* The orphan walk's order witnesses, read here because their denominator `_orphansDriven` is in hand only
        here. `JS_OrphanTakeOne` prefers a body whose source resolved a network door's entry name against the
        global object and falls through otherwise, so a run with no such body is byte-identical to no order.
@@ -1399,6 +1405,9 @@ char *result_cold_json(void) {
     METRIC_SET(branch_asked, rf_asked);
     METRIC_SET(branch_refined, rf_refined);
     METRIC_SET(fork_over_pinned, fk_pinned);
+    METRIC_SET(fork_observed, fo_observed);
+    METRIC_SET(fork_unobserved, fo_unobserved);
+    METRIC_SET(fork_mechanism, fo_mechanism);
     METRIC_SET(orphan_preferred, orph_pref);
     METRIC_SET(orphan_scripts, orph_scripts);
     METRIC_SET(orphan_claims, resumed.orphans);

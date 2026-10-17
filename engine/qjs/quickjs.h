@@ -2574,11 +2574,23 @@ typedef enum JSConcolicAbsentOp {
     JS_CONCOLIC_ABSENT_HAS_CALL,
 } JSConcolicAbsentOp;
 
+/* WHAT THE STANDARD ANSWERS AT A MISS THE ABSENT HOOK IS ASKED ABOUT, stated by the call site because only it
+   knows which algorithm it is running. The host mints an unknown either way; this says what this session's
+   own run reads there, which decides which arm of a later branch the session takes. */
+typedef enum JSConcolicAbsentAnswer {
+    /* §10.1.8.1 OrdinaryGet ( obj, propertyKey, receiver ) step 2.b: a property read that misses the chain
+       answers undefined. */
+    JS_CONCOLIC_ABSENT_ANSWERS_UNDEFINED,
+    /* An identifier no binding resolves: §6.2.5.5 GetValue ( refRecord ) step 2 throws a ReferenceError, so the
+       session stops at this read. */
+    JS_CONCOLIC_ABSENT_ANSWERS_THROW,
+} JSConcolicAbsentAnswer;
+
 typedef struct JSConcolicHooks {
     int (*add)(JSContext *ctx, JSValue *sp, JSConcolicAddOp op);
     int (*cmp)(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op);
     int (*is)(JSValueConst v);
-    JSValue (*absent)(JSContext *ctx, JSValueConst obj, JSAtom name);
+    JSValue (*absent)(JSContext *ctx, JSValueConst obj, JSAtom name, JSConcolicAbsentAnswer answer);
     /* THE SAME MISS ON THE GLOBAL, REACHED BY AN OPERATION THAT PERFORMS NO [[Get]] AT ALL. RECORDING ONLY,
        AND THE VOID RETURN IS THE CONTRACT rather than a convenience — for EVERY member of JSConcolicAbsentOp,
        and for one reason in three spellings: no member's algorithm contains a read, so a value handed back

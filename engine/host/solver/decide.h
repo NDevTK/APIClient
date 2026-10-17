@@ -387,6 +387,14 @@ void decide_replay_stats(long *hits, long *left, long *left_arms);
  * is not in this number. It is a POPULATION SIZE for the refusal, which is what it was landed to be. */
 void decide_fork_pinned_stats(long *total, long *over_pinned);
 
+/* WHICH ARMS A FORK MINTED THAT THIS SESSION'S OWN OBSERVATION DID NOT PICK. Lifetime counts over the session,
+ * in forks: `observed` branch forks had one arm the session's observation took (the other is marked forced),
+ * `unobserved` branch forks had none (both arms chosen, neither marked), and `mechanism` forks are the
+ * predicate-free ones (a peer's answer, a declined request, an orphan drive, a close request), whose arm each
+ * mechanism marks itself. `observed + unobserved + mechanism == total`, asserted here, in one call so the
+ * identity holds of one moment. */
+void decide_fork_observation_stats(long *total, long *observed, long *unobserved, long *mechanism);
+
 /* WHAT A NAME BOUGHT — the ASK and the OUTCOME of decide_arm's FIRST arm, which is the one of its three that
  * had no row at all.
  *

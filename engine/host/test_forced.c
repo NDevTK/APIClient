@@ -1043,6 +1043,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
 #include "fixture/declines.h"
+#include "fixture/absentarm.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1469,6 +1470,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
     { "declines", HTML_DECLINES },
+    { "absentarm", HTML_ABSENTARM },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -5675,6 +5677,10 @@ static TfErrEdges g_tf_err_edges[] = {
        message. The OUTER TypeError is cancelled by that listener's `ev.preventDefault()` and so does not
        stand, which is why this pair expects exactly one announcement and not two. */
     { "reentrant",    0, 0, 0 },
+    /* HTML_ABSENTARM's two throws, one per arm of a branch over a global this session does not have; the
+       `absent-arm` row asserts both stood and which of them is filed as this engine's exploration. */
+    { "absBOOMARM",   0, 0, 0 },
+    { "absBOOMOBS",   0, 0, 0 },
 };
 /* THIS DOCUMENT'S OWN ADDRESS, TAKEN FROM THE ONE CALL THAT ESTABLISHES IT rather than spelled a sixth time.
    `https://x.test/p` is already a literal at several sites and one of their comments complains about it, so a
@@ -13218,6 +13224,44 @@ TF_UNIT void probes_declines(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `absentarm` document. */
+TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
+    /* The branch over `window.__tfAbsentGate`: this session reads undefined there, so the falsy arm is the one
+       it takes and the truthy arm is the engine's choice. The chosen arm's request is graded forced and its
+       throw is this engine's exploration; the observed arm's request is derived and its throw is the page's
+       own. The invented message is the control that the explored array is not every message. */
+    const TfErrEdges *e_arm = tf_err_edges("absBOOMARM");
+    const TfErrEdges *e_obs = tf_err_edges("absBOOMOBS");
+    const char *absarm_why = NULL; int absarm_tt = 1;
+
+    fold_row(&absarm_tt, &absarm_why, !!strstr(js, "\"/api/abschosen\"") && !!strstr(js, "\"/api/absobserved\""),
+             "NOT REACHED: no /api/abschosen or no /api/absobserved record, so the branch over the absent global "
+             "did not run both arms");
+    fold_row(&absarm_tt, &absarm_why, e_arm && e_arm->stands > 0 && e_obs && e_obs->stands > 0,
+             "the stream did not announce both `absBOOMARM` and `absBOOMOBS`, so an arm's uncaught throw was not "
+             "reported");
+    fold_row(&absarm_tt, &absarm_why, emitted_record_graded_has(js, "/api/abschosen", "forced", "\"door\":\"fetch\""),
+             "the chosen arm's /api/abschosen is not graded forced — the absent mint's observation (undefined) "
+             "did not reach decide_real_arm, so the arm the session does not take was left unmarked");
+    fold_row(&absarm_tt, &absarm_why,
+             emitted_record_graded_has(js, "/api/absobserved", "derived", "\"door\":\"fetch\""),
+             "the observed arm's /api/absobserved is not graded derived — the arm this session takes was marked "
+             "forced, so the observation picked the wrong arm");
+    fold_row(&absarm_tt, &absarm_why, tf_err_listed(js, "pageErrorsExplored", "absBOOMARM"),
+             "the chosen arm's throw is not in `pageErrorsExplored` — it is raised only on the arm decide.c marks "
+             "forced, so result_page_error did not read that arm's provenance");
+    fold_row(&absarm_tt, &absarm_why,
+             tf_err_listed(js, "pageErrors", "absBOOMOBS") && !tf_err_listed(js, "pageErrorsExplored", "absBOOMOBS"),
+             "the observed arm's throw is not the page's own — it is raised on the arm this session takes, so it "
+             "must stand in `pageErrors` and stay out of `pageErrorsExplored`");
+    fold_row(&absarm_tt, &absarm_why, !tf_err_listed(js, "pageErrorsExplored", "absINVENTED"),
+             "`pageErrorsExplored` names a message no program of this document raises");
+    const Probe rows[] = {
+        { "absent-arm", absarm_tt, "__tfAbsentGate", SESS_EXPLORE, absarm_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `windowclose` document. */
 TF_UNIT void probes_windowclose(const char *js, Probe *tab, int *n) {
     const char *winclose_why = NULL;
@@ -16540,6 +16584,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fragbase(js, probes, &np);
     probes_fragdialog(js, probes, &np);
     probes_declines(js, probes, &np);
+    probes_absentarm(js, probes, &np);
     probes_windowclose(js, probes, &np);
     probes_windowopenerclose(js, probes, &np);
     probes_timers(js, probes, &np);

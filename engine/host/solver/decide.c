@@ -121,6 +121,14 @@ static long g_fork_total;
    released in decide_free, reported beside `g_fork_total` in one call so `over_pinned <= total` holds of one
    moment. */
 static long g_fork_over_pinned;   /* EVENTS: forks whose subject this flow had already pinned             */
+/* The branch forks (dec_fork_here, the one site a predicate or an unnamed site forks at), split by whether this
+   session's own observation picked one of the two arms. An observed fork's other arm is chosen and marked forced
+   (decide_note_forced_arm); an unobserved fork's two arms are both chosen and neither is marked, which is the
+   population a page error on such an arm is still filed as the page's from. The rest of `g_fork_total` is the
+   mechanism forks (decide_fork_same_path), whose arm each mechanism states itself. Lifetime counts, released in
+   decide_free. */
+static long g_fork_observed;      /* EVENTS: branch forks one of whose arms the session's observation took */
+static long g_fork_unobserved;    /* EVENTS: branch forks no observation of this session decided          */
 static long g_replay_hits;        /* ARMS consumed on a matching question (dec_replay)                  */
 static long g_replay_left;        /* EVENTS: divergences (dec_leave_path)                               */
 static long g_replay_left_arms;   /* ARMS abandoned by those divergences, summed                        */
@@ -421,6 +429,7 @@ void decide_free(void) {
     for (i = 0; i < g_fork_mech_n; i++) free(g_fork_mech[i].key);
     free(g_fork_mech); g_fork_mech = NULL; g_fork_mech_n = g_fork_mech_cap = 0;
     g_fork_total = 0;
+    g_fork_observed = g_fork_unobserved = 0;
     /* The ledger goes with the session: it is read beside `resumed`, which describes this session's rebuild. */
     g_replay_hits = g_replay_left = g_replay_left_arms = 0;
     g_fork_over_pinned = 0;
@@ -820,6 +829,24 @@ long decide_fork_total(void) { return g_fork_total; }
 
 /* See decide.h. The total is reported with the pinned count in one call, so `over_pinned <= total` holds of one
    moment rather than of two getters read around a fork. */
+void decide_fork_observation_stats(long *total, long *observed, long *unobserved, long *mechanism) {
+    long mech = 0;
+    int i;
+
+    DCHECK(total && observed && unobserved && mechanism, "the fork observation census was asked to fill nothing");
+    for (i = 0; i < g_fork_mech_n; i++) mech += g_fork_mech[i].n;
+    /* The partition: every fork is filed at dec_fork_here (counted above by its observation) or at
+       decide_fork_same_path (a mechanism row), and at no third site. */
+    DCHECK(g_fork_observed + g_fork_unobserved + mech == g_fork_total,
+           "the fork census's three populations do not sum to its total — a fork was counted into the total "
+           "at a site that is neither dec_fork_here nor decide_fork_same_path, so the observation split "
+           "states a denominator it does not cover");
+    *total = g_fork_total;
+    *observed = g_fork_observed;
+    *unobserved = g_fork_unobserved;
+    *mechanism = mech;
+}
+
 void decide_fork_pinned_stats(long *total, long *over_pinned) {
     if (total) *total = g_fork_total;
     if (over_pinned) *over_pinned = g_fork_over_pinned;
@@ -1286,6 +1313,8 @@ static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, 
        arms answer, so the sibling and every later flow that re-asks it replays that slot. An unspellable branch
        records nothing (a slot would be a hole agreeing with every other) and hands its sibling the arm as a
        one-shot. */
+    if (real_arm == REAL_ARM_UNOBSERVED) g_fork_unobserved++;
+    else                                 g_fork_observed++;
     if (key) {
         dblob = decide_fork_blob(g_c, !take, asked);
         fork_key_count(key, FORK_ROW_PREDICATE);
@@ -1417,8 +1446,10 @@ static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, int
  * them, which `concolic_cmp_hook` computes by running §7.2.13 or §7.2.14 on the examples), §7.1.2 ToBoolean of
  * that computed value answers the question. Nothing is solved or re-decided from a stored expression.
  *
- * A branch with no example answers -1: external input and absent server-injected state are example-free by design,
- * so neither arm of `if (__FLAGS.admin)` contradicts an observation and neither may be marked forced.
+ * A branch with no example asks what this session's own run read (concolic_observed_truth): absent server state
+ * is example-free by design, and its read still answers undefined in this session, so the arm of
+ * `if (window.__FLAGS)` the session does not take is chosen and is marked forced. With neither, it answers -1:
+ * no observation picked an arm, and neither is marked.
  * `JS_ToBool` runs no page code (§7.1.2 has no ToPrimitive step), so it can be asked inside a branch hook. */
 static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
     ConcolicExState st;
@@ -1430,7 +1461,10 @@ static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
        `undefined`) are bytes, and a falsy one makes the false arm primary. NONE (no bytes) and CONTRADICTED
        (bytes this path disproved) answer unobserved, the sound direction. */
     st = concolic_example_state(cond);
-    if (st != CONCOLIC_EX_HELD && st != CONCOLIC_EX_DETERMINED) return REAL_ARM_UNOBSERVED;
+    if (st != CONCOLIC_EX_HELD && st != CONCOLIC_EX_DETERMINED) {
+        int seen = concolic_observed_truth(cond);
+        return seen >= 0 ? seen : REAL_ARM_UNOBSERVED;
+    }
     ex = concolic_example(ctx, cond);
     real = JS_ToBool(ctx, ex);
     JS_FreeValue(ctx, ex);

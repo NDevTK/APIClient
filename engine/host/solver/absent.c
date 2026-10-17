@@ -1490,7 +1490,7 @@ void absent_unresolved_note(JSContext *ctx, JSAtom name, JSConcolicAbsentOp op)
     JS_FreeCString(ctx, s);
 }
 
-JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
+JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name, JSConcolicAbsentAnswer answer)
 {
     JSValue g = JS_GetGlobalObject(ctx);
     int is_global = (JS_VALUE_GET_PTR(obj) == JS_VALUE_GET_PTR(g));
@@ -1535,6 +1535,16 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
        this run received can state it, which is the population the bar exists for. The example-free mint one
        line up is the same fact read from the other end: nothing here knows what a logged-in visitor holds. */
     r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
+    /* What this session itself reads here, which is not an example: a property read that misses answers
+       undefined (§10.1.8.1 OrdinaryGet step 2.b), so a branch over the unknown has one arm the session takes
+       and one this engine chose, and decide.c marks the chosen one forced. A pin answers bytes, not a record,
+       and observes nothing.
+       Named residual. Not covered: JS_CONCOLIC_ABSENT_ANSWERS_THROW, an identifier no binding resolves, where
+       the session stops at §6.2.5.5 GetValue step 2's ReferenceError and every arm after the read is chosen.
+       Next diff builds: the flow continuing past that read marked as standing on a world the engine chose, at
+       the read itself. Absence shows as: a page error after a bare `__STATE__.x` read filed as the page's own. */
+    if (answer == JS_CONCOLIC_ABSENT_ANSWERS_UNDEFINED && concolic_is(r))
+        concolic_observe_undefined(r);
 done:
     free(shape);
     free(src);

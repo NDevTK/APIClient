@@ -243,6 +243,19 @@ typedef enum {
     CONCOLIC_EX_CONTRADICTED    /* an example THIS path's own arm proved wrong */
 } ConcolicExState;
 ConcolicExState concolic_example_state(JSValueConst v);
+/* What this session's own run reads here, as §7.1.2 ToBoolean ( arg ) of it: 0 or 1, or -1 where the record
+   carries no such observation. It is not an example: an example is bytes a request may carry, and this says
+   only which arm this session's own branch over the value takes, so decide.c can tell the arm it observed
+   from the arm it chose. Written at the absent mint (concolic_observe_undefined) and carried by the ToBoolean
+   derivation, which runs §7.1.2 on it.
+   Named residual. Not covered: every other derivation (a comparison, a member read, a concatenation), so
+   `window.__X === "a"` and `cfg.admin` over an absent mint read -1. Next diff builds: the observation run
+   through the same operation each derivation already runs on the example. Absence shows as: `forkUnobserved`
+   above zero on a document whose every unknown is an absent property read. */
+int  concolic_observed_truth(JSValueConst v);
+/* Records on a freshly minted source that this session's own run reads it as undefined. Asserts `v` is a
+   concolic that carries no example and no observation yet. */
+void concolic_observe_undefined(JSValueConst v);
 void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example);   /* attach/replace (consumes example) */
 
 /* WHAT THIS FLOW HAS *PROVED* THIS VALUE IS — CONCRETIZE-ON-PIN, asked of a VALUE and answered in BYTES.

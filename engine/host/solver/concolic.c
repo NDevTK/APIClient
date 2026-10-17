@@ -167,6 +167,11 @@ typedef struct {
        other bytes are the page's own; NULL on every other value, whose whole shape spells one unknown. Owned. */
     int *hole_span;
     int  hole_n;
+    /* What this session's own run reads here, as ToBoolean (concolic.h's concolic_observed_truth): `obs_has`
+       says there is an observation, `obs_truth` is it. Zero from the mint, so a record nobody observed has
+       none. */
+    signed char obs_has;
+    signed char obs_truth;
 } Concolic;
 
 /* One disposer for an owned list of spelled strings, shared by every record that holds one (a call predicate's
@@ -4061,6 +4066,11 @@ JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
     free(shape);
     rc = JS_GetOpaque(r, g_concolic_class);
     DCHECK(rc != NULL, "a ToBoolean result was minted as something that is not a concolic value");
+    /* The session's own reading, through the same §7.1.2 the example went through above. */
+    if (concolic_observed_truth(v) >= 0) {
+        rc->obs_has = 1;
+        rc->obs_truth = (signed char)(concolic_observed_truth(v) ^ negate);
+    }
     /* The branch key and its polarity, written together: the operand's own branch key, so a chain of negations
        keys the innermost predicate. An operand this engine cannot spell leaves both absent, and every branch
        over the result keeps both arms. */
@@ -5306,6 +5316,29 @@ static ConcolicExState example_state_of(const Concolic *c, const Cons **ppin)
         if (e && e->ex_contra) return CONCOLIC_EX_CONTRADICTED;
     }
     return CONCOLIC_EX_HELD;
+}
+
+int concolic_observed_truth(JSValueConst v) {
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+
+    if (!c || !c->obs_has) return -1;
+    DCHECK(c->obs_truth == 0 || c->obs_truth == 1,
+           "a value carries an observation that is neither true nor false — it is §7.1.2 ToBoolean of what "
+           "the session read, written at two lines, so a third value is a write from somewhere else");
+    return c->obs_truth;
+}
+
+void concolic_observe_undefined(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+
+    DCHECK(c != NULL, "the session's own reading was recorded on a value that is not a concolic");
+    DCHECK(c != NULL && !c->ex_has && !c->obs_has,
+           "the session's own reading was recorded on a source that already carries an example or an "
+           "observation — the absent mint is example-free and records this once, so a second fact here is "
+           "two producers stating what one read answered");
+    if (!c) return;
+    c->obs_has = 1;
+    c->obs_truth = 0;   /* §7.1.2 ToBoolean step 2: undefined is false */
 }
 
 JSValue concolic_example(JSContext *ctx, JSValueConst v) {

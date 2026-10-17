@@ -129,6 +129,13 @@ METRIC(branch_refined, "branchRefined", LIFETIME, "decision", AGENT, "solver/dec
    denominator `forks` comes from the same call (solver/decide.h), so `forkOverPinned <= forks`
    holds within one moment. */
 METRIC(fork_over_pinned, "forkOverPinned", LIFETIME, "fork", AGENT, "solver/decide.c", INT)
+/* Every fork, by whether this session's own observation picked an arm (solver/decide.h's
+   decide_fork_observation_stats): `forkObserved` branch forks had one (the other arm is marked forced),
+   `forkUnobserved` had none (both arms chosen, neither marked forced), `forkMechanism` are the predicate-free
+   forks whose arm the mechanism marks. The three sum to `forks`, asserted where all four are in one hand. */
+METRIC(fork_observed, "forkObserved", LIFETIME, "fork", AGENT, "solver/decide.c", INT)
+METRIC(fork_unobserved, "forkUnobserved", LIFETIME, "fork", AGENT, "solver/decide.c", INT)
+METRIC(fork_mechanism, "forkMechanism", LIFETIME, "fork", AGENT, "solver/decide.c", INT)
 /* The orphan walk's preferred takes, over `_orphansDriven` on this document; the containment is
    asserted where both are in one hand. */
 METRIC(orphan_preferred, "orphanPreferred", LIFETIME, "drive", AGENT, "solver/engine.c", INT)

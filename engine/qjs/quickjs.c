@@ -14195,7 +14195,7 @@ static bool js_present_ask(JSContext *ctx, JSObject *holder, JSAtom prop, JSValu
    emits nothing.
    Returns the unknown, or JS_UNINITIALIZED for "this read is not on the channel" — never JS_UNDEFINED, which
    is a legitimate ANSWER a host may compose and would be indistinguishable from a refusal. */
-static JSValue js_absent_ask(JSContext *ctx, JSValueConst obj, JSAtom prop)
+static JSValue js_absent_ask(JSContext *ctx, JSValueConst obj, JSAtom prop, JSConcolicAbsentAnswer answer)
 {
     JSObject *base;
     bool ask;
@@ -14219,7 +14219,7 @@ static JSValue js_absent_ask(JSContext *ctx, JSValueConst obj, JSAtom prop)
     }
     if (!ask)
         return JS_UNINITIALIZED;
-    return g_concolic.absent(ctx, obj, prop);
+    return g_concolic.absent(ctx, obj, prop, answer);
 }
 
 /* THE SAME MISS, REACHED BY AN OPERATION THAT PERFORMS NO [[Get]] — and therefore a RECORDING and never an ask.
@@ -14767,7 +14767,7 @@ static JSValue JS_GetPropertyInternal(JSContext *ctx, JSValueConst obj,
     /* §10.1.8.1 OrdinaryGet ( O, P, Receiver ) step 2.b, and the two bases on which that `undefined` is a
        fabrication — js_absent_ask, which is the HIT arm's twin and shares its key rule. */
     {
-        JSValue a = js_absent_ask(ctx, obj, prop);
+        JSValue a = js_absent_ask(ctx, obj, prop, JS_CONCOLIC_ABSENT_ANSWERS_UNDEFINED);
         if (!JS_IsUninitialized(a))
             return a;
     }
@@ -50964,7 +50964,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            is on the channel by construction — which is exactly the kind of "true today" that
                            made the property-read arm the one with no key rule in it. There is one ask; a
                            second spelling of its conditions here is a second thing to keep in step. */
-                        JSValue cv = js_absent_ask(ctx, ctx->global_obj, atom);
+                        JSValue cv = js_absent_ask(ctx, ctx->global_obj, atom, JS_CONCOLIC_ABSENT_ANSWERS_THROW);
                         if (!JS_IsUninitialized(cv)) {
                             js_with_has_free(ctx, wh);
                             *sp++ = cv;
