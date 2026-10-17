@@ -3419,6 +3419,21 @@ int concolic_example_present(JSValueConst v) {
     return st == CONCOLIC_EX_HELD || st == CONCOLIC_EX_DETERMINED;
 }
 
+/* See concolic.h. The answer is a string or absent, so no caller can read a held `undefined` as absence. */
+JSValue concolic_example_string(JSContext *ctx, JSValueConst v) {
+    JSValue ex, s;
+
+    DCHECK(concolic_is(v), "an example's ToString was asked of a value that is not a concolic — a determined "
+                           "operand is converted by the caller's own ToString, which may run page code");
+    if (!concolic_example_present(v)) return JS_UNDEFINED;
+    ex = concolic_example(ctx, v);
+    if (!example_operable(ex)) { JS_FreeValue(ctx, ex); return JS_UNDEFINED; }
+    s = JS_ToString(ctx, ex);
+    JS_FreeValue(ctx, ex);
+    CHECK(!JS_IsException(s), "OOM converting a concolic's primitive example with §7.1.19 ToString");
+    return s;
+}
+
 /* The comparison's own example: the engine's real equality run over values the run already holds
  * (`JS_IsStrictEqual` is §7.2.14, `JS_IsEqual` is §7.2.13), never a re-implementation of either. The caller
  * states which algorithm through `op`, which matters because `"1" == 1` is true and `"1" === 1` is false.

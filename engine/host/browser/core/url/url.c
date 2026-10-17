@@ -1802,14 +1802,11 @@ static const char *url_operand_bytes(JSContext *ctx, JSValueConst v)
 {
     if (JS_IsUndefined(v)) return NULL;
     if (concolic_is(v)) {
-        JSValue ex = concolic_example(ctx, v);
+        /* The operand is a USVString, so its bytes are the example's ToString: a held `undefined` or number is
+           text to parse, and an example with no ToString this engine may run is no bytes. */
+        JSValue ex = concolic_example_string(ctx, v);
         const char *s;
 
-        /* An example is a PRIMITIVE and an address is text, so anything else is a producer that attached a
-           value it never computed — and the JS_ToCString below would be a coercion over it. */
-        DCHECK(JS_IsString(ex) || JS_IsUndefined(ex),
-               "a concolic address or base carries an example that is not a string — an example is what the "
-               "engine COMPUTED for this source, and no source in this engine mints a non-string address");
         if (!JS_IsString(ex)) { JS_FreeValue(ctx, ex); return NULL; }
         s = JS_ToCString(ctx, ex);
         JS_FreeValue(ctx, ex);
