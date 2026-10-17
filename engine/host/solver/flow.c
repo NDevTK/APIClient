@@ -3006,24 +3006,18 @@ static double flow_queue_nonreward(const Flow *f) {
     return -(double)flow_silence_notch(f) * FLOW_AGE_QUANTUM;
 }
 
-/* The optimism term, on its own, because it is a reading of the flow and not a place in the queue (the fitness
-   distance's side of the split). "a UCB optimism bonus proportional to 1/(visits+1) so a NEVER-RUN FLOW IS NEVER
-   STARVED": for a flow that has completed no unit it is 1.0, one emission's worth of promise, which
-   flow_nonreward's bound prices. A visit is a trial: a flow preempted mid-program has not completed one, and a
-   dispatch is the scheduler's decision, not a fact about the flow. A completed unit is the fact the reward
-   depends on: a program that ends has reached its fetches, owes its checkpoint and can run its reactions.
-   A newcomer cannot inherit it: an arrival stands on nobody's decisions (flow_add_unseeded), so it has finished
-   nothing, and the incumbent's count would be a stranger's fact, differing between two newcomers by units neither
-   completed. A fork carries it (flow_fork_inherit), because completed units are a fact about the executed prefix,
-   which an arm is: two arms forked either side of a completed unit differ by it, the reading decreases in that
-   count, and the older arm ranks higher, so the queue drains oldest-first. At the branch the arm ties with its
-   parent and flow_pick's strict comparison leaves the thread there; the parent finishes its unit, its count
-   advances, and every arm and never-run member then outranks it. So a flow monopolises one unit of work; a unit
-   that never ends is the aging's job. Its range is unchanged: flow_nonreward adds it back and FLOW_NONREWARD_MAX
-   prices it at zero visits.
-   A seeded drive adds `orphan_seen` to the denominator: the product's count of drives of the same body elsewhere
-   (flow.h). It lowers and never removes, so a drive of explored code still runs, and its untouched floor is
-   `1/(1 + orphan_seen)`, which the never-starved guards in flow_pick_walk read as the reference instead of 1.0. */
+/* The optimism term, a reading of the flow rather than a place in the queue: CLAUDE.md's UCB bonus, so a never-run
+   flow is never starved. It is 1/(1 + visits + orphan_seen): 1.0 for a flow that has completed no unit and was
+   seeded over unexplored code, one emission's worth of promise, which flow_nonreward's bound prices.
+   `visits` counts completed units, not dispatches: a program that ends has reached its fetches, owes its checkpoint
+   and can run its reactions. A newcomer cannot inherit it (flow_add_unseeded): it stands on nobody's decisions, so
+   two newcomers would differ by units neither completed. A fork carries it (flow_fork_inherit), because it is a
+   fact about the executed prefix: arms forked either side of a unit differ by it, the older ranks higher, and the
+   queue drains oldest-first. At the branch the arm ties with its parent and flow_pick's strict comparison keeps the
+   thread there until the parent's unit completes, so a flow monopolises one unit; a unit that never ends is the
+   aging's job. `orphan_seen` is the product's count of drives of the same body elsewhere (flow.h), set at the
+   seed: it lowers and never removes, so explored code still runs, and its floor 1/(1 + orphan_seen) is what the
+   never-starved guards in flow_pick_walk read. FLOW_NONREWARD_MAX prices the term at its maximum, 1.0. */
 static double flow_optimism(const Flow *f) {
     return 1.0 / (1.0 + (double)f->visits + (double)f->orphan_seen);
 }

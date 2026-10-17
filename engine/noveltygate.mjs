@@ -11,8 +11,7 @@
  *   C, D-alone  handed nothing: every drive reads a product count of 0.
  *   D-known     C's identities (positive control): the bundle's drives read C's count, rank below their own
  *               visits unlowered and below D's own code seeded at the same unit count; all still run.
- *   D-invented  invented drive lines (negative control): no drive is lowered.
- * Exit status is 0 only when every row holds; each row prints what it read.
+ *   D-invented  invented drive lines (negative control): no drive is lowered. Exit 0 only when every row holds.
  */
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
