@@ -25977,6 +25977,24 @@ enum { LEN_PH_START = 0, LEN_PH_GOT, LEN_PH_PRIM, LEN_PH_UNKNOWN };
  * suspends at every ask (the sibling's snapshot is taken there) and its C locals are gone when it resumes. The
  * unknown itself rides `coerce`, which the clone dups and the teardown frees, so a machine abandoned mid-chain
  * leaks nothing. */
+/* The completion position `h->len_probe`'s ask reaches on the unknown's example: §7.1.20 ToLength of a
+   primitive example, run here because a primitive's conversion runs no page code. Longer (1) below it, the
+   length (0) at it; past it, and for an absent or Object example, unstated. */
+static int step_length_unknown_real(JSContext *ctx, JSStepHdr *h)
+{
+    JSValue ex = g_concolic.example(ctx, h->coerce);
+    int64_t len;
+    int real = JS_OUTCOME_REAL_UNSTATED;
+
+    if (!JS_IsUndefined(ex) && !JS_IsObject(ex) && !JS_IsSymbol(ex) && !JS_IsBigInt(ex)) {
+        int ok = JS_ToLengthFree(ctx, &len, js_dup(ex));
+        DCHECK(ok == 0, "ToLength of a primitive example other than a Symbol or a BigInt threw");
+        real = h->len_probe < len ? 1 : h->len_probe == len ? 0 : JS_OUTCOME_REAL_UNSTATED;
+    }
+    JS_FreeValue(ctx, ex);
+    return real;
+}
+
 static int step_length_unknown(JSContext *ctx, JSStepHdr *h, int64_t *plen)
 {
     for (;;) {
@@ -25985,7 +26003,7 @@ static int step_length_unknown(JSContext *ctx, JSStepHdr *h, int64_t *plen)
                "the unknown-length chain resumed holding something that is not unknown input — the operand it "
                "forks over has to be the value the length read actually produced");
         snprintf(h->len_op, sizeof h->len_op, "LengthOfArrayLike>%d", h->len_probe);
-        r = step_fork_run(ctx, h, h->coerce, h->len_op, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
+        r = step_fork_run(ctx, h, h->coerce, h->len_op, 2, step_length_unknown_real(ctx, h), &arm);
         if (r)
             return r;                     /* JS_STEP_FORK: the driver snapshots the sibling and re-enters here */
         if (arm == 0) {                   /* the length is exactly this many */
@@ -95481,11 +95499,12 @@ typedef struct JSConcolicCall {
 STEP_STATE_HDR_FIRST(JSConcolicCall);
 
 /* Named residual. Not covered: an Object operand other than a builtin-protocol RegExp or a replace callback (a
-   method of an object example such as an array example's `map`, a `.call` reached as a value rather than at a
-   call operator, a replacer over a pattern with named groups); the result carries no example. Next diff: the
-   same stand-in for an array example's callback methods, handing each element as an unknown derived from the
-   array. How its absence shows: an address built inside `cfg.items.map(fn)` over a fetched record is emitted as
-   a shape where the same address built from `cfg.items[0]` carries bytes.
+   method of an object example other than an array callback method, a `.call` reached as a value rather than
+   at a call operator, a replacer over a pattern with named groups); the result carries no example. Next diff:
+   the same forwarding for Array.prototype's other methods over an unknown receiver (`slice`, `concat`,
+   `indexOf`), each once its step machine is shown to read the receiver only through [[Get]]. How its absence
+   shows: an address built from `cfg.items.slice(1)` over a fetched record is a shape where `cfg.items[1]`
+   carries bytes.
    Named residual. Not covered: a throw another value of the unknown would reach while its example's run
    completes normally (`x.toFixed(d)` with an unknown `d`). Next diff: the outcome asked on every run, with the
    normal completion stated real, once a builtin whose throw no operand can reach declares so at its definition.
@@ -95493,10 +95512,32 @@ STEP_STATE_HDR_FIRST(JSConcolicCall);
 #define CCALL_STAGES(X) \
     X(CCALL_ENTRY,   "7.3.13 Call over the examples (func's, thisValue's and each argument's)") \
     X(CCALL_RUN,     "7.3.13 step 3 (Return ? func.[[Call]](thisValue, argList)), run on the examples") \
-    X(CCALL_OUTCOME, "the call's completion over the unknown: normal, or the throw the examples' run reached")
+    X(CCALL_OUTCOME, "the call's completion over the unknown: normal, or the throw the examples' run reached") \
+    X(CCALL_FORWARD, "7.3.13 step 3, the builtin's own algorithm over the unknown receiver")
 enum { CCALL_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_concolic_call_steps[] = { CCALL_STAGES(JS_STEP_STAGE_LABEL) NULL };
 enum { CCALL_NORMAL, CCALL_THROW };   /* the outcome fork's completions; the normal one is numbered first */
+
+/* Whether `fex` is one of Array.prototype's callback methods, which the call forwards: §23.1.3's algorithms read
+   their receiver only through [[Get]] and LengthOfArrayLike, which over an unknown are the per-element member
+   reads (each an unknown derived from the receiver, carrying its example's element) and the per-position length
+   forks, so the builtin's own step machine runs the page's callback on every element a world has. */
+static bool js_concolic_call_forwards(JSValueConst fex)
+{
+    JSObject *fp = JS_VALUE_GET_OBJ(fex);
+
+    if (fp->u.cfunc.cproto != JS_CFUNC_step) return false;
+    switch (fp->u.cfunc.magic) {
+    case STEPDEF_ARRAY_EVERY: case STEPDEF_ARRAY_SOME: case STEPDEF_ARRAY_FOREACH: case STEPDEF_ARRAY_MAP:
+    case STEPDEF_ARRAY_FILTER: case STEPDEF_ARRAY_REDUCE: case STEPDEF_ARRAY_REDUCE_RIGHT:
+    case STEPDEF_ARRAY_FIND: case STEPDEF_ARRAY_FIND_INDEX: case STEPDEF_ARRAY_FIND_LAST:
+    case STEPDEF_ARRAY_FIND_LAST_INDEX: case STEPDEF_ARRAY_SORT: case STEPDEF_ARRAY_TOSORTED:
+    case STEPDEF_ARRAY_FLATMAP:
+        return true;
+    default:
+        return false;
+    }
+}
 
 /* Whether the RegExp protocol over `v` runs only this realm's builtins, so a String method handed it passes the
    receiver's example to no page code. Every member §22.2.6's methods and String.prototype's RegExp arms Get
@@ -95728,6 +95769,15 @@ static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JS
         s->ncb = n + 2;
         for (i = 0; i < n + 2; i++) s->cb[i] = JS_UNDEFINED;
         s->cb[1] = fex;
+        /* An array callback method over an unknown receiver is the builtin's own call, receiver and all. */
+        if (runs && g_concolic.is(s->hdr.this_val) && js_concolic_call_forwards(fex)) {
+            s->cb[0] = js_dup(s->hdr.this_val);
+            for (i = 0; i < n; i++) s->cb[2 + i] = js_dup(s->hdr.argv[i]);
+            s->hdr.stage = CCALL_FORWARD;
+            *out_cb = s->cb;
+            *out_argc = n;
+            return JS_STEP_CALL;
+        }
         for (i = -1; runs && i < n; i++) {
             JSValue ex = i == 1 ? js_concolic_call_replacer(ctx, s, fex, s->cb[2]) : JS_UNINITIALIZED;
             if (JS_IsException(ex)) return -1;
@@ -95745,6 +95795,12 @@ static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JS
         *out_cb = s->cb;
         *out_argc = n;
         return JS_STEP_CALL;
+    }
+    if (s->hdr.stage == CCALL_FORWARD) {
+        /* The builtin's completion is the call's: a value, or its throw, still live in the context. */
+        if (JS_IsException(cb_result)) return -1;
+        s->result = cb_result;
+        return 0;
     }
     if (s->hdr.stage == CCALL_RUN) {
         JSValue example = cb_result;
