@@ -721,8 +721,9 @@ static LbChildNext lb_child(LbRun *r, lxb_dom_element_t *parent, BoxTreeChild c,
    LB5 `LF !` makes the boundary after every forced break mandatory. */
 /* The walk holds one line's §10.8 between items, so a line is taken one item at a time: `begin` seeds the strut,
    `item` takes the next item and `end` closes the line. Each answers the box metrics it derived (a strut's or an
-   atomic inline's extent). An inline box's strut is a function of its element alone, so the walk keeps the last
-   one it derived and a run of items in one box derives it once; `lb_take` of the same extent is the same take. */
+   atomic inline's extent). An inline box's strut is a function of its element alone, so a run of items in one
+   box derives and takes it once: the line's extent already holds it, and taking it again would only nest the
+   same extreme in a new opaque term wherever the comparison is undecided. */
 typedef struct {
     TextRunLine line;
     size_t      i, breaks, last_rendering;
@@ -768,12 +769,10 @@ static size_t lb_line_walk_item(LbLineWalk *w, const TextRunMeasure *m)
     if (atom) {
         lb_take(&w->out, lb_atomic_extent(box));
         derived++;
-    } else {
-        if (w->strut_of != box) {
-            w->strut = lb_strut_extent(box);
-            w->strut_of = box;
-            derived++;
-        }
+    } else if (w->strut_of != box) {
+        w->strut = lb_strut_extent(box);
+        w->strut_of = box;
+        derived++;
         lb_take(&w->out, w->strut);
     }
     /* The box-edges test runs last because `lb_has_nonzero_box_edges` reads used values, which crash for box
@@ -1118,7 +1117,8 @@ typedef struct LbFill {
     LbSpanState    span;
     size_t         span_line, span_item;
     CssPx          span_lo, span_hi;
-    lxb_dom_element_t *span_strut_of;   /* the element `span_strut` was derived for, or NULL */
+    lxb_dom_element_t *span_strut_of;   /* the element `span_strut` was derived and folded for, or NULL */
+    size_t         span_strut_line;     /* the line it was folded on */
     LbExtent       span_strut;
     CssPx         *align;      /* one per line, read where `aligned` */
     bool          *aligned;
@@ -1699,13 +1699,13 @@ static bool lb_span_pull(LbFill *f)
                core/layout/scrolling_area.c). Deriving them from `A'` and `D'` would give a rectangle smaller
                than the rendered one. */
             if (!text_run_measure_item_is_text(&f->m, j)) continue;
-            /* The strut is a function of the element alone, kept for a run of items in one box as the line walk
-               keeps it. */
-            if (f->span_strut_of != text_run_measure_item_style(&f->m, j)) {
-                f->span_strut_of = text_run_measure_item_style(&f->m, j);
-                f->span_strut = lb_strut_extent(f->span_strut_of);
-                layout_job_line_metrics_spend(1);
-            }
+            /* A run of items in one box on one line reaches one extent, so it is folded once, as the line walk
+               takes it once. */
+            if (f->span_strut_of == text_run_measure_item_style(&f->m, j) && f->span_strut_line == i) continue;
+            f->span_strut_of = text_run_measure_item_style(&f->m, j);
+            f->span_strut_line = i;
+            f->span_strut = lb_strut_extent(f->span_strut_of);
+            layout_job_line_metrics_spend(1);
             b = f->span_strut;
             f->span_lo = css_px_min(f->span_lo, css_px_sub(css_px_add(top, e.above), b.above));
             f->span_hi = css_px_max(f->span_hi, css_px_add(css_px_add(top, e.above), b.below));
