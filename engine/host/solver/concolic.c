@@ -160,6 +160,11 @@ typedef struct {
        Owned and freed at concolic_finalizer. The record has one mint (concolic_alloc, through reclaim_calloc,
        so the never-purchased state is the zero) and no field-by-field clone. */
     char *key_atom;
+    /* The identity of the value this one is §7.1.19 ToString of, where it is a concatenation with the empty
+       String (§13.15.3 step 1.c over `x + ""` or `"" + x`), else NULL. As a property key it denotes what `x`
+       denotes, so concolic_key_name_hook records this identity and not the concatenation's. Written once at the
+       concatenation's mint; owned. */
+    char *str_of;
     /* The affine facet, or NULL. Written once, at the mint, by aff_attach; owned. */
     ConcolicAffine *aff;
     /* Which bytes of `shape` this engine spelled for an unknown (concolic_shape_hole_mask): `hole_n` sorted,
@@ -1963,6 +1968,7 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->sp_subj);
     ident_list_free(c->conj, c->conj_n);
     free(c->key_atom);
+    free(c->str_of);
     aff_free(c->aff);
     free(c->hole_span);
     JS_FreeValueRT(rt, c->example);
@@ -4382,8 +4388,16 @@ JSValue concolic_key_name_hook(JSContext *ctx, JSValueConst key) {
     atom = keyname_atom(ctx, key, sh ? sh : "{}");
     /* What this trade costs is recorded as it is spent, the one place it can be undone. The atom is recorded,
        not the shape, because concolic_key_value_hook inverts by the bytes the page hands back. */
-    keyname_record(atom, sh ? sh : "{}", concolic_src_c(key), concolic_root_c(key), root_whose_of(key),
-                   concolic_ident_c(key));
+    /* The KEY's identity, which is §7.1.21 ToPropertyKey ( arg ) of the value: for `x` that is ToString(x), and
+       for `x + ""` it is the same string, so both record `x`'s identity and share the slot the page shares. It
+       is exact for every primitive `x`; an object whose @@toPrimitive answers its two hints differently is the
+       one world where they are two keys. */
+    {
+        Concolic *kc = JS_GetOpaque(key, g_concolic_class);
+
+        keyname_record(atom, sh ? sh : "{}", concolic_src_c(key), concolic_root_c(key), root_whose_of(key),
+                       kc && kc->str_of ? kc->str_of : concolic_ident_c(key));
+    }
     return JS_NewString(ctx, atom);
 }
 
@@ -5637,6 +5651,26 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
                                                               /* consumes example and ident */
     if (af) aff_attach(result, af);
     if (string_arm) hole_spans_concat(result, a, strlen(sha), b);
+    /* `x + ""` and `"" + x`: §13.15.3 step 1.c returns ToString(ToPrimitive(x)) concatenated with nothing, so
+       the result is the string form of the one unknown operand. Recorded through a chain, so `(x + "") + ""`
+       names `x` too. */
+    if (string_arm && ca != cb) {
+        JSValueConst u = ca ? a : b, k = ca ? b : a;
+        Concolic *uc = JS_GetOpaque(u, g_concolic_class), *rc = JS_GetOpaque(result, g_concolic_class);
+        const char *of = uc ? (uc->str_of ? uc->str_of : uc->ident) : NULL;
+
+        if (rc && of && JS_IsString(k)) {
+            size_t kn = 0;
+            const char *ks = JS_ToCStringLen(ctx, &kn, k);
+
+            CHECK(ks, "concolic +: OOM reading the concrete operand of a concatenation");
+            if (kn == 0) {
+                rc->str_of = strdup(of);
+                CHECK(rc->str_of, "concolic +: OOM recording which value a concatenation is the string of");
+            }
+            JS_FreeCString(ctx, ks);
+        }
+    }
     free(sha); free(shb); free(shape); free(root);
     JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
     sp[-2] = result;
