@@ -4289,10 +4289,10 @@ static void keyname_record(const char *atom, const char *shape, const char *src,
            second source to the first, and solve its candidate at an address that never fed it.
            If it fires, the fix is at whichever speller composed the value. The rule every speller owes:
            a shape separates every pair of operands its identity separates, wherever the shape is an
-           expression. concolic_add_hook's shape is not an expression but the string the concatenation produced
-           (`/api/{x}`), so `x + 5` and `x + "5"` share one shape there by design. The expression spellers are
-           concolic_call_hook, derived_operand_shape, concolic_key_read_hook, concolic_typeof_hook and
-           concolic_arith_hook, all routed through derived_operand_shape and ident_of_operand. */
+           expression. concolic_add_hook's string arm is not an expression but the string the concatenation
+           produced (`/api/{x}`); its other arm is. The expression spellers are concolic_call_hook,
+           derived_operand_shape, concolic_key_read_hook, concolic_typeof_hook, concolic_arith_hook and
+           concolic_add_hook's numeric arm, all routed through derived_operand_shape and ident_of_operand. */
         /* Named residual: the assert is blind where the identity is absent (an Object or Symbol operand):
            every field it compares agrees, yet the values differ. keyname_atom separates most of that
            population by first-purchase site. Not covered: two unspellable values first purchased at one site,
@@ -5572,17 +5572,11 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
            "13.15.3 and 22.1.3.5 disagree about the numeric arm, so an unnamed caller has no answer here");
     if (!ca && !cb) return 0;
 
-    /* The one site that must not route to derived_operand_shape: a concatenation's shape is not an expression
-       but the string it produced, so `"/api/" + cfg.region` renders `/api/{cfg.region}`, the @H provenance the
-       endpoint surface is built from. Quoting would spell `"/api/"{cfg.region}`. So this site is deliberately
-       coarser than its identity: `x + 5` and `x + "5"` are two identities and one shape, and the repair for
-       that pair is in what .key_name spends (keyname_record's named residual), never here. */
+    /* The operands as a concatenation renders them: a String operand's own bytes, unquoted. */
     char *sha = ca ? strdup(concolic_shape_c(a) ? concolic_shape_c(a) : "{}") : cstr_dup(ctx, a);
     char *shb = cb ? strdup(concolic_shape_c(b) ? concolic_shape_c(b) : "{}") : cstr_dup(ctx, b);
     CHECK(sha && shb, "concolic +: OOM shape");
-    size_t ln = strlen(sha) + strlen(shb) + 1;
-    char *shape = reclaim_malloc(ln); CHECK(shape, "concolic +: OOM shape concat");
-    snprintf(shape, ln, "%s%s", sha, shb);
+    char *shape;
     const char *src = ca ? concolic_src_c(a) : concolic_src_c(b);
     JSValueConst ops[2];
     char *root;
@@ -5620,6 +5614,23 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
        example; the result's shape is then the page's bytes around its operands' holes. */
     int string_arm = op == JS_CONCOLIC_ADD_CONCAT || (hava && JS_IsString(exa)) || (havb && JS_IsString(exb));
     JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
+    /* The shape, by the arm. On the string arm it is the string the concatenation produced, so
+       `"/api/" + cfg.region` renders `/api/{cfg.region}`, the @H provenance the endpoint surface is built from
+       (quoting would spell `"/api/"{cfg.region}`). Elsewhere (§13.15.3's numeric arm, or an arm no example
+       decides) it is the expression, through derived_operand_shape like every other operator, so a sum
+       `0 + {a} + {b}` keeps its operators and `x + 5` stays apart from `x + "5"`. */
+    if (string_arm) {
+        size_t ln = strlen(sha) + strlen(shb) + 1;
+
+        shape = reclaim_malloc(ln);
+        CHECK(shape, "concolic +: OOM shape concat");
+        snprintf(shape, ln, "%s%s", sha, shb);
+    } else {
+        char *ea = derived_operand_shape(ctx, a), *eb = derived_operand_shape(ctx, b);
+
+        shape = shapef("%s+%s", ea, eb);
+        free(ea); free(eb);
+    }
 
     char *ident;
     { const char *f[2]; char *ia = ident_of_operand(ctx, a), *ib = ident_of_operand(ctx, b);
