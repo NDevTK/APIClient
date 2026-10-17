@@ -598,6 +598,7 @@ static const struct { double lo, hi; } CSS_ENV_RANGE[CSS_ENV_FACT_COUNT] = {
     /* css-fonts-4 §2.5 Font size: the font-size property: `<length-percentage [0,∞]>`, and "Negative lengths
        are invalid". */
     [CSS_ENV_DEFAULT_FONT_SIZE]       = { 0.0, INFINITY },
+    [CSS_ENV_DEFAULT_FIXED_FONT_SIZE] = { 0.0, INFINITY },
     /* CSS 2.2 §10.8.1 Leading and half-leading: "a characteristic height above the baseline and a depth below
        it". */
 #define CSS_ENV_FONT_FACT_RANGE(id, family, fact, bytes) \

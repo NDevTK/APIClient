@@ -179,6 +179,10 @@ typedef enum {
        this model determines it, the spec calls it the reader's own preference, and a `rem`-sized layout puts
        its entire responsive ladder behind it. */
     CSS_ENV_DEFAULT_FONT_SIZE,
+    /* The reader's default font size for fixed-width text, which `medium` is under a family list of exactly
+       `monospace` (core/css/font_size_functions.h). A preference beside the one above, read apart from it by
+       any page that sets `monospace` beside a proportional family. */
+    CSS_ENV_DEFAULT_FIXED_FONT_SIZE,
     /* CSS 2.1 §10.8.1 (Leading and half-leading)'s `A` — "a characteristic height above the baseline" — and
        `D` — "a depth below [the baseline]" — of each installed face (core/fonts/installed_font.h), which
        core/css/font_metrics.h reads and says why. They are SEPARATE facts from the default font size and not a

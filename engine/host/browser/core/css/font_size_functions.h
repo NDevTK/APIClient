@@ -4,8 +4,9 @@
  * WHY THERE IS A TABLE AT ALL, IN THE SPEC'S OWN WORDS. css-fonts-4 §2.5 "Font size: the font-size property"
  * defines `<absolute-size>` as "a keyword [that] refers to an entry in A TABLE OF FONT SIZES COMPUTED AND KEPT
  * BY THE USER AGENT", and §2.5.1 gives that table's scaling factors with `medium` as "the reference middle
- * value". So the eight keywords are not eight constants: they are ONE picked number and eight exact ratios to
- * it, and the ratios are the spec's while the number is this user agent's.
+ * value". So the eight keywords are not eight constants: they are ONE picked number and a table over it. The
+ * number is the reader's, and the table is real Chrome's, which css_font_size_for_keyword cites; §2.5.1's
+ * scaling factors are the spec's suggestion for it.
  *
  * WHY IT IS A COMPONENT AND NOT A CONSTANT INSIDE WHOEVER NEEDED IT FIRST. Three readers already need this one
  * number and each would otherwise carry its own copy — the defect CLAUDE.md §per-realm names, in the same
@@ -54,12 +55,9 @@
  * differ is already forked; a second source key would name a question nothing can ask. What the ratio gets
  * instead is the ASSERTION its range makes possible, over the arithmetic rather than over the constant.
  *
- * THE READABILITY FLOOR IS AN INVARIANT AND NOT A CLAMP. §2.5.1 closes with "to preserve readability, an UA
- * applying these guidelines should nevertheless avoid creating font sizes of less than 9 device pixels per EM
- * unit". A user agent that meets that by CLAMPING has made its table non-linear and its smallest two keywords
- * indistinguishable; a user agent that meets it by CHOOSING a default the table clears asserts it instead, and
- * the assert names §2.5.1 the day someone lowers the default past it. That is the whole value of the number
- * being picked here rather than in three places: there is one place for the guideline to be checked. */
+ * THE READABILITY FLOOR IS IN THE TABLE. §2.5.1 closes with "to preserve readability, an UA applying these
+ * guidelines should nevertheless avoid creating font sizes of less than 9 device pixels per EM unit", and
+ * Chrome's rows begin at 9 for every `medium` they cover. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_FONT_SIZE_FUNCTIONS_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_FONT_SIZE_FUNCTIONS_H
 #include <stdbool.h>
@@ -90,11 +88,15 @@ double css_default_font_size_px(void);
    space a serialization may have left is ignored. */
 bool css_absolute_size_keyword(const char *kw, size_t n);
 
-/* §2.5.1's ENTRY for one of those eight — the scaling factor times the default font size above, carrying that
-   fact. `kw` must be in CSS_KEYWORDS_ABSOLUTE_SIZE, and the answer is ABSOLUTE: an
-   `<absolute-size>` keyword does NOT depend on the parent element, which is exactly what distinguishes it from
-   §2.5's `<relative-size>` below. */
-CssPx css_absolute_size_px(JSContext *realm, CssKeyword kw);
+/* The fixed-width `medium`, CSS_ENV_DEFAULT_FIXED_FONT_SIZE in `realm`, and the number that fact stands for. */
+CssPx css_default_fixed_font_size(JSContext *realm);
+double css_default_fixed_font_size_px(void);
+
+/* The table's ENTRY for one of those eight, over the default font size above, or over the fixed-width one
+   where `monospace` (the element's family list is exactly `monospace`); `quirks` selects the quirks-mode
+   table. `kw` must be in CSS_KEYWORDS_ABSOLUTE_SIZE. The answer is ABSOLUTE: an `<absolute-size>` keyword does
+   not depend on the parent element, which is what distinguishes it from §2.5's `<relative-size>` below. */
+CssPx css_font_size_for_keyword(JSContext *realm, CssKeyword kw, bool monospace, bool quirks);
 
 /* §2.5's `<relative-size>` — `larger` and `smaller`, "interpreted relative to the computed font-size of the
    PARENT element and possibly the table of font sizes".

@@ -1247,6 +1247,109 @@ static bool computed_border_width(lxb_dom_element_t *el, const char *name, int s
 
 /* ---- css-fonts-4 §2.5 "Font size: the font-size property" ------------------------------------------------- */
 
+/* Whether `el`'s family list is exactly the one generic family `monospace`, the test real Chrome selects the
+   fixed-width default by (Chromium 0842759f third_party/blink/renderer/platform/fonts/font_description.h's
+   FontDescription::IsMonospace: "only use fixed default size when there is only one font family, and that
+   family is "monospace""). */
+static bool cv_font_is_monospace(lxb_dom_element_t *el)
+{
+    char *family = css_computed_value(el, "font-family");
+    CssFontFamilyList l = { NULL, 0, 0 };
+    bool ok = css_font_family_list(family, &l), mono;
+
+    free(family);
+    DCHECK(ok, "an element's computed `font-family` fails css-fonts-4 §2.1's own grammar");
+    mono = l.n == 1 && l.v[0].generic != NULL && strcmp(l.v[0].generic, "monospace") == 0;
+    css_font_family_list_free(&l);
+    return mono;
+}
+
+static bool cv_quirks(lxb_dom_element_t *el)
+{
+    const lxb_dom_node_t *n = lxb_dom_interface_node(el);
+
+    return n->owner_document != NULL && n->owner_document->compat_mode == LXB_DOM_DOCUMENT_CMODE_QUIRKS;
+}
+
+/* What real Chrome keeps beside a font size, FontDescription::Size's `keyword` and `is_absolute`, both
+   inherited with it: the `<absolute-size>` keyword the size came from (CSS_KEYWORD_INVALID for none), and
+   whether it was stated in units that do not follow the font. Chromium 0842759f
+   third_party/blink/renderer/core/css/resolver/style_builder_converter.cc's
+   StyleBuilderConverterBase::ConvertFontSize: a keyword is not absolute; `larger`, `smaller`, a percentage and
+   a font-relative length other than `rem` take the parent's flag; a math function and any other length are
+   absolute. The root's parent is the initial style, whose size is the keyword `medium`. */
+typedef struct { CssKeyword keyword; bool absolute; } CvFontSizeOrigin;
+
+static bool cv_length_of(lxb_dom_element_t *el, CssPropertyId id, char *spec, CssLength *out);
+
+static CvFontSizeOrigin cv_font_size_origin(lxb_dom_element_t *el)
+{
+    static const char *const FONT_RELATIVE[] = { "em", "ex", "ch", "ic", "lh", "cap",
+                                                 "rcap", "rex", "rch", "ric", "rlh" };
+    lxb_dom_element_t *parent = css_parent_element(el);
+    CvFontSizeOrigin up = { CSS_KEYWORD_MEDIUM, false }, out = { CSS_KEYWORD_INVALID, true };
+    char *cascaded = css_cv_cascaded(el, "font-size");
+    CssDefaulting d = css_defaulting_of("font-size", cascaded);
+    const char *p, *u;
+    size_t n, i;
+    CssKeyword k;
+
+    if (parent != NULL) up = cv_font_size_origin(parent);
+    /* A declaration invalid at computed-value time is `unset`, which for this inherited property is the
+       parent's, exactly as cv_length_cascaded answers it. */
+    if (d == CSS_DEFAULTING_DECLARED) {
+        CssLength probe;
+        char *copy = strdup(cascaded);
+
+        CHECK(copy != NULL, "css: OOM copying a `font-size` declaration");
+        if (!cv_length_of(el, CSS_PROPERTY_FONT_SIZE, copy, &probe)) d = CSS_DEFAULTING_INHERITED;
+    }
+    if (d != CSS_DEFAULTING_DECLARED) {
+        free(cascaded);
+        return d == CSS_DEFAULTING_INHERITED ? up : (CvFontSizeOrigin){ CSS_KEYWORD_MEDIUM, false };
+    }
+    for (p = cascaded; isspace((unsigned char)*p); p++) { }
+    for (n = strlen(p); n > 0 && isspace((unsigned char)p[n - 1]); n--) { }
+    k = css_keyword_of(p, n);
+    if (css_keyword_set_has(CSS_KEYWORDS_ABSOLUTE_SIZE, k)) {
+        out.keyword = k;
+        out.absolute = false;
+    } else if (k == CSS_KEYWORD_LARGER || k == CSS_KEYWORD_SMALLER || k == CSS_KEYWORD_MATH ||
+               (n > 0 && p[n - 1] == '%' && memchr(p, '(', n) == NULL)) {
+        out.absolute = up.absolute;
+    } else if (memchr(p, '(', n) == NULL) {
+        for (u = p + n; u > p && isalpha((unsigned char)u[-1]); u--) { }
+        for (i = 0; i < sizeof FONT_RELATIVE / sizeof FONT_RELATIVE[0]; i++)
+            if ((size_t)(p + n - u) == strlen(FONT_RELATIVE[i]) && strncasecmp(u, FONT_RELATIVE[i], p + n - u) == 0)
+                out.absolute = up.absolute;
+    }
+    free(cascaded);
+    return out;
+}
+
+/* A size whose family changed between monospace and not, from Chromium 0842759f
+   third_party/blink/renderer/core/css/resolver/font_builder.cc's FontBuilder::CheckForGenericFamilyChange: an
+   absolute size stands; a keyword one is re-read from the table for the element's family; any other is scaled
+   by the fixed-width default over the proportional one, or by its inverse when the parent was the monospace
+   one. So `<pre>` inheriting `medium` computes 13px. */
+static CssLength cv_font_size_generic_change(lxb_dom_element_t *el, CssLength len)
+{
+    lxb_dom_element_t *parent = css_parent_element(el);
+    bool mono = cv_font_is_monospace(el), parent_mono = parent != NULL && cv_font_is_monospace(parent);
+    JSContext *realm = css_cv_realm(el);
+    CvFontSizeOrigin o;
+    CssPx ratio;
+
+    if (mono == parent_mono) return len;
+    o = cv_font_size_origin(el);
+    if (o.absolute) return len;
+    if (o.keyword != CSS_KEYWORD_INVALID)
+        return css_cv_px(css_font_size_for_keyword(realm, o.keyword, mono, cv_quirks(el)));
+    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE, "a computed `font-size` is not an absolute length");
+    ratio = css_px_div(css_default_fixed_font_size(realm), css_default_font_size(realm));
+    return css_cv_px(parent_mono ? css_px_div(len.px, ratio) : css_px_mul(len.px, ratio));
+}
+
 /* §2.5's `Computed value:` LINE IS `an absolute length` WITH NO SECOND ARM, which is what makes this property
  * different in kind from every other length above and is the whole reason it needed its own rule. The ten
  * box-model lengths say "the percentage AS SPECIFIED or the absolute length" because their percentage refers to
@@ -1283,7 +1386,8 @@ static bool computed_font_size(lxb_dom_element_t *el, char *spec, CssLength *out
         case CSS_KEYWORD_X_LARGE:
         case CSS_KEYWORD_XX_LARGE:
         case CSS_KEYWORD_XXX_LARGE:
-            *out = css_cv_px(css_absolute_size_px(css_cv_realm(el), len.keyword));
+            *out = css_cv_px(css_font_size_for_keyword(css_cv_realm(el), len.keyword, cv_font_is_monospace(el),
+                                                       cv_quirks(el)));
             return true;
         /* §2.5's `<relative-size>`: "interpreted relative to the computed font-size of the parent element". The
            PARENT's, on an element with no parent element too — §7.2's initial value is what the metrics answer
@@ -1476,8 +1580,18 @@ static bool cv_length_of(lxb_dom_element_t *el, CssPropertyId id, char *spec, Cs
     return computed_length(el, name, spec, out);
 }
 
-/* The derivation of one length-shaped computed value, made on its first ask in a hold. */
+static CssLength cv_length_cascaded(lxb_dom_element_t *el, CssPropertyId id);
+
+/* The derivation of one length-shaped computed value, made on its first ask in a hold. A `font-size` then
+   takes the family change, whichever of the cascade's arms it came from. */
 static CssLength cv_length(lxb_dom_element_t *el, CssPropertyId id)
+{
+    CssLength len = cv_length_cascaded(el, id);
+
+    return id == CSS_PROPERTY_FONT_SIZE ? cv_font_size_generic_change(el, len) : len;
+}
+
+static CssLength cv_length_cascaded(lxb_dom_element_t *el, CssPropertyId id)
 {
     const char *name = css_property_name(id);
     int side = cv_border_width_side(id);

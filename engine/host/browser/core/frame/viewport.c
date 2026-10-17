@@ -137,6 +137,7 @@ double viewport_env_fact_value(JSContext *realm, CssEnvFact fact)
     case CSS_ENV_DYNAMIC_VIEWPORT_HEIGHT: return viewport_height(realm);
     case CSS_ENV_DEVICE_PIXEL_RATIO:      return viewport_device_pixel_ratio(realm);
     case CSS_ENV_DEFAULT_FONT_SIZE:       return css_default_font_size_px();
+    case CSS_ENV_DEFAULT_FIXED_FONT_SIZE: return css_default_fixed_font_size_px();
     default: {
         InstalledFont face;
         FontMetricsFaceFact which;
@@ -226,6 +227,8 @@ static const struct { const char *member; bool presented; } VIEWPORT_FACT[CSS_EN
        text size is a preference the user agent has whether or not this document is on a screen, while the
        INITIAL CONTAINING BLOCK is a rectangle a navigable presents and stops existing when it does not. */
     [CSS_ENV_DEFAULT_FONT_SIZE]  = { "defaultFontSize",               false },
+    /* The fixed-width default beside it, `presented` false for the same reason. */
+    [CSS_ENV_DEFAULT_FIXED_FONT_SIZE] = { "defaultFixedFontSize",     false },
     /* CSS 2.1 §10.8.1's `A`, read off the picked face by core/css/font_metrics.h, which is where the
        PICKED-rather-than-DERIVED test is argued for it — what the model picked is the FACE and not the
        ratio. It is its own row beside the one above rather than sharing it because the two are

@@ -1,7 +1,8 @@
 /* css-fonts-4 §2.5.1's absolute-size table and the number `medium` is. See font_size_functions.h for why the
-   default font size is a PICKED environment fact, why the `<relative-size>` ratio is not one, and why §2.5.1's
-   readability floor is asserted rather than clamped. */
+   default font size is a PICKED environment fact, why the `<relative-size>` ratio is not one, and where §2.5.1's
+   readability floor lives. */
 #include <ctype.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
@@ -9,7 +10,6 @@
 #include "check.h"
 #include "core/css/css_length.h"
 #include "core/css/font_size_functions.h"
-#include "core/frame/viewport.h"
 
 /* THE ONE PICKED NUMBER, IN CSS PIXELS — what §2.5's `Initial: medium` computes to on this user agent. §2.5.1
    makes every other entry an exact ratio to it, so this is the single point the whole table moves with, and it
@@ -21,22 +21,44 @@ double css_default_font_size_px(void)
     return CSS_DEFAULT_FONT_SIZE_PX;
 }
 
-/* §2.5.1's SCALING FACTORS, as the exact fractions the table prints them as rather than as decimals: the table
-   reads "3/5, 3/4, 8/9, 1, 6/5, 3/2, 2/1, 3/1" and 8/9 has no finite decimal, so a rounded copy would be a
-   second answer that is always slightly wrong. The ORDER is the table's own, smallest first, which is what
-   makes the readability floor below a question about the FIRST row rather than a scan. */
-static const struct { CssKeyword kw; double num, den; } CSS_ABSOLUTE_SIZE[] = {
-    { CSS_KEYWORD_XX_SMALL,  3.0, 5.0 },
-    { CSS_KEYWORD_X_SMALL,   3.0, 4.0 },
-    { CSS_KEYWORD_SMALL,     8.0, 9.0 },
-    { CSS_KEYWORD_MEDIUM,    1.0, 1.0 },
-    { CSS_KEYWORD_LARGE,     6.0, 5.0 },
-    { CSS_KEYWORD_X_LARGE,   3.0, 2.0 },
-    { CSS_KEYWORD_XX_LARGE,  2.0, 1.0 },
-    { CSS_KEYWORD_XXX_LARGE, 3.0, 1.0 },
-};
+/* Real Chrome's default font size for fixed-width text: Chromium 0842759f
+   third_party/blink/public/common/web_preferences/web_preferences.h's `default_fixed_font_size = 13`, beside
+   its `default_font_size = 16`. Like the other it is a reader's preference and not a CSS rule. */
+#define CSS_DEFAULT_FIXED_FONT_SIZE_PX 13.0
 
-#define CSS_FS_N(set) (sizeof(set) / sizeof((set)[0]))
+/* Real Chrome's table of font sizes, which is this user agent's: §2.5 makes an `<absolute-size>` "an entry in a
+   table of font sizes computed and kept by the user agent", and §2.5.1 lets it "fine-tune these values".
+   Chromium 0842759f third_party/blink/renderer/core/css/font_size_functions.cc's
+   FontSizeFunctions::FontSizeForKeyword reads the row of kStrictFontSizeTable (kQuirksFontSizeTable in a quirks
+   document) for a `medium` of a whole 9 to 16 pixels, and otherwise scales `medium` by kFontSizeFactors, no
+   smaller than the minimum logical font size (web_preferences.h's `minimum_logical_font_size = 6`). Rows are
+   `medium` 9 to 16, columns xx-small to xxx-large; [0] is the strict table and [1] the quirks one. */
+#define CSS_FS_TABLE_MIN 9
+#define CSS_FS_TABLE_MAX 16
+#define CSS_FS_MIN_LOGICAL_PX 6.0
+static const int CSS_FONT_SIZE_TABLE[2][CSS_FS_TABLE_MAX - CSS_FS_TABLE_MIN + 1][8] = {
+    { { 9, 9, 9, 9, 11, 14, 18, 27 },   { 9, 9, 9, 10, 12, 15, 20, 30 },  { 9, 9, 10, 11, 13, 17, 22, 33 },
+      { 9, 9, 10, 12, 14, 18, 24, 36 }, { 9, 10, 12, 13, 16, 20, 26, 39 }, { 9, 10, 12, 14, 17, 21, 28, 42 },
+      { 9, 10, 13, 15, 18, 23, 30, 45 }, { 9, 10, 13, 16, 18, 24, 32, 48 } },
+    { { 9, 9, 9, 9, 11, 14, 18, 28 },   { 9, 9, 9, 10, 12, 15, 20, 31 },  { 9, 9, 9, 11, 13, 17, 22, 34 },
+      { 9, 9, 10, 12, 14, 18, 24, 37 }, { 9, 9, 10, 13, 16, 20, 26, 40 }, { 9, 9, 11, 14, 17, 21, 28, 42 },
+      { 9, 10, 12, 15, 17, 23, 30, 45 }, { 9, 10, 13, 16, 18, 24, 32, 48 } },
+};
+static const double CSS_FONT_SIZE_FACTORS[8] = { 0.60, 0.75, 0.89, 1.0, 1.2, 1.5, 2.0, 3.0 };
+static const CssKeyword CSS_FONT_SIZE_KEYWORDS[8] = {
+    CSS_KEYWORD_XX_SMALL, CSS_KEYWORD_X_SMALL, CSS_KEYWORD_SMALL,    CSS_KEYWORD_MEDIUM,
+    CSS_KEYWORD_LARGE,    CSS_KEYWORD_X_LARGE, CSS_KEYWORD_XX_LARGE, CSS_KEYWORD_XXX_LARGE,
+};
+/* Each entry is a function of `medium`, so it is an atom over it, named by its definition. */
+static const char *const CSS_FONT_SIZE_OP[2][8] = {
+    { "Blink FontSizeForKeyword xx-small", "Blink FontSizeForKeyword x-small", "Blink FontSizeForKeyword small",
+      "Blink FontSizeForKeyword medium", "Blink FontSizeForKeyword large", "Blink FontSizeForKeyword x-large",
+      "Blink FontSizeForKeyword xx-large", "Blink FontSizeForKeyword xxx-large" },
+    { "Blink FontSizeForKeyword quirks xx-small", "Blink FontSizeForKeyword quirks x-small",
+      "Blink FontSizeForKeyword quirks small", "Blink FontSizeForKeyword quirks medium",
+      "Blink FontSizeForKeyword quirks large", "Blink FontSizeForKeyword quirks x-large",
+      "Blink FontSizeForKeyword quirks xx-large", "Blink FontSizeForKeyword quirks xxx-large" },
+};
 
 /* §2.5's `<relative-size>` ratio. §2.5's own sentence is the range and the assertion below is over it: "the
    specific ratio is unspecified, but should be around 1.2–1.5". The LOW END is the pick, and the nearest thing
@@ -50,10 +72,6 @@ static const struct { CssKeyword kw; double num, den; } CSS_ABSOLUTE_SIZE[] = {
 #define CSS_RELATIVE_SIZE_RATIO 1.2
 #define CSS_RELATIVE_SIZE_MIN   1.2
 #define CSS_RELATIVE_SIZE_MAX   1.5
-
-/* §2.5.1's closing guideline, as a NUMBER this file can be held to: "to preserve readability, an UA applying
-   these guidelines should nevertheless avoid creating font sizes of less than 9 DEVICE PIXELS per EM unit". */
-#define CSS_FONT_SIZE_READABLE_DEVICE_PX 9.0
 
 CssPx css_default_font_size(JSContext *realm)
 {
@@ -69,18 +87,20 @@ CssPx css_default_font_size(JSContext *realm)
               "for an element that generates no box, and CSSOM §9 reaches that answer through a conjunct it "
               "does not state: BUILD it over core/dom/element_view.h's `element_view_has_box`, which is the "
               "same one css_length.c's viewport-percentage arm and its `border-*-width` snap already name");
-    /* §2.5.1's readability guideline, asserted at the picked number rather than clamped onto the answer — see
-       font_size_functions.h. The SMALLEST entry is the one that decides it, and the table is in the spec's own
-       order, so it is row zero and not a scan. */
-    DCHECK(CSS_DEFAULT_FONT_SIZE_PX * (CSS_ABSOLUTE_SIZE[0].num / CSS_ABSOLUTE_SIZE[0].den) *
-                   viewport_device_pixel_ratio(realm) >= CSS_FONT_SIZE_READABLE_DEVICE_PX,
-           "this user agent's DEFAULT FONT SIZE no longer clears css-fonts-4 §2.5.1 (Absolute Size Keyword "
-           "Mapping Table)'s readability guideline: `xx-small` — the table's smallest entry, at a scaling "
-           "factor of 3/5 — now computes to fewer than 9 DEVICE PIXELS per EM unit, which §2.5.1 says a user "
-           "agent applying these guidelines should avoid creating. The fix is the PICKED number, not a clamp: "
-           "clamping the table would make its two smallest keywords compute the same length and stop it being "
-           "eight ratios of one value. Raise the default, or state why this user agent departs from §2.5.1");
     return css_px_fact(CSS_ENV_DEFAULT_FONT_SIZE, realm);
+}
+
+double css_default_fixed_font_size_px(void)
+{
+    return CSS_DEFAULT_FIXED_FONT_SIZE_PX;
+}
+
+CssPx css_default_fixed_font_size(JSContext *realm)
+{
+    if (realm == NULL)
+        DFAIL("the fixed-width default font size was asked for with no realm — the source key its fact is minted "
+              "under is keyed on the document that read it, exactly as css_default_font_size's is");
+    return css_px_fact(CSS_ENV_DEFAULT_FIXED_FONT_SIZE, realm);
 }
 
 bool css_absolute_size_keyword(const char *kw, size_t n)
@@ -94,23 +114,27 @@ bool css_absolute_size_keyword(const char *kw, size_t n)
     return css_keyword_set_has(CSS_KEYWORDS_ABSOLUTE_SIZE, css_keyword_of(kw, n));
 }
 
-CssPx css_absolute_size_px(JSContext *realm, CssKeyword kw)
+CssPx css_font_size_for_keyword(JSContext *realm, CssKeyword kw, bool monospace, bool quirks)
 {
-    CssPx medium;
-    unsigned i;
+    CssPx medium = monospace ? css_default_fixed_font_size(realm) : css_default_font_size(realm);
+    int col, m = (int)medium.px, q = quirks ? 1 : 0;
 
-    medium = css_default_font_size(realm);
-    for (i = 0; i < CSS_FS_N(CSS_ABSOLUTE_SIZE); i++) {
-        if (CSS_ABSOLUTE_SIZE[i].kw != kw) continue;
-        /* §2.5.1: "the medium value is used as the reference middle value", so `medium`'s own entry is the
-           identity and the other seven are its exact ratios. The scale is over the `CssPx`, which is what
-           carries CSS_ENV_DEFAULT_FONT_SIZE through to the page — an `<absolute-size>` keyword is a function
-           of the reader's font preference exactly as a bare `medium` is. */
-        return css_px_scale(medium, CSS_ABSOLUTE_SIZE[i].num / CSS_ABSOLUTE_SIZE[i].den);
+    for (col = 0; col < 8 && CSS_FONT_SIZE_KEYWORDS[col] != kw; col++) { }
+    if (col == 8)
+        DFAILF("the table of font sizes was asked for keyword %u, which is not one of css-fonts-4 §2.5's eight "
+               "`<absolute-size>` values; CSS_KEYWORDS_ABSOLUTE_SIZE and this table are one list", (unsigned)kw);
+    DCHECK(medium.px == (double)m && m > 0,
+           "a default font size is not a positive whole number of pixels — Blink's Settings hold it as an int, "
+           "and the table's rows are indexed by it");
+    /* `medium` is the reference middle value in every row, so its entry is the fact itself. */
+    if (col == 3) return medium;
+    if (m >= CSS_FS_TABLE_MIN && m <= CSS_FS_TABLE_MAX) {
+        DCHECK(CSS_FONT_SIZE_TABLE[q][m - CSS_FS_TABLE_MIN][3] == m,
+               "a row of the table of font sizes does not hold its own `medium` in the medium column");
+        return css_px_atom(CSS_FONT_SIZE_OP[q][col], &medium, 1, CSS_FONT_SIZE_TABLE[q][m - CSS_FS_TABLE_MIN][col]);
     }
-    DFAILF("§2.5.1's table was asked for keyword %u, which is not one of css-fonts-4 §2.5's eight "
-           "`<absolute-size>` values; CSS_KEYWORDS_ABSOLUTE_SIZE and this table are one list", (unsigned)kw);
-    return medium;
+    return css_px_atom(CSS_FONT_SIZE_OP[q][col], &medium, 1,
+                       fmax(CSS_FONT_SIZE_FACTORS[col] * m, CSS_FS_MIN_LOGICAL_PX));
 }
 
 CssPx css_relative_size_px(CssPx parent, bool larger)
