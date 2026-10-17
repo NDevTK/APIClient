@@ -9946,6 +9946,13 @@ TF_UNIT void probes_fetchreply(const char *js, Probe *tab, int *n) {
     fold_row(&udcodec_tt, &udcodec_why, param_value_is(js, "/api/udcodec", "v", "undefined"),
              "/api/udcodec's `v` is not `undefined`: encodeURIComponent over an example of `undefined` did not "
              "run the codec on it, so the builtin read the example as absent");
+    const char *udcall_why = NULL;
+    int udcall_tt = 1;
+    fold_row(&udcall_tt, &udcall_why, !!strstr(js, "\"/api/udcall\""),
+             "there is no /api/udcall record: the statement over the served `__UDX.a` never ran");
+    fold_row(&udcall_tt, &udcall_why, param_value_is(js, "/api/udcall", "v", "true"),
+             "/api/udcall's `v` is not `true`: URL.canParse over an example of `undefined` did not parse the "
+             "USVString `undefined` against its base, so the URL component read the example as absent");
     /* THE SECOND REACTION OF `.then(r => r.json()).then(…)` — and the row is the PAIR, because either half
        alone is a term that cannot localise. `chain1` alone says the reply was delivered and the first handler
        ran; `chain2` is the only thing that says json()'s own promise ever SETTLED, and its absence beside a
@@ -10380,6 +10387,7 @@ TF_UNIT void probes_fetchreply(const char *js, Probe *tab, int *n) {
         { "undef-example-arith", udarith_tt, "/api/udarith", SESS_EXPLORE, udarith_why },
         { "undef-example-coerce", udcoerce_tt, "/api/udcoerce", SESS_EXPLORE, udcoerce_why },
         { "undef-example-codec", udcodec_tt, "/api/udcodec", SESS_EXPLORE, udcodec_why },
+        { "undef-example-call", udcall_tt, "/api/udcall", SESS_EXPLORE, udcall_why },
         { "then-chain", then_chain, "at=chain1", SESS_EXPLORE },
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE, clone_body_why },
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE, body_bytes_why },
