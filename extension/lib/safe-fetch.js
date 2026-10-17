@@ -79,6 +79,16 @@ function _bytesOfB64(b64) {
   for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
   return u;
 }
+/* The Set-Cookie fields of each Response the wire answered, which the Response itself hides (Fetch §2.2.2
+   "Headers"' forbidden response-header names). A process's own fetch states them on its Response. */
+var _wireSetCookies = new WeakMap();
+function _setCookiesOf(resp) {
+  if (_wireSetCookies.has(resp)) return _wireSetCookies.get(resp);
+  CHECK(typeof resp.headers.getSetCookie === "function",
+        "a reply's Set-Cookie fields were asked of a Response the service worker's wire did not answer, in a " +
+        "realm whose Headers has no getSetCookie — its cookies would be stored as none");
+  return resp.headers.getSetCookie();
+}
 /* One send over the service worker's wire (wire.js), answered as the Response the worker's fetch answered: a
    port per send, the body in base64 chunks, since runtime messages carry JSON only. The zone pings the worker
    every 10 s and acknowledges each chunk, which keeps it alive while the network is slow (it is ended after
@@ -119,7 +129,12 @@ function _wireRelay(href, init) {
           start: function (c) { stream = c; },
           cancel: function () { settled = true; clearInterval(ping); port.disconnect(); }
         });
-        resolve(new Response(rs, { status: m.head.status, statusText: m.head.statusText, headers: m.head.headers }));
+        DCHECK(Array.isArray(m.head.setCookie) &&
+               m.head.setCookie.every(function (v) { return v === null || typeof v === "string"; }),
+               "the wire answered a head with no Set-Cookie list — wire.js states one for every send");
+        var resp = new Response(rs, { status: m.head.status, statusText: m.head.statusText, headers: m.head.headers });
+        _wireSetCookies.set(resp, m.head.setCookie);
+        resolve(resp);
         return;
       }
       if (m.chunk !== undefined) {
@@ -1455,15 +1470,13 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
 }
 /* A request that speaks as an identity (lib/request-identity.js's identityFor answer) runs `send` under
    lib/speak-as.js's rules for the last URL of `urlList` (Fetch §2.2.5's URL list, which a redirect grows): one
-   for its own method and, when `preflightNames` is a list, one for its OPTIONS request. Its cookies are the identity's (cookieHeaderFor's Cookie) only where this zone is willing
-   (`credentialed`); otherwise it carries none. The zone's own fetch omits credentials, so this extension's
-   jar adds nothing and a reply's Set-Cookie is not stored. `stated` is null, or the operator tier's
-   Send-panel record (safeFetchStatedShape), whose Origin and Referer replace the identity's on every rule of
-   the send. A request with no identity runs `send` as this extension, uncredentialed.
-   Named residual. Not covered: a credentialed send's reply Set-Cookie, which the identity's own request would
-   store in its jar and this send stores nowhere. Next diff reads it from webRequest's onHeadersReceived on
-   the worker's fetch (wire.js) and stores it there. Its absence shows as a server that rotates a token on a
-   tool-sent credentialed request leaving the person's next own request presenting the retired value. */
+   for its own method and, when `preflightNames` is a list, one for its OPTIONS request. Its cookies are the
+   identity's (cookieHeaderFor's Cookie) only where this zone is willing (`credentialed`); otherwise it carries
+   none, and where it carries them its reply's Set-Cookie is stored in the identity's jar (lib/cookie-store.js)
+   before anything reads the reply. The zone's own fetch omits credentials, so this extension's jar neither adds
+   nor receives a cookie. `stated` is null, or the operator tier's Send-panel record (safeFetchStatedShape),
+   whose Origin and Referer replace the identity's on every rule of the send. A request with no identity runs
+   `send` as this extension, uncredentialed. */
 async function _speakAs(identity, urlList, method, mode, destination, credentialed, preflightNames, stated, init, send) {
   if (!identity) return send();
   var href = urlList[urlList.length - 1];
@@ -1485,7 +1498,13 @@ async function _speakAs(identity, urlList, method, mode, destination, credential
      a header needs no admission. */
   var admitted = stated === null ? null
     : { origin: stated.origin === null ? null : stated.origin.header, referer: stated.referer };
-  return withSpeakAsRules(identity.origin, href, rules, admitted, send);
+  var sent = await withSpeakAsRules(identity.origin, href, rules, admitted, send);
+  /* Fetch §4.7 "HTTP-network fetch": "If includeCredentials is true, then the user agent should parse and store
+     response `Set-Cookie` headers", which cookieArmFor's "listed" arm is. */
+  if (sent.resp && cookieArmFor(facts, href).arm === "listed")
+    await cookieStoreSetCookies(_setCookiesOf(sent.resp), href, facts,
+                                mode === "navigate" && destination === "document");
+  return sent;
 }
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
   /* CORB for a script-like load, over facts already computed, answering the rule that refused or null, so

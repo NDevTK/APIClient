@@ -114,8 +114,8 @@ function pageRequestIdentity(origin, docUrl, url, credentials, mode, referrerPol
 /* Whether a document of this identity sends cookies with `url`, as {arm, rule}: "none" for omit, or
    same-origin to another origin (Fetch §2.2.5 "Requests"), with `rule` saying which; otherwise "listed".
    The zone's own fetch omits credentials on every arm and a "listed" send sets the Cookie
-   `_identityCookies` computes, so the extension's own jar, whose partition is the extension's and holds what
-   the zone's earlier fetches stored, adds nothing, and a reply's Set-Cookie is not stored. */
+   `_identityCookies` computes, so the extension's own jar, whose partition is the extension's, adds nothing;
+   a "listed" send's reply Set-Cookie is stored in the identity's jar (lib/cookie-store.js). */
 function cookieArmFor(identityFacts, url) {
   const { credentials, origin } = identityFacts;
   if (credentials === "omit") return { arm: "none", rule: "the credentials mode is omit (Fetch §2.2.5 Requests)" };

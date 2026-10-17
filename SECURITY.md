@@ -323,7 +323,18 @@ Three callers speak as a document:
 - every operator send (above).
 Neither a message nor the engine can state an identity. `safeFetch` `CHECK`s that a credentialed request
 has one, and the zone's own fetch always omits credentials: the extension's jar, whose partition is the
-extension's, is never sent, and a reply's `Set-Cookie` is stored nowhere.
+extension's, is never sent and receives nothing. A send that carries the identity's cookies stores its
+reply's `Set-Cookie`, a 3xx's included, in the identity's jar before anything reads the reply
+(`lib/cookie-store.js`): RFC 6265bis (draft 22) §5.6 parses each field and §5.7 "Storage Model" decides, on
+the request URL's host and the identity's site for cookies, whether the cookie is kept; CHIPS §2.3 makes a
+`Partitioned` one the request's partition's. A cookie the model ignores is never written: a `Domain` that
+the request host does not domain-match or that is a public suffix, `Secure` from a URL that is not
+potentially trustworthy, a non-secure cookie that would overlay a secure one, a SameSite cookie from a
+cross-site request that is not a top-level navigation, `SameSite=None` or `Partitioned` without `Secure`,
+and a prefix whose conditions fail. The browser's own refusal of a write is an ignore too. A top-level
+navigation keeps a cookie of any SameSite value (§5.7 step 18.3; Chrome 148 stores Lax and Strict cookies
+from a browser-initiated navigation, measured), where Fetch §3.1.3's same-site mode would answer
+"lax-or-less" for it.
 - `lib/request-identity.js` and `lib/speak-as.js` compute the headers:
   - `Origin` by Fetch §3.2 "append a request `Origin` header";
   - `Referer` by Fetch §5.4's referrer rule, so a referrer not same-origin with the identity is "client",
@@ -370,10 +381,10 @@ Residuals, each a difference from the document's own request:
 - The order between unpartitioned and partitioned cookies of equal path length is not the browser's.
   `chrome.cookies` states no creation time.
 - The storage access status is assumed `active`.
-- A reply's cookies are not stored. The zone's fetch omits credentials on every send, so a `Set-Cookie`
-  never lands in a jar, the document's included ("Known residuals").
 - The partition bit is computed as the request's own cross-site status, with the frame's
-  `hasCrossSiteAncestor`. The person's third-party-cookie setting is not read.
+  `hasCrossSiteAncestor`, for the cookies a send carries and the ones its reply stores; a top-level
+  navigation's partition is its client's top-level site, as CHIPS §2.2 states it. The
+  person's third-party-cookie setting is read neither for sending nor for storing.
 - An operator's frame policy is not observable from this zone, so an operator send that states none uses the
   default policy, strict-origin-when-cross-origin. An engine page request carries the referrer and policy the
   engine states on its request record, and a referrer not of the identity's origin is "client" (Fetch §5.4).
@@ -532,8 +543,8 @@ arm. The mark can only narrow `actor`, never widen it, and a `page` caller must 
 - `webRequest` exists so a captured fetch() or XHR is described by the browser rather than the page, and so
   the zone can follow its own sends' redirects. The service worker listens to `xmlhttprequest`-type requests
   of documents (a tab and a `documentId`; never the offscreen's own) with `requestBody` and `extraHeaders`,
-  blocks and modifies nothing, and relays each event to `lib/web-request.js`; and, in `wire.js`, to the 3xx of
-  its own fetch (no tab, no document), which it answers to the send that made it. Its records carry the person's Cookie and Set-Cookie: the log keeps neither value
+  blocks and modifies nothing, and relays each event to `lib/web-request.js`; and, in `wire.js`, to the 3xx and
+  the `Set-Cookie` fields of its own fetch (no tab, no document), which it answers to the send that made it. Its records carry the person's Cookie and Set-Cookie: the log keeps neither value
   (Cookie only as the fact that one was sent, Set-Cookie not at all), and key extraction runs over the
   page-settable headers alone.
 - `manifest.json` requests `offscreen`, `cookies`, `declarativeNetRequestWithHostAccess`, `webNavigation`,
@@ -544,9 +555,11 @@ arm. The mark can only narrow `actor`, never widen it, and a `page` caller must 
 - `cookies` exists so a send that speaks as a document can carry exactly that document's cookies
   (`lib/request-identity.js`). It reads the jar with `cookies.getAll`, partitioned cookies through a
   `partitionKey`, and asks `cookies.getPartitionKey` for a frame's key. Only the service worker's `__rpc`
-  arms call it, and those serve only the offscreen document (`OFFSCREEN_HREF`). No arm writes or removes a
-  cookie. The grant is read access to every cookie under `<all_urls>`, so a hole in the `__rpc` sender gate
-  exposes the person's whole jar.
+  arms call it, and those serve only the offscreen document (`OFFSCREEN_HREF`). One arm writes: `cookies.set`
+  takes a cookie `lib/cookie-store.js`'s storage model kept from a credentialed reply, `CHECK`s its shape and
+  writes it to the default jar; no arm removes one, and an expired cookie replaces its namesake by
+  eviction. The grant is read and write access to every cookie under `<all_urls>`, so a hole in the `__rpc`
+  sender gate exposes and can rewrite the person's whole jar.
 - The service worker holds no learned state and relays no renderer's message. Content scripts message the
   offscreen directly, so the service worker cannot launder a renderer's message into an extension-origin
   one. What it relays of page traffic is the browser's own webRequest record, which no renderer can author.
@@ -657,7 +670,6 @@ Each residual states what is not covered, what would close it, and how its absen
 
 | Residual | Not covered | What closes it | How its absence shows |
 |----------|-------------|----------------|-----------------------|
-| A credentialed send's reply cookies | A send that speaks as a document carries the identity's cookies, with the zone's fetch omitting credentials, so the reply's `Set-Cookie` is stored nowhere, where the identity's own request would store it in its jar. The wire's `webRequest` listener reads redirects only (`wire.js`), and the documents' listeners take documents' traffic only (`lib/web-request.js`); `Set-Cookie` under `onHeadersReceived` with `extraHeaders` on the worker's fetch is not measured. Letting the browser store them applies the extension's own storage rules and writes the real jar first | `onHeadersReceived` with `extraHeaders` on the worker's own fetch, then RFC 6265bis §5.7's storage model run on the identity's site for cookies | a server that rotates a token on a tool-sent credentialed request leaving the person's next own request presenting the retired value |
 | Private network by name (write side unmitigated) | `_ipAddressSpace` classifies IP literals by Local Network Access's "Non-public IP address blocks" table and the names `localhost`, `*.localhost` and `*.local`; any other name is `public`. A name that resolves to a local or loopback address (an intranet name, `.internal`, `.lan`, a single-label host, `127.0.0.1.nip.io`) is therefore sent from a public page, including by the default arm for the page's own unpinned `fetch()`. The reply is unreadable unless that host answers `Access-Control-Allow-Origin` for the page or `*` (`_corsCheck`). No stable MV3 surface resolves a name before the connection: `chrome.dns` is Chrome Dev only, `webRequest` reports the address only on events after the request was sent, and blocking `webRequest` is policy-installed only. Whether Chrome's own Local Network Access check applies to this extension's offscreen fetches is unmeasured | Chrome's local-network gate shown, in real Chrome, to apply to this extension's fetches, or a resolver this zone can ask before connecting | a page analysed from a public origin causing a request to a host on the person's network |
 | The request carries no page `Origin` header | `Origin` is a forbidden request header, so the zone's request carries this extension's origin or none, and a server that reflects the request's `Origin` answers an `Access-Control-Allow-Origin` that is not the page's. The page then gets a network error where a browser's request would pass: a narrowing | a transport that can state the page's origin | a cross-origin API that works in a browser failing `blocked-cors:allow-origin-mismatch` here |
 | No ORB for a no-cors element's bytes | CORB applies to script-like destinations only, so a cross-origin `no-cors` image, style or font body of any type is delivered to the engine; page script cannot read it, but a compromised engine could | Chromium's ORB rules for the other no-cors destinations | a JSON or HTML body delivered for an `image` destination |

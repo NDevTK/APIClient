@@ -28,8 +28,9 @@ const _wireRuleReady = chrome.declarativeNetRequest.updateSessionRules({
                action: { type: "modifyHeaders", requestHeaders: [{ header: _WIRE_NONCE_HEADER, operation: "remove" }] },
                condition: { initiatorDomains: [chrome.runtime.id], tabIds: [chrome.tabs.TAB_ID_NONE] } }],
 });
-/* nonce -> the send's record {redirect: a promise of its 3xx, resolveRedirect}; requestId -> the same record,
-   bound when onBeforeSendHeaders shows the nonce. The requestId holds across the request's life. */
+/* nonce -> the send's record {redirect: a promise of its 3xx, resolveRedirect, setCookie: a promise of its
+   reply's Set-Cookie fields, resolveSetCookie}; requestId -> the same record, bound when onBeforeSendHeaders
+   shows the nonce. The requestId holds across the request's life. */
 const _wireByNonce = new Map();
 const _wireByRequest = new Map();
 /* The keys of the sends this worker has on the network. A speak-as rule matches by method and URL (a rule
@@ -76,7 +77,17 @@ chrome.webRequest.onBeforeRedirect.addListener((d) => {
            "this zone reads are text, and a binary one would be dropped from the hop's judgement");
     return [h.name, h.value];
   });
-  rec.resolveRedirect({ status: d.statusCode, statusLine: d.statusLine, headers });
+  rec.resolveRedirect({ status: d.statusCode, statusLine: d.statusLine,
+                       headers: headers.filter((h) => !/^set-cookie2?$/i.test(h[0])) });
+}, _WIRE_FILTER, ["responseHeaders", "extraHeaders"]);
+/* A reply's Set-Cookie fields, a 3xx's included: the worker's Response hides them (Fetch §2.2.2 "Headers"' forbidden
+   response-header names), and webRequest reports each one only with extraHeaders (measured in Chrome 148).
+   A field webRequest reports as bytes is null, which the zone ignores. */
+chrome.webRequest.onHeadersReceived.addListener((d) => {
+  const rec = _wireByRequest.get(d.requestId);
+  if (!rec) return;
+  rec.resolveSetCookie(d.responseHeaders.filter((h) => h.name.toLowerCase() === "set-cookie")
+    .map((h) => (typeof h.value === "string" ? h.value : null)));
 }, _WIRE_FILTER, ["responseHeaders", "extraHeaders"]);
 
 function _wireB64(u8) {
@@ -92,8 +103,9 @@ function _wireBytes(b64) {
 }
 
 /* One send: `m` is {href, init: {method, headers: [[name, value]] | null, body: null | {text} | {b64}}}. The
-   port is answered {head: {status, statusText, headers}}, then {chunk: base64} per body chunk, then {end}; or
-   {error} for Fetch §5.6's network error. A 3xx's head is the record webRequest reported and its body is none. */
+   port is answered {head: {status, statusText, headers, setCookie}}, then {chunk: base64} per body chunk, then
+   {end}; or {error} for Fetch §5.6's network error. A 3xx's head is the record webRequest reported and its body
+   is none. A data: URL has no webRequest event and no Set-Cookie. */
 async function _wireSend(port, m, signal) {
   CHECK(typeof m.href === "string" && /^(https?|data):/.test(m.href) && !!m.init && typeof m.init.method === "string",
         "a wire send names no http(s) or data: URL and method — lib/safe-fetch.js's _wire states both");
@@ -107,6 +119,7 @@ async function _wireSend(port, m, signal) {
   const nonce = _wireNonce();
   const rec = {};
   rec.redirect = new Promise((resolve) => { rec.resolveRedirect = resolve; });
+  rec.setCookie = new Promise((resolve) => { rec.resolveSetCookie = resolve; });
   _wireByNonce.set(nonce, rec);
   const post = (msg) => { try { port.postMessage(msg); } catch (e) { /* the zone ended the send */ } };
   try {
@@ -121,13 +134,15 @@ async function _wireSend(port, m, signal) {
     if (resp.type === "opaqueredirect") {
       const r = await rec.redirect;
       const reason = /^HTTP\/\S+ \d{3} ?(.*)$/.exec(r.statusLine);
-      post({ head: { status: r.status, statusText: reason ? reason[1] : "", headers: r.headers } });
+      post({ head: { status: r.status, statusText: reason ? reason[1] : "", headers: r.headers,
+                     setCookie: await rec.setCookie } });
       post({ end: true });
       return;
     }
     const out = [];
     resp.headers.forEach((v, k) => out.push([k, v]));
-    post({ head: { status: resp.status, statusText: resp.statusText, headers: out } });
+    const setCookie = m.href.startsWith("data:") ? [] : await rec.setCookie;
+    post({ head: { status: resp.status, statusText: resp.statusText, headers: out, setCookie } });
     if (resp.body) {
       const reader = resp.body.getReader();
       for (;;) {

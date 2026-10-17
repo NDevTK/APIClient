@@ -81,6 +81,8 @@
 <script src="lib/referrer-policy.js"></script>
 <!-- Who a zone send speaks as, and that identity's cookies; calls the two files above. -->
 <script src="lib/request-identity.js"></script>
+<!-- A credentialed reply's Set-Cookie, stored in the identity's jar (RFC 6265bis §5.7). -->
+<script src="lib/cookie-store.js"></script>
 <script src="lib/identity-preview.js"></script>
 <!-- The headers a zone send speaking as a document sets, and its one service-worker rule (the rule family's
      constants are shared with the worker through speak-as-rule.js). -->

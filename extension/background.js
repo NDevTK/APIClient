@@ -220,6 +220,25 @@ const _PROBE_INJECTORS = {
   },
 };
 
+/* One cookie RFC 6265bis §5.7 kept, written to the person's default jar: {refused: null} once written (or, for
+   an expiry already past, once the cookie it replaces is evicted), or {refused: the browser's reason}. */
+const _COOKIE_SET_KEYS = ["url", "name", "value", "path", "secure", "httpOnly", "sameSite", "domain",
+                          "expirationDate", "partitionKey"];
+async function _cookiesSet(d) {
+  CHECK(!!d && Object.keys(d).every((k) => _COOKIE_SET_KEYS.indexOf(k) >= 0) && /^https?:/.test(d.url) &&
+        typeof d.name === "string" && typeof d.value === "string" && typeof d.path === "string" &&
+        d.path[0] === "/" && typeof d.secure === "boolean" && typeof d.httpOnly === "boolean" &&
+        ["strict", "lax", "no_restriction", "unspecified"].indexOf(d.sameSite) >= 0 &&
+        (d.domain === undefined || typeof d.domain === "string") &&
+        (d.expirationDate === undefined || typeof d.expirationDate === "number") &&
+        (d.partitionKey === undefined || (typeof d.partitionKey.topLevelSite === "string" &&
+                                          typeof d.partitionKey.hasCrossSiteAncestor === "boolean")),
+        "cookies.set was asked for a cookie lib/cookie-store.js's storage model did not shape — it states every " +
+        "field chrome.cookies.set reads, and the store is the person's default one");
+  try { await chrome.cookies.set(d); return { refused: null }; }
+  catch (e) { return { refused: String((e && e.message) || e) }; }
+}
+
 async function _swRpc(msg) {
   const api = msg.api, args = msg.args || [];
   switch (api) {
@@ -233,10 +252,11 @@ async function _swRpc(msg) {
     case "tabs.query": return chrome.tabs.query(...args);
     case "tabs.get": return chrome.tabs.get(...args);
     case "webNavigation.getAllFrames": return chrome.webNavigation.getAllFrames(...args);
-    // The cookies a send that speaks as a document carries (lib/request-identity.js): read-only, and the
-    // offscreen document is the only sender this arm serves.
+    // The cookies a send that speaks as a document carries (lib/request-identity.js), and the ones its reply
+    // stores (lib/cookie-store.js); the offscreen document is the only sender these arms serve.
     case "cookies.getAll": return chrome.cookies.getAll(...args);
     case "cookies.getPartitionKey": return chrome.cookies.getPartitionKey(...args);
+    case "cookies.set": return _cookiesSet(args[0]);
     // One declarativeNetRequest rule per zone send that speaks as a document (speak-as-rule.js).
     case "speakAs.install": return speakAsInstall(args[0]);
     case "speakAs.release": return speakAsRelease(args[0]);

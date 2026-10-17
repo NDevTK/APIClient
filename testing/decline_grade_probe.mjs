@@ -52,7 +52,8 @@ function zone(edge) {
   createContext(sandbox);
   /* The ast-worker.html order for the files a credentialed navigation's identity is built and spoken by. */
   for (const f of ['check.js', 'lib/public-suffix-table.js', 'lib/site.js', 'lib/referrer-policy.js',
-                   'lib/request-identity.js', 'speak-as-rule.js', 'lib/speak-as.js', 'lib/navigable-notice.js',
+                   'lib/request-identity.js', 'lib/cookie-store.js', 'speak-as-rule.js', 'lib/speak-as.js',
+                   'lib/navigable-notice.js',
                    'lib/document-record.js', 'lib/safe-fetch.js'])
     runInContext(readFileSync(join(EXT, f), 'utf8'), sandbox, { filename: join(EXT, f) });
   for (const n of ['safeFetch', 'safeFetchEgressStated'])
@@ -142,8 +143,10 @@ const ROWS = [
    listens on loopback, and the rows' principal is a loopback page, so Local Network Access admits the request.
    The realm reaches it through the host's fetch with redirect "manual", which a process answers with the 3xx
    itself. Its relay holds a one-cookie jar and keeps the speak-as rules a send installs, applied by exact URL
-   and method as declarativeNetRequest applies them, so the server's log is what each hop carried. Origin A is
-   widened, as `--explore` widens one, and B (the same server under `localhost`) is not. */
+   and method as declarativeNetRequest applies them, so the server's log is what each hop carried, and it logs
+   each cookie the zone writes. Origin A is widened, as `--explore` widens one, and B (the same server under
+   `localhost`) is not. C (127.0.0.2) is widened and cross-site with A. D is a domain with a registrable
+   domain, `app.example.test`, which the relay sends to A's address; its URL is not potentially trustworthy. */
 const hits = [];
 const ROUTES = new Map();
 const server = createServer((req, res) => {
@@ -163,13 +166,25 @@ ROUTES.set('/hop/1', hop('/home')).set('/hop/1b', hop('/home2')).set('/hop/2', h
   .set('/hop/7', hop('/logout7')).set('/hop/8', hop(`${B}/hop/9`))
   .set('/hop/9', hop(`${A}/end9`, { 'Access-Control-Allow-Origin': '*' }))
   .set('/end9', { status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'text/plain' } });
+const setCookie = (fields) => ({ status: 200, headers: { 'Content-Type': 'text/plain', 'Set-Cookie': fields } });
+ROUTES.set('/sc/1', setCookie(['host1=a; Path=/', 'dom1=b; Domain=.Example.test', 'forged=x; Domain=evil.example',
+                               'pub=x; Domain=test', 'lax1=1; SameSite=Lax', 'sec=1; Secure', 'lock=evil; Path=/',
+                               'none1=1; SameSite=None']))
+  .set('/sc/2', setCookie(['__Host-ok=1; Secure; Path=/', '__Host-bad=1; Secure; Path=/; Domain=127.0.0.1',
+                           'p1=1; Secure; Partitioned; SameSite=None', 'p2=1; Partitioned', 'gone=1; Max-Age=0',
+                           'old=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT', 'cap=1; Max-Age=999999999',
+                          ]))
+  .set('/sc/3', setCookie(['xs=1', 'xsl=1; SameSite=Lax', 'xsn=1; SameSite=None; Secure']))
+  .set('/hop/sc', { status: 302, headers: { Location: '/home-sc', 'Set-Cookie': ['hopc=1; Path=/'] } });
+const C = `http://127.0.0.2:${PORT}`, D = `http://app.example.test:${PORT}`;
+const cookieWrites = [];   // [{name, details, before: the number of server hits when it was written}]
 const speakAsRules = new Map();   // ruleId -> { method, url, requestHeaders }
 let zf = null;
 const FIXTURE_EDGE = {
   fetch: (u, init) => {
     const s = String(u);
     if (s.startsWith('data:')) return fetch(u, init);
-    if (!s.startsWith(A + '/') && !s.startsWith(B + '/')) throw new Error(REACHED);
+    if (![A, B, C, D].some((o) => s.startsWith(o + '/'))) throw new Error(REACHED);
     const headers = new Headers(init && init.headers ? init.headers : undefined);
     const method = zf.speakAsDnrMethod(init && init.method ? init.method : 'GET');
     for (const r of speakAsRules.values()) {
@@ -177,11 +192,16 @@ const FIXTURE_EDGE = {
       for (const h of r.requestHeaders)
         if (h.operation === 'remove') headers.delete(h.header); else headers.set(h.header, h.value);
     }
-    return fetch(s, Object.assign({}, init, { headers }));
+    return fetch(s.startsWith(D + '/') ? A + s.slice(D.length) : s, Object.assign({}, init, { headers }));
   },
   swRpc: async (api, args) => {
+    if (api === 'cookies.getAll' && args.name !== undefined)
+      return [{ name: 'lock', value: 'held', domain: '.example.test', path: '/', secure: true }]
+        .filter((c) => c.name === args.name);
     if (api === 'cookies.getAll')
       return args.partitionKey ? [] : [{ name: 'sid', value: 'probe', path: '/', sameSite: 'lax' }];
+    if (api === 'cookies.set') { cookieWrites.push({ name: args.name, details: args, before: hits.length });
+                                 return { refused: null }; }
     if (api === 'speakAs.clearFamily') { speakAsRules.clear(); return 0; }
     if (api === 'speakAs.install') {
       for (const r of zf.speakAsCheckedRules(args))
@@ -202,6 +222,11 @@ const PAGE_FETCH = (Z, url) => ({ destination: '', mode: 'cors', credentials: 's
                                   useCorsPreflight: false,
                                   identity: Z.pageRequestIdentity(A, `${A}/page`, url, 'same-origin', 'cors',
                                                                   'strict-origin-when-cross-origin', `${A}/page`) });
+/* A credentialed `cors` request of the page's own, which is not a navigation (RFC 6265bis §5.7 step 18). */
+const CREDENTIALED_FETCH = (Z, url) => ({ destination: '', mode: 'cors', credentials: 'include', useCorsPreflight: false,
+  identity: Z.identityFor(Z.engineIdentity(A, `${A}/page`), { url, requestInit: { credentials: 'include', mode: 'cors',
+                          referrer: '', referrerPolicy: null } }, 'strict-origin-when-cross-origin') });
+const wrote = (name) => cookieWrites.find((w) => w.name === name);
 const FIXTURE_ROWS = [
   { label: 'REDIRECT, harmless: /hop/1 -> /home (CONTROL: must be answered)',
     url: `${A}/hop/1`, want: 'ANSWERED', list: [`${A}/hop/1`, `${A}/home`], sent: ['/home'] },
@@ -223,18 +248,49 @@ const FIXTURE_ROWS = [
   { label: 'REDIRECT, an intermediate cross-origin 3xx that allows it: A -> B -> A (CONTROL: answered, cors)',
     url: `${A}/hop/8`, want: 'ANSWERED', type: 'cors', over: (Z) => PAGE_FETCH(Z, `${A}/hop/8`),
     list: [`${A}/hop/8`, `${A}/end9`], sent: ['/hop/9', '/end9'] },
+  /* RFC 6265bis §5.7 on a credentialed navigation's reply, row by row in `stored` and `ignored`. */
+  { label: 'COOKIES, a navigation of app.example.test: host-only and Domain=example.test stored; a forged Domain, ' +
+           'a public suffix, Secure over http, an overlay of a secure cookie and None without Secure ignored',
+    principal: `${D}/page`, url: `${D}/sc/1`, want: 'ANSWERED',
+    stored: ['host1', 'dom1', 'lax1'], ignored: ['forged', 'pub', 'sec', 'lock', 'none1'],
+    check: () => (wrote('host1').details.domain === undefined && wrote('dom1').details.domain === 'example.test' &&
+                  wrote('lax1').details.sameSite === 'lax' && wrote('host1').details.sameSite === 'unspecified' &&
+                  wrote('host1').details.expirationDate === undefined) },
+  { label: 'COOKIES, a navigation of 127.0.0.1 (potentially trustworthy): prefixes, Partitioned, lifetimes',
+    url: `${A}/sc/2`, want: 'ANSWERED', stored: ['__Host-ok', 'p1', 'gone', 'old', 'cap'],
+    ignored: ['__Host-bad', 'p2'],
+    check: () => (JSON.stringify(wrote('p1').details.partitionKey) ===
+                    JSON.stringify({ topLevelSite: 'http://127.0.0.1', hasCrossSiteAncestor: false }) &&
+                  wrote('__Host-ok').details.partitionKey === undefined && wrote('gone').details.expirationDate === 0 &&
+                  wrote('old').details.expirationDate === Date.UTC(2015, 9, 21, 7, 28) / 1000 &&
+                  Math.abs(wrote('cap').details.expirationDate - (Date.now() / 1000 + 400 * 86400)) < 60) },
+  { label: 'COOKIES, the page\'s credentialed cors fetch of cross-site 127.0.0.2: only SameSite=None is stored',
+    url: `${C}/sc/3`, want: 'REFUSE:network', over: (Z) => CREDENTIALED_FETCH(Z, `${C}/sc/3`),
+    stored: ['xsn'], ignored: ['xs', 'xsl'],
+    check: () => wrote('xsn').details.partitionKey === undefined },
+  { label: 'COOKIES, a 3xx\'s Set-Cookie is stored before its hop is sent',
+    principal: `${D}/page`, url: `${D}/hop/sc`, want: 'ANSWERED', list: [`${D}/hop/sc`, `${D}/home-sc`],
+    stored: ['hopc'], ignored: [],
+    check: () => hits.findIndex((h) => h.path === '/home-sc') >= wrote('hopc').before },
+  { label: 'COOKIES, an uncredentialed request stores nothing (CONTROL)',
+    principal: `${D}/page`, url: `${D}/sc/1`, want: 'ANSWERED',
+    over: () => ({ credentialed: false, identity: undefined }), stored: [], ignored: ['host1', 'dom1'] },
 ];
 
 const z = zone(NO_EDGE);
 zf = zone(FIXTURE_EDGE);
 zf.safeFetchWiden(A);
+zf.safeFetchWiden(C);
+zf.safeFetchWiden(D);
 let bad = 0, wire = 0, decl = 0;
 const census = new Map();
 async function run(Z, principal, row) {
   let got, detail, r = null;
   try {
     const over = typeof row.over === 'function' ? row.over(Z) : row.over;
-    r = row.ask ? await row.ask(Z, row) : await Z.safeFetch(row.url, navOpts(Z, principal, row.url, over));
+    cookieWrites.length = 0;
+    r = row.ask ? await row.ask(Z, row)
+      : await Z.safeFetch(row.url, navOpts(Z, row.principal || principal, row.url, over));
     if (r && r.refusal) { got = r.refusal.kind === 'decline' ? 'DECLINE' : 'REFUSE:' + r.refusal.kind;
                           detail = r.refusal.reason; }
     else { got = 'ANSWERED'; detail = 'status ' + (r && r.status); }
@@ -250,6 +306,14 @@ async function run(Z, principal, row) {
   }
   const notes = [];
   let ok = got === row.want && (row.reason === undefined || detail.startsWith(row.reason));
+  /* The cookies the zone wrote, by name: every `stored` one and no `ignored` one, and the row's check over
+     what each write stated. */
+  if (row.stored) {
+    const names = cookieWrites.map((w) => w.name);
+    notes.push('wrote ' + JSON.stringify(names));
+    if (row.stored.some((n) => !names.includes(n)) || row.ignored.some((n) => names.includes(n))) ok = false;
+    if (row.check && row.stored.length && !row.check()) { ok = false; notes.push('a write stated the wrong fields'); }
+  }
   /* Fetch §2.2.6 "Responses"' URL list, the requested URL then the landed one: only this zone followed the
      chain, so only its record can say where the bytes came from. */
   if (row.list) {

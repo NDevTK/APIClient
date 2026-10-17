@@ -193,7 +193,8 @@ const ZONE = (() => {
   createContext(sandbox);
   speakAsHost(sandbox);
   for (const f of ['check.js', 'lib/public-suffix-table.js', 'lib/site.js', 'lib/referrer-policy.js',
-                   'lib/request-identity.js', 'speak-as-rule.js', 'lib/speak-as.js', 'lib/navigable-notice.js',
+                   'lib/request-identity.js', 'lib/cookie-store.js', 'speak-as-rule.js', 'lib/speak-as.js',
+                   'lib/navigable-notice.js',
                    'lib/document-record.js',
                    'lib/safe-fetch.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
