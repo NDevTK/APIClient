@@ -33522,6 +33522,8 @@ typedef struct JSArraySearch {
     JSValue obj;          /* ToObject(this) (owned) */
     JSValue val;          /* the element, held across its read (owned) */
     JSValue result;       /* DONE (owned) */
+    JSValue test;         /* IsStrictlyEqual over unknown input while its ToBoolean is asked (owned), else
+                             JS_UNINITIALIZED */
     int64_t len, n;
     int present;          /* HasProperty(O, k): indexOf and lastIndexOf skip holes, so they must ask first */
 } JSArraySearch;
@@ -91471,7 +91473,7 @@ static bool js_internal_array_includes(JSContext *ctx, JSValueConst arr, JSValue
    in whether a hole is visited — so ONE stage list expanded once per algorithm with that algorithm's own step
    numbers. `includes` never asks HasProperty (a hole IS undefined to it), which is why its label for that stage
    names the step it skips to instead. */
-#define ASRCH_STAGES(X, TOOBJ, LEN, FROM, HAS, GET) \
+#define ASRCH_STAGES(X, TOOBJ, LEN, FROM, HAS, GET, EQ) \
     X(ASRCH_TOOBJECT,  TOOBJ) \
     X(ASRCH_LENGTH,    LEN) \
     X(ASRCH_FROMINDEX, FROM) \
@@ -91480,22 +91482,25 @@ static bool js_internal_array_includes(JSContext *ctx, JSValueConst arr, JSValue
                        "the next one") \
     X(ASRCH_HAS,       HAS) \
     X(ASRCH_SKIP,      "the index advance after an absent element, which runs nothing") \
-    X(ASRCH_GET,       GET)
-enum { ASRCH_STAGES(JS_STEP_STAGE_ENUM, 0, 0, 0, 0, 0) };
+    X(ASRCH_GET,       GET) \
+    X(ASRCH_EQ,        EQ)
+enum { ASRCH_STAGES(JS_STEP_STAGE_ENUM, 0, 0, 0, 0, 0, 0) };
 static const char *const js_array_indexOf_steps[] = {
     ASRCH_STAGES(JS_STEP_STAGE_LABEL,
                  "23.1.3.17 step 1 (O is ToObject(this value))",
                  "23.1.3.17 step 2 (len is LengthOfArrayLike(O))",
                  "23.1.3.17 step 4 (k is ToClampedIndex(fromIndex, len))",
                  "23.1.3.17 step 5.b (kPresent is HasProperty(O, propertyKey))",
-                 "23.1.3.17 step 5.c.i (elementK is Get(O, propertyKey))") NULL };
+                 "23.1.3.17 step 5.c.i (elementK is Get(O, propertyKey))",
+                 "23.1.3.17 step 5.c.ii (IsStrictlyEqual(searchElement, elementK) returns k)") NULL };
 static const char *const js_array_lastIndexOf_steps[] = {
     ASRCH_STAGES(JS_STEP_STAGE_LABEL,
                  "23.1.3.20 step 1 (O is ToObject(this value))",
                  "23.1.3.20 step 2 (len is LengthOfArrayLike(O))",
                  "23.1.3.20 step 4 (k is len - 1, or min(ToAbsoluteIndex(fromIndex, len), len - 1))",
                  "23.1.3.20 step 5.b (kPresent is HasProperty(O, propertyKey))",
-                 "23.1.3.20 step 5.c.i (elementK is Get(O, propertyKey))") NULL };
+                 "23.1.3.20 step 5.c.i (elementK is Get(O, propertyKey))",
+                 "23.1.3.20 step 5.c.ii (IsStrictlyEqual(searchElement, elementK) returns k)") NULL };
 static const char *const js_array_includes_steps[] = {
     ASRCH_STAGES(JS_STEP_STAGE_LABEL,
                  "23.1.3.16 step 1 (O is ToObject(this value))",
@@ -91503,7 +91508,18 @@ static const char *const js_array_includes_steps[] = {
                  "23.1.3.16 step 4 (k is ToClampedIndex(fromIndex, len))",
                  "23.1.3.16 step 5 (includes asks no HasProperty — a hole IS undefined to SameValueZero — so "
                  "this stage falls straight through to the element read)",
-                 "23.1.3.16 step 5.a (elementK is Get(O, ToString(k)))") NULL };
+                 "23.1.3.16 step 5.a (elementK is Get(O, ToString(k)))",
+                 "23.1.3.16 step 5.b (SameValueZero(searchElement, elementK) returns true)") NULL };
+
+/* Whether a search's comparison is asked of the solver: IsStrictlyEqual with an unknown operand. SameValueZero
+   (`includes`) has no predicate of its own in the comparison hook, so it keeps §7.2.11's own steps. */
+static bool js_array_search_asks(JSValueConst target, JSValueConst el, int eq)
+{
+    return eq == JS_EQ_STRICT && g_concolic.is && (g_concolic.is(target) || g_concolic.is(el));
+}
+
+/* step_tobool_run's `op` for the search's one comparison. */
+#define ASRCH_EQ_OP "IsStrictlyEqual(searchElement, elementK) of indexOf or lastIndexOf"
 
 static int js_array_search_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
@@ -91520,6 +91536,7 @@ static int js_array_search_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         s->obj = JS_ToObject(ctx, s->hdr.this_val);
         if (JS_IsException(s->obj)) { s->obj = JS_UNDEFINED; return -1; }
         s->result = JS_UNDEFINED;
+        s->test = JS_UNINITIALIZED;
         s->hdr.stage = ASRCH_LENGTH;
     }
     if (s->hdr.stage == ASRCH_LENGTH) {
@@ -91562,7 +91579,8 @@ static int js_array_search_step(JSContext *ctx, void *st, JSValue cb_result, JSV
            interleaving the rest point exists to allow. */
         if (s->len > 0 && js_get_fast_array(ctx, s->obj, &arrp, &count)
             && (!back || count == s->len)
-            && (back ? s->n >= 0 : s->n < (int64_t)count)) {
+            && (back ? s->n >= 0 : s->n < (int64_t)count)
+            && !js_array_search_asks(target, arrp[s->n], eq)) {
             if (js_strict_eq2(ctx, target, arrp[s->n], eq)) goto found;
             s->n += back ? -1 : 1;
             return JS_STEP_YIELD;
@@ -91592,12 +91610,41 @@ static int js_array_search_step(JSContext *ctx, void *st, JSValue cb_result, JSV
             }
             s->hdr.stage = ASRCH_GET;
         }
-        DCHECK(s->hdr.stage == ASRCH_GET, "array search machine: unknown stage");
-        r = step_getidx_run(ctx, &s->hdr, s->obj, s->n, cb_result, &s->val, out_cb, out_argc);
-        cb_result = JS_UNDEFINED;
-        if (r) return r < 0 ? -1 : r;
+        if (s->hdr.stage == ASRCH_GET) {
+            r = step_getidx_run(ctx, &s->hdr, s->obj, s->n, cb_result, &s->val, out_cb, out_argc);
+            cb_result = JS_UNDEFINED;
+            if (r) return r < 0 ? -1 : r;
+            s->hdr.stage = ASRCH_EQ;
+        }
+        DCHECK(s->hdr.stage == ASRCH_EQ, "array search machine: unknown stage");
         {
-            bool hit = js_strict_eq2(ctx, target, s->val, eq);   /* BORROWS both: the element is ours to free */
+            bool hit;
+
+            /* IsStrictlyEqual over unknown input is the `===` operator's own predicate, forked through the
+               branch seam; it is held on the state because the ask suspends and a sibling re-enters here with
+               undefined placed. */
+            if (js_array_search_asks(target, s->val, eq)) {
+                int b;
+
+                if (JS_IsUninitialized(s->test)) {
+                    JSValue pair[2] = { js_dup(target), js_dup(s->val) };
+
+                    if (!g_concolic.cmp(ctx, pair + 2, false, JS_CONCOLIC_EQ_STRICT))
+                        DFAIL("the concolic comparison hook declined an unknown search operand");
+                    s->test = pair[0];
+                } else {
+                    DCHECK(JS_IsUndefined(cb_result), "a search re-entered its comparison with a value placed");
+                }
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                r = step_tobool_run(ctx, &s->hdr, s->test, ASRCH_EQ_OP, &b);
+                if (r) return r < 0 ? -1 : r;
+                JS_FreeValue(ctx, s->test);
+                s->test = JS_UNINITIALIZED;
+                hit = b;
+            } else {
+                hit = js_strict_eq2(ctx, target, s->val, eq);   /* BORROWS both: the element is ours to free */
+            }
             JS_FreeValue(ctx, s->val); s->val = JS_UNDEFINED;
             if (hit) goto found;
         }
@@ -91620,6 +91667,7 @@ static void js_array_search_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->result);
     v->val(ctx, &s->val);
     v->val(ctx, &s->obj);
+    v->val(ctx, &s->test);
 }
 
 static JSValue js_array_search_fini(JSContext *ctx, void *st, bool take_result)
@@ -95727,12 +95775,11 @@ typedef struct JSConcolicCall {
 STEP_STATE_HDR_FIRST(JSConcolicCall);
 
 /* Named residual. Not covered: an Object operand other than a builtin-protocol RegExp or a replace callback (a
-   method of an object example other than an array callback method, a `.call` reached as a value rather than
-   at a call operator); the result carries no example. Next diff:
-   the same forwarding for Array.prototype's other methods over an unknown receiver (`slice`, `concat`,
-   `indexOf`), each once its step machine is shown to read the receiver only through [[Get]]. How its absence
-   shows: an address built from `cfg.items.slice(1)` over a fetched record is a shape where `cfg.items[1]`
-   carries bytes.
+   method of an object example other than one js_concolic_call_forwards names, a `.call` reached as a value
+   rather than at a call operator); the result carries no example. Next diff: IsArray over an unknown asked of
+   its example (§7.2.2, which Array.isArray and concat's IsConcatSpreadable both run), then `concat` forwarded.
+   How its absence shows: an address built from `cfg.items.concat(more)` over a fetched record is a shape
+   where `cfg.items[0]` carries bytes.
    Named residual. Not covered: a throw another value of the unknown would reach while its example's run
    completes normally (`x.toFixed(d)` with an unknown `d`). Next diff: the outcome asked on every run, with the
    normal completion stated real, once a builtin whose throw no operand can reach declares so at its definition.
@@ -95746,10 +95793,12 @@ enum { CCALL_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_concolic_call_steps[] = { CCALL_STAGES(JS_STEP_STAGE_LABEL) NULL };
 enum { CCALL_NORMAL, CCALL_THROW };   /* the outcome fork's completions; the normal one is numbered first */
 
-/* Whether `fex` is one of Array.prototype's callback methods, which the call forwards: §23.1.3's algorithms read
-   their receiver only through [[Get]] and LengthOfArrayLike, which over an unknown are the per-element member
+/* Whether `fex` is an Array.prototype method the call forwards: these §23.1.3 algorithms read their receiver
+   only through [[Get]], [[HasProperty]] and LengthOfArrayLike, which over an unknown are the per-element member
    reads (each an unknown derived from the receiver, carrying its example's element) and the per-position length
-   forks, so the builtin's own step machine runs the page's callback on every element a world has. */
+   forks, so the builtin's own step machine runs on every element a world has. slice's ArraySpeciesCreate takes
+   IsArray false for an unknown (js_is_array tests the class) and creates an Array, which is what the
+   constructor of a parsed reply's array, %Array%, creates too. */
 static bool js_concolic_call_forwards(JSValueConst fex)
 {
     JSObject *fp = JS_VALUE_GET_OBJ(fex);
@@ -95760,7 +95809,8 @@ static bool js_concolic_call_forwards(JSValueConst fex)
     case STEPDEF_ARRAY_FILTER: case STEPDEF_ARRAY_REDUCE: case STEPDEF_ARRAY_REDUCE_RIGHT:
     case STEPDEF_ARRAY_FIND: case STEPDEF_ARRAY_FIND_INDEX: case STEPDEF_ARRAY_FIND_LAST:
     case STEPDEF_ARRAY_FIND_LAST_INDEX: case STEPDEF_ARRAY_SORT: case STEPDEF_ARRAY_TOSORTED:
-    case STEPDEF_ARRAY_FLATMAP:
+    case STEPDEF_ARRAY_FLATMAP: case STEPDEF_ARRAY_SLICE: case STEPDEF_ARRAY_INDEXOF:
+    case STEPDEF_ARRAY_LASTINDEXOF:
         return true;
     default:
         return false;
