@@ -359,28 +359,14 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
    the browser, and `msg` the page's capture of the response body, joined on (documentId, method, URL,
    ordinal). */
 function _httpRecord(tabId, msg, wr, frameId, documentId) {
-  // Non-network URL schemes. Page-local blobs/data URIs go through fetch()
-  // but produce an empty hostname, which breaks service grouping ("" bucket)
-  // and isn't reverse-engineerable API traffic.
-  if (/^(blob|data|file|chrome(-extension)?|about):/i.test(wr.url)) return;
-
+  /* Every joined request is filed: the log holds each fetch()/XHR the page made, and what this function
+     learns from it is decided by the response's content below, never by its address. The browser reports
+     only network requests to the `xmlhttprequest` listener, and intercept.js captures none of this tool's
+     own `_internal_probe` requests, so neither needs a filter here. */
+  DCHECK(/^https?:/i.test(wr.url),
+         "a joined webRequest record is not an http(s) request — background.js listens for `xmlhttprequest` " +
+         "requests, which the browser reports only for network schemes");
   const url = new URL(wr.url);
-
-  // Filter internal extension requests
-  if (url.hash.includes("_internal_probe")) return;
-
-  // Static-asset filtering is CONTENT-based (see classifyResponseAsset
-  // below). URL extensions do not decide API-vs-asset here — an API endpoint
-  // at /users/42/avatar.png that returns JSON metadata is still an API, and
-  // a dynamic endpoint like /models/duck.glb returning a binary 3D model is
-  // still an asset. The body's magic bytes are the source of truth.
-
-  // Filter telemetry/tracking noise
-  const noisePaths = ["/gen_204", "/client_204", "/jserror", "/ulog", "/log", "/error", "/collect"];
-  if (noisePaths.some((p) => url.pathname.includes(p))) return;
-
-  // Skip internal probe requests
-  if (url.searchParams.has("_probe")) return;
 
   const tab = _docForLearning(documentId);
   let service = extractInterfaceName(url);
