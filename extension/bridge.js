@@ -971,10 +971,13 @@ function clusterKeyOf(msg) {
    v3 adds `prefs` (the configured device share, see residency, and the egress table): this zone's state lives
    in IndexedDB, never `chrome.storage.local`, beside the store it is about.
    v4 adds `novelty`, lib/novelty-set.js's partitions keyed by origin: the identities every session of a
-   cluster emitted, which is what makes a resumed or second document's reward novelty against all of them. */
+   cluster emitted, which is what makes a resumed or second document's reward novelty against all of them.
+   v5 adds `bodies` (lib/body-store.js): an entry names its document by digest (`doc`) and the bytes are stored
+   once, counted by the entries naming them. Entries an older build wrote inline are converted once, after the
+   open, by frontierBodiesReady, since a digest cannot be computed inside the upgrade transaction. */
 function idbOpen() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open("apiclient-frontier", 4);
+    const r = indexedDB.open("apiclient-frontier", 5);
     r.onupgradeneeded = (ev) => {
       const db = r.result;
       if (ev.oldVersion < 2) {   // v1's entry grammar cannot state its document's response; it is not resumable
@@ -983,6 +986,7 @@ function idbOpen() {
       }
       if (ev.oldVersion < 3 && !db.objectStoreNames.contains("prefs")) db.createObjectStore("prefs");
       if (ev.oldVersion < 4 && !db.objectStoreNames.contains("novelty")) db.createObjectStore("novelty");
+      if (ev.oldVersion < 5 && !db.objectStoreNames.contains("bodies")) db.createObjectStore("bodies");
     };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
@@ -1015,6 +1019,19 @@ function idbWrite(store, durability, write) {
 /* A person's setting, written "strict": §2.7 asks for "strict" "in cases where reducing the risk of data loss
    outweighs the impact to performance and power", and a setting is written once per act. Rejects with the
    transaction's failure, which the caller reports (prefWriteOutcome). */
+/* idbWrite over several stores in one transaction, so an entry and the body references it implies commit
+   together; `write` receives the object stores by name. */
+function idbWriteStores(stores, durability, write) {
+  return idbOpen().then((db) => new Promise((res, rej) => {
+    const tx = db.transaction(stores, "readwrite", { durability });
+    tx.oncomplete = () => res();
+    tx.onabort = () => rej(tx.error || new DOMException("the " + stores.join("+") + " transaction was aborted",
+                                                        "AbortError"));
+    const by = {};
+    for (const n of stores) by[n] = tx.objectStore(n);
+    write(by);
+  }));
+}
 function frontierPrefPut(name, value) {
   return idbWrite("prefs", "strict", (s) => s.put(value, name));
 }
@@ -1311,8 +1328,7 @@ async function frontierShare() {
    induces, not as an accounting identity with the disk. */
 function frontierDocBytes(e) {
   if (e.shed === true) return 0;
-  const h = (e.html instanceof Uint8Array) ? e.html.length : e.html.length * 2;
-  return h + e.code.length * 2;
+  return e.docBytes + e.code.length * 2;
 }
 /* The tiebreak for which tail entry gives up its document first: a cheap test on the record, not a proof,
    because a wrong answer costs only a re-fetch (a residue whose document does not come back keeps its recipes
@@ -1332,7 +1348,9 @@ function frontierRederivable(e) {
 /* The store's decisions, counted where they are made, since a share cannot be observed by its outcome:
    documents shed, re-derived, and stranded (shed and then not fetchable back, the costly direction), plus
    `overShare`, the bytes residency refused to give back because they were the only copy of a residue. */
-const _frontierStats = { shed: 0, rederived: 0, stranded: 0, docBytes: 0, overShare: 0 };
+/* `docBytes` is what the document halves occupy with each body counted once; `docBytesNamed` what they would
+   occupy if every entry held its own copy, so the pair is what storing a body once by digest saved. */
+const _frontierStats = { shed: 0, rederived: 0, stranded: 0, docBytes: 0, docBytesNamed: 0, overShare: 0 };
 /* Residency, restored at the one door that can break it. "The stored document halves fit the share" is an
    invariant of the store and only `frontierPut` can falsify it, so it is re-established there; there is no
    pressure loop or trigger.
@@ -1342,9 +1360,19 @@ const _frontierStats = { shed: 0, rederived: 0, stranded: 0, docBytes: 0, overSh
 async function frontierResidency() {
   const share = await frontierShare();
   const rows = [];
-  let total = 0;
-  for (const row of (await frontierIndex()).values()) { total += row.bytes; if (row.bytes > 0) rows.push(row); }
+  /* How many resident entries name each body: a body's bytes are freed when the last of them is shed. */
+  const names = new Map();
+  let total = 0, named = 0;
+  for (const row of (await frontierIndex()).values()) {
+    named += row.bytes;
+    if (row.bytes > 0) rows.push(row);
+    if (row.doc === null) { total += row.bytes; continue; }
+    total += row.bytes - row.docBytes;
+    if (!names.has(row.doc)) total += row.docBytes;
+    names.set(row.doc, (names.has(row.doc) ? names.get(row.doc) : 0) + 1);
+  }
   _frontierStats.docBytes = total;
+  _frontierStats.docBytesNamed = named;
   _frontierStats.overShare = 0;
   if (total <= share) return;
   /* Highest weight first, so the share is spent on what the one order values most. */
@@ -1379,9 +1407,12 @@ async function frontierResidency() {
                    credentialed: e.credentialed, provenance: frontierProvenance(e), arrival: frontierArrival(e),
                    sandbox: frontierSandbox(e), addressSpace: frontierAddressSpace(e), shed: true };
     frontierRecord(shed, "was shed to the configured share");
-    await frontierWrite(e.key, shed);
+    await frontierWrite(e.key, shed, undefined);
     if (_frontierIndexBuilt) _frontierIndex.set(e.key, frontierRow(shed));
-    total -= row.bytes;
+    /* The inventory always goes; the body only with its last name. */
+    total -= row.bytes - row.docBytes;
+    names.set(row.doc, names.get(row.doc) - 1);
+    if (names.get(row.doc) === 0) total -= row.docBytes;
     _frontierStats.shed++;
   }
   _frontierStats.docBytes = total;
@@ -1405,10 +1436,13 @@ function frontierRecord(e, when) {
          "entry exists because a run finished, so its visits are at least one, and this is the divisor that " +
          "amortises the demonstrated surface over the fetches spent on it; without it a document that has " +
          "been re-fetched fifty times ranks exactly like one nobody has ever opened");
-  DCHECK((e.html !== undefined) !== (e.shed === true),
+  DCHECK((e.doc !== undefined) !== (e.shed === true),
          "a cold-tier entry " + when + " claiming `shed=" + String(e.shed) + "` while its document half is " +
-         (e.html === undefined ? "absent" : "present") + " — the two are complements, and a record that " +
+         (e.doc === undefined ? "absent" : "present") + " — the two are complements, and a record that " +
          "disagrees with itself is read as a document by one consumer and as a re-fetchable residue by another");
+  DCHECK(e.html === undefined,
+         "a stored cold-tier entry " + when + " holds its document inline — the store names a document by its " +
+         "digest (lib/body-store.js), and frontierBodiesReady converts every entry an older build wrote");
   DCHECK(e.stranded !== true || e.shed === true,
          "a cold-tier entry " + when + " marked STRANDED while it still holds its document — stranded means a " +
          "shed entry's proved re-derivation stopped working, and an entry with its bytes has nothing to " +
@@ -1422,7 +1456,10 @@ function frontierRecord(e, when) {
            "keeps, so shedding an entry down to nothing is the reset this category exists instead of");
     return e;
   }
-  return frontierDoc(e, when);
+  DCHECK(typeof e.doc === "string" && /^[0-9a-f]{64}$/.test(e.doc) && Number.isInteger(e.docBytes) &&
+         e.docBytes >= 0 && typeof e.code === "string",
+         "a cold-tier entry " + when + " names its document by no digest, or with no size or script inventory");
+  return e;
 }
 /* The cold tier's edges surface failure instead of answering empty, since an empty answer is exactly what a
    first visit looks like and the continuous frontier would silently become per-session. A DCHECK, not a CHECK:
@@ -1435,6 +1472,7 @@ function frontierFail(op, err) {
 }
 async function frontierGet(key) {
   try {
+    await frontierBodiesReady();
     const db = await idbOpen();
     return await new Promise((res, rej) => { const t = db.transaction("frontier").objectStore("frontier").get(key); t.onsuccess = () => res(t.result || null); t.onerror = () => rej(t.error); });
   } catch (e) { RETHROW_FATAL(e); frontierFail("read", e); return null; }
@@ -1459,6 +1497,7 @@ function frontierKeyAddress(key) {
 }
 async function frontierLookup(key, sourceUrl) {
   try {
+    await frontierBodiesReady();
     const db = await idbOpen();
     return await new Promise((res, rej) => {
       const tx = db.transaction("frontier");
@@ -1514,13 +1553,41 @@ function coldLookupOf(fkey, look) {
 /* The one write, settled when its transaction commits (idbWrite). It rejects on failure like every edge here;
    there is no quota arm (`unlimitedStorage`), and residency is asked by frontierPut after the write lands. The
    durability hint is the storage bucket's default: entries are rewritten on every park. */
-function frontierWrite(key, entry) {
-  return idbWrite("frontier", "default", (s) => { if (entry && entry.recipes) s.put(entry, key); else s.delete(key); });
+function frontierWrite(key, entry, value) {
+  const keep = !!(entry && entry.recipes);
+  const doc = keep && entry.doc !== undefined ? entry.doc : null;
+  DCHECK((doc === null) === (value === undefined),
+         "a cold-tier write names a document digest without its bytes, or bytes without a digest");
+  return idbWriteStores(["frontier", "bodies"], "default", (st) => {
+    const g = st.frontier.get(key);
+    g.onsuccess = () => {
+      const old = g.result && g.result.doc !== undefined ? g.result.doc : null;
+      if (old !== null && old !== doc) bodyUnref(st.bodies, old);
+      if (doc !== null && doc !== old) bodyRef(st.bodies, doc, value);
+      if (keep) st.frontier.put(entry, key); else st.frontier.delete(key);
+    };
+  });
+}
+/* The stored form of an in-memory entry (frontierDoc's: its document inline): the document named by digest. */
+async function frontierStoredForm(entry) {
+  frontierDoc(entry, "was written");
+  const stored = Object.assign({}, entry);
+  delete stored.html;
+  stored.doc = await bodyDigest(entry.html);
+  stored.docBytes = bodyBytes(entry.html);
+  return stored;
 }
 async function frontierPut(key, entry) {
-  if (entry && entry.recipes) frontierRecord(entry, "was written");   // before the edge: the grammar, not the storage
   try {
-    await frontierWrite(key, entry);
+    await frontierBodiesReady();
+    if (entry && entry.recipes) {
+      const stored = await frontierStoredForm(entry);
+      frontierRecord(stored, "was written");   // before the edge: the grammar, not the storage
+      await frontierWrite(key, stored, entry.html);
+      entry = stored;
+    } else {
+      await frontierWrite(key, null, undefined);
+    }
     /* The ranking view moves with the store, on the one door that writes it, once the write landed; an unbuilt
        index is skipped because it will be built from the store, which then contains this. */
     if (_frontierIndexBuilt) { if (entry && entry.recipes) _frontierIndex.set(key, frontierRow(entry)); else _frontierIndex.delete(key); }
@@ -1529,8 +1596,43 @@ async function frontierPut(key, entry) {
     await frontierResidency();
   } catch (e) { RETHROW_FATAL(e); frontierFail("write", e); }
 }
+/* A stored document's bytes, by the digest its entry names. */
+async function frontierBody(digest) {
+  try {
+    const db = await idbOpen();
+    const rec = await new Promise((res, rej) => {
+      const t = db.transaction("bodies").objectStore("bodies").get(digest);
+      t.onsuccess = () => res(t.result); t.onerror = () => rej(t.error);
+    });
+    DCHECK(rec !== undefined && Number.isInteger(rec.refs) && rec.refs >= 1,
+           "a cold-tier entry names a body the store does not hold — the entry and its reference are written in " +
+           "one transaction, so the two have parted");
+    return rec === undefined ? null : rec.value;
+  } catch (e) { RETHROW_FATAL(e); frontierFail("body read", e); return null; }
+}
+/* The one reader of the inline document form: entries an older build wrote with `html` are converted to a
+   digest and a body reference, each in its own transaction, before any other edge reads the store. */
+let _frontierBodiesConverted = null;
+function frontierBodiesReady() {
+  if (_frontierBodiesConverted === null) _frontierBodiesConverted = (async () => {
+    try {
+      const db = await idbOpen();
+      const inline = await new Promise((res, rej) => {
+        const t = db.transaction("frontier").objectStore("frontier").getAll();
+        t.onsuccess = () => res((t.result || []).filter((e) => e && e.html !== undefined));
+        t.onerror = () => rej(t.error);
+      });
+      for (const e of inline) {
+        const stored = await frontierStoredForm(e);
+        await frontierWrite(e.key, stored, e.html);
+      }
+    } catch (e) { RETHROW_FATAL(e); frontierFail("body conversion", e); }
+  })();
+  return _frontierBodiesConverted;
+}
 async function frontierAll() {
   try {
+    await frontierBodiesReady();
     const db = await idbOpen();
     return await new Promise((res, rej) => { const t = db.transaction("frontier").objectStore("frontier").getAll(); t.onsuccess = () => res(t.result || []); t.onerror = () => rej(t.error); });
   } catch (e) { RETHROW_FATAL(e); frontierFail("scan", e); return []; }
@@ -1583,7 +1685,8 @@ function frontierRow(e) {
      opens an entry to learn its size. */
   return { key: e.key, sourceUrl: e.sourceUrl, emit: e.emit, visits: e.visits,
            shed: e.shed === true, stranded: e.stranded === true,
-           bytes: frontierDocBytes(e), rederivable: frontierRederivable(e) };
+           bytes: frontierDocBytes(e), rederivable: frontierRederivable(e),
+           doc: e.shed === true ? null : e.doc, docBytes: e.shed === true ? 0 : e.docBytes };
 }
 async function frontierIndex() {
   if (_frontierIndexBuilt) return _frontierIndex;
@@ -5480,7 +5583,11 @@ async function admitSeatLand(seat) {
                           addressSpace: frontierAddressSpace(stored) },
                         "was re-derived for the cold tier");
     } else {
-      doc = frontierDoc(stored, "came back from the cold tier");
+      if (seat.landed.body === null) return null;   // release: frontierBody asserted the reference in dev
+      const inmem = Object.assign({}, stored, { html: seat.landed.body });
+      delete inmem.doc;
+      delete inmem.docBytes;
+      doc = frontierDoc(inmem, "came back from the cold tier");
     }
     /* The principal resumes with the recipe: a parked flow resumes into the same world only under the same
        principal, which cannot be re-derived from the address. The stamp site refuses an empty one. */
@@ -5849,7 +5956,8 @@ const _hostOps = {
          read is needed is known only after the first answers. admitSeatLand makes every decision on a round. */
       admitLoadSeat({ kind: "cold", key: cand.row.key }, async () => {
         const stored = await frontierGet(cand.row.key);
-        return { stored: stored, back: stored && stored.shed ? await frontierRederive(stored) : null };
+        return { stored: stored, back: stored && stored.shed ? await frontierRederive(stored) : null,
+                 body: stored && !stored.shed ? await frontierBody(stored.doc) : null };
       });
     }
     return pick ? pick.census : null;
@@ -6114,6 +6222,7 @@ self.rendererPoolProbe = function rendererPoolProbe() {
 async function frontierClear() {
   try {
     await idbWrite("frontier", "default", (s) => s.clear());
+    await idbWrite("bodies", "default", (s) => s.clear());
     _frontierIndex.clear();   // the ranking view is the store's projection: a cleared store ranks nothing
     /* And the product's known identities, which name what every cleared session found. */
     noveltyClear();

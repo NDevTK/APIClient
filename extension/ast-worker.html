@@ -127,6 +127,8 @@
 <!-- the product's known identities per cluster origin (engine/host/solver/novelty.h spells them; this keeps
      their union and what each instance is owed of it), loaded before the bridge that hands them over. -->
 <script src="lib/novelty-set.js"></script>
+<!-- a parked document's bytes once per digest, counted by the frontier entries that name them -->
+<script src="lib/body-store.js"></script>
 <!-- the v2 host bridge: the ONLY irreducible trusted-zone JS (SECURITY.md) — dynamic-import()s the
      engine WASM lib/qjs/qjs.mjs, drives qjs_step, safe-fetches, persists IDB, installs self.astDispatch. -->
 <script src="bridge.js"></script>
