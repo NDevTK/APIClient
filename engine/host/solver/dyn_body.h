@@ -93,10 +93,6 @@ const char *dyn_body_text(const DynBody *b);
    this pair replaces), and it is kept rather than recomputed for a second reason: the census walks every row of
    every flow, and a `strlen` there is a pass over every byte of every bundle the frontier holds. */
 size_t dyn_body_len(const DynBody *b);
-/* SHA-256 of the bytes as 64 lowercase hex digits, BORROWED for as long as the caller holds a reference:
-   computed once where the body is made, which is a span that already walks every byte (a copy, or the decode
-   that produced an adopted buffer), so no later step pays a pass over a bundle to name it by its content. */
-const char *dyn_body_digest(const DynBody *b);
 
 /* HAVE THESE BYTES ALREADY BEEN PARSED TO COMPLETION BY SOME FLOW OF THIS PROCESS — the direct answer to the
    question `classicCompiles` against a document's program count was being asked to infer, and it lives HERE

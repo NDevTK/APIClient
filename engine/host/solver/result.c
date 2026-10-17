@@ -1399,6 +1399,7 @@ char *result_cold_json(void) {
     METRIC_SET(resumed_flows, resumed.flows);
     METRIC_SET(resumed_cands, resumed.cands);
     METRIC_SET(resumed_worlds, resumed.worlds);
+    METRIC_SET(resumed_refused, resumed.refused);
     METRIC_SET(replay_hits, rp_hits);
     METRIC_SET(replay_left, rp_left);
     METRIC_SET(replay_left_arms, rp_left_arms);

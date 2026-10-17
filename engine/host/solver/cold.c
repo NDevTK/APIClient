@@ -430,7 +430,9 @@ static void park_gen_rec(void)
            "the generation record is not the first in the park document — every record after it is named under "
            "the generation above it, so a reader that met a flow first would rebuild it in the ended session's "
            "namespace and hand a peer a name it already holds a segment for");
-    snprintf(rec, sizeof rec, "g%u", world_session());
+    /* And the spelling every cross-session name in this document is folded in, after a comma, so a later build
+       that folds names otherwise refuses the document whole (cold_resume) rather than meeting names no body has. */
+    snprintf(rec, sizeof rec, "g%u,%d", world_session(), JS_ORPHAN_LOCATOR_SPELLING);
     park_rec(rec);
     /* THE FLAG GOES UP AFTER THE WRITE, SO IT IS A COUNT AND NOT AN INTENTION. park_doc_agrees reads it as the
        number of 'g' records in this document, and one raised BEFORE park_rec would make that identity false
@@ -631,12 +633,10 @@ static void park_rec_world(const char *vector)
  *
  * WHAT THE LOCATOR IS AND WHY IT IS NOT A POSITION. Neither name a session already has survives it: the
  * function object is a live heap reference, and the index of the take that produced it is a fact about one heap
- * at one instant. quickjs's JS_OrphanHash composes what the BUNDLE determines instead — the script, the
- * position in that script, and the body's own text — which is stable across sessions for the reason the whole
- * tier rests on: the same bytes compile the same way. An older sketch of this record carried a hash of the
- * SOURCE TEXT alone, and that is the one composition that does not work: a minified bundle repeats
- * `function(e){return e.default}` dozens of times, so the name would have identified a SET and the resume would
- * have driven whichever member of it the heap walk met first.
+ * at one instant. quickjs's JS_OrphanHash composes what the BUNDLE determines instead — the script's content
+ * and the body's position in it — which is stable across sessions for the reason the whole tier rests on: the
+ * same bytes compile the same way. The position is what keeps it a member's name: a minified bundle repeats
+ * `function(e){return e.default}` dozens of times, and a hash of a body's text alone would name the set.
  *
  * SIXTEEN LOWER-CASE HEX DIGITS, FIXED WIDTH AND SEPARATOR-FREE — the same self-delimiting property that makes
  * a decision slot nine characters, and for the same reason: the field is the whole record, so a reader that
@@ -1721,7 +1721,21 @@ void cold_resumed(ColdResumed *out)
     *out = g_resumed;
 }
 
-void cold_resume(JSContext *ctx, const char *recipes)
+/* Whether `recipes` opens with a generation record stating this build's name spelling: `g<digits>,<spelling>`. */
+static int park_doc_spelling_current(const char *recipes)
+{
+    const char *q = recipes;
+    char *ep;
+    long sp;
+
+    if (*q++ != 'g' || *q < '0' || *q > '9') return 0;
+    while (*q >= '0' && *q <= '9') q++;
+    if (*q++ != ',') return 0;
+    sp = strtol(q, &ep, 10);
+    return ep != q && (*ep == ';' || *ep == '\0') && sp == JS_ORPHAN_LOCATOR_SPELLING;
+}
+
+int cold_resume(JSContext *ctx, const char *recipes)
 {
     void **seg = NULL;
     long seg_n = 0, seg_cap = 0, flows = 0, k;
@@ -1741,6 +1755,14 @@ void cold_resume(JSContext *ctx, const char *recipes)
            "the cold tier was asked to resume an empty park document — a document with no residue DELETES its "
            "cold entry, so a caller reaching here has confused 'fully explored' with 'paged out'");
     memset(&g_resumed, 0, sizeof g_resumed);
+    /* A residue an older build wrote names bodies and sites by another fold; it is refused whole, as an old
+       novelty spelling is, and the session starts from its boot flow. Stored state from the past is input. */
+    if (!park_doc_spelling_current(recipes)) {
+        g_resumed.refused = 1;
+        printf("@RESUMED 0\n");
+        fflush(stdout);
+        return 0;
+    }
     /* THIS IS AN APPEND, NOT A SEED, and the two used to be one act. It asserted the frontier was EMPTY and
        assigned its park-local ordinals into it as though the document were the whole of what exists — which is
        true of the session-start rebuild and false by construction of the thing this tier is for: a PARTIAL
@@ -1793,7 +1815,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
                legitimately writes (solver/world.c: a document reaching world_registry_init for the first time
                is generation 0), so nothing downstream can tell them apart either.
                TWO ASSERTS AND NOT ONE, because they refuse different things — a field that was not read, and a
-               record that carries something after the field — and a single condition over both would report
+               record whose name spelling is not this build's — and a single condition over both would report
                whichever fired under the message written for the other. */
             gen = (uint32_t)strtoul(q, &ep, 10);
             DCHECK(ep != q,
@@ -1802,8 +1824,9 @@ void cold_resume(JSContext *ctx, const char *recipes)
                    "an unreadable record and a real `g0` are one value. The resumed session would mint in "
                    "generation 1 — the namespace the first resumed session of this document already used — and "
                    "a peer that never left memory keys its segments on exactly those names");
-            DCHECK(ep == end, "a generation record carries something after its number — the record is one "
-                              "unsigned integer and nothing else");
+            DCHECK(ep < end && *ep == ',' && strtol(ep + 1, NULL, 10) == JS_ORPHAN_LOCATOR_SPELLING,
+                   "a generation record carries no name spelling after its number — park_doc_spelling_current "
+                   "admitted this document, so the two readers of one record disagree");
             world_session_resume(gen);
         } else if (kind == 'w') {
             /* A PEER'S TIMELINE, RE-MATERIALIZED FROM THE ONE THING ABOUT IT THAT HAS AN IDENTITY OUTSIDE THE
@@ -2358,6 +2381,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
        what was rebuilt while this function held the answer. */
     printf("@RESUMED %ld\n", flows);
     fflush(stdout);
+    return 1;
 }
 
 void cold_free(void)

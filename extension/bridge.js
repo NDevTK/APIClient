@@ -2952,8 +2952,9 @@ function engineBootFailed(eng, e) {
   _reserveStats.failed++;
 }
 /* How many parked flows seeded this session's frontier, read once where the seeding happened. solver/cold.c
-   prints `@RESUMED <n>` from cold_resume, called only for a non-empty residue, after DCHECKing `flows > 0`, so
-   an absent line and a zero are distinct. `asked` (this zone composed the `recipes` argument) and the line are
+   prints `@RESUMED <n>` from cold_resume, called only for a non-empty residue: `n >= 1` after a rebuild (it
+   DCHECKs `flows > 0`), and 0 for a residue refused whole for an older build's name spelling (solver/cold.h).
+   An absent line and a zero are distinct. `asked` (this zone composed the `recipes` argument) and the line are
    asserted against each other: a residue with no line is a silent rebuild, a line with no residue a resume of
    a frontier never given. Release answers `null`, not `0`, for asked-but-silent, since the count is unknown. */
 function engineResumeCount(lines, asked) {
@@ -2971,10 +2972,6 @@ function engineResumeCount(lines, asked) {
            "once per session and the frontier is seeded once, so a second line is a second rebuild landing on " +
            "top of a frontier that already stands on the first one's segments");
     n = Number(tail);
-    DCHECK(n >= 1,
-           "the engine reported a rebuild of " + n + " flows — cold_resume DCHECKs `flows > 0` before it " +
-           "prints, so a zero here is a residue whose whole point was unreachable arriving as a number this " +
-           "zone would render as a successful resume of nothing");
   }
   DCHECK((n >= 0) === asked,
          asked ? "this zone handed the engine a parked residue and the engine reported no rebuild — the " +

@@ -3101,27 +3101,20 @@ JS_EXTERN uint32_t JS_OrphanGen(JSRuntime *rt);
 typedef int JSOrphanBornFn(JSContext *ctx, JSValueConst fn, int arg_count, void *opaque);
 JS_EXTERN void JS_SetOrphanBornHook(JSRuntime *rt, JSOrphanBornFn *hook, void *opaque);
 /* THE CROSS-SESSION NAME OF ONE ORPHAN'S BODY — what a host writes down so a LATER session can drive the same
-   function again. Neither of the two names a session already has survives it: a function object is a live heap
-   reference, and a position in the heap walk above is a fact about one heap at one instant. So the locator is
-   composed of what the BUNDLE determines and the session does not — the script the body was compiled from, WHERE
-   IN THAT SCRIPT the body begins, and the body's own source text — and it is stable across sessions for the
-   simple reason that the same bytes compile the same way.
-   ALL THREE ARE LOAD-BEARING. Source text alone does not identify a body in a minified bundle: `function(e){
-   return e.default}` occurs dozens of times in one webpack output, so a hash of the text alone would name a set
-   and the resume would drive whichever member it met first. Position alone changes with every byte the server
-   prepends, so a hash of the position alone silently stops matching the day a banner is added. Together, a
-   mismatch means the file genuinely changed, which is the honest answer.
-   IT NAMES THE BYTECODE, NOT THE CLOSURE, for the same reason the take does: `entered` is a bit on the
-   JSFunctionBytecode, so one body is one orphan however many closures of it a factory has made, and two
-   closures of one body must therefore hash the same.
-   ALLOCATION-FREE — the interned filename's characters and the source buffer are read in place — so it may be
-   called from inside the object-list walk above. `fn` must be an object with a bytecode body; a C function, a
-   bound function and a Proxy have no body to name and are never orphans. */
+   function again. A function object is a live heap reference and a position in the heap walk is a fact about one
+   heap, so the locator is what the BUNDLE determines: the content digest of the script the body was compiled
+   from and the body's position in it (line relative to the script's first, column). The script is named by its
+   bytes, not its address, so one bundle served at two URLs names each body once; changed bytes name none of the
+   old bodies. A position names a member because the bytes it indexes are immutable, which also separates the
+   dozens of identical one-line bodies a minifier emits.
+   IT NAMES THE BYTECODE, NOT THE CLOSURE, for the take's reason: `entered` is a bit on the JSFunctionBytecode,
+   so two closures of one body hash the same. ALLOCATION-FREE, so it may be called inside the object-list walk.
+   `fn` must be an object with a bytecode body compiled by this runtime. */
 JS_EXTERN uint64_t JS_OrphanHash(JSContext *ctx, JSValueConst fn);
-/* The name of the script an orphan's body was compiled from, the filename JS_OrphanHash folds first, so a host
-   holding the bytes it compiled under that name can name them by their content. Same precondition as
-   JS_OrphanHash; the string is the caller's to free with JS_FreeCString. */
-JS_EXTERN const char *JS_OrphanScriptName(JSContext *ctx, JSValueConst fn);
+/* The spelling of JS_OrphanHash's composition, which a host writes beside every name it persists, so a name
+   folded by an older composition is refused whole rather than met as a name no body has. 2: the script's content
+   digest and the body's position in it; 1 (never written down): the script's address, position and body text. */
+#define JS_ORPHAN_LOCATOR_SPELLING 2
 /* WHERE THE PAGE'S OWN CODE IS STANDING, as a CALL SITE rather than as a body — the locator above folded over
    the nearest bytecode frame's body PLUS the byte offset of the opcode that frame is standing at, so two calls
    in one minified function are two names where JS_OrphanHash gives them one. Answers about the nearest frame
@@ -3161,7 +3154,7 @@ typedef struct {
 } JSNetSiteAhead;
 JS_EXTERN void     JS_FlowNetSiteAhead(const JSValue *flow, JSNetSiteAhead *out);
 /* THE NAME OF AN INTRINSIC OF THIS REALM — the OTHER name source a value can have, for the creator kind
-   JS_OrphanHash's composition cannot reach. A locator built from a script, a position and a body's text names
+   JS_OrphanHash's composition cannot reach. A locator built from a script's content and a position names
    nothing for `Array.prototype`: no page created it. An intrinsic is a SINGLETON of its realm, so the SLOT it
    occupies is its whole name, and a slot may name it because the class registry is fixed at each class's own
    definition rather than being an ordinal over a set the page mutates. Answered by walking the per-realm
@@ -3213,8 +3206,8 @@ JS_EXTERN JSValue  JS_SymbolRegistryKey(JSContext *ctx, JSValueConst v);
  * question is THIS function's: a caller that had to ask it would be keeping a list of classes in a file that
  * cannot tell a bound function from a Proxy, which is the whole reason this exists beside JS_OrphanHash.
  *
- * A CLOSURE the page's own code created. Its SITE is JS_OrphanHash's body locator — (script, line, column,
- * body text), already composed and already this engine's one spelling of "which body" — and that alone is NOT
+ * A CLOSURE the page's own code created. Its SITE is JS_OrphanHash's body locator — (script content,
+ * position), already composed and already this engine's one spelling of "which body" — and that alone is NOT
  * a name, because a body is 1:1 with its position while a CLOSURE is not: a factory called three times is one
  * locator and three functions, and a name shared by three closures would have one call's constraint refine
  * another's branch.

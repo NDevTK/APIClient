@@ -52,7 +52,6 @@
 #include "solver/pending_index.h" /* which records a reply answers, without walking the frontier to find out */
 #include "solver/endpoint.h"    /* the @H surface, and one of the three tables no leak walk in this runtime can see */
 #include "solver/novelty.h"     /* the identity set novelty_free gives back beside the @H surface */
-#include "solver/script_digest.h" /* which bytes each program name was compiled from, for a drive's key */
 #include "solver/attr_shadow.h" /* …and the taint shadow, whose entries are GC objects and are leaked by two hosts */
 #include "solver/metrics.h"     /* the agent's metrics block, released with the agent */
 #include "check.h"
@@ -5828,24 +5827,15 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
        the one place a drive is created; its arms inherit it with the mark (engine_sibling_assemble). */
     sib->orphan_hash = hash;
     /* And how much of this body the product had already explored, read at the seed: the drive's key is the
-       content of the script it was compiled from and its locator (solver/novelty.h's NOVELTY_DRIVE), and the
-       count lowers this drive's optimism and never removes it. Written after the assembly's rank-neutral
-       equality, because the drive is an arrival at the discoverer's coordinate and not a branch of its work.
-       Named residual. Not covered: the locator folds the script's address, so one bundle served at two addresses
-       is two keys. Next diff builds: quickjs's locator taking the script's content digest in place of its
-       filename. Absence shows as: a drive of a cache-busted copy (`app.js?v=2`) reading `seen` 0 beside a
-       drive of the same body at `app.js?v=1` that the product holds. */
+       body's locator (solver/novelty.h's NOVELTY_DRIVE), which is its script's content and its position there,
+       so one bundle at two addresses is one key. The count lowers this drive's optimism and never removes it.
+       Written after the assembly's rank-neutral equality, because the drive is an arrival at the discoverer's
+       coordinate and not a branch of its work. */
     {
-        const char *name = JS_OrphanScriptName(ctx, t.fn);
-        char loc[17], *script;
-        const char *fields[2];
-        CHECK(name != NULL, "engine: OOM reading a driven body's script name");
-        script = script_digest_identity(name);
-        JS_FreeCString(ctx, name);
+        char loc[17];
+        const char *fields[1] = { loc };
         snprintf(loc, sizeof loc, "%016llx", (unsigned long long)hash);
-        fields[0] = script; fields[1] = loc;
-        flow_set_orphan_seen(sib, (int64_t)novelty_drive_note(novelty_id(NOVELTY_DRIVE, fields, 2), sib->visits));
-        free(script);
+        flow_set_orphan_seen(sib, (int64_t)novelty_drive_note(novelty_id(NOVELTY_DRIVE, fields, 1), sib->visits));
     }
     /* Where it enters the queue, asserted at the one entry that manufactures its own work: a drive entering at
        virtual time zero would carry the full optimism bonus ahead of the backlog, and a bundle has thousands of
@@ -8596,10 +8586,6 @@ static int flow_step(JSContext *ctx, Flow *f) {
                parse result over the source text and step 34's base URL, which `prog_name` is for an inline row.
                Nothing runs, so the row is left here; a parse result whose error to rethrow is set is reported
                (§8.1.4.6) as a frame, the shape §8.1.4.4 step 8's report takes, and leaves the row when it ends. */
-            /* Which bytes this program name stands for, so a drive of a body compiled here is keyed by them. */
-            DCHECK(f->script_i < f->dyn_n && dyn_body_text(f->dyn[f->script_i]) == body,
-                   "the row the cursor names is not the row whose bytes are about to be compiled");
-            script_digest_note(prog_name, f->dyn[f->script_i]);
             if (stype == SCRIPT_TYPE_IMPORTMAP) {
                 DCHECK(flow_dyn_url(f) == NULL,
                        "an import map row carries an address — only an inline `importmap` script is a row");
@@ -10201,8 +10187,9 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     DCHECK(flow_count() == 0,
            "a session began over a frontier that already has members — the boot flow and a parked residue are "
            "alternative seedings");
-    if (recipes && *recipes) cold_resume(ctx, recipes);
-    else flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* the first flow: the page's scripts, empty decision vector */
+    /* A residue refused whole for an older name spelling seeds the boot flow, as no residue does. */
+    if (!(recipes && *recipes && cold_resume(ctx, recipes)))
+        flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* the first flow: the page's scripts, empty decision vector */
     /* The routing latch is answered here, where the answer is known: only the resume above opens a claim on an
        orphan's body, so the frontier holds one now or none for the session. Closing it here rather than on the
        first closure a page builds makes engine_orphan_born free for every session that inherited no drive, and
@@ -11840,7 +11827,6 @@ void solver_agent_free(JSContext *ctx)
     /* And the identity set with the tables whose credit sites filed it: an identity left standing would assert
        against the next agent's first mint of the same record. */
     novelty_free();
-    script_digest_free();
     /* The page-error console, beside the other emission table and after the whole platform, so its tables' rows
        and its route latch do not outlive the agent. Safe here because every writer is gone, and there are two
        kinds: a flow (`flow_step`, `flow_run_one_job`, a module's rejection reaction), all released by

@@ -106,6 +106,9 @@ METRIC(resumed_segs, "resumedSegs", CONSTANT, "segment", AGENT, "solver/cold.c",
 METRIC(resumed_flows, "resumedFlows", CONSTANT, "member", AGENT, "solver/cold.c", INT)
 METRIC(resumed_cands, "resumedCands", CONSTANT, "member", AGENT, "solver/cold.c", INT)
 METRIC(resumed_worlds, "resumedWorlds", CONSTANT, "world", AGENT, "solver/cold.c", INT)
+/* 1 when the residue handed over was refused whole: an older build folded its cross-session names otherwise
+   (cold.h's cold_resume). `resumed` is then 0 beside it. */
+METRIC(resumed_refused, "resumedRefused", CONSTANT, "rebuild", AGENT, "solver/cold.c", INT)
 /* The path half's verdict rows, lifetime counts. Units differ: `replayHits` and `replayLeftArms`
    are arms (decision-vector slots), `replayLeft` is divergence events; their identity is asserted
    in result_cold_json. They say what the `resumed*` rows cannot: whether a rebuilt session followed its

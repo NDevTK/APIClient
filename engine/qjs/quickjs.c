@@ -1400,10 +1400,13 @@ typedef struct JSFunctionBytecode {
     int pc2line_len;
     uint8_t *pc2line_buf;
     char *source;
-    /* THIS BODY'S LOCATOR, FOLDED ONCE — (script, line, column, body text) as orphan_hash_body composes it.
-       It is a MEMO and not a second name: the fold is O(source_len) and a top-level program's source is the
-       WHOLE SCRIPT, so a caller asking per DOM write would hash megabytes per write. Asked lazily because the
-       overwhelming majority of bodies are never named at all.
+    /* THE CONTENT OF THE SCRIPT THIS BODY WAS COMPILED FROM — FNV-1a 64 over every byte the compile was handed,
+       never 0 — and that compile's first line, so a body's position is read relative to its own script. Both are
+       the compile's, shared by every body of it; 0 for a body read back from serialized bytecode. */
+    uint64_t script_digest;
+    int script_line0;
+    /* THIS BODY'S LOCATOR, FOLDED ONCE — (script content, position) as orphan_hash_body composes it. A MEMO and
+       not a second name, asked lazily because the overwhelming majority of bodies are never named at all.
        0 MEANS "NOT YET FOLDED" AND IS NOT A SENTINEL OVER A POPULATION. Every other reserved value in this
        engine has to be proved disjoint from the real one; this one does not, because the only cost of a body
        whose fold genuinely IS zero is that it is folded again next time and answers the same number. There is
@@ -1565,8 +1568,8 @@ typedef struct JSRegExp {
  * engine's hottest allocation and JS_RunningSiteHash WALKS THE STACK, which is the reason this class was left
  * until last. The walk is short — outward to the first frame with a bytecode body, one hop from an object
  * literal — and the expensive-looking half of it is NOT paid per allocation: orphan_hash_body MEMOIZES into
- * `b->locator` and returns that field on every call after the first for a given body, so the filename fold and
- * the body-text fold happen once per body and never once per object. What is paid per plain object is the walk,
+ * `b->locator` and returns that field on every call after the first for a given body, so the locator's fold
+ * happens once per body and never once per object. What is paid per plain object is the walk,
  * one memoized field read, four FNV rounds over the byte offset, and a counter increment.
  *
  * NAMED RESIDUAL — THE SITE REPRODUCES WITHIN A BUILD AND NOT ACROSS ONE, AND THIS FIELD IS THE FIRST
@@ -57159,6 +57162,9 @@ typedef struct JSFunctionDef {
 
     /* pc2line table */
     JSAtom filename;
+    /* The compile's script digest, written on the ROOT def only, once the parse has read every byte
+       (js_eval_compile_finish); js_create_function copies it from the root into every body. */
+    uint64_t script_digest;
     JSAtom eval_origin;   /* JS_ATOM_NULL unless from_eval: see JSFunctionBytecode.eval_origin */
     int line_num;
     int col_num;
@@ -57199,6 +57205,11 @@ typedef struct JSToken {
 struct JSParseFrame;
 typedef struct JSParseState {
     JSContext *ctx;
+    /* THE SCRIPT'S CONTENT DIGEST, FOLDED AS THE PARSE READS: `digest_at` is how far, and it only advances, so
+       a lexer that backtracks folds nothing twice. Folded at each production's dispatch rather than in one pass
+       at the start, so a script's length never appears in one stint's cost (solver/rest_unit.h's bound). */
+    uint64_t digest;
+    const uint8_t *digest_at;
     int last_line_num;  /* line number of last token */
     int last_col_num;   /* column number of last token */
     int line_num;       /* line number of current offset */
@@ -57293,6 +57304,18 @@ typedef struct JSParseState {
        from a Script's, so "carry on where you were" is two continuations and a bool cannot say which. */
     uint8_t pgm_resume;
 } JSParseState;
+
+/* Folds the script bytes from `digest_at` up to `to` into the parse's content digest (FNV-1a 64). */
+static void js_parse_digest_to(JSParseState *s, const uint8_t *to)
+{
+    uint64_t h = s->digest;
+    const uint8_t *q = s->digest_at;
+
+    for (; q < to; q++) { h ^= *q; h *= 0x100000001b3ULL; }
+    s->digest = h;
+    if (to > s->digest_at) s->digest_at = to;
+}
+
 enum { PGM_FRESH = 0, PGM_IN_SRCELEM, PGM_IN_FNCTOR };
 
 /* ---- JSON.parse's data types. They sit HERE, below JSParseState, because the step machine at the end of
@@ -61607,6 +61630,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     PD_PUSH_AT(entry, level, parse_flags, op, entry_ptr, entry_line, entry_col);
 
  dispatch:
+    js_parse_digest_to(s, s->buf_ptr);
     if (s->pd_sp == s->pd_base)
         goto done;
     /* THE SUSPENSION POINT, taken UNCONDITIONALLY — there is no non-suspending mode, for the same reason
@@ -77115,6 +77139,12 @@ static JSValue js_create_function_post(JSContext *ctx, JSFunctionDef *fd)
        JSFunctionBytecode structure, avoiding allocation overhead
      */
     b->filename = fd->filename;
+    {
+        const JSFunctionDef *root = fd;
+        while (root->parent) root = root->parent;
+        b->script_digest = root->script_digest;
+        b->script_line0 = root->line_num;
+    }
     b->from_eval = fd->from_eval;
     b->from_inline_script = fd->from_inline_script;
     b->is_program = (fd->parent == NULL);
@@ -77758,6 +77788,8 @@ static void js_parse_init(JSContext *ctx, JSParseState *s,
     s->col_num = 1;
     s->buf_start = s->buf_ptr = (const uint8_t *)input;
     s->buf_end = s->buf_ptr + input_len;
+    s->digest = 0xcbf29ce484222325ULL;
+    s->digest_at = s->buf_start;
     s->line_start = s->buf_ptr;
     s->mark = s->buf_ptr + min_int(1, input_len);
     s->eol = s->buf_ptr;
@@ -78084,6 +78116,10 @@ static JSValue js_eval_compile_finish(JSContext *ctx, JSEvalCompile *ec, int err
         js_module_reexport_imported_bindings(ctx, m, fd);
     }
 
+    /* The script's content digest, complete now that the parse has read to its end; 0 is reserved for a body
+       with no compile behind it, so a fold that lands there is moved off it. */
+    js_parse_digest_to(s, s->buf_end);
+    fd->script_digest = s->digest ? s->digest : 1;
     /* create the function object and all the enclosed functions */
     fun_obj = js_create_function(ctx, fd);
     ec->fd = NULL;   /* consumed by js_create_function on BOTH of its exits */
@@ -114809,50 +114845,29 @@ static uint64_t orphan_hash_u32(uint64_t h, uint32_t v)
     return orphan_hash_bytes(h, b, sizeof b);
 }
 
-/* THE BODY HALF OF A LOCATOR, FACTORED SO THERE IS EXACTLY ONE COMPOSITION OF IT. Two callers need (script,
-   line, column, body text): the orphan's cross-session name below, and JS_RunningSiteHash's CALL-SITE name,
-   which is this fold plus one coordinate. A second copy would be the second spelling of one identity, and it
-   would fail in the direction that costs most here — a site name and a body name folded two different ways
-   over the same body would file one body under two numbers, with nothing anywhere to compare them. */
+/* THE BODY HALF OF A LOCATOR, FACTORED SO THERE IS EXACTLY ONE COMPOSITION OF IT. Two callers need it: the
+   orphan's cross-session name below, and JS_RunningSiteHash's CALL-SITE name, which is this fold plus one
+   coordinate; a second copy would file one body under two numbers.
+   IT IS (THE CONTENT OF THE SCRIPT, THE BODY'S POSITION IN IT): the script's content digest, the line relative to
+   the compile's first, and the column. The script is named by its bytes and not its address, so one bundle
+   served at two URLs (`app.js?v=1` and `?v=2`, a CDN mirror) names its bodies once, and a bundle whose bytes
+   changed names none of the old ones. A position is an ordinal, and it names a member here because the bytes it
+   indexes are immutable: the same content puts the same body at the same offset. The body's own text is not
+   folded, since the content digest already fixes it. Its spelling is JS_ORPHAN_LOCATOR_SPELLING. */
 static uint64_t orphan_hash_body(JSRuntime *rt, JSFunctionBytecode *b)
 {
-    JSAtom filename;
     uint64_t h = 0xcbf29ce484222325ULL;
 
+    (void)rt;
     if (b->locator != 0)
         return b->locator;
-    /* WHICH SCRIPT, by the interned filename's own characters rather than through a formatting buffer: a URL is
-       longer than any fixed buffer worth putting on this stack, and a truncated one would make two chunks that
-       differ only in their content hash suffix name the same body. Wide and narrow are folded identically to
-       their code units, so an atom's storage width — which is a property of how it was built — cannot change
-       the answer. */
-    filename = b->filename;
-    if (__JS_AtomIsTaggedInt(filename)) {
-        h = orphan_hash_u32(h, __JS_AtomToUInt32(filename));
-    } else {
-        JSString *s;
-        DCHECK(filename != JS_ATOM_NULL && filename < rt->atom_size,
-               "an orphan's body names no script at all — every compile in this engine is given a filename, so "
-               "a body without one cannot be found again and the locator would collapse to its position");
-        s = rt->atom_array[filename];
-        h = orphan_hash_u32(h, s->len);
-        if (s->is_wide_char) {
-            uint32_t i;
-            for (i = 0; i < s->len; i++) h = orphan_hash_u32(h, str16(s)[i]);
-        } else {
-            h = orphan_hash_bytes(h, str8(s), s->len);
-        }
-    }
-    /* WHERE IN IT — the two coordinates the parser recorded, which is what separates the dozens of identical
-       one-line bodies a minifier emits. */
-    h = orphan_hash_u32(h, (uint32_t)b->line_num);
+    DCHECK(b->script_digest != 0,
+           "a body asked for its cross-session name has no compile behind it — every body this runtime compiles "
+           "takes its script's content digest at js_create_function, so this one was read back from bytecode");
+    h = orphan_hash_u32(h, (uint32_t)(b->script_digest >> 32));
+    h = orphan_hash_u32(h, (uint32_t)b->script_digest);
+    h = orphan_hash_u32(h, (uint32_t)(b->line_num - b->script_line0));
     h = orphan_hash_u32(h, (uint32_t)b->col_num);
-    /* AND THE BODY'S OWN TEXT, which is what makes a position that has MOVED fail to match rather than match
-       the wrong body. It is saved unconditionally at parse time in this fork; a body that has none (bytecode
-       read back with its source stripped) contributes its zero length and is still named by the two coordinates
-       above, which is why this is a fold and not an assertion. */
-    h = orphan_hash_u32(h, (uint32_t)b->source_len);
-    if (b->source) h = orphan_hash_bytes(h, b->source, (size_t)b->source_len);
     b->locator = h;
     return h;
 }
@@ -114871,18 +114886,6 @@ uint64_t JS_OrphanHash(JSContext *ctx, JSValueConst fn)
            "bound function and a Proxy are never handed over by JS_OrphanTakeOne, so a caller that reached here "
            "with one is naming something the resume can never take back");
     return orphan_hash_body(ctx->rt, p->u.func.function_bytecode);
-}
-
-const char *JS_OrphanScriptName(JSContext *ctx, JSValueConst fn)
-{
-    JSObject *p;
-
-    DCHECK(JS_VALUE_GET_TAG(fn) == JS_TAG_OBJECT,
-           "an orphan's script was asked of something that is not an object — only a function with a body is one");
-    p = JS_VALUE_GET_OBJ(fn);
-    DCHECK(js_class_has_bytecode(p->class_id) && p->u.func.function_bytecode,
-           "an orphan's script was asked of a function with no bytecode body — JS_OrphanTakeOne never hands one over");
-    return JS_AtomToCString(ctx, p->u.func.function_bytecode->filename);
 }
 
 /* ── WHERE THE PAGE'S OWN CODE IS STANDING ───────────────────────────────────────────────────────────────────
@@ -115247,11 +115250,8 @@ int JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
  * page's own bytes produce it again. It is NOT the address, which js_malloc REUSES and which no park carries,
  * and NOT the compiled bytecode's pointer, which is the same objection one field over.
  *
- * EVERY CODE UNIT GOES THROUGH orphan_hash_u32 WHATEVER THE STRING'S STORAGE WIDTH IS, and that is a
- * DIFFERENCE from orphan_hash_body above rather than an oversight. That function folds a narrow atom byte by
- * byte and a wide one unit by unit, which is sound for an ATOM because interning gives one filename one
- * representation. A RegExp's pattern is an ordinary page-built String and js_sub_string KEEPS ITS PARENT'S
- * WIDTH, so `new RegExp("abc")` and `new RegExp(s.slice(2))` over the same three characters can differ in
+ * EVERY CODE UNIT GOES THROUGH orphan_hash_u32 WHATEVER THE STRING'S STORAGE WIDTH IS. A RegExp's pattern is
+ * an ordinary page-built String and js_sub_string KEEPS ITS PARENT'S WIDTH, so `new RegExp("abc")` and `new RegExp(s.slice(2))` over the same three characters can differ in
  * storage width with nothing about the pattern differing at all — and a width-sensitive fold would hand one
  * pattern two sites. That costs no ARM (the ordinal already separates every value one flow mints) and it costs
  * the LOCALITY a site exists for, which is the whole of what makes a site worth composing.

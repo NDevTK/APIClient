@@ -1,18 +1,18 @@
 /* Novelty against the product: `node engine/noveltygate.mjs <binary>`. Each document is its own `--abi` instance
  * (two tabs are two agent clusters); this file plays the zone with extension/lib/novelty-set.js loaded verbatim,
- * absorbing each `@RESULT`'s `_novelty` into the cluster origin's partition and handing it back as `novelty`
- * records. Every fetch gets a network error so frontiers drain; requests are recorded at Fetch §5.6 step 12.
+ * absorbing each `@RESULT`'s `_novelty` into the origin's partition and handing it back as `novelty` records.
+ * Every other fetch gets a network error so frontiers drain; requests are recorded at Fetch §5.6 step 12.
  * Endpoints, over https://app.test where B adds one endpoint and one header to A's two requests:
- *   A, B-alone  handed nothing: every ask paid.
+ *   A, B-alone  handed nothing: every ask paid.   B-stale  A's lines under another spelling: refused whole.
  *   B-known     A's identities at boot (positive control): paid = |B - A|, knownUnpaid = |B ∩ A|, B's header paid.
  *   B-invented  identities nothing emitted (negative control): nothing known-unpaid, the set's size counted.
- *   B-stale     A's lines under another spelling: refused whole.   B-late  handed in round 1: later mints unpaid.
- * Drives of uncalled code, over C and D of https://shop.test sharing /bundle.js, D adding its own function:
- *   C, D-alone  handed nothing: every drive reads a product count of 0.
- *   D-known     C's identities (positive control): the bundle's drives read C's count, rank below their own
- *               visits unlowered and below D's own code seeded at the same unit count; all still run.
- *   D-invented  invented drive lines (negative control): no drive is lowered. Exit 0 only when every row holds.
- */
+ *   B-late      handed in round 1: later mints unpaid.
+ * Drives of uncalled code, over C and D of https://shop.test sharing /bundle.js, D adding its own function, each
+ * handed C's identities except C, D-alone (every drive reads a product count of 0) and D-invented (invented lines,
+ * the negative control: nothing lowered). D-known: the bundle's drives read C's count, rank below their own
+ * visits unlowered, and all run; D-rank: below D's own code at the same unit count. E-moved: the same bytes at
+ * `/static/bundle.js?v=2` give C's identities; F-changed: one appended comment gives none of them.
+ * Exit 0 when every row holds, 1 when one fails, 3 when none fails and a row's witness was not reached. */
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
@@ -55,6 +55,10 @@ const DOC_C = `<!doctype html><script src="/bundle.js"></script>`;
 const DOC_D = `<!doctype html><script src="/bundle.js"></script><script>
 function only() { fetch('/api/only').catch(function () {}); }
 </script>`;
+/* The same bytes at a second address, and changed bytes: the drive key is the script's content, not its URL. */
+const DOC_E = `<!doctype html><script src="/static/bundle.js?v=2"></script>`;
+const BUNDLE_F = BUNDLE + '// v3\n';
+const DOC_F = `<!doctype html><script src="/bundle-f.js"></script>`;
 
 const b64 = (s) => Buffer.from(s).toString('base64');
 
@@ -86,11 +90,14 @@ function run(tag, url, html, boot, late) {
              ASKERS URL (solver/engine.h's engine_pending_split); a network error is JSON `null` and no body. */
           for (const f of owed.splice(0)) {
             const abs = new URL(f[11], url).href;
-            /* The bundle is the one body this zone serves; every other request is a network error. */
-            const reply = new URL(abs).pathname === '/bundle.js'
+            /* The bundles are the only bodies this zone serves; every other request is a network error. */
+            const path = new URL(abs).pathname;
+            const js = path === '/bundle.js' || path === '/static/bundle.js' ? BUNDLE
+              : path === '/bundle-f.js' ? BUNDLE_F : null;
+            const reply = js !== null
               ? [b64(JSON.stringify({ status: 200, statusText: 'OK', headers: [['content-type', 'text/javascript']],
                                       urlList: [abs], computedType: 'text/javascript', type: 'basic' })),
-                 b64(BUNDLE)]
+                 b64(js)]
               : [b64('null'), '-'];
             say(['provide', f[0], f[7], f[8], f[9], f[11], ...reply].join('\t'));
           }
@@ -115,10 +122,16 @@ const kindOf = (nov, kind) => {
 const linesOf = (nov, kind) => new Set(nov.identities.filter((l) => l.startsWith(kind + ' ')));
 const setText = (spelling, lines) => spelling + '\n' + [...lines].map((l) => l + '\n').join('');
 
-let failed = 0;
+let failed = 0, unreached = 0;
 function row(name, ok, what) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(11)} ${what}`);
   if (!ok) failed++;
+}
+/* A row whose claim needs a witness the run may not produce: with none it is unscored, never a pass. */
+function rowReached(name, reached, ok, what) {
+  if (reached) return row(name, ok, what);
+  console.log(`NOT REACHED  ${name.padEnd(11)} ${what}`);
+  unreached++;
 }
 const census = (nov) => nov.kinds.map((k) => `${k.kind} ${k.paid}/${k.asks} paid, ${k.knownUnpaid} known`).join('; ') +
                         `; known ${nov.known}, own ${nov.own} (${nov.ownKnown} of them known), ` +
@@ -199,9 +212,10 @@ const shopKnown = ZONE.noveltyOwed(SHOP, { spelling: null, n: 0 });
   const pairs = bundled.flatMap((b) => own.filter((o) => o.visits === b.visits).map((o) => [b, o]));
   row('D-known', bundled.length > 0 && own.length > 0 && bundled.every((d) => d.seen >= 1) &&
       own.every((d) => d.seen === 0) && bundled.every((d) => opt(d) < 1 / (1 + d.visits)) &&
-      pairs.every(([b, o]) => opt(b) < opt(o)) && hasEndpoint(D1, '/api/shared') && hasEndpoint(D1, '/api/only'),
-      dcensus(D1) + ` — ${pairs.length} equal-visit pair(s): ` +
-      pairs.map(([b, o]) => `${opt(b).toFixed(4)} < ${opt(o).toFixed(4)}`).join(', '));
+      hasEndpoint(D1, '/api/shared') && hasEndpoint(D1, '/api/only'), dcensus(D1));
+  rowReached('D-rank', pairs.length > 0, pairs.every(([b, o]) => opt(b) < opt(o)),
+             `${pairs.length} equal-visit pair(s): ` +
+             pairs.map(([b, o]) => `${opt(b).toFixed(4)} < ${opt(o).toFixed(4)}`).join(', '));
 }
 {
   const invented = new Set();
@@ -210,5 +224,13 @@ const shopKnown = ZONE.noveltyOwed(SHOP, { spelling: null, n: 0 });
   const D2 = await run('d-invented', SHOP + '/d', DOC_D, setText(C._novelty.spelling, invented), null);
   row('D-invented', dlist(D2).every((d) => d.seen === 0) && D2._novelty.known === invented.size, dcensus(D2));
 }
-console.log(failed ? `${failed} row(s) FAILED` : 'every row holds');
-process.exit(failed ? 1 : 0);
+{
+  const E = await run('e-moved', SHOP + '/e', DOC_E, shopKnown, null);
+  row('E-moved', dlist(E).length > 0 && dlist(E).every((d) => cDrives.has(d.identity) && d.seen >= 1) &&
+      hasEndpoint(E, '/api/shared'), dcensus(E));
+  const F = await run('f-changed', SHOP + '/f', DOC_F, shopKnown, null);
+  row('F-changed', dlist(F).length > 0 && dlist(F).every((d) => !cDrives.has(d.identity) && d.seen === 0) &&
+      hasEndpoint(F, '/api/shared'), dcensus(F));
+}
+console.log(failed ? `${failed} row(s) FAILED` : unreached ? `${unreached} row(s) NOT REACHED` : 'every row holds');
+process.exit(failed ? 1 : unreached ? 3 : 0);

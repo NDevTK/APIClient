@@ -22,7 +22,7 @@
     X(NOVELTY_SINK,     "sink",     0)   /* solver/solve.c's search identity: sink class and injection source */ \
     X(NOVELTY_FINDING,  "finding",  0)   /* a fire-verified PoC for that same (class, source) */                 \
     X(NOVELTY_SENDER,   "sender",   0)   /* a sender row a pinned detection demands of that search */            \
-    X(NOVELTY_DRIVE,    "drive",    1)   /* a drive of uncalled code: script content and function locator */
+    X(NOVELTY_DRIVE,    "drive",    1)   /* a drive of uncalled code: quickjs's content locator of the body */
 typedef enum {
 #define NOVELTY_KIND_ENUM(id, token, counted) id,
     NOVELTY_KINDS(NOVELTY_KIND_ENUM)
@@ -38,7 +38,7 @@ typedef struct { uint64_t hi, lo; } NoveltyId;
 
 /* The text a set line starts with, and the first field of every digested spelling: a change to any kind's
    fields is a new spelling, so a set persisted under an older one matches nothing rather than the wrong thing. */
-#define NOVELTY_SPELLING "novelty/1"
+#define NOVELTY_SPELLING "novelty/2"   /* 2: drive keys are quickjs's content locator alone */
 
 /* The scope every identity of this instance is qualified by: the serialization of the root document address's
    origin (URL §4 "URL serializing" over its tuple origin), set once per agent before any credit site runs. An

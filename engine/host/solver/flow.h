@@ -226,12 +226,12 @@ typedef struct Flow {
        work is not in its recipe: re-running the document never calls the function, so the recipe also carries a
        function locator (`orphan_hash`) and a resumed flow drives the body it names. Inherited by a fork. */
     int orphan;
-    /* Where that function is, in a form a later session can find: quickjs's JS_OrphanHash of the script the body
-       was compiled from, its position in that script and its own source text. `fn` dies with the session; this
+    /* Where that function is, in a form a later session can find: quickjs's JS_OrphanHash, the content of the
+       script the body was compiled from and its position in that script. `fn` dies with the session; this
        crosses the tier, stamped when the drive is created and carried unchanged by every arm. 0 for a flow that
        is not a driven orphan, which the park asserts. */
     uint64_t orphan_hash;
-    /* How many drives of this body (solver/novelty.h's NOVELTY_DRIVE: script content and locator) the product
+    /* How many drives of this body (solver/novelty.h's NOVELTY_DRIVE: quickjs's content locator) the product
        had recorded, in every other document and session of this cluster, when this drive was seeded. A term of
        the optimism denominator, `1/(1 + visits + orphan_seen)`: explored code is lowered elsewhere and never
        removed. Written once, at the seed (flow_set_orphan_seen), before the drive is dispatched, and copied by a

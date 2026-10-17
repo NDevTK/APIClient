@@ -932,8 +932,12 @@ const char *cold_park_json(void);
    back to the flows that were not paged out), so the document's park-local ordinals are resolved against a
    table local to THIS call and no live member is read, renumbered or displaced; both directions are asserted at
    the merge. Whether a SESSION starts from a residue or from a fresh boot flow is engine_sched_begin's choice,
-   not this call's — they are alternatives, and the frontier is seeded once. */
-void cold_resume(JSContext *ctx, const char *recipes);
+   not this call's — they are alternatives, and the frontier is seeded once.
+   A document whose generation record does not state this build's JS_ORPHAN_LOCATOR_SPELLING was written by a
+   build whose cross-session names (orphan locators, and every site and creation name folded from one into a
+   decision key) this build cannot meet, so it is refused whole: nothing is rebuilt, `@RESUMED 0` is printed,
+   ColdResumed's `refused` is 1, and this answers 0 so the session seeds a boot flow. 1 otherwise. */
+int cold_resume(JSContext *ctx, const char *recipes);
 
 /* WHAT THE LAST cold_resume REBUILT, PER RECORD KIND — the observable that says which ARMS of the grammar ran.
    `@RESUMED <n>` is printed for the extension because a line on stdout is the only channel that zone has, and
@@ -987,6 +991,8 @@ typedef struct {
        so a 0 that is a MISSING COUNTER cannot reach a reader as a 0 that is an ABSENT RECORD. */
     long commits;
     long delivers;
+    /* 1 when the residue handed over was refused whole for an older name spelling (cold_resume), 0 otherwise. */
+    long refused;
 } ColdResumed;
 void cold_resumed(ColdResumed *out);
 
