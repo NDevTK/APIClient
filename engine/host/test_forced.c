@@ -29998,6 +29998,7 @@ TF_UNIT void second_agent_selftest(const char *origin)
     printf("@A2OK\n");
 }
 
+#ifndef __EMSCRIPTEN__
 /* The tightest memory cgroup limit on this process's path, or UINT64_MAX: cgroup v1's `memory.limit_in_bytes` and
    v2's `memory.max` at each ancestor, since a parent's limit binds its children. */
 static uint64_t native_cgroup_limit(void) {
@@ -30031,14 +30032,17 @@ static uint64_t native_cgroup_limit(void) {
     fclose(cg);
     return best;
 }
+#endif
 
 /* The RAM floor engine_reclaim_tail sells the frontier's tail at is an allocation that fails, and a 64-bit host
    under overcommit never fails one: a memory cgroup kills the process instead, with the tail unsold. So this
    host refuses where the shipped vehicle does: wasm32's address space (build.mjs's WASM_ADDRESS_BYTES, its
    `-sMAXIMUM_MEMORY`), or a tighter memory cgroup limit or RLIMIT_AS already on the process. A sanitized build
-   keeps its own reservation, which an address-space limit would refuse at start. */
+   keeps its own reservation, which an address-space limit would refuse at start; the wasm build of this file is
+   the shipped vehicle itself, whose linear memory is the ceiling. */
 static void native_ceiling_arm(void) {
-#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+#if defined(__EMSCRIPTEN__) || defined(__SANITIZE_ADDRESS__) || \
+    (defined(__has_feature) && __has_feature(address_sanitizer))
     return;
 #else
     struct rlimit rl;
