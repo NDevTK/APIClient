@@ -2083,6 +2083,7 @@ static JSClassID g_ready_slot = JS_INVALID_CLASS_ID;
 static const char *const DOC_READINESS[3] = { "loading", "interactive", "complete" };
 
 static int document_readiness(JSContext *ctx);
+static void document_set_dcl_queued(JSContext *ctx, bool on);
 
 /* HTML §3.1.5's update the current document readiness, all four steps. Step 1 ("if document's current document
    readiness equals readinessValue, then return") stops a `readystatechange` for an unchanged readiness, and makes
@@ -2123,6 +2124,32 @@ static void document_set_ready(JSContext *ctx, int stage)
 void document_set_readiness_loading(JSContext *ctx)
 {
     document_set_ready(ctx, 0);
+    document_set_dcl_queued(ctx, false);   /* the reopened stream reaches §13.2.7 again */
+}
+
+/* Whether §13.2.7 step 6's DOMContentLoaded task has run for this parse. It is its own fact because step 3 makes
+   the readiness "interactive" before step 5 runs the deferred scripts, so the readiness cannot say it. */
+static bool document_dcl_queued(JSContext *ctx)
+{
+    JSValue rec = realm_value_get(ctx, g_ready_slot), v;
+    bool on;
+
+    DCHECK(JS_IsObject(rec), "a realm answered for its DOMContentLoaded latch with no record");
+    v = JS_GetPropertyStr(ctx, rec, "dcl");
+    DCHECK(JS_IsBool(v), "a document's readiness record holds no DOMContentLoaded latch");
+    on = JS_ToBool(ctx, v) != 0;
+    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, rec);
+    return on;
+}
+
+static void document_set_dcl_queued(JSContext *ctx, bool on)
+{
+    JSValue rec = realm_value_get(ctx, g_ready_slot);
+
+    DCHECK(JS_IsObject(rec), "a realm was asked to set a DOMContentLoaded latch it has no record for");
+    JS_SetPropertyStr(ctx, rec, "dcl", JS_NewBool(ctx, on));
+    JS_FreeValue(ctx, rec);
 }
 
 /* This document's readiness: 0 loading, 1 interactive, 2 complete. */
@@ -2250,7 +2277,9 @@ static void completely_finish_loading(JSContext *ctx)
 static int document_done_stage(JSContext *ctx, int stage)
 {
     if (stage == 0) {
-        document_set_ready(ctx, 1);
+        DCHECK(document_readiness(ctx) == 1,
+               "§13.2.7 step 6's DOMContentLoaded task ran before step 3 made the readiness interactive");
+        document_set_dcl_queued(ctx, true);
         /* §3.1.1: DOMContentLoaded is fired at the document and bubbles, so a listener on window hears it through
            the document's ancestors. It is not cancelable. */
         event_target_fire(ctx, doc_here(ctx)->doc_obj,
@@ -2362,6 +2391,32 @@ static bool document_parse_ended(JSContext *realm)
     return d == NULL || !html_parse_insertion_point_defined(lxb_dom_interface_document(d->dom));
 }
 
+/* See document.h. Steps 1, 2 and 4 have nothing to do here: there is no speculative parser, and lexbor's close
+   already set the insertion point to undefined and popped the stack of open elements. */
+int document_parse_end_step(JSContext *ctx)
+{
+    JSValue docs = navigable_tree_order(ctx), len;
+    uint32_t n = 0, i;
+    int did = 0;
+
+    len = JS_GetPropertyStr(ctx, docs, "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    for (i = 0; i < n && !did; i++) {
+        JSValue proxy = JS_GetPropertyUint32(ctx, docs, i);
+        JSContext *realm = window_proxy_realm(ctx, proxy);
+
+        if (document_readiness(realm) == 0 && document_parse_ended(realm) &&
+            engine_document_parse_position(document_doc(realm)) == NULL) {
+            document_set_ready(realm, 1);   /* step 3, which fires `readystatechange` (§3.1.5 step 4) */
+            did = 1;
+        }
+        JS_FreeValue(ctx, proxy);
+    }
+    JS_FreeValue(ctx, docs);
+    return did;
+}
+
 int document_lifecycle_step(JSContext *ctx)
 {
     JSValue docs = navigable_tree_order(ctx), len;
@@ -2375,12 +2430,13 @@ int document_lifecycle_step(JSContext *ctx)
         JSValue proxy = JS_GetPropertyUint32(ctx, docs, i);
         JSContext *realm = window_proxy_realm(ctx, proxy);
         /* §13.2.7 steps 5-6: DOMContentLoaded is queued once the list of scripts that will execute when the
-           document has finished parsing is empty, which is a question about this document's scripts alone. */
-        if (document_readiness(realm) == 0 && document_parse_ended(realm) &&
+           document has finished parsing is empty, which is a question about this document's scripts alone.
+           Step 3 (document_parse_end_step) has already made the readiness interactive. */
+        if (document_readiness(realm) == 1 && !document_dcl_queued(realm) &&
             !engine_document_dcl_scripts_held(document_doc(realm))) {
             document_done_stage(realm, 0);
-            DCHECK(document_readiness(realm) == 1,
-                   "a document's DOMContentLoaded stage ran and left its readiness where it was — this walk "
+            DCHECK(document_dcl_queued(realm),
+                   "a document's DOMContentLoaded stage ran and left its latch where it was — this walk "
                    "would then pick the same document for ever, queueing its listeners again every turn, which "
                    "is a live-lock the scheduler cannot tell from progress");
             did = 1;
@@ -2400,7 +2456,8 @@ int document_lifecycle_step(JSContext *ctx)
            own element component raises and this predicate reads. How its absence would show: a document reaching
            `load` before such an element finished. */
         /* Step 7, the spin over the two as-soon-as-possible lists, asked before step 8's. */
-        if (document_readiness(realm) == 1 && !engine_document_load_scripts_held(document_doc(realm)) &&
+        if (document_readiness(realm) == 1 && document_dcl_queued(realm) &&
+            !engine_document_load_scripts_held(document_doc(realm)) &&
             !document_load_event_delayed(ctx, docs, n, proxy)) {
             document_done_stage(realm, 1);
             DCHECK(document_readiness(realm) == 2,
@@ -3887,6 +3944,7 @@ void document_init(JSContext *ctx)
        document of this agent in one call, so the frontier's single document-lifecycle slot is claimed once, here,
        and given back once at document_agent_free (the setter asserts both). */
     engine_set_document_done_hook(document_lifecycle_step);
+    engine_set_parse_end_hook(document_parse_end_step);   /* §13.2.7 step 3, asked above the sequence */
     agent_state_ptr("document", &g_document_rt,
                     "the runtime §4.5's interface and its ten sub-components declared into, and the latch");
     agent_state_class("document", &g_document_class, "§4.5's interface prototype slot and brand");
@@ -3961,6 +4019,7 @@ void document_install_proto(JSContext *ctx)
         JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
         CHECK(!JS_IsException(rec), "this realm's document-readiness record could not be allocated");
         JS_SetPropertyStr(ctx, rec, "stage", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, rec, "dcl", JS_FALSE);
         realm_value_set(ctx, g_ready_slot, rec);
     }
     /* §7.5.9: page showing is "initially false", built here so it is baseline rather than created inside whichever
@@ -4746,6 +4805,7 @@ void document_agent_free(JSRuntime *rt)
        defect core/agent_state.h records for Indexed Database §2.7.1). First, as element_free's two DOM-write hooks
        are, because the very next call can run a finalizer. */
     engine_set_document_done_hook(NULL);
+    engine_set_parse_end_hook(NULL);
     /* The sub-components document_init declares, in the reverse of that order, by platform_agent_free's rule: a
        component declared after another may hold what that one minted. document_fragment, shadow_root and slot are
        declared only by document_init, so only this releases them. */

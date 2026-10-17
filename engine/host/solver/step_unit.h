@@ -74,6 +74,7 @@
     X(FORK_DECLINED_REQ,  "fork-over-a-declined-request")                         \
     X(RESUME_PARKED,      "resume-parked-continuation")                           \
     X(LINK_CONNECTED,     "link-connected-time")                                  \
+    X(PARSE_END,          "the-end-readiness-interactive")                        \
     X(ROUTED_DELIVERY,    "routed-delivery")                                      \
     X(ROUTED_NOT_MINE,    "routed-delivery-not-this-timeline")                    \
     /* AND THE OTHER REFUSAL, WHICH IS A DIFFERENT FACT AND NOT A SHADE OF   */ \

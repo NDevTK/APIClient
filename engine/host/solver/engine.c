@@ -733,6 +733,15 @@ void engine_set_document_done_hook(int (*fn)(JSContext *ctx))
     g_docdone_hook = fn;
 }
 
+/* The browser layer's §13.2.7 step 3, see engine.h. */
+static int (*g_parse_end_hook)(JSContext *ctx);
+void engine_set_parse_end_hook(int (*fn)(JSContext *ctx))
+{
+    DCHECK(fn == NULL || g_parse_end_hook == NULL,
+           "a second component claimed §13.2.7 step 3 — one call answers for every document of this agent");
+    g_parse_end_hook = fn;
+}
+
 /* The event loop's timer step, registered by the timer component so the scheduler does not depend on the browser
    half. Asked only where this flow has nothing else to run, the one moment virtual time may move (timer.h). */
 static int (*g_timer_hook)(JSContext *ctx);
@@ -8030,6 +8039,17 @@ static int flow_step(JSContext *ctx, Flow *f) {
                checkpoint above has drained (2.8), so the next task is the next iteration and the next step. This
                return keeps the continuation from becoming a drain: one task per call of flow_step. */
             if (turn_task_done) return 0;
+            /* HTML §13.2.7 "The end" step 3, "Update the current document readiness to 'interactive'", in the
+               parser's own task: the program that held the last parse position has left the stack and its
+               checkpoint has drained, and nothing else of this flow may start first, because step 5's spin is
+               where the event loop runs again. The update fires `readystatechange`, whose reactions are this
+               turn's checkpoint. */
+            if (flow_stack_empty(f) && g_parse_end_hook && g_parse_end_hook(ctx)) {
+                g_step_unit = STEP_UNIT_PARSE_END;
+                turn_task_done = 1;
+                if (turn_continues()) continue;
+                return 0;
+            }
             /* The networking task source: a rung of this ladder, not its floor. Fetch §2 Infrastructure's queue a
              * fetch task ends "Otherwise, queue a global task on the networking task source with taskDestination
              * and algorithm", and both kinds of reply this register holds (a `fetch()`, and an external script's
@@ -11792,6 +11812,9 @@ void solver_agent_free(JSContext *ctx)
     DCHECK(g_docdone_hook == NULL,
            "§13.2.7's document-load lifecycle step was still registered when the solver's agent state was released — "
            "core/dom/document.c gives it back at document_agent_free, which runs first");
+    DCHECK(g_parse_end_hook == NULL,
+           "§13.2.7 step 3 was still registered when the solver's agent state was released — document_agent_free "
+           "gives it back");
     DCHECK(g_link_connected_hook == NULL,
            "§4.6.8.20's connected time for parsed link elements was still registered when the solver's agent state "
            "was released — html_link_free gives it back, and platform.h's release column runs first");

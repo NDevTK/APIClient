@@ -171,6 +171,10 @@ void engine_set_idle_hook(int (*fn)(JSContext *ctx));
    load) and answers 1, or answers 0 when every document of the agent is complete. One claimant at a time
    (asserted); NULL releases the slot. A scheduler with no document (the solver fixture) has no hook. */
 void engine_set_document_done_hook(int (*fn)(JSContext *ctx));
+/* HTML §13.2.7 "The end" step 3 (core/dom/document.c's document_parse_end_step), asked above the sequence once the
+   execution context stack and the microtask queue are empty: it runs in the parser's own task, before step 5's
+   spin. One claimant at a time (asserted); NULL releases the slot. */
+void engine_set_parse_end_hook(int (*fn)(JSContext *ctx));
 /* HTML §13.2.7 "The end", asked of document `doc` in the running flow. The first is true while the document owes
    a script DOMContentLoaded waits for (step 5's list, and the parse's own scripts before it); the second while
    it owes any script `load` waits for, adding step 7's two as-soon-as-possible lists. */

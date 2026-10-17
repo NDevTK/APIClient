@@ -170,6 +170,13 @@ uint32_t document_doc(JSContext *ctx);
    documents that never fire DOMContentLoaded or `load`. */
 int document_lifecycle_step(JSContext *ctx);
 
+/* HTML §13.2.7 "The end" step 3 for ONE document of this agent whose parser has stopped — no row of the running
+   flow holds its parse position (solver/engine.h's engine_document_parse_position) — updating its readiness to
+   "interactive", which fires `readystatechange`. Returns 1 when it moved one, else 0. Registered as the
+   scheduler's parse-end hook, asked before the flow's next program, so a deferred or module script reads
+   "interactive" as in a browser. */
+int document_parse_end_step(JSContext *ctx);
+
 /* HTML §3.1.5's CURRENT DOCUMENT READINESS of ONE DOCUMENT, as the string `readyState` answers with —
    "loading", "interactive" or "complete". Asked of this component because it owns the load lifecycle that
    moves it; the member itself is core/dom/document_metadata.c's, and there is exactly one statement of the
