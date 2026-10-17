@@ -186,7 +186,10 @@ function identityThirdPartyCookiesAllowed() {
    blocks it, or null. A request is third-party when it is cross-site with its site for cookies; a top-level
    navigation's site for cookies is its own, as Chrome 148 counts it (measured with the browser's setting
    false: a cross-site subresource request sent and stored only Partitioned cookies, and a cross-site link
-   navigation sent and stored unpartitioned ones too). Read on every send and every store. */
+   navigation sent and stored unpartitioned ones too). A site exception the person set, the egress table's
+   `third-party-cookies` row of the client's top-level site, decides in place of the global setting; it keys
+   on the top-level site because the site for cookies is opaque under a cross-site ancestor. Read on every
+   send and every store. */
 async function thirdPartyCookiesBlocked(facts) {
   if (facts.sameSite || facts.topLevelNavigation) return null;
   if (_thirdPartyCookiesAllowed === null) {
@@ -195,6 +198,16 @@ async function thirdPartyCookiesBlocked(facts) {
           "would follow no one's setting");
     await _thirdPartyCookiesStating;
   }
+  const site = facts.client.partitionKey.topLevelSite;
+  let exception = null;
+  if (site !== null) {
+    await safeFetchEgressReady();
+    exception = safeFetchSiteSetting(site, "third-party-cookies");
+  }
+  if (exception === "allow") return null;
+  if (exception === "block")
+    return "this extension's third-party-cookie exception for " + site + " blocks an unpartitioned cookie on a " +
+           "cross-site request";
   return identityThirdPartyCookiesAllowed() ? null
     : "this extension's third-party-cookie setting is off, which blocks an unpartitioned cookie on a cross-site " +
       "request";

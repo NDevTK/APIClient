@@ -840,6 +840,11 @@ var _SIGNALS = [
    more than one value is a dropped control, since every grant would silently permit both. */
 function _signalRegistryCheck() {
   var seen = Object.create(null), i, s;
+  _SITE_SETTINGS.forEach(function (t) {
+    CHECK(safeFetchSignalUsable(t.name, t.values[0]) === "not-a-signal",
+          "the site setting `" + t.name + "` shares its name with an egress signal, so one table row " +
+          "would answer both");
+  });
   for (i = 0; i < _SIGNALS.length; i++) {
     s = _SIGNALS[i];
     CHECK(!seen[s.name],
@@ -1009,8 +1014,13 @@ var _DEFAULT_ARMS = [
          "tool built" }
 ];
 var _EXPLORED = Object.create(null);
-/* `_EXPLORED` is the per-origin egress table, origin → signal → value → true. Whether a host has stated it
-   is a separate field, because an unstated table is empty and an empty one reads as policy. */
+/* The per-site settings the same table holds beside the signals, keyed by a site's serialization (HTML
+   §7.1.1.1 "obtain a site", which is an origin string): a row a person sets for one site, which no firing
+   question reads. A row holds at most one value. */
+var _SITE_SETTINGS = [{ name: "third-party-cookies", values: ["allow", "block"] }];
+/* `_EXPLORED` is the per-origin egress table, origin → signal (or site setting) → value → true. Whether a
+   host has stated it is a separate field, because an unstated table is empty and an empty one reads as
+   policy. */
 var _EXPLORED_STATED = false;
 /* A host's promise to state the table. A host whose grants are in IndexedDB cannot state them until a read
    returns, and a request in that window may be answered neither from the empty table nor by stating one
@@ -1044,6 +1054,15 @@ function safeFetchSignalUsable(signal, value) {
     return _SIGNALS[i].values.indexOf(value) >= 0 ? null : "not-a-value";
   }
   return "not-a-signal";
+}
+/* Whether a row name and value are a signal's or a site setting's this file knows, as a reason or null. */
+function _tableRowUsable(name, value) {
+  for (var i = 0; i < _SITE_SETTINGS.length; i++)
+    if (_SITE_SETTINGS[i].name === name) return _SITE_SETTINGS[i].values.indexOf(value) >= 0 ? null : "not-a-value";
+  return safeFetchSignalUsable(name, value);
+}
+function _isSiteSetting(name) {
+  return _SITE_SETTINGS.some(function (t) { return t.name === name; });
 }
 /* The registry for a surface that renders one row per signal: name, grade and value space, copied. The `of`
    functions stay here, so a surface cannot compute a value the walk did not decide from. */
@@ -1126,7 +1145,8 @@ function safeFetchEgressStated(table) {
         /* A stored value this build no longer knows is dropped, not asserted: a renamed signal or a retired
            value is an upgrade, an unknown value permits nothing, and aborting would brick every profile that
            ever granted anything. This is the one place this file reads its own store as input. */
-        if (safeFetchSignalUsable(signal, values[i]) !== null) continue;
+        if (_tableRowUsable(signal, values[i]) !== null) continue;
+        if (_isSiteSetting(signal) && values.length !== 1) continue;
         if (!_EXPLORED[origin]) _EXPLORED[origin] = Object.create(null);
         if (!_EXPLORED[origin][signal]) _EXPLORED[origin][signal] = Object.create(null);
         _EXPLORED[origin][signal][values[i]] = true;
@@ -1178,15 +1198,20 @@ function safeFetchWiden(origin) {
       safeFetchPermit(origin, _SIGNALS[i].name, _SIGNALS[i].values[j], true);
   }
 }
-/* The person takes a whole origin back. Answers whether anything was there, so a surface reports what it
-   did rather than a revocation of nothing. */
+/* The person takes a whole origin's egress back; a site setting stored under the same key stays. Answers
+   whether anything was there, so a surface reports what it did rather than a revocation of nothing. */
 function safeFetchUnwiden(origin) {
-  var had = _EXPLORED[origin] !== undefined;
   CHECK(_EXPLORED_STATED,
         "an egress permission was revoked before this host stated its table — the revocation would be " +
         "undone by the restore that follows it, and the person would watch a permission they had just " +
         "withdrawn come back");
-  delete _EXPLORED[origin];
+  var had = false, name;
+  for (name in _EXPLORED[origin] || {}) {
+    if (_isSiteSetting(name)) continue;
+    had = true;
+    delete _EXPLORED[origin][name];
+  }
+  if (_EXPLORED[origin] && Object.keys(_EXPLORED[origin]).length === 0) delete _EXPLORED[origin];
   return had;
 }
 /* The permitted origins, for a caller that asserts their absence where its own reasoning relies on it. */
@@ -1195,7 +1220,9 @@ function safeFetchWidenedOrigins() {
         "the permitted-origin list was read before this host stated its table — an empty answer would be " +
         "read as `nobody has permitted anything`, which is a statement this host has not yet made, and a " +
         "surface rendering it would tell a person their standing grants are gone");
-  return Object.keys(_EXPLORED);
+  return Object.keys(_EXPLORED).filter(function (o) {
+    return Object.keys(_EXPLORED[o]).some(function (name) { return !_isSiteSetting(name); });
+  });
 }
 /* The table in the shape `safeFetchEgressStated` takes, so a host persists what the chokepoint uses; the
    round trip is the contract. */
@@ -1214,6 +1241,37 @@ function safeFetchEgressTable() {
     }
   }
   return out;
+}
+/* A site's setting `name` (a `_SITE_SETTINGS` row): its value, or null where the person set none. `site` is
+   a site's serialization, as lib/site.js's siteOf gives it. */
+function safeFetchSiteSetting(site, name) {
+  CHECK(_EXPLORED_STATED, "a site setting was read before this host stated its table");
+  CHECK(_isSiteSetting(name) && safeFetchWidenable(site) === null,
+        "a site setting was asked as " + JSON.stringify(name) + " of " + JSON.stringify(site) + ", which is not " +
+        "a site setting of a site");
+  var row = _EXPLORED[site] && _EXPLORED[site][name];
+  var values = row ? Object.keys(row) : [];
+  DCHECK(values.length <= 1, "the site setting " + name + " of " + site + " holds two values");
+  return values.length ? values[0] : null;
+}
+/* The person sets a site's setting to `value`, or clears it with null; at most one value stays. */
+function safeFetchSetSiteSetting(site, name, value) {
+  CHECK(_EXPLORED_STATED, "a site setting was changed before this host stated its table, whose restore would undo it");
+  CHECK(safeFetchWidenable(site) === null && _isSiteSetting(name) &&
+        (value === null || _tableRowUsable(name, value) === null),
+        "a site setting was asked to be " + JSON.stringify(value) + " for " + JSON.stringify(name) + " of " +
+        JSON.stringify(site) + ", which this table cannot hold");
+  if (!_EXPLORED[site]) _EXPLORED[site] = Object.create(null);
+  _EXPLORED[site][name] = Object.create(null);
+  if (value !== null) _EXPLORED[site][name][value] = true;
+  else delete _EXPLORED[site][name];
+  if (Object.keys(_EXPLORED[site]).length === 0) delete _EXPLORED[site];
+}
+/* A promise that the table is stated, for a reader outside `safeFetch`'s own wait. */
+function safeFetchEgressReady() {
+  if (_EXPLORED_STATED) return Promise.resolve();
+  CHECK(_EXPLORED_STATING !== null, "the egress table was awaited in a host that neither stated nor promised it");
+  return _EXPLORED_STATING;
 }
 /* One origin's permissions row by row, with `false` for an unpermitted value rather than an absent key,
    because a checkbox rendered from a missing key looks like a denial and is a different fact. */
@@ -2414,4 +2472,7 @@ if (typeof self !== "undefined") {
   self.safeFetchDefaultArms = safeFetchDefaultArms;
   self.safeFetchFiringRefusal = safeFetchFiringRefusal;
   self.safeFetchWidenedOrigins = safeFetchWidenedOrigins;
+  self.safeFetchSiteSetting = safeFetchSiteSetting;
+  self.safeFetchSetSiteSetting = safeFetchSetSiteSetting;
+  self.safeFetchEgressReady = safeFetchEgressReady;
 }

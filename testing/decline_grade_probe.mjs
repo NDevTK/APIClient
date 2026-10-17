@@ -46,7 +46,7 @@ const NO_EDGE = {
   swRpc: () => { throw new Error(REACHED); },
 };
 
-function zone(edge) {
+function zone(edge, table) {
   const sandbox = { console, URL, TextDecoder, TextEncoder, Headers, fetch: edge.fetch, swRpc: edge.swRpc };
   sandbox.self = sandbox; sandbox.globalThis = sandbox;
   createContext(sandbox);
@@ -64,7 +64,7 @@ function zone(edge) {
   /* THE DEFAULT TABLE, STATED ONCE AND EMPTY, WHICH IS WHAT AN UNCONFIGURED ORIGIN HAS — and the chokepoint
      ABORTS on a firing question asked before any host has spoken, so this is not setup: it is the one thing
      that makes every answer below be about the DEFAULT policy, except at an origin a row's realm widens. */
-  sandbox.safeFetchEgressStated({});
+  sandbox.safeFetchEgressStated(table || {});
   return sandbox;
 }
 
@@ -182,7 +182,8 @@ ROUTES.set('/sc/1', setCookie(['host1=a; Path=/', 'dom1=b; Domain=.Example.test'
   .set('/sc/4', setCookie(['pkn=1; Secure; Partitioned; SameSite=None', 'unn=1; Secure; SameSite=None',
                            'lxn=1; SameSite=Lax']));
 const C = `http://127.0.0.2:${PORT}`, D = `http://app.example.test:${PORT}`;
-ROUTES.set('/hop/tc', hop(`${C}/sc/4`)).set('/sc/6', ROUTES.get('/sc/5'));
+ROUTES.set('/hop/tc', hop(`${C}/sc/4`)).set('/sc/6', ROUTES.get('/sc/5')).set('/sc/7', ROUTES.get('/sc/5'))
+  .set('/sc/8', ROUTES.get('/sc/5'));
 const cookieWrites = [];   // [{name, details, before: the number of server hits when it was written}]
 /* C's jar: an unpartitioned None and Lax cookie, and one of whichever partition is asked for. */
 const C_JAR = [{ name: 'tp', value: '1', path: '/', sameSite: 'no_restriction' },
@@ -292,6 +293,27 @@ const FIXTURE_ROWS = [
   { label: 'THIRD-PARTY COOKIES ON, stated: the same cors fetch sends and stores its unpartitioned cookies',
     url: `${C}/sc/6`, want: 'REFUSE:network', over: (Z) => CREDENTIALED_FETCH(Z, `${C}/sc/6`), thirdPartyAllowed: true,
     stored: ['xsn', 'xsp'], ignored: ['xs', 'xsl'], carried: { path: '/sc/6', cookie: 'tp=1; tpp=1', referer: null } },
+  /* A per-site exception, the egress table's `third-party-cookies` row of the client's top-level site,
+     decides in place of the global setting, both ways. */
+  { label: 'THIRD-PARTY COOKIES OFF, 127.0.0.1 excepted "allow": the cors fetch sends and stores unpartitioned ones',
+    url: `${C}/sc/7`, want: 'REFUSE:network', over: (Z) => CREDENTIALED_FETCH(Z, `${C}/sc/7`), thirdPartyAllowed: false,
+    siteException: 'allow',
+    stored: ['xsn', 'xsp'], ignored: ['xs', 'xsl'], carried: { path: '/sc/7', cookie: 'tp=1; tpp=1', referer: null } },
+  { label: 'THIRD-PARTY COOKIES ON, 127.0.0.1 excepted "block": only the Partitioned cookie is sent and stored',
+    url: `${C}/sc/8`, want: 'REFUSE:network', over: (Z) => CREDENTIALED_FETCH(Z, `${C}/sc/8`), thirdPartyAllowed: true,
+    siteException: 'block',
+    stored: ['xsp'], ignored: ['xs', 'xsl', 'xsn'], carried: { path: '/sc/8', cookie: 'tpp=1', referer: null } },
+  { label: 'THIRD-PARTY COOKIES, the exception round-trips through the persisted table and is no egress grant',
+    url: `${A}/`, want: 'ANSWERED', ask: (Z) => {
+      Z.safeFetchSetSiteSetting('http://127.0.0.2', 'third-party-cookies', 'block');
+      const table = Z.safeFetchEgressTable();
+      Z.safeFetchSetSiteSetting('http://127.0.0.2', 'third-party-cookies', null);
+      const restored = zone(FIXTURE_EDGE, table);
+      const back = restored.safeFetchSiteSetting('http://127.0.0.2', 'third-party-cookies');
+      const listed = restored.safeFetchWidenedOrigins().includes('http://127.0.0.2');
+      if (back !== 'block' || listed) throw new Error(`restored ${back}, listed as widened ${listed}`);
+      return { status: 200 };
+    } },
   { label: 'THIRD-PARTY COOKIES OFF, a navigation that hops cross-site to 127.0.0.2: first-party there, its ' +
            'Lax cookie sent, and its Partitioned cookie keyed on the destination\'s site',
     url: `${A}/hop/tc`, want: 'REFUSE:network', thirdPartyAllowed: false,
@@ -322,6 +344,7 @@ async function run(Z, principal, row) {
     /* The host's restore with nothing stored, unless the row states the person's setting. */
     if (Z === zf) Z.identityThirdPartyCookiesStated(row.thirdPartyAllowed === undefined
       ? Z.identityThirdPartyCookiesRestored(null) : row.thirdPartyAllowed);
+    if (Z === zf) Z.safeFetchSetSiteSetting('http://127.0.0.1', 'third-party-cookies', row.siteException || null);
     r = row.ask ? await row.ask(Z, row)
       : await Z.safeFetch(row.url, navOpts(Z, row.principal || principal, row.url, over));
     if (r && r.refusal) { got = r.refusal.kind === 'decline' ? 'DECLINE' : 'REFUSE:' + r.refusal.kind;

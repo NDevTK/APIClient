@@ -396,7 +396,12 @@ Residuals, each a difference from the document's own request:
   no reply, and the setting unchanged). It is read for each send and store that is cross-site with its site
   for cookies and is not a top-level navigation; off, such a send carries and stores Partitioned cookies only,
   under a rule naming the setting, which is what Chrome 148 does with its own setting off (measured). The
-  default is on, what Chrome 148 does in a fresh profile with no setting changed (measured).
+  default is on, what Chrome 148 does in a fresh profile with no setting changed (measured). A per-site
+  exception ("allow" or "block") decides in place of the global setting for sends whose client's top-level
+  site it names; it is the `third-party-cookies` row of that site in the per-origin egress table, persisted
+  with it, set from the popup's control for the shown document's site through the same admitted message, and
+  no egress grant (revoking an origin's egress leaves it). Both survive the offscreen document's recreation
+  and a browser restart (measured in Chrome 148).
 - An operator's frame policy is not observable from this zone, so an operator send that states none uses the
   default policy, strict-origin-when-cross-origin. An engine page request carries the referrer and policy the
   engine states on its request record, and a referrer not of the identity's origin is "client" (Fetch §5.4).

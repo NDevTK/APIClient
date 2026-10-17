@@ -418,15 +418,17 @@ async function handlePopupMessage(msg, sender, sendResponse) {
       return;
     }
 
-    /* This extension's third-party-cookie setting, read and set through the one entry into the host. The
-       relay forwards exactly the three fields the command has. */
+    /* This extension's third-party-cookie setting and its per-site exception, read and set through the one
+       entry into the host. The relay forwards exactly the fields the command has. */
     case "THIRD_PARTY_COOKIES": {
-      DCHECK(Object.keys(msg).every((k) => ["type", "initiator", "allowed"].indexOf(k) >= 0),
+      DCHECK(Object.keys(msg).every((k) => ["type", "initiator", "subject", "allowed", "exception"].indexOf(k) >= 0),
              "the third-party-cookie message carries a field this relay does not forward");
       const reply = await self.astDispatch({ type: "AST_THIRD_PARTY_COOKIES", initiator: msg.initiator,
-                                             allowed: msg.allowed });
+                                             subject: msg.subject, allowed: msg.allowed, exception: msg.exception });
       DCHECK(reply && reply.success === true && reply.result && typeof reply.result.allowed === "boolean" &&
-             typeof reply.result.defaultAllowed === "boolean",
+             typeof reply.result.defaultAllowed === "boolean" &&
+             (reply.result.site === null || typeof reply.result.site === "string") &&
+             (reply.result.exception === null || typeof reply.result.exception === "string"),
              "the host answered the third-party-cookie command without the setting now in force");
       sendResponse(reply.result);
       return;

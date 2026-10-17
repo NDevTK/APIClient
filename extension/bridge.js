@@ -6100,25 +6100,41 @@ self.astDispatch = async function astDispatch(msg) {
     // The frame's CSP verdict on a request the Send panel composed. It is shown, never enforced.
     if (msg.type === "AST_REQUEST_POLICY")
       return { success: true, result: await engineRequestPolicyVerdict(msg.documentId, msg.url) };
+    /* This extension's third-party-cookie setting: read, or set by the person, answered with what is now in
+       force. `allowed` sets the global setting; `exception` ("allow", "block" or null to clear) sets the
+       egress table's `third-party-cookies` row of the subject's site, persisted with the table. A change is a
+       person's act, so it carries the user-initiated grade the egress command carries. */
+    if (msg.type === "AST_THIRD_PARTY_COOKIES") {
+      await _thirdPartyCookiesReady;
+      DCHECK(typeof msg.subject === "string",
+             "the third-party-cookie command carried no subject — the popup states the origin it is showing");
+      const _site = self.safeFetchWidenable(msg.subject) === null ? siteOf(msg.subject + "/") : null;
+      if (msg.allowed !== undefined || msg.exception !== undefined)
+        CHECK(msg.initiator === PAGE_CONTEXT_USER_INITIATED,
+              "the third-party-cookie setting was asked to change by " + JSON.stringify(msg.initiator) +
+              " — only the person, in the popup, changes it");
+      if (msg.allowed !== undefined) {
+        CHECK(typeof msg.allowed === "boolean", "the third-party-cookie setting was asked to become " +
+              JSON.stringify(msg.allowed) + ", not a boolean");
+        await frontierPrefPut("thirdPartyCookies", msg.allowed);
+        self.identityThirdPartyCookiesStated(msg.allowed);
+      }
+      if (msg.exception !== undefined) {
+        CHECK(_site !== null && (msg.exception === null || msg.exception === "allow" || msg.exception === "block"),
+              "a third-party-cookie exception " + JSON.stringify(msg.exception) + " was asked for the subject " +
+              JSON.stringify(msg.subject) + ", which has no site or is not allow, block or null");
+        self.safeFetchSetSiteSetting(_site, "third-party-cookies", msg.exception);
+        await egressPolicyPersist();
+      }
+      return { success: true, result: { allowed: self.identityThirdPartyCookiesAllowed(),
+                                        defaultAllowed: THIRD_PARTY_COOKIES_DEFAULT, site: _site,
+                                        exception: _site === null ? null
+                                          : self.safeFetchSiteSetting(_site, "third-party-cookies") } };
+    }
     /* The one setting this surface carries: how much of the person's disk the frontier's stored documents may
        occupy. It is a knob on storage, never on work (an instance count or a throttle would be a bound): every
        recipe, counter and entry survives at every setting, including zero, and only whether a document is held
        or fetched back changes. The reply carries the value now in force, so a caller can read back what took. */
-    /* This extension's third-party-cookie setting: read, or set by the person (`allowed`), answered with the
-       value now in force. A change is a person's act, so it carries the user-initiated grade the egress
-       command carries. */
-    if (msg.type === "AST_THIRD_PARTY_COOKIES") {
-      await _thirdPartyCookiesReady;
-      if (msg.allowed !== undefined) {
-        CHECK(msg.initiator === PAGE_CONTEXT_USER_INITIATED && typeof msg.allowed === "boolean",
-              "the third-party-cookie setting was asked to change by " + JSON.stringify(msg.initiator) +
-              " to " + JSON.stringify(msg.allowed) + " — only the person, in the popup, changes it, to a boolean");
-        await frontierPrefPut("thirdPartyCookies", msg.allowed);
-        self.identityThirdPartyCookiesStated(msg.allowed);
-      }
-      return { success: true, result: { allowed: self.identityThirdPartyCookiesAllowed(),
-                                        defaultAllowed: THIRD_PARTY_COOKIES_DEFAULT } };
-    }
     if (msg.type === "AST_FRONTIER_SHARE") {
       DCHECK(msg.bytes === undefined ||
              (typeof msg.bytes === "number" && Number.isFinite(msg.bytes) && msg.bytes >= 0),

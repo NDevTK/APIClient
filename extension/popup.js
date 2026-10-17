@@ -358,7 +358,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   /* This extension's third-party-cookie setting: sent only on a change, and re-rendered from the answer. */
   document.getElementById("third-party-cookies").addEventListener("change", async (ev) => {
-    await renderThirdPartyCookies(!!ev.target.checked);
+    await renderThirdPartyCookies({ allowed: !!ev.target.checked });
+  });
+  document.getElementById("third-party-cookies-exception").addEventListener("change", async (ev) => {
+    await renderThirdPartyCookies({ exception: ev.target.value === "" ? null : ev.target.value });
   });
   renderThirdPartyCookies();
 
@@ -1030,6 +1033,8 @@ async function loadState() {
      no longer the one in front of the person. It is re-asked here, from the host, rather than re-labelled
      from anything this surface remembers. */
   await renderEgressPolicy();
+  /* The third-party-cookie exception names the pinned document's site, so it follows the pin too. */
+  await renderThirdPartyCookies();
 }
 
 /* THE SHARE, AND THE DECISIONS RESIDENCY MADE UNDER IT. Called with a byte count it SETS the share first;
@@ -1054,14 +1059,22 @@ async function renderFrontierShare(bytes) {
     "; " + r.shed + " shed, " + r.rederived + " fetched back, " + r.stranded + " could not be";
 }
 
-/* This extension's third-party-cookie setting, as the host holds it: `allowed` undefined reads it, a boolean
-   sets it. The status line says what it covers and that it is not the browser's setting. */
-async function renderThirdPartyCookies(allowed) {
-  const r = await chrome.runtime.sendMessage(allowed === undefined ? { type: "THIRD_PARTY_COOKIES" }
-    : { type: "THIRD_PARTY_COOKIES", initiator: "user-initiated", allowed });
-  DCHECK(r && typeof r.allowed === "boolean" && typeof r.defaultAllowed === "boolean",
-         "the third-party-cookie command answered without the setting now in force");
+/* This extension's third-party-cookie setting and the exception for the shown document's site, as the host
+   holds them: no `act` reads them; `{allowed}` sets the setting and `{exception}` the site's exception. The
+   status line says what it covers and that it is not the browser's setting. */
+async function renderThirdPartyCookies(act) {
+  const subject = currentPrincipalOrigin();
+  const r = await chrome.runtime.sendMessage(act === undefined ? { type: "THIRD_PARTY_COOKIES", subject }
+    : Object.assign({ type: "THIRD_PARTY_COOKIES", initiator: "user-initiated", subject }, act));
+  DCHECK(r && typeof r.allowed === "boolean" && typeof r.defaultAllowed === "boolean" &&
+         (r.site === null || typeof r.site === "string") && (r.exception === null || typeof r.exception === "string"),
+         "the third-party-cookie command answered without the setting and exception now in force");
   document.getElementById("third-party-cookies").checked = r.allowed;
+  document.getElementById("third-party-cookies-site").textContent =
+    r.site === null ? "no site (opaque origin)" : r.site;
+  const ex = document.getElementById("third-party-cookies-exception");
+  ex.value = r.exception === null ? "" : r.exception;
+  ex.disabled = r.site === null;
   document.getElementById("third-party-cookies-status").textContent =
     (r.allowed ? "On" : "Off") + (r.allowed === r.defaultAllowed ? " (default)" : "") +
     ": when off, a request this tool sends with your cookies to a site other than the page's (not a page " +
