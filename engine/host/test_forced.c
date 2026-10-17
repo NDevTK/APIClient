@@ -13298,7 +13298,8 @@ TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
     fold_row(&absarm_tt, &absarm_why, !tf_err_listed(js, "pageErrorsExplored", "absINVENTED"),
              "`pageErrorsExplored` names a message no program of this document raises");
     /* One property name bought twice: `k + ""` and `k` are one key by §7.1.21 ToPropertyKey, so the write
-       under the first is read under the second (`same`), and `k + "5"` names another slot (`other`). */
+       under the first is read under the second (`same`). `k + "5"` names no slot this object holds, so its read
+       is an unknown and `other` is never the concrete `false` a shared slot would give. */
     const char *abskey_why = NULL; int abskey_tt = 1;
 
     fold_row(&abskey_tt, &abskey_why, !!strstr(js, "\"/api/abskey\""),
@@ -13306,7 +13307,7 @@ TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
     fold_row(&abskey_tt, &abskey_why, param_value_is(js, "/api/abskey", "same", "true"),
              "a value written under `k + \"\"` was not read back under `k` — the two bought different slots for "
              "one §7.1.21 property key");
-    fold_row(&abskey_tt, &abskey_why, param_value_is(js, "/api/abskey", "other", "true"),
+    fold_row(&abskey_tt, &abskey_why, !param_value_is(js, "/api/abskey", "other", "false"),
              "`k + \"5\"` read the slot written under `k + \"\"` — two property names shared one slot");
     const Probe rows[] = {
         { "absent-arm", absarm_tt, "__tfAbsentGate", SESS_EXPLORE, absarm_why },

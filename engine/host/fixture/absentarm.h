@@ -5,8 +5,8 @@
    with its own tag, so the probe rows can read which arm's records are graded forced and which arm's page error
    is filed as this engine's exploration.
    A first script spends an unknown read off the global as a property key twice, once as `k + ""` and once as
-   `k`: §7.1.21 ToPropertyKey makes them one name, so the value written under one is read under the other, and
-   `k + "5"` is a different name.
+   `k`: §7.1.21 ToPropertyKey makes them one name, so the value written under one is read under the other,
+   while `k + "5"` is a different name and does not read that slot.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_ABSENTARM_H
