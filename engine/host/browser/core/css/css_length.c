@@ -39,7 +39,8 @@ typedef struct {
     CssPxAtomSlot *atoms;       /* the same shape over atom keys; each key OWNED */
     size_t         atoms_cap;
     unsigned       atoms_n;
-    CssPxAtomDef  *atom_defs;   /* `atoms_n` of them, each OWNED */
+    CssPxAtomDef  *atom_defs;   /* `atoms_n` of them, each OWNED, in storage for `atom_defs_cap` */
+    size_t         atom_defs_cap;
 } CssPxFormTable;
 
 static JSClassID g_css_px_form_table_class;
@@ -357,8 +358,16 @@ static unsigned css_px_atom_intern(JSContext *realm, char *key, const char *op, 
     DCHECK(t->atoms_n != UINT_MAX, "a realm's atom table ran out of names");
     t->atoms[i].key = key;
     t->atoms[i].id = ++t->atoms_n;
-    t->atom_defs = realloc(t->atom_defs, (size_t)t->atoms_n * sizeof *t->atom_defs);
-    CHECK(t->atom_defs, "css_length: OOM recording an atom's definition");
+    /* Grown by doubling, as the key table is: a layout mints an atom per undecided extreme, so growing by one
+       would copy the whole array for each. */
+    if ((size_t)t->atoms_n > t->atom_defs_cap) {
+        size_t cap = t->atom_defs_cap ? 2 * t->atom_defs_cap : 64;
+        CssPxAtomDef *grown = realloc(t->atom_defs, cap * sizeof *grown);
+
+        CHECK(grown, "css_length: OOM recording an atom's definition");
+        t->atom_defs = grown;
+        t->atom_defs_cap = cap;
+    }
     d = &t->atom_defs[t->atoms_n - 1];
     d->op = strdup(op);
     d->nargs = nargs;
