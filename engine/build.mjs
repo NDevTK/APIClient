@@ -22,6 +22,8 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { stampArtifact, gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 import { probeTables } from "./probe_rows.mjs";
+import { abortRecord } from "./abort_record.mjs";
+import { vehicleReading, compareVehicle } from "./vehicle.mjs";
 import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
 import { objStore, toolIdentity } from "./obj_store.mjs";
 import { cpuText } from "./gate_cpu.mjs";
@@ -983,26 +985,6 @@ const standingText = (s) =>
                                 `did not, which is the OTHER reading of a 0 and takes the mechanism rather ` +
                                 `than the budget`)));
 
-/* AN ABORT IS AN ABORT EVEN WHERE NO SIGNAL CAN CARRY IT, AND UNDER EMSCRIPTEN NONE CAN.
-   `runOutcome`'s `.signal` arm exists precisely so that a DCHECK doing its job is never misfiled as a timing
-   artifact — and for the WASM smoke, which is the stage this build is about, that arm is UNREACHABLE. The
-   emscripten runtime does not deliver SIGABRT: `abort()` reaches `__abort_js`, which throws a JS
-   `RuntimeError: Aborted(native code called abort())`, and node exits with STATUS 1. `test_forced.c`'s own
-   completion path also exits 1 (`return h_ok ? 0 : 1`) when the probe table is merely incomplete. So the two
-   most different outcomes this gate can produce — "a DCHECK named an unbuilt capability at a file:line" and
-   "the frontier answered most of the fixture and not all of it" — arrived as the SAME `FAILED rc=1`, and the
-   arm written to keep them apart only ever fires for the `native` targets.
-   MEASURED, AND IT COST A READING: a smoke run whose last words were
-   `@WHY §7.1.1 ToPrimitive ( input [ , preferredType ] ) reached with a REAL object … ROUTE THE CALL SITE`
-   followed by `Aborted(native code called abort())` was read off the stage table as an incomplete probe
-   table. The @WHY names the exact thing to build; the verdict discarded it and offered a row count instead.
-   THE WITNESS IS WHAT THE ABORTING MACROS ACTUALLY WRITE, not a signal the host cannot send: `check.h`'s
-   `@WHY`/`@E ` JSON line, and `engine/qjs/quickjs-check.h`'s prose `@WHY <msg> (<file>:<line>)`. Both abort
-   on the next statement, so either one in a run's output means that run died at an assert. Matched at the
-   START of a line and only in those two exact shapes, so a stage that quotes the token out of a source
-   comment cannot manufacture one. */
-const ABORT_WITNESS = /^@(?:WHY|E) (?:\{"phase":"assert"|.*\([^()]*:\d+\)$)/m;
-const EMSCRIPTEN_ABORT = "Aborted(native code called abort())";
 
 /* AND THE STAGE THAT DECLINED TO ASK ITS QUESTION AT ALL, which `skipped` below already reports for the cases
    THIS file can see — a program that did not link — and which was invisible for the cases only the CHILD can
@@ -1013,26 +995,6 @@ const EMSCRIPTEN_ABORT = "Aborted(native code called abort())";
    produce for some other reason entirely. The tag is left open (`[<gate>] REFUSED TO MEASURE: …`) so any gate
    can state it in its own name rather than this file keeping a list of which ones can. */
 const REFUSED_WITNESS = /^\[[^\]\n]+\] REFUSED TO MEASURE: (.+)$/m;
-function abortRecord(out) {
-  const m = out.match(ABORT_WITNESS);
-  /* THE WHOLE LINE, NOT THE WITNESS'S OWN MATCH — which is what `return m[0]` here was, and it discarded the
-     record for exactly one of the two shapes. The prose alternative ends at `$`, so its match IS its line and
-     nothing was ever wrong with it; the JSON alternative is a seven-word PREFIX, so every `check.h` abort
-     arrived here as the literal `@WHY {"phase":"assert"` and nothing else — a cause that names no cause, in
-     the one line anybody reads AND in the detail line under it, with the `cond`, the `at` and the `reason`
-     the macro composed thrown away at this statement. It was relayed to another lane as the cause and cost
-     that lane its own reading to find out the cause had been dropped, which is §A-FINDING-RELAYED with the
-     finding removed before the relay. One regex serving two shapes can only ever be right about the one whose
-     match happens to reach the end of its line, so the line is taken from the match's POSITION (`^` anchors
-     it to a line start) and never from its extent. */
-  if (m) return out.slice(m.index).split("\n", 1)[0];
-  /* An abort with no assertion line above it is a RAW `abort()`/`assert` — still an abort, and the absence of
-     the message is itself the finding (a site that should be using check.h). Said, rather than defaulted. */
-  if (out.includes(EMSCRIPTEN_ABORT))
-    return `${EMSCRIPTEN_ABORT} — with NO @WHY/@E line above it, so this abort came from a raw abort()/assert ` +
-           `rather than from check.h, and it carries no message naming what to fix`;
-  return null;
-}
 
 /* THE CAUSE'S NAME, FOR THE ONE LINE ANYBODY READS. A `split(" (")[0]` was the whole of this and it only
    worked for the arms that happen to open with a parenthesis: the two that do not — NOT ESTABLISHED, and the
@@ -5557,7 +5519,7 @@ function finishChild(label, t, logs, hint) {
      `captured` is this process's string; a stage that reads a run reports it BY PATH — engine/fixturereach.mjs
      says so in its own header. It is the PER-PID path and never the stable symlink: two names for one inode
      is what CLAUDE.md measured an abort count double on. */
-  return Object.assign(runOutcome(label, t, hint), { captured: t.captured, log: logs.log });
+  return Object.assign(runOutcome(label, t, hint), { captured: t.captured, log: logs.log, signal: t.signal });
 }
 function runChild(label, prog, args, hint) {
   const logs = runLogs(label);
@@ -6133,11 +6095,13 @@ const STAGE_HOST = {
   VEHICLE: { tag: "vehicle", vehicle: true  },
   /* A READER OF THE SOURCES. No engine, no slice, no denomination; a finding about the revision. */
   SOURCE:  { tag: "source",  vehicle: false },
+  /* A COMPARISON OF ONE DOCUMENT'S NATIVE RUN WITH ITS WASM RUN (`vehicleStage`); a finding about the revision. */
+  PAIR:    { tag: "native+wasm", vehicle: false },
 };
 /* THE HOST IS ATTACHED WHERE THE PROGRAM WAS CHOSEN, AND A NEW OBJECT IS RETURNED RATHER THAN THE STAGE
    MUTATED: a host written into a stage after the fact is a fact that arrives late, and a stage whose host
    CHANGED is worse than one that never stated it. Every field the producer wrote is carried across -
-   `captured` included, which is what the vehicle-agreement reader below is made of. */
+   `captured` and `signal` included, which are what `vehicleStage` reads. */
 function onHost(stage, host) {
   if (!host || typeof host.tag !== "string" || typeof host.vehicle !== "boolean")
     throw new Error(`[build] a stage was pushed with ${JSON.stringify(host)} where a STAGE_HOST belongs. ` +
@@ -6146,114 +6110,25 @@ function onHost(stage, host) {
   return Object.assign({}, stage, { host });
 }
 
-/* ── WHETHER THE THING THAT SHIPS BEHAVED LIKE THE THING THAT WAS MEASURED ────────────────────────────────
-   ONE LINE, ITS OWN VERDICT, AND IT IS SUMMED INTO NOTHING. §Testing: the vehicle's disagreement with the
-   verdict host "is a finding about the VEHICLE, reported as one, never averaged into the verdict and never
-   used to overturn it". So this composes a sentence and returns it; no arm of `report()` branches on it, no
-   exit code moves by one, and it is deliberately NOT a stage - a third pass/fail total beside the two
-   `report()` already prints is exactly the furniture §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN describes.
-   IT COMPARES ONLY WHAT SURVIVES A REPEAT, WHICH IS A SHORT LIST AND IS THE WHOLE DISCIPLINE HERE. §Testing:
-   "a crash's IDENTITY and its frame list, a conservation identity read within one sample, a count that cannot
-   be true, and a value that is wrong rather than small" survive; "any comparison of totals across two runs"
-   does not - and this file already carries its own measurement of that, two runs of ONE artifact answering
-   35/208 and 75/208 at 3,003 and 34,947 units of engine work and TERMINATING DIFFERENTLY. So the ANSWERED
-   count is not compared, and the refusal is STATED rather than left as a silence a reader would fill in: a
-   line reading "native answered 90 and the vehicle 25" would be the caveat-stated-and-then-not-applied defect
-   in the one place this file most owes it.
-   WHAT IS LEFT IS TWO FACTS AND BOTH ARE REAL. The fixture's own DENOMINATOR - how many statements the
-   document ASKS - is a property of test_forced.c and not of any interleaving, so two hosts disagreeing about
-   it means the two programs are not the same fixture, which no other stage in this build would ever notice.
-   And the ABORT IDENTITY, named by the same `causeName` every verdict in this file uses, so there is ONE
-   spelling of "the name of an abort" rather than a second that can drift: an abort on one host and not the
-   other, or two different aborts, IS "the thing that ships does not behave like the thing that was measured".
-   ABSENCE IS REPORTED AS ABSENCE. A host that printed no probe stream, or no `@QUANTUM` line, is said to have
-   printed none - never defaulted to a number or a denomination this reader did not observe. */
-function vehicleAgreement(nat, veh) {
-  /* `captured` IS THE WITNESS THAT A CHILD RAN AT ALL. `skipped()` produces a stage with none, which is the
-     positive statement "this question was never put" and must not render as a host that agreed. */
-  const read = (s) => (s && "captured" in s)
-    ? { stand: probeStanding(s.captured), abort: abortRecord(s.captured),
-        q: quantumDenomination(s.captured), label: s.label }
-    : null;
-  const a = read(nat), b = read(veh);
-  if (a === null || b === null)
-    return `[build] VEHICLE AGREEMENT - NOT ASKED: ` +
-           `${a === null ? "the native run" : "the vehicle run"} produced no output in this build, so there ` +
-           `is no second reading to compare against and this line says NOTHING about the vehicle. That is an ` +
-           `absence, and an absence is not agreement.`;
-  const den = (r) => r.q === null ? `${r.label} printed no @QUANTUM line`
-                                  : `${r.label}: a ${r.q.measure} slice of ${r.q.sliceMs} ms`;
-  const asked = (r) => r.stand === null ? null : r.stand.asked;
-  const findings = [];
-  /* A MISSING PROBE STREAM IS AN INABILITY AND NOT A FINDING, WHICH IS THE DIRECTION THIS HAS TO ERR IN.
-     Whether a run reached the fixture's first table is a REACH fact - a run that aborts early prints none and
-     a run that gets further prints one - and reach is the quantity §Testing says is a reading of ONE
-     interleaving. So an absent stream on either host says nothing whatever about the VEHICLE, and reporting
-     it as a vehicle finding would be an accusation manufactured by the instrument, which this project rates
-     as the worse of the two failure directions. It is stated as something this line COULD NOT COMPARE, named
-     per host, so the silence is readable as an answer rather than as agreement. */
-  const cannot = [];
-  if (asked(a) === null || asked(b) === null)
-    cannot.push(`the fixture's own DENOMINATOR (native: ` +
-                `${asked(a) === null ? "no @H probe stream" : asked(a) + " statements asked"}; vehicle: ` +
-                `${asked(b) === null ? "no @H probe stream" : asked(b) + " statements asked"}) - a host that ` +
-                `printed no table did not REACH one, which is a reading of one interleaving and says nothing ` +
-                `about the vehicle`);
-  else if (asked(a) !== asked(b))
-    findings.push(`THE TWO HOSTS ASK DIFFERENT NUMBERS OF STATEMENTS (native ${asked(a)}, vehicle ` +
-                  `${asked(b)}) - the fixture's denominator is a property of engine/host/test_forced.c and ` +
-                  `not of any interleaving, so these two programs are not the same fixture`);
-  const an = a.abort === null ? null : causeName(a.abort);
-  const bn = b.abort === null ? null : causeName(b.abort);
-  /* AN ABORT ON ONE HOST AND NONE ON THE OTHER IS A REACH DIFFERENCE, AND REACH IS THE ONE QUANTITY THIS
-     FUNCTION REFUSES TO COMPARE. The guard above already says it for the DENOMINATOR -- a host that printed no
-     table "did not REACH one, which is a reading of one interleaving and says nothing about the vehicle" -- and
-     this axis had no such guard, so the same fact arrived as a FINDING at one axis and as an INABILITY at the
-     other, in one function. An abort is FIRST-PAST-THE-POST and a run reaches it or does not; the vehicle's
-     slice is WALL-denominated, so how far it got is a fact about the box and the hour, which this line says of
-     itself two sentences later. There is no cross-host reach measure available to rule that out either: the
-     tail below refuses every work, fork, job and census total for exactly the reason that would be needed here.
-     MEASURED, on the frozen build at 3a2808f: this line reported `THE ABORTS DIFFER - native: box_tree.c...;
-     vehicle: none` as a VEHICLE finding. The native host aborted at the ::marker DCHECK after 606.1 s of CPU
-     and the vehicle spent its whole 900.0 s budget without reaching it. Nothing about the vehicle was
-     established; the difference was the native host dying earlier in its own budget.
-     SO THE PARTITION IS THREE-WAY AND NOT TWO. Two DIFFERENT aborts is a real host disagreement, because both
-     runs reached one and they name different things. One abort and one absence is an INABILITY, named per host
-     so the silence is readable as an answer rather than as agreement -- which is §A-GATE-STATES-ITS-FINDINGS-
-     AND-ITS-BLIND-SPOTS-AS-SEPARATE-VERDICTS owed to the one axis of this function that lacked it.
-     WHAT THIS COSTS IS A FINDING, WHICH IS THE DIRECTION THAT NEEDS SAYING: a falling count must not be
-     readable as accuracy by anyone, including whoever made it fall. Nothing is weakened in the verdict, since
-     a vehicle finding never moved the exit code and this line says so; and nothing is lost, because the pair
-     moves to COULD NOT BE COMPARED with both hosts' states named. What IS gone is the ability to report
-     `native aborted, vehicle did not` as a defect in the vehicle, and that report was never about the vehicle. */
-  if (an !== null && bn !== null && an !== bn)
-    findings.push(`THE ABORTS DIFFER - native: ${JSON.stringify(an)}; vehicle: ${JSON.stringify(bn)}. BOTH ` +
-                  `hosts reached an abort and they name different things, and an abort's IDENTITY survives a ` +
-                  `repeat - so this is a difference between the two HOSTS and not between two runs`);
-  else if (an !== bn)
-    cannot.push(`the ABORT (native: ${an === null ? "none" : JSON.stringify(an)}; vehicle: ` +
-                `${bn === null ? "none" : JSON.stringify(bn)}) - an abort is FIRST-PAST-THE-POST, so one host ` +
-                `reaching one and the other not is a REACH difference, and reach on the vehicle is ` +
-                `wall-denominated and therefore a fact about the box and the hour. The host that aborted may ` +
-                `simply have died earlier in its own budget; no total this line is allowed to compare could ` +
-                `tell that from a difference between the two programs`);
-  const head = `[build] VEHICLE AGREEMENT (${den(a)}; ${den(b)})`;
-  const could = cannot.length ? `\n[build]   COULD NOT BE COMPARED IN THIS RUN: ${cannot.join("; ")}.` : ``;
-  const tail = `\n[build]   NOT COMPARED, DELIBERATELY: how many statements each host ANSWERED, and every ` +
-               `work, fork, job and census total. Two runs of ONE artifact on ONE host already move those, so ` +
-               `a difference between two HOSTS carries no information about either. This line decides ` +
-               `nothing and no exit code moves by one.`;
-  /* WHAT AGREEMENT MAY BE CLAIMED IS EXACTLY WHAT WAS COMPARED. With the denominator uncomparable the only
-     surviving axis is the abort identity, so the sentence names that axis rather than saying the two hosts
-     agree - "agree on everything comparable" over an empty comparison is the vacuous claim one column over. */
-  const agreed = [asked(a) === null || asked(b) === null ? null : `the same ${asked(a)} statement(s) asked`,
-                  an === null ? `no abort on either` : `the same abort ${JSON.stringify(an)} on both`]
-                 .filter(Boolean).join(", and ");
-  return (findings.length
-    ? `${head} - ${findings.length} FINDING(S) ABOUT THE VEHICLE: ${findings.join("; ")}` +
-      `\n[build]   a vehicle finding is never averaged into the verdict and never overturns it (§Testing). ` +
-      `The verdict above is the native host's.` + could
-    : `${head} - the two hosts agree on what this run could compare: ${agreed}` + could) + tail;
+/* The vehicle stage of one fixture document: its native run and its WASM run compared by engine/vehicle.mjs.
+   A disagreement is a DEFECT naming the document and the first differing statement, because the program that
+   ships answered differently from the program that was measured. A pair in which neither the crashes nor the
+   final answers could be compared is NOT ASKED, and says which half was missing. */
+function vehicleStage(doc, nat, veh) {
+  const label = `vehicle (${doc})`;
+  if (!nat || !("captured" in nat)) return skipped(label, "the native run of this document did not run");
+  if (!veh || !("captured" in veh)) return skipped(label, "the wasm run of this document did not run");
+  const c = compareVehicle(doc, vehicleReading(nat.captured, nat.signal, nat.log),
+                           vehicleReading(veh.captured, veh.signal, veh.log));
+  const tail = ` — work: ${c.work}`;
+  console.log(`[build] ${label}: compared ${c.compared.join("; ") || "nothing"}` +
+              (c.uncompared.length ? `; not compared: ${c.uncompared.join("; ")}` : ``) + tail);
+  if (c.defect !== null)
+    return { label, verdict: `DEFECT — ${c.defect}`, code: 1, kind: STAGE_KIND.DEFECT };
+  if (!c.answered)
+    return { label, verdict: `NOT ASKED — neither both crashes nor both final tables exist to compare: ` +
+                             c.uncompared.join("; "), code: 1, kind: STAGE_KIND.NOT_ASKED };
+  return { label, verdict: "PASS", code: 0, kind: null };
 }
 
 /* A SOURCE CENSUS IS RECOGNISED BY THE SENTENCE THE STAGE ITSELF PRINTS, NEVER BY ITS FILE NAME. A list here of
@@ -6619,7 +6494,7 @@ const revAtStart = () => (REV_AT_START ||= gateRevision(
 let GATE_SEAM = null;
 
 /* `findings` IS A REQUIRED ARGUMENT AND AN EMPTY ARRAY IS A POSITIVE STATEMENT. It carries the lines that are
-   NOT stages - the vehicle-agreement sentence is the only one today - and it is required rather than
+   NOT stages - the per-host fixture row sums today - and it is required rather than
    defaulted for the reason every other required argument in this file is: `undefined` from a caller that
    stopped passing it and `[]` from a build that had nothing to say must never render the same. */
 function report(stages, findings) {
@@ -6842,16 +6717,12 @@ function report(stages, findings) {
      verdict is read as part of it unless something says otherwise. Printed on the clean day for the reason
      every other census here is: a line that appears only on the bad day is one nobody learns to look for. */
   const vbad = rank.map((k) => vehicle.find((s) => s.kind === k)).find(Boolean);
-  console.log(vehicle.length === 0
-    ? `[build] VEHICLE — no stage in this build ran on the vehicle with a native counterpart, so nothing ` +
-      `here says whether the thing that SHIPS behaves like the thing that was measured. That is an ABSENCE ` +
-      `and it is not agreement.`
-    : vbad
+  if (vehicle.length)
+    console.log(vbad
       ? `[build] VEHICLE — ${censusText(vpart, vehicle)}; worst: ${vbad.label} [${vbad.kind.tag}] — ` +
-        `${vbad.verdict}\n[build]   NOT SUMMED INTO THE VERDICT AND NOT ABLE TO OVERTURN IT (§Testing). The ` +
-        `vehicle's slice is wall-denominated, so how far its run got is a fact about the box and the hour; ` +
-        `what it is entitled to state is a DISAGREEMENT with the native run, which is what the VEHICLE ` +
-        `AGREEMENT line reports.`
+        `${vbad.verdict}\n[build]   not summed into the verdict: the vehicle's slice is wall-denominated, so ` +
+        `how far its run got is a fact about the box and the hour; its disagreement with the native run is ` +
+        `the \`vehicle (<document>)\` stages', which do decide.`
       : `[build] VEHICLE — ${censusText(vpart, vehicle)}. It is summed into no verdict either way.`);
   /* AND THE LINES THAT ARE NOT STAGES AT ALL. They decide nothing and are counted in nothing; they are here
      rather than at their own push site because what a reader pastes is the tail of this run. */
@@ -8521,8 +8392,8 @@ if (NATIVE) {
     : await runDocuments("the native run (" + kind + ")", bin, [],
                          "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault"))
     .map((s) => onHost(s, STAGE_HOST.NATIVE)));
-  /* NO VEHICLE RAN IN THIS TARGET AND THEREFORE NO AGREEMENT LINE. `report()` says so in its own words rather
-     than printing nothing, because a silent vehicle line reads as agreement. */
+  /* This target runs no wasm, so it has no vehicle stage; the gate suite (`node engine/build.mjs gates`) runs
+     the `vehicle (<document>)` comparisons. */
   report(stages, []);
 }
 
@@ -9070,7 +8941,7 @@ STAGES.push(onHost(NATIVE_BUILT.stage, STAGE_HOST.NATIVE));
  * thousand lines of running and auditing inside the file whose name says `build`, reachable only through this
  * verb, so a reader looking for the gates reads the build to find them and a reader changing the build reads
  * the gates to be sure. WHAT THE NEXT DIFF BUILDS: those stages, their helpers (`runChild`, `runProgram`,
- * `skipped`, `onHost`, `coldRoundTripStages`, `vehicleAgreement`, `probeStanding`, `abortRecord`,
+ * `skipped`, `onHost`, `coldRoundTripStages`, `vehicleStage`, `probeStanding`,
  * `CENSUS_WITNESS`) and `report` move to their own entry, which takes the artifact paths and the revision
  * reading as ARGUMENTS rather than closing over this file's constants — because a module that derived `OUT`
  * for itself would be a second place the layout is written down, which is the rule `engine/lexbor_source.mjs`
@@ -9167,15 +9038,13 @@ const WASM_SMOKE = SMOKE_LINK.code
 const WASM_HOST = NATIVE_BUILT.bin === null ? STAGE_HOST.WASM : STAGE_HOST.VEHICLE;
 STAGES.push(...WASM_SMOKE.map((s) => onHost(s, WASM_HOST)));
 FINDINGS.push(documentRowsText(WASM_HOST.tag, WASM_SMOKE));
-/* ONE LINE, ITS OWN VERDICT, SUMMED INTO NOTHING — see `vehicleAgreement`. It is composed here, where both
-   records are in one hand, and PRINTED by `report()` beside the verdict, where a reader is looking. */
-/* PER DOCUMENT, paired by name: the two hosts' readings of one document are the only comparable pair. */
-{
+/* The vehicle stage: each document's two runs, paired by name, compared by `vehicleStage`. Where the native
+   program did not link there is no pair, and the wasm runs above decide on their own. */
+if (NATIVE_BUILT.bin !== null) {
   const byDoc = (xs) => new Map(xs.filter((s) => s.doc).map((s) => [s.doc, s]));
   const nd = byDoc(NATIVE_SMOKE), wd = byDoc(WASM_SMOKE);
-  const docs = [...new Set([...nd.keys(), ...wd.keys()])];
-  if (!docs.length) FINDINGS.push(vehicleAgreement(null, null));
-  for (const d of docs) FINDINGS.push(vehicleAgreement(nd.get(d) || null, wd.get(d) || null));
+  for (const d of new Set([...nd.keys(), ...wd.keys()]))
+    STAGES.push(onHost(vehicleStage(d, nd.get(d), wd.get(d)), STAGE_HOST.PAIR));
 }
 /* AND THE REACHABILITY LADDER OVER THE TWO RUNS ABOVE, WHICH IS THE READER THOSE @ MARKERS WERE WRITTEN FOR.
    engine/host/test_forced.c prints a marker at the head of every selftest row it answers, and engine/
