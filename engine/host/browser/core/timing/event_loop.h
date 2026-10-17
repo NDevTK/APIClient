@@ -175,6 +175,8 @@ JSValue event_loop_now(JSContext *ctx);
    a timer whose expiry passes mid-task is due at the next selection and not before it. Applying advance_to's
    invariant here would assert against the spec. */
 void event_loop_work_advance(JSContext *ctx, uint64_t units);
+/* The units every flow has banked through it, over the process. A report only. */
+uint64_t event_loop_work_banked_life(void);
 /* WHO CALLS IT: the interpreter, through the one registration that also carries the preempt policy
  * (quickjs.h's JSFlowControlHooks `work`, relayed by solver/engine.c). The count is taken at the yield poll,
  * BEFORE the policy is asked, so a flow that parks there has already banked the work it did to reach that

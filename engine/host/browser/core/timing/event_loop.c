@@ -217,6 +217,9 @@ JSValue event_loop_now(JSContext *ctx)
    of the unsafe shared current time (step 2.2's taskStartTime, step 3's taskEndTime) and differences them, so
    time passes while step 2.6 performs the task's steps. See event_loop.h for the whole of why the quantity is
    the flow's own retired opcodes, why it is accumulated exactly, and why this is not event_loop_advance_to. */
+/* Every unit any flow banked, over the process: a lifetime count for core/timing/thread_work.c's census. */
+static uint64_t g_work_banked;
+
 void event_loop_work_advance(JSContext *ctx, uint64_t units)
 {
     double work;
@@ -249,7 +252,10 @@ void event_loop_work_advance(JSContext *ctx, uint64_t units)
            "function writes it, and only upwards) or the sum has left the exactly-representable integers, at "
            "which point the clock silently stops moving inside a task exactly as it did before this existed");
     el_num_set(ctx, g_atom_work, work + (double)units);
+    g_work_banked += units;
 }
+
+uint64_t event_loop_work_banked_life(void) { return g_work_banked; }
 
 /* THE ORDER THIS CLOCK TAKES IN A SESSION THAT EXPLORES NOTHING — HTML §8.1.7.3 Processing model step 2.1's
  * own freedom, exercised on the only facts the moments carry.

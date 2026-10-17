@@ -36,6 +36,7 @@
 /* §8.1.4.6 "Runtime script errors"'s throw site — one component derives it, this one reports it. */
 #include "core/events/report_exception.h"
 #include "core/timing/event_loop.h"   /* whether the clock's licence was wanted and refused — see event_loop_advance_census */
+#include "core/timing/thread_work.h"   /* the thread work that clock does not see — see the `tw*` rows */
 
 /* The page's own uncaught errors, deduped (see result.h). The message is the page's own and is not interpreted.
    The dedupe key is the pair (message, HTML §8.1.4.6 "Runtime script errors" throw site), so two scripts raising
@@ -1484,6 +1485,26 @@ char *result_cold_json(void) {
     METRIC_SET(sched_us, r.sched_us);
     METRIC_SET(slice_overruns, r.slice_overruns);
     METRIC_SET_OBJECT(step_unit_runs, runs);
+    {
+        ThreadWorkCensus tw;
+
+        thread_work_census(&tw);
+        METRIC_SET(tw_opcode_units, (long long)tw.opcode_units);
+        METRIC_SET(tw_discarded_units, (long long)tw.discarded_units);
+        METRIC_SET(tw_script_parse_bytes_all, (long long)tw.script_parse_bytes_all);
+        METRIC_SET(tw_script_parse_spans, tw.spans[THREAD_WORK_SCRIPT_PARSE]);
+        METRIC_SET(tw_script_parse_bytes, (long long)tw.bytes[THREAD_WORK_SCRIPT_PARSE]);
+        METRIC_SET(tw_script_parse_us, tw.cpu_us[THREAD_WORK_SCRIPT_PARSE]);
+        METRIC_SET(tw_decode_spans, tw.spans[THREAD_WORK_DECODE]);
+        METRIC_SET(tw_decode_bytes, (long long)tw.bytes[THREAD_WORK_DECODE]);
+        METRIC_SET(tw_decode_us, tw.cpu_us[THREAD_WORK_DECODE]);
+        METRIC_SET(tw_html_parse_spans, tw.spans[THREAD_WORK_HTML_PARSE]);
+        METRIC_SET(tw_html_parse_bytes, (long long)tw.bytes[THREAD_WORK_HTML_PARSE]);
+        METRIC_SET(tw_html_parse_us, tw.cpu_us[THREAD_WORK_HTML_PARSE]);
+        METRIC_SET(tw_css_parse_spans, tw.spans[THREAD_WORK_CSS_PARSE]);
+        METRIC_SET(tw_css_parse_bytes, (long long)tw.bytes[THREAD_WORK_CSS_PARSE]);
+        METRIC_SET(tw_css_parse_us, tw.cpu_us[THREAD_WORK_CSS_PARSE]);
+    }
     METRIC_SET_OBJECT(step_unit_overruns, over);
     METRIC_SET_OBJECT(step_unit_overrun_seamless_arms, seam);
     METRIC_SET_OBJECT(step_unit_overrun_ask_arms, oask);

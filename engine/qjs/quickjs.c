@@ -34291,7 +34291,18 @@ void JS_RequestFlowYield(void) { FLOW_YIELD_REQUEST(JS_PREEMPT_HOST); }
  * flow's time. */
 static _Thread_local uint64_t g_flow_work_retired __attribute__((tls_model("local-exec"))) = 0;
 #define FLOW_WORK_RETIRE()  (g_flow_work_retired++)
-void JS_FlowDiscardRetiredWork(void) { g_flow_work_retired = 0; }
+uint64_t JS_FlowDiscardRetiredWork(void)
+{
+    uint64_t u = g_flow_work_retired;
+    g_flow_work_retired = 0;
+    return u;
+}
+
+/* Source bytes the tokenizers have consumed, over the process: a report for the host's thread-work census.
+   Each byte is counted once however often a lookahead rescans it, because only forward progress past
+   `counted_ptr` is added. */
+static uint64_t g_flow_parse_bytes;
+uint64_t JS_FlowParseBytesLife(void) { return g_flow_parse_bytes; }
 
 /* HOW MANY DISPATCHES UNTIL THE COOPERATIVE BUDGET IS NEXT ASKED — the OCCASION for a clock read and no part of
  * the answer. It closes the gap solver/quantum.h names first: every source that raised a yield request was a
@@ -57221,6 +57232,7 @@ typedef struct JSParseState {
     const uint8_t *buf_start;
     const uint8_t *buf_ptr;
     const uint8_t *buf_end;
+    const uint8_t *counted_ptr;   /* how far the source has been counted (js_parse_count_bytes) */
     const uint8_t *line_start; /* first character of the current line */
     const uint8_t *eol;  // most recently seen end-of-line character
     const uint8_t *mark; // first token character, invariant: eol < mark
@@ -58479,6 +58491,14 @@ static JSAtom parse_ident(JSParseState *s, const uint8_t **pp,
    Deleting the guard is what makes that claim falsifiable rather than decorative: if some path still reaches
    here through C recursion, it now overflows the stack and CRASHES LOUD at the point that recursed, instead of
    being laundered into a RangeError the caller reports as if the source were at fault. */
+static void js_parse_count_bytes(JSParseState *s)
+{
+    if (s->buf_ptr > s->counted_ptr) {
+        g_flow_parse_bytes += (uint64_t)(s->buf_ptr - s->counted_ptr);
+        s->counted_ptr = s->buf_ptr;
+    }
+}
+
 static __exception int next_token(JSParseState *s)
 {
     const uint8_t *p, *p_next;
@@ -58486,6 +58506,7 @@ static __exception int next_token(JSParseState *s)
     bool ident_has_escape;
     JSAtom atom;
 
+    js_parse_count_bytes(s);
     free_token(s, &s->token);
 
     p = s->last_ptr = s->buf_ptr;
@@ -59138,6 +59159,7 @@ static __exception int json_next_token(JSParseState *s)
     int c;
     JSAtom atom;
 
+    js_parse_count_bytes(s);
     json_free_token(s, &s->token);
 
     p = s->last_ptr = s->buf_ptr;
@@ -77790,6 +77812,7 @@ static void js_parse_init(JSContext *ctx, JSParseState *s,
     s->buf_end = s->buf_ptr + input_len;
     s->digest = 0xcbf29ce484222325ULL;
     s->digest_at = s->buf_start;
+    s->counted_ptr = s->buf_ptr;
     s->line_start = s->buf_ptr;
     s->mark = s->buf_ptr + min_int(1, input_len);
     s->eol = s->buf_ptr;

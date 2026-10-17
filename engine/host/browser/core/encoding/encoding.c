@@ -43,6 +43,7 @@
 #include "solver/concolic.h"
 #include "core/encoding/encoding.h"
 #include "core/encoding/encoding_table.h"
+#include "core/timing/thread_work.h"
 #include "core/idl_args.h"
 #include "core/agent_state.h"
 #include "core/realm.h"
@@ -1328,7 +1329,10 @@ char *encoding_decode(const char *p, size_t n, int fallback_encoding, size_t *ou
     EncDecoder d;
     EncBuf o = { 0 };
     int bom = encoding_bom_sniff(p, n), r;
+    size_t in_n = n;
+    ThreadWorkSpan tw;
 
+    thread_work_begin(&tw);
     DCHECK(fallback_encoding >= 0 && fallback_encoding < ENC_COUNT,
            "a decode was given a fallback that is not an encoding in this registry — §4.2's get an encoding is "
            "what a caller turns a label into one with, and its FAILURE is the caller's own answer to substitute "
@@ -1361,6 +1365,7 @@ char *encoding_decode(const char *p, size_t n, int fallback_encoding, size_t *ou
         o.b[o.n] = 0;
     }
     if (out_n) *out_n = o.n;
+    thread_work_end(&tw, THREAD_WORK_DECODE, in_n);
     return o.b;
 }
 

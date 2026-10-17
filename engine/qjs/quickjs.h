@@ -2078,7 +2078,9 @@ JS_EXTERN void JS_SetFlowControlHooks(const JSFlowControlHooks *hooks);
    first, so its residue is zero). A finished flow's clock is never read again and host time is no flow's time,
    so both are discarded rather than banked — which is what makes "the count `work` receives is the running
    flow's own" a property of the mechanism instead of a hope about call order. */
-JS_EXTERN void JS_FlowDiscardRetiredWork(void);
+JS_EXTERN uint64_t JS_FlowDiscardRetiredWork(void);   /* returns what it discarded */
+/* Source bytes quickjs's script and JSON tokenizers have consumed, over the process (a report). */
+JS_EXTERN uint64_t JS_FlowParseBytesLife(void);
 
 /* APIClient TIME-TRAVEL (record/replay) hooks — the RECORD boundary of the COW time-travel executor.
    A flow's live state is (shared baseline ∘ its per-flow COW delta); rewinding a flow reverses that delta,

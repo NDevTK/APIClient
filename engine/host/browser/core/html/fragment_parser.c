@@ -36,6 +36,7 @@
 #include "core/html/sanitizer.h"
 #include "core/idl_args.h"
 #include "solver/dom_cow.h"
+#include "core/timing/thread_work.h"   /* the bytes an HTML parser is fed, for the thread-work census */
 
 /* THE FRAGMENT PARSE, AS A MACHINE — the last drive-to-completion left beside the insertion it feeds.
  * `lxb_html_document_parse_fragment` tokenises and tree-builds the whole markup inside one opcode, so
@@ -335,9 +336,13 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
         }
         if (s->pc->fed < s->len) {
             /* ONE BYTE. lexbor's incoming-buffer machinery is what makes a token able to span two of these. */
-            CHECK(lxb_html_parse_fragment_chunk_process(s->pc->parser,
-                      (const lxb_char_t *)s->html + s->pc->fed, 1) == LXB_STATUS_OK,
-                  "the fragment parse failed on a byte of its markup");
+            ThreadWorkSpan tw;
+            lxb_status_t fst;
+
+            thread_work_begin(&tw);
+            fst = lxb_html_parse_fragment_chunk_process(s->pc->parser, (const lxb_char_t *)s->html + s->pc->fed, 1);
+            thread_work_end(&tw, THREAD_WORK_HTML_PARSE, 1);
+            CHECK(fst == LXB_STATUS_OK, "the fragment parse failed on a byte of its markup");
             s->pc->fed++;
             return JS_STEP_YIELD;
         }

@@ -42,6 +42,7 @@
 #include "core/frame/navigable.h"   /* HTML §7.3.1 Navigables: tree order over this agent's navigables */
 #include "core/frame/window_proxy.h" /* which realm of this agent a document name is, in the asking timeline */
 #include "core/frame/document_lifecycle.h"   /* HTML §7.4.6.1: what a navigation does to the Document it replaces */
+#include "core/timing/thread_work.h"   /* the census of thread work the clock does not see */
 #include "core/timing/event_loop.h"   /* HTML §8.1.7.3 Processing model: the clock's second mover — the work the
                                          running flow retired, which the interpreter reports and this file relays */
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
@@ -8709,7 +8710,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     if (f->compile != NULL) g_classic_compile_resumed++;
                     int64_t t_comp0 = quantum_thread_us();
                     JSValue fn = JS_UNDEFINED;
+                    ThreadWorkSpan tw;
+                    uint64_t parsed0 = JS_FlowParseBytesLife();
+                    thread_work_begin(&tw);
                     int cr = JS_FlowCompileStep(prog_ctx, body, body_n, prog_name, src_flags, &fn, &f->compile);
+                    thread_work_end(&tw, THREAD_WORK_SCRIPT_PARSE, JS_FlowParseBytesLife() - parsed0);
                     if (quantum_thread_us() - t_comp0 >= (int64_t)ENGINE_QUANTUM_MS * 1000)
                         g_classic_compile_over++;
                     if (cr == 0) {
@@ -9607,7 +9612,7 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
        clock (quickjs.h's JSFlowControlHooks.work), and what stands in it here is host time between two flows or the
        residue of a flow that finished without parking, never `f`'s. Banked, it would put another timeline's
        duration into this flow's first `performance.now()`. */
-    JS_FlowDiscardRetiredWork();
+    thread_work_note_discarded(JS_FlowDiscardRetiredWork());
     if (!f->delta) f->delta = cow_delta_new();
     cow_set_current((CowDelta *)f->delta);
     cow_apply(ctx, (CowDelta *)f->delta);

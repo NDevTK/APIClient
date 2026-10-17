@@ -19,6 +19,7 @@
 /* §13.2.6's DOM writes are the per-flow delta's — this component owns the one place a parser is made, so it is
    where that implementation is installed. */
 #include "solver/dom_cow.h"
+#include "core/timing/thread_work.h"   /* the bytes an HTML parser is fed, for the thread-work census */
 
 /* LEXBOR'S TOKEN-DONE CALLBACK IS STATIC, SO IT IS CAPTURED RATHER THAN NAMED — `lxb_html_tree_token_callback`
    has no declaration in any header, and re-writing its six lines here would be a second copy of a function
@@ -539,8 +540,13 @@ lxb_status_t html_parse_document_open(lxb_html_document_t *document, DomParseRoo
        exactly the silent divergence a re-expression must not introduce. */
     opt = document->opt;
     st = lxb_html_document_parse_chunk_begin(document);
-    if (st == LXB_STATUS_OK)
+    if (st == LXB_STATUS_OK) {
+        ThreadWorkSpan tw;
+
+        thread_work_begin(&tw);
         st = lxb_html_document_parse_chunk(document, html, size);
+        thread_work_end(&tw, THREAD_WORK_HTML_PARSE, size);
+    }
     document->opt = opt;
     DCHECK(st != LXB_STATUS_OK || html_parse_insertion_point_defined(doc),
            "a document parse that lexbor reported OK left no live input stream behind it — §13.2.3.5's "
@@ -591,7 +597,13 @@ lxb_status_t html_parse_document_write(lxb_html_document_t *document, const lxb_
            "undefined — for §8.4.3 \"document.write()\" step 10 see the paragraph above this assert for the "
            "two ways that happens and for what the host has to do about the second one; for HTML §7.5.4 "
            "\"Loading text documents\" step 4 it means the open that precedes it did not report its failure");
-    st = lxb_html_document_parse_chunk(document, text, size);
+    {
+        ThreadWorkSpan tw;
+
+        thread_work_begin(&tw);
+        st = lxb_html_document_parse_chunk(document, text, size);
+        thread_work_end(&tw, THREAD_WORK_HTML_PARSE, size);
+    }
     /* A `CHECK` AND NOT A `DCHECK`, for html_fire's reason one layer up: §13.2 tokenization and tree
        construction are error-RECOVERING and define no input they reject, so a non-OK status here is the
        allocation floor — and a markup sink that silently dropped its markup in release would be a document
