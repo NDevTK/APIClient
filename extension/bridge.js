@@ -2094,7 +2094,7 @@ function _bestCandidate(pop) {
       /* The exclusion moves the row's weight, it does not delete it: a parked entry and the tab holding its
          address are one work item (the tab's engine resumes the residue), so a waiting document at that address
          must have been ranked by the row's history. A row excluded because a live instance holds its address is
-         carried by that engine's `engineWeight` instead (its stored account plus its own service). */
+         carried by that engine's `engineKey` instead (its stored account plus its own service). */
       DCHECK(!waitingAddrs.has(row.sourceUrl) || byAddress.has(row.sourceUrl),
              "a parked residue was taken out of the Level-1 order because a waiting document holds its " +
              "address, and that document was not ranked by it — the row's weight has left the order with " +
@@ -6082,6 +6082,14 @@ const _hostOps = {
              "rehydration the word it was parked under), so an absent one is a composer nobody told, and the " +
              "entry it writes would read back as an older store's and be re-fetched as `derived`");
       const _parkProvenance = eng.msg.provenance;
+      /* The value this run adds to the row, read twice over one result: the account the last step stated and the
+         result's `_novelty.landed`, both novelty_landed_value with no step between. `_novelty.paid` also counts
+         a novel credit made on host time, which no flow was paid, so it is the bound and not the value. */
+      const _nov = result._novelty;
+      DCHECK(_nov && _nov.landed === eng.level1.paid && _nov.landed <= _nov.paid,
+             "a parked run's novel value disagrees with its own result (account " + eng.level1.paid + ", landed " +
+             String(_nov && _nov.landed) + ", paid " + String(_nov && _nov.paid) + ") — both are the landed novel " +
+             "credits of one instance read after its last step, and the paid asks bound them");
       const _account = engineAccount(eng);
       await frontierPut(result._fkey, {
         /* The recipe carries its environment: the top-level creation URL (HTML §8.1.3.5 Secure contexts decides
