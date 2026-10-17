@@ -3623,6 +3623,7 @@ typedef struct {
     double bw;
     int seeded, never_tie;
     int64_t weighed, entries;
+    int64_t straddled, tied, tied_phase, tied_bucket, below;
 } FlowIxAnswer;
 
 static void ix_q_push(FlowIxNode **q, FlowIxNode *n, double bound, double off, unsigned char kind) {
@@ -3644,7 +3645,8 @@ static void ix_q_push_tree(FlowIxNode **q, FlowIxTreap *n, double off, int64_t c
    Members are compared by weight and then registry slot, the walk's first maximum. Pure: it writes only the queue
    nodes, which nothing reads outside one query. */
 static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
-    FlowIxAnswer a = { NULL, 0.0, 0, 0, 0, 0 };
+    FlowIxAnswer a = { NULL, 0.0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    static Flow **pw_f; static double *pw_w; static long pw_cap; long pw_n = 0;
     FlowIxNode *q = NULL;
     double sw = 0.0, nmax = 0.0;
     int nseen = 0;
@@ -3681,6 +3683,7 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
         } else if (e->kind == IX_Q_TREE) {
             Flow *m = (Flow *)((char *)e - offsetof(Flow, ix_qt));
             int64_t from = flow_ix_carry_from(m->family);
+            if (m->ix_t.lo < from && m->ix_t.hi >= from) a.straddled++;
             ix_q_push(&q, &m->ix_qs, e->off + ix_t_self(&m->ix_t, from), e->off, IX_Q_SELF);
             if (m->ix_t.l) ix_q_push_tree(&q, m->ix_t.l, e->off, from);
             if (m->ix_t.r) ix_q_push_tree(&q, m->ix_t.r, e->off, from);
@@ -3709,12 +3712,31 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
                     "of the key's operands did not re-key",
                     w, e->key, m->ix_t.key, flow_ix_member_key(m), (long long)m->ix_t.phase,
                     (long long)flow_silence_phase(m));
+            if (pw_n == pw_cap) {
+                pw_cap = pw_cap ? 2 * pw_cap : 1024;
+                pw_f = realloc(pw_f, (size_t)pw_cap * sizeof *pw_f); pw_w = realloc(pw_w, (size_t)pw_cap * sizeof *pw_w);
+                CHECK(pw_f && pw_w, "probe: OOM");
+            }
+            pw_f[pw_n] = m; pw_w[pw_n] = w; pw_n++;
             if (nn > 0 && (!nseen || w > nmax)) { nmax = w; nseen = 1; }
             if (!a.best || w > a.bw || (w == a.bw && m->reg_i < a.best->reg_i)) { a.best = m; a.bw = w; }
         }
     }
     if (a.seeded && (!a.best || sw >= a.bw)) { a.best = (Flow *)seed; a.bw = sw; }
     a.never_tie = nseen && nmax == a.bw;
+    for (long i = 0; i < pw_n; i++) {
+        Flow *m = pw_f[i];
+        if (m == a.best) continue;
+        if (pw_w[i] < a.bw) { a.below++; continue; }
+        a.tied++;
+        if (m->acct->branch == a.best->acct->branch) {
+            a.tied_bucket++;
+            if (m->ix_t.notch == a.best->ix_t.notch && m->ix_t.visits == a.best->ix_t.visits &&
+                m->ix_t.rung == a.best->ix_t.rung && m->ix_t.replay == a.best->ix_t.replay &&
+                m->ix_t.surv == a.best->ix_t.surv)
+                a.tied_phase++;
+        }
+    }
     return a;
 }
 
@@ -4133,6 +4155,7 @@ static void flow_count_plateau(const Flow *seed, const FlowIxAnswer *a) {
    better flow takes the thread at the next opcode. The seed is a live member (engine.c drops an incumbent the
    seeding paged out before asking), so it is read through its handle. */
 static int64_t g_ix_entries;   /* lifetime: queue entries the index's asks took, published as `scanIndexEntries` */
+static int64_t g_ix_asks, g_ix_straddled, g_ix_tied, g_ix_tied_phase, g_ix_tied_bucket, g_ix_below;
 static Flow *flow_pick(const Flow *seed, const Flow *exclude, FlowScan why) {
     FlowIxAnswer a;
     CHECK((unsigned)why < (unsigned)FLOW_SCAN_N,
@@ -4145,11 +4168,19 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, FlowScan why) {
     a = flow_ix_query(seed, exclude);
     g_scan_weights[why] += a.weighed;
     g_ix_entries += a.entries;
+    g_ix_asks++; g_ix_straddled += a.straddled; g_ix_tied += a.tied; g_ix_tied_phase += a.tied_phase;
+    g_ix_tied_bucket += a.tied_bucket; g_ix_below += a.below;
     if (why == FLOW_SCAN_NEXT) flow_count_plateau(seed, &a);
     return a.best;
 }
 
 int64_t flow_ix_entries(void) { return g_ix_entries; }
+int64_t flow_ix_probe(int i) {
+    switch (i) {
+    case 0: return g_ix_asks; case 1: return g_ix_straddled; case 2: return g_ix_tied;
+    case 3: return g_ix_tied_phase; case 4: return g_ix_tied_bucket; default: return g_ix_below;
+    }
+}
 
 #if APICLIENT_DEV
 /* The index against the frontier it indexes, asked at every census: the eager checks in flow_ix_query see only
