@@ -678,12 +678,7 @@ char *result_wfq_json(void) {
     METRIC_SET(scan_census_runs, flow_scan_runs(FLOW_SCAN_CENSUS));
     METRIC_SET(scan_census_weights, flow_scan_weights(FLOW_SCAN_CENSUS));
     METRIC_SET(scan_index_entries, flow_ix_entries());
-    METRIC_SET(ix_probe_asks, flow_ix_probe(0));
-    METRIC_SET(ix_probe_straddled, flow_ix_probe(1));
-    METRIC_SET(ix_probe_tied, flow_ix_probe(2));
-    METRIC_SET(ix_probe_tied_phase, flow_ix_probe(3));
-    METRIC_SET(ix_probe_tied_bucket, flow_ix_probe(4));
-    METRIC_SET(ix_probe_below, flow_ix_probe(5));
+    METRIC_SET(scan_index_asks, flow_ix_asks());
     METRIC_SET(preempt_asks_lifetime, engine_preempt_asks());
     METRIC_SET(rival_miss_gen, rm.gen);
     METRIC_SET(rival_miss_cur, rm.cur);

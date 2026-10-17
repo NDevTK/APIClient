@@ -241,12 +241,10 @@ METRIC(scan_census_weights, "scanCensusWeights", LIFETIME, "weighing", PROCESS, 
    whole cost of an ask that does not walk; per ask against `members` and `families` it says
    which of the two the index pays for (solver/flow.c's flow_ix_query states the residual). */
 METRIC(scan_index_entries, "scanIndexEntries", LIFETIME, "entry", PROCESS, "solver/flow.c", INT)
-METRIC(ix_probe_asks, "ixProbeAsks", LIFETIME, "ask", PROCESS, "solver/flow.c", INT)
-METRIC(ix_probe_straddled, "ixProbeStraddled", LIFETIME, "entry", PROCESS, "solver/flow.c", INT)
-METRIC(ix_probe_tied, "ixProbeTied", LIFETIME, "weighing", PROCESS, "solver/flow.c", INT)
-METRIC(ix_probe_tied_phase, "ixProbeTiedPhase", LIFETIME, "weighing", PROCESS, "solver/flow.c", INT)
-METRIC(ix_probe_tied_bucket, "ixProbeTiedBucket", LIFETIME, "weighing", PROCESS, "solver/flow.c", INT)
-METRIC(ix_probe_below, "ixProbeBelow", LIFETIME, "weighing", PROCESS, "solver/flow.c", INT)
+/* …and how many runnable asks took them, so a sample pair reads the entries one ask cost as a difference over a
+   difference, against `members` and `families` at the two samples. The never-dispatched question the dispatch
+   ask's plateau rows put to the index is counted in the entries and not here: it is part of the ask it answers. */
+METRIC(scan_index_asks, "scanIndexAsks", LIFETIME, "ask", PROCESS, "solver/flow.c", INT)
 /* …and how often the hook was asked. The rival rescan is close to half of all frontier
    weighing; this tells a cache that absorbs nothing (repair the cache) from a generation
    moving as fast as the hook is consulted (the page branching). `scanRivalRuns /

@@ -53,10 +53,13 @@ typedef struct FlowAcct FlowAcct;
 #define FLOW_STEP_RETIRED 3
 
 /* A node of one of the order's leftist max-heaps (flow.c's flow_ix_* banner), embedded in the record it orders so
-   the index allocates nothing. `s` is the null-path length; `off` is used only by a query's queue. */
+   the index allocates nothing. It carries a copy of the order's key (flow.c's FlowOrderKey: `key` the weight, then
+   the partial sums `x`, `self` and `ikey`, then the birth sequence `seq`), and every heap is ordered by it. `s` is
+   the null-path length; `off`, the family's coordinate, and `kind` are used only by a query's queue. */
 typedef struct FlowIxNode {
     struct FlowIxNode *l, *r, *up;
-    double key, off;
+    double key, x, self, ikey, off;
+    uint64_t seq;
     int s;
     unsigned char kind;
 } FlowIxNode;
@@ -64,17 +67,19 @@ typedef struct FlowIxNode {
 /* A member's operand tuple and, while it represents its class, its node in its branch bucket's treap (flow.c's
    flow_ix_* banner). A class is the members of one bucket with one tuple (phase, own notch, completed units, the
    three fitness fields), which weigh the same to the bit; the treap holds one node per class, in search order by
-   the tuple and heap order by `prio`, carrying the class's key and, over its subtree, the largest key (`max`) and
-   the phase range (`lo`, `hi`). `cls` is the class's members in a heap by registry slot, `ncls` and `nnever`
-   how many there are and how many were never dispatched; all of these are read off the representative only. */
+   the tuple and heap order by `prio`, carrying the class's key and, over its subtree, the largest key (`max`), the
+   lowest birth sequence among the classes at it (`floor`), the largest key of a class holding a never-dispatched
+   member (`nmax`, -INFINITY when none) and the phase range (`lo`, `hi`). `cls` is the class's members in a heap by
+   birth sequence, `ncls` and `nnever` how many there are and how many were never dispatched; all of these are read
+   off the representative, the class's oldest member, only. */
 typedef struct FlowIxTreap {
     struct FlowIxTreap *l, *r, *up;
-    double key, max;
+    double key, max, nmax;
     int64_t phase, lo, hi;
     int64_t notch, visits;
     double replay, surv;
     int rung;
-    uint64_t seq;
+    uint64_t seq, floor;
     uint64_t prio;
     struct FlowIxNode *cls;
     long ncls, nnever;
@@ -550,9 +555,10 @@ typedef struct Flow {
            join raises `sub_born` for a whole arm with no generation bump, which the sum alone cannot see.
        `key_stamped` rather than a sentinel generation, because `g_gen` starts at zero and flow_registry_init
        resets it. Dev-only in field and check, since stamping is a call per member per scan. */
-    /* Named residual. Not covered: `ikey_last` is a third evaluation because flow_weight re-associates its
-       member half rather than containing it. Next diff builds: flow_weight composed with the member half as a
-       subexpression, so one stamp covers both claims and this field is deleted. Absence shows as: a key check
+    /* Named residual. Not covered: `ikey_last` is a third evaluation per member per scan. flow_order_key now
+       contains flow_index_key and, with no carry, flow_member_key as partial sums, but the walk stamps them apart
+       from its weighing. Next diff builds: the walk stamping flow_order_key's own partial sums, taken once with
+       the weighing, so one evaluation covers the claims and this field is deleted. Absence shows as: a key check
        that passes while the index's key moved by an amount the bucket term compensated. */
 #if APICLIENT_DEV
     double   key_last;
@@ -566,7 +572,7 @@ typedef struct Flow {
        its class); and whether it is in the index at all, which is exactly "a member not host-owed". Owned and
        read by flow.c alone. */
     FlowIxTreap ix_t;
-    FlowIxNode ix_qt, ix_qs, ix_c;   /* …and its node in its class's heap, keyed on its registry slot */
+    FlowIxNode ix_qt, ix_qs, ix_c;   /* …and its node in its class's heap, keyed on its birth sequence */
     unsigned char ix_in;
     /* Its links in two populations the index re-keys or re-admits as a whole: its family's away list (members
        whose own silence is non-zero in the current window, the ones an emission re-keys) and the host-owed list
@@ -1129,7 +1135,7 @@ typedef struct {
        credited finding by flow_credit_emit and by nothing else. `val_top` cannot stand in for it, because a
        credit is any positive amount (the @S survival ratchet credits fractions).
        An emission zeroes both silence halves for every arm of the family at once, leaving arms in one visit tier
-       exactly tied, so flow_pick returns the first maximum in registry (birth) order and the tier is swept from
+       exactly tied, so flow_pick returns the tied member with the lowest birth sequence and the tier is swept from
        its oldest member, one member per quantum of own silence; the next emission restarts the sweep. If that
        holds, `picks_max` tracks this within a small factor and `picks_live / picks_max` is the mean sweep depth;
        `val_top / top_forgiven` says whether the leader earns findings or ratchets fractions.
@@ -1344,7 +1350,7 @@ FlowKeyChecks flow_key_checks(void);
 /* Lifetime count of queue entries the order's index took across every runnable ask (flow.c's flow_ix_query):
    the index's own work beside `scan<Entry>Weights`, the members it weighed. Never reset; may be differenced. */
 int64_t flow_ix_entries(void);
-int64_t flow_ix_probe(int i);
+int64_t flow_ix_asks(void);
 
 /* Lifetime count of rank changes (raises of frontier_rank_changed): the denominator of the hook's rescan count.
  * The hook rescans when `flow_frontier_gen() != g_seen_gen || cur != g_seen_cur` (engine.c), so its cadence is
