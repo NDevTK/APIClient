@@ -53335,6 +53335,119 @@ static void flow_clone_state_free_shell(JSContext *ctx, JSAsyncFunctionState *c)
     js_free(ctx, c);
 }
 
+/* A sibling's own Promise combinator, for every walk that forks one: the generator-drive frame arm (9) and the
+   requester walk, which reaches the record under each request it issues — GetIterator's `next` read (52), the
+   result unpack (45), the per-element `then` read (42), `constructor.resolve` (69), the aggregate capability
+   (9) and a forked sibling's own capability (76). The iterator and the element wrappers stay shared objects,
+   isolated per flow by the COW delta; every field the release frees is taken again.
+   THE AGGREGATE IS THE SIBLING'S OWN AND IS BUILT LATER: its capability is a Construct of the page's constructor
+   for a subclass, and a fork has nowhere to suspend, so `cap_owed` asks on the sibling's first step for an
+   original that holds one, and a capability still in flight is delivered to the sibling's own copy of the
+   request. The pre-fork element wrappers [0..index) are copied and re-attached on that first step too, since the
+   sibling's iterator is past them. `values`, the count environment and `keys` are fresh where the original has
+   built them, and left unbuilt where `constructor.resolve` is still being read, whose answer builds them. NULL on
+   OOM, with nothing left allocated. */
+static JSPromiseAll *js_promise_all_clone(JSContext *ctx, const JSPromiseAll *os)
+{
+    JSPromiseAll *ns = js_mallocz(ctx, sizeof(*ns));
+    int i, fail = 0;
+
+    if (!ns) return NULL;
+    *ns = *os;
+    ns->iter = js_dup(os->iter);
+    ns->next = js_dup(os->next);
+    ns->this_val = js_dup(os->this_val);
+    ns->promise_resolve = js_dup(os->promise_resolve);
+    ns->elem_value = js_dup(os->elem_value);
+    ns->att_promise = js_dup(os->att_promise);   /* mid-attach: the sibling redoes it with its OWN closures */
+    ns->res_obj = js_dup(os->res_obj);
+    ns->acq_method = js_dup(os->acq_method);
+    ns->acq_iterable = js_dup(os->acq_iterable);
+    ns->fin_arg = js_dup(os->fin_arg);
+    ns->src_obj = js_dup(os->src_obj);
+    ns->key_list = js_dup(os->key_list);
+    ns->cur_key = js_dup(os->cur_key);
+    ns->cur_atom = JS_DupAtom(ctx, os->cur_atom);
+    ns->result_promise = JS_UNDEFINED;
+    ns->resolving_funcs[0] = ns->resolving_funcs[1] = JS_UNDEFINED;
+    ns->cap_owed = os->cap_owed || !JS_IsUndefined(os->result_promise);
+    ns->values = ns->resolve_element_env = ns->elem_promises = ns->keys = JS_UNDEFINED;
+    ns->args_own = NULL; ns->args_own_n = 0;
+    if (os->args_own) {
+        ns->args_own = js_malloc(ctx, sizeof(JSValue) * (size_t)(os->args_own_n > 0 ? os->args_own_n : 1));
+        if (!ns->args_own) { js_promise_all_end(ctx, ns); js_free(ctx, ns); return NULL; }
+        ns->args_own_n = os->args_own_n;
+        for (i = 0; i < os->args_own_n; i++) ns->args_own[i] = js_dup(os->args_own[i]);
+    }
+    DCHECK(JS_IsUndefined(os->values) == JS_IsUndefined(os->resolve_element_env) &&
+           JS_IsUndefined(os->values) == JS_IsUndefined(os->elem_promises),
+           "a Promise combinator holds some of the three arrays `constructor.resolve`'s answer builds together");
+    DCHECK(!JS_IsUndefined(os->values) || os->index == 0,
+           "a Promise combinator has taken elements before it built the arrays they are recorded in");
+    if (!JS_IsUndefined(os->values)) {
+        ns->values = JS_NewArray(ctx);
+        ns->resolve_element_env = JS_NewArray(ctx);
+        ns->elem_promises = JS_NewArray(ctx);
+        if (!JS_IsUndefined(os->keys)) ns->keys = JS_NewArray(ctx);
+        fail = JS_IsException(ns->values) || JS_IsException(ns->resolve_element_env) ||
+               JS_IsException(ns->elem_promises) || JS_IsException(ns->keys) ||
+               JS_DefinePropertyValueUint32(ctx, ns->resolve_element_env, 0, js_int32(1),
+                                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE | JS_PROP_WRITABLE) < 0;
+        /* Array operations only: the `then` re-attach is page code and runs on the sibling's first step. */
+        for (i = 0; !fail && i < os->index; i++) {
+            JSValue ep = JS_GetPropertyInt64(ctx, os->elem_promises, i);
+            fail = JS_IsException(ep) || JS_DefinePropertyValueInt64(ctx, ns->elem_promises, i, ep,
+                                                                     JS_PROP_C_W_E) < 0;
+        }
+        for (i = 0; !fail && !JS_IsUndefined(os->keys) && i < os->index; i++) {
+            JSValue kk = JS_GetPropertyInt64(ctx, os->keys, i);
+            fail = JS_IsException(kk) || JS_DefinePropertyValueInt64(ctx, ns->keys, i, kk, JS_PROP_C_W_E) < 0;
+        }
+    }
+    if (fail) {
+        if (JS_IsException(ns->values)) ns->values = JS_UNDEFINED;
+        if (JS_IsException(ns->resolve_element_env)) ns->resolve_element_env = JS_UNDEFINED;
+        if (JS_IsException(ns->elem_promises)) ns->elem_promises = JS_UNDEFINED;
+        if (JS_IsException(ns->keys)) ns->keys = JS_UNDEFINED;
+        js_promise_all_end(ctx, ns);
+        js_free(ctx, ns);
+        return NULL;
+    }
+    ns->reattach_pending = os->index;
+    return ns;
+}
+
+/* A sibling's own async-from-sync wrapper call, for every walk that forks one: the generator-drive frame arm (10)
+   and the requester walk, which reaches the record under the reads 27.1.5.4 AsyncFromSyncIteratorContinuation
+   issues — IteratorComplete / IteratorValue on the sync result (43) and step 6's `constructor` read (73). The
+   sync iterator stays a shared object, isolated per flow by the COW delta; every other owned field is taken
+   again. The capability is FRESH: each operation runs to its own completion before its promise reaches the
+   caller's await, so a fork inside it means neither arm has handed its promise over, and each delivers its own.
+   NULL on OOM, with nothing left allocated. */
+static JSAsyncFromSync *js_async_from_sync_clone(JSContext *ctx, const JSAsyncFromSync *os)
+{
+    JSAsyncFromSync *ns = js_mallocz(ctx, sizeof(*ns));
+
+    if (!ns) return NULL;
+    DCHECK(os->call_outer == NULL,
+           "a for-await wrapper call was forked while a machine WAITS on its result — the sibling's call_outer "
+           "would still name the ORIGINAL waiter, so the two arms would deliver into one continuation; clone the "
+           "waiting link too");
+    *ns = *os;   /* every owned field as borrowed until the two lists below take them */
+    #define AFS_DUP_ONE(f) ns->f = js_dup(os->f);
+    AFS_OWNED_REST(AFS_DUP_ONE)
+    #undef AFS_DUP_ONE
+    ns->promise = JS_NewPromiseCapability(ctx, ns->resolving_funcs);
+    if (JS_IsException(ns->promise)) {
+        ns->promise = JS_UNDEFINED;
+        ns->resolving_funcs[0] = ns->resolving_funcs[1] = JS_UNDEFINED;
+        js_async_from_sync_end(ctx, ns);
+        js_free(ctx, ns);
+        return NULL;
+    }
+    return ns;
+}
+
 /* The join-chain search, declared here because clone_deep_flow re-derives each cloned join's cached
    enclosing-join pointer with it. */
 struct JSArrayJoin;
@@ -53451,14 +53564,17 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
            whatever its declaration says it is. */
         *out_kind = ((JSAsyncSettle *)st)->cont_kind;
         return ((JSAsyncSettle *)st)->cont;
-    case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET:
+    case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
+    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP:
         /* JSPromiseAll HAS no requester field: a combinator is reached from an opcode and settles a capability,
-           so nothing waits on the record. Stated rather than defaulted — if one is ever added it belongs here,
-           and the DCHECK on the sibling's links is what will say so. */
+           so nothing waits on the record in any of the roles its requests name it in. Stated rather than
+           defaulted — if one is ever added it belongs here, and the DCHECK on the sibling's links is what will
+           say so. */
         return NULL;
-    case CONT_ASYNC_FROM_SYNC:
+    case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET: case CONT_AFS_CONT:
         /* `call_outer` is the requester of an IN-FLIGHT CALL, not of the record, and the wrapper is reached
-           from a for-await opcode. A fork standing on one has a link this walk has never carried. */
+           from a for-await opcode. A fork standing on one has a link this walk has never carried. The same
+           record under the reads its continuation issues (43, 73) answers the same. */
         DCHECK(((struct JSAsyncFromSync *)st)->call_outer == NULL,
                "deep-fork of an async-from-sync wrapper whose in-flight call has a REQUESTER under it — give "
                "that link its arm in cont_outer_get/cont_outer_set so the sibling's copy names its own");
@@ -53485,13 +53601,12 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
     case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
-    case CONT_PROMISE_TRY_SETTLE: case CONT_PROMISE_ALL_THEN: case CONT_AFS_GET: case CONT_ITER_HELPER_GET:
-    case CONT_PROMISE_ALL_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
+    case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
+    case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
     case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO: case CONT_TA_TARGET: case CONT_SETMAP_CTOR:
-    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER: case CONT_AFS_CONT:
-    case CONT_PROMISE_ALL_RECAP:
+    case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
     }
     {
@@ -53543,7 +53658,9 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         ((struct JSKeyedInv *)st)->outer = outer; ((struct JSKeyedInv *)st)->outer_kind = outer_kind; return;
     /* Terminal: cont_outer_get answers no link for these, so there is nothing to write back. */
     case CONT_OP_KEYED: case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: case CONT_PROMISE_ALL:
-    case CONT_PROMISE_ALL_NEXT_GET: case CONT_ASYNC_FROM_SYNC: case CONT_WITH_HAS: case CONT_NONE:
+    case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
+    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP: case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET:
+    case CONT_AFS_CONT: case CONT_WITH_HAS: case CONT_NONE:
         break;
     /* No arm yet, as in cont_outer_get. */
     case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
@@ -53551,13 +53668,12 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
     case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
-    case CONT_PROMISE_TRY_SETTLE: case CONT_PROMISE_ALL_THEN: case CONT_AFS_GET: case CONT_ITER_HELPER_GET:
-    case CONT_PROMISE_ALL_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
+    case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
+    case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
     case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO: case CONT_TA_TARGET: case CONT_SETMAP_CTOR:
-    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER: case CONT_AFS_CONT:
-    case CONT_PROMISE_ALL_RECAP:
+    case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
     }
     DFAIL("cont_outer_set: a kind cont_outer_get answered with a link has no way to write one back — the two "
@@ -53635,21 +53751,30 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         return js_keyed_inv_clone(ctx, (const struct JSKeyedInv *)st);
     case CONT_OWNKEYS_CHK:
         return js_ownkeys_chk_clone(ctx, (const struct JSOwnKeysChk *)st);
+    case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
+    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP:
+        /* A combinator under a request it issued — a getter or a Proxy trap answering one of its reads, or the
+           subclass constructor its capability Constructs, branching on unknown input. */
+        return js_promise_all_clone(ctx, (const JSPromiseAll *)st);
+    case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET: case CONT_AFS_CONT:
+        /* a for-await wrapper call under a read its continuation issued — a getter or a Proxy trap on the sync
+           result, or on the value's `constructor` — branching on unknown input */
+        return js_async_from_sync_clone(ctx, (const JSAsyncFromSync *)st);
     /* No arm here. A kind that is only ever a frame's own cont_state (CONT_ARG_LIST_YIELD's anchor, say) is
        cloned by clone_deep_flow's arm for it; any other has not yet been asked to copy a link. */
-    case CONT_ARG_LIST_YIELD: case CONT_NONE: case CONT_AGEN_CREATE: case CONT_CONSTRUCT: case CONT_SETTER: case CONT_PROMISE_ALL:
-    case CONT_ASYNC_FROM_SYNC: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_EXEC:
+    case CONT_ARG_LIST_YIELD: case CONT_NONE: case CONT_AGEN_CREATE: case CONT_CONSTRUCT: case CONT_SETTER:
+    case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_EXEC:
     case CONT_PROMISE_TRY: case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_ACQUIRE_GET: case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE:
     case CONT_ITER_CLOSE_CALL: case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE:
     case CONT_FOROF_GET: case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP:
-    case CONT_PROMISE_CAP: case CONT_PROMISE_TRY_SETTLE: case CONT_PROMISE_ALL_THEN: case CONT_AFS_GET:
-    case CONT_ITER_HELPER_GET: case CONT_PROMISE_ALL_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET:
+    case CONT_PROMISE_CAP: case CONT_PROMISE_TRY_SETTLE:
+    case CONT_ITER_HELPER_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET:
     case CONT_ITER_CALL_GET_NOARG: case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET:
-    case CONT_PROMISE_ALL_NEXT_GET: case CONT_FOROF_ENUMREC_WRAP: case CONT_ITER_FROM_NEXT_GET:
+    case CONT_FOROF_ENUMREC_WRAP: case CONT_ITER_FROM_NEXT_GET:
     case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV: case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO:
-    case CONT_TA_TARGET: case CONT_SETMAP_CTOR: case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_SETTLE:
-    case CONT_AGEN_DEFER: case CONT_AFS_CONT: case CONT_PROMISE_ALL_RECAP: case CONT_GETPROP_YIELD:
+    case CONT_TA_TARGET: case CONT_SETMAP_CTOR: case CONT_PROMISE_ALL_SETTLE:
+    case CONT_AGEN_DEFER: case CONT_GETPROP_YIELD:
     case CONT_ARRAY_LEN_YIELD:
         break;
     }
@@ -53989,97 +54114,14 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                 if (!ns) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
                 ct->cont_state = ns;
             } else if (otf->cont_kind == CONT_ASYNC_FROM_SYNC) {
-                /* `for await (x of syncGen)` forked mid-syncGen.next(): each .next() is INDEPENDENT (no cross-element
-                   accumulation), so the sibling just needs its OWN wrapper promise — the fork mid-drive means neither
-                   arm has delivered its promise to the caller's OP_await yet, so a fresh capability is conflict-free.
-                   sync_iter == genobj (gen-COW-isolated above). orig_* copied by *ns=*os. */
-                JSAsyncFromSync *os = (JSAsyncFromSync *)otf->cont_state;
-                JSAsyncFromSync *ns = js_mallocz(ctx, sizeof(*ns));
+                /* `for await (x of syncGen)` forked mid-syncGen.next(), the generator drive on the chain. */
+                JSAsyncFromSync *ns = js_async_from_sync_clone(ctx, (const JSAsyncFromSync *)otf->cont_state);
                 if (!ns) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                *ns = *os;   /* copies every OWNED field as borrowed — the two lists below take them properly */
-                #define AFS_DUP_ONE(f) ns->f = js_dup(os->f);
-                AFS_OWNED_REST(AFS_DUP_ONE)   /* sync_iter (== genobj, gen-COW-isolated), the nextMethod, and the
-                                                 in-flight unpack/argument/close values — each a real reference */
-                #undef AFS_DUP_ONE
-                ns->promise = JS_NewPromiseCapability(ctx, ns->resolving_funcs);   /* fresh (overwrites the copied funcs): sibling delivers ITS own promise */
-                if (JS_IsException(ns->promise)) {
-                    ns->promise = JS_UNDEFINED;
-                    ns->resolving_funcs[0] = ns->resolving_funcs[1] = JS_UNDEFINED;
-                    js_async_from_sync_end(ctx, ns); js_free(ctx, ns); js_free(ctx, oa); js_free(ctx, ca); return NULL;
-                }
-                DCHECK(os->call_outer == NULL,
-                       "clone_deep_flow: a for-await drive forked while a machine WAITS on its wrapper call — the "
-                       "sibling's call_outer still points at the ORIGINAL waiter, so the two arms would deliver "
-                       "into one continuation; clone the waiting link too");
                 ct->cont_state = ns;
             } else if (otf->cont_kind == CONT_PROMISE_ALL) {
-                /* Promise.all(gen) forked mid-consume. The sibling gets a FRESH aggregate (own result_promise +
-                   resolving_funcs + values + remainingElementsCount env), and each pre-fork element wrapper [0..index)
-                   — retained in elem_promises precisely for this — is RE-ATTACHED to the sibling aggregate via
-                   js_promise_all_attach (the sibling's gen fork is past those elements and cannot re-pull them). The
-                   sibling then continues driving from ns->index (== os->index) on its own gen fork. At index==0 the
-                   re-attach loop is empty (fork before the first element) — the clean base case. */
-                JSPromiseAll *os = (JSPromiseAll *)otf->cont_state;
-                JSPromiseAll *ns = js_mallocz(ctx, sizeof(*ns));
+                /* Promise.all(gen) forked mid-consume, the generator drive on the chain. */
+                JSPromiseAll *ns = js_promise_all_clone(ctx, (const JSPromiseAll *)otf->cont_state);
                 if (!ns) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                *ns = *os;   /* copies os's OWNED aggregate fields as borrowed; null the fresh ones so an error path frees safely */
-                ns->result_promise = JS_UNDEFINED;
-                ns->resolving_funcs[0] = ns->resolving_funcs[1] = JS_UNDEFINED;
-                ns->values = JS_UNDEFINED; ns->resolve_element_env = JS_UNDEFINED; ns->elem_promises = JS_UNDEFINED;
-                ns->iter = js_dup(os->iter);              /* == genobj, gen-COW-isolated */
-                ns->next = js_dup(os->next);
-                ns->this_val = js_dup(os->this_val);
-                ns->promise_resolve = js_dup(os->promise_resolve);
-                ns->elem_value = js_dup(os->elem_value);   /* in flight when a fork lands mid-resolve */
-                ns->att_promise = js_dup(os->att_promise); /* likewise, mid-attach: the sibling redoes the attach,
-                                                              building its OWN element closures from ns */
-                ns->res_obj = js_dup(os->res_obj);         /* in flight when a fork lands mid-unpack */
-                ns->acq_method = js_dup(os->acq_method);       /* both in flight when a fork lands mid-capability */
-                ns->acq_iterable = js_dup(os->acq_iterable);
-                /* the keyed source's own fields. `keys` is FRESH like `values` and takes a copy of the elements
-                   already walked, because the sibling builds its own result object out of the pair. */
-                ns->src_obj = js_dup(os->src_obj);
-                ns->key_list = js_dup(os->key_list);
-                ns->cur_key = js_dup(os->cur_key);
-                ns->cur_atom = JS_DupAtom(ctx, os->cur_atom);
-                ns->keys = JS_UNDEFINED;
-                /* NOT BUILT HERE. For a subclass this is the page's constructor, and a fork has nowhere to
-                   suspend — the same reason the .then re-attach below is deferred. The sibling asks on its
-                   first step, through the seam the original acquisition already uses. */
-                ns->result_promise = JS_UNDEFINED;
-                ns->resolving_funcs[0] = JS_UNDEFINED;
-                ns->resolving_funcs[1] = JS_UNDEFINED;
-                ns->cap_owed = 1;
-                ns->values = JS_NewArray(ctx);
-                ns->resolve_element_env = JS_NewArray(ctx);
-                ns->elem_promises = JS_NewArray(ctx);
-                if (os->keyed) ns->keys = JS_NewArray(ctx);
-                if (JS_IsException(ns->keys)
-                    || JS_IsException(ns->values)
-                    || JS_IsException(ns->resolve_element_env) || JS_IsException(ns->elem_promises)
-                    || JS_DefinePropertyValueUint32(ctx, ns->resolve_element_env, 0, js_int32(1),
-                                                    JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE | JS_PROP_WRITABLE) < 0) {
-                    js_promise_all_end(ctx, ns); js_free(ctx, ns); js_free(ctx, oa); js_free(ctx, ca); return NULL;
-                }
-                { int fail = 0;   /* COPY the retained element wrappers; DEFER the .then re-attach to the sibling's first
-                                    do_promise_all_step (no interpreter re-entry inside clone_deep_flow — array ops only). */
-                  for (int ei = 0; ei < os->index; ei++) {
-                      JSValue ep = JS_GetPropertyInt64(ctx, os->elem_promises, ei);
-                      if (JS_IsException(ep)
-                          || JS_DefinePropertyValueInt64(ctx, ns->elem_promises, ei, ep, JS_PROP_C_W_E) < 0) {
-                          fail = 1; break; }   /* JS_DefinePropertyValueInt64 consumes ep */
-                  }
-                  if (!fail && os->keyed) {
-                      for (int ei = 0; ei < os->index; ei++) {
-                          JSValue kk = JS_GetPropertyInt64(ctx, os->keys, ei);
-                          if (JS_IsException(kk)
-                              || JS_DefinePropertyValueInt64(ctx, ns->keys, ei, kk, JS_PROP_C_W_E) < 0) {
-                              fail = 1; break; }
-                      }
-                  }
-                  if (fail) { js_promise_all_end(ctx, ns); js_free(ctx, ns); js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                }
-                ns->reattach_pending = os->index;   /* the sibling re-attaches [0..index) on its first step */
                 ct->cont_state = ns;
             }
             if (g_time_travel.gen_fork) g_time_travel.gen_fork(ctx, genobj, g0, g1);
@@ -54708,14 +54750,17 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         js_free_rt(rt, st);
         return;
     }
-    case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: {
-        /* both roles of one JSPromiseAll: the combinator's own state (9), or the requester of GetIterator
-           step 5.b's `next` read (52). */
+    case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
+    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP: {
+        /* every role of one JSPromiseAll: the combinator's own state (9), or the requester of a read or a
+           capability it issued (52, 45, 42, 69, 76); js_promise_all_clone names them. */
         js_promise_all_end(ctx, (struct JSPromiseAll *)st);
         js_free_rt(rt, st);
         return;
     }
-    case CONT_ASYNC_FROM_SYNC: {
+    case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET: case CONT_AFS_CONT: {
+        /* every role of one JSAsyncFromSync: the wrapper call's own state (10), or the requester of a read its
+           continuation issued (43, 73). */
         js_async_from_sync_end(ctx, (struct JSAsyncFromSync *)st);
         js_free_rt(rt, st);
         return;
@@ -54802,13 +54847,12 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
     case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
-    case CONT_PROMISE_TRY_SETTLE: case CONT_PROMISE_ALL_THEN: case CONT_AFS_GET: case CONT_ITER_HELPER_GET:
-    case CONT_PROMISE_ALL_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
+    case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
+    case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
     case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO: case CONT_TA_TARGET: case CONT_SETMAP_CTOR:
-    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER: case CONT_AFS_CONT:
-    case CONT_PROMISE_ALL_RECAP:
+    case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
     }
     {
