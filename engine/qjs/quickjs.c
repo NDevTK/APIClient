@@ -95801,8 +95801,11 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSArrayJoin *s = st;
     int i;
-    DCHECK(s->b.ctx != NULL, "the join buffer is initialised by stage 0's first statement, before any throw");
-    v->strbuf(ctx, &s->b);
+    /* The buffer is built by stage 0's first statement, so a machine forked or released before its first step
+       (requested, then preempted before the driver stepped it) holds none and its state is still the zero. */
+    DCHECK(s->b.ctx != NULL || s->hdr.stage == JOIN_TOOBJECT,
+           "a join past its first stage holds no buffer — stage 0 builds it before anything that can throw");
+    if (s->b.ctx) v->strbuf(ctx, &s->b);
     v->val(ctx, &s->result);
     v->val(ctx, &s->obj);
     v->val(ctx, &s->sep);
