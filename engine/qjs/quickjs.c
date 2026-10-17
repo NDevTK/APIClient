@@ -54066,7 +54066,11 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                swap recorded on the sibling's delta (gen_fork hook -> engine_fork_finalize), so each arm's
                generator resolves to its own state across context switches. A DIRECT .next() drive holds the
                generator object in async_promise; a FOR-OF drive holds it on the caller stack (async_promise
-               UNDEFINED) at caller_sp[forof_off] — recover it there so both drives fork identically. */
+               UNDEFINED) at caller_sp[forof_off] — recover it there so both drives fork identically.
+               A CREATE (gen_magic 0xFF, a `g()` whose parameters are still binding) has no generator object yet:
+               its frame owns the state and async_promise holds the generator FUNCTION, which
+               do_generator_create_settle builds the object from. Its sibling's clone is owned by the sibling's
+               frame the same way, becomes its own object's original state at that settle, and needs no swap. */
             DCHECK(otf->cont_kind == CONT_NONE || otf->cont_kind == CONT_ITER_CONSUME
                    || otf->cont_kind == CONT_ASYNC_FROM_SYNC || otf->cont_kind == CONT_PROMISE_ALL,
                    "clone_deep_flow: a generator-drive frame carries an unexpected C-continuation kind — the *ct=*otf struct-copy SHARES cont_state, so each consumer kind that can ride a generator .next() drive must clone its state HERE first.");
@@ -54079,11 +54083,17 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
             DCHECK(JS_VALUE_GET_TAG(genobj) == JS_TAG_OBJECT,
                    "clone_deep_flow: generator-body fork could not resolve the generator object");
             JSGeneratorData *g0 = otf->gen_data;
+            int gen_creating = (otf->gen_magic == 0xFF);
+            DCHECK(!gen_creating || (!gen_forof && JS_IsFunction(ctx, genobj)),
+                   "clone_deep_flow: a generator create holds something other than the function it builds from");
+            DCHECK(!gen_creating || otf->seq_req_kind == CONT_NONE,
+                   "clone_deep_flow: a generator create requested by a machine was forked — the struct copy shares "
+                   "that requester between the two creates; give `seq_req` its clone and relink here");
             /* The swap gen_fork records installs g1 into `genobj` at every switch-in, so `genobj` must be the
                generator whose running state this frame is; asserted here, where the frame that resolved it is in
                scope, rather than at the switch-in that would install into whatever it named. */
-            DCHECKF(JS_VALUE_GET_OBJ(genobj)->class_id == JS_CLASS_GENERATOR &&
-                    JS_VALUE_GET_OBJ(genobj)->u.generator_data == g0,
+            DCHECKF(gen_creating || (JS_VALUE_GET_OBJ(genobj)->class_id == JS_CLASS_GENERATOR &&
+                                     JS_VALUE_GET_OBJ(genobj)->u.generator_data == g0),
                     "clone_deep_flow: a generator-drive frame (cont kind %d, %s drive) resolved an object that is "
                     "not the generator whose state it runs (class %d) — the sibling's swap would install a "
                     "generator state into it", (int)otf->cont_kind, gen_forof ? "for-of" : "direct .next()",
@@ -54092,7 +54102,9 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
             JSGeneratorData *g1 = js_mallocz(ctx, sizeof(*g1));
             if (!g1) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
             g1->state = g0->state;
-            g1->cow_ref = 1;   /* the sibling delta's gendata entry owns this clone (creation ref transfers there) */
+            /* the sibling delta's gendata entry owns a drive's clone (creation ref transfers there); a create's is
+               its frame's, as the original is, and becomes its object's original state (cow_ref 0) */
+            g1->cow_ref = gen_creating ? 0 : 1;
             /* AND ITS FRAME IS OWNED BY THAT DELTA, WHICH NO COLLECTION CAN FREE — so this clone's frame names
                no collectable owner and a cell minted in it roots nothing (js_mallocz already wrote the NULL;
                this says it is the answer rather than an omission). The generator OBJECT is shared and is NOT
@@ -54133,7 +54145,7 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                 if (!ns) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
                 ct->cont_state = ns;
             }
-            if (g_time_travel.gen_fork) g_time_travel.gen_fork(ctx, genobj, g0, g1);
+            if (!gen_creating && g_time_travel.gen_fork) g_time_travel.gen_fork(ctx, genobj, g0, g1);
         } else {
             JSFunctionBytecode *wb = JS_VALUE_GET_OBJ(otf->sf.cur_func)->u.func.function_bytecode;
             /* The clone is the SAME frame, so it gets the SAME buffer — the size the interpreter RECORDED when
