@@ -947,7 +947,9 @@ if (!ends._routedTasksFired)
        `${ends._routedTasksTargetGone}, threw ${ends._routedTasksThrew}`);
 /* No `/got` has two readings. The listener never ran, or it ran and composed an address the engine could not
    ground, which it declines before any host sees it (pending_park_request's unaddressed refusal). The peer's
-   call-site table separates them: a `/got` site rooted in a routed delivery's `message.` sources is the second. */
+   call-site table separates them: a `/got` site rooted in a routed delivery's `message.` sources is the second.
+   An orphan drive's site is neither and is not counted: it is rooted in the listener's own unbound parameter,
+   which has no value anywhere in the program, so its address correctly has no example. */
 if (!got.length) {
   const peer = JSON.parse(engines[1].str('qjs_result'));
   if (!Array.isArray(peer.fetchCallSites) || typeof peer._cold.replyUnaddressed !== 'number')
