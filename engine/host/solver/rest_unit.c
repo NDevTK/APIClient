@@ -31,15 +31,20 @@
 #define REST_UNIT_LAYOUT_QUESTIONS_N   32u
 
 /* Boxes a resting drive lays out per rest point, 4. The floor is the cost of resting, which a body pays as one
-   staged walk. The ceiling is bound (2), measured by the scrolling-area bracket the drive runs inside: a box
-   whose content is one inline formatting context pays that context's whole fill, up to about 2 ms of CPU in a
-   dev build, so eight such boxes overrun the slice. */
+   staged walk. The ceiling is bound (2), measured by the scrolling-area bracket the drive runs inside: a box's
+   own work between its asks, with the fill of an inline formatting context it holds counted apart
+   (REST_UNIT_LAYOUT_LINE_ITEMS). */
 #define REST_UNIT_LAYOUT_BOXES_N   4u
 
 /* Elements a resting drive's float search examines per rest point, 32. The floor is the rest's own cost,
    which a search pays as one held place; the ceiling is bound (2): an element whose cascaded style is built
    by its first read costs a few hundred microseconds. */
 #define REST_UNIT_LAYOUT_FLOAT_SCAN_N   32u
+
+/* Items a resting drive's line box fill takes per rest point, 256. The floor is the rest's own cost: the body
+   holding the fill is replayed, which one item does not amortize. The ceiling is bound (2): an item costs a few
+   advance measures, tens of microseconds in a dev build, so 256 stay a few milliseconds. */
+#define REST_UNIT_LAYOUT_LINE_ITEMS_N   256u
 
 /* Descendants folded into a scrolling area per rest point. The floor is the cost of asking, which one
    node's edge does not amortize; the ceiling is bound (2), asserted around each unit. A node whose
@@ -58,6 +63,7 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_LAYOUT_BOXES:     n = REST_UNIT_LAYOUT_BOXES_N;     break;
     case REST_UNIT_LAYOUT_FLOAT_SCAN: n = REST_UNIT_LAYOUT_FLOAT_SCAN_N; break;
     case REST_UNIT_LAYOUT_DESCENDANTS: n = REST_UNIT_LAYOUT_DESCENDANTS_N; break;
+    case REST_UNIT_LAYOUT_LINE_ITEMS: n = REST_UNIT_LAYOUT_LINE_ITEMS_N; break;
     }
     /* No `default:` arm, so clang's -Wswitch (on by default) warns about a kind with no case here; such a
        kind, or an integer cast into the enum, leaves `n` at zero and fails the check below. */

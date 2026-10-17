@@ -1683,8 +1683,9 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             /* THE BOX HAS AN ELEMENT AND ITS OWN CONTENT BOX IS THE CONTAINING BLOCK OF ITS LINES, so
                §9.4.2's width is `el`'s and is left to be derived — which also keeps it unread for a run with
                no break position in it, the skip line_box.h states as load-bearing. */
-            if (!line_box_atomics_ask(el, whole, line_box_available_width_derived(), &w.item))
-                return bf_walk_stage(body, el, &w, &out);   /* "not yet": an atomic inline was deferred */
+            if (!line_box_atomics_ask(el, whole, line_box_available_width_derived(), &w.item) ||
+                !line_box_extents_ask(el, whole, line_box_available_width_derived()))
+                return bf_walk_stage(body, el, &w, &out);   /* "not yet": deferred, or the fill rested */
             h = line_box_content_height(el, whole, line_box_available_width_derived(),
                                         &any_line_box, &first_baseline, &last_baseline);
         }
@@ -1781,8 +1782,9 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             }
             /* The anonymous box is one of a resting drive's boxes; a body's walk that has spent them stops. */
             if (!layout_job_bf_step(body)) return bf_walk_stage(body, el, &w, &out);
-            if (!line_box_atomics_ask(el, anon_run, line_box_available_width_derived(), &w.item))
-                return bf_walk_stage(body, el, &w, &out);   /* "not yet": an atomic inline was deferred */
+            if (!line_box_atomics_ask(el, anon_run, line_box_available_width_derived(), &w.item) ||
+                !line_box_extents_ask(el, anon_run, line_box_available_width_derived()))
+                return bf_walk_stage(body, el, &w, &out);   /* "not yet": deferred, or the fill rested */
             b = bf_anon_box(el, anon_run, pass);
             w.at_run = false;
             w.item = 0;

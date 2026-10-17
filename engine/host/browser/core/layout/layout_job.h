@@ -152,11 +152,18 @@ void layout_job_drive_end(LayoutJobDrive *d);
 
 /* A drive whose driver rests (a step machine's, on its entered job). `begin_resting` asserts it is the job's
    outermost drive and takes every suspended entry the last activation left as its own; `spent` answers whether
-   this activation has laid out its rest_unit_items(REST_UNIT_LAYOUT_BOXES) boxes or examined its
-   rest_unit_items(REST_UNIT_LAYOUT_FLOAT_SCAN) elements; `end` on a resting drive
+   this activation has laid out its rest_unit_items(REST_UNIT_LAYOUT_BOXES) boxes, examined its
+   rest_unit_items(REST_UNIT_LAYOUT_FLOAT_SCAN) elements or taken its rest_unit_items(REST_UNIT_LAYOUT_LINE_ITEMS)
+   line box items; `end` on a resting drive
    leaves suspended entries in place for the next activation and asserts none is computing. */
 void layout_job_drive_begin_resting(LayoutJobDrive *d);
 bool layout_job_drive_spent(const LayoutJobDrive *d);
+
+/* Whether a line box fill (core/layout/line_box.h) may take another step in this activation, and the items a
+   step took. Outside a resting drive, or under a drive nested inside a body, a fill runs to completion: `left`
+   answers true and `spend` counts nothing. */
+bool layout_job_line_items_left(void);
+void layout_job_line_items_spend(size_t n);
 
 /* ---- LAYOUT_Q_BF_BOX ------------------------------------------------------------------------------------ */
 

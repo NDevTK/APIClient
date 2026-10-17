@@ -153,6 +153,9 @@ void text_run_measure_init(TextRunMeasure *m)
     m->faces_of = NULL;
     m->faces.n = 0;
     m->finished = false;
+    m->walk = 0;
+    m->cps = NULL;
+    m->answered = false;
     m->released = false;
 }
 
@@ -605,6 +608,58 @@ static CssPx tr_line_size(const TextRunMeasure *m, size_t lo, size_t hi, TextRun
     return tr_line_prefix(m, lo, hi, hi, basis);
 }
 
+static void tr_line_sum_open(TextRunLineSum *s, size_t lo)
+{
+    s->lo = lo;
+    s->at = lo;
+    s->content = false;
+    s->sum = css_px(0.0);
+    s->size = css_px(0.0);
+}
+
+/* Add item `s->at` to the line: `tr_line_prefix`'s additions over `[lo, at + 1)` in its order, so `size` is
+   `tr_line_size(m, lo, at + 1, basis)`. A character after the last content item is summed into `sum` alone,
+   because §4.1.2 removes it from this line and keeps it if content follows, where a preserved tab is positioned
+   against everything before it. */
+static void tr_line_sum_add(const TextRunMeasure *m, TextRunLineSum *s, TextRunSizeBasis basis)
+{
+    size_t i = s->at++;
+    const TextRunItem *it;
+    CssPx advance;
+
+    DCHECK(i < m->count, "a line was summed past the end of the collected run");
+    it = &m->items[i];
+    if (tr_kind_has_size(it->kind)) {
+        CssPx px = tr_sized_px(m, i, basis);
+
+        s->sum = css_px_add(s->sum, px);
+        if (tr_item_stops_trim(it)) { s->size = s->sum; s->content = true; }
+        else                        s->size = css_px_add(s->size, px);
+        return;
+    }
+    if (it->kind == TEXT_RUN_ITEM_FORCED_BREAK) return;
+    if (!tr_item_stops_trim(it) && !s->content) return;   /* §4.1.2's leading trim */
+    if (tr_char_at(m, i)->cp == 0x0009)
+        advance = tr_tab_advance(it->style, s->sum);
+    else
+        advance = css_font_advance_measure_px(it->style, it->face, it->cp);
+    DCHECK(advance.px >= 0.0,
+           "the first available font reported a NEGATIVE advance measure for a character on a line; OpenType "
+           "'hmtx''s advanceWidth is a UFWORD and a computed `font-size` is non-negative");
+    s->sum = css_px_add(s->sum, advance);
+    if (tr_item_stops_trim(it)) { s->size = s->sum; s->content = true; }
+}
+
+/* Sum the line forward to item boundary `at`; answers the items added. */
+static size_t tr_line_sum_to(const TextRunMeasure *m, TextRunLineSum *s, size_t at, TextRunSizeBasis basis)
+{
+    size_t k = 0;
+
+    DCHECK(s->at <= at && at <= m->count, "a line was summed to a boundary behind it or past the run's end");
+    while (s->at < at) { tr_line_sum_add(m, s, basis); k++; }
+    return k;
+}
+
 /* Whether the soft wrap opportunity at a boundary is enabled. css-text-3 §5.5 "Line Breaking Details" has two
    cases:
      "For soft wrap opportunities created by characters that disappear at the line break (e.g. U+0020 SPACE),
@@ -759,10 +814,10 @@ static void tr_floor_max_content(TextRunMeasure *m)
     m->max_content = css_px_max(m->max_content, m->min_content);
 }
 
-void text_run_measure_finish(TextRunMeasure *m)
+void text_run_measure_finish_begin(TextRunMeasure *m)
 {
     uint32_t *cps;
-    size_t i, k = 0, max_line = 0, min_line = 0;
+    size_t i, k = 0;
 
     DCHECK(m != NULL, "a text run measurement was finished with nothing to finish");
     DCHECK(!m->finished, "a text run measurement was finished twice — the second call would run [UAX14] over a "
@@ -772,6 +827,7 @@ void text_run_measure_finish(TextRunMeasure *m)
         /* An inline formatting context with no items: css-sizing-3 §2.1's two sizes are the size that "fits
            around its contents", and there are none, so both are zero. */
         DCHECK(m->items == NULL, "an empty run holds a collection it never appended to");
+        m->answered = true;
         return;
     }
     for (i = 0; i < m->count; i++)
@@ -784,6 +840,7 @@ void text_run_measure_finish(TextRunMeasure *m)
         m->max_content = css_px_max(m->max_content, tr_line_size(m, 0, m->count, TEXT_RUN_SIZE_MAX_CONTENT));
         m->min_content = css_px_max(m->min_content, tr_line_size(m, 0, m->count, TEXT_RUN_SIZE_MIN_CONTENT));
         tr_floor_max_content(m);
+        m->answered = true;
         return;
     }
     cps = malloc(m->ncps * sizeof *cps);
@@ -806,68 +863,89 @@ void text_run_measure_finish(TextRunMeasure *m)
     line_break_actions(cps, m->ncps, m->actions);
     /* css-text-3 §5.5's tailoring, applied to the one array before any partition reads it. */
     tr_atomic_nbsp_tailoring(m, cps);
-    /* The two answers are one walk over different lines, css-sizing-3 §2.1 "Auto Box Sizes"'s own construction:
-       "if none of the soft wrap opportunities within the box were taken" against "if all soft wrap opportunities
-       within the box were taken"; an atomic descendant's own opportunities are its answer, not breaks this run
-       takes. Max-content lines are cut by forced breaks alone (CSS 2.2 §10.3.5 "Floating, non-replaced
-       elements": "without breaking lines other than where explicit line breaks occur"), min-content lines by
-       every break. `actions[ncps]` is LB3's mandatory break at eot, so the loop closes each answer's last line
-       and there is no tail case. */
-    for (i = 1; i <= m->ncps; i++) {
-        /* The line ends at this break, in item coordinates (`tr_item_boundary_of_cp`). At `i == ncps` it runs
-           to the end of the collection, because trailing box edges after the last code point are still on the
-           last line: LB3 closes the text, not the items. */
-        size_t at = i == m->ncps ? m->count : tr_item_boundary_of_cp(m->item_of_cp, i);
-        bool forced = m->actions[i] == LINE_BREAK_MANDATORY;
-        bool soft = false;
+    m->cps = cps;
+    m->walk = 1;
+    tr_line_sum_open(&m->max_line, 0);
+    tr_line_sum_open(&m->min_line, 0);
+}
 
-        /* At eot there is no right-hand code point and LB3 makes the action mandatory, so the opportunity arm is
-           unreachable there. The guard is explicit because the index it protects, `item_of_cp[i]`, is one past
-           the end at that position. */
-        if (i < m->ncps && m->actions[i] == LINE_BREAK_OPPORTUNITY)
-            soft = tr_opportunity_enabled(m, m->item_of_cp[i - 1], m->item_of_cp[i]);
-        DCHECK(i < m->ncps || forced,
-               "[UAX14] LB3 \"Always break at the end of text\" did not make the action at eot MANDATORY. "
-               "core/layout/line_break.h states that the action at position `count` always is, and the walk "
-               "below has no tail case precisely because of it");
-        /* CSS 2.2 §9.4.2's theorem, recorded on the one pass that sees it: a break strictly inside the run. Eot
-           is excluded because LB3's action there closes the run; counting it would report a run with nowhere to
-           break as splittable. */
-        if (i < m->ncps && (forced || soft)) m->splits = true;
-        if (forced && i < m->ncps) {
-            LineBreakClass cls = line_break_class_of(cps[i - 1]);
-            TextRunItemKind kind = m->items[m->item_of_cp[i - 1]].kind;
+bool text_run_measure_finish_done(const TextRunMeasure *m)
+{
+    DCHECK(m != NULL && m->finished, "a text run measurement's walk was asked about before its collection closed");
+    return m->answered;
+}
 
-            /* An item's kind decides which class it may reach a mandatory action through, and the two are
-               written by different components. A character of a collapsed run reaches one only as BK or NL
-               (css-text-3 §5.5's forced classes "regardless of the white-space value"); §4.1.1 collapses CR and
-               LF away (§4's CR is "treated identically to spaces (U+0020) in all respects", LF is the segment
-               break). A forced break item reaches one only as LF, the code point HTML §15.3.4's `newline`
-               names. An atomic inline never does: U+FFFC is class CB, and LB20 is an opportunity on both sides. */
-            DCHECK(kind == TEXT_RUN_ITEM_FORCED_BREAK
-                       ? cls == LB_CLASS_LF
-                       : (kind == TEXT_RUN_ITEM_CHAR && (cls == LB_CLASS_BK || cls == LB_CLASS_NL)),
-                   "a FORCED line break inside a collapsed run came from an item whose [UAX14] class is not the "
-                   "one its kind implies. A CHARACTER may reach a mandatory action only as css-text-3 §5.5's BK "
-                   "or NL, since §4.1.1 collapses CR and LF away before this measurement sees them; a FORCED "
-                   "BREAK item may reach it only as LF, since HTML §15.3.4's `display-outside: newline` is the "
-                   "U+000A css-text-3 §4 names; and an ATOMIC INLINE may not reach one at all, since its U+FFFC "
-                   "is class CB and LB20 breaks before and after it rather than mandating. So this is Phase I's "
-                   "collapsible set, this file's two code-point constants, and [UAX14]'s classes having come "
-                   "apart");
-        }
-        if (forced) {
-            m->max_content = css_px_max(m->max_content,
-                                        tr_line_size(m, max_line, at, TEXT_RUN_SIZE_MAX_CONTENT));
-            max_line = at;
-        }
-        if (forced || soft) {
-            m->min_content = css_px_max(m->min_content,
-                                        tr_line_size(m, min_line, at, TEXT_RUN_SIZE_MIN_CONTENT));
-            min_line = at;
-        }
+/* The two answers are one walk over different lines, css-sizing-3 §2.1 "Auto Box Sizes"'s own construction: "if
+   none of the soft wrap opportunities within the box were taken" against "if all soft wrap opportunities within
+   the box were taken"; an atomic descendant's own opportunities are its answer, not breaks this run takes.
+   Max-content lines are cut by forced breaks alone (CSS 2.2 §10.3.5 "Floating, non-replaced elements": "without
+   breaking lines other than where explicit line breaks occur"), min-content lines by every break. Both open lines
+   are summed forward at every position, so a step costs the items it passes. `actions[ncps]` is LB3's mandatory
+   break at eot, so the last step closes each answer's last line and there is no tail case. */
+size_t text_run_measure_finish_step(TextRunMeasure *m)
+{
+    size_t i, at, k;
+    bool forced, soft = false;
+
+    DCHECK(m != NULL && m->finished && !m->answered && !m->released,
+           "css-sizing-3 §2.1's walk was stepped outside its run: before [UAX14], after its last position, or "
+           "after the release");
+    i = m->walk++;
+    DCHECKF(i >= 1 && i <= m->ncps, "css-sizing-3 §2.1's walk reached position %zu of a run of %zu code points",
+            i, m->ncps);
+    /* The line ends at this break, in item coordinates (`tr_item_boundary_of_cp`). At `i == ncps` it runs
+       to the end of the collection, because trailing box edges after the last code point are still on the
+       last line: LB3 closes the text, not the items. */
+    at = i == m->ncps ? m->count : tr_item_boundary_of_cp(m->item_of_cp, i);
+    forced = m->actions[i] == LINE_BREAK_MANDATORY;
+    k = tr_line_sum_to(m, &m->max_line, at, TEXT_RUN_SIZE_MAX_CONTENT) +
+        tr_line_sum_to(m, &m->min_line, at, TEXT_RUN_SIZE_MIN_CONTENT);
+
+    /* At eot there is no right-hand code point and LB3 makes the action mandatory, so the opportunity arm is
+       unreachable there. The guard is explicit because the index it protects, `item_of_cp[i]`, is one past
+       the end at that position. */
+    if (i < m->ncps && m->actions[i] == LINE_BREAK_OPPORTUNITY)
+        soft = tr_opportunity_enabled(m, m->item_of_cp[i - 1], m->item_of_cp[i]);
+    DCHECK(i < m->ncps || forced,
+           "[UAX14] LB3 \"Always break at the end of text\" did not make the action at eot MANDATORY. "
+           "core/layout/line_break.h states that the action at position `count` always is, and the walk "
+           "has no tail case precisely because of it");
+    /* CSS 2.2 §9.4.2's theorem, recorded on the one pass that sees it: a break strictly inside the run. Eot
+       is excluded because LB3's action there closes the run; counting it would report a run with nowhere to
+       break as splittable. */
+    if (i < m->ncps && (forced || soft)) m->splits = true;
+    if (forced && i < m->ncps) {
+        LineBreakClass cls = line_break_class_of(m->cps[i - 1]);
+        TextRunItemKind kind = m->items[m->item_of_cp[i - 1]].kind;
+
+        /* An item's kind decides which class it may reach a mandatory action through, and the two are
+           written by different components. A character of a collapsed run reaches one only as BK or NL
+           (css-text-3 §5.5's forced classes "regardless of the white-space value"); §4.1.1 collapses CR and
+           LF away (§4's CR is "treated identically to spaces (U+0020) in all respects", LF is the segment
+           break). A forced break item reaches one only as LF, the code point HTML §15.3.4's `newline`
+           names. An atomic inline never does: U+FFFC is class CB, and LB20 is an opportunity on both sides. */
+        DCHECK(kind == TEXT_RUN_ITEM_FORCED_BREAK
+                   ? cls == LB_CLASS_LF
+                   : (kind == TEXT_RUN_ITEM_CHAR && (cls == LB_CLASS_BK || cls == LB_CLASS_NL)),
+               "a FORCED line break inside a collapsed run came from an item whose [UAX14] class is not the "
+               "one its kind implies. A CHARACTER may reach a mandatory action only as css-text-3 §5.5's BK "
+               "or NL, since §4.1.1 collapses CR and LF away before this measurement sees them; a FORCED "
+               "BREAK item may reach it only as LF, since HTML §15.3.4's `display-outside: newline` is the "
+               "U+000A css-text-3 §4 names; and an ATOMIC INLINE may not reach one at all, since its U+FFFC "
+               "is class CB and LB20 breaks before and after it rather than mandating. So this is Phase I's "
+               "collapsible set, this file's two code-point constants, and [UAX14]'s classes having come "
+               "apart");
     }
-    DCHECK(max_line == m->count && min_line == m->count,
+    if (forced) {
+        m->max_content = css_px_max(m->max_content, m->max_line.size);
+        tr_line_sum_open(&m->max_line, at);
+    }
+    if (forced || soft) {
+        m->min_content = css_px_max(m->min_content, m->min_line.size);
+        tr_line_sum_open(&m->min_line, at);
+    }
+    if (i < m->ncps) return k;
+    DCHECK(m->max_line.lo == m->count && m->min_line.lo == m->count,
            "[UAX14] LB3 \"Always break at the end of text\" did not close the last line of one of the two "
            "answers over the whole ITEM collection, so a run's tail was collected and never measured. The last "
            "line runs to `count` rather than to a break position exactly so that a box edge after the final "
@@ -875,7 +953,16 @@ void text_run_measure_finish(TextRunMeasure *m)
     tr_floor_max_content(m);
     /* The code points are not read again: every walk over this run asks the action at a position, and an
        advance is read off the item, which carries the element the code point belongs to. */
-    free(cps);
+    free(m->cps);
+    m->cps = NULL;
+    m->answered = true;
+    return k;
+}
+
+void text_run_measure_finish(TextRunMeasure *m)
+{
+    text_run_measure_finish_begin(m);
+    while (!text_run_measure_finish_done(m)) (void)text_run_measure_finish_step(m);
 }
 
 void text_run_measure_release(TextRunMeasure *m)
@@ -892,26 +979,29 @@ void text_run_measure_release(TextRunMeasure *m)
     free(m->items);
     free(m->actions);
     free(m->item_of_cp);
+    free(m->cps);   /* held only while §2.1's walk is incomplete */
     m->items = NULL;
     m->actions = NULL;
     m->item_of_cp = NULL;
+    m->cps = NULL;
     m->count = 0;
     m->capacity = 0;
     m->ncps = 0;
 }
 
 /* The relation between the two answers, asserted where they are read because it is about the pair, and
-   established by `tr_floor_max_content` on both exits of `text_run_measure_finish`. CSS 2.2 §10.3.5's
+   established by `tr_floor_max_content` on every exit that sets `answered`. CSS 2.2 §10.3.5's
    `min(max(preferred minimum width, available width), preferred width)` and css-sizing-3 §2.1's
    `clamp(min-content, stretch-fit, max-content)` agree only while it holds. */
 static void tr_require_answers(const TextRunMeasure *m)
 {
     DCHECK(m != NULL, "css-sizing-3 §2.1's intrinsic inline sizes were read from no measurement");
-    DCHECK(m->finished,
-           "css-sizing-3 §2.1's intrinsic inline sizes were read from a measurement that has not run [UAX14] "
-           "over its characters yet. text_run_measure_finish is what produces them, and the fields before it "
-           "hold the zero text_run_measure_init wrote — which is a plausible answer for a run with text in it "
-           "and is why this is a crash rather than a default");
+    DCHECK(m->answered,
+           "css-sizing-3 §2.1's intrinsic inline sizes were read from a measurement whose walk over its code "
+           "point positions has not completed. text_run_measure_finish_step is what produces them, and the "
+           "fields before its last position hold a partial maximum or the zero text_run_measure_init wrote — "
+           "which is a plausible answer for a run with text in it and is why this is a crash rather than a "
+           "default");
     DCHECK(!m->released,
            "a text run measurement was read AFTER `text_run_measure_release`. Every answer this component has "
            "— css-sizing-3 §2.1's two sizes and CSS 2.2 §9.4.2's line boxes — is derived from a collection "
@@ -921,8 +1011,8 @@ static void tr_require_answers(const TextRunMeasure *m)
            "a text run's MIN-CONTENT inline size came out WIDER than its max-content inline size. css-sizing-3 "
            "§2.1 states the first as the size \"if ALL soft wrap opportunities within the box were taken\" and "
            "the second as the size \"if NONE\" were, and §2.1's floor makes the effective max-content size "
-           "at least the min-content one; `tr_floor_max_content` applies it on both exits of "
-           "text_run_measure_finish, so this is an exit that skipped it");
+           "at least the min-content one; `tr_floor_max_content` applies it on every exit that sets "
+           "`answered`, so this is an exit that skipped it");
 }
 
 /* CSS 2.2 §9.4.2's fill and its per-item positions are about a line that exists, so every box on it has one
@@ -1025,37 +1115,41 @@ bool text_run_measure_splits(const TextRunMeasure *m)
 /* ---- CSS 2.2 §9.4.2's distribution across line boxes ------------------------------------------------------
    "When several inline-level boxes cannot fit horizontally within a single line box, they are distributed among
    two or more vertically-stacked line boxes."
-   The iteration is `text_run_measure_finish`'s: the same positions, `actions` and `tr_opportunity_enabled`
+   The iteration is `text_run_measure_finish_step`'s: the same positions, `actions` and `tr_opportunity_enabled`
    question; only which positions are taken differs. `prev` is the last position that still fit, which makes it
    greedy: when a line grows past `available` the break goes back to `prev` and the segment after it opens the
    next line. With no such prefix (`prev == start`) nothing is emitted early, per §9.4.2: "if an inline box
    cannot be split … then the inline box overflows the line box." Every position either closes a line at a
-   strictly greater boundary or leaves it alone, so the loop terminates.
+   strictly greater boundary or leaves it alone, so the walk ends at the run's last position.
    The lines are non-empty and partition `[0, count)` (`tr_item_boundary_of_cp` is strictly increasing and the
    last line closes at `count`), which bounds the allocation at `count`. */
-size_t text_run_measure_fill(const TextRunMeasure *m, CssPx available, TextRunLine **lines)
+void text_run_fill_begin(TextRunFill *f, const TextRunMeasure *m, CssPx available)
 {
-    TextRunLine *out;
-    size_t i, n = 0, start = 0, prev = 0;
-
     tr_require_answers(m);
     tr_require_used_sizes(m);
-    DCHECK(lines != NULL,
-           "CSS 2.2 §9.4.2's line boxes were asked for with nowhere to put them. The count alone is not the "
-           "answer this entry has: a caller asks which line each BOX is on — §10.8's step 3 is two maxima over "
-           "the boxes on ONE line — and a number cannot be asked that");
+    DCHECK(f != NULL, "CSS 2.2 §9.4.2's fill was begun with nowhere to hold it");
+    f->available = available;
+    f->walk = 1;
+    f->n = 0;
+    f->start = 0;
+    f->prev = 0;
+    tr_line_sum_open(&f->line, 0);
+    tr_line_sum_open(&f->at_prev, 0);
+    tr_line_sum_open(&f->seg, 0);
+    f->out = NULL;
+    f->complete = false;
     if (m->count == 0) {
         /* §9.4.2: "line boxes are created as needed to hold inline-level content within an inline formatting
            context", and there is none: no line box at all, not the zero-height line box the section treats as
            not existing. */
         DCHECK(m->items == NULL, "an empty run holds a collection it never appended to");
-        *lines = NULL;
-        return 0;
+        f->complete = true;
+        return;
     }
-    out = malloc(m->count * sizeof *out);
-    CHECK(out != NULL, "out of memory distributing one inline formatting context's content across CSS 2.2 "
-                       "§9.4.2's line boxes. The array is one entry per collected item and the lines partition "
-                       "them, so a failure here is the physical floor");
+    f->out = malloc(m->count * sizeof *f->out);
+    CHECK(f->out != NULL, "out of memory distributing one inline formatting context's content across CSS 2.2 "
+                          "§9.4.2's line boxes. The array is one entry per collected item and the lines partition "
+                          "them, so a failure here is the physical floor");
     if (m->ncps == 0) {
         /* css-text-3 §5.5 "Line Breaking Details": "out-of-flow boxes and inline box boundaries do not
            introduce a forced line break or soft wrap opportunity in the flow". A run of box edges has nowhere
@@ -1065,67 +1159,117 @@ size_t text_run_measure_fill(const TextRunMeasure *m, CssPx available, TextRunLi
                            "carries no code point for [UAX14] to have decided about. A forced break carries one "
                            "and so does an atomic inline, so a `br` or an `<img>` in this run would have been "
                            "counted and this arm not taken");
-        out[0].from = 0;
-        out[0].to = m->count;
-        out[0].size = tr_line_size(m, 0, m->count, TEXT_RUN_SIZE_MAX_CONTENT);
-        *lines = out;
-        return 1;
+        f->out[0].from = 0;
+        f->out[0].to = m->count;
+        f->out[0].size = tr_line_size(m, 0, m->count, TEXT_RUN_SIZE_MAX_CONTENT);
+        f->n = 1;
+        f->start = m->count;
+        f->complete = true;
     }
-    for (i = 1; i <= m->ncps; i++) {
-        size_t at = i == m->ncps ? m->count : tr_item_boundary_of_cp(m->item_of_cp, i);
-        bool forced = m->actions[i] == LINE_BREAK_MANDATORY;
-        bool soft = false;
+}
 
-        if (i < m->ncps && m->actions[i] == LINE_BREAK_OPPORTUNITY)
-            soft = tr_opportunity_enabled(m, m->item_of_cp[i - 1], m->item_of_cp[i]);
-        if (!forced && !soft) continue;
-        DCHECK(at > prev, "CSS 2.2 §9.4.2's fill met two break positions at the SAME item boundary, so one of "
-                          "them divides nothing. `tr_item_boundary_of_cp` is strictly increasing in the "
-                          "code point index and the eot position maps past every item, so this is that mapping "
-                          "having stopped being a function of the code point");
+bool text_run_fill_done(const TextRunFill *f)
+{
+    DCHECK(f != NULL, "CSS 2.2 §9.4.2's fill was asked about with no fill");
+    return f->complete;
+}
+
+/* One line ending at `to`, of inline size `size`. */
+static void tr_fill_emit(TextRunFill *f, const TextRunMeasure *m, size_t to, CssPx size)
+{
+    DCHECK(f->n < m->count, "CSS 2.2 §9.4.2's fill produced more line boxes than the run has items, and the "
+                            "lines partition the items — so a line was emitted empty or a boundary went "
+                            "backwards");
+    f->out[f->n].from = f->start;
+    f->out[f->n].to = to;
+    f->out[f->n].size = size;
+    f->n++;
+    f->start = to;
+}
+
+size_t text_run_fill_step(TextRunFill *f, const TextRunMeasure *m)
+{
+    size_t i, at, k;
+    bool forced, soft = false;
+
+    DCHECK(f != NULL && !f->complete, "CSS 2.2 §9.4.2's fill was stepped after its last position");
+    tr_require_answers(m);
+    i = f->walk++;
+    DCHECKF(i >= 1 && i <= m->ncps, "CSS 2.2 §9.4.2's fill reached position %zu of a run of %zu code points",
+            i, m->ncps);
+    at = i == m->ncps ? m->count : tr_item_boundary_of_cp(m->item_of_cp, i);
+    forced = m->actions[i] == LINE_BREAK_MANDATORY;
+    /* The open line and the line that would open at `prev` are both summed forward to every position, so no
+       position re-sums a line from its start. */
+    k = tr_line_sum_to(m, &f->line, at, TEXT_RUN_SIZE_MAX_CONTENT) +
+        tr_line_sum_to(m, &f->seg, at, TEXT_RUN_SIZE_MAX_CONTENT);
+    if (i < m->ncps && m->actions[i] == LINE_BREAK_OPPORTUNITY)
+        soft = tr_opportunity_enabled(m, m->item_of_cp[i - 1], m->item_of_cp[i]);
+    if (forced || soft) {
+        DCHECK(at > f->prev, "CSS 2.2 §9.4.2's fill met two break positions at the SAME item boundary, so one of "
+                             "them divides nothing. `tr_item_boundary_of_cp` is strictly increasing in the code "
+                             "point index and the eot position maps past every item, so this is that mapping "
+                             "having stopped being a function of the code point");
         /* "cannot fit horizontally within a single line box", measured over the line as it would be if this
            position were not taken: the comparison is at `at` and the emission at `prev`. `prev > start` is
            §9.4.2's cannot-be-split condition stated positively. */
-        if (prev > start && tr_line_size(m, start, at, TEXT_RUN_SIZE_MAX_CONTENT).px > available.px) {
-            DCHECK(n < m->count, "CSS 2.2 §9.4.2's fill produced more line boxes than the run has items, and "
-                                 "the lines partition the items — so a line was emitted empty or a boundary "
-                                 "went backwards");
-            out[n].from = start;
-            out[n].to = prev;
-            out[n].size = tr_line_size(m, start, prev, TEXT_RUN_SIZE_MAX_CONTENT);
-            n++;
-            start = prev;
+        if (f->prev > f->start && f->line.size.px > f->available.px) {
+            tr_fill_emit(f, m, f->prev, f->at_prev.size);
+            f->line = f->seg;
         }
         if (forced) {
             /* css-text-3 §5.5 makes this break forced "regardless of the white-space value", so the line ends
                here whether or not anything overflowed; at `i == ncps` it is LB3 closing the run. */
-            DCHECK(n < m->count, "CSS 2.2 §9.4.2's fill produced more line boxes than the run has items at a "
-                                 "FORCED break, and the lines partition the items");
-            out[n].from = start;
-            out[n].to = at;
-            out[n].size = tr_line_size(m, start, at, TEXT_RUN_SIZE_MAX_CONTENT);
-            n++;
-            start = at;
+            tr_fill_emit(f, m, at, f->line.size);
+            tr_line_sum_open(&f->line, at);
         }
-        prev = at;
+        f->prev = at;
+        f->at_prev = f->line;
+        tr_line_sum_open(&f->seg, at);
     }
-    DCHECK(start == m->count,
+    if (i < m->ncps) return k;
+    DCHECK(f->start == m->count,
            "[UAX14] LB3 \"Always break at the end of text\" did not close CSS 2.2 §9.4.2's last line box over "
            "the whole ITEM collection, so the run's tail is on no line at all. The last line runs to `count` "
            "rather than to a break position exactly so that a box edge after the final character is still on a "
            "line, and a caller reading these lines would place that box nowhere");
-    DCHECK(n >= 1, "CSS 2.2 §9.4.2 produced NO line box for a run that has code points in it — \"line boxes are "
-                   "created as needed to hold inline-level content\" and there is content");
+    DCHECK(f->n >= 1, "CSS 2.2 §9.4.2 produced NO line box for a run that has code points in it — \"line boxes "
+                      "are created as needed to hold inline-level content\" and there is content");
     /* §9.4.2's overflow theorem, closed here: `text_run_measure_splits` lets a caller skip deriving an
        available width, which is safe only because a run with no inside position emits only at eot, one line
        box with `available` never compared. */
-    DCHECK(m->splits || n == 1,
+    DCHECK(m->splits || f->n == 1,
            "CSS 2.2 §9.4.2's fill divided a run that `text_run_measure_splits` says has nowhere to be divided. "
            "The section's \"if an inline box cannot be split … then the inline box overflows the line box\" is "
            "what makes that predicate a theorem, and a caller trusting it has passed an available width it "
            "derived from nothing");
-    *lines = out;
+    f->complete = true;
+    return k;
+}
+
+size_t text_run_fill_end(TextRunFill *f, const TextRunMeasure *m, TextRunLine **lines)
+{
+    size_t n;
+
+    DCHECK(f != NULL && f->complete, "CSS 2.2 §9.4.2's fill was ended before its last position was taken");
+    DCHECK(lines != NULL,
+           "CSS 2.2 §9.4.2's line boxes were asked for with nowhere to put them. The count alone is not the "
+           "answer this entry has: a caller asks which line each BOX is on — §10.8's step 3 is two maxima over "
+           "the boxes on ONE line — and a number cannot be asked that");
+    DCHECK(f->n == 0 || f->out != NULL, "CSS 2.2 §9.4.2's fill reported line boxes and holds none of them");
+    tr_require_answers(m);
+    *lines = f->out;
+    n = f->n;
+    f->out = NULL;
+    f->n = 0;
     return n;
+}
+
+void text_run_fill_release(TextRunFill *f)
+{
+    DCHECK(f != NULL, "CSS 2.2 §9.4.2's fill was released with no fill");
+    free(f->out);
+    f->out = NULL;
 }
 
 /* CSS 2.2 §9.4.2's per-item position on one line box: a distance from the line box's start edge, not a

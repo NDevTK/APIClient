@@ -18,7 +18,7 @@
    needs no outlines. How many line boxes there are needs the run's advances (core/css/font_metrics.h) and soft
    wrap opportunities ([UAX14], core/layout/line_break.h) against each line's available width: §9.4.2
    distributes boxes across "two or more vertically-stacked line boxes" when they "cannot fit horizontally
-   within a single line box". That is `text_run_measure_fill`, beside css-sizing-3 §2.1's two partitions in
+   within a single line box". That is `text_run_fill_step`, beside css-sizing-3 §2.1's two partitions in
    core/layout/text_run.h because all three read one [UAX14] pass.
    So this component collects, fills, then measures each line: §10.8's step 3 is "the distance between the
    uppermost box top and the lowermost box bottom" of one line, and which boxes are on it only the fill knows
@@ -90,12 +90,15 @@ LineBoxAvailableWidth line_box_available_width_derived(void);
 LineBoxAvailableWidth line_box_available_width_stated(CssPx px);
 
 /* A layout job's line box record: one fill per (`style`, run, stated width), owned by the job and released
-   with its memo. `release` asserts `asks == served + built` and one entry per fill, and frees every fill. */
+   with its memo. A fill is held from its first ask, complete or not: an ask finds its lines complete
+   (`served`), begins it (`built`), continues it (`resumed`) or, under a resting drive whose line box items are
+   spent, leaves it unbegun (`deferred`). `release` asserts the four sum to `asks` and one entry per fill, and
+   frees every fill. */
 struct LbEntry;
 typedef struct {
     struct LbEntry *tab;     /* a power-of-two table, NULL with `cap` 0 before the first fill */
     size_t          cap, used;
-    long long       asks, served, built;
+    long long       asks, served, built, resumed, deferred;
 } LineBoxRecord;
 void line_box_record_release(LineBoxRecord *r);
 
@@ -126,7 +129,7 @@ void line_box_record_release(LineBoxRecord *r);
        line box in the cell"; reading the last there makes a row too short when a taller cell's first line
        sits above its last.
    Both baselines are distances only when `*any_line_box` is true. */
-/* Named residual. Not covered: `avail` is on this entry only; `line_box_content_span`, `line_box_glyphs` and
+/* Named residual. Not covered: `avail` is on this entry only; `line_box_content_span_ask`, `line_box_glyphs` and
    `line_box_inline_fragments` reduce the same fill but derive their width from `style`, so a box whose
    containing rectangle is not `style`'s content box and which is painted or scrolled, not only measured,
    would be filled at two widths. Next: the same argument on those three entries, threaded to the same
@@ -162,12 +165,16 @@ CssPx line_box_content_height(lxb_dom_element_t *style, BlockFlowRun run, LineBo
    `<div style="line-height:100px"><span style="line-height:10px">x</span></div>` overflows nothing.
    A context with nothing on its lines reports the content box's beginning corner on both outputs, which is
    inside the padding box (CSS 2 §8.1) and so invisible to the extreme. */
-void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
-                           bool vertical, CssPx *lo, CssPx *hi);
+/* An ask: asked after `line_box_atomics_ask`, and on the block axis after `line_box_extents_ask`, for the same
+   key. The block axis is a walk over the items, held by the job's line box record and taken one item at a time
+   under a resting drive's line box items: false ("not yet") when those were spent, with `*lo` and `*hi`
+   unwritten. The inline axis is a walk over the lines and always answers. */
+bool line_box_content_span_ask(lxb_dom_element_t *style, BlockFlowRun run,
+                               bool vertical, CssPx *lo, CssPx *hi);
 
 /* One placed character of this context's line boxes: the code point, its inline box, and the pen position
  * CSS 2.1 §E.2 "Painting order"'s step 7.2.1 draws it from, as offsets from the establishing box's content box
- * origin (the frame of `line_box_content_span` and of core/layout/block_flow.h's `BlockFlowAnonBox` origin).
+ * origin (the frame of `line_box_content_span_ask` and of core/layout/block_flow.h's `BlockFlowAnonBox` origin).
  *
  * `baseline_y` is a baseline, not a top edge: §10.8's step 3 puts the line's baseline its maximum `A'` below
  * its top, the coordinate every box on the line hangs from, and `line_box_inline_fragments` derives its block
@@ -282,19 +289,26 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
 /* The same fragments without a drive of their own: false ("not yet") when the establishing context's §9.4.1
    walk deferred a contribution, with nothing stored; true with the array at `*out` and its count at `*count`.
    `line_box_inline_fragments` is this ask inside a drive (core/layout/layout_job.h). */
-/* The walks the fill of `style`'s run reads for its atomic inline-level boxes (CSS 2.2 §10.8 step 1's margin box
-   of an `inline-block` and its §10.8.1 baseline), asked without a drive before the line boxes are measured:
-   false ("not yet") when one was deferred, with the question suspended on the current job. The fill itself
-   is held by the job's line box record, so asking costs no second fill. `*from` is the first item asked; on
-   "not yet" it is set to the item whose walk deferred, so a caller that keeps it resumes there. */
+/* The fill of `style`'s run and the walks it reads for its atomic inline-level boxes (CSS 2.2 §10.8 step 1's
+   margin box of an `inline-block` and its §10.8.1 baseline), asked without a drive before the line boxes are
+   measured. False ("not yet") when one walk was deferred, with the question suspended on the current job, or
+   when a resting drive's line box items (core/layout/layout_job.h) were spent, with the fill held part-taken by
+   the job's line box record; either way asking again continues. `*from` is the first item asked; on "not yet"
+   it is set to the item whose walk deferred, so a caller that keeps it resumes there. */
 bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail,
                           size_t *from);
+
+/* CSS 2.2 §10.8's extent of each of the fill's line boxes, which `line_box_content_height`, the block axis of
+   `line_box_content_span_ask` and the fragments read, taken one item at a time under a resting drive's line box
+   items: false ("not yet") when those were spent, with the extents held part-taken. Asked after
+   `line_box_atomics_ask` answered true for the same key, which it asserts. */
+bool line_box_extents_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail);
 
 bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
                                    LineBoxFragment **out, size_t *count);
 
 /* Where a non-replaced inline box's own margin edges reach on one physical axis: `*lo` and `*hi` receive the
- * extreme over all of its fragments, in the frame `line_box_content_span` and `LineBoxFragment` use (offsets
+ * extreme over all of its fragments, in the frame `line_box_content_span_ask` and `LineBoxFragment` use (offsets
  * from `*establishing`'s content box origin), with `*establishing` receiving that block container.
  *
  * Both halves of the name are asserted here; `line_box_inline_fragments` admits `inline-block` and replaced

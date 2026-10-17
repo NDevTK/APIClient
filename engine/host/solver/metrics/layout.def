@@ -4,7 +4,9 @@
    start. `_layoutJobsStep` and `_layoutJobsPaint` count jobs a step machine and a paint owned (a fork's
    clone of a step machine's job is a step job), `_layoutJobRests` the rest points a driver took
    with its job alive, and `_layoutServedAcrossRest` the memo answers recorded before such a rest and served
-   after it: a nonzero value is a job that suspended and resumed with its memo. */
+   after it: a nonzero value is a job that suspended and resumed with its memo. `_layoutLineItems` counts the
+   items line box fills took under a resting drive and `_layoutFillRests` the asks a fill answered "not yet"
+   because those were spent: a nonzero value is a CSS 2.2 §9.4.2 context that rested inside its fill. */
 METRIC(bf_asks,            "_layoutBfAsks",           LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(bf_served,          "_layoutBfServed",         LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(bf_deferred,        "_layoutBfDeferred",       LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
@@ -13,6 +15,8 @@ METRIC(jobs_step,          "_layoutJobsStep",         LIFETIME, "job",  AGENT, "
 METRIC(jobs_paint,         "_layoutJobsPaint",        LIFETIME, "job",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(job_rests,          "_layoutJobRests",         LIFETIME, "rest", AGENT, "core/layout/layout_job.c", INT)
 METRIC(served_across_rest, "_layoutServedAcrossRest", LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
+METRIC(line_items,         "_layoutLineItems",        LIFETIME, "item", AGENT, "core/layout/layout_job.c", INT)
+METRIC(fill_rests,         "_layoutFillRests",        LIFETIME, "ask",  AGENT, "core/layout/line_box.c",   INT)
 IDENTITY_LE(bf_served,          bf_asks)
 IDENTITY_LE(bf_deferred,        bf_asks)
 IDENTITY_LE(served_across_rest, bf_served)

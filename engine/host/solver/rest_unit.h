@@ -75,7 +75,13 @@ typedef enum {
        Past this many the search holds its place and the drive rests. Cost: one element's `display`,
        `position` and `float`, the first read of which builds its cascaded style; bound (2) is asserted by the
        REST_UNIT_LAYOUT_DESCENDANTS bracket. */
-    REST_UNIT_LAYOUT_FLOAT_SCAN
+    REST_UNIT_LAYOUT_FLOAT_SCAN,
+    /* One item of an inline formatting context's collection (core/layout/text_run.h: a character, a box edge,
+       a forced break or an atomic inline) taken by a step of its fill under a resting drive
+       (core/layout/line_box.h): css-sizing-3 §2.1's walk, CSS 2.2 §9.4.2's distribution or §10.8's line box
+       extents. Past this many the fill is held and the drive rests. Cost: a few advance measures and one
+       `white-space` read; bound (2) is asserted by the REST_UNIT_LAYOUT_DESCENDANTS bracket. */
+    REST_UNIT_LAYOUT_LINE_ITEMS
 } RestUnitKind;
 
 /* How many items of `kind` one rest point covers; at least 1 (asserted). It takes only the kind, which is

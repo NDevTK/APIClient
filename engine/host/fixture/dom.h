@@ -501,6 +501,14 @@ static const char HTML_DOM[] =
     " uasc.scrollIntoView(false); var uap1 = document.scrollingElement.scrollTop;"
     " uapos = 'start' + uap0 + '-end' + uap1; }"
     "fetch('/api/scrollpos?v=' + uapos);"
+    /* …AND THE SAME MEMBER OVER ONE LONG INLINE FORMATTING CONTEXT, which is a rest-granularity row: §6.1's
+       ancestor walk lays out a `<p>` of 400 words inside one scheduler unit, so the row settles only if CSS 2.2
+       §9.4.2's fill rests between its items (solver/rest_unit.h's bound (2), asserted in a dev build). */
+    "var uaslong = document.createElement('p'); var uaswords = [];"
+    "for (var uasi = 0; uasi < 400; uasi++) uaswords.push('w' + uasi);"
+    "uaslong.textContent = uaswords.join(' '); bpar.appendChild(uaslong);"
+    "uaslong.scrollIntoView().then(function () { fetch('/api/scrolllong?v=islongscroll'); },"
+    " function (e) { fetch('/api/scrolllong?v=rej' + (e && e.name)); });"
     /* Pointer Events 4 §4 "Extensions to the Element interface" — `hasPointerCapture`, the one of its three
        members this engine installs (core/events/pointer_capture.h says why the other two are absent and what
        installing them costs). Every row here stays true after the other two land.

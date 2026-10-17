@@ -13894,6 +13894,7 @@ TF_UNIT void probes_dom(const char *js, Probe *tab, int *n) {
            unobservable while the viewport's scrolling area equals the viewport — /api/scrollpos carries that
            measurement and is deliberately asserted by nothing. */
         { "/api/scrollarm",  "isscrollarm" },
+        { "/api/scrolllong", "islongscroll" },   /* …settled over a 400-word context, which rests inside its fill */
         { "/api/formstate",  "isform"  },   /* a control's value state, the form's listed elements */
         { "/api/classlist",  "iscl"    },   /* §7.1 add/remove/toggle/replace over the class attribute */
         { "/api/clview",     "isview"  },   /* …and the list is a VIEW, with nothing to keep in step */

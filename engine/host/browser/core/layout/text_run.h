@@ -19,7 +19,7 @@
 /* Three partitions over one [UAX14] pass: §2.1's two sizes (no opportunities taken, all taken) and CSS 2.2
    §9.4.2 "Inline formatting contexts"' greedy fill against an available width ("when several inline-level boxes
    cannot fit horizontally within a single line box, they are distributed among two or more vertically-stacked
-   line boxes", `text_run_measure_fill`). The fill is not a generalisation of the other two, which need no width
+   line boxes", `text_run_fill_step`). The fill is not a generalisation of the other two, which need no width
    comparisons; all three read one `actions` array, so they cannot disagree about where the run may break.
    §9.4.2's overflow sentence ("If an inline box cannot be split … then the inline box overflows the line box")
    means a segment always goes on the current line, so the fill never invents a break, and a run with no break
@@ -103,7 +103,7 @@ typedef enum {
    margins and paddings (and gutters), a cyclic percentage is resolved against zero for determining intrinsic
    size contributions", §5.2.1), so `text_run_measure_add_box_edge` takes one number and writes both.
    CSS 2.2 §9.4.2's fill is under neither: at a determined width every box has one used width, stated twice by
-   its producer, and `text_run_measure_fill` asserts the two agree rather than picking one. */
+   its producer, and `text_run_fill_step` asserts the two agree rather than picking one. */
 typedef enum {
     TEXT_RUN_SIZE_MIN_CONTENT = 0,
     TEXT_RUN_SIZE_MAX_CONTENT = 1,
@@ -140,6 +140,16 @@ typedef struct {
     CssPx size[2];
 } TextRunItem;
 
+/* css-text-3 §4.1.2's per-line sum over `[lo, at)`, taken forward one item at a time so a walk that is still
+   deciding where a line ends pays for each item once. Written and read only by text_run.c, whose
+   `tr_line_sum_add` performs the additions `tr_line_prefix` performs, in its order. */
+typedef struct {
+    size_t lo, at;
+    bool   content;   /* an item §4.1.2 stops trimming at is in `[lo, at)` */
+    CssPx  sum;       /* the sized items, and the characters from the first content item on */
+    CssPx  size;      /* the line `[lo, at)`'s inline size: `sum` less the characters after the last content item */
+} TextRunLineSum;
+
 /* The running state of one inline formatting context's measurement, written and read only through the entries
    below. */
 typedef struct {
@@ -166,7 +176,7 @@ typedef struct {
        run that "overflows the line box". */
     bool splits;
     /* Whether any atomic inline carries two different sizes, set by `text_run_measure_add_atomic`. Such a run is
-       an intrinsic measurement with no used widths, which `text_run_measure_fill` and
+       an intrinsic measurement with no used widths, which `text_run_fill_step` and
        `text_run_measure_line_offset` refuse. Recorded at the append because the offset entry is called per box,
        and a scan there would be quadratic. */
     bool atomic_sizes_differ;
@@ -174,7 +184,15 @@ typedef struct {
        `font-family` once. Scoped to this measurement, during which no computed value moves. */
     lxb_dom_element_t *faces_of;
     FontFallbackList faces;
+    /* The collection is closed and [UAX14] has run (`text_run_measure_finish_begin`). */
     bool finished;
+    /* §2.1's walk over the code point positions: the next one (from 1), the code points it classifies, and the
+       open line of each of the two partitions. `cps` is owned and freed when the walk completes. */
+    size_t walk;
+    uint32_t *cps;
+    TextRunLineSum max_line, min_line;
+    /* The walk is complete, so the two answers and `splits` are written. */
+    bool answered;
     /* `release` has run: the answers derive from freed memory, so reads assert this is false. */
     bool released;
 } TextRunMeasure;
@@ -211,7 +229,7 @@ void text_run_measure_add_forced_break(TextRunMeasure *m, lxb_dom_element_t *sty
    The caller derives the sizes (CSS 2.2 §10.3.2 for a replaced element, §10.3.9 "'Inline-block', non-replaced
    elements in normal flow", or the box's module). Two numbers because its content wraps under §2.1's two
    constraints; a replaced box's are equal (css-sizing-3 §5.1), but that is a property of replaced elements. A
-   caller with a used width (core/layout/line_box.c) states it twice, which `text_run_measure_fill` asserts.
+   caller with a used width (core/layout/line_box.c) states it twice, which `text_run_fill_step` asserts.
    No code point argument, as for a forced break. Either size may be zero (HTML §15.4.2's empty `img`) or
    negative (negative margins, CSS 2.2 §8.3 "Margin properties"); an inverted pair is refused, since
    css-sizing-3 §2.2 repairs it one level up ("the effective max-content contribution is floored by the
@@ -219,9 +237,13 @@ void text_run_measure_add_forced_break(TextRunMeasure *m, lxb_dom_element_t *sty
 void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, CssPx min_content,
                                  CssPx max_content);
 
-/* Run [UAX14] over everything collected and produce css-sizing-3 §2.1's two answers. Every caller must reach
-   this, and must not add items afterwards. It frees nothing, so the fill reuses the pass; each caller owes
-   `text_run_measure_release` exactly once. */
+/* Close the collection and run [UAX14] over it; nothing may be added afterwards. css-sizing-3 §2.1's two answers
+   are then a walk over the code point positions, one per `step`, which answers how many items it summed; `done`
+   says the walk is complete and the answers readable. `finish` is the three run to completion. The pass is kept
+   for the fill; each caller owes `text_run_measure_release` exactly once, complete or not. */
+void text_run_measure_finish_begin(TextRunMeasure *m);
+bool text_run_measure_finish_done(const TextRunMeasure *m);
+size_t text_run_measure_finish_step(TextRunMeasure *m);
 void text_run_measure_finish(TextRunMeasure *m);
 
 /* End the measurement and free the collection and the [UAX14] pass. Nothing may be read afterwards; the
@@ -237,15 +259,32 @@ typedef struct {
     CssPx size;
 } TextRunLine;
 
-/* CSS 2.2 §9.4.2's distribution of this run across line boxes at one available width ("the width of a line
-   box is determined by a containing block and the presence of floats"): `available` is the establishing box's
-   used content width; a context with floats needs per-line widths and is not a caller yet.
-   Answers the line count and stores a newly allocated array of `TextRunLine`s at `*lines`, which the caller
-   owns and frees. The lines partition the items in order (a trailing box edge included), so every box has a
-   line, as CSSOM View §6's `getClientRects()` step 3 needs. Greedy, as §9.4.2 is: the widest prefix that fits,
-   or one segment when nothing fits. `available` is ignored, provably and asserted, when
-   `text_run_measure_splits` is false. */
-size_t text_run_measure_fill(const TextRunMeasure *m, CssPx available, TextRunLine **lines);
+/* CSS 2.2 §9.4.2's distribution of an answered run across line boxes at one available width ("the width of a
+   line box is determined by a containing block and the presence of floats"), as a walk over the run's code point
+   positions held between steps. `available` is the establishing box's used content width; a context with floats
+   needs per-line widths and is not a caller yet. It is ignored, provably and asserted, when
+   `text_run_measure_splits` is false. Greedy, as §9.4.2 is: the widest prefix that fits, or one segment when
+   nothing fits. The lines partition the items in order (a trailing box edge included), so every box has a line,
+   as CSSOM View §6's `getClientRects()` step 3 needs. The run must outlive the fill. */
+typedef struct {
+    CssPx available;
+    size_t walk;                  /* the next code point position, from 1 */
+    size_t n, start, prev;        /* lines emitted; the open line's start; the last position taken */
+    TextRunLineSum line;          /* `[start, at)` */
+    TextRunLineSum at_prev;       /* `[start, prev)`, the open line as it stood at `prev` */
+    TextRunLineSum seg;           /* `[prev, at)`, the line that opens at `prev` if this one overflows */
+    TextRunLine *out;             /* owned until `text_run_fill_end` hands it over */
+    bool complete;
+} TextRunFill;
+
+/* `begin` starts the walk; `step` takes one position and answers how many items it summed; `done` says every
+   position is taken. `end` answers the line count and hands the newly allocated array to `*lines`, which the
+   caller owns and frees. A fill abandoned before its end is released with `text_run_fill_release`. */
+void text_run_fill_begin(TextRunFill *f, const TextRunMeasure *m, CssPx available);
+bool text_run_fill_done(const TextRunFill *f);
+size_t text_run_fill_step(TextRunFill *f, const TextRunMeasure *m);
+size_t text_run_fill_end(TextRunFill *f, const TextRunMeasure *m, TextRunLine **lines);
+void text_run_fill_release(TextRunFill *f);
 
 /* CSS 2.2 §9.4.2's theorem: is there anywhere inside this run for the fill to break. False means one line box
    at every available width, so a caller need not derive one. */
