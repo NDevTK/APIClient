@@ -53448,6 +53448,45 @@ static JSAsyncFromSync *js_async_from_sync_clone(JSContext *ctx, const JSAsyncFr
     return ns;
 }
 
+/* The construct sequences `new Set(it)` / `new Map(it)` (67) and `new Int8Array(it)` (66) run the page's reads
+   before the consume starts, and own the consume machine until it does. The consume's `outer` is the one link of
+   the pair: what waits on the sequence is whoever asked for the construct. */
+static JSIterConsume *ctor_seq_consume(void *st, uint8_t kind)
+{
+    JSIterConsume *cs = kind == CONT_SETMAP_CTOR ? ((JSSetMapCtor *)st)->consume : ((JSTATarget *)st)->consume;
+
+    DCHECK(kind == CONT_SETMAP_CTOR || kind == CONT_TA_TARGET, "a construct sequence was asked of another kind");
+    DCHECK(cs != NULL, "a construct sequence is waiting on a read with its consume machine already handed to the "
+                       "acquire — the hand-over frees the sequence in the same step, so nothing can wait on it");
+    return cs;
+}
+/* A sibling's own construct sequence: its own consume machine (js_iter_consume_clone, whose `outer` the
+   requester walk then binds), its own references to new.target and the probed @@iterator, and the same borrowed
+   iterable, which the sibling's cloned operand stack holds as well. NULL on OOM, with nothing left allocated. */
+static void *js_ctor_seq_clone(JSContext *ctx, const void *os, uint8_t kind)
+{
+    JSIterConsume *cs = js_iter_consume_clone(ctx, ctor_seq_consume((void *)os, kind));
+
+    if (!cs) return NULL;
+    if (kind == CONT_SETMAP_CTOR) {
+        JSSetMapCtor *ns = js_mallocz(ctx, sizeof(*ns));
+        if (!ns) { js_iter_consume_end(ctx, cs); js_free(ctx, cs); return NULL; }
+        *ns = *(const JSSetMapCtor *)os;
+        ns->consume = cs;
+        ns->ntgt = js_dup(ns->ntgt);
+        ns->getiter = js_dup(ns->getiter);
+        return ns;
+    } else {
+        JSTATarget *nt = js_mallocz(ctx, sizeof(*nt));
+        if (!nt) { js_iter_consume_end(ctx, cs); js_free(ctx, cs); return NULL; }
+        *nt = *(const JSTATarget *)os;
+        nt->consume = cs;
+        nt->ntgt = js_dup(nt->ntgt);
+        nt->getiter = js_dup(nt->getiter);
+        return nt;
+    }
+}
+
 /* The join-chain search, declared here because clone_deep_flow re-derives each cloned join's cached
    enclosing-join pointer with it. */
 struct JSArrayJoin;
@@ -53592,6 +53631,12 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
         /* TERMINAL, like CONT_OP_KEYED: the reference it resolves belongs to the OP_with_* opcode, whose operands
            are on the frame's own stack, which the frame clone carries. The record has no requester field. */
         return NULL;
+    case CONT_SETMAP_CTOR: case CONT_TA_TARGET: {
+        /* a construct sequence: whoever asked for the construct, which its consume machine records */
+        JSIterConsume *cs = ctor_seq_consume(st, kind);
+        *out_kind = cs->outer_kind;
+        return cs->outer;
+    }
     case CONT_NONE:
         /* answered above */
         break;
@@ -53605,7 +53650,7 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
-    case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO: case CONT_TA_TARGET: case CONT_SETMAP_CTOR:
+    case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
     }
@@ -53656,6 +53701,10 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         ((struct JSProxyInv *)st)->outer = outer; ((struct JSProxyInv *)st)->outer_kind = outer_kind; return;
     case CONT_KEYED_INV:
         ((struct JSKeyedInv *)st)->outer = outer; ((struct JSKeyedInv *)st)->outer_kind = outer_kind; return;
+    case CONT_SETMAP_CTOR: case CONT_TA_TARGET: {
+        JSIterConsume *cs = ctor_seq_consume(st, kind);
+        cs->outer = outer; cs->outer_kind = outer_kind; return;
+    }
     /* Terminal: cont_outer_get answers no link for these, so there is nothing to write back. */
     case CONT_OP_KEYED: case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: case CONT_PROMISE_ALL:
     case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
@@ -53672,7 +53721,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
-    case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO: case CONT_TA_TARGET: case CONT_SETMAP_CTOR:
+    case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
     }
@@ -53760,6 +53809,10 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         /* a for-await wrapper call under a read its continuation issued — a getter or a Proxy trap on the sync
            result, or on the value's `constructor` — branching on unknown input */
         return js_async_from_sync_clone(ctx, (const JSAsyncFromSync *)st);
+    case CONT_SETMAP_CTOR: case CONT_TA_TARGET:
+        /* a construct sequence under one of its reads — a new.target `prototype` getter or Proxy trap, or a
+           subclass's `add`/`set` accessor — branching on unknown input */
+        return js_ctor_seq_clone(ctx, st, kind);
     /* No arm here. A kind that is only ever a frame's own cont_state (CONT_ARG_LIST_YIELD's anchor, say) is
        cloned by clone_deep_flow's arm for it; any other has not yet been asked to copy a link. */
     case CONT_ARG_LIST_YIELD: case CONT_NONE: case CONT_AGEN_CREATE: case CONT_CONSTRUCT: case CONT_SETTER:
@@ -53773,7 +53826,7 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     case CONT_ITER_CALL_GET_NOARG: case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET:
     case CONT_FOROF_ENUMREC_WRAP: case CONT_ITER_FROM_NEXT_GET:
     case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV: case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO:
-    case CONT_TA_TARGET: case CONT_SETMAP_CTOR: case CONT_PROMISE_ALL_SETTLE:
+    case CONT_PROMISE_ALL_SETTLE:
     case CONT_AGEN_DEFER: case CONT_GETPROP_YIELD:
     case CONT_ARRAY_LEN_YIELD:
         break;
@@ -54779,6 +54832,13 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         js_free_rt(rt, st);
         return;
     }
+    case CONT_SETMAP_CTOR:
+        /* the sequence and its consume machine, whose end releases the construct's requester exactly once */
+        js_setmap_ctor_free(ctx, (JSSetMapCtor *)st);
+        return;
+    case CONT_TA_TARGET:
+        js_ta_target_free(ctx, (JSTATarget *)st);
+        return;
     case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET: case CONT_AFS_CONT: {
         /* every role of one JSAsyncFromSync: the wrapper call's own state (10), or the requester of a read its
            continuation issued (43, 73). */
@@ -54872,7 +54932,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
     case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
-    case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO: case CONT_TA_TARGET: case CONT_SETMAP_CTOR:
+    case CONT_DEFINE_CLASS: case CONT_CTOR_PROTO:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
     }
