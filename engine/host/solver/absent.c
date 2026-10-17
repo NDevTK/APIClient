@@ -199,6 +199,7 @@
 #include "check.h"
 #include "solver/absent.h"
 #include "solver/concolic.h"
+#include "solver/flow.h"     /* flow_mark_forced_arm, for the read this session throws at */
 #include "browser/i18n_names.h"
 #include "browser/language_names.h"
 #include "browser/obsolete_names.h"
@@ -1525,26 +1526,26 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name, JSConcol
         if (!base)
             goto done;
     }
-    /* Example-free, and that is the ONE way this half differs from the present half: nothing here knows what a
-       logged-in visitor's flags WOULD hold, and inventing one fabricates an observation. The provenance is
-       spelled by the same speller either way — see ns_member_spell. */
+    /* The provenance is spelled by the same speller as the present half's — see ns_member_spell. */
     ns_member_spell(base, name, s, &shape, &src);
     /* THE WORLD'S, AND THE CONTRAST WITH THE PRESENT ARM IS THE WHOLE OF WHY THIS IS STATED PER ARM: this is
        the MISS arm, so the member is ABSENT — the document this engine was served states nothing about it,
        and what WOULD stand there is whatever a server injects for a visitor with state. No parse of any byte
-       this run received can state it, which is the population the bar exists for. The example-free mint one
-       line up is the same fact read from the other end: nothing here knows what a logged-in visitor holds. */
+       this run received can state it, which is the population the bar exists for. */
     r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
-    /* What this session itself reads here, which is not an example: a property read that misses answers
-       undefined (§10.1.8.1 OrdinaryGet step 2.b), so a branch over the unknown has one arm the session takes
-       and one this engine chose, and decide.c marks the chosen one forced. A pin answers bytes, not a record,
-       and observes nothing.
-       Named residual. Not covered: JS_CONCOLIC_ABSENT_ANSWERS_THROW, an identifier no binding resolves, where
-       the session stops at §6.2.5.5 GetValue step 2's ReferenceError and every arm after the read is chosen.
-       Next diff builds: the flow continuing past that read marked as standing on a world the engine chose, at
-       the read itself. Absence shows as: a page error after a bare `__STATE__.x` read filed as the page's own. */
-    if (answer == JS_CONCOLIC_ABSENT_ANSWERS_UNDEFINED && concolic_is(r))
-        concolic_observe_undefined(r);
+    /* What this session itself reads here. A property read that misses answers undefined (§10.1.8.1
+       OrdinaryGet step 2.b), which the unknown holds as its example, so every derivation computes the session's
+       value from it and decide.c marks the arm the session does not take forced. An identifier no binding
+       resolves throws (§6.2.5.5 GetValue step 2), so the session stops at this read and the flow reading on
+       stands on a world this engine chose from here. A pin answers bytes, not a record, and holds nothing. */
+    switch (answer) {
+    case JS_CONCOLIC_ABSENT_ANSWERS_UNDEFINED:
+        if (concolic_is(r)) concolic_hold_undefined(r);
+        break;
+    case JS_CONCOLIC_ABSENT_ANSWERS_THROW:
+        flow_mark_forced_arm();
+        break;
+    }
 done:
     free(shape);
     free(src);

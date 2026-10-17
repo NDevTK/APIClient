@@ -333,23 +333,25 @@ typedef struct Flow {
      * request this flow builds must declare: the value's bytes are the same either way, so the fact is recorded
      * where it happens. It is the contradiction, not the fork: forced execution forks both arms of nearly every
      * branch, while this marks an arm the concrete example disagrees with (an example-less branch marks nothing).
-     * Two writers. flow_mark_forced_arm marks the running flow, reached by five acts:
+     * Two writers. flow_mark_forced_arm marks the running flow, reached by these acts:
      *   - a branch whose arm the concrete example contradicts (solver/decide.c);
      *   - a request the trusted zone declined, whose failure arm runs the page's `catch` over an outcome nobody
      *     sent (solver/engine.c's flow_decline_fork);
      *   - a modelled potential close request, an arrival no user performed (solver/engine.c's close-request arm);
-     *   - a witness verification delivering the value a pin chose (solver/concolic.c's concolic_deliver).
-     * flow_take_peer_marks marks a timeline with another instance's flow's marks (a document's arrival, a routed
-     * delivery or operation). A new producer is a line in this list, not a second bit. Monotone, never a weight
-     * term, fork-carried (flow_fork_inherit asserts it); not cold-tier state, since a resumed flow re-observes
-     * each contradiction as its replay re-reaches it. */
+     *   - a witness verification delivering the value a pin chose (solver/concolic.c's concolic_deliver);
+     *   - a read the session throws at and the flow reads past (absent.c's unbound identifier, concolic.c's
+     *     member read over an undefined or null example).
+     * flow_take_peer_marks copies another instance's flow's marks. A new producer is a line in this list, not a
+     * second bit. Monotone, never a weight term, fork-carried (flow_fork_inherit asserts it); not cold-tier
+     * state, since a resumed flow re-observes each contradiction as its replay re-reaches it. */
     int   path_forced;
     /* Whether this path pinned a value the fork chose rather than an example: a separate fact answering a
      * different question. `path_forced` says what a reply is worth; this says whether an address composed
      * afterwards may rest on bytes this engine chose, which decides whether fetching it may be spent. Set where
      * decide.c pins a source (concretize-on-pin) on the holding arm of an equality whose example contradicts
-     * that arm or does not exist (REAL_ARM_UNOBSERVED: `location.hash`, absent server state), and where a
-     * witness verification delivers a pinned value (solver/concolic.c's concolic_deliver).
+     * that arm or does not exist (REAL_ARM_UNOBSERVED: `location.hash`, server state read as a bare
+     * identifier), and where a witness verification delivers a pinned value (solver/concolic.c's
+     * concolic_deliver).
      * It is not nested inside `path_forced`. A pin on an unobserved arm leaves the grade `derived`, since every
      * value is computed from inputs and the pinned one is a literal the page's own equality spelled, so the
      * pair (derived, pinned) is an offerable example whose request the person must widen to fire.

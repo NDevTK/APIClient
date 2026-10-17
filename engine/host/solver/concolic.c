@@ -167,11 +167,6 @@ typedef struct {
        other bytes are the page's own; NULL on every other value, whose whole shape spells one unknown. Owned. */
     int *hole_span;
     int  hole_n;
-    /* What this session's own run reads here, as ToBoolean (concolic.h's concolic_observed_truth): `obs_has`
-       says there is an observation, `obs_truth` is it. Zero from the mint, so a record nobody observed has
-       none. */
-    signed char obs_has;
-    signed char obs_truth;
 } Concolic;
 
 /* One disposer for an owned list of spelled strings, shared by every record that holds one (a call predicate's
@@ -2821,6 +2816,7 @@ static int example_member(JSContext *ctx, JSValueConst parent_example, JSAtom at
    lets a candidate inject at a precise source. The derived value carries the parent's example read through,
    so a field the record holds arrives with the server's bytes; either way it stays opaque for control flow,
    because a loaded `features.admin:false` must not concretize the gate or the admin endpoint is lost. */
+static int example_present(JSValueConst v);
 static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
     (void)receiver;
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
@@ -2854,6 +2850,15 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
            "path `concolic_src_pinned` says is pinned, so the two spellings of one question over one chain "
            "have diverged. Every later read of this member composes a value this flow has already proved "
            "otherwise, and decide.c's fork-over-pinned row counts a fork the mint was to have decided");
+    /* §6.2.5.5 GetValue ( refRecord ) step 3.a: ToObject throws a TypeError on an undefined or null base. Where
+       this session's own value here is one of those, the session stops at this read, and a flow reading on
+       stands on a world this engine chose. */
+    if (example_present(obj)) {
+        JSValue bex = concolic_example(ctx, obj);
+
+        if (JS_IsUndefined(bex) || JS_IsNull(bex)) flow_mark_forced_arm();
+        JS_FreeValue(ctx, bex);
+    }
     /* src = the field path (a precise @S injection point); root = the parent's, unchanged. A field of an
        unknown object is controlled separately, hence the new injection identity, but arrives by the same route
        as the object's bytes, and a report must say so. */
@@ -3410,9 +3415,9 @@ static int example_present(JSValueConst v) {
  * (`JS_IsStrictEqual` is §7.2.14, `JS_IsEqual` is §7.2.13), never a re-implementation of either. The caller
  * states which algorithm through `op`, which matters because `"1" == 1` is true and `"1" === 1` is false.
  *
- * An operand with no example yields a result with no example: attacker input and absent server state are
- * example-free, and collapsing that to `false` would invent which arm a real session takes. decide.c reads the
- * absence as REAL_ARM_UNOBSERVED and leaves both arms unmarked.
+ * An operand with no example yields a result with no example: attacker input and server state read as a bare
+ * identifier are example-free, and collapsing that to `false` would invent which arm a real session takes.
+ * decide.c reads the absence as REAL_ARM_UNOBSERVED and leaves both arms unmarked.
  *
  * A concrete operand always has a value, including `undefined`, hence `hava`/`havb`: JS_UNDEFINED means "no
  * example" only on the concolic side, while `cfg.admin === undefined` compares against a real undefined. */
@@ -4066,11 +4071,6 @@ JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
     free(shape);
     rc = JS_GetOpaque(r, g_concolic_class);
     DCHECK(rc != NULL, "a ToBoolean result was minted as something that is not a concolic value");
-    /* The session's own reading, through the same §7.1.2 the example went through above. */
-    if (concolic_observed_truth(v) >= 0) {
-        rc->obs_has = 1;
-        rc->obs_truth = (signed char)(concolic_observed_truth(v) ^ negate);
-    }
     /* The branch key and its polarity, written together: the operand's own branch key, so a chain of negations
        keys the innermost predicate. An operand this engine cannot spell leaves both absent, and every branch
        over the result keeps both arms. */
@@ -5318,27 +5318,16 @@ static ConcolicExState example_state_of(const Concolic *c, const Cons **ppin)
     return CONCOLIC_EX_HELD;
 }
 
-int concolic_observed_truth(JSValueConst v) {
-    const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
-
-    if (!c || !c->obs_has) return -1;
-    DCHECK(c->obs_truth == 0 || c->obs_truth == 1,
-           "a value carries an observation that is neither true nor false — it is §7.1.2 ToBoolean of what "
-           "the session read, written at two lines, so a third value is a write from somewhere else");
-    return c->obs_truth;
-}
-
-void concolic_observe_undefined(JSValueConst v) {
+void concolic_hold_undefined(JSValueConst v) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
 
-    DCHECK(c != NULL, "the session's own reading was recorded on a value that is not a concolic");
-    DCHECK(c != NULL && !c->ex_has && !c->obs_has,
-           "the session's own reading was recorded on a source that already carries an example or an "
-           "observation — the absent mint is example-free and records this once, so a second fact here is "
-           "two producers stating what one read answered");
+    DCHECK(c != NULL, "an undefined example was held on a value that is not a concolic");
+    DCHECK(c != NULL && !c->ex_has && JS_IsUndefined(c->example),
+           "an undefined example was held on a source that already holds one — the absent mint is the one "
+           "caller and mints with none, so a held example here is a second producer stating what one read "
+           "answered");
     if (!c) return;
-    c->obs_has = 1;
-    c->obs_truth = 0;   /* §7.1.2 ToBoolean step 2: undefined is false */
+    c->ex_has = 1;   /* `example` is already JS_UNDEFINED: the presence bit is the whole write */
 }
 
 JSValue concolic_example(JSContext *ctx, JSValueConst v) {

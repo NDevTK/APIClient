@@ -1446,10 +1446,9 @@ static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, int
  * them, which `concolic_cmp_hook` computes by running §7.2.13 or §7.2.14 on the examples), §7.1.2 ToBoolean of
  * that computed value answers the question. Nothing is solved or re-decided from a stored expression.
  *
- * A branch with no example asks what this session's own run read (concolic_observed_truth): absent server state
- * is example-free by design, and its read still answers undefined in this session, so the arm of
- * `if (window.__FLAGS)` the session does not take is chosen and is marked forced. With neither, it answers -1:
- * no observation picked an arm, and neither is marked.
+ * Absent server state read through a property holds `undefined`, the session's own answer (absent.c), so the
+ * arm of `if (window.__FLAGS)` the session does not take contradicts it and is marked forced. A branch with no
+ * example answers -1: no observation picked an arm, and neither is marked.
  * `JS_ToBool` runs no page code (§7.1.2 has no ToPrimitive step), so it can be asked inside a branch hook. */
 static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
     ConcolicExState st;
@@ -1461,10 +1460,7 @@ static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
        `undefined`) are bytes, and a falsy one makes the false arm primary. NONE (no bytes) and CONTRADICTED
        (bytes this path disproved) answer unobserved, the sound direction. */
     st = concolic_example_state(cond);
-    if (st != CONCOLIC_EX_HELD && st != CONCOLIC_EX_DETERMINED) {
-        int seen = concolic_observed_truth(cond);
-        return seen >= 0 ? seen : REAL_ARM_UNOBSERVED;
-    }
+    if (st != CONCOLIC_EX_HELD && st != CONCOLIC_EX_DETERMINED) return REAL_ARM_UNOBSERVED;
     ex = concolic_example(ctx, cond);
     real = JS_ToBool(ctx, ex);
     JS_FreeValue(ctx, ex);
@@ -1573,13 +1569,13 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
         /* concolic_pin pins `src` only where the compared value is that source; a derivation of it pins nothing. */
         pinned = concolic_pin(cond);
         /* The path records that it has chosen a witness on an arm no example of this run confirmed: one the
-           example contradicts, or one over a source with no example (`location.hash`, absent server state),
-           where the fork and not an observation chose the arm. From here concolic_new's pin arm answers every
-           read of `src` with `tok`, so addresses composed from that source carry bytes this engine picked,
-           which the trusted zone's firing decision must tell apart from observed ones. It is recorded at the
-           choice because the composed URL is a bare string by then (`pin_mint` answers with a primitive and
-           `concolic_add_hook` derives nothing from two); solver/flow.h's field has the full reading. Gated on
-           `pinned`: a loose equality or a derived subject determined no value. */
+           example contradicts, or one over a source with no example (`location.hash`, server state read as a
+           bare identifier), where the fork and not an observation chose the arm. From here concolic_new's pin
+           arm answers every read of `src` with `tok`, so addresses composed from that source carry bytes this
+           engine picked, which the trusted zone's firing decision must tell apart from observed ones. It is
+           recorded at the choice because the composed URL is a bare string by then (`pin_mint` answers with a
+           primitive and `concolic_add_hook` derives nothing from two); solver/flow.h's field has the full
+           reading. Gated on `pinned`: a loose equality or a derived subject determined no value. */
         if (pinned && (forced_arm || real == REAL_ARM_UNOBSERVED)) flow_mark_pinned_value();
     }
     /* The other arm, which is an observation, not an absence: forced execution runs both arms of every
