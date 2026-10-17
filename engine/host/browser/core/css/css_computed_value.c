@@ -943,14 +943,15 @@ CssPx css_font_advance_measure_px(lxb_dom_element_t *el, InstalledFont face, uin
                                                         css_cv_advance_direction(el, codepoint)));
 }
 
-/* Named residual. Not covered: css-fonts-4 §6.4 `font-kerning: none`, which real Chrome honours by turning
-   the 'kern' feature off (font_features.cc); this engine does not model the property, so such text is
-   kerned. Next diff: `font-kerning` as a keyword row of core/css/css_property_id.h, read here. How its absence
-   shows: a `font-kerning: none` run measures narrower than real Chrome lays it out. */
+/* css-fonts-4 §6.3 "Kerning: the font-kerning property": `none` turns metric kerning off; `auto` leaves it
+   "at the discretion of the user agent", and real Chrome kerns there as for `normal`, appending a 'kern'-off
+   feature for kNoneKerning alone (third_party/blink/renderer/platform/fonts/shaping/font_features.cc,
+   Chromium 0842759f, the switch over FontDescription::GetKerning()). */
 CssPx css_font_kerning_px(lxb_dom_element_t *el, InstalledFont face, uint32_t codepoint,
                           FontMetricsCodepointAfter after, void *arg)
 {
     DCHECK(el != NULL, "a pair kerning was asked for with no element to take its size and axis from");
+    if (css_computed_keyword_is(el, "font-kerning", CSS_KEYWORD_NONE)) return css_px(0.0);
     if (css_cv_advance_direction(el, codepoint) != FONT_METRICS_ADVANCE_HORIZONTAL) return css_px(0.0);
     return css_px_scale(css_font_size_px(el), font_metrics_kerning_em(face, codepoint, after, arg));
 }

@@ -179,6 +179,9 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
     /* css-inline-3 §4.2.1 "Alignment Baseline Source: the baseline-source longhand": `auto | first | last`. */
     case CSS_KEYWORDS_BASELINE_SOURCE:
         return k == CSS_KEYWORD_AUTO || k == CSS_KEYWORD_FIRST || k == CSS_KEYWORD_LAST;
+    /* css-fonts-4 §6.3 "Kerning: the font-kerning property": `auto | normal | none`. */
+    case CSS_KEYWORDS_FONT_KERNING:
+        return k == CSS_KEYWORD_AUTO || k == CSS_KEYWORD_NORMAL || k == CSS_KEYWORD_NONE;
     /* css-inline-3 §4.2.2 "Alignment Baseline Type: the alignment-baseline longhand": `baseline |
        <baseline-metric>`, `<baseline-metric> = text-bottom | alphabetic | ideographic | middle | central |
        mathematical | hanging | text-top`. NAMED RESIDUAL: lexbor's longhand parser has no `hanging`, so a

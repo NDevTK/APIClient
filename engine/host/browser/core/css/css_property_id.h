@@ -106,6 +106,7 @@ typedef enum {
     X(LIST_STYLE_POSITION, "list-style-position", LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, LIST_STYLE_POSITION) \
     X(ALIGNMENT_BASELINE,  "alignment-baseline",  LXB_CSS_PROPERTY_ALIGNMENT_BASELINE, KEYWORD, ALL, ALIGNMENT_BASELINE)\
     X(BASELINE_SOURCE,     "baseline-source",     LXB_CSS_PROPERTY_BASELINE_SOURCE, KEYWORD, ALL, BASELINE_SOURCE) \
+    X(FONT_KERNING,        "font-kerning",        LXB_CSS_PROPERTY__UNDEF,         KEYWORD, ALL, FONT_KERNING)    \
     X(OVERFLOW_X,          "overflow-x",          LXB_CSS_PROPERTY_OVERFLOW_X,     KEYWORD, ALL, OVERFLOW)        \
     X(OVERFLOW_Y,          "overflow-y",          LXB_CSS_PROPERTY_OVERFLOW_Y,     KEYWORD, ALL, OVERFLOW)        \
     X(ALIGN_CONTENT,       "align-content",       LXB_CSS_PROPERTY_ALIGN_CONTENT,  ALIGN, ALL, NONE)              \

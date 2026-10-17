@@ -48,9 +48,9 @@
    none of which the cascade computes, which text_run.c asserts.
    Not measured, and asserted in text_run.c: css-text-3 §7.1 "Word Spacing: the word-spacing property", §7.2
    "Tracking: the letter-spacing property" and §2.1 "Case Transforms: the text-transform property", none of
-   which the cascade computes; the assert fires when one gains a computed value. Kerning and ligatures are absent
-   because no installed face (core/fonts/installed_font.h) ships 'GSUB' or 'GPOS', so advances simply sum (as
-   core/layout/line_box.c says of heights); that changes when such a face is loaded. */
+   which the cascade computes; the assert fires when one gains a computed value. A character's advance gains
+   its 'GPOS' pair kerning (css_font_kerning_px, which reads css-fonts-4 §6.3's `font-kerning`). Ligatures are
+   absent because no installed face (core/fonts/installed_font.h) ships 'GSUB'. */
 
 #include <stdbool.h>
 #include <stddef.h>

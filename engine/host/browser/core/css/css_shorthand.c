@@ -313,8 +313,8 @@ static char *place_component(const char *value, CssPropertyId first, CssProperty
 /* A KEYWORD row of core/css/css_property_id.h's table that lexbor's registry does not parse: its declarations
    reach the cascade as raw `__CUSTOM` tokens, and its `Value:` line is one keyword of the row's set, so this
    component owns the parse over that set, and CSS Syntax drops what the set does not admit. These are
-   `caption-side`, `table-layout`, `border-collapse`, `pointer-events` and the four `border-*-style`
-   longhands (lexbor carries `border`, the `border-<side>` shorthands and `border-*-color`, and no other border
+   `caption-side`, `table-layout`, `border-collapse`, `pointer-events`, `font-kerning` and the four
+   `border-*-style` longhands (lexbor carries `border`, the `border-<side>` shorthands and `border-*-color`, and no other border
    property, which is also why `<line-width>` is parsed here). */
 static bool sh_keyword_row(const char *longhand, CssKeywordSet *set)
 {
