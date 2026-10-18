@@ -293,27 +293,24 @@ EngineRivalMiss engine_rival_miss(void);
    paying converts nothing into work, so a driver treats an unpaid stall as its terminator, never a step
    count. */
 #define ENGINE_STEP_STALLED 3
-#define ENGINE_QUANTUM_MS  12  /* a thread-sharing floor, not a cap: nothing is dropped across it. A budget of CPU
-                                  consumed; solver/quantum.h owns the edge that expires it. */
-/* How often the quantum budget is read, in interpreter dispatches. It reaches quickjs.c as
-   JSFlowControlHooks.budget_period because quickjs.c includes no host header, so the scheduler owns the one
-   value. It is an occasion to read the CPU clock, never a dispatch-denominated budget: a C activation that
-   declares no step boundary retires no dispatches however long it runs (the aging charge in engine.c is
-   denominated in thread time for that reason). The value bounds overshoot (at most one period past the budget,
-   tens of microseconds) and amortises the clock read (a call into JS on some hosts); both stay under one
-   percent of ENGINE_QUANTUM_MS from about 1024 to 16384, so re-derive it against the slice. The gate counts
-   down, so it need not be a power of two. */
-#define ENGINE_QUANTUM_ASK_EVERY 4096
+/* The cooperative slice, in engine work: retired opcodes and regexp back-edges plus host work charged in the
+   opcode unit by its input (core/timing/thread_work.h). A thread-sharing floor, never a cap: nothing is dropped
+   across it. 54000 units is about 12 ms of the native dev build at thread_work.h's 0.222 us per opcode, and it
+   fits flow.c's per-residue census domain (at most 65536). */
+#define ENGINE_QUANTUM_WORK ((int64_t)54000)
+/* How often the slice's budget is asked, in interpreter dispatches (JSFlowControlHooks.budget_period, since
+   quickjs.c includes no host header). The ask is a load and a compare, so the period only bounds the overshoot
+   past the budget: at most one period, under 2% of the slice. The gate counts down, so it need not be a power
+   of two. */
+#define ENGINE_QUANTUM_ASK_EVERY 1024
 /* Dev-build diagnostic margin, in work one step performs (forks + flows created + jobs run): a step that does
-   this much without consulting the preempt hook has no suspend/resume seam on that path. It is work rather
-   than wall time because a wall clock cannot decide this on a loaded machine (see engine_sched_step), and it
-   sits far above an ordinary step's few forks between suspend points. It truncates and drops nothing. */
+   this much without consulting the preempt hook has no suspend/resume seam on that path. It sits far above an
+   ordinary step's few forks between suspend points. It truncates and drops nothing. */
 #define ENGINE_SEAMLESS_WORK 1000
-/* The CPU margin for a seamless stretch the work count cannot see (a C `for(;;);` forks and queues nothing):
-   400 quanta of consumed CPU without offering the scheduler a seam. Asked only where quantum_measure_is_cpu()
-   says the reading is CPU, since consumed CPU is what a loaded machine cannot inflate. Dev-build only; it
-   truncates and drops nothing. */
-#define ENGINE_SEAMLESS_CPU_US ((int64_t)ENGINE_QUANTUM_MS * 1000 * 400)
+/* The same verdict in retired work: 400 slices of the flow's own work in one step with no seam offered. An
+   interpreted stretch cannot reach it (the dispatch-counted budget raises within a slice), so what it names is
+   host work charged by its input in one span with no rest point. Dev-build only; it truncates and drops nothing. */
+#define ENGINE_SEAMLESS_STEP_WORK (ENGINE_QUANTUM_WORK * 400)
 /* Whether the host owes anything: non-zero if any frontier member waits on something only the host can supply,
    the union of engine_pending_fetches and engine_host_requests read from the same registers. It is the
    scheduler's last question before calling a frontier exhausted (STALLED rather than DONE), so a host does not
@@ -487,10 +484,12 @@ void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const Fet
    trusted zone's Level-1 order ranks a non-runnable engine last (-Infinity) and reads nothing else of this
    frontier's order: no flow weight crosses documents. */
 int engine_runnable(void);
-/* The thread measure this instance has spent inside engine_sched_step's bracket over every slice (`loop_us`
-   below, solver/quantum.h for what the measure is on each host): the CPU of service Level 1 divides a document's
-   novel value by. A lifetime counter, never reset at a session boundary. */
-int64_t engine_service_us(void);
+/* The engine work this instance's flows have retired over every slice: the service Level 1 divides a
+   document's novel value by. A lifetime counter, never reset at a session boundary. */
+int64_t engine_service_work(void);
+/* The same counter plus the running flow's standing, unbanked count: the instance's whole retired work at this
+   instant, so a bracket's two readings differ by exactly the work done between them. */
+int64_t engine_work_retired(void);
 /* Issue a synchronous request only the host can answer (see engine.c) and return its id; the asking step
    machine returns JS_STEP_YIELD and the flow suspends until the answer lands while siblings run. The id is the
    rendezvous, never the request text: the answer is computed under the asking flow's world, so two identical
@@ -914,8 +913,9 @@ long engine_units_done(void);
  * cannot size them from a second copy.
  * Microsecond rows are int64_t because `long` is 32 bits on wasm32, where a microsecond sum saturates in 35.8
  * minutes and signed overflow would read as a negative cost; solver/engine.c asserts the width at `g_step_us`.
- * They are in the slice's own measure (`quantum_thread_us()`, CPU or wall as @QUANTUM says), and a reading is
- * a ratio within one run, since totals across runs are not comparable. */
+ * They are the pricing clock (`quantum_thread_us()`, CPU or wall as @QUANTUM's `price` says), which prices the
+ * engine's own overhead on this host and decides nothing; a reading is a ratio within one run. Work rows are
+ * a function of the path and compare across runs and hosts. */
 typedef struct {
     long steps;              /* scheduler steps: every entry into flow_step, counted at its own entry */
     long arms[STEP_UNIT_N];  /* …and how many ran each arm, in solver/step_unit.h's order, counted at the
@@ -935,6 +935,11 @@ typedef struct {
        excludes the host's time between slices. `step_us / steps` against the slice separates a slice-bound loop
        from one given little thread time; take the slice from `@QUANTUM`, the artifact's own report. */
     int64_t step_us;
+    /* The engine work the same turns retired, the sum of the aging charges (flow_age_running), so `step_work /
+       steps` against `@QUANTUM`'s `sliceWork` separates a slice-bound loop from one given little work; it is
+       the same on every host, while `step_us` prices it on this one. `step_work <= service_work` is asserted. */
+    int64_t step_work;
+    int64_t service_work;
     /* The split of step_us: `slice_us` is the step's own bracket and `sched_us` everything else in the turn,
      * which, because charges telescope, includes the previous turn's tail (checkpoint, finish). A step that
      * overruns the slice points at the quantum's transport; a large pick and swap points at the frontier's
@@ -957,10 +962,10 @@ typedef struct {
     int64_t loop_us;
     int64_t between_slices_us;
     long    slices;
-    /* Turns whose step alone met or exceeded the slice budget, so `slice_overruns / steps` is a fraction of a
-     * published denominator; the lifetime mean `step_us / steps` hides that a few long turns usually carry the
-     * time. It compares the step's two clock readings against ENGINE_QUANTUM_MS, the margin quantum_expired()
-     * uses, though on Linux quantum_expired() reads a timer-set flag rather than the clock. Neither seam verdict
+    /* Turns whose step alone retired at least a slice's work, so `slice_overruns / steps` is a fraction of a
+     * published denominator; the lifetime mean `step_work / steps` hides that a few long turns usually carry the
+     * work. It compares the step's work against ENGINE_QUANTUM_WORK, the inequality engine_quantum_spent asks,
+     * so an overrun is a turn that met the budget between two of its asks. Neither seam verdict
      * in engine_sched_step can judge these turns: both require `g_preempt_asked == pa0`, and an overrunning turn
      * consulted the hook to end. A count, not a maximum, so it cannot plateau like a ceiling. */
     int64_t slice_overruns;
@@ -987,25 +992,25 @@ typedef struct {
      * seamless turn adds nothing. A `long` because solver/result.c composes step-unit rows through one
      * `cold_hist_json` that takes `long`; the add asserts its headroom. Lifetime, every build. */
     long     over_ask_arms[STEP_UNIT_N];
-    /* The longest stretch with no suspend point offered, in the slice's own measure, over non-seamless
-     * overrunning turns, overall and per arm; seamless turns are excluded because their stretch is the whole
-     * turn. quantum_expired() is monotone within a slice and a true answer ends the turn, so every consultation
-     * of an overrunning turn falls within ENGINE_QUANTUM_MS of the slice's start and the gap lies in [span -
-     * ENGINE_QUANTUM_MS, span]: to within one budget it is the arm's worst turn span. A gap far below that bound
+    /* The longest stretch of work with no suspend point offered, over non-seamless overrunning turns, overall
+     * and per arm; seamless turns are excluded because their stretch is the whole turn. engine_quantum_spent is
+     * monotone within a slice and a true answer ends the turn, so every consultation of an overrunning turn falls
+     * within ENGINE_QUANTUM_WORK of the slice's start and the gap lies in [span - ENGINE_QUANTUM_WORK, span]: to
+     * within one budget it is the arm's worst turn span. A gap far below that bound
      * means a wanted preempt was dropped (the `requested > fired` seam message). A maximum, read as a floor
-     * against the budget and never as a ceiling; `max(over_gap_arms) == slice_overrun_gap_us` is asserted in the
+     * against the budget and never as a ceiling; `max(over_gap_arms) == slice_overrun_gap_work` is asserted in the
      * overrun branch. It is not engine.c's dev-only wall `g_max_gap`, which covers seamless turns. The per-arm
      * row is `long` for `over_ask_arms`' reason, with its headroom asserted. Every build.
-     *   Named residual: testing/live-run.js does not carry `stepUnitOverrunGapArms` or `sliceOverrunGapUs`, so
+     *   Named residual: testing/live-run.js does not carry `stepUnitOverrunGapArms` or `sliceOverrunGapWork`, so
      * only a build's own smoke reports them; the next diff adds both to that driver's cold row lists beside the
      * ask rows; its absence shows as a real-site report quoting a per-turn ask density with no gap row to
      * contradict it. */
-    int64_t  slice_overrun_gap_us;    /* the worst no-suspend-point stretch of any non-seamless overrunning turn */
+    int64_t  slice_overrun_gap_work;  /* the worst no-suspend-point stretch of any non-seamless overrunning turn */
     long     over_gap_arms[STEP_UNIT_N];
     /* The classic compile phase of a start step. A compile rests: JS_FlowCompileStep polls the preempt hook in
      * the parse's own dispatch and parks through `f->compile` (`compile-handed-the-thread-back`).
      * `classic_compiles` is one per program, raised when a parse finishes; `classic_compile_overruns` is one
-     * per stint that met the slice, so neither is a subset of the other. Stints are `classic_compiles +
+     * per stint whose parse retired a slice's work, so neither is a subset of the other. Stints are `classic_compiles +
      * arms[STEP_UNIT_COMPILE_YIELDED]`, and overruns are asserted under that and under `slice_overruns`. Module
      * compiles are in none of these rows (their stint is `module-compile-handed-the-thread-back`).
      * `classic_compile_again` counts parses of bytes some flow of this process had already parsed, identity
@@ -1014,7 +1019,7 @@ typedef struct {
      * `classic_compiles` and not of each other (asserted). Do not read `classic_compiles` against
      * `root_programs`: forks, candidates, replays and appended chunks all compile. */
     long classic_compiles;           /* classic program compiles, one per program, at flow_step's start site */
-    long classic_compile_overruns;   /* compile stints that met the slice; not a subset of the row above */
+    long classic_compile_overruns;   /* compile stints that retired a slice's work; not a subset of the above */
     long classic_compile_again;      /* …of which the bytes had already been parsed by some flow: the repeat */
     /* The bytes those repeats covered, so a repeat can be weighed as a cost; int64_t for `step_us`'s reason, and
        asserted not below its own count. */

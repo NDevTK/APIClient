@@ -4,7 +4,7 @@
  * A rest unit is a granularity, not a bound: it decides how often a flow offers to rest, never whether work
  * happens. Choosing it trades the cost of asking the scheduler (a step-machine yield, a frontier re-rank,
  * possibly a COW delta swap) against the delay before a due suspension is taken. Both belong to the
- * scheduler, so the answer lives here beside ENGINE_QUANTUM_MS and components ask for it. The finest unit a
+ * scheduler, so the answer lives here beside ENGINE_QUANTUM_WORK and components ask for it. The finest unit a
  * substrate offers is also a choice, and the expensive one: one scheduler round trip per item.
  *
  * HTML §7.5.2 "Loading HTML documents" and §7.5.4 "Loading text documents" name the loaders' unit in the
@@ -22,12 +22,12 @@
  * (1) It does not grow with the response. A fraction of the response ("rest sixteen times per document") is
  *     drive-to-completion under another name. `rest_unit_items` takes only a kind — no length, document or
  *     handle — so such a unit is not expressible.
- * (2) One unit's work is small against ENGINE_QUANTUM_MS. A coarser unit never misses a due suspension; it
+ * (2) One unit's work is small against ENGINE_QUANTUM_WORK. A coarser unit never misses a due suspension; it
  *     delays the offer by at most one unit, which cannot change which flow runs next while the unit is small
- *     against the slice. `rest_unit_begin`/`rest_unit_end` assert this on consumed CPU in a dev build, where
- *     solver/quantum.h says the reading is CPU, and only for kinds whose answer is above 1: at 1 there is no
- *     smaller number, so an overrun is a fact about the document and the fix is to make that item a pull one
- *     layer down.
+ *     against the slice. `rest_unit_begin`/`rest_unit_end` assert this on the engine work the unit retired in a
+ *     dev build, and only for kinds whose answer is above 1: at 1 there is no smaller number, so an overrun is
+ *     a fact about the document and the fix is to make that item a pull one layer down. A kind whose items
+ *     charge no work is measured by nothing (core/timing/thread_work.h names which).
  *
  * Every answer is at least 1 (asserted), so no value of this policy turns a pull back into a call. */
 #ifndef ENGINE_HOST_SOLVER_REST_UNIT_H
@@ -44,7 +44,7 @@ typedef enum {
        the unit, with HTML §13.2.5 "Tokenization", §13.2.6 "Tree construction" and solver/dom_cow.h's
        announcement of each node as the per-byte constant. A fill runs no page code because a Document's
        scripts are seeded after §13.2.7 "The end" (core/frame/navigable.c's navigable_seed_scripts); if script
-       execution moves into the parse, the bracket's CPU assert is what reports the unbounded unit. */
+       execution moves into the parse, the bracket's work assert is what reports the unbounded unit. */
     REST_UNIT_INPUT_BYTES = 0,
     /* One construct of XML §2.1 "Well-Formed XML Documents"' [1] `document`, core/xml/xml_parse.h's step,
        reached from HTML §7.5.3 "Loading XML documents". Cost: one production instance, whose size the document
@@ -94,7 +94,7 @@ typedef enum {
    how bound (1) is enforced: a caller cannot pass a length, so the answer cannot be a fraction of one. */
 size_t rest_unit_items(RestUnitKind kind);
 
-/* One unit's work, bracketed: bound (2), measured. `begin` latches the kind and the consumed-CPU reading;
+/* One unit's work, bracketed: bound (2), measured. `begin` latches the kind and the work counter's reading;
    `end` asserts the unit stayed under the scheduler's slice. Brackets do not nest, and an `end` needs an open
    `begin` (both asserted). They observe only: nothing branches on them, and both compile to nothing in
    release. A driver whose unit is fixed at 1 may leave its units unbracketed. */

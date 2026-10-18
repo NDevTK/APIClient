@@ -48,7 +48,7 @@
                                          running flow retired, which the interpreter reports and this file relays */
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
 #include "solver/cold.h"      /* the park and the resume themselves; their census is composed in result.c */
-#include "solver/quantum.h"   /* the cooperative quantum's asynchronous edge, and what this host can measure */
+#include "solver/quantum.h"   /* the slice's bracket, the host's claim on the thread, and the pricing clock */
 #include "solver/reclaim.h"   /* …and its RAM edge: which allocators can sell a flow rather than fail */
 #include "solver/reply_decode.h" /* …and what the reply body itself teaches — see engine_provide */
 #include "solver/pending_index.h" /* which records a reply answers, without walking the frontier to find out */
@@ -6318,7 +6318,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
        account, which equals SFQ's v(t) because this flow is the one in service. Every coordinate is checked: the
        completed-unit count (the optimism term), its service with the window mark, and its family (the aging
        term's halves). */
-    DCHECK(sib->cpu == f->cpu && sib->cpu_gen == f->cpu_gen &&
+    DCHECK(sib->work == f->work && sib->work_gen == f->work_gen &&
            sib->visits == f->visits && sib->family == f->family,
            "a driven orphan entered the frontier at a virtual time that is not the running flow's — the orphan's arm "
            "inherits the discovering flow's account");
@@ -7477,17 +7477,45 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
        weight is recomputed at every consultation.
    (2) Cooperative-quantum yield: a thread-sharing floor, so even a top-ranked flow breathes after a slice and the
        host loop can interleave, pump and snapshot. Not a step cap: no flow is dropped or reordered, and the flow
-       resumes byte-identically. The expiry is asked of solver/quantum.h, which owns both the asynchronous edge
-       that raises the request (a per-thread CPU timer natively) and the measure it is decided on: CPU consumed,
-       since a descheduled thread denies nobody anything, and an asynchronous source, since straight-line call-free
-       code raises no request of its own. */
+       resumes byte-identically. The slice is engine work (engine_quantum_spent), counted at dispatch, so where a
+       flow parks is a function of its path; solver/quantum.h's host yield only hands the thread to the host. */
 static int64_t engine_now_ms(void);   /* the wall clock, for the gap census below: reported, never a verdict */
+
+/* The engine's one currency: the work its flows retired (quickjs.h's JSFlowControlHooks.work), banked here and
+   nowhere else. A lifetime count of this instance, never reset: the slice, a step's aging charge and Level 1's
+   service are each a difference of this one counter, so they cannot disagree about what a unit is. */
+static int64_t g_service_work = 0;
+/* Where the open slice started on that counter, set at engine_sched_step's quantum_begin(). */
+static int64_t g_slice_work0 = 0;
+
+/* Bank `units` the running flow retired: its event-loop clock moves (HTML §8.1.7.3's second mover, which
+   asserts a running flow at its origin) and the instance's counter with it. */
+static void engine_work_bank(JSContext *ctx, uint64_t units) {
+    DCHECKF(units <= (uint64_t)(INT64_MAX - g_service_work),
+            "banking %llu units would overflow the instance's work counter (%lld) — the units are counted per "
+            "dispatch, so this is a count that stopped being one", (unsigned long long)units,
+            (long long)g_service_work);
+    event_loop_work_advance(ctx, units);
+    g_service_work += (int64_t)units;
+}
+
+/* The work this slice has banked. The scheduler loop asks it between steps, where the running flow's standing
+   count has been banked by the step's close. */
+static int64_t engine_slice_work(void) { return g_service_work - g_slice_work0; }
+
+/* Is the open slice's budget spent, asked while a flow executes: the banked work plus the running flow's standing
+   count (JS_FlowPeekRetiredWork), so the answer is exact at any dispatch. Monotone within a slice. */
+static int engine_quantum_spent(void) {
+    DCHECK(quantum_slice_open(), "the slice's budget was asked outside an open slice — whoever is running this "
+                                 "flow is not the scheduler");
+    return engine_slice_work() + (int64_t)JS_FlowPeekRetiredWork() >= ENGINE_QUANTUM_WORK;
+}
 /* The rival is cached; the comparison is not. What is cached is the rival's identity, found by the O(flows) scan,
    and the scan reruns only when the generation or running flow changes. Both weights are recomputed at every
    consultation, because a parked flow's weight moves without a generation bump: `flow_silence_notch` reads the
-   flow's own silence plus its family's `fam_us`, which `flow_age_running` writes after every step, and on a real
+   flow's own silence plus its family's `fam_work`, which `flow_age_running` writes after every step, and on a real
    page the whole frontier is one family (every flow descends from the boot flow). The notch is a floor of
-   `(cpu_i + fam_us) / S`, so a step can carry the rival across a boundary while the running flow's stands still; a
+   `(cpu_i + fam_work) / S`, so a step can carry the rival across a boundary while the running flow's stands still; a
    cached weight would then yield to a flow no longer better. A fitness write cannot cause that: it is made only on
    the running flow, through flow_observe_survival or flow_observe_rung, which both raise the generation (a fire
    with the generation equal to the ranked one is a notch straddle, not a distance write). The cached pointer is
@@ -7569,16 +7597,12 @@ static uint64_t g_preempt_asked = 0;
    seconds between two consecutive offers is the violation. Reset when the step starts, updated at each
    consultation, closed with the tail after the last. */
 static int64_t g_last_ask = 0, g_max_gap = 0;
-/* The same two in the slice's own measure, the pair a verdict could decide on (solver/engine.h's
-   `over_gap_arms`). The wall pair is dev-only and reports a seamless turn's whole duration; these are raised in
-   every build and report the widest interval between two consecutive offers of a turn that offered some, in
-   `quantum_thread_us()` microseconds, comparable with ENGINE_QUANTUM_MS. Declared here because preempt_hook writes
-   them; their lifetime scalar is declared with `g_over_asks`, where it is read. They cost one clock read per
-   consultation: on the generic and emscripten branch quantum_expired() already reads that clock, so it is a second
-   read; on the native branch quantum_expired() reads a `volatile sig_atomic_t` and the read is new. The wall clock
-   stays under the guard because nothing publishes it and emscripten answers clock_gettime from JS; this pair is
-   published (`sliceOverrunGapUs`, `stepUnitOverrunGapArms`). */
-static int64_t g_gap_last_us = 0, g_gap_max_us = 0;
+/* The same two in work, the pair a verdict could decide on (solver/engine.h's `over_gap_arms`). The wall pair is
+   dev-only and reports a seamless turn's whole duration; these are raised in every build and report the widest
+   stretch of work between two consecutive offers of a turn that offered some, comparable with
+   ENGINE_QUANTUM_WORK. Declared here because preempt_hook writes them; their lifetime scalar is declared with
+   `g_over_asks`, where it is read. Published as `sliceOverrunGapWork` and `stepUnitOverrunGapArms`. */
+static int64_t g_gap_last_work = 0, g_gap_max_work = 0;
 
 /* The one of the three a census reads, exported for solver/result.c (published beside `scanRivalRuns`, so no second
    definition of "how often was the policy asked"). The two clocks stay private: nothing outside the seam message
@@ -7598,10 +7622,10 @@ static int preempt_hook(int kind) {
     (void)kind;
     Flow *cur = flow_running();
     /* The policy is asked only by the scheduler, from this one point. Both decisions are about the flow the
-       scheduler is running, and between two engine_sched_step calls there is none: the thread is the host's, and
-       quantum_end disarms the edge over it. An entry reaching this hook on the host's time would be asking whether
-       to park a flow nobody drives. It is asserted here because clauses (0) and (1) can return before the budget
-       (and quantum_expired's own precondition) is reached. A hit is a new host-time entry into the interpreter:
+       scheduler is running, and between two engine_sched_step calls there is none: the thread is the host's. An
+       entry reaching this hook on the host's time would be asking whether to park a flow nobody drives. It is
+       asserted here because clauses (0) and (1) can return before the budget (and its own precondition) is
+       reached. A hit is a new host-time entry into the interpreter:
        give it a driver that can act on the answer, or stop it consulting the policy; never widen the slice. */
     DCHECK(quantum_slice_open(),
            "the preempt policy was consulted with no slice open — something reached the interpreter on the host's "
@@ -7609,18 +7633,18 @@ static int preempt_hook(int kind) {
     /* This consultation, counted (`preemptAsksLifetime`), before the rescan below so the containment its quotient
        rests on is an order of statements. */
     g_preempt_asked++;
-    /* The interval since the last offer, in the slice's own measure (solver/engine.h's `over_gap_arms`), raised
-       beside the count and above every clause, so an offer answered by clause (1) or the value yield still counts
-       and both numbers bracket the same population. The max is taken before the reading is stored, so it is the
-       interval between consecutive offers; `g_gap_last_us` is opened at the turn's bracket, so the first interval
-       is the stretch before the first offer. */
+    /* The work since the last offer (solver/engine.h's `over_gap_arms`), raised beside the count and above every
+       clause, so an offer answered by clause (1) or the value yield still counts and both numbers bracket the
+       same population. The max is taken before the reading is stored, so it is the stretch between consecutive
+       offers; `g_gap_last_work` is opened at the turn's bracket, so the first stretch is the one before the first
+       offer. */
     {
-        int64_t gap_now = quantum_thread_us();
-        if (gap_now - g_gap_last_us > g_gap_max_us) g_gap_max_us = gap_now - g_gap_last_us;
-        g_gap_last_us = gap_now;
+        int64_t gap_now = g_service_work + (int64_t)JS_FlowPeekRetiredWork();
+        if (gap_now - g_gap_last_work > g_gap_max_work) g_gap_max_work = gap_now - g_gap_last_work;
+        g_gap_last_work = gap_now;
     }
     /* The wall gap census belongs to the seam message and is compiled out with it; the count and the
-       slice-measure gap above are not, because solver/result.c publishes them in every build. `engine_now_ms()`
+       work gap above are not, because solver/result.c publishes them in every build. `engine_now_ms()`
        per consultation feeds only a developer's message, and on the host that matters most emscripten answers
        clock_gettime from JS, so it stays under the guard. The two gap censuses measure two populations: the wall
        one reports a seamless turn's whole duration beside the work count (a wall number says whether the box was
@@ -7739,10 +7763,10 @@ static int preempt_hook(int kind) {
                "answering one state two ways");
         return 1;
     }
-    /* (2) Cooperative-quantum floor: thread-sharing, not value. The same expiry the scheduler loop returns to the
+    /* (2) Cooperative-quantum floor: thread-sharing, not value. The same budget the scheduler loop returns to the
        host on, so a flow parking on it and a step returning on it are one event seen twice. Nothing is dropped,
        starved or reordered: the same flow resumes byte-identically unless the WFQ says otherwise. */
-    return quantum_expired();
+    return engine_quantum_spent() || quantum_host_wants_thread();
 }
 
 /* May the running flow go on to the next sub-step of the event-loop turn it is in? The scheduler's granularity
@@ -8082,7 +8106,7 @@ static long g_task_held_deliv, g_task_held_seq, g_task_arm_older, g_task_arm_no_
 static long g_unit_mid_program;      /* …the member held a live frame: inside a program, the trial continues */
 static long g_unit_parked;           /* …the runtime held a parked continuation: suspended on an await/reply */
 static long g_unit_checkpoint_owed;  /* …the flow still owed its microtask checkpoint: the turn is not over */
-/* What those steps cost in the slice's own measure (solver/engine.h's EngineStepUnitRuns `step_us`: read as a ratio
+/* What those steps cost on the pricing clock (solver/engine.h's EngineStepUnitRuns `step_us`: read as a ratio
    against `g_steps`, never a total). Declared beside its denominator and its one adding line, so numerator and
    denominator live in one file. It is the same microseconds `flow_age_running` is charged, taken at the same line,
    not a second clock reading; the charge asserts the delta non-negative (flow.c), so this only climbs. A report
@@ -8118,8 +8142,8 @@ static int64_t g_between_us;
 static int64_t g_slice_exit_us;
 static int     g_slice_exit_set;
 static long    g_slices;
-/* The partition of the above (solver/engine.h's `slice_overruns`), counted from the same two readings the slice arm
-   is accumulated from, so a turn cannot be charged to one and counted by the other. */
+/* Turns whose step retired a slice's work (solver/engine.h's `slice_overruns`), counted from the same reading the
+   aging charge is, so a turn cannot be charged one amount and judged on another. */
 static int64_t g_slice_over;
 /* Whether the overrunning turns offered a suspend point at all (solver/engine.h's `slice_overrun_asks`):
    `g_preempt_asked` bracketed across the step from the same `t_slice0`. In every build: one load per turn, and a
@@ -8128,10 +8152,13 @@ static uint64_t g_over_asks;       /* suspend points offered, summed over the tu
 static long     g_over_seamless;   /* …and how many of those turns offered NOT ONE */
 /* The longest stretch of one of those turns during which the policy was not consulted (solver/engine.h's
    `over_gap_arms`: the pair above is a density, which cannot tell nine spread stretches from one unbroken run).
-   The lifetime maximum over non-seamless overrunning turns; its per-turn readings, `g_gap_last_us` and
-   `g_gap_max_us`, are declared with their writer preempt_hook. The lead and tail count: the closing reading closes
+   The lifetime maximum over non-seamless overrunning turns; its per-turn readings, `g_gap_last_work` and
+   `g_gap_max_work`, are declared with their writer preempt_hook. The lead and tail count: the closing reading closes
    the stretch after the last offer, and the turn's opening reading the one before the first. A report only. */
-static int64_t g_over_gap_us;      /* the worst such interval over every non-seamless overrunning turn */
+static int64_t g_over_gap_work;    /* the worst such stretch over every non-seamless overrunning turn */
+/* The work every turn that stepped a flow retired, the sum of the aging charges (solver/engine.h's
+   `step_work`). */
+static int64_t g_step_work;
 /* The one phase inside a step whose cost is a length the page chose: the classic compile. `g_slice_over` and
    `g_step_unit_over` say a turn met the slice and in which arm, not which phase: a start step is a compile
    (JS_FlowNew -> JS_Eval over `body_n` bytes) then an execution (JS_FlowResume), and only the second runs bytecode.
@@ -8200,7 +8227,7 @@ _Static_assert(sizeof ((EngineStepUnitRuns *)0)->classic_compile_again_bytes
    Both objects are asserted here, the one translation unit holding both, above the copy-out and the single add. */
 _Static_assert(sizeof g_step_us >= 8,
                "solver/engine.c: the dispatch loop's microsecond accumulator has been narrowed. On wasm32 "
-               "`long` is 4 bytes, so a 32-bit accumulator of the slice's own measure overflows after ~35.8 "
+               "`long` is 4 bytes, so a 32-bit accumulator of the pricing clock overflows after ~35.8 "
                "minutes and hands its reader a NEGATIVE total, which reads as cheap turns rather than as a "
                "broken number — see solver/engine.h's `step_us`.");
 _Static_assert(sizeof ((EngineStepUnitRuns *)0)->step_us >= sizeof g_step_us,
@@ -8212,7 +8239,7 @@ _Static_assert(sizeof ((EngineStepUnitRuns *)0)->step_us >= sizeof g_step_us,
    stopped being monotone. */
 _Static_assert(sizeof g_loop_us >= 8 && sizeof g_between_us >= 8 && sizeof g_slice_exit_us >= 8,
                "solver/engine.c: the slice-span accumulators have been narrowed. On wasm32 `long` is 4 bytes, "
-               "so a 32-bit accumulator of the slice's own measure overflows after ~35.8 minutes — and these "
+               "so a 32-bit accumulator of the pricing clock overflows after ~35.8 minutes — and these "
                "measure spans STRICTLY LONGER than `g_step_us` does, so they invert first.");
 _Static_assert(sizeof ((EngineStepUnitRuns *)0)->loop_us >= sizeof g_loop_us &&
                sizeof ((EngineStepUnitRuns *)0)->between_slices_us >= sizeof g_between_us,
@@ -9204,11 +9231,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     JS_FreeValue(prog_ctx, held);
                     g_classic_parse_shared++;
                 } else {
-                    /* The compile, bracketed (see g_classic_compiles). Both readings are in the slice's own measure
-                     * (quantum_thread_us), so the comparison is the inequality quantum_expired() asks. Only the
-                     * classic arm is bracketed: JS_FlowEvalModule compiles and evaluates, and a bracket around it
-                     * would time both together. A failed compile is counted, because it parsed the bytes and spent
-                     * the time. Nothing branches on either.
+                    /* The compile, bracketed (see g_classic_compiles): the parse's work is its bytes at the
+                     * tokenizer's rate, the units it retired, so the comparison is the inequality
+                     * engine_quantum_spent asks. Only the classic arm is bracketed: JS_FlowEvalModule compiles and
+                     * evaluates. A failed compile is counted, because it parsed the bytes. Nothing branches on
+                     * either.
                      *
                      * JS_FlowCompileStep polls the same budget hook and preempt policy as the interpreter's
                      * dispatch, from the parse's production dispatch, and hands a suspended parse back through
@@ -9224,14 +9251,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        about how the stint started, true of one that parks again, finishes or ends in a SyntaxError,
                        and raised under an arm it would partition outcomes rather than stints. */
                     if (f->compile != NULL) g_classic_compile_resumed++;
-                    int64_t t_comp0 = quantum_thread_us();
                     JSValue fn = JS_UNDEFINED;
                     ThreadWorkSpan tw;
                     uint64_t parsed0 = JS_FlowParseBytesLife();
                     thread_work_begin(&tw);
                     int cr = JS_FlowCompileStep(prog_ctx, body, body_n, prog_name, src_flags, &fn, &f->compile);
                     thread_work_end(&tw, THREAD_WORK_SCRIPT_PARSE, JS_FlowParseBytesLife() - parsed0);
-                    if (quantum_thread_us() - t_comp0 >= (int64_t)ENGINE_QUANTUM_MS * 1000)
+                    if ((int64_t)((JS_FlowParseBytesLife() - parsed0) * THREAD_WORK_UNITS_PER_BYTE_SCRIPT) >=
+                        ENGINE_QUANTUM_WORK)
                         g_classic_compile_over++;
                     if (cr == 0) {
                         /* Parked mid-parse. No ENGINE_LEAVE_ROW and no cursor move: this row is still the row the
@@ -9775,6 +9802,12 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->unframed_steps = g_unframed_steps;
     /* And what they cost, in the same reading as the count they are divided by. */
     out->step_us = g_step_us;
+    out->step_work = g_step_work;
+    out->service_work = g_service_work;
+    DCHECKF(g_step_work <= g_service_work,
+            "the turns' aging charges (%lld units) exceed the work the instance banked (%lld) — a charge is a "
+            "difference of the banked counter across one step, so a larger sum charged work nobody banked",
+            (long long)g_step_work, (long long)g_service_work);
     out->slice_us = g_slice_us;
     out->sched_us = g_sched_us;
     out->slice_overruns = g_slice_over;
@@ -9864,7 +9897,7 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->slice_overrun_seamless = g_over_seamless;
     /* The worst no-offer stretch. It is a maximum, not a partition, so its only identity (`max(arms) == scalar`)
        is exact at the raise and is not asked again here. */
-    out->slice_overrun_gap_us   = g_over_gap_us;
+    out->slice_overrun_gap_work = g_over_gap_work;
     /* The unit boundary's refusal arms, read with the `steps` they partition. */
     out->unit_mid_program     = g_unit_mid_program;
     out->unit_parked          = g_unit_parked;
@@ -10273,16 +10306,15 @@ static int engine_outcome_hook(JSContext *ctx, JSValueConst over, const char *op
    because an advance with none writes the shared baseline and moves every sibling's moment, and a guard here would
    skip that advance silently. The interpreter asks only under a live flow base; a case where that is not a running
    flow is fixed at its route. */
-static void engine_work_hook(JSContext *ctx, uint64_t units) { event_loop_work_advance(ctx, units); }
+static void engine_work_hook(JSContext *ctx, uint64_t units) { engine_work_bank(ctx, units); }
 /* JSFlowControlHooks.budget: is this slice spent, asked from the interpreter's dispatch every
    ENGINE_QUANTUM_ASK_EVERY dispatches so the budget can expire inside bytecode that raises nothing. It is the same
-   call clause (2) of preempt_hook makes: one budget and one edge with three consumers (a flow that parks on it, a
-   step that returns the thread on it, a dispatch that asks for the park to be requested). It holds no policy: the
-   interpreter decides only whether to raise, and the raise is answered by preempt_hook as a back-edge's is, with
-   the rank comparison in front of it, so asking earlier drops, skips or reorders nothing. Its precondition is the
-   callee's: quantum_expired() aborts outside an open slice, and the gate asks only under a live flow base, so a new
-   host-time entry into the interpreter reaches that abort and names itself. */
-static int engine_budget_hook(void) { return quantum_expired(); }
+   question clause (2) of preempt_hook asks: one budget with three consumers (a flow that parks on it, a step that
+   returns the thread on it, a dispatch that asks for the park to be requested). The raise is answered by
+   preempt_hook as a back-edge's is, with the rank comparison in front of it, so asking earlier drops, skips or
+   reorders nothing. engine_quantum_spent asserts an open slice, so a host-time entry into the interpreter names
+   itself there. */
+static int engine_budget_hook(void) { return engine_quantum_spent() || quantum_host_wants_thread(); }
 static const JSFlowControlHooks FC_EXPLORE = { .branch = engine_branch_hook, .outcome = engine_outcome_hook,
                                                .fork = engine_fork_finalize, .preempt = preempt_hook,
                                                .budget = engine_budget_hook,
@@ -10301,7 +10333,7 @@ static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook,      /* 
 static const JSFlowControlHooks FC_OFF     = { 0 };
 
 /* The wall clock, which times nothing the scheduler decides on: the cooperative slice and the WFQ's aging charge
-   are both in the quantum's own measure (solver/quantum.h), CPU actually consumed, in one currency. What is left
+   are both engine work (engine_quantum_spent, flow_age_running), in one currency. What is left
    for elapsed time is the seam message's reported numbers, the gap between two suspend points and a step's wall
    time, printed and never a verdict. CLOCK_MONOTONIC, so a wall-clock adjustment cannot make a reported gap
    negative. Microseconds is the primitive: milliseconds would quantise a sub-millisecond step to zero, and the gap
@@ -10953,7 +10985,8 @@ int engine_runnable(void) {
     return b != NULL;
 }
 
-int64_t engine_service_us(void) { return g_loop_us; }
+int64_t engine_service_work(void) { return g_service_work; }
+int64_t engine_work_retired(void) { return g_service_work + (int64_t)JS_FlowPeekRetiredWork(); }
 
 #if APICLIENT_DEV
 /* A printable, bounded excerpt of page bytes for a diagnostic. The source is whatever the page shipped, so a message
@@ -10979,14 +11012,9 @@ static void excerpt(char *out, size_t cap, const char *src, size_t n)
 static int engine_sched_slice(void) {
     JSContext *ctx = g_sess_ctx;
     Flow *cur = g_sess_cur;
-    /* One reading of the slice's own measure per iteration, carried: it closes the step just run (the WFQ's aging
-       charge) and opens the next, so the charges telescope across the quantum and no quantisation is lost between
-       steps. It is the quantum's measure (quantum_thread_us), because the aging term is CPU aging ("a monopolizer
-       that burns CPU without emitting") and must be in the slice's currency; where a host has no CPU clock,
-       quantum_measure() says so. Telescoping charges the context switch and finish between two readings to the
-       flow stepped next, not the one they were for: one COW delta swap of misattribution, bounded by the swaps
-       this scheduler counts, which a second reading per iteration would buy back for an order decision a notch of
-       quantisation already absorbs. */
+    /* One reading of the pricing clock per iteration, carried: it closes the turn just run and opens the next, so
+       the step census (`g_step_us` and its halves) telescopes across the slice. It prices the engine's own
+       overhead on this host and decides nothing; the aging charge is the step's work. */
     int64_t now = quantum_thread_us();
     /* The span every cost this loop reports is a share of is opened at engine_sched_step's first statement, not
        here: the partition `loop_us`/`between_slices_us` is charged from engine_sched_step's own two readings, and
@@ -11040,7 +11068,7 @@ static int engine_sched_slice(void) {
         engine_session_close();
         return ENGINE_STEP_DONE;
     }
-    /* Nothing is re-admitted here. A slice that ended on its CPU quantum handed the thread to a host with nothing
+    /* Nothing is re-admitted here. A slice that ended on its work quantum handed the thread to a host with nothing
        to answer, so clearing host-owed marks at every slice would launder them through the exit a busy slice
        always takes, and a frontier blocked on the host could never be swept to its end, making the stall
        unreachable. The marks live until the host does something that could have answered them, and each such
@@ -11117,27 +11145,13 @@ static int engine_sched_slice(void) {
            thread, the misattribution a slice already carries for every record it routes, paid only by a host that
            asked for pictures. */
         {
-            /* Aging is charged in thread time, not in steps: a step is one unit of work, so a per-step charge would
-             * bill twelve milliseconds of execution the same as advancing one script index. The aging term demotes
-             * "a monopolizer that burns CPU without emitting", so it measures time in the reward's currency
-             * (flow.c's FLOW_AGE_RATE: one emitted finding per second held without emitting). The reading is
-             * unconditional, since a release build needs the aging policy as much as a dev one, and costs nothing,
-             * being carried in `now`.
-             *
-             * It is the quantum's measure (solver/quantum.h): CPU actually consumed where the host has a CPU clock,
-             * natively CLOCK_THREAD_CPUTIME_ID, the clock the slice's timer is armed on. On the extension's wasm
-             * instance every WASI clock is emscripten_get_now(), so the measure is wall time and quantum_measure()
-             * names it; there a descheduled step is charged for time it did not burn and a flow is demoted one
-             * notch early, which reorders nothing out of the frontier. The seam assertion below cannot take that
-             * trade, since it aborts, so it decides on work.
-             *
-             * Work done is the wrong quantity here: a tight compute loop over opaque input forks, queues and emits
-             * nothing, so its share of engine_work_done() stays at zero and aging by work would never demote it.
-             * The interpreter's retired-dispatch count moves in that loop but has one increment site, inside
-             * quickjs.c's DISPATCH, so a C activation that declares no step boundary retires none of it however
-             * long it runs, and a charge in it would leave a C-builtin-heavy flow undemotable. That is the
-             * population solver/quantum.h names as one no raise source reaches: one blind spot in the raise and the
-             * charge, closed by the step-machine conversion rather than by a choice of unit. */
+            /* Aging is charged in engine work, not in steps: a step is one unit of the ladder, so a per-step
+             * charge would bill a slice of execution the same as advancing one script index. The work is the
+             * step's retired opcodes and regexp back-edges plus host work charged by its input, banked on the
+             * instance's counter (engine_work_bank), so the charge is a function of the flow's path and
+             * identical on every host and across a resume. A C activation that declares no step boundary and
+             * charges nothing retires none of it; that population is closed by the step-machine conversion and
+             * by charging host work by its input (core/timing/thread_work.h), never by a clock. */
             int64_t t0 = now;   /* this step's start: the previous iteration's reading, carried */
 #if APICLIENT_DEV
             uint64_t pq0 = 0, pf0 = 0, pa0 = g_preempt_asked;
@@ -11169,16 +11183,18 @@ static int engine_sched_slice(void) {
                at. */
             int64_t t_slice0 = quantum_thread_us();
             g_sched_us += t_slice0 - now;
+            /* The step's opening on the work counter: the switch-in discarded what stood in the interpreter, so
+               everything banked from here to the step's close is this flow's. */
+            const int64_t step_work0 = g_service_work;
             /* The same bracket in the other currency, opened on the clock's line so the two readings are of one
                span: the overrun test below compares `now - t_slice0`, and this counts the suspend points offered
                across that interval. From here rather than the turn's `t0`, because the pick, switch and delta swap
                consult no policy. A load of a static in every build; see g_over_asks. */
             uint64_t pa_slice0 = g_preempt_asked;
-            /* The third reading of the same bracket, needing no clock call: `t_slice0` is the turn's opening
-               reading in the slice's measure, so the gap census opens from the number the overrun test subtracts
-               from. Reset here rather than at `t0`, as `pa_slice0` is: a gap measured from `t0` would include a
-               span in which no offer was possible and read as a missing seam (solver/engine.h's `over_gap_arms`). */
-            g_gap_max_us = 0; g_gap_last_us = t_slice0;
+            /* The gap census opens from the number the overrun test subtracts from, reset here rather than at
+               `t0`, as `pa_slice0` is: a gap measured from the pick would include a span in which no offer was
+               possible and read as a missing seam (solver/engine.h's `over_gap_arms`). */
+            g_gap_max_work = 0; g_gap_last_work = step_work0;
             int r = flow_step(ctx, cur);
             /* The work retired since the step's last poll is the step's own (core/timing/thread_work.h): banked on
                its clock here, while it is still the running flow, so a task's end moment does not depend on
@@ -11186,8 +11202,10 @@ static int engine_sched_slice(void) {
             if (flow_running() == cur) {
                 uint64_t left = JS_FlowTakeRetiredWork();
 
-                if (left != 0) event_loop_work_advance(ctx, left);
+                if (left != 0) engine_work_bank(ctx, left);
             }
+            /* What this step retired, the aging charge and the overrun test's operand. */
+            const int64_t step_work = g_service_work - step_work0;
             /* Where the step's answer goes onto the flow: the one point every arm of flow_step converges on, so a
                new arm cannot forget to be recorded. The arm declares its name; it is kept here, read by the `@COLD`
                histogram and the seamless-stretch aborts below, and decides nothing. flow_step resets to NONE at
@@ -11298,14 +11316,13 @@ static int engine_sched_slice(void) {
             int64_t age_notch0 = flow_silence_notch(cur);
 #endif
             now = quantum_thread_us();
-            /* The other half, from the same two readings the charge uses, never a third clock reading: `t_slice0`
-               was taken just before the step and `now` just after, so this arm is the step alone, and the two arms
-               sum to the charge by construction. */
+            /* The other half, from the same two readings, never a third: `t_slice0` was taken just before the
+               step and `now` just after, so this arm is the step alone and the two arms sum to the turn. */
             g_slice_us += now - t_slice0;
-            /* Whether this turn overran, by the inequality solver/quantum.c's quantum_expired() uses: a step that
-               met the slice never reached a raise point, which a mean of turn costs cannot report. Counted and
+            /* Whether this turn overran, by the inequality engine_quantum_spent asks: a step that retired a slice's
+               work met the budget between two of its asks, which a mean of turn costs cannot report. Counted and
                nothing else; no branch depends on it, since a per-turn overrun test is what a watchdog is built of. */
-            if (now - t_slice0 >= (int64_t)ENGINE_QUANTUM_MS * 1000) {
+            if (step_work >= ENGINE_QUANTUM_WORK) {
                 g_slice_over++;
                 /* Keyed on the arm this turn declared, still in hand: `g_step_unit` is written at flow_step's
                    convergence point above and not overwritten until the next step, so arm, readings and budget are
@@ -11376,37 +11393,36 @@ static int engine_sched_slice(void) {
                             "turn (%llu against %llu) — both are raised from one turn's arm and consultation delta",
                             (unsigned long long)step_unit_over_asks_total(),
                             (unsigned long long)g_over_asks);
-                    /* And the widest interval inside this turn with no point offered, which the sum above is a
-                       proxy for (solver/engine.h's `over_gap_arms`). The tail is closed here: `now` is the turn's
-                       closing reading in `g_gap_last_us`'s measure, so `now - g_gap_last_us` is the stretch from the
-                       last offer to the turn's end, which for a turn that consulted nine times in its first
-                       millisecond and then ran for seconds is the finding; `g_gap_max_us` alone would report
-                       milliseconds for it. Only for a non-seamless turn: a turn that offered no point has no
+                    /* And the widest stretch of work inside this turn with no point offered, which the sum above is
+                       a proxy for (solver/engine.h's `over_gap_arms`). The tail is closed here: `g_service_work` is
+                       the turn's closing reading, so its distance from `g_gap_last_work` is the stretch from the
+                       last offer to the turn's end, which for a turn that consulted nine times early and then ran
+                       on is the finding; `g_gap_max_work` alone would report the early stretches. Only for a non-seamless turn: a turn that offered no point has no
                        interval between offers, its whole duration is already its share of `g_slice_us`, counted by
                        `g_step_unit_over_seamless`, and one row holding a turn's worst gap and its length could not
                        be read for either. */
                     {
-                        int64_t gap = now - g_gap_last_us > g_gap_max_us
-                                      ? now - g_gap_last_us : g_gap_max_us;
+                        int64_t gap = g_service_work - g_gap_last_work > g_gap_max_work
+                                      ? g_service_work - g_gap_last_work : g_gap_max_work;
                         /* The headroom is asked before the narrowing, for the ask row's reason against a
                            different horizon: this row is a maximum, so the `long` it must be overflows only for one
-                           turn whose worst no-offer stretch exceeds about 2147 seconds on a 32-bit host, an engine
-                           hung for half an hour. */
+                           turn whose worst no-offer stretch exceeds two billion units on a 32-bit host, about 40000
+                           slices with no point offered. */
                         DCHECK(gap <= (int64_t)LONG_MAX,
-                               "one turn's widest no-suspend-point stretch does not fit a `long` (about 2147 seconds "
-                               "in one turn) — the two readings belong to different clocks, or the engine held the "
+                               "one turn's widest no-suspend-point stretch does not fit a `long` (two billion units "
+                               "in one turn) — the two readings belong to different counters, or the engine held the "
                                "thread that long without a point");
-                        if (gap > g_over_gap_us) g_over_gap_us = gap;
+                        if (gap > g_over_gap_work) g_over_gap_work = gap;
                         if ((long)gap > g_step_unit_over_gap[g_step_unit])
                             g_step_unit_over_gap[g_step_unit] = (long)gap;
                         /* The identity is a max, not a sum: a sum of maxima is a quantity no turn produced, and the
                            arm row and its scalar are folds of one per-turn number over one population, so the
                            scalar is the arms' maximum. Asserted here, with the arm, the turn's readings and its
                            delta in hand. */
-                        DCHECKF(step_unit_over_gap_max() == g_over_gap_us,
+                        DCHECKF(step_unit_over_gap_max() == g_over_gap_work,
                                 "the per-arm worst-gap row and its scalar disagree (%ld against %lld) — both are "
                                 "folded as maxima from one turn's interval",
-                                step_unit_over_gap_max(), (long long)g_over_gap_us);
+                                step_unit_over_gap_max(), (long long)g_over_gap_work);
                     }
                 }
                 DCHECKF(g_over_seamless <= g_slice_over,
@@ -11416,33 +11432,29 @@ static int engine_sched_slice(void) {
                         "than its population is one of them being raised somewhere else",
                         g_over_seamless, (long long)g_slice_over);
             }
-            /* What this turn of the dispatch loop cost, from the delta the charge bills, never a second reading
-               (see g_step_us). Before the charge, because `flow_age_running` is the WFQ's policy and this is a
-               census, which may not decide whether the policy ran. In every build: without it `steps` has no
-               denominator. The headroom is asked before the add: a sum of non-negative charges (flow_age_running
-               asserts the sign; flow.c: a negative charge promotes a monopolizer) can mislead only by overflowing.
-               At int64_t the horizon is hundreds of thousands of years of slice time, so this cannot fire today;
-               the _Static_assert catches a narrowing at build time and this catches a clock that stopped being
-               what the reading assumes, which together make solver/engine.h's paragraph a checked claim. */
+            /* What this turn cost on the pricing clock (see g_step_us) and what it retired, before the charge,
+               because `flow_age_running` is the WFQ's policy and these are a census, which may not decide whether
+               the policy ran. The headroom is asked before the add: a sum of non-negative readings can mislead
+               only by overflowing, and the _Static_assert catches a narrowing at build time. */
             DCHECK(now - t0 <= INT64_MAX - g_step_us,
-                   "the dispatch loop's microsecond total would overflow — the slice measure is no longer "
-                   "microseconds or `step_us` was narrowed");
+                   "the dispatch loop's pricing-clock total would overflow — the clock is no longer microseconds "
+                   "or `step_us` was narrowed");
             g_step_us += now - t0;
-            flow_age_running(now - t0);
+            g_step_work += step_work;
+            flow_age_running(step_work);
 #if APICLIENT_DEV
             /* The WFQ's monopolizer half, asserted where the charge meets the pick. Its twin, "a UCB optimism bonus
                ∝ 1/(visits+1) so a never-run flow is never starved", is a floor on the weight flow_pick returns;
                flow_pick_walk's bound on the aging half is derived from flow_weight and catches only an edit to the
-               formula. This is observability: whether consuming a whole quantum moves the flow's rank at the
+               formula. This is observability: whether retiring a whole quantum moves the flow's rank at the
                granularity the thread is handed out in, since the next statement of this loop is the pick. Under
                today's unit it is an identity: `flow_silence_notch` divides by the cooperative quantum and the
-               charge adds the same microseconds to both of its summands, so a full quantum moves it at least two
+               charge adds the same units to both of its summands, so a full quantum moves it at least two
                notches. A unit coarser than a quantum would leave the optimism bonus as the only finer term, whose
-               sole mover is completing a unit of work, the precondition for reaching a queued job
+               sole mover is completing a unit of the ladder, the precondition for reaching a queued job
                (`frame == NULL`), so the one flow able to run a promise reaction would be the only one paying. A
-               charge under one quantum is exempt: it is below anything this scheduler decides, and the charges
-               telescope. */
-            DCHECK(now - t0 < (int64_t)ENGINE_QUANTUM_MS * 1000 || flow_silence_notch(cur) > age_notch0,
+               charge under one quantum is exempt: it is below anything this scheduler decides. */
+            DCHECK(step_work < ENGINE_QUANTUM_WORK || flow_silence_notch(cur) > age_notch0,
                    "a flow consumed a whole cooperative quantum and its rank did not move — the aging term is "
                    "quantised coarser than the thread is handed over");
 #endif
@@ -11479,13 +11491,12 @@ static int engine_sched_slice(void) {
                is never observed and the engine spins with the switch count frozen. The preempt fired/requested
                ratio cannot catch it, since a pure C loop reaches no back-edge and requests nothing. Not a bound: it
                truncates nothing, drops no flow and is compiled out of release; it asserts the path has the seam the
-               design requires and names the flow, with an enormous margin (400x the 12 ms quantum) so anything
-               under it is merely slow. */
+               design requires and names the flow, with an enormous margin (400 slices) so anything under it is
+               merely slow. */
 #if APICLIENT_DEV
             {
-                /* The wall clock's other end, taken once for the two reported numbers below: a reading distinct
-                   from the aging charge's (the slice's measure), so a message never prints one under the other's
-                   name. */
+                /* The wall clock's other end, taken once for the two reported numbers below; printed, never a
+                   verdict. */
                 int64_t done = engine_now_ms();
                 int64_t spent = done - wall0_ms;
                 (void)spent;
@@ -11503,22 +11514,16 @@ static int engine_sched_slice(void) {
                  * The shape that reaches it is in the tree: an unknown-length walk over opaque input asks one
                  * outcome-fork question per position, and the driver re-enters the same step after each fork.
                  *
-                 * A seamless stretch that does no observable work (a bare `for(;;);` in C) is invisible to this
-                 * verdict; the CPU verdict below covers it where the host has a thread CPU clock
-                 * (quantum_measure_is_cpu(): solver/quantum.h answers per host, and emscripten's WASI clocks are
-                 * all wall time). Consumed CPU cannot be inflated by load. The two are separate verdicts with
-                 * separate messages, so a reader can tell which one decided. */
+                 * The second verdict is the step's retired work, which no load can inflate either: an interpreted
+                 * stretch cannot reach its margin (the dispatch-counted budget raises within a slice), so a step
+                 * past it with no point offered is host work charged by its input in one span with no rest point.
+                 * A C stretch that retires and charges nothing (a bare `for(;;);`) is invisible to both, and is
+                 * closed by the step-machine conversion rather than by a clock. */
                 long work = engine_work_done() - w0;
-                /* The CPU verdict: the seamless stretch with no observable work, which the work verdict is blind
-                   to. Gated on the host having a CPU clock, since on emscripten this quantity is wall time and load
-                   would falsify it. */
-                if (quantum_measure_is_cpu() && (now - t0) > ENGINE_SEAMLESS_CPU_US && g_preempt_asked == pa0) {
-                    /* Sized for the whole line: the fixed text alone is over 200 bytes before quantum_measure()'s
-                       54, and `unit=` and `script_i=` are the fields that say where. */
-                    DFAILF("%d ms of thread CPU consumed in one step with no suspend point offered (measure: %s; %ld "
-                           "units of work) — this stretch has no suspend/resume seam; unit=%s script_i=%d",
-                           (int)((now - t0) / 1000), quantum_measure(), work, step_unit_name(g_step_unit),
-                           cur ? cur->script_i : -1);
+                if (step_work > ENGINE_SEAMLESS_STEP_WORK && g_preempt_asked == pa0) {
+                    DFAILF("%lld units of retired work in one step with no suspend point offered (%ld forks+flows+"
+                           "jobs) — this stretch has no suspend/resume seam; unit=%s script_i=%d",
+                           (long long)step_work, work, step_unit_name(g_step_unit), cur ? cur->script_i : -1);
                 }
                 if (work > ENGINE_SEAMLESS_WORK && g_preempt_asked == pa0) {
                     /* The two excerpts are the only bounded things here, because their sources (a payload, a script
@@ -11567,7 +11572,7 @@ static int engine_sched_slice(void) {
                     excerpt(pl_txt, sizeof pl_txt, pl, pl ? strlen(pl) : 0);
                     excerpt(body_txt, sizeof body_txt, bodytxt, bodyn);
                     DFAILF("%ld units of work (forks+flows+jobs) with no suspend point offered (wall gap %d ms, step "
-                           "%d ms; slice measure %s; points asked=%llu, preempts wanted=%llu fired=%llu; slowest Web "
+                           "%d ms; pricing clock %s; points asked=%llu, preempts wanted=%llu fired=%llu; slowest Web "
                            "API member step %s %dms of %dms over %ld steps; wrapper map %ld/%ld; live objects %lld, "
                            "heap %lld KiB) — this stretch has no suspend/resume seam; unit=%s script_i=%d flow=%s "
                            "payload=%s body=%s",
@@ -11645,11 +11650,17 @@ static int engine_sched_slice(void) {
                unit of real progress. */
         }
         /* Thread-sharing: the slice's budget is gone, so hand the thread back and keep the frontier. It is the
-         * question preempt_hook asks, one budget and one edge at the two levels it acts on (there the running
-         * flow parks, here the step returns), so a flow parked on the quantum and a step ended on it are one
-         * event. The quantum is the only yield: Level 1 ranks documents in the trusted zone by their novel value
-         * per CPU-second, and no flow weight of this frontier is compared with another document's. */
-        if (quantum_expired()) {
+         * question preempt_hook asks, at the two levels it acts on (there the running flow parks, here the step
+         * returns), so a flow parked on the quantum and a step ended on it are one event; the step's close banked
+         * the running flow's standing count, so the banked work is the whole of it here. Level 1 ranks documents
+         * in the trusted zone by their novel value per unit of work served, and no flow weight of this frontier
+         * is compared with another document's.
+         *   Named residual. Not covered: the host yield (quantum_host_wants_thread, emscripten only) ends the
+         * slice as the work budget does, so Level 1 re-ranks and Level 2 charges at a point elapsed time chose.
+         * Next diff builds: a fourth step code the renderer answers by re-entering the same engine with no pick,
+         * charge or service round, so the slice resumes where the host took the thread. Absence shows as: two
+         * runs of one fixture on the WASM host giving different pick sequences while native runs agree. */
+        if (engine_slice_work() >= ENGINE_QUANTUM_WORK || quantum_host_wants_thread()) {
             /* The other closing edge of a turn, discharged without buying a return (@PERWORLD): a yield hands the
                host this member standing, with its deltas applied and a step of real work behind it, which is the
                turn a picture is owed of, so a mark still up is paid by the return already happening. This is what
@@ -11810,15 +11821,14 @@ void engine_sched_end(void) {
 }
 
 /* One quantum. Returns ENGINE_STEP_DONE when the frontier is empty (the session is closed and its hooks are
- * uninstalled) and ENGINE_STEP_YIELD when the slice expired with the frontier intact. The slice is a budget of CPU
- * actually consumed (solver/quantum.h says what each host can measure), not a cap: nothing is dropped, starved,
- * reordered or forgotten across it, and the next call resumes the same top flow on the same frontier.
+ * uninstalled) and ENGINE_STEP_YIELD when the slice's work was spent with the frontier intact. The slice is a
+ * budget of engine work (ENGINE_QUANTUM_WORK), not a cap: nothing is dropped, starved, reordered or forgotten
+ * across it, and the next call resumes the same top flow on the same frontier.
  *
- * The slice's bracket is a wrapper because the body has many exits. Opening the budget arms an asynchronous edge
- * (solver/quantum.h) and closing it disarms the edge, so a return that forgot one would leave a CPU timer running
- * over the host's time between two steps: the signal would land while the host pumps its port, raise a request
- * nothing answers, and expire the next slice at its first opcode. A `quantum_end()` before every return is the
- * shape where one is eventually missing; one bracket around one call cannot be, which is also why the slice-span
+ * The slice's bracket is a wrapper because the body has many exits: the slice open state (solver/quantum.h) is
+ * asserted by every entry that may run only inside or only outside one, so a return that forgot to close it would
+ * fail the next slice's open. A `quantum_end()` before every return is the shape where one is eventually
+ * missing; one bracket around one call cannot be, which is also why the slice-span
  * accumulators are here and not at those returns. */
 int engine_sched_step(void) {
     int r;
@@ -11854,6 +11864,11 @@ int engine_sched_step(void) {
        over. */
     g_slices++;
     quantum_begin();
+    /* The slice's budget is counted from here: its work on the instance's counter, and the dispatch countdown
+       that decides where the budget is asked, both of which a session resumed from the cold tier also starts
+       from. */
+    g_slice_work0 = g_service_work;
+    JS_FlowBudgetArm();
     /* The flow stamp, the DOM capture and the capture route belong to the slice, not the session:
      * engine_sched_slice returns YIELD without switching the running flow out, so "the session is live" and "a
      * flow is running" differ by the host's own time. The three marks are one statement in three registers: the
@@ -11898,8 +11913,8 @@ int engine_sched_step(void) {
     g_slice_delta = cow_current();
     cow_set_current(NULL);
     quantum_end();
-    /* What this slice cost the engine's own thread, closed after `quantum_end()` because disarming the edge is the
-       slice's work, at the boundary the marks are restored at. One accumulate past every return of the body, which
+    /* What this slice cost the engine's own thread on the pricing clock, closed after `quantum_end()`, at the
+       boundary the marks are restored at. One accumulate past every return of the body, which
        is what the wrapper is for. */
     {
         int64_t t_out = quantum_thread_us();

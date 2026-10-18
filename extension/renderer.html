@@ -467,13 +467,11 @@
         return {};   /* emscripten's async form: the exports arrive through `ok` */
       },
     });
-    /* THE COOPERATIVE QUANTUM HAS NO ASYNCHRONOUS EDGE IN THIS REALM, AND THIS IS THE ONLY PLACE THAT CAN SEE
-       WHY. engine/host/solver/quantum.h's emscripten branch is built on that absence: the yield request is
-       polled at EVERY dispatch, so the suspend point is universal — but the only things that RAISE one are the
-       flow's own bytecode (a back-edge, a call, a fork), so the slice is evaluated when the page next offers
-       one of those and not when the budget actually runs out. What would end that is a WATCHDOG THREAD storing
-       the request byte in the engine's own linear memory from outside its instruction stream.
-       WHAT BLOCKS IT IS ONE THING AND IT IS NOT THE FLAG, which is the correction this line exists to carry —
+    /* WHETHER THIS REALM CAN BE HANDED SHARED MEMORY, recorded by the act below (`sharedMemoryRecord`). The
+       cooperative slice needs none: it is engine work counted at dispatch (solver/engine.c's
+       engine_quantum_spent), which the page's code shape cannot evade, so no thread outside the instruction
+       stream is wanted for it.
+       WHAT BLOCKS THE TRANSPORT IS ONE THING AND IT IS NOT THE FLAG, which is the correction this line exists to carry —
        quantum.h used to price the transport as `-pthread` plus cross-origin isolation ON THE OFFSCREEN
        DOCUMENT, and the engine has not run there since every instance became a renderer. Measured here, on
        real Chrome: this realm CAN construct a shared WebAssembly.Memory and CAN create a Worker, and the
@@ -713,61 +711,11 @@
            "when forStorage is " +
            "true, and a structuredClone is neither, so this file's reading of the gate is wrong about this " +
            "browser and every classification above it is drawn on the wrong map");
-    /* NAMED RESIDUAL — WHAT THE ABSENT EDGE LEAVES IS TWO POPULATIONS AND THE SHARED-MEMORY DCHECK READS AS ONE.
-       `sharedMemoryRecord`'s act, and the DCHECK on `SHM.act`, are right that this realm cannot have a watchdog
-       thread, and they are written as though that thread were the whole of the gap. It is not, and the split is
-       decided by ONE question asked of each case: does the flow perform a DISPATCH, which is where the request
-       byte is read.
-       (a) IS RETIRED AND IS KEPT HERE BECAUSE THE CLAUSE THAT ASKED FOR IT WAS ONE COMMIT FROM BEING EXECUTED.
-       It read: a stretch of bytecode with no loop back-edge and no call raises nothing, so the slice is not
-       evaluated until the next one — a population BOUNDED by one compiled basic block, since the interpreter
-       raises at every back-edge and every call opcode. `133f190` built the raise it asked for, and this file
-       went on asking. VERIFIED AGAINST THAT COMMIT'S OWN DIFF rather than relayed: `flow_budget_poll` sits in
-       the interpreter's dispatch behind a countdown re-armed from `JSFlowControlHooks.budget_period`, the
-       installation in solver/engine.c is under NO host `#ifdef`, and the raise is a CONJUNCTION with
-       `quantum_expired()` — so the period moves only how often the CLOCK is consulted, which is the one thing
-       the clause said it must not be a cap on. It reaches THIS realm: that commit's own DCHECK names the host
-       where asking the budget "is a call into JS", which is this one. What the absent transport would have
-       bought for (a) is therefore already bought, by a diff that needed no shared memory.
-       NOT COVERED (b): a C activation that declares no step boundary performs NO dispatch at all, so it answers no poll
-       however the request was raised. THE HOST THAT HAS THE ASYNCHRONOUS EDGE HAS THIS HOLE TOO, IDENTICALLY, and that is
-       the part that DCHECK cannot say: a per-thread CPU signal SETS the request byte and the byte is READ at a
-       dispatch, so a signal that fires inside a long C activation is answered when that activation returns and not
-       before. The transport this frame is denied would have closed (a), which is now closed anyway, and would
-       NOT close (b) — so (b) is the WHOLE of what this realm's missing edge still costs.
-       WHAT THE NEXT DIFF BUILDS: for (b), the continuation-holding conversion CLAUDE.md §C-stack already prescribes — the
-       builtin declares its steps and offers a point per step — which is host-independent and is therefore the diff that
-       pays on BOTH hosts, owed whether or not this realm ever becomes isolated. For (a) there is no next diff: it is
-       built, and the clause that used to stand here is quoted above rather than deleted, because a reader who
-       re-derives it from this realm's missing edge will ask for it a second time.
-       HOW ITS ABSENCE WOULD SHOW: for (b), a step call whose wall duration exceeds the engine's own slice by more than a
-       margin, observed HERE, around the call this frame makes — this document is the caller, so it is the one place that
-       can time a whole activation without asking the engine anything. That observation is now UNCONFOUNDED, which is
-       what retiring (a) buys the reader: an overrun measured here can no longer be a basic block nothing asked.
-       For (a) it showed as very nearly nothing, and that was the observation rather than the lack of one: a realm
-       in which (a) were the binding half would show step calls overrunning on documents that enter no long C
-       activation at all.
-       AND THE TRANSPORT WAS PRICED FOR TWO THINGS, NOT ONE — EVERYTHING ABOVE RETIRES THE RAISE EDGE AND IS SILENT
-       ABOUT THE CLOCK, WHICH IS THE HALF A READER REACHES FOR NEXT. A non-isolated realm's `performance.now()` is
-       coarsened to 100us and an isolated one's to 5us, so `quantum_measure` answering WALL rather than CPU reads as a
-       second, independent reason to want isolation, standing untouched by the argument that closed (a). It is not a
-       weaker benefit; it is NONE, and the reason is arithmetic over the ORDERING's own unit rather than over the
-       clock's. DERIVED AS COMMANDS, because a figure here would rot the day either constant moves:
-       `git grep -n '#define FLOW_SERVICE_US' engine/host/solver/flow.c` gives the aging notch as
-       `ENGINE_QUANTUM_MS * 1000`, `git grep -n '#define ENGINE_QUANTUM_MS' engine/host/solver/engine.h` gives that
-       quantum, and flow.c states in its own words that a burn below `FLOW_SERVICE_US` STILL FLOORS TO A NOTCH OF
-       ZERO. So the smallest quantity the WFQ can express is one WHOLE quantum, and both clock resolutions are orders
-       of magnitude BENEATH a unit that cannot express either of them. Sharpening the clock cannot move one ordering
-       decision, because there is no decision at that scale to move.
-       THE DEFECT SHAPE, WHICH OUTLIVES THIS REALM AND THIS FLAG: THE CAPABILITY WAS PRICED BY ITS ABSENCE RATHER THAN
-       BY ITS CONSUMER. `no CPU clock` is a true statement about this host and reads as a defect, and nobody asked
-       WHAT READS THE CLOCK — which is one grep and answers that the reader floors two orders above the difference.
-       A capability is priced by opening its consumer, never by naming what the platform withholds.
-       AND A CAPABILITY WITH NO CONSUMER IS NOT INERT, WHICH IS WHY THIS IS RECORDED AT THE SITE THAT HOLDS THE ACT
-       RATHER THAN ONLY IN A REPORT: shared memory plus `Atomics.wait` is the obvious way to make a host call
-       SYNCHRONOUS -- write the request, notify, block for the reply -- and a blocked thread is a flow that cannot
-       yield, which is the drive-to-completion CLAUDE.md's scheduler section bans outright. Parking at a fetch is the
-       mechanism here and not a limitation, so the one use this realm's isolation would unlock is the one use it must
+    /* What this realm's isolation buys the scheduler is nothing: the slice is engine work counted at dispatch
+       (solver/engine.c's engine_quantum_spent), so no thread outside the instruction stream is wanted, and a C
+       activation that declares no step boundary dispatches nothing on either host until the step-machine
+       conversion reaches it. Shared memory plus `Atomics.wait` would make a host call synchronous, and a blocked
+       thread is a flow that cannot yield, so the one use this isolation would unlock is the one use it must
        never be put to. */
   }
 

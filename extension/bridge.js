@@ -217,38 +217,25 @@ function assertResultDocument(r) {
            "the engine's WFQ census carries a non-finite `" + k + "` — every row of it is a count, a service " +
            "notch or a weight, and a NaN reaching a reader makes every comparison against it false, which is " +
            "the same silent failure §engineRecordFacts asserts one level up for the Level-1 weight");
-  /* `_quantum` (solver/quantum.h) says what the `_wfq` order was billed in, so it is asserted here between the
-     order and the censuses it qualifies. It is not a census: `measure` is a string and `isCpu` a boolean, so
-     the generic finite-number pass below would reject it or force a 0/1 encoding; hence three named asserts.
-     On a host with no CPU clock (the engine's realm) the cooperative slice and solver/engine.c's
-     `flow_age_running` charge are billed in wall time, so an OS descheduling moves one flow's rank and two runs
-     of one build over one page can take different frontier orders; bounding the slice in steps would be a cap,
-     so the variance stays and the document names it. The cause is the build, not isolation:
-     engine/build.mjs links no `-pthread`, so linear memory is an ordinary ArrayBuffer with no second thread,
-     even though the engine's frame is cross-origin isolated (renderer.html verifies that by attempting it).
-     `isCpu` says whether the caveat applies, `measure` what was billed instead, `sliceMs` how coarse the
-     slicing was. `quantum_json` reads only compile-time constants, so none is ever legitimately absent. */
+  /* `_quantum` (solver/quantum.h) states the slice the `_wfq` order was served in and what the step census's
+     microsecond rows are priced on. The slice and every charge are engine work, the same on every host; the
+     pricing clock is CPU natively and wall time in this realm, which moves no rank. `price` is a string and
+     `priceIsCpu` a boolean, so the generic finite-number pass below would reject them; hence named asserts.
+     `quantum_json` reads only compile-time constants, so none is ever legitimately absent. */
   DCHECK(r._quantum && typeof r._quantum === "object" && !Array.isArray(r._quantum),
          "the engine's result document carries no _quantum — solver/quantum.c's quantum_json composes it into " +
-         "every document result.c builds, partials included, and it is what says whether the `_wfq` ordering " +
-         "above may be compared with another run's at all. Its absence has the same two causes as a missing " +
-         "counter and in the same order: check first whether the loaded wasm predates this reader " +
-         "(extension/lib/qjs/qjs.mjs.build.json's `head`), then whether result_json's composition changed " +
-         "under this seam. NEVER SOFTEN IT INTO A DEFAULT — the default a reader would reach for is `isCpu` " +
-         "true, which is the one answer that is false on the host this extension actually runs");
-  DCHECK(typeof r._quantum.measure === "string" && r._quantum.measure !== "",
-         "the engine's _quantum carries no `measure` string — it is what the scheduler's slice and the WFQ's " +
-         "aging charge are billed in, stated by the component that owns the fact so that no message anywhere " +
-         "restates it and goes stale. An empty one is that composer emitting a field it cannot answer");
-  DCHECK(typeof r._quantum.isCpu === "boolean",
-         "the engine's _quantum carries no boolean `isCpu` — it is a yes/no about the HOST and the producer " +
-         "always knows it, so an absent one is a broken contract and never a false. It is deliberately not a " +
-         "0/1: a number here would pass the generic census check below, and the whole point of this field is " +
-         "that it is not a census reading and must be read by name");
-  DCHECK(typeof r._quantum.sliceMs === "number" && Number.isFinite(r._quantum.sliceMs) && r._quantum.sliceMs > 0,
-         "the engine's _quantum carries no positive `sliceMs` — it is solver/engine.h's ENGINE_QUANTUM_MS, a " +
-         "compile-time constant of the artifact, so a zero or a NaN is the composer having lost it rather " +
-         "than a host that shares its thread infinitely finely");
+         "every document result.c builds, partials included. Check first whether the loaded wasm predates this " +
+         "reader (extension/lib/qjs/qjs.mjs.build.json's `head`), then whether result_json's composition changed");
+  DCHECK(Number.isSafeInteger(r._quantum.sliceWork) && r._quantum.sliceWork > 0,
+         "the engine's _quantum carries no positive integer `sliceWork` — it is solver/engine.h's " +
+         "ENGINE_QUANTUM_WORK, a compile-time constant of the artifact");
+  DCHECK(Number.isSafeInteger(r._quantum.hostYieldMs) && r._quantum.hostYieldMs >= 0,
+         "the engine's _quantum carries no `hostYieldMs` — solver/quantum.c states it per host, 0 where no host " +
+         "event loop waits on a step");
+  DCHECK(typeof r._quantum.price === "string" && r._quantum.price !== "" &&
+         typeof r._quantum.priceIsCpu === "boolean",
+         "the engine's _quantum carries no `price` string or boolean `priceIsCpu` — they say what the census's " +
+         "microsecond rows are read on, and the producer always knows it");
   /* The subsystem censuses: solver/result.h's `_cold`, `_heap`, `_swap`, solver/decide.h's `_forkAt` and
      solver/absent.h's `_absent`. `_absent` counts standard-owned globals the page feature-detected and this
      engine answered with `undefined` (solver/absent.c); it separates a page with nothing to learn from one whose
@@ -979,12 +966,12 @@ function clusterKeyOf(msg) {
    v5 adds `bodies` (lib/body-store.js): an entry names its document by digest (`doc`) and the bytes are stored
    once, counted by the entries naming them. Entries an older build wrote inline are converted once, after the
    open, by frontierBodiesReady, since a digest cannot be computed inside the upgrade transaction.
-   v6 replaces an entry's `emit`/`visits` with its Level-1 account, `paid` and `serviceUs` (see level1Weight).
-   A v5 entry's counts are in another currency and its CPU of service was never recorded, so the account it
-   carries forward is the unserved one: its recipes are kept, and the order hands it a first quantum. */
+   v6 replaces an entry's `emit`/`visits` with its Level-1 account `paid` (see level1Weight), and v7 its
+   service with `serviceWork`, engine work rather than thread time; an older entry's service is in another
+   currency, so it carries its recipes (and from v6 its `paid`) forward and restarts unserved. */
 function idbOpen() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open("apiclient-frontier", 6);
+    const r = indexedDB.open("apiclient-frontier", 7);
     r.onupgradeneeded = (ev) => {
       const db = r.result;
       if (ev.oldVersion < 2) {   // v1's entry grammar cannot state its document's response; it is not resumable
@@ -994,14 +981,15 @@ function idbOpen() {
       if (ev.oldVersion < 3 && !db.objectStoreNames.contains("prefs")) db.createObjectStore("prefs");
       if (ev.oldVersion < 4 && !db.objectStoreNames.contains("novelty")) db.createObjectStore("novelty");
       if (ev.oldVersion < 5 && !db.objectStoreNames.contains("bodies")) db.createObjectStore("bodies");
-      if (ev.oldVersion >= 2 && ev.oldVersion < 6) {
+      if (ev.oldVersion >= 2 && ev.oldVersion < 7) {
         const c = r.transaction.objectStore("frontier").openCursor();
         c.onsuccess = () => {
           const cur = c.result;
           if (!cur) return;
           const e = cur.value;
-          delete e.emit; delete e.visits;
-          e.paid = LEVEL1_UNSERVED.paid; e.serviceUs = LEVEL1_UNSERVED.serviceUs;
+          if (ev.oldVersion < 6) { delete e.emit; delete e.visits; e.paid = LEVEL1_UNSERVED.paid; }
+          delete e.serviceUs;
+          e.serviceWork = LEVEL1_UNSERVED.serviceWork;
           cur.update(e);
           cur.continue();
         };
@@ -1161,7 +1149,7 @@ function egressPolicyPersist() {
   return frontierPrefPut("exploreOrigins", self.safeFetchEgressTable());
 }
 /* A frontier entry: { key: address|identity|bundle, sourceUrl, topLevelUrl, origin, responseHeaders, html, code,
-   recipes, paid, serviceUs, credentialed, provenance }, plus `shed`/`stranded` for a shed entry. Rehydration
+   recipes, paid, serviceWork, credentialed, provenance }, plus `shed`/`stranded` for a shed entry. Rehydration
    rebuilds the document from (html, code) and resumes the recipes, so a parked flow on any site can advance
    later even when that page is not open. */
 /* The document half of a cold-tier entry, one speller for the store's writer and its reader. Recipes replay
@@ -1439,7 +1427,7 @@ async function frontierResidency() {
       /* `provenance` goes through frontierProvenance, so an entry predating the field leaves stating the word
          its population supports. */
       const shed = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
-                     responseHeaders: e.responseHeaders, recipes: e.recipes, paid: e.paid, serviceUs: e.serviceUs,
+                     responseHeaders: e.responseHeaders, recipes: e.recipes, paid: e.paid, serviceWork: e.serviceWork,
                      credentialed: e.credentialed, provenance: frontierProvenance(e), arrival: frontierArrival(e),
                      sandbox: frontierSandbox(e), addressSpace: frontierAddressSpace(e), shed: true };
       frontierRecord(shed, "was shed to the configured share");
@@ -1716,44 +1704,43 @@ async function frontierAll() {
 /* Level 1: one order over documents, hot, parked and waiting alike, by UCB1 (Auer, Cesa-Bianchi and Fischer,
    "Finite-time Analysis of the Multiarmed Bandit Problem", 2002) over a two-level tree, site then document, in
    one currency (level1Tree, level1Key). An account is `paid`, the novel value its instances' flows were paid
-   (main.c's qjs_level1_account), and `serviceUs`, the thread measure of the slices it was given; a site's
-   account is the sum of its documents'. A node's weight against its parent's service N, with C and N in
-   CPU-seconds, is
+   (main.c's qjs_level1_account), and `serviceWork`, the engine work its slices retired; a site's account is the
+   sum of its documents'. A node's weight against its parent's service N, with C and N in LEVEL1_POINT_WORK, is
      paid / C + LEVEL1_C * sqrt(ln(1 + N) / C),   and +Infinity at C = 0,
    with N the service of every site for a site and the site's own service for a document. So a never-served site
-   takes its first quantum before any site deepens, and a site's stream of new documents spends only its share. The unit is the CPU-second
-   the rate is priced in. ln(1 + N) stands for UCB1's ln n because N is measured service rather than a count of
-   pulls, below one second early in a session where ln N is negative; the two agree as N grows. LEVEL1_C is
-   UCB1's sqrt(2): a document's bonus then falls below a leader's rate lead r after about 2 ln(1 + N) / r^2
-   CPU-seconds, so a barren new document costs seconds against a leader making a finding per CPU-second, and a
-   leader whose rate decays loses the thread to the bonus. A slice the host's clock measures as 0 leaves the
-   document unserved; on emscripten that clock is coarse wall time inside the step (solver/quantum.h), and the
-   expected charge over many slices is still their duration. */
+   takes its first quantum before any site deepens, and a site's stream of new documents spends only its share.
+   ln(1 + N) stands for UCB1's ln n because N is measured service rather than a count of pulls, below one unit
+   early in a session where ln N is negative; the two agree as N grows. LEVEL1_C is UCB1's sqrt(2): a document's
+   bonus then falls below a leader's rate lead r after about 2 ln(1 + N) / r^2 units of service. Work is a
+   function of each flow's path, so the order is the same on every host and across a resume. */
 const LEVEL1_C = Math.SQRT2;
-const LEVEL1_UNSERVED = Object.freeze({ paid: 0, serviceUs: 0 });
+/* The work one point of novel value is priced against: about a second of the native dev build at
+   core/timing/thread_work.h's 0.222 us per unit, the price solver/flow.c's FLOW_SILENCE_WORK sets for Level 2. */
+const LEVEL1_POINT_WORK = 4500000;
+const LEVEL1_UNSERVED = Object.freeze({ paid: 0, serviceWork: 0 });
 function level1AccountCheck(a, what) {
   DCHECK(a && typeof a.paid === "number" && Number.isFinite(a.paid) && a.paid >= 0,
          what + " carries no Level-1 value (`" + String(a && a.paid) + "`) — `paid` is a sum of positive " +
          "credits, and without it the order ranks this document by its optimism alone");
-  DCHECK(Number.isSafeInteger(a.serviceUs) && a.serviceUs >= 0,
-         what + " carries no Level-1 service (`" + String(a.serviceUs) + "`) — `serviceUs` is the divisor of " +
+  DCHECK(Number.isSafeInteger(a.serviceWork) && a.serviceWork >= 0,
+         what + " carries no Level-1 service (`" + String(a.serviceWork) + "`) — `serviceWork` is the divisor of " +
          "the rate and of the bonus, and an absent one ranks a document served for an hour as a new one");
 }
-function level1Weight(a, totalUs) {
+function level1Weight(a, totalWork) {
   level1AccountCheck(a, "a ranked Level-1 work item");
-  DCHECK(Number.isSafeInteger(totalUs) && totalUs >= a.serviceUs,
-         "the Level-1 parent's service (" + totalUs + " us) is below one child's own service (" + a.serviceUs +
-         " us) — a parent's account is the sum of its children's, so a member outside it was ranked");
-  if (a.serviceUs === 0) return Infinity;
-  const c = a.serviceUs / 1e6;
-  const w = a.paid / c + LEVEL1_C * Math.sqrt(Math.log1p(totalUs / 1e6) / c);
+  DCHECK(Number.isSafeInteger(totalWork) && totalWork >= a.serviceWork,
+         "the Level-1 parent's service (" + totalWork + " units) is below one child's own service (" + a.serviceWork +
+         " units) — a parent's account is the sum of its children's, so a member outside it was ranked");
+  if (a.serviceWork === 0) return Infinity;
+  const c = a.serviceWork / LEVEL1_POINT_WORK;
+  const w = a.paid / c + LEVEL1_C * Math.sqrt(Math.log1p(totalWork / LEVEL1_POINT_WORK) / c);
   DCHECK(Number.isFinite(w), "a served Level-1 work item weighed " + w + " — both terms are finite over a " +
                              "positive service, so the arithmetic above was given something else");
   return w;
 }
 /* The rate term alone, which the Level-1 census reports beside the weight; null for a document never served. */
 function level1Rate(a) {
-  return a.serviceUs === 0 ? null : a.paid / (a.serviceUs / 1e6);
+  return a.serviceWork === 0 ? null : a.paid / (a.serviceWork / LEVEL1_POINT_WORK);
 }
 /* The entry points into Level 1's population, one per kind of member, each of which awaits level1AskSites over
    the member's address before the member can be ranked; level1SiteOf names the one whose member was not asked.
@@ -1779,20 +1766,20 @@ function level1SiteOf(url, door) {
 }
 /* The tree's accounts over the population this zone knows: each cold row's stored account plus each instance's
    own counters since it booted (a resumed instance's stored share is its row, so nothing is counted twice),
-   summed per site. `totalUs` is the root's service, the sum over sites. An instance that has not reported has
+   summed per site. `totalWork` is the root's service, the sum over sites. An instance that has not reported has
    served nothing. */
 function level1Tree(resident, idx) {
   const sites = new Map();
-  const add = (url, paid, us, door) => {
+  const add = (url, paid, work, door) => {
     const k = level1SiteOf(url, door), a = sites.get(k);
-    if (a) { a.paid += paid; a.serviceUs += us; } else sites.set(k, { paid: paid, serviceUs: us });
+    if (a) { a.paid += paid; a.serviceWork += work; } else sites.set(k, { paid: paid, serviceWork: work });
   };
-  for (const row of idx.values()) add(row.sourceUrl, row.paid, row.serviceUs, LEVEL1_DOOR.cold);
+  for (const row of idx.values()) add(row.sourceUrl, row.paid, row.serviceWork, LEVEL1_DOOR.cold);
   for (const e of resident)
-    if (e.level1 !== undefined) add(e.msg.sourceUrl, e.level1.paid, e.level1.serviceUs, LEVEL1_DOOR.instance);
-  let totalUs = 0;
-  for (const a of sites.values()) totalUs += a.serviceUs;
-  return { sites: sites, totalUs: totalUs };
+    if (e.level1 !== undefined) add(e.msg.sourceUrl, e.level1.paid, e.level1.serviceWork, LEVEL1_DOOR.instance);
+  let totalWork = 0;
+  for (const a of sites.values()) totalWork += a.serviceWork;
+  return { sites: sites, totalWork: totalWork };
 }
 /* A document's place in the tree: its site, the site's weight among sites, and its own weight within the site.
    A document no member of which can run ranks last at both levels. */
@@ -1800,7 +1787,7 @@ function level1Key(tree, url, acct, runnable, door) {
   const site = level1SiteOf(url, door);
   if (!runnable) return { site: site, siteW: -Infinity, docW: -Infinity };
   const sa = tree.sites.get(site) || LEVEL1_UNSERVED;
-  return { site: site, siteW: level1Weight(sa, tree.totalUs), docW: level1Weight(acct, sa.serviceUs) };
+  return { site: site, siteW: level1Weight(sa, tree.totalWork), docW: level1Weight(acct, sa.serviceWork) };
 }
 /* Whether `a` is strictly ahead of `b`: the document weight decides within one site, the site weight across. */
 function level1Ahead(a, b) {
@@ -1810,7 +1797,7 @@ function level1Ahead(a, b) {
    frontier on every scheduler round, and `getAll` would deserialize every parked document to answer them.
    This zone is the store's only writer and frontierPut updates the view on its way through, so a row and an
    entry cannot disagree; it is built once per zone lifetime from the store. */
-const _frontierIndex = new Map();   // key -> frontierRow(entry): { key, sourceUrl, paid, serviceUs, shed, stranded, bytes, rederivable }
+const _frontierIndex = new Map();   // key -> frontierRow(entry): { key, sourceUrl, paid, serviceWork, shed, stranded, bytes, rederivable }
 let _frontierIndexBuilt = false;
 function frontierRow(e) {
   DCHECK(typeof e.key === "string" && e.key !== "",
@@ -1830,7 +1817,7 @@ function frontierRow(e) {
      candidate (only a visit resumes it). The two residency numbers are computed here too, so residency never
      opens an entry to learn its size. */
   return { key: e.key, sourceUrl: e.sourceUrl, origin: e.origin, credentialed: e.credentialed,
-           paid: e.paid, serviceUs: e.serviceUs,
+           paid: e.paid, serviceWork: e.serviceWork,
            shed: e.shed === true, stranded: e.stranded === true,
            bytes: frontierDocBytes(e), rederivable: frontierRederivable(e),
            doc: e.shed === true ? null : e.doc, docBytes: e.shed === true ? 0 : e.docBytes };
@@ -1915,7 +1902,7 @@ async function _frontierRederive(e, held) {
   }
   const strandedEntry = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
                           responseHeaders: e.responseHeaders, recipes: e.recipes, paid: e.paid,
-                          serviceUs: e.serviceUs, credentialed: e.credentialed, provenance: frontierProvenance(e),
+                          serviceWork: e.serviceWork, credentialed: e.credentialed, provenance: frontierProvenance(e),
                           arrival: frontierArrival(e), sandbox: frontierSandbox(e),
                           addressSpace: frontierAddressSpace(e), shed: true, stranded: true };
   frontierRecord(strandedEntry, "was stranded");
@@ -1925,10 +1912,10 @@ async function _frontierRederive(e, held) {
   return null;
 }
 /* ────────────────────────────────────────────────────────────────────────────────────────────────────
-   Level 1 of the one attention: interleave the live document engines by novel value per CPU-second, in
-   slices, so no document or deep path monopolizes CPU. Each agent cluster is one wasm instance (SECURITY.md:
+   Level 1 of the one attention: interleave the live document engines by novel value per unit of work served,
+   in slices, so no document or deep path monopolizes the thread. Each agent cluster is one wasm instance (SECURITY.md:
    one per (browsing-context group, origin)). The engine states its account (qjs_level1_account) and yields hot
-   at the CPU quantum (qjs_step -> 2); the host ranks all live engines and every waiting and parked document by
+   at the work quantum (qjs_step -> 2); the host ranks all live engines and every waiting and parked document by
    one order (level1Key, site then document), advances the winner one slice and re-ranks. The ranking does not ask: the
    account and the working set are recorded by engineRecordFacts at the end of every round, since an instance
    behind the frame boundary answers only by message.
@@ -2050,7 +2037,7 @@ const CAND_SPREAD = [
   { row: "candRateMin",
     fold: (c, t) => { if (!("candRateMin" in c) || t.rate < c.candRateMin) c.candRateMin = t.rate; } },
   { row: "candSvcMax",
-    fold: (c, t) => { if (!("candSvcMax" in c) || t.serviceUs > c.candSvcMax) c.candSvcMax = t.serviceUs; } },
+    fold: (c, t) => { if (!("candSvcMax" in c) || t.serviceWork > c.candSvcMax) c.candSvcMax = t.serviceWork; } },
 ];
 /* The zeroed reading: the one statement of which rows a candidate walk produces. Counts start at 0 because a
    zero count is a reading; spread rows are absent because an extremum over nothing is not a number, and
@@ -2076,7 +2063,7 @@ function _candRanked(cen, kind, url, row, tree) {
   cen.cands++;
   if (key.siteW === Infinity) cen.candSiteUnserved++;
   if (key.docW === Infinity) { cen.candUnserved++; return key; }
-  const t = { w: key.siteW, rate: level1Rate(row), serviceUs: row.serviceUs };
+  const t = { w: key.siteW, rate: level1Rate(row), serviceWork: row.serviceWork };
   if (!(d.wMax in cen) || t.w > cen[d.wMax]) cen[d.wMax] = t.w;
   for (const s of CAND_SPREAD) {
     s.fold(cen, t);
@@ -2177,7 +2164,7 @@ function _bestCandidate(pop) {
   for (const e of resident) if (e.msg && e.msg.sourceUrl) live.add(e.msg.sourceUrl);
   /* What the store already knows about the waiting addresses, which is the rank a waiting document is
      entitled to. The key's bundle half is the engine's, so the host cannot know which residue a visit resumes,
-     but every row carries its `sourceUrl`: "this address has been served C CPU-seconds for F of novel value" is
+     but every row carries its `sourceUrl`: "this address has been served C units of work for F of novel value" is
      a fact about the address being admitted, so a document cycle (A names B, B names A) sinks by its rate
      instead of re-entering as never served. Nothing refuses a second fetch; the order only prefers other work
      first. One pass over the index, only for the addresses in question. */
@@ -2191,8 +2178,8 @@ function _bestCandidate(pop) {
     if (!waitingAddrs.has(row.sourceUrl)) continue;
     const a = byAddress.get(row.sourceUrl);
     /* Summed across the bundles served at one address: one account for the address, value over service. */
-    if (a) { a.paid += row.paid; a.serviceUs += row.serviceUs; }
-    else byAddress.set(row.sourceUrl, { paid: row.paid, serviceUs: row.serviceUs });
+    if (a) { a.paid += row.paid; a.serviceWork += row.serviceWork; }
+    else byAddress.set(row.sourceUrl, { paid: row.paid, serviceWork: row.serviceWork });
   }
   let best = null;
   const tree = level1Tree(resident, idx);
@@ -3260,7 +3247,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          (prior && documentIdentityOf(prior.sourceUrl, prior.origin, prior.credentialed)) + " vs " +
          documentIdentityOf(msg.sourceUrl, msg.origin, msg.credentialed) + ") — the key names the identity, " +
          "so the store and its key have parted");
-  // Phase 2: seed the frontier, fresh or from parked recipes. Each step is one slice, ended at the CPU quantum.
+  // Phase 2: seed the frontier, fresh or from parked recipes. Each step is one slice, ended at the work quantum.
   /* The residue handed over, named before it is sent: solver/engine.c seeds from recipes or a boot flow and
      never both, so "" is this zone's own statement that nothing was resumed. */
   const _residue = (prior && prior.recipes) ? prior.recipes : "";
@@ -3949,10 +3936,10 @@ async function engineRecordFacts(eng) {
   level1AccountCheck(a, "an instance's Level-1 account");
   /* Both are lifetime counters of the instance, so a reading below the last one is a second instance answering
      under this record or a counter that was reset. */
-  DCHECK(eng.level1 === undefined || (a.paid >= eng.level1.paid && a.serviceUs >= eng.level1.serviceUs),
+  DCHECK(eng.level1 === undefined || (a.paid >= eng.level1.paid && a.serviceWork >= eng.level1.serviceWork),
          "an instance's Level-1 account fell (" + JSON.stringify(eng.level1) + " then " + _rank.account + ") — " +
-         "`paid` and `serviceUs` only climb within one instance");
-  eng.level1 = { runnable: a.runnable === 1, paid: a.paid, serviceUs: a.serviceUs };
+         "`paid` and `serviceWork` only climb within one instance");
+  eng.level1 = { runnable: a.runnable === 1, paid: a.paid, serviceWork: a.serviceWork };
   /* The working set as the frame stated it on the call above: `workingSetBytes` is a declared reply field of
      every `content.mojom.Renderer` method, and only a call can grow the memory, so the reply just awaited is
      the freshest value. WASM memory is a whole number of 64 KiB pages. */
@@ -3967,7 +3954,7 @@ async function engineRecordFacts(eng) {
    lifetime counters, so a document's service survives a park. */
 function engineAccount(eng) {
   const p = eng.prior;
-  return { paid: (p ? p.paid : 0) + eng.level1.paid, serviceUs: (p ? p.serviceUs : 0) + eng.level1.serviceUs };
+  return { paid: (p ? p.paid : 0) + eng.level1.paid, serviceWork: (p ? p.serviceWork : 0) + eng.level1.serviceWork };
 }
 /* The Level-1 key of an instance that has reported (level1Key over its address and account): last at both levels
    when no member can take the thread, so its next step retires it through DONE or its service round pays it. A
@@ -5425,7 +5412,7 @@ const _LEVEL1_SHAPE_KEY = { nopool: "rNoPool", idle: "rIdle", waited: "rWaited",
                             admitted: "rAdmitted" };
 /* The one arm that is two populations, split by the engine's own step code. `rServiced` counts every round
    that ended in a service round, reached for ENGINE_STEP_STALLED (nothing runnable, so leaving the hot set is
-   right) and for ENGINE_STEP_YIELD (a runnable frontier at the CPU quantum, whose round returns at once and
+   right) and for ENGINE_STEP_YIELD (a runnable frontier at the work quantum, whose round returns at once and
    which hostSchedule waits for while it outranks every hot engine). The two readings take opposite work, so
    they are counted apart; `testing/corpus`'s report.mjs prints them per pass in its ENGINE SPAN block. A
    yielding engine is not stepped while its payment is in flight: that would issue `ops.step` concurrently with
@@ -5569,7 +5556,7 @@ function _level1Record(pool, rd) {
 
 /* The scheduler policy, with engine ops injected so it is testable with mock engines. Each iteration admits a
    waiting document while there is headroom (`ops.admit` gates creation), then advances the highest-weight hot
-   engine by one slice, which ends at the CPU quantum, and re-ranks. At the RAM floor `ops.evictee` chooses an
+   engine by one slice, which ends at the work quantum, and re-ranks. At the RAM floor `ops.evictee` chooses an
    engine to park to the cold tier (`ops.requestPark`). */
 async function hostSchedule(pool, ops) {
   DCHECK(typeof ops.arrival === "function",
@@ -5800,7 +5787,7 @@ let _hostArrivalWake = null;
    closes); `joinedRooted` counts arrivals for a running instance (a RESHIP re-delivery, a sub-frame);
    `peakBooting` is the high-water mark of simultaneous reservations. `evicted` and `rehydrated` are the two
    ends of the RAM floor: their difference tells a floor doing its job from one churning (the Level-1 ratchet
-   solver/flow.h names, where a resident engine's weight ages by CPU while a parked item's estimate does not). */
+   solver/flow.h names, where a resident engine's weight ages by work while a parked item's estimate does not). */
 /* `navigated` is its own count, not a kind of join: a navigation adds a document and deactivates the one it
    replaced (HTML §7.4.6.1 Updating the traversable), and folding it into `joinedRooted` would mix link clicks
    into the count of same-origin sub-frames. */
@@ -5977,7 +5964,7 @@ async function admitSeatLand(seat) {
       if (!back) return null;
       doc = frontierDoc({ key: stored.key, sourceUrl: stored.sourceUrl, topLevelUrl: stored.topLevelUrl,
                           origin: stored.origin, responseHeaders: back.headers, html: back.bytes, code: "",
-                          recipes: stored.recipes, paid: stored.paid, serviceUs: stored.serviceUs,
+                          recipes: stored.recipes, paid: stored.paid, serviceWork: stored.serviceWork,
                           credentialed: stored.credentialed, provenance: frontierProvenance(stored),
                           arrival: frontierArrival(stored), sandbox: frontierSandbox(stored),
                           addressSpace: frontierAddressSpace(stored) },
@@ -6480,7 +6467,7 @@ const _hostOps = {
         credentialed: eng.msg.credentialed, recipes: result._park.join(";"),
         /* The document's Level-1 account: the resumed row's plus this instance's, so service and value are
            carried across every park and session. */
-        paid: _account.paid, serviceUs: _account.serviceUs,
+        paid: _account.paid, serviceWork: _account.serviceWork,
       });
     }
     if (!engineHasLiveCaller(eng)) {
@@ -7065,7 +7052,7 @@ console.debug("[ast-worker v2] bridge ready (self.astDispatch + self.rendererPoo
    stated in them, and a driver's own copy would go stale silently. */
 if (typeof module !== "undefined" && module.exports)
   module.exports = { hostSchedule, engineKey, level1Weight, level1Rate, level1Tree, level1Key, level1Ahead,
-                     level1SiteOf, LEVEL1_UNSERVED, LEVEL1_DOOR,
+                     level1SiteOf, LEVEL1_UNSERVED, LEVEL1_POINT_WORK, LEVEL1_DOOR,
                      _bestCandidate, _candPopulation, _level1Record, _candCensus, CAND_KINDS, CAND_SPREAD,
                      documentIdentityOf, _frontierMembers,
                      zoneRouteSetCookies, zoneAnswerSetCookies, zoneOpenJar, zoneReclaimHeldCookies,

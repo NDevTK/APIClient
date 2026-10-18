@@ -61,7 +61,7 @@
  *
  * THE MECHANISM CITED STARVES A RUNNER AND WHAT IT WAS CITED AGAINST IS A POPULATION, AND THOSE ARE NOT THE
  * SAME OBJECT. Aging charges the thread a MEMBER actually burned, and a fork COPIES that charge onto the arm
- * — `cpu` with its `cpu_gen`, and `visits` with it — because §ONE-WFQ requires a fork to be RANK-NEUTRAL. So
+ * — `work` with its `work_gen`, and `visits` with it — because §ONE-WFQ requires a fork to be RANK-NEUTRAL. So
  * the flow that keeps holding the thread does sink below the siblings it left behind, and that is why the two
  * per-position chains making this same citation — the unknown `length` and the unknown own-key set, each
  * asking "is there one beyond n?" — are RIGHT to make it: each is LINEAR, one continuing flow per position,

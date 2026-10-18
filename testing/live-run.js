@@ -922,7 +922,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      reported scripts that never start". They are MAXIMA and not counts — solver/engine.h calls them so — and a
      maximum saturates and then plateaus, so a plateau in one is NOT a ceiling and the series length is part of
      quoting it. `finished` is the departure fact and is a genuine lifetime count. */
-  "steps", "sliceUs", "sliceOverruns",
+  "steps", "sliceUs", "stepWork", "serviceWork", "sliceOverruns",
   /* AND THE ONE THING `sliceOverruns` AND `stepUnitOverruns` TOGETHER CANNOT SAY, WHICH IS WHAT THOSE TURNS
      WERE INSIDE. An arm is where a step ENDED, and `resume-program` and `start-a-classic-program` both end
      inside one call whether the time went into the page's bytecode between two of its own raise points or
@@ -935,7 +935,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
   "sliceOverrunAsks", "sliceOverrunSeamless",
   /* AND THE WORST UNBROKEN STRETCH WITH NO SUSPEND POINT IN IT, WHICH IS THE ONE ROW THAT CLOSES A QUESTION
      THIS DRIVER HAD TO WITHDRAW. The ask pair above is a COUNT of consultations and a count cannot be a
-     duration, so the per-arm SPAN this file once attributed from `overrunStepUsAtLeast` was a pooled mean over
+     duration, so the per-arm SPAN this file once attributed from `overrunStepWorkAtLeast` was a pooled mean over
      every arm — withdrawn at that field's own banner, where the only bound left was one quantum to the whole
      accumulator, a thirteen-hundred-fold range.
      IT IS A MAXIMUM AND IS DECLARED AS ONE, which solver/metrics/cold.def states on its row.
@@ -956,7 +956,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      An artifact older than this row prints `-`, which is this driver's absent-versus-zero rule.
      RETIREMENT: this record goes when the gap is published per arm as a DISTRIBUTION rather than a maximum,
      because a maximum names the worst stretch and cannot say how many stretches there were. */
-  "sliceOverrunGapUs",
+  "sliceOverrunGapWork",
   /* AND THE OTHER TWO THIRDS OF THE TURN, WITHOUT WHICH `sliceUs` IS A NUMERATOR WHOSE TOTAL THIS DRIVER
      NEVER PRINTED. solver/engine.h splits a turn into the STEP (`sliceUs`) and EVERYTHING ELSE (`schedUs` —
      the pick, the context switch, the delta swap and the previous iteration's tail), and states that they are
@@ -1816,7 +1816,7 @@ function census(r) {
                           company on precisely the runs where slices are answering without dispatching.
        `meanStepSliceUs` = sliceUs / steps — the step half of a TURN, which is the population `sliceUs` has and
                           the one the quantum is compared against, since the overrun test runs per turn on the
-                          line below the accumulation. FAR ABOVE `sliceMs` with `sliceOverruns` small is the
+                          line below the accumulation. FAR ABOVE the slice with `sliceOverruns` small is the
                           quantum not bounding turns at all, which is solver/quantum.h's named transport gap (a
                           C activation declaring no step boundary answers no poll however the request was
                           raised); NEAR it is a quantum doing its job and the cost being the NUMBER of turns.
@@ -1981,26 +1981,19 @@ function census(r) {
      runs of ONE document in FOUR fresh browsers, `phasesPerPick` held inside a narrow band while `phaseShare`
      swung by more than a factor of two. **THE REASON IS IN THE DENOMINATORS AND IS NOT A PROPERTY OF THAT
      DOCUMENT**: only a CHARGED member mints a new residue, so `picksLifetime` is the population that PRODUCES
-     phases, while `members` is decided by how far a wall-denominated run happened to get before its budget
-     elapsed. One denominator is the cause of the numerator and the other is a lottery, which is why the
+     phases, while `members` is decided by how far a run happened to get before its budget elapsed. One denominator is the cause of the numerator and the other is a lottery, which is why the
      secondary reading is the one to quote and the primary is the one to quote WITH ITS RUN COUNT.
      A FALLING `phasesPerPick` IS A DIFFERENT FINDING FROM A SWINGING `phaseShare`, AND THE SECOND DOCUMENT IS
      WHAT SEPARATES THEM. Where `phasesPerPick` falls MONOTONICALLY as picks rise, the residue count is
-     SATURATING rather than the quotient being unstable — and saturation here is a CLOCK PIN and not a
-     frontier fact, because `flow_silence_phase` is `flow_own_silence(f) % FLOW_SERVICE_US` (flow.c) and
-     `FLOW_SERVICE_US` is `ENGINE_QUANTUM_MS * 1000` (flow.c, solver/engine.h), so the count of distinct
-     residues cannot exceed that span divided by the clock's own granularity however large the frontier grows.
-     flow.h records a vehicle reading pinned at `FLOW_SERVICE_US / 100`; a drive whose six microsecond
-     accumulators share a gcd of 5 is pinned at `FLOW_SERVICE_US / 5` instead, which is why the pin is read off
-     the RUN rather than copied from that record. THE DISCRIMINATOR IS ONE DIVISION AND NEEDS NO SECOND RUN:
-     take the gcd of `instanceUs`, `loopUs`, `betweenSlicesUs`, `sliceUs`, `stepUs` and `schedUs` on the row in
-     front of you, divide `sliceMs * 1000` by it, and compare `silPhases` against that ceiling. Near it, the
-     figure is about the CLOCK and may not price anything; far below it, the figure is about the FRONTIER.
+     SATURATING rather than the quotient being unstable. `flow_silence_phase` is `flow_own_silence(f) %
+     FLOW_SERVICE_WORK` (flow.c), a residue of exact integer work, so the count of distinct residues is bounded
+     by `sliceWork` alone and by no clock's granularity; near that ceiling the figure is about the slice's
+     width, far below it the figure is about the FRONTIER.
      NO MAGNITUDE FROM THAT DRIVE IS WRITTEN HERE AND THE DERIVATION IS WHAT IS HANDED OVER, because a live
      figure is a fact about a document at an hour and this file is the thing that takes it: run
      `node testing/harness.js restart` and `node testing/live-run.js 1 <url>` per run, ONE FRESH BROWSER EACH
      — the frontier is cross-session BY DESIGN and lives in RAM, so clearing storage does not reach it — and
-     read the pair at the terminal census with `sliceMeasure` beside it. */
+     read the pair at the terminal census with `sliceWork` beside it. */
   const sp = num("silPhases"), sc = num("silCarry"), pk = num("picksLifetime"), mem = num("wfqMembers");
   o.phaseShare = ratio(sp, mem);
   o.phaseShareOf = (o.phaseShare === null) ? null : "silPhases / wfqMembers";
@@ -2026,138 +2019,57 @@ function census(r) {
       "hook and `rivalPerFork` beside it is a rate over a denominator that is not the population"
     : null;
 
-  /* AND WHAT EVERY ORDERING FIGURE ABOVE WAS DENOMINATED IN, WHICH IS THE ONE FIELD ON THIS RECORD THAT
-     QUALIFIES ALL OF THEM AND WHICH THIS DRIVER HAS NEVER ASKED FOR. solver/flow.h states it as the
-     RETIREMENT CONDITION on its own correction — "it goes when a census row in this tree carries the host's
-     slice measure beside it, so a live-page figure cannot be quoted without saying which clock it was
-     denominated in" — and the WFQ_CARRY_ROWS banner above repeats the demand in this file's own words: what
-     is quoted from a drive is the pair PLUS its host's slice measure. The engine composes it
-     (solver/quantum.c's `quantum_json`), bridge.js relays it onto every run record this driver reads
-     (`quantum: result._quantum`) and the popup renders it; this driver never asked, which is the same broken
-     contract as a field written with no reader and is the defect `absent` below was taken for one rung out.
-     WHY IT IS NOT A READING OF AN INSTANT AND NOT A TOTAL: it is a property of the HOST and the BUILD,
-     constant for the session, and the reason flow.h's two prior live readings are not comparable with each
-     other at all — one is thread-CPU and one is wall, and neither says so at the figure. A `phaseShare`
-     quoted without it is a number whose denominator a later reader cannot reconstruct.
-     THREE FIELDS AND NOT ONE, because each answers what the others cannot: `sliceIsCpu` is whether the
-     loaded-machine caveat applies at all, `sliceMeasure` is what the slice was billed in instead, and
-     `sliceMs` is how coarse the slicing was — and that last one is what stops `meanSliceUs` being priced
-     against a constant this file names in PROSE. bridge.js DCHECKs all three, which a RELEASE artifact
-     compiles out, so this is the only place the contract is checked on the artifact a live drive measures —
-     exactly the argument `rivalMissRefused` and `scanRefused` above are made on.
-     ABSENT AND MALFORMED ARE DIFFERENT FACTS AND NEITHER IS A DEFAULT. `null` is this driver's
-     absent-versus-zero rule and means the run did not state the quantum; `sliceMeasureRefused` means it DID
-     and a field is not the kind the producer composes, which is a fact about the seam and not about the host.
-     The default a reader would reach for is `isCpu: false`, and that is the WRONG one to guess in both
-     directions: guessed false it attaches a caveat to a host that has a real CPU clock, and guessed true it
-     removes one from the host that ships. */
+  /* WHAT EVERY ORDERING FIGURE ABOVE WAS SERVED IN: the run's `_quantum` (solver/quantum.c's `quantum_json`,
+     relayed by bridge.js as `quantum`). The slice and the aging charge are engine work, so `sliceWork` is the
+     budget a turn is judged against; `hostYieldMs` says whether a wall clock also ends a slice on this host;
+     `price` is the clock the microsecond rows are read on. bridge.js DCHECKs each, which a release artifact
+     compiles out, so this is the check on the artifact a live drive measures. `null` means the run stated no
+     quantum; `sliceRefused` means it did and a field is not the kind the producer composes. */
   {
     const q = ("quantum" in r && r.quantum && typeof r.quantum === "object" && !Array.isArray(r.quantum))
       ? r.quantum : null;
     const bad = [];
     if (q) {
-      if (typeof q.measure !== "string" || q.measure === "") bad.push("`measure` is not a non-empty string");
-      if (typeof q.isCpu !== "boolean") bad.push("`isCpu` is not a boolean");
-      if (typeof q.sliceMs !== "number" || !Number.isFinite(q.sliceMs) || q.sliceMs <= 0)
-        bad.push("`sliceMs` is not a positive finite number");
+      if (!Number.isSafeInteger(q.sliceWork) || q.sliceWork <= 0) bad.push("`sliceWork` is not a positive integer");
+      if (!Number.isSafeInteger(q.hostYieldMs) || q.hostYieldMs < 0) bad.push("`hostYieldMs` is not a count");
+      if (typeof q.price !== "string" || q.price === "") bad.push("`price` is not a non-empty string");
     }
     const ok = q !== null && bad.length === 0;
-    o.sliceMeasure = ok ? q.measure : null;
-    o.sliceIsCpu = ok ? q.isCpu : null;
-    o.sliceMs = ok ? q.sliceMs : null;
-    o.sliceMeasureRefused = (q !== null && bad.length)
-      ? "the run stated a `_quantum` this driver cannot resolve — " + bad.join(", ") + ". solver/quantum.c " +
-        "composes all three from compile-time constants of its own file and bridge.js DCHECKs each by name, " +
-        "so on a release artifact a field of the wrong kind is a second composer of this seam rather than a " +
-        "host without a clock, and every ordering figure on this row is a figure whose denomination is unknown"
+    o.sliceWork = ok ? q.sliceWork : null;
+    o.hostYieldMs = ok ? q.hostYieldMs : null;
+    o.slicePrice = ok ? q.price : null;
+    o.sliceRefused = (q !== null && bad.length)
+      ? "the run stated a `_quantum` this driver cannot resolve — " + bad.join(", ") + "; solver/quantum.c " +
+        "composes every field from compile-time constants, so a field of the wrong kind is a second composer"
       : null;
-    /* AND THE ONE READING THE CARRIED `sliceMs` MAKES DERIVABLE RATHER THAN PROSE. `meanSliceUs`'s own banner
-       above reads the mean slice "against solver/quantum.h's quantum" and names that quantum as a NUMBER in a
-       comment, so the comparison a reader actually wants has been theirs to do by hand against a constant that
-       moves in another file. ENGINE_QUANTUM_MS rides the record; the quotient is the overshoot, and FAR above 1
-       with `sliceOverruns` small is that banner's own reading — a quantum not bounding slices at all, which on
-       a host with no asynchronous edge is solver/quantum.h's named transport gap and not a busy box. It is
-       `null` whenever either operand is, so a run that stated no quantum composes no overshoot. */
-    o.sliceOvershoot = ratio(num("meanSliceUs"), o.sliceMs === null ? null : o.sliceMs * 1000);
-    o.sliceOvershootOf = (o.sliceOvershoot === null) ? null : "meanSliceUs / (sliceMs * 1000)";
-    /* …AND THE SAME OVERSHOOT FOR THE POPULATION THE BUDGET IS ACTUALLY TESTED AGAINST, WHICH IS A TURN AND
-       NOT A SLICE. The row above is a SLICE against the budget and is the reading its own banner names; the
-       overrun test is per TURN — solver/engine.h calls `sliceOverruns` "the count of TURNS whose step alone met
-       or exceeded the budget" — so a reader deciding whether the quantum bounds anything wants the turn figure
-       and a reader deciding whether slices run long wants the slice one. Carrying only one of them is why the
-       retired wording sixty lines up read a consistent pair as a contradiction. */
-    o.stepSliceOvershoot = ratio(num("meanStepSliceUs"), o.sliceMs === null ? null : o.sliceMs * 1000);
-    o.stepSliceOvershootOf = (o.stepSliceOvershoot === null) ? null
-      : "meanStepSliceUs / (sliceMs * 1000)";
-    /* AND WHAT ONE OVERRUNNING TURN COST, BOUNDED ON BOTH SIDES, WHICH IS THE DERIVATION THIS DRIVER HAS BEEN
-       LEAVING IN PROSE FOR A READER TO DO BY HAND — the thing this block's own banner calls a derivation
-       nobody performs. `sliceUs` is the step half of EVERY turn, so charging all of it to the overrunning ones
-       is an UPPER bound and `sliceUs / sliceOverruns` is that bound, which solver/live-run's own correction
-       sixty lines up already names. The LOWER bound is the half nothing here has ever stated and it is what
-       makes the pair worth anything: a turn that did NOT overrun spent less than one quantum BY DEFINITION, so
-       those turns account for strictly less than `(steps - sliceOverruns) * quantum` between them and the rest
-       is the overrunning turns'. THE TWO ARE TIGHT EXACTLY WHEN THE NON-OVERRUNNING TURNS CANNOT ACCOUNT FOR
-       THE TOTAL, which is the condition a reader checks by seeing them close, and loose otherwise — so the
-       pair carries its own admissibility rather than needing a caveat. MEASURED over seven real-site runs of
-       two documents when this landed, the two bounds fell within 1-20% of each other at 104-565 quanta, i.e.
-       ONE TURN holding the thread for 1.25 to 6.7 seconds against a 12 ms budget, with 2.8-12.2% of turns
-       reaching the slice. A FRACTION AND NOT A MEAN: `sliceOverruns` is a SUBSET count, so neither of these is
-       a reading of the population `sliceUs` is over, and both are `null` whenever the run stated no quantum,
-       no overrun or no step total. The lower bound can go NEGATIVE, and that is not a defect to clamp — it is
-       the statement that the non-overrunning turns could by themselves account for the whole accumulator, so
-       the pair is UNINFORMATIVE on that run and says so in the one way a reader cannot mistake for a small
-       cost. */
-    const ovr = num("sliceOverruns"), stp = num("steps"), su = num("sliceUs");
-    const qus = (o.sliceMs === null) ? null : o.sliceMs * 1000;
-    o.overrunStepUsAtMost = ratio(su, ovr);
-    o.overrunStepUsAtMostOf = (o.overrunStepUsAtMost === null) ? null : "sliceUs / sliceOverruns";
-    o.overrunStepUsAtLeast = (su === null || ovr === null || stp === null || qus === null || ovr <= 0)
-      ? null : (su - (stp - ovr) * qus) / ovr;
-    o.overrunStepUsAtLeastOf = (o.overrunStepUsAtLeast === null) ? null
-      : "(sliceUs - (steps - sliceOverruns) * sliceMs * 1000) / sliceOverruns";
-    /* AND WHAT SHARE OF THE WHOLE INSTANCE SPAN THOSE TURNS HELD, which is the one number that says whether
-       an overrun is a tail or the run, and which NOTHING here stated — so every reading of these bounds so
-       far has been a magnitude with no idea of its own weight. The two bounds above say what ONE overrunning
-       turn cost; this says what ALL of them cost together against `instanceUs`, which is the span the host
-       gave this engine and therefore the only denominator a reach claim can be made against.
-       IT IS THE LOWER BOUND AND NEVER THE UPPER, which is the whole of why it is worth emitting: the upper
-       bound attributes every microsecond of the step phase to the overrunning turns, so it is near 100% by
-       construction and says nothing. The lower bound charges every OTHER turn the full quantum it is allowed
-       — the most generous reading available to them — so whatever is left is what the overrunning turns held
-       even if every well-behaved turn ran to the very edge of its budget.
-       AND THE COMPLEMENT IS WHAT CARRIES IT, which is why both are emitted: a share is persuasive only
-       against the ceiling on everything else, and `restSpanUsAtMost` is that ceiling exactly —
-       `(steps - sliceOverruns)` turns times the quantum, with no run-to-run variance in it at all, because
-       it is a definition rather than a measurement. A reader holding 98% and a 0.95-second ceiling on the
-       other 79 turns does not need to trust the 98%.
-       MEASURED, five fresh-browser drives of one dev artifact across two real apps, read off these same
-       emitted fields: the share reads 98.1%, 98.1% and 98.5% on three gitlab drives (9, 9 and 11
-       overrunning turns of 88, 89 and 90) and 91.5% and 82.7% on two gitpod drives (19 of 545, 32 of 1169),
-       while the complement ceiling reads 0.95, 0.96, 0.95, 6.31 and 13.64 seconds against instance spans of
-       64, 62, 78, 87 and 88 seconds. NINE TURNS ARE THE GITLAB DRIVE and the other seventy-nine cannot
-       account for a second of it.
-       WHAT IT IS NOT IS A MECHANISM, for `stepUnitOverrunRate`'s reason one level up: the share says the
-       engine's reach on a real app is bounded by a handful of turns that do not rest, and says nothing
-       whatever about WHY they do not — `sliceOverrunSeamless` and the per-arm ask density beside it are the
-       rows that start on that, and neither is settled by this one.
-       AND IT GOES NEGATIVE WHEREVER ITS NUMERATOR DOES, WHICH IS INHERITED AND MUST NOT BE CLAMPED — the
-       banner above states why the lower bound may be negative (the non-overrunning turns could by themselves
-       account for the whole accumulator) and a share of a negative bound is that same statement rendered as a
-       share. A clamp to zero here would turn `this pair cannot be read on this run` into `the overrunning
-       turns held none of the span`, which is the absent-versus-zero pair this driver refuses everywhere else.
-       RETIREMENT: this record goes when the share is composed by the ENGINE beside the bounds it is a share
-       of, because `instanceUs` and `sliceUs` are in one hand at the census and a quotient a driver composes
-       is a quotient a second reader of the same document can compose differently. */
-    const iu = num("instanceUs");
-    o.overrunSpanShareAtLeast = (o.overrunStepUsAtLeast === null || ovr === null || iu === null || iu <= 0)
-      ? null : o.overrunStepUsAtLeast * ovr / iu;
-    o.overrunSpanShareAtLeastOf = (o.overrunSpanShareAtLeast === null) ? null
-      : "overrunStepUsAtLeast * sliceOverruns / instanceUs — a LOWER bound, because every other turn is " +
-        "charged the full quantum it was allowed";
-    o.restSpanUsAtMost = (stp === null || ovr === null || qus === null) ? null : (stp - ovr) * qus;
-    o.restSpanUsAtMostOf = (o.restSpanUsAtMost === null) ? null
-      : "(steps - sliceOverruns) * sliceMs * 1000 — a definition rather than a measurement: a turn that did " +
-        "not overrun used at most the quantum, so this is the ceiling on everything the share leaves out";
+    /* A turn's work against the slice: `stepWork / steps` over `sliceWork`, one unit on both sides, so the
+       quotient is a function of the paths. FAR above 1 with `sliceOverruns` small is a budget not bounding
+       turns at all; near it, the cost is the NUMBER of turns. */
+    o.stepSliceOvershoot = ratio(ratio(num("stepWork"), num("steps")), o.sliceWork);
+    o.stepSliceOvershootOf = (o.stepSliceOvershoot === null) ? null : "(stepWork / steps) / sliceWork";
+    /* What one overrunning turn retired, bounded on both sides. Charging all of `stepWork` to the overrunning
+       turns is the upper bound; the lower bound charges every other turn the most it may hold (a turn that did
+       not overrun retired less than one slice by definition), so the pair is tight exactly when the other
+       turns cannot account for the total. The lower bound may go negative, which says the pair is
+       uninformative on this run, and is never clamped. `serviceWork` is the instance's whole banked work,
+       the denominator of the share. */
+    const ovr = num("sliceOverruns"), stp = num("steps"), sw = num("stepWork"), qw = o.sliceWork;
+    o.overrunStepWorkAtMost = ratio(sw, ovr);
+    o.overrunStepWorkAtMostOf = (o.overrunStepWorkAtMost === null) ? null : "stepWork / sliceOverruns";
+    o.overrunStepWorkAtLeast = (sw === null || ovr === null || stp === null || qw === null || ovr <= 0)
+      ? null : (sw - (stp - ovr) * qw) / ovr;
+    o.overrunStepWorkAtLeastOf = (o.overrunStepWorkAtLeast === null) ? null
+      : "(stepWork - (steps - sliceOverruns) * sliceWork) / sliceOverruns";
+    const iw = num("serviceWork");
+    o.overrunWorkShareAtLeast = (o.overrunStepWorkAtLeast === null || ovr === null || iw === null || iw <= 0)
+      ? null : o.overrunStepWorkAtLeast * ovr / iw;
+    o.overrunWorkShareAtLeastOf = (o.overrunWorkShareAtLeast === null) ? null
+      : "overrunStepWorkAtLeast * sliceOverruns / serviceWork — a LOWER bound, because every other turn is " +
+        "charged the whole slice it was allowed";
+    o.restWorkAtMost = (stp === null || ovr === null || qw === null) ? null : (stp - ovr) * qw;
+    o.restWorkAtMostOf = (o.restWorkAtMost === null) ? null
+      : "(steps - sliceOverruns) * sliceWork — a definition: a turn that did not overrun retired less than " +
+        "one slice, so this is the ceiling on everything the share leaves out";
     /* AND THE PER-ARM RATE, WHICH IS THE READING THE BANNER SIXTY LINES UP ASKS FOR BY NAME ("read that
        against `stepUnitRuns` arm by arm") AND WHICH NOBODY HAD TAKEN — because it is a derivation over two
        HISTOGRAMS and this driver only ever composed derivations over numbers. It is here rather than in prose
@@ -2243,7 +2155,7 @@ function census(r) {
          at exactly one each — while
          THE PER-TURN SPAN THIS RECORD ONCE PUT ON THAT ARM IS WITHDRAWN, AND THE RETIRED WORDING IS KEPT
          BELOW THE VERDICT BECAUSE IT IS WHAT A READER RE-DERIVES FROM THE TWO BOUNDS SIXTY LINES UP. It read
-         `about seven seconds apiece, 28 of the run's 65 seconds`, and `overrunStepUsAtLeast`'s denominator is
+         `about seven seconds apiece, 28 of the run's 65 seconds`, and `overrunStepWorkAtLeast`'s denominator is
          `sliceOverruns` — ALL NINE overrunning turns of ALL THREE arms — so that figure is a POOLED MEAN and
          attributing it to one arm is the mean-across-populations defect, committed with the very row that
          exists to prevent it.

@@ -75,8 +75,8 @@ function devNonResidentOrder(order, n) {
           `, ${n("candCold")} parked frontier(s)` + ("candColdWMax" in order ? ` (best served ${n("candColdWMax")})` : "") +
           `; ${n("candUnserved")} of ${n("cands")} never served`;
   if ("candWMax" in order) {
-    s += `. Over the served: weight ${n("candWMin")}..${n("candWMax")}, novel value per CPU-second ` +
-         `${n("candRateMin")}..${n("candRateMax")}, most service ${n("candSvcMax")} us`;
+    s += `. Over the served: weight ${n("candWMin")}..${n("candWMax")}, novel value per point of work ` +
+         `${n("candRateMin")}..${n("candRateMax")}, most service ${n("candSvcMax")} units`;
   }
   return s;
 }

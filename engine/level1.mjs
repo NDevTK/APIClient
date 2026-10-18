@@ -108,6 +108,9 @@ const ZONE = (() => {
   return sandbox;
 })();
 const B = ZONE.module.exports;
+/* One point's worth of service and one slice of it, in the shipped unit, so every fixture states a ratio. */
+const PT = B.LEVEL1_POINT_WORK;
+const SLICE = 54000;   /* solver/engine.h's ENGINE_QUANTUM_WORK */
 /* Every host the driver ranks is asked first, as each production entry point asks before its member joins. */
 await ZONE.siteAsk(Object.keys(SITE_TABLE));
 for (const n of ['hostSchedule', 'engineKey', 'level1Weight', 'level1Tree', 'level1Key', '_bestCandidate',
@@ -162,15 +165,15 @@ const kindWMax = (cen, kind) => cen[kindOf(kind).wMax];
 const originOfUrl = (url) => new URL(url).origin;
 const job = (url, o = {}) => ({ msg: { sourceUrl: url, frameId: o.frameId || 0, origin: o.origin || originOfUrl(url),
                                        credentialed: o.credentialed !== false } });
-const row = (key, url, paid, serviceUs, o = {}) =>
+const row = (key, url, paid, serviceWork, o = {}) =>
   ({ key, sourceUrl: url, origin: o.origin || originOfUrl(url), credentialed: o.credentialed !== false,
-     paid, serviceUs, shed: false, stranded: o.stranded === true, bytes: 0, rederivable: true });
+     paid, serviceWork, shed: false, stranded: o.stranded === true, bytes: 0, rederivable: true });
 /* The key a walk over `P` gives the document at `url` with account `acct`, read through the shipped functions. */
 const keyOf = (P, url, acct) => B.level1Key(B.level1Tree(P.resident, P.idx), url, acct, true);
 /* An instance as hostSchedule and engineKey read one: a hot record with an address and a stated account. */
-const engM = (url, paid, serviceUs, o = {}) =>
+const engM = (url, paid, serviceWork, o = {}) =>
   Object.assign({ state: 'hot', msg: { sourceUrl: url, credentialed: true }, origin: originOfUrl(url), prior: null,
-                  _readyP: null, level1: { runnable: true, paid: paid, serviceUs: serviceUs } }, o);
+                  _readyP: null, level1: { runnable: true, paid: paid, serviceWork: serviceWork } }, o);
 const eng = (url, fkey, o = {}) => ({ state: 'hot', msg: { sourceUrl: url, credentialed: o.credentialed !== false },
                                       origin: o.origin || originOfUrl(url), fkey: fkey || ('k|' + url) });
 const idxOf = (...rows) => new Map(rows.map((r) => [r.key, r]));
@@ -215,10 +218,10 @@ function checkPresence(r, asked) {
 console.log('[level1] ── the one weight ──');
 {
   const U = B.LEVEL1_UNSERVED;
-  must(B.level1Weight(U, 0) === Infinity && B.level1Weight(U, 5e6) === Infinity,
+  must(B.level1Weight(U, 0) === Infinity && B.level1Weight(U, 5 * PT) === Infinity,
        'a document never served weighs +Infinity whatever the total, so it is handed a quantum first');
-  const a = { paid: 4, serviceUs: 2e6 }, b = { paid: 4, serviceUs: 4e6 }, c = { paid: 8, serviceUs: 2e6 };
-  const N = 10e6;
+  const a = { paid: 4, serviceWork: 2 * PT }, b = { paid: 4, serviceWork: 4 * PT }, c = { paid: 8, serviceWork: 2 * PT };
+  const N = 10 * PT;
   must(Number.isFinite(B.level1Weight(a, N)) && B.level1Weight(a, N) > B.level1Weight(b, N),
        'at equal value, more service ranks lower: both the rate and the bonus fall with service');
   must(B.level1Weight(c, N) > B.level1Weight(a, N),
@@ -230,7 +233,7 @@ console.log('[level1] ── the one weight ──');
 console.log('[level1] ── a ranked member is an asked one ──');
 {
   let threw = false;
-  try { B._bestCandidate(pop({ idx: idxOf(row('k1', 'https://never.test/', 1, 1e6)) })); }
+  try { B._bestCandidate(pop({ idx: idxOf(row('k1', 'https://never.test/', 1, 1 * PT)) })); }
   catch (e) { threw = !!(e && e.apiclientFatal) && /never asked/.test(e.message) && /cold row/.test(e.message); }
   must(threw, 'ranking a cold row whose host was never asked aborts, naming the entry point that skipped the ask');
 }
@@ -273,7 +276,7 @@ console.log('[level1] ── the three facts `_level1Record` keeps apart ──'
 {
   const P = pop({ waiting: [job('https://a.test/')],
                   seeds: seedsOf('https://a.test/admin'),
-                  idx: idxOf(row('k1', 'https://c.test/', 6, 3e6)) });
+                  idx: idxOf(row('k1', 'https://c.test/', 6, 3 * PT)) });
   const pick = B._bestCandidate(P);
   const r = record([], { n: 0, drained: 0, unserved: 0, unservedSites: 0 }, pick.census, 1);
   checkPresence(r, true);
@@ -299,9 +302,9 @@ console.log('[level1] ── the discriminator: which tie is this ──');
   const entryTie = B._bestCandidate(pop({ waiting: [job('https://a.test/'), job('https://b.test/')] })).census;
   must(entryTie.candUnserved === entryTie.cands && !('candWMax' in entryTie),
        'an empty store ranks every candidate as never served, and the census reports no finite spread', entryTie);
-  const servedTie = B._bestCandidate(pop({ idx: idxOf(row('k1', 'https://c.test/', 2, 1e6),
-                                                       row('k2', 'https://d.test/', 2, 1e6)) })).census;
-  must(servedTie.candWMax === servedTie.candWMin && servedTie.candUnserved === 0 && servedTie.candSvcMax === 1e6,
+  const servedTie = B._bestCandidate(pop({ idx: idxOf(row('k1', 'https://c.test/', 2, 1 * PT),
+                                                       row('k2', 'https://d.test/', 2, 1 * PT)) })).census;
+  must(servedTie.candWMax === servedTie.candWMin && servedTie.candUnserved === 0 && servedTie.candSvcMax === PT,
        'two served candidates of equal account tie, and the census says this tie stands above service', servedTie);
   console.log('[level1]   entry-value tie  ' + JSON.stringify(entryTie));
   console.log('[level1]   served tie       ' + JSON.stringify(servedTie));
@@ -310,12 +313,12 @@ console.log('[level1] ── the discriminator: which tie is this ──');
 /* A waiting document whose ADDRESS this store already knows ranks by that address's own account, not as never
    served. */
 {
-  const known = row('k1', 'https://a.test/', 9, 3e6);
+  const known = row('k1', 'https://a.test/', 9, 3 * PT);
   const P = pop({ waiting: [job('https://a.test/'), job('https://z.test/')], idx: idxOf(known) });
   const cen = B._bestCandidate(P).census;
   must(kindWMax(cen, 'doc') === keyOf(P, 'https://a.test/', known).siteW,
        'a waiting document ranks by what this profile has already spent and learned AT ITS ADDRESS', cen);
-  must(cen.candSvcMax === known.serviceUs && cen.candUnserved === 1,
+  must(cen.candSvcMax === known.serviceWork && cen.candUnserved === 1,
        'the census reports the service that produced that rank, beside the one never-served address', cen);
   console.log('[level1]   doc by history   ' + JSON.stringify(cen));
 }
@@ -327,7 +330,7 @@ console.log('[level1] ── the weight that leaves the order ──');
    worth. Each exclusion row is driven at least once here: a row nobody has ever produced is a row nobody
    knows works, and every one of them is a place a weight can leave the order in silence. */
 {
-  const held = row('k1', 'https://a.test/', 9, 3e6);
+  const held = row('k1', 'https://a.test/', 9, 3 * PT);
   const P = pop({ waiting: [job('https://a.test/')], idx: idxOf(held) });
   const cen = B._bestCandidate(P).census;
   must(cen.exclLive === 1 && kindPop(cen, 'cold') === 0,
@@ -337,14 +340,14 @@ console.log('[level1] ── the weight that leaves the order ──');
   console.log('[level1]   exclLive         ' + JSON.stringify(cen));
 }
 {
-  const r1 = row('k1', 'https://a.test/', 4, 2e6);
+  const r1 = row('k1', 'https://a.test/', 4, 2 * PT);
   const cen = B._bestCandidate(pop({ resident: [eng('https://b.test/', 'k1')], idx: idxOf(r1) })).census;
   must(cen.exclHeld === 1 && kindPop(cen, 'cold') === 0 && cen.cands === 0,
        'a residue an instance already holds by KEY is not a candidate for a second instance', cen);
   console.log('[level1]   exclHeld         ' + JSON.stringify(cen));
 }
 {
-  const cen = B._bestCandidate(pop({ idx: idxOf(row('k1', 'https://a.test/', 4, 2e6, { stranded: true })) })).census;
+  const cen = B._bestCandidate(pop({ idx: idxOf(row('k1', 'https://a.test/', 4, 2 * PT, { stranded: true })) })).census;
   must(cen.exclStranded === 1 && cen.cands === 0,
        'a stranded residue has no bytes to build an instance over, so it is excluded and COUNTED', cen);
   console.log('[level1]   exclStranded     ' + JSON.stringify(cen));
@@ -358,7 +361,7 @@ console.log('[level1] ── the weight that leaves the order ──');
 }
 {
   const cen = B._bestCandidate(pop({ seeds: seedsOf('https://a.test/admin'),
-                                     idx: idxOf(row('k1', 'https://a.test/admin', 3, 1e6)) })).census;
+                                     idx: idxOf(row('k1', 'https://a.test/admin', 3, 1 * PT)) })).census;
   must(cen.exclSeedParked === 1 && kindPop(cen, 'seed') === 0 && kindPop(cen, 'cold') === 1,
        'a declared route this profile already holds a residue for is admitted as THAT residue, once', cen);
   console.log('[level1]   exclSeedParked   ' + JSON.stringify(cen));
@@ -433,10 +436,10 @@ console.log('[level1] ── hostSchedule, driven with mock engines ──');
 {
   const rounds = [];
   const poolArr = [];
-  const e1 = engM('https://e.test/', 5, 1e6);
+  const e1 = engM('https://e.test/', 5, 1 * PT);
   poolArr.push(e1);
   /* Served rows only: an unserved candidate would spend the round on its admission (the `admitted` arm). */
-  const asked = pop({ idx: idxOf(row('k1', 'https://c.test/', 6, 3e6)) });
+  const asked = pop({ idx: idxOf(row('k1', 'https://c.test/', 6, 3 * PT)) });
   let admits = 0, steps = 0;
   const ops = {
     key: B.engineKey,
@@ -534,7 +537,7 @@ const baseOps = (poolArr, o, all) => Object.assign({
   finish: async (e) => { const i = poolArr.indexOf(e); if (i >= 0) poolArr.splice(i, 1); },
 }, o);
 {
-  const poolArr = [engM('https://e.test/', 5, 1e6)];
+  const poolArr = [engM('https://e.test/', 5, 1 * PT)];
   const newSite = pop({ waiting: [job('https://n.test/')] });
   let admits = 0, stepped = 0;
   const ops = baseOps(poolArr, { admit: async () => (admits++ === 0 ? B._bestCandidate(newSite).census : null),
@@ -547,7 +550,7 @@ const baseOps = (poolArr, o, all) => Object.assign({
 {
   /* The same never-served address, but of the site the hot engine is already serving: it is ahead only within
      that site, so the round steps rather than spending itself on the admission. */
-  const poolArr = [engM('https://e.test/', 5, 1e6)];
+  const poolArr = [engM('https://e.test/', 5, 1 * PT)];
   const sameSite = pop({ resident: poolArr, waiting: [job('https://e.test/next')] });
   let admits = 0, stepped = 0;
   const ops = baseOps(poolArr, { admit: async () => (admits++ === 0 ? B._bestCandidate(sameSite).census : null),
@@ -559,7 +562,7 @@ const baseOps = (poolArr, o, all) => Object.assign({
        died ? String(died.message || died) : seen);
 }
 {
-  const poolArr = [engM('https://e.test/', 5, 1e6)];
+  const poolArr = [engM('https://e.test/', 5, 1 * PT)];
   const newSite = pop({ waiting: [job('https://n.test/')] });
   const ops = baseOps(poolArr, { evictee: async () => ({ evict: null, cand: B._bestCandidate(newSite).census }) });
   const { died } = await drive(poolArr, ops);
@@ -569,8 +572,8 @@ const baseOps = (poolArr, o, all) => Object.assign({
 {
   /* B yields and its service round is in flight; it is ahead of A, but the round steps A rather than idle the
      thread on B's reply, and B takes the slice after its round lands. */
-  const A = engM('https://a.test/', 1, 1e6, { name: 'A' });
-  const Bk = engM('https://b.test/', 9, 1e6, { name: 'B' });
+  const A = engM('https://a.test/', 1, 1 * PT, { name: 'A' });
+  const Bk = engM('https://b.test/', 9, 1 * PT, { name: 'B' });
   const poolArr = [A, Bk];
   const order = [];
   let n = 0;
@@ -588,7 +591,7 @@ const baseOps = (poolArr, o, all) => Object.assign({
 /* A round waiting on the only engine's in-flight service round wakes on an arrival and asks admission again
    before that reply lands; with no wake it asks only once the reply lands, which is the control. */
 async function arrivalDrive(wakes) {
-  const lead = engM('https://b.test/', 9, 1e6, { name: 'B' });
+  const lead = engM('https://b.test/', 9, 1 * PT, { name: 'B' });
   const poolArr = [lead];
   const newSite = pop({ waiting: [job('https://n.test/')] });
   let wake = null, arrived = false, landed = false, settle = null, inFlight = null, n = 0;
@@ -630,8 +633,8 @@ console.log('[level1] ── a site that mints addresses spends only its own sha
    moves neither site's share, and M's new documents each take their first quantum within M's slices, ahead of
    M's root. */
 async function mintDrive(minted, slices) {
-  const P = engM('https://p.test/', 100, 2e6, { name: 'P', rate: 0.6, decay: 0.0006 });
-  const root = engM('https://m.test/', 40, 2e6, { name: 'M', rate: 0, decay: 0 });
+  const P = engM('https://p.test/', 100, 2 * PT, { name: 'P', rate: 0.6, decay: 0.0006 });
+  const root = engM('https://m.test/', 40, 2 * PT, { name: 'M', rate: 0, decay: 0 });
   const kids = [];
   for (let i = 0; i < minted; i++) kids.push(engM('https://m.test/p' + i, 0, 0, { name: 'm' + i, rate: 0, decay: 0 }));
   const poolArr = [P, root, ...kids];
@@ -641,7 +644,7 @@ async function mintDrive(minted, slices) {
     step: async (e) => {
       if (order.length >= slices) return 0;
       order.push(e.name);
-      e.level1.serviceUs += 12000; e.level1.paid += e.rate; e.rate = Math.max(0, e.rate - e.decay);
+      e.level1.serviceWork += SLICE; e.level1.paid += e.rate; e.rate = Math.max(0, e.rate - e.decay);
       return 2;
     },
   }, all);

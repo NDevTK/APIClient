@@ -1783,30 +1783,30 @@ QJS_EXPORT void qjs_host_answers_exhausted(unsigned req)
 }
 
 /* This instance's Level-1 account, the three facts the trusted zone ranks documents by:
-   `{"runnable":0|1,"paid":<novel value>,"serviceUs":<thread measure of service>}`. `paid` is
-   novelty_landed_value and `serviceUs` engine_service_us, both lifetime counters of this instance, so the zone
+   `{"runnable":0|1,"paid":<novel value>,"serviceWork":<engine work served>}`. `paid` is
+   novelty_landed_value and `serviceWork` engine_service_work, both lifetime counters of this instance, so the zone
    adds a parked document's stored account to them. No flow weight crosses: Level 1 compares documents by value per
-   CPU-second, never one frontier's order against another's. The buffer is this entry's and is overwritten by the
+   unit of work served, never one frontier's order against another's. The buffer is this entry's and is overwritten by the
    next call; the host copies the string out of linear memory before it asks again. */
 QJS_EXPORT const char *qjs_level1_account(void)
 {
     static char buf[128];
     double paid;
-    int64_t us;
+    int64_t work;
     int n;
 
     DCHECK(g_begun, "qjs_level1_account was asked of an engine whose frontier was never seeded");
     paid = novelty_landed_value();
-    us = engine_service_us();
+    work = engine_service_work();
     /* The novel credits are a subset of the flow ledger's paid credits (the @S ladder's rungs are paid too). */
     DCHECKF(paid <= flow_credit_paid_value(),
             "the Level-1 novel value %g exceeds the flow ledger's paid value %g — every landed novel credit is one "
             "flow_credit_emit paid", paid, flow_credit_paid_value());
-    DCHECKF(paid >= 0.0 && paid == paid && us >= 0,
-            "the Level-1 account is negative or NaN (paid %g, serviceUs %lld) — both are sums of non-negative "
-            "charges that only climb", paid, (long long)us);
-    n = snprintf(buf, sizeof buf, "{\"runnable\":%d,\"paid\":%.17g,\"serviceUs\":%lld}", engine_runnable(), paid,
-                 (long long)us);
+    DCHECKF(paid >= 0.0 && paid == paid && work >= 0,
+            "the Level-1 account is negative or NaN (paid %g, serviceWork %lld) — both are sums of non-negative "
+            "charges that only climb", paid, (long long)work);
+    n = snprintf(buf, sizeof buf, "{\"runnable\":%d,\"paid\":%.17g,\"serviceWork\":%lld}", engine_runnable(),
+                 paid, (long long)work);
     CHECK(n > 0 && (size_t)n < sizeof buf, "the Level-1 account did not fit its buffer — the zone would parse a "
                                            "truncated record");
     return buf;

@@ -1753,23 +1753,19 @@ async function main() {
                         'composes it with the same JSON grammar `@COLD`, `@HEAP` and `@SWAP` use, so a ' +
                         `payload this zone cannot read is the two grammars having parted (${err.message})`);
       }
-      /* ASSERTED, NOT DEFAULTED, and the three fields are asserted SEPARATELY because they answer different
-         questions: `isCpu` decides whether a reach total means anything, `sliceMs` is the budget itself, and
-         `measure` is the sentence a reader quotes. A `??` over any of them would turn a producer that
-         stopped stating one into a plausible datum, which is the defect this file is full of warnings about. */
-      if (typeof q.measure !== 'string' || !q.measure)
-        throw new Error(`the host announced a quantum with no \`measure\` string: ${line}`);
-      if (typeof q.isCpu !== 'boolean')
-        throw new Error(`the host announced a quantum whose \`isCpu\` is not a boolean: ${line} — it is the ` +
-                        'field that says whether a descheduled thread was charged, so an unreadable one ' +
-                        'leaves every total this run produces unquotable rather than merely imprecise');
-      if (!(typeof q.sliceMs === 'number' && q.sliceMs > 0))
-        throw new Error(`the host announced a quantum with no positive \`sliceMs\`: ${line}`);
+      /* Asserted, not defaulted, each field by name: `sliceWork` is the budget, `hostYieldMs` whether a wall
+         clock also ends a slice, and `price`/`priceIsCpu` what the census's microsecond rows are read on. */
+      if (!(Number.isSafeInteger(q.sliceWork) && q.sliceWork > 0))
+        throw new Error(`the host announced a quantum with no positive integer \`sliceWork\`: ${line}`);
+      if (!(Number.isSafeInteger(q.hostYieldMs) && q.hostYieldMs >= 0))
+        throw new Error(`the host announced a quantum with no \`hostYieldMs\`: ${line}`);
+      if (typeof q.price !== 'string' || !q.price || typeof q.priceIsCpu !== 'boolean')
+        throw new Error(`the host announced a quantum with no \`price\` string or boolean \`priceIsCpu\`: ${line}`);
       /* ONCE PER INSTANCE IS THE PRODUCER'S CONTRACT (`g_announced`), so a second line from one instance is
          that contract broken and not a refinement to take. */
-      if (e.quantum !== null && e.quantum.measure !== q.measure)
-        throw new Error(`instance [${e.tag}] announced two different denominations — ` +
-                        `\`${e.quantum.measure}\` then \`${q.measure}\`; quantum.c announces once per ` +
+      if (e.quantum !== null && JSON.stringify(e.quantum) !== JSON.stringify(q))
+        throw new Error(`instance [${e.tag}] announced two different quanta — ` +
+                        `\`${JSON.stringify(e.quantum)}\` then \`${JSON.stringify(q)}\`; quantum.c announces once per ` +
                         'instance, so two answers mean one of them belongs to a program this zone is not ' +
                         'driving');
       e.quantum = q;
@@ -2160,9 +2156,8 @@ async function main() {
 
   /* AND THE DENOMINATION IS SAID OUT LOUD BESIDE THE FINDINGS, because every total in the document this
      process is about to print was taken under it, and CLAUDE.md's rule is that an instrument measuring a
-     budget STATES WHICH QUESTION IT ANSWERED: a wall-denominated slice charges a DESCHEDULED thread, so a
-     loaded box silently decides how far a run gets and no reach total from it is a fact about a revision; a
-     thread-CPU one does not, which is the whole reason this host exists beside the wasm one. Printing it is
+     budget STATES WHICH QUESTION IT ANSWERED: a slice a wall clock can end is one interleaving, while a slice
+     of work alone is a function of the paths, which is the whole reason this host exists beside the wasm one. Printing it is
      what stops the next reader having to know which host produced a number.
      ABSENT IS A DIFFERENT SENTENCE AND NOT A MISSING ONE — quantum.c prints the line at the FIRST SLICE, so
      no line means no slice was ever opened, which is a fact about the run and never an unknown denomination.
@@ -2170,7 +2165,7 @@ async function main() {
      denominations in one drive is a claim about a program this zone is not driving. */
   {
     const announced = instances.filter((i) => i.quantum !== null);
-    const measures = [...new Set(announced.map((i) => i.quantum.measure))];
+    const measures = [...new Set(announced.map((i) => JSON.stringify(i.quantum)))];
     if (measures.length > 1)
       throw new Error('[trusted] two instances of one binary announced different quantum denominations: ' +
                       `${measures.map((m) => `\`${m}\``).join(' and ')} — they are the same executable, so ` +
@@ -2180,15 +2175,14 @@ async function main() {
                     'a statement that the budget was never exercised, NOT a run whose denomination is ' +
                     'unknown, and any reach total below was reached without one.');
     else
-      console.error(`[trusted] quantum ${announced[0].quantum.sliceMs} ms, measured as ` +
-                    `\`${announced[0].quantum.measure}\` (isCpu ${announced[0].quantum.isCpu}) across ` +
-                    `${announced.length} of ${instances.length} instance(s). ` +
-                    (announced[0].quantum.isCpu
-                       ? 'A descheduled thread is not charged, so a total below is comparable across runs on ' +
-                         'this host at one revision.'
-                       : 'A DESCHEDULED THREAD IS CHARGED, so machine load decided how far this run got and ' +
-                         'no total below is a fact about a revision — quote it with the load average or not ' +
-                         'at all.'));
+      console.error(`[trusted] quantum ${announced[0].quantum.sliceWork} units of engine work, priced on ` +
+                    `\`${announced[0].quantum.price}\` across ${announced.length} of ${instances.length} ` +
+                    `instance(s). ` +
+                    (announced[0].quantum.hostYieldMs > 0
+                       ? `A ${announced[0].quantum.hostYieldMs} ms wall-time host yield also ends a slice, so ` +
+                         'the order below is one interleaving.'
+                       : 'No wall clock ends a slice, so the order is a function of the paths; where the run ' +
+                         'was cut is still the CPU budget\'s.'));
   }
   /* WHAT EACH INSTANCE WAS DOING WHILE IT RAN, WHICH IS THE ONLY THING A KILLED RUN LEAVES BEHIND.
      `@RESULT` is composed when the frontier DRAINS or STALLS and a real page's frontier does neither inside

@@ -53,9 +53,8 @@
  * (`Lifetime`, `UsLife`) that most rows follow and some do not — `svcMax` is a quantum count derived from
  * microseconds and says so nowhere in its name — so a regex over the keys would be a count of a SPELLING
  * standing in for a fact about the producer. What this reports is the SET, with both values, so a reader can
- * open the accessor. The build's own verdict block names the one mechanism that moves a row on one artifact:
- * the cooperative slice is thread-CPU, so a loaded box costs an opcode sequence more of it and the quantum
- * fires at a different opcode.
+ * open the accessor. The build's own verdict block names what still moves a row on one artifact: where a
+ * run is cut (its CPU budget and the deadlock backstop), since the slice and the aging are engine work.
  *
  * A STAGE IN ONLY ONE RUN IS NAMED AS SUCH. That is how a truncated run reads correctly: a container restart
  * or a killed wrapper leaves a snapshot whose stage logs simply stop, and the aggregate log's last line is

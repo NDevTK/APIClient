@@ -128,9 +128,9 @@ void event_loop_free(JSRuntime *rt);
  *     switches. A flow's clock would move because a SIBLING forked, so the same flow on two schedules reads
  *     two clocks and a resume observes moments its own path never produced.
  *   — the count of times the interpreter's yield POLL was reached is schedule-dependent for a subtler reason:
- *     a poll happens when the request byte is raised, the quantum's CPU-time edge raises it asynchronously,
- *     and "last raise wins" means an asynchronous raise landing on an already-raised byte adds no poll while
- *     one landing on a clear byte adds one. The number of polls is therefore a fact about the machine.
+ *     a poll happens when the request byte is raised, and a raise from the budget or a rank change landing on
+ *     an already-raised byte adds no poll while one landing on a clear byte adds one. The number of polls is
+ *     therefore a fact about the schedule.
  * Opcodes retired is neither: it is what the flow DID, in the order its own bytecode says, and it is identical
  * on every schedule and across a park.
  *

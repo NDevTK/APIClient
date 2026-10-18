@@ -652,17 +652,17 @@ char *result_wfq_json(void) {
     METRIC_SET(br_born_life_min, w.br_born_min);
     METRIC_SET(br_crowd_live, w.br_crowd_live);
     METRIC_SET(br_crowd_born_life, w.br_crowd_born);
-    METRIC_SET(br_crowd_us_life, w.br_crowd_us);
+    METRIC_SET(br_crowd_work_life, w.br_crowd_work);
     METRIC_SET(br_minter_live, w.br_minter_live);
     METRIC_SET(br_minter_gone_life, w.br_minter_gone);
-    METRIC_SET(br_minter_us_life, w.br_minter_us);
-    METRIC_SET(br_us_life_max, w.br_us_max);
-    METRIC_SET(br_us_life_min, w.br_us_min);
-    METRIC_SET(br_us_life_sum, w.br_us_sum);
-    METRIC_SET(br_held_us_life, w.br_held_us);
-    METRIC_SET(br_empty_us_life, w.br_empty_us);
-    METRIC_SET(br_retired_us_life, w.br_retired_us);
-    METRIC_SET(charged_us_life, w.charged_us);
+    METRIC_SET(br_minter_work_life, w.br_minter_work);
+    METRIC_SET(br_work_life_max, w.br_work_max);
+    METRIC_SET(br_work_life_min, w.br_work_min);
+    METRIC_SET(br_work_life_sum, w.br_work_sum);
+    METRIC_SET(br_held_work_life, w.br_held_work);
+    METRIC_SET(br_empty_work_life, w.br_empty_work);
+    METRIC_SET(br_retired_work_life, w.br_retired_work);
+    METRIC_SET(charged_work_life, w.charged_work);
     METRIC_SET(br_depth_max, w.br_depth_max);
     METRIC_SET(br_fan_max, w.br_fan_max);
     METRIC_SET(br_fan_sum, w.br_fan_sum);
@@ -1034,7 +1034,7 @@ char *result_cold_json(void) {
     /* …`oask`: of the overrunning turns that did offer a point, how many points each arm's offered; the scalar
        sums every arm, and arms' densities differ (solver/engine.h's `over_ask_arms`). */
     char oask[STEP_UNITS_JSON_MAX];
-    /* …`ogap`: not a count but a maximum — each arm's widest interval, in the slice's own measure, during which
+    /* …`ogap`: not a count but a maximum — each arm's widest stretch of work during which
        one of its non-seamless overrunning turns offered nothing (solver/engine.h's `over_gap_arms`). */
     char ogap[STEP_UNITS_JSON_MAX];
     /* The two frontier-extent histograms live on the heap, since there is no list width to derive; see
@@ -1157,8 +1157,8 @@ char *result_cold_json(void) {
 
             for (g = 0; g < STEP_UNIT_N; g++)
                 if (r.over_gap_arms[g] > gapmax) gapmax = r.over_gap_arms[g];
-            DCHECK((int64_t)gapmax == r.slice_overrun_gap_us,
-                   "the per-arm worst-gap row and `sliceOverrunGapUs` disagree — the two are folded from ONE "
+            DCHECK((int64_t)gapmax == r.slice_overrun_gap_work,
+                   "the per-arm worst-gap row and `sliceOverrunGapWork` disagree — the two are folded from ONE "
                    "turn's interval one statement apart in the engine's overrun branch and the fold is a "
                    "MAXIMUM rather than a sum, so a scalar the arms do not reach means a row was lost "
                    "crossing into this document, and the loss reads as a turn that offered its suspend "
@@ -1494,6 +1494,8 @@ char *result_cold_json(void) {
     METRIC_SET(shared_kib, (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024);
     METRIC_SET(steps, r.steps);
     METRIC_SET(step_us, r.step_us);
+    METRIC_SET(step_work, r.step_work);
+    METRIC_SET(service_work, r.service_work);
     METRIC_SET(instance_us, r.instance_us);
     METRIC_SET(loop_us, r.loop_us);
     METRIC_SET(between_slices_us, r.between_slices_us);
@@ -1529,7 +1531,7 @@ char *result_cold_json(void) {
     METRIC_SET_OBJECT(step_unit_overrun_gap_arms, ogap);
     METRIC_SET(slice_overrun_asks, r.slice_overrun_asks);
     METRIC_SET(slice_overrun_seamless, r.slice_overrun_seamless);
-    METRIC_SET(slice_overrun_gap_us, r.slice_overrun_gap_us);
+    METRIC_SET(slice_overrun_gap_work, r.slice_overrun_gap_work);
     METRIC_SET(classic_compiles, r.classic_compiles);
     METRIC_SET(classic_compile_overruns, r.classic_compile_overruns);
     METRIC_SET(classic_compile_again, r.classic_compile_again);

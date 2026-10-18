@@ -429,27 +429,22 @@ function devEngineRunsSection(runs) {
       : `frontier order over ${m.wfq.members} flows: `
         + Object.keys(m.wfq).filter((k) => k !== "members")
                 .map((k) => String(k) + " " + String(m.wfq[k])).join(" · ");
-    /* What the order is denominated in (solver/quantum.h's `_quantum`), directly under it because it decides
-       whether two runs' orders may be compared. On a wall-clock host the aging charge bills wall time to
-       whichever flow the OS left running; on a CPU-clocked host every billed microsecond is one the flow held
-       the thread for, but the slice is that same CPU, so the order moves on a loaded machine too. Hence the
-       instruction is unconditional: compare two runs of one build before reading a difference between two. */
-    DCHECK(m.quantum && typeof m.quantum === "object" && typeof m.quantum.isCpu === "boolean"
-           && typeof m.quantum.measure === "string" && typeof m.quantum.sliceMs === "number",
-           "an engine run record reached the diagnostics page with no `quantum` denomination — " +
-           "solver/quantum.c composes it into every document result.c builds and bridge.js asserts its three " +
-           "fields before relaying it whole, so a record that has an @RESULT document and no `quantum` is that " +
-           "relay broken");
-    const denom = label([`scheduler slice ${m.quantum.sliceMs} ms, billed in ${m.quantum.measure}`
-      + (m.quantum.isCpu
-          ? ` — real thread CPU, so every microsecond the aging charge bills is one the flow held the thread `
-            + `for. That does not make the order reproducible: the slice is that same CPU, and a loaded `
-            + `machine costs one opcode sequence more of it.`
-          : ` — NOT CPU: the aging charge that produced the order above bills wall time to whichever flow the `
-            + `OS left running, so a descheduling nothing in the page chose moves one flow's rank alone — a `
-            + `second and larger source of variance on top of the one a CPU-clocked host has.`)
-      + ` Either way, two runs of THIS SAME build over this same page take different orders: compare two runs `
-      + `of one build before reading a difference between two builds.`]);
+    /* The slice the order was served in (solver/quantum.h's `_quantum`), directly under it because it decides
+       whether two runs' orders may be compared. The slice and the aging charge are engine work, so the order is
+       a function of the paths; this realm's host yield also ends a slice on wall time, which makes the order
+       one interleaving until solver/engine.c's named residual is built. */
+    DCHECK(m.quantum && typeof m.quantum === "object" && typeof m.quantum.sliceWork === "number"
+           && typeof m.quantum.hostYieldMs === "number" && typeof m.quantum.price === "string",
+           "an engine run record reached the diagnostics page with no `quantum` — solver/quantum.c composes it " +
+           "into every document result.c builds and bridge.js asserts its fields before relaying it whole, so " +
+           "a record that has an @RESULT document and no `quantum` is that relay broken");
+    const denom = label([`scheduler slice ${m.quantum.sliceWork} units of engine work`
+      + (m.quantum.hostYieldMs > 0
+          ? ` — this realm also hands its thread back every ${m.quantum.hostYieldMs} ms of wall time, which ends `
+            + `the slice, so two runs of this build over this page can take different orders: compare two runs `
+            + `of one build before reading a difference between two builds.`
+          : ` — no wall clock ends a slice, so the order is a function of the paths.`)
+      + ` Census microseconds are priced on ${m.quantum.price}.`]);
     /* The subsystem censuses, relayed whole by bridge.js and rendered generically: `_cold`, `_heap`, `_swap`
        (solver/result.c) and `_absent` (solver/absent.c: names a standard owns that the document read and this
        realm did not answer, which a feature-detecting page otherwise loses silently). A row is a number or a

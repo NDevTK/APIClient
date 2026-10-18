@@ -2135,8 +2135,7 @@ const row = {
      published rows instead of inferring the remainder, and a remainder inferred from a total is a number whose
      reading nobody can check.
      `slices` IS THE DENOMINATOR NEITHER SPAN WOULD OTHERWISE HAVE, in the producer's own words, and the two
-     quotients it makes are in the slice's own measure and therefore comparable against the `@QUANTUM` line a run
-     prints. `steps` is the other denominator and this row has carried it all along — so `slices` against `steps`
+     quotients it makes are on the pricing clock the `@QUANTUM` line names as `price`. `steps` is the other denominator and this row has carried it all along — so `slices` against `steps`
      is the producer's own next question, "the slices that dispatched nobody", and both terms are now present.
      ALL FIVE ARE LIFETIME COUNTS by the producer's declared kind, so they may be differenced across samples
      — unlike the delivery guard above, which is four GAUGES — and they are taken off the SAME entry as every

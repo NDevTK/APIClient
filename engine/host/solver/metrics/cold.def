@@ -247,14 +247,18 @@ METRIC(dyn_kib, "dynKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
 METRIC(shared_kib, "sharedKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
 /* `steps` and `stepUnitRuns` are lifetime counts of steps run through each arm, and `stepUnits` a
    gauge of members standing in each arm now: with the gauge alone, an arm never entered and one
-   entered and left before every census read alike. `stepUs` is `steps`' denominator — the thread
-   time the loop's turns consumed, in the slice's own measure — so a turn costing a whole slice
-   makes one choice per slice by construction, while cheap turns mean little thread time was
-   given. Read `stepUs / steps` as a ratio within one run, never a total across runs; calling it
-   CPU needs the @QUANTUM line. 64-bit because on wasm32 a `long` of microseconds saturates in
+   entered and left before every census read alike. `stepUs` prices those turns on the pricing
+   clock (@QUANTUM's `price`); read `stepUs / steps` as a ratio within one run, never a total
+   across runs. `stepWork` below is the same turns in the slice's own unit. 64-bit because on wasm32 a `long` of microseconds saturates in
    35.8 minutes (solver/engine.h's `step_us`; engine.c asserts the width). */
 METRIC(steps, "steps", LIFETIME, "step", PROCESS, "solver/engine.c", INT)
 METRIC(step_us, "stepUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
+/* …and the engine work those turns retired, the sum of the aging charges, beside every unit the
+   instance banked. `stepWork / steps` against @QUANTUM's `sliceWork` says whether the loop is
+   slice-bound, the same on every host; `stepUs` prices it on this one. `stepWork <= serviceWork`
+   is asserted at engine_step_unit_runs. */
+METRIC(step_work, "stepWork", LIFETIME, "unit", PROCESS, "solver/engine.c", INT)
+METRIC(service_work, "serviceWork", LIFETIME, "unit", PROCESS, "solver/engine.c", INT)
 /* …and what that total is a share of: the thread measure this instance consumed since its
    dispatch loop first ran. `stepUs` counts only turns taken, so a small `stepUs/steps` is a cheap
    loop or one barely entered. Both sides are one clock, `quantum_thread_us()` (named on
@@ -273,9 +277,9 @@ METRIC(slices, "slices", LIFETIME, "slice", PROCESS, "solver/engine.c", INT)
    source to expire it, a dominant pick-and-swap is the ordering costing more than the work.
    `schedUs` is everything in the turn that is not the step, including the previous iteration's
    tail (the charge telescopes; solver/engine.h); identity asserted at engine_frontier_census. */
-/* …and `sliceOverruns`, because `stepUs/steps` is a mean no turn is near: raised once per turn
-   from the readings `sliceUs` accumulates, containment asserted at engine_step_unit_runs
-   (solver/engine.h's `slice_overruns`). */
+/* …and `sliceOverruns`, because `stepWork/steps` is a mean no turn is near: a turn whose step
+   retired a slice's work, raised once per turn from the work its aging charge is, containment
+   asserted at engine_step_unit_runs (solver/engine.h's `slice_overruns`). */
 METRIC(slice_us, "sliceUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
 METRIC(sched_us, "schedUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
 METRIC(slice_overruns, "sliceOverruns", LIFETIME, "turn", PROCESS, "solver/engine.c", INT)
@@ -313,13 +317,13 @@ METRIC(step_unit_overrun_seamless_arms, "stepUnitOverrunSeamlessArms", LIFETIME,
    `sliceOverrunAsks / sliceOverruns` averages arms that answer differently (solver/engine.h's
    `over_ask_arms`). */
 METRIC(step_unit_overrun_ask_arms, "stepUnitOverrunAskArms", LIFETIME, "point", PROCESS, "solver/engine.c", OBJECT)
-/* …and the widest no-offer stretch of one such turn, in the slice's own measure. The preempt
-   policy's only false arm is the budget test, monotone within a slice, and the first true parks
-   the flow, so every consultation sits within ENGINE_QUANTUM_MS of the slice's opening and this
-   row is the worst turn's span to within one budget (`stepUnitOverruns` is only a count). A 0 is
-   no non-seamless overrunning turn or gaps under a microsecond; `stepUnitOverruns` minus
-   `stepUnitOverrunSeamlessArms` tells them apart (solver/engine.h's `over_gap_arms`). */
-METRIC(step_unit_overrun_gap_arms, "stepUnitOverrunGapArms", MAXIMUM, "us", PROCESS, "solver/engine.c", OBJECT)
+/* …and the widest no-offer stretch of work in one such turn. The preempt policy's only false arm
+   is the budget test, monotone within a slice, and the first true parks the flow, so every
+   consultation sits within ENGINE_QUANTUM_WORK of the slice's opening and this row is the worst
+   turn's span to within one budget (`stepUnitOverruns` is only a count). A 0 is no non-seamless
+   overrunning turn; `stepUnitOverruns` minus `stepUnitOverrunSeamlessArms` says which
+   (solver/engine.h's `over_gap_arms`). */
+METRIC(step_unit_overrun_gap_arms, "stepUnitOverrunGapArms", MAXIMUM, "unit", PROCESS, "solver/engine.c", OBJECT)
 /* …and whether the page's own code ran in those turns: an arm is where a step ended, and the time
    may be the page's bytecode between its raise points or one native call that never returned.
    `sliceOverrunAsks` is the suspend points those turns offered and `sliceOverrunSeamless` how
@@ -328,14 +332,13 @@ METRIC(step_unit_overrun_gap_arms, "stepUnitOverrunGapArms", MAXIMUM, "us", PROC
 METRIC(slice_overrun_asks, "sliceOverrunAsks", LIFETIME, "point", PROCESS, "solver/engine.c", INT)
 METRIC(slice_overrun_seamless, "sliceOverrunSeamless", LIFETIME, "turn", PROCESS, "solver/engine.c", INT)
 /* …and the worst no-offer stretch over every arm at once, so `max(arms) == this` makes the
-   per-arm row checkable as whole. A high-water mark: read against ENGINE_QUANTUM_MS, never
-   another run's figure; its evidence is bounded by `stepUnitOverruns` minus
-   `stepUnitOverrunSeamlessArms`. */
-METRIC(slice_overrun_gap_us, "sliceOverrunGapUs", MAXIMUM, "us", PROCESS, "solver/engine.c", INT)
+   per-arm row checkable as whole. A high-water mark: read against @QUANTUM's `sliceWork`; its
+   evidence is bounded by `stepUnitOverruns` minus `stepUnitOverrunSeamlessArms`. */
+METRIC(slice_overrun_gap_work, "sliceOverrunGapWork", MAXIMUM, "unit", PROCESS, "solver/engine.c", INT)
 /* …and which phase of a start step spent the time. A start compiles then executes; the compile
    rests (JS_FlowCompileStep hands the parse back part way), so one program parses over one or
-   more stints. `classicCompiles` is one per program, `classicCompileOverruns` one per stint that
-   met the slice, so they are not a ratio; the stint population is `classicCompiles +
+   more stints. `classicCompiles` is one per program, `classicCompileOverruns` one per stint whose
+   parse retired a slice's work, so they are not a ratio; the stint population is `classicCompiles +
    stepUnitRuns[compile-handed-the-thread-back]`, against which the containment is asserted.
    `classicCompiles` counts every flow, timeline and appended row (chunks, injected scripts,
    `javascript:` URLs, peer operations, value dumps), so it far exceeds `rootPrograms` on a

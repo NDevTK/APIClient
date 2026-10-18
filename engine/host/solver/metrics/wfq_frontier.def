@@ -53,9 +53,9 @@ METRIC(picks_lifetime, "picksLifetime", LIFETIME, "dispatch", PROCESS, "solver/f
    proves nothing retired; a nonzero here proves nothing. */
 METRIC(picks_departed, "picksDeparted", LIFETIME, "dispatch", PROCESS, "solver/flow.c", INT)
 /* The seven notch rows (`svcMax`, `svcMin`, `svcFamMax`, `svcFamMin`, `candSvcMax`, `topSvc`,
-   `topSvcFam`) are quotients `<thread time> / FLOW_SERVICE_US` (flow.c's flow_service_notch
+   `topSvcFam`) are quotients `<work> / FLOW_SERVICE_WORK` (flow.c's flow_service_notch
    and flow_family_notch), so one increment is one quantum of unforgiven silence — never a
-   dispatch, step or microsecond; multiply by FLOW_AGE_QUANTUM for the points the weight
+   dispatch, step or unit; multiply by FLOW_AGE_QUANTUM for the points the weight
    charges. Dispatch counts are the `picks*` rows. Gauges: silence since the account's last
    forgiveness, which flow_credit_emit zeroes family-wide; `topForgiven` counts those. */
 METRIC(svc_max, "svcMax", GAUGE, "notch", AGENT, "solver/flow.c", INT)
@@ -89,36 +89,35 @@ METRIC(br_born_life_max, "brBornLifeMax", GAUGE, "member", AGENT, "solver/flow.c
 METRIC(br_born_life_min, "brBornLifeMin", GAUGE, "member", AGENT, "solver/flow.c", INT)
 /* `brCrowd*` are the bucket owning `brLiveMax`; the other maxima may belong to different
    buckets (the burn maximum is often a departed root holding boot's burn). Compare
-   `brCrowdLive / members` with `brCrowdUsLife / brHeldUsLife`: at par, branching turned into
+   `brCrowdLive / members` with `brCrowdWorkLife / brHeldWorkLife`: at par, branching turned into
    thread one for one; near zero, an arm already demoted that nothing retires; above, an
-   ordinary monopolist. `brCrowdUsLife` 0 with `brCrowdLive > 0` is starvation, not an
+   ordinary monopolist. `brCrowdWorkLife` 0 with `brCrowdLive > 0` is starvation, not an
    unobserved bucket. `brCrowdLive == brLiveMax` is asserted in flow_wfq_census. */
 METRIC(br_crowd_live, "brCrowdLive", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(br_crowd_born_life, "brCrowdBornLife", GAUGE, "member", AGENT, "solver/flow.c", INT)
-METRIC(br_crowd_us_life, "brCrowdUsLife", GAUGE, "us", AGENT, "solver/flow.c", INT)
+METRIC(br_crowd_work_life, "brCrowdWorkLife", GAUGE, "unit", AGENT, "solver/flow.c", INT)
 /* …and the same three for the arm that has taken the most arms (selected by `brBornLifeMax`,
    where the crowd is selected by `brLiveMax`; `sub_born = live + sub_gone` makes them one
    bucket only while nothing has departed). An arm forking at every position of an unknown
    length and letting each finish mints unboundedly and stands narrow. It carries the smallest
-   branch bonus; compare `brMinterUsLife / brHeldUsLife` with `brMinterLive / members` as for
+   branch bonus; compare `brMinterWorkLife / brHeldWorkLife` with `brMinterLive / members` as for
    the crowd. `brMinterGoneLife` (shed count) is published nowhere else. The live count is a
    gauge; the shed count and burn are per-bucket lifetime counts read at one instant, since
    the bucket selected moves. `brMinterLive + brMinterGoneLife == brBornLifeMax` is asserted
-   in flow_wfq_census; `brMinterUsLife == brCrowdUsLife` says both selectors name one arm. */
+   in flow_wfq_census; `brMinterWorkLife == brCrowdWorkLife` says both selectors name one arm. */
 METRIC(br_minter_live, "brMinterLive", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(br_minter_gone_life, "brMinterGoneLife", GAUGE, "member", AGENT, "solver/flow.c", INT)
-METRIC(br_minter_us_life, "brMinterUsLife", GAUGE, "us", AGENT, "solver/flow.c", INT)
-/* Burn rows are over every bucket, in the quantum's own measure (@QUANTUM's `isCpu`), so a
-   raw total is quoted with that line; `brUsLifeMax / chargedUsLife` is how concentrated the
-   thread is. Asserted in flow_wfq_census: `brHeldUsLife + brEmptyUsLife == brUsLifeSum` and
-   `brUsLifeSum + brRetiredUsLife == chargedUsLife`. */
-METRIC(br_us_life_max, "brUsLifeMax", GAUGE, "us", AGENT, "solver/flow.c", INT)
-METRIC(br_us_life_min, "brUsLifeMin", GAUGE, "us", AGENT, "solver/flow.c", INT)
-METRIC(br_us_life_sum, "brUsLifeSum", GAUGE, "us", AGENT, "solver/flow.c", INT)
-METRIC(br_held_us_life, "brHeldUsLife", GAUGE, "us", AGENT, "solver/flow.c", INT)
-METRIC(br_empty_us_life, "brEmptyUsLife", GAUGE, "us", AGENT, "solver/flow.c", INT)
-METRIC(br_retired_us_life, "brRetiredUsLife", LIFETIME, "us", PROCESS, "solver/flow.c", INT)
-METRIC(charged_us_life, "chargedUsLife", LIFETIME, "us", PROCESS, "solver/flow.c", INT)
+METRIC(br_minter_work_life, "brMinterWorkLife", GAUGE, "unit", AGENT, "solver/flow.c", INT)
+/* Burn rows are over every bucket, in engine work, so a raw total is comparable across runs;
+   `brWorkLifeMax / chargedWorkLife` is how concentrated the thread is. Asserted in flow_wfq_census: `brHeldWorkLife + brEmptyWorkLife == brWorkLifeSum` and
+   `brWorkLifeSum + brRetiredWorkLife == chargedWorkLife`. */
+METRIC(br_work_life_max, "brWorkLifeMax", GAUGE, "unit", AGENT, "solver/flow.c", INT)
+METRIC(br_work_life_min, "brWorkLifeMin", GAUGE, "unit", AGENT, "solver/flow.c", INT)
+METRIC(br_work_life_sum, "brWorkLifeSum", GAUGE, "unit", AGENT, "solver/flow.c", INT)
+METRIC(br_held_work_life, "brHeldWorkLife", GAUGE, "unit", AGENT, "solver/flow.c", INT)
+METRIC(br_empty_work_life, "brEmptyWorkLife", GAUGE, "unit", AGENT, "solver/flow.c", INT)
+METRIC(br_retired_work_life, "brRetiredWorkLife", LIFETIME, "unit", PROCESS, "solver/flow.c", INT)
+METRIC(charged_work_life, "chargedWorkLife", LIFETIME, "unit", PROCESS, "solver/flow.c", INT)
 METRIC(br_depth_max, "brDepthMax", GAUGE, "level", AGENT, "solver/flow.c", INT)
 /* …and which fork inside a bucket did the minting. A fan is the live members forked directly
    off one non-root node (solver/flow.h); `brFanDepth` 1 is the top-level arm minting the
@@ -147,7 +146,7 @@ METRIC(cand_wmax, "candWMax", GAUGE, "point", AGENT, "solver/flow.c", FIXED3)
    picksMax` is the sweep depth. It belongs to whichever account leads, so it may fall on a
    change of leader (`valTop` falling beside it). `valTop / topForgiven` is points per
    finding. Read `topSvc`, never `topSvcFam`, for a gap: every arm of a family reads one
-   `fam_us`, which cancels out of `neverPickedGap`. A monopolising leader shows `topSvc`
+   `fam_work`, which cancels out of `neverPickedGap`. A monopolising leader shows `topSvc`
    climbing with gaps closing; a front refilled by fresh arms shows `topSvc` low or
    sawtoothing with gaps standing. `nonrewardMax` is flow.c's FLOW_NONREWARD_MAX: `(valTop -
    valMin) + nonrewardMax` is the largest gap a non-negative non-reward sum can produce, so a
@@ -341,7 +340,7 @@ METRIC(credits_offered_lifetime, "creditsOfferedLifetime", LIFETIME, "credit", P
 METRIC(credits_paid_lifetime, "creditsPaidLifetime", LIFETIME, "credit", PROCESS, "solver/flow.c", INT)
 METRIC(credits_dropped_lifetime, "creditsDroppedLifetime", LIFETIME, "credit", PROCESS, "solver/flow.c", INT)
 /* The values the paid credits carried, summed (a survival-ratchet credit is a fraction of a point): the novel
-   value the trusted zone's Level-1 order divides by `loopUs`. A lifetime counter. */
+   value the trusted zone's Level-1 order divides by `serviceWork`. A lifetime counter. */
 METRIC(credits_paid_value_lifetime, "creditsPaidValueLifetime", LIFETIME, "point", PROCESS, "solver/flow.c", FIXED3)
 /* The novel share of it, the value Level 1 ranks a document by (solver/novelty.h's novelty_landed_value). */
 METRIC(novelty_landed_lifetime, "noveltyLandedLifetime", LIFETIME, "point", PROCESS, "solver/novelty.c", FIXED3)

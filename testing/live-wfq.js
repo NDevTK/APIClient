@@ -137,7 +137,7 @@ const GAUGES = ["members", "unrun", "neverPicked", "neverPickedGap", "neverPicke
    an arm convert fork factor into thread time — had no instrument outside a fixture whose fork factor is
    its author's design decision rather than a document's.
 
-   AND THE MINTER TRIPLE HAD NO READER ANYWHERE. `brMinterLive`, `brMinterGoneLife` and `brMinterUsLife`
+   AND THE MINTER TRIPLE HAD NO READER ANYWHERE. `brMinterLive`, `brMinterGoneLife` and `brMinterWorkLife`
    occur in exactly ONE file in this tree — result.c, which emits them — while `brCrowd*` occurs in two.
    That is the write-with-no-reader half of the record-field contract, and here it is not a tidiness
    defect: result.c states that the crowd is selected by `brLiveMax`, a MEMBERSHIP fact, while an arm that
@@ -163,17 +163,17 @@ function wfqComposerKeys() {
 
 /* THE KINDS CANNOT BE DERIVED FROM A FORMAT STRING, so they are written here from result.c's own prose
    with the reason, exactly as the COUNTERS/GAUGES split above is. result.c: "The only rows on this line a
-   reader may difference are `brUsLifeSum`, `brRetiredUsLife` and `chargedUsLife`, whose population is
-   every microsecond ever charged rather than whichever buckets are standing." Everything else at this
+   reader may difference are `brWorkLifeSum`, `brRetiredWorkLife` and `chargedWorkLife`, whose population is
+   every unit ever charged rather than whichever buckets are standing." Everything else at this
    scope is a GAUGE or a per-bucket lifetime read at ONE instant — because THE BUCKET SELECTED MOVES
    BETWEEN SAMPLES, and an extremum over the buckets standing is not its field's kind. Differencing one of
    those across two rows of this stream is arithmetic about two different arms. */
-const BR_DIFFABLE = ["brUsLifeSum", "brRetiredUsLife", "chargedUsLife"];
+const BR_DIFFABLE = ["brWorkLifeSum", "brRetiredWorkLife", "chargedWorkLife"];
 const BR_INSTANT  = ["branches", "brLiveMax", "brLiveMin", "brLiveSum",
                      "brBornLifeMax", "brBornLifeMin",
-                     "brCrowdLive", "brCrowdBornLife", "brCrowdUsLife",
-                     "brMinterLive", "brMinterGoneLife", "brMinterUsLife",
-                     "brUsLifeMax", "brUsLifeMin", "brHeldUsLife", "brEmptyUsLife",
+                     "brCrowdLive", "brCrowdBornLife", "brCrowdWorkLife",
+                     "brMinterLive", "brMinterGoneLife", "brMinterWorkLife",
+                     "brWorkLifeMax", "brWorkLifeMin", "brHeldWorkLife", "brEmptyWorkLife",
                      "brDepthMax", "brFanMax", "brFanSum", "brFanDepth"];
 
 function branchScope() {
@@ -185,7 +185,7 @@ function branchScope() {
                       "from result.c's own composer, so a row that has gone is one the producer renamed " +
                       "or dropped rather than one this file invented, and every reading below it would " +
                       "compare an absent field as undefined.");
-  const published = [...keys].filter((k) => /^(?:branches|br[A-Z])/.test(k) || k === "chargedUsLife");
+  const published = [...keys].filter((k) => /^(?:branches|br[A-Z])/.test(k) || k === "chargedWorkLife");
   const unread = published.filter((k) => !named.includes(k));
   if (unread.length)
     throw new Error("[live-wfq] result_wfq_json publishes branch-scope row(s) no reader here names: " +
@@ -526,12 +526,12 @@ const COST_IDENTITIES = [
 const BR_IDENTITIES = [
   ["brLiveSum==members", ["brLiveSum", "members"],
    (w) => w.brLiveSum === w.members],
-  ["brUsLifeSum+brRetiredUsLife==chargedUsLife", ["brUsLifeSum", "brRetiredUsLife", "chargedUsLife"],
-   (w) => w.brUsLifeSum + w.brRetiredUsLife === w.chargedUsLife],
+  ["brWorkLifeSum+brRetiredWorkLife==chargedWorkLife", ["brWorkLifeSum", "brRetiredWorkLife", "chargedWorkLife"],
+   (w) => w.brWorkLifeSum + w.brRetiredWorkLife === w.chargedWorkLife],
   ["brCrowdLive==brLiveMax", ["brCrowdLive", "brLiveMax"],
    (w) => w.brCrowdLive === w.brLiveMax],
-  ["brHeldUsLife+brEmptyUsLife==brUsLifeSum", ["brHeldUsLife", "brEmptyUsLife", "brUsLifeSum"],
-   (w) => w.brHeldUsLife + w.brEmptyUsLife === w.brUsLifeSum],
+  ["brHeldWorkLife+brEmptyWorkLife==brWorkLifeSum", ["brHeldWorkLife", "brEmptyWorkLife", "brWorkLifeSum"],
+   (w) => w.brHeldWorkLife + w.brEmptyWorkLife === w.brWorkLifeSum],
   ["brMinterLive+brMinterGoneLife==brBornLifeMax", ["brMinterLive", "brMinterGoneLife", "brBornLifeMax"],
    (w) => w.brMinterLive + w.brMinterGoneLife === w.brBornLifeMax],
   /* THE ONLY BOUND ON THE NUMERATOR OF THE READING THIS DRIVER EXISTS TO TAKE, AND IT WAS THE ONE
@@ -547,21 +547,20 @@ const BR_IDENTITIES = [
      auditor deriving its rule from the code that owns it: a restated invariant is a second copy, and
      the copy that drifts is the one nobody runs against reality. Both conjuncts are one-sided because
      a maximum and a sum are upper bounds over sets the minter belongs to. */
-  ["brMinterLive<=brLiveMax&&brMinterUsLife<=brHeldUsLife",
-   ["brMinterLive", "brLiveMax", "brMinterUsLife", "brHeldUsLife"],
-   (w) => w.brMinterLive <= w.brLiveMax && w.brMinterUsLife <= w.brHeldUsLife],
+  ["brMinterLive<=brLiveMax&&brMinterWorkLife<=brHeldWorkLife",
+   ["brMinterLive", "brLiveMax", "brMinterWorkLife", "brHeldWorkLife"],
+   (w) => w.brMinterLive <= w.brLiveMax && w.brMinterWorkLife <= w.brHeldWorkLife],
 ];
 
 /* A SHARE IS PRINTED WHERE result.c PRESCRIBES THE QUOTIENT AND NOWHERE ELSE, which is the distinction the
    header makes about `starvedPicks / picksLifetime`: that one is withheld because it sums two populations,
    and these two are the readings result.c names in its own text — "Take the crowd's share of the members
-   standing against its share of the thread the live buckets hold", and "READ `brMinterUsLife /
-   brHeldUsLife` AGAINST `brMinterLive / members`". The three-way verdict those readings carry (at par /
+   standing against its share of the thread the live buckets hold", and "READ `brMinterWorkLife /
+   brHeldWorkLife` AGAINST `brMinterLive / members`". The three-way verdict those readings carry (at par /
    near zero / above par) is NOT computed: classifying would pick a threshold the contract leaves to a
    reader, and the three take opposite diffs.
-   A QUOTIENT OF TWO BURNS IS UNIT-FREE AND A RAW BURN IS NOT. result.c: "A quotient of two burns from ONE
-   run in ONE unit is the same number either way; a raw microsecond total from this line is not, and is
-   quoted with that line beside it." So `isCpu` is carried on every row that prints one.
+   A BURN IS ENGINE WORK, a function of the paths, so a raw total and a quotient of two are both quotable
+   without a host caveat.
    A ZERO DENOMINATOR YIELDS null AND NEVER 0 — an unasked question and a measured zero are different
    facts, and this stream already spells absence as null everywhere else. */
 const share = (n, d) => (typeof n === "number" && typeof d === "number" && d > 0
@@ -600,8 +599,8 @@ function sample(pg) {
     try { const p = self.rendererPoolProbe(); sched = { alive: p.scheduler.alive }; }
     catch (e) { sched = { PROBE_THREW: String((e && e.message) || e) }; }
     if (!("wfq" in r)) return { run: r.run, NO_WFQ: true, switches: r.switches, sched: sched };
-    /* `quantum` rides the same log row (bridge.js composes it beside `wfq`) and its `isCpu` is what makes a
-       RAW burn on this line quotable. Absent is returned as absent; bridge.js asserts its shape upstream. */
+    /* `quantum` rides the same log row (bridge.js composes it beside `wfq`): the slice the burns were served
+       in. Absent is returned as absent; bridge.js asserts its shape upstream. */
     /* AND THE HEAP CENSUS, WHICH RIDES THIS SAME ROW AND WAS DROPPED HERE. bridge.js composes
        `heap: result._heap` one line from the `wfq` it composes above and DCHECKs its presence on every
        document it accepts, so an absent one is a producer that stopped composing rather than an engine
@@ -859,9 +858,9 @@ async function main() {
            refutation of the aging question is usually quoted from; the minter pair is the arm that question
            is actually about, and they are the same bucket only when `selectorsAgree`. */
         out.crowdLiveShare  = share(w.brCrowdLive,   w.members);
-        out.crowdUsShare    = share(w.brCrowdUsLife, w.brHeldUsLife);
+        out.crowdUsShare    = share(w.brCrowdWorkLife, w.brHeldWorkLife);
         out.minterLiveShare = share(w.brMinterLive,  w.members);
-        out.minterUsShare   = share(w.brMinterUsLife, w.brHeldUsLife);
+        out.minterUsShare   = share(w.brMinterWorkLife, w.brHeldWorkLife);
         /* A COINCIDENCE TEST, AND IT USED TO BE VACUOUS ON THE ONE FRONTIER IT MATTERS MOST ON.
            This compared the two BURNS alone, so on an un-charged frontier -- both zero -- it answered
            TRUE for any two buckets whatever, including two that are plainly different. That reads as
@@ -880,12 +879,12 @@ async function main() {
            can do is REFUTE -- a false is conclusive that the two selectors reached different arms. */
         {
           const ident = ["brCrowdLive", "brMinterLive", "brCrowdBornLife", "brBornLifeMax",
-                         "brCrowdUsLife", "brMinterUsLife"];
+                         "brCrowdWorkLife", "brMinterWorkLife"];
           if (ident.some((k) => typeof w[k] !== "number")) out.selectorsAgree = null;
           else if (ident.every((k) => w[k] === 0))         out.selectorsAgree = null;
           else out.selectorsAgree = (w.brCrowdLive     === w.brMinterLive &&
                                      w.brCrowdBornLife === w.brBornLifeMax &&
-                                     w.brCrowdUsLife   === w.brMinterUsLife);
+                                     w.brCrowdWorkLife   === w.brMinterWorkLife);
         }
         /* SET FROM THIS CENSUS BEFORE THE LINE IS EMITTED, so the line where a run first separates carries
            its own index rather than the next one's.
@@ -910,9 +909,6 @@ async function main() {
         if (out.selectorsAgree === false && sepAt === null) sepAt = n;
         out.selectorsEverSeparatedAt = sepAt;
         out.selectorsCensusesSeen = n;
-        /* CARRIED BESIDE EVERY RAW BURN ON THIS LINE, because result.c says a raw microsecond total is
-           quoted with the quantum's unit and a quotient of two burns is not. */
-        out.isCpu = (s.quantum && typeof s.quantum.isCpu === "boolean") ? s.quantum.isCpu : null;
         console.log(JSON.stringify(out));
       }
     }

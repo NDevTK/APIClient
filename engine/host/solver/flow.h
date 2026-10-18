@@ -6,7 +6,7 @@
  * frame-agnostic by construction.
  *
  * The WFQ orders flows by an anytime-bandit priority: accumulated emitted value, plus a UCB optimism bonus
- * proportional to 1/(1 + visits) so a never-run flow is never starved, minus CPU aging so a flow that burns CPU
+ * proportional to 1/(1 + visits) so a never-run flow is never starved, minus work aging so a flow that spends work
  * without emitting sinks below productive and unrun flows. It orders only and never drops a work item. A
  * monopolizer is a fork chain rather than one flow, so the reward and the family half of the aging live on the
  * fork family's account (`family` below, flow.c's FlowAcct). */
@@ -22,7 +22,7 @@
 #include "solver/dyn_body.h"  /* the program text a flow's sequence holds; shared, because no flow writes it */
 #include "solver/step_unit.h" /* the named arm of flow_step a flow last returned through */
 
-/* A node of the fork tree, and the only part of a flow that outlives it: the thread time a departing flow burned
+/* A node of the fork tree, and the only part of a flow that outlives it: the work a departing flow burned
    must reach the flow that forked it, because the aging term prices a fork chain as one monopolizer. Opaque so
    that flow.c's flow_weight is its only rank reader. Refcounting and the charge are in flow.c. */
 typedef struct FlowAcct FlowAcct;
@@ -109,26 +109,26 @@ typedef struct Flow {
        Never copied, never inherited, never read by flow_weight; flow_fork_inherit asserts it is still zero,
        because a value copied at a fork differs between two arms by birth order rather than merit. */
     double val;
-    /* The own half of the aging term: thread time in microseconds this flow burned since its fork family last
+    /* The own half of the aging term: the work this flow retired since its fork family last
        emitted, never a step or opcode count (a count is not commensurate with the reward). The exchange rate is
        FLOW_AGE_RATE and the term steps in flow.c's FLOW_AGE_QUANTUM. int64_t because a 32-bit wasm `long`
-       overflows after about 2147 s, and a negative value would rank a monopolizer first.
-       It is a reading only while `cpu_gen` matches the account's `emit_gen`, so every reader goes through
+       overflows after about two billion units, and a negative value would rank a monopolizer first.
+       It is a reading only while `work_gen` matches the account's `emit_gen`, so every reader goes through
        flow.c's flow_own_silence and never reads it raw. Written only for the flow holding the thread; inherited
        at a fork. The family half (`family`) keeps a fork chain one unit against other families; this half
        orders arms within one family, where every arm reads the same family charge. Both reset at an emission
        credited to the account, which makes them silence rather than lifetime service. */
-    int64_t cpu;
-    /* Which silence window `cpu` is a reading of: this flow's copy of its account's `emit_gen`. An emission
+    int64_t work;
+    /* Which silence window `work` is a reading of: this flow's copy of its account's `emit_gen`. An emission
        forgives the whole family with one increment of `emit_gen` rather than a walk, because flow_weight is O(1)
-       and is evaluated inside DCHECK conditions. Inherited at a fork together with `cpu`; flow_fork_inherit's
+       and is evaluated inside DCHECK conditions. Inherited at a fork together with `work`; flow_fork_inherit's
        rank-neutrality equality fails if only one is copied. flow.c's flow_age_running normalises a stale value
        where the flow is charged. */
-    uint64_t cpu_gen;
+    uint64_t work_gen;
     /* The optimism term's quantity: units of work completed, not a clock. flow_credit_visit, its only raiser,
        credits one when a step leaves the flow between units, holding neither a program nor a parked
        continuation: the "JavaScript execution context stack is now empty" point of HTML §8.1.4.4 "Calling
-       scripts", where the microtask checkpoint also sits. Keyed on units rather than thread time, a flow keeps
+       scripts", where the microtask checkpoint also sits. Keyed on units rather than work, a flow keeps
        the thread until its program ends, so the jobs it queued (reachable only with `frame == NULL`) run.
        Inherited at a fork, since an arm has completed every unit its parent did. Not copied at an arrival
        (flow_add_unseeded): an arrival stands on nobody's decisions and starts at zero, the value the never-starved
@@ -145,7 +145,7 @@ typedef struct Flow {
        progress is a resume-seam defect (`vis_zero` counts members that finished nothing, which covers both). */
     int64_t picks;
     /* The family half of the aging term: a direct pointer at the root of this flow's fork family, shared by every
-       arm, holding the thread time the family burned since any arm last emitted. A from-baseline flow founds one
+       arm, holding the work the family burned since any arm last emitted. A from-baseline flow founds one
        (its own `acct`); a fork joins its parent's (flow_fork_inherit), so a reward stated once per family is
        cancelled by aging charged once per family. It is not the ancestry (`acct` is); it is direct so
        flow_weight costs one indirection, as it must inside DCHECK conditions. */
@@ -552,7 +552,7 @@ typedef struct Flow {
        because key_checks_total() is asserted equal to the weighings one loop performed:
          - `key_last`: flow_member_key, the sum that must stand still or flow_pick_walk goes blind to a fork
            re-ranking a whole arm;
-         - `phase_last`: flow_silence_phase, `own_silence % FLOW_SERVICE_US`, which the key's floor discards and
+         - `phase_last`: flow_silence_phase, `own_silence % FLOW_SERVICE_WORK`, which the key's floor discards and
            which is the bucket key; a sub-quantum writer would re-bucket a member without moving `key_last`;
          - `ikey_last`: flow_index_key, the key without the bucket term, which an index is keyed on; a fork's
            join raises `sub_born` for a whole arm with no generation bump, which the sum alone cannot see.
@@ -795,7 +795,7 @@ void flow_restore_reward(Flow *f, double val);
 /* This flow completed a unit of work: the optimism term's visit. Credited by the scheduler after flow_step
  * returns, the one point that sees whole steps, when the flow is left between units (the same boundary as
  * HTML §8.1.7.3 "Processing model"'s end-of-checkpoint steps). Asserts the flow is not inside a program, since
- * thread time inside a program is what the term must not measure. */
+ * work inside a program is what the term must not measure. */
 void flow_credit_visit(Flow *f);
 
 /* The scheduler handed this member the thread: the one writer of `picks`, credited at the context switch every
@@ -805,7 +805,7 @@ void flow_credit_pick(Flow *f);
 
 /* The census of what the ordering is made of. flow_weight is reward + optimism - aging, and the optimism term's
  * whole range is 1.0 (one emission), so a member a point below another in reward is outranked however long it
- * waits, until aging (FLOW_AGE_RATE per microsecond of silence) brings the top down. The reward spread therefore
+ * waits, until aging (FLOW_AGE_RATE per unit of silent work) brings the top down. The reward spread therefore
  * decides whether the optimism term can still order anything; this struct measures it and the other terms.
  *
  * Read the populations precisely: `val_zero` (family reward exactly 0) is empty inside a busy period by
@@ -855,7 +855,7 @@ typedef struct {
     long self_emit;    /* members with val > 0: they emitted something themselves rather than standing on an
                           account an ancestor filled. Zero here while `finished` climbs is work that advances no
                           statement. */
-    long unrun;        /* members at zero own silence (flow.c's flow_own_silence, never raw `Flow.cpu`): not
+    long unrun;        /* members at zero own silence (flow.c's flow_own_silence, never raw `Flow.work`): not
                           charged since their fork family last emitted, so it includes every arm of a family that
                           just produced (`never_picked` counts the never-dispatched). A superset of flow_pick's
                           `unrun`, which needs every non-reward term at zero; read against `vis_max` it separates
@@ -944,14 +944,14 @@ typedef struct {
     /* The extremes of the optimism denominator, `1 + visits + orphan_seen`, which the census's own spread bound
        is taken over; not published, since `visMin`/`visMax` are the visit count's own rows. */
     int64_t opt_den_min, opt_den_max;
-    /* The family half of the aging in the same notches (flow.c's FlowAcct `fam_us`), which flow_weight reads.
+    /* The family half of the aging in the same notches (flow.c's FlowAcct `fam_work`), which flow_weight reads.
        The reward lives on the same node, so a family presents it once however many arms it has. The ratio to
        `svc_max` is the widest family's fork factor, a fact about the document's branching;
        `svc_fam_max` far below `svc_max` cannot happen while every arm's charge lands on the family, which
        flow_age_running asserts. */
     int64_t svc_fam_max;
     /* The family half's floor. On a one-family frontier (a real page: every flow descends from boot) every
-       member reads one `fam_us` (flow_fork_inherit joins the parent's account), so `svc_fam_max == svc_fam_min`
+       member reads one `fam_work` (flow_fork_inherit joins the parent's account), so `svc_fam_max == svc_fam_min`
        is a common offset that orders nothing. A multi-family frontier with one chain monopolising shows the
        same maximum with a floor far below it. */
     int64_t svc_fam_min;
@@ -962,7 +962,7 @@ typedef struct {
        below the maximum means the family term is ordering. */
     long families;
     /* Members standing away from their family's epoch base, counted two ways. flow_own_silence is
-       `cpu_gen == family->emit_gen ? cpu : 0`, and flow_credit_emit sends a whole family to its base by moving
+       `work_gen == family->emit_gen ? work : 0`, and flow_credit_emit sends a whole family to its base by moving
        `emit_gen`, so an index over flow_index_key is rebuilt only for the members standing away.
        `epoch_away_live` is maintained incrementally at four sites, summed over distinct families;
        `epoch_away_walk` is this scan asking every member. flow_wfq_census asserts they are equal; both are
@@ -975,12 +975,12 @@ typedef struct {
        `(own + fam) / S` decomposes exactly into the member's notch, the family's, and a carry bit whose
        threshold (the family's residue) is common, so between two frontier generations only that bit moves, and
        members sharing a phase flip it together. At 1 the bit is a common offset and one cached maximum is
-       exact; that state is reachable (a fork copies `cpu` and `cpu_gen`, an emission zeroes a family's phases)
+       exact; that state is reachable (a fork copies `work` and `work_gen`, an emission zeroes a family's phases)
        but has been observed only with `members == 1`.
-       The count is capped by the clock: phases are residues of `FLOW_SERVICE_US` in the quantum clock's
-       currency, so a coarse clock bounds them at `FLOW_SERVICE_US` divided by its granularity. Read that
-       ceiling off the run (the gcd of its microsecond accumulators) and never copy it from here: near it the
-       figure is about the clock. A structure over the fixed phase domain `[0, FLOW_SERVICE_US)`, whose carry
+       The count is capped by the clock: phases are residues of `FLOW_SERVICE_WORK` in the quantum clock's
+       currency, so a coarse clock bounds them at `FLOW_SERVICE_WORK` divided by its granularity. Read that
+       ceiling off the run (the gcd of its work accumulators) and never copy it from here: near it the
+       figure is about the clock. A structure over the fixed phase domain `[0, FLOW_SERVICE_WORK)`, whose carry
        splits it into `[0, S-R)` and `[S-R, S)`, costs a logarithm whatever this reads, so prefer it.
        Read it against `picks_lifetime` first (only a charged member mints a residue) and `members` second; a
        quotient that falls monotonically as picks rise is saturation at the clock ceiling. */
@@ -1000,16 +1000,15 @@ typedef struct {
      * one indirection (flow.c's FlowAcct `branch`). A deeper branch is summed into its top-level arm; the
      * residual at FlowAcct `up` says why there is no per-node bucket, and the `br_fan_*` rows name the deep
      * minter.
-     * Kinds: `branches`, `br_live_*` and `br_depth_max` are gauges. `sub_born` and `sub_us` are per-bucket
+     * Kinds: `branches`, `br_live_*` and `br_depth_max` are gauges. `sub_born` and `sub_work` are per-bucket
      * lifetime counters, but an extremum over the buckets moves as buckets open and depart, so `br_born_*`,
-     * `br_us_max/min`, the crowd and minter triples are read as ratios at one instant, never differenced. Only
-     * `br_retired_us` and `charged_us` only grow. Burn is in microseconds of whatever `quantum_measure` answers
-     * (thread CPU or wall, per the run's `@QUANTUM` `isCpu`), so quote a raw total with that line; a quotient of
-     * two burns from one run is host-independent.
+     * `br_work_max/min`, the crowd and minter triples are read as ratios at one instant, never differenced. Only
+     * `br_retired_work` and `charged_work` only grow. Burn is in engine work, a function of the path, so a raw total and a
+     * quotient of two burns are both host-independent.
      * Identities asserted in flow_wfq_census, every term published: `br_live_sum == members` (buckets partition
-     * the frontier) and `br_held_us + br_empty_us + br_retired_us == charged_us`, via `br_us_sum`. */
+     * the frontier) and `br_held_work + br_empty_work + br_retired_work == charged_work`, via `br_work_sum`. */
     /* Reading them: `br_live_max / members` is how concentrated the frontier is on one side of one branch;
-     * `br_us_max / charged_us` is how concentrated the thread is. The extrema can belong to different buckets
+     * `br_work_max / charged_work` is how concentrated the thread is. The extrema can belong to different buckets
      * (the burn maximum is often a departed family root holding nobody), so a one-arm pair is read off the
      * crowd or minter triple. The mint pair is the branch term's own range: flow_branch_bonus returns
      * `1.0 / sub_born`, so `1/br_born_min - 1/br_born_max` is the span wfq_accounted_spread reads. The live and
@@ -1022,7 +1021,7 @@ typedef struct {
        `live > 0` guard, and the family-root door takes a root's bucket after its flow departed to keep that
        burn in the identity, so it exceeds the live-bearing count by one per such family; it is not the fold
        width a per-bucket order would pay.
-       Named residual. Not covered: the live-bearing bucket count is not published or derivable (`br_empty_us`
+       Named residual. Not covered: the live-bearing bucket count is not published or derivable (`br_empty_work`
        misses a departed root that burned nothing). Next diff builds: that count, folded inside branch_take's
        live guard and emitted here, landing with `testing/live-wfq.js`, which throws on an unnamed branch-scope
        row. Absence shows as: `branches` quoted as a fold width, high by one per family whose root departed. */
@@ -1034,44 +1033,44 @@ typedef struct {
     long br_born_min;   /* lifetime: the fewest — the two ends of flow_branch_bonus's own denominator */
     /* The crowd: the fattest live bucket's own membership, mint and receipt, from one bucket. Its share of the
        members (`br_crowd_live / members`) against its share of the live buckets' thread
-       (`br_crowd_us / br_held_us`) separates three states: at par, a branching arm converting fork factor into
+       (`br_crowd_work / br_held_work`) separates three states: at par, a branching arm converting fork factor into
        thread; near zero, the order demoting it while retention keeps the frontier from draining; above par, a
-       monopolist. `br_crowd_us == br_us_max` says the crowd is the hungriest bucket; `br_crowd_born ==
+       monopolist. `br_crowd_work == br_work_max` says the crowd is the hungriest bucket; `br_crowd_born ==
        br_born_max` says it is the minter.
        flow_wfq_census asserts `br_crowd_live == br_live_max`, written by different writers (a dereference of the
        retained bucket after the walk; a running maximum during it). Folded inside the live guard: all three are
        zero only when no live bucket was reached, which cannot happen with members standing; a zero
-       `br_crowd_us` with `br_crowd_live > 0` is a crowd never charged.
+       `br_crowd_work` with `br_crowd_live > 0` is a crowd never charged.
        Named residual. Not covered: what the hungriest bucket minted and shed. Next diff builds: nothing until a
-       reading needs it. Absence shows as: `br_crowd_us`, `br_minter_us` and `br_us_max` all different with
-       `br_us_max` inside `br_held_us`, a live arm holding the most thread that no triple names. */
+       reading needs it. Absence shows as: `br_crowd_work`, `br_minter_work` and `br_work_max` all different with
+       `br_work_max` inside `br_held_work`, a live arm holding the most thread that no triple names. */
     long br_crowd_live;    /* gauge: live members in the bucket that owns `br_live_max` */
     long br_crowd_born;    /* lifetime: that same bucket's own mint count */
-    int64_t br_crowd_us;   /* lifetime microseconds: that same bucket's own receipt */
+    int64_t br_crowd_work;   /* lifetime work: that same bucket's own receipt */
     /* The minter: the same three numbers for the bucket that has minted the most, a different arm whenever an arm
        shed what it minted (`sub_born = live + sub_gone`). A walk over an unknown length forks a `stop at n` arm
        at every position and each arm finishes, so the minter stands narrow and is not the crowd. It carries
-       the smallest branch bonus, so `br_minter_us / br_held_us` against `br_minter_live / members` says whether
+       the smallest branch bonus, so `br_minter_work / br_held_work` against `br_minter_live / members` says whether
        the branch term's demotion reaches the thread (the crowd's three states, asked of this arm).
        `br_minter_gone` is the shed count, published nowhere else. flow_wfq_census asserts
        `br_minter_live + br_minter_gone == br_born_max` (different writers, as for the crowd);
-       `br_minter_us == br_crowd_us` says the two selectors name one arm. Zero semantics are the crowd's. */
+       `br_minter_work == br_crowd_work` says the two selectors name one arm. Zero semantics are the crowd's. */
     long br_minter_live;   /* gauge: live members in the bucket that owns `br_born_max` */
     long br_minter_gone;   /* lifetime: arms that same bucket has shed — published nowhere else */
-    int64_t br_minter_us;  /* lifetime microseconds: that same bucket's own receipt */
-    int64_t br_us_max;  /* lifetime microseconds: the most thread time one bucket's subtree ever received */
-    int64_t br_us_min;  /* lifetime microseconds: the least */
-    int64_t br_us_sum;  /* lifetime microseconds: their sum — one half of the burn identity */
-    /* `br_us_sum` split by whether anyone stands in the bucket, so a live arm's share has a live denominator
-       (`br_held_us`). Two accumulators in two arms of one condition, so `br_held_us + br_empty_us == br_us_sum`
+    int64_t br_minter_work;  /* lifetime work: that same bucket's own receipt */
+    int64_t br_work_max;  /* lifetime work: the most work one bucket's subtree ever received */
+    int64_t br_work_min;  /* lifetime work: the least */
+    int64_t br_work_sum;  /* lifetime work: their sum — one half of the burn identity */
+    /* `br_work_sum` split by whether anyone stands in the bucket, so a live arm's share has a live denominator
+       (`br_held_work`). Two accumulators in two arms of one condition, so `br_held_work + br_empty_work == br_work_sum`
        is a check; asserted in flow_wfq_census. These rows are gauges despite the per-bucket "lifetime" labels:
        a bucket whose subtree wholly departs is freed in `acct_unref` and its receipt moves into
-       `br_retired_us`, so `br_us_sum`, `br_held_us` and `br_empty_us` fall then, and only `br_retired_us` and
-       `charged_us` are monotone (solver/result.c files them the same way). */
-    int64_t br_held_us;  /* lifetime microseconds: received by buckets holding at least one live member */
-    int64_t br_empty_us; /* lifetime microseconds: received by buckets still taken and holding none */
-    int64_t br_retired_us; /* lifetime microseconds received by buckets whose subtree has wholly departed */
-    int64_t charged_us; /* lifetime microseconds the scheduler has charged at all — the identity's total */
+       `br_retired_work`, so `br_work_sum`, `br_held_work` and `br_empty_work` fall then, and only `br_retired_work` and
+       `charged_work` are monotone (solver/result.c files them the same way). */
+    int64_t br_held_work;  /* lifetime work: received by buckets holding at least one live member */
+    int64_t br_empty_work; /* lifetime work: received by buckets still taken and holding none */
+    int64_t br_retired_work; /* lifetime work received by buckets whose subtree has wholly departed */
+    int64_t charged_work; /* lifetime work the scheduler has charged at all — the identity's total */
     /* Gauge: how deep in the fork tree the deepest live member sits (0 at a root). It ranks nothing; it says
        whether the fork tree is a star (a root walk is O(1) amortised) or a chain (quadratic). Real bundles read
        a star, but the binding cost of a per-node bucket is retention, which depth cannot see (FlowAcct `up`). */
@@ -1117,7 +1116,7 @@ typedef struct {
      * Aging is absolute, while the scheduler's demotion of a monopolizer is comparative. flow.c's
      * flow_arrive_at_virtual_time applies SFQ's `max{v(t), F_prev}` to from-baseline entries as a continuing
      * relation, so a created document or candidate is not placed ahead of the backlog. These weights order one
-     * document's flows only: Level 1 ranks documents in the trusted zone by value per CPU-second. Every field of this struct is emitted; flow_wfq_census's accounting assertion keeps that true. */
+     * document's flows only: Level 1 ranks documents in the trusted zone by value per unit of work served. Every field of this struct is emitted; flow_wfq_census's accounting assertion keeps that true. */
     /* The fitness term's range (@S distance, added by flow_weight). Its floor is the constant 0: a flow with no
        payload has no ladder and both fitness writers refuse to record one, so [0, dist_max] is the range. With
        `cands: 0` it is 0 by construction, which is a fact about the run's @S population. */
@@ -1129,7 +1128,7 @@ typedef struct {
     /* The two halves of the leader's own silence, read off the member flow_best returned, in notches like
        `svc_max`/`svc_fam_max` (multiply by FLOW_AGE_QUANTUM for points). A ledger is monotone, so a frozen
        `val_top` and a slowly earning one look alike; the silence is not monotone (flow_credit_emit zeroes
-       `fam_us`), so these say whether the leader's aging is being forgiven.
+       `fam_work`), so these say whether the leader's aging is being forgiven.
        Reported separately: on a one-family frontier `top_svc_fam` is a common offset that cancels from every
        gap. `top_svc` is the half that moves a gap: a monopolising front sinks and `top_svc` climbs, while a
        front refilled by fresh arms keeps it low or sawtoothing while the same gap stands; those take opposite
@@ -1444,14 +1443,14 @@ Flow *flow_next_to_run(const Flow *incumbent, FlowScan why);
  * against, hence it excludes rather than seeds. The same scan, so the hook and the pick never disagree. */
 Flow *flow_rival_of(const Flow *cur);
 
-/* Whole quanta of thread time this flow has consumed: the quantised own silence, a census quantity. Not itself
+/* Whole quanta of work this flow has consumed: the quantised own silence, a census quantity. Not itself
  * a weight term; the aging term reads its sum with the family notch in this unit. */
 int64_t flow_service_notch(const Flow *f);
 /* The family's notch, in the same unit; it has its own reset point (flow.c's flow_age_running). The ratio of the
    two is the widest family's fork factor. */
 int64_t flow_family_notch(const Flow *f);
-/* The aging term's quantity: whole cooperative quanta of silence, `(own + fam) / FLOW_SERVICE_US`. The price per
-   notch is applied where the term is summed (flow.c's FLOW_AGE_QUANTUM), since the cost of a microsecond and the
+/* The aging term's quantity: whole cooperative quanta of silence, `(own + fam) / FLOW_SERVICE_WORK`. The price per
+   notch is applied where the term is summed (flow.c's FLOW_AGE_QUANTUM), since the cost of a unit of work and the
    order's smallest step are different quantities. Public because it is half of a rank change: between two of
    these notches and two completed units, a weight moves only through an emission, which is the invariant
    engine.c's seam assertion holds the value yield to. */
@@ -1495,7 +1494,7 @@ int   flow_host_owed(const Flow *f);
 
 /* The host answered this flow, so it is askable again. One clear per event, on the flow the event reached: a
  * reply provided into its register, an answer delivered, a record or operation attached to it. Tied to the
- * event rather than to the slice, because a slice that ended on its CPU quantum gave the host nothing to answer,
+ * event rather than to the slice, because a slice that ended on its work quantum gave the host nothing to answer,
  * and clearing per slice would make "every member waits on the host" unreachable. */
 void  flow_clear_host_owed(Flow *f);
 
@@ -1537,7 +1536,7 @@ void  flow_set_orphan_seen(Flow *f, int64_t seen);
    dropped arm (no flow holds the thread). */
 int   flow_credit_emit(double v);
 /* The sum of the values flow_credit_emit paid to an account over this instance's lifetime: the document's novel
-   value as Level 1 ranks it (the trusted zone divides it by engine_service_us). Raised on the paid arm only, so a
+   value as Level 1 ranks it (the trusted zone divides it by engine_service_work). Raised on the paid arm only, so a
    credit made on host time with no flow to pay is not in it. Never falls. */
 double flow_credit_paid_value(void);
 /* Where this candidate's own bytes stand on the @S ladder: the fitness term of flow_weight, composed from the
@@ -1594,14 +1593,14 @@ int   flow_path_peer_pinned(const Flow *f);
    flow_path_forced: what such a flow requests is this tool's act, so its drive mark (solver/engine.h's
    PENDING_DRIVEN_*) reads `driven` and it never fires as the page's. */
 int   flow_path_driven(const Flow *f);
-/* Charge the running flow for the thread time a step just burned, in microseconds (the reward's currency), after
-   the step and by the scheduler alone, which holds both ends of the interval. Never a step count (see `cpu`). A
+/* Charge the running flow for the work a step just burned, in units of work (the reward's currency), after
+   the step and by the scheduler alone, which holds both ends of the interval. Never a step count (see `work`). A
    flow that leaves the frontier also hands what it burned to the flow that forked it, which prices a fork
    chain. */
 void  flow_age_running(int64_t us);
 
 /* The forked sibling takes over its parent's account: both rank terms at the instant of the branch, and the fork
-   edge that sends the thread time the arm burns to its family. Without it an arm would read zero reward and
+   edge that sends the work the arm burns to its family. Without it an arm would read zero reward and
    the full never-run bonus and outrank every flow that ever had a turn. Called by the fork only; a
    from-baseline flow (the first flow, a candidate session, a cold resume) keeps the constructor's zeros. Asserts
    the fork is rank-neutral (reasoning at the definition). `at_branch` is the parent's path marks read where the

@@ -1,10 +1,10 @@
 /* Work the thread does outside the interpreter's dispatch, which retires no opcode: decoding bytes, tokenizing
  * HTML, parsing CSS, and parsing script (the last counted and charged inside quickjs, JS_FlowParseBytesLife).
  *
- * A census: each span is counted with the bytes it consumed and the thread CPU it took (quantum_thread_us),
- * beside all the work the clock (event_loop.h's work mover) banked, the host charges retired, and the work
- * discarded, so a rate can be re-read against `stepUs`. CPU is a report here and never a clock input: the
- * clock must be a function of the flow's path.
+ * A census: each span is counted with the bytes it consumed and the thread CPU it took (quantum_thread_us,
+ * the pricing clock), beside all the work the clock (event_loop.h's work mover) banked, the host charges
+ * retired, and the work discarded, so a rate can be re-read against `stepUs`. CPU prices a kind here and is
+ * never an input: the clock, the slice and the aging are functions of the flow's path.
  *
  * The charge. Each kind's bytes move the clock in the opcode unit, at a fixed rate: what one byte of the kind
  * costs this engine's thread, over what one retired opcode costs it, both read off this census at one build
@@ -15,6 +15,11 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_THREAD_WORK_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_THREAD_WORK_H
 
+/* Named residual. Not covered: host work that is neither a parse nor a decode charges nothing, which today is
+   layout (the rest-unit kinds REST_UNIT_LAYOUT_*) and C builtins over their input (JSON, codecs, sorts without a
+   callback), so the slice and the aging do not see it. Next diff builds: a kind per such component, charged by
+   its input at a rate read off this census, as the four below are. Absence shows as: a step whose `stepUs` is
+   large against its `stepWork` beside the census's per-opcode price. */
 #define THREAD_WORK_UNITS_PER_BYTE_SCRIPT 1   /* 0.209 us per byte over 0.222 us per opcode */
 #define THREAD_WORK_UNITS_PER_KIB_DECODE 41
 #define THREAD_WORK_UNITS_PER_KIB_HTML 78

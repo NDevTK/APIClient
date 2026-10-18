@@ -2008,7 +2008,7 @@ typedef struct JSFlowControlHooks {
        means wildly different amounts of work when the source is a loop back-edge (once per iteration) and when
        it is a call (millions of times), and a policy that cannot tell them apart must answer the same for both.
        run-test262 forces every back-edge and samples calls for exactly that reason; the solver's own policy is
-       rank + wall-clock and does not care which source asked. */
+       rank + the work-denominated slice and does not care which source asked. */
 #define JS_PREEMPT_BACKEDGE 0
 #define JS_PREEMPT_FORK     1
 #define JS_PREEMPT_CALL     2
@@ -2018,31 +2018,14 @@ typedef struct JSFlowControlHooks {
    cross-instance read needing the flow suspended. */
 #define JS_PREEMPT_HOST     3
     int  (*preempt)(int kind);
-    /* IS THE RUNNING FLOW'S COOPERATIVE SLICE SPENT — the same question `preempt`'s own policy answers on its
-       quantum clause, asked from the interpreter's DISPATCH so that the budget can expire inside a stretch of
-       bytecode that raises nothing. It is a SECOND QUESTION AND NOT A SECOND POLICY: `preempt` answers "should
-       this flow park", which is rank AND budget, and this answers the budget alone — because the only thing a
-       dispatch does with the answer is RAISE, and the raise is then answered by the poll through `preempt`
-       exactly as a back-edge's is. One park decision, still in one place.
-       WHY IT EXISTS: solver/quantum.h's raise sources were a loop back-edge, a call and a fork, and all three
-       are occasions THE PAGE'S OWN CODE SHAPE supplies or withholds, so a straight-line call-free stretch could
-       not expire the slice it was supposed to be bounded by. A count of the interpreter's own dispatches is
-       UNEVADABLE — a page cannot write bytecode that dispatches without dispatching — which is the property
-       that header states and which is not restated here.
-       `budget_period` IS A GRANULARITY AND NOT A BUDGET. It says how often the question is ASKED; the answer is
-       the hook's, and the hook's is a CLOCK. It buys the one thing a period can buy: on a host whose clock read
-       is a call into JS, asking at every opcode is unaffordable, and asking every N amortises it while bounding
-       the OVERSHOOT at N dispatches. The raise is a CONJUNCTION with the hook's answer, so the raises taken with
-       the period are a SUBSET of those taken without it — which is the test g_flow_work_retired's declaration in
-       quickjs.c states in full, applied at the countdown that gates this call.
-       A DISPATCH-DENOMINATED BUDGET WOULD BE A DIFFERENT THING AND IS BANNED, and the reason bounds what this
-       can reach too: the dispatch count has ONE increment site, inside DISPATCH, so a C activation that declares
-       no step boundary retires zero of it however long it runs. That is the same population no raise source
-       reaches, and it is why solver/engine.c charges its aging term in thread time and not in work.
-       INSTALLED AND REMOVED WITH `preempt`, by one owner in one registration, for `work`'s reason below: a
-       budget is a fact about a scheduler session and about nothing else. A NULL `budget` is a host that declines
-       this edge — wpt_runner.c drives flows under its own policy with no frontier to be fair between — and it
-       costs that host one predicted-not-taken branch per dispatch and nothing else. */
+    /* Is the running flow's cooperative slice spent: the budget half of `preempt`'s policy, asked from the
+       interpreter's dispatch every `budget_period` dispatches so a straight-line stretch that raises nothing
+       still expires the slice. A true answer only raises a JS_PREEMPT_HOST request; the poll then asks
+       `preempt`, so every park decision stays in one place. The slice is denominated in retired work (the count
+       `work` receives plus JS_FlowPeekRetiredWork's standing count), so the answer is a function of the flow's
+       path; the period is how often it is asked and bounds the overshoot at one period. A dispatch cannot be
+       evaded by the page's code shape, which is the property the raise needs. A NULL `budget` is a host
+       declining the edge (wpt_runner.c); installed and removed with `preempt` by one owner. */
     int      (*budget)(void);
     uint32_t budget_period;
     /* THE WORK THE RUNNING FLOW HAS RETIRED since this hook last saw it, in OPCODES — reported at the yield
@@ -2084,6 +2067,10 @@ typedef struct JSFlowControlHooks {
     uint32_t parse_units_per_byte;
 } JSFlowControlHooks;
 JS_EXTERN void JS_SetFlowControlHooks(const JSFlowControlHooks *hooks);
+/* Re-arm the budget's dispatch countdown to a whole period: the scheduler calls it where a slice opens, so the
+   dispatches at which the budget is asked are counted from the slice's start and are the same for a session
+   resumed from the cold tier as for one that never parked. */
+JS_EXTERN void JS_FlowBudgetArm(void);
 /* THROW AWAY the retired-work count standing in the interpreter, attributing it to nobody — called by the
    scheduler where it switches a flow IN, which is the last instant at which anything standing there is by
    construction NOT the incoming flow's. Two things can be standing and neither is: work the HOST retired
@@ -2094,6 +2081,9 @@ JS_EXTERN void JS_SetFlowControlHooks(const JSFlowControlHooks *hooks);
 JS_EXTERN uint64_t JS_FlowDiscardRetiredWork(void);   /* returns what it discarded */
 /* Retires `units` of work the host did on the running flow's behalf, into the count `work` receives next. */
 JS_EXTERN void JS_FlowRetireWork(uint64_t units);
+/* The retired-work count standing in the interpreter, unbanked and unchanged: what a budget adds to the work
+   already banked to know the running flow's whole work so far. */
+JS_EXTERN uint64_t JS_FlowPeekRetiredWork(void);
 /* Takes the retired-work count, leaving it zero: the scheduler banks it on the running flow's clock where a
    step ends with that flow still running, so work retired after the step's last poll is not lost. */
 JS_EXTERN uint64_t JS_FlowTakeRetiredWork(void);

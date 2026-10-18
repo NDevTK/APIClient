@@ -3,8 +3,7 @@
    the unit — core/loader/html_document.c and core/loader/text_document.c both read REST_UNIT_INPUT_BYTES. */
 #include "solver/rest_unit.h"
 
-#include "solver/engine.h"     /* ENGINE_QUANTUM_MS: the ceiling is the scheduler's slice */
-#include "solver/quantum.h"    /* the consumed-CPU reading, and whether this host's reading is CPU */
+#include "solver/engine.h"     /* ENGINE_QUANTUM_WORK and the work counter: the ceiling is the scheduler's slice */
 #include "check.h"
 
 /* HTML §7.5.2 "Loading HTML documents" / §7.5.4 "Loading text documents": one networking task's bytes. The
@@ -94,7 +93,7 @@ size_t rest_unit_items(RestUnitKind kind)
    pairing DCHECKs would fire first. */
 static int          g_rest_open;
 static RestUnitKind g_rest_kind;
-static int64_t      g_rest_mark_us;
+static int64_t      g_rest_mark_work;
 #endif
 
 void rest_unit_begin(RestUnitKind kind)
@@ -107,7 +106,7 @@ void rest_unit_begin(RestUnitKind kind)
            "and returns to the frontier");
     g_rest_open    = 1;
     g_rest_kind    = kind;
-    g_rest_mark_us = quantum_thread_us();
+    g_rest_mark_work = engine_work_retired();
 #else
     (void)kind;
 #endif
@@ -123,21 +122,20 @@ void rest_unit_end(void)
            "work of exactly one unit, and an unmatched end is a driver that returned to the frontier from "
            "somewhere its own bracket does not cover");
     g_rest_open = 0;
-    spent = quantum_thread_us() - g_rest_mark_us;
-    /* Two gates. The reading must be CPU (solver/quantum.h): on the wasm host it is a wall clock, which a
-       descheduled thread would fail while consuming nothing. And the unit must be a choice (more than one
-       item): at one item there is no smaller number to name, so an overrun is fixed one layer down. */
-    if (!quantum_measure_is_cpu() || rest_unit_items(g_rest_kind) <= 1)
+    spent = engine_work_retired() - g_rest_mark_work;
+    /* The unit must be a choice (more than one item): at one item there is no smaller number to name, so an
+       overrun is fixed one layer down. The reading is work, a function of the unit's input, so no load moves it. */
+    if (rest_unit_items(g_rest_kind) <= 1)
         return;
-    DCHECKF(spent < (int64_t)ENGINE_QUANTUM_MS * 1000,
-            "one rest unit of kind %d (%zu items) consumed %lld us of CPU — a whole cooperative quantum is "
-            "%d ms, and the entire argument for resting at a chosen granularity rather than at the substrate's "
+    DCHECKF(spent < ENGINE_QUANTUM_WORK,
+            "one rest unit of kind %d (%zu items) retired %lld units of work — a whole cooperative quantum is "
+            "%lld, and the entire argument for resting at a chosen granularity rather than at the substrate's "
             "finest item is that a coarser unit DELAYS a due suspension by at most one unit's work, which is "
             "acceptable only while that work is small against the slice the scheduler already lets a flow hold. "
             "At this size it is not: a higher-value sibling that became runnable at the start of this unit "
             "waited longer than the scheduler's own decision interval to be picked. LOWER THE NUMBER FOR THIS "
             "KIND IN rest_unit.c — it is a policy input for exactly this reason and no loader changes — unless "
             "the per-item cost itself has grown, in which case the substrate's item is what to look at",
-            (int)g_rest_kind, rest_unit_items(g_rest_kind), (long long)spent, ENGINE_QUANTUM_MS);
+            (int)g_rest_kind, rest_unit_items(g_rest_kind), (long long)spent, (long long)ENGINE_QUANTUM_WORK);
 #endif
 }

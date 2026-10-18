@@ -26036,7 +26036,7 @@ enum { LEN_PH_START = 0, LEN_PH_GOT, LEN_PH_PRIM, LEN_PH_UNKNOWN };
  * empty walk, a concrete terminating path, which is what an @S candidate re-fire on its way to a sink needs.
  * OUTCOME 1 is "longer", and it asks again at n + 1. There is NO BOUND on n and there must not be one — a cap, a
  * seen-set or a same-length fixpoint would delete every world past it. What makes this behave like a finite walk
- * is the WFQ: the flow that keeps answering "longer" emits nothing new, so CPU-aging sinks it below every flow
+ * is the WFQ: the flow that keeps answering "longer" emits nothing new, so work aging sinks it below every flow
  * that does, and it is outranked and paged rather than stopped.
  *
  * The probe cursor and the operation string live on the HEADER, not in this function's locals: the machine
@@ -34321,118 +34321,30 @@ static _Thread_local JSFlowControlHooks g_flow_control = { 0 };
    test's base its own; single-threaded it is just a global. */
 static _Thread_local JSAsyncFunctionState *g_flow_base_gen = NULL;
 
-/* THE YIELD REQUEST — the engine's ONE suspend-point mechanism, and the reason a suspend point is a property of
-   the ENGINE rather than of the page's bytecode.
-   It used to be neither. The preempt hook was consulted at a loop back-edge, at a call, and at a concolic fork:
-   three places chosen by what the PAGE happened to contain. A top-level bundle is thousands of straight-line
-   statements, so a flow could run for seconds without reaching any of them — measured at requested=1 fired=1
-   across five seconds, which is not a seam the scheduler declined, it is a seam it never reached. A getter, a
-   callback and a direct `eval` with no back-edge had the same property and nothing said so.
-   The mechanism is the one every engine uses for the same problem (V8's StackGuard interrupt request,
-   SpiderMonkey's interruptBits_): a REQUEST BIT that anything may raise, polled at every dispatch. The poll is a
-   thread-local byte load and a predicted-not-taken branch — it costs nothing when nobody wants the thread, which
-   is what lets the question be askable EVERYWHERE instead of only where a loop put it. It is NOT a counter:
-   nothing here counts opcodes and nothing bounds a flow. It answers YES only when something ASKED, and the whole
-   of "when" lives in the scheduler's policy on the other side of the hook.
-   The value it holds is WHO ASKED, biased by one so that zero means nobody: JS_PREEMPT_* + 1. Last raise wins,
-   which loses nothing — a raise from the interpreter is answered at the very next dispatch, so a standing
-   interpreter request cannot be overwritten by a later one, and an overwritten HOST request is still answered at
-   that same dispatch with a different name on it.
-   IT IS A RELAXED LOCK-FREE ATOMIC, NOT MERELY `volatile`, AND THE REASON IS A SIGNAL HANDLER. The cooperative
-   quantum's edge (host solver/quantum.c) is a per-thread CPU timer whose handler raises this byte from an
-   ASYNCHRONOUS interrupt of the very thread running the interpreter. C11 §7.14.1.1 lets a handler touch exactly
-   two kinds of object: `volatile sig_atomic_t`, and a LOCK-FREE ATOMIC. `volatile uint8_t` is neither, and
-   `sig_atomic_t` is `int` — a wider object than the poll wants. A relaxed atomic byte is the second kind, is
-   what V8 and SpiderMonkey use for the same interrupt word, and compiles to the SAME plain load and store the
-   `volatile` spelling did on every target this ships to, which is what keeps the per-opcode poll free. The
-   lock-freedom is not assumed: it is a build failure below if it ever stops holding. Relaxed is the whole
-   ordering needed — the handler runs on the polling thread, so there is nothing to synchronise WITH; the byte
-   is a request, never a handshake carrying data.
-   LOCK-FREEDOM IS ONLY HALF OF WHAT MAKES THAT STORE SAFE, AND THE OTHER HALF IS THE TLS MODEL — which is why
-   it is DECLARED here instead of argued about somewhere else. Reaching a thread-local through the general
-   dynamic model calls __tls_get_addr, which on first touch in a thread allocates and takes the dynamic-loader
-   lock; a signal handler that interrupted the interpreter mid-allocation would then deadlock against it, and no
-   amount of the object being a lock-free atomic would help, because the unsafe part happens before the store.
-   local-exec is the model with no call in it: a constant offset from the thread pointer. It was previously TRUE
-   of every build in this tree, for a reason no build file states — that quickjs.c is compiled straight into the
-   PROGRAM rather than into a dlopen'd object — so the property held by accident and its loss would have been
-   silent. Asked for explicitly it stops being an accident: a build that made the engine a dynamically-loaded
-   module now FAILS TO LINK (a TPOFF relocation in a shared object), naming the thing it broke, instead of
-   quietly emitting a call the handler must not make. (Wasm has only this model, so the attribute is what it
-   already does there.) */
-static _Thread_local volatile uint8_t g_flow_yield_req __attribute__((tls_model("local-exec"))) = 0;
-_Static_assert(__atomic_always_lock_free(sizeof(g_flow_yield_req), 0),
-               "the yield request must be a LOCK-FREE atomic byte: the quantum's CPU-time edge raises it from a "
-               "signal handler, and a handler that took a lock to store it could deadlock against the "
-               "interpreter it interrupted");
-#define FLOW_YIELD_READ()        __atomic_load_n(&g_flow_yield_req, __ATOMIC_RELAXED)
-#define FLOW_YIELD_SET(v)        __atomic_store_n(&g_flow_yield_req, (uint8_t)(v), __ATOMIC_RELAXED)
+/* The yield request: the engine's one suspend-point mechanism, polled at every dispatch (V8's StackGuard
+   interrupt request, SpiderMonkey's interruptBits_). Anything may raise it (a back-edge, a call, a fork, the
+   dispatch-counted budget, a rank change through frontier_rank_changed) and the scheduler's policy on the other
+   side of the hook decides whether the flow parks. The value is who asked, biased by one so zero means nobody
+   (JS_PREEMPT_* + 1); last raise wins, which loses nothing, since a raise is answered at the next dispatch.
+   Every raiser runs on the polling thread, so the byte is a plain thread-local; local-exec keeps the
+   per-opcode poll a constant offset from the thread pointer. */
+static _Thread_local uint8_t g_flow_yield_req __attribute__((tls_model("local-exec"))) = 0;
+#define FLOW_YIELD_READ()        (g_flow_yield_req)
+#define FLOW_YIELD_SET(v)        (g_flow_yield_req = (uint8_t)(v))
 #define FLOW_YIELD_REQUEST(kind) FLOW_YIELD_SET((kind) + 1)
 void JS_RequestFlowYield(void) { FLOW_YIELD_REQUEST(JS_PREEMPT_HOST); }
 
-/* THE WORK THE RUNNING FLOW HAS RETIRED — the ONE quantity in this interpreter that is a function of the
- * flow's own path and of nothing else, which is what makes it the thing a virtual clock may be built on.
+/* The work the running flow has retired: one unit per dispatched opcode and per regexp back-edge, plus what the
+ * tokenizers and the host charge in the same unit (JS_FlowRetireWork). It is a function of the flow's own path,
+ * so the scheduler's one currency (aging, service, the slice) and the modelled clock are built on it, and each
+ * reading is the same on every host and across a park.
  *
- * IT IS A COUNTER AND IT IS NOT A BUDGET, and the distinction is the whole of why it is allowed to exist next
- * to a yield request whose own comment says "It is NOT a counter: nothing here counts opcodes and nothing
- * bounds a flow". That sentence is about the REQUEST, and it stays true. This number is READ by the host that
- * measures modelled time (JSFlowControlHooks.work) and by the poll that banks it there, and by nobody else.
+ * Counted at dispatch after the yield poll: the opcode a park suspends in front of is counted once, when
+ * `restart:` re-dispatches it, so a parked-and-resumed run counts the same total as an uninterrupted one.
  *
- * AND WHAT IS BANNED IS A PROPERTY, NOT A GRAMMAR — THIS PARAGRAPH STATED A GRAMMAR AND THE CODE BENEATH IT
- * ALREADY BROKE IT, TWICE, WHICH IS WHY THE OLD WORDING IS QUOTED HERE RATHER THAN DELETED. It read "nothing
- * below compares this number to anything, nothing branches on it, and no value of it makes any flow run less
- * far ... The instant something here decides from it, it is a step cap and it is banned", and of that only the
- * run-less-far clause was ever true. The yield poll COMPARES this counter (`g_flow_work_retired != 0`) and
- * branches on the comparison, deliberately, under a paragraph of its own explaining that a zero-unit advance
- * is the ABSENCE of an advance rather than an advance of zero. And the VALUE is the modelled clock's
- * increment, so a page spinning on `performance.now() - t0 < 8` exits BECAUSE of this number — which is as
- * direct a way of changing what a flow does as there is. A rule refuted by both of the uses it was written
- * over is not a strict rule, it is a rule aimed at the wrong axis, and the axis is the clause that survived:
- * NO VALUE OF IT MAY MAKE ANY FLOW RUN LESS FAR.
- *
- * THE TEST IS MECHANICAL AND NEEDS NO RUN — DELETE THE TEST THE COUNTER APPEARS IN AND ASK WHETHER ANY FLOW
- * THEN RUNS FURTHER. A step cap is exactly a test whose PRESENCE is what stops the flow, so deleting one lets
- * the flow run on; deleting a GRANULARITY can only make the guarded question be asked MORE often, never less,
- * so the flow runs the same distance or a shorter one. `if (g_flow_work_retired > N) <raise>` fails the test
- * at once — with it gone nothing raises and the flow runs on — and that is the banned shape, banned by what it
- * does rather than by the word "decides". The `!= 0` passes: delete it and the work hook is called with zero
- * units and aborts, which is not a flow running further.
- *
- * SO THE COUNTER MAY DECIDE WHEN A QUESTION IS ASKED AND MAY NEVER BE ANY PART OF THE ANSWER. It may gate a
- * CLOCK READ — §a-bound-is-not-a-granularity exactly, where the BUDGET STAYS THE CLOCK and the counter
- * supplies only the occasion — provided the raise it gates is a CONJUNCTION whose other conjunct is the
- * budget, so that the raises taken with the gate are a SUBSET of those taken without it. It may never be the
- * sole reason for a raise, a park, a skip, a drop or a reorder, and it may never be compared with a constant
- * that is not a period. Two things a builder owes beyond that test, neither of which the test catches: the
- * period is a POLICY INPUT THE SCHEDULER OWNS (§a-bound-is-not-a-granularity — the unit is stated where
- * ENGINE_QUANTUM_MS is, never as a constant hidden in this file, so two components cannot disagree about it
- * silently), and the gate is a FLOOR on how often the budget is evaluated and never a ceiling, so the
- * back-edge, call and fork raises STAY — this counter is zeroed at every switch-in and at every bank, so a
- * flow switched out before the period elapses would otherwise have its budget evaluated at nothing at all.
- * A reader who re-derives the old grammar meets this paragraph before acting on it, which is the whole reason
- * it is here.
- * RETIREMENT: this record goes when no use of this counter in this tree stands outside a conjunction with the
- * budget, because the deletion test can then be asserted where the uses are instead of described here.
- *
- * COUNTED AT DISPATCH, WHICH IS WHAT MAKES A PARKED-AND-RESUMED RUN COUNT THE SAME TOTAL AS AN UNINTERRUPTED
- * ONE. The poll branches out of DISPATCH BEFORE `opcode = *pc++`, so the opcode a park suspends in front of is
- * not counted here and is counted exactly once when `restart:` re-dispatches it. Counting after the handler
- * instead would need a site per opcode — the shape sf->cur_pc's eighty-two hand-written stores already
- * demonstrated the failure of — and would count the in-flight opcode twice across a park, which is a total
- * that depends on WHERE the flow was preempted. That is precisely what §Time-travel-resume's razor forbids.
- *
- * THREAD-LOCAL FOR THE REASON THE REQUEST IS: run-test262 drives many tests on parallel OS threads, and a
- * shared counter would attribute one thread's work to another's flow. local-exec for a DIFFERENT reason than
- * the request's — no signal handler touches this — namely that it is incremented at EVERY opcode, and the
- * general-dynamic model would put a __tls_get_addr call in the dispatch. Plain, not atomic: the polling thread
- * is its only reader and its only writer.
- *
- * ZEROED WHEN THE SCHEDULER SWITCHES A FLOW IN (JS_FlowDiscardRetiredWork), which is what makes "the count
- * handed over is the RUNNING flow's own" true rather than merely intended. Two things can be standing in it at
- * a switch and neither belongs to the incoming flow: work the HOST retired between two flows, and the residue
- * of an outgoing flow that FINISHED (a flow that parks banks at the poll first, so its residue is zero). Both
- * are discarded rather than banked — a finished flow's clock is not read again, and host time is not any
- * flow's time. */
+ * Thread-local because run-test262 drives tests on parallel threads; local-exec because it is incremented at
+ * every opcode. Discarded at a flow's switch-in (JS_FlowDiscardRetiredWork): what stands there then is host
+ * work or a finished flow's residue, neither of them the incoming flow's. */
 static _Thread_local uint64_t g_flow_work_retired __attribute__((tls_model("local-exec"))) = 0;
 #define FLOW_WORK_RETIRE()  (g_flow_work_retired++)
 uint64_t JS_FlowDiscardRetiredWork(void)
@@ -34442,6 +34354,7 @@ uint64_t JS_FlowDiscardRetiredWork(void)
     return u;
 }
 uint64_t JS_FlowTakeRetiredWork(void) { return JS_FlowDiscardRetiredWork(); }
+uint64_t JS_FlowPeekRetiredWork(void) { return g_flow_work_retired; }
 void JS_FlowRetireWork(uint64_t units) { g_flow_work_retired += units; }
 
 /* Source bytes the tokenizers have consumed, over the process: a report for the host's thread-work census.
@@ -34450,34 +34363,13 @@ void JS_FlowRetireWork(uint64_t units) { g_flow_work_retired += units; }
 static uint64_t g_flow_parse_bytes;
 uint64_t JS_FlowParseBytesLife(void) { return g_flow_parse_bytes; }
 
-/* HOW MANY DISPATCHES UNTIL THE COOPERATIVE BUDGET IS NEXT ASKED — the OCCASION for a clock read and no part of
- * the answer. It closes the gap solver/quantum.h names first: every source that raised a yield request was a
- * shape of the PAGE'S OWN BYTECODE (a back-edge, a call, a fork), so a straight-line call-free stretch expired
- * no slice, and a budget noticed only when the debtor volunteers is not a budget. A dispatch count has the
- * property that file states — UNEVADABLE BY THE PAGE'S OWN CODE SHAPE — because no bytecode dispatches without
- * dispatching.
- *
- * A SEPARATE COUNTER FROM g_flow_work_retired, DELIBERATELY. That one's reset points belong to the CLOCK it
- * banks into — a switch-in discards it, a poll banks it — and a period inheriting them would change silently
- * whenever the banking policy did, which is one quantity answering two questions. This one's reset point is its
- * own: it is re-armed where the budget is evaluated, and nowhere else.
- *
- * IT PASSES THE TEST THE DECLARATION ABOVE STATES. Delete `--g_flow_budget_countdown <= 0` and flow_budget_poll
- * runs at EVERY dispatch: the budget is asked more often, so a raise lands at the same opcode or an earlier one
- * and NO FLOW RUNS FURTHER. The raise itself is a CONJUNCTION whose other conjunct is the budget, so the raises
- * taken with the period are a subset of those taken without it. The `0` this is compared against IS the period
- * — a countdown's exhaustion — and not a second constant; the period itself is the scheduler's
- * (JSFlowControlHooks.budget_period, solver/engine.h's ENGINE_QUANTUM_ASK_EVERY) and never this file's.
- *
- * IT IS A FLOOR ON HOW OFTEN THE BUDGET IS EVALUATED AND NEVER A CEILING, which is why the back-edge, call and
- * fork raises STAY. Those fire on occasions this counter does not reach at all, and each is a chance to expire
- * a slice sooner; removing one because this exists would be the only edit here that could make a flow run
- * further than it does today.
- *
- * COUNTS DOWN RATHER THAN UP so the hot path is one thread-local decrement and one predicted-not-taken branch
- * with no second load — DISPATCH is expanded at every BREAK in the interpreter. local-exec and non-atomic for
- * g_flow_work_retired's reasons exactly. INT32_MAX is the no-policy value: a host that installs no `budget`
- * reaches flow_budget_poll once in two billion dispatches, finds no hook, and re-arms. */
+/* How many dispatches until the cooperative budget is next asked. A dispatch count cannot be evaded by the
+ * page's code shape, so a straight-line, call-free stretch still reaches the budget. The period is the
+ * scheduler's (JSFlowControlHooks.budget_period, solver/engine.h's ENGINE_QUANTUM_ASK_EVERY) and bounds the
+ * overshoot past the budget at one period; the back-edge, call and fork raises stay, since each can expire a
+ * slice sooner. A separate counter from g_flow_work_retired because its reset point is its own: it is re-armed
+ * where the budget is evaluated. Counts down so the hot path is one decrement and one predicted branch;
+ * INT32_MAX is the no-policy value. */
 static _Thread_local int32_t g_flow_budget_countdown __attribute__((tls_model("local-exec"))) = INT32_MAX;
 static void flow_budget_arm(void)
 {
@@ -34499,8 +34391,8 @@ static void flow_budget_poll(void)
        PARK"), made here so the question is not even asked. It is NOT a fallback by §C-stack's test: delete the
        population it selects against and the question still has to be asked, because a slice is a fact about a
        RUNNING FLOW and between two scheduler steps there is none. It is also what keeps the host's own
-       precondition true by construction rather than by hope — solver/quantum.c's quantum_expired() aborts
-       outside an open slice, and a host-time entry into the interpreter has no flow base to reach this by. */
+       precondition true by construction: solver/engine.c's budget asserts an open slice, and a host-time entry
+       into the interpreter has no flow base to reach this by. */
     if (g_flow_base_gen != NULL && g_flow_control.budget != NULL && g_flow_control.budget())
         FLOW_YIELD_REQUEST(JS_PREEMPT_HOST);
 }
@@ -35006,6 +34898,7 @@ void JS_SetFlowGen(uint32_t gen) { g_flow_gen = gen; }
    installed on the host's own time, outside any slice, and asking the budget there is the one thing the gate's
    flow-base conjunct exists to prevent. */
 void JS_SetFlowControlHooks(const JSFlowControlHooks *h) { g_flow_control = *h; flow_budget_arm(); }
+void JS_FlowBudgetArm(void) { flow_budget_arm(); }
 void JS_SetTimeTravelHooks(const JSTimeTravelHooks *h) { g_time_travel = *h; }
 void JS_SetConcolicHooks(const JSConcolicHooks *h) { g_concolic = *h; }
 void JS_SetEvalSinkHook(JSEvalSinkFunc *cb) { g_eval_sink = cb; }
@@ -67853,8 +67746,8 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
    which is FLOW_BUDGET_TICK's arrangement re-derived here rather than called: flow_budget_poll's own gate is
    `g_flow_base_gen != NULL`, and a COMPILE runs before its flow exists (JS_FlowNew compiles and only then
    async_func_init's the frame), so that gate is false for exactly this span. The ANSWER half is the yield
-   request BYTE and `preempt` — the same byte, so a HOST request already standing from the quantum's CPU-time
-   edge parks the parse too, and the same policy, so this engine still makes every park decision in one place.
+   request BYTE and `preempt` — the same byte, so a HOST request already standing from the dispatch-counted
+   budget or a rank change parks the parse too, and the same policy, so this engine still makes every park decision in one place.
    NOTHING HERE BOUNDS ANYTHING (§NO BOUNDS). A `true` hands the parse to a caller that asked to hold it and
    the parse resumes from the exact production it stopped at; no value of the countdown, the budget or the
    policy makes any parse cover less ground, which is the test g_flow_work_retired's declaration states. */
@@ -69923,7 +69816,7 @@ static void js_module_linking_scc_pop(JSContext *ctx, JSModuleDef *m, JSModuleDe
    prologue exactly as it can inside any other body. It has nothing to do with the prologue's SHAPE: a comment
    here used to argue that the prologue is compiled with no back-edge and therefore "nothing in it can preempt",
    and that was never true of this interpreter. A back-edge is one of the places a request is RAISED; the request
-   is also raised from outside the flow's instruction stream entirely (solver/quantum.c's CPU-time edge,
+   is also raised by things that are not the flow's instruction stream (the dispatch-counted budget,
    frontier_rank_changed), and it is ANSWERED wherever the next opcode is fetched. Straight-line code parks.
      WHICH IS NOT LINKING BECOMING ASYNCHRONOUS, and the standard is what settles that. 16.2.1.6.1.2 Link ( )
    returns a normal completion containing unused or a throw completion — synchronously, unlike 16.2.1.6.1.3
@@ -106214,9 +106107,12 @@ static JSValue js_regexp_tostring_fini(JSContext *ctx, void *st, bool take_resul
 /* Should a running match give the thread back at its next back-edge? It REPLACES lre_check_timeout, which
    asked the embedder's interrupt handler every 10000 opcodes and TRUNCATED the match — a watchdog, which is a
    bound. The scheduler answers instead, and the match parks and resumes at the exact opcode. */
+/* A regexp back-edge is a unit of engine work, as a dispatch is: retired before the policy is asked, so a
+   backtracking pattern spends the slice's budget like any other stretch of the flow's path. */
 int lre_want_yield(void *opaque)
 {
     (void)opaque;
+    FLOW_WORK_RETIRE();
     return g_flow_control.preempt != NULL && g_flow_control.preempt(JS_PREEMPT_BACKEDGE);
 }
 
