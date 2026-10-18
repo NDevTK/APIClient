@@ -56,12 +56,16 @@ export function vehicleReading(out, signal, where) {
     if (completed && verdict === null)
       for (const [head, word] of VERDICTS) if (line.startsWith(head)) verdict = word;
   }
-  const finals = tables.filter((t) => t.final);
-  if (completed && verdict === null)
-    throw new Error(`${where}: the run printed @RESULT and none of test_forced.c's verdict sentences after ` +
-                    `it — main() prints one on every completion, so the emitter and this reader disagree`);
-  return { tables, final: finals.length ? finals[finals.length - 1].row : null, verdict,
-           crash: crashIdentity(out, signal), quantum, work: coldWork(cold, where) };
+  /* A run is complete when its verdict sentence is out: one that crashed or was killed between @RESULT and
+     the verdict has no final answer. One that ended on neither and still printed none is a disagreement. */
+  const crash = crashIdentity(out, signal);
+  if (completed && verdict === null && crash === null && signal === null)
+    throw new Error(`${where}: the run printed @RESULT, ended on no crash and no signal, and printed none of ` +
+                    `test_forced.c's verdict sentences after it — main() prints one on every completion, so ` +
+                    `the emitter and this reader disagree`);
+  const finals = verdict === null ? [] : tables.filter((t) => t.final);
+  return { tables, final: finals.length ? finals[finals.length - 1].row : null, verdict, crash, quantum,
+           work: coldWork(cold, where) };
 }
 
 /* The work the run retired: every unit the event loop's clock banked under a flow, the units retired with no
