@@ -1416,8 +1416,8 @@ const SURFACES = new Map([
      the schedule chooses — hold any row of them invariant and every schedule fails against the reference on
      healthy code. `_wfq` escapes that by an argument about WHICH instant (the terminal one, reached by
      draining or parking, so `{members:0}` under every schedule). This one needs neither argument: it is not a
-     reading at all. solver/quantum.c's `quantum_json` renders `ENGINE_QUANTUM_MS` and two string literals of
-     its own branch, all three compile-time constants of the artifact — so no instant, no allocation, no fork
+     reading at all. solver/quantum.c's `quantum_json` renders `ENGINE_QUANTUM_WORK`, its host's yield interval and
+     its pricing clock's name, all compile-time constants of the artifact — so no instant, no allocation, no fork
      order and no reply policy can move it, and there is no schedule under which the reference and the subject
      could legitimately differ.
      AND A MISMATCH WOULD BE A REAL FINDING, WHICH IS WHY DROPPING IT WOULD COST SOMETHING. This gate's whole
@@ -1999,8 +1999,8 @@ for (const doc of docs) {
          interleavings and emitted the same set: the invariant tested against the thing that moves it.
          `held/undiscriminated` — the counts agree, so this sample offers NO EVIDENCE the two runs interleaved
          differently. It is not a failure and not a defect in the document: on an idle box the reference simply
-         reproduces itself, which is a property of the BOX (quantum_thread_us is a wall clock on this host, so
-         the schedule only moves when something else is competing for it). It is a weaker sample, and the honest
+         reproduces itself, which is a property of the HOST (this host's yield ends a slice on wall time, so
+         the schedule only moves when something else is competing for the thread). It is a weaker sample, and the honest
          thing is to say which was taken rather than to report both as one word.
          AND IT IS NOT ASSERTED IN EITHER DIRECTION. Equal counts do not prove equal orders (two orders can
          coincide in count), and unequal counts are not a demand — requiring divergence would make a quiet box a
