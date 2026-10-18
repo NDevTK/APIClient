@@ -1011,16 +1011,17 @@ for (const p of passes) for (const r of p.rows) {
        VALUES here: `null` is predates, the string is a stated absence, and an object is a reading. */
     tlad: (() => {
       const K = ['taskHeldDelivLifetime', 'taskHeldSeqLifetime',
-                 'taskArmOlderLifetime', 'taskArmNoRowLifetime'];
+                 'taskArmOlderLifetime', 'taskArmRowWaitLifetime', 'taskArmNoRowLifetime'];
       if (!K.some((k) => k in r)) return null;
       const sur = (r.stepUnitRuns && typeof r.stepUnitRuns === 'object'
                    && !Array.isArray(r.stepUnitRuns)) ? r.stepUnitRuns : null;
       const o = { deliv: r.taskHeldDelivLifetime, seq: r.taskHeldSeqLifetime,
-                  older: r.taskArmOlderLifetime, noRow: r.taskArmNoRowLifetime,
+                  older: r.taskArmOlderLifetime, rowWait: r.taskArmRowWaitLifetime,
+                  noRow: r.taskArmNoRowLifetime,
                   task: sur && typeof sur['run-a-task'] === 'number' ? sur['run-a-task'] : null,
                   wfqFrom: typeof r.wfqFrom === 'number' ? r.wfqFrom : null,
                   cFrom: typeof r.countersFrom === 'number' ? r.countersFrom : null };
-      return ['deliv', 'seq', 'older', 'noRow'].some((k) => typeof o[k] === 'number')
+      return ['deliv', 'seq', 'older', 'rowWait', 'noRow'].some((k) => typeof o[k] === 'number')
         ? o : 'no-live-frontier';
     })(),
     sigs, wasm: (r.artifact && r.artifact.wasmSha256 || '').slice(0, 12),
@@ -2498,7 +2499,7 @@ if (tlShown.length || tlMute.length) {
   const tlIdW = Math.max('site'.length, ...tlShown.map((r) => r.id.length)) + 2;
   const num = (x) => (typeof x === 'number' ? String(x) : '-');
   const cell = (x) => num(x.t.deliv) + 'dl/' + num(x.t.seq) + 'sq  ' +
-    num(x.t.older) + '+' + num(x.t.noRow) + (x.oneSample ? '=' : '<=') + num(x.t.task) +
+    num(x.t.older) + '+' + num(x.t.rowWait) + '+' + num(x.t.noRow) + (x.oneSample ? '=' : '<=') + num(x.t.task) +
     (x.olderShare === null ? '' : ' (' + x.olderShare.toFixed(0) + '% older)');
   console.log('');
   console.log('WHICH LADDER ARM TOOK THE STEP OF A TASK HOLDER (site, then PER PASS IN ORDER):');
@@ -2508,7 +2509,8 @@ if (tlShown.length || tlMute.length) {
      the shape it exists to prevent — a reader takes it as the key to a row and there is no row. */
   if (tlShown.length) {
   console.log('  <taskHeldDelivLifetime>dl/<taskHeldSeqLifetime>sq  ' +
-              '<taskArmOlderLifetime>+<taskArmNoRowLifetime>{=|<=}<run-a-task> (<older> as % of run-a-task)');
+              '<taskArmOlderLifetime>+<taskArmRowWaitLifetime>+<taskArmNoRowLifetime>{=|<=}<run-a-task> ' +
+              '(<older> as % of run-a-task)');
   console.log('  `=` is ONE census entry (wfqFrom === countersFrom) and `<=` is TWO, so only `=` cells carry');
   console.log('  the engine\'s asserted equality; `dl` and `sq` are steps the task arm never got and have NO');
   console.log('  denominator here. dl is TWO quantities: before PEND_WORK_SEQ a large dl is the delivery arm');
@@ -2516,7 +2518,8 @@ if (tlShown.length || tlMute.length) {
   console.log('  order working) and a NEAR-ZERO dl is the old exclusion -- so compare two dl cells only after');
   console.log('  `git grep -c PEND_WORK_SEQ <each pass\'s stamp> -- engine/host` answers the same at both.');
   console.log('  sq large -> the arrival comparison is answering NO; older>0 refutes both for the steps it');
-  console.log('  counts; noRow is the arm reached with no row to compare at all. All five are LIFETIME counts.');
+  console.log('  counts; rowWait is the arm reached while the cursor\'s row waits to start, noRow with no row');
+  console.log('  at the cursor at all. All six are LIFETIME counts.');
   }
   for (const r of tlShown)
     console.log('  ' + pad(r.id, tlIdW) + r.stated.map(cell).join(' | '));

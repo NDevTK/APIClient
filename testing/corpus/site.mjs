@@ -1712,6 +1712,7 @@ const row = {
   taskHeldDelivLifetime: wfqRow('taskHeldDelivLifetime'),
   taskHeldSeqLifetime: wfqRow('taskHeldSeqLifetime'),
   taskArmOlderLifetime: wfqRow('taskArmOlderLifetime'),
+  taskArmRowWaitLifetime: wfqRow('taskArmRowWaitLifetime'),
   taskArmNoRowLifetime: wfqRow('taskArmNoRowLifetime'),
   /* AND WHETHER ANYTHING HAS EVER LEFT, WHICH THIS ROW DERIVED BY SUBTRACTION WHEN THE ENGINE STATES IT.
      report.mjs composed `gone` as `flows - wfqMembers` under a guard that the two halves came from ONE
@@ -2568,18 +2569,20 @@ row.taskArmPartitionDisagrees = (() => {
   const sur = row.stepUnitRuns;
   const rt = (sur && typeof sur === 'object' && !Array.isArray(sur)
               && typeof sur['run-a-task'] === 'number') ? sur['run-a-task'] : null;
-  const a = row.taskArmOlderLifetime, b = row.taskArmNoRowLifetime;
-  if (rt === null || typeof a !== 'number' || typeof b !== 'number') return null;
+  const a = row.taskArmOlderLifetime, w = row.taskArmRowWaitLifetime, b0 = row.taskArmNoRowLifetime;
+  if (rt === null || typeof a !== 'number' || typeof w !== 'number' || typeof b0 !== 'number') return null;
+  const b = w + b0;   /* the two reasons with no older task, kept apart in the rows and summed for the identity */
   const oneSample = row.wfqFrom !== null && row.wfqFrom === row.countersFrom;
   const out = [];
   if (oneSample) {
     if (a + b !== rt)
-      out.push('taskArmOlderLifetime ' + a + ' + taskArmNoRowLifetime ' + b + ' is ' + (a + b) +
+      out.push('taskArmOlderLifetime ' + a + ' + taskArmRowWaitLifetime ' + w + ' + taskArmNoRowLifetime ' + b0 +
+               ' is ' + (a + b) +
                ' over run-a-task ' + rt + ' -- ONE SAMPLE (wfqFrom === countersFrom ' + row.wfqFrom +
                '), so the engine asserts EQUALITY here and the arm has a second writer');
   } else if (a + b > rt) {
-    out.push('taskArmOlderLifetime ' + a + ' + taskArmNoRowLifetime ' + b + ' is ' + (a + b) +
-             ' over run-a-task ' + rt + ' -- TWO ENTRIES (wfqFrom ' + row.wfqFrom + ', countersFrom ' +
+    out.push('taskArmOlderLifetime ' + a + ' + taskArmRowWaitLifetime ' + w + ' + taskArmNoRowLifetime ' + b0 +
+             ' is ' + (a + b) + ' over run-a-task ' + rt + ' -- TWO ENTRIES (wfqFrom ' + row.wfqFrom + ', countersFrom ' +
              row.countersFrom + '), so only containment is claimed and a sum above a LATER total is still a ' +
              'second writer of the arm');
   }

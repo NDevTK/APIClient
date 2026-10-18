@@ -791,7 +791,7 @@ const WFQ_PICKS = ["unframedPicksLifetime"];
    emitted record could say whether the queue was behind the program sequence or behind the reply-delivery arm
    — two mechanisms, opposite diffs, one number. */
 const WFQ_LADDER = ["taskHeldDelivLifetime", "taskHeldSeqLifetime",
-                    "taskArmOlderLifetime", "taskArmNoRowLifetime"];
+                    "taskArmOlderLifetime", "taskArmRowWaitLifetime", "taskArmNoRowLifetime"];
 /* THE OWED-GLOBALS PAIR, NAMED HERE SO THE KIND LINE CANNOT DRIFT FROM THE ROWS. Both are LIFETIME
    counts over the agent's life — solver/absent.c raises them per read and zeroes them only when the
    agent goes — so they are differenceable, unlike the gauges beside them. The names are this list and

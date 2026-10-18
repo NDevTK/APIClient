@@ -8078,24 +8078,24 @@ static long g_unframed_steps;
      `g_task_held_deliv`: the reply-delivery arm took the step. The entry carries a stamp (PEND_WORK_SEQ) and the arm
        asks flow_task_precedes, so a delivery no longer precedes an older queued callback, but it still precedes
        every row (its arm records that as a deadlock it avoids). So this sizes the arm going ahead of a younger task.
-       Comparing it across the stamp's introduction compares two quantities: `git grep -c PEND_WORK_SEQ <stamp> --
-       engine/host` says which an artifact measures.
      `g_task_held_seq`: the program-sequence arm took it (`seq_compiles && !job_precedes`): the queued task is younger
        than the row at the cursor. The only record of that answer.
      `g_task_arm_older`: the task arm ran because the comparison said the task is older.
-     `g_task_arm_no_row`: the task arm ran with no program to start (`seq_compiles` 0); a member past the end of its
-       sequence is here at every step (`programCursors`' top bucket counts them).
-   Identity, asserted at the accessor: `g_task_arm_older + g_task_arm_no_row == g_step_unit_runs[STEP_UNIT_RUN_TASK]`;
-   the halves are raised at the choice and the total after flow_step returns, so a second writer or an early return
+     `g_task_arm_row_wait`: the task arm ran while the row at the cursor is an external script still to start
+       (`seq_awaits`): the event loop spinning while that row waits, its reply owed or answered behind older tasks.
+     `g_task_arm_no_row`: the task arm ran with no row at the cursor; a member past the end of its sequence is here
+       at every step (`programCursors`' top bucket counts them).
+   Identity, asserted at the accessor: the three task-arm reasons sum to g_step_unit_runs[STEP_UNIT_RUN_TASK]; the
+   parts are raised at the choice and the total after flow_step returns, so a second writer or an early return
    breaks it. Not covered: the three arms above delivery (link-connected time, a routed delivery, a peer's parked
-   operation), visible as `run-a-task` plus these four not accounting for unframed steps while `jobsReadyTask` stays
+   operation), visible as `run-a-task` plus these five not accounting for unframed steps while `jobsReadyTask` stays
    above zero; the checkpoint arm (no task is runnable there; `jobsReadyMicro` sizes it); and queue depth
    (job_pick_index takes the oldest, so a late task waits behind earlier ones). Lifetime counts, a report only.
    Named residual. Not covered: rows are still not in the arrival chain above the delivery arm. Next diff builds:
    the oldest runnable row's stamp computed above the delivery arm, putting all three carriers in one arrival
    order, after which `g_task_held_deliv` counts nothing. Absence shows as: `g_task_held_deliv` above zero (today
    every use of `seq_compiles` is below the line `grep -n 'uint64_t deliv_seq = flow_stack_empty'` prints). */
-static long g_task_held_deliv, g_task_held_seq, g_task_arm_older, g_task_arm_no_row;
+static long g_task_held_deliv, g_task_held_seq, g_task_arm_older, g_task_arm_row_wait, g_task_arm_no_row;
 /* Why a turn did not end a unit of work, the three readings behind a low `g_units_done`. The unit boundary in the
    dispatch loop is a conjunction of three clauses, and these count which refused:
      a live frame: the member is inside a program and the turn advanced it (`resume-program`'s state); a frontier
@@ -8865,16 +8865,18 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 DCHECK(!flow_job_microtask(f),
                        "a task was about to begin while this flow still held a microtask — the checkpoint runs "
                        "before every program in the sequence");
-                /* Which of the arm's two reasons this step took it for (`g_task_arm_older`): `job_precedes` is the
-                   arrival comparison answering yes (the remaining rows are younger than a queued task),
-                   `seq_compiles` 0 is a member with no row left. Different populations; their sum is asserted at
-                   the accessor. */
+                /* Which of the arm's three reasons this step took it for: `job_precedes` is the arrival comparison
+                   answering yes (the row at the cursor is younger than a queued task), `seq_awaits` is a row at the
+                   cursor still waiting to start, and otherwise the member has no row left. Different populations;
+                   their sum is asserted at the accessor. */
                 if (timer_seq != 0 && !flow_task_precedes(f, timer_seq) &&
                     engine_timer_takes_turn(ctx, f, timer_seq, UINT64_MAX)) {
                     g_step_unit = STEP_UNIT_TIMER_ARRIVED;
                     return 0;
                 }
-                if (job_precedes) g_task_arm_older++; else g_task_arm_no_row++;
+                if (job_precedes) g_task_arm_older++;
+                else if (seq_awaits) g_task_arm_row_wait++;
+                else g_task_arm_no_row++;
                 g_step_unit = STEP_UNIT_RUN_TASK;
                 flow_run_one_job(ctx, f);
                 return flow_blocked(f) ? FLOW_STEP_OWED : 0;
@@ -9783,16 +9785,19 @@ void engine_ladder_task_census(EngineLadderTaskCensus *out)
     DCHECK(out != NULL, "the ladder's task-arm census was asked for into nothing");
     out->task_held_deliv = g_task_held_deliv;
     out->task_held_seq   = g_task_held_seq;
-    out->task_arm_older  = g_task_arm_older;
-    out->task_arm_no_row = g_task_arm_no_row;
+    out->task_arm_older    = g_task_arm_older;
+    out->task_arm_row_wait = g_task_arm_row_wait;
+    out->task_arm_no_row   = g_task_arm_no_row;
     /* The task arm's step count, partitioned by the reason the arm was reached. Not a tautology: the halves are
        raised inside the arm at the choice and the total at the convergence point after flow_step returns, so a
        second assignment of STEP_UNIT_RUN_TASK, or a return added between the choice and that point, breaks it. */
-    DCHECKF(out->task_arm_older + out->task_arm_no_row == g_step_unit_runs[STEP_UNIT_RUN_TASK],
-            "the task arm ran %ld times and its two reasons account for %ld — every run is either an older queued "
-            "task or no row to compare, so STEP_UNIT_RUN_TASK has a second writer or a return separates the reason "
-            "from the record",
-            g_step_unit_runs[STEP_UNIT_RUN_TASK], out->task_arm_older + out->task_arm_no_row);
+    DCHECKF(out->task_arm_older + out->task_arm_row_wait + out->task_arm_no_row ==
+            g_step_unit_runs[STEP_UNIT_RUN_TASK],
+            "the task arm ran %ld times and its three reasons account for %ld — every run is an older queued task, "
+            "a row at the cursor still waiting, or no row, so STEP_UNIT_RUN_TASK has a second writer or a return "
+            "separates the reason from the record",
+            g_step_unit_runs[STEP_UNIT_RUN_TASK],
+            out->task_arm_older + out->task_arm_row_wait + out->task_arm_no_row);
 }
 
 /* The ladder's own traffic, copied out whole (solver/engine.h has what the rows mean and how they differ from the

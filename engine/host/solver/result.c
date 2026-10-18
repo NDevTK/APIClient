@@ -695,6 +695,7 @@ char *result_wfq_json(void) {
     METRIC_SET(task_held_deliv_lifetime, lt.task_held_deliv);
     METRIC_SET(task_held_seq_lifetime, lt.task_held_seq);
     METRIC_SET(task_arm_older_lifetime, lt.task_arm_older);
+    METRIC_SET(task_arm_row_wait_lifetime, lt.task_arm_row_wait);
     METRIC_SET(task_arm_no_row_lifetime, lt.task_arm_no_row);
     METRIC_SET(deliv_ready, w.deliv_ready);
     METRIC_SET(deliv_framed, w.deliv_framed);

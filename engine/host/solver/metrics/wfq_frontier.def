@@ -195,6 +195,7 @@ METRIC(ready_picks_lifetime, "readyPicksLifetime", LIFETIME, "dispatch", PROCESS
 METRIC(task_held_deliv_lifetime, "taskHeldDelivLifetime", LIFETIME, "step", PROCESS, "solver/engine.c", INT)
 METRIC(task_held_seq_lifetime, "taskHeldSeqLifetime", LIFETIME, "step", PROCESS, "solver/engine.c", INT)
 METRIC(task_arm_older_lifetime, "taskArmOlderLifetime", LIFETIME, "step", PROCESS, "solver/engine.c", INT)
+METRIC(task_arm_row_wait_lifetime, "taskArmRowWaitLifetime", LIFETIME, "step", PROCESS, "solver/engine.c", INT)
 METRIC(task_arm_no_row_lifetime, "taskArmNoRowLifetime", LIFETIME, "step", PROCESS, "solver/engine.c", INT)
 METRIC(deliv_ready, "delivReady", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(deliv_framed, "delivFramed", GAUGE, "member", AGENT, "solver/flow.c", INT)

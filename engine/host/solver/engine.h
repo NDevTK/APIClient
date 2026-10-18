@@ -1068,8 +1068,8 @@ typedef struct {
 void engine_step_unit_runs(EngineStepUnitRuns *out);
 
 /* Which arm took the step of a member that had a runnable task on its own queue: the two arms above the task
- * arm that can be reached with one, and the task arm's two reasons. Read them against the `jobsReadyTask` gauge
- * and the `run-a-task` arm; `task_arm_older + task_arm_no_row == run-a-task` is asserted in
+ * arm that can be reached with one, and the task arm's three reasons. Read them against the `jobsReadyTask` gauge
+ * and the `run-a-task` arm; `task_arm_older + task_arm_row_wait + task_arm_no_row == run-a-task` is asserted in
  * engine_ladder_task_census. Lifetime counts, released by nothing; solver/engine.c states the mechanism at the
  * counters. `task_held_deliv` changed meaning when replies gained PEND_WORK_SEQ (it now counts deliveries
  * ahead of younger tasks), so compare it only across artifacts that both carry that stamp. */
@@ -1077,7 +1077,8 @@ typedef struct {
     long task_held_deliv;   /* the reply-delivery arm took a step with a task runnable on the member's queue */
     long task_held_seq;     /* the program-sequence arm took it: `seq_compiles && !job_precedes`, task runnable */
     long task_arm_older;    /* the task arm ran because the queued task was strictly older than the cursor's row */
-    long task_arm_no_row;   /* …and because there was no row to compare against at all (`seq_compiles` 0) */
+    long task_arm_row_wait; /* …because the cursor's row is an external script still waiting to start */
+    long task_arm_no_row;   /* …and because there was no row at the cursor at all */
 } EngineLadderTaskCensus;
 void engine_ladder_task_census(EngineLadderTaskCensus *out);
 
