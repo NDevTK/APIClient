@@ -3491,6 +3491,13 @@ JS_EXTERN void JS_ModuleLoadPending(JSContext *ctx, JSValue source_promise);
 JS_EXTERN void JS_SetModuleNormalizeFunc2(JSRuntime *rt,
                                           JSModuleNormalizeFunc2 *module_normalize);
 
+/* ECMAScript §13.3.12.1.1 HostGetImportMetaProperties ( moduleRecord ), with §13.3.12.1 step 4.c folded in:
+   defines the host's properties on `meta`, module `m`'s fresh null-prototype import.meta object. Called once
+   per module per timeline, when its `import.meta` is first evaluated. Returns 0, or -1 with a throw live (an
+   allocation failure; the spec's CreateDataPropertyOrThrow is `!`). NULL leaves the object empty. */
+typedef int JSModuleImportMetaFunc(JSContext *ctx, JSModuleDef *m, JSValueConst meta);
+JS_EXTERN void JS_SetModuleImportMetaFunc(JSRuntime *rt, JSModuleImportMetaFunc *func);
+
 /* return the import.meta object of a module */
 JS_EXTERN JSValue JS_GetImportMeta(JSContext *ctx, JSModuleDef *m);
 JS_EXTERN JSAtom JS_GetModuleName(JSContext *ctx, JSModuleDef *m);

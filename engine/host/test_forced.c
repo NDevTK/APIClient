@@ -658,6 +658,11 @@ static const TfServed TF_SERVED[] = {
       "export function mmDrive(){ fetch('/api/moddriveran?w=mdrENTER');"
       " fetch('/api/moddrivefn?w=' + (typeof mmProbe === 'function' ? 'mdrFN' : 'mdrNOFN'));"
       " fetch('/api/moddriveconst?w=' + mmDeps([0])); }" },
+    /* An external module's HTML §8.1.6.7.1 `url` is its own address, and `resolve` resolves against it. */
+    { "https://x.test/chunk/mdmeta.js", "text/javascript",
+      "try { fetch('/api/mmetaext?u=' + (import.meta.url === 'https://x.test/chunk/mdmeta.js' ? 'mxURL' : 'mxBADURL')"
+      " + '&r=' + (import.meta.resolve('./mddep.js') === 'https://x.test/chunk/mddep.js' ? 'mxRES' : 'mxBADRES'));"
+      " } catch (e) { fetch('/api/mmetaext?u=' + e.name); }" },
     { "https://x.test/chunk/mdbad.js",  "application/json",
       "fetch('/api/modbadran?w=mbRAN');export default 1;" },
     /* …AND A MODULE WITH A DEPENDENCY, WHICH IS THE ONE MODULE SHAPE NOTHING IN THIS FIXTURE HAD AND THE
@@ -1344,7 +1349,7 @@ static const char *HTML_COLD =
        THERE WAS DELIBERATELY NO ROW IN `probes` UNTIL THE CAPTURE LANDED, AND THAT DECISION IS RECORDED
        HERE because it is the reason the two rows that exist now have the shape they have. A row landed ahead
        of the repair would have been RED ON EVERY RUN, which is §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN's
-       furniture — the same call `HTML_MODULES`'s `import.meta.url` residual makes, for the same
+       furniture — for the same
        reason, and worse here because a red row in that table is read by every lane that builds. So both rows
        arrived in the SAME commit as the capture that closes the edge, and each reads the ABSENCE of a
        `-sees-` path from `endpoint_json_array()` and never the PRESENCE of a `-clean` one — which would be
@@ -12240,6 +12245,23 @@ TF_UNIT void probes_modules(const char *js, Probe *tab, int *n) {
              "JS_ResumeParkedFlow drains at the top of the scheduler loop, so a continuation that never "
              "resumed is the park seam dropping a module's frame where it carries every other flow's — and "
              "a module whose evaluation never completes leaves its promise pending for ever");
+    /* HTML §8.1.6.7.1 HostGetImportMetaProperties, read in an inline module and in an external one. `u=TypeError`
+       is `import.meta.resolve` missing; a `Bad` token names which member answered wrong. */
+    const char *mmetain_why = NULL;
+    int mmetain_tt = 1;
+    fold_row(&mmetain_tt, &mmetain_why, !!strstr(js, "\"/api/mmetain\""),
+             "NOT REACHED: no /api/mmetain record, so the inline module did not run past its await");
+    fold_row(&mmetain_tt, &mmetain_why,
+             param_value_is(js, "/api/mmetain", "u", "miURL") && param_value_is(js, "/api/mmetain", "r", "miRES") &&
+                 param_value_is(js, "/api/mmetain", "p", "miNULL"),
+             "an inline module's import.meta is not `{ url: document.baseURI, resolve }` over a null prototype");
+    const char *mmetaext_why = NULL;
+    int mmetaext_tt = 1;
+    fold_row(&mmetaext_tt, &mmetaext_why, !!strstr(js, "\"/api/mmetaext\""),
+             "NOT REACHED: no /api/mmetaext record, so `/chunk/mdmeta.js` was not loaded or did not run");
+    fold_row(&mmetaext_tt, &mmetaext_why,
+             param_value_is(js, "/api/mmetaext", "u", "mxURL") && param_value_is(js, "/api/mmetaext", "r", "mxRES"),
+             "an external module's import.meta.url is not its own address, or `resolve` did not resolve against it");
     /* §16.2.1.7.3.1 InitializeEnvironment's BINDING, asked at the module body's own level and again from two
        closures down. The pair is entailed — the nested read cannot be reported on while the statement has not
        run — and the statement that answers them names WHICH of two opposite repairs a 0 is: the prologue that
@@ -12510,6 +12532,8 @@ TF_UNIT void probes_modules(const char *js, Probe *tab, int *n) {
         { "xk-spki", xk_spki, "/api/xkspki", SESS_EXPLORE, xkspki_why },
         { "module-entry", modentry_tt, "/api/modreach", SESS_EXPLORE, modentry_why },
         { "module-tla", modtla_tt, "/api/modtla", SESS_EXPLORE, modtla_why },
+        { "module-meta-inline", mmetain_tt, "/api/mmetain", SESS_EXPLORE, mmetain_why },
+        { "module-meta-external", mmetaext_tt, "/api/mmetaext", SESS_EXPLORE, mmetaext_why },
         /* §16.2.1.7.3.1's BINDING. `mfd-top` stands first because it is what says whether the row below it is
            about the closure chain or about how far the run got. */
         { "mfd-top", mfdtop_tt, "/api/mfdtop", SESS_EXPLORE, mfdtop_why },

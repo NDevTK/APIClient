@@ -594,6 +594,7 @@ struct JSRuntime {
         JSModuleLoaderFunc2 *module_loader_func2;
     } u;
     JSModuleCheckSupportedImportAttributes *module_check_attrs;
+    JSModuleImportMetaFunc *module_import_meta_func;   /* JS_SetModuleImportMetaFunc's; NULL = none */
     void *module_loader_opaque;
     /* timestamp for internal use in module evaluation */
     int64_t module_async_evaluation_next_timestamp;
@@ -68525,6 +68526,11 @@ void JS_SetModuleLoaderFunc2(JSRuntime *rt,
     rt->module_loader_opaque = opaque;
 }
 
+void JS_SetModuleImportMetaFunc(JSRuntime *rt, JSModuleImportMetaFunc *func)
+{
+    rt->module_import_meta_func = func;
+}
+
 void JS_SetModuleNormalizeFunc2(JSRuntime *rt,
                                 JSModuleNormalizeFunc2 *module_normalize)
 {
@@ -70119,9 +70125,17 @@ JSValue JS_GetImportMeta(JSContext *ctx, JSModuleDef *m)
     /* allocate meta_obj only if requested to save memory */
     obj = m->meta_obj;
     if (JS_IsUndefined(obj)) {
+        /* §13.3.12.1 ImportMeta's step 4: the object, the host's properties on it, then the record's slot. The
+           slot is per-timeline module state (JSModuleEvalState), announced before the write like every field
+           there, so a sibling forked before this read mints its own object. */
         obj = JS_NewObjectProto(ctx, JS_NULL);
         if (JS_IsException(obj))
             return JS_EXCEPTION;
+        if (ctx->rt->module_import_meta_func && ctx->rt->module_import_meta_func(ctx, m, obj) < 0) {
+            JS_FreeValue(ctx, obj);
+            return JS_EXCEPTION;
+        }
+        js_module_eval_capture(ctx, m);
         m->meta_obj = obj;
     }
     return js_dup(obj);
@@ -72293,6 +72307,7 @@ typedef struct JSModuleEvalState {
     JSValue promise;
     JSValue resolving_funcs[2];
     JSValue eval_exception;
+    JSValue meta_obj;   /* §13.3.12.1's [[ImportMeta]]: written once per timeline, by JS_GetImportMeta */
     /* THE ASYNC PARENT LIST, and it has to be here because pending_async_dependencies is. The two are one
        accounting: js_module_eval_after_child increments the counter and appends to this array in the same
        breath, one pair per graph edge, and GatherAvailableAncestors decrements once per entry it walks.
@@ -72348,6 +72363,7 @@ void *JS_ModuleEvalStateSave(JSContext *ctx, void *mod)
     b->resolving_funcs[0] = js_dup(m->resolving_funcs[0]);
     b->resolving_funcs[1] = js_dup(m->resolving_funcs[1]);
     b->eval_exception = js_dup(m->eval_exception);
+    b->meta_obj = js_dup(m->meta_obj);
     return b;
 }
 
@@ -72361,6 +72377,7 @@ void JS_ModuleEvalStateRestore(JSContext *ctx, void *mod, void *blob)
     JS_FreeValue(ctx, m->resolving_funcs[0]);
     JS_FreeValue(ctx, m->resolving_funcs[1]);
     JS_FreeValue(ctx, m->eval_exception);
+    JS_FreeValue(ctx, m->meta_obj);
     /* NOT `js_module_set_status`, AND THIS IS THE ONE SITE WHERE THAT IS THE DEFECT RATHER THAN THE FIX. A
        restore is the delta being UNAPPLIED, so announcing it would offer the value being restored as this
        flow's FIRST baseline — and the host's dedup is first-baseline-wins, so the announcement would pin the
@@ -72381,6 +72398,7 @@ void JS_ModuleEvalStateRestore(JSContext *ctx, void *mod, void *blob)
     m->resolving_funcs[0] = js_dup(b->resolving_funcs[0]);
     m->resolving_funcs[1] = js_dup(b->resolving_funcs[1]);
     m->eval_exception = js_dup(b->eval_exception);
+    m->meta_obj = js_dup(b->meta_obj);
     /* The array is restored WITH the counter, never without it — see JSModuleEvalState. */
     js_free(ctx, m->async_parent_modules);
     m->async_parent_modules = js_module_apm_dup(ctx, b->async_parent_modules,
@@ -72410,6 +72428,7 @@ void *JS_ModuleEvalStateClone(JSContext *ctx, void *blob)
     c->resolving_funcs[0] = js_dup(b->resolving_funcs[0]);
     c->resolving_funcs[1] = js_dup(b->resolving_funcs[1]);
     c->eval_exception = js_dup(b->eval_exception);
+    c->meta_obj = js_dup(b->meta_obj);
     return c;
 }
 
@@ -72422,6 +72441,7 @@ void JS_ModuleEvalStateFree(JSRuntime *rt, void *blob)
     JS_FreeValueRT(rt, b->resolving_funcs[0]);
     JS_FreeValueRT(rt, b->resolving_funcs[1]);
     JS_FreeValueRT(rt, b->eval_exception);
+    JS_FreeValueRT(rt, b->meta_obj);
     js_free_rt(rt, b->async_parent_modules);
     js_free_rt(rt, b);
 }

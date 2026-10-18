@@ -121,14 +121,18 @@ static const char HTML_MODULES[] =
        The records are entailed, so the lowest 0 localises: the first, before the await, says the body began
        (a 0 is the loader's classification); the second, after it, says the body parked into the slot
        JS_ResumeParkedFlow drains and resumed with its continuation intact (a 0 is the park seam).
-       NAMED RESIDUAL. Not covered: `import.meta.url` — quickjs's `JS_GetImportMeta` allocates a bare
-       null-prototype object for the host to populate and this host names no meta callback, so it is
-       `undefined` here. The next diff builds a module-name-to-URL answer at the meta callback. Its absence
-       shows as a module resolving a nested relative specifier against nothing. */
+       After the await it reads HTML §8.1.6.7.1 HostGetImportMetaProperties' two members (`module-meta-inline`):
+       an inline module's base URL is its document's, so `url` is `document.baseURI` and `resolve` resolves
+       against it; and it imports `/chunk/mdmeta.js`, whose `url` is its own address (`module-meta-external`). */
     "<script type=module>"
     " fetch('/api/modreach?d=ok');"
     " await Promise.resolve('r');"
     " fetch('/api/modtla?w=resumed');"
+    " try { fetch('/api/mmetain?u=' + (import.meta.url === document.baseURI ? 'miURL' : 'miBADURL')"
+    " + '&r=' + (import.meta.resolve('./chunk/mdmod.js') === new URL('./chunk/mdmod.js', document.baseURI).href"
+    " ? 'miRES' : 'miBADRES') + '&p=' + (Object.getPrototypeOf(import.meta) === null ? 'miNULL' : 'miPROTO'));"
+    " } catch (e) { fetch('/api/mmetain?u=' + e.name); }"
+    " import('/chunk/mdmeta.js');"
     "</script>"
     /* WEB CRYPTOGRAPHY §29.4.5 AES-GCM EXPORT KEY — `generateKey` then `exportKey` in three formats, the
        reachability witness for §14.3.6 and §14.3.10.

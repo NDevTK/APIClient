@@ -282,7 +282,7 @@ static void d_xml_serializer(JSContext *c, const PlatformAgent *a) { (void)a; xm
 /* ECMAScript §16.2.1.10 HostLoadImportedModule is the runtime's hook, which is what an agent is. Without it
    `import(specifier)` resolves to nothing, neither a module nor an error. */
 static void d_import_map(JSContext *c, const PlatformAgent *a) { (void)a; import_map_init(c); }
-static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; module_loader_install(JS_GetRuntime(c)); }
+static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; module_loader_install(c); }
 
 /* ---- the agent half, undone ----------------------------------------------------------------------------- */
 

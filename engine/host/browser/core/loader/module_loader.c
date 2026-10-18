@@ -34,6 +34,8 @@
 #include "core/url/url.h"
 #include "core/loader/import_map.h"
 #include "core/loader/module_loader.h"
+#include "core/idl_args.h"
+#include "solver/concolic.h"
 
 /* HTML §8.1.5.1 "The resolution algorithm"'s resolve a URL-like module specifier. Fills `out` and returns
    true for a URL; false is the algorithm's null, with `out` initialised-and-empty either way. */
@@ -133,6 +135,119 @@ done:
     return out;
 }
 
+/* HTML §8.1.6.7.1 HostGetImportMetaProperties(moduleRecord)'s resolveFunction, `import.meta.resolve`. Step 1's
+   `? ToString(specifier)` is the declaration's DOMString conversion, so the page's toString runs on the
+   trampoline. Steps 2-3 resolve against the module the function was minted for: one declaration serves every
+   module, so that module's base URL rides the function object under g_ml_base_atom, read back off the callee. */
+#define ML_RESOLVE_STAGES(X) \
+    X(ML_RESOLVE_RUN = IDL_STEP_FIRST, \
+      "HTML §8.1.6.7.1 HostGetImportMetaProperties(moduleRecord) resolveFunction steps 2-3 (resolve a module " \
+      "specifier given moduleScript and specifier, and return the serialization of url)")
+enum { ML_RESOLVE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const ML_RESOLVE_STEPS[] = { ML_RESOLVE_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct { int unused; } MlResolveState;
+
+static int   g_ml_resolve_id = -1;            /* the resolveFunction's declaration */
+static JSAtom g_ml_base_atom = JS_ATOM_NULL;  /* the function object's slot holding its module's base URL */
+
+static void ml_resolve_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+static int ml_resolve_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    JSValue bv;
+    const char *base, *spec;
+    char *url;
+    int r;
+
+    (void)st; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == ML_RESOLVE_RUN, "import.meta.resolve resumed at a stage §8.1.6.7.1 does not have");
+    DCHECK(argc >= 1, "import.meta.resolve reached its body with no specifier — the declaration requires it");
+    r = JS_GetOwnSlot(ctx, &bv, hdr->func_obj, g_ml_base_atom);
+    if (r < 0) return -1;
+    DCHECK(r > 0 && JS_IsString(bv),
+           "import.meta.resolve ran through a function carrying no module base URL — module_import_meta writes "
+           "it on the line after the mint, and nothing else mints this declaration's functions");
+    base = JS_ToCString(ctx, bv);
+    JS_FreeValue(ctx, bv);
+    if (!base) return -1;
+    /* An unknown specifier resolves to an unknown URL, its example the real resolution of the operand's. */
+    if (concolic_is(argv[0])) {
+        JSValue ex = concolic_example(ctx, argv[0]), real = JS_UNDEFINED;
+
+        if (JS_IsString(ex)) {
+            const char *es = JS_ToCString(ctx, ex);
+            char *u;
+
+            CHECK(es, "OOM reading an unknown module specifier's example");
+            u = module_normalize(ctx, base, es, NULL);
+            JS_FreeCString(ctx, es);
+            if (u) { real = JS_NewString(ctx, u); js_free(ctx, u); }
+            else JS_FreeValue(ctx, JS_GetException(ctx));   /* that example does not resolve: no example */
+        }
+        JS_FreeValue(ctx, ex);
+        JS_FreeCString(ctx, base);
+        *presult = concolic_new_derived(ctx, "import.meta.resolve", argv, 1, real);
+        return JS_IsException(*presult) ? -1 : 0;
+    }
+    spec = JS_ToCString(ctx, argv[0]);
+    if (!spec) { JS_FreeCString(ctx, base); return -1; }
+    url = module_normalize(ctx, base, spec, NULL);   /* a failure has thrown step 2's TypeError */
+    JS_FreeCString(ctx, spec);
+    JS_FreeCString(ctx, base);
+    if (!url) return -1;
+    *presult = JS_NewString(ctx, url);
+    js_free(ctx, url);
+    return JS_IsException(*presult) ? -1 : 0;
+}
+
+static const IdlStepDecl ml_resolve_decl = {
+    ml_resolve_step, sizeof(MlResolveState), ml_resolve_visit, NULL,
+    "HTML §8.1.6.7.1 HostGetImportMetaProperties(moduleRecord) resolveFunction", ML_RESOLVE_STEPS
+};
+
+/* HTML §8.1.6.7.1 HostGetImportMetaProperties(moduleRecord), as quickjs's JSModuleImportMetaFunc: `url` is
+   moduleScript's base URL serialized (step 3) and `resolve` its resolveFunction (step 5), defined as ECMAScript
+   §13.3.12.1 step 4.c's CreateDataPropertyOrThrow does. This engine names a module by that base URL
+   (solver/engine.c's row name; the name ml_referrer_base_url resolves a dependency against), so step 3 reads
+   the name, asserted to be a serialized URL. */
+static int module_import_meta(JSContext *ctx, JSModuleDef *m, JSValueConst meta)
+{
+    JSAtom na = JS_GetModuleName(ctx, m);
+    const char *name = JS_AtomToCString(ctx, na);
+    JSValue fn;
+
+    JS_FreeAtom(ctx, na);
+    if (!name) return -1;
+    {
+        UrlRecord u;
+        bool ok;
+        char *ser;
+
+        url_record_init(&u);
+        ok = url_parse(&u, name, strlen(name), NULL);
+        ser = ok ? url_serialize(&u, false) : NULL;
+        DCHECKF(ok && ser && !strcmp(ser, name),
+                "a module named `%s` evaluated import.meta, and that is not a serialized URL — §8.1.6.7.1 step 2 "
+                "asserts a JavaScript module script's base URL is not null, and this engine names a module by it",
+                name);
+        free(ser);
+        url_record_free(&u);
+    }
+    fn = idl_step_function(ctx, "resolve", g_ml_resolve_id);
+    if (JS_IsException(fn)) { JS_FreeCString(ctx, name); return -1; }
+    if (JS_DefinePropertyValue(ctx, fn, g_ml_base_atom, JS_NewString(ctx, name), 0) < 0 ||
+        JS_DefinePropertyValueStr(ctx, meta, "url", JS_NewString(ctx, name), JS_PROP_C_W_E) < 0) {
+        JS_FreeValue(ctx, fn);
+        JS_FreeCString(ctx, name);
+        return -1;
+    }
+    JS_FreeCString(ctx, name);
+    return JS_DefinePropertyValueStr(ctx, meta, "resolve", fn, JS_PROP_C_W_E) < 0 ? -1 : 0;
+}
+
 static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *opaque)
 {
     JSValue promise, resolving[2];
@@ -183,8 +298,12 @@ static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *o
    runtime it installed into is the slot, and NULLing it is what the release has to be caught forgetting. */
 static JSRuntime *g_module_rt;
 
-void module_loader_install(JSRuntime *rt)
+void module_loader_install(JSContext *ctx)
 {
+    static const IdlArgType RESOLVE_ARGS[1] = { IDL_DOMSTRING };
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    JSValue key;
+
     DCHECK(rt != NULL, "the module loader was installed on no runtime");
     /* A SECOND AGENT IN ONE PROCESS IS WHY THIS IS AN ASSERT AND NOT AN `if (g_module_rt) return;`. That latch
        is the shape core/agent_state.h opens by recording: `fetch_init` returned early on a slot its own release
@@ -195,7 +314,18 @@ void module_loader_install(JSRuntime *rt)
                                 "did not run or did not give the runtime back, and a re-install would leave "
                                 "ECMAScript §16.2.1.10 HostLoadImportedModule pointing at the agent that went");
     JS_SetModuleLoaderFunc(rt, module_normalize, module_load, NULL);
+    JS_SetModuleImportMetaFunc(rt, module_import_meta);
     g_module_rt = rt;
+    /* §8.1.6.7.1's resolveFunction is CreateBuiltinFunction(steps, 1, "resolve", « »): one argument, which
+       step 1 converts with ToString. */
+    g_ml_resolve_id = idl_method_id_step(ctx, RESOLVE_ARGS, 1, NULL, 0, &ml_resolve_decl, 0);
+    key = JS_NewSymbol(ctx, "importMetaResolveBase", false);
+    CHECK(!JS_IsException(key), "the import.meta.resolve base URL slot key could not be allocated");
+    g_ml_base_atom = JS_ValueToAtom(ctx, key);
+    JS_FreeValue(ctx, key);
+    CHECK(g_ml_base_atom != JS_ATOM_NULL, "the import.meta.resolve base URL slot key could not be interned");
+    agent_state_id("module_loader", &g_ml_resolve_id, "HTML §8.1.6.7.1's resolveFunction declaration");
+    agent_state_atom("module_loader", &g_ml_base_atom, "the resolveFunction's module base URL slot key");
     agent_state_ptr("module_loader", &g_module_rt, "the runtime ECMAScript §16.2.1.10 HostLoadImportedModule "
                                                    "was installed into");
 }
@@ -214,5 +344,9 @@ void module_loader_free(JSRuntime *rt)
     DCHECK(g_module_rt == rt, "the module loader is being released against a runtime it was not installed "
                               "into — the hook it claimed is on a different one and would survive this agent");
     JS_SetModuleLoaderFunc(rt, NULL, NULL, NULL);
+    JS_SetModuleImportMetaFunc(rt, NULL);
     g_module_rt = NULL;
+    JS_FreeAtomRT(rt, g_ml_base_atom);
+    g_ml_base_atom = JS_ATOM_NULL;
+    g_ml_resolve_id = -1;
 }
