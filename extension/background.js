@@ -27,36 +27,27 @@ const OFFSCREEN_URL = "ast-worker.html";
 const OFFSCREEN_HREF = chrome.runtime.getURL(OFFSCREEN_URL);
 
 // ─── Offscreen lifecycle ──────────────────────────────────────────────────────
-let _offscreenP = null;
-async function ensureOffscreen() {
-  try {
+/* The offscreen document is the zone's brain, and it exists whenever this worker runs: the worker creates it
+   at its own start. runtime.onInstalled and onStartup do not fire on every browser start (measured in
+   Chrome 155: a worker started with neither, and no document came up), and content scripts message the
+   brain directly, so nothing else would create it. Checks and creations run one at a time, so two
+   callers never both create. */
+let _offscreenChain = Promise.resolve();
+function ensureOffscreen() {
+  const next = _offscreenChain.then(async () => {
     const existing = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
     if (existing.length > 0) return;
-  } catch (_) { /* getContexts unavailable during teardown — fall through */ }
-  if (_offscreenP) return _offscreenP;
-  _offscreenP = (async () => {
-    try {
-      await chrome.offscreen.createDocument({
-        url: OFFSCREEN_URL,
-        reasons: ["WORKERS"],
-        justification: "API discovery + JavaScript analysis brain (IndexedDB + Web Worker)",
-      });
-    } catch (e) { /* concurrent create / already exists */ }
-    finally { _offscreenP = null; }
-  })();
-  return _offscreenP;
+    await chrome.offscreen.createDocument({
+      url: OFFSCREEN_URL,
+      reasons: ["WORKERS"],
+      justification: "API discovery + JavaScript analysis brain (IndexedDB + Web Worker)",
+    });
+  });
+  // The next check waits for this one either way; this one's failure reaches its own caller through `next`.
+  _offscreenChain = next.then(() => undefined, () => undefined);
+  return next;
 }
-
-// Wake the brain on browser start / extension update so it resumes any incomplete
-// deep grind from IndexedDB without waiting for a navigation.
-try {
-  chrome.runtime.onStartup.addListener(() => ensureOffscreen().catch((e) => console.warn("[bg:onStartup] ensureOffscreen failed:", e && e.message || e)));
-  chrome.runtime.onInstalled.addListener(() => ensureOffscreen().catch((e) => console.warn("[bg:onInstalled] ensureOffscreen failed:", e && e.message || e)));
-} catch (e) {
-  // chrome.runtime.onStartup / onInstalled missing — the only way this catch fires
-  // is if the MV3 API surface changed. Surface so the boot-time hook gap is visible.
-  console.warn("[bg] failed to register onStartup/onInstalled listeners:", e && e.message || e);
-}
+ensureOffscreen().catch((e) => console.error("[bg] the offscreen document could not be created:", e && e.message || e));
 
 // Forward a message to the offscreen brain, ensuring it exists first.
 function toBrain(m) {
