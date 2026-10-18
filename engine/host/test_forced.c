@@ -13687,12 +13687,25 @@ TF_UNIT void probes_griditem(const char *js, Probe *tab, int *n) {
              "css-grid-1 §8.5: the single item does not follow the wrapped `span 2` item on its row");
     fold_row(&grids_tt, &grids_why, param_value_is(js, "/api/gridiw", "s4y", "10"),
              "css-grid-1 §8.5: the `span 2` item that overflows the first row does not wrap to the second");
+    /* Named areas: css-grid-1 §7.3's template, §7.3.2's implicit line names, and `grid-area` placement. */
+    const char *grida_why = NULL; int grida_tt = 1;
+    fold_row(&grida_tt, &grida_why, param_value_is(js, "/api/gridiw", "tax", "100"),
+             "css-grid-1 §8.3: `grid-area: main` does not start at the `main-start` column line");
+    fold_row(&grida_tt, &grida_why, param_value_is(js, "/api/gridiw", "tay", "10"),
+             "css-grid-1 §8.3: `grid-area: main` does not start at the `main-start` row line, below `head`");
+    fold_row(&grida_tt, &grida_why, param_value_is(js, "/api/gridiw", "taw", "150"),
+             "css-grid-1 §7.3: the `main` area is not its one 150px column");
+    fold_row(&grida_tt, &grida_why, param_value_is(js, "/api/gridiw", "tnx", "290"),
+             "css-grid-1 §8.3: an area the template lacks does not name the lines past the explicit grid");
+    fold_row(&grida_tt, &grida_why, param_value_is(js, "/api/gridiw", "tny", "30"),
+             "css-grid-1 §8.3: an area the template lacks does not name the rows past the explicit grid");
     const Probe rows[] = {
         { "grid-item-auto-width", gridiw_tt, "/api/gridiw", SESS_EXPLORE, gridiw_why },
         { "grid-rows-sized", gridrow_tt, "/api/gridiw", SESS_EXPLORE, gridrow_why },
         { "grid-explicit-tracks", gridx_tt, "/api/gridiw", SESS_EXPLORE, gridx_why },
         { "inline-grid-baseline", gridb_tt, "/api/gridiw", SESS_EXPLORE, gridb_why },
         { "grid-spanning-items", grids_tt, "/api/gridiw", SESS_EXPLORE, grids_why },
+        { "grid-template-areas", grida_tt, "/api/gridiw", SESS_EXPLORE, grida_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

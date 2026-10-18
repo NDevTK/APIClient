@@ -53,6 +53,14 @@ static const char HTML_GRIDITEM[] =
     "<div id=s4 style=\"display:grid;width:150px;grid-template-columns:50px 50px 50px\">"
     "<div style=\"grid-column:span 2;height:10px\"></div><div style=\"grid-column:span 2;height:10px\"></div>"
     "<div id=s4c style=\"height:10px\"></div></div>"
+    /* Named areas (§7.3) placed by `grid-area` (§8.4), over a track list shorter than the template: `main` is
+       the second column of the second row, under a 10px `head`. An area the template lacks names lines past the
+       explicit grid (§8.3), so `nope` is in the second implicit column and row. The third template column and
+       the two implicit ones are `auto` and share the 60px left, so `nope` starts at 290. */
+    "<div id=ta style=\"display:grid;width:310px;grid-template-areas:'head head side' 'nav main side';"
+    "grid-template-columns:100px 150px\"><div id=tam style=\"grid-area:main;height:20px\"></div>"
+    "<div style=\"grid-area:head;height:10px\"></div><div id=tan style=\"grid-area:nope;height:5px\"></div>"
+    "</div>"
     "<script>var g2 = document.getElementById('g2');"
     "function R(id) { return document.getElementById(id).getBoundingClientRect(); }"
     "fetch('/api/gridiw?w=' + getComputedStyle(document.getElementById('gi')).width"
@@ -66,7 +74,10 @@ static const char HTML_GRIDITEM[] =
     " + '&s1x=' + (R('s1c').left - R('s1').left) + '&s1w=' + R('s1c').width"
     " + '&s2x=' + (R('s2b').left - R('s2').left)"
     " + '&s3y=' + (R('s3c').top - R('s3').top) + '&s3h=' + R('s3b').height"
-    " + '&s4x=' + (R('s4c').left - R('s4').left) + '&s4y=' + (R('s4c').top - R('s4').top));"
+    " + '&s4x=' + (R('s4c').left - R('s4').left) + '&s4y=' + (R('s4c').top - R('s4').top)"
+    " + '&tax=' + (R('tam').left - R('ta').left) + '&tay=' + (R('tam').top - R('ta').top)"
+    " + '&taw=' + R('tam').width + '&tnx=' + (R('tan').left - R('ta').left)"
+    " + '&tny=' + (R('tan').top - R('ta').top));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
