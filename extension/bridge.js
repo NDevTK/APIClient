@@ -6261,7 +6261,7 @@ const _hostOps = {
            hostSchedule's failure arm. */
         /* The declaring document speaks as itself for this one load, so it ends with the load. */
         const held = "held:route:" + (++_heldRoutes);
-        admitLoadSeat({ kind: "seed", seed: seed },
+        admitLoadSeat({ kind: "seed", seed: seed, identity: seed.identity },
                       () => navigationLoad(seed.url, seed.principalUrl, seed.principalOrigin, seed.provenance,
                                            seed.fromDoc,
                                            /* `report`: a route seed holds no rendezvous and has an arm
