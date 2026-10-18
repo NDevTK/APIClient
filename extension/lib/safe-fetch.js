@@ -1387,8 +1387,11 @@ function safeFetchFiringRefusal(facts) {
                           actor: facts.actor, driven: facts.driven,
                           credentialed: facts.credentialed, headers: facts.headers });
 }
-/* A cross-document message (HTML §9.3.3 "Posting messages", routed to another instance) reaches another
-   document's state, so it is judged by `_firingRefusal` over the facts a fetch states, with no arm of its own.
+/* A cross-document act reaches another document's state, so it is judged by `_firingRefusal` over the facts a
+   fetch states, with no arm of its own: a message routed to another instance (HTML §9.3.3 "Posting messages")
+   and a cross-agent operation (a member of another agent's Window, §7.2.1; a traversable's close, §7.3.1.6; a
+   lent object's internal method). Which member a read names changes no signal, and a member outside §7.2.1.3.1
+   CrossOriginProperties is never routed (window_proxy.c answers it locally), so there is no branch on it.
    It carries no address, so its URL is the receiving document's origin, and `url-authority` reads `unknown`.
    An opaque origin is one no widening can name, so it is asked as `about:blank`'s, whose origin is opaque too.
    Its destination is the empty string, a value like a page `fetch()`. It is the page's act. Its provenance,
@@ -1396,18 +1399,18 @@ function safeFetchFiringRefusal(facts) {
    <pinned|unpinned>` word, solver/engine.c's engine_record_head). `doc` is the sending document's record. It
    pays no cookie jar and carries no header list. Answers `_firingRefusal`'s "signal=value", or null to
    deliver. */
-function safeFetchPostRefusal(post) {
+function safeFetchCrossDocumentRefusal(act) {
   var m;
-  CHECK(post !== null && typeof post === "object" && typeof post.targetOrigin === "string" &&
-        typeof post.marks === "string",
-        "a cross-document message was judged without the receiving instance's origin or the record's marks");
-  m = post.marks.split(",");
+  CHECK(act !== null && typeof act === "object" && typeof act.targetOrigin === "string" &&
+        typeof act.marks === "string",
+        "a cross-document act was judged without the receiving instance's origin or the record's marks");
+  m = act.marks.split(",");
   CHECK(m.length === 3 && (m[0] === "derived" || m[0] === "forced") &&
         (m[1] === "driven" || m[1] === "undriven") && (m[2] === "pinned" || m[2] === "unpinned"),
-        "a cross-document message's marks " + JSON.stringify(post.marks) + " are not the word " +
+        "a cross-document act's marks " + JSON.stringify(act.marks) + " are not the word " +
         "engine_record_head writes — the engine that routed it refuses any other (peer_marks_word_ok)");
-  return _firingRefusal({ url: new URL(_isRealOrigin(post.targetOrigin) ? post.targetOrigin + "/" : "about:blank"),
-                          destination: "", provenance: m[0], pinned: m[2], doc: post.doc, actor: "page",
+  return _firingRefusal({ url: new URL(_isRealOrigin(act.targetOrigin) ? act.targetOrigin + "/" : "about:blank"),
+                          destination: "", provenance: m[0], pinned: m[2], doc: act.doc, actor: "page",
                           driven: m[1], credentialed: false, headers: null });
 }
 /* The vector for a hypothetical request, for a surface that shows a person what they are deciding about. It
@@ -2599,7 +2602,7 @@ if (typeof self !== "undefined") {
   self.safeFetchSignalVector = safeFetchSignalVector;
   self.safeFetchDefaultArms = safeFetchDefaultArms;
   self.safeFetchFiringRefusal = safeFetchFiringRefusal;
-  self.safeFetchPostRefusal = safeFetchPostRefusal;
+  self.safeFetchCrossDocumentRefusal = safeFetchCrossDocumentRefusal;
   self.safeFetchWidenedOrigins = safeFetchWidenedOrigins;
   self.safeFetchSiteSetting = safeFetchSiteSetting;
   self.safeFetchSetSiteSetting = safeFetchSetSiteSetting;

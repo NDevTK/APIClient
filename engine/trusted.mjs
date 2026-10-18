@@ -217,7 +217,7 @@ export const ZONE = (() => {
   /* lib/document-record.js's writers are on this list for the reason the policy is: this host records every
      document it provisions, and a zone assembled without them would hand the chokepoint no record, which
      `_docOf` refuses on the first request rather than here at assembly. */
-  for (const n of ['safeFetchWiden', 'safeFetchEgressStated', 'safeFetchFiringRefusal', 'safeFetchPostRefusal',
+  for (const n of ['safeFetchWiden', 'safeFetchEgressStated', 'safeFetchFiringRefusal', 'safeFetchCrossDocumentRefusal',
                    'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'docRecord', 'docRecordJoin',
                    'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque',
                    'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordAskerRefusal',
@@ -1319,12 +1319,22 @@ async function main() {
      RUNNING A PROGRAM — the IDL getter HTML §7.2.1 "Security infrastructure for Window, WindowProxy, and
      Location objects" defines the member as — so the operation becomes a flow on that instance's own frontier
      and each completion arrives later, through its notices, once per live timeline. */
-  function askOperation(e, id, op) {
+  function askOperation(e, id, op, doc) {
     const target = op.split('\t')[1];
     const token = `${e.tag}#${id}`;
     const go = () => {
       const h = holderOf(target);
       if (!h) return false;
+      /* The one firing rule, as a fetch is judged (safeFetchCrossDocumentRefusal), under the asking document's
+         record; the record's fourth field is the asking timeline's marks (engine_record_head). A refusal is a
+         decline, which the asker forks into a waiting arm and a failure arm. */
+      const refusal = ZONE.safeFetchCrossDocumentRefusal({ targetOrigin: h.origin, marks: op.split('\t')[3], doc });
+      if (refusal) {
+        e.ready.push(declineAnswer(id, `\`${op.slice(0, 120)}\` — a CROSS-AGENT OPERATION this origin's egress ` +
+                                       `policy refuses on \`${refusal}\`, as it would a fetch with the same signals`));
+        flush();
+        return true;
+      }
       reads.set(token, { asker: e, id, op, by: [] });
       h.ready.push(['perform', token, b64(op)].join('\t'));
       flush();
@@ -1585,10 +1595,10 @@ async function main() {
       const go = () => {
         const t = holderOf(f[1]);
         if (!t) return false;
-        /* The one firing rule, as a fetch is judged (safeFetchPostRefusal). The record names no sending
+        /* The one firing rule, as a fetch is judged (safeFetchCrossDocumentRefusal). The record names no sending
            document, so it is judged under the weaker-wins meet of the sending instance's records, which is
            SECURITY.md's bound on what an engine's word can get. */
-        const refusal = ZONE.safeFetchPostRefusal({ targetOrigin: t.origin, marks: f[3],
+        const refusal = ZONE.safeFetchCrossDocumentRefusal({ targetOrigin: t.origin, marks: f[3],
                                                     doc: ZONE.docRecordMeet(e.docs.map((n) => docRecords.get(n))) });
         if (refusal) {
           e.ready.push(decline(`windowproxy.post -> ${f[1]} — a CROSS-DOCUMENT MESSAGE this origin's egress ` +
@@ -1951,7 +1961,7 @@ async function main() {
          not in who resolves it, so this is a prefix and not a list: a row added to core/frame/remote_op.c's
          OPS table reaches its instance with nothing here to remember. */
       if (op.startsWith('windowproxy.') || op.startsWith('object.')) {
-        askOperation(e, id, op);
+        askOperation(e, id, op, doc);
       } else if (op.startsWith('document.fetch\t')) {
         /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer policy><TAB><initiator><TAB><url>` —
            §7.4.5's load for a document THIS instance holds,

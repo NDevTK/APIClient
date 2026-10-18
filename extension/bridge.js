@@ -5133,10 +5133,10 @@ async function hostNotice(eng, line) {
     CHECK(!!eng.origin, "a cross-document message was posted by an instance with no recorded principal — only " +
                         "the trusted zone may state a sender's origin, and this one has none to state; carry " +
                         "the document's browser-stated origin into the cold recipe so a resumed instance keeps it");
-    /* The one firing rule, as a fetch is judged (safeFetchPostRefusal). The record names no sending document, so
+    /* The one firing rule, as a fetch is judged (safeFetchCrossDocumentRefusal). The record names no sending document, so
        it is judged under the weaker-wins meet of the sending instance's records, SECURITY.md's bound on what an
        engine's word can get. */
-    const _postRefusal = self.safeFetchPostRefusal({ targetOrigin: target.origin, marks: f[3],
+    const _postRefusal = self.safeFetchCrossDocumentRefusal({ targetOrigin: target.origin, marks: f[3],
                                                      doc: docRecordMeet([...eng.records.values()]) });
     if (_postRefusal) {
       console.warn("[bridge] windowproxy.post -> " + f[1] + " is refused on `" + _postRefusal + "`, as a fetch " +
@@ -5340,6 +5340,16 @@ async function engineServiceHostRequests(eng) {
       DCHECK(holder !== eng, "a cross-agent operation was routed back to the instance whose flow asked it — an " +
                              "operation on this agent's own object is performed in this heap and never leaves, " +
                              "so this zone and the engine have answered one identity question two ways");
+      /* The one firing rule, as a fetch is judged (safeFetchCrossDocumentRefusal), under the asking document's
+         record; the record's fourth field is the asking timeline's marks (engine_record_head). A refusal is a
+         declined rendezvous, which the asker forks into a waiting arm and a failure arm. */
+      const _opRefusal = self.safeFetchCrossDocumentRefusal({ targetOrigin: holder.origin, marks: op.split("\t")[3],
+                                                              doc: askerDoc });
+      if (_opRefusal) {
+        await engineDeclineRendezvous(eng, id, "blocked-signal:" + _opRefusal);
+        did++;
+        continue;
+      }
       const token = "op" + (_nextRemoteToken++);
       _remoteOps.set(token, { asker: eng, req: id });
       eng._remoteAsked.add(id);

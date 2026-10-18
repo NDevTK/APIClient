@@ -57,7 +57,7 @@ function zone() {
   createContext(sandbox);
   loadZone(sandbox);
   for (const n of ['safeFetchEgressStated', 'safeFetchFiringRefusal', 'safeFetchSignalVector',
-                   'safeFetchDefaultArms', 'safeFetchPostRefusal'])
+                   'safeFetchDefaultArms', 'safeFetchCrossDocumentRefusal'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js installed no \`${n}\` — this probe reads the policy's own ` +
                       'answer rather than restating its rules, so a load that installs nothing leaves it ' +
@@ -177,31 +177,55 @@ const CONTROLS = [
 
 const URL_UNDER_TEST = 'https://example.test/x';
 
-/* A CROSS-DOCUMENT MESSAGE, DECIDED AS A FETCH WITH THE SAME SIGNALS. Each row is a `windowproxy.post`'s marks
-   and the sending document's record, as engine/trusted.mjs and bridge.js hand them to safeFetchPostRefusal. It
-   is scored against the fetch that states the same signals at the receiving origin, a page `fetch()` from the
-   same record with no cookie jar and no header list. Every row must agree with its fetch. `differs` is the
-   armed control: a post beside a fetch whose destination differs, which must disagree, so agreement below is
-   not a comparison that cannot fail. */
+/* A CROSS-DOCUMENT ACT, DECIDED AS A FETCH WITH THE SAME SIGNALS. Each row is a record as the engine writes it
+   (engine_record_head's `<verb>\t<doc>\t<world>\t<marks>` and the verb's own fields) with the asking or sending
+   document's record, and its marks are taken from field 3 as engine/trusted.mjs and bridge.js take them, then
+   handed to safeFetchCrossDocumentRefusal. It is scored against the fetch that states the same signals at the
+   receiving origin: a page `fetch()` from the same record, with no cookie jar and no header list. Every row
+   must agree with its fetch. `differs` is the armed control: the act beside a fetch whose destination differs,
+   which must disagree, so agreement below is not a comparison that cannot fail. */
 const POST_ORIGIN = 'https://example.test';
+const W = 'root:1:1';
 const POSTS = [
   { label: 'post, derived path, nothing pinned (fires, as the page fetch() does)',
-    marks: 'derived,undriven,unpinned', doc: ['observed', 'undriven', 'unpinned', 'none'] },
+    record: `windowproxy.post\tpeer\t${W}\tderived,undriven,unpinned\t*\teA==`,
+    doc: ['observed', 'undriven', 'unpinned', 'none'] },
   { label: 'post, forced path, nothing pinned (fires: the bound is the witness)',
-    marks: 'forced,undriven,unpinned', doc: ['observed', 'undriven', 'unpinned', 'none'] },
+    record: `windowproxy.post\tpeer\t${W}\tforced,undriven,unpinned\t*\teA==`,
+    doc: ['observed', 'undriven', 'unpinned', 'none'] },
   { label: 'post on a path that PINNED a witness (refused: the witness conjunct)',
-    marks: 'derived,undriven,pinned', doc: ['observed', 'undriven', 'unpinned', 'none'] },
+    record: `windowproxy.post\tpeer\t${W}\tderived,undriven,pinned\t*\teA==`,
+    doc: ['observed', 'undriven', 'unpinned', 'none'] },
   { label: 'post from a DRIVEN timeline (refused: the actor conjunct, this tool\'s act)',
-    marks: 'derived,driven,unpinned', doc: ['observed', 'undriven', 'unpinned', 'none'] },
+    record: `windowproxy.post\tpeer\t${W}\tderived,driven,unpinned\t*\teA==`,
+    doc: ['observed', 'undriven', 'unpinned', 'none'] },
   { label: 'post from a document the zone recorded as PINNED (refused: the record\'s witness)',
-    marks: 'derived,undriven,unpinned', doc: ['derived', 'undriven', 'pinned', 'none'] },
+    record: `windowproxy.post\tpeer\t${W}\tderived,undriven,unpinned\t*\teA==`,
+    doc: ['derived', 'undriven', 'pinned', 'none'] },
+  { label: 'windowproxy.get of `length`, derived path (fires, as the page fetch() does)',
+    record: `windowproxy.get\tpeer\t${W}\tderived,undriven,unpinned\t-\tlength`,
+    doc: ['observed', 'undriven', 'unpinned', 'none'] },
+  { label: 'windowproxy.get on a path that PINNED a witness (refused: the witness conjunct)',
+    record: `windowproxy.get\tpeer\t${W}\tderived,undriven,pinned\t-\tlength`,
+    doc: ['observed', 'undriven', 'unpinned', 'none'] },
+  { label: 'windowproxy.close from a DRIVEN timeline (refused: the actor conjunct)',
+    record: `windowproxy.close\tpeer\t${W}\tderived,driven,unpinned\t-`,
+    doc: ['observed', 'undriven', 'unpinned', 'none'] },
+  { label: 'object.set from a document the zone recorded as DRIVEN (refused: the record\'s actor)',
+    record: `object.set\tpeer\t${W}\tderived,undriven,unpinned\t-\t7\tk\tv`,
+    doc: ['derived', 'driven', 'unpinned', 'none'] },
   { label: 'CONTROL: the pinned post beside a program load, which must DISAGREE',
-    marks: 'derived,undriven,pinned', doc: ['observed', 'undriven', 'unpinned', 'none'], differs: 'script' },
+    record: `windowproxy.post\tpeer\t${W}\tderived,undriven,pinned\t*\teA==`,
+    doc: ['observed', 'undriven', 'unpinned', 'none'], differs: 'script' },
+  { label: 'CONTROL: the pinned windowproxy.get beside a program load, which must DISAGREE',
+    record: `windowproxy.get\tpeer\t${W}\tderived,undriven,pinned\t-\tlength`,
+    doc: ['observed', 'undriven', 'unpinned', 'none'], differs: 'script' },
 ];
 function askPost(Z, row) {
-  const m = row.marks.split(',');
+  const marks = row.record.split('\t')[3];
+  const m = marks.split(',');
   const doc = Z.docRecord(...row.doc, 'public');
-  const post = Z.safeFetchPostRefusal({ targetOrigin: POST_ORIGIN, marks: row.marks, doc });
+  const post = Z.safeFetchCrossDocumentRefusal({ targetOrigin: POST_ORIGIN, marks, doc });
   const fetch = Z.safeFetchFiringRefusal({ url: POST_ORIGIN + '/', destination: row.differs || '', provenance: m[0],
                                            pinned: m[2], doc, actor: 'page', driven: m[1], credentialed: false,
                                            headers: null });
@@ -280,7 +304,7 @@ function main() {
     process.exitCode = 1;
   }
   console.log('');
-  console.log('A CROSS-DOCUMENT MESSAGE against the fetch with the same signals (safeFetchPostRefusal):');
+  console.log('A CROSS-DOCUMENT ACT against the fetch with the same signals (safeFetchCrossDocumentRefusal):');
   let postsWrong = 0;
   for (const r of POSTS) {
     const got = askPost(Z, r);
@@ -292,8 +316,8 @@ function main() {
                 (got.fetch === null ? 'FIRES' : 'REFUSED at ' + got.fetch));
   }
   if (postsWrong) {
-    console.log(postsWrong + ' POST ROW(S) WERE NOT DECIDED AS THEIR FETCH (or the control agreed): a ' +
-                'cross-document message has an arm of its own, or the comparison cannot fail.');
+    console.log(postsWrong + ' CROSS-DOCUMENT ROW(S) WERE NOT DECIDED AS THEIR FETCH (or a control agreed): ' +
+                'a cross-document act has an arm of its own, or the comparison cannot fail.');
     process.exitCode = 1;
   }
   console.log('');
