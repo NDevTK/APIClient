@@ -116918,6 +116918,12 @@ static int js_promise_resolvefn_step(JSContext *ctx, void *st, JSValue cb_result
                    "promise into a `then` this engine cannot call");
             ex = g_concolic.example(ctx, resolution);
             if (JS_IsUndefined(ex)) {
+                /* A JSON value's `then` is a JSON value or its type's chain's, so the host can often state 2.i's
+                   IsCallable false for every reply; then nothing is undetermined and step 2.i fulfils. */
+                DCHECK(g_concolic.member_never_callable != NULL,
+                       "a host installed the concolic value class without JSConcolicHooks.member_never_callable");
+                if (g_concolic.member_never_callable(ctx, resolution, JS_ATOM_then))
+                    return js_promise_resolvefn_settle(ctx, s, resolution, false);
                 m->hdr.stage = PRF_THENABLE;
                 return JS_STEP_YIELD;   /* "I have more work; re-enter me" — see the stage below */
             }

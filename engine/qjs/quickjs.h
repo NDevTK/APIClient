@@ -2755,6 +2755,9 @@ typedef struct JSConcolicHooks {
     /* §25.5.2 JSON.parse ( text [ , reviver ] ) over an unknown text with no callable reviver: step 4 returns
        ParseJSON's own value, which the host states of the derived result, a concolic. */
     void (*json_value)(JSValueConst v);
+    /* Whether IsCallable(Get(v, key)) is false for every value the unknown `v` can be — 1 when the host can say
+       so, 0 when it cannot. 27.5.1.3 step 2.i asks it of an unknown resolution with no example for `then`. */
+    int (*member_never_callable)(JSContext *ctx, JSValueConst v, JSAtom key);
     /* 7.1.4 ToNumber OVER UNKNOWN INPUT, answered where the SPEC says the operator computes — never at the
        conversion boundary, which owes C a real number. `-x`, `~x`, `x*2`, `x**2`, `++x` yield a DERIVED
        concolic that keeps the source's identity, so a later branch still forks and a later sink still solves

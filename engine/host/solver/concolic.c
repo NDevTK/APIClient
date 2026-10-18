@@ -4709,6 +4709,29 @@ JSValue concolic_isarray_hook(JSContext *ctx, JSValueConst v) {
     return r;
 }
 
+/* JSConcolicHooks.member_never_callable: a JSON value's own members are JSON values and never callable, so where
+   no slot the page wrote holds `key` and every type's intrinsic chain answers it with a data value that is not
+   callable, IsCallable(Get(v, key)) is false whatever the reply sends. An accessor or a Proxy on a chain is the
+   page's code, and answers 0. */
+static int concolic_has_own_slot(JSContext *ctx, JSValueConst obj, JSAtom atom);
+static int concolic_member_never_callable(JSContext *ctx, JSValueConst v, JSAtom key) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    size_t i;
+
+    if (!c || !c->json_value || concolic_has_own_slot(ctx, v, key))
+        return 0;
+    for (i = 0; i < sizeof json_type_class / sizeof json_type_class[0]; i++) {
+        JSValue proto = JS_GetClassProto(ctx, json_type_class[i]), x;
+        int held = example_member(ctx, proto, key, &x), callable = held && JS_IsFunction(ctx, x);
+
+        JS_FreeValue(ctx, proto);
+        JS_FreeValue(ctx, x);
+        if (!held || callable)
+            return 0;
+    }
+    return 1;
+}
+
 void concolic_mark_json_value(JSValueConst v) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
 
@@ -5969,7 +5992,7 @@ static int compile_global_named_dispatch(const char *name, int typeof_only) {
 static JSConcolicHooks g_hooks = {
     .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is,
     .rel = concolic_rel_hook, .type_of = concolic_typeof_hook, .is_array = concolic_isarray_hook,
-    .json_value = concolic_mark_json_value,
+    .json_value = concolic_mark_json_value, .member_never_callable = concolic_member_never_callable,
     .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
     .to_bool = concolic_tobool_hook,
     .key_read = concolic_key_read_hook,
