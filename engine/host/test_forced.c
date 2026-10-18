@@ -13583,8 +13583,18 @@ TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
                  param_value_is(js, "/api/abssumx", "t", "0{__tfAbsSum}"),
              "on /api/abssumx `n` is not `0+{__tfAbsSum}` or `t` is not `0{__tfAbsSum}` — beside a hole with no "
              "example the address spells shapes, and a sum and a concatenation of one operand shared one");
+    /* `m?.deep` is §13.3.9.1's optional chain: the session's `m` is undefined, so its own arm short-circuits and
+       its record is not forced; the arm where `m` is an object reads `deep` and is. */
+    const char *absopt_why = NULL; int absopt_tt = 1;
+
+    fold_row(&absopt_tt, &absopt_why, !!strstr(js, "\"/api/absopt\""),
+             "NOT REACHED: no /api/absopt record, so the optional-chain statement did not run");
+    fold_row(&absopt_tt, &absopt_why, emitted_record_graded_has(js, "/api/absopt", "derived", "aoSHORT"),
+             "no derived /api/absopt record carries `aoSHORT` — the optional chain over an unknown whose session "
+             "value is undefined did not short-circuit on the session's own arm");
     const Probe rows[] = {
         { "absent-arm", absarm_tt, "__tfAbsentGate", SESS_EXPLORE, absarm_why },
+        { "absent-optchain", absopt_tt, "__tfMaybe", SESS_EXPLORE, absopt_why },
         { "absent-key-slot", abskey_tt, "__tfAbsentKey", SESS_EXPLORE, abskey_why },
         { "absent-sum-shape", abssum_tt, "__tfAbsSum", SESS_EXPLORE, abssum_why },
     };

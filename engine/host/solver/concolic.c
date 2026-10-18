@@ -2968,7 +2968,12 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
            "otherwise, and decide.c's fork-over-pinned row counts a fork the mint was to have decided");
     /* §6.2.5.5 GetValue ( refRecord ) step 3.a: ToObject throws a TypeError on an undefined or null base. Where
        this session's own value here is one of those, the session stops at this read, and a flow reading on
-       stands on a world this engine chose. */
+       stands on a world this engine chose.
+       Named residual. Not covered: the session's own world, which throws here and moves on to the page's next
+       task; the flow reads on, marked forced, and no flow stands for it. Next diff builds: the get opcodes over
+       an unknown ask branch_arm_fork whether the base is nullish, the session's arm raising step 3.a's TypeError
+       and the sibling re-reading with that decision replayed. Absence shows as: a document whose every record
+       after such a read is graded forced, with no derived record of any later statement. */
     if (concolic_example_present(obj)) {
         JSValue bex = concolic_example(ctx, obj);
 

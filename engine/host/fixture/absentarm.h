@@ -10,6 +10,7 @@
    It also adds the Number 0 and the String "0" to another unknown `s`, which holds `undefined`, and sends both
    twice: alone, so the address carries §13.15.3's computed bytes, and beside `Math[s]`, a key read with no
    example, so that address spells shapes. A sum and a concatenation take two arms and two shapes.
+   Last, `m?.deep` over a third unknown, `undefined` in this session, short-circuits on the session's own arm.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_ABSENTARM_H
@@ -26,6 +27,7 @@ static const char HTML_ABSENTARM[] =
     " '&tpl=' + (absKo[`${absK}`] === 'str') + '&other=' + (absKo[absK + '5'] === undefined));"
     "var absS = window.__tfAbsSum; fetch('/api/abssum?n=' + (0 + absS) + '&t=' + ('0' + absS));"
     "fetch('/api/abssumx?n=' + (0 + absS) + '&t=' + ('0' + absS) + '&k=' + Math[absS]);"
+    "var absM = window.__tfMaybe; fetch('/api/absopt?w=' + (absM?.deep === undefined ? 'aoSHORT' : 'aoDEEP'));"
     "</script>"
     "<script>"
     "function absBoom(tag) { throw new Error('absBOOM' + tag); }"

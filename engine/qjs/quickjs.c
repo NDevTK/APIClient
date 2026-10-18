@@ -35038,6 +35038,28 @@ static int js_typeof_is_concolic(JSContext *ctx, JSValue *sp, JSAtom expected)
     return 1;
 }
 
+/* OP_is_undefined_or_null, OP_is_undefined and OP_is_null over an unknown operand. Their tag test reads the
+   solver's carrier, which is an Object, so `x?.y` over an unknown never short-circuited, and over one whose
+   example is undefined (a missed read) the session's own world, which does, was lost. The fused opcodes are
+   §7.2.13 IsLooselyEqual ( x, y ) against null (an optional chain, `??`) and §7.2.14 IsStrictlyEqual against
+   undefined or null, so the comparison hook answers with a predicate whose example is the real comparison, and
+   the branch after it forks with the session's arm primary. 1 = answered into sp[-1]; 0 = not an unknown. */
+static int js_nullish_is_concolic(JSContext *ctx, JSValue *sp, JSValue y, JSConcolicEqOp op)
+{
+    JSValue pair[2];
+
+    if (!(g_concolic.is && g_concolic.is(sp[-1])))
+        return 0;
+    DCHECK(g_concolic.cmp != NULL, "an unknown reached a nullish test under a host with no comparison hook");
+    pair[0] = js_dup(sp[-1]);
+    pair[1] = y;
+    if (!g_concolic.cmp(ctx, pair + 2, /*is_neq*/false, op))
+        DFAIL("the concolic comparison hook declined an unknown's nullish test");
+    JS_FreeValue(ctx, sp[-1]);
+    sp[-1] = pair[0];
+    return 1;
+}
+
 #if APICLIENT_DEV
 /* THE OPERAND STACK IS AT THE HEIGHT THE COMPILER COMPUTED FOR THIS pc — asserted at the dispatch, which is the
    only place in the interpreter where that question is universal.
@@ -51248,6 +51270,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE(OP_nop):
             BREAK;
         CASE(OP_is_undefined_or_null):
+            if (js_nullish_is_concolic(ctx, sp, JS_NULL, JS_CONCOLIC_EQ_LOOSE))
+                BREAK;
             if (JS_VALUE_GET_TAG(sp[-1]) == JS_TAG_UNDEFINED ||
                 JS_VALUE_GET_TAG(sp[-1]) == JS_TAG_NULL) {
                 goto set_true;
@@ -51255,12 +51279,16 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 goto free_and_set_false;
             }
         CASE(OP_is_undefined):
+            if (js_nullish_is_concolic(ctx, sp, JS_UNDEFINED, JS_CONCOLIC_EQ_STRICT))
+                BREAK;
             if (JS_VALUE_GET_TAG(sp[-1]) == JS_TAG_UNDEFINED) {
                 goto set_true;
             } else {
                 goto free_and_set_false;
             }
         CASE(OP_is_null):
+            if (js_nullish_is_concolic(ctx, sp, JS_NULL, JS_CONCOLIC_EQ_STRICT))
+                BREAK;
             if (JS_VALUE_GET_TAG(sp[-1]) == JS_TAG_NULL) {
                 goto set_true;
             } else {
