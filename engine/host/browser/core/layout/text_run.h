@@ -146,7 +146,13 @@ typedef struct {
 
 /* css-text-3 §4.1.2's per-line sum over `[lo, at)`, taken forward one item at a time so a walk that is still
    deciding where a line ends pays for each item once. Written and read only by text_run.c, whose
-   `tr_line_sum_add` performs the additions `tr_line_prefix` performs, in its order. */
+   `tr_line_sum_add` performs `tr_line_prefix`'s additions in its order, except that a character adds its bare
+   advance: no kerning and no snap where its shaping run ends. */
+/* Named residual. Not covered: the kerning (css-fonts-4 §6.3 "Kerning: the font-kerning property") and Blink's
+   per-run 1/64 px snap in this sum, which the intrinsic sizes and line breaking read. Next diff builds: the open
+   shaping run carried on the sum, as `tr_line_prefix` carries it. How its absence would show: a max-content
+   width below Chrome's by less than 1/64 px per shaping run, or a line kept whose measured size exceeds the
+   width it was fitted to. */
 typedef struct {
     size_t lo, at;
     bool   content;   /* an item §4.1.2 stops trimming at is in `[lo, at)` */
@@ -173,7 +179,9 @@ typedef struct {
     LineBreakAction *actions;
     size_t *item_of_cp;
     size_t ncps;
-    /* css-sizing-3 §2.1's two answers, written by `finish` and undefined before it. */
+    /* css-sizing-3 §2.1's two answers, written by `finish` and undefined before it. A CssPx's double holds every
+       multiple of 1/64 px exactly, so Blink's LayoutUnit answer is representable; a difference from it is in
+       the summation (`TextRunLineSum`), not in the unit. */
     CssPx max_content;
     CssPx min_content;
     /* CSS 2.2 §9.4.2's theorem, written by `finish`: is there a forced break or enabled soft wrap opportunity
