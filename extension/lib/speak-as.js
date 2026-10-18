@@ -175,14 +175,20 @@ async function _speakAsFlush() {
     for (const a of adds) a.entry.installed = there.has(a.entry.ruleId);
     if (failure !== null) {
       for (const e of [..._speakAsRules.values()]) if (e.installed && !there.has(e.ruleId)) e.installed = false;
-      for (const id of installed) if (!_speakAsRules.has(id) || !_speakAsRules.get(id).installed) _speakAsRemoves.push(id);
+      for (const id of installed)
+        if ((!_speakAsRules.has(id) || !_speakAsRules.get(id).installed) && !_speakAsRemoves.includes(id))
+          _speakAsRemoves.push(id);
       for (const a of adds) a.reject(failure);
       continue;
     }
-    const mine = [..._speakAsRules.values()].filter((e) => e.installed).map((e) => e.ruleId).sort((a, b) => a - b);
-    CHECK(installed.length === mine.length && installed.every((id, i) => id === mine[i]),
+    /* The worker's answer is this zone's installed record plus the rules retired while the update was in
+       flight (a send released, a document ended), whose removal is queued for the next update. */
+    const mine = [..._speakAsRules.values()].filter((e) => e.installed).map((e) => e.ruleId);
+    CHECK(mine.every((id) => there.has(id)) &&
+          installed.every((id) => mine.includes(id) || _speakAsRemoves.includes(id)),
           "the speak-as rules installed are " + JSON.stringify(installed) + ", not this document's record " +
-          JSON.stringify(mine) + " — a rule would set headers no send of this zone computed");
+          JSON.stringify(mine.sort((a, b) => a - b)) + " with the removals queued since the update, " +
+          JSON.stringify(_speakAsRemoves) + " — a rule would set headers no send of this zone computed");
     for (const a of adds) a.resolve();
   }
   _speakAsFlushing = false;
