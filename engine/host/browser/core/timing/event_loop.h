@@ -344,8 +344,8 @@ JSValue event_loop_moment_plus(JSContext *ctx, JSValueConst moment, JSValueConst
 /* THE INSERTION ORDER OF A TASK, allocated by the loop rather than by a source, because it is what orders two
    sources' tasks that become due at the SAME moment — and because a per-source counter cannot: §8.7 Timers's map of
    active timers is per-global, so two same-origin documents each hand out handle 1 and a tie between them
-   would be decided by nothing. `_peek` answers the next number without allocating it, which is what makes "an
-   entry this flow can see was queued on this flow's own timeline" an assertable statement. */
+   would be decided by nothing. `_peek` answers the next number without allocating it, which is what makes it
+   assertable that an entry this flow can see was queued on this flow's own timeline. */
 double event_loop_task_seq(JSContext *ctx);
 double event_loop_task_seq_peek(JSContext *ctx);
 
@@ -370,7 +370,7 @@ double event_loop_task_seq_peek(JSContext *ctx);
  * created by this algorithm. §8.7's own `run steps after a timeout`, reached by this engine's internal
  * callers, is one of those — it is a different algorithm and its task is not this one's.
  *
- * §8.1.7.3 Processing model DECIDES THE BRACKET, AND IT IS NARROWER THAN "WHILE THE CALLBACK'S CODE RUNS":
+ * §8.1.7.3 Processing model DECIDES THE BRACKET, AND IT IS NARROWER THAN THE WHOLE TIME THE CALLBACK'S CODE RUNS:
  * step 2.5 is "Set the event loop's currently running task to oldestTask", 2.6 is "Perform oldestTask's
  * steps", 2.7 is "Set the event loop's currently running task back to null" and only THEN does 2.8 "Perform a
  * microtask checkpoint". So a promise reaction the handler queued runs with NO currently running task and its
