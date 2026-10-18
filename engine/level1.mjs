@@ -157,21 +157,29 @@ const kindWMax = (cen, kind) => cen[kindOf(kind).wMax];
    `frontierRow` projects out of a stored entry (the ranking view is deliberately not the cold tier); a
    waiting job is what `astDispatch` parks; a resident record is an engine holding an address and a frontier
    key; a seed is an address an application declared is a page of itself. */
-const job = (url, o = {}) => ({ msg: { sourceUrl: url, frameId: o.frameId || 0, origin: o.origin || '' } });
+/* Every member states its principal and whether its load carried the session (documentIdentityOf); a fixture
+   names the address's own origin and a credentialed load unless it says otherwise. */
+const originOfUrl = (url) => new URL(url).origin;
+const job = (url, o = {}) => ({ msg: { sourceUrl: url, frameId: o.frameId || 0, origin: o.origin || originOfUrl(url),
+                                       credentialed: o.credentialed !== false } });
 const row = (key, url, paid, serviceUs, o = {}) =>
-  ({ key, sourceUrl: url, paid, serviceUs, shed: false, stranded: o.stranded === true,
-     bytes: 0, rederivable: true });
+  ({ key, sourceUrl: url, origin: o.origin || originOfUrl(url), credentialed: o.credentialed !== false,
+     paid, serviceUs, shed: false, stranded: o.stranded === true, bytes: 0, rederivable: true });
 /* The key a walk over `P` gives the document at `url` with account `acct`, read through the shipped functions. */
 const keyOf = (P, url, acct) => B.level1Key(B.level1Tree(P.resident, P.idx), url, acct, true);
 /* An instance as hostSchedule and engineKey read one: a hot record with an address and a stated account. */
 const engM = (url, paid, serviceUs, o = {}) =>
-  Object.assign({ state: 'hot', msg: { sourceUrl: url }, prior: null, _readyP: null,
-                  level1: { runnable: true, paid: paid, serviceUs: serviceUs } }, o);
-const eng = (url, fkey) => ({ msg: { sourceUrl: url }, fkey: fkey || ('k|' + url) });
+  Object.assign({ state: 'hot', msg: { sourceUrl: url, credentialed: true }, origin: originOfUrl(url), prior: null,
+                  _readyP: null, level1: { runnable: true, paid: paid, serviceUs: serviceUs } }, o);
+const eng = (url, fkey, o = {}) => ({ state: 'hot', msg: { sourceUrl: url, credentialed: o.credentialed !== false },
+                                      origin: o.origin || originOfUrl(url), fkey: fkey || ('k|' + url) });
 const idxOf = (...rows) => new Map(rows.map((r) => [r.key, r]));
-const seedsOf = (...addrs) => new Map(addrs.map((a) => [a, { url: a, principalUrl: a,
-                                                            principalOrigin: 'https://x.test',
-                                                            provenance: 'derived' }]));
+/* A declaration is keyed by the identity its load would have; `seedOf` names the principal and session state. */
+const seedOf = (a, origin, credentialed) => {
+  const identity = B.documentIdentityOf(a, origin, credentialed);
+  return [identity, { url: a, identity, principalUrl: a, principalOrigin: origin, provenance: 'derived' }];
+};
+const seedsOf = (...addrs) => new Map(addrs.map((a) => seedOf(a, originOfUrl(a), true)));
 const pop = (o = {}) => ({ resident: o.resident || [], waiting: o.waiting || [],
                            seeds: o.seeds || new Map(), idx: o.idx || new Map() });
 
@@ -354,6 +362,29 @@ console.log('[level1] ── the weight that leaves the order ──');
   must(cen.exclSeedParked === 1 && kindPop(cen, 'seed') === 0 && kindPop(cen, 'cold') === 1,
        'a declared route this profile already holds a residue for is admitted as THAT residue, once', cen);
   console.log('[level1]   exclSeedParked   ' + JSON.stringify(cen));
+}
+
+{
+  /* One address, two documents: a declaration from an opaque principal loads without the session, so a
+     credentialed member at that address does not hold it, and the two declarations are two seeds. */
+  const seeds = new Map([seedOf('https://a.test/admin', 'null:opaque-1', false),
+                         seedOf('https://a.test/admin', 'https://a.test', true)]);
+  must(seeds.size === 2, 'an opaque and a credentialed declaration of one address are two identities', [...seeds.keys()]);
+  const cen = B._bestCandidate(pop({ resident: [eng('https://a.test/admin')], seeds })).census;
+  must(cen.exclSeedLive === 1 && kindPop(cen, 'seed') === 1,
+       'a credentialed member holds the credentialed declaration and not the opaque one', cen);
+  console.log('[level1]   identity split   ' + JSON.stringify(cen));
+}
+{
+  /* A loading seat is a member: it states the identity it loads, so a second declaration lands on it. */
+  const [id, seed] = seedOf('https://a.test/admin', 'https://a.test', true);
+  const seat = { state: 'loading', what: { kind: 'seed', seed, identity: id }, identity: id, msg: null };
+  const cen = B._bestCandidate(pop({ resident: [seat], seeds: new Map([[id, seed]]) })).census;
+  must(cen.exclSeedLive === 1 && kindPop(cen, 'seed') === 0,
+       'a declaration of the document a loading seat is fetching is that seat, not a second load', cen);
+  const held = B._frontierMembers(pop({ resident: [seat] })).get(id);
+  must(held !== undefined && /loading seed seat/.test(held.label), 'the member names the seat', held);
+  console.log('[level1]   seat member      ' + JSON.stringify(cen));
 }
 
 console.log('[level1] ── the population is an input, and an absent half is not an empty one ──');
