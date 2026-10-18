@@ -454,16 +454,15 @@ void decide_refine_stats(long *asked, long *refined);
  * prefix and neither pays for the other's, and it hands back a blob at the parent's CURRENT cursor rather than
  * at the end of the vector: a flow may fork here mid-replay (a cold-resumed flow re-reaching the read), and a
  * sibling given the end would skip every arm its parent still had to consume.
- * WHAT IT CANNOT CARRY IS THE ANSWER, and that is the honest limit of a decision vector: the arms are what the
- * flow DECIDED, and which of a peer's timelines answered it is not one of them. A parked arm therefore resumes
- * by re-running, re-asking, and taking the first answer of whatever the peer's timelines say today — so the SET
- * of arms is regenerated while the mapping from arm to peer timeline is not. Recording it needs a column of
- * its own — an ANSWER beside the arm, naming the peer WORLD the answer came from — and nothing records that
- * yet. This line used to point at solver_outcome's `n == 2` DCHECK as the same missing slot, which was wrong
- * in both directions and is corrected at decide_fork_same_path's own site: an outcome's completions are
- * NUMBERED by the machine at its definition, so they mean the same thing in every session and are recorded as
- * N-1 ordinary boolean arms; a peer's answers are a set only the peer knows, so they have no index a slot
- * could hold.
+ * The answer is not in the vector, since the arms are what the flow decided; the flow's commitment rows carry
+ * it. A flow that takes a peer's answer pushes a received row for the answering world (engine.c's
+ * answer_commit_taken), flow_answer_fork's parent forecloses the world its arm took, and a delivery-time fork's
+ * arm pushes its own row. The rows park as 'r' records, cold_resume re-installs them, and a replay's re-ask is
+ * admitted through deliver_admits over them, so a resumed arm re-takes its own timeline and refuses its
+ * siblings'. The gap is a peer whose session ended too, whose new timelines are independent of every carried
+ * row: flow_answer_fork's residual. An outcome's completions are another kind: numbered by the machine at its
+ * definition, they are N-1 ordinary boolean arms, and a completion this engine numbers itself is asked through
+ * decide_completion; a peer's answers are a set only the peer knows, with no index a slot could hold.
  *
  * `why` NAMES WHAT ARRIVED, AND IT IS A PARAMETER BECAUSE THE ANSWER FORK IS NOT THE ONLY CALLER. The census
  * row this mints is the frontier's PROVENANCE (decide_fork_at), and it stood as one fixed string — "a peer's

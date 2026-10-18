@@ -1152,14 +1152,11 @@ static void *decide_fork_handoff(int arm) {
  * and it diverges over a value that arrived, not over a predicate. The freeze is the branch fork's (one shared
  * immutable prefix, O(1)); the cursor is the parent's own, which may be mid-replay.
  *
- * That is why this site trips decide_arm's key assert, and the assert stays unnarrowed: the arms above a
- * mid-replay parent's cursor were recorded in a run where the peer answered one way, and this mints N-1 siblings
- * holding different answers that go on to consume those same arms. decide.h states the limit ("WHAT IT CANNOT
- * CARRY IS THE ANSWER"); the key column is what sees it. The outcome fork has no such problem: solver_outcome asks
- * N-1 two-armed questions keyed by completions the machine numbers at its definition, while a peer's answers are
- * a set only the peer knows. What this site needs is an answer column beside the arm, naming the peer timeline (a
- * world, which already crosses the seam and parks) so a replay can ask that peer for the same answer; nothing
- * records it yet. */
+ * A parent mid-replay re-asks a read its record already answered, and its commitment rows (decide.h) admit only
+ * the timeline it took, so no sibling is minted there. Where the rows cannot relate the peer's timelines to the
+ * carried ones (the peer's session ended too, flow_answer_fork's residual), this mints siblings holding other
+ * answers mid-replay, and they go on to consume arms the parent recorded under its own answer; decide_arm's key
+ * assert is what sees that, and it stays unnarrowed. */
 void *decide_fork_same_path(const char *why) {
     DecideBlob *b;
 
