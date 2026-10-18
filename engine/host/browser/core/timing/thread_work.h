@@ -29,6 +29,10 @@
    calibration box, so 6 units per KiB. A key is the predicate's spelling and grows with the path that built
    it, which is why a probe is priced by its bytes and not per call. */
 #define THREAD_WORK_UNITS_PER_KIB_CONSTRAINT 6
+/* The orphan take walks the runtime's whole object list (quickjs.c's JS_OrphanTakeOne), so it is priced per 1024
+   heap entries visited: 112 ns an entry on the live `platform` fixture at load ~35 (scratchpad
+   level1w_walkrate.sh: 59876243 entries over 6.72 s of thread CPU), read as about half that unloaded. */
+#define THREAD_WORK_UNITS_PER_KI_ORPHAN_ENTRIES 256
 
 #include <stddef.h>
 #include <stdint.h>
@@ -39,6 +43,7 @@ typedef enum {
     THREAD_WORK_HTML_PARSE,     /* bytes fed to an HTML parser (core/html/html_parse.c, fragment_parser.c) */
     THREAD_WORK_CSS_PARSE,      /* a style sheet's rules parsed from text (core/css/css_style_sheet.c) */
     THREAD_WORK_CONSTRAINT,     /* a path-constraint key hashed for a probe (solver/concolic.c's cons_hash) */
+    THREAD_WORK_ORPHAN_WALK,    /* heap entries an orphan take visited (solver/engine.c's engine_orphan_seed) */
     THREAD_WORK_N
 } ThreadWorkKind;
 
@@ -53,7 +58,8 @@ void thread_work_begin(ThreadWorkSpan *s);
 /* Ends the span begun with `s`, counting `bytes` and its CPU under `kind` when it is the outermost. */
 void thread_work_end(ThreadWorkSpan *s, ThreadWorkKind kind, uint64_t bytes);
 
-/* Charge `bytes` of `kind` to the running flow's clock at the kind's rate (rounded down), through the
+/* Charge `bytes` of `kind` (heap entries for THREAD_WORK_ORPHAN_WALK) to the running flow's clock at the kind's
+   rate per 1024 (rounded down), through the
    interpreter's retired-work count (quickjs.h's JS_FlowRetireWork). Script parse is charged by quickjs's
    tokenizer itself and is not a kind this takes. With no flow running the charge is discarded at the next
    switch-in, as the baseline's work is. */

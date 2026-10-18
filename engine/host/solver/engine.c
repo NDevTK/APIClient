@@ -6237,7 +6237,11 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     /* The memo is recorded only by an empty walk: a one-at-a-time take leaves the rest of the set standing at
        the same generation (seeding a flow creates no function object), so recording it after a successful take
        would declare a heap of untaken orphans empty for the session. */
-    if (!JS_OrphanTakeOne(ctx, engine_orphan_record, &t)) {
+    /* The walk is priced by the heap entries it visited, the one input its cost grows with. */
+    uint64_t walked0 = JS_OrphanWalkCost(JS_GetRuntime(ctx)).entries;
+    int took = JS_OrphanTakeOne(ctx, engine_orphan_record, &t);
+    thread_work_charge(THREAD_WORK_ORPHAN_WALK, JS_OrphanWalkCost(JS_GetRuntime(ctx)).entries - walked0);
+    if (!took) {
         g_orphan_gen_seen = gen; g_orphan_gen_world = f->world; g_orphan_gen_valid = 1;
         g_orphan_asks_empty++;
         DCHECK(JS_IsUndefined(t.fn), "an orphan take that reported nothing still left a function on the record");
