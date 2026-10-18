@@ -390,6 +390,16 @@ CssPx css_font_size_px(lxb_dom_element_t *el);
    css-writing-modes-4 §5.1's `text-orientation` is named as the row to add. */
 CssPx css_font_advance_measure_px(lxb_dom_element_t *el, InstalledFont face, uint32_t codepoint);
 
+/* The two per-element operands of that entry, read once: `el`'s computed `font-size` and `writing-mode`. A
+   caller measuring many characters of one element holds this and asks the entry below per character, which
+   reads no computed value. The direction stays per character, resolved from the held `writing-mode`. */
+typedef struct {
+    CssPx      font_size;
+    CssKeyword writing_mode;
+} CssFontAdvanceBasis;
+CssFontAdvanceBasis css_font_advance_basis(lxb_dom_element_t *el);
+CssPx css_font_advance_measure_basis_px(const CssFontAdvanceBasis *basis, InstalledFont face, uint32_t codepoint);
+
 /* The pair kerning `face` adds to the advance of `codepoint` in `el`'s run, at `el`'s font size, given what
    follows it in that run (core/css/font_metrics.h). Zero in a vertical inline axis, whose 'vkrn' is not built. */
 CssPx css_font_kerning_px(lxb_dom_element_t *el, InstalledFont face, uint32_t codepoint,

@@ -58,6 +58,7 @@
 
 #include <lexbor/dom/dom.h>
 
+#include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/fonts/font_matching.h"
 #include "core/layout/line_break.h"
@@ -125,6 +126,9 @@ typedef struct {
     /* The installed face css-fonts-4 §5.2 renders a character with, chosen once at collection so the advance
        summed and the glyph painted are one face's. Only a character has one. */
     InstalledFont face;
+    /* A character's advance measure in that face (css-values-4 §6.1.1), at its element's `font-size`, measured
+       once at collection; a tab's is unused, since §4.2's tab stop is positioned where it lands. */
+    CssPx advance;
     /* css-text-3 §3's `nowrap` "suppresses line breaks (text wrapping) within the source" while leaving white
        space collapsible, so whether an opportunity exists is a second per-element fact (§5.5). */
     bool wraps;
@@ -134,7 +138,7 @@ typedef struct {
     /* The inline size this item occupies on its line, one per `TextRunSizeBasis`. An edge holds §2.2's outer
        contribution at one boundary of an inline box; an atomic inline holds its whole margin box (CSS 2 §8.1).
        They share a slot because the per-line sum adds either at the item's position; the kind tells them apart.
-       A character's advance is not stored; a forced break has none. Indexed so `tr_line_prefix` adds
+       A character's advance is `advance`, not this; a forced break has none. Indexed so `tr_line_prefix` adds
        `size[basis]` for every sized kind without an arm per kind; which members differ is recorded on the
        measurement (`atomic_sizes_differ`). */
     CssPx size[2];
@@ -185,6 +189,9 @@ typedef struct {
        `font-family` once. Scoped to this measurement, during which no computed value moves. */
     lxb_dom_element_t *faces_of;
     FontFallbackList faces;
+    /* The same box's advance operands (core/css/css_computed_value.h), held for the same reason. */
+    lxb_dom_element_t *advance_of;
+    CssFontAdvanceBasis advance_basis;
     /* The collection is closed (`text_run_measure_finish_begin`). */
     bool finished;
     /* Where the steps after the collection stand: counting the code points, copying them out, [UAX14]'s pass,

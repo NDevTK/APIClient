@@ -785,9 +785,8 @@ static lxb_dom_node_t *css_cv_root_element(lxb_dom_element_t *el)
    parent element", and an orientation is not a metric — it is how the box the advance is measured along is
    laid out, which the section names as the element's own. `el` is NULL for §6.1.1's no-root-element case,
    where the initial values apply and `writing-mode`'s initial value is `horizontal-tb`. */
-static FontMetricsAdvanceDirection css_cv_advance_direction(lxb_dom_element_t *el, uint32_t codepoint)
+static FontMetricsAdvanceDirection css_cv_advance_direction_in(CssKeyword wm, uint32_t codepoint)
 {
-    CssKeyword wm;
     bool upright_possible;
 
     DCHECK(codepoint <= 0x10FFFF && !(codepoint >= 0xD800 && codepoint <= 0xDFFF),
@@ -796,8 +795,6 @@ static FontMetricsAdvanceDirection css_cv_advance_direction(lxb_dom_element_t *e
            "Orientations\" keys the orientation on [UAX50]'s Vertical_Orientation property, which is defined "
            "over scalar values, so a lone surrogate here is a caller that split a string between its halves "
            "rather than a character whose orientation is merely unknown");
-    if (el == NULL) return FONT_METRICS_ADVANCE_HORIZONTAL;
-    wm = css_computed_keyword(el, "writing-mode");
     upright_possible = wm == CSS_KEYWORD_VERTICAL_RL || wm == CSS_KEYWORD_VERTICAL_LR;
     if (upright_possible)
         DFAIL("css-values-4 §6.1.1's advance measure — the `ch` or `ic` unit — was resolved on an element "
@@ -823,6 +820,14 @@ static FontMetricsAdvanceDirection css_cv_advance_direction(lxb_dom_element_t *e
               "and the crash is here rather than at the callee because the callee is handed the RESOLVED "
               "direction and has no element to resolve one from");
     return FONT_METRICS_ADVANCE_HORIZONTAL;
+}
+
+/* The same over `el`'s computed `writing-mode`; NULL takes its initial `horizontal-tb`. */
+static FontMetricsAdvanceDirection css_cv_advance_direction(lxb_dom_element_t *el, uint32_t codepoint)
+{
+    return css_cv_advance_direction_in(el == NULL ? CSS_KEYWORD_HORIZONTAL_TB
+                                                  : css_computed_keyword(el, "writing-mode"),
+                                       codepoint);
 }
 
 /* IS THIS UNIT MEASURED ON THE ROOT ELEMENT — one of the two questions §6.1.1 splits its twelve units by, and
@@ -938,9 +943,29 @@ CssPx css_font_advance_measure_px(lxb_dom_element_t *el, InstalledFont face, uin
     DCHECK(el != NULL, "css-values-4 §6.1.1's advance measure was asked for with no element. The section states "
                        "it over \"the element on which it is used\" — both the glyph's orientation and the size "
                        "it is measured at come from one, so there is no elementless form of this question");
-    return css_px_scale(css_font_size_px(el),
+    {
+        CssFontAdvanceBasis b = css_font_advance_basis(el);
+
+        return css_font_advance_measure_basis_px(&b, face, codepoint);
+    }
+}
+
+CssFontAdvanceBasis css_font_advance_basis(lxb_dom_element_t *el)
+{
+    CssFontAdvanceBasis b;
+
+    DCHECK(el != NULL, "css-values-4 §6.1.1's advance measure operands were asked for with no element");
+    b.font_size = css_font_size_px(el);
+    b.writing_mode = css_computed_keyword(el, "writing-mode");
+    return b;
+}
+
+CssPx css_font_advance_measure_basis_px(const CssFontAdvanceBasis *basis, InstalledFont face, uint32_t codepoint)
+{
+    DCHECK(basis != NULL, "an advance measure was asked for with no held operands");
+    return css_px_scale(basis->font_size,
                         font_metrics_advance_measure_em(face, codepoint,
-                                                        css_cv_advance_direction(el, codepoint)));
+                                                        css_cv_advance_direction_in(basis->writing_mode, codepoint)));
 }
 
 /* css-fonts-4 §6.3 "Kerning: the font-kerning property": `none` turns metric kerning off; `auto` leaves it

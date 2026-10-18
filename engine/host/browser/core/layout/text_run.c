@@ -152,6 +152,7 @@ void text_run_measure_init(TextRunMeasure *m)
     m->atomic_sizes_differ = false;
     m->faces_of = NULL;
     m->faces.n = 0;
+    m->advance_of = NULL;
     m->finished = false;
     m->prep = 0;
     m->cursor = 0;
@@ -183,6 +184,7 @@ static TextRunItem *tr_append_item(TextRunMeasure *m, TextRunItemKind kind, lxb_
     it->style = style;
     it->cp = 0;
     it->face = INSTALLED_FONT_COUNT;
+    it->advance = css_px(0.0);
     it->wraps = false;
     it->collapsible_space = false;
     it->size[TEXT_RUN_SIZE_MIN_CONTENT] = css_px(0.0);
@@ -198,8 +200,19 @@ static void tr_append(TextRunMeasure *m, uint32_t cp, lxb_dom_element_t *style, 
         css_font_fallback_list(style, &m->faces);
         m->faces_of = style;
     }
+    if (m->advance_of != style) {
+        m->advance_basis = css_font_advance_basis(style);
+        m->advance_of = style;
+    }
     c->cp = cp;
     c->face = font_matching_font_for_character(&m->faces, cp);
+    if (cp != 0x0009) {
+        c->advance = css_font_advance_measure_basis_px(&m->advance_basis, c->face, cp);
+        DCHECK(c->advance.px >= 0.0,
+               "the first available font reported a NEGATIVE advance measure for a character. OpenType 'hmtx' — "
+               "Horizontal Metrics Table's advanceWidth is a UFWORD, .notdef's included, and a computed "
+               "`font-size` is non-negative — so this is a derivation that lost a sign");
+    }
     c->wraps = wraps;
     c->collapsible_space = space;
 }
@@ -646,12 +659,7 @@ static CssPx tr_line_prefix(const TextRunMeasure *m, size_t lo, size_t hi, size_
         if (tr_char_at(m, i)->cp == 0x0009) {
             advance = tr_tab_advance(tr_char_at(m, i)->style, css_px_add(sum, run));
         } else {
-            advance = css_font_advance_measure_px(tr_char_at(m, i)->style, tr_char_at(m, i)->face,
-                                                  tr_char_at(m, i)->cp);
-            DCHECK(advance.px >= 0.0,
-                   "the first available font reported a NEGATIVE advance measure for a character on a line. "
-                   "OpenType 'hmtx' — Horizontal Metrics Table's advanceWidth is a UFWORD, .notdef's included, "
-                   "and a computed `font-size` is non-negative — so this is a derivation that lost a sign");
+            advance = tr_char_at(m, i)->advance;
             kr.m = m;
             kr.at = i;
             kr.end = keep_hi < hi ? keep_hi : hi;
@@ -710,10 +718,7 @@ static void tr_line_sum_add(const TextRunMeasure *m, TextRunLineSum *s, TextRunS
     if (tr_char_at(m, i)->cp == 0x0009)
         advance = tr_tab_advance(it->style, css_px_sum_value(&s->sum));
     else
-        advance = css_font_advance_measure_px(it->style, it->face, it->cp);
-    DCHECK(advance.px >= 0.0,
-           "the first available font reported a NEGATIVE advance measure for a character on a line; OpenType "
-           "'hmtx''s advanceWidth is a UFWORD and a computed `font-size` is non-negative");
+        advance = tr_char_at(m, i)->advance;
     css_px_sum_add(&s->sum, advance);
     if (tr_item_stops_trim(it)) { s->size = s->sum; s->content = true; }
 }
