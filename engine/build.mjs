@@ -9152,6 +9152,13 @@ STAGES.push(onHost(runProgram("record-field contract audit", [join(ENGINE, "fiel
                        "at the ROOT — make the consumer DCHECK the field (extension/check.js mirrors check.h) " +
                        "or delete the half of the contract that has gone stale. There is no baseline to " +
                        "update: the count IS the disagreement."), STAGE_HOST.SOURCE));
+/* The extension's shared classic-script global scopes (each page, the service worker, each content-script
+   world): a declaration that replaces an earlier script's function, or a lexical clash that stops a script
+   from running. It reads the sources only, so it is a source stage. */
+STAGES.push(onHost(runProgram("classic-script global scope audit", [join(ENGINE, "scopegate.mjs")],
+                       "two scripts that share one global scope bind one name, and the line names both. Rename " +
+                       "one. Exit 2 means the audit's own control failed or a script could not be read, so " +
+                       "nothing was judged."), STAGE_HOST.SOURCE));
 /* The provisioning notices' field table: extension/lib/navigable-notice.js must be what navigable_notice.h
    renders, since bridge.js indexes the engine's notices by it. The node readers refuse a stale copy on import;
    this stage states the same disagreement for a build that runs none of them. */
