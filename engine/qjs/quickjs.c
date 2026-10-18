@@ -95906,9 +95906,9 @@ STEP_STATE_HDR_FIRST(JSConcolicCall);
 
 /* Named residual. Not covered: an Object operand other than a builtin-protocol RegExp or a replace callback (a
    method of an object example other than one js_concolic_call_forwards names, a `.call` reached as a value
-   rather than at a call operator); the result carries no example. Next diff: `join` and `includes` forwarded,
-   the second once the comparison hook states SameValueZero. How its absence shows: an address built from
-   `cfg.tags.join(',')` over a fetched record is a shape where `cfg.tags[0]` carries bytes.
+   rather than at a call operator); the result carries no example. Next diff: `includes` forwarded, once the
+   comparison hook states SameValueZero. How its absence shows: `cfg.tags.includes('x')` over a fetched record
+   answers false on every flow, where `cfg.tags.indexOf('x') >= 0` forks.
    Named residual. Not covered: a throw another value of the unknown would reach while its example's run
    completes normally (`x.toFixed(d)` with an unknown `d`). Next diff: the outcome asked on every run, with the
    normal completion stated real, once a builtin whose throw no operand can reach declares so at its definition.
@@ -95939,7 +95939,7 @@ static bool js_concolic_call_forwards(JSValueConst fex)
     case STEPDEF_ARRAY_FIND: case STEPDEF_ARRAY_FIND_INDEX: case STEPDEF_ARRAY_FIND_LAST:
     case STEPDEF_ARRAY_FIND_LAST_INDEX: case STEPDEF_ARRAY_SORT: case STEPDEF_ARRAY_TOSORTED:
     case STEPDEF_ARRAY_FLATMAP: case STEPDEF_ARRAY_SLICE: case STEPDEF_ARRAY_INDEXOF:
-    case STEPDEF_ARRAY_LASTINDEXOF: case STEPDEF_ARRAY_CONCAT:
+    case STEPDEF_ARRAY_LASTINDEXOF: case STEPDEF_ARRAY_CONCAT: case STEPDEF_ARRAY_JOIN:
         return true;
     default:
         return false;
@@ -96702,13 +96702,16 @@ static int js_array_join_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
            The coercion below owes C a real string, which over a concolic is a crash, so the element's EXAMPLE
            is what the join appends: the engine runs the real join over the examples, and the result carries
            that string as its own example. An element with no example, or one whose example is not a primitive
-           (ToString would run page code with no flow), leaves the result with none. */
+           (ToString would run page code with no flow), leaves the result with none. A null example is step
+           7.c's nullish element, which contributes nothing. */
         {
             JSValue ex = js_concolic_operand(ctx, s->el);
             if (!JS_IsUninitialized(ex)) {
                 if (JS_IsUndefined(s->unknown)) s->unknown = js_dup(s->el);
                 if (JS_IsUndefined(ex) || JS_IsObject(ex) || JS_IsSymbol(ex)) {
                     s->example_lost = true;
+                } else if (JS_IsNull(ex)) {
+                    /* step 7.c: R gains nothing for a nullish element */
                 } else {
                     str = JS_ToString(ctx, ex);
                     if (JS_IsException(str) || string_buffer_concat_value_free(&s->b, str)) {
