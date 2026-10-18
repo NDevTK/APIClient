@@ -624,8 +624,9 @@ static double tr_snapped_px(double width)
 
 static CssPx tr_snapped_width(CssPx width)
 {
-    return css_px_atom("Blink ShapeResult::SnappedWidth: ceil(width * 64) / 64", &width, 1,
-                       tr_snapped_px(width.px));
+    /* The snap only rounds up, by less than 1/64 px: `width <= ceil(64 * width) / 64 < width + 1/64`. */
+    return css_px_atom_enclosed("Blink ShapeResult::SnappedWidth: ceil(width * 64) / 64", width, 0.0, 1.0 / 64.0,
+                                tr_snapped_px(width.px));
 }
 
 static void tr_end_open(TextRunLineEnd *e, size_t lo)

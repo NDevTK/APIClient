@@ -267,6 +267,10 @@ CssPx css_px_fact(CssEnvFact fact, JSContext *realm);
    none. `op` names the function whole (a strategy or an argument's unit included). The one way to replace a
    length's number outside the arithmetic below (a math function, a rounding, a clamp written by hand). */
 CssPx css_px_atom(const char *op, const CssPx *args, int nargs, double px);
+/* The same over one operand `x`, for an op that states its enclosure: in every world the result lies in
+   `[x + lo, x + hi]` (asserted of the example). A range over a form holding the atom replaces it by `x` and
+   that offset, so an extreme or a comparison the offset cannot reach is decided without it. */
+CssPx css_px_atom_enclosed(const char *op, CssPx x, double lo, double hi, double px);
 /* One operand of an atom's definition: a determined length `px`, or the polynomial `c + Σ m[0..n)` over facts by
    index, whose monomials may name further atoms. */
 typedef struct { bool determined; double px; double c; int n; const CssPxMonomial *m; } CssPxAtomArg;

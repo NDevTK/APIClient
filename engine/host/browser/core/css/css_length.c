@@ -31,7 +31,11 @@ static char *css_len_strdup(const char *s)
    are not bounded by the program's expressions (their constants are numbers the layout computes). */
 /* An atom's name, interned under its key; and its definition, indexed by the name minus one. */
 typedef struct { unsigned char *key; size_t len; unsigned id; } CssPxAtomSlot;
-typedef struct { char *op; int nargs; CssPxAtomArg *args; } CssPxAtomDef;
+/* An enclosure, where the op states one: in every world the atom lies in `[x + lo, x + hi]` for its one operand
+   `x` (css_px_atom_enclosed). */
+typedef struct { bool enclosed; double lo, hi; } CssPxEnclosure;
+typedef struct { char *op; int nargs; CssPxAtomArg *args; CssPxEnclosure enc; } CssPxAtomDef;
+static const CssPxEnclosure CSS_PX_UNENCLOSED = { false, 0.0, 0.0 };
 
 typedef struct {
     CssPxForm    **slot;        /* open-addressed, a power of two long, at most half full; NULL is empty; OWNED */
@@ -366,7 +370,7 @@ static void css_px_key_end(CssPxKey *k)
 /* The name `key` (borrowed) is interned under in `realm`'s table; a new name is copied and records `op` over
    `args` (borrowed, copied) as its definition. */
 static unsigned css_px_atom_intern(JSContext *realm, const CssPxKey *key, const char *op, const CssPxAtomArg *args,
-                                   int nargs)
+                                   int nargs, CssPxEnclosure enc)
 {
     CssPxFormTable *t = css_px_realm_table(realm);
     CssPxAtomDef *d;
@@ -391,7 +395,14 @@ static unsigned css_px_atom_intern(JSContext *realm, const CssPxKey *key, const 
     }
     for (i = css_px_atom_hash(key->b, key->n) & (t->atoms_cap - 1); t->atoms[i].key;
          i = (i + 1) & (t->atoms_cap - 1))
-        if (t->atoms[i].len == key->n && !memcmp(t->atoms[i].key, key->b, key->n)) return t->atoms[i].id;
+        if (t->atoms[i].len == key->n && !memcmp(t->atoms[i].key, key->b, key->n)) {
+            const CssPxEnclosure *had = &t->atom_defs[t->atoms[i].id - 1].enc;
+
+            DCHECKF(had->enclosed == enc.enclosed && (!enc.enclosed || (had->lo == enc.lo && had->hi == enc.hi)),
+                    "the atom `%s` was minted twice over one definition with two enclosures — its op names the "
+                    "function, and one function has one enclosure", op);
+            return t->atoms[i].id;
+        }
     DCHECK(t->atoms_n != UINT_MAX, "a realm's atom table ran out of names");
     t->atoms[i].key = malloc(key->n ? key->n : 1);
     CHECK(t->atoms[i].key, "css_length: OOM interning an atom's name");
@@ -411,6 +422,7 @@ static unsigned css_px_atom_intern(JSContext *realm, const CssPxKey *key, const 
     d = &t->atom_defs[t->atoms_n - 1];
     d->op = strdup(op);
     d->nargs = nargs;
+    d->enc = enc;
     d->args = calloc((size_t)(nargs > 0 ? nargs : 1), sizeof *d->args);
     CHECK(d->op && d->args, "css_length: OOM recording an atom's definition");
     for (a = 0; a < nargs; a++) {
@@ -463,7 +475,7 @@ static void css_px_key_op(CssPxKey *k, const char *op, int nargs)
 /* `out`'s form becomes the atom named `key` (borrowed), defined as `op` over `args`. A non-finite example has
    no form and stays opaque. */
 static void css_px_form_atom_named(CssPx *out, const CssPxKey *key, const char *op, const CssPxAtomArg *args,
-                                   int nargs)
+                                   int nargs, CssPxEnclosure enc)
 {
     CssPxForm f;
 
@@ -475,7 +487,7 @@ static void css_px_form_atom_named(CssPx *out, const CssPxKey *key, const char *
     memset(&f, 0, sizeof f);
     f.known = true;
     f.n = 1;
-    f.m[0].atom = css_px_atom_intern(out->realm, key, op, args, nargs);
+    f.m[0].atom = css_px_atom_intern(out->realm, key, op, args, nargs, enc);
     f.m[0].k = 1.0;
     f.m[0].aval = out->px;
     out->form = css_px_form_intern(out->realm, &f);
@@ -484,7 +496,7 @@ static void css_px_form_atom_named(CssPx *out, const CssPxKey *key, const char *
 /* `out`'s form becomes the atom that is `op` over `args`: an opaque function of the facts in `out.env`, named by
    its definition so every derivation of it subtracts it. An operand with no form leaves `out` opaque, since
    there is then no definition to name. */
-static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int nargs)
+static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int nargs, CssPxEnclosure enc)
 {
     CssPxKey key;
     CssPxAtomArg *def;
@@ -515,7 +527,7 @@ static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int 
         if (determined) css_px_key_bytes(&key, &args[i].px, sizeof args[i].px);
         else css_px_key_poly(&key, args[i].form->c, args[i].form->m, args[i].form->n);
     }
-    css_px_form_atom_named(out, &key, op, def, nargs);
+    css_px_form_atom_named(out, &key, op, def, nargs, enc);
     css_px_key_end(&key);
     free(def);
 }
@@ -527,7 +539,21 @@ CssPx css_px_atom(const char *op, const CssPx *args, int nargs, double px)
 
     for (i = 0; i < nargs; i++) out = css_px_combine(out, args[i], px);
     if (out.env == CSS_ENV_NONE) return out;
-    css_px_form_atom(&out, op, args, nargs);
+    css_px_form_atom(&out, op, args, nargs, CSS_PX_UNENCLOSED);
+    return out;
+}
+
+CssPx css_px_atom_enclosed(const char *op, CssPx x, double lo, double hi, double px)
+{
+    CssPx out = css_px_combine(css_px(px), x, px);
+    CssPxEnclosure enc = { true, lo, hi };
+
+    DCHECKF(lo <= hi, "the atom `%s` was given the empty enclosure [x + %g, x + %g]", op, lo, hi);
+    DCHECKF(px >= x.px + lo && px <= x.px + hi,
+            "the atom `%s` is %.17g over an operand of %.17g, outside the enclosure [x + %g, x + %g] its op states",
+            op, px, x.px, lo, hi);
+    if (out.env == CSS_ENV_NONE) return out;
+    css_px_form_atom(&out, op, &x, 1, enc);
     return out;
 }
 
@@ -573,7 +599,7 @@ static bool css_px_form_normal(CssPx *out, CssPxPoly *p, CssPxForm *f)
         css_px_key_op(&key, "poly", 1);
         css_px_key_bytes(&key, &determined, 1);
         css_px_key_poly(&key, p->c, p->m, n);
-        css_px_form_atom_named(out, &key, "poly", &def, 1);
+        css_px_form_atom_named(out, &key, "poly", &def, 1, CSS_PX_UNENCLOSED);
         css_px_key_end(&key);
         return false;
     }
@@ -718,30 +744,96 @@ static const struct { double lo, hi; } CSS_ENV_RANGE[CSS_ENV_FACT_COUNT] = {
 #undef CSS_ENV_FONT_FACT_RANGE
 };
 
-/* The bounds of `a - b` over every world, both operands known. */
-static void css_px_diff_range(CssPx a, CssPx b, double *lo, double *hi)
+/* A form being expanded for its range: its monomials, with every enclosed atom replaced by its operand, the
+   constant, and the interval the replaced atoms' enclosures add. */
+typedef struct {
+    CssPxMonomial *m;
+    int            n, cap;
+    double         c, ilo, ihi;
+} CssPxExpansion;
+
+static void css_px_expansion_push(CssPxExpansion *x, const CssPxMonomial *mono, double k)
 {
-    CssPx d = css_px_sub(a, b);
-    int i, f;
+    if (x->n == x->cap) {
+        int cap = x->cap ? 2 * x->cap : 16;
+        CssPxMonomial *grown = realloc(x->m, (size_t)cap * sizeof *grown);
 
-    *lo = *hi = css_px_form_c(d);
-    if (d.env == CSS_ENV_NONE) return;
-    DCHECK(d.form->known, "the difference of two known lengths has an opaque form");
-    for (i = 0; i < d.form->n; i++) {
-        double k = d.form->m[i].k, mlo = 1.0, mhi = 1.0;
+        CHECK(grown, "css_length: OOM expanding a form for its range");
+        x->m = grown;
+        x->cap = cap;
+    }
+    x->m[x->n] = *mono;
+    x->m[x->n++].k = k;
+}
 
-        /* An atom is a function the form cannot state, so nothing bounds it. */
-        if (d.form->m[i].atom) { *lo = -INFINITY; *hi = INFINITY; return; }
+/* The bounds of `c + Σ m` over every world. An atom whose op states an enclosure is its operand plus an offset
+   in `[lo, hi]`, so it is replaced by the operand, which keeps the operand's facts beside the form's other
+   monomials and lets them cancel; an atom whose op states none is a function the form cannot bound. */
+static void css_px_poly_range(JSContext *realm, double c, const CssPxMonomial *m, int n, double *lo, double *hi)
+{
+    CssPxExpansion x = { NULL, 0, 0, c, 0.0, 0.0 };
+    CssPxFormTable *t = css_px_realm_table(realm);
+    int i, j, f;
+
+    for (i = 0; i < n; i++) css_px_expansion_push(&x, &m[i], m[i].k);
+    for (i = 0; i < x.n; i++) {
+        CssPxMonomial mono = x.m[i];
+        const CssPxAtomDef *d;
+        double k = mono.k;
+
+        if (!mono.atom) continue;
+        d = &t->atom_defs[mono.atom - 1];
+        if (!d->enc.enclosed) {
+            free(x.m);
+            *lo = -INFINITY;
+            *hi = INFINITY;
+            return;
+        }
+        for (f = 0; f < CSS_ENV_FACT_COUNT; f++)
+            DCHECK(!mono.e[f], "a monomial holds an atom and a fact, and a form's monomial names one or the other");
+        DCHECK(d->nargs == 1, "an enclosed atom has other than its one operand");
+        x.ilo += k > 0.0 ? k * d->enc.lo : k * d->enc.hi;
+        x.ihi += k > 0.0 ? k * d->enc.hi : k * d->enc.lo;
+        x.m[i].k = 0.0;
+        if (d->args[0].determined) {
+            x.c += k * d->args[0].px;
+            continue;
+        }
+        x.c += k * d->args[0].c;
+        for (j = 0; j < d->args[0].n; j++) css_px_expansion_push(&x, &d->args[0].m[j], k * d->args[0].m[j].k);
+    }
+    qsort(x.m, (size_t)x.n, sizeof *x.m, css_px_mono_cmp);
+    *lo = x.c + x.ilo;
+    *hi = x.c + x.ihi;
+    for (i = 0; i < x.n;) {
+        CssPxMonomial mono = x.m[i++];
+        double k = mono.k, mlo = 1.0, mhi = 1.0;
+
+        while (i < x.n && css_px_mono_cmp(&mono, &x.m[i]) == 0) k += x.m[i++].k;
+        if (k == 0.0) continue;
+        DCHECK(!mono.atom, "an expanded form kept an atom after every enclosed one was replaced");
         for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
-            if (!d.form->m[i].e[f]) continue;
+            if (!mono.e[f]) continue;
             DCHECK(CSS_ENV_RANGE[f].lo >= 0.0, "a fact's range reaches below zero, so its monomials are not "
                                                "monotone and their ranges are not their facts' products");
-            mlo *= pow(CSS_ENV_RANGE[f].lo, d.form->m[i].e[f]);
-            mhi *= pow(CSS_ENV_RANGE[f].hi, d.form->m[i].e[f]);
+            mlo *= pow(CSS_ENV_RANGE[f].lo, mono.e[f]);
+            mhi *= pow(CSS_ENV_RANGE[f].hi, mono.e[f]);
         }
         *lo += k > 0.0 ? k * mlo : k * mhi;
         *hi += k > 0.0 ? k * mhi : k * mlo;
     }
+    free(x.m);
+}
+
+/* The bounds of `a - b` over every world, both operands known. */
+static void css_px_diff_range(CssPx a, CssPx b, double *lo, double *hi)
+{
+    CssPx d = css_px_sub(a, b);
+
+    *lo = *hi = css_px_form_c(d);
+    if (d.env == CSS_ENV_NONE) return;
+    DCHECK(d.form->known, "the difference of two known lengths has an opaque form");
+    css_px_poly_range(d.realm, d.form->c, d.form->m, d.form->n, lo, hi);
 }
 
 /* css-values-4 §10.9.2 Infinities, NaN, and Signed Zero: "When comparing 0⁺ and 0⁻, 0⁻ is less than 0⁺". C
@@ -836,7 +928,7 @@ CssPx css_px_mul(CssPx a, CssPx b)
                 if (a.form->m[i].atom && b.form->m[j].atom) {
                     CssPx ab[2] = { a, b };
 
-                    css_px_form_atom(&out, "mul", ab, 2);
+                    css_px_form_atom(&out, "mul", ab, 2, CSS_PX_UNENCLOSED);
                     return out;
                 }
                 memset(&m, 0, sizeof m);
@@ -867,7 +959,7 @@ CssPx css_px_div(CssPx a, CssPx b)
     if (b.env != CSS_ENV_NONE) {
         CssPx ab[2] = { a, b };
 
-        css_px_form_atom(&out, "div", ab, 2);
+        css_px_form_atom(&out, "div", ab, 2, CSS_PX_UNENCLOSED);
     } else if (a.env != CSS_ENV_NONE && a.form->known) {
         css_px_form_lin(&out, a, 1.0 / b.px, css_px(0.0), 0.0);
     }
@@ -1443,7 +1535,7 @@ CssPx css_length_snap_line_width(JSContext *realm, CssPx len)
     /* The three steps are a step function of the ratio, which no polynomial states: the result is one atom,
        named by the snap over `len`, so every derivation of this width subtracts the same one. */
     res = css_px_combine(len, css_px_env(CSS_ENV_DEVICE_PIXEL_RATIO, realm, out), out);
-    css_px_form_atom(&res, "snap-line-width", &len, 1);
+    css_px_form_atom(&res, "snap-line-width", &len, 1, CSS_PX_UNENCLOSED);
     return res;
 }
 
