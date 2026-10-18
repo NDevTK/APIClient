@@ -1058,7 +1058,7 @@ char *result_cold_json(void) {
     long orph_pref;
     long orph_scripts;
     /* The clock licence's pair — see core/timing/event_loop.h. Both or neither at the accessor. */
-    long adv_asked, adv_declined, adv_raced;
+    long adv_asked, adv_declined, adv_raced, adv_raced_arrival;
     long awaiting_rows;   /* the awaited-rows gauge, read once below and used by the assert and the row */
     /* what the emitted @H array is a fraction of, and what of it predates any program — endpoint.h */
     long ep_minted, ep_assets, ep_emitted, ep_pre_program;
@@ -1236,7 +1236,7 @@ char *result_cold_json(void) {
     orph_pref = engine_orphan_preferred();
     orph_scripts = engine_orphan_scripts();
     event_loop_advance_census(&adv_asked, &adv_declined);
-    event_loop_deadline_race_census(&adv_raced);
+    event_loop_deadline_race_census(&adv_raced, &adv_raced_arrival);
     DCHECK(adv_raced <= adv_declined,
            "the deadline race was asked more often than the clock licence was refused — it is asked only after a "
            "refusal");
@@ -1551,6 +1551,7 @@ char *result_cold_json(void) {
     METRIC_SET(clock_advance_asked_life, adv_asked);
     METRIC_SET(clock_advance_declined_life, adv_declined);
     METRIC_SET(clock_deadline_race_asked_life, adv_raced);
+    METRIC_SET(clock_deadline_arrival_race_asked_life, adv_raced_arrival);
     METRIC_SET(out_of_programs, c.out_of_programs);
     METRIC_SET(out_of_programs_unrun, c.out_of_programs_unrun);
     METRIC_SET(out_of_programs_framed, c.out_of_programs_framed);

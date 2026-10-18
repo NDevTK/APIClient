@@ -775,6 +775,10 @@ JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, i
    nothing, which is the same positive statement `pending_ready` makes as a boolean. */
 int pending_next_deliverable(JSValueConst reg);
 uint64_t pending_ready_next_seq(JSValueConst reg);
+/* EVERY DELIVERABLE ENTRY ARRIVES NOW: each takes a private copy (pending_unshare) stamped by `next`, in index
+   order, so they stay younger than a task queued just before and keep their order among themselves. The
+   deadline race's deadline-first arm calls it after its timer fires. */
+void pending_restamp_answered(JSValueConst reg, uint64_t (*next)(void));
 
 /* Set a field. `v` is consumed. `pending_set_int` is the same for the numeric ones.
    IT REFUSES ONE WRITE: `PEND_HAVE_VALUE` on a SYNCHRONOUS request. See `pending_answer_rendezvous` below — this

@@ -184,6 +184,18 @@ static const char HTML_ABORT[] =
     " setTimeout(function () { done('timer'); }, 50);"
     "}, 9500);"
     "</script>"
+    /* Two requests issued together, which the host answers in one payment: the delivery arm races the 50 ms
+       deadline before each arrival, so the timer can run between the two reactions too: `timer-a-b`,
+       `a-timer-b` and `a-b-timer`. */
+    "<script>"
+    "setTimeout(function () {"
+    " var seen = [];"
+    " function done(t) { seen.push(t); if (seen.length === 3) fetch('/api/xpairorder?v=' + seen.join('-')); }"
+    " fetch('/api/xpaira').then(function () { done('a'); });"
+    " fetch('/api/xpairb').then(function () { done('b'); });"
+    " setTimeout(function () { done('timer'); }, 50);"
+    "}, 10000);"
+    "</script>"
     /* A request aborted while its reply is still owed: the abort runs on the line after the call, before the
        host can answer, so the engine tells the host to end the send, and the page sees an AbortError. */
     "<script>"

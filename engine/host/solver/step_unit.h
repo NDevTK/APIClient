@@ -173,6 +173,8 @@
     X(TIMER,              "fire-due-timer")                                       \
     /* a due timer older than the reply or callback the step would have run */   \
     X(TIMER_ARRIVED,      "fire-a-timer-that-arrived-first")                      \
+    /* a timer whose deadline the race put before the next answered arrival */    \
+    X(TIMER_RACED,        "fire-a-timer-before-the-next-arrival")                 \
     X(IDLE_PERIOD,        "start-or-run-an-idle-period")                         \
     /* NO `unhandled-rejection-notify` ROW, AND ITS ABSENCE IS A STATEMENT. HTML  */ \
     /* §8.1.4.7 Unhandled promise rejections' "notify about rejected promises" is */ \

@@ -371,6 +371,23 @@ int pending_next_deliverable(JSValueConst reg)
     return -1;
 }
 
+void pending_restamp_answered(JSValueConst reg, uint64_t (*next)(void))
+{
+    int n = pend_len(reg), i;
+
+    DCHECK(next != NULL, "the answered replies were re-stamped with no clock to stamp them from");
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(reg, i);
+        int hit = pend_deliverable(e);
+
+        JS_FreeValue(pend_ctx(), e);
+        if (!hit) continue;
+        e = pending_unshare(reg, i);
+        pending_set_int(e, PEND_WORK_SEQ, (int64_t)next());
+        JS_FreeValue(pend_ctx(), e);
+    }
+}
+
 int pending_ready(JSValueConst reg)
 {
     return pending_next_deliverable(reg) >= 0;

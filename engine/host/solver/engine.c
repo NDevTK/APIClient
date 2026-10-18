@@ -789,6 +789,14 @@ void engine_task_arrival(uint64_t seq)
     g_task_arrival = seq;
 }
 
+static int (*g_timer_race_hook)(JSContext *ctx);
+void engine_set_timer_race_hook(int (*fn)(JSContext *ctx))
+{
+    DCHECK(fn == NULL || g_timer_race_hook == NULL,
+           "a second component claimed the delivery arm's deadline race — there is one timer source per event loop");
+    g_timer_race_hook = fn;
+}
+
 static uint64_t (*g_timer_due_hook)(JSContext *ctx);
 void engine_set_timer_due_hook(uint64_t (*fn)(JSContext *ctx))
 {
@@ -8646,6 +8654,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
             if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq) &&
                 engine_timer_takes_turn(ctx, f, timer_seq, deliv_seq)) {
                 g_step_unit = STEP_UNIT_TIMER_ARRIVED;
+                return 0;
+            }
+            /* The deadline race before this arrival: where a timer ahead of the clock comes first, it fires and
+               every answered reply arrives after its task (pending_restamp_answered), so the next step runs it. */
+            if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq) && !flow_blocked(f) && g_timer_race_hook &&
+                g_timer_race_hook(ctx)) {
+                pending_restamp_answered(f->pending, flow_work_seq_next);
+                g_step_unit = STEP_UNIT_TIMER_RACED;
                 return 0;
             }
             if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq)) {

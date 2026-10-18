@@ -263,16 +263,20 @@ int event_loop_may_advance(void);
    follows. The arrival is the timeline's next one, one unknown per arrival (named by flow.h's `replies_taken`),
    so a request issued after an arrival is raced again, and the earliest timer is always the one asked, so a
    later deadline is never asked against an arrival an earlier one already preceded. Named residual. Not
-   covered: the race is asked at the idle rung only, so replies the host answers in one payment are delivered
-   with no deadline between them, and the order of the replies among themselves is the host's. Next diff
-   builds: the same predicate asked at the delivery arm before each arrival, the timer firing first re-stamping
-   the answered replies after it. Absence shows as: a deadline beside two requests answered together never
-   running between their two reactions. */
+   covered: the order of the replies among themselves is the host's. Next diff builds: an arrival order asked
+   between answered replies, held until the deadline race's measured family size decides it, since it is the
+   same principle at factorial cost. Absence shows as: a page whose behaviour depends on which of two requests
+   answers first explored in one order only. */
 int event_loop_deadline_first(JSContext *ctx, JSValueConst when);
 
-/* How often event_loop_deadline_first asked its predicate: a lifetime count of the ask, ahead of the answer, so
-   it is at most the licence's refusals. */
-void event_loop_deadline_race_census(long *asked);
+/* THE SAME PREDICATE ASKED BEFORE AN ARRIVAL THAT HAS ALREADY BEEN ANSWERED — the delivery arm's half of the race
+   (core/timing/timer.h's timer_race_arrival). Asked whatever is owed, since the reply about to be delivered is
+   the arrival in question; a 1 licenses the move as above. */
+int event_loop_deadline_before_arrival(JSContext *ctx, JSValueConst when);
+
+/* How often each half asked its predicate: lifetime counts of the ask, ahead of the answer. The idle half is
+   asked only after a refusal, so it is at most the licence's refusals; the delivery half before a delivery. */
+void event_loop_deadline_race_census(long *idle_asked, long *arrival_asked);
 
 /* HOW OFTEN THAT LICENCE WAS WANTED AND HOW OFTEN IT WAS REFUSED — the partition of a count solver/result.c
    already publishes, and the reason it needs one. `stepReachedIdleLife` is exactly the descents the TIMER rung

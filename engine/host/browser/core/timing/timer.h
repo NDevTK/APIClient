@@ -62,6 +62,12 @@ int timer_due_before(JSContext *ctx, JSValueConst moment);
    hoisted. Absence shows as: a due timer's task running behind work that arrived after it was due. */
 uint64_t timer_due_stamp(JSContext *ctx);
 
+/* THE DELIVERY ARM'S HALF OF THE DEADLINE RACE: where the timer source's next task is still ahead of the clock,
+   ask whether its expiry comes before the arrival about to be delivered (event_loop_deadline_before_arrival),
+   and on that arm fire it as timer_run_due does. Returns 1 when a timer fired; the caller then makes the
+   answered replies arrive after its task. Asked from a flow's step between tasks, like the step below. */
+int timer_race_arrival(JSContext *ctx);
+
 /* FIRE THE EARLIEST DUE TIMER — the event loop's step, asked by whoever DRIVES the loop when it has nothing
    else to run, or when timer_due_stamp's task is older than the reply or callback it would run instead. Nothing is queued when a timer is set: §8.1.7 runs a task from a source that has one
    DUE, and the timer source's task is due at its expiry. Asking here, at the one moment the driver knows the

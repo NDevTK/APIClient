@@ -413,35 +413,49 @@ JSValue event_loop_moment_plus(JSContext *ctx, JSValueConst moment, JSValueConst
    containment false from the first session close onward, which is the mismatch that file names as the wrong
    precedent to copy.
    A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on either, and the licence's answer is unchanged. */
-static long g_advance_asked, g_advance_declined, g_deadline_race_asked;
+static long g_advance_asked, g_advance_declined, g_deadline_race_asked, g_deadline_arrival_asked;
 
-void event_loop_deadline_race_census(long *asked)
+void event_loop_deadline_race_census(long *idle_asked, long *arrival_asked)
 {
-    DCHECK(asked != NULL, "the deadline race's census was asked with nowhere to put its count");
-    *asked = g_deadline_race_asked;
+    DCHECK(idle_asked != NULL && arrival_asked != NULL,
+           "the deadline race's census was asked with nowhere to put one of its two counts");
+    *idle_asked = g_deadline_race_asked;
+    *arrival_asked = g_deadline_arrival_asked;
 }
 
 /* The replies' arrival, as a source: the network states it and nothing in this engine computed it. */
 static const char EL_ARRIVAL[] = "HTML §8.1.7.3 Processing model: the arrival of the replies in flight";
 
-int event_loop_deadline_first(JSContext *ctx, JSValueConst when)
+/* `when` < the timeline's next arrival, the one predicate both halves ask. The arrival is named by how many
+   replies this timeline has taken: one unknown per arrival, so after one arrives the deadline is raced against
+   the next, and a request issued with none arriving only moves the next arrival earlier, which an answered race
+   already covers. */
+static int el_deadline_before_next_arrival(JSContext *ctx, JSValueConst when)
 {
     char src[sizeof EL_ARRIVAL + 32], shape[sizeof src + 2];
     JSValue arrival;
     int first;
 
-    if (event_loop_may_advance()) return 1;
-    /* The NEXT arrival, named by how many replies this timeline has taken: one unknown per arrival, so after
-       one arrives the deadline is raced against the next, and a request issued with none arriving only moves
-       the next arrival earlier, which an answered race already covers. */
     snprintf(src, sizeof src, "%s, number %u", EL_ARRIVAL, (unsigned)flow_running()->replies_taken + 1);
     snprintf(shape, sizeof shape, "{%s}", src);   /* a source's shape is its provenance in braces */
-    g_deadline_race_asked++;
     arrival = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
     first = event_loop_before(ctx, when, arrival);
     JS_FreeValue(ctx, arrival);
     if (first) el_num_set(ctx, g_atom_licence, 1);
     return first;
+}
+
+int event_loop_deadline_first(JSContext *ctx, JSValueConst when)
+{
+    if (event_loop_may_advance()) return 1;
+    g_deadline_race_asked++;
+    return el_deadline_before_next_arrival(ctx, when);
+}
+
+int event_loop_deadline_before_arrival(JSContext *ctx, JSValueConst when)
+{
+    g_deadline_arrival_asked++;
+    return el_deadline_before_next_arrival(ctx, when);
 }
 
 void event_loop_advance_census(long *asked, long *declined)

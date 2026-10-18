@@ -15106,9 +15106,22 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
     fold_row(&xsrow_tt, &xsrow_why, param_value_only_undriven(js, "/api/xsrow", "n", "200"),
              "NOT REACHED or wrong: an inserted script ran before all 200 message tasks queued ahead of its fetch, "
              "or never ran");
+    /* The race before each arrival of two requests issued together. */
+    const char *xpair_why = NULL;
+    int xpair_tt = 1;
+    const int xp_tab = param_undriven_count(js, "/api/xpairorder", "v", "timer-a-b");
+    const int xp_atb = param_undriven_count(js, "/api/xpairorder", "v", "a-timer-b");
+    const int xp_abt = param_undriven_count(js, "/api/xpairorder", "v", "a-b-timer");
+    fold_row(&xpair_tt, &xpair_why,
+             xp_tab > 0 && xp_atb > 0 && xp_abt > 0 &&
+             xp_tab + xp_atb + xp_abt == param_undriven_count(js, "/api/xpairorder", "v", NULL),
+             "NOT REACHED or wrong: a 50 ms timer beside two fetch() calls issued together did not run before, "
+             "between and after their two reactions (`timer-a-b`, `a-timer-b`, `a-b-timer`), or an arm "
+             "recorded another order");
     const Probe rows[] = {
         { "script-after-tasks", xsrow_tt, "/chunk/xsrow.js", SESS_EXPLORE, xsrow_why },
         { "deadline-race", xrace_tt, "/api/xraceorder", SESS_EXPLORE, xrace_why },
+        { "deadline-race-pair", xpair_tt, "/api/xpairorder", SESS_EXPLORE, xpair_why },
         { "deadline-race-chain", xchain_tt, "/api/xchainorder", SESS_EXPLORE, xchain_why },
         { "xhr-timeout", xatime_tt, "/api/xatimedout", SESS_EXPLORE, xatime_why },
         { "xhr-timeout-beaten", xabeat_tt, "/api/xabeat", SESS_EXPLORE, xabeat_why },

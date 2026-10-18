@@ -405,6 +405,8 @@ METRIC(clock_advance_declined_life, "clockAdvanceDeclinedLife", LIFETIME, "ask",
 /* Of those refusals, how many a timer's deadline asked against the owed replies' arrival
    (event_loop_deadline_first): counted at the ask, so at most `clockAdvanceDeclinedLife`. */
 METRIC(clock_deadline_race_asked_life, "clockDeadlineRaceAskedLife", LIFETIME, "ask", PROCESS, "core/timing/event_loop.c", INT)
+/* The delivery arm's half: the same predicate asked before an arrival already answered (timer_race_arrival). */
+METRIC(clock_deadline_arrival_race_asked_life, "clockDeadlineArrivalRaceAskedLife", LIFETIME, "ask", PROCESS, "core/timing/event_loop.c", INT)
 /* `outOfPrograms` separates a member inside its last program from one past the last row, which
    a cursor value cannot: only the latter reaches engine.c's orphan arm. Its three parts also
    name members never dispatched or suspended in a live frame (the ladder sits below
