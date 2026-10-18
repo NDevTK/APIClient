@@ -4509,6 +4509,10 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
            "a Document was installed for a realm with no navigable — §7.2.3's proxy belongs to the navigable "
            "and the navigable exists before its realm, so the caller that owns it passes it in");
     d->proxy = JS_DupValue(ctx, nav_proxy);
+    /* HTML §8.1.3.1's "create a new realm" gives a Window realm its WindowProxy as the global this value, which
+       ECMAScript §9.6 InitializeHostDefinedRealm step 7 takes from the host: this realm's top-level `this`,
+       `globalThis` and §7.2.2's `window` are this object. Before any of the Document's code can run. */
+    JS_SetGlobalThisValue(ctx, JS_DupValue(ctx, nav_proxy));
     /* Permissions Policy §9.5 "Create a Permissions Policy for a navigable", run here because §9.5 runs once per
        Document a navigable is given, and the navigable is the argument beside it. Before the no-address return for
        the policy container's reason: a Document with no address still has a navigable and a container, and a

@@ -1098,6 +1098,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
 #include "fixture/typefacet.h"
+#include "fixture/windowthis.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1533,6 +1534,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
     { "typefacet", HTML_TYPEFACET },
+    { "windowthis", HTML_WINDOWTHIS },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -13818,6 +13820,31 @@ TF_UNIT void probes_typefacet(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `windowthis` document (fixture/windowthis.h). */
+TF_UNIT void probes_windowthis(const char *js, Probe *tab, int *n) {
+    static const struct { const char *p, *why; } ONE[] = {
+        { "dv", "HTML §7.2.2: document.defaultView is not the object `window` answers" },
+        { "th", "ECMAScript §16.1.6: the top-level `this` is not the realm's [[GlobalThisValue]], `window`" },
+        { "gt", "ECMAScript §19.1.1: `globalThis` is not `window`" },
+        { "se", "HTML §7.2.2: `self` is not `window`" },
+        { "fr", "HTML §7.2.2: `frames` is not `window`" },
+        { "ww", "HTML §7.2.2: `window.window` is not `window`" },
+        { "sl", "ECMAScript §10.2.1.2 step 5.a: a sloppy function's undefined `this` is not `window`" },
+    };
+    const char *wt_why = NULL; int wt_tt = 1;
+    size_t i;
+    fold_row(&wt_tt, &wt_why, !!strstr(js, "\"/api/winthis\""),
+             "NOT REACHED: there is no /api/winthis record at all — the script threw before its fetch");
+    for (i = 0; i < sizeof ONE / sizeof ONE[0]; i++)
+        fold_row(&wt_tt, &wt_why, param_value_only(js, "/api/winthis", ONE[i].p, "1"), ONE[i].why);
+    fold_row(&wt_tt, &wt_why, param_value_only(js, "/api/winthis", "fn", "function"),
+             "DOM §2.7: EventTarget's addEventListener is not reached through `window`");
+    const Probe rows[] = {
+        { "window-is-global-this", wt_tt, "/api/winthis", SESS_EXPLORE, wt_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `contentsflex` document. */
 TF_UNIT void probes_contentsflex(const char *js, Probe *tab, int *n) {
     /* css-display-3 §2.5's `contents` splice makes `cf` an item of the flex container, and css-flexbox-1 §9.2
@@ -17393,6 +17420,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_inlineflex(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
+    probes_windowthis(js, probes, &np);
     probes_custommedia(js, probes, &np);
     probes_visualupdate(js, probes, &np);
     probes_windowclose(js, probes, &np);

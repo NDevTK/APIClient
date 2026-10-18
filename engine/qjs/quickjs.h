@@ -1655,6 +1655,12 @@ JS_EXTERN JSValue JS_EvalThis2(JSContext *ctx, JSValueConst this_obj,
                               const char *input, size_t input_len,
                               JSEvalOptions *options);
 JS_EXTERN JSValue JS_GetGlobalObject(JSContext *ctx);
+/* ECMAScript §9.1.1.4's [[GlobalThisValue]] of this realm: the global object unless the host supplied another
+   (HTML §7.2.3's WindowProxy). JS_IsGlobalReceiver answers whether `v` is either of the two, which is what a
+   test meaning "this read or write is addressed to the global" asks. */
+JS_EXTERN JSValue JS_GetGlobalThisValue(JSContext *ctx);
+JS_EXTERN void JS_SetGlobalThisValue(JSContext *ctx, JSValue this_value);
+JS_EXTERN bool JS_IsGlobalReceiver(JSContext *ctx, JSValueConst v);
 JS_EXTERN int JS_DefineProperty(JSContext *ctx, JSValueConst this_obj,
                                 JSAtom prop, JSValueConst val,
                                 JSValueConst getter, JSValueConst setter,

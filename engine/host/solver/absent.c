@@ -1291,13 +1291,11 @@ static char *ns_join(const char *base, JSAtom name, const char *key)
 
 void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSValueConst value)
 {
-    JSValue g = JS_GetGlobalObject(ctx);
-    int is_root = (JS_VALUE_GET_PTR(parent) == JS_VALUE_GET_PTR(g));
+    int is_root = JS_IsGlobalReceiver(ctx, parent);   /* the global object or the WindowProxy over it */
     const char *base = is_root ? NULL : ns_path_of(parent);
     const char *n = ns_key_str(ctx, name);
     char *path;
 
-    JS_FreeValue(ctx, g);
     /* A CHILD ARRIVING BEFORE ITS PARENT IS THE ENGINE AND THIS FILE DISAGREEING, not a case to default past.
        js_publish_document_namespace walks OUT from the global object and publishes a record before it descends
        into it, so a parent that is neither the global nor a filed row means the walk reached this record by
@@ -1495,14 +1493,12 @@ void absent_unresolved_note(JSContext *ctx, JSAtom name, JSConcolicAbsentOp op)
 
 JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name, JSConcolicAbsentAnswer answer)
 {
-    JSValue g = JS_GetGlobalObject(ctx);
-    int is_global = (JS_VALUE_GET_PTR(obj) == JS_VALUE_GET_PTR(g));
+    int is_global = JS_IsGlobalReceiver(ctx, obj);   /* `window.X`, `self.X` and `this.X` address the global */
     const char *s = ns_key_str(ctx, name);
     const char *base = NULL;
     JSValue r = JS_UNINITIALIZED;
     char *shape = NULL, *src = NULL;
 
-    JS_FreeValue(ctx, g);
     if (is_global) {
         /* WHAT THE NAME WAS, ANSWERED WHERE BOTH ENTRIES ANSWER IT. The three arms, their counters and the
            denominator are global_miss_note's, because the classification is a question about the NAME and

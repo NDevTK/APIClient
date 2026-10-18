@@ -410,6 +410,18 @@ static JSValue js_win_frame_element(JSContext *ctx, JSValueConst this_val, int m
  * navigable its realm has, whoever asks. HTML §7.2.3.5 step 3 is what makes that ordinary rather than exotic —
  * a same-origin WindowProxy performs [[GetOwnProperty]] ON W, so the getter a cross-document read invokes is
  * the OTHER document's, with the proxy as its receiver. */
+/* HTML §7.2.2: "The window, frames, and self getter steps are to return this's relevant realm.[[GlobalEnv]].
+   [[GlobalThisValue]]." A Window realm's value is its navigable's WindowProxy (document.c supplies it when the
+   realm's Document is installed), which is what the receiver resolution answers as the navigable. */
+static JSValue js_win_global_this(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
+    (void)magic;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
+    return JS_DupValue(ctx, nav);
+}
+
 static JSValue js_win_parent(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
@@ -1095,8 +1107,6 @@ void window_install(JSContext *ctx, JSValueConst global, const char *origin)
        put `EventTarget` on every realm — including the ones no Document is ever installed over. */
     idl_define_global_property_reference(ctx, g, "Window", idl_interface_object(ctx, "Window", gp));
 
-    /* 7.2.2: window, self and frames all return THIS Window's proxy, and the global object IS that proxy here —
-       so `window.X`, `self.X` and a bare `X` are one read spelled three ways. */
     /* EVERY MEMBER BELOW IS AN OWN PROPERTY OF THE GLOBAL, because Window is declared [Global] — Web IDL
        §3.7.3: an interface with [Global] defines its members on the GLOBAL OBJECT, not on the interface
        prototype object, which is left with nothing on it but its @@toStringTag and `constructor`. That is not
@@ -1111,10 +1121,10 @@ void window_install(JSContext *ctx, JSValueConst global, const char *origin)
        not configurable. It was a data property, which is the right VALUE behind the wrong kind of property:
        `Object.getOwnPropertyDescriptor(window, "window").get` is a function in every browser and was undefined
        here. */
-    idl_install_value_attribute(ctx, g, "window", JS_DupValue(ctx, global), IDL_ATTR_UNFORGEABLE);
+    idl_install_accessor_unforgeable(ctx, g, "window", js_win_global_this, 0, -1);
     /* `self` is [Replaceable], not [LegacyUnforgeable] — `window` is the unforgeable one. A page may
        overwrite `self` and the IDL says so; a fixed own value said it could not. */
-    idl_install_replaceable_value(ctx, g, "self", JS_DupValue(ctx, global));
+    idl_install_replaceable(ctx, g, "self", js_win_global_this, 0);
     /* §7.2.2's IDL marks `top` `[LegacyUnforgeable] readonly attribute WindowProxy? top;` — an OWN property —
        but its VALUE is the navigable's, and `top` is a WALK of the parent chain, so a grandchild answers with
        the top-level traversable rather than with itself. An own ACCESSOR, not an own value frozen at install
@@ -1127,7 +1137,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *origin)
        does not have them, and `top` is on HTML §7.2.1.3.1 CrossOriginProperties with [[NeedsGetter]] true, so
        it is one of the names for which that check has an answer other than "refuse". */
     idl_install_accessor_unforgeable(ctx, g, "top", js_win_top, 0, -1);
-    idl_install_replaceable_value(ctx, g, "frames", JS_DupValue(ctx, global));   /* [Replaceable] */
+    idl_install_replaceable(ctx, g, "frames", js_win_global_this, 0);   /* [Replaceable] */
     /* §7.2.2.4's `parent` and `opener` ARE THE NAVIGABLE'S, so they are read from this realm's own WindowProxy
        rather than answered here. They were two FIXED values behind two comments explaining why an embedder
        could not exist — `no embedder is reachable from this instance` and `the document was navigated to, not

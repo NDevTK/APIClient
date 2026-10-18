@@ -966,6 +966,11 @@ struct JSContext {
     JSValue eval_obj;
 
     JSValue global_obj; /* global object */
+    /* ECMAScript §9.1.1.4 Global Environment Records' [[GlobalThisValue]]: the global object unless the host
+       supplied another at §9.6 InitializeHostDefinedRealm step 7 (HTML's WindowProxy, JS_SetGlobalThisValue).
+       The top-level `this`, a sloppy function's undefined receiver (§10.2.1.2 step 5.a) and `globalThis`
+       (§19.1.1) are this value; identifier resolution stays on the global object. */
+    JSValue global_this;
     JSValue global_var_obj; /* contains the global let/const definitions */
 
     double time_origin;
@@ -5171,6 +5176,7 @@ static void JS_MarkContext(JSRuntime *rt, JSContext *ctx,
     }
 
     JS_MarkValue(rt, ctx->global_obj, mark_func);
+    JS_MarkValue(rt, ctx->global_this, mark_func);
     JS_MarkValue(rt, ctx->global_var_obj, mark_func);
 
     JS_MarkValue(rt, ctx->throw_type_error, mark_func);
@@ -5273,6 +5279,7 @@ static void js_context_release_refs(JSRuntime *rt, JSContext *ctx)
         js_module_release_refs(ctx, list_entry(el, JSModuleDef, link));
 
     JS_FreeValue(ctx, ctx->global_obj);
+    JS_FreeValue(ctx, ctx->global_this);
     JS_FreeValue(ctx, ctx->global_var_obj);
 
     JS_FreeValue(ctx, ctx->throw_type_error);
@@ -11978,6 +11985,35 @@ JSValue JS_GetGlobalObject(JSContext *ctx)
     return js_dup(ctx->global_obj);
 }
 
+JSValue JS_GetGlobalThisValue(JSContext *ctx)
+{
+    DCHECK(JS_IsObject(ctx->global_this), "a realm's [[GlobalThisValue]] was read before its global object existed");
+    return js_dup(ctx->global_this);
+}
+
+/* §9.6 InitializeHostDefinedRealm step 7, done after the global object exists because HTML's WindowProxy is
+   created over it. Once per realm, before any of its code has run, and `globalThis` (§19.1.1, whose initial
+   value is [[GlobalThisValue]]) is redefined with it. Takes ownership of `this_value`. */
+void JS_SetGlobalThisValue(JSContext *ctx, JSValue this_value)
+{
+    DCHECK(JS_IsObject(this_value), "a realm's [[GlobalThisValue]] was supplied as something that is not an Object");
+    DCHECK(JS_VALUE_GET_PTR(ctx->global_this) == JS_VALUE_GET_PTR(ctx->global_obj) ||
+               JS_VALUE_GET_PTR(ctx->global_this) == JS_VALUE_GET_PTR(this_value),
+           "a realm's [[GlobalThisValue]] was supplied twice with two different objects — §9.6 fixes it once");
+    JS_FreeValue(ctx, ctx->global_this);
+    ctx->global_this = this_value;
+    CHECK(JS_DefinePropertyValue(ctx, ctx->global_obj, JS_ATOM_globalThis, js_dup(this_value),
+                                 JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE) >= 0,
+          "the realm's globalThis property could not be redefined to its [[GlobalThisValue]]");
+}
+
+bool JS_IsGlobalReceiver(JSContext *ctx, JSValueConst v)
+{
+    return JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT &&
+           (JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(ctx->global_obj) ||
+            JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(ctx->global_this));
+}
+
 /* WARNING: obj is freed */
 JSValue JS_Throw(JSContext *ctx, JSValue obj)
 {
@@ -12095,7 +12131,7 @@ static JSValue js_callsite_type_name(JSContext *ctx, const JSCallSiteData *csd)
     if (JS_VALUE_GET_TAG(csd->this_val) != JS_TAG_OBJECT)
         return JS_NULL;
     p = JS_VALUE_GET_OBJ(csd->this_val);
-    if (p == JS_VALUE_GET_OBJ(ctx->global_obj))
+    if (JS_IsGlobalReceiver(ctx, csd->this_val))
         return JS_NULL;
     if (p->class_id == JS_CLASS_PROXY)
         return JS_NewString(ctx, "Proxy");
@@ -14266,7 +14302,7 @@ static JSValue js_absent_ask(JSContext *ctx, JSValueConst obj, JSAtom prop, JSCo
     if (!JS_AtomIsPublishedName(ctx->rt, prop))
         return JS_UNINITIALIZED;
     base = JS_VALUE_GET_OBJ(obj);
-    ask = (base == JS_VALUE_GET_OBJ(ctx->global_obj));
+    ask = JS_IsGlobalReceiver(ctx, obj);
     if (!ask && js_object_is_document_record(base)) {
         /* A record whose extent the document's bytes wrote: publication is what says whether it is on the
            CHANNEL or is merely an object an inline script happened to make and keep, and it is asked here
@@ -14378,10 +14414,9 @@ static void js_absent_note_has(JSContext *ctx, JSValueConst base, JSAtom prop, J
     /* AND THE BASE DECIDES WHOSE MISS IT IS. The census's owed arm is about names a standard puts ON THE
        GLOBAL OBJECT, so `"Node" in gon` is a field of an app record that happens to be spelled like an
        interface and suppressing or counting it would be the same defect the read hook's own `is_global` test
-       exists to prevent. `window`, `self` and `globalThis` are all this one object, so all three spellings of
-       the receiver are covered by the pointer and none of them is named here. */
-    if (JS_VALUE_GET_TAG(base) != JS_TAG_OBJECT ||
-        JS_VALUE_GET_PTR(base) != JS_VALUE_GET_PTR(ctx->global_obj))
+       exists to prevent. `window`, `self` and `globalThis` are the realm's [[GlobalThisValue]] and a bare name's
+       base is the global object, so JS_IsGlobalReceiver's two objects cover every spelling of the receiver. */
+    if (!JS_IsGlobalReceiver(ctx, base))
         return;
     js_absent_note_unresolved(ctx, prop, op);
 }
@@ -36079,7 +36114,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     if (likely(tag == JS_TAG_OBJECT))
                         goto normal_this;
                     if (tag == JS_TAG_NULL || tag == JS_TAG_UNDEFINED) {
-                        val = js_dup(ctx->global_obj);
+                        val = js_dup(ctx->global_this);   /* §10.2.1.2 step 5.a */
                     } else {
                         val = JS_ToObject(ctx, this_obj);
                         if (JS_IsException(val))
@@ -52810,7 +52845,8 @@ JSValue *JS_FlowInstantiate(JSContext *ctx, JSValueConst fn) {
            "global and intrinsics while its receiver came from this one");
     s = js_mallocz(ctx, sizeof(*s));
     if (!s) return NULL;
-    if (async_func_init(ctx, s, fn, ctx->global_obj, 0, NULL)) { js_free(ctx, s); return NULL; }
+    /* A program's frame: §16.1.6 ScriptEvaluation runs it with the realm's [[GlobalThisValue]] as `this`. */
+    if (async_func_init(ctx, s, fn, ctx->global_this, 0, NULL)) { js_free(ctx, s); return NULL; }
     return (JSValue *)s;   /* opaque handle */
 }
 
@@ -78169,7 +78205,7 @@ static JSValue JS_EvalFunctionInternal(JSContext *ctx, JSValue fun_obj,
 
 JSValue JS_EvalFunction(JSContext *ctx, JSValue fun_obj)
 {
-    return JS_EvalFunctionInternal(ctx, fun_obj, ctx->global_obj, NULL, NULL);
+    return JS_EvalFunctionInternal(ctx, fun_obj, ctx->global_this, NULL, NULL);   /* §16.1.6 */
 }
 
 #ifndef QJS_DISABLE_PARSER
@@ -78609,12 +78645,12 @@ JSValue JS_Eval(JSContext *ctx, const char *input, size_t input_len,
         .line_num = 1,
         .eval_flags = eval_flags
     };
-    return JS_EvalThis2(ctx, ctx->global_obj, input, input_len, &options);
+    return JS_EvalThis2(ctx, ctx->global_this, input, input_len, &options);   /* §16.1.6 */
 }
 
 JSValue JS_Eval2(JSContext *ctx, const char *input, size_t input_len, JSEvalOptions *options)
 {
-    return JS_EvalThis2(ctx, ctx->global_obj, input, input_len, options);
+    return JS_EvalThis2(ctx, ctx->global_this, input, input_len, options);   /* §16.1.6 */
 }
 
 /*******************************************************************/
@@ -121619,6 +121655,7 @@ static int JS_AddIntrinsicBasicObjects(JSContext *ctx)
                                                   JS_CLASS_OBJECT, 64);
     if (JS_IsException(ctx->global_obj))
         return -1;
+    ctx->global_this = js_dup(ctx->global_obj);   /* §9.6 step 7's default, until a host supplies its own */
     ctx->global_var_obj = JS_NewObjectProtoClassAlloc(ctx, JS_NULL,
                                                       JS_CLASS_OBJECT, 16);
     if (JS_IsException(ctx->global_var_obj))
@@ -127795,7 +127832,7 @@ static JSValue js_frame_this_binding(JSContext *ctx, JSStackFrame *sf)
         }
     }
     if (JS_IsUndefined(sf->this_val) || JS_IsNull(sf->this_val))
-        return js_dup(ctx->global_obj);
+        return js_dup(ctx->global_this);   /* §10.2.1.2 step 5.a */
     /* A PRIMITIVE RECEIVER IS RECORDED UNBOXED. 10.2.1.2 step 5 does box it for a sloppy function, and that is
        what getThis has to answer — but boxing ALLOCATES a wrapper and DEFINES its properties, which is a throw
        inside a capture that runs with an exception already in flight, and it is what put JS_ToObject, and
