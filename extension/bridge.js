@@ -4079,7 +4079,11 @@ async function engineRecordFacts(eng) {
   DCHECK(a && (a.runnable === 0 || a.runnable === 1),
          "the engine's Level-1 account states no runnability (`" + _rank.account + "`) — it is the one fact of " +
          "the frontier's order Level 1 reads, and without it a drained engine would be stepped for ever");
-  level1AccountCheck(a, "an instance's Level-1 account");
+  /* The engine states lifetime counters (`paid`, `pulls`), not a ranked account: level1Credit makes the account
+     from their differences below, so the account's own check applies to `acct`, not to this reply. */
+  DCHECK(Number.isFinite(a.paid) && a.paid >= 0 && Number.isFinite(a.pulls) && a.pulls >= 0,
+         "the engine's Level-1 account (`" + _rank.account + "`) states no finite non-negative `paid` and " +
+         "`pulls` — main.c's qjs_level1_account writes both on every answer");
   /* Both are lifetime counters of the instance, so a reading below the last one is a second instance answering
      under this record or a counter that was reset. */
   DCHECK(eng.level1 === undefined || (a.paid >= eng.level1.paid && a.pulls >= eng.level1.pulls),
