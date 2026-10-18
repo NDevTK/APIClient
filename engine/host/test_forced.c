@@ -1097,6 +1097,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
+#include "fixture/typefacet.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1531,6 +1532,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
+    { "typefacet", HTML_TYPEFACET },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -13795,6 +13797,27 @@ TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `typefacet` document (fixture/typefacet.h). Every arm's value, not one of them: a fork over
+   an unknown typeof would put a second, symbolic value beside the literal. */
+TF_UNIT void probes_typefacet(const char *js, Probe *tab, int *n) {
+    const char *ty_why = NULL; int ty_tt = 1;
+    fold_row(&ty_tt, &ty_why, !!strstr(js, "\"/api/tyfacet\""),
+             "NOT REACHED: there is no /api/tyfacet record at all — the script threw before its fetch");
+    fold_row(&ty_tt, &ty_why, param_value_only(js, "/api/tyfacet", "t", "boolean"),
+             "ECMAScript §13.5.7: `typeof !!__DEV__` is not \"boolean\" on every arm — the Logical NOT result "
+             "carries no Boolean type, so typeof answered an unknown");
+    fold_row(&ty_tt, &ty_why, param_value_only(js, "/api/tyfacet", "b", "1"),
+             "ECMAScript §7.2.14: a flow found the Boolean `!!__DEV__` to be neither true nor false");
+    fold_row(&ty_tt, &ty_why, param_value_only(js, "/api/tyfacet", "n", "number"),
+             "ECMAScript §13.5.4.1: `typeof +x` over an unknown is not \"number\" on every arm");
+    fold_row(&ty_tt, &ty_why, param_value_only(js, "/api/tyfacet", "str", "string"),
+             "ECMAScript §13.15.3: `typeof (\"a\" + x)` over an unknown is not \"string\" on every arm");
+    const Probe rows[] = {
+        { "typeof-fixed-by-type", ty_tt, "/api/tyfacet", SESS_EXPLORE, ty_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `contentsflex` document. */
 TF_UNIT void probes_contentsflex(const char *js, Probe *tab, int *n) {
     /* css-display-3 §2.5's `contents` splice makes `cf` an item of the flex container, and css-flexbox-1 §9.2
@@ -17369,6 +17392,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_contentsflex(js, probes, &np);
     probes_inlineflex(js, probes, &np);
     probes_svgelement(js, probes, &np);
+    probes_typefacet(js, probes, &np);
     probes_custommedia(js, probes, &np);
     probes_visualupdate(js, probes, &np);
     probes_windowclose(js, probes, &np);

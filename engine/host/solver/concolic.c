@@ -174,10 +174,10 @@ typedef struct {
        other bytes are the page's own; NULL on every other value, whose whole shape spells one unknown. Owned. */
     int *hole_span;
     int  hole_n;
-    /* Whether this value is a String whatever its bytes: a concatenation's string arm returns one (§13.15.3
-       step 1.c.iii, §22.1.3.5), so a later `+` over it takes the string arm with no example. Written at that
-       mint only; 0 says nothing about the type. */
-    uint8_t is_string;
+    /* ECMAScript §6.1 ECMAScript Language Types: the set of types this value takes in every world, as CTY_*
+       bits. Stated only by a mint whose algorithm fixes its result's type (concolic_type_state), and asserted
+       there against the example; 0 is unstated, never "no type", so a value no mint typed stays unknown-typed. */
+    uint8_t ty;
     /* Whether every reply could only make this a value ECMAScript §25.5.2.1 ParseJSON ( text ) produces, or
        `undefined` where a member is absent: a String, Number, Boolean or null, or an object an ObjectLiteral
        (ECMAScript §13.2.5.5 Runtime Semantics: Evaluation) or an ArrayLiteral (ECMAScript §13.2.4.2 Runtime
@@ -188,6 +188,13 @@ typedef struct {
        concolic_mark_json_value at a reply's mint and by concolic_exotic_get on a member; 0 says nothing. */
     uint8_t json_value;
 } Concolic;
+
+/* §6.1's eight language types, one bit each, so a mint can state a set (`x - 1` is a Number or a BigInt). */
+enum {
+    CTY_UNDEFINED = 1u << 0, CTY_NULL = 1u << 1, CTY_BOOLEAN = 1u << 2, CTY_STRING = 1u << 3,
+    CTY_SYMBOL = 1u << 4, CTY_NUMBER = 1u << 5, CTY_BIGINT = 1u << 6, CTY_OBJECT = 1u << 7,
+    CTY_NUMERIC = CTY_NUMBER | CTY_BIGINT,
+};
 
 /* One disposer for an owned list of spelled strings, shared by every record that holds one (a call predicate's
    arguments on the value and on ConcolicPred, a conjunction's conjuncts). These are C strings outside the GC
@@ -3079,6 +3086,61 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     return r;
 }
 
+/* The type bit of a value that is not an unknown. */
+static unsigned cty_of_concrete(JSValueConst v)
+{
+    if (JS_IsUndefined(v)) return CTY_UNDEFINED;
+    if (JS_IsNull(v)) return CTY_NULL;
+    if (JS_IsBool(v)) return CTY_BOOLEAN;
+    if (JS_IsString(v)) return CTY_STRING;
+    if (JS_IsSymbol(v)) return CTY_SYMBOL;
+    if (JS_IsNumber(v)) return CTY_NUMBER;
+    if (JS_IsBigInt(v)) return CTY_BIGINT;
+    DCHECK(JS_IsObject(v), "a value of none of ECMAScript §6.1's eight language types was asked its type");
+    return CTY_OBJECT;
+}
+
+/* The types an operand takes: a concrete value's one, an unknown's stated set, 0 for an unknown no mint typed. */
+static unsigned cty_of_operand(JSValueConst v)
+{
+    const Concolic *c = concolic_is(v) ? JS_GetOpaque(v, g_concolic_class) : NULL;
+
+    return c ? c->ty : cty_of_concrete(v);
+}
+
+/* §13.5.3.1 typeof's answer where a type set fixes it: every member's row of §13.5.3.1's table agrees, and no
+   member is an Object, whose row depends on [[Call]]. NULL when the set does not fix it. */
+static const char *cty_typeof_fixed(unsigned ty)
+{
+    static const char *const ROW[8] = { "undefined", "object", "boolean", "string", "symbol", "number", "bigint", NULL };
+    const char *fixed = NULL;
+    int i;
+
+    if (!ty || (ty & CTY_OBJECT)) return NULL;
+    for (i = 0; i < 8; i++) {
+        if (!(ty & (1u << i))) continue;
+        if (fixed && strcmp(fixed, ROW[i]) != 0) return NULL;
+        fixed = ROW[i];
+    }
+    return fixed;
+}
+
+/* State a fresh mint's type set: what its algorithm fixes the result's type to. Once per value, and the
+   example the mint attached (if any) is one of those types. A candidate re-fire's mint answers the attacker's
+   bytes, a real value with no record, and states nothing. `file`/`line` are the mint's. */
+#define concolic_type_state(r, ty) concolic_type_state_at((r), (ty), __FILE__, __LINE__)
+static void concolic_type_state_at(JSValueConst r, unsigned ty, const char *file, int line)
+{
+    Concolic *c;
+
+    if (!concolic_is(r)) return;
+    c = JS_GetOpaque(r, g_concolic_class);
+    DCHECKF(ty != 0 && c->ty == 0, "%s:%d stated a type set that is empty, or stated one twice", file, line);
+    DCHECKF(!c->ex_has || (cty_of_concrete(c->example) & ty),
+            "%s:%d minted a value whose example is of a type outside the set its algorithm fixes", file, line);
+    c->ty = (uint8_t)ty;
+}
+
 /* The equality operators, spelled once: the identity's operator field. concolic_new_cmp composes the same
    field for a component whose IDL member is a comparison, and the two must agree exactly or a page writing
    the comparison the component declares would fork again over the same predicate. */
@@ -3154,6 +3216,7 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
     c->cmp_algo = (signed char)algo;   /* what the arm may conclude; written with `cmp_op` */
     c->cmp_subj = subj ? strdup(subj) : NULL;
     CHECK(!subj || c->cmp_subj, "concolic: OOM recording the hole an equality is a fact about");
+    concolic_type_state(r, CTY_BOOLEAN);   /* §7.2.13, §7.2.14 and §7.2.12 IsLessThan each answer a Boolean */
     return r;
 }
 
@@ -3432,6 +3495,7 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
             free(members); free(order);
             res = concolic_alloc(ctx, shape, NULL, NULL, 0u, NULL, conj_example(ctx, a, b));
             free(shape);
+            concolic_type_state(res, CTY_BOOLEAN);
             return res;
         }
 
@@ -3466,6 +3530,7 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
     /* Not a source read (concolic_alloc, never concolic_derived): a conjunction is a boolean this engine
        computed, and an @S candidate substituted into it would answer a predicate with a payload. */
     res = concolic_alloc(ctx, shape, NULL, NULL, 0u, ident, conj_example(ctx, a, b));
+    concolic_type_state(res, CTY_BOOLEAN);
     free(shape);
     c = JS_GetOpaque(res, g_concolic_class);
     DCHECK(c != NULL, "a conjunction was minted as something that is not a concolic value");
@@ -3685,6 +3750,19 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
         aff_free(d);
     }
     opq = ca ? a : b; other = ca ? b : a;
+    /* A Boolean in every world compared with a Boolean: §7.2.14 step 2 and §7.2.13 step 1 both reach
+       SameValueNonNumber, true exactly when the two are the same Boolean, so `b === true` is ToBoolean(b) and
+       `b === false` is its complement. Minted as that predicate, the two comparisons branch on one constraint
+       entry and no flow takes both false arms. SameValueZero agrees for Booleans. */
+    if (!concolic_is(other) && JS_IsBool(other) && cty_of_operand(opq) == CTY_BOOLEAN) {
+        int negate = (!JS_ToBool(ctx, other)) ^ (is_neq != 0);
+        JSValue res2 = concolic_tobool_hook(ctx, opq, negate);
+
+        DCHECK(!JS_IsUninitialized(res2), "a Boolean-typed unknown was refused by ToBoolean's own mint");
+        JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
+        sp[-2] = res2;
+        return 1;
+    }
     src = concolic_src_c(opq);
     root = concolic_root_c(opq);   /* the same operand, or concolic_alloc's assert sees two facts about two values */
     /* The pin token is the other operand spelled, through literal_tok's classification, which also returns the
@@ -4100,6 +4178,22 @@ static int aff_arith(JSContext *ctx, int op, int nops, JSValueConst a, JSValueCo
     }
 }
 
+/* The types an arithmetic result takes. Each operator applies ToNumeric to its operands and then a Number or a
+   BigInt operation, throwing a TypeError where the two numeric types differ (§13.15.3 step 4 for the binary
+   ones), so a binary result is a Number where either operand cannot be a BigInt. Unary plus is ToNumber, which
+   throws for a BigInt (§13.5.4.1), and §6.1.6.2.11 BigInt::unsignedRightShift always throws, so those two
+   answer a Number. An operand that is unknown-typed, or an Object whose ToPrimitive is the page's, may be
+   either. */
+static unsigned carith_result_types(int op, int nops, JSValueConst a, JSValueConst b)
+{
+    unsigned ta = cty_of_operand(a), tb = nops == 2 ? cty_of_operand(b) : 0;
+    int a_bigint = !ta || (ta & (CTY_BIGINT | CTY_OBJECT));
+    int b_bigint = nops == 1 || !tb || (tb & (CTY_BIGINT | CTY_OBJECT));
+
+    if (op == JS_CARITH_PLUS || op == JS_CARITH_SHR) return CTY_NUMBER;
+    return (a_bigint && b_bigint) ? CTY_NUMERIC : CTY_NUMBER;
+}
+
 int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
     JSValue a = sp[-nops], b = nops == 2 ? sp[-1] : JS_UNDEFINED;
     int ca = concolic_is(a), cb = nops == 2 && concolic_is(b);
@@ -4211,6 +4305,7 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
                                root_whose_or_unstated(derived_root_whose(ops, nops)), ident, example);
         if (af) aff_attach(res, af);
     }
+    concolic_type_state(res, carith_result_types(op, nops, a, b));
     free(shape);
     free(root);
     JS_FreeValue(ctx, sp[-nops]);
@@ -4271,6 +4366,7 @@ JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
     r = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape,
                          root_whose_or_unstated(root_whose_of(v)), ident, example);
     free(shape);
+    concolic_type_state(r, CTY_STRING);   /* §22.1.1.1 String ( value ) answers a String */
     str_of_record(r, v);
     return r;
 }
@@ -4317,6 +4413,7 @@ JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
     JS_FreeValue(ctx, ex);
     r = concolic_alloc(ctx, shape, src, root, root_whose_of(v), ident, example);
     free(shape);
+    concolic_type_state(r, CTY_BOOLEAN);   /* §7.1.2 and §13.5.7 answer a Boolean */
     rc = JS_GetOpaque(r, g_concolic_class);
     DCHECK(rc != NULL, "a ToBoolean result was minted as something that is not a concolic value");
     /* The branch key and its polarity, written together: the operand's own branch key, so a chain of negations
@@ -4690,6 +4787,13 @@ JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     ConcolicExState st;
 
     if (!concolic_is(v)) return JS_UNINITIALIZED;
+    /* An operand whose type set fixes §13.5.3.1's row is answered by the row: `typeof !x` is "boolean" in
+       every world, so nothing here is unknown and nothing forks over it. */
+    {
+        const char *fixed = cty_typeof_fixed(cty_of_operand(v));
+
+        if (fixed) return JS_NewString(ctx, fixed);
+    }
     st = concolic_example_state(v);
     if (st == CONCOLIC_EX_HELD || st == CONCOLIC_EX_DETERMINED) {
         JSValue ex = concolic_example(ctx, v);
@@ -4708,6 +4812,7 @@ JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     ident = concolic_ident_compose("typeof", f, 1);
     r = concolic_derived(ctx, shape, shape, concolic_root_c(v), root_whose_of(v), ident, example);
     free(shape);
+    concolic_type_state(r, CTY_STRING);   /* §13.5.3.1's every row is a String */
     return r;
 }
 
@@ -4924,7 +5029,11 @@ static JSValue own_keys_pred(JSContext *ctx, const Concolic *c)
     if (!ident)
         return JS_UNINITIALIZED;
     /* Not a source read (concolic_alloc, never concolic_derived): a boolean about the record. */
-    return concolic_alloc(ctx, "{cmp}", NULL, NULL, 0u, ident, JS_UNDEFINED);
+    {
+        JSValue r = concolic_alloc(ctx, "{cmp}", NULL, NULL, 0u, ident, JS_UNDEFINED);
+        concolic_type_state(r, CTY_BOOLEAN);
+        return r;
+    }
 }
 
 JSValue concolic_own_keys_pred(JSContext *ctx, JSValueConst record)
@@ -5753,6 +5862,9 @@ void concolic_contradict_example(const char *ident) {
 void concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
     if (!c) { JS_FreeValue(ctx, example); return; }
+    DCHECK(!c->ty || JS_IsUndefined(example) || (cty_of_concrete(example) & c->ty),
+           "an example of a type outside the value's stated type set was attached after its mint — the mint's "
+           "algorithm fixes the type in every world, this run's world among them");
     JS_FreeValue(ctx, c->example);
     c->example = example;   /* consume */
     c->ex_has = !JS_IsUndefined(example);
@@ -5945,9 +6057,12 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     }
     /* Step 1.c is a disjunction, so one String operand decides the string arm whether or not the other has an
        example; the result's shape is then the page's bytes around its operands' holes. */
-    Concolic *ka = ca ? JS_GetOpaque(a, g_concolic_class) : NULL, *kb = cb ? JS_GetOpaque(b, g_concolic_class) : NULL;
-    int string_arm = op == JS_CONCOLIC_ADD_CONCAT || (hava && JS_IsString(exa)) || (havb && JS_IsString(exb)) ||
-                     (ka && ka->is_string) || (kb && kb->is_string);
+    /* Whether the string arm is taken in every world, which is what the result's type states: §22.1.3.5's, or
+       §13.15.3 step 1.c with an operand that is a String in every world. An example decides the arm for this
+       run's shape and not the type in the others. */
+    unsigned ta = cty_of_operand(a), tb = cty_of_operand(b);
+    int string_fixed = op == JS_CONCOLIC_ADD_CONCAT || ta == CTY_STRING || tb == CTY_STRING;
+    int string_arm = string_fixed || (hava && JS_IsString(exa)) || (havb && JS_IsString(exb));
     JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
     /* The shape, by the arm. On the string arm it is the string the concatenation produced, so
        `"/api/" + cfg.region` renders `/api/{cfg.region}`, the @H provenance the endpoint surface is built from
@@ -5996,11 +6111,15 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     JSValue result = concolic_derived(ctx, shape, src, root, derived_root_whose(ops, 2), ident, example);
                                                               /* consumes example and ident */
     if (af) aff_attach(result, af);
-    if (string_arm) {
-        Concolic *rs = JS_GetOpaque(result, g_concolic_class);
+    if (string_arm) hole_spans_concat(result, a, strlen(sha), b);
+    /* §13.15.3 answers a String, a Number or a BigInt; the numeric arm is a Number unless both operands may be
+       BigInts (carith_result_types's reading of step 4), and is reached only when neither may be a String. */
+    {
+        int a_str = !ta || (ta & (CTY_STRING | CTY_OBJECT)), b_str = !tb || (tb & (CTY_STRING | CTY_OBJECT));
+        int a_big = !ta || (ta & (CTY_BIGINT | CTY_OBJECT)), b_big = !tb || (tb & (CTY_BIGINT | CTY_OBJECT));
+        unsigned numeric = (a_big && b_big) ? CTY_NUMERIC : CTY_NUMBER;
 
-        hole_spans_concat(result, a, strlen(sha), b);
-        if (rs) rs->is_string = 1;
+        concolic_type_state(result, string_fixed ? CTY_STRING : (a_str || b_str) ? (CTY_STRING | numeric) : numeric);
     }
     /* `x + ""` and `"" + x`: §13.15.3 step 1.c returns ToString(ToPrimitive(x)) concatenated with nothing, so
        the result is the string form of the one unknown operand. Recorded through a chain, so `(x + "") + ""`
