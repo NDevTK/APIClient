@@ -89,9 +89,10 @@ static const char HTML_ABORT[] =
     " fetch('/api/apteedab?own=' + o4 + '&clone=' + q4);"
     "})();"
     "</script>"
-    /* XHR §3.5.6's timeout, on HTML §8.7's timer source. The host answers between slices, so a 1 ms timeout
-       sent in a task whose loop moves the work clock past it, inside one slice, fires before the answer:
-       `timeout` then `loadend`. The clock never jumps to a deadline while a reply is in flight
+    /* XHR §3.5.6's timeout, on HTML §8.7's timer source. The zone declines a POST to /api/decl (the fixture's
+       HTML_DECLINES rule), so the 1 ms send has a failure arm, `error` then `loadend`, and a waiting arm that
+       nothing answers, where the task's loop moves the work clock past the timeout and it fires at the idle
+       rung: `timeout` then `loadend`. The clock never jumps to a deadline while a reply is in flight
        (event_loop_may_advance), so a 60 s timeout is beaten by the host's answer: `load` then `loadend`.
        The 1 ms send's task queues the fetch-message task below last, so that task's long loop runs after
        this timeout has fired. */
@@ -103,9 +104,9 @@ static const char HTML_ABORT[] =
     "  x.addEventListener('loadend', function () { seen.push('loadend'); fetch(path + '?v=' + seen.join('-')); });"
     " }"
     " setTimeout(function () {"
-    "  var t1 = new XMLHttpRequest(), e1 = []; t1.open('GET', '/api/xatimeout'); t1.timeout = 1;"
-    "  watch(t1, e1, '/api/xatimedout'); t1.send();"
-    "  for (var i = 0; i < 30000; i++) {}"
+    "  var t1 = new XMLHttpRequest(), e1 = []; t1.open('POST', '/api/decl/xatimeout'); t1.timeout = 1;"
+    "  watch(t1, e1, '/api/xatimedout'); t1.send('t');"
+    "  for (var i = 0; i < 60000; i++) {}"
     "  setTimeout(function () { window.xfmsgTask(); }, 0);"
     " }, 0);"
     " var t2 = new XMLHttpRequest(), e2 = []; t2.open('GET', '/api/xabeaten'); t2.timeout = 60000;"

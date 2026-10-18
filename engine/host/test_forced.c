@@ -14977,9 +14977,12 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
     /* XHR §3.5.6's timeout: it fires for a send nothing answered in time, and an answer beats it. */
     const char *xatime_why = NULL;
     int xatime_tt = 1;
-    fold_row(&xatime_tt, &xatime_why, param_value_only_undriven(js, "/api/xatimedout", "v", "timeout-loadend"),
-             "NOT REACHED or wrong: an asynchronous send with a 1 ms timeout did not end in `timeout` then "
-             "`loadend`");
+    const int xat_t = param_undriven_count(js, "/api/xatimedout", "v", "timeout-loadend");
+    const int xat_e = param_undriven_count(js, "/api/xatimedout", "v", "error-loadend");
+    fold_row(&xatime_tt, &xatime_why, xat_t > 0 && xat_t + xat_e == param_undriven_count(js, "/api/xatimedout", "v", NULL),
+             "NOT REACHED or wrong: a declined asynchronous send with a 1 ms timeout did not end in `timeout` then "
+             "`loadend` in the arm still waiting on the zone, or an arm ended in neither that nor the failure "
+             "arm's `error` then `loadend`");
     const char *xabeat_why = NULL;
     int xabeat_tt = 1;
     fold_row(&xabeat_tt, &xabeat_why, param_value_only_undriven(js, "/api/xabeat", "v", "load-loadend"),
