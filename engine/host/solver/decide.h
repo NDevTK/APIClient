@@ -476,6 +476,15 @@ void decide_refine_stats(long *asked, long *refined);
  * the row copies it. */
 void *decide_fork_same_path(const char *why);
 
+/* A fork over a completion this engine numbers itself: a two-armed choice whose arms are fixed by the caller's
+ * algorithm (a declined request's waiting arm, a reply's success arm), recorded as one ordinary slot keyed by
+ * `why`, the mechanism's name. Returns the arm this flow takes. On a replay that recorded the slot it is the
+ * recorded arm and `*sib_blob` is NULL: the flow takes that arm itself and mints nothing. Otherwise this flow
+ * takes 0 and `*sib_blob` is the sibling's decision state, standing past the slot with arm 1, for the caller to
+ * assemble that arm with. A completion with three arms is asked as two of these, in a fixed order. The sibling
+ * and this flow then park on different recipes, which decide_fork_same_path cannot give them. */
+int decide_completion(const char *why, void **sib_blob);
+
 /* THE SAME FREEZE WITH NO FRONTIER MEMBER BEHIND IT — for a caller that wants the running flow's PATH and is
  * not minting a flow to stand on it.
  * IT IS NOT A VARIANT OF THE CALL ABOVE, IT IS THE OTHER HALF OF WHAT THAT CALL DOES. decide_fork_same_path

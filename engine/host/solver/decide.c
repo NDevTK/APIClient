@@ -1185,6 +1185,38 @@ void *decide_fork_same_path(const char *why) {
     return b;
 }
 
+/* See decide.h. The slot is keyed by `why`, the mechanism's own name, so a replay that reaches a different
+   mechanism here diverges (dec_replay's key comparison) rather than consuming an arm recorded for another. */
+int decide_completion(const char *why, void **sib_blob) {
+    DecideBlob *b;
+    uint32_t asked;
+    int arm;
+
+    DCHECK(why != NULL && *why == '(',
+           "a completion fork was keyed by something other than a mechanism's name — the census files it as a "
+           "synthetic row, whose names open on `(`");
+    DCHECK(g_running, "a completion fork was asked while no flow's decision state was loaded");
+    DCHECK(sib_blob != NULL, "a completion fork was asked with nowhere to hand the sibling's decision state");
+    *sib_blob = NULL;
+    asked = dec_key_hash(why);
+    if (g_c < dec_total()) {
+        arm = dec_replay(asked);
+        if (arm >= 0) return arm;
+        dec_leave_path();
+    }
+    b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM forking a flow's decision state at a completion");
+    /* The sibling stands past its own slot: it is assembled already holding its completion and never re-asks
+       this question, unlike a branch's sibling, which resumes at the branch and replays its slot there. */
+    b->seg = dec_seg_arm(dec_freeze(), 1, asked);
+    b->c = g_c + 1;
+    dec_blob_take_mints(b);
+    b->pending = -1;
+    fork_key_count(why, FORK_ROW_SYNTHETIC);
+    dec_append(0, asked); g_c++;
+    *sib_blob = b;
+    return 0;
+}
+
 /* See decide.h. The freeze and reference are the fork's; the census entry is not, because no frontier member is
    made. A function of its own rather than a flag on the one above, so neither caller reads as the other's special
    case: one mints a flow, one records a path. */

@@ -5099,12 +5099,11 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        replay builds the call where its work runs out. An arm the replay forks before then is an ordinary arm of
        the document and drives nothing, so it carries no mark, no locator and no routed body; were it to inherit
        the claim, every arm of the replay would build the call and park as the same drive of the same body.
-       Named residual. Not covered: which arm of a fork that records no arm (decide_fork_same_path) the drive stood
-       on when it parked; the claim stays with the parent, so a drive born in a sibling's timeline resumes in the
-       parent's. Next diff builds: those forks' completions recorded as numbered arms (solver_outcome's elimination
-       sequence), so the replay consumes the drive's arm instead of re-forking. Absence shows as: a resumed drive
-       emitting addresses that differ from its recording session's, on a page whose arms set the state the
-       driven body's closure reads. */
+       Named residual. Not covered: which arm of a fork that still records none (decide_fork_same_path: a peer's
+       answer, a delivery-time fork) the drive stood on; the claim stays with the parent, so a drive born in such a
+       sibling's timeline resumes in the parent's. Next diff builds: the peer-answer column decide.h names, so the
+       replay consumes that arm too. Absence shows as: a resumed drive emitting addresses that differ from its
+       recording session's, on a page where a peer's answer sets the state the driven body's closure reads. */
     if (parent->orphan_want) {
         sib->orphan = 0;
         sib->orphan_hash = 0;
@@ -5534,8 +5533,9 @@ static int flow_answer_exhausted(const Flow *f) {
 /* The success arm of a `fetch()` whose reply no observation gave: declined by the zone, or answered with a status
  * that is not ok. The server decides the status, headers and body (for the second, under credentials or state
  * this visitor lacks), so where the domain permits the success path that path runs, on a reply whose body is
- * unknown (fetch_reply_unknown). It is assembled from its own clone of the flow, and its copy of record `i` is
- * answered with that reply and marked `taken`. Its path is marked forced when the reply is delivered
+ * unknown (fetch_reply_unknown). The arm's copy of record `i` is answered with that reply and marked `taken`; the
+ * arm is a sibling assembled from its own clone of the flow, or `f` itself when its recorded path chose it, and
+ * the return says which (1: `f` took the success). Its path is marked forced when the reply is delivered
  * (flow_deliver_one_reply), because a sibling is born with no mark its parent lacks. A `same-origin` request to
  * another origin has no success to explore.
  * Named residual. Not covered: an XMLHttpRequest's declined send, whose answer is a host request's
@@ -5543,20 +5543,21 @@ static int flow_answer_exhausted(const Flow *f) {
  * Next diff builds: the same arm through engine_host_answer's record, and a reply record whose URL list is the
  * unknown address. How its absence shows: an address built from `xhr.response` behind a declined send is reached
  * on no flow while the same address behind a declined `fetch()` is. */
-static void flow_success_arm(JSContext *ctx, Flow *f, int i, int in_program, int in_job, const char *site,
-                             int taken) {
+static int flow_success_arm(JSContext *ctx, Flow *f, int i, int in_program, int in_job, const char *site,
+                            int taken) {
     JSValue e = pending_entry(f->pending, i), uv, mv;
     const char *u, *m;
     JSValue reply, se;
     JSValue *clone;
-    void *parked;
-    Flow *sib;
+    void *parked, *dblob;
+    Flow *sib, *arm_flow;
+    int arm;
 
     /* An address with no bytes (pending_park_request's own decline) names no URL for a reply to come from, so it
        keeps the two arms it had. That is the residual above's second gap: its success path is not explored. */
     if (pending_get_int(e, PEND_ADDRESS) == FETCH_ADDRESS_UNKNOWN) {
         JS_FreeValue(ctx, e);
-        return;
+        return 0;
     }
     uv = pending_get(e, PEND_URL);
     mv = pending_get(e, PEND_MODE);
@@ -5570,29 +5571,41 @@ static void flow_success_arm(JSContext *ctx, Flow *f, int i, int in_program, int
     JS_FreeValue(ctx, mv);
     JS_FreeValue(ctx, e);
     if (JS_IsUninitialized(reply))
-        return;
-    clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
-    parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
-    CHECK(!in_program || clone != NULL,
-          "engine: a flow parked on a declined fetch could not be cloned for the arm that explores its success");
-    CHECK(!in_job || parked != NULL,
-          "engine: a flow parked on a declined fetch inside a job could not have its continuation cloned");
-    sib = engine_sibling_assemble(ctx, f, clone, decide_fork_same_path(site), concolic_pins_suspend(),
-                                  flow_path_marks(f));
-    DCHECK(sib->parked == NULL, "a freshly assembled arm already holds parked continuations");
-    sib->parked = parked;
-    se = pending_unshare(sib->pending, i);
+        return 0;
+    /* The success arm is completion 1 of a recorded two-armed choice, so a replay that recorded it makes this
+       flow the success arm, and one that recorded 0 makes it the other; only a new choice mints the sibling. */
+    arm = decide_completion(site, &dblob);
+    if (arm == 1) {
+        arm_flow = f;
+    } else if (dblob != NULL) {
+        clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
+        parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
+        CHECK(!in_program || clone != NULL,
+              "engine: a flow parked on a declined fetch could not be cloned for the arm that explores its success");
+        CHECK(!in_job || parked != NULL,
+              "engine: a flow parked on a declined fetch inside a job could not have its continuation cloned");
+        sib = engine_sibling_assemble(ctx, f, clone, dblob, concolic_pins_suspend(), flow_path_marks(f));
+        DCHECK(sib->parked == NULL, "a freshly assembled arm already holds parked continuations");
+        sib->parked = parked;
+        arm_flow = sib;
+    } else {
+        JS_FreeValue(ctx, reply);
+        return 0;
+    }
+    se = pending_unshare(arm_flow->pending, i);
     pending_set_int(se, taken, 1);
     pending_set(se, PEND_VALUE, reply);
     pending_set_int(se, PEND_HAVE_VALUE, 1);
     JS_FreeValue(ctx, se);
+    return arm_flow == f;
 }
 
 /* A `fetch()` answered with a status that is not ok (Fetch §2.2.3 Statuses: "An ok status is a status in the range
  * 200 to 299, inclusive"), a 401 to a logged-out visitor being the population this exists for: the observation is
  * this visitor's, and the success path behind it is the surface another visitor reaches, so it gets the same arm as
  * a declined request (flow_success_arm). Asked before the reply is delivered, so the arm clones the flow still
- * waiting on it; this flow keeps the observed reply. A reply no server sent is never asked again. One per step. */
+ * waiting on it; this flow keeps the observed reply unless its recorded path chose the success arm. A reply no
+ * server sent is never asked again. One per step. */
 static int flow_reply_success_fork(JSContext *ctx, Flow *f) {
     int n = pending_count(f->pending), i;
 
@@ -5620,7 +5633,7 @@ static int flow_reply_success_fork(JSContext *ctx, Flow *f) {
             continue;
         flow_success_arm(ctx, f, i, in_program, in_job,
                          "(a reply's status was not ok — the arm takes a reply no server sent)", PEND_SUCCESS_TAKEN);
-        /* This flow's own copy, so the observed reply's arm is never forked twice from this register. */
+        /* This flow's own copy, so the register's arm is never forked twice, whichever arm this flow took. */
         pe = pending_unshare(f->pending, i);
         pending_set_int(pe, PEND_SUCCESS_TAKEN, 1);
         JS_FreeValue(ctx, pe);
@@ -5629,20 +5642,19 @@ static int flow_reply_success_fork(JSContext *ctx, Flow *f) {
     return 0;
 }
 
-/* One arm per declined request: the fork a refusal owes. The trusted zone grades each refusal on one axis: would a
- * real browser making this request also get Fetch §5.6 Fetch methods' network error? Where it would (a blocked
- * scheme, a CORS failure, a CORB-blocked body) the reply arrives as that error. Where it would not (the firing
- * policy declining an act at an unwidened origin, the destructive deny list, a method the chokepoint cannot
- * issue) the request is declined and the outcome is unobserved, so every arm runs:
- *   - the waiting arm, the sibling assembled below, keeps the unanswered record and stays parked at the line that
- *     asked, a parked search that fires the day the origin is widened. It holds no reply, status or example.
- *   - for a `fetch()`, the success arm (flow_decline_success_arm): a reply no server sent, graded forced.
- *   - the failure arm, this flow, takes §5.6's network error (JS_NULL) and runs the page's `catch`, where bundles
- *     keep fallback endpoints, retry hosts and degraded-mode configuration. Its path is marked forced in the
- *     same operation as the fork (flow_mark_forced_arm), so nothing it builds is ever graded derived; the
- *     waiting arm inherits the path as it stood before.
- * It runs where flow_answer_fork does, for the same reasons, one decline per step. Every kind takes the same JS_NULL,
- * and flow_deliver_one_reply turns it into each kind's own failure (a rejected `fetch()`, §4.12.1.1's null result,
+/* One arm per declined request: the fork a refusal owes. The zone grades each refusal on one axis: would a real
+ * browser making this request also get Fetch §5.6 Fetch methods' network error? Where it would (a blocked scheme,
+ * a CORS failure, a CORB-blocked body) the reply arrives as that error. Where it would not (the firing policy at an
+ * unwidened origin, the destructive deny list, a method the chokepoint cannot issue) the outcome is unobserved and
+ * every arm runs, each a completion asked in this order (decide_completion), so each parks on its own recipe:
+ *   - the waiting arm keeps the unanswered record and stays parked at the line that asked, a parked search that
+ *     fires the day the origin is widened. It holds no reply, status or example.
+ *   - for a `fetch()`, the success arm (flow_success_arm): a reply no server sent, graded forced.
+ *   - the failure arm takes §5.6's network error (JS_NULL) and runs the page's `catch`, where bundles keep fallback
+ *     endpoints, retry hosts and degraded-mode configuration. Its path is marked forced in the same operation
+ *     (flow_mark_forced_arm), so nothing it builds is graded derived; the other arms stand on the path before it.
+ * It runs where flow_answer_fork does, one decline per step. Every kind takes the same JS_NULL, and
+ * flow_deliver_one_reply turns it into each kind's own failure (a rejected `fetch()`, §4.12.1.1's null result,
  * HostLoadImportedModule's TypeError, a `<link>`'s error branch), so this holds no per-kind knowledge of the
  * outcome beyond the synchronous kind's completion below. */
 static int flow_decline_fork(JSContext *ctx, Flow *f) {
@@ -5651,9 +5663,9 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(f->pending, i), se, pe, reason;
         JSValue *clone;
-        void *parked;
+        void *parked, *dblob;
         int in_program, in_job, kind;
-        Flow *sib;
+        Flow *sib, *arm_flow;
 
         if (!pending_entry_declined(e) || pending_get_int(e, PEND_DECLINE_TAKEN)) {
             JS_FreeValue(ctx, e);
@@ -5710,36 +5722,51 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
             JS_FreeValue(ctx, e);
             continue;
         }
-        clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
-        parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
-        CHECK(!in_program || clone != NULL,
-              "engine: a flow parked on a declined request could not be cloned — the waiting arm is what makes a "
-              "per-origin widening possible");
-        CHECK(!in_job || parked != NULL,
-              "engine: a flow parked on a declined request inside a job could not have its continuation cloned");
-        sib = engine_sibling_assemble(ctx, f, clone,
-                                      decide_fork_same_path("(the trusted zone declined this request — no "
-                                                            "predicate was asked)"),
-                                      concolic_pins_suspend(), flow_path_marks(f));
-        DCHECK(sib->parked == NULL,
-               "a freshly assembled arm already holds parked continuations — the assembly builds a flow that "
-               "has never run, so a set on it came from somewhere that is not this fork");
-        sib->parked = parked;
-        /* The waiting arm's own copy of the record, marked as having had its fork. The record is shared by
-           pending_fork, so both sides take a private copy; otherwise the first flow to step would consume a
-           decline every parked timeline is owed. The copy leaves the outstanding set (no reply is coming) and
-           keeps the reason, the account of a park that will not drain. */
-        se = pending_unshare(sib->pending, i);
-        pending_set_int(se, PEND_DECLINE_TAKEN, 1);
-        DCHECK(!pending_get_int(se, PEND_HAVE_VALUE) && pending_entry_declined(se),
-               "the waiting arm of a decline came out of the unshare holding an answer, or holding no refusal "
-               "— it is the arm that goes on waiting for the real one, so an answered copy would resume it "
-               "over a reply nobody sent and an unrefused copy would be re-listed to the host and re-declined");
-        JS_FreeValue(ctx, se);
-        if (kind == FLOW_PENDING_RESOLVE)
-            flow_success_arm(ctx, f, i, in_program, in_job,
-                             "(the trusted zone declined this request — the arm takes a reply no server sent)",
-                             PEND_DECLINE_TAKEN);
+        /* The waiting arm is completion 1 of a recorded choice, asked first; a flow whose recorded path chose
+           it is that arm, and only a new choice mints it as a sibling. */
+        if (decide_completion("(the trusted zone declined this request — the arm waits for the real reply)",
+                              &dblob) == 1) {
+            arm_flow = f;
+        } else if (dblob != NULL) {
+            clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
+            parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
+            CHECK(!in_program || clone != NULL,
+                  "engine: a flow parked on a declined request could not be cloned — the waiting arm is what makes "
+                  "a per-origin widening possible");
+            CHECK(!in_job || parked != NULL,
+                  "engine: a flow parked on a declined request inside a job could not have its continuation "
+                  "cloned");
+            sib = engine_sibling_assemble(ctx, f, clone, dblob, concolic_pins_suspend(), flow_path_marks(f));
+            DCHECK(sib->parked == NULL,
+                   "a freshly assembled arm already holds parked continuations — the assembly builds a flow that "
+                   "has never run, so a set on it came from somewhere that is not this fork");
+            sib->parked = parked;
+            arm_flow = sib;
+        } else {
+            arm_flow = NULL;
+        }
+        if (arm_flow != NULL) {
+            /* The waiting arm's own copy of the record, marked as having had its fork. The record is shared by
+               pending_fork, so both sides take a private copy; otherwise the first flow to step would consume a
+               decline every parked timeline is owed. The copy leaves the outstanding set (no reply is coming)
+               and keeps the reason, the account of a park that will not drain. */
+            se = pending_unshare(arm_flow->pending, i);
+            pending_set_int(se, PEND_DECLINE_TAKEN, 1);
+            DCHECK(!pending_get_int(se, PEND_HAVE_VALUE) && pending_entry_declined(se),
+                   "the waiting arm of a decline came out of the unshare holding an answer, or holding no refusal "
+                   "— it is the arm that goes on waiting for the real one, so an answered copy would resume it "
+                   "over a reply nobody sent and an unrefused copy would be re-listed to the host and re-declined");
+            JS_FreeValue(ctx, se);
+        }
+        if (arm_flow == f ||
+            (kind == FLOW_PENDING_RESOLVE &&
+             flow_success_arm(ctx, f, i, in_program, in_job,
+                              "(the trusted zone declined this request — the arm takes a reply no server sent)",
+                              PEND_DECLINE_TAKEN))) {
+            JS_FreeValue(ctx, reason);
+            JS_FreeValue(ctx, e);
+            return 1;
+        }
         /* This flow's copy, answered with §5.6's network error (JS_NULL, core/fetch/fetch.h). The delivery owns
            what each kind does with it; this states the outcome. */
         pe = pending_unshare(f->pending, i);
