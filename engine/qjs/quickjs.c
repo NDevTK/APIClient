@@ -116756,8 +116756,8 @@ _Static_assert(offsetof(JSPromiseResolveFn, hdr) == 0, "JSStepHdr must be first 
 #define PRF_STAGES(X) \
     X(PRF_HEAD, "27.5.1.3 steps 4.a-4.d / steps 2.a-2.f (the pair fires ONCE; a reject settles here, and " \
                 "so does a self resolution or a non-Object resolution)") \
-    X(PRF_THENABLE, "27.5.1.3 step 2.i over a resolution carrying NO example (the fork: outcome 0 is not a " \
-                    "thenable and fulfils, outcome 1 is the 2.j-2.l adoption)") \
+    X(PRF_THENABLE, "27.5.1.3 steps 2.f-2.i over a resolution carrying NO example (the fork: outcome 0 is " \
+                    "not a thenable and fulfils, 1 is the 2.j-2.l adoption, 2 is 2.g's abrupt read and rejects)") \
     X(PRF_ADOPT, "27.5.2.2 over a `then` this engine cannot call (the fork: outcome 0 is resolve called, 1 " \
                  "is reject called or a throw, 2 is neither and the promise stays pending)") \
     X(PRF_THEN, "27.5.1.3 steps 2.g-2.m (then is Get(resolution, \"then\"); an abrupt read REJECTS; a callable " \
@@ -116773,6 +116773,10 @@ static const char *const js_promise_resolvefn_steps[] = { PRF_STAGES(JS_STEP_STA
    because step_fork_run keeps the POINTER on the header across the park and re-hashes the BYTES on the
    answer. */
 #define PRF_THENABLE_OP "27.5.1.3 resolution is a thenable"
+/* Its three completions, the partition of resolveSteps steps 2.f-2.l over an Object resolution: `then` is not
+   callable (2.i fulfils), callable (2.j-2.l adopt through a job), or its read is abrupt (2.g rejects now).
+   Outcome 0 stays the one that terminates, for step_fork_run's numbering rule. */
+enum { PRF_THENABLE_FULFIL = 0, PRF_THENABLE_ADOPT, PRF_THENABLE_THROWS };
 
 /* AND THE ADOPT WORLD'S OWN FORK, ASKED OF THE SAME OPERAND AND SHARING NOTHING WITH THE ONE ABOVE. The
    constraint key is (operand, OPERATION, completion), so the operation string is what keeps the two apart: a
@@ -116941,9 +116945,9 @@ static int js_promise_resolvefn_step(JSContext *ctx, void *st, JSValue cb_result
            NOTHING ABOUT. There is no example to perform step 2.f's read on, and performing it on the UNKNOWN
            is the exact defect the head of this machine exists to avoid — the exotic [[Get]] answers a CALLABLE
            unknown for every name, so 2.i would take its true arm for every unknown there has ever been. What
-           is undetermined is therefore not a VALUE but which of the algorithm's two completions this world
-           reaches, which is what the outcome seam is: 2.i's "Perform FulfillPromise(promise, resolution)", or
-           2.k's NewPromiseResolveThenableJob.
+           is undetermined is therefore not a VALUE but which of the algorithm's three completions this world
+           reaches, which is what the outcome seam is: 2.i's "Perform FulfillPromise(promise, resolution)", 2.k's
+           NewPromiseResolveThenableJob, or 2.g's RejectPromise over an abrupt `then` read.
            OUTCOME 0 IS "NOT A THENABLE", which is step_fork_run's one numbering rule read against this
            predicate: a session with NO forking policy (the @S candidate re-fire) never reaches the seam at
            all and the driver takes outcome 0 for it, so outcome 0 must be the completion that terminates.
@@ -116975,10 +116979,21 @@ static int js_promise_resolvefn_step(JSContext *ctx, void *st, JSValue cb_result
         DCHECK(JS_IsUndefined(m->cb[0]) && JS_IsUndefined(m->cb[1]),
                "the thenable fork was reached with step 2.f's operands already on the machine — the sibling's "
                "snapshot is taken AT the ask, so anything owned here is owned by two flows");
-        r = step_fork_run(ctx, &m->hdr, resolution, PRF_THENABLE_OP, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
+        r = step_fork_run(ctx, &m->hdr, resolution, PRF_THENABLE_OP, 3, JS_OUTCOME_REAL_UNSTATED, &arm);
         if (r) return r;
-        if (arm == 0)   /* step 2.i: IsCallable(thenAction) is false — FulfillPromise with the resolution */
+        if (arm == PRF_THENABLE_FULFIL)   /* step 2.i: IsCallable(thenAction) is false — FulfillPromise */
             return js_promise_resolvefn_settle(ctx, s, resolution, false);
+        if (arm == PRF_THENABLE_THROWS) {
+            /* Step 2.g: the `then` read is abrupt, and RejectPromise takes its value now, with no job. What a
+               getter or a Proxy trap threw is unknown, so the reason is derived from the resolution. */
+            JSValue reason = js_concolic_derive(ctx, resolution, "then.throw", JS_UNDEFINED);
+
+            DCHECK(!JS_IsUninitialized(reason), "step 2.g's reason was derived from a resolution that is not unknown");
+            r = js_promise_resolvefn_settle(ctx, s, reason, true);
+            JS_FreeValue(ctx, reason);
+            return r;
+        }
+        DCHECK(arm == PRF_THENABLE_ADOPT, "the thenable fork came back on a completion it did not declare");
         /* THE ADOPT ARM, WHICH ADVANCES A STAGE RATHER THAN ASKING ITS OWN QUESTION HERE. Both asks are over
            the SAME operand and neither is ever outstanding while the other is, which is the condition under
            which two asks may share a stage — and sharing one would still be wrong, for the reason

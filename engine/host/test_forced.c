@@ -13601,8 +13601,20 @@ TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
     fold_row(&abstag_tt, &abstag_why, emitted_record_graded_has(js, "/api/abstag", "derived", "atRAN"),
              "no derived /api/abstag record — Object.prototype.toString's own @@toStringTag read over an unknown "
              "whose session value is undefined forced the session's arm, though that algorithm never throws there");
+    /* §27.5.1.3 resolveSteps over an example-free unknown forks three ways; the row reads step 2.g's arm, the
+       abrupt `then` read that rejects at once. Its rejection reaction runs before the later microtask turns
+       `trNOW` into `trJOB`, which an adoption's rejection (a job later) does not. The ask is counted first. */
+    const char *thenrej_why = NULL; int thenrej_tt = 1;
+
+    fold_row(&thenrej_tt, &thenrej_why, !!strstr(js, "27.5.1.3 resolution is a thenable"),
+             "NOT ASKED: the fork table names no §27.5.1.3 thenable ask, so the unknown resolution never reached "
+             "PRF_THENABLE (an example or member_never_callable settled it at the head)");
+    fold_row(&thenrej_tt, &thenrej_why, param_value_is(js, "/api/tnrej", "w", "trNOW"),
+             "no /api/tnrej record carries `trNOW` — no arm rejected at resolve time, so §27.5.1.3 step 2.g's "
+             "abrupt `then` read is missing from the thenable fork's partition");
     const Probe rows[] = {
         { "absent-arm", absarm_tt, "__tfAbsentGate", SESS_EXPLORE, absarm_why },
+        { "then-throws", thenrej_tt, "/api/tnrej", SESS_EXPLORE, thenrej_why },
         { "absent-optchain", absopt_tt, "__tfMaybe", SESS_EXPLORE, absopt_why },
         { "absent-totag", abstag_tt, "__tfAbsTag", SESS_EXPLORE, abstag_why },
         { "absent-key-slot", abskey_tt, "__tfAbsentKey", SESS_EXPLORE, abskey_why },
