@@ -2086,8 +2086,14 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
  * `covering`, when non-NULL, receives the weakest arm among the covering rows (written only when the answer
  * is 1). Deciding to push a row needs the bit; deciding that an arm exists needs the arm, and a second producer's
  * row (an answer commitment) can cover a delivery. Several received rows may cover one vector, so the answer is
- * the weakest of them rather than the first match, which would depend on push order. */
-static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec, FlowCommitArm *covering)
+ * the weakest of them rather than the first match, which would depend on push order.
+ *
+ * `need_arm` asks whether a commitment that has an other side is implied. A row with no arm (a root world heard
+ * from while its sender carried no mark) does not imply one: a root world's flow can take a mark later without
+ * forking (a cold-resumed replay re-pins as it runs under a fresh root), and its marked delivery owes the
+ * timeline that never received it, so only the arm-free commitment that row states is covered. */
+static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec, bool need_arm,
+                                  FlowCommitArm *covering)
 {
     int n = flow_world_commits(f), i, implied = 0;
     FlowCommitArm arm = FLOW_COMMIT_ARM_DELIVERY_FORK;
@@ -2106,27 +2112,22 @@ static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec
                "read as received would suppress the arm for a world this timeline never heard from");
         rel = world_vec_relate(vec, c);
         if (JS_VALUE_GET_INT(tv) && (rel == WORLD_REL_SAME || rel == WORLD_REL_ANCESTOR)) {
-            /* The covering arm is read only for a caller that asked, and that scope is what makes the assert
-               below true. A root sending world's row carries no arm (deliver_fork_arm declines to mint where
-               there is no branch) and covers itself: a second message from one root is WORLD_REL_SAME against
-               it, so demanding an arm on every covering row would abort an ordinary repeated delivery. The one
-               caller that wants the arm, deliver_fork_arm, has already returned for a root before it asks. */
-            if (covering) {
-                JSValue av = JS_GetPropertyUint32(ctx, e, 2);
-                FlowCommitArm row_arm;
+            JSValue av = JS_GetPropertyUint32(ctx, e, 2);
+            FlowCommitArm row_arm;
 
-                DCHECK(JS_VALUE_GET_TAG(av) == JS_TAG_INT,
-                       "a delivery-world commitment covering an arriving world carried no small-integer minting "
-                       "mechanism — the covering row says whether an arm for this world already exists");
-                row_arm = (FlowCommitArm)JS_VALUE_GET_INT(av);
-                JS_FreeValue(ctx, av);
-                DCHECK(row_arm != FLOW_COMMIT_ARM_NONE,
-                       "a received commitment covering an arriving sending world states no flow on the other side of "
-                       "its branch, while the arriving world names a fork point — a NONE row must come from "
-                       "world_vec_fork_point declining a root, and the caller has already returned for a root");
+            DCHECK(JS_VALUE_GET_TAG(av) == JS_TAG_INT,
+                   "a delivery-world commitment covering an arriving world carried no small-integer minting "
+                   "mechanism — the covering row says whether an arm for this world already exists");
+            row_arm = (FlowCommitArm)JS_VALUE_GET_INT(av);
+            JS_FreeValue(ctx, av);
+            /* A row with no arm is a root world's, and only that same root can arrive at or above it. */
+            DCHECK(row_arm != FLOW_COMMIT_ARM_NONE || rel == WORLD_REL_SAME,
+                   "a received commitment with no arm is covered by a world above it — an arm-free row is pushed "
+                   "only for a root sending world, which has no ancestor");
+            if (!(need_arm && row_arm == FLOW_COMMIT_ARM_NONE)) {
                 if (row_arm == FLOW_COMMIT_ARM_ANSWER_OWED) arm = FLOW_COMMIT_ARM_ANSWER_OWED;
+                implied = 1;
             }
-            implied = 1;
         }
         JS_FreeCString(ctx, c);
         JS_FreeValue(ctx, cv);
@@ -2492,7 +2493,7 @@ static FlowCommitArm deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec, 
        An implied commitment is covered by the deeper one's arm, whose foreclosure is a subtree containing this
        world, and which mechanism minted that arm is the covering row's statement, not a constant: a
        cross-instance answer also pushes received rows (answer_commit_taken), and its arm is owed, not minted. */
-    if (deliver_commit_implied(ctx, f, vec, &covering)) return covering;
+    if (deliver_commit_implied(ctx, f, vec, true, &covering)) return covering;
     DCHECK(f->frame == NULL,
            "a delivery-time fork was taken by a flow inside a program — flow_step makes deliveries only with no "
            "frame");
@@ -2519,7 +2520,8 @@ static void deliver_commit_taken(JSContext *ctx, Flow *f, const char *vec, FlowC
     /* The same predicate the arm above is minted on, so the row and the arm cannot drift apart: they are the two
        halves of "this timeline has heard from `vec`". `arm` is what the fork above observed about its own run,
        passed down, never re-derived here. */
-    if (!deliver_commit_implied(ctx, f, vec, NULL)) flow_world_commit_push(ctx, f, vec, 1, arm);
+    if (!deliver_commit_implied(ctx, f, vec, arm != FLOW_COMMIT_ARM_NONE, NULL))
+        flow_world_commit_push(ctx, f, vec, 1, arm);
 }
 
 /* The same half for a cross-instance answer: the second producer of a received row, and why flow.h's vocabulary
@@ -2541,7 +2543,7 @@ static void answer_commit_taken(JSContext *ctx, Flow *f, const char *world)
     DCHECK(world != NULL && *world,
            "a cross-instance answer was recorded as a commitment with no answering timeline — a peer's answer names "
            "the world of the flow that ran it");
-    if (!deliver_commit_implied(ctx, f, world, NULL))
+    if (!deliver_commit_implied(ctx, f, world, false, NULL))
         flow_world_commit_push(ctx, f, world, 1, FLOW_COMMIT_ARM_ANSWER_OWED);
 }
 
