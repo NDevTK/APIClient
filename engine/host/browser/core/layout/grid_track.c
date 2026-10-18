@@ -190,8 +190,7 @@ static GridTrack *gt_push(GridAxisSizing *g, CssGridTrackKind kind, double flex,
     t->kind = kind;
     t->flex = flex;
     t->fixed = fixed;
-    t->flex_maxc = css_px(0.0);
-    t->has_items = false;
+    t->growable = false;
     /* §11.4 "Initialize Track Sizes": a fixed sizing function is both the base size and the growth limit; an
        intrinsic min (`auto`, and a bare `<flex>`'s implied `auto`) gives a base size of zero, and an intrinsic
        or flexible max a growth limit of infinity. */
@@ -266,6 +265,8 @@ void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, lxb
     g->items = g->target_index = 0;
     g->tracks = NULL;
     g->ntracks = g->capacity = 0;
+    g->contribs = NULL;
+    g->ncontribs = g->contribs_cap = 0;
     g->avail = css_px(0.0);
     grid_placement_run(container, gt_explicit_count(container, false), gt_explicit_count(container, true),
                        &g->placement);
@@ -288,41 +289,25 @@ void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, lxb
     gt_tracks_init(g);
 }
 
-/* One item's contributions to the track it is in. Columns: §11.5's minimum contribution (in a min-/max-content
-   constraint "limited min-content contribution", which for a track with no fixed max is the min-content
-   contribution) and the max-content contribution. Rows: the one outer size. False is "not yet". */
-static bool gt_contributions_ask(const GridAxisSizing *g, lxb_dom_element_t *item, CssPx *minc, CssPx *maxc)
+/* One item's contributions on the axis. Columns: §11.5's minimum contribution (under a min-/max-content
+   constraint "limited min-content contribution", which for tracks with no fixed max is the min-content
+   contribution) and the min-content and max-content contributions. Rows: the one outer size for all three.
+   False is "not yet". */
+static bool gt_contributions_ask(const GridAxisSizing *g, lxb_dom_element_t *item, GridContribution *out)
 {
     IntrinsicInlineSizes c;
 
     if (g->vertical) {
-        if (!gt_row_contribution_ask(item, minc)) return false;
-        *maxc = *minc;
+        if (!gt_row_contribution_ask(item, &out->minimum)) return false;
+        out->min_content = out->max_content = out->minimum;
         return true;
     }
     if (!intrinsic_inline_sizes_ask(item)) return false;
     c = intrinsic_inline_contributions(item);
-    *minc = g->constraint == GRID_SIZING_AVAILABLE ? gt_minimum_contribution(item, c) : c.min_content;
-    *maxc = c.max_content;
+    out->minimum = g->constraint == GRID_SIZING_AVAILABLE ? gt_minimum_contribution(item, c) : c.min_content;
+    out->min_content = c.min_content;
+    out->max_content = c.max_content;
     return true;
-}
-
-/* §11.5 for one span-1 item in a track with an `auto` minimum: "set its base size to the maximum of its items'
-   minimum contributions, floored at zero". An `auto` maximum's growth limit is "the maximum of the items'
-   max-content contributions" ("auto max track sizing functions are treated the same as max-content"). A
-   flexible track's base size takes the same minimum through §11.5's step for "items crossing flexible tracks"
-   (distributing only to that track), and its items' max-content contributions are kept for §11.7. A fixed
-   track takes nothing from its items. */
-static void gt_fold(GridTrack *t, CssPx minc, CssPx maxc)
-{
-    t->base = css_px_max(t->base, css_px_max(minc, css_px(0.0)));
-    if (t->kind == CSS_GRID_TRACK_AUTO) {
-        t->growth = t->has_items ? css_px_max(t->growth, maxc) : maxc;
-        t->growth_inf = false;
-    } else {
-        t->flex_maxc = t->has_items ? css_px_max(t->flex_maxc, maxc) : maxc;
-    }
-    t->has_items = true;
 }
 
 static CssPx gt_sum(const GridAxisSizing *g)
@@ -372,6 +357,225 @@ static CssPx gt_find_fr(const GridAxisSizing *g, size_t lo, size_t hi, CssPx spa
     return hyp;
 }
 
+/* Whether the item spans a track with a flexible sizing function. */
+static bool gt_crosses_flex(const GridAxisSizing *g, const GridContribution *c)
+{
+    size_t t;
+
+    for (t = c->start; t < c->start + c->span; t++)
+        if (g->tracks[t].kind == CSS_GRID_TRACK_FLEX) return true;
+    return false;
+}
+
+/* Which of a track's two sizes a distribution grows, and which contribution it accommodates. */
+typedef enum { GT_BASE = 0, GT_GROWTH } GtSize;
+typedef enum { GT_MINIMUM = 0, GT_MIN_CONTENT, GT_MAX_CONTENT } GtKind;
+/* Which tracks a sub-step affects: an intrinsic (`auto`) min or max, every flexible track, or none. */
+typedef enum { GT_AFFECT_AUTO = 0, GT_AFFECT_FLEX } GtAffect;
+
+static CssPx gt_contribution(const GridContribution *c, GtKind k)
+{
+    return k == GT_MINIMUM ? c->minimum : k == GT_MIN_CONTENT ? c->min_content : c->max_content;
+}
+
+/* §11.5.1's affected size: "(For infinite growth limits, substitute the track's base size.)" */
+static CssPx gt_affected_size(const GridTrack *t, GtSize which)
+{
+    return which == GT_BASE || t->growth_inf ? t->base : t->growth;
+}
+
+/* §11.5.1's limit: for base sizes "the limit is its growth limit"; for growth limits "the growth limit if the
+   growth limit is finite and the track is not infinitely growable … and infinity otherwise". False is
+   infinity. */
+static bool gt_limit(const GridTrack *t, GtSize which, CssPx *out)
+{
+    if (t->growth_inf || (which == GT_GROWTH && t->growable)) return false;
+    *out = t->growth;
+    return true;
+}
+
+/* §11.5.1's "distributing the space equally among these tracks, freezing a track's item-incurred increase as
+   its affected size + item-incurred increase reaches its limit (and continuing to grow the unfrozen tracks as
+   needed)" over the tracks `set`, into `inc`; `limited` false is the step "beyond limits". Answers the space
+   left. */
+static CssPx gt_share(const GridAxisSizing *g, const size_t *set, size_t n, GtSize which, bool limited, CssPx *inc,
+                      CssPx space)
+{
+    bool froze = true;
+    size_t i;
+
+    while (froze && space.px > 0.0) {
+        size_t unfrozen = 0;
+        CssPx share;
+
+        froze = false;
+        for (i = 0; i < n; i++) {
+            const GridTrack *t = &g->tracks[set[i]];
+            CssPx lim;
+
+            if (!limited || !gt_limit(t, which, &lim) ||
+                css_px_add(gt_affected_size(t, which), inc[set[i]]).px < lim.px)
+                unfrozen++;
+        }
+        if (unfrozen == 0) break;
+        share = css_px_scale(space, 1.0 / (double)unfrozen);
+        for (i = 0; i < n; i++) {
+            const GridTrack *t = &g->tracks[set[i]];
+            CssPx lim, d = share;
+
+            if (limited && gt_limit(t, which, &lim)) {
+                CssPx room = css_px_sub(lim, css_px_add(gt_affected_size(t, which), inc[set[i]]));
+
+                if (room.px <= 0.0) continue;
+                if (room.px < share.px) { d = room; froze = true; }
+            }
+            inc[set[i]] = css_px_add(inc[set[i]], d);
+            space = css_px_sub(space, d);
+        }
+    }
+    return space;
+}
+
+/* §11.5.1 "Distributing Extra Space Across Spanned Tracks" for one sub-step of §11.5 over the items `group`
+   selects: span `span` among those crossing no flexible track, or (`span` 0) every item crossing one, in which
+   case only flexible tracks are affected and the space goes "according to the ratios of their flexible sizing
+   functions rather than distributing space equally; and if the sum is less than one, distributing that
+   proportion of space according to the ratios of their flexible sizing functions and the rest equally". */
+static void gt_distribute(GridAxisSizing *g, size_t span, GtAffect affect, GtSize which, GtKind kind, bool mark)
+{
+    CssPx *planned = calloc(g->ntracks ? g->ntracks : 1, sizeof *planned);
+    CssPx *inc = calloc(g->ntracks ? g->ntracks : 1, sizeof *inc);
+    bool *touched = calloc(g->ntracks ? g->ntracks : 1, sizeof *touched);
+    size_t *aff = calloc(g->ntracks ? g->ntracks : 1, sizeof *aff), *rest = calloc(g->ntracks ? g->ntracks : 1, sizeof *rest);
+    size_t i, t;
+
+    CHECK(planned && inc && touched && aff && rest, "css-grid-1 §11.5.1: out of memory distributing extra space");
+    for (i = 0; i < g->ncontribs; i++) {
+        const GridContribution *c = &g->contribs[i];
+        bool flex = gt_crosses_flex(g, c);
+        size_t na = 0, nr = 0, end = c->start + c->span;
+        CssPx space = gt_contribution(c, kind);
+
+        if (span == 0 ? !flex : (flex || c->span != span)) continue;
+        for (t = c->start; t < end; t++) {
+            const GridTrack *tr = &g->tracks[t];
+            bool affected = affect == GT_AFFECT_FLEX ? tr->kind == CSS_GRID_TRACK_FLEX : tr->kind == CSS_GRID_TRACK_AUTO;
+
+            /* "Subtract the affected size of every spanned track (not just the affected tracks) from the item's
+               size contribution, flooring it at zero." */
+            space = css_px_sub(space, gt_affected_size(tr, which));
+            inc[t] = css_px(0.0);
+            if (affected) aff[na++] = t;
+            else rest[nr++] = t;
+        }
+        space = css_px_max(space, css_px(0.0));
+        if (na == 0) continue;
+        if (affect == GT_AFFECT_FLEX) {
+            double sum = 0.0;
+
+            for (t = 0; t < na; t++) sum += g->tracks[aff[t]].flex;
+            if (sum > 0.0) {
+                double portion = sum < 1.0 ? sum : 1.0;
+
+                for (t = 0; t < na; t++)
+                    inc[aff[t]] = css_px_scale(space, portion * g->tracks[aff[t]].flex / sum);
+                space = css_px_scale(space, 1.0 - portion);
+            }
+            space = gt_share(g, aff, na, which, false, inc, space);
+        } else {
+            space = gt_share(g, aff, na, which, true, inc, space);
+            /* "If space remains at this point, and the item spans both affected tracks and non-affected tracks,
+               distribute space as for the previous step, but into the non-affected tracks instead." */
+            if (space.px > 0.0 && nr > 0) space = gt_share(g, rest, nr, which, true, inc, space);
+            /* "Distribute space beyond limits": to an affected track with an intrinsic (here `auto`, which is also
+               the max-content kind) max, which every affected track here has. */
+            if (space.px > 0.0) space = gt_share(g, aff, na, which, false, inc, space);
+        }
+        /* "For each affected track, if the track's item-incurred increase is larger than the track's planned
+           increase set the track's planned increase to that value." */
+        for (t = 0; t < na; t++) {
+            if (!touched[aff[t]] || inc[aff[t]].px > planned[aff[t]].px) planned[aff[t]] = inc[aff[t]];
+            touched[aff[t]] = true;
+        }
+    }
+    /* "Update the tracks' affected sizes by adding in the planned increase … (If the affected size is an
+       infinite growth limit, set it to the track's base size plus the planned increase.)" */
+    for (t = 0; t < g->ntracks; t++) {
+        GridTrack *tr = &g->tracks[t];
+
+        if (!touched[t]) continue;
+        if (which == GT_BASE) {
+            tr->base = css_px_add(tr->base, planned[t]);
+        } else if (tr->growth_inf) {
+            tr->growth = css_px_add(tr->base, planned[t]);
+            tr->growth_inf = false;
+            /* "Mark any tracks whose growth limit changed from infinite to finite in this step as infinitely
+               growable for the next step." */
+            if (mark) tr->growable = true;
+        } else {
+            tr->growth = css_px_add(tr->growth, planned[t]);
+        }
+    }
+    free(planned);
+    free(inc);
+    free(touched);
+    free(aff);
+    free(rest);
+}
+
+/* "If the track's growth limit is now less than its base size, increase the growth limit to match." */
+static void gt_growth_floor(GridAxisSizing *g)
+{
+    size_t t;
+
+    for (t = 0; t < g->ntracks; t++)
+        if (!g->tracks[t].growth_inf) g->tracks[t].growth = css_px_max(g->tracks[t].growth, g->tracks[t].base);
+}
+
+/* §11.5 "Resolve Intrinsic Track Sizes" over the recorded contributions. */
+static void gt_resolve_intrinsic(GridAxisSizing *g)
+{
+    size_t i, span, max_span = 1, t;
+
+    /* "Size tracks to fit non-spanning items: For each track with an intrinsic track sizing function and not a
+       flexible sizing function, consider the items in it with a span of 1": the base size takes the largest
+       minimum contribution (under a min-/max-content constraint, the largest limited min-content
+       contribution), "floored at zero", and an `auto` max (treated as max-content) the largest max-content
+       contribution. */
+    for (i = 0; i < g->ncontribs; i++) {
+        const GridContribution *c = &g->contribs[i];
+        GridTrack *tr;
+
+        if (c->span > max_span) max_span = c->span;
+        if (c->span != 1) continue;
+        tr = &g->tracks[c->start];
+        if (tr->kind != CSS_GRID_TRACK_AUTO) continue;
+        tr->base = css_px_max(tr->base, css_px_max(c->minimum, css_px(0.0)));
+        tr->growth = tr->growth_inf ? c->max_content : css_px_max(tr->growth, c->max_content);
+        tr->growth_inf = false;
+    }
+    gt_growth_floor(g);
+    /* "Increase sizes to accommodate spanning items crossing content-sized tracks: Next, consider the items with a
+       span of 2 that do not span a track with a flexible sizing function", then each greater span. Every track
+       with an intrinsic sizing function here is `auto`, which is the min of every sub-step's set and the max of
+       both maximum sub-steps; the content-based minimums sub-step affects no track. */
+    for (span = 2; span <= max_span; span++) {
+        gt_distribute(g, span, GT_AFFECT_AUTO, GT_BASE, GT_MINIMUM, false);
+        if (g->constraint == GRID_SIZING_MAX_CONTENT) gt_distribute(g, span, GT_AFFECT_AUTO, GT_BASE, GT_MAX_CONTENT, false);
+        gt_growth_floor(g);
+        gt_distribute(g, span, GT_AFFECT_AUTO, GT_GROWTH, GT_MIN_CONTENT, true);
+        gt_distribute(g, span, GT_AFFECT_AUTO, GT_GROWTH, GT_MAX_CONTENT, false);
+        for (t = 0; t < g->ntracks; t++) g->tracks[t].growable = false;
+    }
+    /* "Increase sizes to accommodate spanning items crossing flexible tracks: Next, repeat the previous step
+       instead considering (together, rather than grouped by span size) all items that do span a track with a
+       flexible sizing function while distributing space only to flexible tracks". A flexible track's min is
+       `auto` and its max is neither intrinsic nor max-content, so only the minimum sub-steps affect it. */
+    gt_distribute(g, 0, GT_AFFECT_FLEX, GT_BASE, GT_MINIMUM, false);
+    if (g->constraint == GRID_SIZING_MAX_CONTENT) gt_distribute(g, 0, GT_AFFECT_FLEX, GT_BASE, GT_MAX_CONTENT, false);
+    gt_growth_floor(g);
+}
+
 /* §11.5's last sentence through §11.8, once every item is folded. */
 static void gt_size(GridAxisSizing *g)
 {
@@ -380,6 +584,7 @@ static void gt_size(GridAxisSizing *g)
     size_t i, nauto = 0;
     CssKeyword content;
 
+    gt_resolve_intrinsic(g);
     for (i = 0; i < g->ntracks; i++) {
         GridTrack *t = &g->tracks[i];
 
@@ -433,14 +638,18 @@ static void gt_size(GridAxisSizing *g)
                For each flexible track, if the flexible track's flex factor is greater than one, the result of
                dividing the track's base size by its flex factor; otherwise, the track's base size. For each grid
                item that crosses a flexible track, the result of finding the size of an fr using all the grid
-               tracks that the item crosses and a space to fill of the item's max-content contribution." Every
-               item spans one track, and the largest contribution in a track gives that track's largest result. */
+               tracks that the item crosses and a space to fill of the item's max-content contribution." */
             for (i = 0; i < g->ntracks; i++) {
                 const GridTrack *t = &g->tracks[i];
 
                 if (t->kind != CSS_GRID_TRACK_FLEX) continue;
                 fraction = css_px_max(fraction, t->flex > 1.0 ? css_px_scale(t->base, 1.0 / t->flex) : t->base);
-                if (t->has_items) fraction = css_px_max(fraction, gt_find_fr(g, i, i + 1, t->flex_maxc));
+            }
+            for (i = 0; i < g->ncontribs; i++) {
+                const GridContribution *c = &g->contribs[i];
+
+                if (gt_crosses_flex(g, c))
+                    fraction = css_px_max(fraction, gt_find_fr(g, c->start, c->start + c->span, c->max_content));
             }
         }
         /* "For each flexible track, if the product of the used flex fraction and the track's flex factor is
@@ -500,18 +709,31 @@ bool grid_axis_sizing_step(GridAxisSizing *g)
     item = grid_item_of(g->container, g->cursor);
     if (item != NULL) {
         GridCell cell;
+        GridContribution rec;
         size_t t;
+        bool sized_by_items = false;
 
         DCHECK(g->items < g->placement.n, "a grid axis met more items than its placement placed");
         cell = g->placement.cells[g->items];
-        t = g->vertical ? cell.row : cell.col;
-        DCHECK(t < g->ntracks, "a grid item was placed in a track the axis does not have");
-        if (g->tracks[t].kind != CSS_GRID_TRACK_BREADTH) {
-            CssPx minc, maxc;
-
+        rec.start = g->vertical ? cell.row : cell.col;
+        rec.span = g->vertical ? cell.rows : cell.cols;
+        DCHECK(rec.span >= 1 && rec.start + rec.span <= g->ntracks,
+               "a grid item was placed across tracks the axis does not have");
+        for (t = rec.start; t < rec.start + rec.span; t++)
+            if (g->tracks[t].kind != CSS_GRID_TRACK_BREADTH) sized_by_items = true;
+        /* A fixed track takes nothing from its items, so an item spanning only fixed tracks is not measured. */
+        if (sized_by_items) {
             /* The one step that can stop: the item's measurement under a resting drive. The cursor stays. */
-            if (!gt_contributions_ask(g, item, &minc, &maxc)) return false;
-            gt_fold(&g->tracks[t], minc, maxc);
+            if (!gt_contributions_ask(g, item, &rec)) return false;
+            if (g->ncontribs == g->contribs_cap) {
+                size_t cap = g->contribs_cap ? 2 * g->contribs_cap : 8;
+                GridContribution *grown = realloc(g->contribs, cap * sizeof *grown);
+
+                CHECK(grown != NULL, "css-grid-1 §11.5: out of memory recording item contributions");
+                g->contribs = grown;
+                g->contribs_cap = cap;
+            }
+            g->contribs[g->ncontribs++] = rec;
         }
         if (item == g->target) {
             g->found = true;
@@ -535,6 +757,9 @@ void grid_axis_sizing_end(GridAxisSizing *g)
     free(g->tracks);
     g->tracks = NULL;
     g->ntracks = g->capacity = 0;
+    free(g->contribs);
+    g->contribs = NULL;
+    g->ncontribs = g->contribs_cap = 0;
     grid_placement_free(&g->placement);
 }
 
@@ -562,11 +787,25 @@ static void gt_run_drive(GridAxisSizing *g, lxb_dom_element_t *container, lxb_do
     layout_job_drive_end(&d);
 }
 
-/* The track the target is in, on the run's axis. */
-static size_t gt_target_track(const GridAxisSizing *g)
+/* The first track of the target's area and the number it spans, on the run's axis. */
+static size_t gt_target_track(const GridAxisSizing *g, size_t *span)
 {
+    const GridCell *c;
+
     DCHECK(g->found, "a grid item's track was read from a run that never reached the item");
-    return g->vertical ? g->placement.cells[g->target_index].row : g->placement.cells[g->target_index].col;
+    c = &g->placement.cells[g->target_index];
+    *span = g->vertical ? c->rows : c->cols;
+    return g->vertical ? c->row : c->col;
+}
+
+/* The target's area's extent on the run's axis: the sum of the tracks it spans. */
+static CssPx gt_target_extent(const GridAxisSizing *g)
+{
+    size_t span, t, start = gt_target_track(g, &span);
+    CssPx s = css_px(0.0);
+
+    for (t = start; t < start + span; t++) s = css_px_add(s, g->tracks[t].base);
+    return s;
 }
 
 void grid_track_placement(lxb_dom_element_t *container, GridPlacement *out)
@@ -591,7 +830,7 @@ CssPx grid_item_area_inline_size(lxb_dom_element_t *container, lxb_dom_element_t
 
     DCHECK(item != NULL, "a grid area's inline size was asked for no item");
     gt_run_drive(&g, container, item, false);
-    w = g.tracks[gt_target_track(&g)].base;
+    w = gt_target_extent(&g);
     grid_axis_sizing_end(&g);
     return w;
 }
@@ -603,7 +842,7 @@ CssPx grid_item_area_block_size(lxb_dom_element_t *container, lxb_dom_element_t 
 
     DCHECK(item != NULL, "a grid area's block size was asked for no item");
     gt_run_drive(&g, container, item, true);
-    h = g.tracks[gt_target_track(&g)].base;
+    h = gt_target_extent(&g);
     grid_axis_sizing_end(&g);
     return h;
 }
@@ -630,7 +869,7 @@ static void gt_require_unmoved_tracks(const GridAxisSizing *g)
 static CssPx gt_target_offset(const GridAxisSizing *g)
 {
     CssPx o = css_px(0.0);
-    size_t i, t = gt_target_track(g);
+    size_t span, i, t = gt_target_track(g, &span);
 
     for (i = 0; i < t; i++) o = css_px_add(o, g->tracks[i].base);
     return o;
@@ -682,17 +921,23 @@ bool grid_item_track_min_is_auto(lxb_dom_element_t *container, lxb_dom_element_t
 {
     CssGridTrackList list;
     GridPlacement p;
-    size_t k = gt_item_index(container, item), t;
-    bool any, autoish;
+    size_t k = gt_item_index(container, item), start, span, t;
+    bool any, autoish = false, flex = false;
 
-    grid_placement_run(container, gt_explicit_count(container, false), gt_explicit_count(container, true), &p);
-    DCHECK(k < p.n, "a grid item's track was asked for an item its container's placement did not place");
-    t = vertical ? p.cells[k].row : p.cells[k].col;
+    grid_track_placement(container, &p);
+    DCHECK(k < p.n, "a grid item's tracks were asked for an item its container's placement did not place");
+    start = vertical ? p.cells[k].row : p.cells[k].col;
+    span = vertical ? p.cells[k].rows : p.cells[k].cols;
     grid_placement_free(&p);
     any = css_computed_grid_track_list(container, vertical ? "grid-template-rows" : "grid-template-columns", &list);
-    autoish = !any || t >= list.n || list.tracks[t].kind != CSS_GRID_TRACK_BREADTH;
+    for (t = start; t < start + span; t++) {
+        CssGridTrackKind kind = any && t < list.n ? list.tracks[t].kind : CSS_GRID_TRACK_AUTO;
+
+        if (kind != CSS_GRID_TRACK_BREADTH) autoish = true;
+        if (kind == CSS_GRID_TRACK_FLEX) flex = true;
+    }
     css_grid_track_list_free(&list);
-    return autoish;
+    return autoish && !(span > 1 && flex);
 }
 
 CssPx grid_item_content_size_suggestion_inline(lxb_dom_element_t *container, lxb_dom_element_t *item)

@@ -37,18 +37,26 @@ typedef enum {
 
 /* One track. `kind` and `flex` are its sizing function (css_grid_track_list.h); `fixed` its resolved length
    for a fixed one. `base` and `growth` are §11.4's base size and growth limit, `growth_inf` while the limit is
-   infinite. `flex_maxc` is the largest max-content contribution among a flexible track's items, which §11.7's
-   indefinite case reads. */
+   infinite; `growable` is §11.5's "infinitely growable" mark, held between two of its steps. */
 typedef struct {
     CssGridTrackKind kind;
     double           flex;
-    CssPx            fixed, base, growth, flex_maxc;
-    bool             growth_inf, has_items;
+    CssPx            fixed, base, growth;
+    bool             growth_inf, growable;
 } GridTrack;
 
-/* One run of §11.3 over one axis of `container`. `placement` is §8.5's cell for every item (owned). `target`
-   is the item whose track is wanted, or NULL; `target_index` its item number once `found`. `tracks` is owned,
-   the explicit tracks then the implicit ones; both are released by `grid_axis_sizing_end`. */
+/* One item's §11.5 contributions on the axis, over the `span` tracks from `start`: its minimum contribution
+   (under a min-/max-content constraint, its limited min-content contribution), and its min-content and
+   max-content contributions. */
+typedef struct {
+    size_t start, span;
+    CssPx  minimum, min_content, max_content;
+} GridContribution;
+
+/* One run of §11.3 over one axis of `container`. `placement` is §8.5's area for every item. `target` is the
+   item whose tracks are wanted, or NULL; `target_index` its item number once `found`. `tracks` holds the
+   explicit tracks then the implicit ones, `contribs` the items that span a track with an intrinsic or flexible
+   sizing function. All three are owned and released by `grid_axis_sizing_end`. */
 typedef struct {
     lxb_dom_element_t   *container, *target;
     bool                 vertical;
@@ -59,6 +67,8 @@ typedef struct {
     size_t               items, target_index;
     GridTrack           *tracks;
     size_t               ntracks, capacity;
+    GridContribution    *contribs;
+    size_t               ncontribs, contribs_cap;
     CssPx                avail;
 } GridAxisSizing;
 
@@ -79,10 +89,10 @@ void grid_axis_sizing_end(GridAxisSizing *g);
 void grid_track_placement(lxb_dom_element_t *container, GridPlacement *out);
 /* Whether `container`'s columns can be sized in this activation: every step run, false at the first "not yet". */
 bool grid_track_columns_ask(lxb_dom_element_t *container);
-/* The inline size of `item`'s grid area in `container`, a content-box extent in CSS pixels: the used size of
-   the column it is placed in. `item` must be a grid item of `container`. */
+/* The inline size of `item`'s grid area in `container`, a content-box extent in CSS pixels: the sum of the
+   used sizes of the columns it spans. `item` must be a grid item of `container`. */
 CssPx grid_item_area_inline_size(lxb_dom_element_t *container, lxb_dom_element_t *item);
-/* The block size of `item`'s grid area: the used size of its row. Same contract. */
+/* The block size of `item`'s grid area: the sum of the rows it spans. Same contract. */
 CssPx grid_item_area_block_size(lxb_dom_element_t *container, lxb_dom_element_t *item);
 /* The offset of `item`'s grid area from `container`'s content-box origin, in CSS pixels on each axis. False
    is "not yet". Refuses, by name, a content alignment (css-grid-1 §10.5 "Aligning the Grid") that would move
@@ -96,8 +106,9 @@ bool grid_container_max_content_block_size_ask(lxb_dom_element_t *container, Css
    (min-content constraint)". Content-box extents. False is "not yet". */
 bool grid_container_inline_sizes_ask(lxb_dom_element_t *container, CssPx *min_content, CssPx *max_content);
 
-/* Whether the track `item` is placed in on one axis has an `auto` min track sizing function — §6.6 "Automatic
-   Minimum Size of Grid Items"' second condition, which `auto` and a bare `<flex>` meet and a length does not. */
+/* §6.6 "Automatic Minimum Size of Grid Items"' track conditions for `item` on one axis: it "spans at least one
+   track in that axis whose min track sizing function is auto" (`auto` and a bare `<flex>`, not a length), and
+   "if it spans more than one track in that axis, none of those tracks are flexible". */
 bool grid_item_track_min_is_auto(lxb_dom_element_t *container, lxb_dom_element_t *item, bool vertical);
 /* css-grid-1 §6.6's content size suggestion for `item`'s width: its min-content size, clamped by a definite
    `max-width`, as a content-box extent in CSS pixels. `item` must be a grid item of `container` and not a

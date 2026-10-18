@@ -2,10 +2,11 @@
  * the grid-row-start, grid-column-start, grid-row-end, and grid-column-end properties", §8.4 "Placement
  * Shorthands: the grid-column, grid-row, and grid-area properties" and §8.5 "Grid Item Placement Algorithm" in
  * `grid-auto-flow: row` with sparse packing. core/layout/grid_track.h sizes the tracks the cells are in. */
-/* Named residual. Not covered: spans of more than one track, named lines and areas (`<custom-ident>`), lines
- * before the explicit grid, and a placement shorthand declared beside one of its own longhands, each refused
- * by name. Next diff builds: spans of N tracks, with §11.5's distribution of extra space across spanned tracks.
- * How its absence would show: a page's grid aborting at grid_placement.c's refusal of a span. */
+/* Named residual. Not covered: named lines and areas (`<custom-ident>`), lines before the explicit grid, a
+ * row-locked item past the implicit grid's columns, and a placement shorthand declared beside one of its own
+ * longhands, each refused by name. Next diff builds: named lines, from `grid-template-columns`' and
+ * `grid-template-rows`' `[<custom-ident>*]`. How its absence would show: a page's grid aborting at
+ * grid_placement.c's refusal of a `<custom-ident>`. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_GRID_PLACEMENT_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_GRID_PLACEMENT_H
 
@@ -16,9 +17,10 @@
 
 #include "core/layout/box_tree.h"
 
-/* One item's cell, as zero-based track indices. */
+/* One item's grid area: its start row and column as zero-based track indices, and the number of rows and
+   columns it spans, each at least one. */
 typedef struct {
-    size_t row, col;
+    size_t row, col, rows, cols;
 } GridCell;
 
 /* Every item's cell, in order-modified document order; `columns` and `rows` count the implicit grid's tracks,
