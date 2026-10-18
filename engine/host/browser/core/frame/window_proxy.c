@@ -2858,6 +2858,7 @@ static const JSClassExoticMethods PROXY_EXOTIC = {
     .get_prototype = proxy_get_prototype,
     .prevent_extensions = proxy_prevent_extensions,
     .get_own_property_no_user_code = true,
+    .get_prototype_walkable = true,   /* W's own prototype or null: a chain that ends */
     .forwarded_object = proxy_forwarded_object,
 };
 

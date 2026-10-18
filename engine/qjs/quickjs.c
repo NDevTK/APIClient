@@ -13241,16 +13241,16 @@ static const JSClassExoticMethods *js_exotic_getproto(JSRuntime *rt, JSObject *p
 /* The next link of an ordinary lookup walk. 10.1.8.1 OrdinaryGet step 2.a, 10.1.9.2 OrdinarySetWithOwnDescriptor
    step 1.a and 10.1.7.1 OrdinaryHasProperty step 3 each ask `obj.[[GetPrototypeOf]]()`, which for a class that
    computes its prototype is the class's answer, not the shape link (HTML §7.2.3.1's WindowProxy answers its
-   Window's). Borrowed: the class holds what it answers, which the assert states, and a walk runs nothing between
-   taking a link and reading it. The hook runs no page code (its declaration's contract), so a throw is not an
-   answer any walk could report. */
+   Window's), where the class declares the walk may take it (get_prototype_walkable). Borrowed: the class holds
+   what it answers, which the assert states, and a walk runs nothing between taking a link and reading it. The
+   hook runs no page code (its declaration's contract), so a throw is not an answer any walk could report. */
 static JSObject *js_walk_proto(JSContext *ctx, JSObject *p)
 {
     const JSClassExoticMethods *em = js_exotic_getproto(ctx->rt, p);
     JSValue v;
     JSObject *q;
 
-    if (likely(!em))
+    if (likely(!em) || !em->get_prototype_walkable)
         return p->shape->proto;
     v = em->get_prototype(ctx, JS_MKPTR(JS_TAG_OBJECT, p));
     CHECK(!JS_IsException(v),
@@ -13694,8 +13694,8 @@ static JSValueConst JS_GetPrototypePrimitive(JSContext *ctx, JSValueConst val)
    exotic hook is consulted here: a class may COMPUTE its answer (JSClassExoticMethods.get_prototype), in which
    case the shape's link is not what the internal method returns and for HTML §7.2.3's WindowProxy is not even
    an object of the right document.
-   The ordinary property walks ask the same hook through js_walk_proto, so a class that computes its prototype
-   is answered one way by every route. */
+   The ordinary property walks ask the same hook through js_walk_proto for a class that declares
+   get_prototype_walkable, so such a class is answered one way by every route. */
 JSValue JS_GetPrototype(JSContext *ctx, JSValueConst obj)
 {
     JSValue val;

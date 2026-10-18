@@ -5265,6 +5265,12 @@ static JSClassExoticMethods g_concolic_exotic = {
     /* The lookup is a slot read of this value's own example and a derivation composed in this file, so it runs
        no page code by construction, which lets the engine's accessor walk and COW slot read run it from C. */
     .get_own_property_no_user_code = true,
+    /* get_prototype_walkable is not declared: each link of a derived chain is a new unknown, so a walk run from C
+       that took it would never end.
+       Named residual. Not covered: an ordinary [[Set]] or accessor walk that misses on an unknown stops there, as
+       at null, and never asks whether an ancestor holds a setter or getter. Next diff builds: that walk's three
+       completions as a fork, as js_instanceof_step declares them. Absence shows as: a write through an unknown's
+       chain landing on the receiver in every flow, with no flow in which an inherited setter runs. */
 };
 
 void concolic_init(JSContext *ctx) {

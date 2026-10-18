@@ -986,6 +986,11 @@ typedef struct JSClassExoticMethods {
        the safe direction — it asserts rather than runs. Web IDL's indexed property getter is the first kind
        by construction: an index lookup has no accessors in it. */
     bool get_own_property_no_user_code;
+    /* Whether an ordinary lookup walk run from C (OrdinaryGet, OrdinarySetWithOwnDescriptor, OrdinaryHasProperty)
+       takes its next link from get_prototype above. A class declares it when its answer is a link whose chain
+       ends, as HTML §7.2.3.1's (the Window's own prototype, or null) does. A class whose answer is a fresh value
+       per ask declares nothing: that chain has no end a C walk can reach, so the walk keeps the stored link. */
+    bool get_prototype_walkable;
     /* THE OBJECT THIS ONE'S KEYED OPERATIONS ARE PERFORMED ON — a class that STANDS IN for another object,
        which is what HTML §7.2.3's same-origin branch makes a WindowProxy: every one of its internal methods
        is `W.[[X]](…)`, so `frame.contentWindow.onunload = f` writes the OTHER document's Window and not the

@@ -413,6 +413,7 @@ static const JSClassExoticMethods RL_EXOTIC = {
     .get_prototype = rl_get_prototype,
     .prevent_extensions = rl_prevent_extensions,
     .get_own_property_no_user_code = true,
+    .get_prototype_walkable = true,   /* always null: a chain that ends */
 };
 
 /* ---- the object, its table, and its lifetime -------------------------------------------------------------- */
