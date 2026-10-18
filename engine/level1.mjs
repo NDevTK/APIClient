@@ -46,7 +46,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createContext } from 'node:vm';
+import { createContext, runInContext } from 'node:vm';
 import { loadZone } from './zone.mjs';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
@@ -803,6 +803,66 @@ async function mintDrive(minted, slices) {
          threw ? String(threw.message || threw) : { why, crashed: ctrl._crashed, run: run && run._run, rows });
   }
   console.log('[level1]   engine account   format ' + fmt + '; ' + invented.length + ' invented replies driven');
+}
+
+/* ─── THE ENGINE'S OTHER TWO ANSWERS: A STEP CODE AND A REQUEST-POLICY VERDICT ──────────────────────────
+   Both are the instance's statements. The step op takes DONE, YIELD and STALLED and refuses any other code
+   before recording anything, so the instance keeps its last account; the policy question takes `allowed` and
+   a refusal naming its directive, and answers any other verdict `refused`, never allowing, without throwing.
+   Each refused instance is marked crashed and its lines compose a crashed run with one `result-refused` row. */
+{
+  const ops = runInContext('_hostOps', ZONE);
+  const pool = runInContext('_pool', ZONE);
+  const account = async () => ({ account: '{"runnable":1,"paid":5,"pulls":4}', workingSetBytes: 65536 });
+  const inst = (o) => Object.assign({ state: 'hot', msg: { sourceUrl: 'https://a.test/' }, lines: [], origin: 'https://a.test',
+                                      _novelty: { spelling: null, n: 0 }, _noveltyCounted: new Map(),
+                                      level1: { runnable: true, paid: 3, pulls: 2, acct: { value: 3, pulls: 2, at: 1 } } }, o);
+  const refusedRun = (e) => {
+    const run = ZONE.linesToAnalysis(e.lines, e.msg, 'crashed', null);
+    return { run: run._run, rows: run.resolverErrors.filter((x) => x.context === 'result-refused').map((x) => x.message) };
+  };
+  for (const code of [0, 2, 3, 1, 4, '2', null, undefined]) {
+    let asked = 0;
+    const e = inst({ r: { renderer: { step: async () => ({ code }), getLevel1Account: async () => { asked++; return account(); } } } });
+    let st, threw = null;
+    try { st = await ops.step(e); } catch (x) { threw = x; }
+    const accepted = code === 0 || code === 2 || code === 3;
+    const r = e._crashed ? refusedRun(e) : null;
+    must(threw === null && (accepted
+           ? st === code && !e._crashed && asked === 1 && e.level1.paid === 5
+           : st === 0 && e._crashed === true && asked === 0 && e.level1.paid === 3 && r.run === 'crashed' &&
+             r.rows.length === 1 && r.rows[0].includes(JSON.stringify(code))),
+         'the step code ' + JSON.stringify(code) + ' is ' + (accepted ? 'taken and the round recorded' :
+           'refused as the instance\'s answer before anything is recorded, and the op answers DONE'),
+         threw ? String(threw.message || threw) : { st, crashed: e._crashed, asked, level1: e.level1, r });
+  }
+  const verdicts = [['allowed', 'allowed', ''], ['blocked\tconnect-src', 'blocked', 'connect-src'],
+                    ['report-only\tdefault-src', 'report-only', 'default-src'], ['allowed\tconnect-src', null],
+                    ['blocked', null], ['blocked\t', null], ['denied\tconnect-src', null], [7, null],
+                    ['blocked\tconnect-src\tx', null]];
+  for (const [raw, verdict, directive] of verdicts) {
+    let asked = 0;
+    const e = inst({ docId: 'policy-doc', joinedDocIds: [],
+                     r: { renderer: { checkRequestPolicy: async () => { asked++; return { verdict: raw }; } } } });
+    pool.push(e);
+    let a, again, threw = null;
+    try {
+      a = await ZONE.engineRequestPolicyVerdict('policy-doc', 'https://a.test/api');
+      again = await ZONE.engineRequestPolicyVerdict('policy-doc', 'https://a.test/api');
+    } catch (x) { threw = x; }
+    pool.splice(pool.indexOf(e), 1);
+    const r = e._crashed ? refusedRun(e) : null;
+    must(threw === null && (verdict !== null
+           ? a.verdict === verdict && a.directive === directive && a.reason === undefined && !e._crashed &&
+             again.verdict === verdict && asked === 2
+           : a.verdict === 'refused' && a.directive === '' && typeof a.reason === 'string' &&
+             a.reason.includes(JSON.stringify(raw)) && e._crashed === true && r.run === 'crashed' &&
+             r.rows.length === 1 && r.rows[0] === a.reason && again.verdict === 'unknown' && asked === 1),
+         'the request-policy verdict ' + JSON.stringify(raw) + ' is ' + (verdict !== null ? 'answered as `' + verdict +
+           '`' : 'answered `refused` with its reason, never as allowing, and the instance is retired and asked nothing more'),
+         threw ? String(threw.message || threw) : { a, again, asked, crashed: e._crashed, r });
+  }
+  console.log('[level1]   engine answers   8 step codes and ' + verdicts.length + ' request-policy verdicts driven');
 }
 
 console.log('[level1] ── verdict ──');

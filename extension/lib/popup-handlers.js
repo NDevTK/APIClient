@@ -445,8 +445,10 @@ async function handlePopupMessage(msg, sender, sendResponse) {
              "SEND_PANEL_POLICY arrived with no documentId or no URL — the Send panel states both");
       const reply = await self.astDispatch({ type: "AST_REQUEST_POLICY", documentId: msg.documentId, url: msg.url });
       DCHECK(reply && reply.success === true && reply.result && typeof reply.result.verdict === "string" &&
-             typeof reply.result.directive === "string",
-             "the host answered a request-policy question with something other than {verdict, directive}");
+             typeof reply.result.directive === "string" &&
+             (reply.result.verdict === "refused") === (typeof reply.result.reason === "string"),
+             "the host answered a request-policy question with something other than {verdict, directive}, " +
+             "and a `reason` exactly on the refused verdict");
       sendResponse(reply.result);
       return;
     }

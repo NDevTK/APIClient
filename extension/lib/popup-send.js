@@ -563,9 +563,12 @@ function renderSendPolicyVerdict(row, url) {
       say("the frame's `" + r.directive + "` would block this request in the page. It is sent anyway, as your act.");
     else if (r.verdict === "report-only")
       say("only a report-only `" + r.directive + "` refuses it, so the page's own request would be sent and reported.");
-    else {
+    else if (r.verdict === "refused") {
+      DCHECK(typeof r.reason === "string", "SEND_PANEL_POLICY refused a verdict and named no reason");
+      say("unknown — the engine instance's answer was refused (" + r.reason + "), and its run reads crashed.");
+    } else {
       DCHECK(r.verdict === "unknown", "SEND_PANEL_POLICY answered the verdict " + JSON.stringify(r.verdict) +
-             ", which is none of allowed, blocked, report-only and unknown");
+             ", which is none of allowed, blocked, report-only, refused and unknown");
       say("unknown — no running engine instance holds this frame's document.");
     }
   });

@@ -3911,8 +3911,12 @@ async function engineUnload(eng, docName, incomingDocName) {
 /* CSP §4.1.2 "Should request be blocked by Content Security Policy?" for a request to `url` the document
    `documentId` would make with the empty destination (a fetch()), answered by the instance holding that
    document (content.mojom.Renderer.CheckRequestPolicy) for its answer alone. Answers {verdict, directive}:
-   `allowed` or `blocked` with the directive that refused it, or `unknown` with "" when no running instance
-   holds the document, so a surface never shows an unasked policy as allowing.
+   `allowed`, or `blocked` or `report-only` with the directive that refused it; `unknown` with "" when no
+   running instance holds the document, so a surface never shows an unasked policy as allowing; or `refused`
+   with "" and the `reason` when the instance's answer is none of its forms. The answer is the instance's
+   statement and so input: it is refused through engineRefuse, which retires the instance, and is never read
+   as allowing. The verdict gates no send (the Send panel shows it beside the person's own act), so a refusal
+   declines nothing.
    Not covered: a document whose instance is booting or parked cold, which answers `unknown`. The next diff
    waits for a booting instance's `_readyP` and resumes a cold one through its recipe. Its absence shows as
    `unknown` for a frame whose document this zone has analysed but is not running now. */
@@ -3920,14 +3924,20 @@ async function engineRequestPolicyVerdict(documentId, url) {
   DCHECK(typeof documentId === "string" && documentId !== "" && typeof url === "string" && URL.canParse(url),
          "a request policy was asked with no document name or an unparseable URL — the Send panel states both");
   const eng = hostHolderOf(documentId);
-  if (eng === null || (eng.state !== "hot" && eng.state !== "fetching")) return { verdict: "unknown", directive: "" };
+  /* A retired instance is asked nothing more, as `step` and engineFinalize ask it nothing. */
+  if (eng === null || eng._crashed || (eng.state !== "hot" && eng.state !== "fetching"))
+    return { verdict: "unknown", directive: "" };
   const r = await eng.r.renderer.checkRequestPolicy({ docId: documentId, url: new URL(url).href, destination: "" });
-  const [verdict, directive] = r.verdict.split("\t");
-  DCHECK((verdict === "allowed" && directive === undefined) ||
-         ((verdict === "blocked" || verdict === "report-only") && typeof directive === "string" && directive !== ""),
-         "CheckRequestPolicy answered " + JSON.stringify(r.verdict) + ", which is not `allowed` or a refusal " +
-         "naming its directive — main.c's qjs_check_request_policy writes one of those");
-  return { verdict, directive: directive === undefined ? "" : directive };
+  const parts = typeof r.verdict === "string" ? r.verdict.split("\t") : null;
+  if (parts !== null && parts.length === 1 && parts[0] === "allowed") return { verdict: "allowed", directive: "" };
+  if (parts !== null && parts.length === 2 && (parts[0] === "blocked" || parts[0] === "report-only") &&
+      parts[1] !== "")
+    return { verdict: parts[0], directive: parts[1] };
+  const why = "CheckRequestPolicy answered " + JSON.stringify(r.verdict) + ", which is neither `allowed` nor " +
+              "`blocked` or `report-only` naming its directive";
+  /* The instance may have a round in flight; it is finalized at its next step, which skips a crashed one. */
+  if (!eng._crashed) engineRefuse(eng, why);
+  return { verdict: "refused", directive: "", reason: why };
 }
 /* The Level-1 ranking's facts (the instance's account and its working set), recorded at the end of every round
    this zone has with an instance (seed, step, service), because an instance behind the frame boundary answers
@@ -5741,12 +5751,12 @@ async function hostSchedule(pool, ops) {
     /* The park flag and the step that reads it stay ordered: both are calls on one renderer's point-to-point
        port, which delivers in order, and this loop makes no other call into that instance between them. */
     const st = await ops.step(target);
-    /* The step code is the engine's own statement, one of three: ENGINE_STEP_DONE (0), ENGINE_STEP_YIELD (2)
-       or ENGINE_STEP_STALLED (3). A yield asks to be outranked and a stall asks to be paid, so they are distinct
-       codes. The codes are enumerated, never defaulted: a fourth value is an ABI change. */
+    /* The step op answers one of three codes: ENGINE_STEP_DONE (0), ENGINE_STEP_YIELD (2) or
+       ENGINE_STEP_STALLED (3). A yield asks to be outranked and a stall asks to be paid, so they are distinct
+       codes. The op refuses any other code the instance states, so a fourth here is the op's own contract. */
     DCHECK(st === 0 || st === 2 || st === 3,
-           "qjs_step answered with a code outside {DONE, YIELD, STALLED} — a fourth value is an ABI that " +
-           "changed under a host still speaking the old one");
+           "the step op answered " + JSON.stringify(st) + ", outside {DONE, YIELD, STALLED} — `step` refuses an " +
+           "instance's other codes through engineRefuse and answers DONE for them");
     // Dev `__forcepark`: request the park only after N dispatches, so it captures mid-exploration residue
     // (recipes with real decision vectors and handler-driven async flows), like a production RAM-pressure park.
     /* Only while there is a session to park: DONE means the step drained the frontier and closed the session,
@@ -6174,6 +6184,14 @@ const _hostOps = {
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "novelty", e); return 0; }
     try { st = (await eng.r.renderer.step()).code; }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "step", e); return 0; }   // crashed instance: finalize it (loud) rather than keep stepping a dead engine
+    /* The code is the instance's statement, one of ENGINE_STEP_DONE (0), ENGINE_STEP_YIELD (2) and
+       ENGINE_STEP_STALLED (3). Any other is refused before anything is recorded from this step, so the instance
+       keeps the facts of its last accepted round and is retired through DONE. */
+    if (st !== 0 && st !== 2 && st !== 3) {
+      engineRefuse(eng, "qjs_step answered the code " + JSON.stringify(st) + ", which is none of DONE (0), " +
+                        "YIELD (2) and STALLED (3)");
+      return 0;
+    }
     /* The round ends here, so the re-rank reads what this step left: the frontier it advanced and the memory it
        grew. A crashed instance is not asked; the branch above hands it to finish(). */
     /* A refused reply retires the instance now, through DONE. */
