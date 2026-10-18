@@ -7,6 +7,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_baseline.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/box_tree.h"
 #include "core/layout/flex_baseline.h"
 #include "core/layout/flex_container_baseline.h"
 #include "core/layout/flex_cross_size.h"
@@ -28,6 +29,55 @@ static lxb_dom_element_t *fcb_element(lxb_dom_element_t *container, const FlexLi
     return lxb_dom_interface_element(m->first);
 }
 
+/* The startmost item of a single-line `column` container: the first in order-modified document order, which
+   orders by `order` and keeps document order within one value. NULL when it has none. */
+static lxb_dom_element_t *fcb_column_startmost(lxb_dom_element_t *container)
+{
+    BoxTreeChild c;
+    lxb_dom_element_t *best = NULL;
+    long best_order = 0;
+    char buf[160];
+
+    for (c = box_tree_first_child(container); box_tree_child_exists(c); c = box_tree_next_sibling(container, c)) {
+        lxb_dom_node_t *node = box_tree_child_node(c);
+        FlexItemChildKind kind = flex_item_child_kind(container, node);
+        long order;
+
+        if (kind == FLEX_ITEM_CHILD_NONE) continue;
+        if (kind == FLEX_ITEM_CHILD_TEXT) {
+            order = 0;
+        } else {
+            order = flex_item_order(lxb_dom_interface_element(node));
+        }
+        if (best != NULL && order >= best_order) continue;
+        if (kind == FLEX_ITEM_CHILD_TEXT)
+            DFAILF("%s: css-flexbox-1 §8.5 takes the container's baseline from §4's anonymous item around its "
+                   "text, whose position core/layout/flex_position.h does not answer. BUILD that item's placement",
+                   box_subject(container, buf, sizeof buf));
+        best = lxb_dom_interface_element(node);
+        best_order = order;
+    }
+    return best;
+}
+
+/* §8.5's cross-axis set: "If the flex container has at least one flex item, the flex container's first/last
+   cross-axis baseline set is generated from the alignment baseline of the startmost/endmost flex item. (If that
+   item has no alignment baseline parallel to the flex container's cross axis, then one is first synthesized
+   from its border edges.)" */
+static bool fcb_cross_axis_ask(lxb_dom_element_t *container, bool *has, CssPx *out)
+{
+    lxb_dom_element_t *item = fcb_column_startmost(container);
+    bool item_has = false;
+    CssPx b = css_px(0.0), x, y;
+
+    *has = item != NULL;
+    if (item == NULL) return true;
+    if (!box_first_baseline_ask(item, &item_has, &b)) return false;
+    flex_position_item_offset(container, item, &x, &y);
+    *out = css_px_add(y, item_has ? b : used_value_border_edge_px(item, true));
+    return true;
+}
+
 bool flex_container_first_baseline_ask(lxb_dom_element_t *container, bool *has, CssPx *out)
 {
     FlexLineMember *m = NULL;
@@ -39,10 +89,7 @@ bool flex_container_first_baseline_ask(lxb_dom_element_t *container, bool *has, 
 
     DCHECK(container != NULL && has != NULL && out != NULL,
            "a flex container's baseline was asked for with no container or nowhere to put it");
-    if (flex_container_main_axis(container) != FLEX_MAIN_AXIS_INLINE)
-        DFAILF("%s is a `column` flex container, whose first cross-axis baseline set css-flexbox-1 §8.5 takes "
-               "\"from the alignment baseline of the startmost/endmost flex item\". BUILD that set",
-               box_subject(container, buf, sizeof buf));
+    if (flex_container_main_axis(container) != FLEX_MAIN_AXIS_INLINE) return fcb_cross_axis_ask(container, has, out);
     n = flex_line_members(container, &m);
     *has = n > 0;
     if (n == 0) return true;

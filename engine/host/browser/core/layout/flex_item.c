@@ -330,3 +330,19 @@ double flex_item_flexibility_factor(lxb_dom_element_t *item, const char *name)
     free(v);
     return n;
 }
+
+long flex_item_order(lxb_dom_element_t *el)
+{
+    char *v = css_computed_value(el, "order"), *endp;
+    long order;
+    char nbuf[160];
+
+    DCHECKF(v != NULL, "%s: the cascade produced no computed `order` — it is in lexbor's registry with an initial "
+                       "value, so the last layer always answers", box_subject(el, nbuf, sizeof nbuf));
+    order = strtol(v, &endp, 10);
+    DCHECKF(endp != v && *endp == '\0',
+            "%s: `order` computed to `%s`, which is not the integer its `Computed value:` line states",
+            box_subject(el, nbuf, sizeof nbuf), v);
+    free(v);
+    return order;
+}

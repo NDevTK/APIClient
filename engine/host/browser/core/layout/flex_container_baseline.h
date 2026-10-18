@@ -1,14 +1,13 @@
-/* css-flexbox-1 §8.5 "Flex Container Baselines": a flex container's first main-axis baseline set, as the
+/* css-flexbox-1 §8.5 "Flex Container Baselines": a flex container's first baseline set, as the
  * alphabetic baseline in `horizontal-tb`. Its readers are the inline formatting context, which aligns an
  * `inline-flex` by its first baseline (css-inline-3 §4.2.1 "Alignment Baseline Source: the baseline-source
  * longhand": `auto` "specifies last-baseline alignment for inline-block, first-baseline alignment for everything
  * else"), a block container's baseline walk, and css-align-3 §9.1's baseline of an item that is itself a flex
  * container (core/layout/box_baseline.h). */
-/* Named residual. Not covered: the cross-axis baseline set of a container whose main axis is its block axis,
- * §4's anonymous item as the item that gives the baseline, an item in last-baseline alignment, and the last
- * baseline set, each refused by name. Next diff builds: the cross-axis set of a `column` container from its
- * startmost item. How its absence would show: an `inline-flex` `column` container aborting at this file's
- * refusal. */
+/* Named residual. Not covered: §4's anonymous item as the item that gives the baseline, an item in
+ * last-baseline alignment, and the last baseline set, each refused by name. Next diff builds: the anonymous
+ * item's placement in core/layout/flex_position.h. How its absence would show: a flex container whose first
+ * item is bare text aborting at this file's refusal. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_CONTAINER_BASELINE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_CONTAINER_BASELINE_H
 

@@ -450,24 +450,6 @@ static void fl_require_horizontal_tb(lxb_dom_element_t *el, const char *what)
            what);
 }
 
-/* css-display-3 §3 "Display Order: the order property"'s ordinal group of an element item: `Computed value:
-   specified integer`. §4's anonymous item is unstyleable, so it takes the `Initial:` 0 at its caller. */
-static long fl_item_order(lxb_dom_element_t *el)
-{
-    char *v = css_computed_value(el, "order"), *endp;
-    long order;
-    char nbuf[160];
-
-    DCHECKF(v != NULL, "%s: the cascade produced no computed `order` — it is in lexbor's registry with an initial "
-                       "value, so the last layer always answers", box_subject(el, nbuf, sizeof nbuf));
-    order = strtol(v, &endp, 10);
-    DCHECKF(endp != v && *endp == '\0',
-            "%s: `order` computed to `%s`, which is not the integer its `Computed value:` line states",
-            box_subject(el, nbuf, sizeof nbuf), v);
-    free(v);
-    return order;
-}
-
 /* §4's item list ("Each in-flow child of a flex container becomes a flex item", text sequences wrapped once
    each), enumerated as core/layout/flex_intrinsic_size.c enumerates it, in document order; `fl_lines_build`
    reorders and breaks it. `out` may be NULL to count only; it is one walk run twice, because classifying a
@@ -534,7 +516,7 @@ static size_t fl_collect(lxb_dom_element_t *container, CssPx inner_main, bool ve
                        box_subject(it.el, nbuf, sizeof nbuf));
             if (out != NULL) {
                 fl_require_horizontal_tb(it.el, "FLEX ITEM");
-                it.order = fl_item_order(it.el);
+                it.order = flex_item_order(it.el);
                 fl_fill(&it, inner_main, fl_measure_element(it.el, vertical), vertical);
             }
             break;

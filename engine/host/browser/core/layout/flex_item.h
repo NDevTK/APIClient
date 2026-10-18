@@ -122,5 +122,9 @@ bool flex_item_is_collapsed(lxb_dom_element_t *item);
    less-than-one sum test). Zero gets no share: §9.7's step 2 freezes such an item. */
 double flex_item_flexibility_factor(lxb_dom_element_t *item, const char *name);
 
+/* css-display-3 §3 "Display Order: the order property"'s ordinal group of element item `item`: `Computed value:
+   specified integer`. §4's anonymous item is unstyleable and takes the `Initial:` 0, at its caller. */
+long flex_item_order(lxb_dom_element_t *item);
+
 
 #endif
