@@ -33,9 +33,20 @@ export function vehicleReading(out, signal, where) {
   let work = null, completed = false, verdict = null, quantum = null, cold = null;
   for (const line of lines) {
     if (line.startsWith("@HWORK ")) { work = JSON.parse(line.slice(7)).workDone; continue; }
-    if (line.startsWith("@RESULT ")) { completed = true; continue; }
+    if (line.startsWith("@RESULT ")) {
+      completed = true;
+      const r = JSON.parse(line.slice(8));
+      if (!r._cold || typeof r._cold !== "object")
+        throw new Error(`${where}: the result document carries no \`_cold\` census — solver/result.c composes ` +
+                        `it into every result, so the composer and this reader disagree`);
+      cold = { census: r._cold, terminal: true };
+      continue;
+    }
     if (line.startsWith("@QUANTUM ")) { if (quantum === null) quantum = line.slice(9); continue; }
-    if (line.startsWith("@COLD {")) { cold = JSON.parse(line.slice(6)); continue; }
+    if (line.startsWith("@COLD {")) {
+      if (!completed) cold = { census: JSON.parse(line.slice(6)), terminal: false };
+      continue;
+    }
     if (line.startsWith("@H ")) {
       const t = probeTables(line, where);
       if (t.length) tables.push({ row: t[0], work, final: completed });
@@ -53,17 +64,19 @@ export function vehicleReading(out, signal, where) {
            crash: crashIdentity(out, signal), quantum, work: coldWork(cold, where) };
 }
 
-/* The work the run retired, read off its last frontier census: every unit the event loop's clock banked
-   under a flow, the units retired with no flow running (discarded), and the part of both that is host work
-   charged in the opcode unit (core/timing/thread_work.h). Null where the run printed no census. */
+/* The work the run retired: every unit the event loop's clock banked under a flow, the units retired with no
+   flow running (discarded), and the part of both that is host work charged in the opcode unit
+   (core/timing/thread_work.h). A completed run's is the result document's own census, taken at completion;
+   an incomplete run's is its last @COLD census, a floor (`terminal` false). Null where there is no census. */
 function coldWork(cold, where) {
   if (cold === null) return null;
+  const c = cold.census;
   for (const k of ["twBankedUnits", "twChargedUnits", "twDiscardedUnits"])
-    if (!Number.isInteger(cold[k]))
-      throw new Error(`${where}: the @COLD census carries no integer \`${k}\` — solver/metrics/cold.def ` +
+    if (!Number.isInteger(c[k]))
+      throw new Error(`${where}: the frontier census carries no integer \`${k}\` — solver/metrics/cold.def ` +
                       `declares it, so the composer and this reader disagree`);
-  const retired = cold.twBankedUnits + cold.twDiscardedUnits;
-  return { retired, charged: cold.twChargedUnits, opcodes: retired - cold.twChargedUnits };
+  const retired = c.twBankedUnits + c.twDiscardedUnits;
+  return { retired, charged: c.twChargedUnits, opcodes: retired - c.twChargedUnits, terminal: cold.terminal };
 }
 
 /* The first statement, in `a`'s order, whose value differs between two tables of one program. */
@@ -74,7 +87,8 @@ function firstDiffering(a, b) {
 }
 
 const workText = (r) => r.work === null ? "no frontier census"
-  : `${r.work.retired} units retired (${r.work.opcodes} opcodes, ${r.work.charged} charged host work)`;
+  : `${r.work.retired} units retired${r.work.terminal ? " at completion" : " by the last census (a floor)"} ` +
+    `(${r.work.opcodes} opcodes, ${r.work.charged} charged host work)`;
 
 /* The comparison of one document's two readings: `{ defect, answered, compared, uncompared, work }`, where
    `defect` is null or the first disagreement, naming the document and the statement, and `answered` says
@@ -134,7 +148,11 @@ export function compareVehicle(doc, nat, veh) {
   } else {
     work = `not yet exact: the hosts slice in different currencies (native ${nat.quantum ?? "no @QUANTUM"}; ` +
            `wasm ${veh.quantum ?? "no @QUANTUM"}), so their paths differ and their work is reported, not ` +
-           `compared; native ${workText(nat)}; wasm ${workText(veh)}`;
+           `compared; native ${workText(nat)}; wasm ${workText(veh)}` +
+           (nat.work !== null && veh.work !== null && nat.work.terminal && veh.work.terminal
+              ? `; at completion they ${nat.work.retired === veh.work.retired ? "are equal"
+                                       : `differ by ${veh.work.retired - nat.work.retired} units (wasm - native)`}`
+              : ``);
   }
   return { defect, answered, compared, uncompared, work };
 }
