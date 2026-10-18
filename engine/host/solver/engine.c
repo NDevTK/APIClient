@@ -9977,6 +9977,10 @@ static int g_reclaim_allowed;
 
 static int engine_reclaim_set(int v) { int prev = g_reclaim_allowed; g_reclaim_allowed = v; return prev; }
 
+/* The flow being switched in, while its delta is applied: not yet the running flow (flow_set_running comes after
+   the apply), and the one member a sale may not take, since its chain is half-installed in the heap. */
+static const Flow *g_reclaim_keep;
+
 static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     Flow *tail;
 
@@ -9998,7 +10002,10 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
            "other runtime");
     /* The running flow cannot go: its decision state is live in decide.c rather than in its blob and its delta is
        applied to the heap, which cold_park_flow and flow_release both refuse. Every other member is a snapshot. */
-    tail = flow_worst(flow_running());
+    DCHECK(!(g_reclaim_keep && flow_running()),
+           "a reclaim found both a flow being switched in and a running flow — a switch-in follows the switch-out, so "
+           "one of them is the flow this allocation is for and the other is stale");
+    tail = flow_worst(g_reclaim_keep ? g_reclaim_keep : flow_running());
     if (!tail) {
         /* The floor, a reading rather than a failure: the frontier held nothing but the flow this allocation is
            for, so the allocator's NULL is the physical answer. Counted apart from the unarmed refusal because the
@@ -10012,7 +10019,7 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
        ask here (solver/reclaim.h), often while growing the running flow's state (its delta's entry array, its DOM
        undo log) with the old buffer in a local, so selling that flow would free the buffer the caller is about to
        write through, a corruption that would look like a COW bug. */
-    DCHECK(tail != flow_running(),
+    DCHECK(tail != flow_running() && tail != g_reclaim_keep,
            "the pager chose the flow the scheduler is switched into — the allocation that asked for this "
            "memory is usually growing that flow's own delta or undo log, so selling it frees the buffer the "
            "caller is holding and is about to write through");
@@ -10595,7 +10602,16 @@ static int engine_sched_slice(void) {
         if (!best) break;
         if (best != cur) {                  /* context switch: swap COW delta + decision + pins */
             if (cur) flow_switch_out(ctx, cur);
-            flow_switch_in(ctx, best);
+            /* The switch-in allocates as it applies `best`'s delta (a slot a sibling deleted is re-created, a DOM
+               node re-attached), and it holds no position in the frontier, only `best`: so the refusal edge is
+               armed across it with `best` kept out of the sale. */
+            {
+                int prev_reclaim = engine_reclaim_set(1);
+                g_reclaim_keep = best;
+                flow_switch_in(ctx, best);
+                g_reclaim_keep = NULL;
+                engine_reclaim_set(prev_reclaim);
+            }
             solve_flow_begin(best);   /* the substitution is live only while its own flow runs */
             /* The member's own record that it was chosen. The switch count below is a fact about the scheduler;
                this is a fact about the member, and tells a flow the ordering never reached from one it reached
