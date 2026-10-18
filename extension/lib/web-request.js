@@ -1,10 +1,17 @@
 // lib/web-request.js — the browser's own record of a page's fetch() and XMLHttpRequest traffic, from
-// chrome.webRequest, and its join to intercept.js's body capture.
+// chrome.webRequest, and its join to intercept.js's capture.
 //
 // The service worker relays every webRequest event of a document's `xmlhttprequest`-type requests here as an
 // `__evt` (background.js). Those events are stamped by the browser, so the request line, the header lists,
-// the request body bytes and the status a record carries cannot be stated by the page. intercept.js, which
-// runs in the page's own realm, supplies only what webRequest cannot: the response body and the call site.
+// the request body bytes and the status a record carries cannot be stated by the page. The record is the
+// observed request: every complete one is filed (lib/response-decode.js's httpRecordFile) but a CORS
+// preflight, which is the browser's own act. intercept.js, which runs in the page's own realm, adds only what
+// webRequest cannot state: the response body the page read, the call site and the request init. A request
+// made from a realm intercept.js does not wrap, such as a fetch taken from another frame's window, has no
+// capture and is filed from the record alone, its response body absent (null, never an empty "").
+
+// A record is filed once: when its capture joins it, and otherwise when its document leaves, since the two
+// halves reach this zone over separate relays and a capture can arrive after the record completes.
 
 // The join key is (documentId, method, URL, ordinal), the ordinal counting that document's requests with that
 // method and URL. webRequest's side is the order of onBeforeRequest, which Chrome delivers in call order
@@ -18,25 +25,30 @@
 // dedicated worker's fetch (stamped with the parent's documentId; intercept.js does not run in the worker),
 // an EventSource connection (type `xmlhttprequest`), a request CSP or mixed content blocks. Next diff
 // builds: intercept.js counting only calls that reach the network, from a fact the browser states. Absence
-// shows as: a capture refused `status-mismatch`, or left waiting, on a page whose worker, service worker or
-// EventSource shares a (method, URL) with its own fetch() calls.
+// shows as: a capture refused `status-mismatch`, or counted `wrapperOnly`, on a page whose worker, service
+// worker or EventSource shares a (method, URL) with its own fetch() calls.
 
 /* documentId -> the document's requests: `next` holds each key's request count in onBeforeRequest order (its
-   next ordinal) and the last requestId counted; `records` the records no capture has taken yet, by key and
-   ordinal; `waiting` the captures whose record is not complete yet, by key and ordinal. A document that left
-   keeps only `{tabId, left: true}`, so a late event or capture of it is told apart from a relay fault; its
-   tab's close deletes that too. */
+   next ordinal) and the last requestId counted; `slots`, by key and ordinal, what each side has delivered of
+   one request: the browser's `record` and the page's `capture`, each null until it arrives. A slot leaves
+   when its request is filed or set aside. A document that left keeps only `{tabId, left: true}`, so a late
+   event or capture of it is told apart from a relay fault; its tab's close deletes that too. */
 var _wrDocs = new Map();
 /* requestId -> the record of a request whose events are still arriving. A redirect reuses the requestId. */
 var _wrById = new Map();
-/* Lifetime counts of how each record and capture ended, by outcome. */
-var webRequestCensus = { joined: 0, statusMismatch: 0, leftUnjoined: 0, leftFailed: 0, leftInFlight: 0,
-                         leftWaiting: 0, eventAfterLeft: 0, captureAfterLeft: 0 };
+/* Lifetime counts. Every record ends in exactly one of `joined` (filed with its capture), `webRequestOnly`
+   (filed with no capture), `preflight` (the browser's CORS-preflight request), `failed`, `leftInFlight` and
+   `unregistered` (complete, in a document that never registered with this zone), so `recorded` is their sum
+   plus the records live now. Of the captures, `wrapperOnly` is one no record matched by the time its
+   document left, and `statusMismatch` and `captureRefused` are refused by name. */
+var webRequestCensus = { recorded: 0, joined: 0, webRequestOnly: 0, preflight: 0, failed: 0, leftInFlight: 0,
+                         unregistered: 0, wrapperOnly: 0, statusMismatch: 0, captureRefused: 0,
+                         captureAfterLeft: 0, eventAfterLeft: 0 };
 
 function _wrDocOf(documentId, tabId) {
   var d = _wrDocs.get(documentId);
   if (d === undefined) {
-    d = { tabId: tabId, left: false, next: new Map(), records: new Map(), waiting: new Map() };
+    d = { tabId: tabId, left: false, next: new Map(), slots: new Map() };
     _wrDocs.set(documentId, d);
   }
   return d;
@@ -44,6 +56,24 @@ function _wrDocOf(documentId, tabId) {
 
 function _wrKey(method, url) {
   return method + " " + url;
+}
+
+/* The slot of `key` and `ordinal` in document `d`, made empty if absent. */
+function _wrSlotOf(d, key, ordinal) {
+  if (!d.slots.has(key)) d.slots.set(key, new Map());
+  var keyS = d.slots.get(key);
+  var slot = keyS.get(ordinal);
+  if (slot === undefined) {
+    slot = { key: key, ordinal: ordinal, record: null, capture: null };
+    keyS.set(ordinal, slot);
+  }
+  return slot;
+}
+
+function _wrSlotDrop(d, slot) {
+  DCHECK(d.slots.get(slot.key).get(slot.ordinal) === slot,
+         "a webRequest slot was dropped from a document that does not hold it — each slot lives in one document");
+  d.slots.get(slot.key).delete(slot.ordinal);
 }
 
 function _wrHeaderMap(list) {
@@ -136,13 +166,15 @@ function webRequestEvent(ev) {
            "capture joins on is this order");
     r = { requestId: ev.requestId, documentId: ev.documentId, tabId: ev.tabId, frameId: ev.frameId,
           method: ev.method, url: ev.url, ordinal: n.count, requestBodyRaw: ev.requestBody, requestHeaders: null,
-          status: null, statusText: null, responseHeaders: null, redirects: [], done: false, failed: null,
-          joined: false };
+          status: null, statusText: null, responseHeaders: null, redirects: [], done: false, failed: null };
     n.count++;
     n.lastRequestId = ev.requestId;
     _wrById.set(ev.requestId, r);
-    if (!d.records.has(key)) d.records.set(key, new Map());
-    d.records.get(key).set(r.ordinal, r);
+    webRequestCensus.recorded++;
+    var slot = _wrSlotOf(d, key, r.ordinal);
+    DCHECK(slot.record === null, "two webRequest records took ordinal " + r.ordinal + " of " + key +
+                                 " — the ordinal is this document's count of the key, taken once per record");
+    slot.record = r;
     return;
   }
   DCHECK(r !== undefined, "a webRequest " + ev.ev + " arrived for request " + ev.requestId + " of a live " +
@@ -162,12 +194,12 @@ function webRequestEvent(ev) {
            "headers its earlier events state");
     r.done = true;
     _wrById.delete(r.requestId);
-    _wrTryJoin(d, r);
+    _wrAdvance(d, d.slots.get(_wrKey(r.method, r.url)).get(r.ordinal));
   } else if (ev.ev === "onErrorOccurred") {
     r.done = true;
     r.failed = ev.error;
     _wrById.delete(r.requestId);
-    _wrTryJoin(d, r);
+    _wrAdvance(d, d.slots.get(_wrKey(r.method, r.url)).get(r.ordinal));
   } else {
     DFAIL("background.js relayed the webRequest event `" + ev.ev + "`, which this file does not take");
   }
@@ -196,32 +228,28 @@ function _wrHeader(map, name) {
   return map[name] !== undefined ? map[name] : "";
 }
 
-/* Settles the complete record `r` of document `d` with the capture `w` that names its ordinal: the record
-   leaves `d.records`, and the capture is delivered or refused by name. */
-function _wrSettle(d, r, w) {
-  DCHECK(!r.joined && r.done, "a webRequest record was settled twice, or before it completed — a settled " +
-                              "record leaves its document's records, and only a complete one is settled");
-  r.joined = true;
-  d.records.get(_wrKey(r.method, r.url)).delete(r.ordinal);
-  if (r.failed !== null) {
-    console.warn("[web-request] " + r.method + " " + r.url + " capture refused: ordinal " + r.ordinal +
-                 " is a request that failed (" + r.failed + ")");
+/* Whether a complete record is Fetch §4.8 "CORS-preflight fetch"'s request, which the browser makes on its
+   own: an `OPTIONS` request carrying `Access-Control-Request-Method`, a header the page cannot set (Fetch
+   §2.2.2 "Headers" lists it among the forbidden request-headers) and §4.8 appends to every preflight. */
+function _wrIsPreflight(r) {
+  return r.method === "OPTIONS" && r.requestHeaders["access-control-request-method"] !== undefined;
+}
+
+/* Files the complete record `r` as an observed request of its document, with what its capture `w` added,
+   or with none (`w` null). `outcome` names the census count the record ends in. */
+function _wrFile(r, w, outcome) {
+  DCHECK(r.done && r.failed === null, "a webRequest record was filed before it completed, or after it failed");
+  if (!httpRecordDocumentRegistered(r.documentId)) {
+    webRequestCensus.unregistered++;
+    console.warn("[web-request] " + r.method + " " + r.url + " is not filed: document " + r.documentId +
+                 " never registered with this zone");
     return;
   }
-  /* The capture is compared with the status the page's own fetch exposed. Fetch §4.1 "Main fetch" hands a
-     request whose response tainting is "opaque" an opaque filtered response, which Fetch §2.2.6 "Responses"
-     gives status 0 whatever the browser's record of the internal response says; every other response the page
-     reads exposes the internal status. The type is the page's Response's (intercept.js reads `clone.type`). */
-  var exposed = w.capture.transport === "fetch" && w.capture.responseType === "opaque" ? 0 : r.status;
-  if (exposed !== w.capture.observedStatus) {
-    webRequestCensus.statusMismatch++;
-    console.warn("[web-request] " + r.method + " " + r.url + " capture refused (status-mismatch): the page " +
-                 "observed " + String(w.capture.observedStatus) + " and its response exposes " + exposed +
-                 " (the browser reports " + r.status + ") for ordinal " + r.ordinal);
-    return;
-  }
-  webRequestCensus.joined++;
-  w.deliver({
+  webRequestCensus[outcome]++;
+  httpRecordFile({
+    documentId: r.documentId,
+    tabId: r.tabId,
+    frameId: r.frameId,
     url: r.url,
     method: r.method,
     status: r.status,
@@ -229,25 +257,64 @@ function _wrSettle(d, r, w) {
     requestHeadersOnWire: r.requestHeaders,
     requestHeaders: _wrPageHeaders(r.requestHeaders),
     rawBodyB64: webRequestStatesBody(r.method)
-      ? _wrRequestBody(r.requestBodyRaw, _wrHeader(r.requestHeaders, "content-type")) : w.capture.requestBodyB64,
+      ? _wrRequestBody(r.requestBodyRaw, _wrHeader(r.requestHeaders, "content-type"))
+      : w === null ? null : w.requestBodyB64,
     responseHeaders: _wrReadableResponseHeaders(r.responseHeaders),
     contentType: _wrHeader(r.responseHeaders, "content-type"),
     redirects: r.redirects,
-  });
+  }, w);
 }
 
-function _wrTryJoin(d, r) {
-  var keyW = d.waiting.get(_wrKey(r.method, r.url));
-  var w = keyW === undefined ? undefined : keyW.get(r.ordinal);
-  if (w === undefined) return;
-  keyW.delete(r.ordinal);
-  _wrSettle(d, r, w);
+/* Moves `slot` of document `d` on as far as what has arrived allows: a failed or preflight record is set
+   aside, a capture whose status the record contradicts is refused and the record filed alone, and a record
+   with its capture is filed. Anything else waits for the other half, or the document's departure. */
+function _wrAdvance(d, slot) {
+  var r = slot.record;
+  if (r === null || !r.done) return;
+  if (r.failed !== null) {
+    if (slot.capture !== null) {
+      webRequestCensus.captureRefused++;
+      console.warn("[web-request] " + slot.key + " capture refused: ordinal " + r.ordinal +
+                   " is a request that failed (" + r.failed + ")");
+    }
+    webRequestCensus.failed++;
+    _wrSlotDrop(d, slot);
+    return;
+  }
+  if (_wrIsPreflight(r)) {
+    if (slot.capture !== null) {
+      webRequestCensus.captureRefused++;
+      console.warn("[web-request] " + slot.key + " capture refused: ordinal " + r.ordinal + " is the " +
+                   "browser's CORS preflight");
+    }
+    webRequestCensus.preflight++;
+    _wrSlotDrop(d, slot);
+    return;
+  }
+  var w = slot.capture;
+  if (w === null) return;
+  _wrSlotDrop(d, slot);
+  /* The capture is compared with the status the page's own fetch exposed. Fetch §4.1 "Main fetch" hands a
+     request whose response tainting is "opaque" an opaque filtered response, which Fetch §2.2.6 "Responses"
+     gives status 0 whatever the browser's record of the internal response says; every other response the page
+     reads exposes the internal status. The type is the page's Response's (intercept.js reads `clone.type`). */
+  var exposed = w.transport === "fetch" && w.responseType === "opaque" ? 0 : r.status;
+  if (exposed !== w.observedStatus) {
+    webRequestCensus.statusMismatch++;
+    console.warn("[web-request] " + r.method + " " + r.url + " capture refused (status-mismatch): the page " +
+                 "observed " + String(w.observedStatus) + " and its response exposes " + exposed +
+                 " (the browser reports " + r.status + ") for ordinal " + r.ordinal + "; the record is filed " +
+                 "without it");
+    _wrFile(r, null, "webRequestOnly");
+    return;
+  }
+  _wrFile(r, w, "joined");
 }
 
 /* intercept.js's capture of one fetch() or XHR, from document `documentId`, joined to the browser's record
-   of the same request; `deliver(wr)` runs once with the record's browser-stated fields when both halves have
-   arrived. The capture is the page's: a key or ordinal no record holds leaves it waiting, never asserted. */
-function webRequestJoin(documentId, tabId, capture, deliver) {
+   of the same request by key and ordinal. The capture is the page's: a key or ordinal no record holds leaves
+   it waiting, never asserted. */
+function webRequestJoin(documentId, tabId, capture) {
   var key = _wrKey(capture.method, capture.url);
   var d = _wrDocs.get(documentId);
   if (d !== undefined && d.left) {
@@ -256,52 +323,51 @@ function webRequestJoin(documentId, tabId, capture, deliver) {
     return;
   }
   d = _wrDocOf(documentId, tabId);
-  var keyR = d.records.get(key);
-  var r = keyR === undefined ? undefined : keyR.get(capture.seq);
-  if (r !== undefined && r.done) {
-    _wrSettle(d, r, { capture: capture, deliver: deliver });
-    return;
-  }
+  var keyS = d.slots.get(key);
   var n = d.next.get(key);
-  if (r === undefined && n !== undefined && capture.seq < n.count) {
-    console.warn("[web-request] " + key + " capture refused: ordinal " + capture.seq + " is already joined");
+  if ((keyS === undefined || !keyS.has(capture.seq)) && n !== undefined && capture.seq < n.count) {
+    webRequestCensus.captureRefused++;
+    console.warn("[web-request] " + key + " capture refused: ordinal " + capture.seq + " is already settled");
     return;
   }
-  if (!d.waiting.has(key)) d.waiting.set(key, new Map());
-  if (d.waiting.get(key).has(capture.seq)) {
+  var slot = _wrSlotOf(d, key, capture.seq);
+  if (slot.capture !== null) {
+    webRequestCensus.captureRefused++;
     console.warn("[web-request] " + key + " capture refused: ordinal " + capture.seq + " was captured twice");
     return;
   }
-  d.waiting.get(key).set(capture.seq, { capture: capture, deliver: deliver });
+  slot.capture = capture;
+  _wrAdvance(d, slot);
 }
 
-/* Reclaims the live document `documentId`: every record and waiting capture it holds is counted by how it
-   ended, and its in-flight records leave _wrById. */
+/* Reclaims the live document `documentId`. No capture can arrive for it any more, so each complete record is
+   filed without one; an in-flight record leaves _wrById; and a capture no record matched is counted. */
 function _wrReclaim(documentId, d) {
-  var left = { unjoined: 0, failed: 0, inFlight: 0, waiting: 0 };
-  for (var keyR of d.records.values()) {
-    for (var r of keyR.values()) {
-      if (!r.done) { left.inFlight++; _wrById.delete(r.requestId); }
-      else if (r.failed !== null) left.failed++;
-      else left.unjoined++;
+  var inFlight = 0, wrapperOnly = 0, alone = 0;
+  for (var keyS of d.slots.values()) {
+    for (var slot of keyS.values()) {
+      var r = slot.record;
+      if (r === null) { wrapperOnly++; continue; }
+      if (!r.done) { inFlight++; _wrById.delete(r.requestId); continue; }
+      DCHECK(r.failed === null && !_wrIsPreflight(r) && slot.capture === null,
+             "a complete record of document " + documentId + " is still held with a failure, as a preflight " +
+             "or with its capture — _wrAdvance settles each of those when it arrives");
+      alone++;
+      _wrFile(r, null, "webRequestOnly");
     }
   }
-  for (var keyW of d.waiting.values()) left.waiting += keyW.size;
   for (var rest of _wrById.values())
     DCHECK(rest.documentId !== documentId, "request " + rest.requestId + " of document " + documentId +
-           " is in flight in _wrById and in none of the document's records, so it would outlive the document");
-  webRequestCensus.leftUnjoined += left.unjoined;
-  webRequestCensus.leftFailed += left.failed;
-  webRequestCensus.leftInFlight += left.inFlight;
-  webRequestCensus.leftWaiting += left.waiting;
-  if (left.unjoined + left.inFlight + left.waiting > 0)
-    console.warn("[web-request] document " + documentId + " left with " + left.unjoined + " complete record(s) " +
-                 "no capture joined, " + left.inFlight + " in flight and " + left.waiting + " capture(s) no " +
-                 "record completed");
+           " is in flight in _wrById and in none of the document's slots, so it would outlive the document");
+  webRequestCensus.leftInFlight += inFlight;
+  webRequestCensus.wrapperOnly += wrapperOnly;
+  if (inFlight + wrapperOnly + alone > 0)
+    console.warn("[web-request] document " + documentId + " left with " + alone + " complete record(s) no " +
+                 "capture joined, " + inFlight + " in flight and " + wrapperOnly + " capture(s) no record matched");
 }
 
-/* The document `documentId` was destroyed (see webRequestDocumentPort): its records and waiting captures
-   are reclaimed, it stays known as left until its tab closes, and the speak-as rules of sends that spoke as
+/* The document `documentId` was destroyed (see webRequestDocumentPort): its requests are filed and its
+   captures reclaimed, it stays known as left until its tab closes, and the speak-as rules of sends that spoke as
    it go (lib/speak-as.js). */
 function webRequestDocumentLeft(documentId, tabId) {
   speakAsDocumentEnded("frame:" + documentId);

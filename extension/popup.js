@@ -902,7 +902,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         },
         redirectURL: "",
         headersSize: -1,
-        bodySize: r.responseBody ? r.responseBody.length : 0,
+        // HAR 1.2's response bodySize is "-1 if the info is not available": a body nothing observed.
+        bodySize: r.responseBody === null ? -1 : r.responseBody.length,
       };
 
       // Response body

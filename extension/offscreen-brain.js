@@ -152,8 +152,8 @@ function _checkLogEntry(entry, kind) {
          "(id/url/method/service/timestamp/status) — the popup renders all six off every entry it lists, " +
          "and a hole in one is a card identifying a request nobody can find again, for kind " + kind);
   if (kind === "http") {
-    /* THE RESPONSE HALF. `responseBody` is `string | null` and the null is load-bearing: a captured request
-       whose response had no body says so, and every consumer that renders a body branches on it. */
+    /* The response half. `responseBody` is `string | null`: "" is a body observed empty, and null a body
+       nothing observed (a form submission's answer, a request no page capture joined). */
     DCHECK(typeof entry.statusText === "string" &&
            (entry.responseBody === null || typeof entry.responseBody === "string") &&
            typeof entry.responseBase64 === "boolean" &&

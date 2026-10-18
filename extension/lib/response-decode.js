@@ -351,21 +351,30 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     return;
   }
 
-  // ─── HTTP (fetch / XHR): the browser's record of the request, joined to the page's body capture ─
-  webRequestJoin(documentId, tabId, msg, (wr) => _httpRecord(tabId, msg, wr, frameId, documentId));
+  // ─── HTTP (fetch / XHR): the page's capture, joined to the browser's record of the request ─
+  webRequestJoin(documentId, tabId, msg);
 }
 
-/* One fetch()/XHR round trip: `wr` is lib/web-request.js's record of the request, every field of it stated by
-   the browser, and `msg` the page's capture of the response body, joined on (documentId, method, URL,
-   ordinal). */
-function _httpRecord(tabId, msg, wr, frameId, documentId) {
-  /* Every joined request is filed: the log holds each fetch()/XHR the page made, and what this function
-     learns from it is decided by the response's content below, never by its address. The browser reports
-     only network requests to the `xmlhttprequest` listener, and intercept.js captures none of this tool's
-     own `_internal_probe` requests, so neither needs a filter here. */
+/* Whether `documentId` is a document this zone registered, which every record is filed under. */
+function httpRecordDocumentRegistered(documentId) {
+  return state.docs.has(documentId);
+}
+
+/* One fetch()/XHR round trip, filed by lib/web-request.js: `wr` is the browser's record of the request, every
+   field of it stated by the browser, with the document, tab and frame that made it; `cap` is the page's
+   capture joined to it on (documentId, method, URL, ordinal), or null for a request no capture joined, whose
+   response body, call site and request init are then absent. */
+function httpRecordFile(wr, cap) {
+  /* Every request is filed: the log holds each fetch()/XHR the page made, and what this function learns from
+     it is decided by the response's content below, never by its address. The browser reports only network
+     requests to the `xmlhttprequest` listener, and the zone's own sends leave from the service worker, which
+     background.js does not relay, so neither needs a filter here. */
   DCHECK(/^https?:/i.test(wr.url),
-         "a joined webRequest record is not an http(s) request — background.js listens for `xmlhttprequest` " +
+         "a webRequest record is not an http(s) request — background.js listens for `xmlhttprequest` " +
          "requests, which the browser reports only for network schemes");
+  const documentId = wr.documentId, tabId = wr.tabId, frameId = wr.frameId;
+  const responseBody = cap === null ? null : cap.body;
+  const responseBase64 = cap === null ? false : cap.base64Encoded;
   const url = new URL(wr.url);
 
   const tab = _docForLearning(documentId);
@@ -411,11 +420,11 @@ function _httpRecord(tabId, msg, wr, frameId, documentId) {
     statusText: wr.statusText,
     completedAt: Date.now(),
     requestHeaders: headerMap,
-    requestInit: _requestInitCopy(msg.requestInit),
+    requestInit: cap === null ? null : _requestInitCopy(cap.requestInit),
     contentType: contentType || "",
     rawBodyB64: rawBodyB64,
-    responseBody: msg.body,
-    responseBase64: msg.base64Encoded,
+    responseBody: responseBody,
+    responseBase64: responseBase64,
     mimeType: wr.contentType,
     responseHeaders: wr.responseHeaders,
     /* `frameId` IS NOT WRITTEN HERE, AND IT USED TO BE WRITTEN TWICE. This built it as `frameId ?? 0` and then
@@ -431,7 +440,7 @@ function _httpRecord(tabId, msg, wr, frameId, documentId) {
     // endpoint (one the forced-execution engine didn't reach), this names the
     // exact bundle function that fired the request — diagnostic provenance
     // for the network-vs-AST diff.
-    callStack: msg.callStack,
+    callStack: cap === null ? "" : cap.callStack,
   };
 
   /* THE RECORD IS COMPLETE HERE, AND ITS FIRST CONSUMER IS NOT `_pushGlobalLog`. `learnFromRequest` reads
@@ -461,10 +470,10 @@ function _httpRecord(tabId, msg, wr, frameId, documentId) {
   }
 
   // Key scanning on response body
-  if (msg.body) {
-    let textBody = msg.body;
-    if (msg.base64Encoded) {
-      try { textBody = new TextDecoder().decode(base64ToUint8(msg.body)); }
+  if (responseBody) {
+    let textBody = responseBody;
+    if (responseBase64) {
+      try { textBody = new TextDecoder().decode(base64ToUint8(responseBody)); }
       catch (e) {
         RETHROW_FATAL(e);
         /* Base64 / UTF-8 decode failure on a captured response body — most
@@ -516,14 +525,14 @@ function _httpRecord(tabId, msg, wr, frameId, documentId) {
      sniffing for the bytes SAFEFETCH FETCHED, and it stamps its answer on the reply record it hands the
      renderer. These bytes are not those: intercept.js captured them off the live page and relayed them here,
      and safeFetch has never seen the response they came from. */
-  const _assetClass = classifyResponseAsset(msg.body, msg.base64Encoded, {
+  const _assetClass = classifyResponseAsset(responseBody, responseBase64, {
     /* Fetch §2.2.6's FILTERED RESPONSE KIND. An OPAQUE no-cors response has a null body and an empty header
        list, so an unreadable response and an empty one are byte-identical here and only the zone that held the
        Response can tell them apart. intercept.js reads it off `clone.type`; content.js relays it (it did not,
        for the whole life of the field, which is why this branch had never once run). The XHR path emits none
        because XHR cannot produce one — its own spec fails a cross-origin response CORS did not allow rather
        than handing back an opaque one — so absence is "not applicable", not "not sent". */
-    responseType: msg.transport === "fetch" ? msg.responseType : null,
+    responseType: cap !== null && cap.transport === "fetch" ? cap.responseType : null,
     /* The header list is always present; whether it NAMES a content type is the question, and `null` is
        this classifier's own vocabulary for "the response declared none". */
     responseContentType: wr.responseHeaders["content-type"] !== undefined ? wr.responseHeaders["content-type"] : null,
