@@ -1068,6 +1068,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rejection.h"
 #include "fixture/navigator.h"
 #include "fixture/abort.h"
+#include "fixture/races.h"
 #include "fixture/statesinks.h"
 #include "fixture/navigation.h"
 #include "fixture/idlindex.h"
@@ -1500,6 +1501,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "rejection", HTML_REJECTION },
     { "navigator", HTML_NAVIGATOR },
     { "abort", HTML_ABORT },
+    { "races", HTML_RACES },
     { "statesinks", HTML_STATESINKS },
     { "navigation", HTML_NAVIGATION },
     { "idlindex", HTML_IDLINDEX },
@@ -15080,6 +15082,28 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
     fold_row(&xabeat_tt, &xabeat_why, xab_l > 0 && xab_l + xab_t == param_undriven_count(js, "/api/xabeat", "v", NULL),
              "NOT REACHED or wrong: no timeline ended a send with a long timeout in `load` then `loadend` when the "
              "answer came first, or one ended in neither that nor the timeout arm's `timeout` then `loadend`");
+    const Probe rows[] = {
+        { "xhr-timeout", xatime_tt, "/api/xatimedout", SESS_EXPLORE, xatime_why },
+        { "xhr-timeout-beaten", xabeat_tt, "/api/xabeat", SESS_EXPLORE, xabeat_why },
+        { "fetch-timer", xftimer_tt, "/api/xforder", SESS_EXPLORE, xftimer_why },
+        { "fetch-message", xfmsg_tt, "/api/xfmorder", SESS_EXPLORE, xfmsg_why },
+        { "xhr-timer", xatimer_tt, "/api/xaorder", SESS_EXPLORE, xatimer_why },
+        { "xhr-abort", xaabort_tt, "/api/xaaborted", SESS_EXPLORE, xaabort_why },
+        { "xhr-open", xaopen_tt, "/api/xareopened", SESS_EXPLORE, xaopen_why },
+        { "abort-cancel", apcancel_tt, "/api/apcancelled", SESS_EXPLORE, apcancel_why },
+        { "abort-after-answer", apabort_tt, "/api/apabort", SESS_EXPLORE, apabort_why },
+        { "abort", abortfire_tt, "/api/aborted", SESS_EXPLORE, abortfire_why },
+        { "deadline", deadline_tt, "/api/deadline", SESS_EXPLORE, deadline_why },
+        { "any-step2", anyfork_tt, "/api/anyfork", SESS_EXPLORE, anyfork_why },
+        { "any-step2-cursor", anylate_tt, "/api/anylate", SESS_EXPLORE, anylate_why },
+        { "any-step2-after-park", anyiter_tt, "/api/anyiter", SESS_EXPLORE, anyiter_why },
+        { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE, idlcoerce_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `races` document (fixture/races.h). */
+TF_UNIT void probes_races(const char *js, Probe *tab, int *n) {
     /* A deadline raced against a reply in flight: both orders, and nothing else. */
     const char *xrace_why = NULL;
     int xrace_tt = 1;
@@ -15123,21 +15147,6 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
         { "deadline-race", xrace_tt, "/api/xraceorder", SESS_EXPLORE, xrace_why },
         { "deadline-race-pair", xpair_tt, "/api/xpairorder", SESS_EXPLORE, xpair_why },
         { "deadline-race-chain", xchain_tt, "/api/xchainorder", SESS_EXPLORE, xchain_why },
-        { "xhr-timeout", xatime_tt, "/api/xatimedout", SESS_EXPLORE, xatime_why },
-        { "xhr-timeout-beaten", xabeat_tt, "/api/xabeat", SESS_EXPLORE, xabeat_why },
-        { "fetch-timer", xftimer_tt, "/api/xforder", SESS_EXPLORE, xftimer_why },
-        { "fetch-message", xfmsg_tt, "/api/xfmorder", SESS_EXPLORE, xfmsg_why },
-        { "xhr-timer", xatimer_tt, "/api/xaorder", SESS_EXPLORE, xatimer_why },
-        { "xhr-abort", xaabort_tt, "/api/xaaborted", SESS_EXPLORE, xaabort_why },
-        { "xhr-open", xaopen_tt, "/api/xareopened", SESS_EXPLORE, xaopen_why },
-        { "abort-cancel", apcancel_tt, "/api/apcancelled", SESS_EXPLORE, apcancel_why },
-        { "abort-after-answer", apabort_tt, "/api/apabort", SESS_EXPLORE, apabort_why },
-        { "abort", abortfire_tt, "/api/aborted", SESS_EXPLORE, abortfire_why },
-        { "deadline", deadline_tt, "/api/deadline", SESS_EXPLORE, deadline_why },
-        { "any-step2", anyfork_tt, "/api/anyfork", SESS_EXPLORE, anyfork_why },
-        { "any-step2-cursor", anylate_tt, "/api/anylate", SESS_EXPLORE, anylate_why },
-        { "any-step2-after-park", anyiter_tt, "/api/anyiter", SESS_EXPLORE, anyiter_why },
-        { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE, idlcoerce_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -17326,6 +17335,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idb(js, probes, &np);
     probes_css(js, probes, &np);
     probes_abort(js, probes, &np);
+    probes_races(js, probes, &np);
     probes_scripts(js, probes, &np);
     probes_platform(js, probes, &np);
     probes_rejection(js, probes, &np);

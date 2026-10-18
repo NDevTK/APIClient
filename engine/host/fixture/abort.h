@@ -160,42 +160,6 @@ static const char HTML_ABORT[] =
     " for (var i = 0; i < 3000000; i++) {}"
     "};"
     "</script>"
-    /* A timer's deadline ahead of the clock while a reply is in flight is raced against the reply's unknown
-       arrival (HTML §8.1.7.3 step 2.1; §8.7's run steps after a timeout), so both orders run: `reply-timer`
-       and `timer-reply`. The outer timer runs the pair once nothing else is due, so the flow is idle with the
-       reply owed. */
-    "<script>"
-    "setTimeout(function () {"
-    " var seen = [];"
-    " function done(t) { seen.push(t); if (seen.length === 2) fetch('/api/xraceorder?v=' + seen.join('-')); }"
-    " fetch('/api/xrace').then(function () { done('reply'); });"
-    " setTimeout(function () { done('timer'); }, 50);"
-    "}, 9000);"
-    "</script>"
-    /* The same race over a chain: the second request is issued from the first reply's reaction, so each
-       arrival is its own unknown and the 50 ms deadline is raced at each, three orders: `timer-a-b`,
-       `a-timer-b` and `a-b-timer`. */
-    "<script>"
-    "setTimeout(function () {"
-    " var seen = [];"
-    " function done(t) { seen.push(t); if (seen.length === 3) fetch('/api/xchainorder?v=' + seen.join('-')); }"
-    " fetch('/api/xchaina').then(function () { done('a');"
-    "  fetch('/api/xchainb').then(function () { done('b'); }); });"
-    " setTimeout(function () { done('timer'); }, 50);"
-    "}, 9500);"
-    "</script>"
-    /* Two requests issued together, which the host answers in one payment: the delivery arm races the 50 ms
-       deadline before each arrival, so the timer can run between the two reactions too: `timer-a-b`,
-       `a-timer-b` and `a-b-timer`. */
-    "<script>"
-    "setTimeout(function () {"
-    " var seen = [];"
-    " function done(t) { seen.push(t); if (seen.length === 3) fetch('/api/xpairorder?v=' + seen.join('-')); }"
-    " fetch('/api/xpaira').then(function () { done('a'); });"
-    " fetch('/api/xpairb').then(function () { done('b'); });"
-    " setTimeout(function () { done('timer'); }, 50);"
-    "}, 10000);"
-    "</script>"
     /* A request aborted while its reply is still owed: the abort runs on the line after the call, before the
        host can answer, so the engine tells the host to end the send, and the page sees an AbortError. */
     "<script>"
