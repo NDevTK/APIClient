@@ -569,16 +569,16 @@ function linesToAnalysis(lines, msg, outcome, eng) {
      crashRecord for a boot that never got an instance) put an `@E {"phase":"engine-crash",…,"err":…}` line in
      `lines` before calling here. */
   let crashErr = "";
+  /* Why this zone refused the engine's document, or null. The document is the engine's statement and so input:
+     one that does not parse, is not a record carrying every field consumers read, or is absent from a run that
+     owes one is refused, and the run is recorded as crashed with the refusal as its cause, never as a page that
+     was analysed and found clean. */
+  let refusal = null;
   for (const raw of lines) {
     const ln = String(raw);
     if (ln.startsWith("@RESULT ")) {
       try { result = JSON.parse(ln.slice(8)); }
-      catch (e) {
-        /* result.c asserts its own document against truncation, so unparseable text is an engine defect. Dev
-           aborts; release records the parse error so a zero result still says why. */
-        DFAIL("the engine emitted an @RESULT line that is not JSON: " + String(e && e.message || e));
-        extraErrors.push({ context: "result-parse", message: String(e && e.message || e) });
-      }
+      catch (e) { result = null; refusal = "the engine's @RESULT line is not JSON: " + String(e && e.message || e); }
     } else if (ln.startsWith("@E ")) {
       extraErrors.push({ context: "engine", message: ln.slice(3) });
       /* Parsed, not substring-matched: the `phase` field identifies the crash line, so a page's own error
@@ -603,12 +603,22 @@ function linesToAnalysis(lines, msg, outcome, eng) {
       extraErrors.push({ context: o.phase, message: o.reason });
     }
   }
-  /* A partial or complete run must carry its document; reporting its absence as an empty page would be a false
-     clean bill. */
-  const mustHaveDocument = (outcome === "partial" || outcome === "complete");
-  DCHECK(!mustHaveDocument || result !== null,
-         "an engine session produced no @RESULT document at all — the one result document is what every " +
-         "finding for this page travels in, and reporting its absence as an empty page is a false clean bill");
+  if (refusal === null && result !== null) {
+    const missing = (typeof result !== "object" || Array.isArray(result)) ? ENGINE_DOC_FIELDS
+                                                                         : ENGINE_DOC_FIELDS.filter((k) => result[k] === undefined);
+    if (missing.length) refusal = "the engine's result document carries no " + missing.join(", ");
+  }
+  /* A partial or complete run owes its document; its absence reported as an empty page would be a false clean
+     bill. */
+  if (refusal === null && result === null && (outcome === "partial" || outcome === "complete"))
+    refusal = "the engine session produced no result document";
+  if (refusal !== null) {
+    result = null;
+    extraErrors.push({ context: "result-refused", message: refusal });
+    console.warn("[bridge] " + msg.sourceUrl + ": this zone refused the engine's result (" + refusal + ")");
+    crashErr = refusal;
+    outcome = "crashed";
+  }
   /* A document that is present is asserted whether or not one was required, including a crashed instance's
      unconsumed partial, whose fields are read below. */
   if (result) assertResultDocument(result);
@@ -896,13 +906,15 @@ function linesToAnalysis(lines, msg, outcome, eng) {
   }
   return analysis;
 }
+/* The engine-document fields every consumer reads, refused at linesToAnalysis' door when any is absent. */
+const ENGINE_DOC_FIELDS = ["fetchCallSites", "securitySinks", "_park", "_parkWhy", "_novelty"];
 /* Whether an analysis carries an engine document, asked in one place so the five fields cannot drift apart
-   across consumers. True means an @RESULT arrived and was asserted; false means none did and `_run` says which
-   absence. A record with some but not all of the five is linesToAnalysis broken. */
+   across consumers. True means an @RESULT arrived and was accepted; false means none did and `_run` says which
+   absence. linesToAnalysis copies all five or none and refuses a document missing one, so a record with some is
+   that composition broken, which is this zone's own code. */
 function analysisHasDocument(a) {
   DCHECK(a && typeof a === "object", "an analysis record is not an object — every producer of one is in this file");
-  const n = (a.fetchCallSites !== undefined) + (a.securitySinks !== undefined) + (a._park !== undefined) +
-            (a._novelty !== undefined) + (a._parkWhy !== undefined);
+  const n = ENGINE_DOC_FIELDS.filter((k) => a[k] !== undefined).length;
   DCHECK(n === 0 || n === 5,
          "an analysis carries " + n + " of the five engine-document fields (fetchCallSites, securitySinks, " +
          "_park, _parkWhy, _novelty) — linesToAnalysis writes all five or none, because their presence IS " +
@@ -6245,6 +6257,10 @@ const _hostOps = {
     if (idx < 0) return;   // release
     const partial = linesToAnalysis([eng.lines[idx]], eng.msg, "partial", eng);   // parse only the snapshot line
     eng.lines.splice(idx, 1);                                           // consume it
+    /* A refused snapshot is the instance's output failing this zone's door, so the instance is retired as
+       crashed with the refusal as its cause (the step op finalizes a crashed instance); the person sees a crashed
+       run, never a snapshot read off a record that has no document. */
+    if (partial._run === "crashed") { engineCrash(eng, "result", partial.resolverErrors.at(-1).message); return; }
     // Merge on any surface: an XSS-only page (verified @S PoCs, no endpoints) must surface incrementally too.
     /* `securitySinks` is asserted on every document (assertResultDocument), and a snapshot built from the @RESULT
        line above always has one, which is asserted rather than assumed. */
@@ -6272,6 +6288,8 @@ const _hostOps = {
   },
   step: async (eng) => {
     let st;
+    /* An instance this zone retired (a refused result) is finalized rather than stepped again. */
+    if (eng._crashed) return 0;
     /* The identities other instances of this cluster emitted since this one was last handed its partition. */
     try { await noveltyHand(eng); }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "novelty", e); return 0; }
@@ -6583,7 +6601,21 @@ const _hostOps = {
        heap that aborted and its counters a finished run, and with no `_park` the write would delete the residue
        a previous session parked (frontierPut deletes an entry with empty recipes). Skipping it leaves that entry
        as it was. */
-    if (eng.persist && result._fkey && result._run === "complete") {   // persist into the global frontier (the cross-session cold tier)
+    /* The value a parked run adds to its row, read twice over one result: the account the last step stated and
+       the result's `_novelty.landed`, both novelty_landed_value with no step between; `_novelty.paid` also counts
+       a novel credit made on host time, which no flow was paid, so it bounds them. Both are the engine's
+       statements and so input: a run whose readings disagree is refused its park, the entry a previous session
+       wrote stays as it was, and the refusal rides the analysis the person is shown. */
+    const _parks = eng.persist && result._fkey && result._run === "complete";
+    const _nov = _parks ? result._novelty : null;
+    const _parkRefusal = (!_parks || (_nov.landed === eng.level1.paid && _nov.landed <= _nov.paid)) ? null
+      : "the run's novel value disagrees with its own result (account " + eng.level1.paid + ", landed " +
+        String(_nov.landed) + ", paid " + String(_nov.paid) + ")";
+    if (_parkRefusal !== null) {
+      result.resolverErrors.push({ context: "park-refused", message: _parkRefusal });
+      console.warn("[bridge] " + eng.msg.sourceUrl + ": this zone refused the run's park (" + _parkRefusal + ")");
+    }
+    if (_parks && _parkRefusal === null) {   // persist into the global frontier (the cross-session cold tier)
       /* The gate's premise is another function's: `_run` is `complete` exactly where linesToAnalysis was given a
          document. Were that to break, `recipes` would be "" and frontierPut would delete the residue. */
       DCHECK(analysisHasDocument(result),
@@ -6606,14 +6638,6 @@ const _hostOps = {
              "rehydration the word it was parked under), so an absent one is a composer nobody told, and the " +
              "entry it writes would read back as an older store's and be re-fetched as `derived`");
       const _parkProvenance = eng.msg.provenance;
-      /* The value this run adds to the row, read twice over one result: the account the last step stated and the
-         result's `_novelty.landed`, both novelty_landed_value with no step between. `_novelty.paid` also counts
-         a novel credit made on host time, which no flow was paid, so it is the bound and not the value. */
-      const _nov = result._novelty;
-      DCHECK(_nov.landed === eng.level1.paid && _nov.landed <= _nov.paid,
-             "a parked run's novel value disagrees with its own result (account " + eng.level1.paid + ", landed " +
-             String(_nov.landed) + ", paid " + String(_nov.paid) + ") — both are the landed novel " +
-             "credits of one instance read after its last step, and the paid asks bound them");
       const _account = engineAccount(eng);
       DCHECK(result._fkey === frontierKeyOf(eng.msg.sourceUrl, eng.origin, eng.msg.credentialed, eng._bundleId),
              "a run is parking under the frontier key " + result._fkey + " while the document it stores is " +
