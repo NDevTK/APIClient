@@ -13508,9 +13508,22 @@ TF_UNIT void probes_griditem(const char *js, Probe *tab, int *n) {
              "css-grid-1 §5.2: the `auto`-height grid container is not the 55px sum of its rows");
     fold_row(&gridrow_tt, &gridrow_why, param_value_is(js, "/api/gridiw", "t", "25"),
              "css-grid-1 §3.3: the second item's border box is not 25px below its container, past the first row");
+    /* Explicit tracks: §7.2's fixed and flexible columns, and a fixed row before a flexible one. */
+    const char *gridx_why = NULL; int gridx_tt = 1;
+    fold_row(&gridx_tt, &gridx_why, param_value_is(js, "/api/gridiw", "x2", "100"),
+             "css-grid-1 §11.7: the second column does not start after the 100px fixed one");
+    fold_row(&gridx_tt, &gridx_why, param_value_is(js, "/api/gridiw", "w2", "100"),
+             "css-grid-1 §11.7: the `1fr` column is not 100px of the 300px left");
+    fold_row(&gridx_tt, &gridx_why, param_value_is(js, "/api/gridiw", "w3", "200"),
+             "css-grid-1 §11.7: the `2fr` column is not 200px of the 300px left");
+    fold_row(&gridx_tt, &gridx_why, param_value_is(js, "/api/gridiw", "y4", "50"),
+             "css-grid-1 §7.2: the second row does not start after the 50px fixed one");
+    fold_row(&gridx_tt, &gridx_why, param_value_is(js, "/api/gridiw", "h4", "150"),
+             "css-grid-1 §11.7: the `1fr` row is not the 150px left of 200px");
     const Probe rows[] = {
         { "grid-item-auto-width", gridiw_tt, "/api/gridiw", SESS_EXPLORE, gridiw_why },
         { "grid-rows-sized", gridrow_tt, "/api/gridiw", SESS_EXPLORE, gridrow_why },
+        { "grid-explicit-tracks", gridx_tt, "/api/gridiw", SESS_EXPLORE, gridx_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

@@ -5,8 +5,11 @@
    one `auto` row take the free space (§11.8 "Stretch auto Tracks") and its item, stretch-fit for `normal`
    alignment, is 300px by 50px. The second has an `auto` height, which §5.2 "Sizing Grid Containers" makes the
    sum of its two rows: 5px of margin plus 20px, then 30px, 55px in all, with the second item's border box
-   25px below the container's top. It ends with TF_CANVAS_INK, which test_forced.c defines before including
-   it. */
+   25px below the container's top. The third is 400px wide over `100px 1fr 2fr` (§7.2 "Explicit Track
+   Sizing"): the fixed column is 100px and §11.7 "Expand Flexible Tracks" gives the two flexible ones 100px
+   and 200px of the 300px left. The fourth is 300px by 200px over rows `50px 1fr`, so its second row is
+   150px tall and starts 50px down. Chrome 155 gives these numbers for the same markup. It ends with
+   TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_GRIDITEM_H
 #define ENGINE_HOST_FIXTURE_GRIDITEM_H
 #ifndef TF_CANVAS_INK
@@ -19,11 +22,19 @@ static const char HTML_GRIDITEM[] =
     "<div style=\"display:grid;width:300px;height:50px\"><div id=gi>x</div></div>"
     "<div id=g2 style=\"display:grid;width:200px\"><div style=\"height:20px;margin-top:5px\">a</div>"
     "<div id=r2 style=\"height:30px\">b</div></div>"
+    "<div id=g3 style=\"display:grid;width:400px;grid-template-columns:100px 1fr 2fr\">"
+    "<div style=\"height:10px\">a</div><div id=c2 style=\"height:10px\">b</div>"
+    "<div id=c3 style=\"height:10px\">c</div></div>"
+    "<div id=g4 style=\"display:grid;width:300px;height:200px;grid-template-rows:50px 1fr\">"
+    "<div>a</div><div id=r4>b</div></div>"
     "<script>var g2 = document.getElementById('g2');"
+    "function R(id) { return document.getElementById(id).getBoundingClientRect(); }"
     "fetch('/api/gridiw?w=' + getComputedStyle(document.getElementById('gi')).width"
     " + '&h=' + getComputedStyle(document.getElementById('gi')).height"
     " + '&c=' + getComputedStyle(g2).height"
-    " + '&t=' + (document.getElementById('r2').getBoundingClientRect().top - g2.getBoundingClientRect().top));"
+    " + '&t=' + (document.getElementById('r2').getBoundingClientRect().top - g2.getBoundingClientRect().top)"
+    " + '&x2=' + (R('c2').left - R('g3').left) + '&w2=' + R('c2').width + '&w3=' + R('c3').width"
+    " + '&y4=' + (R('r4').top - R('g4').top) + '&h4=' + R('r4').height);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
