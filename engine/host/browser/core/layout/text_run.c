@@ -570,118 +570,157 @@ static CssPx tr_tab_advance(lxb_dom_element_t *style, CssPx pos)
     return css_px_atom("css-text-3 tab stop", args, 3, stop - pos.px);
 }
 
-/* How far along line `[lo, hi)` item `upto` begins: the sum of the sizes and advances of `[lo, upto)`, less
-   css-text-3 §4.1.2 "Phase II: Trimming and Positioning"'s ends ("a sequence of collapsible spaces at the
-   beginning of a line is removed", "a sequence of collapsible spaces at the end of a line is removed"). The trim
-   is a loop over a sequence, though §4.1.1 leaves at most one such space per run, because preserved white space
-   can begin a line with several.
-   The trim range is the whole line's and the sum is the prefix's: which spaces disappear depends on where the
-   line ends, so a prefix that trimmed over `[lo, upto)` would remove a mid-line space and the offsets would not
-   add up to the line's size. `upto == hi` is the size, where the line's last item ends (a fragment's far
-   edge); every smaller `upto` is a position inside it. */
 /* What follows character `at` in its shaping run for pair kerning: the characters after it on the line in the
-   same element and face, up to a box edge, an atomic inline, a forced break or the trim. */
-typedef struct { const TextRunMeasure *m; size_t at, end; } TrKernRun;
+   same element and face, up to a box edge, an atomic inline, a forced break or `end`. `reached_end` records an
+   answer that stopped at `end` rather than at the run, which a longer line could change. */
+typedef struct { const TextRunMeasure *m; size_t at, end; bool reached_end; } TrKernRun;
 
 static int32_t tr_kern_after(void *arg, size_t k)
 {
-    const TrKernRun *r = arg;
+    TrKernRun *r = arg;
     size_t j = r->at + 1 + k;
     const TextRunItem *left = &r->m->items[r->at];
 
-    if (j >= r->end || r->m->items[j].kind != TEXT_RUN_ITEM_CHAR || r->m->items[j].style != left->style ||
+    if (j >= r->end) {
+        r->reached_end = true;
+        return -1;
+    }
+    if (r->m->items[j].kind != TEXT_RUN_ITEM_CHAR || r->m->items[j].style != left->style ||
         r->m->items[j].face != left->face)
         return -1;
     return (int32_t)r->m->items[j].cp;
+}
+
+/* Character `p`'s pair kerning against what follows it before `end`, under css-fonts-4 §6.3 "Kerning: the
+   font-kerning property", which "controls metric kerning, kerning that utilizes adjustment data contained in
+   the font". `*settled` is whether the answer stands however far the line grows. A preserved tab has none. */
+static CssPx tr_kerning(const TextRunMeasure *m, size_t p, size_t end, bool *settled)
+{
+    const TextRunItem *c = tr_char_at(m, p);
+    TrKernRun kr;
+    CssPx k;
+
+    if (c->cp == 0x0009) {
+        *settled = true;
+        return css_px(0.0);
+    }
+    kr.m = m;
+    kr.at = p;
+    kr.end = end;
+    kr.reached_end = false;
+    k = css_font_kerning_px(c->style, c->face, c->cp, tr_kern_after, &kr);
+    *settled = !kr.reached_end;
+    return k;
 }
 
 /* A shaping run's inline size, as real Chrome snaps it: Chromium 0842759f
    third_party/blink/renderer/core/layout/inline/line_breaker.cc sets an item's inline size to its shape
    result's SnappedWidth(), which platform/fonts/shaping/shape_result.h defines as
    `LayoutUnit::FromFloatCeil(width_)`, the advances' sum rounded up to the next 1/64 px. */
+static double tr_snapped_px(double width)
+{
+    return ceil(width * 64.0) / 64.0;
+}
+
 static CssPx tr_snapped_width(CssPx width)
 {
     return css_px_atom("Blink ShapeResult::SnappedWidth: ceil(width * 64) / 64", &width, 1,
-                       ceil(width.px * 64.0) / 64.0);
+                       tr_snapped_px(width.px));
 }
 
-static CssPx tr_line_prefix(const TextRunMeasure *m, size_t lo, size_t hi, size_t upto,
-                            TextRunSizeBasis basis)
+static void tr_end_open(TextRunLineEnd *e, size_t lo)
 {
-    CssPx sum = css_px(0.0), run = css_px(0.0);
-    lxb_dom_element_t *run_style = NULL;
-    size_t i, keep_lo = hi, keep_hi = lo;
-
-    DCHECK(lo <= hi && hi <= m->count, "a line was measured over a range that is not inside the collected run");
-    DCHECK(lo <= upto && upto <= hi,
-           "css-text-3 §4.1.2's per-line sum was asked for a prefix that ends outside the line it is a prefix "
-           "of. The trim range below is the LINE's, so a bound past `hi` would sum items §4.1.2 never looked at "
-           "and a bound before `lo` would sum a negative span");
-    /* §4.1.2's two ends are found over content items (`tr_item_stops_trim`): an edge is not content, so a
-       leading space after an opened inline box is still trimmed, and an atomic inline is, so a space beyond it
-       is not at the line's edge. Nothing is moved, because `lo` and `hi` still delimit the items whose sizes are
-       summed; advancing the range would drop an edge outside the surviving text, such as an empty inline box at
-       a line's start. */
-    for (i = lo; i < hi; i++)
-        if (tr_item_stops_trim(&m->items[i])) { keep_lo = i; break; }
-    for (i = hi; i > lo; i--)
-        if (tr_item_stops_trim(&m->items[i - 1])) { keep_hi = i; break; }
-    /* The characters of one element form one shaping run, whose advances are summed and snapped once where
-       it ends (tr_snapped_width); a prefix that stops inside a run adds its unsnapped advances. */
-    for (i = lo; i < upto; i++) {
-        CssPx advance;
-        TrKernRun kr;
-
-        /* The two sized kinds are summed wherever they land and neither is trimmed, since §4.1.2 removes only
-           collapsible spaces: an edge adds css-sizing-3 §2.2's outer size at one boundary, an atomic inline
-           CSS 2 §8.1's margin box (CSS 2.2 §9.4.2: "horizontal margins, borders, and padding are respected
-           between these boxes"). */
-        if (tr_kind_has_size(m->items[i].kind)) {
-            if (run_style != NULL) { sum = css_px_add(sum, tr_snapped_width(run)); run = css_px(0.0); }
-            run_style = NULL;
-            sum = css_px_add(sum, tr_sized_px(m, i, basis));
-            continue;
-        }
-        /* A forced break occupies a position and no width: its U+000A exists for [UAX14] alone, and an advance
-           for it would be the first available font's .notdef. It is skipped before the trim test, so a break at
-           a line's edge is neither kept nor removed. It ends a shaping run. */
-        if (m->items[i].kind == TEXT_RUN_ITEM_FORCED_BREAK) {
-            if (run_style != NULL) { sum = css_px_add(sum, tr_snapped_width(run)); run = css_px(0.0); }
-            run_style = NULL;
-            continue;
-        }
-        if (i < keep_lo || i >= keep_hi) continue;   /* §4.1.2 removed it from this line */
-        if (run_style != tr_char_at(m, i)->style) {
-            if (run_style != NULL) { sum = css_px_add(sum, tr_snapped_width(run)); run = css_px(0.0); }
-            run_style = tr_char_at(m, i)->style;
-        }
-        /* A tab is preserved exactly when it is still U+0009: Phase I turns a collapsible one into a space. */
-        if (tr_char_at(m, i)->cp == 0x0009) {
-            advance = tr_tab_advance(tr_char_at(m, i)->style, css_px_add(sum, run));
-        } else {
-            advance = tr_char_at(m, i)->advance;
-            kr.m = m;
-            kr.at = i;
-            kr.end = keep_hi < hi ? keep_hi : hi;
-            advance = css_px_add(advance, css_font_kerning_px(tr_char_at(m, i)->style, tr_char_at(m, i)->face,
-                                                              tr_char_at(m, i)->cp, tr_kern_after, &kr));
-        }
-        run = css_px_add(run, advance);
-    }
-    /* The run open at `upto` ends there when nothing of it continues on the line. */
-    if (run_style != NULL) {
-        bool continues = upto < hi && upto < keep_hi && m->items[upto].kind == TEXT_RUN_ITEM_CHAR &&
-                         m->items[upto].style == run_style;
-        sum = css_px_add(sum, continues ? run : tr_snapped_width(run));
-    }
-    return sum;
+    css_px_sum_init(&e->closed);
+    css_px_sum_init(&e->run);
+    e->run_style = NULL;
+    e->kern_lo = e->end = lo;
 }
 
-/* One line's inline size: the prefix above taken to the line's end, which CSS 2.2 §9.4.2's distribution
-   compares against an available width. */
-static CssPx tr_line_size(const TextRunMeasure *m, size_t lo, size_t hi, TextRunSizeBasis basis)
+/* The open run's kernings that can no longer change, given what lies before `end`, join `run` in order. */
+static void tr_end_settle(const TextRunMeasure *m, TextRunLineEnd *e, size_t end)
 {
-    return tr_line_prefix(m, lo, hi, hi, basis);
+    while (e->kern_lo < e->end) {
+        bool settled;
+        CssPx k = tr_kerning(m, e->kern_lo, end, &settled);
+
+        if (!settled) return;
+        css_px_sum_add(&e->run, k);
+        e->kern_lo++;
+    }
+}
+
+/* The open run's unsettled kernings, read against what lies before `end`. */
+static CssPx tr_end_pending(const TextRunMeasure *m, const TextRunLineEnd *e, size_t end)
+{
+    CssPxSum s;
+    size_t p;
+    bool settled;
+
+    css_px_sum_init(&s);
+    for (p = e->kern_lo; p < e->end; p++) css_px_sum_add(&s, tr_kerning(m, p, end, &settled));
+    return css_px_sum_value(&s);
+}
+
+/* The open run ends: its kernings are read against the line as it stands and its width is snapped once. */
+static void tr_end_close(const TextRunMeasure *m, TextRunLineEnd *e)
+{
+    if (e->run_style != NULL) {
+        css_px_sum_add(&e->run, tr_end_pending(m, e, e->end));
+        css_px_sum_add(&e->closed, tr_snapped_width(css_px_sum_value(&e->run)));
+        css_px_sum_init(&e->run);
+        e->run_style = NULL;
+    }
+    e->kern_lo = e->end;
+}
+
+/* Character `i` joins the open run, or opens one in another element. The run's earlier kernings are settled
+   against it before a preserved tab is positioned, so the tab stop is measured from where the tab begins. */
+static void tr_end_add_char(const TextRunMeasure *m, TextRunLineEnd *e, size_t i)
+{
+    const TextRunItem *c = tr_char_at(m, i);
+    CssPx advance;
+
+    if (e->run_style != c->style) {
+        tr_end_close(m, e);
+        e->run_style = c->style;
+        e->kern_lo = e->end = i;
+    }
+    DCHECKF(e->end == i, "item %zu joined a shaping run that ends at item %zu, so a character between them is "
+            "on the line and in no run", i, e->end);
+    tr_end_settle(m, e, i + 1);
+    if (c->cp == 0x0009) {
+        CssPx at = css_px_add(css_px_add(css_px_sum_value(&e->closed), css_px_sum_value(&e->run)),
+                              tr_end_pending(m, e, i + 1));
+
+        advance = tr_tab_advance(c->style, at);
+    } else {
+        advance = c->advance;
+    }
+    css_px_sum_add(&e->run, advance);
+    e->end = i + 1;
+}
+
+/* Where the open run stands if it continues past the end of the sum: unsnapped, with its kernings read
+   against what lies before `kend`. */
+static CssPx tr_end_offset(const TextRunMeasure *m, const TextRunLineEnd *e, size_t kend)
+{
+    return css_px_add(css_px_add(css_px_sum_value(&e->closed), css_px_sum_value(&e->run)),
+                      tr_end_pending(m, e, kend));
+}
+
+/* The sum's inline size with its open run ending where the sum does. */
+static CssPx tr_end_size(const TextRunMeasure *m, const TextRunLineEnd *e)
+{
+    if (e->run_style == NULL) return css_px_sum_value(&e->closed);
+    return css_px_add(css_px_sum_value(&e->closed),
+                      tr_snapped_width(css_px_add(css_px_sum_value(&e->run), tr_end_pending(m, e, e->end))));
+}
+
+/* The same size as a number alone, for a comparison that interns no form. */
+static double tr_end_size_px(const TextRunMeasure *m, const TextRunLineEnd *e)
+{
+    if (e->run_style == NULL) return e->closed.v.px;
+    return e->closed.v.px + tr_snapped_px(e->run.v.px + tr_end_pending(m, e, e->end).px);
 }
 
 static void tr_line_sum_open(TextRunLineSum *s, size_t lo)
@@ -689,38 +728,46 @@ static void tr_line_sum_open(TextRunLineSum *s, size_t lo)
     s->lo = lo;
     s->at = lo;
     s->content = false;
-    css_px_sum_init(&s->sum);
-    css_px_sum_init(&s->size);
+    tr_end_open(&s->sum, lo);
+    tr_end_open(&s->size, lo);
 }
 
-/* Add item `s->at` to the line: `tr_line_prefix`'s additions over `[lo, at + 1)` in its order, so `size` is
-   `tr_line_size(m, lo, at + 1, basis)`. A character after the last content item is summed into `sum` alone,
-   because §4.1.2 removes it from this line and keeps it if content follows, where a preserved tab is positioned
-   against everything before it. */
+/* Add item `s->at` to the line. A sized item closes the open run and is summed wherever it lands; a forced
+   break closes it and adds nothing. A character before the first content item is §4.1.2's leading trim, and
+   one after the last is summed into `sum` alone, because §4.1.2 removes it from this line and keeps it if
+   content follows, where a preserved tab is positioned against everything before it. */
 static void tr_line_sum_add(const TextRunMeasure *m, TextRunLineSum *s, TextRunSizeBasis basis)
 {
     size_t i = s->at++;
     const TextRunItem *it;
-    CssPx advance;
 
     DCHECK(i < m->count, "a line was summed past the end of the collected run");
     it = &m->items[i];
     if (tr_kind_has_size(it->kind)) {
         CssPx px = tr_sized_px(m, i, basis);
 
-        css_px_sum_add(&s->sum, px);
-        if (tr_item_stops_trim(it)) { s->size = s->sum; s->content = true; }
-        else                        css_px_sum_add(&s->size, px);
+        tr_end_close(m, &s->sum);
+        css_px_sum_add(&s->sum.closed, px);
+        if (tr_item_stops_trim(it)) {
+            s->size = s->sum;
+            s->content = true;
+        } else {
+            tr_end_close(m, &s->size);
+            css_px_sum_add(&s->size.closed, px);
+        }
         return;
     }
-    if (it->kind == TEXT_RUN_ITEM_FORCED_BREAK) return;
-    if (!tr_item_stops_trim(it) && !s->content) return;   /* §4.1.2's leading trim */
-    if (tr_char_at(m, i)->cp == 0x0009)
-        advance = tr_tab_advance(it->style, css_px_sum_value(&s->sum));
-    else
-        advance = tr_char_at(m, i)->advance;
-    css_px_sum_add(&s->sum, advance);
-    if (tr_item_stops_trim(it)) { s->size = s->sum; s->content = true; }
+    if (it->kind == TEXT_RUN_ITEM_FORCED_BREAK) {
+        tr_end_close(m, &s->sum);
+        tr_end_close(m, &s->size);
+        return;
+    }
+    if (!tr_item_stops_trim(it) && !s->content) return;
+    tr_end_add_char(m, &s->sum, i);
+    if (tr_item_stops_trim(it)) {
+        s->size = s->sum;
+        s->content = true;
+    }
 }
 
 /* Sum the line forward to item boundary `at`; answers the items added. */
@@ -731,6 +778,47 @@ static size_t tr_line_sum_to(const TextRunMeasure *m, TextRunLineSum *s, size_t 
     DCHECK(s->at <= at && at <= m->count, "a line was summed to a boundary behind it or past the run's end");
     while (s->at < at) { tr_line_sum_add(m, s, basis); k++; }
     return k;
+}
+
+/* The line `[s->lo, s->at)`'s inline size: css-text-3 §4.1.2's trailing trim is applied. */
+static CssPx tr_line_sum_size(const TextRunMeasure *m, const TextRunLineSum *s)
+{
+    return tr_end_size(m, &s->size);
+}
+
+/* How far along line `[lo, hi)` item `upto` begins: the sum of the sizes and advances of `[lo, upto)`, less
+   css-text-3 §4.1.2 "Phase II: Trimming and Positioning"'s ends ("a sequence of collapsible spaces at the
+   beginning of a line is removed", "a sequence of collapsible spaces at the end of a line is removed"). It is
+   the line sum taken to `upto`; past the line's last content item it is that sum's trimmed size. A position
+   inside a shaping run that continues on the line is unsnapped, with the pair it forms with `upto` kerned.
+   `upto == hi` is the line's size, where its last item ends (a fragment's far edge). */
+static CssPx tr_line_prefix(const TextRunMeasure *m, size_t lo, size_t hi, size_t upto,
+                            TextRunSizeBasis basis)
+{
+    TextRunLineSum s;
+    size_t i, keep_hi = lo;
+    bool continues;
+
+    DCHECK(lo <= hi && hi <= m->count, "a line was measured over a range that is not inside the collected run");
+    DCHECK(lo <= upto && upto <= hi,
+           "css-text-3 §4.1.2's per-line sum was asked for a prefix that ends outside the line it is a prefix "
+           "of. The trim range is the line's, so a bound past `hi` would sum items §4.1.2 never looked at and "
+           "a bound before `lo` would sum a negative span");
+    for (i = hi; i > lo; i--)
+        if (tr_item_stops_trim(&m->items[i - 1])) { keep_hi = i; break; }
+    tr_line_sum_open(&s, lo);
+    tr_line_sum_to(m, &s, upto, basis);
+    if (upto > keep_hi) return tr_line_sum_size(m, &s);
+    continues = upto < keep_hi && m->items[upto].kind == TEXT_RUN_ITEM_CHAR &&
+                m->items[upto].style == s.sum.run_style;
+    return continues ? tr_end_offset(m, &s.sum, keep_hi) : tr_end_size(m, &s.sum);
+}
+
+/* One line's inline size: the prefix above taken to the line's end, which CSS 2.2 §9.4.2's distribution
+   compares against an available width. */
+static CssPx tr_line_size(const TextRunMeasure *m, size_t lo, size_t hi, TextRunSizeBasis basis)
+{
+    return tr_line_prefix(m, lo, hi, hi, basis);
 }
 
 /* Whether the soft wrap opportunity at a boundary is enabled. css-text-3 §5.5 "Line Breaking Details" has two
@@ -949,8 +1037,8 @@ static size_t tr_prep_step(TextRunMeasure *m)
         tr_line_sum_add(m, &m->max_line, TEXT_RUN_SIZE_MAX_CONTENT);
         tr_line_sum_add(m, &m->min_line, TEXT_RUN_SIZE_MIN_CONTENT);
         if (++m->cursor < m->count) return 1;
-        m->max_content = css_px_max(m->max_content, css_px_sum_value(&m->max_line.size));
-        m->min_content = css_px_max(m->min_content, css_px_sum_value(&m->min_line.size));
+        m->max_content = css_px_max(m->max_content, tr_line_sum_size(m, &m->max_line));
+        m->min_content = css_px_max(m->min_content, tr_line_sum_size(m, &m->min_line));
         tr_floor_max_content(m);
         m->answered = true;
         return 1;
@@ -1059,11 +1147,11 @@ size_t text_run_measure_finish_step(TextRunMeasure *m)
                "apart");
     }
     if (forced) {
-        m->max_content = css_px_max(m->max_content, css_px_sum_value(&m->max_line.size));
+        m->max_content = css_px_max(m->max_content, tr_line_sum_size(m, &m->max_line));
         tr_line_sum_open(&m->max_line, at);
     }
     if (forced || soft) {
-        m->min_content = css_px_max(m->min_content, css_px_sum_value(&m->min_line.size));
+        m->min_content = css_px_max(m->min_content, tr_line_sum_size(m, &m->min_line));
         tr_line_sum_open(&m->min_line, at);
     }
     if (i < m->ncps) return k;
@@ -1297,6 +1385,10 @@ static void tr_fill_emit(TextRunFill *f, const TextRunMeasure *m, size_t to, Css
     DCHECK(f->n < m->count, "CSS 2.2 §9.4.2's fill produced more line boxes than the run has items, and the "
                             "lines partition the items — so a line was emitted empty or a boundary went "
                             "backwards");
+    DCHECKF(size.px == tr_line_size(m, f->start, to, TEXT_RUN_SIZE_MAX_CONTENT).px,
+            "the line [%zu, %zu) was fitted at %.17g px and measures %.17g px from its start: the forward sum and "
+            "the line's own sum came apart", f->start, to, size.px,
+            tr_line_size(m, f->start, to, TEXT_RUN_SIZE_MAX_CONTENT).px);
     f->out[f->n].from = f->start;
     f->out[f->n].to = to;
     f->out[f->n].size = size;
@@ -1330,14 +1422,14 @@ size_t text_run_fill_step(TextRunFill *f, const TextRunMeasure *m)
         /* "cannot fit horizontally within a single line box", measured over the line as it would be if this
            position were not taken: the comparison is at `at` and the emission at `prev`. `prev > start` is
            §9.4.2's cannot-be-split condition stated positively. */
-        if (f->prev > f->start && f->line.size.v.px > f->available.px) {
-            tr_fill_emit(f, m, f->prev, css_px_sum_value(&f->at_prev.size));
+        if (f->prev > f->start && tr_end_size_px(m, &f->line.size) > f->available.px) {
+            tr_fill_emit(f, m, f->prev, tr_line_sum_size(m, &f->at_prev));
             f->line = f->seg;
         }
         if (forced) {
             /* css-text-3 §5.5 makes this break forced "regardless of the white-space value", so the line ends
                here whether or not anything overflowed; at `i == ncps` it is LB3 closing the run. */
-            tr_fill_emit(f, m, at, css_px_sum_value(&f->line.size));
+            tr_fill_emit(f, m, at, tr_line_sum_size(m, &f->line));
             tr_line_sum_open(&f->line, at);
         }
         f->prev = at;
