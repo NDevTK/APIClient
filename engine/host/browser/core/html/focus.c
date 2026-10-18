@@ -1773,12 +1773,10 @@ int focus_element_run(JSContext *ctx, JSValueConst el, uint8_t *phase, JSValue *
  * ordinary way a focus-trap library collects candidates — reads `undefined` on an absent member and takes its
  * false arm for every element in the document, which is a whole region of the page's own code never explored.
  *
- * THE MIXIN'S OTHER HOME IS HONESTLY ABSENT. HTMLOrSVGOrMathMLElement is included by SVGElement and
- * MathMLElement as well, and neither interface exists in this engine (SVGElement is a name on
- * browser/platform_names.h, so reading it is the ReferenceError that names the component to write). The
- * getter's default therefore never sees an SVG `a` or a MathML `a`, which is why those two of §6.6.3's arms are
- * not written below: they are unreachable through the only prototype this member is installed on, and a branch
- * for a receiver that cannot arrive is a claim this file cannot make. */
+ * THE MIXIN HAS TWO HOMES HERE. HTMLOrSVGOrMathMLElement is included by HTMLElement and SVGElement, whose
+ * prototypes both receive these members (core/svg/svg_element.c installs them on SVGElement's), and by
+ * MathMLElement, which is absent (browser/platform_names.h). So the default below has an SVG `a` arm and no
+ * MathML `a` arm: a MathML element cannot be the receiver of a member installed on neither of its prototypes. */
 
 /* §6.6.3's LAST GETTER STEP, as its own predicate: "Return 0 if this is an a, area, button, frame, iframe,
    input, object, select, textarea, or SVG a element, or MathML a element, or is a summary element that is a
@@ -1794,6 +1792,9 @@ static bool el_tabindex_default_is_zero(const lxb_dom_node_t *n)
                                         "select", "textarea" };
     size_t i;
 
+    DCHECK(html_or_svg_or_mathml_element_node_is(n),
+           "§6.6.3's tabIndex default was asked of an element no prototype carrying the member belongs to");
+    if (n->ns == LXB_NS_SVG) return el_is(n, "a");   /* "or SVG a element" */
     for (i = 0; i < sizeof ZERO / sizeof ZERO[0]; i++)
         if (el_is(n, ZERO[i])) return true;
     return el_is_summary_for_parent_details(n);
@@ -1816,13 +1817,12 @@ static JSValue js_tab_index_get(JSContext *ctx, JSValueConst this_val, int magic
 
     (void)magic;
     /* WEB IDL §3.7.6 Attributes' brand check, a THROW and not an assert: this accessor sits on
-       HTMLElement.prototype and
-       a page reaches one off a prototype with `.call` on anything at all. */
-    if (!html_element_is(this_val))
-        return JS_ThrowTypeError(ctx, "HTMLElement.tabIndex was reached on something that is not an HTML "
-                                      "element");
+       HTMLElement.prototype and SVGElement.prototype, and a page reaches one off a prototype with `.call` on
+       anything at all. */
+    if (!html_or_svg_or_mathml_element_is(this_val))
+        return JS_ThrowTypeError(ctx, "tabIndex was reached on something that is not an HTML or SVG element");
     DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
-           "html_element_is admitted a value with no element node behind it");
+           "html_or_svg_or_mathml_element_is admitted a value with no element node behind it");
     v = el_attr(n, "tabindex", &len);                                                    /* steps 1-2 */
     if (v && html_parse_integer((const char *)v, len, &parsed) && !parsed.overflow &&
         parsed.value >= INT32_MIN && parsed.value <= INT32_MAX)
@@ -1845,8 +1845,8 @@ static JSValue js_tab_index_set(JSContext *ctx, JSValueConst this_val, JSValueCo
     int wrote;
 
     (void)magic;
-    if (!html_element_is(this_val))
-        return JS_ThrowTypeError(ctx, "HTMLElement.tabIndex was set on something that is not an HTML element");
+    if (!html_or_svg_or_mathml_element_is(this_val))
+        return JS_ThrowTypeError(ctx, "tabIndex was set on something that is not an HTML or SVG element");
     DCHECK(JS_IsNumber(val),
            "§6.6.3's tabIndex setter was handed something that is not a number — it is declared IDL_LONG, so "
            "Web IDL's `long` conversion produced one before this body was entered");

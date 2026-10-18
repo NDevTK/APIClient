@@ -267,20 +267,37 @@ static JSValue js_node_child_op(JSContext *ctx, JSValueConst this_val, int argc,
    by node TYPE and cannot answer it. So the html layer registers the answer and node_wrap ASKS, which keeps it
    the ONE place a wrapper is built. Not a fallback and nothing to select against: there is exactly one answer
    per element, and an element wrapped before the resolver exists is a DCHECK, not a degraded path. */
-/* WHICH HTML INTERFACE AN ELEMENT WEARS — the HTML layer's answer, and it takes a REALM because the prototype
-   it names is that realm's. OWNED, like every other per-realm prototype read. */
-static JSValue (*g_element_resolver)(JSContext *ctx, lxb_dom_element_t *el);
-void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *el))
+/* WHICH INTERFACE AN ELEMENT WEARS, PER NAMESPACE — each namespace's specification answers for its own elements
+   (HTML §3.2.2 for HTML's, SVG 2 for SVG's), and it takes a REALM because the prototype it names is that realm's.
+   OWNED, like every other per-realm prototype read. A namespace with no resolver is answered by DOM §4.5's
+   default: "The element interface for any name and namespace is Element, unless stated otherwise." */
+static JSValue (*g_element_resolver[LXB_NS__LAST_ENTRY])(JSContext *ctx, lxb_dom_element_t *el);
+void node_set_element_resolver(lxb_ns_id_t ns, JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *el))
 {
-    /* ONE CLAIMANT, AND NULL GIVES IT BACK. The slot is this file's and the answer is the HTML layer's, so
-       html_element_free releases it and node_free asserts that it did — a resolver left pointing into a
-       component the cascade has already torn down is the defect core/agent_state.h found in idb_transaction. */
-    DCHECK(fn == NULL || g_element_resolver == NULL,
-           "a second component claimed the element-interface resolver — there is one answer per element, and "
-           "the second claim silently decides the prototype of every wrapper the first was building");
-    DCHECK(fn != NULL || g_element_resolver != NULL,
-           "the element-interface resolver was released by a component that never registered one");
-    g_element_resolver = fn;
+    /* ONE CLAIMANT PER NAMESPACE, AND NULL GIVES IT BACK. The slot is this file's and the answer is the
+       namespace's component, so its free releases it and node_free asserts that it did — a resolver left
+       pointing into a component the cascade has already torn down is the defect core/agent_state.h found in
+       idb_transaction. */
+    DCHECK(ns > LXB_NS__UNDEF && ns < LXB_NS__LAST_ENTRY,
+           "an element-interface resolver was claimed for a namespace id Lexbor does not define");
+    DCHECK(fn == NULL || g_element_resolver[ns] == NULL,
+           "a second component claimed one namespace's element-interface resolver — there is one answer per "
+           "element, and the second claim silently decides the prototype of every wrapper the first was building");
+    DCHECK(fn != NULL || g_element_resolver[ns] != NULL,
+           "a namespace's element-interface resolver was released by a component that never registered one");
+    g_element_resolver[ns] = fn;
+}
+
+/* The prototype an element's wrapper is built with: its namespace's resolver's answer, or DOM §4.5's Element
+   default for a namespace no resolver claims, which includes every id Lexbor allocates past its own enum for a
+   namespace URI it was handed. OWNED. */
+static JSValue node_element_interface_proto(JSContext *ctx, lxb_dom_element_t *el)
+{
+    lxb_ns_id_t ns = lxb_dom_interface_node(el)->ns;
+
+    if (ns < LXB_NS__LAST_ENTRY && g_element_resolver[ns])
+        return g_element_resolver[ns](ctx, el);
+    return element_proto(ctx);
 }
 
 /* THE TREE HOOK IS INSTALLED INTO THE CHOKEPOINT, not called from each mutation site, and the difference is a
@@ -5179,7 +5196,7 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
     DCHECK(g_protos_ready, "a node was wrapped before the DOM interfaces existed");
     DCHECK((int)n->type > 0 && (int)n->type < LXB_DOM_NODE_TYPE_LAST_ENTRY,
            "a Lexbor node carries a type the DOM does not define");
-    DCHECK(n->type != LXB_DOM_NODE_TYPE_ELEMENT || g_element_resolver != NULL,
+    DCHECK(n->type != LXB_DOM_NODE_TYPE_ELEMENT || g_element_resolver[LXB_NS_HTML] != NULL,
            "an Element node was wrapped before the HTML layer registered its interface resolver");
     /* THE PROTOTYPE IS THE NODE'S DOCUMENT'S REALM'S, and the distinction is the whole reason a wrapper is
        cached: there is ONE wrapper per node — two same-origin documents are one agent and both see the same
@@ -5205,8 +5222,8 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
            is answerable by a table keyed on node TYPE, which is exactly why both are asked here rather than
            there: `node_claim_type` admits ONE claimant per type, and it is right to, because the type is not
            what decides. */
-        proto = (n->type == LXB_DOM_NODE_TYPE_ELEMENT && g_element_resolver)
-                    ? g_element_resolver(rctx, lxb_dom_interface_element(n))
+        proto = (n->type == LXB_DOM_NODE_TYPE_ELEMENT)
+                    ? node_element_interface_proto(rctx, lxb_dom_interface_element(n))
               : (n->type == LXB_DOM_NODE_TYPE_DOCUMENT)
                     ? document_interface_proto(rctx, lxb_dom_interface_document(n))
                     : node_type_proto(rctx, (int)n->type);
@@ -6145,10 +6162,11 @@ void node_free(JSRuntime *rt)
     dom_cow_set_tree_hook(NULL);
     event_target_set_tree(NULL);
     engine_set_wrap_stats(NULL);
-    DCHECK(g_element_resolver == NULL,
-           "the element-interface resolver was still registered when the node layer was released — "
-           "core/html/html_element.c claimed it and gives it back at html_element_free, which the DOM group's "
-           "own cascade runs first");
+    for (int ns = 0; ns < LXB_NS__LAST_ENTRY; ns++)
+        DCHECK(g_element_resolver[ns] == NULL,
+               "a namespace's element-interface resolver was still registered when the node layer was released — "
+               "core/html/html_element.c and core/svg/svg_element.c claim theirs and give them back at their "
+               "frees, which the DOM group's own cascade runs first");
     /* §4.2.3's THREE HOOK-LIST LENGTHS ARE NOT RESET HERE. `g_tree_hook_n = 0` stood on this line and its two
        siblings stood nowhere, which is the drift a release written as a second copy of a declaration produces;
        all three are declared to core/agent_state.h in node_init, so agent_state_undo("element") puts them back

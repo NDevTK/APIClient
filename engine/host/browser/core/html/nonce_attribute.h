@@ -36,9 +36,8 @@
 
 /* Once per AGENT — the `nonce` setter's step id. */
 void nonce_attribute_init(JSContext *ctx);
-/* Onto ONE realm's HTMLElement.prototype. HTMLElement is the only interface in this agent that includes
-   HTMLOrSVGOrMathMLElement: SVGElement and MathMLElement are names on browser/platform_names.h, so reading one
-   is the ReferenceError that names the component to write, and the mixin has no other carrier to be on. */
+/* Onto ONE realm's prototype of an interface that includes HTMLOrSVGOrMathMLElement (HTMLElement's and
+   SVGElement's; MathMLElement is absent), through html_or_svg_or_mathml_element_install. */
 void nonce_attribute_install(JSContext *ctx, JSValueConst proto);
 void nonce_attribute_free(void);
 

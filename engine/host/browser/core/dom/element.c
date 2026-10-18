@@ -43,6 +43,7 @@
 #include "core/events/pointer_capture.h"
 #include "core/html/autofocus.h"
 #include "core/html/html_element.h"
+#include "core/svg/svg_element.h"   /* svg_element_init / svg_element_free: SVG 2 §4.4.1 */
 #include "core/html/custom_elements.h"
 #include "core/html/html_iframe.h"
 #include "core/html/html_parse.h"    /* the ONE place an HTML parser is made — that header owns the token bytes */
@@ -3301,6 +3302,7 @@ void element_init(JSContext *ctx)
        the standard numbers that family after the mutation record the list's last entry queues. */
     html_style_element_init(ctx);
     html_element_init(ctx);   /* the HTML half, which builds HTMLElement and the per-tag interfaces on this */
+    svg_element_init(ctx);    /* SVG 2's SVGElement, after the HTML half whose mixin installer it calls */
     agent_state_ptr("element", &g_element_rt,
                     "the runtime this whole DOM group declared into, and the declaration latch");
     agent_state_atom("element", &g_attrs_key, "the [SameObject] NamedNodeMap cache slot on an element's wrapper");
@@ -3437,6 +3439,7 @@ void element_free(JSRuntime *rt)
        and this call is the claim that entitles the undo to — see core/events/pointer_capture.c. */
     pointer_capture_free();
     element_view_free();
+    svg_element_free(rt);    /* before the HTML half, the reverse of element_init */
     html_element_free(rt);
     html_style_element_free(rt);   /* before the sheet interface whose objects it holds */
     style_sheet_list_free(rt);

@@ -20,6 +20,7 @@
 #include "core/events/report_exception.h"
 #include "core/fullscreen/fullscreen.h"
 #include "core/html/html_element.h"
+#include "core/svg/svg_element.h"   /* svg_element_install: SVGElement and SVGAnimatedString */
 #include "core/html/html_form.h"
 #include "core/html/custom_elements.h"
 #include "core/html/element_internals.h"
@@ -4571,6 +4572,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
         JS_FreeValue(ctx, ep);
     }
     html_element_install(ctx, global);   /* HTMLElement and every per-tag interface object */
+    svg_element_install(ctx, global);    /* SVG 2's SVGElement and SVGAnimatedString */
     cssom_install(ctx, global);          /* CSSStyleDeclaration, and getComputedStyle on the Window */
     css_style_sheet_install(ctx, global); /* CSSOM §6.1.1 StyleSheet and §6.1.2 CSSStyleSheet */
     style_sheet_list_install(ctx, global); /* CSSOM §6.2.2 StyleSheetList */

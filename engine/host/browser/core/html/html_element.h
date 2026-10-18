@@ -22,6 +22,16 @@ JSValue html_element_proto(JSContext *ctx);
    namespace is what decides it) so the answer lives here, and idl_iface_narrow is what a member declares it
    with. */
 bool html_element_is(JSValueConst v);
+/* HTML §3.2.2's `interface mixin HTMLOrSVGOrMathMLElement`: whether this element is one the mixin's members
+   (dataset, nonce, autofocus, tabIndex, focus(), blur()) are on — an HTML element or an SVG element, since
+   HTMLElement and SVGElement include the mixin. MathMLElement includes it too and is absent here
+   (browser/platform_names.h), so a MathML element answers false. The node form serves the steps that have no
+   wrapper to ask. */
+bool html_or_svg_or_mathml_element_node_is(const lxb_dom_node_t *n);
+bool html_or_svg_or_mathml_element_is(JSValueConst v);
+/* The mixin's members onto one realm's prototype of an interface that includes it (HTMLElement's, SVGElement's):
+   `autofocus`, `dataset`, `nonce`, `focus()`, `blur()` and `tabIndex`, from the components that own them. */
+void html_or_svg_or_mathml_element_install(JSContext *ctx, JSValueConst proto);
 /* §4's HTMLUnknownElement.prototype FOR THIS REALM. OWNED. DOM §4.9 step 5.1.4's failure arm names the
    interface by name — "create an element internal given document, HTMLUnknownElement, localName, …" — so a
    custom element whose constructor threw is an HTMLUnknownElement with that local name, which is what makes

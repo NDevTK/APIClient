@@ -198,12 +198,18 @@ static const ElReflect R_HTML[] = {
        it is core/html/nonce_attribute.c and not a new kind in the reflection enum. */
     { "popover", "popover", REFLECT_ENUM, .en = &POPOVER_ATTRIBUTE },
     { "hidden", "hidden", REFLECT_BOOL }, { "inert", "inert", REFLECT_BOOL },
-    { "autofocus", "autofocus", REFLECT_BOOL },
     /* §2.6.2 `[Reflect, ReflectRange=(0,8)] unsigned long` — no [ReflectDefault], so an unparseable or absent
        `headingoffset` answers the range's MINIMUM (0) and not a default. HTMLElement is inherited by every
        element interface, so this one row is the member on 62 of them. */
     { "headingOffset", "headingoffset", REFLECT_ULONG, 0, false, 0, 8, true },
     { "headingReset", "headingreset", REFLECT_BOOL },
+};
+
+/* HTML §3.2.2's `interface mixin HTMLOrSVGOrMathMLElement`'s one reflection, `[CEReactions, Reflect] attribute
+   boolean autofocus`: the mixin's own table, installed with its other members by
+   html_or_svg_or_mathml_element_install on every prototype that includes it. */
+static const ElReflect R_HTML_OR_SVG_OR_MATHML[] = {
+    { "autofocus", "autofocus", REFLECT_BOOL },
 };
 
 /* THE PER-INTERFACE REFLECTIONS. Each list is what that interface's IDL declares and nothing else — which is
@@ -686,6 +692,7 @@ static int g_iface_refl_base[HTML_IFACE_N];
 static const ElReflect *g_iface_refl[HTML_IFACE_N];
 static int g_iface_nrefl[HTML_IFACE_N];
 static int g_html_refl_base;
+static int g_mixin_refl_base;   /* R_HTML_OR_SVG_OR_MATHML's, declared beside g_html_refl_base */
 
 /* Which of the two BASE interfaces a row names, or 0. Rows naming them are not built by the per-interface loops
    — HTMLElement.prototype and HTMLUnknownElement.prototype are built and installed explicitly, once each — so
@@ -740,32 +747,21 @@ JSValue html_element_interface_proto(JSContext *ctx, const char *name, size_t n)
     return JS_GetClassProto(ctx, g_unknown_class);   /* §3.2.2 STEP 7 */
 }
 
-/* THE SAME QUESTION ASKED OF AN ELEMENT — the namespace gate, then the name.
+/* THE SAME QUESTION ASKED OF AN HTML-NAMESPACE ELEMENT. node.c asks each namespace's resolver for its own
+ * elements only (core/svg/svg_element.c answers SVG's), so an `<a>` inside an `<svg>` never reaches this table.
  *
- * THE NAMESPACE IS PART OF THE QUESTION, and it used to be missing: node.c hands this resolver EVERY element
- * node it wraps, whatever namespace it is in, and this answered out of HTML's table regardless — so
- * an `<a>` inside an `<svg>` was handed HTMLAnchorElement.prototype and answered `instanceof HTMLAnchorElement`
- * true, which is how a page tells a link from a shape. DOM §4.5 Interface Document states the default this
- * falls back to in its own sentence: "The element interface for any name and namespace is Element, unless
- * stated otherwise."
- *
- * NAMED RESIDUAL — SVG AND MATHML. An element in the SVG or MathML namespace is answered with Element, which is
- * DOM §4.5's default and is what the sentence above says for a namespace no other specification covers; it is
- * NARROWER than the platform, where SVG defines SVGAElement for that `<a>` and MathML defines MathMLElement.
- * What the next diff must leave standing is a core/svg/svg_element.c owning SVG's own name-to-interface rows,
- * and a node.c resolver seam that admits MORE THAN ONE resolver keyed by namespace — node_set_element_resolver
- * today holds exactly one and asserts it is claimed once, so widening it is part of that diff and not a thing
- * to reach for. Its absence shows as `document.createElementNS(SVG_NS, "a").constructor.name`
- * answering "Element" where a browser answers "SVGAElement" — and, before that, as the ReferenceError a page
- * gets for reading the global `SVGElement`, which is on browser/platform_names.h and is the forcing function
- * that names the component to write. */
+ * Named residual. Not covered: MathML-namespace elements are answered by DOM §4.5's default, Element, where
+ * MathML Core defines MathMLElement. Next diff builds: a core/mathml/mathml_element.c registering its resolver
+ * for LXB_NS_MATH, as core/svg/svg_element.c does for LXB_NS_SVG. Absence shows as: the ReferenceError a page
+ * gets for reading the global `MathMLElement`, which is on browser/platform_names.h. */
 static JSValue html_proto_for(JSContext *ctx, lxb_dom_element_t *el)
 {
     size_t n = 0;
     const lxb_char_t *tag = lxb_dom_element_local_name(el, &n);
 
-    if (lxb_dom_interface_node(el)->ns != LXB_NS_HTML)
-        return element_proto(ctx);   /* DOM §4.5's default, and OWNED like every per-realm prototype read */
+    DCHECK(lxb_dom_interface_node(el)->ns == LXB_NS_HTML,
+           "the HTML element-interface resolver was asked about an element in another namespace — node.c keys "
+           "the resolvers by namespace, so this one is registered for LXB_NS_HTML alone");
     DCHECK(tag != NULL && n != 0,
            "an HTML-namespace element carries no local name — DOM §1.4 Name validation's valid element "
            "local name is one or more code points, so an element with an empty one was built by something "
@@ -1095,6 +1091,9 @@ void html_element_init(JSContext *ctx)
     /* EVERY REFLECTION DECLARED ONCE, here, with the base index each row's install names them by. */
     g_html_refl_base = element_declare_reflections(ctx, "HTMLElement", R_HTML,
                                                   (int)(sizeof(R_HTML) / sizeof(R_HTML[0])));
+    g_mixin_refl_base = element_declare_reflections(
+        ctx, "HTMLOrSVGOrMathMLElement", R_HTML_OR_SVG_OR_MATHML,
+        (int)(sizeof(R_HTML_OR_SVG_OR_MATHML) / sizeof(R_HTML_OR_SVG_OR_MATHML[0])));
     for (i = 0; i < HTML_IFACE_N; i++) {
         for (j = 0; j < i; j++)
             if (g_iface_class[j] == g_iface_class[i]) break;
@@ -1181,11 +1180,25 @@ void html_element_init(JSContext *ctx)
     realm_declare_intrinsic(html_element_install_protos);
     /* node.c keys its prototype table by node TYPE; an element's interface is keyed by its LOCAL NAME, which is
        HTML's mapping and not the DOM's. So the base ASKS, and stays the one place a wrapper is built. */
-    node_set_element_resolver(html_proto_for);
+    node_set_element_resolver(LXB_NS_HTML, html_proto_for);
 }
 
 /* §3.2.2 AND §4's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM — HTMLElement, HTMLUnknownElement, and one per
    interface the tag table names. */
+void html_or_svg_or_mathml_element_install(JSContext *ctx, JSValueConst proto)
+{
+    DCHECK(g_html_ready, "HTMLOrSVGOrMathMLElement's members were installed before their interfaces were declared");
+    element_install_reflections(ctx, proto, g_mixin_refl_base,
+                                (int)(sizeof(R_HTML_OR_SVG_OR_MATHML) / sizeof(R_HTML_OR_SVG_OR_MATHML[0])));
+    idl_install_accessor(ctx, proto, "dataset", js_html_dataset, 0, -1);
+    /* §2.5.6 Nonce attributes' `nonce`: not a reflection row, because its getter reads an internal slot and its
+       setter deliberately does not write the content attribute. */
+    nonce_attribute_install(ctx, proto);
+    /* §6.6.6's `focus(options)` and `blur()`, the two entry points of §6.6.4's processing model, and §6.6.3's
+       `tabIndex` (core/html/focus.c). */
+    focus_install_html_members(ctx, proto);
+}
+
 void html_element_install_protos(JSContext *ctx)
 {
     JSValue html_p, unknown_p, base, prev;
@@ -1216,22 +1229,14 @@ void html_element_install_protos(JSContext *ctx)
     /* §3.2.2 `[SameObject] attribute CSSStyleDeclaration style` — the attribute is HTMLElement's, the object is
        the CSSOM's, so each side owns its half. */
     cssom_install_style_attribute(ctx, html_p);
-    idl_install_accessor(ctx, html_p, "dataset", js_html_dataset, 0, -1);
     /* The six §3.2.6/§6.8 global attributes whose IDL attribute COMPUTES a value from the tree rather than
        mirroring one attribute — installed onto THIS realm's prototype like every other member. */
     global_attributes_install(ctx, html_p);
     /* §4.13.7 "Element internals"'s `ElementInternals attachInternals()` — an HTMLElement member, installed
        on THIS realm's prototype like every other. */
     element_internals_install_html_members(ctx, html_p);
-    /* §2.5.6 Nonce attributes' `nonce` — the third `HTMLOrSVGOrMathMLElement` member on this prototype, beside
-       the two below, and here rather than in R_HTML because its getter reads an internal slot and its setter
-       deliberately does not write the content attribute. */
-    nonce_attribute_install(ctx, html_p);
-    /* §6.6.6's `HTMLOrSVGOrMathMLElement` members — `focus(options)` and `blur()`, the two entry points of
-       §6.6.4's processing model, and §6.6.3's `tabIndex`. They were one body returning undefined; they are now
-       the real algorithms, which move the document's focused area and fire the page's focus handlers
-       (core/html/focus.c). */
-    focus_install_html_members(ctx, html_p);
+    /* §3.2.2 `HTMLElement includes HTMLOrSVGOrMathMLElement`. */
+    html_or_svg_or_mathml_element_install(ctx, html_p);
     /* CSSOM VIEW §7's `partial interface HTMLElement` — the offset family, installed on THIS realm's prototype
        like every other member. It is per realm because its answers are: every used value it reports bottoms out
        in CSS 2.1 §10.1's initial containing block, which is 300 CSS pixels wide in a child navigable and 1280
@@ -1625,6 +1630,16 @@ bool html_element_is(JSValueConst v)
     return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->ns == LXB_NS_HTML;
 }
 
+bool html_or_svg_or_mathml_element_node_is(const lxb_dom_node_t *n)
+{
+    return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT && (n->ns == LXB_NS_HTML || n->ns == LXB_NS_SVG);
+}
+
+bool html_or_svg_or_mathml_element_is(JSValueConst v)
+{
+    return html_or_svg_or_mathml_element_node_is(node_of(v));
+}
+
 void html_element_free(JSRuntime *rt)
 {
     /* THE FOUR SLOTS THIS FILE CLAIMED IN OTHER COMPONENTS, GIVEN BACK FIRST. §2.9's activation behaviour is
@@ -1634,7 +1649,7 @@ void html_element_free(JSRuntime *rt)
        INTO a component the cascade around this line is tearing down, which is the defect core/agent_state.h
        found in idb_transaction. All four receivers assert at their own release that the claim is gone. */
     hyperlink_free();
-    node_set_element_resolver(NULL);
+    node_set_element_resolver(LXB_NS_HTML, NULL);
     event_target_set_handler_terms(NULL);
     event_target_set_click_terms(NULL);
     dom_string_map_free(rt);

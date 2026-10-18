@@ -1093,6 +1093,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/contentsflex.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
+#include "fixture/svgelement.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1524,6 +1525,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "contentsflex", HTML_CONTENTSFLEX },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
+    { "svgelement", HTML_SVGELEMENT },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -13680,6 +13682,62 @@ TF_UNIT void probes_griditem(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `svgelement` document (fixture/svgelement.h). */
+TF_UNIT void probes_svgelement(const char *js, Probe *tab, int *n) {
+    /* SVG 2 §4.4.1: an SVG-namespace element wears SVGElement, which inherits Element and not HTMLElement. */
+    const char *iface_why = NULL; int iface_tt = 1;
+    fold_row(&iface_tt, &iface_why, !!strstr(js, "\"/api/svgel\""),
+             "NOT REACHED: there is no /api/svgel record at all — the script threw before its fetch, as it does "
+             "when `SVGElement` is not a global");
+    fold_row(&iface_tt, &iface_why, param_value_is(js, "/api/svgel", "inst", "1"),
+             "SVG 2 §4.4.1: the `<circle>` is not an instance of SVGElement");
+    fold_row(&iface_tt, &iface_why, param_value_is(js, "/api/svgel", "el", "1"),
+             "SVG 2 §4.4.1: SVGElement does not inherit Element");
+    fold_row(&iface_tt, &iface_why, param_value_is(js, "/api/svgel", "html", "0"),
+             "DOM §4.5: an SVG-namespace element answers `instanceof HTMLElement` true");
+    fold_row(&iface_tt, &iface_why, param_value_is(js, "/api/svgel", "tag", "SVGElement"),
+             "Web IDL §3.7.3: the element's class string is not SVGElement");
+    fold_row(&iface_tt, &iface_why, param_value_is(js, "/api/svgel", "ns", "svg"),
+             "SVG 2 §4.4.1: the `<svg>` element is not an instance of SVGElement");
+    /* §4.4.1's className, a [SameObject] SVGAnimatedString reflecting `class` (§4.6.7). */
+    const char *cn_why = NULL; int cn_tt = 1;
+    fold_row(&cn_tt, &cn_why, param_value_is(js, "/api/svgel", "cn", "ring"),
+             "SVG 2 §4.6.7: className.baseVal is not the `class` attribute's value");
+    fold_row(&cn_tt, &cn_why, param_value_is(js, "/api/svgel", "same", "1"),
+             "SVG 2 §4.4.1: className is [SameObject] and two reads answered two objects");
+    fold_row(&cn_tt, &cn_why, param_value_is(js, "/api/svgel", "set", "set"),
+             "SVG 2 §4.6.7: setting className.baseVal did not set the `class` attribute");
+    fold_row(&cn_tt, &cn_why, param_value_is(js, "/api/svgel", "anim", "set"),
+             "SVG 2 §4.6.7: className.animVal is not the attribute's current value");
+    /* §4.4.1's ownerSVGElement and viewportElement: the nearest `svg` ancestor, null on the outermost. */
+    const char *own_why = NULL; int own_tt = 1;
+    fold_row(&own_tt, &own_why, param_value_is(js, "/api/svgel", "own", "1"),
+             "SVG 2 §4.4.1: ownerSVGElement is not the nearest ancestor `svg` element");
+    fold_row(&own_tt, &own_why, param_value_is(js, "/api/svgel", "root", "1"),
+             "SVG 2 §4.4.1: the outermost svg element's ownerSVGElement is not null");
+    fold_row(&own_tt, &own_why, param_value_is(js, "/api/svgel", "vp", "1"),
+             "SVG 2 §8.8: viewportElement is not the nearest ancestor that establishes an SVG viewport");
+    /* The included members: CSSOM's style, and HTML §3.2.2's HTMLOrSVGOrMathMLElement. */
+    const char *mix_why = NULL; int mix_tt = 1;
+    fold_row(&mix_tt, &mix_why, param_value_is(js, "/api/svgel", "st", "object"),
+             "SVG 2 §4.4.1: the CSSOM's `style` is not on SVGElement");
+    fold_row(&mix_tt, &mix_why, param_value_is(js, "/api/svgel", "ds", "v"),
+             "HTML §3.2.2: HTMLOrSVGOrMathMLElement's `dataset` does not read the `data-k` attribute");
+    fold_row(&mix_tt, &mix_why, param_value_is(js, "/api/svgel", "ti", "-1"),
+             "HTML §6.6.3: a `<circle>` with no tabindex attribute does not answer tabIndex -1");
+    fold_row(&mix_tt, &mix_why, param_value_is(js, "/api/svgel", "ta", "0"),
+             "HTML §6.6.3: an SVG `a` element with no tabindex attribute does not answer tabIndex 0");
+    fold_row(&mix_tt, &mix_why, param_value_is(js, "/api/svgel", "fo", "function"),
+             "HTML §6.6.6: HTMLOrSVGOrMathMLElement's `focus` is not on SVGElement");
+    const Probe rows[] = {
+        { "svg-element-interface", iface_tt, "/api/svgel", SESS_EXPLORE, iface_why },
+        { "svg-class-name", cn_tt, "/api/svgel", SESS_EXPLORE, cn_why },
+        { "svg-owner-element", own_tt, "/api/svgel", SESS_EXPLORE, own_why },
+        { "svg-included-members", mix_tt, "/api/svgel", SESS_EXPLORE, mix_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `contentsflex` document. */
 TF_UNIT void probes_contentsflex(const char *js, Probe *tab, int *n) {
     /* css-display-3 §2.5's `contents` splice makes `cf` an item of the flex container, and css-flexbox-1 §9.2
@@ -17207,6 +17265,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_absentarm(js, probes, &np);
     probes_griditem(js, probes, &np);
     probes_contentsflex(js, probes, &np);
+    probes_svgelement(js, probes, &np);
     probes_custommedia(js, probes, &np);
     probes_visualupdate(js, probes, &np);
     probes_windowclose(js, probes, &np);

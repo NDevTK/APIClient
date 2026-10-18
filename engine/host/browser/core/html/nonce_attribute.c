@@ -12,6 +12,7 @@
 /* DOM §4.9 Interface Element's own key — the (null, `nonce`) attribute these steps are defined over. */
 #include "core/dom/attr_list.h"
 #include "core/dom/node.h"
+#include "core/html/html_element.h"   /* html_or_svg_or_mathml_element_node_is: which elements carry the mixin */
 #include "core/dom/element.h"
 #include "core/idl_args.h"
 #include "core/html/nonce_attribute.h"
@@ -23,18 +24,6 @@
 
 /* §2.5.6's `nonce` setter, declared once per AGENT — see nonce_attribute_init. */
 static int g_id_set_nonce = -1;
-
-/* WHICH ELEMENTS INCLUDE HTMLOrSVGOrMathMLElement, over the ELEMENT rather than over a wrapper — the attribute
-   change steps and the cloning steps both stand where there is no JS value to ask. §4's element-interface table
-   maps every HTML-namespace element to an interface inheriting HTMLElement (HTMLUnknownElement included), so
-   the namespace is the whole test, exactly as core/html/html_element.c's html_element_is says for the wrapper
-   side. SVG and MathML elements are NOT in it, and that is not a narrowing: SVGElement and MathMLElement are
-   names on browser/platform_names.h — absent interfaces whose ReferenceError names the component to write — so
-   in this agent the mixin has no other carrier for the member to be on either. */
-static bool includes_mixin(const lxb_dom_node_t *n)
-{
-    return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->ns == LXB_NS_HTML;
-}
 
 /* THE SLOT, READ — AND THE CONTENT ATTRIBUTE WHERE NOTHING HAS WRITTEN ONE, WHICH IS NOT A DEFAULT THIS FILE
  * INVENTED BUT THE VALUE §2.5.6'S OWN STEPS PUT THERE IN A BROWSER.
@@ -103,7 +92,7 @@ static JSValue nonce_get_slot(JSContext *ctx, lxb_dom_element_t *el)
     size_t vl = 0;
 
     if (i >= 0) return JS_DupValue(ctx, attr_shadow_opaque(i));
-    if (!includes_mixin(lxb_dom_interface_node(el))) return JS_NewStringLen(ctx, "", 0);
+    if (!html_or_svg_or_mathml_element_node_is(lxb_dom_interface_node(el))) return JS_NewStringLen(ctx, "", 0);
     a = dom_attr_get_ns(el, NULL, "nonce");
     /* NOW the standard's own sentence applies, and it is the only place it does: an element with no
        null-namespace `nonce` attribute and nothing written into the slot is an element nothing has specified
@@ -145,14 +134,14 @@ static void nonce_set_slot(JSContext *ctx, lxb_dom_element_t *el, JSValueConst v
     dom_cow_set_prop_taint(ctx, el, NONCE_SLOT, v);
 }
 
-/* WEB IDL §3.7.6's brand check, a THROW and not an assert: the member sits on HTMLElement.prototype and a page
-   reaches an accessor off a prototype with `.call` on anything at all. */
+/* WEB IDL §3.7.6's brand check, a THROW and not an assert: the member sits on HTMLElement.prototype and
+   SVGElement.prototype, and a page reaches an accessor off a prototype with `.call` on anything at all. */
 static lxb_dom_element_t *nonce_receiver(JSContext *ctx, JSValueConst this_val)
 {
     lxb_dom_node_t *n = node_of(this_val);
 
-    if (includes_mixin(n)) return lxb_dom_interface_element(n);
-    JS_ThrowTypeError(ctx, "HTMLElement.nonce was reached on something that is not an HTML element");
+    if (html_or_svg_or_mathml_element_node_is(n)) return lxb_dom_interface_element(n);
+    JS_ThrowTypeError(ctx, "nonce was reached on something that is not an HTML or SVG element");
     return NULL;
 }
 
@@ -201,7 +190,7 @@ void nonce_attribute_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const c
 
     /* Step 1: "If element does not include HTMLOrSVGOrMathMLElement, then return."
        Step 2: "If localName is not nonce or namespace is not null, then return." */
-    if (!includes_mixin(lxb_dom_interface_node(el))) return;
+    if (!html_or_svg_or_mathml_element_node_is(lxb_dom_interface_node(el))) return;
     if (ns != NULL || !local || strcmp(local, "nonce") != 0) return;
 
     /* THE STEPS' `value` IS READ BACK OFF THE ATTRIBUTE RATHER THAN TAKEN AS BYTES, and that is not a detour.
@@ -233,8 +222,8 @@ void nonce_attribute_cloned(JSContext *ctx, lxb_dom_node_t *src, lxb_dom_node_t 
 {
     JSValue v;
 
-    if (!includes_mixin(src)) return;
-    DCHECK(includes_mixin(copy),
+    if (!html_or_svg_or_mathml_element_node_is(src)) return;
+    DCHECK(html_or_svg_or_mathml_element_node_is(copy),
            "DOM §4.4 clone a node produced a copy of an HTML element that is not one — §2.5.6's cloning steps "
            "are stated over a copy of the same element, so a pair that disagrees means step 2's clone a single "
            "node built the wrong interface");

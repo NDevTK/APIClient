@@ -359,9 +359,10 @@ int  node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
    is the WHOLE of owning it: the fork copies it and the teardown discharges it through this one list, so a
    caller has no release half to write and no second allocator to grow it with. */
 void node_clone_visit_state(JSContext *ctx, NodeCloneState *s, JSStepVisit *v);
-/* An ELEMENT's interface is decided by its TAG — HTML's element-interface table, which is the html layer's
-   knowledge. It registers the answer here; node_wrap asks it and stays the one place a wrapper is built. */
-void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *el));
+/* An ELEMENT's interface is decided by its namespace's specification from its local name — HTML §3.2.2's table
+   for the HTML namespace, SVG 2's for SVG. Each namespace's component registers its answer here (NULL gives it
+   back); node_wrap asks it and stays the one place a wrapper is built. */
+void node_set_element_resolver(lxb_ns_id_t ns, JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *el));
 
 /* THE NODE IS BEING DESTROYED — drop the wrapper the map holds for it. It is called from the ONE point every
    node death converges on (core/dom/node_interface.c's destroy dispatcher, and core/dom/attr_list.c's
