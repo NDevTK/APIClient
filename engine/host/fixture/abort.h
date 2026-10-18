@@ -75,6 +75,15 @@ static const char HTML_ABORT[] =
     " fetch('/api/apabort?own=' + own + '&late=' + late + '&clone=' + kv);"
     "})();"
     "</script>"
+    /* A request aborted while its reply is still owed: the abort runs on the line after the call, before the
+       host can answer, so the engine tells the host to end the send, and the page sees an AbortError. */
+    "<script>"
+    "(async function () {"
+    " var c3 = new AbortController(), p3 = fetch('/api/apcancel', { signal: c3.signal }); c3.abort();"
+    " var v; try { await p3; v = 'resolved'; } catch (e) { v = e.name; }"
+    " fetch('/api/apcancelled?v=' + v);"
+    "})();"
+    "</script>"
     TF_CANVAS_INK
     "</body></html>";
 

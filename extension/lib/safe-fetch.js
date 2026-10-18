@@ -119,6 +119,13 @@ function _wireRelaySend(href, init, held) {
   var body = init.body === undefined ? null
     : typeof init.body === "string" ? { text: init.body } : { b64: _b64OfBytes(init.body) };
   return new Promise(function (resolve, reject) {
+    /* A send whose signal is already aborted is never made: a redirect hop after the abort would otherwise go
+       out, since an aborted signal fires no further `abort`. */
+    if (init.signal && init.signal.aborted) {
+      if (held !== null) held.release();
+      reject(new TypeError("wire: the send of " + href + " was aborted before it was made"));
+      return;
+    }
     var port = chrome.runtime.connect({ name: "wire" });
     var stream = null, headSeen = false, settled = false, received = 0;
     var ping = setInterval(function () { port.postMessage({ ping: true }); }, 10000);

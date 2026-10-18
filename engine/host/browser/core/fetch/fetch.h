@@ -416,8 +416,12 @@ bool fetch_is_destination_type(const char *destination);
  * wants it says so at its own site; this predicate answers §2.2.5's question and no other. */
 bool fetch_is_script_like(const char *destination);
 
+/* The host's network. `owe` parks the running flow on a request whose reply `deliver` takes. `cancel` is Fetch §2
+   Infrastructure's "abort a fetch controller" for a park `owe` made: the running flow stops waiting on the
+   `deliver` it names, and the host ends the transfer once no flow is owed it. */
 typedef struct {
     void (*owe)(JSContext *ctx, JSValueConst deliver, JSValueConst value, const FetchRequest *req);
+    void (*cancel)(JSContext *ctx, JSValueConst deliver);
 } FetchProvider;
 void fetch_set_provider(const FetchProvider *p);
 
@@ -433,6 +437,8 @@ void fetch_set_provider(const FetchProvider *p);
    itself would each need its own copy of that check, and a request owed to nobody is a flow parked for the
    rest of the session. */
 void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req);
+/* Abort the park fetch_owe made with `deliver`, through the provider's `cancel`. */
+void fetch_cancel(JSContext *ctx, JSValueConst deliver);
 
 /* PARSE A URL A PAGE WROTE, against HTML's API base URL — the one operation every Fetch entry point performs
    on a URL string, so `new Request("/api/users")` and `Response.redirect("/there")` resolve the same address by

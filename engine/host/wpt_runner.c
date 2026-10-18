@@ -443,6 +443,7 @@ static uint64_t g_conn_seq;
 typedef struct {
     uint64_t seq;              /* stable across the table's compaction — an index is not */
     int      state, deliver, failed;
+    int      cancelled;        /* a `fetch.cancel` notice named it: the bytes finish, the reply reaches nobody */
     char    *method, *url;     /* with `mode`, the key engine_provide delivers on; `url` is what an answer reports */
     char    *mode;             /* Fetch §2.2.5's request mode, the line's own word */
     char    *referrer_policy;  /* …and the line's referrer policy and referrer, the rest of the key */
@@ -491,7 +492,7 @@ static bool wpt_request_asked(const char *method, const char *mode, const char *
 {
     int i;
     for (i = 0; i < g_inflight_n; i++)
-        if (g_inflight[i].deliver == WPT_DELIVER_FETCH &&
+        if (g_inflight[i].deliver == WPT_DELIVER_FETCH && !g_inflight[i].cancelled &&
             !strcmp(g_inflight[i].method, method) && !strcmp(g_inflight[i].mode, mode) &&
             !strcmp(g_inflight[i].referrer_policy, referrer_policy) &&
             !strcmp(g_inflight[i].referrer, referrer) && !strcmp(g_inflight[i].url, url)) return true;
@@ -1121,6 +1122,13 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
 
     DCHECK(ctx != NULL, "a reply completed for a flow before this host had a realm to deliver it into — only "
                         "the pre-session loads run without one, and none of them is delivered");
+    /* A cancelled send's reply never reaches the engine: no flow is owed it (engine_pending_fetch_cancel). Its
+       request record is released here, as an answered one's is below. */
+    if (r->cancelled) {
+        for (i = 0; i < g_owed_n; i++)
+            if (!strcmp(g_owed[i].url, r->url) && !strcmp(g_owed[i].method, r->method)) { wpt_owed_forget(i); break; }
+        return 0;
+    }
     /* A network error has no header list. What is on the request now is whatever arrived before the framing
        failed, and §2.2.5's network error is a response with none; half a header section beside a null body would
        be two answers about one reply. */
@@ -1843,6 +1851,25 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        Only `world.parked` is park-only: engine_notify_worlds_parked's one caller is inside the park (engine.c),
        so one outside a park is a park this host did not ask for. engine_notify_worlds_gone is also called by
        solver/flow.c's flow_release whenever a flow leaves the frontier, which is ordinary traffic. */
+    /* `fetch.cancel <method> <mode> <referrer policy> <referrer> <url>`: no flow is owed this request any more
+       (engine_pending_fetch_cancel). A send already on a connection finishes its bytes, since an HTTP/1.1
+       exchange ends only with its message or its connection, and is marked so its reply reaches nobody
+       (wpt_request_finish releases its record). One never sent has its record released here. */
+    if (nf == 6 && !strcmp(f[0], "fetch.cancel")) {
+        int i, sent = 0;
+        for (i = 0; i < g_inflight_n; i++)
+            if (g_inflight[i].deliver == WPT_DELIVER_FETCH && !g_inflight[i].cancelled &&
+                !strcmp(g_inflight[i].method, f[1]) && !strcmp(g_inflight[i].mode, f[2]) &&
+                !strcmp(g_inflight[i].referrer_policy, f[3]) && !strcmp(g_inflight[i].referrer, f[4]) &&
+                !strcmp(g_inflight[i].url, f[5])) {
+                g_inflight[i].cancelled = 1;
+                sent = 1;
+            }
+        for (i = 0; !sent && i < g_owed_n; i++)
+            if (!strcmp(g_owed[i].url, f[5]) && !strcmp(g_owed[i].method, f[1])) { wpt_owed_forget(i); break; }
+        free(whole);
+        return;
+    }
     if (nf == 2 && (!strcmp(f[0], "world.gone") || !strcmp(f[0], "world.parked"))) {
         DCHECK(g_parking || !strcmp(f[0], "world.gone"),
                "a park's carried-segment announcement arrived while this run was still measuring — "
@@ -2470,7 +2497,7 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        edge is a parameter, and fetch.c aborts on a fetch issued with none. What it does with the flow is the
        product's park (wpt_owe): the request goes on that flow's own pending register. The page error hook names
        who reports a page error while the programs are the scheduler's. */
-    { static const FetchProvider P = { wpt_owe }; fetch_set_provider(&P); }
+    { static const FetchProvider P = { wpt_owe, engine_pending_fetch_cancel }; fetch_set_provider(&P); }
     result_set_page_error_hook(wpt_page_error);
     /* No string-handler edge is stated: HTML §8.7's timer initialization steps compile a DOMString handler as a
        classic script when the timer fires (substeps 9.8.7-9.8.8, inside step 9's task), and core/timing/timer.c

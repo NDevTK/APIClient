@@ -533,6 +533,54 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
     JS_FreeValue(ctx, e);
 }
 
+/* Fetch §2 Infrastructure's "abort a fetch controller", for §5.6 step 11's abort steps: the running flow stops
+   waiting on the park `deliver` names, and the trusted zone is told to end the send once no live flow still
+   owes that request. Records are shared across forks, so a sibling that did not abort keeps the record in the
+   outstanding set and the send goes on for it. A park that already holds its reply is left to deliver, since
+   processResponse returns at locallyAborted; a park the zone declined was never sent. The notice is
+   `fetch.cancel<TAB>METHOD<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>URL`, the key engine_provide reads. */
+void engine_pending_fetch_cancel(JSContext *ctx, JSValueConst deliver) {
+    Flow *f = flow_running();
+    int i, n;
+
+    DCHECK(f != NULL, "a fetch's abort steps ran outside a running flow — an abort algorithm runs inside the "
+                      "signal-abort steps of the flow that aborted, and the park it ends is on that flow's register");
+    for (i = 0, n = pending_count(f->pending); i < n; i++) {
+        JSValue e = pending_entry(f->pending, i), r = pending_get(e, PEND_RESOLVE);
+        int mine = pending_get_int(e, PEND_KIND) == FLOW_PENDING_RESOLVE && JS_IsObject(r) &&
+                   JS_VALUE_GET_PTR(r) == JS_VALUE_GET_PTR(deliver);
+        const char *fv[5] = { NULL, NULL, NULL, NULL, NULL };
+        static const int field[5] = { PEND_METHOD, PEND_MODE, PEND_REFERRER_POLICY, PEND_REFERRER, PEND_URL };
+        int k, keyed;
+
+        JS_FreeValue(ctx, r);
+        if (!mine) { JS_FreeValue(ctx, e); continue; }
+        if (pending_get_int(e, PEND_HAVE_VALUE)) { JS_FreeValue(ctx, e); return; }
+        keyed = pending_index_keyed(e);
+        for (k = 0; keyed && k < 5; k++) {
+            JSValue s = pending_get(e, field[k]);
+            fv[k] = JS_ToCString(ctx, s);
+            JS_FreeValue(ctx, s);
+            CHECK(fv[k] != NULL, "engine: OOM naming a cancelled request");
+        }
+        JS_FreeValue(ctx, e);
+        pending_remove(&f->pending, i);
+        if (keyed) {
+            PendRequestKey key = { fv[0], fv[1], fv[2], fv[3], fv[4] };
+            PendIndexNode *node = pending_index_find(&key);
+
+            if (node == NULL || pending_index_node_count(node) == 0) {
+                const char *notice[5] = { fv[0], fv[1], fv[2], fv[3], fv[4] };
+                char *rec = engine_notice_build("fetch.cancel", notice, 5);
+                engine_host_notify(ctx, rec);
+                free(rec);
+            }
+            for (k = 0; k < 5; k++) JS_FreeCString(ctx, fv[k]);
+        }
+        return;
+    }
+}
+
 /* Parks a dynamic `import()`. The same register and URL as a fetch, with a different delivery: a module load is
    owed source text, so the delivery settles `resolve` with the reply's body rather than the reply record a
    `fetch()` makes a Response from. */

@@ -752,7 +752,8 @@ async function main() {
          instance's request 1 and this zone would answer a question nobody asked. */
       tag: `${docId}/s${++serial}`,
       say: (rec) => child.stdin.write(rec + '\n'),
-      ready: [], answered: new Map(), stalled: false, live: true, result: null, results: 0, quantum: null,
+      ready: [], answered: new Map(), sends: new Map(),
+      stalled: false, live: true, result: null, results: 0, quantum: null,
       /* How much of this cluster's partition of the product's known identities the child has been handed
          (extension/lib/novelty-set.js's noveltyOwed advances it). */
       novelty: { spelling: null, n: 0 }, noveltyCounted: new Map(),
@@ -1009,7 +1010,7 @@ async function main() {
   };
 
   const workFetch = async (e, method, destination, initiator, provenance, pinned, driven, credentials, mode,
-                           referrerPolicy, referrer, askers, url) => {
+                           referrerPolicy, referrer, askers, url, send) => {
     const abs = new URL(url, e.docUrl).href;
     /* EVERY ANSWER THIS FUNCTION HAS LEAVES THROUGH ONE DOOR, AND THE DOOR IS WHAT RELEASES THE KEY. Pushing
        the record and remembering the key are ONE act here rather than two statements a later arm could take
@@ -1019,6 +1020,9 @@ async function main() {
        happens at the WRITE (`flush` drains this list beside `ready`), because the pair is still owed while its
        answer is only queued. */
     const settle = (rec) => {
+      /* A cancelled send's answer never reaches the engine: no flow is owed it (`fetch.cancel`). */
+      if (send.cancelled) return;
+      send.queued = rec;
       e.ready.push(rec);
       e.releaseOnWrite.push(fetchKey(method, mode, referrerPolicy, referrer, url));
     };
@@ -1120,13 +1124,20 @@ async function main() {
        chokepoint decides from the pair what the page may read of the reply (Fetch §4.1 "Main fetch"). */
     /* `useCorsPreflight: false`: Fetch §5.4 "Request class" sets that flag only for a ReadableStream body,
        which a GET cannot carry. */
-    const raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, destination, mode,
-                                            provenance, pinned, driven, credentials, useCorsPreflight: false,
-                                            actor: 'page',
-                                            doc, credentialed: false,
-                                            identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, 'engine:' + e.docId, abs,
-                                                                               credentials, mode,
-                                                                               referrerPolicy, referrer) });
+    /* A send the engine cancelled mid-body throws out of safeFetch's body read; nobody is owed that answer. */
+    let raw;
+    try {
+      raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, destination, mode,
+                                        provenance, pinned, driven, credentials, useCorsPreflight: false,
+                                        actor: 'page', signal: send.controller.signal,
+                                        doc, credentialed: false,
+                                        identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, 'engine:' + e.docId, abs,
+                                                                           credentials, mode,
+                                                                           referrerPolicy, referrer) });
+    } catch (err) {
+      if (send.cancelled) return;
+      throw err;
+    }
     /* A REFUSAL THIS ZONE'S OWN POLICY MADE IS A DECLINE AND NOT A NETWORK ERROR, and the difference is what
        the flow does next. A `provide` of `null` is Fetch §5.6's network error: the page's request RESUMES down
        its failure path having been told the server could not be reached, which for a request nobody sent is a
@@ -1210,7 +1221,10 @@ async function main() {
   const payRound = (i) => {
     noveltyHand(i);
     for (const rec of i.ready.splice(0, i.ready.length)) i.say(rec);
-    for (const key of i.releaseOnWrite.splice(0, i.releaseOnWrite.length)) i.answered.delete(key);
+    for (const key of i.releaseOnWrite.splice(0, i.releaseOnWrite.length)) {
+      i.answered.delete(key);
+      i.sends.delete(key);
+    }
     i.say('go');
   };
 
@@ -1635,6 +1649,30 @@ async function main() {
       parkedWorlds.push(f[1]);
       return;
     }
+    /* `fetch.cancel <method> <mode> <referrer policy> <referrer> <url>` — no flow is owed this request any more
+       (solver/engine.c's engine_pending_fetch_cancel). Its send ends through its signal and its key is released,
+       so its answer is never written and a later park of the same key is worked anew. A key with no send was
+       cancelled before this zone was shown it. */
+    if (f[0] === 'fetch.cancel') {
+      if (f.length !== 6) throw new Error(`a fetch.cancel notice is not the five-field key: ${record}`);
+      const key = fetchKey(f[1], f[2], f[3], f[4], f[5]);
+      const send = e.sends.get(key);
+      if (send === undefined) return;
+      send.cancelled = true;
+      e.sends.delete(key);
+      e.answered.delete(key);
+      /* An answer already queued for the next write is taken back with its key. */
+      if (send.queued !== undefined) {
+        const at = e.ready.indexOf(send.queued), ak = e.releaseOnWrite.indexOf(key);
+        if (at < 0 || ak < 0)
+          throw new Error(`a cancelled send's queued answer is not on the next write: ${record} — payRound ` +
+                          'releases a send with its key, so a send still recorded has its answer queued');
+        e.ready.splice(at, 1);
+        e.releaseOnWrite.splice(ak, 1);
+      }
+      send.controller.abort();
+      return;
+    }
     throw new Error(`the host emitted a NOTICE under the operation \`${f[0]}\`, which this zone does not ` +
                     `route: ${record} — a notice this zone drops is a document nothing runs or a message ` +
                     'nothing delivers, and every read through it parks its flow for the rest of the session');
@@ -1840,8 +1878,10 @@ async function main() {
          the answer was composed, so working it a second time would fetch one address twice for one park. Once
          the write goes out the key is released and the next announcement is a FRESH park (see `track`). */
       if (e.answered.has(key)) return;
+      const send = { controller: new AbortController(), cancelled: false, queued: undefined };
+      e.sends.set(key, send);
       track(e, key, workFetch(e, method, destination, initiator, provenance, pinned, driven, credentials, mode,
-                              referrerPolicy, referrer, askers, url));
+                              referrerPolicy, referrer, askers, url, send));
     } else if (f[0] === 'request') {
       /* `request<TAB>id<TAB>asker<TAB>op` (solver/engine.h's engine_host_requests). */
       if (f.length < 4 || !f[2])

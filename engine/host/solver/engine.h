@@ -456,6 +456,10 @@ int  engine_take_paged_owed(void);
    on the flow's own register because the reaction the resolve enqueues belongs to that flow and its delta. */
 void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst value,
                               const FetchRequest *req);
+/* Abort that park (core/fetch/fetch.h's FetchProvider `cancel`): the running flow's still-owed entry whose
+   resolve is `deliver` leaves its register, and once no live flow owes the request the host is told with a
+   `fetch.cancel` notice keyed like engine_provide. A park already answered, or absent, is left as it is. */
+void engine_pending_fetch_cancel(JSContext *ctx, JSValueConst deliver);
 /* The same park for a dynamic `import()`, which is owed source text: the drain settles `resolve` with the
    reply's body, not with the reply record `fetch()` builds a Response from. A failed load settles `reject`:
    HTML §8.1.6.7.3 "HostLoadImportedModule(referrer, moduleRequest, loadState, payload)" makes a null

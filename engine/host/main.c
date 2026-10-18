@@ -169,7 +169,8 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
 {
     /* The host's network: SECURITY.md puts every byte behind the trusted chokepoint, so a request parks on the
        flow's pending register and the trusted zone fetches it. fetch.c aborts on a fetch with no provider. */
-    { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
+    { static const FetchProvider P = { engine_pending_fetch_url, engine_pending_fetch_cancel };
+      fetch_set_provider(&P); }
     /* Who reads an uncaught page error: `qjs_result` publishes result_json for every page, so `pageErrors` reaches
        the zone whether or not the frontier drained (see solver/result.h). */
     result_page_errors_ride_the_document();

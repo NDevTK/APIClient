@@ -5352,6 +5352,41 @@ static int tf_xhr_declined(const char *op, size_t len) {
     return at_url && !is_get;
 }
 
+/* The address field of every `fetch.cancel` notice the engine sent (solver/engine.c's
+   engine_pending_fetch_cancel), in arrival order. */
+static char **g_tf_cancel;
+static int g_tf_cancel_n;
+
+static void tf_cancel_record(const char *rec, size_t len)
+{
+    const char *url = rec + len;
+    int tabs = 0;
+
+    while (url > rec && url[-1] != '\t') url--;
+    for (const char *q = rec; q < rec + len; q++) tabs += *q == '\t';
+    DCHECK(tabs == 5 && url < rec + len,
+           "a fetch.cancel notice is not `fetch.cancel<TAB>METHOD<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>"
+           "URL` — engine_pending_fetch_cancel writes the five-field key engine_provide reads");
+    g_tf_cancel = realloc(g_tf_cancel, (size_t)(g_tf_cancel_n + 1) * sizeof *g_tf_cancel);
+    CHECK(g_tf_cancel != NULL, "the fixture could not record a fetch.cancel notice");
+    g_tf_cancel[g_tf_cancel_n] = strndup(url, (size_t)(rec + len - url));
+    CHECK(g_tf_cancel[g_tf_cancel_n] != NULL, "the fixture could not record a fetch.cancel notice");
+    g_tf_cancel_n++;
+}
+
+/* How many `fetch.cancel` notices named an address ending in `path`. */
+static int tf_cancelled(const char *path)
+{
+    size_t pl = strlen(path);
+    int c = 0;
+
+    for (int i = 0; i < g_tf_cancel_n; i++) {
+        size_t ul = strlen(g_tf_cancel[i]);
+        c += ul >= pl && !strcmp(g_tf_cancel[i] + ul - pl, path);
+    }
+    return c;
+}
+
 /* Child document ids this fixture has handed out. Starts above the fixture's own document (1). */
 static int hostreq_answer_all(JSContext *ctx)
 {
@@ -5371,6 +5406,8 @@ static int hostreq_answer_all(JSContext *ctx)
         const char *end = strchr(nz, '\n');
         size_t len = end ? (size_t)(end - nz) : strlen(nz);
 
+        if (len > strlen("fetch.cancel\t") && !memcmp(nz, "fetch.cancel\t", strlen("fetch.cancel\t")))
+            tf_cancel_record(nz, len);
         if (len > sizeof(ROUTE_SEED_NOTICE) &&
             !memcmp(nz, ROUTE_SEED_NOTICE "\t", sizeof(ROUTE_SEED_NOTICE))) {
             const char *addr = nz + sizeof(ROUTE_SEED_NOTICE);
@@ -5869,7 +5906,8 @@ TF_UNIT void tf_agent_init(JSContext *ctx, const char *origin, const char *top_l
        are drained by the machine every declared member converges on. */
     g_id_append_child = idl_method_id(ctx, ONE_STR, 1, js_append_child, 0);
     /* THIS FIXTURE'S EDGES — WHO answers, which is the half that is legitimately per-host. */
-    { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
+    { static const FetchProvider P = { engine_pending_fetch_url, engine_pending_fetch_cancel };
+      fetch_set_provider(&P); }
     result_set_page_error_hook(tf_page_error);   /* …and WHO reads an uncaught page error — see tf_page_error */
     tf_declare_staged_page_errors();   /* …and which of them this document raises on purpose */
 
@@ -14719,7 +14757,21 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
                                         param_value_only(js, "/api/apabort", "late", "AbortError"),
              "the page's own reads around an abort differ from Chrome 155's: a body read before the abort "
              "must keep its bytes (`own`), and one read after it must reject with an AbortError (`late`)");
+    /* Fetch §5.6 step 11's "abort controller", as the engine's cancel edge: an aborted park still owed a reply
+       tells the host to end its send, once, and a park whose reply already arrived tells it nothing. */
+    const char *apcancel_why = NULL;
+    int apcancel_tt = 1;
+    fold_row(&apcancel_tt, &apcancel_why, param_value_only(js, "/api/apcancelled", "v", "AbortError"),
+             "NOT REACHED or wrong: a fetch whose signal was aborted while its reply was owed did not reject "
+             "with an AbortError");
+    fold_row(&apcancel_tt, &apcancel_why, tf_cancelled("/api/apcancel") == 1,
+             "an aborted park still owed its reply did not send exactly one `fetch.cancel` notice — the host "
+             "would go on with a send no flow is owed (solver/engine.c's engine_pending_fetch_cancel)");
+    fold_row(&apcancel_tt, &apcancel_why, tf_cancelled("/api/apread") == 0 && tf_cancelled("/api/apunread") == 0,
+             "a park whose reply had already arrived sent a `fetch.cancel` notice — its send is over, and the "
+             "host would be told to end a request it already answered");
     const Probe rows[] = {
+        { "abort-cancel", apcancel_tt, "/api/apcancelled", SESS_EXPLORE, apcancel_why },
         { "abort-after-answer", apabort_tt, "/api/apabort", SESS_EXPLORE, apabort_why },
         { "abort", abortfire_tt, "/api/aborted", SESS_EXPLORE, abortfire_why },
         { "deadline", deadline_tt, "/api/deadline", SESS_EXPLORE, deadline_why },

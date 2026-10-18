@@ -403,6 +403,16 @@ int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination,
     return blocked;
 }
 
+void fetch_cancel(JSContext *ctx, JSValueConst deliver)
+{
+    DCHECK(g_provider != NULL && g_provider->cancel != NULL,
+           "a fetch was aborted with no host cancel edge installed — the host would go on sending a request no "
+           "flow is owed; every FetchProvider states `cancel` beside `owe`");
+    DCHECK(JS_IsFunction(ctx, deliver), "a fetch was aborted naming no delivery closure — the closure is the "
+                                        "park's identity on the flow's register");
+    g_provider->cancel(ctx, deliver);
+}
+
 void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req)
 {
     DCHECK(g_provider != NULL && g_provider->owe != NULL,
@@ -662,9 +672,11 @@ static void js_fetch_release(JSContext *ctx, void *st)
  * capture. What it captured is read back off the callee its own header carries. */
 enum { FETCH_DELIVER_RESOLVE = 0, FETCH_DELIVER_REJECT, FETCH_DELIVER_RECORD };
 
-/* The fetch() call's own record, which §5.6 keeps as two locals that step 11's abort steps and step 12's
-   processResponse both read: `aborted` is locallyAborted and `response` is responseObject, null until
-   processResponse makes one. A null-prototype object no page can reach, so it rides the flow's heap like any
+/* The fetch() call's own record, which §5.6 keeps as locals that step 11's abort steps and step 12's
+   processResponse both read: `aborted` is locallyAborted, `response` is responseObject, null until
+   processResponse makes one, and `controller` is the delivery closure the host was owed the request with, null
+   until fetch_park mints it (a request blocked or answered before the host is reached has none). A null-prototype
+   object no page can reach, so it rides the flow's heap like any
    other value and its reads run nothing of the page's. */
 static JSValue fetch_call_record_new(JSContext *ctx)
 {
@@ -673,6 +685,7 @@ static JSValue fetch_call_record_new(JSContext *ctx)
     CHECK(!JS_IsException(rec), "fetch: OOM minting a fetch() call's record");
     JS_DefinePropertyValueStr(ctx, rec, "aborted", JS_FALSE, JS_PROP_WRITABLE);
     JS_DefinePropertyValueStr(ctx, rec, "response", JS_NULL, JS_PROP_WRITABLE);
+    JS_DefinePropertyValueStr(ctx, rec, "controller", JS_NULL, JS_PROP_WRITABLE);
     return rec;
 }
 
@@ -825,11 +838,9 @@ static int g_deliver_stepid = -1;
    abort the fetch() call with p, request, responseObject and the signal's abort reason — reject p (a no-op
    once processResponse has settled it) and, when responseObject exists and its body is still readable, error
    that body with the reason. The request's body was extracted by the constructor and no page holds its
-   stream, so cancelling it observes nothing and is not performed. Closure data: [reject, the call's record,
-   requestObject's signal].
-   Named residual. Not covered: the steps' "Abort controller", which terminates the fetch itself; the fetch is
-   the trusted zone's and no cancel edge reaches it. Next diff builds: a cancel edge on FetchProvider beside
-   `owe`, called from here. Absence shows as: the trusted zone completing a request whose page aborted it. */
+   stream, so cancelling it observes nothing and is not performed. "Abort controller" is the provider's
+   `cancel` (fetch_cancel) over the record's `controller`, which ends the host's send once no flow is owed it.
+   Closure data: [reject, the call's record, requestObject's signal]. */
 enum { FETCH_ABORT_REJECT_FN = 0, FETCH_ABORT_RECORD, FETCH_ABORT_SIGNAL };
 #define FETCH_ABORT_STAGES(X) \
     X(FETCH_ABORT_REJECT, "Fetch §5.6 fetch(input, init) step 11's abort steps (set locallyAborted; abort a " \
@@ -865,9 +876,14 @@ static int js_fetch_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
 
     if (s->hdr.stage == FETCH_ABORT_REJECT) {
         if (s->cphase == 0) {
+            JSValue controller = JS_GetPropertyStr(ctx, rec, "controller");
+
             s->reason = abort_signal_reason(ctx, JS_StepClosureData(&s->hdr, FETCH_ABORT_SIGNAL));
             s->stream = JS_UNDEFINED;
             JS_SetPropertyStr(ctx, (JSValue)rec, "aborted", JS_TRUE);
+            /* "Abort controller with requestObject's signal's abort reason", before p is rejected. */
+            if (!JS_IsNull(controller)) fetch_cancel(ctx, controller);
+            JS_FreeValue(ctx, controller);
         }
         r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), JS_StepClosureData(&s->hdr, FETCH_ABORT_REJECT_FN),
                           JS_UNDEFINED, 1, (JSValueConst *)&s->reason, cb_result, &out, out_cb, out_argc);
@@ -1587,6 +1603,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
         deliver = JS_NewStepClosure(ctx, g_deliver_stepid, 1, 3, data);
         if (!JS_IsException(deliver)) {
             FetchRequest req = {0};
+            JS_SetPropertyStr(ctx, call, "controller", JS_DupValue(ctx, deliver));
             /* `GET` IS THE REQUEST'S OWN METHOD, NOT A HOLE FILLED HERE — Fetch §2.2.5 "Requests": "A request has an
                associated method (a method). Unless stated otherwise it is `GET`." The park is keyed on
                (method, url) (solver/engine.h), so a request that reached the seam unnamed would collect another

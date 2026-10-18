@@ -3202,7 +3202,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* The request's destination travels with it (Fetch §2.2.5 Requests): safe-fetch.js decides the CORB class
      from §2.2.5's script-like predicate over it, so it is passed through, not reduced to a boolean. */
   const fetched = async (method, u, destination, provenance, pinned, driven, credentials, mode, referrerPolicy,
-                         referrer, asked) => {
+                         referrer, asked, signal) => {
+    DCHECK(signal instanceof AbortSignal,
+           "a pending request reached the fetch relay with no abort signal — engineIssue owns one per send, and " +
+           "a `fetch.cancel` notice ends the send through it");
     DCHECK(pinned === "pinned" || pinned === "unpinned",
            "a pending request reached the fetch relay carrying no witness mark — solver/engine.h states " +
            "`pinned` or `unpinned` on every line of the pending join, and the chokepoint reads it WITH the " +
@@ -3286,7 +3289,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          the chokepoint's `actor` row reads it. */
       const opts = { pageOrigin: eng.origin, destination, mode, provenance, pinned,
                      driven, credentials, actor: "page", useCorsPreflight: false,
-                     doc, credentialed: false,
+                     doc, credentialed: false, signal,
                      identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, "engine:" + eng.docId, abs, credentials, mode,
                                                    referrerPolicy, referrer) };
       const r = await self.safeFetch(abs, opts);
@@ -4017,12 +4020,13 @@ function engineIssue(eng, key, start, deliver) {
          "round hands the answer to, so an issue missing either is a request nobody will ever answer");
   if (eng._inflight.has(key)) return 0;
   /* The record enters the map before the call suspends, so the next round, re-listing the same request,
-     sees it in flight. */
-  const rec = { landed: false, value: undefined, error: null, settled: null, deliver };
+     sees it in flight. `controller` ends the send when the engine says no flow is owed it (engineCancel). */
+  const rec = { landed: false, value: undefined, error: null, settled: null, deliver,
+                controller: new AbortController(), cancelled: false };
   eng._inflight.set(key, rec);
   /* `settled` never rejects; the error is carried and rethrown at delivery inside the round, so an invariant
      abort out of `eng.fetched` still reaches hostSchedule's failure arm and there is no unhandled rejection. */
-  rec.settled = start().then(
+  rec.settled = start(rec.controller.signal).then(
     (v) => { rec.landed = true; rec.value = v; },
     (e) => { rec.landed = true; rec.error = e; });
   /* The round can wait on it (hostSchedule's wait arm relies on that). It fails only if `start` threw
@@ -4033,6 +4037,19 @@ function engineIssue(eng, key, start, deliver) {
          "stall arm into the full-speed spin it exists to prevent");
   return 1;
 }
+/* Fetch §2 Infrastructure's "abort a fetch controller", on the zone's side: the engine's `fetch.cancel` notice
+   says no flow is owed the request keyed like engine_provide (solver/engine.c's engine_pending_fetch_cancel).
+   The send ends through its signal (safe-fetch.js disconnects the wire's port, and wire.js aborts the platform
+   fetch), and it leaves the in-flight set, so a reply that landed meanwhile is never delivered and a later park
+   of the same key is issued anew. A key not in flight was cancelled before any round issued it. */
+function engineCancel(eng, method, mode, referrerPolicy, referrer, url) {
+  const key = "fetch\n" + method + "\n" + mode + "\n" + referrerPolicy + "\n" + referrer + "\n" + url;
+  const rec = eng._inflight.get(key);
+  if (rec === undefined) return;
+  rec.cancelled = true;
+  eng._inflight.delete(key);
+  rec.controller.abort();
+}
 /* The delivering half, which the engine's park is waiting for. It returns how many registers it filled,
    progress like `wpt_net_pump`'s return. The record leaves the in-flight set here, not when bytes land, so a
    landed reply not yet handed over still refuses a re-issue. */
@@ -4042,6 +4059,8 @@ async function engineDeliverLanded(eng) {
     const rec = eng._inflight.get(key);
     if (!rec.landed) continue;
     eng._inflight.delete(key);
+    CHECK(!rec.cancelled, "a cancelled send's reply was about to reach the engine — engineCancel takes a " +
+          "cancelled send out of the in-flight set, so its reply has no record to be delivered through");
     if (rec.error) throw rec.error;
     await rec.deliver(rec.value);
     n++;
@@ -4096,9 +4115,9 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
     /* The ask is raised inside the starter, which `engineIssue` invokes only for a key not in flight, so a
        re-listed request is counted once and the containment with the declined histogram holds. */
     issued += engineIssue(eng, key,
-      () => { eng._egress.asked++;
-              return eng.fetched(method, url, destination, provenance, pinned, driven, credentials, mode,
-                                 referrerPolicy, referrer, askerRecord(eng, askers, "asker")); },
+      (signal) => { eng._egress.asked++;
+                    return eng.fetched(method, url, destination, provenance, pinned, driven, credentials, mode,
+                                       referrerPolicy, referrer, askerRecord(eng, askers, "asker"), signal); },
       (answer) => engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer));
   }
   return issued;
@@ -4863,6 +4882,13 @@ async function hostNotice(eng, line) {
      since releasing an unheld world is a no-op, and only this zone knows the other instances. A booting
      instance is skipped because both delivery branches wait for `_readyP`, so it holds no foreign world
      (qjs_world_gone asserts the frontier was seeded). */
+  /* `fetch.cancel <method> <mode> <referrer policy> <referrer> <url>` — no flow is owed this request any more. */
+  if (f[0] === "fetch.cancel") {
+    DCHECK(f.length === 6 && f[1] !== "" && f[2] !== "" && f[4] !== "" && f[5] !== "",
+           "a fetch.cancel notice is not the five-field key engine_provide reads: " + line);
+    engineCancel(eng, f[1], f[2], f[3], f[4], f[5]);
+    return;
+  }
   if (f[0] === "world.gone") {
     DCHECK(f.length >= 2 && !!f[1],
            "a world.gone notice carried no world name — world_parse answers out of whatever the receiving " +
