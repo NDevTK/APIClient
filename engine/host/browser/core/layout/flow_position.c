@@ -17,6 +17,7 @@
 #include "core/layout/flow_placement.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_position.h"
+#include "core/layout/grid_track.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/layout_job.h"
 #include "core/layout/line_box.h"
@@ -457,6 +458,33 @@ static bool fp_is_flex_item(lxb_dom_element_t *el)
 /* A flex item's border-box origin: its container's content-box origin (its border-box origin plus the leading
    border and padding) plus css-flexbox-1 §9.5's and §9.6's placement inside it (core/layout/flex_position.h).
    False ("not yet") when the container's origin was deferred. */
+/* A grid item: an in-flow box-tree child of a grid container (css-grid-1 §6 "Grid Items"). */
+static bool fp_is_grid_item(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *parent = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
+
+    return parent != NULL && (css_computed_display_is(parent, CSS_KEYWORD_GRID) ||
+                              css_computed_display_is(parent, CSS_KEYWORD_INLINE_GRID));
+}
+
+/* css-grid-1 §3.3 "Grid Areas": the item is laid out in its grid area, so its border-box origin is the
+   container's content-box origin, plus the area's offset (core/layout/grid_track.h), plus the item's own
+   leading margins (its stretched size fills the area less them). */
+static bool fp_grid_item_origin(lxb_dom_element_t *el, FlowPoint *out)
+{
+    lxb_dom_element_t *container = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
+    FlowPoint o;
+    CssPx ax, ay;
+
+    if (!flow_border_box_origin_ask(container, &o) || !grid_item_area_origin_ask(container, el, &ax, &ay))
+        return false;
+    out->x = css_px_add(css_px_add(o.x, used_value_leading_edge_px(container, false)),
+                        css_px_add(ax, used_value_px(el, "margin-left")));
+    out->y = css_px_add(css_px_add(o.y, used_value_leading_edge_px(container, true)),
+                        css_px_add(ay, used_value_px(el, "margin-top")));
+    return true;
+}
+
 static bool fp_flex_item_origin(lxb_dom_element_t *el, FlowPoint *out)
 {
     lxb_dom_element_t *container = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
@@ -922,6 +950,7 @@ static bool fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_el
         return fp_table_row_group_origin(el, out);
     if (css_computed_display_is(el, CSS_KEYWORD_TABLE_CAPTION)) return fp_caption_origin(el, out);
     if (fp_is_flex_item(el)) return fp_flex_item_origin(el, out);
+    if (fp_is_grid_item(el)) return fp_grid_item_origin(el, out);
     fp_require_placeable(el);
 
     /* §10.1's first case, §9.4.1's base case: the root's containing block is the ICB, "anchored at the canvas

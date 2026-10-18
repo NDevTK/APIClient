@@ -16,6 +16,7 @@
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_intrinsic_size.h"
 #include "core/layout/flex_item.h"
+#include "core/layout/grid_track.h"
 #include "core/layout/flow_placement.h"
 #include "core/layout/layout_job.h"
 #include "core/layout/line_box.h"
@@ -2401,11 +2402,9 @@ bool block_flow_auto_height_ask(lxb_dom_element_t *el, CssPx *out)
        main size. The VERTICAL WRITING MODES still crash by name and return FALSE, and their fall-through into
        §10.6.3's stack below is the release arm this walk already had for them. */
     if (flex && bf_flex_auto_block_size(el, out)) return true;
-    if (grid)
-        DFAIL("css-grid-1 §11 \"Grid Layout Algorithm\" sizes a GRID CONTAINER's ROWS and its auto height is "
-              "the sum of the row track sizes plus the gutters, not CSS 2.1 §10.6.3's stack of block-level "
-              "children: a grid item is placed in a TRACK, and two items in the same row do not stack at all. "
-              "BUILD css-grid-1 §11.3 \"Track Sizing Algorithm\"");
+    /* css-grid-1 §5.2 "Sizing Grid Containers": "the grid container's auto block size is its max-content
+       size", the sum of its row sizes (core/layout/grid_track.h), not §10.6.3's stack of block-level children. */
+    if (grid) return grid_container_max_content_block_size_ask(el, out);
     if (!container)
         DFAIL("CSS 2.1 §10.6.3's content-based height was asked for a box that is not a BLOCK CONTAINER — "
               "§9.2.1's box that 'either contains only block-level boxes or establishes an inline formatting "

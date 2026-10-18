@@ -13433,8 +13433,17 @@ TF_UNIT void probes_griditem(const char *js, Probe *tab, int *n) {
              "core/layout/used_value.c's grid-item DFAIL emits nothing, and that DFAIL names what to build");
     fold_row(&gridiw_tt, &gridiw_why, param_value_is(js, "/api/gridiw", "w", "300px"),
              "css-grid-1 §6.2: the grid item's used width is not its 300px grid area");
+    /* The rows: a stretched item fills its 50px row, and an `auto`-height container is its rows' sum. */
+    const char *gridrow_why = NULL; int gridrow_tt = 1;
+    fold_row(&gridrow_tt, &gridrow_why, param_value_is(js, "/api/gridiw", "h", "50px"),
+             "css-grid-1 §6.2: the grid item's used height is not its 50px grid area");
+    fold_row(&gridrow_tt, &gridrow_why, param_value_is(js, "/api/gridiw", "c", "55px"),
+             "css-grid-1 §5.2: the `auto`-height grid container is not the 55px sum of its rows");
+    fold_row(&gridrow_tt, &gridrow_why, param_value_is(js, "/api/gridiw", "t", "25"),
+             "css-grid-1 §3.3: the second item's border box is not 25px below its container, past the first row");
     const Probe rows[] = {
         { "grid-item-auto-width", gridiw_tt, "/api/gridiw", SESS_EXPLORE, gridiw_why },
+        { "grid-rows-sized", gridrow_tt, "/api/gridiw", SESS_EXPLORE, gridrow_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
