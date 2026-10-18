@@ -160,58 +160,18 @@ typedef struct {
        no arm of any verdict branches on it, and the verdict it informs is a person's. */
     long *programs_ahead;
     int   programs_ahead_n;
-    /* …AND HOW MANY OF THE STANDING MEMBERS HAVE NO ROW LEFT TO RUN — `script_i == dyn_n`, counted on the same
-       walk. Emitted as `outOfPrograms`.
-
-       IT IS NOT DERIVABLE FROM THE HISTOGRAM AND THAT IS THE WHOLE REASON IT IS A ROW. The bucket a member
-       lands in is its cursor, and one cursor value covers two states that take opposite work: INSIDE the
-       program at that index (its frame is live) and PAST THE LAST ROW OF ITS OWN SEQUENCE (there is no program
-       there to be inside). `framed` above separates those two — but `framed` is a count over the WHOLE
-       frontier and cannot be attributed to a bucket, and `dyn_n` is per-flow and crosses no boundary at all,
-       so nothing a reader holds can tell the two apart. Two members in one bucket, and no way to say which is
-       which.
-       WHAT TURNS ON IT IS THE ORPHAN QUESTION, which is why this is the fact worth carrying rather than a
-       per-bucket phase table. engine.c reaches engine_orphan_seed where a flow has no program, job, delivery,
-       checkpoint or lifecycle stage DUE at the current moment AND no rendering opportunity, no due timer, no
-       idle work and no outstanding reply — so `0` orphan asks has two readings — no member has run out of
-       PROGRAMS, or members have and are held by one of the other EIGHT — and the census reported them
-       identically.
-       THE LIST HAS NOW BEEN WRONG TWICE, IN OPPOSITE DIRECTIONS, AND BOTH TIMES FOR THE SAME REASON: a list of
-       rungs written down where the ladder is not. It first ended "timer, rendering opportunity, outstanding
-       reply or unmodelled close request", which was the seat the seed had at the ladder's EXIT; it then said
-       those three sit BELOW the two clock-driven sources, which was the seat the seed had between the lifecycle
-       arm and the clock. The project owner's ordering has since put the seed BELOW all three clock-driven
-       sources and then below the host-owed return, so the timer, the rendering opportunity and an outstanding
-       reply are holders and only the close request is beneath it.
-       AND THE ARGUMENT THAT MOVED IT THE FIRST TIME IS EXACTLY WHY THE NUMBERS BELOW ARE NOW WEAKER, which is
-       stated rather than discovered: a rendering opportunity is generated for ever on a document that has one,
-       so a seat below it is reached only where the opportunity did NOT fire, and a zero in this row is again
-       partly a fact about the DOCUMENT rather than about the frontier. That is the PRICE of serving the page's
-       own arranged work first, and solver/engine.c's clock-arrival counters are what separate the two readings
-       the row can no longer separate for itself. RETIREMENT: this record goes when this row is published beside
-       those arrival counts, because the pair then answers what this paragraph argues.
-       Measured on the native smoke fixture: 129 members standing at
-       the top bucket with `deepest 10`, i.e. every program the document has, against a run reporting zero
-       orphan asks. Those two together are the second reading and say which of the four to open; either one
-       alone is the first.
-       AND THIS ROW IS A GAUGE OVER LIVE MEMBERS, SO ITS ZERO HAS A THIRD READING THE PAIRING ABOVE DOES NOT
-       NAME: the walk that raises it visits the frontier's standing members, so a census taken when `live` is 0
-       reports 0 whatever every member did before it left — which is INDISTINGUISHABLE, in this number alone,
-       from a frontier none of whose members ever ran out. It is `deepest`/`completed`'s hazard one row over:
-       those two are high-water marks and cannot go backwards, and this one can, because it is not a history.
-       So the row is evidence only where `live` is nonzero, and `live` is on the same line — read them
-       together. MEASURED, both halves in one session: on a real bundle this row stood at ~1 live member in 10
-       from the FIRST census through the 129th while orphan asks stayed 0; on a draining fixture the terminal
-       census read this row 0 and `program_cursors` `{0: 0}` with `live` 0, having asked 1536 orphans on the
-       way — the same 0, and the opposite fact. A reader who took either number alone had a coherent,
-       confident, wrong answer available.
-       AND THE CONCLUSION DRAWN FROM THE FIRST OF THOSE — "which is the second reading and says the other four
-       rungs are what hold them" — WAS WRONG, AND IS RETIRED HERE RATHER THAN DELETED, because it is the
-       inference the next reader re-derives from the pairing above. It skips the two holders that are not
-       rungs, which is why the three rows below exist instead of a sentence.
-       A REPORT AND NEVER A BOUND (§NO BOUNDS), for `program_cursors`' reason exactly: nothing in the engine
-       reads it, no arm of any verdict branches on it, and "how many members have run out of programs" is
-       precisely the shape a drain check would be built from. */
+    /* …and how many standing members have no row left to run (`script_i == dyn_n`), counted on the same walk and
+       emitted as `outOfPrograms`. The histogram cannot give it: one cursor value covers both inside the program at
+       that index and past the last row of the member's sequence, `framed` is a whole-frontier count and `dyn_n` is
+       per flow, so nothing else a reader holds separates the two. It carries the orphan question: engine.c reaches
+       engine_orphan_seed only where a flow has no program, job, delivery, checkpoint or lifecycle stage due and no
+       rendering opportunity, due timer, idle work or outstanding reply (only the close request is beneath the
+       seed), so `0` orphan asks reads either as no member out of programs or as members held by one of those eight;
+       the three rows below partition the second reading. A rendering opportunity fires for ever on a document that
+       has one, so a zero here is partly a fact about the document; engine.c's clock-arrival counters separate that.
+       It is a gauge over live members, so a census at `live` 0 reports 0 whatever members did before leaving: read
+       it beside `live` on the same line. A report and never a bound: nothing in the engine reads it, and it is the
+       shape a drain check would be built from. */
     long  out_of_programs;
     /* …AND WHICH OF THOSE MEMBERS COULD EVEN HAVE BEEN ASKED THE ORPHAN QUESTION — a PARTITION of
        `out_of_programs` into three, raised on the same walk and SUMMING to it, which is the identity that says
