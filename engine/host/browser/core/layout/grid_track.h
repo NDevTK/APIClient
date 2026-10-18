@@ -8,13 +8,14 @@
  * The track arithmetic after the last item is a constant step. Columns are sized before rows (css-grid-1 §11
  * "Grid Layout Algorithm"), so a row's item contributes at its used column width. Readers are drives over the
  * steps; an `_ask` reader returns "not yet" instead and is re-entered from its first step. */
-/* Named residual. Not covered: gutters, content alignment that moves a track, and every grid property but
- * `display`, the two track lists (core/css/css_grid_track_list.h's residual covers their grammar),
- * `grid-template-areas` and the placement properties (core/layout/grid_placement.h's covers them). An explicit
- * track the template's areas add beyond the track list is `auto`, as implicit tracks are, the initial
- * `grid-auto-rows` and `grid-auto-columns` (§7.6 "Implicit Track Sizing"). Next diff builds: gutters, CSS
- * Gaps 1's `row-gap` and `column-gap` as fixed-size tracks between the grid's tracks. How its absence would
- * show: a page's grid aborting at grid_track.c's refusal of a declared gap. */
+/* Named residual. Not covered: a percentage gutter without a definite available grid space, content alignment
+ * that moves a track, and every grid property but `display`, the two track lists (core/css/css_grid_track_list.h's
+ * residual covers their grammar), `grid-template-areas`, the gaps and the placement properties
+ * (core/layout/grid_placement.h's covers them). An explicit track the template's areas add beyond the track list
+ * is `auto`, as implicit tracks are, the initial `grid-auto-rows` and `grid-auto-columns` (§7.6 "Implicit Track
+ * Sizing"). Next diff builds: a percentage gutter under an intrinsic size, resolved against zero for the
+ * contributions and against the content box for the layout (CSS Gaps 1 §2.3). How its absence would show: a
+ * page's grid aborting at grid_track.c's refusal of a percentage gap. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_GRID_TRACK_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_GRID_TRACK_H
 
@@ -71,6 +72,7 @@ typedef struct {
     GridContribution    *contribs;
     size_t               ncontribs, contribs_cap;
     CssPx                avail;
+    CssPx                gap;   /* the used gutter between two adjacent tracks (css-grid-1 §10.1) */
 } GridAxisSizing;
 
 /* Begin §11.3 over `container`'s columns (`vertical` false) or rows. `container` must generate a grid

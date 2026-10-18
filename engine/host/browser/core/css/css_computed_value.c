@@ -2263,6 +2263,90 @@ bool css_computed_grid_template_areas(lxb_dom_element_t *el, CssGridTemplateArea
     return parsed;
 }
 
+/* The `i`th top-level component of `text`, newly allocated, or NULL when it has fewer; `*count` is how many it
+   has. Parentheses group, so a math function with spaces is one component. */
+static char *css_cv_component(const char *text, int i, int *count)
+{
+    const char *s = text, *from = NULL;
+    char *out = NULL;
+    int depth = 0, k = 0;
+
+    for (;; s++) {
+        bool space = *s == '\0' || (depth == 0 && isspace((unsigned char)*s));
+
+        if (*s == '(') depth++;
+        if (*s == ')' && depth > 0) depth--;
+        if (!space && from == NULL) from = s;
+        if (space && from != NULL) {
+            if (k == i) {
+                out = malloc((size_t)(s - from) + 1);
+                CHECK(out != NULL, "out of memory copying one component of a declared value");
+                memcpy(out, from, (size_t)(s - from));
+                out[s - from] = '\0';
+            }
+            k++;
+            from = NULL;
+        }
+        if (*s == '\0') break;
+    }
+    *count = k;
+    return out;
+}
+
+bool css_computed_gap(lxb_dom_element_t *el, bool rows, CssLength *out)
+{
+    const char *names[4] = { rows ? "row-gap" : "column-gap", rows ? "grid-row-gap" : "grid-column-gap", "gap",
+                             "grid-gap" };
+    char *declared[4], *text = NULL;
+    int i, from = -1, n = 0, count;
+    bool parsed = false;
+
+    DCHECK(el != NULL && out != NULL, "a computed gap was asked for with no element or nowhere to put it");
+    for (i = 0; i < 4; i++) {
+        declared[i] = css_cv_cascaded(el, names[i]);
+        if (declared[i] != NULL) { n++; from = i; }
+    }
+    if (n > 1)
+        DFAILF("an element declares its `%s` under two of `%s`, `%s`, `%s` and `%s`, which only the cascade "
+               "order of the declarations decides. BUILD CSS Gaps 1 §2.2's shorthand and §2.4's aliases in the "
+               "cascade", names[0], names[0], names[1], names[2], names[3]);
+    /* §2.2: "If <'column-gap'> is omitted, it's set to the same value as <'row-gap'>." */
+    if (from >= 2) {
+        text = css_cv_component(declared[from], rows ? 0 : 1, &count);
+        if (!rows && text == NULL && count == 1) text = css_cv_component(declared[from], 0, &count);
+        if (count > 2) { free(text); text = NULL; }
+    } else if (from >= 0) {
+        text = declared[from];
+        declared[from] = NULL;
+    }
+    for (i = 0; i < 4; i++) free(declared[i]);
+    if (text == NULL) return false;
+    switch (css_defaulting_of(names[0], text)) {
+    case CSS_DEFAULTING_DECLARED:
+        if (strcasecmp(text, "normal") == 0) break;
+        if (strcasecmp(text, "thin") == 0 || strcasecmp(text, "medium") == 0 || strcasecmp(text, "thick") == 0)
+            DFAILF("`%s: %s` is a `<line-width>`, which CSS Gaps 1 §2.1 admits. BUILD its length", names[0], text);
+        {
+            CssCvFontCtx slot;
+            CssFontMetrics font = css_cv_font_metrics(&slot, el, names[0]);
+
+            /* `<length-percentage [0,∞]>`: "Negative values are invalid." */
+            parsed = css_length_parse(css_cv_realm(el), &font, text, CSS_KEYWORDS_NONE, out) &&
+                     !(out->kind == CSS_LENGTH_ABSOLUTE && out->px.px < 0.0) &&
+                     !(out->kind == CSS_LENGTH_PERCENTAGE && out->pct < 0.0);
+        }
+        break;
+    case CSS_DEFAULTING_INHERITED:
+        DFAILF("`%s: inherit`, whose value is the parent's computed gap (CSS Cascade 5 §7.2 \"Inheritance\"). "
+               "BUILD that read", names[0]);
+        break;
+    case CSS_DEFAULTING_INITIAL:
+        break;
+    }
+    free(text);
+    return parsed;
+}
+
 /* css-lists-3 §3.3 "Image Markers: the list-style-image property"' `Computed value:` line, which is a
    KEYWORD AND TWO ARMS rather than one rule: "the keyword noneor the computed <image>" — whose absent
    space is the draft's own, §3.3's table closing an `<a>` against the next word (see the by-name dispatch's

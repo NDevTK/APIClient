@@ -48,14 +48,6 @@ static void gt_require_supported_columns(lxb_dom_element_t *c)
                        "css-grid-1 §7.6 \"Implicit Track Sizing\"' sizing functions for the implicit columns");
     gt_require_initial(c, "grid-auto-flow", "row",
                        "css-grid-1 §8.5 \"Grid Item Placement Algorithm\" for column flow and `dense` packing");
-    gt_require_initial(c, "column-gap", "normal",
-                       "CSS Gaps 1 §2.1 \"Row and Column Gutters: the row-gap and column-gap properties\" as "
-                       "fixed-size gutter tracks (css-grid-1 §11.2 \"Track Sizing Terminology\"' note)");
-    gt_require_initial(c, "gap", "normal", "CSS Gaps 1 §2.2 \"Gap Shorthand: the gap property\"'s gutters");
-    gt_require_initial(c, "grid-column-gap", "normal",
-                       "CSS Gaps 1 §2.4 \"Legacy Gap Properties: the grid-row-gap, grid-column-gap, and "
-                       "grid-gap properties\" as the column gutters");
-    gt_require_initial(c, "grid-gap", "normal", "CSS Gaps 1 §2.4's legacy shorthand as the column gutters");
 }
 
 /* The container's side for its rows. */
@@ -63,12 +55,6 @@ static void gt_require_supported_rows(lxb_dom_element_t *c)
 {
     gt_require_initial(c, "grid-auto-rows", "auto",
                        "css-grid-1 §7.6 \"Implicit Track Sizing\"' sizing functions for the implicit rows");
-    gt_require_initial(c, "row-gap", "normal",
-                       "CSS Gaps 1 §2.1 \"Row and Column Gutters: the row-gap and column-gap properties\" as "
-                       "fixed-size gutter tracks between the rows");
-    gt_require_initial(c, "grid-row-gap", "normal",
-                       "CSS Gaps 1 §2.4 \"Legacy Gap Properties: the grid-row-gap, grid-column-gap, and "
-                       "grid-gap properties\" as the row gutters");
 }
 
 /* `item`'s number among `container`'s grid items, in order-modified document order. */
@@ -228,6 +214,32 @@ static void gt_tracks_init(GridAxisSizing *g)
     while (g->ntracks < total) gt_push(g, CSS_GRID_TRACK_AUTO, 0.0, css_px(0.0));
 }
 
+/* css-grid-1 §10.1 "Gutters: the row-gap, column-gap, and gap properties": "each gutter is treated as an extra,
+   empty, fixed-size track of the specified size, which is spanned by any grid items that span across its
+   corresponding grid line", and `normal` is "a used value of 0px" (CSS Gaps 1 §2.1). A percentage resolves
+   against the content box (§2.3 "Percentages In gap Properties"), here the available grid space. */
+static CssPx gt_used_gap(const GridAxisSizing *g)
+{
+    CssLength gap;
+    char buf[160];
+
+    if (!css_computed_gap(g->container, g->vertical, &gap)) return css_px(0.0);
+    if (gap.kind == CSS_LENGTH_ABSOLUTE) return gap.px;
+    if (g->constraint != GRID_SIZING_AVAILABLE)
+        DFAILF("%s is a grid container with a percentage %s and no definite available grid space, which CSS Gaps 1 "
+               "§2.3 resolves \"against zero for determining intrinsic size contributions, but ... against the "
+               "box's content box when laying out the box's contents\". BUILD both resolutions",
+               box_subject(g->container, buf, sizeof buf), g->vertical ? "`row-gap`" : "`column-gap`");
+    return css_px_max(css_length_resolve_pct(gap, g->avail), css_px(0.0));
+}
+
+/* The gutters between `n` adjacent tracks: "Gutters only appear between tracks of the implicit grid; there is
+   no gutter before the first track or after the last track." */
+static CssPx gt_gutters(const GridAxisSizing *g, size_t n)
+{
+    return n > 1 ? css_px_scale(g->gap, (double)(n - 1)) : css_px(0.0);
+}
+
 void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, lxb_dom_element_t *target,
                             bool vertical, GridSizingConstraint constraint)
 {
@@ -272,6 +284,7 @@ void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, lxb
             g->avail = used_value_content_px(container, vertical);
         }
     }
+    g->gap = gt_used_gap(g);
     gt_tracks_init(g);
 }
 
@@ -320,10 +333,11 @@ static CssPx gt_sum(const GridAxisSizing *g)
     size_t i;
 
     for (i = 0; i < g->ntracks; i++) s = css_px_add(s, g->tracks[i].base);
-    return s;
+    return css_px_add(s, gt_gutters(g, g->ntracks));
 }
 
-/* §11.7.1 "Find the Size of an fr" over the tracks `[lo, hi)` and a space to fill. */
+/* §11.7.1 "Find the Size of an fr" over the tracks `[lo, hi)` and a space to fill, whose gutters are fixed
+   tracks among them. */
 static CssPx gt_find_fr(const GridAxisSizing *g, size_t lo, size_t hi, CssPx space)
 {
     bool *inflexible = calloc(hi - lo, sizeof *inflexible);
@@ -333,7 +347,7 @@ static CssPx gt_find_fr(const GridAxisSizing *g, size_t lo, size_t hi, CssPx spa
 
     CHECK(inflexible != NULL, "css-grid-1 §11.7.1: out of memory marking inflexible tracks");
     while (restart) {
-        CssPx leftover = space;
+        CssPx leftover = css_px_sub(space, gt_gutters(g, hi - lo));
         double sum = 0.0;
 
         /* "Let leftover space be the space to fill minus the base sizes of the non-flexible grid tracks. Let
@@ -458,7 +472,7 @@ static void gt_distribute(GridAxisSizing *g, size_t span, GtAffect affect, GtSiz
         const GridContribution *c = &g->contribs[i];
         bool flex = gt_crosses_flex(g, c);
         size_t na = 0, nr = 0, end = c->start + c->span;
-        CssPx space = gt_contribution(c, kind);
+        CssPx space = css_px_sub(gt_contribution(c, kind), gt_gutters(g, c->span));
 
         if (span == 0 ? !flex : (flex || c->span != span)) continue;
         for (t = c->start; t < end; t++) {
@@ -802,14 +816,14 @@ static size_t gt_target_track(const GridAxisSizing *g, size_t *span)
     return g->vertical ? c->row : c->col;
 }
 
-/* The target's area's extent on the run's axis: the sum of the tracks it spans. */
+/* The target's area's extent on the run's axis: the sum of the tracks it spans and the gutters between them. */
 static CssPx gt_target_extent(const GridAxisSizing *g)
 {
     size_t span, t, start = gt_target_track(g, &span);
     CssPx s = css_px(0.0);
 
     for (t = start; t < start + span; t++) s = css_px_add(s, g->tracks[t].base);
-    return s;
+    return css_px_add(s, gt_gutters(g, span));
 }
 
 void grid_track_placement(lxb_dom_element_t *container, GridPlacement *out)
@@ -869,14 +883,14 @@ static void gt_require_unmoved_tracks(const GridAxisSizing *g)
                box_subject(g->container, buf, sizeof buf), name, leftover.px);
 }
 
-/* The target's track's start: the sizes of the tracks ahead of it. */
+/* The target's track's start: the sizes of the tracks ahead of it and the gutter after each. */
 static CssPx gt_target_offset(const GridAxisSizing *g)
 {
     CssPx o = css_px(0.0);
     size_t span, i, t = gt_target_track(g, &span);
 
     for (i = 0; i < t; i++) o = css_px_add(o, g->tracks[i].base);
-    return o;
+    return css_px_add(o, gt_gutters(g, t + 1));
 }
 
 bool grid_item_area_origin_ask(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx *x, CssPx *y)

@@ -160,6 +160,13 @@ bool css_computed_grid_track_list(lxb_dom_element_t *el, const char *name, CssGr
    caller releases `*out` with `css_grid_template_areas_free`. */
 bool css_computed_grid_template_areas(lxb_dom_element_t *el, CssGridTemplateAreas *out);
 
+/* CSS Gaps 1 §2.1 "Row and Column Gutters: the row-gap and column-gap properties"' computed `row-gap` (`rows`)
+   or `column-gap` on `el`: "specified keyword, else a computed <length-percentage> value". False for `normal`,
+   the initial value, which an invalid declaration also computes to. The value comes from the longhand, its §2.4
+   legacy alias, or the §2.2 `gap` shorthand (or its alias `grid-gap`); two of them declared on one element are
+   refused by name, since only their cascade order would decide. */
+bool css_computed_gap(lxb_dom_element_t *el, bool rows, CssLength *out);
+
 /* THE COMPUTED VALUE of a LENGTH-VALUED property on `el` — CSS 2.1 §8.3, §8.4, §10.2 and §10.5's one line,
    "the percentage as specified or the absolute length", plus css-backgrounds-3 §3.3's snapped border widths.
    Every relative unit is ABSOLUTIZED here (that is what makes this the computed value rather than the specified
