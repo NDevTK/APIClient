@@ -80,6 +80,21 @@ static void gt_require_auto_column_placement(lxb_dom_element_t *item)
    Minimum Size of Grid Items"': 0 for a scroll container, else the content size suggestion (the min-content
    size, "clamped by the maximum size in the affected axis, if it's definite"), since the one column has an
    `auto` minimum and is not flexible. */
+static CssPx gt_content_size_suggestion(lxb_dom_element_t *item)
+{
+    CssPx m, mx;
+    char buf[160];
+
+    if (replaced_element_of(item).replaced)
+        DFAILF("%s is a replaced grid item with an automatic minimum width. css-grid-1 §6.6's content-based "
+               "minimum size takes its transferred size suggestion. BUILD that suggestion",
+               box_subject(item, buf, sizeof buf));
+    m = intrinsic_inline_sizes(item).min_content;
+    if (intrinsic_declared_sizing_px(item, INTRINSIC_AXIS_HORIZONTAL, "max-width", CSS_KEYWORD_NONE, &mx))
+        m = css_px_min(m, mx);
+    return m;
+}
+
 static CssPx gt_minimum_contribution(lxb_dom_element_t *item, IntrinsicInlineSizes contributions)
 {
     CssLength w = css_computed_length(item, "width");
@@ -92,23 +107,8 @@ static CssPx gt_minimum_contribution(lxb_dom_element_t *item, IntrinsicInlineSiz
         DFAILF("%s has an intrinsic `width` keyword, whose css-grid-1 §11.5 minimum contribution is not built. "
                "BUILD css-sizing-3 §3.2's keyword as the item's preferred size in the contribution",
                box_subject(item, buf, sizeof buf));
-    if (!intrinsic_declared_sizing_px(item, INTRINSIC_AXIS_HORIZONTAL, "min-width", CSS_KEYWORD_AUTO, &m)) {
-        if (scroll_container_is(item)) {
-            m = css_px(0.0);
-        } else {
-            if (replaced_element_of(item).replaced)
-                DFAILF("%s is a replaced grid item with an automatic minimum width. css-grid-1 §6.6's content-based "
-                       "minimum size takes its transferred size suggestion. BUILD that suggestion",
-                       box_subject(item, buf, sizeof buf));
-            m = intrinsic_inline_sizes(item).min_content;
-            {
-                CssPx mx;
-
-                if (intrinsic_declared_sizing_px(item, INTRINSIC_AXIS_HORIZONTAL, "max-width", CSS_KEYWORD_NONE, &mx))
-                    m = css_px_min(m, mx);
-            }
-        }
-    }
+    if (!intrinsic_declared_sizing_px(item, INTRINSIC_AXIS_HORIZONTAL, "min-width", CSS_KEYWORD_AUTO, &m))
+        m = scroll_container_is(item) ? css_px(0.0) : gt_content_size_suggestion(item);
     used.min_content = m;
     used.max_content = m;
     return intrinsic_outer_contribution(item, used).min_content;
@@ -224,6 +224,17 @@ bool grid_track_sizing_done(const GridTrackSizing *g)
 {
     DCHECK(g != NULL, "css-grid-1 §11.3 was asked about with no state");
     return g->sized;
+}
+
+CssPx grid_item_content_size_suggestion_inline(lxb_dom_element_t *container, lxb_dom_element_t *item)
+{
+    DCHECK(item != NULL && box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(item))) == container,
+           "a content size suggestion was asked for an element that is not a box-tree child of the grid "
+           "container named");
+    DCHECK(!scroll_container_is(item), "css-grid-1 §6.6 gives a scroll container no content-based minimum");
+    gt_require_implicit_columns(container);
+    gt_require_auto_column_placement(item);
+    return gt_content_size_suggestion(item);
 }
 
 CssPx grid_item_area_inline_size(lxb_dom_element_t *container, lxb_dom_element_t *item)

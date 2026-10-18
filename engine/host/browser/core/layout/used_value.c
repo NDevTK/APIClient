@@ -34,6 +34,7 @@
 #include "core/layout/table_height.h"
 #include "core/layout/table_width.h"
 #include "core/layout/table_wrapper.h"
+#include "core/layout/scroll_container.h"
 #include "core/layout/scrolling_area.h"
 #include "core/layout/used_value.h"
 
@@ -2132,6 +2133,38 @@ typedef struct {
    place beats a declaration-ordering convenience. */
 static bool uv_flex_item_cross_axis(lxb_dom_element_t *el, UvBox box, bool vertical);
 
+static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_max, CssPx *out);
+
+/* css-grid-1 §6.6 "Automatic Minimum Size of Grid Items" for `el`'s width, in the terms of a `min-width`
+   value. The one implicit `auto` column meets §6.6's track conditions, so a non-scroll-container item takes
+   its content-based minimum size: "its specified size suggestion if it exists, otherwise its transferred size
+   suggestion if that exists and the element is replaced, else its content size suggestion", each "clamped by
+   the maximum size in the affected axis, if it's definite". The specified size suggestion is the definite
+   preferred size, a percentage resolving against the grid area's width. */
+static CssPx uv_grid_item_automatic_min_width(lxb_dom_element_t *el, lxb_dom_element_t *grid, UvBox box)
+{
+    CssLength w = css_computed_length(el, "width");
+    CssPx m, mx;
+    char buf[160];
+
+    if (scroll_container_is(el)) return css_px(0.0);
+    if (w.kind == CSS_LENGTH_ABSOLUTE) {
+        m = w.px;
+    } else if (w.kind == CSS_LENGTH_PERCENTAGE || w.kind == CSS_LENGTH_CALCULATED) {
+        m = css_px_max(css_length_resolve_pct(w, used_value_containing_block_width(el)), css_px(0.0));
+    } else {
+        if (w.keyword != CSS_KEYWORD_AUTO)
+            DFAILF("%s is a grid item with an intrinsic `width` keyword, whose css-grid-1 §6.6 specified size "
+                   "suggestion is not built. BUILD css-sizing-3 §3.2's keyword as a definite preferred size",
+                   box_subject(el, buf, sizeof buf));
+        m = grid_item_content_size_suggestion_inline(grid, el);
+        if (uv_is_border_box(el)) m = css_px_add(m, uv_surround_total(uv_surround(el, false)));
+        return m;
+    }
+    if (uv_limit(el, box, false, true, &mx)) m = css_px_min(m, mx);
+    return m;
+}
+
 /* ONE limit. `is_max` picks the property; `box` is read only where the answer depends on the box's type, which
    is exactly css-sizing-3 §3.2's "unless otherwise defined by the relevant layout module". */
 static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_max, CssPx *out)
@@ -2236,15 +2269,21 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
            answer is the diff that makes it reachable. THAT IS THE ORDER THIS NARROWING BELONGS IN rather than
            a tidy-up that could have been landed alone: on its own it has no caller, and one commit later it
            would be the line a `min-height: auto` flex item dies on.
-           A GRID ITEM KEEPS THE CRASH ON BOTH AXES and that is css-grid-1's own scope rather than caution:
-           §6.6 "Automatic Minimum Size of Grid Items" says "the used value of its automatic minimum size IN A
-           GIVEN AXIS is the content-based minimum size if all of the following are true", and its conditions
-           are about the TRACK the item spans — "it spans at least one track in that axis whose min track
-           sizing function is auto" — so both axes are defined and neither is this engine's to answer yet.
+           A GRID ITEM'S WIDTH is css-grid-1 §6.6 "Automatic Minimum Size of Grid Items"' answer, below; its
+           height keeps the crash until the rows are sized, since §6.6's conditions are about the track the
+           item spans in that axis.
            `uv_flex_item_cross_axis` is what tells the two apart, and it is the same predicate the two routes
            in `uv_pass_size` ask, so a flex item whose cross size step 11 answers and a flex item whose
            `min-height: auto` resolves to zero are the SAME SET by construction rather than by two lists
            agreeing. */
+        if (box == UV_BOX_ITEM && !vertical) {
+            lxb_dom_element_t *grid = uv_grid_item_container(el);
+
+            if (grid != NULL) {
+                *out = uv_grid_item_automatic_min_width(el, grid, box);
+                return true;
+            }
+        }
         if (box == UV_BOX_ITEM && !uv_flex_item_cross_axis(el, box, vertical))
             DFAIL("`min-width`/`min-height` is `auto` on a FLEX or GRID ITEM, which is the one box css-sizing-3 "
                   "§3.2 hands to another module: \"specifies an automatic minimum size. UNLESS OTHERWISE "
@@ -2261,8 +2300,8 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
                   "§9.4 \"Cross Size Determination\"' step 11 and REACHES this function, which is exactly "
                   "the case the test above lets past. What still cannot reach this line is the other three: "
                   "a `row` container's item on its MAIN axis returns from `uv_sized` before `uv_limits` is "
-                  "called at all, and a `column` container's item and a GRID item still crash in "
-                  "`uv_pass_size` first");
+                  "called at all, a `column` container's item still crashes in `uv_pass_size` first, and a GRID "
+                  "item's height waits on css-grid-1 §11's row sizing");
         /* §3.2, for every other box: "it resolves to a used value of 0". Its very next sentence pins that for
            the boxes this component classifies — "for backwards-compatibility, the resolved value of this
            keyword is zero for boxes of all [CSS2] display types: block and inline boxes, inline blocks, and

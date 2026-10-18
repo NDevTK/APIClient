@@ -50,4 +50,11 @@ bool grid_track_sizing_done(const GridTrackSizing *g);
    the column it is placed in. `item` must be a grid item of `container`. */
 CssPx grid_item_area_inline_size(lxb_dom_element_t *container, lxb_dom_element_t *item);
 
+/* css-grid-1 §6.6 "Automatic Minimum Size of Grid Items"' content size suggestion for `item`'s width: its
+   min-content size, clamped by a definite `max-width`, as a content-box extent in CSS pixels. `item` must be a
+   grid item of `container` and not a scroll container (§6.6's first condition, which is the caller's); the
+   one implicit `auto` column meets §6.6's other two. A replaced item, whose suggestion is §6.6's transferred
+   one, is refused by name. */
+CssPx grid_item_content_size_suggestion_inline(lxb_dom_element_t *container, lxb_dom_element_t *item);
+
 #endif
