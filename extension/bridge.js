@@ -896,23 +896,23 @@ function linesToAnalysis(lines, msg, outcome, eng) {
   }
   return analysis;
 }
-/* Whether an analysis carries an engine document, asked in one place so the four fields cannot drift apart
+/* Whether an analysis carries an engine document, asked in one place so the five fields cannot drift apart
    across consumers. True means an @RESULT arrived and was asserted; false means none did and `_run` says which
-   absence. A record with some but not all of the four is linesToAnalysis broken. */
+   absence. A record with some but not all of the five is linesToAnalysis broken. */
 function analysisHasDocument(a) {
   DCHECK(a && typeof a === "object", "an analysis record is not an object — every producer of one is in this file");
   const n = (a.fetchCallSites !== undefined) + (a.securitySinks !== undefined) + (a._park !== undefined) +
             (a._novelty !== undefined) + (a._parkWhy !== undefined);
   DCHECK(n === 0 || n === 5,
          "an analysis carries " + n + " of the five engine-document fields (fetchCallSites, securitySinks, " +
-         "_park, _parkWhy, _novelty) — linesToAnalysis writes all five or none, because their presence IS the statement " +
-         "that an @RESULT document arrived, and a partial set would be read by every consumer as a document that " +
+         "_park, _parkWhy, _novelty) — linesToAnalysis writes all five or none, because their presence IS " +
+         "the statement that an @RESULT document arrived, and a partial set would be read by every consumer as a document that " +
          "is there while one of the surfaces it travels in is silently gone");
-  DCHECK(n === 4 || a._run === "crashed" || a._run === "nothing-to-run",
+  DCHECK(n === 5 || a._run === "crashed" || a._run === "nothing-to-run",
          "an analysis marked `" + a._run + "` carries no engine document — only a crashed instance and a page " +
          "with nothing to run may lack one, so a partial/complete run without one is the @RESULT relay broken " +
          "and reporting it as a page with no API surface is a false clean bill");
-  return n === 4;
+  return n === 5;
 }
 self.analysisHasDocument = analysisHasDocument;   // read by offscreen-brain.js and lib/merge.js across the zone's one realm
 
