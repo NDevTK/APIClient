@@ -45,7 +45,10 @@ void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
 
     DCHECK(kind != THREAD_WORK_SCRIPT_PARSE && kind < THREAD_WORK_N,
            "a charge named script parse or no kind — quickjs's tokenizer charges script parse itself");
-    units = bytes * PER_KIB[kind] / 1024;
+    /* Rounded up per call: a step over a non-empty input costs at least the one unit an opcode does, and a
+       remainder carried between calls would make one flow's charge depend on the flow that ran before it. Rounding
+       down would make every constraint probe under 171 bytes free, and a lookup is one probe per frozen segment. */
+    units = (bytes * PER_KIB[kind] + 1023) / 1024;
     g_charged += units;
     if (units != 0) JS_FlowRetireWork(units);
 }
