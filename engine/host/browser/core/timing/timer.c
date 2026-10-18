@@ -1344,7 +1344,7 @@ static const JSTrampStepDef TT_DEF = {
 int timer_run_due(JSContext *ctx)
 {
     JSValue whenv = JS_UNDEFINED;
-    double seq = 0;
+    double seq = 0, due = 0;
     int idx = -1, nest = 0, repeat = 0;
     JSContext *docctx = timer_earliest(ctx, &idx, &whenv, &seq);
     JSValue q, e, handler, timeout, this_arg;
@@ -1461,6 +1461,8 @@ int timer_run_due(JSContext *ctx)
        for a nested `setTimeout` inside the handler and for substep 9.11's re-performance. */
     nest = (int)timer_entry_num(docctx, e, TE_NEST);
     handle = (uint32_t)timer_entry_num(docctx, e, TE_HANDLE);
+    /* The arrival timer_due_stamp gave the task when it first saw it due, or 0 if nothing saw it before now. */
+    due = timer_entry_num(docctx, e, TE_DUE);
     {
         JSValue rep = JS_GetPropertyUint32(docctx, e, TE_REPEAT);
 
@@ -1517,7 +1519,9 @@ int timer_run_due(JSContext *ctx)
         CHECK(!JS_IsException(task),
               "timer: §8.7 Timers's step 9 task could not be allocated — a dropped task is a callback the "
               "page asked for and never gets, which is invisible from outside");
+        if (due != 0) engine_task_arrival((uint64_t)due);
         JS_EnqueueCallTask(docctx, task, TT_ARG_N, targ, TASK_SOURCE_TIMER);   /* §8.7 step 9 */
+        engine_task_arrival(0);
         JS_FreeValue(docctx, task);
         JS_FreeValue(docctx, lvl);
         JS_FreeValue(docctx, idv);

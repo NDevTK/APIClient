@@ -781,6 +781,14 @@ void engine_set_timer_hook(int (*fn)(JSContext *ctx))
     g_timer_hook = fn;
 }
 
+static uint64_t g_task_arrival;   /* engine_task_arrival's stamp, until the enqueue it names takes it */
+void engine_task_arrival(uint64_t seq)
+{
+    DCHECK(g_task_arrival == 0, "a task's arrival was named while an earlier one was unconsumed — the enqueue "
+                                "it was named for never reached engine_enqueue_job");
+    g_task_arrival = seq;
+}
+
 static uint64_t (*g_timer_due_hook)(JSContext *ctx);
 void engine_set_timer_due_hook(uint64_t (*fn)(JSContext *ctx))
 {
@@ -7855,7 +7863,15 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
     DCHECKF(!is_task || task_source_stated(src),
             "a callback was queued as a task without stating its task source, or that none put it there — HTML "
             "§8.1.7.1 orders one source's work across carriers (is_task=%d)", (int)is_task);
-    flow_job_push(ctx, f, fn, argc, argv, is_task, handle);
+    if (g_task_arrival) {
+        uint64_t seq = g_task_arrival;
+
+        DCHECK(is_task, "a microtask was queued under a task's arrival stamp");
+        g_task_arrival = 0;
+        flow_job_push_arrived(ctx, f, fn, argc, argv, handle, seq);
+    } else {
+        flow_job_push(ctx, f, fn, argc, argv, is_task, handle);
+    }
     return 1;   /* host owns it */
 }
 

@@ -729,6 +729,10 @@ void flow_job_kinds(const Flow *f, int *task_out, int *micro_out);
    `handle` is the runtime's name for the callback, so the host that took the job can find it again. */
 void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task,
                    JSTaskHandle handle);
+/* The same for a task that arrived at `seq` (non-zero, already issued by flow_work_seq_next): it is placed
+   before every queued task with a later stamp, so the queue's tasks stay in arrival order. */
+void flow_job_push_arrived(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv,
+                           JSTaskHandle handle, uint64_t seq);
 /* The next arrival stamp: one monotone counter per instance, issued to both of a flow's task carriers (a `jobs`
    record at flow_job_push; a `dyn` row's `dyn_run`, and its `dyn_id` at creation). flow.c's g_work_seq says why
    the two share a clock: an order over arrival is the one §8.1.7.1 "Definitions" and §8.1.7.3 "Processing

@@ -2569,10 +2569,25 @@ void flow_job_kinds(const Flow *f, int *task_out, int *micro_out) {
     *micro_out = m;
 }
 
+static void job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task,
+                     JSTaskHandle handle, uint64_t seq);
+
 void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task,
                    JSTaskHandle handle) {
+    job_push(ctx, f, fn, argc, argv, task, handle, 0);
+}
+
+void flow_job_push_arrived(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv,
+                           JSTaskHandle handle, uint64_t seq) {
+    DCHECK(seq != 0, "a task was queued as having arrived earlier with no arrival stamp");
+    job_push(ctx, f, fn, argc, argv, 1, handle, seq);
+}
+
+/* `seq` 0 is a task or microtask arriving now: a fresh stamp, appended. */
+static void job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task,
+                     JSTaskHandle handle, uint64_t seq) {
     JSValue e;
-    int i;
+    int i, at;
 
     DCHECK(argc >= 0, "a job was queued with a negative argument count");
     DCHECK(argc == 0 || argv != NULL, "a job was queued claiming arguments it did not bring");
@@ -2599,7 +2614,7 @@ void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueCons
        the runtime, whose own queues and baseline list issue callbacks this file never sees, while a stamp orders this
        flow's `jobs` against its `dyn`, the host's alone. The baseline handover therefore stamps a task when a flow
        adopts it, since nothing orders it against a row before it has a flow. */
-    JS_SetPropertyUint32(ctx, e, JOB_SEQ, JS_NewInt64(ctx, (int64_t)flow_work_seq_next()));
+    JS_SetPropertyUint32(ctx, e, JOB_SEQ, JS_NewInt64(ctx, (int64_t)(seq ? seq : flow_work_seq_next())));
     for (i = 0; i < argc; i++)
         JS_SetPropertyUint32(ctx, e, (uint32_t)(JOB_HDR + i), JS_DupValue(ctx, argv[i]));
     if (!JS_IsObject(f->jobs)) {
@@ -2607,7 +2622,19 @@ void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueCons
         f->jobs = JS_NewArray(ctx);
         CHECK(!JS_IsException(f->jobs), "flow: OOM allocating a flow's job queue");
     }
-    JS_SetPropertyUint32(ctx, f->jobs, (uint32_t)flow_job_pending(f), e);
+    at = flow_job_pending(f);
+    /* An earlier arrival goes in front of the entries stamped after it, shifting them up by one, so the queue stays
+       in stamp order; job_pick_index still takes a microtask before any task. */
+    while (seq && at > 0) {
+        JSValue prev = job_entry(f, at - 1);
+        int later = job_field_u64(prev, JOB_SEQ, "a task placed by arrival") > seq;
+
+        if (later) JS_SetPropertyUint32(ctx, f->jobs, (uint32_t)at, JS_DupValue(ctx, prev));
+        JS_FreeValue(ctx, prev);
+        if (!later) break;
+        at--;
+    }
+    JS_SetPropertyUint32(ctx, f->jobs, (uint32_t)at, e);
     cow_engine_write_end();
 }
 

@@ -161,6 +161,10 @@ void engine_set_timer_hook(int (*fn)(JSContext *ctx));
 /* The timer source's arrival stamp for its next task when that task is already due (core/timing/timer.h's
    timer_due_stamp), registered by the timer component beside the step above. */
 void engine_set_timer_due_hook(uint64_t (*fn)(JSContext *ctx));
+/* The next task this agent queues arrived at `seq` (a stamp flow_work_seq_next issued), so it is ordered by that
+   arrival rather than by the enqueue. Named immediately before one enqueue and consumed by it; naming 0 after
+   the enqueue asserts that it was. */
+void engine_task_arrival(uint64_t seq);
 /* HTML §8.1.7.3's in-parallel half, the rendering task source (rendering.h). Asked immediately before the timer
    step: both are due on the one virtual clock, and this one defers to a timer that expires first. */
 void engine_set_rendering_hook(int (*fn)(JSContext *ctx, bool due_only));
