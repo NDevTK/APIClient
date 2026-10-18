@@ -48,7 +48,19 @@ export function loadZone(sandbox, extra = []) {
                     'or a driver\'s own table)');
   const files = [...ZONE_SCRIPTS, ...extra];
   assertShippedOrder(files);
-  for (const f of files)
+  /* The classic scripts share one global scope, so a later script's function or var silently replaces an
+     earlier script's function of the same name in the shipped document too; a host refuses to load that. */
+  const declaredBy = new Map();
+  for (const f of files) {
+    const before = new Map(Object.getOwnPropertyNames(sandbox).map((k) => [k, sandbox[k]]));
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
+    for (const k of Object.getOwnPropertyNames(sandbox)) {
+      if (before.has(k) && before.get(k) === sandbox[k]) continue;
+      if (declaredBy.has(k) && typeof before.get(k) === 'function')
+        throw new Error(`\`${f}\` replaces the global function \`${k}\` that \`${declaredBy.get(k)}\` declares; ` +
+                        'every caller of the first now reaches the second, so rename one');
+      declaredBy.set(k, f);
+    }
+  }
   return sandbox;
 }
