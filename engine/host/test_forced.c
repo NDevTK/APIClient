@@ -13557,11 +13557,30 @@ TF_UNIT void probes_griditem(const char *js, Probe *tab, int *n) {
              "synthesizes it");
     fold_row(&gridb_tt, &gridb_why, param_value_is(js, "/api/gridiw", "l6", "34"),
              "CSS 2.2 §10.8: the line holding the synthesized-baseline `inline-grid` is not its height");
+    /* Items spanning several tracks: §11.5's spanning steps, §6.6's zero minimum over a flexible track, and
+       §8.5's auto-placement of spans. */
+    const char *grids_why = NULL; int grids_tt = 1;
+    fold_row(&grids_tt, &grids_why, param_value_is(js, "/api/gridiw", "s1x", "80"),
+             "css-grid-1 §11.5.1: a spanning item's extra space is not shared equally by the two `auto` columns");
+    fold_row(&grids_tt, &grids_why, param_value_is(js, "/api/gridiw", "s1w", "90"),
+             "css-grid-1 §11.5.1: the second `auto` column is not its item's 50px plus half the extra 80px");
+    fold_row(&grids_tt, &grids_why, param_value_is(js, "/api/gridiw", "s2x", "200"),
+             "css-grid-1 §6.6: an `auto`-width item spanning a flexible track does not have a zero minimum, so "
+             "the `1fr` columns do not split the 200px left equally");
+    fold_row(&grids_tt, &grids_why, param_value_is(js, "/api/gridiw", "s3y", "50"),
+             "css-grid-1 §11.5: a 100px item spanning two `auto` rows does not make each 50px");
+    fold_row(&grids_tt, &grids_why, param_value_is(js, "/api/gridiw", "s3h", "50"),
+             "css-grid-1 §6.2: the stretched item in a 50px row is not 50px tall");
+    fold_row(&grids_tt, &grids_why, param_value_is(js, "/api/gridiw", "s4x", "100"),
+             "css-grid-1 §8.5: the single item does not follow the wrapped `span 2` item on its row");
+    fold_row(&grids_tt, &grids_why, param_value_is(js, "/api/gridiw", "s4y", "10"),
+             "css-grid-1 §8.5: the `span 2` item that overflows the first row does not wrap to the second");
     const Probe rows[] = {
         { "grid-item-auto-width", gridiw_tt, "/api/gridiw", SESS_EXPLORE, gridiw_why },
         { "grid-rows-sized", gridrow_tt, "/api/gridiw", SESS_EXPLORE, gridrow_why },
         { "grid-explicit-tracks", gridx_tt, "/api/gridiw", SESS_EXPLORE, gridx_why },
         { "inline-grid-baseline", gridb_tt, "/api/gridiw", SESS_EXPLORE, gridb_why },
+        { "grid-spanning-items", grids_tt, "/api/gridiw", SESS_EXPLORE, grids_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

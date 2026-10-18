@@ -95,8 +95,8 @@ static size_t gt_item_index(lxb_dom_element_t *container, lxb_dom_element_t *ite
    would result from assuming the item's used minimum size as its preferred size; else the item's minimum
    contribution is its min-content contribution". The used minimum of `min-width: auto` is §6.6 "Automatic
    Minimum Size of Grid Items"': 0 for a scroll container, else the content size suggestion (the min-content
-   size, "clamped by the maximum size in the affected axis, if it's definite"). Only an item in a track with an
-   `auto` minimum is asked, which is §6.6's second condition. */
+   size, "clamped by the maximum size in the affected axis, if it's definite"). The suggestion is asked only
+   where §6.6's track conditions hold (`gt_auto_minimum_applies`); elsewhere the automatic minimum is zero. */
 static CssPx gt_content_size_suggestion(lxb_dom_element_t *item)
 {
     CssPx m, mx;
@@ -112,7 +112,8 @@ static CssPx gt_content_size_suggestion(lxb_dom_element_t *item)
     return m;
 }
 
-static CssPx gt_minimum_contribution(lxb_dom_element_t *item, IntrinsicInlineSizes contributions)
+static CssPx gt_minimum_contribution(lxb_dom_element_t *item, IntrinsicInlineSizes contributions,
+                                     bool content_based)
 {
     CssLength w = css_computed_length(item, "width");
     IntrinsicInlineSizes used;
@@ -125,7 +126,7 @@ static CssPx gt_minimum_contribution(lxb_dom_element_t *item, IntrinsicInlineSiz
                "BUILD css-sizing-3 §3.2's keyword as the item's preferred size in the contribution",
                box_subject(item, buf, sizeof buf));
     if (!intrinsic_declared_sizing_px(item, INTRINSIC_AXIS_HORIZONTAL, "min-width", CSS_KEYWORD_AUTO, &m))
-        m = scroll_container_is(item) ? css_px(0.0) : gt_content_size_suggestion(item);
+        m = scroll_container_is(item) || !content_based ? css_px(0.0) : gt_content_size_suggestion(item);
     used.min_content = m;
     used.max_content = m;
     return intrinsic_outer_contribution(item, used).min_content;
@@ -293,6 +294,22 @@ void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, lxb
    constraint "limited min-content contribution", which for tracks with no fixed max is the min-content
    contribution) and the min-content and max-content contributions. Rows: the one outer size for all three.
    False is "not yet". */
+/* §6.6's track conditions over the item's spanned tracks `[start, start + span)`: "it spans at least one track
+   in that axis whose min track sizing function is auto" (a `<flex>` track's min is `auto`), and "if it spans
+   more than one track in that axis, none of those tracks are flexible". */
+static bool gt_auto_minimum_applies(const GridAxisSizing *g, size_t start, size_t span)
+{
+    bool autoish = false, flex = false;
+    size_t t;
+
+    DCHECK(span >= 1 && start + span <= g->ntracks, "§6.6 was asked over tracks the axis does not have");
+    for (t = start; t < start + span; t++) {
+        if (g->tracks[t].kind != CSS_GRID_TRACK_BREADTH) autoish = true;
+        if (g->tracks[t].kind == CSS_GRID_TRACK_FLEX) flex = true;
+    }
+    return autoish && !(span > 1 && flex);
+}
+
 static bool gt_contributions_ask(const GridAxisSizing *g, lxb_dom_element_t *item, GridContribution *out)
 {
     IntrinsicInlineSizes c;
@@ -304,7 +321,9 @@ static bool gt_contributions_ask(const GridAxisSizing *g, lxb_dom_element_t *ite
     }
     if (!intrinsic_inline_sizes_ask(item)) return false;
     c = intrinsic_inline_contributions(item);
-    out->minimum = g->constraint == GRID_SIZING_AVAILABLE ? gt_minimum_contribution(item, c) : c.min_content;
+    out->minimum = g->constraint == GRID_SIZING_AVAILABLE
+                       ? gt_minimum_contribution(item, c, gt_auto_minimum_applies(g, out->start, out->span))
+                       : c.min_content;
     out->min_content = c.min_content;
     out->max_content = c.max_content;
     return true;

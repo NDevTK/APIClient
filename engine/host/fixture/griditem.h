@@ -34,6 +34,25 @@ static const char HTML_GRIDITEM[] =
     "<div>ab</div><div>cd</div></span> tail</div>"
     "<div id=l6><span id=t6>text</span> <span style=\"display:inline-grid;width:100px;"
     "grid-template-columns:50px 50px\"><div style=\"height:30px\"></div><div>xy</div></span> tail</div>"
+    /* Items spanning several tracks (§11.5 "Resolve Intrinsic Track Sizes"). A 170px item over two `auto`
+       columns of 40px and 50px items adds 40px to each, so the second starts at 80 and is 90 wide. An
+       `auto`-width item over `100px 1fr` has an automatic minimum of zero (§6.6), so the `1fr 1fr` columns
+       split the 200px left and the third starts at 200. A 100px item spanning two `auto` rows of 20px items
+       makes each 50px. Two `span 2` items and a single one over three 50px columns place the second at the
+       next row's start and the third after it, 100px across and 10px down. */
+    "<div id=s1 style=\"display:grid;width:300px;grid-template-columns:auto auto;justify-content:start\">"
+    "<div style=\"grid-column:1/3\"><div style=\"width:170px;height:10px\"></div></div>"
+    "<div><div style=\"width:40px;height:10px\"></div></div>"
+    "<div id=s1c><div style=\"width:50px;height:10px\"></div></div></div>"
+    "<div id=s2 style=\"display:grid;width:300px;grid-template-columns:100px 1fr 1fr\">"
+    "<div style=\"grid-column:1/3\"><div style=\"width:250px;height:10px\"></div></div>"
+    "<div id=s2b><div style=\"width:10px;height:10px\"></div></div></div>"
+    "<div id=s3 style=\"display:grid;width:200px;grid-template-columns:100px 100px\">"
+    "<div style=\"grid-row:span 2\"><div style=\"height:100px\"></div></div>"
+    "<div id=s3b><div style=\"height:20px\"></div></div><div id=s3c><div style=\"height:20px\"></div></div></div>"
+    "<div id=s4 style=\"display:grid;width:150px;grid-template-columns:50px 50px 50px\">"
+    "<div style=\"grid-column:span 2;height:10px\"></div><div style=\"grid-column:span 2;height:10px\"></div>"
+    "<div id=s4c style=\"height:10px\"></div></div>"
     "<script>var g2 = document.getElementById('g2');"
     "function R(id) { return document.getElementById(id).getBoundingClientRect(); }"
     "fetch('/api/gridiw?w=' + getComputedStyle(document.getElementById('gi')).width"
@@ -43,7 +62,11 @@ static const char HTML_GRIDITEM[] =
     " + '&x2=' + (R('c2').left - R('g3').left) + '&w2=' + R('c2').width + '&w3=' + R('c3').width"
     " + '&y4=' + (R('r4').top - R('g4').top) + '&h4=' + R('r4').height"
     " + '&t5=' + (R('t5').top - R('l5').top) + '&g5=' + (R('g5').top - R('l5').top) + '&l5=' + R('l5').height"
-    " + '&t6=' + (R('t6').top - R('l6').top) + '&l6=' + R('l6').height);"
+    " + '&t6=' + (R('t6').top - R('l6').top) + '&l6=' + R('l6').height"
+    " + '&s1x=' + (R('s1c').left - R('s1').left) + '&s1w=' + R('s1c').width"
+    " + '&s2x=' + (R('s2b').left - R('s2').left)"
+    " + '&s3y=' + (R('s3c').top - R('s3').top) + '&s3h=' + R('s3b').height"
+    " + '&s4x=' + (R('s4c').left - R('s4').left) + '&s4y=' + (R('s4c').top - R('s4').top));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
