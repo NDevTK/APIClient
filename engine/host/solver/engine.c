@@ -7577,6 +7577,9 @@ static int engine_drop_jobs(JSContext *ctx) {
    microtask checkpoint, not a FIFO pop: arrival order within a queue, but no task may begin while this flow holds
    a microtask, so `setTimeout(f, 0)` cannot run in the middle of a promise chain. */
 static void flow_run_one_job(JSContext *ctx, Flow *f) {
+    DCHECK(f->compile == NULL,
+           "a job ran while this flow holds a parse parked part way — the parse is the task in progress (HTML §8.1.4.3 "
+           "Creating scripts), and flow_stack_empty, which every job arm is guarded on, answers no while it is held");
     JSValue job = flow_job_take(ctx, f);   /* the pick IS the checkpoint rule — see flow.h */
     g_jobs_run++;
     JSValue r = flow_job_run(ctx, job);    /* the reaction runs in this flow's timeline */
@@ -8090,6 +8093,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
            park), and an uncaught throw from it must be recorded as this page's error (§8.1.4.6 Runtime script
            errors' "report an exception", the hook scripts and jobs use) and taken out of the per-runtime
            `rt->current_exception` before another flow's evaluation finds it. */
+        DCHECK(f->compile == NULL || !JS_HasParkedFlow(JS_GetRuntime(ctx)),
+               "a flow holds a parked parse and a parked continuation at once — no job runs while a parse is held "
+               "(flow_run_one_job), so the continuation parked before the parse began, when the compile arm below "
+               "could not have been reached");
         {
             JSValue pcv = JS_UNDEFINED;
             if (JS_ResumeParkedFlow(JS_GetRuntime(ctx), &pcv)) {

@@ -1447,11 +1447,15 @@ void flow_credit_pick(Flow *f) {
    One predicate for every consumer of the sentence: the microtask checkpoint, the networking task source's arm in
    flow_step, the engine's reply-delivery arm, and the census. cold_census asks it directly (solver/cold.h's
    `stack_empty`): `flows - framed` answers only the first half and is an upper bound, so this count is what
-   separates replies members cannot take from an arm not reached for another reason. */
+   separates replies members cannot take from an arm not reached for another reason.
+   A parse parked part way (`Flow::compile`) also answers no: HTML §8.1.4.3 Creating scripts runs ParseScript or
+   ParseModule inside the algorithm that creates the script, so the task that holds the parse has not ended, and no
+   task or checkpoint may begin until the parse resumes and its program has run. */
 int flow_stack_empty(const Flow *f) {
     int row;
 
     if (f->frame) return 0;
+    if (f->compile) return 0;
     row = f->script_i;
     if (row < f->dyn_n) {
         DCHECK(f->dyn_pos != NULL,
