@@ -12533,7 +12533,7 @@ TF_UNIT void probes_modules(const char *js, Probe *tab, int *n) {
         { "module-entry", modentry_tt, "/api/modreach", SESS_EXPLORE, modentry_why },
         { "module-tla", modtla_tt, "/api/modtla", SESS_EXPLORE, modtla_why },
         { "module-meta-inline", mmetain_tt, "/api/mmetain", SESS_EXPLORE, mmetain_why },
-        { "module-meta-external", mmetaext_tt, "/api/mmetaext", SESS_EXPLORE, mmetaext_why },
+        { "module-meta-external", mmetaext_tt, "/chunk/mdmeta.js", SESS_EXPLORE, mmetaext_why },
         /* §16.2.1.7.3.1's BINDING. `mfd-top` stands first because it is what says whether the row below it is
            about the closure chain or about how far the run got. */
         { "mfd-top", mfdtop_tt, "/api/mfdtop", SESS_EXPLORE, mfdtop_why },
