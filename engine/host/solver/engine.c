@@ -8683,8 +8683,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        (§4.12.1.1's encoding-parsed url, never the raw attribute, which the host would resolve
                        against its own base), and the flow runs no program of its own here: §4.12.1.1 fixes this
                        script's position against the scripts around it. The request went out when the row was created
-                       (step 33 fetches at prepare; step 35 only decides where the result runs), and an answered reply
-                       would already have been delivered by the networking arm above, which the dev block asserts. */
+                       (step 33 fetches at prepare; step 35 only decides where the result runs). An answered reply
+                       stands here only behind a strictly older task: its stamp is its arrival (Fetch §4.1 "Main
+                       fetch"), and the networking arm above declines to an older task, which the task arm below
+                       runs while the row waits. The dev block asserts that. */
 #if APICLIENT_DEV
                     {
                         /* Read outside the condition, under the dev guard: pending_ready reads the register's
@@ -8692,12 +8694,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                            arm's conjunction; a DYN_SCRIPT_SRC row is queued DYN_POS_APPEND at both sites that
                            create one, so an immediate row cannot be how this line was reached. */
                         int ready = flow_pending_ready(f);
-                        DCHECK(flow_stack_empty(f) && !ready,
-                               "a flow reached an external script row holding an answered reply — the "
-                               "networking task source's arm runs above the whole sequence, so an answered "
-                               "entry standing here means that arm's guard and this row's have stopped being "
-                               "the same question, and this flow is about to report itself owed a reply the "
-                               "host has already paid");
+                        int behind = ready && flow_task_precedes(f, flow_pending_ready_next_seq(f));
+                        DCHECK(flow_stack_empty(f) && (!ready || behind),
+                               "a flow reached an external script row holding an answered reply with no older "
+                               "task queued — the networking arm above delivers every reply no task precedes, so "
+                               "that arm's guard and this row's have stopped being the same question, and this "
+                               "flow is about to report itself owed a reply the host has already paid");
                         /* The request step 33 owed for this row is outstanding: the park is made at the row's
                            creation and names the row by `dyn_id`, so a flow here with no entry naming the row would
                            report itself host-owed over a request nobody can list (a §7.5.10 removal that took the
@@ -8786,8 +8788,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * NAVIGATION_AND_TRAVERSAL), since within one source arrival order is queue order;
              * core/timing/task_source.h records the narrower repair.
              *
-             * The delivery arm above the sequence joins the order for tasks (PEND_WORK_SEQ, minted at every push,
-             * and flow_task_precedes asked with the reply's stamp), so a flow whose register never empties still
+             * The delivery arm above the sequence joins the order for tasks (PEND_WORK_SEQ, minted when its answer
+             * lands, and flow_task_precedes asked with the reply's stamp), so a flow whose register never empties still
              * runs a task that arrived first. It still precedes every row, because a row at the cursor may be a
              * DYN_SCRIPT_SRC parked on its own reply (deferring to it could deadlock) and `seq_compiles` is
              * computed only below that arm; the residual is at `g_task_held_deliv`. Its next diff hoists the kind
