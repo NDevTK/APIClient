@@ -680,11 +680,19 @@ static void park_rec_world(const char *vector)
  * finds a different width is holding a document another writer produced and refuses it rather than reading a
  * short name as a valid one. Written like park_rec_cand's text fields and not through park_rec, whose charset
  * is the digit grammar and does not admit the hex letters 'a' through 'd'. */
-static void park_rec_orphan(const Flow *f)
+/* A locator's spelling: sixteen lower-case hex digits, most significant first, NUL-terminated. */
+static void park_orphan_hex(uint64_t hash, char out[17])
 {
     static const char H[] = "0123456789abcdef";
-    char rec[17];
     int d;
+
+    for (d = 0; d < 16; d++) out[d] = H[(hash >> (60 - 4 * d)) & 15u];
+    out[16] = 0;
+}
+
+static void park_rec_orphan(const Flow *f)
+{
+    char rec[17];
 
     DCHECK(f->orphan,
            "the cold tier was asked to name the function of a flow that is not a driven orphan — the record "
@@ -697,12 +705,48 @@ static void park_rec_orphan(const Flow *f)
            "a driven orphan was parked with no function locator — its record would name a body no session can "
            "find, so the resumed drive would wait for a function that is never handed to it and finish having "
            "called nothing, which is precisely the silent drop this record exists to prevent");
-    for (d = 0; d < 16; d++) rec[d] = H[(f->orphan_hash >> (60 - 4 * d)) & 15u];
-    rec[16] = 0;
+    park_orphan_hex(f->orphan_hash, rec);
     park_open_rec();
     park_str("o");
     park_str(rec);
 }
+
+#if APICLIENT_DEV
+/* One record of park_doc_holds_drive's walk: a hit when `rec` is the locator `orphan` and the record before it
+   named the chain `chain`. `prev` carries whether it did. */
+static int park_drive_rec(const char *rec, int over, const char *chain, const char *orphan, int *prev)
+{
+    size_t chain_n = strlen(chain);
+    int hit = *prev && !over && strcmp(rec, orphan) == 0;
+
+    *prev = !over && strncmp(rec, chain, chain_n) == 0 && rec[chain_n] == ',';
+    return hit;
+}
+
+/* Whether the document already holds a flow record whose chain field is `chain` ("f-" or "f<ordinal>") followed
+   by the locator record `orphan` ("o<hex>"): the same drive of the same body on the same path. Reads the bytes
+   in block order, as every reader does, so a record spanning two blocks is read whole. */
+static int park_doc_holds_drive(const char *chain, const char *orphan)
+{
+    char rec[48];
+    size_t n = 0, i;
+    int over = 0, prev = 0, hit = 0;
+    const ParkBlock *b;
+
+    for (b = g_park_head; b && !hit; b = b->next)
+        for (i = 0; i < b->len && !hit; i++) {
+            if (b->bytes[i] != ';') {
+                if (n < sizeof rec - 1) rec[n++] = b->bytes[i]; else over = 1;
+                continue;
+            }
+            rec[n] = 0;
+            hit = park_drive_rec(rec, over, chain, orphan, &prev);
+            n = 0; over = 0;
+        }
+    rec[n] = 0;
+    return hit || park_drive_rec(rec, over, chain, orphan, &prev);
+}
+#endif
 
 /* AN UNMADE ROUTED DELIVERY — one record per [record, senderOrigin] pair still on the flow's queue, written
    immediately AFTER the 'f' or 'c' record of the flow that holds it and belonging to it. A message a peer sent
@@ -1288,6 +1332,23 @@ void cold_park_flow(Flow *f)
         g_parked_census.cands++;   /* a candidate session, as the preview counts it */
         break;
     case PARK_KIND_FLOW:
+#if APICLIENT_DEV
+        /* A drive is its path and its body, so two records with both equal are one drive written twice: each
+           resumes as a claimant that re-runs the same path to the same call. */
+        if (f->orphan) {
+            char chain[24], orphan[18];
+
+            if (id < 0) snprintf(chain, sizeof chain, "f-");
+            else        snprintf(chain, sizeof chain, "f%ld", id);
+            orphan[0] = 'o';
+            park_orphan_hex(f->orphan_hash, orphan + 1);
+            DCHECKF(!park_doc_holds_drive(chain, orphan),
+                    "the park document already holds the drive '%s;%s' — two records that are the same drive of "
+                    "the same body on the same path resume as two claimants of one drive; the flow written first "
+                    "and this one (waiting %d, driving %d) are arms of a fork the recipe does not record",
+                    chain, orphan, f->orphan_want, !JS_IsUndefined(f->fn));
+        }
+#endif
         if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", flow_reward(f));
         else        snprintf(rec, sizeof rec, "f%ld,%.17g", id, flow_reward(f));
         park_rec(rec);

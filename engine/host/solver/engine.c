@@ -5093,12 +5093,24 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     /* The name of the function it drives travels by the same sentence: the arm's recipe must say which body to
        re-take, and the park asserts a drive has a name. */
     sib->orphan_hash = parent->orphan_hash;
-    /* The wait travels too: a resumed drive replays the document first, and a replay branches, so a flow still
-       waiting for its function forks arms that are each the same drive; without the wait an arm would never build
-       its call and the park would write an 'o' for a `fn` it lacks. The take consumes the `entered` bit, not the
-       function, so N arms each call it. `fn` is carried by flow_add_unseeded; `orphan_argc` belongs to that body. */
-    sib->orphan_want = parent->orphan_want;
-    sib->orphan_argc = parent->orphan_argc;
+    sib->orphan_want = 0;
+    sib->orphan_argc = 0;
+    /* The wait does not travel. A parked drive is one flow, so its claim is held by one: the claimant, whose
+       replay builds the call where its work runs out. An arm the replay forks before then is an ordinary arm of
+       the document and drives nothing, so it carries no mark, no locator and no routed body; were it to inherit
+       the claim, every arm of the replay would build the call and park as the same drive of the same body.
+       Named residual. Not covered: which arm of a fork that records no arm (decide_fork_same_path) the drive stood
+       on when it parked; the claim stays with the parent, so a drive born in a sibling's timeline resumes in the
+       parent's. Next diff builds: those forks' completions recorded as numbered arms (solver_outcome's elimination
+       sequence), so the replay consumes the drive's arm instead of re-forking. Absence shows as: a resumed drive
+       emitting addresses that differ from its recording session's, on a page whose arms set the state the
+       driven body's closure reads. */
+    if (parent->orphan_want) {
+        sib->orphan = 0;
+        sib->orphan_hash = 0;
+        JS_FreeValue(ctx, sib->fn);
+        sib->fn = JS_UNDEFINED;
+    }
     /* A field added to the candidate identity is an obligation here: the fields are copied one by one so that a
        new one is visible, and this checks they arrived. */
     DCHECK(!!sib->cand_src == !!parent->cand_src && !!sib->cand_payload == !!parent->cand_payload &&
@@ -5881,11 +5893,10 @@ EngineOrphanExits engine_orphan_exits(void) {
     return e;
 }
 /* The round trip's two numbers: waits a hand-over satisfied, and waiting flows that finished without a body. The
-   third, how many were rebuilt, is the cold tier's (cold_resumed().orphans). The unmet count is counted at the
-   finish, not derived: a waiting drive forks arms while it replays, so more flows can be satisfied than there
-   were records, and a difference would report that as a loss. A drive that finished still waiting is the loss
-   exactly (the bundle no longer holds the body, or the locator does not name it), and on unchanged bytes between
-   two sessions it is zero. */
+   third, how many were rebuilt, is the cold tier's (cold_resumed().orphans), and it bounds both, because a claim
+   is held by the one flow its record rebuilt (a fork does not copy it) and is satisfied at most once. The unmet
+   count is counted at the finish: a drive that finished still waiting is the loss exactly (the bundle no longer
+   holds the body, or the locator does not name it), and on unchanged bytes between two sessions it is zero. */
 static long g_orphan_claims_met, g_orphan_claims_unmet;
 /* Whether any claim is still open: a latch set by a walk that found none, rather than a counter that flow_remove,
    flow_release and the park would all have to decrement. Only cold_resume opens claims, before any flow is
@@ -5962,6 +5973,14 @@ static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64
        satisfies the last claim latches on the next one. */
     if (!open) g_orphan_claims_closed = 1;
     g_orphan_claims_met += n;
+    {
+        ColdResumed cr;
+
+        cold_resumed(&cr);
+        DCHECK(g_orphan_claims_met <= cr.orphans,
+               "more orphan claims were satisfied than the cold tier rebuilt — a claim belongs to the one flow its "
+               "'o' record named, so a second holder is a fork that copied the wait (engine_sibling_assemble)");
+    }
     return n;
 }
 
@@ -6107,8 +6126,7 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
         base = engine_orphan_call(ctx, f->fn, f->orphan_argc, f->orphan_hash);
         f->frame = base;
         /* Not counted again here: `orphanClaimsMet` counts hand-overs by the routing walk (from a take or from a
-           body's creation, engine_orphan_born), and an arm that inherited the function from a waiting parent also
-           reaches this line, so counting built frames would inflate a number compared against the records. */
+           body's creation, engine_orphan_born), and each hand-over reaches this line once. */
         f->orphan_want = 0;
         return ORPHAN_STEP_RESUMED;
     }

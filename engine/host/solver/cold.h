@@ -978,9 +978,8 @@ typedef struct {
        before it rather than producing one. It is also the first half of the round trip's only observable: the
        engine reports it against how many of those waits a take SATISFIED and how many waiting flows FINISHED
        never having been handed a body (`orphanClaims`/`orphanClaimsMet`/`orphanClaimsUnmet`). The last is the
-       verdict — ZERO on a document whose bytes did not change between two sessions — and the middle one may
-       legitimately exceed this count, because a waiting drive forks arms while it replays and every arm of it
-       is the same drive of the same body. */
+       verdict — ZERO on a document whose bytes did not change between two sessions. This count bounds both: a
+       claim stays with the flow its record rebuilt, and an arm its replay forks is not a drive. */
     long orphans;
     /* 'r' AND 'm': THE OTHER TWO POSITIONAL KINDS, REBUILT — a sending timeline's commitment and an unmade
        routed delivery, each naming the flow written before it rather than producing one, exactly as 'o' does.
