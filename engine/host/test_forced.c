@@ -581,6 +581,7 @@ static void fixture_route_gadget_post(JSContext *ctx);
 typedef struct { const char *at; const char *type; const char *body; } TfServed;
 static const TfServed TF_SERVED[] = {
     { "https://x.test/chunk/replyprog.js", "text/javascript",  "fetch('/api/progran');" },
+    { "https://x.test/chunk/xsrow.js",     "text/javascript",  "fetch('/api/xsrow?n=' + window.__xsn);" },
     { "https://x.test/chunk/replyctl.js",  "application/json", "fetch('/api/ctlran');" },
     { "https://x.test/chunk/injsrc.js",    "text/javascript",
       "fetch('/api/injran?el=' + (document.currentScript === null ? 'injnull'"
@@ -15099,7 +15100,14 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
              xc_tab + xc_atb + xc_abt == param_undriven_count(js, "/api/xchainorder", "v", NULL),
              "NOT REACHED or wrong: a 50 ms timer beside a fetch() whose reaction issues a second one did not run "
              "in each of the three orders against the two arrivals, or an arm recorded another order");
+    /* An inserted script's response runs after every task queued before its fetch started. */
+    const char *xsrow_why = NULL;
+    int xsrow_tt = 1;
+    fold_row(&xsrow_tt, &xsrow_why, param_value_only_undriven(js, "/api/xsrow", "n", "200"),
+             "NOT REACHED or wrong: an inserted script ran before all 200 message tasks queued ahead of its fetch, "
+             "or never ran");
     const Probe rows[] = {
+        { "script-after-tasks", xsrow_tt, "/chunk/xsrow.js", SESS_EXPLORE, xsrow_why },
         { "deadline-race", xrace_tt, "/api/xraceorder", SESS_EXPLORE, xrace_why },
         { "deadline-race-chain", xchain_tt, "/api/xchainorder", SESS_EXPLORE, xchain_why },
         { "xhr-timeout", xatime_tt, "/api/xatimedout", SESS_EXPLORE, xatime_why },

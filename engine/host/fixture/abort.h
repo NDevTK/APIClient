@@ -193,6 +193,20 @@ static const char HTML_ABORT[] =
     " fetch('/api/apcancelled?v=' + v);"
     "})();"
     "</script>"
+    /* An inserted script with `async` false is in the list of scripts that will execute in order as soon as
+       possible (HTML §4.12.1.1), so it holds a row. Its fetch starts at its prepare (step 33) and its response
+       is a networking task from its arrival (Fetch §4.1 "Main fetch"), so the 200 message tasks queued before the
+       insertion all run before the script: `n` is 200. They outlast a slice, so the response lands while they
+       are queued and the flow stands on the row with an answered reply behind older tasks. */
+    "<script>"
+    "(function () {"
+    " var ch = new MessageChannel(), n = 0;"
+    " ch.port1.onmessage = function () { for (var i = 0, s = 0; i < 300; i++) s += i; window.__xsn = ++n; };"
+    " for (var k = 0; k < 200; k++) ch.port2.postMessage(k);"
+    " var el = document.createElement('script'); el.async = false; el.src = '/chunk/xsrow.js';"
+    " document.head.appendChild(el);"
+    "})();"
+    "</script>"
     TF_CANVAS_INK
     "</body></html>";
 
