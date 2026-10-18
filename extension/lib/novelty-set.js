@@ -32,19 +32,19 @@ const _noveltyDirty = new Set();
    -> the count it last reported), because a result is re-composed whole on every partial: a counted line adds
    what the instance's count rose by since its last result, so one drive is counted once however many results
    repeat it. A result under another spelling than the partition holds is a build that digests differently, so
-   the partition is replaced rather than mixed. The lines are the engine's statement and so input: one that is
-   not an identity, or a count below that instance's last, is refused and changes nothing. */
+   the partition is replaced rather than mixed. The record is the engine's statement and so input: a record that
+   is not {spelling, identities[]} is refused whole, and a line that is not an identity, or a count below that
+   instance's last, is refused alone; a refusal changes nothing. */
 function noveltyAbsorb(partition, nov, counted) {
   DCHECK(typeof partition === "string", "a novelty partition is not an origin string: " + String(partition));
   /* Asked by shape and not by `instanceof`: engine/trusted.mjs loads this file into a realm of its own and
      hands it a Map of its realm. */
   DCHECK(!!counted && typeof counted.has === "function" && typeof counted.set === "function",
          "a novelty absorb was handed no per-instance count record");
-  DCHECK(!!nov && typeof nov === "object" && typeof nov.spelling === "string" && nov.spelling !== "" &&
-         nov.spelling.indexOf("\n") < 0 && Array.isArray(nov.identities),
-         "a result document's `_novelty` is not {spelling, identities[]} — solver/novelty.c's novelty_json " +
-         "writes both on every document, so this is a wasm built before that commit (build it) or that " +
-         "composition changed under this reader");
+  if (!nov || typeof nov !== "object" || typeof nov.spelling !== "string" || nov.spelling === "" ||
+      nov.spelling.indexOf("\n") >= 0 || !Array.isArray(nov.identities))
+    return { added: 0, refused: [{ line: JSON.stringify(nov === undefined ? null : nov).slice(0, 200),
+                                   reason: "not a `_novelty` record {spelling, identities[]}" }] };
   let p = _noveltyParts.get(partition);
   if (p === undefined || p.spelling !== nov.spelling) {
     p = { spelling: nov.spelling, lines: [], plain: new Set(), counts: new Map() };
