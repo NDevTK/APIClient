@@ -20,6 +20,7 @@
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
+#include "core/layout/grid_track.h"
 #include "core/layout/flex_position.h"
 #include "core/layout/flow_placement.h"
 #include "core/layout/flow_position.h"
@@ -1743,7 +1744,12 @@ CssPx used_value_containing_block_width(lxb_dom_element_t *el)
     UvCb cb;
     CssPx w;
     const lxb_dom_element_t *rec_cb = NULL;
+    lxb_dom_element_t *grid = uv_grid_item_container(el);
 
+    /* css-grid-1 §3.3 "Grid Areas": "A grid item's grid area forms the containing block into which it is laid
+       out", so its width is the area's (core/layout/grid_track.h), not §10.1's walk, which refuses a grid
+       container as an ancestor. Asked before the pass's record, whose agreement check re-derives that walk. */
+    if (grid != NULL) return grid_item_area_inline_size(grid, el);
     if (flow_placement_cb_width_ask(el, &w, &rec_cb)) {
         DCHECKF(uv_cb_width_agrees(el, rec_cb, w),
                 "CSS 2.1 §10.1's recorded containing-block width for this box was derived against an ancestor "
@@ -2462,6 +2468,23 @@ CssPx used_value_default_replaced_size(bool vertical)
  * over the whole subtree; the substituted pass never runs it, because the substituted value is a length. So a
  * declared `min-height` on every level of a tree adds one walk in total, not one per level. */
 static lxb_dom_element_t *uv_flex_item_container(lxb_dom_element_t *el, UvBox box);
+
+/* The grid container `el` is a grid item of, or NULL: css-grid-1 §6 "Grid Items"' in-flow child of a box whose
+   `display` is `grid` or `inline-grid`, through the box tree's `contents` splice. A box-less element and an
+   absolutely positioned one (§9) are no item. */
+static lxb_dom_element_t *uv_grid_item_container(lxb_dom_element_t *el)
+{
+    CssDisplay own, pd;
+
+    own = css_computed_display(el);
+    if (own.kind == CSS_DISPLAY_BOX) return NULL;
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) ||
+        css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED))
+        return NULL;
+    if (!css_box_parent_display(lxb_dom_interface_node(el), &pd)) return NULL;
+    if (!css_display_spells(pd, CSS_KEYWORD_GRID) && !css_display_spells(pd, CSS_KEYWORD_INLINE_GRID)) return NULL;
+    return box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
+}
 
 static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *opposite, CssLength len, UvBox box,
                        const CssLength *size_len);
@@ -3696,6 +3719,45 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
     return r;
 }
 
+/* css-grid-1 §6.2 "Grid Item Sizing" for `width: auto`: "A grid item is sized within the containing block
+   defined by its grid area", and for `normal` or `stretch` self-alignment a non-replaced item takes "the
+   inline size calculation rules for non-replaced boxes (defined in CSS 2 § 10.3.3 Block-level, non-replaced
+   elements in normal flow), i.e. the stretch-fit size": the area's width less the item's margins, borders
+   and paddings, floored at zero. `justify-self: auto` is the container's `justify-items` (css-align-3 §6.1),
+   whose `legacy` alone behaves as `normal`. */
+static CssPx uv_grid_item_auto_width(lxb_dom_element_t *el, UvBox box)
+{
+    lxb_dom_element_t *container = uv_grid_item_container(el);
+    CssAlign self;
+    UvSurround s;
+    CssPx margins, content;
+    char buf[160];
+
+    DCHECK(container != NULL, "a grid item's auto width was asked of a box no grid container holds");
+    self = css_computed_align(el, "justify-self");
+    if (self.value == CSS_KEYWORD_AUTO) self = css_computed_align(container, "justify-items");
+    if (!(self.value == CSS_KEYWORD_NORMAL || self.value == CSS_KEYWORD_STRETCH ||
+          (self.value == CSS_KEYWORD_LEGACY && !self.legacy)))
+        DFAILF("%s is a grid item whose self-alignment is not `normal` or `stretch`, which css-grid-1 §6.2 sizes "
+               "as fit-content. BUILD §10.3.5's shrink-to-fit over the grid area's width",
+               box_subject(el, buf, sizeof buf));
+    if (css_computed_length_is(el, "margin-left", CSS_KEYWORD_AUTO) ||
+        css_computed_length_is(el, "margin-right", CSS_KEYWORD_AUTO))
+        DFAILF("%s is a grid item with an `auto` inline margin, which css-align-3 §6.1 makes absorb the free "
+               "space instead of stretching. BUILD the item's fit-content size and its margin alignment",
+               box_subject(el, buf, sizeof buf));
+    s = uv_surround(el, false);
+    margins = css_px_add(uv_margin(el, "margin-left", "margin-right", css_computed_length(el, "margin-left"), box,
+                                   NULL),
+                         uv_margin(el, "margin-right", "margin-left", css_computed_length(el, "margin-right"), box,
+                                   NULL));
+    content = css_px_max(css_px_sub(css_px_sub(used_value_containing_block_width(el), uv_surround_total(s)),
+                                    margins),
+                         css_px(0.0));
+    if (!uv_is_border_box(el)) return content;
+    return css_px_add(content, uv_surround_total(s));
+}
+
 static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool vertical)
 {
     /* THE BASIS A PERCENTAGE SIZE RESOLVES AGAINST, AND WHETHER THERE IS ONE — the one difference between the
@@ -4084,7 +4146,7 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
     }
     /* A FLEX ITEM NEVER REACHES THIS LINE: `uv_flex_item_main_size` and `uv_flex_item_cross_axis` answer both of
        its axes from its box-tree container. So an item here is one of two things, told apart by the container
-       its box parent is, and each crash names its own missing capability. */
+       its box parent is: a grid item, sized from its grid area, or a flex item the box tree did not splice. */
     if (box == UV_BOX_ITEM) {
         CssDisplay pd;
         bool have = css_box_parent_display(lxb_dom_interface_node(el), &pd);
@@ -4092,12 +4154,7 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
         DCHECK(have, "a box classified as a flex or grid item has no box parent with a `display` — uv_box_kind "
                      "read that same parent to classify it");
         if (css_display_spells(pd, CSS_KEYWORD_GRID) || css_display_spells(pd, CSS_KEYWORD_INLINE_GRID))
-            DFAIL("a GRID ITEM with `width: auto`. css-grid-1 §6.2 \"Grid Item Sizing\": \"A grid item is "
-                  "sized within the containing block defined by its grid area\", and for `normal` or `stretch` "
-                  "self-alignment a non-replaced item takes the stretch-fit size of that area. The area's width "
-                  "is the sum of its columns, which css-grid-1 §11.1 \"Grid Sizing Algorithm\" sizes through "
-                  "§11.3 \"Track Sizing Algorithm\". BUILD the track sizing algorithm for the container's "
-                  "columns and answer the item from its grid area");
+            return uv_grid_item_auto_width(el, box);
         DFAIL("a FLEX ITEM spliced into its container by `display: contents` whose box-tree container "
               "(core/layout/box_tree.h's box_tree_parent) is not the flex container its box parent's `display` "
               "names. css-display-3 §2.5 \"Box Generation: the none and contents keywords\": the element with "

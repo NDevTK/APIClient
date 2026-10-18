@@ -145,6 +145,11 @@ void intrinsic_size_record_release(IntrinsicSizeRecord *r);
    wrong at any used-value site. */
 IntrinsicInlineSizes intrinsic_outer_contribution(lxb_dom_element_t *el, IntrinsicInlineSizes inner);
 
+/* css-sizing-3 §5.2 "Intrinsic Contributions" of `el`'s box: its min-content and max-content contributions,
+   §5.1's measurement with the box's own `width`, `min-width` and `max-width` applied and then §2.2's outer
+   size. A body that can propagate "not yet" asks `intrinsic_inline_sizes_ask(el)` first. */
+IntrinsicInlineSizes intrinsic_inline_contributions(lxb_dom_element_t *el);
+
 /* css-sizing-3 §2.2's outer size of `el`'s box in the vertical axis over an inner size the caller computed: top
    and bottom margin, border and padding, each at §5.2.1's zero basis. One number because a block size has one
    intrinsic size (css-sizing-3 §3.2: "for a box's block size, unless otherwise specified, this is equivalent to

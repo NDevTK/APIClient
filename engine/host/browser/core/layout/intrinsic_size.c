@@ -412,8 +412,7 @@ static IsChildNext is_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
        Cyclic percentages are already substituted, so `is_require_acyclic` is not owed. */
     if (!intrinsic_inline_sizes_ask(el)) return IS_CHILD_NOT_YET;
     {
-        IntrinsicInlineSizes inner = is_declared_inline_sizes(el, intrinsic_inline_sizes(el));
-        IntrinsicInlineSizes outer = intrinsic_outer_contribution(el, inner);
+        IntrinsicInlineSizes outer = intrinsic_inline_contributions(el);
 
         text_run_measure_add_atomic(m, el, outer.min_content, outer.max_content);
     }
@@ -750,6 +749,14 @@ IntrinsicInlineSizes intrinsic_outer_contribution(lxb_dom_element_t *el, Intrins
                                             is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, true)));
 }
 
+/* §5.2's order: §5.1's measurement, then the box's `width`/`min-width`/`max-width`, then §2.2's outer size;
+   a declaration applied after the outer step would clamp a margin box by a content-box property. */
+IntrinsicInlineSizes intrinsic_inline_contributions(lxb_dom_element_t *el)
+{
+    DCHECK(el != NULL, "css-sizing-3 §5.2's contributions were asked of no element");
+    return intrinsic_outer_contribution(el, is_declared_inline_sizes(el, intrinsic_inline_sizes(el)));
+}
+
 CssPx intrinsic_outer_block_contribution(lxb_dom_element_t *el, CssPx inner)
 {
     /* §2.2's outer size over one number: a block size has one intrinsic size (css-sizing-3 §3.2: both keywords
@@ -888,10 +895,7 @@ static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
         {
             lxb_dom_element_t *ch = lxb_dom_interface_element(brk);
 
-            /* §5.2's order: §5.1's measurement, then the child's `width`/`min-width`/`max-width`, then §2.2's
-               outer size; a declaration applied after the outer step would clamp a margin box by a content-box
-               property. */
-            one = intrinsic_outer_contribution(ch, is_declared_inline_sizes(ch, intrinsic_inline_sizes(ch)));
+            one = intrinsic_inline_contributions(ch);
         }
         out.min_content = css_px_max(out.min_content, one.min_content);
         out.max_content = css_px_max(out.max_content, one.max_content);
