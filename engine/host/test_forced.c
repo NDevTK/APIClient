@@ -897,6 +897,11 @@ static int fixture_provide(JSContext *ctx) {
             const char *rtype = sv ? sv->type : "application/json";
 
             header_list_append(&eh, "x-echo-method", method);
+            /* AND THE REFERRER, for the sandbox-fetch rows of HTML_NAVIGATION only: whose request a fetch taken
+               from a removed iframe's window is shows in its referrer source, which the page compares against
+               its own fetch's. */
+            if (!strncmp(abs, "https://x.test/api/sbx", strlen("https://x.test/api/sbx")))
+                header_list_append(&eh, "x-echo-referrer", referrer);
             /* AND `Content-Type` ON THOSE TWO, WHICH IS NOT DECORATION — IT IS READ TWICE, BY TWO READERS
                THAT WANT IT FOR DIFFERENT REASONS. The ENGINE's §8.1.4.2 decode takes the reply's own
                `content-type` to pick the program's charset (solver/engine.c's reply_source_text), so a
@@ -13114,7 +13119,27 @@ TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
              "pair is the entry's `navigationStateSymbols` beside its `navigationAPIState`, and §7.2.6.5's "
              "getState is a METHOD precisely because it deserializes afresh -- so this reads the table on "
              "every call and a one-shot loss is not a shape it can have");
+    /* A fetch taken from a removed iframe's window and bound to this one is this window's request, as in
+       Chrome 155; the same function called on the removed window rejects. */
+    const char *sbx_why = NULL;
+    int sbx_tt = 1;
+    fold_row(&sbx_tt, &sbx_why, !!strstr(js, "\"/api/sbxbound\""),
+             "NOT REACHED: there is no /api/sbxbound record, so the bound sandbox fetch or its control never "
+             "settled");
+    fold_row(&sbx_tt, &sbx_why, param_value_only(js, "/api/sbxbound", "v", "same") &&
+                                param_value_only(js, "/api/sbxbound", "m", "POST") &&
+                                param_value_only(js, "/api/sbxbound", "realm", "this"),
+             "a fetch taken from a removed iframe's window and bound to this window was not this window's "
+             "request: its referrer differs from this document's own fetch (`v`), its method is not POST "
+             "(`m`), or its Response is not this realm's (`realm`, Fetch §5.6's relevantRealm)");
+    const char *sbxdead_why = NULL;
+    int sbxdead_tt = 1;
+    fold_row(&sbxdead_tt, &sbxdead_why, param_value_only(js, "/api/sbxdetached", "v", "TypeError"),
+             "a fetch called with a removed iframe's window as its receiver did not reject with a TypeError, "
+             "which Chrome 155 does");
     const Probe rows[] = {
+        { "sandbox-fetch", sbx_tt, "/api/sbxbound", SESS_EXPLORE, sbx_why },
+        { "sandbox-fetch-detached", sbxdead_tt, "/api/sbxdetached", SESS_EXPLORE, sbxdead_why },
         { "hostreq", hostreq_tt, "/api/hostreq?", SESS_EXPLORE, hostreq_why },
         { "hostreq-fork", hostreqfork_tt, "/api/hostreqfork", SESS_EXPLORE, hostreqfork_why },
         { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE, navopen_why },
@@ -14635,7 +14660,18 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
              "the same ask after the SAME machine has already parked on the page's iterator, which is what says "
              "the held flag and the iterator cursor's values are separate slots each surviving one clone",
              "iterhot", "itercold");
+    /* A signal the page aborts after its response arrived: both requests stay recorded, a body read before
+       the abort keeps its bytes and one read after it rejects with the signal's reason, as in Chrome 155. */
+    const char *apabort_why = NULL;
+    int apabort_tt = 1;
+    fold_row(&apabort_tt, &apabort_why, !!strstr(js, "\"/api/apread\"") && !!strstr(js, "\"/api/apunread\""),
+             "a request whose signal the page aborted after its response arrived is missing from the record");
+    fold_row(&apabort_tt, &apabort_why, param_value_only(js, "/api/apabort", "own", "read") &&
+                                        param_value_only(js, "/api/apabort", "late", "AbortError"),
+             "the page's own reads around an abort differ from Chrome 155's: a body read before the abort "
+             "must keep its bytes (`own`), and one read after it must reject with an AbortError (`late`)");
     const Probe rows[] = {
+        { "abort-after-answer", apabort_tt, "/api/apabort", SESS_EXPLORE, apabort_why },
         { "abort", abortfire_tt, "/api/aborted", SESS_EXPLORE, abortfire_why },
         { "deadline", deadline_tt, "/api/deadline", SESS_EXPLORE, deadline_why },
         { "any-step2", anyfork_tt, "/api/anyfork", SESS_EXPLORE, anyfork_why },

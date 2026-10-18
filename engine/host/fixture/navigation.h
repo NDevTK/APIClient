@@ -86,6 +86,24 @@ static const char HTML_NAVIGATION[] =
        (core/frame/window_proxy.h). Whether the realm comes back is the `realm-reclaim` row, which compares
        `childRealmsMade` against `childRealmsPeak`. */
 
+    /* A fetch taken from a removed iframe's window, as Sentry takes its transport (it reads a fresh
+       hidden iframe's `contentWindow.fetch`, removes the iframe and binds the function to this window). Chrome
+       155 sends it, keepalive or not, as this window's request: its referrer is this document's address and a
+       relative URL resolves against this document. Fetch §5.6 "Fetch methods" reads the receiver's realm
+       ("Let relevantRealm be this's relevant realm"), so the response is this realm's `Response`. The same
+       function called with the removed window as its receiver rejects with a TypeError in Chrome 155. The
+       fixture host echoes each request's referrer, and this document's own `fetch` is the control. */
+    "var _sbI = document.createElement('iframe'); _sbI.hidden = true; document.head.appendChild(_sbI);"
+    "var _sbW = _sbI.contentWindow, _sbF = _sbW.fetch; document.head.removeChild(_sbI);"
+    "var _sbO = { method: 'POST', body: 'x', keepalive: true, referrerPolicy: 'unsafe-url' };"
+    "Promise.all([fetch('/api/sbxctl', _sbO), _sbF.bind(window)('/api/sbxsend', _sbO)]).then(function (rs) {"
+    " var a = rs[0].headers.get('x-echo-referrer'), b = rs[1].headers.get('x-echo-referrer');"
+    " fetch('/api/sbxbound?v=' + (a === b ? 'same' : 'differ') + '&m=' + rs[1].headers.get('x-echo-method')"
+    " + '&realm=' + (rs[1] instanceof Response ? 'this' : 'other'));"
+    "}, function (e) { fetch('/api/sbxbound?v=rejected' + e.name); });"
+    "_sbF.call(_sbW, '/api/sbxdead', { method: 'POST', body: 'x' }).then(function () {"
+    " fetch('/api/sbxdetached?v=resolved'); }, function (e) { fetch('/api/sbxdetached?v=' + e.name); });"
+
     /* HTML §7.4.4 "Non-fragment synchronous \"navigations\""' URL AND HISTORY UPDATE STEPS, reached as every
        client-side router reaches them: §7.2.5 "The History interface"'s `pushState` with a url — the one
        statement that makes a document nothing navigates to (solver/route_seed.c seeds it).
