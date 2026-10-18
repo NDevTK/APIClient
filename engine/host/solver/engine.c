@@ -549,34 +549,12 @@ void engine_pending_fetch_cancel(JSContext *ctx, JSValueConst deliver) {
         JSValue e = pending_entry(f->pending, i), r = pending_get(e, PEND_RESOLVE);
         int mine = pending_get_int(e, PEND_KIND) == FLOW_PENDING_RESOLVE && JS_IsObject(r) &&
                    JS_VALUE_GET_PTR(r) == JS_VALUE_GET_PTR(deliver);
-        const char *fv[5] = { NULL, NULL, NULL, NULL, NULL };
-        static const int field[5] = { PEND_METHOD, PEND_MODE, PEND_REFERRER_POLICY, PEND_REFERRER, PEND_URL };
-        int k, keyed;
+        int answered = pending_get_int(e, PEND_HAVE_VALUE) != 0;
 
         JS_FreeValue(ctx, r);
-        if (!mine) { JS_FreeValue(ctx, e); continue; }
-        if (pending_get_int(e, PEND_HAVE_VALUE)) { JS_FreeValue(ctx, e); return; }
-        keyed = pending_index_keyed(e);
-        for (k = 0; keyed && k < 5; k++) {
-            JSValue s = pending_get(e, field[k]);
-            fv[k] = JS_ToCString(ctx, s);
-            JS_FreeValue(ctx, s);
-            CHECK(fv[k] != NULL, "engine: OOM naming a cancelled request");
-        }
         JS_FreeValue(ctx, e);
-        pending_remove(&f->pending, i);
-        if (keyed) {
-            PendRequestKey key = { fv[0], fv[1], fv[2], fv[3], fv[4] };
-            PendIndexNode *node = pending_index_find(&key);
-
-            if (node == NULL || pending_index_node_count(node) == 0) {
-                const char *notice[5] = { fv[0], fv[1], fv[2], fv[3], fv[4] };
-                char *rec = engine_notice_build("fetch.cancel", notice, 5);
-                engine_host_notify(ctx, rec);
-                free(rec);
-            }
-            for (k = 0; k < 5; k++) JS_FreeCString(ctx, fv[k]);
-        }
+        if (!mine) continue;
+        if (!answered) engine_cancel_entry(ctx, f, i);
         return;
     }
 }
@@ -1369,23 +1347,55 @@ static void host_cancel_notify(JSContext *ctx, uint32_t req) {
 /* See engine.h. */
 int engine_host_withdraw(JSContext *ctx, uint32_t req) {
     Flow *f = flow_running();
-    int slot = -1, owed;
-    uint32_t host;
+    int slot = -1;
     JSValue e;
 
     DCHECK(f != NULL && req != 0, "a fetch controller was withdrawn with no flow or no rendezvous to withdraw");
     e = host_request_entry_of(ctx, f, req, &slot);
     if (JS_IsUndefined(e)) return 0;
-    DCHECK(pending_get_int(e, PEND_ASYNC),
-           "the page withdrew a blocking rendezvous — a blocked flow runs no page code, so only an async send's "
-           "controller can be reached from the page");
-    owed = !pending_get_int(e, PEND_HAVE_VALUE);
-    host = (uint32_t)pending_get_int(e, PEND_REQ_HOST);
+    JS_FreeValue(ctx, e);
+    engine_cancel_entry(ctx, f, slot);
+    return 1;
+}
+
+/* See engine.h. */
+void engine_cancel_entry(JSContext *ctx, Flow *f, int slot) {
+    static const int field[5] = { PEND_METHOD, PEND_MODE, PEND_REFERRER_POLICY, PEND_REFERRER, PEND_URL };
+    const char *fv[5] = { NULL, NULL, NULL, NULL, NULL };
+    JSValue e = pending_entry(f->pending, slot);
+    int rendezvous = pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ;
+    int owed = !pending_get_int(e, PEND_HAVE_VALUE);
+    int keyed = !rendezvous && owed && pending_index_keyed(e);
+    uint32_t host = rendezvous ? (uint32_t)pending_get_int(e, PEND_REQ_HOST) : 0;
+
+    DCHECK(!rendezvous || pending_get_int(e, PEND_ASYNC),
+           "a blocking rendezvous was cancelled — its flow is blocked and runs no code that could cancel it; "
+           "its teardown is engine_host_terminate");
+    for (int k = 0; keyed && k < 5; k++) {
+        JSValue s = pending_get(e, field[k]);
+        fv[k] = JS_ToCString(ctx, s);
+        JS_FreeValue(ctx, s);
+        CHECK(fv[k] != NULL, "engine: OOM naming a cancelled request");
+    }
     JS_FreeValue(ctx, e);
     pending_remove(&f->pending, slot);
-    g_host_terminated++;
-    if (owed && g_sess_live) host_cancel_notify(ctx, host);
-    return 1;
+    if (rendezvous) {
+        g_host_terminated++;
+        if (owed && g_sess_live) host_cancel_notify(ctx, host);
+        return;
+    }
+    if (!keyed) return;
+    {
+        PendRequestKey key = { fv[0], fv[1], fv[2], fv[3], fv[4] };
+        PendIndexNode *node = pending_index_find(&key);
+
+        if ((node == NULL || pending_index_node_count(node) == 0) && g_sess_live) {
+            char *rec = engine_notice_build("fetch.cancel", fv, 5);
+            engine_host_notify(ctx, rec);
+            free(rec);
+        }
+        for (int k = 0; k < 5; k++) JS_FreeCString(ctx, fv[k]);
+    }
 }
 
 /* A flow leaving the frontier unfinished (the pager's sale, a retirement) takes its async sends with it, and

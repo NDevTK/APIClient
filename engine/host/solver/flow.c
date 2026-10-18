@@ -5718,14 +5718,30 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
     return removed;
 }
 
-/* WHETHER A REGISTER ENTRY IS A FETCH ISSUED IN THE CONTEXT OF `doc` — §7.5.11 step 2's population. Every park
-   a document's code or algorithm makes records the asking document (PEND_DOC). A document script's park also
-   names its row and leaves with it (above); a host request is a cross-instance read, not a fetch. */
+/* WHETHER A HOST RENDEZVOUS IS A FETCH: the zone answers `xhr.send` (XHR §3.5.6) and `document.fetch` (HTML
+   §7.4.5) out of the network. Every other rendezvous is a cross-agent operation, which is no fetch. */
+static int pend_rendezvous_is_fetch(JSValueConst e) {
+    JSValue ov = pending_get(e, PEND_OP);
+    const char *op = JS_ToCString(pending_ctx(), ov);
+    int fetch;
+
+    CHECK(op != NULL, "solver: OOM reading a host rendezvous's operation");
+    fetch = !strncmp(op, "xhr.send\t", 9) || !strncmp(op, "document.fetch\t", 15);
+    JS_FreeCString(pending_ctx(), op);
+    JS_FreeValue(pending_ctx(), ov);
+    return fetch;
+}
+
+/* WHETHER A REGISTER ENTRY IS A FETCH ISSUED IN THE CONTEXT OF `doc` — HTML §7.5.11 "Aborting a document load"
+   step 2's population. Every park a document's code or algorithm makes records the asking document
+   (PEND_DOC), and so does every host rendezvous. A document script's park also names its row and leaves with
+   it (above). */
 static int pend_entry_fetch_of_document(JSValueConst e, uint32_t doc) {
     int kind = (int)pending_get_int(e, PEND_KIND);
     uint32_t edoc = (uint32_t)pending_get_int(e, PEND_DOC);
 
-    if (kind == FLOW_PENDING_DOCSCRIPT || kind == FLOW_PENDING_HOSTREQ) return 0;
+    if (kind == FLOW_PENDING_DOCSCRIPT) return 0;
+    if (kind == FLOW_PENDING_HOSTREQ && !pend_rendezvous_is_fetch(e)) return 0;
     DCHECK(edoc != 0,
            "a fetch on a flow's register names no asking document — every fetch park records "
            "document_doc at its push, so this record was pushed by a park that does not");
@@ -5746,9 +5762,11 @@ int flow_fetches_for_document(const Flow *f, uint32_t doc) {
     return n;
 }
 
-/* See flow.h. The register is walked backwards because pending_remove is a swap-remove. A removed entry's
-   record survives for any sibling register that names it (pending_index_unref), and a reply already received
-   for it is discarded with it, which is step 2's "discarding any further data received from the network". */
+/* See flow.h. The register is walked backwards because the cancel's removal is a swap-remove. A cancelled
+   entry's record survives for any sibling register that names it (pending_index_unref), and a reply already
+   received for it is discarded with it, which is step 2's "discarding any further data received from the
+   network". Step 2's "Cancel any instances of the fetch algorithm" is engine_cancel_entry, which tells the zone
+   to end a send no flow is owed any more. */
 void flow_abort_document_load(Flow *f, uint32_t doc) {
     DCHECK(f != NULL && doc != 0, "§7.5.11 was run for no flow or for the NONE document");
     flow_programs_remove_for_document(f, doc);
@@ -5757,7 +5775,7 @@ void flow_abort_document_load(Flow *f, uint32_t doc) {
         int go = pend_entry_fetch_of_document(e, doc);
 
         JS_FreeValue(pending_ctx(), e);
-        if (go) pending_remove(&f->pending, k);
+        if (go) engine_cancel_entry(pending_ctx(), f, k);
     }
     DCHECK(flow_programs_unstarted_for_document(f, doc) == 0 && flow_fetches_for_document(f, doc) == 0,
            "§7.5.11 step 2 ran and this flow still holds an unstarted program or a fetch of the aborted "

@@ -501,6 +501,11 @@ uint32_t engine_host_request_async(JSContext *ctx, const char *op, JSValueConst 
    unanswered the zone is told `fetch.cancel<TAB><host name>` (engine_host_terminate's notice). An answer that
    has landed but not been delivered is dropped with the entry. Returns 1 if an entry was withdrawn. */
 int      engine_host_withdraw(JSContext *ctx, uint32_t req);
+/* Cancel the register entry at `slot` of `f` (Fetch §2 Infrastructure: its controller is canceled): it leaves
+   the register with any answer already on it, and while it is still owed the zone is told `fetch.cancel`,
+   naming a park by its pair once no live flow owes that request and an async rendezvous by its host name.
+   A blocking rendezvous cannot be cancelled here (asserted): its flow runs no code that could ask. */
+void     engine_cancel_entry(JSContext *ctx, struct Flow *f, int slot);
 /* Whether request `req` has been answered. `*out` is borrowed, so a machine re-entered before it is ready to
    consume may read it again. It reports the answer's arrival, whatever its completion type. */
 int      engine_host_answered(uint32_t req, JSValueConst *out);
