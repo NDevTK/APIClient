@@ -2,12 +2,12 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/layout/block_flow.h"
+#include "core/layout/box_baseline.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/grid_baseline.h"
 #include "core/layout/grid_placement.h"
 #include "core/layout/grid_track.h"
 #include "core/layout/layout_job.h"
-#include "core/layout/replaced_element.h"
 #include "core/layout/used_value.h"
 
 /* §10.6's steps 1 and 2 ask whether any item in the track participates in baseline alignment. */
@@ -31,7 +31,6 @@ bool grid_container_first_baseline_ask(lxb_dom_element_t *container, bool *has, 
     size_t k = 0, row = 0, col = 0;
     CssPx x, y, top, inner;
     bool inner_has;
-    char buf[160];
 
     DCHECK(container != NULL && has != NULL && out != NULL,
            "a grid container's baseline was asked for with no container or nowhere to put it");
@@ -68,22 +67,8 @@ bool grid_container_first_baseline_ask(lxb_dom_element_t *container, bool *has, 
        a first row of an empty item then an item with text puts the container's baseline at the empty item's
        border-box bottom in that browser. Grid items synthesize from their border edges (css-align-3 §9.1
        "Determining the Baselines of a Box"), the alphabetic baseline from the line-under edge. */
-    inner_has = false;
-    if (!replaced_element_of(first).replaced) {
-        if (css_computed_display_is(first, CSS_KEYWORD_GRID) || css_computed_display_is(first, CSS_KEYWORD_INLINE_GRID)) {
-            if (!grid_container_first_baseline_ask(first, &inner_has, &inner)) return false;
-        } else if (css_computed_display_is(first, CSS_KEYWORD_FLEX) ||
-                   css_computed_display_is(first, CSS_KEYWORD_INLINE_FLEX)) {
-            DFAILF("%s is a flex container as a grid's first item, whose baseline css-flexbox-1 §8.5 \"Flex "
-                   "Container Baselines\" defines. BUILD that baseline", box_subject(first, buf, sizeof buf));
-        } else if (!block_flow_first_line_box_baseline_ask(first, &inner, &inner_has)) {
-            return false;
-        }
-    }
-    if (inner_has)
-        *out = css_px_add(css_px_add(top, used_value_leading_edge_px(first, true)), inner);
-    else
-        *out = css_px_add(top, used_value_border_edge_px(first, true));
+    if (!box_first_baseline_ask(first, &inner_has, &inner)) return false;
+    *out = css_px_add(top, inner_has ? inner : used_value_border_edge_px(first, true));
     return true;
 }
 

@@ -13,6 +13,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
+#include "core/layout/flex_container_baseline.h"
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_intrinsic_size.h"
 #include "core/layout/flex_item.h"
@@ -2061,17 +2062,18 @@ static bool bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, BfBox *result
     /* Not a block container: a flex or grid container, whose height is its own spec's and which establishes an
        independent formatting context, so its margins are its own and nothing inside it is this walk's. Its
        baseline is its own module's too, and it can be the last box on the stack holding one, so it is never
-       skipped or substituted. A grid gives css-grid-1 §10.6 "Grid Container Baselines"' first baseline to
-       either pass: Chrome 155 does, putting an `inline-block`'s baseline on a grid's first row whatever the
-       grid's later rows hold, where §10.6's last set would take the last row. */
+       skipped or substituted. A grid or flex container gives its first baseline (css-grid-1 §10.6 "Grid
+       Container Baselines", css-flexbox-1 §8.5 "Flex Container Baselines") to either pass: Chrome 155 does,
+       putting an `inline-block`'s baseline on the container's first row or line whatever follows it, where the
+       last set would take the last. */
     if (!container) {
+        DCHECKF(grid || flex_item_display_is_flex_container(d),
+                "%s is neither a block container nor a grid or flex container, and reached the arm for those two",
+                box_subject(el, nbuf, sizeof nbuf));
         if (pass != BF_BASELINE_NONE && grid) {
             if (!grid_container_first_baseline_ask(el, &b.has_line_box, &b.baseline)) return false;
         } else if (pass != BF_BASELINE_NONE) {
-            DFAILF("CSS 2.2 §10.8.1 \"Leading and half-leading\"'s walk for an enclosing `inline-block`'s baseline "
-                   "reached a flex container (%s) on §9.4.1's stack, whose baseline css-flexbox-1 §8.5 \"Flex "
-                   "Container Baselines\" defines over its first and last flex lines. Build it, reported on "
-                   "`BfBox` in the frame `baseline` uses, as a grid's is", box_subject(el, nbuf, sizeof nbuf));
+            if (!flex_container_first_baseline_ask(el, &b.has_line_box, &b.baseline)) return false;
         }
         b.border_h = used_value_border_edge_px(el, true);
         *result = b;

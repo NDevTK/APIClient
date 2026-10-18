@@ -12,6 +12,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
+#include "core/layout/flex_container_baseline.h"
 #include "core/layout/grid_baseline.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
@@ -281,6 +282,7 @@ static LbExtent lb_atomic_extent(lxb_dom_element_t *el)
     CssPx margin_box = used_value_margin_edge_px(el, true);
     bool inline_block = css_computed_display_is(el, CSS_KEYWORD_INLINE_BLOCK);
     bool inline_grid = css_computed_display_is(el, CSS_KEYWORD_INLINE_GRID);
+    bool inline_flex = css_computed_display_is(el, CSS_KEYWORD_INLINE_FLEX);
     bool replaced = replaced_element_of(el).replaced;
     LbExtent out;
     CssPx inner_baseline = css_px(0.0);
@@ -292,20 +294,24 @@ static LbExtent lb_atomic_extent(lxb_dom_element_t *el)
        a too-small extent loses every maximum. The two facts are independent (HTML §15.4 "Replaced elements"'
        question and the cascade's `display`), so a box can be both; `replaced` is read first because §10.8.1
        gives a replaced element no baseline whatever its `display`. */
-    DCHECK(replaced || inline_block || inline_grid,
+    DCHECK(replaced || inline_block || inline_grid || inline_flex,
            "CSS 2.2 §10.8's step 1 for an ATOMIC INLINE-LEVEL box was asked of a box that is neither a "
            "REPLACED element nor an `inline-block`. `lb_child` collects a run item of the atomic kind for "
            "exactly those — css-text-3 §5.5 \"Line Breaking Details\"' \"each replaced element or other atomic "
-           "inline\" — an `inline-grid` too, and crashes for an `inline-table` and an `inline-flex`, so any other "
-           "box reaching here is that walk and this measurement disagreeing about what was collected");
+           "inline\" — an `inline-grid` and an `inline-flex` too, and crashes for an `inline-table`, so any "
+           "other box reaching here is that walk and this measurement disagreeing about what was collected");
     out.above = margin_box;
     out.below = css_px(0.0);
     if (replaced) return out;
-    /* An `inline-grid` aligns its first baseline (css-inline-3 §4.2.1's `auto`: first-baseline alignment for
-       everything but an inline-block), css-grid-1 §10.6's. With no grid item it has none, and an inline-level
-       box synthesizes from its margin edges (css-align-3 §9.1), which is the bottom margin edge above. */
-    if (inline_grid) {
-        if (!grid_container_first_baseline(el, &inner_baseline)) return out;
+    /* An `inline-grid` or `inline-flex` aligns its first baseline (css-inline-3 §4.2.1's `auto`: first-baseline
+       alignment for everything but an inline-block), css-grid-1 §10.6's or css-flexbox-1 §8.5's. With no item
+       it has none, and an inline-level box synthesizes from its margin edges (css-align-3 §9.1), which is the
+       bottom margin edge above. */
+    if (inline_grid || inline_flex) {
+        bool has = inline_grid ? grid_container_first_baseline(el, &inner_baseline)
+                               : flex_container_first_baseline(el, &inner_baseline);
+
+        if (!has) return out;
         out.above = css_px_add(lb_content_top_from_margin_edge(el), inner_baseline);
         out.below = css_px_sub(margin_box, out.above);
         return out;
@@ -332,6 +338,7 @@ static bool lb_atomic_ask(lxb_dom_element_t *el)
     if (replaced_element_of(el).replaced) return true;
     if (used_value_height_behaves_as_auto(el) && !block_flow_auto_height_ask(el, &unused)) return false;
     if (css_computed_display_is(el, CSS_KEYWORD_INLINE_GRID)) return grid_container_first_baseline_ask(el, &has, &unused);
+    if (css_computed_display_is(el, CSS_KEYWORD_INLINE_FLEX)) return flex_container_first_baseline_ask(el, &has, &unused);
     if (lb_inline_block_overflow_excepts_baseline(el)) return true;
     return block_flow_last_line_box_baseline_ask(el, &unused, &has);
 }
@@ -442,7 +449,7 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
     lxb_dom_node_t *n;
     lxb_dom_element_t *el;
     CssDisplay d;
-    bool atomic, inline_box, inline_block, inline_grid, on_the_line;
+    bool atomic, inline_box, inline_block, inline_grid, inline_flex, on_the_line;
 
     /* css-lists-3 §3.5's outside marker box "is placed outside the principal block box", so it is on no line
        box of the list item's content; an inside one aborts at the classification.
@@ -519,6 +526,7 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
              css_display_spells(d, CSS_KEYWORD_INLINE_GRID) || css_display_spells(d, CSS_KEYWORD_INLINE_TABLE);
     inline_box = css_display_spells(d, CSS_KEYWORD_INLINE);
     inline_grid = css_display_spells(d, CSS_KEYWORD_INLINE_GRID);
+    inline_flex = css_display_spells(d, CSS_KEYWORD_INLINE_FLEX);
     /* Which atomic inline-level boxes this walk collects. §10.8.1's whole sentence (its main arm, its "no
        in-flow line boxes" disjunct and its `overflow` disjunct) is decided in `lb_atomic_extent`; what is left
        here is whether §10.8's step 1 and a used inline size exist for the box type at all.
@@ -532,18 +540,18 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
        "Horizontal margins, borders, and padding are respected between these boxes."); the baseline differs,
        and `lb_atomic_extent` decides it. The replaced test runs at most once on any path, after the `display`
        test, so replaced_element.c's own crashes never pre-empt the classification crash below. */
-    on_the_line = (inline_block || inline_grid) && !replaced_element_of(el).replaced;
+    on_the_line = (inline_block || inline_grid || inline_flex) && !replaced_element_of(el).replaced;
     /* The crash is over the `display` alone, so a replaced `inline-block` falls through to the replaced arm
-       below (§10.3.10's "exactly as inline replaced elements"). An `inline-table` or `inline-flex` crashes
-       whether or not it is replaced: replacedness does not say what an `inline-flex` box's used main size is.
-       An `inline-grid` is collected like an `inline-block`: css-grid-1 §5.2 "Sizing Grid Containers" sizes it
-       "as an atomic inline-level box (such as an inline-block)", and §10.6 gives it its baseline. */
-    if (atomic && !inline_block && !inline_grid)
-        DFAIL("an `inline-table` or `inline-flex` on a line: CSS 2.2 §9.2.2 makes it an atomic inline-level box, "
-              "collected like an `inline-grid` once its baseline exists. BUILD the `inline-table`'s (CSS 2.2 "
-              "§10.8.1 \"Leading and half-leading\": \"the baseline of the first row of the table\", a row "
-              "baseline core/layout/table_height.h computes and does not export) or the `inline-flex`'s "
-              "(css-flexbox-1 §8.5 \"Flex Container Baselines\", and its shrink-to-fit width)");
+       below (§10.3.10's "exactly as inline replaced elements"). An `inline-table` crashes whether or not it is
+       replaced. An `inline-grid` is collected like an `inline-block`: css-grid-1 §5.2 "Sizing Grid Containers"
+       sizes it "as an atomic inline-level box (such as an inline-block)", and §10.6 gives it its baseline. An
+       `inline-flex` is too: css-flexbox-1 §9.2 sizes it "using the rules of the formatting context in which it
+       participates", and §8.5 gives it its baseline. */
+    if (atomic && !inline_block && !inline_grid && !inline_flex)
+        DFAIL("an `inline-table` on a line: CSS 2.2 §9.2.2 makes it an atomic inline-level box, collected like an "
+              "`inline-grid` once its baseline exists. BUILD CSS 2.2 §10.8.1 \"Leading and half-leading\"'s "
+              "\"baseline of the first row of the table\", a row baseline core/layout/table_height.h computes "
+              "and does not export");
     /* §9.2.1.1's second paragraph is run by core/layout/block_flow.h's content-order box list: a block-level
        box inside an inline box is on the container's §9.4.1 stack, so it is this run's exclusive end and the
        walk stopped at it before this line. Neither origin can arrive here, which the one assert below says. */
@@ -2299,10 +2307,12 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
     DCHECK(el != NULL && establishing != NULL && out != NULL && count != NULL,
            "CSSOM VIEW §6's box fragments were asked for with no element or nowhere to report them");
     DCHECK(css_computed_display_is(el, CSS_KEYWORD_INLINE) || css_computed_display_is(el, CSS_KEYWORD_INLINE_BLOCK) ||
-               css_computed_display_is(el, CSS_KEYWORD_INLINE_GRID),
+               css_computed_display_is(el, CSS_KEYWORD_INLINE_GRID) ||
+               css_computed_display_is(el, CSS_KEYWORD_INLINE_FLEX),
            "CSSOM VIEW §6's box fragments were asked for a box that `lb_child` does not put on a line: neither "
-           "`inline`, `inline-block` nor `inline-grid`. The caller's own step (core/dom/element_view.h's fragment "
-           "kind, core/layout/flow_position.c's placement) classifies first, so the two lists have come apart");
+           "`inline`, `inline-block`, `inline-grid` nor `inline-flex`. The caller's own step (core/dom/"
+           "element_view.h's fragment kind, core/layout/flow_position.c's placement) classifies first, so the "
+           "two lists have come apart");
     /* Which delimitation this box's fragments take; `display` decides only half. CSS 2.2 §9.2.2:
        "Inline-level boxes that are not inline boxes (such as replaced inline-level elements, inline-block
        elements, and inline-table elements) are called atomic inline-level boxes because they participate in
@@ -2314,7 +2324,8 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
        index. A single opaque box is never the box §9.4.2 "split[s] into several boxes", so it is exactly one
        fragment, which the closing assert checks. */
     atomic = replaced_element_of(el).replaced || css_computed_display_is(el, CSS_KEYWORD_INLINE_BLOCK) ||
-             css_computed_display_is(el, CSS_KEYWORD_INLINE_GRID);
+             css_computed_display_is(el, CSS_KEYWORD_INLINE_GRID) ||
+             css_computed_display_is(el, CSS_KEYWORD_INLINE_FLEX);
     /* HTML §15.3.4 "Phrasing content"'s `br { display-outside: newline; }` and `wbr { display-outside:
        break-opportunity; }` reach here as `display: inline` boxes (core/layout/phrasing_break.h), and
        `lb_child` puts them on the line as a forced break or an opportunity rather than as a box with two

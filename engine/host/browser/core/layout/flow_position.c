@@ -358,11 +358,12 @@ static bool fp_is_on_a_line_box(lxb_dom_element_t *el)
        'overflow' property has a computed value other than 'visible', in which case the baseline is the bottom
        margin edge"; `lb_atomic_extent`). A replaced `inline-block` is the same (CSS 2.2 §10.3.10: "Exactly as
        inline replaced elements."), sized by used_value.c's replaced arm first.
-       An `inline-grid` is the same shape with css-grid-1 §10.6's baseline. `inline-table` and `inline-flex`
-       leave through `fp_require_placeable`, each needing a module's number. A replaced element with `display:
-       block` is block-level (§9.2.1) and takes the induction, with §10.3.4's and §10.6.2's extents. */
+       An `inline-grid` and an `inline-flex` are the same shape with css-grid-1 §10.6's and css-flexbox-1 §8.5's
+       baselines. `inline-table` leaves through `fp_require_placeable`, needing its first row's baseline. A
+       replaced element with `display: block` is block-level (§9.2.1) and takes the induction, with §10.3.4's and
+       §10.6.2's extents. */
     return css_computed_display_is(el, CSS_KEYWORD_INLINE) || css_computed_display_is(el, CSS_KEYWORD_INLINE_BLOCK) ||
-           css_computed_display_is(el, CSS_KEYWORD_INLINE_GRID);
+           css_computed_display_is(el, CSS_KEYWORD_INLINE_GRID) || css_computed_display_is(el, CSS_KEYWORD_INLINE_FLEX);
 }
 
 /* CSS 2 §9.4.2 "Inline formatting contexts"' placement of a box on a line ("boxes are laid out horizontally,
@@ -538,7 +539,7 @@ static void fp_require_placeable(lxb_dom_element_t *el)
     /* `inline` and `inline-block` are placed by §9.4.2 (`fp_line_box_origin`) before this is asked. What is left
        is atomic inline-level boxes (CSS 2.1 §9.2.2 "Inline-level elements and inline boxes") whose module
        outside CSS 2.1 §10 owns a number the line needs. */
-    inline_level = css_display_spells(d, CSS_KEYWORD_INLINE_TABLE) || css_display_spells(d, CSS_KEYWORD_INLINE_FLEX);
+    inline_level = css_display_spells(d, CSS_KEYWORD_INLINE_TABLE);
     if (table_internal)
         DFAILF("%s: "
               "this box is TABLE-INTERNAL, and CSS 2.1 §17.5 'Visual layout of table contents' positions it "
@@ -586,11 +587,9 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "cell occupies and the horizontal sum above has no width for it",
               box_subject(el, nbuf, sizeof nbuf));
     if (inline_level)
-        DFAILF("%s: an `inline-table` or `inline-flex`, an atomic inline-level box (CSS 2.1 §9.2.2 \"Inline-level "
-               "elements and inline boxes\") that §9.4.2 places on a line once core/layout/line_box.c collects it. "
-               "BUILD its baseline, as css-grid-1 §10.6 \"Grid Container Baselines\" is built for an "
-               "`inline-grid`: CSS 2.2 §10.8.1's first-row baseline for an `inline-table`, css-flexbox-1 §8.5 "
-               "\"Flex Container Baselines\" (and its shrink-to-fit width) for an `inline-flex`",
+        DFAILF("%s: an `inline-table`, an atomic inline-level box (CSS 2.1 §9.2.2 \"Inline-level elements and "
+               "inline boxes\") that §9.4.2 places on a line once core/layout/line_box.c collects it. BUILD CSS 2.2 "
+               "§10.8.1's first-row baseline for it, as css-grid-1 §10.6 is built for an `inline-grid`",
                box_subject(el, nbuf, sizeof nbuf));
     /* What is left is block-level (CSS 2.1 §9.2.1 'Block-level elements and block boxes'), which §9.4.1's rules
        describe. A `table` stays here: §17.4 'Tables in the visual formatting model' makes the wrapper
