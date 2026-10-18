@@ -1500,6 +1500,7 @@ char *result_cold_json(void) {
     METRIC_SET(loop_us, r.loop_us);
     METRIC_SET(between_slices_us, r.between_slices_us);
     METRIC_SET(slices, r.slices);
+    METRIC_SET(pick_digest, r.pick_digest);
     METRIC_SET(slice_us, r.slice_us);
     METRIC_SET(sched_us, r.sched_us);
     METRIC_SET(slice_overruns, r.slice_overruns);

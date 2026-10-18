@@ -273,6 +273,10 @@ METRIC(instance_us, "instanceUs", LIFETIME, "us", PROCESS, "solver/engine.c", IN
 METRIC(loop_us, "loopUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
 METRIC(between_slices_us, "betweenSlicesUs", LIFETIME, "us", PROCESS, "solver/engine.c", INT)
 METRIC(slices, "slices", LIFETIME, "slice", PROCESS, "solver/engine.c", INT)
+/* …and which members those turns ran, as a digest of the pick sequence (solver/engine.h's
+   `pick_digest`): equal on two runs of one artifact over one fixture exactly when both picked the
+   same members in the same order. An identity, never a magnitude. */
+METRIC(pick_digest, "pickDigest", LIFETIME, "digest", PROCESS, "solver/engine.c", INT)
 /* The two phases `stepUs` sums: a step overrunning the slice is the quantum with no asynchronous
    source to expire it, a dominant pick-and-swap is the ordering costing more than the work.
    `schedUs` is everything in the turn that is not the step, including the previous iteration's

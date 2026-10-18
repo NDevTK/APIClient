@@ -8159,6 +8159,9 @@ static int64_t g_over_gap_work;    /* the worst such stretch over every non-seam
 /* The work every turn that stepped a flow retired, the sum of the aging charges (solver/engine.h's
    `step_work`). */
 static int64_t g_step_work;
+/* The pick sequence's digest (solver/engine.h's `pick_digest`), folded once per turn where the turn's member is
+   switched in and has executed nothing. */
+static uint64_t g_pick_digest = 14695981039346656037ULL;
 /* The one phase inside a step whose cost is a length the page chose: the classic compile. `g_slice_over` and
    `g_step_unit_over` say a turn met the slice and in which arm, not which phase: a start step is a compile
    (JS_FlowNew -> JS_Eval over `body_n` bytes) then an execution (JS_FlowResume), and only the second runs bytecode.
@@ -9833,6 +9836,7 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->loop_us           = g_loop_us;
     out->between_slices_us = g_between_us + (g_slice_exit_set ? now - g_slice_exit_us : 0);
     out->slices            = g_slices;
+    out->pick_digest       = (int64_t)(g_pick_digest & ((1ULL << 52) - 1));
     /* The containment, an identity rather than an expectation: `g_instance_us0` is opened at engine_sched_slice's
        entry from the reading the first turn's `t0` is carried from, and every charge in `g_step_us` is a
        sub-interval closed before this line reads the clock. A total above its span is a baseline taken after a
@@ -11195,6 +11199,10 @@ static int engine_sched_slice(void) {
                `t0`, as `pa_slice0` is: a gap measured from the pick would include a span in which no offer was
                possible and read as a missing seam (solver/engine.h's `over_gap_arms`). */
             g_gap_max_work = 0; g_gap_last_work = step_work0;
+            {
+                uint64_t b = flow_birth_seq(cur);
+                for (int i = 0; i < 8; i++) { g_pick_digest ^= (b >> (8 * i)) & 0xff; g_pick_digest *= 1099511628211ULL; }
+            }
             int r = flow_step(ctx, cur);
             /* The work retired since the step's last poll is the step's own (core/timing/thread_work.h): banked on
                its clock here, while it is still the running flow, so a task's end moment does not depend on

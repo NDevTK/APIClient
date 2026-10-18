@@ -962,6 +962,10 @@ typedef struct {
     int64_t loop_us;
     int64_t between_slices_us;
     long    slices;
+    /* FNV-1a over the birth sequence of every turn's picked member, in turn order, low 52 bits so it is an exact
+       JSON number: two runs of one artifact over one fixture agree on it exactly when they picked the same
+       members in the same order, which is the witness that the order is a function of the paths. */
+    int64_t pick_digest;
     /* Turns whose step alone retired at least a slice's work, so `slice_overruns / steps` is a fraction of a
      * published denominator; the lifetime mean `step_work / steps` hides that a few long turns usually carry the
      * work. It compares the step's work against ENGINE_QUANTUM_WORK, the inequality engine_quantum_spent asks,

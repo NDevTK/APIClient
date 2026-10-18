@@ -3172,6 +3172,11 @@ static double flow_branch_bonus(const Flow *f) {
    same two indirections flow_branch_bonus reads, so the two agree on which bucket the member is in. The
    preconditions are asserted here because this is an entry from outside this file, whose callers have no other
    statement of them. */
+uint64_t flow_birth_seq(const Flow *f) {
+    DCHECK(f != NULL && f->ix_t.seq != 0, "a birth sequence was asked of no member, or of one flow_new never stamped");
+    return f->ix_t.seq;
+}
+
 long flow_branch_born(const Flow *f) {
     DCHECK(f != NULL && f->acct != NULL && f->acct->branch != NULL,
            "a member's branch bucket was asked for with no bucket — flow_new opens one for every node and the fork "

@@ -1469,6 +1469,9 @@ int flow_silence_carry(const Flow *f);
    assertion reads it to check what may move while the generation stands still. The integer rather than the
    term, so equality is exact. Reconciles against `brBornMax`/`brBornMin`. Not a term; nothing ranks by it. */
 long flow_branch_born(const Flow *f);
+/* The member's birth sequence, unique for the instance's life and assigned in birth order, so it names the same
+   member on two runs that took the same path. */
+uint64_t flow_birth_seq(const Flow *f);
 
 /* The lowest-priority member other than `exclude`: the tail the cold tier gives up first at the RAM floor, the
  * same comparator as flow_best read the other way, so the flow paged out is the one the WFQ would run last.
