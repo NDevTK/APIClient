@@ -49,20 +49,25 @@ void visual_update_taken(JSContext *docctx)
     if (visual_update_pending(docctx)) vu_set(docctx, false);
 }
 
-/* DOM §4.2.3's children changed steps: `parent`'s children or data changed, so its document's rendering may
-   have. Only a realm's active document is rendered (document_active_realm_of answers NULL for a DOMParser or
-   createHTMLDocument document). `ctx` is the mutating realm and decides nothing here. Written only on the
-   change from clear, so a flow's run of mutations captures the record once. */
-static void vu_children_changed(JSContext *ctx, lxb_dom_node_t *parent)
+void visual_update_document_changed(lxb_dom_document_t *doc)
 {
     JSContext *docctx;
 
+    if (doc == NULL) return;
+    docctx = document_active_realm_of(lxb_dom_interface_node(doc));
+    if (docctx == NULL) return;
+    /* Written only on the change from clear, so a flow's run of writes captures the record once. */
+    if (!visual_update_pending(docctx)) vu_set(docctx, true);
+}
+
+/* DOM §4.2.3's children changed steps: `parent`'s children or data changed. `ctx` is the mutating realm and
+   decides nothing here. */
+static void vu_children_changed(JSContext *ctx, lxb_dom_node_t *parent)
+{
     (void)ctx;
     DCHECK(parent != NULL && parent->owner_document != NULL,
            "DOM §4.2.3's children changed steps named a parent that has no node document");
-    docctx = document_active_realm_of(lxb_dom_interface_node(parent->owner_document));
-    if (!docctx) return;
-    if (!visual_update_pending(docctx)) vu_set(docctx, true);
+    visual_update_document_changed(parent->owner_document);
 }
 
 void visual_update_init(JSContext *ctx)

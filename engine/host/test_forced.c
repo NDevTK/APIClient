@@ -13399,8 +13399,19 @@ TF_UNIT void probes_visualupdate(const char *js, Probe *tab, int *n) {
              "document whose tree changed");
     fold_row(&vupd_tt, &vupd_why, param_value_is(js, "/api/vupd", "ro", "1"),
              "the ResizeObserver callback's request carries no ro=1");
+    /* The attribute and the CSSOM change: each element's second delivery, reached by the page's own timeline. */
+    const char *vupda_why = NULL; int vupda_tt = 1;
+    fold_row(&vupda_tt, &vupda_why, emitted_record_has_both(js, "/api/vupda", "\"driven\":false", "\"attr\""),
+             "no frame followed the style attribute write, so step 16 never reported `vb` at its new size — "
+             "DOM §4.9's attribute change steps raised no visible effect");
+    const char *vupdc_why = NULL; int vupdc_tt = 1;
+    fold_row(&vupdc_tt, &vupdc_why, emitted_record_has_both(js, "/api/vupdc", "\"driven\":false", "\"cssom\""),
+             "no frame followed the insertRule, so step 16 never reported `vc` at its new size — the CSSOM rule "
+             "list write raised no visible effect");
     const Probe rows[] = {
         { "visual-update-after-mutation", vupd_tt, "/api/vupd", SESS_EXPLORE, vupd_why },
+        { "visual-update-after-attribute", vupda_tt, "/api/vupda", SESS_EXPLORE, vupda_why },
+        { "visual-update-after-cssom", vupdc_tt, "/api/vupdc", SESS_EXPLORE, vupdc_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

@@ -31,6 +31,7 @@
 #include "core/idl_index_arg.h"
 #include "core/idl_indexed.h"
 #include "core/realm.h"
+#include "core/rendering/visual_update.h"   /* a document's sheet list moving is a visible effect */
 #include "solver/concolic.h"
 
 static JSClassID g_list_class;
@@ -214,6 +215,7 @@ void style_sheet_list_add(JSContext *ctx, JSValueConst sheet, JSValueConst owner
            "top-level sheets, and a constructed sheet reaches a document only through adoptedStyleSheets. The "
            "constructed one is built and mints WITHOUT this add; an @import'd one reaching here is a creator "
            "that routed through the wrong algorithm");
+    visual_update_document_changed(owner->owner_document);   /* a visible effect (core/rendering/visual_update.h) */
     root_wrap = root_wrap_of(ctx, owner);
     list = root_sheets(ctx, root_wrap);
     DCHECK(list_index_of(ctx, list, sheet) < 0,
@@ -283,6 +285,7 @@ void style_sheet_list_remove(JSContext *ctx, JSValueConst sheet)
            "that skipped them");
     /* THE READ, NEVER THE MINT — see root_sheets_existing. A removal that could create the list would answer
        its own question with an empty Array and charge the miss to the sheet. */
+    visual_update_document_changed(css_style_sheet_node_document(sheet));   /* a visible effect */
     list = root_sheets_existing(ctx, root_wrap);
     DCHECK(JS_IsArray(list),
            "§6.2's remove a CSS style sheet reached a holder that has NO LIST AT ALL — the add that recorded "

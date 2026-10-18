@@ -46,6 +46,7 @@
 #include "core/dom/node.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "core/rendering/visual_update.h"   /* a sheet write is a visible effect HTML §8.1.7.3 asks about */
 #include "solver/concolic.h"   /* §6.1 step 12 asserts what it cannot parse */
 #include "solver/cow.h"
 #include "core/timing/thread_work.h"   /* a sheet parsed from text, for the thread-work census */
@@ -117,6 +118,28 @@ static CssStyleSheetData *sheet_of(JSValueConst v)
     return s;
 }
 
+/* The document whose rendering this sheet takes part in: the node document of its outermost parent CSS style
+   sheet's owner node, or NULL for a sheet no node owns (a constructed sheet, or one §6.2 removed). BORROWED. */
+static lxb_dom_document_t *sheet_rec_document(CssStyleSheetData *s)
+{
+    lxb_dom_node_t *n;
+
+    while (JS_IsObject(s->parent_style_sheet)) {
+        s = sheet_of(s->parent_style_sheet);
+        DCHECK(s != NULL, "a CSS style sheet's parent CSS style sheet is not a CSS style sheet");
+    }
+    n = node_of(s->owner_node);
+    return n != NULL ? n->owner_document : NULL;
+}
+
+lxb_dom_document_t *css_style_sheet_node_document(JSValueConst sheet)
+{
+    CssStyleSheetData *s = sheet_of(sheet);
+
+    DCHECK(s != NULL, "a node document was asked of something that is not a CSS style sheet");
+    return sheet_rec_document(s);
+}
+
 /* WRITE ONE OWNED SLOT, and never `JS_FreeValue(ctx, s->f); s->f = <a new value>;` — see cow.h for the order
    and the defect. §6.2's remove a CSS style sheet is the worst shape of it this component has, and it is worse
    than the ordinary pair: it freed THREE slots and then assigned all three, so between the first free and its
@@ -148,6 +171,7 @@ static void sheet_set_at(JSContext *ctx, CssStyleSheetData *s, JSValue *slot, JS
             "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
             "a layout job's activation (core/layout/layout_job.h) and take it out of the walk",
             file, line);
+    visual_update_document_changed(sheet_rec_document(s));   /* resolved before the write moves an owner */
     cow_record_set_at(ctx, s, &SHEET_REC, slot, v, file, line);
 }
 #define sheet_set(ctx_, s_, slot_, v_) sheet_set_at((ctx_), (s_), (slot_), (v_), __FILE__, __LINE__)
@@ -372,6 +396,7 @@ void css_style_sheet_set_disabled(JSValueConst sheet, bool disabled)
            "for it. "
            "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
            "a layout job's activation (core/layout/layout_job.h) and take it out of the walk");
+    if (s->disabled != disabled) visual_update_document_changed(sheet_rec_document(s));
     s->disabled = disabled;
 }
 
@@ -466,7 +491,7 @@ static JSValue sheet_mint(JSContext *ctx, JSValueConst owner_node, JSValueConst 
        `(MediaList or DOMString) media = ""` default specifies, so the two creators agree without either of
        them saying so. It is minted BEFORE JS_SetOpaque like every other slot — the record is unreachable by
        the collector until then, so this allocation cannot reach sheet_gc_mark through a half-built record. */
-    s->media = media_list_new(ctx, media_text);
+    s->media = media_list_new(ctx, media_text, obj);
     CHECK(!JS_IsException(s->media), "a CSS style sheet's media list could not be allocated");
     /* §6.1: the disabled flag is "either set or unset. Unset by default". §6.2's create specifies no value for
        it, so every creator but one leaves it at the calloc's zero; the one that does specify it is §6.1's

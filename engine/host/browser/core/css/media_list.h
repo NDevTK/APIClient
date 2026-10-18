@@ -31,8 +31,9 @@ void media_list_free(JSRuntime *rt);
 
 /* §4.4's "CREATE A MEDIALIST OBJECT WITH A STRING text" — a new object whose `mediaText` is then set to `text`,
    which is the parse and the canonicalisation, not a copy of the bytes. `text` may be NULL, which is the empty
-   string and therefore the empty collection. OWNED: the caller frees. */
-JSValue media_list_new(JSContext *ctx, const char *text);
+   string and therefore the empty collection. `owner` is the sheet or rule whose `media` this is, held so a
+   mutation can name the document it changes (core/rendering/visual_update.h). OWNED: the caller frees. */
+JSValue media_list_new(JSContext *ctx, const char *text, JSValueConst owner);
 
 /* Is `v` a MediaList? The brand, for a caller holding something it took off an attribute. */
 bool media_list_is(JSContext *ctx, JSValueConst v);

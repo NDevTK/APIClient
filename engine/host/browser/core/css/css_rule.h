@@ -169,6 +169,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <lexbor/dom/dom.h>
+
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_index_arg.h"
@@ -186,6 +188,9 @@ void css_rule_free(JSRuntime *rt);
 
 /* Is `v` a CSSRule? The class brand, for a caller holding something it took out of a rule list. */
 bool css_rule_is(JSValueConst v);
+/* The document whose rendering the rule takes part in, through its parent CSS style sheet. BORROWED; NULL for
+   a rule in no sheet, or in one no node owns. */
+lxb_dom_document_t *css_rule_node_document(JSValueConst rule);
 
 /* IS `v` AN `@import` RULE? CSSOM §6.1.2 "The CSSStyleSheet Interface"'s synchronously replace the rules of a
    CSSStyleSheet step 3 is the one asker — "If rules contains one or more @import rules, remove those rules from

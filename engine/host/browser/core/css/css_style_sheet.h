@@ -100,6 +100,10 @@ bool css_style_sheet_is(JSValueConst v);
    node created). */
 lxb_dom_node_t *css_style_sheet_owner_node(JSValueConst sheet);
 
+/* The document whose rendering the sheet takes part in: the node document of its outermost parent CSS style
+   sheet's owner node. BORROWED; NULL for a sheet no node owns (constructed, or removed by §6.2). */
+lxb_dom_document_t *css_style_sheet_node_document(JSValueConst sheet);
+
 /* CSS Syntax's "PARSE A STYLESHEET'S CONTENTS" over `text`, with the result becoming this sheet's CSS RULES.
    IT IS AN APPEND INTO AN EMPTY LIST AND IT IS NOT WHAT §6.1.2's `replaceSync` RUNS — this line used to say it
    was that operation "minus the constructed-flag check that member adds", and the member that then got built

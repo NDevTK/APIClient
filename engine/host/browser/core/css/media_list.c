@@ -14,17 +14,24 @@
 #include "quickjs-step.h"
 #include "core/agent_state.h"
 #include "core/css/css_cascade_pass.h"   /* the layout job's record a cascade-input write may not land inside */
+#include "core/css/css_rule.h"
+#include "core/css/css_style_sheet.h"
 #include "core/css/media_list.h"
 #include "core/css/media_query.h"
 #include "core/idl_args.h"
 #include "core/idl_index_arg.h"
 #include "core/idl_indexed.h"
 #include "core/realm.h"
+#include "core/rendering/visual_update.h"   /* a media list rewrite is a visible effect */
 #include "solver/concolic.h"   /* CSSOM §4.4's `item` takes an index unknown input crosses AS ITSELF */
 
 static JSClassID g_list_class;
 static JSValue   g_queries_key = JS_UNDEFINED;
 static JSAtom    g_atom_queries = JS_ATOM_NULL;
+/* The owner slot: the sheet or rule whose `media` attribute this is, so a mutation can name the document it
+   changes. Defined once at the mint, unwritable, and never page-visible. */
+static JSValue   g_owner_key = JS_UNDEFINED;
+static JSAtom    g_atom_owner = JS_ATOM_NULL;
 static int       g_id_set_media_text = -1, g_id_item = -1, g_id_append = -1, g_id_delete = -1;
 static int       g_id_to_string = -1, g_id_put_forwards = -1;
 
@@ -212,6 +219,18 @@ static void ml_set_text(JSContext *ctx, JSValueConst self, const char *text)
 /* `stringifier attribute [LegacyNullToEmptyString] CSSOMString mediaText` — the null-to-empty is part of the
    TYPE and is the declaration's, so `ml.mediaText = null` empties the collection rather than parsing the four
    characters "null". */
+/* A mutation of the collection changes what its owner's document renders (core/rendering/visual_update.h). */
+static void ml_changed(JSContext *ctx, JSValueConst self)
+{
+    JSValue owner;
+
+    if (JS_GetOwnSlot(ctx, &owner, self, g_atom_owner) <= 0) owner = JS_UNDEFINED;
+    DCHECK(JS_IsObject(owner), "a MediaList has no owner — media_list_new defines the slot at every mint");
+    visual_update_document_changed(css_style_sheet_is(owner) ? css_style_sheet_node_document(owner)
+                                                              : css_rule_node_document(owner));
+    JS_FreeValue(ctx, owner);
+}
+
 static JSValue js_ml_set_media_text(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     const char *v;
@@ -222,6 +241,7 @@ static JSValue js_ml_set_media_text(JSContext *ctx, JSValueConst this_val, JSVal
     if (!v) return JS_EXCEPTION;
     ml_set_text(ctx, this_val, v);
     JS_FreeCString(ctx, v);
+    ml_changed(ctx, this_val);
     return JS_UNDEFINED;
 }
 
@@ -344,6 +364,7 @@ static JSValue js_ml_append(JSContext *ctx, JSValueConst this_val, int argc, JSV
 
         JS_SetPropertyUint32(ctx, arr, ml_length(ctx, this_val), JS_NewString(ctx, one));   /* STEP 4 */
         JS_FreeValue(ctx, arr);
+        ml_changed(ctx, this_val);
     }
     free(one);
     return JS_UNDEFINED;
@@ -393,6 +414,7 @@ static JSValue js_ml_delete(JSContext *ctx, JSValueConst this_val, int argc, JSV
     free(one);
     if (!removed)
         return JS_ThrowDOMException(ctx, "NotFoundError", "the media query is not in this media list");
+    ml_changed(ctx, this_val);
     return JS_UNDEFINED;
 }
 
@@ -415,7 +437,7 @@ int media_list_put_forwards_setter(void)
 
 /* ---- the interface ------------------------------------------------------------------------------------------ */
 
-JSValue media_list_new(JSContext *ctx, const char *text)
+JSValue media_list_new(JSContext *ctx, const char *text, JSValueConst owner)
 {
     JSValue proto, obj, arr;
 
@@ -431,6 +453,9 @@ JSValue media_list_new(JSContext *ctx, const char *text)
        that is what makes each mutation a property write the per-flow COW delta already captures. So the slot is
        defined once and unwritable, exactly as core/css/css_rule_list.c's is. */
     JS_DefinePropertyValue(ctx, obj, g_atom_queries, arr, 0);
+    DCHECK(JS_IsObject(owner), "a MediaList was minted with no owner — §4.4 has no constructor, so every list "
+                               "is some sheet's or rule's `media`");
+    JS_DefinePropertyValue(ctx, obj, g_atom_owner, JS_DupValue(ctx, owner), 0);
     /* §4.4's create step 2 — "set its mediaText attribute to text", which is the parse, not a copy. */
     ml_set_text(ctx, obj, text);
     return obj;
@@ -450,6 +475,10 @@ void media_list_init(JSContext *ctx)
     CHECK(!JS_IsException(g_queries_key), "the MediaList slot key allocation failed");
     g_atom_queries = JS_ValueToAtom(ctx, g_queries_key);
     CHECK(g_atom_queries != JS_ATOM_NULL, "the MediaList slot key could not be interned");
+    g_owner_key = JS_NewSymbol(ctx, "mediaListOwner", false);
+    CHECK(!JS_IsException(g_owner_key), "the MediaList owner key allocation failed");
+    g_atom_owner = JS_ValueToAtom(ctx, g_owner_key);
+    CHECK(g_atom_owner != JS_ATOM_NULL, "the MediaList owner key could not be interned");
     g_id_set_media_text = idl_setter_id(ctx, IDL_DOMSTRING, /*null_to_empty*/ true, js_ml_set_media_text, 0);
     /* §4.4's `item` IS A MACHINE — a declaration and not a dispatch, since there is no second body for
        anything to select against. Its one `unsigned long index` can be unknown external input. */
@@ -504,6 +533,10 @@ void media_list_free(JSRuntime *rt)
     g_atom_queries = JS_ATOM_NULL;
     JS_FreeValueRT(rt, g_queries_key);
     g_queries_key = JS_UNDEFINED;
+    JS_FreeAtomRT(rt, g_atom_owner);
+    g_atom_owner = JS_ATOM_NULL;
+    JS_FreeValueRT(rt, g_owner_key);
+    g_owner_key = JS_UNDEFINED;
     g_id_item = g_id_append = g_id_delete = g_id_to_string = -1;
     g_id_set_media_text = g_id_put_forwards = -1;
     /* THE CLASS ID IS NOT RESET HERE. It is declared under `element`, whose release ends in

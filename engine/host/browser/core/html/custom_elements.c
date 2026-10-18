@@ -70,6 +70,7 @@
 #include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "core/rendering/visual_update.h"   /* `:defined` moving is a visible effect HTML §8.1.7.3 asks about */
 #include "core/dom/node.h"
 #include "core/dom/names.h"
 #include "core/dom/attr_list.h"   /* §4.9's (namespace, local name) lookup — the old value of THIS attribute */
@@ -825,6 +826,12 @@ static void ce_set_state(JSContext *ctx, JSValueConst wrap, int state)
            "else in this engine can see it happen. "
            "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
            "a layout job's activation (core/layout/layout_job.h) and take it out of the walk");
+    {
+        lxb_dom_node_t *n = node_of(wrap);   /* `:defined` re-decided is a visible effect for its document */
+
+        DCHECK(n != NULL, "a custom element state was written onto a wrapper with no node");
+        visual_update_document_changed(n->owner_document);
+    }
     JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_state, JS_NewInt32(ctx, state), CE_SLOT_FLAGS);
 }
 

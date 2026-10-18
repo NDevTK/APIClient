@@ -59,6 +59,7 @@
 #include "core/html/html_link.h"
 #include "core/html/html_option.h"
 #include "core/html/html_dialog.h"   /* HTML §4.11.4's attribute change steps and removing steps, both below */
+#include "core/rendering/visual_update.h"   /* an attribute change is a visible effect HTML §8.1.7.3 asks about */
 #include "core/html/input_value.h"   /* HTML §4.10.5's type change steps, in the family below */
 #include "core/html/fragment_parser.h"
 #include "core/html/fragment_serializer.h"
@@ -2973,6 +2974,9 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
     mutation_observer_queue_record(rctx, MR_TYPE_ATTRIBUTES, lxb_dom_interface_node(el), local, ns,
                                    old_val, old_len, JS_UNDEFINED, JS_UNDEFINED, NULL, NULL);
     custom_elements_attribute_changed(rctx, el, ns, local, old_val, old_len, val, val_len);
+    /* A class, a style or any other attribute selectors and presentation read may change what the element's
+       document renders (core/rendering/visual_update.h). */
+    visual_update_document_changed(lxb_dom_interface_node(el)->owner_document);
     /* §4.2.2's two attribute change steps — a slottable's `slot` and a slot's `name`. They re-derive the name
        from the attribute that is NOW there, which is why the whole hook had to move after the write. */
     slot_attribute_changed(rctx, el, ns, local);

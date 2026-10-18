@@ -40,6 +40,7 @@
 #include "core/idl_args.h"
 #include "core/idl_indexed.h"
 #include "core/realm.h"
+#include "core/rendering/visual_update.h"   /* a rule write is a visible effect HTML §8.1.7.3 asks about */
 #include "solver/cow.h"
 
 /* CSSOM §6.4's TYPE state item, which IS which interface this rule is. For every interface CSSOM §6.4.2's `type` table
@@ -380,6 +381,21 @@ static CssRuleData *rule_of(JSValueConst v)
    A CALLER THAT HAS A CHANNEL DOES NOT REACH THIS: it tests the mint BEFORE publishing and returns the
    exception, which is what the three attribute setters and `js_rule_style` do. This is for the publish that has
    nowhere to report. */
+/* The document whose rendering the rule takes part in, through its parent CSS style sheet; NULL for a rule
+   in no sheet. BORROWED. */
+static lxb_dom_document_t *rule_rec_document(const CssRuleData *r)
+{
+    return JS_IsObject(r->parent_style_sheet) ? css_style_sheet_node_document(r->parent_style_sheet) : NULL;
+}
+
+lxb_dom_document_t *css_rule_node_document(JSValueConst rule)
+{
+    CssRuleData *r = rule_of(rule);
+
+    DCHECK(r != NULL, "a node document was asked of something that is not a CSS rule");
+    return rule_rec_document(r);
+}
+
 #define rule_set(ctx_, r_, slot_, v_)                                                                          \
     do {                                                                                                       \
         JSValue rule_set_v_ = (v_);                                                                            \
@@ -407,6 +423,8 @@ static CssRuleData *rule_of(JSValueConst v)
                "the site and not here: test the mint and RETURN the exception before publishing. If it does "    \
                "not, this is the allocation wall itself",                                                       \
                #v_);                                                                                            \
+        /* A visible effect (core/rendering/visual_update.h), resolved before the write moves the parent.   */ \
+        visual_update_document_changed(rule_rec_document(r_));                                                 \
         cow_record_set((ctx_), (r_), &RULE_REC, (slot_), rule_set_v_);                                          \
     } while (0)
 
@@ -820,7 +838,7 @@ static JSValue media_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, J
     obj = rule_new(ctx, PROTO_MEDIA, RULE_TYPE_MEDIA, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) return obj;
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->media, media_list_new(ctx, prelude));
+    rule_set(ctx, r, &r->media, media_list_new(ctx, prelude, obj));
     return obj;
 }
 
@@ -964,7 +982,7 @@ static JSValue import_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, 
     if (p.supports_text) {
         rule_set(ctx, r, &r->supports_text, JS_NewString(ctx, p.supports_text));
     }
-    rule_set(ctx, r, &r->media, media_list_new(ctx, p.media_text));
+    rule_set(ctx, r, &r->media, media_list_new(ctx, p.media_text, obj));
     css_import_prelude_free(&p);
     return obj;
 }
@@ -2354,6 +2372,7 @@ JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst par
                                         "anything other than @import and @namespace rules");
         }
     }
+    visual_update_document_changed(css_rule_node_document(built));   /* a visible effect */
     rules_insert_at(ctx, list, index, built);            /* STEP 8 */
     return JS_NewUint32(ctx, index);                     /* STEP 9 */
 }
