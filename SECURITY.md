@@ -566,7 +566,9 @@ itself as a browser would: a program load; any other subresource; a request with
 both `observed` (this is also what fires the seeded document load); and the analysed page's own request whose
 address no fork pinned (`destination=value`, `witness=unpinned`, `actor=page`). A navigation reads
 `destination=value`: a new navigable, like a postMessage, is judged by the same rows as a `fetch()`. Probes,
-discovery and tool-composed requests fire only at an origin a person widened. The witness mark is independent
+discovery and tool-composed requests fire only at an origin a person widened. The load of a route a document
+declared is discovery and states `actor=tool`: HTML §7.4.4's URL and history update steps fetch nothing, so the
+page sent no request for that address. The witness mark is independent
 of the provenance: a forced path that pinned nothing fires, and a `derived` path that pinned a value does not.
 
 Beside the provenance, every engine record of a request states a drive mark, `driven` or `undriven`

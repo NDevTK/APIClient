@@ -2523,9 +2523,9 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, ref
          "this caller DOES with a refusal, and a caller that does not state it would have this function pick " +
          "for it: a rendezvous it does not hold, a report it cannot write, or an empty document for an " +
          "address nothing ever fetched");
-  /* `actor` is whose act this navigation is, stated by each caller: a child navigable and a declared route are
-     the page's, an ambient seed this tool composed is the tool's (safe-fetch.js's `_actorOf`: a request this
-     tool composed at a person's direction is still `tool`). It is the signal the egress registry grades
+  /* `actor` is whose act this navigation is, stated by each caller: a child navigable is the page's, a declared
+     route's load and an ambient seed are the tool's (safe-fetch.js's `_actorOf`: a request this tool composed
+     at a person's direction is still `tool`). It is the signal the egress registry grades
      `certain`, shown on the person's own control, so it must be true. The value space is asked of the
      chokepoint and never copied here. */
   DCHECK(typeof self.safeFetchSignalUsable === "function" &&
@@ -2534,14 +2534,17 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, ref
          "gate on: " + JSON.stringify(actor) + " — the word says whether the ANALYSED PAGE composed " +
          "this navigation or THIS TOOL did, which no other signal can answer, and safe-fetch.js aborts on an " +
          "absent one. It is stated per caller rather than once here because this loader serves a child " +
-         "navigable (the page), a route an application declared of itself (the page), and an ambient seed " +
-         "this tool composed from an address the person's browser navigated to (the tool)");
-  /* `driven` is the engine's drive mark for a `page` navigation (`driven`/`undriven`, off the notice beside the
-     provenance), and `unstated` for a `tool` one; safe-fetch.js's `_drivenOf` CHECKs the pairing. `pinned` is
-     the engine's witness mark off the same record (`pinned`/`unpinned`), `unstated` for a `tool` one. */
-  DCHECK(actor === "page" ? (pinned === "pinned" || pinned === "unpinned") : pinned === "unstated",
+         "navigable (the page), the load of a route an application declared of itself (the tool), and an " +
+         "ambient seed this tool composed from an address the person's browser navigated to (the tool)");
+  /* `driven` and `pinned` are the engine's drive and witness marks off the record a navigation relays
+     (`driven`/`undriven`, `pinned`/`unpinned`), and `unstated` for one that relays none (an ambient seed). A
+     `page` navigation always relays one; a declared route's `tool` load relays its declaration's.
+     safe-fetch.js's `_drivenOf` CHECKs the drive mark's pairing with `page`. */
+  DCHECK(actor === "page" ? (pinned === "pinned" || pinned === "unpinned")
+                          : (pinned === "pinned" || pinned === "unpinned" || pinned === "unstated"),
          "a \u00a77.4 navigation was loaded with the witness mark " + JSON.stringify(pinned) + " for actor `" +
-         actor + "` — a page navigation relays the engine's mark off its record and a tool one composed none");
+         actor + "` — a page navigation relays the engine's mark off its record, and a tool one relays its " +
+         "record's or states `unstated`");
   /* The requested address, resolved once because every arm owes a URL: a navigable whose load did not load
      still gets a Document, at the URL that was requested. An unparseable address is a caller's serializer
      disagreeing with the URL parser, a broken contract, so it throws (a DFAIL would leave arms reading
@@ -4805,10 +4808,10 @@ async function hostNotice(eng, line) {
       console.warn("[bridge] a route declaration for `" + f[1] + "` is refused: " + _seedFrom.refusal.text);
       return;
     }
-    /* `actor: "page"`: the route was declared by this document's own code, as the load will state. */
+    /* `actor: "tool"`: the load this asks about is this zone's act, as the load states (the seed arm says why). */
     const _seedRefusal = self.safeFetchFiringRefusal({
       url: f[1], destination: "document", provenance: f[2], pinned: f[4],
-      doc: _seedFrom.issuerDoc, actor: "page", driven: f[3],
+      doc: _seedFrom.issuerDoc, actor: "tool", driven: f[3],
       credentialed: navigationCarriesSession(f[1], eng.origin), headers: null });
     if (_seedRefusal) {
       console.warn("[bridge] a route declaration for `" + f[1] + "` is refused by this origin's egress " +
@@ -6181,10 +6184,15 @@ const _hostOps = {
                                               destructive deny list, so a declared `/logout` passes it and
                                               the chokepoint refuses `blocked-destructive:<token>`. */
                                            /*refusalArm*/"report",
-                                           /* `page`: HTML §7.4.4's steps ran in the analysed document, so
-                                              its own code composed the address; the declaration's drive
-                                              mark says whether a drive of uncalled code ran them. */
-                                           /*actor*/"page", seed.driven, seed.pinned, DOCUMENT_REQUEST_UNSTATED,
+                                           /* `tool`: HTML §7.4.4 Non-fragment synchronous "navigations"'
+                                              URL and history update steps set the document's URL and fetch
+                                              nothing, so the page sent no request for this address and a
+                                              reload of it would. This load is active discovery from the
+                                              learning document: same-origin with it (the notice router
+                                              refuses any other address), and judged by the one egress rule
+                                              as any request this tool composes. The declaration's drive
+                                              mark travels as the engine stated it. */
+                                           /*actor*/"tool", seed.driven, seed.pinned, DOCUMENT_REQUEST_UNSTATED,
                                            /* A declared route is a document only this zone holds. */
                                            async () => ({ identity: await engineIdentity(stampOrigin(seed.principalOrigin),
                                                                                    seed.principalUrl, held),
