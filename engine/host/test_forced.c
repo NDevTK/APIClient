@@ -12300,9 +12300,9 @@ TF_UNIT void probes_modules(const char *js, Probe *tab, int *n) {
        unknown namespace is adopted on the trampoline, and an arm that fulfils runs the `then` callback. */
     const char *thengetter_why = NULL;
     int thengetter_tt = 1;
-    fold_row(&thengetter_tt, &thengetter_why, param_value_is(js, "/api/thengetter", "w", "tgOK"),
+    fold_row(&thengetter_tt, &thengetter_why, param_value_is(js, "/api/tgetter", "w", "tgOK"),
              "a promise resolved with a thenable whose `then` is a getter did not fulfil with `tgOK` — no "
-             "/api/thengetter record means the getter, its rest-parameter call or the reaction did not run");
+             "/api/tgetter record means the getter, its rest-parameter call or the reaction did not run");
     const char *impunk_why = NULL;
     int impunk_tt = 1;
     fold_row(&impunk_tt, &impunk_why, param_value_is(js, "/api/impunk", "w", "iuRES"),
@@ -12580,7 +12580,7 @@ TF_UNIT void probes_modules(const char *js, Probe *tab, int *n) {
         { "module-tla", modtla_tt, "/api/modtla", SESS_EXPLORE, modtla_why },
         { "module-meta-inline", mmetain_tt, "/api/mmetain", SESS_EXPLORE, mmetain_why },
         { "module-meta-external", mmetaext_tt, "/chunk/mdmeta.js", SESS_EXPLORE, mmetaext_why },
-        { "then-getter", thengetter_tt, "/api/thengetter", SESS_EXPLORE, thengetter_why },
+        { "then-getter", thengetter_tt, "/api/tgetter", SESS_EXPLORE, thengetter_why },
         { "import-unknown", impunk_tt, "/api/impunk", SESS_EXPLORE, impunk_why },
         /* §16.2.1.7.3.1's BINDING. `mfd-top` stands first because it is what says whether the row below it is
            about the closure chain or about how far the run got. */

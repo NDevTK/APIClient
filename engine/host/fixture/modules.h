@@ -140,7 +140,7 @@ static const char HTML_MODULES[] =
        (`import-unknown`). */
     "<script>"
     "new Promise(function (r) { r({ get then() { return function (...cb) { cb[0]('tgOK'); }; } }); })"
-    ".then(function (v) { fetch('/api/thengetter?w=' + v); });"
+    ".then(function (v) { fetch('/api/tgetter?w=' + v); });"
     "import(window.__tfImportSpec).then(function () { fetch('/api/impunk?w=iuRES'); },"
     " function (e) { fetch('/api/impunk?w=' + e.name); });"
     "</script>"
