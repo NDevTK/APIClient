@@ -260,10 +260,14 @@ int event_loop_may_advance(void);
 /* DOES THE DEADLINE `when`, AHEAD OF THE CLOCK, COME BEFORE THE REPLIES THIS FLOW IS OWED? 1 when nothing is owed
    (event_loop_may_advance); otherwise the predicate `when` < the replies' arrival, asked through event_loop_before
    (a restartable fork, so only between a flow's tasks), and a 1 licenses the one forward move to `when` that
-   follows. Named residual. Not covered: the arrival is one unknown per timeline, so a deadline raced once is not
-   raced again against a request issued after that race, and two deadlines are asked independently of their own
-   order. Next diff builds: an arrival named by the requests in flight, ordered with the deadlines it is asked
-   against. Absence shows as: a timer that waited for one reply also waiting, unforked, for a later one. */
+   follows. The arrival is the timeline's next one, one unknown per arrival (named by flow.h's `replies_taken`),
+   so a request issued after an arrival is raced again, and the earliest timer is always the one asked, so a
+   later deadline is never asked against an arrival an earlier one already preceded. Named residual. Not
+   covered: the race is asked at the idle rung only, so replies the host answers in one payment are delivered
+   with no deadline between them, and the order of the replies among themselves is the host's. Next diff
+   builds: the same predicate asked at the delivery arm before each arrival, the timer firing first re-stamping
+   the answered replies after it. Absence shows as: a deadline beside two requests answered together never
+   running between their two reactions. */
 int event_loop_deadline_first(JSContext *ctx, JSValueConst when);
 
 /* How often event_loop_deadline_first asked its predicate: a lifetime count of the ask, ahead of the answer, so

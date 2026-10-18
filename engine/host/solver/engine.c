@@ -4397,6 +4397,8 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
         JSValue p = pending_entry(f->pending, i);
         JSValue pv;
         int kind;
+
+        f->replies_taken++;
         /* No entry is delivered while a settle of this register is still parked: its reactions are not queued
            yet (27.5.1.4 FulfillPromise step 7), and anything delivered first would enqueue ahead of them. Both
            homes of a park are asked (on the Flow while switched out, in the runtime's FIFO while switched in), as
@@ -5078,6 +5080,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        happened. A pair, because `imm_next` means nothing without the cursor it was computed against. */
     sib->imm_at = parent->imm_at; sib->imm_next = parent->imm_next;
     sib->spin_row = parent->spin_row;
+    sib->replies_taken = parent->replies_taken;
     sib->delta = cow_delta_fork(ctx, (CowDelta *)parent->delta);   /* O(1) shared base segment, then diverges */
     /* Generator-state swaps built by clone_deep_flow for this fork, recorded on the sibling's delta so the shared
        generator object resolves to the sibling's own cloned execution state while it runs. */

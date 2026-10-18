@@ -15061,9 +15061,12 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
              "arm's `error` then `loadend`");
     const char *xabeat_why = NULL;
     int xabeat_tt = 1;
-    fold_row(&xabeat_tt, &xabeat_why, param_value_only_undriven(js, "/api/xabeat", "v", "load-loadend"),
-             "NOT REACHED or wrong: an answer that landed before a long timeout did not end the send in `load` "
-             "then `loadend`, with no `timeout`");
+    /* The answer can win; the deadline-first arm of the race is admitted. */
+    const int xab_l = param_undriven_count(js, "/api/xabeat", "v", "load-loadend");
+    const int xab_t = param_undriven_count(js, "/api/xabeat", "v", "timeout-loadend");
+    fold_row(&xabeat_tt, &xabeat_why, xab_l > 0 && xab_l + xab_t == param_undriven_count(js, "/api/xabeat", "v", NULL),
+             "NOT REACHED or wrong: no timeline ended a send with a long timeout in `load` then `loadend` when the "
+             "answer came first, or one ended in neither that nor the timeout arm's `timeout` then `loadend`");
     /* A deadline raced against a reply in flight: both orders, and nothing else. */
     const char *xrace_why = NULL;
     int xrace_tt = 1;
@@ -15073,8 +15076,20 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
              xr_rt > 0 && xr_tr > 0 && xr_rt + xr_tr == param_undriven_count(js, "/api/xraceorder", "v", NULL),
              "NOT REACHED or wrong: a 50 ms timer set beside a fetch() still in flight did not run in both orders "
              "against the reply (`reply-timer` and `timer-reply`), or an arm recorded another order");
+    /* The race at each arrival of a chain: three orders, and nothing else. */
+    const char *xchain_why = NULL;
+    int xchain_tt = 1;
+    const int xc_tab = param_undriven_count(js, "/api/xchainorder", "v", "timer-a-b");
+    const int xc_atb = param_undriven_count(js, "/api/xchainorder", "v", "a-timer-b");
+    const int xc_abt = param_undriven_count(js, "/api/xchainorder", "v", "a-b-timer");
+    fold_row(&xchain_tt, &xchain_why,
+             xc_tab > 0 && xc_atb > 0 && xc_abt > 0 &&
+             xc_tab + xc_atb + xc_abt == param_undriven_count(js, "/api/xchainorder", "v", NULL),
+             "NOT REACHED or wrong: a 50 ms timer beside a fetch() whose reaction issues a second one did not run "
+             "in each of the three orders against the two arrivals, or an arm recorded another order");
     const Probe rows[] = {
         { "deadline-race", xrace_tt, "/api/xraceorder", SESS_EXPLORE, xrace_why },
+        { "deadline-race-chain", xchain_tt, "/api/xchainorder", SESS_EXPLORE, xchain_why },
         { "xhr-timeout", xatime_tt, "/api/xatimedout", SESS_EXPLORE, xatime_why },
         { "xhr-timeout-beaten", xabeat_tt, "/api/xabeat", SESS_EXPLORE, xabeat_why },
         { "fetch-timer", xftimer_tt, "/api/xforder", SESS_EXPLORE, xftimer_why },

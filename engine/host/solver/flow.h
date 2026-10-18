@@ -400,6 +400,10 @@ typedef struct Flow {
     /* The `dyn_id` of the row whose HTML §13.2.7 step 5.1 spin of the event loop has run, so the row's own
        continuation is not spun again; 0 names no row. A fork carries it; a replay re-derives it. */
     uint64_t spin_row;
+    /* How many replies this timeline has taken (flow_deliver_one_reply): the ordinal of the next arrival, which
+       names the unknown a timer's deadline is raced against (event_loop_deadline_first). A fork carries it; a
+       replay re-derives it. */
+    uint32_t replies_taken;
     /* This flow's own program rows (a lazily loaded chunk, a queued document script), or, while the row's kind
        is DYN_SCRIPT_SRC, the address of a script whose source has not arrived: one column, because it is one
        queue. The row is this flow's; the bytes are not. Source text is fixed once decoded, so every timeline

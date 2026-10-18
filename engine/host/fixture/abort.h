@@ -93,7 +93,9 @@ static const char HTML_ABORT[] =
        HTML_DECLINES rule), so the 1 ms send has a failure arm, `error` then `loadend`, and a waiting arm that
        nothing answers, where the task's loop moves the work clock past the timeout and it fires at the idle
        rung: `timeout` then `loadend`. The clock never jumps to a deadline while a reply is in flight
-       (event_loop_may_advance), so a 60 s timeout is beaten by the host's answer: `load` then `loadend`.
+       (event_loop_may_advance): a 60 s timeout is raced against the answer's unknown arrival
+       (event_loop_deadline_first), so the answer can win, `load` then `loadend`, and the timeout arm,
+       `timeout` then `loadend`, is admitted.
        The 1 ms send's task queues the fetch-message task below last, so that task's long loop runs after
        this timeout has fired. */
     "<script>"
@@ -169,6 +171,18 @@ static const char HTML_ABORT[] =
     " fetch('/api/xrace').then(function () { done('reply'); });"
     " setTimeout(function () { done('timer'); }, 50);"
     "}, 9000);"
+    "</script>"
+    /* The same race over a chain: the second request is issued from the first reply's reaction, so each
+       arrival is its own unknown and the 50 ms deadline is raced at each, three orders: `timer-a-b`,
+       `a-timer-b` and `a-b-timer`. */
+    "<script>"
+    "setTimeout(function () {"
+    " var seen = [];"
+    " function done(t) { seen.push(t); if (seen.length === 3) fetch('/api/xchainorder?v=' + seen.join('-')); }"
+    " fetch('/api/xchaina').then(function () { done('a');"
+    "  fetch('/api/xchainb').then(function () { done('b'); }); });"
+    " setTimeout(function () { done('timer'); }, 50);"
+    "}, 9500);"
     "</script>"
     /* A request aborted while its reply is still owed: the abort runs on the line after the call, before the
        host can answer, so the engine tells the host to end the send, and the page sees an AbortError. */

@@ -426,14 +426,18 @@ static const char EL_ARRIVAL[] = "HTML §8.1.7.3 Processing model: the arrival o
 
 int event_loop_deadline_first(JSContext *ctx, JSValueConst when)
 {
-    char shape[sizeof EL_ARRIVAL + 2];
+    char src[sizeof EL_ARRIVAL + 32], shape[sizeof src + 2];
     JSValue arrival;
     int first;
 
     if (event_loop_may_advance()) return 1;
-    snprintf(shape, sizeof shape, "{%s}", EL_ARRIVAL);   /* a source's shape is its provenance in braces */
+    /* The NEXT arrival, named by how many replies this timeline has taken: one unknown per arrival, so after
+       one arrives the deadline is raced against the next, and a request issued with none arriving only moves
+       the next arrival earlier, which an answered race already covers. */
+    snprintf(src, sizeof src, "%s, number %u", EL_ARRIVAL, (unsigned)flow_running()->replies_taken + 1);
+    snprintf(shape, sizeof shape, "{%s}", src);   /* a source's shape is its provenance in braces */
     g_deadline_race_asked++;
-    arrival = concolic_new(ctx, shape, EL_ARRIVAL, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
+    arrival = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
     first = event_loop_before(ctx, when, arrival);
     JS_FreeValue(ctx, arrival);
     if (first) el_num_set(ctx, g_atom_licence, 1);
