@@ -13592,9 +13592,17 @@ TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
     fold_row(&absopt_tt, &absopt_why, emitted_record_graded_has(js, "/api/absopt", "derived", "aoSHORT"),
              "no derived /api/absopt record carries `aoSHORT` — the optional chain over an unknown whose session "
              "value is undefined did not short-circuit on the session's own arm");
+    /* §20.1.3.6 Object.prototype.toString answers "[object Undefined]" for the session's `t` before its tag read,
+       so the read leaves the session's arm unforced and the request after it has a derived record. */
+    const char *abstag_why = NULL; int abstag_tt = 1;
+
+    fold_row(&abstag_tt, &abstag_why, emitted_record_graded_has(js, "/api/abstag", "derived", "atRAN"),
+             "no derived /api/abstag record — Object.prototype.toString's own @@toStringTag read over an unknown "
+             "whose session value is undefined forced the session's arm, though that algorithm never throws there");
     const Probe rows[] = {
         { "absent-arm", absarm_tt, "__tfAbsentGate", SESS_EXPLORE, absarm_why },
         { "absent-optchain", absopt_tt, "__tfMaybe", SESS_EXPLORE, absopt_why },
+        { "absent-totag", abstag_tt, "__tfAbsTag", SESS_EXPLORE, abstag_why },
         { "absent-key-slot", abskey_tt, "__tfAbsentKey", SESS_EXPLORE, abskey_why },
         { "absent-sum-shape", abssum_tt, "__tfAbsSum", SESS_EXPLORE, abssum_why },
     };

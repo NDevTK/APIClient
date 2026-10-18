@@ -2936,6 +2936,9 @@ typedef struct JSConcolicHooks {
        engine's creation paths, and no per-object cost anywhere, because the ordinal a value carries is a field
        it has either way. */
     uint32_t (*mint_ordinal)(JSContext *ctx);
+    /* §6.2.5.5 GetValue step 3.a's ToObject over an unknown base, asked by the property-read operators before
+       their [[Get]] and by nothing else: the host notes what this session's own value does there. */
+    void (*get_value_base)(JSContext *ctx, JSValueConst base);
 } JSConcolicHooks;
 JS_EXTERN void JS_SetConcolicHooks(const JSConcolicHooks *hooks);
 

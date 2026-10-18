@@ -35038,6 +35038,16 @@ static int js_typeof_is_concolic(JSContext *ctx, JSValue *sp, JSAtom expected)
     return 1;
 }
 
+/* The property-read operators' §6.2.5.5 GetValue step 3.a over an unknown base, before their [[Get]]. */
+static inline void js_get_value_base(JSContext *ctx, JSValueConst base)
+{
+    if (unlikely(js_value_is_concolic(base))) {
+        DCHECK(g_concolic.get_value_base != NULL,
+               "an unknown base reached a property read under a host with no GetValue base hook");
+        g_concolic.get_value_base(ctx, base);
+    }
+}
+
 /* OP_is_undefined_or_null, OP_is_undefined and OP_is_null over an unknown operand. Their tag test reads the
    solver's carrier, which is an Object, so `x?.y` over an unknown never short-circuited, and over one whose
    example is undefined (a missed read) the session's own world, which does, was lost. The fused opcodes are
@@ -36085,6 +36095,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 atom = JS_ATOM_length;
 
                 obj = sp[-1];
+                js_get_value_base(ctx, obj);
                 if (unlikely((tramp_px = tramp_proto_proxy(ctx, obj, atom)) != NULL)) {
                     /* `x.length` is the SAME [[Get]] as `x.f`, and this opcode had no route for it at all: a
                        Proxy anywhere on the chain reached js_proxy_get from JS_GetPropertyInternal with no flow
@@ -48786,6 +48797,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 4;
 
                 obj = sp[-1];
+                js_get_value_base(ctx, obj);
                 if (unlikely((tramp_px = tramp_proto_proxy(ctx, obj, atom)) != NULL)) {
                     sf->cur_pc = pc;
                     {   /* [[Get]] on a Proxy is the `get` trap, and the READ of that trap off the handler is
@@ -48890,6 +48902,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 4;
 
                 obj = sp[-1];
+                js_get_value_base(ctx, obj);
                 if (unlikely((tramp_px = tramp_proto_proxy(ctx, obj, atom)) != NULL)) {
                     /* `proxy.m()` reads the method through the get trap: the receiver STAYS on the stack, so
                        the value is PUSHED rather than replacing an operand — pop 0. */
@@ -49321,6 +49334,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             {
                 JSValue val;
 
+                js_get_value_base(ctx, sp[-2]);
+
                 /* fast path: regular/typed array element by int index */
                 if (likely(JS_VALUE_GET_TAG(sp[-2]) == JS_TAG_OBJECT &&
                            JS_VALUE_GET_TAG(sp[-1]) == JS_TAG_INT)) {
@@ -49469,6 +49484,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE(OP_get_array_el2):
             {
                 JSValue val;
+
+                js_get_value_base(ctx, sp[-2]);
 
                 /* fast path: regular/typed array element by int index */
                 if (likely(JS_VALUE_GET_TAG(sp[-2]) == JS_TAG_OBJECT &&

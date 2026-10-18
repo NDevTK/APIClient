@@ -2933,6 +2933,28 @@ static int atom_is_symbol(JSContext *ctx, JSAtom atom)
    lets a candidate inject at a precise source. The derived value carries the parent's example read through,
    so a field the record holds arrives with the server's bytes; either way it stays opaque for control flow,
    because a loaded `features.admin:false` must not concretize the gate or the admin endpoint is lost. */
+/* JSConcolicHooks.get_value_base: §6.2.5.5 GetValue ( refRecord ) step 3.a, `? ToObject(refRecord.[[Base]])`,
+   over an unknown base, asked by the interpreter's property-read operators before their [[Get]]. ToObject
+   throws a TypeError on an undefined or null base, so where this session's own value is one of those the
+   session stops at this read, and a flow reading on stands on a world this engine chose. It is asked here and
+   not in [[Get]], which every algorithm reaches, many after handling a nullish value themselves
+   (§20.1.3.6 Object.prototype.toString answers "[object Undefined]" before its tag read).
+   Named residual. Not covered: the session's own world, which throws here and moves on to the page's next
+   task; the flow reads on, marked forced, and no flow stands for it. Next diff builds: the get opcodes over
+   an unknown ask branch_arm_fork whether the base is nullish, the session's arm raising step 3.a's TypeError
+   and the sibling re-reading with that decision replayed. Absence shows as: a document whose every record
+   after such a read is graded forced, with no derived record of any later statement. */
+static void concolic_get_value_base_hook(JSContext *ctx, JSValueConst base)
+{
+    JSValue bex;
+
+    DCHECK(concolic_is(base), "GetValue's base hook was asked of a value that is not unknown input");
+    if (!concolic_example_present(base)) return;
+    bex = concolic_example(ctx, base);
+    if (JS_IsUndefined(bex) || JS_IsNull(bex)) flow_mark_forced_arm();
+    JS_FreeValue(ctx, bex);
+}
+
 static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
     (void)receiver;
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
@@ -2966,20 +2988,6 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
            "path `concolic_src_pinned` says is pinned, so the two spellings of one question over one chain "
            "have diverged. Every later read of this member composes a value this flow has already proved "
            "otherwise, and decide.c's fork-over-pinned row counts a fork the mint was to have decided");
-    /* §6.2.5.5 GetValue ( refRecord ) step 3.a: ToObject throws a TypeError on an undefined or null base. Where
-       this session's own value here is one of those, the session stops at this read, and a flow reading on
-       stands on a world this engine chose.
-       Named residual. Not covered: the session's own world, which throws here and moves on to the page's next
-       task; the flow reads on, marked forced, and no flow stands for it. Next diff builds: the get opcodes over
-       an unknown ask branch_arm_fork whether the base is nullish, the session's arm raising step 3.a's TypeError
-       and the sibling re-reading with that decision replayed. Absence shows as: a document whose every record
-       after such a read is graded forced, with no derived record of any later statement. */
-    if (concolic_example_present(obj)) {
-        JSValue bex = concolic_example(ctx, obj);
-
-        if (JS_IsUndefined(bex) || JS_IsNull(bex)) flow_mark_forced_arm();
-        JS_FreeValue(ctx, bex);
-    }
     /* A JSON value's own keys are Strings, so a Symbol names none of them and the read is its type's chain.
        Where every type's chain agrees, that answer is the read's whatever the reply sends: concrete, with no
        unknown to fork on or to deliver a candidate at.
@@ -6058,6 +6066,7 @@ static JSConcolicHooks g_hooks = {
     .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
     .to_bool = concolic_tobool_hook,
     .key_read = concolic_key_read_hook,
+    .get_value_base = concolic_get_value_base_hook,
     .key_name = concolic_key_name_hook,
     /* …and the inverse, which is not optional beside it: `key_name` is the only mechanism turning an unknown
        into bytes, so a host without this would hand an enumerating page a real string where its model says an
