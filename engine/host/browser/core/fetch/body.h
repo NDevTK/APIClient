@@ -161,6 +161,13 @@ int  body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Bod
    Returns 0, or -1 with an exception live. */
 int  body_create_proxy(JSContext *ctx, JSValueConst src_obj, BodyState *src, BodyState *dst);
 
+/* Fetch §5.6 "Fetch methods"' abort steps' "If response's body is non-null and is readable, then error
+   response's body": the stream to error (owned) when `obj`'s body is non-null and readable, and JS_UNDEFINED
+   when it is null or no longer readable. A body held as bytes that no read has consumed is a stream nothing
+   has pulled from, so its stream is made here to be errored; a consumed one was read to its close. `obj` must
+   include Body. JS_EXCEPTION with a throw live. */
+JSValue body_readable_stream(JSContext *ctx, JSValueConst obj);
+
 /* DECLARE that an interface includes Body: the class its instances wear, and how to find the BodyState on one.
    `of` returns NULL when the value is not an instance, which is the receiver check every member performs.
    Returns a handle. There is ONE set of reader machines for the whole platform; the handle is what tells them

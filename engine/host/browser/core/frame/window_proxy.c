@@ -505,6 +505,32 @@ static JSValueConst live_nav_of_document(uint32_t doc)
     return found;
 }
 
+/* Which of this agent's navigables has `global` as its active document's realm's global object, in the
+   timeline that is asking; JS_UNDEFINED when none does. The Window -> navigable edge for ANOTHER realm's Window:
+   win_or_proxy hands a realm its own global in place of its own proxy, so `f.bind(window)` with `f` taken from
+   another window carries this realm's global into that realm's member as the receiver. A destroyed navigable's
+   realm is null (window_proxy_set_destroyed), so the Window of a destroyed document is named by no row. Ctx-free
+   for the reason live_nav_of_document is. */
+static JSValueConst live_nav_of_global(JSValueConst global)
+{
+    int i;
+
+    for (i = 0; i < g_live_navs_n; i++) {
+        ProxyData *p = JS_GetOpaque(g_live_navs[i], g_proxy_class);
+        JSValue g;
+        bool same;
+
+        DCHECK(p != NULL, "a row of the live-navigable table names an object with no §7.2.3 record — both mints "
+                          "attach one before the object is recorded");
+        if (p == NULL || p->realm == NULL || !proxy_of_this_timeline(p)) continue;
+        g = JS_GetGlobalObject(p->realm);
+        same = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(global);
+        JS_FreeValue(p->realm, g);
+        if (same) return g_live_navs[i];
+    }
+    return JS_UNDEFINED;
+}
+
 /* The record as a collector entry sees it: JS_GetAnyOpaque, not JS_GetOpaque(val, g_proxy_class).
    core/agent_state.h states the rule: window_proxy_free gives the class id back and the collection that finalizes
    this agent's object graph runs after the release column, so a lookup against that id would answer NULL for every
@@ -3233,7 +3259,8 @@ JSValueConst window_proxy_navigable_of(JSContext *ctx, JSValueConst v)
     g = JS_GetGlobalObject(ctx);
     is_global = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(v);
     JS_FreeValue(ctx, g);
-    return is_global ? document_window_proxy(ctx) : JS_UNDEFINED;
+    if (is_global) return document_window_proxy(ctx);
+    return window_is(v) ? live_nav_of_global(v) : JS_UNDEFINED;
 }
 
 /* §3.7.6's first clause, written once: "if it is not null or undefined". Its two consumers want different answers
@@ -3313,19 +3340,14 @@ JSValueConst window_proxy_this_navigable(JSContext *ctx, JSValueConst this_val)
         return document_window_proxy(ctx);
     nav = window_proxy_navigable_of(ctx, this_val);
     if (!JS_IsUndefined(nav)) return nav;
-    /* It is a Window, and not one this mapping can name. §3.7.6's TypeError is for a receiver that does not
-       implement the interface, and this one does, so a throw would be a wrong answer with a plausible shape. The
-       missing piece is an edge from a Window object to its navigable that does not go through a realm:
-       window_proxy_navigable_of reads this realm's global out of `ctx`, and a foreign realm's global is the same
-       question asked of a realm it has no handle to. Every other spelling of another navigable here is already
-       the proxy (`contentWindow`, `defaultView`, `parent`/`top`/`opener`, and §7.2.3's own
-       `window`/`self`/`frames`/`globalThis`), which is why nothing reaches this today. */
+    /* It is a Window no live navigable's realm holds: its document was destroyed, so its realm left the
+       navigable. §3.7.6's TypeError is for a receiver that does not implement the interface, and this one does,
+       so a throw would be a wrong answer with a plausible shape; the navigable is still what the member is
+       about, and only the realm edge to it is gone. */
     DCHECK(!window_is(this_val),
-           "a Web IDL attribute of the Window interface was invoked with ANOTHER realm's Window object as its "
-           "receiver. §3.7.6's TypeError is for a receiver that does not implement the interface and this one "
-           "does, so the answer is that navigable rather than a throw — build the Window -> navigable edge "
-           "that does not go through a realm (document_window_proxy reads THIS realm's global out of its ctx, "
-           "which cannot name a foreign one), and route window_proxy_navigable_of onto it");
+           "a Web IDL member of the Window interface was invoked with a Window object whose realm no live "
+           "navigable holds — its document was destroyed. The answer is that navigable rather than a throw: "
+           "record the navigable on the Window when its realm is made, so the edge survives the realm's release");
     JS_ThrowTypeError(ctx, "a Window member was read on an object that is not a Window");
     return JS_UNINITIALIZED;
 }

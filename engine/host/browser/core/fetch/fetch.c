@@ -660,7 +660,29 @@ static void js_fetch_release(JSContext *ctx, void *st)
  * capture, and the work it does (settling) is work only a machine may do. Those two were mutually exclusive
  * before: JS_NewCFunctionData gives capture without the machine, JS_CFUNC_step gives the machine without
  * capture. What it captured is read back off the callee its own header carries. */
-enum { FETCH_DELIVER_RESOLVE = 0, FETCH_DELIVER_REJECT };
+enum { FETCH_DELIVER_RESOLVE = 0, FETCH_DELIVER_REJECT, FETCH_DELIVER_RECORD };
+
+/* The fetch() call's own record, which §5.6 keeps as two locals that step 11's abort steps and step 12's
+   processResponse both read: `aborted` is locallyAborted and `response` is responseObject, null until
+   processResponse makes one. A null-prototype object no page can reach, so it rides the flow's heap like any
+   other value and its reads run nothing of the page's. */
+static JSValue fetch_call_record_new(JSContext *ctx)
+{
+    JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
+
+    CHECK(!JS_IsException(rec), "fetch: OOM minting a fetch() call's record");
+    JS_DefinePropertyValueStr(ctx, rec, "aborted", JS_FALSE, JS_PROP_WRITABLE);
+    JS_DefinePropertyValueStr(ctx, rec, "response", JS_NULL, JS_PROP_WRITABLE);
+    return rec;
+}
+
+static bool fetch_call_aborted(JSContext *ctx, JSValueConst rec)
+{
+    JSValue v = JS_GetPropertyStr(ctx, rec, "aborted");
+
+    DCHECK(JS_IsBool(v), "a fetch() call's record has no boolean `aborted` — fetch_call_record_new defines it");
+    return JS_ToBool(ctx, v);
+}
 
 /* WHERE THIS MACHINE RESTS. §5.6 step 12's processResponse is what a reply runs, and its five sub-steps split
    exactly once: everything up to and including "creating a Response object" runs on the engine's own values,
@@ -700,6 +722,12 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
+        /* processResponse's first step: "If locallyAborted is true, then abort these steps." The abort steps
+           have already rejected p, so the reply the host still delivered settles nothing. */
+        if (fetch_call_aborted(ctx, JS_StepClosureData(&s->hdr, FETCH_DELIVER_RECORD))) {
+            s->value = JS_UNDEFINED;
+            return JS_STEP_DONE;
+        }
         if (JS_IsNull(body_v)) {
             /* The host could not fetch it. §5.6 rejects with a TypeError, and the message is the one every
                browser uses, because a page that matches on it is matching on that. */
@@ -767,6 +795,10 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
             JS_FreeValue(ctx, bd_v);
             if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
         }
+        /* "Set responseObject to the result of creating a Response object", which the abort steps read. */
+        if (!s->reject)
+            JS_SetPropertyStr(ctx, (JSValue)JS_StepClosureData(&s->hdr, FETCH_DELIVER_RECORD), "response",
+                              JS_DupValue(ctx, s->value));
         STEP_GOTO(s->hdr.stage, FETCH_DELIVER_SETTLE, &s->cphase, NULL);
     }
 
@@ -788,6 +820,94 @@ static const JSTrampStepDef js_fetch_deliver_def = {
     .steps = js_fetch_deliver_steps
 };
 static int g_deliver_stepid = -1;
+
+/* Fetch §5.6 "Fetch methods" step 11's abort steps, added to requestObject's signal: set locallyAborted, then
+   abort the fetch() call with p, request, responseObject and the signal's abort reason — reject p (a no-op
+   once processResponse has settled it) and, when responseObject exists and its body is still readable, error
+   that body with the reason. The request's body was extracted by the constructor and no page holds its
+   stream, so cancelling it observes nothing and is not performed. Closure data: [reject, the call's record,
+   requestObject's signal].
+   Named residual. Not covered: the steps' "Abort controller", which terminates the fetch itself; the fetch is
+   the trusted zone's and no cancel edge reaches it. Next diff builds: a cancel edge on FetchProvider beside
+   `owe`, called from here. Absence shows as: the trusted zone completing a request whose page aborted it. */
+enum { FETCH_ABORT_REJECT_FN = 0, FETCH_ABORT_RECORD, FETCH_ABORT_SIGNAL };
+#define FETCH_ABORT_STAGES(X) \
+    X(FETCH_ABORT_REJECT, "Fetch §5.6 fetch(input, init) step 11's abort steps (set locallyAborted; abort a " \
+                          "fetch() call: reject p with the signal's abort reason)") \
+    X(FETCH_ABORT_BODY, "Fetch §5.6 abort a fetch() call (error responseObject's body with the reason, as it " \
+                        "is readable)")
+enum { FETCH_ABORT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_fetch_abort_steps[] = { FETCH_ABORT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t   cphase;   /* the current call's phase, held across a suspension */
+    JSValue   reason;   /* requestObject's signal's abort reason (owned) */
+    JSValue   stream;   /* responseObject's readable body stream, while it is errored (owned) */
+    JSValue   cb[3];    /* the call request buffer: [this, function, argument] */
+} JSFetchAbortState;
+
+static void js_fetch_abort_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSFetchAbortState *s = st;
+    int k;
+    v->val(ctx, &s->reason);
+    v->val(ctx, &s->stream);
+    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
+}
+
+static int js_fetch_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSFetchAbortState *s = st;
+    JSValueConst rec = JS_StepClosureData(&s->hdr, FETCH_ABORT_RECORD);
+    JSValue out;
+    int r;
+
+    if (s->hdr.stage == FETCH_ABORT_REJECT) {
+        if (s->cphase == 0) {
+            s->reason = abort_signal_reason(ctx, JS_StepClosureData(&s->hdr, FETCH_ABORT_SIGNAL));
+            s->stream = JS_UNDEFINED;
+            JS_SetPropertyStr(ctx, (JSValue)rec, "aborted", JS_TRUE);
+        }
+        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), JS_StepClosureData(&s->hdr, FETCH_ABORT_REJECT_FN),
+                          JS_UNDEFINED, 1, (JSValueConst *)&s->reason, cb_result, &out, out_cb, out_argc);
+        if (r > 0) return r;
+        cb_result = JS_UNDEFINED;
+        if (JS_IsException(out)) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, out);
+        {
+            JSValue response = JS_GetPropertyStr(ctx, rec, "response");
+
+            if (JS_IsNull(response)) return JS_STEP_DONE;
+            s->stream = body_readable_stream(ctx, response);
+            JS_FreeValue(ctx, response);
+        }
+        if (JS_IsException(s->stream)) { s->stream = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        if (JS_IsUndefined(s->stream)) return JS_STEP_DONE;
+        STEP_GOTO(s->hdr.stage, FETCH_ABORT_BODY, &s->cphase, NULL);
+    }
+    DCHECK(s->hdr.stage == FETCH_ABORT_BODY, "fetch()'s abort steps were re-entered at a stage they do not have");
+    {
+        JSValue op = readable_stream_ctrl_op(ctx, RS_CTRL_ERROR);
+
+        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), op, readable_stream_controller(s->stream), 1,
+                          (JSValueConst *)&s->reason, cb_result, &out, out_cb, out_argc);
+        JS_FreeValue(ctx, op);
+    }
+    if (r > 0) return r;
+    if (JS_IsException(out)) return JS_STEP_ABRUPT;
+    JS_FreeValue(ctx, out);
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_fetch_abort_def = {
+    /* an abort algorithm's return value is not read, so there is no completion to state */
+    sizeof(JSFetchAbortState), js_fetch_abort_step, NULL, 0,
+    .visit = js_fetch_abort_visit,
+    .algorithm = "Fetch §5.6 fetch(input, init) step 11's abort steps",
+    .steps = js_fetch_abort_steps
+};
+static int g_abort_stepid = -1;
 
 /* THE RECORD'S HEADER LIST, READ BACK — see fetch.h. It runs none of the page's code: the record is this
    engine's own object, built by fetch_reply_new or parsed by qjs_provide out of the trusted zone's JSON, so
@@ -1239,10 +1359,11 @@ static void fetch_settle_local(JSContext *ctx, JSValue *resolving, JSValue value
    is the shape a later diff gets wrong by one. The record was filled by §5.4 steps 10-27, and a request that
    reached this seam is one whose method the standard has already normalized and refused. */
 static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url, const RequestRecord *rec,
-                          JSValueConst input, const HeaderList *hdrs, const char *body, size_t body_len)
+                          JSValueConst input, const HeaderList *hdrs, const char *body, size_t body_len,
+                          JSValueConst signal)
 {
-    JSValue promise, resolving[2], deliver;
-    JSValueConst data[2];
+    JSValue promise, resolving[2], deliver, call;
+    JSValueConst data[3];
     const char *u;
     /* §5.4 step 2'S PARSED URL, kept for the host below. See where it is filled. */
     char *abs = NULL;
@@ -1278,6 +1399,20 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
     promise = JS_NewPromiseCapability(ctx, resolving);
     if (JS_IsException(promise))
         return promise;
+    /* §5.6 step 11, before step 12's fetch: the abort steps go on requestObject's signal, when there is one. */
+    call = fetch_call_record_new(ctx);
+    if (abort_signal_is(ctx, signal)) {
+        JSValue algo;
+
+        data[0] = resolving[1];
+        data[1] = call;
+        data[2] = signal;
+        DCHECK(g_abort_stepid >= 0, "fetch() added its abort steps before their machine was declared");
+        algo = JS_NewStepClosure(ctx, g_abort_stepid, 0, 3, data);
+        CHECK(!JS_IsException(algo), "fetch: OOM minting §5.6 step 11's abort steps");
+        abort_signal_add_algorithm(ctx, signal, algo);   /* BORROWED: the signal takes its own reference */
+        JS_FreeValue(ctx, algo);
+    }
     /* THE CONCRETE PROJECTION IS ASKED FOR EXPLICITLY. A URL built out of unknown external input is a CONCOLIC,
        and the ToString boundary owes C a real string rather than one — so this edge reads the concolic's own
        SHAPE, which is the display form the @H surface reports ("/api/{location.hash}"). Coercing it
@@ -1413,6 +1548,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
             JS_FreeCString(ctx, u);
             JS_FreeValue(ctx, resolving[0]);
             JS_FreeValue(ctx, resolving[1]);
+            JS_FreeValue(ctx, call);
             return promise;
         }
         /* §5.4 STEP 2'S ANSWER, KEPT RATHER THAN THROWN AWAY — and this is the whole of the fix. The parse
@@ -1444,10 +1580,11 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
            §2.2.6 makes that the last item of the response's URL LIST, which the trusted host observes and
            delivers on the reply — so the capture is gone rather than kept beside the list as a second answer
            to one question. */
-        data[0] = resolving[0];
-        data[1] = resolving[1];
+        data[FETCH_DELIVER_RESOLVE] = resolving[0];
+        data[FETCH_DELIVER_REJECT] = resolving[1];
+        data[FETCH_DELIVER_RECORD] = call;
         DCHECK(g_deliver_stepid >= 0, "fetch() parked a reply before its delivery machine was declared");
-        deliver = JS_NewStepClosure(ctx, g_deliver_stepid, 1, 2, data);
+        deliver = JS_NewStepClosure(ctx, g_deliver_stepid, 1, 3, data);
         if (!JS_IsException(deliver)) {
             FetchRequest req = {0};
             /* `GET` IS THE REQUEST'S OWN METHOD, NOT A HOLE FILLED HERE — Fetch §2.2.5 "Requests": "A request has an
@@ -1532,6 +1669,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
     JS_FreeCString(ctx, m_refpol);
     JS_FreeValue(ctx, resolving[0]);
     JS_FreeValue(ctx, resolving[1]);
+    JS_FreeValue(ctx, call);
     return promise;
 }
 
@@ -1591,6 +1729,43 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
 enum { FETCH_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_fetch_steps[] = { FETCH_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
+/* The realm fetch() runs in, which is its receiver's: Web IDL §3.7.7 "Operations" takes "the this value, if it
+   is not null or undefined, or realm's global object otherwise", and Fetch §5.6 "Fetch methods" reads "this's
+   relevant realm" for the Response. Chrome 155 also takes the request's client, its URL's base and the
+   returned promise from the receiver, so a fetch taken from another window and called on this one is this
+   window's request (measured with the iframe live and removed). A receiver whose document is not fully
+   active answers NULL with a TypeError pending, as Chrome 155 rejects it on the line after the iframe's
+   removal; §5.6 states no such step for fetch() (fetchLater's step does), so Chrome is the oracle here. The
+   test is the Window's navigable being null (window_proxy_navigable_null), which §7.3.1.6's sever makes true
+   synchronously, ahead of §7.5.10's queued destroy. Asked at each stage that reads the client, since page
+   code between stages can remove the receiver's iframe. */
+static JSContext *fetch_receiver_realm(JSContext *ctx, JSValueConst this_val)
+{
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
+    if (JS_IsUninitialized(nav)) return NULL;
+    switch (window_proxy_document_state(window_proxy_doc(nav))) {
+    case WP_DOC_ACTIVE:
+    case WP_DOC_INITIAL:
+        if (window_proxy_navigable_null(ctx, nav)) {
+            JS_ThrowTypeError(ctx, "Failed to execute 'fetch' on 'Window': the receiver's document is not "
+                                   "fully active");
+            return NULL;
+        }
+        return window_proxy_realm(ctx, nav);
+    case WP_DOC_DESTROYED:
+    case WP_DOC_NO_NAVIGABLE:
+        JS_ThrowTypeError(ctx, "Failed to execute 'fetch' on 'Window': the receiver's document is not active");
+        return NULL;
+    case WP_DOC_REMOTE:
+        break;
+    }
+    DFAIL("fetch() reached its algorithm with a receiver whose document is in another instance — HTML §7.2.1.1's "
+          "security check refuses a cross-origin receiver before this, and one instance is one origin");
+    JS_ThrowTypeError(ctx, "Failed to execute 'fetch' on 'Window': the receiver is in another agent cluster");
+    return NULL;
+}
+
 static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -1619,6 +1794,10 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
            THE INPUT IS KEPT rather than read back off the arguments later, because a Request carries a captured
            blob URL entry that its `url` string cannot express. */
         if (!s->captured) {
+            if (!fetch_receiver_realm(ctx, hdr->this_val)) {
+                JS_FreeValue(ctx, cb_result);
+                return -1;
+            }
             s->captured = 1;
             /* THE CONSTRUCTION BEGAN — the ASK this edge owes the @H surface, raised once per world in which a
                page-level `fetch()` call reached this body. solver/endpoint.h states why it may be paired by a
@@ -1682,6 +1861,13 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         hdr->stage = FETCH_RECORD;
     }
     if (hdr->stage == FETCH_RECORD) {
+        /* §5.4's "this's relevant settings object", for the request the receiver's realm constructs. */
+        JSContext *rctx = fetch_receiver_realm(ctx, hdr->this_val);
+
+        if (!rctx) {
+            JS_FreeValue(ctx, cb_result);
+            return -1;
+        }
         /* §5.4 STEPS 10-27, THROUGH THE ONE IMPLEMENTATION OF THEM (request.h). Five stages stood here instead
            — a dictionary-shape test and four property reads and coercions — and between them they covered
            three of `RequestInit`'s seventeen members. None of this can park: the declaration converted every
@@ -1717,7 +1903,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
 
                 CHECK(in != NULL, "OOM reading an address's example for Fetch §5.4 step 5");
                 url_record_init(&parsed);
-                if (fetch_parse_url(ctx, &parsed, in, n) &&
+                if (fetch_parse_url(rctx, &parsed, in, n) &&
                     !(parsed.username && *parsed.username) && !(parsed.password && *parsed.password)) {
                     char *ser = url_serialize(&parsed, /*exclude_fragment*/ false);
                     JSValue v;
@@ -1743,7 +1929,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             int bad;
 
             if (!in) return -1;
-            bad = request_parse_input_url(ctx, in, n, &parsed);
+            bad = request_parse_input_url(rctx, in, n, &parsed);
             JS_FreeCString(ctx, in);
             if (bad < 0) return -1;
             ser = url_serialize(&parsed, /*exclude_fragment*/ false);
@@ -1755,7 +1941,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             JS_FreeValue(ctx, s->req_url);
             s->req_url = v;
         }
-        if (request_init_apply(ctx, init, /*from*/ NULL, &s->rec) < 0)
+        if (request_init_apply(rctx, init, /*from*/ NULL, &s->rec) < 0)
             return -1;
         headers_fill_init(&s->fill);
         hdr->stage = FETCH_HEADERS;
@@ -1862,6 +2048,10 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     DCHECK(hdr->stage == FETCH_CALL,
            "the fetch machine was re-entered at a stage §5.4 and §5.6 do not have between them");
     JS_FreeValue(ctx, cb_result);
+    /* The request's client, the endpoint it is recorded under and the promise and Response §5.6 step 12
+       makes are the receiver realm's. */
+    JSContext *rctx = fetch_receiver_realm(ctx, hdr->this_val);
+    if (!rctx) return -1;
     /* Fetch §5.6 "Fetch methods" STEP 4: "If requestObject's signal is aborted, then: Abort the fetch() call with p, request, null,
        and requestObject's signal's abort reason. Return p." — and aborting a fetch() call step 1 is "Reject
        promise with error", which §3.7.7's promise return type makes a throw from here.
@@ -1870,14 +2060,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        signal over « init["signal"] », whose step 2 is "For each signal of signals: if signal is aborted, then
        set resultSignal's abort reason to signal's abort reason and return resultSignal" — so a dependent
        signal built from an aborted source is aborted, with that source's reason.
-       NAMED RESIDUAL: Fetch §5.6 "Fetch methods" step 11 — the abort steps added to that signal, which abort a fetch ALREADY IN
-       FLIGHT — are not built. A signal aborted after this line does nothing, and the flow stays parked on its
-       reply. It cannot be built here: the fetch belongs to the trusted zone (SECURITY.md), so cancelling one is
-       a message to `extension/lib/safe-fetch.js` and a way to settle a pending register entry that no reply
-       will ever fill. WHAT THE NEXT DIFF BUILDS: a cancel edge on the FetchProvider beside `owe`, and the
-       abort algorithm on the signal that calls it. ITS ABSENCE SHOWS as `const c = new AbortController();
-       fetch(u, {signal: c.signal}); c.abort()` resolving with the response instead of rejecting with the
-       reason — where `fetch(u, {signal: AbortSignal.abort()})` now rejects, which it did not before. */
+       A signal aborted after this line is step 11's, whose abort steps fetch_park adds (js_fetch_abort_step). */
     {
         JSValue sig = idl_dict_get(ctx, init, "signal");
         int aborted = 0;
@@ -2099,7 +2282,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         {
             const char *em = JS_ToCString(ctx, s->rec.method);
             CHECK(em != NULL, "OOM borrowing §2.2.5's method for the @H surface's endpoint identity");
-            endpoint_record(ctx, em, s->url, eh, s->hdrs->n, ebp, prov, driven, EPD_FETCH);
+            endpoint_record(rctx, em, s->url, eh, s->hdrs->n, ebp, prov, driven, EPD_FETCH);
             JS_FreeCString(ctx, em);
         }
         if (ext_mime) JS_FreeCString(ctx, ext_mime);
@@ -2118,7 +2301,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        body; run over a DISPLAY SHAPE it would read them out of a spelling of a hole and record sub-requests
        the page never composed — the fabrication CLAUDE.md §@H forbids, arriving one layer in. An unknown body
        genuinely names no sub-requests THIS RUN KNOWS OF, which is what passing none says. */
-    multipart_batch_learn(ctx, s->hdrs, s->body_mime,
+    multipart_batch_learn(rctx, s->hdrs, s->body_mime,
                           body_kind == BODY_BYTES ? body_bytes : NULL,
                           body_kind == BODY_BYTES ? body_bytes_len : 0, prov, driven);
     /* Fetch §5.6 "Fetch methods" STEP 12's "fetch given request", and steps 1 and 13's promise: the endpoint the flow parks on. */
@@ -2127,7 +2310,20 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        a derived POST is not half-spelled. Nothing fires it: `safeFetchMethodRefusal` declines every non-GET
        at the call site, so what this reaches is the RECORD, which is what CLAUDE.md
        §A-REQUEST-CARRIES-THE-PROVENANCE calls the report. */
-    *presult = fetch_park(ctx, s->url, s->req_url, &s->rec, s->input, s->hdrs, body_bytes, body_bytes_len);
+    /* §5.4 step 30's requestObject signal: a dependent signal over init["signal"], made in this's relevant
+       realm, so the abort steps run after init["signal"]'s own `abort` listeners (DOM §3.2 "signal abort" runs a
+       dependent's abort steps after its source's). Its flag test cannot fork here: step 4 above asked this same
+       operand, and the flow's decision for it stands. */
+    {
+        JSValue isig = idl_dict_get(ctx, init, "signal");
+        JSValue rsig = JS_UNDEFINED;
+
+        if (abort_signal_is(ctx, isig)) rsig = abort_signal_dependent_new(rctx, (JSValueConst *)&isig, 1);
+        JS_FreeValue(ctx, isig);
+        *presult = fetch_park(rctx, s->url, s->req_url, &s->rec, s->input, s->hdrs, body_bytes, body_bytes_len,
+                              rsig);
+        JS_FreeValue(ctx, rsig);
+    }
     if (JS_IsException(*presult)) { *presult = JS_UNDEFINED; return -1; }
     return 0;
 }
@@ -2245,6 +2441,7 @@ void fetch_init(JSContext *ctx)
     /* The reply's delivery, declared once for the runtime — every parked fetch mints a CLOSURE over this
        one definition rather than a definition per request. */
     g_deliver_stepid = JS_RegisterStepDef(rt, &js_fetch_deliver_def);
+    g_abort_stepid = JS_RegisterStepDef(rt, &js_fetch_abort_def);
     /* §5.4's BODY IS A STREAM — `.body` answers one, and "clone a body" tees one — so §4 is not an
        optional neighbour of this component, it is a dependency. Each host installing it separately meant
        the dependency held only where a host had remembered: test_forced's fixture reached `res.clone()`
@@ -2299,6 +2496,7 @@ void fetch_free(JSRuntime *rt)
        column, which is what makes this a crash rather than a wrong answer an agent later. */
     g_fetch_stepid = -1;
     g_deliver_stepid = -1;
+    g_abort_stepid = -1;
     g_fetch_rt = NULL;
 }
 

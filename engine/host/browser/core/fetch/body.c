@@ -843,6 +843,17 @@ static const char *body_mime_param(const char *s, size_t n, const char *key, siz
    read in one arm came back CONSUMED in the sibling, whose own first read then threw `body stream already
    read`. Every other kind of shared state a flow writes rides its COW delta, and so does this one — the capture
    goes immediately before the write, so the bytes the delta records are the ones this flow found. */
+/* Whether the body's stream has errored — Fetch §5.6's abort steps error a body the page has not read, and the
+   bytes it was made from are then no longer the answer: the read rejects with the stream's stored error. */
+static bool body_stream_errored(const BodyState *b)
+{
+    ReadableStreamState state;
+    bool locked;
+
+    return !JS_IsUndefined(b->stream) && readable_stream_query(b->stream, &state, &locked) &&
+           state == RS_ERRORED;
+}
+
 static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, size_t *plen,
                      JSValue *pstream)
 {
@@ -909,7 +920,7 @@ static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, 
     /* §5.2's FIRST union arm: a body can BE a ReadableStream, and then there are no bytes to hand back — the
        stream is fully read first. The latch is set either way, because it is set by the CONSUME and not by the
        bytes arriving. */
-    if (!b->bytes && !JS_IsUndefined(b->stream) && readable_stream_is(b->stream))
+    if (!JS_IsUndefined(b->stream) && readable_stream_is(b->stream) && (!b->bytes || body_stream_errored(b)))
         *pstream = JS_DupValue(ctx, b->stream);
     return 0;
 }
@@ -1050,6 +1061,25 @@ static int body_stream_ensure(JSContext *ctx, BodyState *b)
 
 /* §5.3's `body`. NULL for a null body — which is not an empty one — and otherwise the SAME stream every time,
    because a second would give the page two independent readers over one byte sequence. */
+JSValue body_readable_stream(JSContext *ctx, JSValueConst obj)
+{
+    const BodyIface *f = body_iface_of(obj);
+    BodyState *b;
+    ReadableStreamState state;
+    bool locked;
+
+    DCHECK(f != NULL, "body_readable_stream was handed an object that includes no Body — Fetch §5.6's abort "
+                      "steps hand it the Response their own processResponse made");
+    b = f->of(obj);
+    if (!b->has) return JS_UNDEFINED;
+    if (JS_IsUndefined(b->stream)) {
+        if (b->used) return JS_UNDEFINED;
+        if (body_stream_ensure(ctx, b) < 0) return JS_EXCEPTION;
+    }
+    if (!readable_stream_query(b->stream, &state, &locked) || state != RS_READABLE) return JS_UNDEFINED;
+    return JS_DupValue(ctx, b->stream);
+}
+
 static JSValue js_body_get_body(JSContext *ctx, JSValueConst this_val, int magic)
 {
     const BodyIface *f = &g_body_iface[magic];
