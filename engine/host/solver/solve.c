@@ -854,7 +854,7 @@ static void add_pending(const char *src, const char *root, int sink) {
        creation, because a cold resume creating the slot observes nothing and runs with no flow; it sits below
        the assert so a missing flow aborts instead of silently skipping the payment. A search the product already
        holds, opened by another document or session, is paid nothing (solver/novelty.h). */
-    novelty_credit(NOVELTY_SINK, novelty_note(NOVELTY_SINK, sink_identity(NOVELTY_SINK, sink, src)));
+    novelty_credit(NOVELTY_SINK, novelty_note(NOVELTY_SINK, sink_identity(NOVELTY_SINK, sink, src)), 0);
     cand_learn_path(e);
     sc = sink_class(sink);
     /* A single-context class's written-down vectors are attacks: the seeder may withdraw a contradicted one, and
@@ -921,7 +921,8 @@ static void record_sink(int cls, const char *source, const char *poc) {
     /* The flow that proved the exploit is paid for it, as add_pending pays the detection. A candidate flow
        records no endpoints (endpoint_suppress), so without this its reward would rest on the optimism term. A
        finding the product already holds is paid nothing (solver/novelty.h). */
-    novelty_credit(NOVELTY_FINDING, novelty_note(NOVELTY_FINDING, sink_identity(NOVELTY_FINDING, cls, f->source)));
+    novelty_credit(NOVELTY_FINDING, novelty_note(NOVELTY_FINDING, sink_identity(NOVELTY_FINDING, cls, f->source)),
+                   1);
     /* Give back the re-injection point: the blob pins the frozen segment and every segment below it, and a
        solved search seeds nothing further. Clearing it is what closes the search, since search_seeds reads this
        NULL; the probe's other arms keep arriving after a fire and would otherwise be seeded again. */
@@ -940,7 +941,7 @@ static void park_on_sender(const char *src, const char *root, int sink) {
     had = e->snd.n;
     if (sender_pins_learn(&e->snd)) {
         for (int i = had; i < e->snd.n; i++) novel |= novelty_note(NOVELTY_SENDER, sender_identity(e, i));
-        novelty_credit(NOVELTY_SENDER, novel);
+        novelty_credit(NOVELTY_SENDER, novel, 0);
     }
     DCHECK(e->snd.n > 0, "a detection behind a pinned principal recorded no sender for its search");
 }

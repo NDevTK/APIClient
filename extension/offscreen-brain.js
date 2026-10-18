@@ -1578,7 +1578,7 @@ function handleContentMessage(msg, sender) {
     /* THIS DOCUMENT NOW BECOMES WORK ON THE ONE FRONTIER — it APPENDS its flows (boot fork + orphans) and
        does not start a run, a scheduler or an attention of its own. `lastActivatedTs` went with the queue
        that read it: it ordered documents by RECENCY, and recency is not value. The only order is the level-1
-       UCB1 order in bridge.js, which ranks documents by novel value per unit of work served (qjs_level1_account) and
+       UCB1 order in bridge.js, which ranks documents by a bound on novel value per pull (qjs_level1_account) and
        admits against the RAM working-set floor — a policy this zone cannot hold, because no instance can rank
        the others. */
     _dispatchDocument(_dk);   // straight to astDispatch -> the ONE host WFQ pool. No queue, no cache, no in-flight register.

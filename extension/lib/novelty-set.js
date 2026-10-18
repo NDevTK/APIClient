@@ -17,6 +17,13 @@
 /* partition origin -> { spelling, lines: [line…] in arrival order, plain: Set of the uncounted lines,
    counts: Map from a counted line's `<kind> <hex>` to the product's total } */
 const _noveltyParts = new Map();
+/* The product's size: every uncounted identity across the partitions, the count Level 1's discount is keyed on
+   (extension/bridge.js's level1At). A counted line is a drive of uncalled code, which is optimism and not value. */
+function noveltyProductSize() {
+  let n = 0;
+  for (const p of _noveltyParts.values()) n += p.plain.size;
+  return n;
+}
 /* Partitions whose lines grew since noveltyTakeDirty last ran, for the persistence edge. */
 const _noveltyDirty = new Set();
 

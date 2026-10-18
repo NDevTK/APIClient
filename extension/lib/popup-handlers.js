@@ -382,7 +382,7 @@ async function handlePopupMessage(msg, sender, sendResponse) {
        the end of the last scheduler round. The run records above are LEVEL-2's surface (each carries the
        engine's own `_wfq`, the order WITHIN one document); this is the order ACROSS documents, and no result
        document can ever carry it because Level-1 is composed entirely in bridge.js out of `engineWeight` per
-       hot instance and `level1Weight` per waiting address and cold row — no engine can see another engine.
+       hot instance and `level1Index` per waiting address and cold row — no engine can see another engine.
        Until this command existed the only thing that had ever recorded that order was nothing at all, which
        is how a rank frozen at the constant 1.0 for every waiting document survived being shipped.
        IT CROSSES VERBATIM AND `null` IS AN ANSWER. bridge.js declares `_level1` at load, so `undefined` here

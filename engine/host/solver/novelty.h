@@ -57,11 +57,17 @@ int  novelty_note_at(NoveltyKind kind, NoveltyId id, const char *file, int line)
 #define novelty_note(kind, id) novelty_note_at((kind), (id), __FILE__, __LINE__)
 
 /* The credit site's one ask: pays the running flow 1.0 through flow_credit_emit when `novel`, and counts the
-   ask as paid or known-unpaid under `kind` either way. */
-void novelty_credit(NoveltyKind kind, int novel);
-/* The novel value that reached an account: the sum over novelty_credit's paid asks whose flow_credit_emit paid a
-   flow, which is the document's novel value as Level 1 ranks it. A novel emission on host time (no flow holds
-   the thread) is counted paid in the census and is not in this sum. */
+   ask as paid or known-unpaid under `kind` either way. `razor` says whether the identity is the product's razor
+   (a runtime-only address or a key on one, or a fire-verified finding), which weighs it for Level 1. */
+void novelty_credit(NoveltyKind kind, int novel, int razor);
+/* What one landed identity a markup parse could state is worth to Level 1, against 1.0 for a razor identity: the
+   static baseline states it too, so the run's marginal value is what it adds to it (examples, keys), a policy
+   input set so that one razor identity outweighs three that are not. */
+#define NOVELTY_STATABLE_WEIGHT 0.25
+/* The novel value that reached an account: over novelty_credit's paid asks whose flow_credit_emit paid a flow,
+   1.0 for a razor identity and NOVELTY_STATABLE_WEIGHT otherwise, which is the document's novel value as Level 1
+   ranks it. A novel emission on host time (no flow holds the thread) is counted paid in the census and is not
+   in this sum. Never above flow_credit_paid_value(), since no weight exceeds the 1.0 the ledger is paid. */
 double novelty_landed_value(void);
 
 /* Files a drive of uncalled code under `id` (NOVELTY_DRIVE) and answers how many drives of it were known before

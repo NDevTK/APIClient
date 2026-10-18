@@ -123,7 +123,7 @@ int novelty_note_at(NoveltyKind kind, NoveltyId id, const char *file, int line) 
     return !(s->flags & SLOT_KNOWN);
 }
 
-void novelty_credit(NoveltyKind kind, int novel) {
+void novelty_credit(NoveltyKind kind, int novel, int razor) {
     DCHECK(kind >= 0 && kind < NOVELTY_KIND_N && !novelty_kind_counted[kind],
            "a credit was asked for a kind novelty.h does not list as a credit kind — a counted kind is read, not paid");
     if (!novel) { g_unpaid[kind]++; return; }
@@ -137,7 +137,7 @@ void novelty_credit(NoveltyKind kind, int novel) {
                 "a novel credit moved the flow ledger's paid value by %g while flow_credit_emit answered %d — the "
                 "Level-1 value and the ledger it is read beside counted one event two ways",
                 flow_credit_paid_value() - before, landed);
-        if (landed) g_landed += 1.0;
+        if (landed) g_landed += razor ? 1.0 : NOVELTY_STATABLE_WEIGHT;
     }
 }
 
@@ -233,6 +233,14 @@ static void json_long(JsonBuf *b, long v) {
     json_buf_raw(b, num);
 }
 
+/* A weighted value, exact: %.17g round-trips a double, so the zone reads the number the account states. */
+static void json_value(JsonBuf *b, double v) {
+    char num[32];
+    int w = snprintf(num, sizeof num, "%.17g", v);
+    CHECK(w > 0 && (size_t)w < sizeof num, "novelty: a value did not fit its buffer");
+    json_buf_raw(b, num);
+}
+
 char *novelty_json(void) {
     JsonBuf b = { 0 };
     long asks = 0, paid = 0, wrote = 0;
@@ -253,7 +261,7 @@ char *novelty_json(void) {
     }
     json_buf_raw(&b, "],"); json_buf_key(&b, "asks"); json_long(&b, asks);
     json_buf_raw(&b, ","); json_buf_key(&b, "paid"); json_long(&b, paid);
-    json_buf_raw(&b, ","); json_buf_key(&b, "landed"); json_long(&b, (long)g_landed);
+    json_buf_raw(&b, ","); json_buf_key(&b, "landed"); json_value(&b, g_landed);
     json_buf_raw(&b, ","); json_buf_key(&b, "known"); json_long(&b, g_known_n);
     json_buf_raw(&b, ","); json_buf_key(&b, "own"); json_long(&b, g_own_n);
     json_buf_raw(&b, ","); json_buf_key(&b, "ownKnown"); json_long(&b, g_own_known_n);

@@ -103,17 +103,18 @@ const ZONE = (() => {
   createContext(sandbox);
   for (const f of ['check.js', 'lib/site.js', 'lib/referrer-policy.js',
                    'lib/request-identity.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/safe-fetch.js',
-                   'bridge.js'])
+                   'lib/novelty-set.js', 'bridge.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
   return sandbox;
 })();
 const B = ZONE.module.exports;
-/* One point's worth of service and one slice of it, in the shipped unit, so every fixture states a ratio. */
-const PT = B.LEVEL1_POINT_WORK;
-const SLICE = 54000;   /* solver/engine.h's ENGINE_QUANTUM_WORK */
+/* A block of service, in pulls (quanta of work, which is the unit the account states), so every fixture states a
+   count; one slice of the mock drive is one pull. */
+const PT = 100;
+const SLICE = 1;
 /* Every host the driver ranks is asked first, as each production entry point asks before its member joins. */
 await ZONE.siteAsk(Object.keys(SITE_TABLE));
-for (const n of ['hostSchedule', 'engineKey', 'level1Weight', 'level1Tree', 'level1Key', '_bestCandidate',
+for (const n of ['hostSchedule', 'engineKey', 'level1Index', 'level1Tree', 'level1Key', '_bestCandidate',
                  '_candPopulation', '_level1Record', '_candCensus', 'CAND_KINDS', 'CAND_SPREAD'])
   if (B[n] === undefined)
     throw new Error('extension/bridge.js did not export `' + n + '` — this driver is the only reader of the ' +
@@ -165,15 +166,16 @@ const kindWMax = (cen, kind) => cen[kindOf(kind).wMax];
 const originOfUrl = (url) => new URL(url).origin;
 const job = (url, o = {}) => ({ msg: { sourceUrl: url, frameId: o.frameId || 0, origin: o.origin || originOfUrl(url),
                                        credentialed: o.credentialed !== false } });
-const row = (key, url, paid, serviceWork, o = {}) =>
+const row = (key, url, value, pulls, o = {}) =>
   ({ key, sourceUrl: url, origin: o.origin || originOfUrl(url), credentialed: o.credentialed !== false,
-     paid, serviceWork, shed: false, stranded: o.stranded === true, bytes: 0, rederivable: true });
+     value, pulls, at: 1, shed: false, stranded: o.stranded === true, bytes: 0, rederivable: true });
 /* The key a walk over `P` gives the document at `url` with account `acct`, read through the shipped functions. */
 const keyOf = (P, url, acct) => B.level1Key(B.level1Tree(P.resident, P.idx), url, acct, true);
 /* An instance as hostSchedule and engineKey read one: a hot record with an address and a stated account. */
-const engM = (url, paid, serviceWork, o = {}) =>
+const engM = (url, paid, pulls, o = {}) =>
   Object.assign({ state: 'hot', msg: { sourceUrl: url, credentialed: true }, origin: originOfUrl(url), prior: null,
-                  _readyP: null, level1: { runnable: true, paid: paid, serviceWork: serviceWork } }, o);
+                  _readyP: null, level1: { runnable: true, paid: paid, pulls: pulls,
+                                           acct: { value: paid, pulls: pulls, at: 1 } } }, o);
 const eng = (url, fkey, o = {}) => ({ state: 'hot', msg: { sourceUrl: url, credentialed: o.credentialed !== false },
                                       origin: o.origin || originOfUrl(url), fkey: fkey || ('k|' + url) });
 const idxOf = (...rows) => new Map(rows.map((r) => [r.key, r]));
@@ -215,19 +217,70 @@ function checkPresence(r, asked) {
          'the extremum `' + k.wMax + '` exists only over a non-empty `' + k.pop + '`', r);
 }
 
-console.log('[level1] ── the one weight ──');
+console.log('[level1] ── the one index ──');
 {
-  const U = B.LEVEL1_UNSERVED;
-  must(B.level1Weight(U, 0) === Infinity && B.level1Weight(U, 5 * PT) === Infinity,
-       'a document never served weighs +Infinity whatever the total, so it is handed a quantum first');
-  const a = { paid: 4, serviceWork: 2 * PT }, b = { paid: 4, serviceWork: 4 * PT }, c = { paid: 8, serviceWork: 2 * PT };
+  const U = B.LEVEL1_UNSERVED, acct = (value, pulls) => ({ value, pulls, at: 1 });
+  must(B.level1Index(U, 0) === Infinity && B.level1Index(U, 5 * PT) === Infinity,
+       'a document never served indexes +Infinity whatever the total, so it is handed a quantum first');
+  const a = acct(4, 2 * PT), b = acct(4, 4 * PT), c = acct(8, 2 * PT);
   const N = 10 * PT;
-  must(Number.isFinite(B.level1Weight(a, N)) && B.level1Weight(a, N) > B.level1Weight(b, N),
-       'at equal value, more service ranks lower: both the rate and the bonus fall with service');
-  must(B.level1Weight(c, N) > B.level1Weight(a, N),
+  must(Number.isFinite(B.level1Index(a, N)) && B.level1Index(a, N) > B.level1Index(b, N),
+       'at equal value, more service ranks lower: both the rate and the bound fall with service');
+  must(B.level1Index(c, N) > B.level1Index(a, N),
        'at equal service, more novel value ranks higher');
-  must(B.level1Weight(a, 2 * N) > B.level1Weight(a, N),
-       'the bonus grows with all service, so a document left unserved while others run regains rank');
+  must(B.level1Index(a, 2 * N) > B.level1Index(a, N),
+       'the bound grows with all service, so a document left unserved while others run regains rank');
+  must(B.level1Index(a, N) >= a.value / a.pulls && B.level1Index(acct(3, 0.5), 1) === 6,
+       'the index is an upper bound on the rate, and is the rate itself where the parent has served one pull');
+  /* The Poisson divergence at the answer is the threshold, to the double. */
+  const lam = 0.3, beta = 0.05, q = B.level1KlUcb(lam, beta);
+  must(Math.abs(q - lam + lam * Math.log(lam / q) - beta) < 1e-12 && q > lam,
+       'the bound solves P d(v / P, q) = ln N', { q });
+}
+
+console.log('[level1] ── the order carries no unit ──');
+{
+  /* The engine states pulls as its work over ENGINE_QUANTUM_WORK (main.c's qjs_level1_account), so a work unit
+     k times finer multiplies both and states the same pulls; the order is then a function of counts alone. */
+  const state = [['https://a.test/', 4, 23 * 54000], ['https://a.test/x', 1, 9 * 54000],
+                 ['https://b.test/', 9, 80 * 54000], ['https://c.test/', 0, 3 * 54000]];
+  const orderAt = (k) => {
+    const idx = idxOf(...state.map(([u, v, w], i) => row('k' + i, u, v, (w * k) / (54000 * k))));
+    const tree = B.level1Tree([], idx);
+    const ks = state.map(([u], i) => ({ u, key: B.level1Key(tree, u, idx.get('k' + i), true, B.LEVEL1_DOOR.cold) }));
+    ks.sort((x, y) => (B.level1Ahead(x.key, y.key) ? -1 : B.level1Ahead(y.key, x.key) ? 1 : 0));
+    return ks.map((x) => x.u + ' ' + x.key.siteW + ' ' + x.key.docW).join(' | ');
+  };
+  must(orderAt(1) === orderAt(7) && orderAt(1) === orderAt(1000) && orderAt(1) === orderAt(1 / 64),
+       'the same state ranks identically, to the last digit, at work units 1, 7, 1000 and 1/64 times as fine',
+       orderAt(1));
+}
+
+console.log('[level1] ── a barren document falls below a productive one within ln N / r pulls ──');
+{
+  /* A sibling serving at rate r indexes at least r; a barren one indexes ln N / P exactly (the Poisson bound at
+     zero), so it is outranked once P > ln N / r and not before. */
+  const N = 1000, r = 0.5, bound = Math.log(N) / r;
+  const barren = (P) => B.level1Index({ value: 0, pulls: P, at: 1 }, N);
+  const productive = B.level1Index({ value: r * 50, pulls: 50, at: 1 }, N);
+  must(barren(Math.ceil(bound)) < productive && barren(Math.ceil(bound)) < r &&
+       barren(Math.floor(bound)) > r,
+       'a barren document with ln N / r pulls is the crossing: just past it it is outranked by any sibling of rate ' +
+       'r, just before it it is not', { bound, at: barren(Math.ceil(bound)), before: barren(Math.floor(bound)) });
+}
+
+console.log('[level1] ── value the product has absorbed stops predicting ──');
+{
+  /* An account credited at product size 10 and read at 40 keeps its rate and loses three quarters of its
+     counts, so its bound widens: a document whose finds the product has since absorbed from elsewhere is
+     explored again rather than trusted. */
+  const a = { value: 30, pulls: 60, at: 10 }, now = B.level1At(a, 40);
+  must(now.value === 7.5 && now.pulls === 15 && now.at === 40 &&
+       B.level1Index(now, 400) > B.level1Index(B.level1At(a, 10), 400),
+       'growth of the product scales value and pulls alike, so the rate holds and the bound widens', now);
+  const credited = B.level1Credit(a, 2, 1, 20);
+  must(credited.value === 17 && credited.pulls === 31 && credited.at === 20,
+       'a credit lands on the account held at the product size it arrives at', credited);
 }
 
 console.log('[level1] ── a ranked member is an asked one ──');
@@ -318,7 +371,7 @@ console.log('[level1] ── the discriminator: which tie is this ──');
   const cen = B._bestCandidate(P).census;
   must(kindWMax(cen, 'doc') === keyOf(P, 'https://a.test/', known).siteW,
        'a waiting document ranks by what this profile has already spent and learned AT ITS ADDRESS', cen);
-  must(cen.candSvcMax === known.serviceWork && cen.candUnserved === 1,
+  must(cen.candSvcMax === known.pulls && cen.candUnserved === 1,
        'the census reports the service that produced that rank, beside the one never-served address', cen);
   console.log('[level1]   doc by history   ' + JSON.stringify(cen));
 }
@@ -644,7 +697,8 @@ async function mintDrive(minted, slices) {
     step: async (e) => {
       if (order.length >= slices) return 0;
       order.push(e.name);
-      e.level1.serviceWork += SLICE; e.level1.paid += e.rate; e.rate = Math.max(0, e.rate - e.decay);
+      e.level1.acct = B.level1Credit(e.level1.acct, e.rate, SLICE, 1);
+      e.level1.pulls += SLICE; e.level1.paid += e.rate; e.rate = Math.max(0, e.rate - e.decay);
       return 2;
     },
   }, all);

@@ -2243,7 +2243,8 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
             if (wcls > g_eps[i].witness_class) g_eps[i].witness_class = wcls;
             endpoint_witness_add(&g_eps[i], &wit);
             if (endpoint_merge_headers(&g_eps[i], hdrs, nhdrs) > 0)
-                novelty_credit(NOVELTY_HEADER, endpoint_note_headers(&g_eps[i], had_headers));
+                novelty_credit(NOVELTY_HEADER, endpoint_note_headers(&g_eps[i], had_headers),
+                               endpoint_razor_class_of(g_eps[i].door, g_eps[i].addr_class) == EPZ_RUNTIME_ONLY);
             /* The arm the surface has no row for: a merge teaches the record structure and moves no census figure
                (not `minted`, not `emitted`, not `preProgram`, whose flag belongs to the mint), so running code
                composing every address the markup had named would be byte-identical on all four rows to running
@@ -2309,8 +2310,9 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     {
         int novel = novelty_note(NOVELTY_ENDPOINT, nid);
         int hnovel = endpoint_note_headers(e, 0);
-        novelty_credit(NOVELTY_ENDPOINT, novel);
-        if (!novel && e->nh) novelty_credit(NOVELTY_HEADER, hnovel);
+        int razor = endpoint_razor_class_of(e->door, e->addr_class) == EPZ_RUNTIME_ONLY;
+        novelty_credit(NOVELTY_ENDPOINT, novel, razor);
+        if (!novel && e->nh) novelty_credit(NOVELTY_HEADER, hnovel, razor);
     }
 done:
     free(path);
