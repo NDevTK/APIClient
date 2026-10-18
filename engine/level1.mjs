@@ -93,7 +93,10 @@ async function swRpc(method, hosts) {
   return { version: SITE_TABLE_VERSION, domains };
 }
 const ZONE = (() => {
-  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, MessageChannel, swRpc };
+  /* `_globalStoreReady` is offscreen-brain.js's read of the cumulative store, which this realm does not load;
+     it never settles here, so bridge.js's start-up kick never drives the live pool under these rows. */
+  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, MessageChannel, swRpc,
+                    _globalStoreReady: new Promise(() => {}) };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   sandbox.module = { exports: {} };
@@ -406,6 +409,7 @@ console.log('[level1] ── hostSchedule, driven with mock engines ──');
   let admits = 0, steps = 0;
   const ops = {
     key: B.engineKey,
+    arrival: () => new Promise(() => {}),   // nothing arrives during this drive
     tree: () => B.level1Tree(poolArr, new Map()),
     /* THE ADMISSION ASKS THE ORDER ON THE FIRST ROUND AND ANSWERS THE POSITIVE `null` AFTERWARDS — the two
        shapes hostSchedule asserts at the seam, both driven. */
@@ -493,7 +497,7 @@ async function drive(poolArr, ops) {
   return { seen, died };
 }
 const baseOps = (poolArr, o, all) => Object.assign({
-  key: B.engineKey, tree: () => B.level1Tree(all || poolArr, new Map()), admit: async () => null,
+  key: B.engineKey, arrival: () => new Promise(() => {}), tree: () => B.level1Tree(all || poolArr, new Map()), admit: async () => null,
   evictee: async () => ({ evict: null, cand: null }), requestPark: async () => {}, release: async () => {},
   step: async () => 0, serviceFetch: async () => {},
   finish: async (e) => { const i = poolArr.indexOf(e); if (i >= 0) poolArr.splice(i, 1); },
@@ -547,6 +551,43 @@ const baseOps = (poolArr, o, all) => Object.assign({
   must(died === null && order[0] === 'B' && order[1] === 'B',
        'the leader keeps the thread across its own service round instead of a lesser document deepening',
        died ? String(died.message || died) : order);
+}
+
+/* A round waiting on an in-flight service round wakes on an arrival and asks admission again before that reply
+   lands; with no wake it asks only once the reply lands, which is the control. Both wait arms are driven: nothing
+   hot (`lesser` absent), and a leader in flight ahead of a hot lesser document. */
+async function arrivalDrive(lesser, wakes) {
+  const lead = engM('https://b.test/', 9, 1e6, { name: 'B' });
+  const poolArr = lesser ? [engM('https://a.test/', 1, 1e6, { name: 'A' }), lead] : [lead];
+  const newSite = pop({ waiting: [job('https://n.test/')] });
+  let wake = null, arrived = false, landed = false, settle = null, inFlight = null, n = 0;
+  const ops = baseOps(poolArr, {
+    arrival: () => new Promise((r) => { wake = r; }),
+    admit: async () => {
+      if (!arrived || inFlight !== null) return null;
+      inFlight = !landed;
+      return B._bestCandidate(newSite).census;
+    },
+    step: async (e) => (e === lead && n++ === 0 ? 2 : 0),
+    serviceFetch: () => new Promise((res) => { settle = res; }),
+  });
+  const run = drive(poolArr, ops);
+  await new Promise((r) => setTimeout(r, 20));
+  arrived = true;
+  if (wakes && wake !== null) wake();   // null: no round took a latch, which the relation below reports
+  await new Promise((r) => setTimeout(r, 20));
+  landed = true;
+  settle();
+  const { died } = await run;
+  return { died, inFlight };
+}
+for (const lesser of [false, true]) {
+  const woke = await arrivalDrive(lesser, true), ctrl = await arrivalDrive(lesser, false);
+  must(woke.died === null && ctrl.died === null && woke.inFlight === true && ctrl.inFlight === false,
+       'a never-served site arriving while the round waits on ' + (lesser ? 'a leader\'s' : 'the only') +
+       ' service round is admitted before that reply lands, and only after it without the wake',
+       [woke.died ? String(woke.died.message || woke.died) : woke.inFlight,
+        ctrl.died ? String(ctrl.died.message || ctrl.died) : ctrl.inFlight]);
 }
 
 console.log('[level1] ── a site that mints addresses spends only its own share ──');

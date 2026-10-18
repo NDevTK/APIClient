@@ -4829,8 +4829,9 @@ async function hostNotice(eng, line) {
       _seeds.set(f[1], { url: f[1], principalUrl: eng.msg.sourceUrl, principalOrigin: eng.origin,
                          provenance: f[2], driven: f[3], pinned: f[4], fromDoc: _seedFrom.issuerDoc,
                          doc: childDocRecord(_seedFrom.from, f[2], f[3], f[4]) });
-    /* Nothing is kicked: this router runs inside serviceFetch within the one scheduling loop, so `_hostDriving`
-       is true and a `_hostKick()` would return on its first line. `admit` ranks this entry next round. */
+    /* This router runs inside serviceFetch, so the kick finds a round in flight and wakes it if it is waiting
+       on another engine; `admit` ranks this entry next round. */
+    _hostKick();
     return;
   }
   if (f[0] === "windowproxy.post") {
@@ -5448,6 +5449,9 @@ function _level1Record(pool, rd) {
    engine by one slice, which ends at the CPU quantum, and re-ranks. At the RAM floor `ops.evictee` chooses an
    engine to park to the cold tier (`ops.requestPark`). */
 async function hostSchedule(pool, ops) {
+  DCHECK(typeof ops.arrival === "function",
+         "the pool was driven with no arrival op — a round waiting on an in-flight engine is woken by a new " +
+         "work item only through it, so without it a never-served site waits on another document's reply");
   for (;;) {
     /* The round's reading, collected by the round and written once in `finally`, so every exit records: the
        `break`s, the `continue` that waits, and a round that dies inside an op (which records the half it reached;
@@ -5455,6 +5459,8 @@ async function hostSchedule(pool, ops) {
     /* `stepCode` is null for every round that did not service; it is assigned on the same lines as
        `shape = "serviced"`, and `_level1Record` asserts the biconditional. */
     const rd = { hot: null, cand: null, candAsk: 0, shape: "", stepCode: null };
+    /* Taken before admission asks, so an item that arrives after the ask wakes this round's wait arm. */
+    const arrived = ops.arrival();
     try {
     if (ops.admit) rd.cand = await ops.admit();   // seat waiting documents into freed slots
     /* Admission answers with the order it took, or `null` where it took none; `undefined` would be an arm that
@@ -5488,7 +5494,7 @@ async function hostSchedule(pool, ops) {
                "thing that resumes the pool when nothing is hot, so an engine it cannot wait on is one the " +
                "loop spins on or abandons, and both are silent");
       rd.shape = "waited";
-      await Promise.race(pending.map((e) => e._readyP));
+      await Promise.race([arrived, ...pending.map((e) => e._readyP)]);
       continue;
     }
     /* The Level-1 pick, from one reading per engine (each account is what the last round with that instance
@@ -5527,7 +5533,7 @@ async function hostSchedule(pool, ops) {
              "an engine whose service round is in flight carries no readiness promise — it is ahead of every " +
              "hot engine, and this round has nothing else to wait on");
       rd.shape = "waited";
-      await ahead._readyP;
+      await Promise.race([arrived, ahead._readyP]);
       continue;
     }
     /* Normally step `best`. At the RAM floor, step the engine the one order says must give up its memory, after
@@ -5665,6 +5671,10 @@ const _waiting = [];
 const _seeds = new Map();   // absolute address -> { url, principalUrl, principalOrigin, provenance, reach }
 let _heldRoutes = 0;       // the serial a declared route's load names its declaring document by (`held:route:<n>`)
 let _hostDriving = false;
+/* A kick that finds a round in flight is an arrival for that round: `_hostArrived` says one came since the
+   round's top, and `_hostArrivalWake` resolves the promise its wait arms race. Both are reset by `arrival`. */
+let _hostArrived = false;
+let _hostArrivalWake = null;
 /* The reservation ledger, cumulative because the state it describes is transient: an empty pool after an
    analysis looks the same whether reservations ran or not. Each reservation is counted where made and each
    exit where taken, and the probe asserts the arithmetic (no more booting records than provisionings still
@@ -5890,6 +5900,10 @@ async function admitSeatLand(seat) {
 }
 const _hostOps = {
   key: engineKey,
+  arrival: () => {
+    _hostArrived = false;
+    return new Promise((resolve) => { _hostArrivalWake = resolve; });
+  },
   /* The tree's accounts over the population the round ranks: admission builds the cold index on its first line,
      so it exists by the time the pick asks. */
   tree: () => {
@@ -6327,7 +6341,14 @@ function _hostKick() {
      not asserted: the abort was reported once by the arm that latched it, and asserting here would blame the
      next caller and repeat the abort on every navigation. */
   if (_hostDead) { _hostKicksRefused++; return; }
-  if (_hostDriving) return;
+  if (_hostDriving) {
+    DCHECK(_hostArrivalWake !== null,
+           "a round is in flight with no arrival latch — every round takes one at its top, before its first " +
+           "suspension, so a kick can only find a driving loop after the first was taken");
+    _hostArrived = true;
+    _hostArrivalWake();
+    return;
+  }
   _hostDriving = true;
   /* The loop's failure is bannered and, in dev, rethrown as an unhandled rejection: every bridge assertion is
      thrown from inside this loop. Completion and failure take separate arms: re-kicking is what a completed
@@ -6335,10 +6356,11 @@ function _hostKick() {
      would turn one invariant abort into an unbounded retry burying the first report. The failure arm latches
      and stops; the crash is what forces the root fix. */
   hostSchedule(_pool, _hostOps).then(
-    /* A completed round re-kicks on the pool alone. With an empty pool RAM is free, so the only document still
-       waiting is one admit deferred (a sub-frame whose top has not reported), and that top's CONTENT_SEED kicks
-       the pool itself; re-kicking for it would spin. */
-    () => { _hostDriving = false; if (_pool.length) _hostKick(); },
+    /* A completed run re-kicks on the pool, or on an arrival its last round did not ask about (a kick between
+       that round's top and its exit). Not on `_waiting` alone: with an empty pool RAM is free, so a document
+       still waiting is one admit deferred (a sub-frame whose top has not reported), and that top's CONTENT_SEED
+       kicks the pool itself; re-kicking for it would spin. */
+    () => { _hostDriving = false; if (_pool.length || _hostArrived) _hostKick(); },
     /* The loop died; nothing retries, because every rejection here is a should-never-happen (an engine abort
        is answered by engineBootFailed and resolves, so one page failing to boot does not take the pool down).
        `_hostDriving` is cleared because no round is in flight; `_hostDead` is what refuses. */
