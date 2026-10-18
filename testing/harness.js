@@ -770,9 +770,10 @@ function assertEngineAbiPairing() {
 
   /* WHAT THE ARTIFACT ACCEPTS, in its own words. Emscripten writes one `createExportWrapper(name, export,
      nargs)` per exported entry and `nargs` is the wasm signature's parameter count, baked in at link time —
-     so this is the built program describing itself, not a restatement of it. */
+     so this is the built program describing itself, not a restatement of it. The name is quoted with either
+     quotation mark, since emscripten's spelling of the string differs between its releases. */
   const glue = new Map();
-  for (const m of glueSrc.matchAll(/createExportWrapper\(\s*"(\w+)"\s*,[^,]+,\s*(\d+)\s*\)/g)) glue.set(m[1], Number(m[2]));
+  for (const m of glueSrc.matchAll(/createExportWrapper\(\s*(["'])(\w+)\1\s*,[^,]+,\s*(\d+)\s*\)/g)) glue.set(m[2], Number(m[3]));
   if (!glue.size) throw new Error(`${gluePath} declares no createExportWrapper entries — this harness could not\n  read what the built engine accepts, and reporting that as agreement is the measurement no run could\n  contradict. The glue's shape changed; fix this parse rather than launching.`);
 
   /* WHAT THE EXTENSION PLACES, ASKED OF THE EXTENSION'S OWN DESCRIPTION RATHER THAN SCRAPED OUT OF IT. This
