@@ -1436,21 +1436,18 @@ void flow_credit_pick(Flow *f) {
 
 /* Is this flow's JavaScript execution context stack empty? HTML §8.1.4.4 "Calling scripts", clean up after running
    script step 3: "If the JavaScript execution context stack is now empty, perform a microtask checkpoint." That is
-   the precondition of a microtask checkpoint and of a task alike (§8.1.7.3 "Processing model" runs one task and
-   then performs a checkpoint, so neither begins part-way through a program). `Flow::frame` is that stack ("the
-   current script's live preemptible frame, NULL between scripts", solver/flow.h), so a live frame answers no.
-   The other half is the row at the cursor: §4.12.1.1 "Processing model" ends "prepare the script element" with
-   "Otherwise, immediately execute the script element el, even if other scripts are already executing", so that
-   program runs inside the one that inserted it and the stack has not emptied across it. Every other program the
-   flow has left is a task (the next <script>, a lazy chunk, a `javascript:` URL, a §8.7 Timers string handler, a
-   peer's operation).
-   One predicate for every consumer of the sentence: the microtask checkpoint, the networking task source's arm in
-   flow_step, the engine's reply-delivery arm, and the census. cold_census asks it directly (solver/cold.h's
-   `stack_empty`): `flows - framed` answers only the first half and is an upper bound, so this count is what
-   separates replies members cannot take from an arm not reached for another reason.
-   A parse parked part way (`Flow::compile`) also answers no: HTML §8.1.4.3 Creating scripts runs ParseScript or
-   ParseModule inside the algorithm that creates the script, so the task that holds the parse has not ended, and no
-   task or checkpoint may begin until the parse resumes and its program has run. */
+   the precondition of a checkpoint and of a task alike (§8.1.7.3 "Processing model" runs one task, then a
+   checkpoint). `Flow::frame` is that stack (NULL between scripts, solver/flow.h), so a live frame answers no; so
+   does a parse parked part way (`Flow::compile`), since §8.1.4.3 Creating scripts runs ParseScript or ParseModule
+   inside the task that creates the script. The other half is the row at the cursor: §4.12.1.1 "Processing model"
+   ends "prepare the script element" with "Otherwise, immediately execute the script element el, even if other
+   scripts are already executing", so that program runs inside its inserter. Every other program the flow has left
+   is a task (the next <script>, a lazy chunk, a `javascript:` URL, a §8.7 Timers string handler, a peer's
+   operation).
+   One predicate for every consumer: the microtask checkpoint, the networking task source's arm in flow_step, the
+   engine's reply-delivery arm, and the census. cold_census asks it directly (solver/cold.h's `stack_empty`):
+   `flows - framed` answers only the first half and is an upper bound, so this count is what separates replies
+   members cannot take from an arm not reached for another reason. */
 int flow_stack_empty(const Flow *f) {
     int row;
 
