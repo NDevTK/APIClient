@@ -85,7 +85,7 @@ static IntrinsicInlineSizes fis_item_cross_contribution(lxb_dom_element_t *conta
 
         fis_require_parallel(container, item);
         *next = box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(child)));
-        return intrinsic_outer_contribution(item, intrinsic_inline_sizes(item));
+        return intrinsic_inline_contributions(item);
     }
     case FLEX_ITEM_CHILD_NONE:
         break;

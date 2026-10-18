@@ -1093,6 +1093,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/absentarm.h"
 #include "fixture/griditem.h"
 #include "fixture/contentsflex.h"
+#include "fixture/inlineflex.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1526,6 +1527,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "absentarm", HTML_ABSENTARM },
     { "griditem", HTML_GRIDITEM },
     { "contentsflex", HTML_CONTENTSFLEX },
+    { "inlineflex", HTML_INLINEFLEX },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -13766,6 +13768,33 @@ TF_UNIT void probes_svgelement(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `inlineflex` document (fixture/inlineflex.h). */
+TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
+    /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
+    const char *iflexb_why = NULL; int iflexb_tt = 1;
+    fold_row(&iflexb_tt, &iflexb_why, !!strstr(js, "\"/api/iflex\""),
+             "NOT REACHED: there is no /api/iflex record at all, so the document aborted before its fetch");
+    fold_row(&iflexb_tt, &iflexb_why, param_value_is(js, "/api/iflex", "t1", "5"),
+             "css-flexbox-1 §8.5: the `inline-flex` is not aligned by its startmost item's first line");
+    fold_row(&iflexb_tt, &iflexb_why, param_value_is(js, "/api/iflex", "t2", "9"),
+             "css-flexbox-1 §8.5: the `inline-flex` is not aligned by its baseline-aligned items' shared baseline");
+    fold_row(&iflexb_tt, &iflexb_why, param_value_is(js, "/api/iflex", "t3", "20"),
+             "css-align-3 §9.1: the `inline-flex` with no item is not aligned by its margin box's bottom");
+    fold_row(&iflexb_tt, &iflexb_why, param_value_is(js, "/api/iflex", "l3", "38"),
+             "CSS 2.2 §10.8: the line holding the empty `inline-flex` is not its height");
+    fold_row(&iflexb_tt, &iflexb_why, param_value_is(js, "/api/iflex", "t4", "9"),
+             "css-flexbox-1 §8.5: the baseline is not synthesized from the startmost item, as Chrome 155 does");
+    /* css-flexbox-1 §9.9.2 "Flex Container Intrinsic Cross Sizes" under an inline-block's shrink-to-fit. */
+    const char *iflexw_why = NULL; int iflexw_tt = 1;
+    fold_row(&iflexw_tt, &iflexw_why, param_value_is(js, "/api/iflex", "c5", "60"),
+             "css-flexbox-1 §9.9.2: a `column` container's inline size is not its widest item's 60px contribution");
+    const Probe rows[] = {
+        { "inline-flex-baseline", iflexb_tt, "/api/iflex", SESS_EXPLORE, iflexb_why },
+        { "flex-column-intrinsic-width", iflexw_tt, "/api/iflex", SESS_EXPLORE, iflexw_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `contentsflex` document. */
 TF_UNIT void probes_contentsflex(const char *js, Probe *tab, int *n) {
     /* css-display-3 §2.5's `contents` splice makes `cf` an item of the flex container, and css-flexbox-1 §9.2
@@ -17338,6 +17367,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_absentarm(js, probes, &np);
     probes_griditem(js, probes, &np);
     probes_contentsflex(js, probes, &np);
+    probes_inlineflex(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_custommedia(js, probes, &np);
     probes_visualupdate(js, probes, &np);
