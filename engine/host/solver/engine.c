@@ -1318,6 +1318,9 @@ void engine_host_terminate(JSContext *ctx, uint32_t req) {
  * delivered. After a park the flows are still allocated (cold_park writes recipes; teardown frees them), so the
  * session-live test below is what keeps a found entry from counting as a delivery. */
 static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec);
+/* Defined with engine_route, the first edge that reads a peer's marks; counts every record refused for them. */
+static int peer_marks_word_ok(const char *word, size_t len);
+static long g_peer_marks_refused;
 
 int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const char *marks, JSValueConst value,
                        int completion, int source) {
@@ -1353,6 +1356,12 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const ch
                "routed back to the asking instance, so the value came from this heap");
     }
 #endif
+    /* The answering engine's marks word, refused as engine_route refuses a delivery's: the asker stays parked,
+       as it would on a peer that never answered. */
+    if (source == ENGINE_ANSWER_PEER && !peer_marks_word_ok(marks, strlen(marks))) {
+        g_peer_marks_refused++;
+        return 0;
+    }
     /* The session is over, so nothing can consume an answer: a handled state, unlike the aborts at the bottom.
        The registers still exist (a park leaves the flows for teardown), so refusing before the walk is what
        keeps the entry, the host-owed mark and `hostAnswered` untouched. It is not a drop: the parked flow's
@@ -2127,6 +2136,38 @@ static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec
    ledger lives beside the two counters it cannot be derived from. */
 static void routed_rec_arrived(const char *record);
 
+/* A peer record's marks word, read as input: another instance wrote it, and the trusted zone relays it unread
+   because only the sending engine knows its flow's path. Answers 1 when the first `len` bytes of `word` are a
+   word engine_record_head writes, `<derived|forced>,<driven|undriven>,<pinned|unpinned>`, and 0 otherwise.
+   The edges that take a peer's marks (engine_route, engine_perform, engine_host_answer) refuse the record on 0,
+   so every later parse reads a word this instance accepted. A word that does parse is not trusted further: a
+   receiving timeline ORs the marks into its own (flow_take_peer_marks), so a peer's marks can only narrow what
+   this instance sends, and a peer stating fewer than it holds gains no more than its page could by posting
+   other bytes. */
+static int peer_marks_word_ok(const char *word, size_t len)
+{
+    static const char *const words[3][2] = {
+        { PENDING_PROVENANCE_DERIVED, PENDING_PROVENANCE_FORCED },
+        { PENDING_DRIVEN_YES, PENDING_DRIVEN_NO },
+        { PENDING_PINNED_YES, PENDING_PINNED_NO },
+    };
+    size_t at = 0;
+
+    for (int k = 0; k < 3; k++) {
+        size_t end = at;
+        int hit = 0;
+
+        while (end < len && word[end] != ',') end++;
+        for (int j = 0; j < 2; j++)
+            hit |= end - at == strlen(words[k][j]) && !memcmp(word + at, words[k][j], end - at);
+        if (!hit || (k < 2) != (end < len)) return 0;
+        at = end + 1;
+    }
+    return 1;
+}
+
+long engine_peer_marks_refused(void) { return g_peer_marks_refused; }
+
 /* The inbound half of the one-way line: a record the trusted zone routed to this instance because it holds the
  * named document. It is the exact text the sending instance emitted as a notice, plus the sender's origin, which
  * only that zone may stamp (SECURITY.md: an origin the untrusted engine computed for a foreign message is a
@@ -2184,6 +2225,17 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
     tail = strchr(worlds, '\t');
     DCHECK(tail != NULL, "a routed record carried nothing after its transport fields — there is no delivery in it");
     *tail = 0;   /* only to bound the vector for the checks here; flow_deliver re-splits its own copy */
+    {
+        const char *mk = tail + 1, *mk_end = strchr(mk, '\t');
+
+        /* The marks field is the sending engine's word, refused here when it is not one engine_record_head
+           writes, before the record reaches any timeline (see peer_marks_word_ok). */
+        if (!peer_marks_word_ok(mk, mk_end ? (size_t)(mk_end - mk) : strlen(mk))) {
+            g_peer_marks_refused++;
+            free(dup);
+            return;
+        }
+    }
 
     /* Routed to the wrong instance is the trusted zone's bug, and delivering anyway would fire a message the
        page never received. Which of this agent's documents it names is not decided here: an instance is an
@@ -2689,14 +2741,15 @@ static EngineArrival record_marks(const char *record)
 
 /* The receiving timeline takes the sending flow's marks (flow.h's flow_take_peer_marks), on the arm that receives
    the record, after the arm that does not has been minted with this timeline's own marks: in a real browser that
-   other timeline never got the message. A sender's word is never `observed` (it is composed off a running flow,
-   engine_record_head), so arrival_check holds for it too. */
+   other timeline never got the message. The word is one the receiving edge accepted (peer_marks_word_ok), so it
+   is never `observed`. */
 static FlowPeerMarks arrival_marks(EngineArrival a);   /* defined with the arrival, below */
 static void deliver_take_marks(Flow *f, EngineArrival m)
 {
     DCHECK(f == flow_running(), "a sender's marks were taken onto a timeline that is not the one receiving");
-    DCHECK(m.prov != PROV_OBSERVED, "a sending flow's marks state `observed` — engine_record_head composes the "
-                                    "grade off a running flow, which is `derived` or `forced`");
+    DCHECK(m.prov != PROV_OBSERVED, "a peer's marks word reached a timeline stating `observed` — engine_route, "
+                                    "engine_perform and engine_host_answer refuse every word but "
+                                    "`derived` or `forced` with two marks");
     flow_take_peer_marks(f, arrival_marks(m));
 }
 
@@ -3070,6 +3123,12 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
                         "scheduler to run the program that answers it");
 
     op = remote_op_parse(record);
+    /* The asking engine's marks word, refused as engine_route refuses a delivery's. */
+    if (!peer_marks_word_ok(remote_op_marks_field(op), strlen(remote_op_marks_field(op)))) {
+        g_peer_marks_refused++;
+        remote_op_free(op);
+        return;
+    }
     /* Routed to the wrong instance is the trusted zone's bug, and answering would return this document's frame
        count as the other's. Which of this agent's documents it names is the operation's business: the realm is
        selected where the program is queued (flow_perform), with the answering flow switched in, after other

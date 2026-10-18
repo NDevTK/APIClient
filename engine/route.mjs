@@ -801,6 +801,15 @@ function routePending() {
     if (!routedTo.has(p.doc)) routedTo.set(p.doc, 0);
     routedTo.set(p.doc, routedTo.get(p.doc) + 1);
     target.M.ccall('qjs_route', 'void', ['number','number'], [target.cs(p.record), target.cs(p.origin)]);
+    /* Once, a forged copy of the first post whose marks word no engine writes, as a dishonest instance would
+       send to clear a forced path: the receiving edge refuses it before any timeline, and the census below
+       requires exactly this one refusal. */
+    if (routedUpTo === 0) {
+      const f = p.record.split('\t');
+      if (f.length < 5) fail(`a windowproxy.post record has no marks field: ${p.record}`);
+      f[3] = 'observed,undriven,unpinned';
+      target.M.ccall('qjs_route', 'void', ['number','number'], [target.cs(f.join('\t')), target.cs(p.origin)]);
+    }
   }
 }
 
@@ -911,15 +920,16 @@ for (const r of reads.values())
    §9.3.3 step 8's task's (solver/engine.h). */
 const ENDS = ['_routedTasksFired', '_routedTasksTargetOrigin', '_routedTasksTargetGone', '_routedTasksThrew'];
 const ends = { _routedTasksFired: 0, _routedTasksTargetOrigin: 0, _routedTasksTargetGone: 0, _routedTasksThrew: 0 };
-let forked = 0, delivered = 0, refused = 0;
+let forked = 0, delivered = 0, refused = 0, marksRefused = 0;
 for (const e of engines) {
   const r = JSON.parse(e.str('qjs_result'));
   for (const k of ['_worldSegmentsForked', '_routedDelivered', '_routedRefused', '_routedZeroDelivery',
-                   '_orphansDriven', '_orphansAsked', ...ENDS])
+                   '_peerMarksRefused', '_orphansDriven', '_orphansAsked', ...ENDS])
     if (typeof r[k] !== 'number')
       fail(`[${e.tag}] the result document carries no \`${k}\` — solver/result.c emits it unconditionally, so ` +
            'an absent one is a producer that moved under this reader');
   forked += r._worldSegmentsForked;
+  marksRefused += r._peerMarksRefused;
   delivered += r._routedDelivered;
   refused += r._routedRefused;
   for (const k of ENDS) ends[k] += r[k];
@@ -972,6 +982,12 @@ if (!got.length) {
 }
 if (!forked) fail("no segment was materialized by forking an ancestor — the world vector's ancestry was carried " +
                   'and never used');
+/* The forged post above is the one record a receiving edge may refuse for its marks: none means the edge took
+   a word no engine writes, and more means it refused an honest engine's. */
+if (marksRefused !== 1)
+  fail(`${marksRefused} record(s) were refused for their marks word, where this zone forged exactly one — the ` +
+       "receiving edge (solver/engine.c's peer_marks_word_ok) either admitted the forged `observed` or refused " +
+       'a word engine_record_head writes');
 /* The sender's path marks reach the receiver's own request. `a`'s admin arm pinned `__FLAGS.role` on an arm no
    example confirmed, so `b`'s request after taking that record rests on a witness `a`'s fork chose and states
    `pinned`, which the egress default refuses; the root and public records come from unpinned paths and their

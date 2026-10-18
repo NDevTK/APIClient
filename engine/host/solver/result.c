@@ -1822,6 +1822,8 @@ char *result_json(JSContext *ctx) {
                                 timeline. A gauge: it rises on arrival and falls when a timeline admits the record,
                                 so it is a backlog until the receiver drains to a stall, and a loss only after. */
                              "\"_routedZeroDelivery\":%ld,"
+                             /* Arrivals refused for their peer marks word, before any timeline (engine.h). */
+                             "\"_peerMarksRefused\":%ld,"
                              "\"_routedTasksFired\":%ld,\"_routedTasksTargetOrigin\":%ld,"
                              "\"_routedTasksTargetGone\":%ld,\"_routedTasksThrew\":%ld,"
                              "%s,%s,\"_metricsSchema\":%s,"
@@ -1906,7 +1908,7 @@ char *result_json(JSContext *ctx) {
                      eps, sinks, errs, errsRetracted, errsExplored, posts,
                      engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), engine_units_done(), held, made, segf,
-                     routedDelivered, routedRefused, routedZeroDelivery,
+                     routedDelivered, routedRefused, routedZeroDelivery, engine_peer_marks_refused(),
                      routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
                      routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
                      scensus, layoutm, schema,

@@ -1184,6 +1184,9 @@ size_t engine_c_alloc_arena(void);
    timeline has admitted: it may fall, a record in flight looks like a lost one, and it is a loss only on a
    receiver drained to a stall. All three are read together. */
 void engine_routed_census(long *delivered, long *refused, long *zero_delivery);
+/* Records refused at an inbound edge because their marks word is none engine_record_head writes: routed
+   deliveries, performed operations and peer answers, a lifetime count per arrival (before any timeline). */
+long engine_peer_marks_refused(void);
 
 /* The orphan surface's census, per session: `driven` counts drives seeded (a take succeeded and
  * engine_sibling_assemble put the drive on the frontier), never runs; whether a drive ran is answered by its
