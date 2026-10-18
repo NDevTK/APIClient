@@ -13544,10 +13544,24 @@ TF_UNIT void probes_griditem(const char *js, Probe *tab, int *n) {
              "css-grid-1 §7.2: the second row does not start after the 50px fixed one");
     fold_row(&gridx_tt, &gridx_why, param_value_is(js, "/api/gridiw", "h4", "150"),
              "css-grid-1 §11.7: the `1fr` row is not the 150px left of 200px");
+    /* An `inline-grid` on a line beside text, aligned by css-grid-1 §10.6's first baseline. */
+    const char *gridb_why = NULL; int gridb_tt = 1;
+    fold_row(&gridb_tt, &gridb_why, param_value_is(js, "/api/gridiw", "t5", "7"),
+             "css-grid-1 §10.6: the text beside the `inline-grid` is not aligned to its first item's first line");
+    fold_row(&gridb_tt, &gridb_why, param_value_is(js, "/api/gridiw", "g5", "0"),
+             "css-grid-1 §10.6: the `inline-grid` is not where its first baseline puts it on the line");
+    fold_row(&gridb_tt, &gridb_why, param_value_is(js, "/api/gridiw", "l5", "43"),
+             "CSS 2.2 §10.8: the line holding the `inline-grid` is not the height its baseline split gives");
+    fold_row(&gridb_tt, &gridb_why, param_value_is(js, "/api/gridiw", "t6", "16"),
+             "css-grid-1 §10.6: the baseline is not synthesized from the first item in grid order, as Chrome 155 "
+             "synthesizes it");
+    fold_row(&gridb_tt, &gridb_why, param_value_is(js, "/api/gridiw", "l6", "34"),
+             "CSS 2.2 §10.8: the line holding the synthesized-baseline `inline-grid` is not its height");
     const Probe rows[] = {
         { "grid-item-auto-width", gridiw_tt, "/api/gridiw", SESS_EXPLORE, gridiw_why },
         { "grid-rows-sized", gridrow_tt, "/api/gridiw", SESS_EXPLORE, gridrow_why },
         { "grid-explicit-tracks", gridx_tt, "/api/gridiw", SESS_EXPLORE, gridx_why },
+        { "inline-grid-baseline", gridb_tt, "/api/gridiw", SESS_EXPLORE, gridb_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

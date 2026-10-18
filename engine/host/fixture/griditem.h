@@ -8,8 +8,11 @@
    25px below the container's top. The third is 400px wide over `100px 1fr 2fr` (§7.2 "Explicit Track
    Sizing"): the fixed column is 100px and §11.7 "Expand Flexible Tracks" gives the two flexible ones 100px
    and 200px of the 300px left. The fourth is 300px by 200px over rows `50px 1fr`, so its second row is
-   150px tall and starts 50px down. Chrome 155 gives these numbers for the same markup. It ends with
-   TF_CANVAS_INK, which test_forced.c defines before including it. */
+   150px tall and starts 50px down. Two `inline-grid`s sit on lines beside text, aligned by css-grid-1 §10.6
+   "Grid Container Baselines": the first by its first item's first line, the second by its first item's
+   synthesized baseline (an empty 30px box, the first in grid order in a row whose other item has text).
+   Chrome 155 gives these numbers for the same markup. It ends with TF_CANVAS_INK, which test_forced.c defines
+   before including it. */
 #ifndef ENGINE_HOST_FIXTURE_GRIDITEM_H
 #define ENGINE_HOST_FIXTURE_GRIDITEM_H
 #ifndef TF_CANVAS_INK
@@ -27,6 +30,10 @@ static const char HTML_GRIDITEM[] =
     "<div id=c3 style=\"height:10px\">c</div></div>"
     "<div id=g4 style=\"display:grid;width:300px;height:200px;grid-template-rows:50px 1fr\">"
     "<div>a</div><div id=r4>b</div></div>"
+    "<div id=l5><span id=t5>text</span> <span id=g5 style=\"display:inline-grid;width:100px;padding-top:7px\">"
+    "<div>ab</div><div>cd</div></span> tail</div>"
+    "<div id=l6><span id=t6>text</span> <span style=\"display:inline-grid;width:100px;"
+    "grid-template-columns:50px 50px\"><div style=\"height:30px\"></div><div>xy</div></span> tail</div>"
     "<script>var g2 = document.getElementById('g2');"
     "function R(id) { return document.getElementById(id).getBoundingClientRect(); }"
     "fetch('/api/gridiw?w=' + getComputedStyle(document.getElementById('gi')).width"
@@ -34,7 +41,9 @@ static const char HTML_GRIDITEM[] =
     " + '&c=' + getComputedStyle(g2).height"
     " + '&t=' + (document.getElementById('r2').getBoundingClientRect().top - g2.getBoundingClientRect().top)"
     " + '&x2=' + (R('c2').left - R('g3').left) + '&w2=' + R('c2').width + '&w3=' + R('c3').width"
-    " + '&y4=' + (R('r4').top - R('g4').top) + '&h4=' + R('r4').height);"
+    " + '&y4=' + (R('r4').top - R('g4').top) + '&h4=' + R('r4').height"
+    " + '&t5=' + (R('t5').top - R('l5').top) + '&g5=' + (R('g5').top - R('l5').top) + '&l5=' + R('l5').height"
+    " + '&t6=' + (R('t6').top - R('l6').top) + '&l6=' + R('l6').height);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

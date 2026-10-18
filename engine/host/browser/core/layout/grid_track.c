@@ -569,6 +569,12 @@ static size_t gt_target_track(const GridAxisSizing *g)
     return g->vertical ? g->placement.cells[g->target_index].row : g->placement.cells[g->target_index].col;
 }
 
+void grid_track_placement(lxb_dom_element_t *container, GridPlacement *out)
+{
+    DCHECK(container != NULL && out != NULL, "a grid's placement was asked for with no container or no out");
+    grid_placement_run(container, gt_explicit_count(container, false), gt_explicit_count(container, true), out);
+}
+
 bool grid_track_columns_ask(lxb_dom_element_t *container)
 {
     GridAxisSizing g;

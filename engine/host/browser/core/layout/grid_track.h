@@ -74,6 +74,9 @@ bool grid_axis_sizing_step(GridAxisSizing *g);
 bool grid_axis_sizing_done(const GridAxisSizing *g);
 void grid_axis_sizing_end(GridAxisSizing *g);
 
+/* §8.5's placement of `container`'s items over its explicit grid (core/layout/grid_placement.h), owned by the
+   caller and released with `grid_placement_free`. */
+void grid_track_placement(lxb_dom_element_t *container, GridPlacement *out);
 /* Whether `container`'s columns can be sized in this activation: every step run, false at the first "not yet". */
 bool grid_track_columns_ask(lxb_dom_element_t *container);
 /* The inline size of `item`'s grid area in `container`, a content-box extent in CSS pixels: the used size of
