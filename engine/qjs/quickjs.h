@@ -2745,6 +2745,10 @@ typedef struct JSConcolicHooks {
        unknown value's type is unknown, and the engine must not answer it from the host object's REPRESENTATION
        (a callable placeholder would say "function" and decide `typeof x === "function"` for the program). */
     JSValue (*type_of)(JSContext *ctx, JSValueConst v);
+    /* §7.2.2 IsArray ( argument ) over an unknown, for the same reason: the class test answers false for the
+       host object's representation. Returns an unknown boolean derived from `v`, or JS_UNINITIALIZED when `v`
+       is not concolic. */
+    JSValue (*is_array)(JSContext *ctx, JSValueConst v);
     /* 7.1.4 ToNumber OVER UNKNOWN INPUT, answered where the SPEC says the operator computes — never at the
        conversion boundary, which owes C a real number. `-x`, `~x`, `x*2`, `x**2`, `++x` yield a DERIVED
        concolic that keeps the source's identity, so a later branch still forks and a later sink still solves

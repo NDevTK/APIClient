@@ -89245,6 +89245,12 @@ static JSValue js_array_isArray(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv)
 {
     int ret;
+
+    /* 23.1.2.2 step 1 over an unknown argument: IsArray is the solver's question (g_concolic.is_array). */
+    if (g_concolic.is_array) {
+        JSValue u = g_concolic.is_array(ctx, argv[0]);
+        if (!JS_IsUninitialized(u)) return u;
+    }
     ret = js_is_array(ctx, argv[0]);
     if (ret < 0)
         return JS_EXCEPTION;
@@ -90562,7 +90568,17 @@ typedef struct JSArrayConcat {
     int i;               /* -1 = the receiver, then 0..argc-1 */
     int present;         /* the HasProperty answer, held across its own suspension */
     int spreadable;
+    JSValue spread;      /* Get(E, @@isConcatSpreadable), held across IsConcatSpreadable's asks (owned) */
+    JSValue test;        /* the predicate an ask over unknown input is holding (owned), else JS_UNINITIALIZED */
+    uint8_t spread_ph;   /* which step of IsConcatSpreadable is due: ACAT_SP_* */
 } JSArrayConcat;
+/* 23.1.3.2.1 IsConcatSpreadable ( O ): the Get (step 2), whether its result is undefined (step 3), its ToBoolean
+   (step 3.a) and IsArray (step 4). Over an unknown each of the last three is an ask through the branch seam, and a
+   machine with several asks names each (step_tobool_run's `op`). */
+enum { ACAT_SP_GET = 0, ACAT_SP_DEFINED, ACAT_SP_BOOL, ACAT_SP_ISARRAY };
+#define ACAT_DEFINED_OP "IsConcatSpreadable step 3, whether spreadable is undefined"
+#define ACAT_BOOL_OP    "IsConcatSpreadable step 3.a, ToBoolean(spreadable)"
+#define ACAT_ISARRAY_OP "IsConcatSpreadable step 4, IsArray(O)"
 
 /* ONE list expanded twice, so a renumber carries its label with it (JSTrampStepDef.steps). */
 #define ACAT_STAGES(X) \
@@ -90579,6 +90595,78 @@ typedef struct JSArrayConcat {
 enum { ACAT_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_array_concat_steps[] = { ACAT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
+/* One ask of IsConcatSpreadable over unknown input: `s->test`, minted by the caller on first entry, asked through
+   the branch seam. A sibling re-enters with undefined placed. 0 with *pres set, or the code to return. */
+static int js_array_concat_ask(JSContext *ctx, JSArrayConcat *s, JSValue cb_result, const char *op, int *pres)
+{
+    int r;
+
+    DCHECK(JS_IsUndefined(cb_result), "a concat ask was re-entered with a value placed");
+    JS_FreeValue(ctx, cb_result);
+    r = step_tobool_run(ctx, &s->hdr, s->test, op, pres);
+    if (r) return r;
+    JS_FreeValue(ctx, s->test);
+    s->test = JS_UNINITIALIZED;
+    return 0;
+}
+
+/* 23.1.3.2.1 IsConcatSpreadable ( O ) for an Object `e`, into s->spreadable. Steps 3 and 3.a over an unknown
+   spreadable ask the `!==` and ToBoolean predicates; step 4 over an unknown `e` asks IsArray (the solver's
+   g_concolic.is_array, whose example is the reply's). Consumes `cb_result`. 0, the code to return, or -1. */
+static int js_array_concat_spreadable(JSContext *ctx, JSArrayConcat *s, JSValueConst e, JSValue cb_result,
+                                      JSValue **out_cb, int *out_argc)
+{
+    int r, b;
+
+    if (s->spread_ph == ACAT_SP_GET) {
+        r = step_getprop_run(ctx, &s->hdr, e, JS_ATOM_Symbol_isConcatSpreadable, cb_result, &s->spread,
+                             out_cb, out_argc);
+        cb_result = JS_UNDEFINED;
+        if (r) return r < 0 ? -1 : r;
+        if (js_value_is_concolic(s->spread)) {
+            JSValue pair[2] = { js_dup(s->spread), JS_UNDEFINED };
+
+            DCHECK(g_concolic.cmp != NULL, "an unknown @@isConcatSpreadable under a host with no comparison hook");
+            if (!g_concolic.cmp(ctx, pair + 2, true, JS_CONCOLIC_EQ_STRICT))
+                DFAIL("the concolic comparison hook declined an unknown @@isConcatSpreadable");
+            s->test = pair[0];
+            s->spread_ph = ACAT_SP_DEFINED;
+        } else {
+            s->spread_ph = JS_IsUndefined(s->spread) ? ACAT_SP_ISARRAY : ACAT_SP_BOOL;
+        }
+    }
+    if (s->spread_ph == ACAT_SP_DEFINED) {
+        r = js_array_concat_ask(ctx, s, cb_result, ACAT_DEFINED_OP, &b);
+        cb_result = JS_UNDEFINED;
+        if (r) return r;
+        s->spread_ph = b ? ACAT_SP_BOOL : ACAT_SP_ISARRAY;
+    }
+    if (s->spread_ph == ACAT_SP_BOOL) {
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        r = step_tobool_run(ctx, &s->hdr, s->spread, ACAT_BOOL_OP, &b);
+        if (r) return r;
+    } else {
+        DCHECK(s->spread_ph == ACAT_SP_ISARRAY, "IsConcatSpreadable resumed at a step it does not have");
+        if (JS_IsUninitialized(s->test) && g_concolic.is_array)
+            s->test = g_concolic.is_array(ctx, e);
+        if (!JS_IsUninitialized(s->test)) {
+            r = js_array_concat_ask(ctx, s, cb_result, ACAT_ISARRAY_OP, &b);
+            cb_result = JS_UNDEFINED;
+            if (r) return r;
+        } else {
+            JS_FreeValue(ctx, cb_result);
+            b = js_is_array(ctx, e);
+            if (b < 0) return -1;
+        }
+    }
+    JS_FreeValue(ctx, s->spread);
+    s->spread = JS_UNDEFINED;
+    s->spread_ph = ACAT_SP_GET;
+    s->spreadable = b;
+    return 0;
+}
+
 static int js_array_concat_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSArrayConcat *s = st;
@@ -90590,6 +90678,7 @@ static int js_array_concat_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         /* FIRST, before anything that can throw: the teardown frees exactly what the state holds. */
         s->obj = JS_UNDEFINED; s->arr = JS_UNDEFINED; s->el = JS_UNDEFINED;
         s->n = 0; s->k = 0; s->len = 0; s->i = -1; s->present = 0; s->spreadable = 0;
+        s->spread = JS_UNDEFINED; s->test = JS_UNINITIALIZED; s->spread_ph = ACAT_SP_GET;
         s->obj = JS_ToObject(ctx, s->hdr.this_val);
         if (JS_IsException(s->obj)) { s->obj = JS_UNDEFINED; return -1; }
         s->hdr.stage = ACAT_SPECIES;
@@ -90610,19 +90699,9 @@ static int js_array_concat_step(JSContext *ctx, void *st, JSValue cb_result, JSV
                 JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
                 s->spreadable = 0;
             } else {
-                JSValue sv;
-                r = step_getprop_run(ctx, &s->hdr, e, JS_ATOM_Symbol_isConcatSpreadable, cb_result, &sv,
-                                     out_cb, out_argc);
+                r = js_array_concat_spreadable(ctx, s, e, cb_result, out_cb, out_argc);
                 cb_result = JS_UNDEFINED;
                 if (r) return r < 0 ? -1 : r;
-                if (!JS_IsUndefined(sv)) {
-                    s->spreadable = JS_ToBoolFree(ctx, sv);
-                } else {
-                    JS_FreeValue(ctx, sv);
-                    r = js_is_array(ctx, e);
-                    if (r < 0) return -1;
-                    s->spreadable = r;
-                }
             }
             if (!s->spreadable) {
                 if (s->n >= MAX_SAFE_INTEGER) {
@@ -90693,6 +90772,8 @@ static void js_array_concat_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->arr);
     v->val(ctx, &s->obj);
     v->val(ctx, &s->el);
+    v->val(ctx, &s->spread);
+    v->val(ctx, &s->test);
 }
 
 static JSValue js_array_concat_fini(JSContext *ctx, void *st, bool take_result)
@@ -91629,6 +91710,7 @@ static int js_array_search_step(JSContext *ctx, void *st, JSValue cb_result, JSV
                 if (JS_IsUninitialized(s->test)) {
                     JSValue pair[2] = { js_dup(target), js_dup(s->val) };
 
+                    DCHECK(g_concolic.cmp != NULL, "an unknown search operand under a host with no comparison hook");
                     if (!g_concolic.cmp(ctx, pair + 2, false, JS_CONCOLIC_EQ_STRICT))
                         DFAIL("the concolic comparison hook declined an unknown search operand");
                     s->test = pair[0];
@@ -95776,10 +95858,9 @@ STEP_STATE_HDR_FIRST(JSConcolicCall);
 
 /* Named residual. Not covered: an Object operand other than a builtin-protocol RegExp or a replace callback (a
    method of an object example other than one js_concolic_call_forwards names, a `.call` reached as a value
-   rather than at a call operator); the result carries no example. Next diff: IsArray over an unknown asked of
-   its example (§7.2.2, which Array.isArray and concat's IsConcatSpreadable both run), then `concat` forwarded.
-   How its absence shows: an address built from `cfg.items.concat(more)` over a fetched record is a shape
-   where `cfg.items[0]` carries bytes.
+   rather than at a call operator); the result carries no example. Next diff: `join` and `includes` forwarded,
+   the second once the comparison hook states SameValueZero. How its absence shows: an address built from
+   `cfg.tags.join(',')` over a fetched record is a shape where `cfg.tags[0]` carries bytes.
    Named residual. Not covered: a throw another value of the unknown would reach while its example's run
    completes normally (`x.toFixed(d)` with an unknown `d`). Next diff: the outcome asked on every run, with the
    normal completion stated real, once a builtin whose throw no operand can reach declares so at its definition.
@@ -95796,9 +95877,9 @@ enum { CCALL_NORMAL, CCALL_THROW };   /* the outcome fork's completions; the nor
 /* Whether `fex` is an Array.prototype method the call forwards: these §23.1.3 algorithms read their receiver
    only through [[Get]], [[HasProperty]] and LengthOfArrayLike, which over an unknown are the per-element member
    reads (each an unknown derived from the receiver, carrying its example's element) and the per-position length
-   forks, so the builtin's own step machine runs on every element a world has. slice's ArraySpeciesCreate takes
-   IsArray false for an unknown (js_is_array tests the class) and creates an Array, which is what the
-   constructor of a parsed reply's array, %Array%, creates too. */
+   forks, so the builtin's own step machine runs on every element a world has. ArraySpeciesCreate (slice,
+   concat) takes IsArray false for an unknown (js_is_array tests the class) and creates an Array, which is what
+   the constructor of a parsed reply's array, %Array%, creates too; concat's own IsArray is asked. */
 static bool js_concolic_call_forwards(JSValueConst fex)
 {
     JSObject *fp = JS_VALUE_GET_OBJ(fex);
@@ -95810,7 +95891,7 @@ static bool js_concolic_call_forwards(JSValueConst fex)
     case STEPDEF_ARRAY_FIND: case STEPDEF_ARRAY_FIND_INDEX: case STEPDEF_ARRAY_FIND_LAST:
     case STEPDEF_ARRAY_FIND_LAST_INDEX: case STEPDEF_ARRAY_SORT: case STEPDEF_ARRAY_TOSORTED:
     case STEPDEF_ARRAY_FLATMAP: case STEPDEF_ARRAY_SLICE: case STEPDEF_ARRAY_INDEXOF:
-    case STEPDEF_ARRAY_LASTINDEXOF:
+    case STEPDEF_ARRAY_LASTINDEXOF: case STEPDEF_ARRAY_CONCAT:
         return true;
     default:
         return false;

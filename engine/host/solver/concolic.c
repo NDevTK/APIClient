@@ -4497,6 +4497,34 @@ JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     return r;
 }
 
+/* §7.2.2 IsArray ( argument ) over an unknown is unknown, as `typeof` is: the engine's class test sees the host
+   object and answers false. The answer is a boolean derived from the operand, whose example is IsArray of the
+   operand's example where this flow holds one (an example is bytes, never a Proxy, so the class test is the
+   whole algorithm), so a branch over it forks and its real arm is the one the reply takes. */
+JSValue concolic_isarray_hook(JSContext *ctx, JSValueConst v) {
+    const char *sh, *f[1];
+    char *shape, *ident;
+    JSValue r, example = JS_UNDEFINED;
+    ConcolicExState st;
+
+    if (!concolic_is(v)) return JS_UNINITIALIZED;
+    st = concolic_example_state(v);
+    if (st == CONCOLIC_EX_HELD || st == CONCOLIC_EX_DETERMINED) {
+        JSValue ex = concolic_example(ctx, v);
+
+        DCHECK(!concolic_is(ex), "an unknown's example is itself an unknown — concolic_example answers bytes");
+        example = JS_NewBool(ctx, JS_IsArray(ex));
+        JS_FreeValue(ctx, ex);
+    }
+    sh = concolic_shape_c(v);
+    shape = shapef("Array.isArray(%s)", sh ? sh : "{}");
+    f[0] = concolic_ident_c(v);
+    ident = concolic_ident_compose("isArray", f, 1);
+    r = concolic_alloc(ctx, shape, concolic_src_c(v), concolic_root_c(v), root_whose_of(v), ident, example);
+    free(shape);
+    return r;
+}
+
 /* `x in concolic` / property existence: a concolic collection "has" any key, so a membership gate still runs. */
 static int concolic_exotic_has(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     (void)ctx; (void)atom;
@@ -5753,7 +5781,7 @@ static int compile_global_named_dispatch(const char *name, int typeof_only) {
 
 static JSConcolicHooks g_hooks = {
     .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is,
-    .rel = concolic_rel_hook, .type_of = concolic_typeof_hook,
+    .rel = concolic_rel_hook, .type_of = concolic_typeof_hook, .is_array = concolic_isarray_hook,
     .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
     .to_bool = concolic_tobool_hook,
     .key_read = concolic_key_read_hook,
