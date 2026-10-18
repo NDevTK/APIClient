@@ -58,20 +58,21 @@ static const char HTML_ABORT[] =
     /* A request whose signal the page aborts after its response arrived, as Apollo does once it has read its
        own copy. Fetch §5.6 "Fetch methods"' abort steps error the response's body only while it is readable,
        so a body the page finished reading stays read and one it had not started rejects with the signal's
-       reason; Chrome 155 answers the same. The request is the page's either way, so both stay recorded.
-       `clone` reports what a clone taken at the answer reads after the abort: Chrome 155 rejects it with an
+       reason; Chrome 155 answers the same. The request is the page's either way, so both stay recorded. Each
+       read is reported by whether it settled: the reply's bytes are unknown external input, so a test of their
+       length would fork. `clone` reports what a clone taken at the answer reads after the abort: Chrome 155 rejects it with an
        AbortError although every byte had arrived, where Fetch §2.2.4 "Bodies"' clone a body tees the stream
        and the abort errors only this response's branch. */
     "<script>"
     "(async function () {"
     " var c = new AbortController();"
     " var r = await fetch('/api/apread', { method: 'POST', body: 'x', signal: c.signal });"
-    " var k = r.clone(), own = await r.text(); c.abort();"
-    " var kv; try { kv = 'ok' + (await k.text()).length; } catch (e) { kv = e.name; }"
+    " var k = r.clone(), own; try { await r.text(); own = 'read'; } catch (e) { own = e.name; } c.abort();"
+    " var kv; try { await k.text(); kv = 'read'; } catch (e) { kv = e.name; }"
     " var c2 = new AbortController();"
     " var r2 = await fetch('/api/apunread', { method: 'POST', body: 'x', signal: c2.signal });"
-    " c2.abort(); var late; try { late = 'ok' + (await r2.text()).length; } catch (e) { late = e.name; }"
-    " fetch('/api/apabort?own=' + (own.length > 0 ? 'read' : 'empty') + '&late=' + late + '&clone=' + kv);"
+    " c2.abort(); var late; try { await r2.text(); late = 'read'; } catch (e) { late = e.name; }"
+    " fetch('/api/apabort?own=' + own + '&late=' + late + '&clone=' + kv);"
     "})();"
     "</script>"
     TF_CANVAS_INK
