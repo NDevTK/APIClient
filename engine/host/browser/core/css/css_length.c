@@ -30,7 +30,7 @@ static char *css_len_strdup(const char *s)
    live until their realm is torn down: reclamation bounded by the realm's lifetime, since the forms a run makes
    are not bounded by the program's expressions (their constants are numbers the layout computes). */
 /* An atom's name, interned under its key; and its definition, indexed by the name minus one. */
-typedef struct { char *key; unsigned id; } CssPxAtomSlot;
+typedef struct { unsigned char *key; size_t len; unsigned id; } CssPxAtomSlot;
 typedef struct { char *op; int nargs; CssPxAtomArg *args; } CssPxAtomDef;
 
 typedef struct {
@@ -318,17 +318,55 @@ static int css_px_mono_cmp(const void *x, const void *y)
    of the function and not of this realm's number. Interned in the realm's table, since its operands are forms
    over that realm's facts; the number is the realm's, and the definition it was interned with
    (css_px_atom_definition) is what a spelling another session shares names. */
-static size_t css_px_atom_hash(const char *k)
+static size_t css_px_atom_hash(const unsigned char *k, size_t n)
 {
-    size_t h = 1469598103934665603u;
+    size_t h = 1469598103934665603u, i;
 
-    for (; *k; k++) h = (h ^ (unsigned char)*k) * 1099511628211u;
+    for (i = 0; i < n; i++) h = (h ^ k[i]) * 1099511628211u;
     return h;
 }
 
-/* The name `key` (owned, consumed) is interned under in `realm`'s table; a new name records `op` over `args`
-   (borrowed, copied) as its definition. */
-static unsigned css_px_atom_intern(JSContext *realm, char *key, const char *op, const CssPxAtomArg *args, int nargs)
+/* An atom's name as bytes: the fields the definition is made of, each at its own width, so two definitions
+   share a name exactly when every field is bitwise equal. Composed in `inline_` and moved to the heap only if
+   it outgrows it. */
+typedef struct {
+    unsigned char *b;
+    size_t         n, cap;
+    unsigned char  inline_[256];
+} CssPxKey;
+
+static void css_px_key_begin(CssPxKey *k)
+{
+    k->b = k->inline_;
+    k->n = 0;
+    k->cap = sizeof k->inline_;
+}
+
+static void css_px_key_bytes(CssPxKey *k, const void *p, size_t n)
+{
+    if (k->n + n > k->cap) {
+        size_t cap = 2 * (k->n + n);
+        unsigned char *grown = malloc(cap);
+
+        CHECK(grown, "css_length: OOM naming an atom");
+        memcpy(grown, k->b, k->n);
+        if (k->b != k->inline_) free(k->b);
+        k->b = grown;
+        k->cap = cap;
+    }
+    memcpy(k->b + k->n, p, n);
+    k->n += n;
+}
+
+static void css_px_key_end(CssPxKey *k)
+{
+    if (k->b != k->inline_) free(k->b);
+}
+
+/* The name `key` (borrowed) is interned under in `realm`'s table; a new name is copied and records `op` over
+   `args` (borrowed, copied) as its definition. */
+static unsigned css_px_atom_intern(JSContext *realm, const CssPxKey *key, const char *op, const CssPxAtomArg *args,
+                                   int nargs)
 {
     CssPxFormTable *t = css_px_realm_table(realm);
     CssPxAtomDef *d;
@@ -343,20 +381,22 @@ static unsigned css_px_atom_intern(JSContext *realm, char *key, const char *op, 
         CHECK(grown, "css_length: OOM growing a realm's atom table");
         for (j = 0; j < t->atoms_cap; j++) {
             if (!t->atoms[j].key) continue;
-            for (i = css_px_atom_hash(t->atoms[j].key) & (cap - 1); grown[i].key; i = (i + 1) & (cap - 1)) {}
+            for (i = css_px_atom_hash(t->atoms[j].key, t->atoms[j].len) & (cap - 1); grown[i].key;
+                 i = (i + 1) & (cap - 1)) {}
             grown[i] = t->atoms[j];
         }
         free(t->atoms);
         t->atoms = grown;
         t->atoms_cap = cap;
     }
-    for (i = css_px_atom_hash(key) & (t->atoms_cap - 1); t->atoms[i].key; i = (i + 1) & (t->atoms_cap - 1))
-        if (!strcmp(t->atoms[i].key, key)) {
-            free(key);
-            return t->atoms[i].id;
-        }
+    for (i = css_px_atom_hash(key->b, key->n) & (t->atoms_cap - 1); t->atoms[i].key;
+         i = (i + 1) & (t->atoms_cap - 1))
+        if (t->atoms[i].len == key->n && !memcmp(t->atoms[i].key, key->b, key->n)) return t->atoms[i].id;
     DCHECK(t->atoms_n != UINT_MAX, "a realm's atom table ran out of names");
-    t->atoms[i].key = key;
+    t->atoms[i].key = malloc(key->n ? key->n : 1);
+    CHECK(t->atoms[i].key, "css_length: OOM interning an atom's name");
+    memcpy(t->atoms[i].key, key->b, key->n);
+    t->atoms[i].len = key->n;
     t->atoms[i].id = ++t->atoms_n;
     /* Grown by doubling, as the key table is: a layout mints an atom per undecided extreme, so growing by one
        would copy the whole array for each. */
@@ -398,29 +438,37 @@ const char *css_px_atom_definition(JSContext *realm, unsigned atom, int *nargs, 
     return t->atom_defs[atom - 1].op;
 }
 
-/* One polynomial into a key: the constant and every monomial's atom, exponents and coefficient, doubles in `%a`
-   so the spelling is exact. */
-static void css_px_key_poly(FILE *f, double c, const CssPxMonomial *m, int n)
+/* One polynomial into a key: its monomial count, the constant, and every monomial's atom, exponents and
+   coefficient, a double as its bits so the name is exact. */
+static void css_px_key_poly(CssPxKey *k, double c, const CssPxMonomial *m, int n)
 {
-    int i, e;
+    int i;
 
-    fprintf(f, "%a", c);
+    css_px_key_bytes(k, &n, sizeof n);
+    css_px_key_bytes(k, &c, sizeof c);
     for (i = 0; i < n; i++) {
-        fprintf(f, "|%u:", m[i].atom);
-        for (e = 0; e < CSS_ENV_FACT_COUNT; e++) fprintf(f, "%u,", m[i].e[e]);
-        fprintf(f, "*%a", m[i].k);
+        css_px_key_bytes(k, &m[i].atom, sizeof m[i].atom);
+        css_px_key_bytes(k, m[i].e, sizeof m[i].e);
+        css_px_key_bytes(k, &m[i].k, sizeof m[i].k);
     }
 }
 
-/* `out`'s form becomes the atom named `key` (owned, consumed), defined as `op` over `args`. A non-finite example
-   has no form and stays opaque. */
-static void css_px_form_atom_named(CssPx *out, char *key, const char *op, const CssPxAtomArg *args, int nargs)
+/* An atom's key head: its operation, with the terminator that delimits it, and its operand count. */
+static void css_px_key_op(CssPxKey *k, const char *op, int nargs)
+{
+    css_px_key_bytes(k, op, strlen(op) + 1);
+    css_px_key_bytes(k, &nargs, sizeof nargs);
+}
+
+/* `out`'s form becomes the atom named `key` (borrowed), defined as `op` over `args`. A non-finite example has
+   no form and stays opaque. */
+static void css_px_form_atom_named(CssPx *out, const CssPxKey *key, const char *op, const CssPxAtomArg *args,
+                                   int nargs)
 {
     CssPxForm f;
 
     DCHECK(out->env != CSS_ENV_NONE, "an atom was minted for a length derived from no fact");
     if (!isfinite(out->px)) {
-        free(key);
         out->form = &CSS_PX_FORM_OPAQUE;
         return;
     }
@@ -438,9 +486,7 @@ static void css_px_form_atom_named(CssPx *out, char *key, const char *op, const 
    there is then no definition to name. */
 static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int nargs)
 {
-    char *key = NULL;
-    size_t len = 0;
-    FILE *f;
+    CssPxKey key;
     CssPxAtomArg *def;
     int i;
 
@@ -460,17 +506,17 @@ static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int 
             def[i].m = args[i].form->m;
         }
     }
-    f = open_memstream(&key, &len);
-    CHECK(f, "css_length: OOM naming an atom");
-    fprintf(f, "%s(", op);
+    css_px_key_begin(&key);
+    css_px_key_op(&key, op, nargs);
     for (i = 0; i < nargs; i++) {
-        if (i) fputc(';', f);
-        if (args[i].env == CSS_ENV_NONE) fprintf(f, "%a", args[i].px);
-        else css_px_key_poly(f, args[i].form->c, args[i].form->m, args[i].form->n);
+        unsigned char determined = args[i].env == CSS_ENV_NONE;
+
+        css_px_key_bytes(&key, &determined, 1);
+        if (determined) css_px_key_bytes(&key, &args[i].px, sizeof args[i].px);
+        else css_px_key_poly(&key, args[i].form->c, args[i].form->m, args[i].form->n);
     }
-    fputc(')', f);
-    CHECK(fclose(f) == 0 && key, "css_length: OOM naming an atom");
-    css_px_form_atom_named(out, key, op, def, nargs);
+    css_px_form_atom_named(out, &key, op, def, nargs);
+    css_px_key_end(&key);
     free(def);
 }
 
@@ -492,7 +538,16 @@ static bool css_px_form_normal(CssPx *out, CssPxPoly *p, CssPxForm *f)
 {
     int i = 0, n = 0;
 
-    qsort(p->m, (size_t)p->n, sizeof p->m[0], css_px_mono_cmp);
+    /* An insertion sort: a composed form holds a handful of monomials, each wider than the C library's
+       direct-sort threshold, so its sort allocates and indirects. */
+    for (i = 1; i < p->n; i++) {
+        CssPxMonomial t = p->m[i];
+        int j = i;
+
+        for (; j > 0 && css_px_mono_cmp(&p->m[j - 1], &t) > 0; j--) p->m[j] = p->m[j - 1];
+        p->m[j] = t;
+    }
+    i = 0;
     while (i < p->n) {
         CssPxMonomial t = p->m[i++];
 
@@ -509,18 +564,17 @@ static bool css_px_form_normal(CssPx *out, CssPxPoly *p, CssPxForm *f)
         return false;
     }
     if (n > CSS_PX_FORM_MAX) {
-        char *key = NULL;
-        size_t len = 0;
-        FILE *f = open_memstream(&key, &len);
-
-        CHECK(f, "css_length: OOM naming an atom");
+        CssPxKey key;
         CssPxAtomArg def = { false, 0.0, p->c, n, p->m };
+        unsigned char determined = 0;
 
-        fputs("poly(", f);
-        css_px_key_poly(f, p->c, p->m, n);
-        fputc(')', f);
-        CHECK(fclose(f) == 0 && key, "css_length: OOM naming an atom");
-        css_px_form_atom_named(out, key, "poly", &def, 1);
+        /* The same name `css_px_form_atom` gives `poly` over one undetermined operand. */
+        css_px_key_begin(&key);
+        css_px_key_op(&key, "poly", 1);
+        css_px_key_bytes(&key, &determined, 1);
+        css_px_key_poly(&key, p->c, p->m, n);
+        css_px_form_atom_named(out, &key, "poly", &def, 1);
+        css_px_key_end(&key);
         return false;
     }
     memset(f, 0, sizeof *f);
