@@ -276,10 +276,9 @@ static JSRuntime *g_wp_rt;
    suspends on the host where the member reads the active document (see the member table below for which is
    which).
    Every name on it is an own property of the proxy, because §7.2.3 has no interface object: §7.2.3.5 answers each
-   of these names and §7.2.3.10 lists it, so this object is where the descriptor is read from, never what a
-   prototype walk reaches for a same-origin W (proxy_surface_desc). The walk does reach it for a cross-origin one,
-   which is §7.2.3.5 steps 4-6 and this engine's stand-in for §7.2.1.3.4's per-realm anonymous functions: one
-   object, two ways in, one answer.
+   of these names and §7.2.3.10 lists it, so this object is where the descriptor is read from (proxy_surface_desc),
+   never what a prototype walk reaches. For a cross-origin W, §7.2.3.5 steps 4-6 read it the same way, this
+   engine's stand-in for §7.2.1.3.4's per-realm anonymous functions: one object, two ways in, one answer.
    It is per realm, in quickjs's own class-proto slot, as an answer rather than an identity: a member runs in the
    realm that defined it, so one shared object would answer `parent`, `name` and `close()` for every document out
    of whichever realm built it first. `a.postMessage === b.postMessage` holds for two proxies of one realm, which
@@ -2391,25 +2390,12 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
  * of window_proxy_install_proto's, and a name it fell behind (`postMessage` is window_message.c's; `focus` and
  * `blur` are focus_install_window_members') would be handed to the other document's Window while this object's
  * own member answered nothing. */
-/* §7.2.3.1's [[GetPrototypeOf]] is built (proxy_get_prototype), and is not yet the whole of the chain.
- * Reflection asks it (`Object.getPrototypeOf(otherW)`, `Reflect.getPrototypeOf`, `otherW.__proto__`, 7.3.21
- * OrdinaryHasInstance's walk behind `instanceof`, 20.1.3.3's `isPrototypeOf`), so those answer W's own prototype
- * for a W the reader may see and null for one it may not.
- * The ordinary lookup walks still follow the shape link, this object's class prototype: 10.1.8.1 OrdinaryGet step
- * 3, 10.1.9.2 step 2.a and 10.1.7 step 3 each say `O.[[GetPrototypeOf]]()`, and quickjs's walks read the stored
- * link instead (JS_GetPrototype's comment states it from that side). The link must keep pointing where it does:
- * §7.2.3.5 steps 4-6 let a cross-origin read walk to this surface for §7.2.1.3.1's names, and routing those
- * walks through §7.2.3.1, which answers null there, would take `otherW.postMessage` away from every page. */
-/* Named residual: the lookup walks do not ask §7.2.3.1. Not covered: a member of the other document's Window
- * reachable only up its prototype chain is not reached through a same-origin WindowProxy. Next diff builds:
- * window.c declaring §7.2.1.3.1's thirteen names as own properties of the global (a member of an interface
- * declared [Global] is an own property of every object implementing it, as Web IDL §3.7.7 Operations and §3.7.6
- * Attributes state for their member kinds, and §2.3 Interface mixins makes a mixin's members the including
- * interface's), after which the cross-origin surface needs no chain and the walks can ask §7.2.3.1. How its
- * absence shows: a same-origin `otherW.n` for a member the other Window inherits answers from this object's chain
- * rather than the other Window's. EventTarget's three operations are outside it: DOM §2.7 "Interface EventTarget"
- * is not declared [Global], so they are own properties of no global and are always reached up the chain
- * (core/events/event_target.c). */
+/* §7.2.3.1's [[GetPrototypeOf]] (proxy_get_prototype) is the whole of the chain. Reflection asks it
+ * (`Object.getPrototypeOf(otherW)`, `otherW.__proto__`, 7.3.21 OrdinaryHasInstance's walk behind `instanceof`,
+ * 20.1.3.3's `isPrototypeOf`), and so do quickjs's ordinary lookup walks (js_walk_proto), so a same-origin read of
+ * a member the Window inherits, EventTarget's three operations among them (DOM §2.7 "Interface EventTarget" is not
+ * declared [Global]), continues up W's own chain. For a W the reader may not see the answer is null, and
+ * §7.2.3.5's steps 4-6 answer §7.2.1.3.1's names as own properties instead. */
 
 /* §7.2.3's own surface for one name: an own property of this object, not a prototype hit. HTML §7.2.3 "The
  * WindowProxy exotic object": "There is no WindowProxy interface object." Every name a WindowProxy answers is
@@ -2417,10 +2403,9 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
  * only up a prototype chain would be one `Object.getOwnPropertyDescriptor(w, n)` answers `undefined` for while
  * `w.n` answers a value, and one `Object.getOwnPropertyNames(w)` never mentions. The Window and this surface both
  * carry §7.2.1.3.1's thirteen names, which proxy_get_own's steps 4-6 assert.
- * The object is still the class proto, a second role rather than a second surface: §7.2.3.5's cross-origin branch
- * (steps 4-6) answers `0` for §7.2.1.3.1's names and lets the walk reach the same members, this engine's stand-in
- * for §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's "anonymous built-in function, created in the current realm".
- * One object, two ways in, one answer.
+ * §7.2.3.5's cross-origin branch (steps 4-6) answers §7.2.1.3.1's names out of the same object, this engine's
+ * stand-in for §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's "anonymous built-in function, created in the current
+ * realm". One object, two ways in, one answer.
  * The query runs no page code and no walk: own properties only, because Object.prototype's members are the ones
  * the forward should answer out of the other realm.
  * 1 = the surface answers it (*desc filled and owned when desc != NULL), 0 = it does not. */
@@ -2653,28 +2638,28 @@ static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCons
 
     /* Steps 4-6, which only a cross-origin W reaches, with the permit side of the filter checked in the same pass
        as the refuse side.
-       Returning `0` says "not an own property of this exotic object", letting the ordinary walk reach §7.2.3's
-       surface (this object's class prototype) and answer out of it. That is an answer only while the surface
-       owns the name: a listed name it does not own walks off the chain to `undefined`, the value §7.2.1.3.2
-       CrossOriginPropertyFallback forbids, indistinguishable from a member the peer's document lacks.
+       A listed name is answered as this object's own property, out of §7.2.3's surface: §7.2.1.3.5 CrossOriginGet
+       asserts that `O.[[GetOwnProperty]](P)` is not undefined, and §7.2.3.1 answers null for a cross-origin W, so
+       there is no prototype for the ordinary walk to find the member on. A listed name the surface does not own
+       would be `undefined`, the value §7.2.1.3.2 CrossOriginPropertyFallback forbids.
        So it is one loop, not two checks: a filter that throws for every unlisted name passes any test that only
        looks for the throw. proxy_capture_names' reconciliation iterates the member table, so it cannot see a
        §7.2.1.3.1 name no member of this component declares; this loop visits the standard's list, so a name is
-       refused unless listed and answerable because listed. Side-effect-free: proxy_surface_desc with a NULL
-       descriptor reads one own property of an ordinary object and frees what it took. */
+       refused unless listed and answerable because listed. Side-effect-free: proxy_surface_desc reads one own
+       property of an ordinary object. */
     for (i = 0; i < CROSS_ORIGIN_NAME_N; i++)
         if (prop == g_xo_atom[i]) {
             DCHECKF(proxy_surface_desc(ctx, NULL, prop) == 1,
                     "HTML §7.2.1.3.1 CrossOriginProperties lists `%s` among the cross-origin accessible window "
                     "property names, and §7.2.3's own surface for this realm does not own it — so this read is "
-                    "PERMITTED and then answered with `undefined` by a prototype walk that finds nothing, which "
+                    "PERMITTED and then answered with `undefined`, which "
                     "is the one answer §7.2.1.3.2 CrossOriginPropertyFallback rules out (its last step is the "
                     "SecurityError, and a page tells the two apart). §7.2.1.3.4 CrossOriginGetOwnPropertyHelper "
                     "runs OrdinaryGetOwnProperty on the Window, so the member exists and only this surface is "
                     "missing it: install it from the component that owns the member onto the object "
                     "window_proxy_install_proto builds, the way `close`, `postMessage` and §6.6.6's `focus` and "
                     "`blur` are", CROSS_ORIGIN[i].name);
-            return 0;
+            return proxy_surface_desc(ctx, desc, prop);
         }
 
     for (i = 0; i < XO_FALLBACK_N; i++)

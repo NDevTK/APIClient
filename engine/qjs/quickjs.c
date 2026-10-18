@@ -13227,10 +13227,8 @@ static inline __exception int js_poll_interrupts(JSContext *ctx)
 
 /* THE CLASS'S OWN [[GetPrototypeOf]], or NULL when this object's prototype IS the link its shape stores.
    Asked at every site that performs [[GetPrototypeOf]] as a spec internal method rather than following a link
-   it already holds — JS_GetPrototype, the SetImmutablePrototype arm below, and 7.3.21 OrdinaryHasInstance's
-   walk — which is what keeps ONE answer to one question. The three ORDINARY-lookup walks (10.1.8.1 OrdinaryGet,
-   10.1.9.2 OrdinarySetWithOwnDescriptor, 10.1.7 OrdinaryHasProperty) deliberately do not ask it: see the
-   comment on JS_GetPrototype. */
+   it already holds — JS_GetPrototype, the SetImmutablePrototype arm below, 7.3.21 OrdinaryHasInstance's walk and
+   the ordinary lookup walks through js_walk_proto — which is what keeps ONE answer to one question. */
 static const JSClassExoticMethods *js_exotic_getproto(JSRuntime *rt, JSObject *p)
 {
     const JSClassExoticMethods *em;
@@ -13238,6 +13236,35 @@ static const JSClassExoticMethods *js_exotic_getproto(JSRuntime *rt, JSObject *p
         return NULL;
     em = rt->class_array[p->class_id].exotic;
     return (em && em->get_prototype) ? em : NULL;
+}
+
+/* The next link of an ordinary lookup walk. 10.1.8.1 OrdinaryGet step 2.a, 10.1.9.2 OrdinarySetWithOwnDescriptor
+   step 1.a and 10.1.7.1 OrdinaryHasProperty step 3 each ask `obj.[[GetPrototypeOf]]()`, which for a class that
+   computes its prototype is the class's answer, not the shape link (HTML §7.2.3.1's WindowProxy answers its
+   Window's). Borrowed: the class holds what it answers, which the assert states, and a walk runs nothing between
+   taking a link and reading it. The hook runs no page code (its declaration's contract), so a throw is not an
+   answer any walk could report. */
+static JSObject *js_walk_proto(JSContext *ctx, JSObject *p)
+{
+    const JSClassExoticMethods *em = js_exotic_getproto(ctx->rt, p);
+    JSValue v;
+    JSObject *q;
+
+    if (likely(!em))
+        return p->shape->proto;
+    v = em->get_prototype(ctx, JS_MKPTR(JS_TAG_OBJECT, p));
+    CHECK(!JS_IsException(v),
+          "a class's [[GetPrototypeOf]] threw inside an ordinary lookup walk — the hook is declared to run none of "
+          "the page's code, so the walk has no completion to hand the throw to");
+    if (JS_IsNull(v))
+        return NULL;
+    DCHECK(JS_IsObject(v), "a class's [[GetPrototypeOf]] answered a link that is neither an Object nor null");
+    q = JS_VALUE_GET_OBJ(v);
+    DCHECK(JS_REF_COUNT(q) > 1,
+           "a class's [[GetPrototypeOf]] answered a prototype it does not hold — the walk keeps a bare pointer to "
+           "the link, so the answer's only reference cannot be the one the walk is about to drop");
+    JS_FreeValue(ctx, v);
+    return q;
 }
 
 /* return -1 (exception) or true/false */
@@ -13667,22 +13694,8 @@ static JSValueConst JS_GetPrototypePrimitive(JSContext *ctx, JSValueConst val)
    exotic hook is consulted here: a class may COMPUTE its answer (JSClassExoticMethods.get_prototype), in which
    case the shape's link is not what the internal method returns and for HTML §7.2.3's WindowProxy is not even
    an object of the right document.
-   THE ORDINARY PROPERTY WALKS STILL FOLLOW THE SHAPE LINK, deliberately and not yet correctly — 10.1.8.1
-   OrdinaryGet step 3, 10.1.9.2 OrdinarySetWithOwnDescriptor step 2.a and 10.1.7 OrdinaryHasProperty step 3 all
-   say `O.[[GetPrototypeOf]]()`, so a class that computes one is answered TWO ways until the host stops using
-   that link for anything. It is load-bearing on the WindowProxy today: that class's shape link is the object
-   carrying the surface a CROSS-ORIGIN read is allowed to reach, which §7.2.3.1 answers null for, so routing the
-   walks here before those members are own properties of the Window would take a page's own `w.postMessage`
-   away. Closing it is a change to the host's member placement: Web IDL §3.7.6 Attributes and Web IDL §3.7.7
-   Operations each put a member of an interface DECLARED [Global] on every object that implements THAT
-   interface, and every cross-origin name the host needs own is a Window member. After that placement these
-   walks ask this function too.
-   THIS CITED Web IDL §3.7.3 Interface prototype object FOR A CLAIM ABOUT A [Global] OBJECT'S WHOLE CHAIN —
-   that every member of every interface the object implements is own. It is not: the [Global] condition is
-   read off the interface the member is DECLARED on, so an INHERITED member stays on its own interface
-   prototype object and no host placement makes it own. The host's core/events/event_target.c carries the
-   argument and what refutes it; it matters here because the sentence above would otherwise read as a promise
-   that this link eventually carries nothing a walk needs, and it will always carry the inherited members. */
+   The ordinary property walks ask the same hook through js_walk_proto, so a class that computes its prototype
+   is answered one way by every route. */
 JSValue JS_GetPrototype(JSContext *ctx, JSValueConst obj)
 {
     JSValue val;
@@ -14789,7 +14802,7 @@ static JSValue JS_GetPropertyInternal(JSContext *ctx, JSValueConst obj,
                 }
             }
         }
-        p = p->shape->proto;
+        p = js_walk_proto(ctx, p);
         if (!p)
             break;
     }
@@ -15888,7 +15901,7 @@ int JS_HasProperty(JSContext *ctx, JSValueConst obj, JSAtom prop)
                 return false;
             }
         }
-        p = p->shape->proto;
+        p = js_walk_proto(ctx, p);
         if (!p)
             break;
     }
@@ -17042,7 +17055,7 @@ retry:
                 }
             }
         }
-        p1 = p1->shape->proto;
+        p1 = js_walk_proto(ctx, p1);
     prototype_lookup:
         if (!p1)
             break;
@@ -31125,7 +31138,7 @@ static inline JSObject *tramp_accessor_getter(JSContext *ctx, JSValueConst obj, 
                 return xa;
             }
         }
-        p = p->shape->proto;
+        p = js_walk_proto(ctx, p);
         if (!p) return NULL;
     }
 }
@@ -31146,7 +31159,7 @@ static inline JSObject *tramp_proto_proxy(JSContext *ctx, JSValueConst obj, JSAt
         if (p->class_id == JS_CLASS_PROXY) return p;   /* before is_exotic: a proxy IS exotic */
         if (find_own_property1(p, atom)) return NULL;
         if (!tramp_walk_continues(ctx, p, atom)) return NULL;
-        p = p->shape->proto;
+        p = js_walk_proto(ctx, p);
         if (!p) return NULL;
     }
 }
@@ -31164,7 +31177,7 @@ static inline JSObject *tramp_proto_typed_array(JSContext *ctx, JSValueConst obj
         if (is_typed_array(p->class_id)) return p;        /* its [[Set]] owns every canonical numeric index */
         if (find_own_property1(p, atom)) return NULL;
         if (!tramp_walk_continues(ctx, p, atom)) return NULL;
-        p = p->shape->proto;
+        p = js_walk_proto(ctx, p);
         if (!p) return NULL;
     }
 }
@@ -31254,7 +31267,7 @@ static inline JSObject *tramp_accessor_setter(JSContext *ctx, JSValueConst obj, 
                 return xa;
             }
         }
-        p = p->shape->proto;
+        p = js_walk_proto(ctx, p);
         if (!p) return NULL;
     }
 }

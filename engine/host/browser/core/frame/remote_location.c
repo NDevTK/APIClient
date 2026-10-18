@@ -380,10 +380,8 @@ static int rl_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
 
 /* HTML §7.2.4.1 [[GetPrototypeOf]] ( ): "if IsPlatformObjectSameOrigin(this) is true, then return !
    OrdinaryGetPrototypeOf(this). Return null." Always the second sentence here.
-   THE SHAPE LINK STILL POINTS AT THE SURFACE, and that is not a contradiction: quickjs's ordinary lookups walk
-   the stored link rather than asking this hook (JS_GetPrototype's own comment states it from that side), and
-   no lookup ever gets there — §7.2.4.5 above answers every one of §7.2.1.3.7's six names itself and THROWS for
-   every other, so there is no name whose resolution continues past this object. */
+   No lookup continues past this object: §7.2.4.5 above answers every one of §7.2.1.3.7's six names itself and
+   throws for every other, so the ordinary walks, which ask this hook, never take its null. */
 static JSValue rl_get_prototype(JSContext *ctx, JSValueConst obj)
 {
     (void)ctx; (void)obj;
