@@ -906,8 +906,8 @@ function analysisHasDocument(a) {
   DCHECK(n === 0 || n === 5,
          "an analysis carries " + n + " of the five engine-document fields (fetchCallSites, securitySinks, " +
          "_park, _parkWhy, _novelty) — linesToAnalysis writes all five or none, because their presence IS " +
-         "the statement that an @RESULT document arrived, and a partial set would be read by every consumer as a document that " +
-         "is there while one of the surfaces it travels in is silently gone");
+         "the statement that an @RESULT document arrived, and a partial set would be read by every consumer " +
+         "as a document that is there while one of the surfaces it travels in is silently gone");
   DCHECK(n === 5 || a._run === "crashed" || a._run === "nothing-to-run",
          "an analysis marked `" + a._run + "` carries no engine document — only a crashed instance and a page " +
          "with nothing to run may lack one, so a partial/complete run without one is the @RESULT relay broken " +
