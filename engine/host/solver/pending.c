@@ -26,8 +26,11 @@ static JSAtom g_len_atom;
    there is no create to pair with a destroy, no key to go stale when `pending_free` drops the array, and no
    way for the two to be separated by a path that handles one and not the other. It is scheduler bookkeeping
    and not platform data, so §State-isolation's obligation on it is only that no delta capture it — which is
-   the same bracket every other write in this file already runs inside. */
-static JSAtom g_sync_owed_atom;
+   the same bracket every other write in this file already runs inside.
+   The second slot counts the unanswered ASYNC rendezvous (pending_mark_async moves one from the first slot to
+   it), so the two together are every rendezvous the host still owes, which is the join's skip. */
+enum { PEND_RV_SYNC = 0, PEND_RV_ASYNC, PEND_RV_CLASSES };
+static JSAtom g_rv_owed_atom[PEND_RV_CLASSES];
 static int    g_atoms_ready;
 
 /* WHAT THE FORK DOES WITH EACH FIELD, from the one list in pending.h. */
@@ -56,7 +59,8 @@ static void pend_atoms(void)
     if (g_atoms_ready) return;
     for (i = 0; i < PEND_FIELD_COUNT; i++) g_field[i] = JS_NewAtom(pend_ctx(), NAMES[i]);
     g_len_atom = JS_NewAtom(pend_ctx(), "length");
-    g_sync_owed_atom = JS_NewAtom(pend_ctx(), "syncOwed");
+    g_rv_owed_atom[PEND_RV_SYNC] = JS_NewAtom(pend_ctx(), "syncOwed");
+    g_rv_owed_atom[PEND_RV_ASYNC] = JS_NewAtom(pend_ctx(), "asyncOwed");
     g_atoms_ready = 1;
 }
 
@@ -77,7 +81,8 @@ void pending_free_ctx(JSContext *ctx)
     if (g_atoms_ready) {
         for (i = 0; i < PEND_FIELD_COUNT; i++) JS_FreeAtom(ctx, g_field[i]);
         JS_FreeAtom(ctx, g_len_atom);
-        JS_FreeAtom(ctx, g_sync_owed_atom);
+        JS_FreeAtom(ctx, g_rv_owed_atom[PEND_RV_SYNC]);
+        JS_FreeAtom(ctx, g_rv_owed_atom[PEND_RV_ASYNC]);
         g_atoms_ready = 0;
     }
     g_ctx = NULL;
@@ -95,7 +100,7 @@ static JSValue pend_own(JSValueConst obj, JSAtom a)
     return v;
 }
 
-/* HOW MANY ENTRIES THIS REGISTER HOLDS — and `CHECK` for the reason its sibling `pend_sync_owed` gives one
+/* HOW MANY ENTRIES THIS REGISTER HOLDS — and `CHECK` for the reason its sibling `pend_rv_owed` gives one
    paragraph down, which applies here MORE strongly rather than less. Both asserts used to be dev-only, and the
    release continuation was not an abort and not a fallback: `JS_GetOwnSlot` writes JS_UNDEFINED into `*pval`
    before it looks (quickjs.c, its first statement), whose int payload is 0, so a register with no `length`
@@ -133,9 +138,9 @@ static int pend_len(JSValueConst arr)
     return n;
 }
 
-/* HOW MANY UNANSWERED SYNCHRONOUS REQUESTS THIS REGISTER HOLDS — the ONE fact `pending_blocked` is a predicate
-   over, read without touching an entry. 0 for a register that has never held anything, which is JS_UNDEFINED
-   and answers with a tag test, exactly as `pend_len` does and for the same reason.
+/* HOW MANY UNANSWERED RENDEZVOUS OF ONE CLASS THIS REGISTER HOLDS — the blocking class is the ONE fact
+   `pending_blocked` is a predicate over — read without touching an entry. 0 for a register that has never
+   held anything, which is JS_UNDEFINED and answers with a tag test, as `pend_len` does and for its reason.
    `CHECK` AND NOT `DCHECK`, AND THIS DIFF IS WHAT MADE THAT SO. The value is load-bearing in RELEASE — the
    per-opcode preempt hook decides on it there — so a DCHECK would be compiled out in precisely the build where
    the read happens, and what it guards is not a crash but a PLAUSIBLE ANSWER: `JS_GetOwnSlot` writes
@@ -145,20 +150,21 @@ static int pend_len(JSValueConst arr)
    consequence here is a flow spinning on an answer the host only gives between scheduler steps. Every register
    is built in this file with the slot present from its first instant, so the absence is this file's own
    invariant broken and must not be proceeded past in production either. */
-static int pend_sync_owed(JSValueConst reg)
+static int pend_rv_owed(JSValueConst reg, int cls)
 {
     JSValue v;
     int n;
 
+    DCHECK(cls == PEND_RV_SYNC || cls == PEND_RV_ASYNC, "a rendezvous count was read for no class");
     if (!JS_IsObject(reg)) return 0;
     pend_atoms();
-    CHECK(JS_GetOwnSlot(pend_ctx(), &v, reg, g_sync_owed_atom) > 0,
-          "engine: a pending register carries no count of the synchronous requests it is owed — every register "
+    CHECK(JS_GetOwnSlot(pend_ctx(), &v, reg, g_rv_owed_atom[cls]) > 0,
+          "engine: a pending register carries no count of one class of rendezvous it is owed — every register "
           "is built in solver/pending.c with that slot present, so its absence is a register something outside "
           "this file created, and the preempt hook would read a BLOCKED flow as runnable and spin it on a "
           "question the host only answers between scheduler steps");
     CHECK(JS_VALUE_GET_TAG(v) == JS_TAG_INT,
-          "engine: a pending register's count of the synchronous requests it is owed is not a small integer — "
+          "engine: a pending register's count of one class of rendezvous it is owed is not a small integer — "
           "this file is that slot's only writer and writes an int at every one of them");
     n = JS_VALUE_GET_INT(v);
     JS_FreeValue(pend_ctx(), v);
@@ -169,17 +175,18 @@ static int pend_sync_owed(JSValueConst reg)
    pass a new value computed from a read this file did not make. Bracketed like every other register write
    (pending.h: no delta may capture this register); the brackets nest, so a caller already inside one pays
    nothing for this. */
-static void pend_sync_owed_set(JSValueConst reg, int n)
+static void pend_rv_owed_set(JSValueConst reg, int cls, int n)
 {
     int r;
 
+    DCHECK(cls == PEND_RV_SYNC || cls == PEND_RV_ASYNC, "a rendezvous count was written for no class");
     DCHECK(JS_IsObject(reg), "a synchronous-request count was written onto something that is not a register");
     DCHECK(n >= 0, "a pending register was told it is owed a NEGATIVE number of synchronous requests — the "
                    "count is one per unanswered entry of that kind, so this is a second decrement for one "
                    "entry, or a decrement for an entry this register never held");
     pend_atoms();
     cow_engine_write_begin();
-    r = JS_DefinePropertyValue(pend_ctx(), reg, g_sync_owed_atom, JS_NewInt32(pend_ctx(), n), JS_PROP_C_W_E);
+    r = JS_DefinePropertyValue(pend_ctx(), reg, g_rv_owed_atom[cls], JS_NewInt32(pend_ctx(), n), JS_PROP_C_W_E);
     cow_engine_write_end();
     DCHECK(r >= 0, "a pending register's synchronous-request count could not be defined — the register is the "
                    "plain Array this file allocated");
@@ -288,14 +295,14 @@ int pending_entry_declined(JSValueConst e)
    would make the dev build's hot path linear in the frontier" — and this is that rule about this register: an
    audit ON the hook's read would rebuild in dev exactly the walk this removes, so the dev and release builds
    would no longer be the same scheduler. */
-static int pend_sync_owed_walk(JSValueConst reg)
+static int pend_rv_owed_walk(JSValueConst reg, int cls)
 {
     int n = pend_len(reg), i, c = 0;
 
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(reg, i);
         if (pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ && pend_owed(e) &&
-            !pending_get_int(e, PEND_ASYNC)) c++;
+            !pending_get_int(e, PEND_ASYNC) == (cls == PEND_RV_SYNC)) c++;
         JS_FreeValue(pend_ctx(), e);
     }
     return c;
@@ -319,7 +326,12 @@ static int pend_slot_of(JSValueConst reg, JSValueConst rec)
 }
 #endif
 
-int pending_blocked(JSValueConst reg) { return pend_sync_owed(reg) > 0; }
+int pending_blocked(JSValueConst reg) { return pend_rv_owed(reg, PEND_RV_SYNC) > 0; }
+
+int pending_rendezvous_owed(JSValueConst reg)
+{
+    return pend_rv_owed(reg, PEND_RV_SYNC) + pend_rv_owed(reg, PEND_RV_ASYNC) > 0;
+}
 
 /* CAN flow_deliver_one_reply TAKE THIS ENTRY — the one condition the two questions below are made of, written
    once here for the reason `pend_owed` above is: what differs between the callers is whether they want to know
@@ -671,9 +683,10 @@ JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, i
         /* AND ITS OWN COUNT OF WHAT BLOCKS ITS FLOW, PRESENT FROM THE ARRAY'S FIRST INSTANT. A register that
            acquired this slot lazily would answer the per-opcode hook from a MISSING property until something
            happened to write one, which is a hole a reader fills in rather than a producer stating "none yet"
-           (§Architecture). Zero is the positive statement, and `pend_sync_owed`'s CHECK is what makes the
+           (§Architecture). Zero is the positive statement, and `pend_rv_owed`'s CHECK is what makes the
            absence a crash instead of an answer. */
-        pend_sync_owed_set(*reg, 0);
+        pend_rv_owed_set(*reg, PEND_RV_SYNC, 0);
+        pend_rv_owed_set(*reg, PEND_RV_ASYNC, 0);
     }
     /* EVERY FIELD, ALWAYS, AND FROM THE ONE LIST — the fork counts them, so a record short of one is a record
        the fork cannot check. This was a hand-written sequence of `pend_put` calls in this file, which is a
@@ -703,7 +716,7 @@ JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, i
     /* …AND THE REGISTER LEARNS THAT ITS FLOW IS NOW BLOCKED, at the ONE site an entry of that kind is born.
        A record is pushed unanswered by construction (PENDING_FIELDS' default column gives `haveValue` JS_FALSE),
        so the push is unconditionally a debt and needs to read nothing back off the record it just built. */
-    if (kind == FLOW_PENDING_HOSTREQ) pend_sync_owed_set(*reg, pend_sync_owed(*reg) + 1);
+    if (kind == FLOW_PENDING_HOSTREQ) pend_rv_owed_set(*reg, PEND_RV_SYNC, pend_rv_owed(*reg, PEND_RV_SYNC) + 1);
     cow_engine_write_end();
     /* AND THE FRONTIER'S SET LEARNS OF IT AT THE PUSH, WHICH IS BEFORE IT CAN BE SHARED. Tracking is what
        carries the count of registers naming this record, so it has to begin at the ONE moment exactly one
@@ -859,23 +872,27 @@ void pending_answer_rendezvous(JSValueConst reg, JSValueConst e)
            "wrong one settles the entry while the flow actually parked on it keeps its count, and that flow is "
            "then skipped at every pick for the rest of the session");
 #endif
-    /* An async rendezvous never counted toward pending_blocked (pending_mark_async gave its count back). */
+    /* An async rendezvous is on the second count (pending_mark_async moved it there). */
     if (pending_get_int(e, PEND_ASYNC)) {
+        owed = pend_rv_owed(reg, PEND_RV_ASYNC);
+        DCHECK(owed > 0, "a register was told one of its async rendezvous has been answered while it counts none "
+                         "outstanding — pending_mark_async raised the count this lowers");
         pend_set_field(e, PEND_HAVE_VALUE, JS_TRUE);
+        pend_rv_owed_set(reg, PEND_RV_ASYNC, owed - 1);
         return;
     }
-    owed = pend_sync_owed(reg);
+    owed = pend_rv_owed(reg, PEND_RV_SYNC);
     DCHECK(owed > 0,
            "a register was told one of its synchronous requests has been answered while it counts none "
            "outstanding — the count is raised at the push of every entry of that kind and lowered only here "
            "and at the removal of an unanswered one, so this is one transition that reached the register twice");
     pend_set_field(e, PEND_HAVE_VALUE, JS_TRUE);
-    pend_sync_owed_set(reg, owed - 1);
+    pend_rv_owed_set(reg, PEND_RV_SYNC, owed - 1);
 }
 
 void pending_mark_async(JSValueConst reg, JSValueConst e)
 {
-    int owed = pend_sync_owed(reg);
+    int owed = pend_rv_owed(reg, PEND_RV_SYNC);
 
     DCHECK(pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ && !pending_get_int(e, PEND_HAVE_VALUE) &&
            !pending_get_int(e, PEND_ASYNC),
@@ -887,7 +904,8 @@ void pending_mark_async(JSValueConst reg, JSValueConst e)
     DCHECK(owed > 0, "a rendezvous was made async on a register that counts no blocking rendezvous — its push "
                      "raised the count this gives back");
     pend_set_field(e, PEND_ASYNC, JS_TRUE);
-    pend_sync_owed_set(reg, owed - 1);
+    pend_rv_owed_set(reg, PEND_RV_SYNC, owed - 1);
+    pend_rv_owed_set(reg, PEND_RV_ASYNC, pend_rv_owed(reg, PEND_RV_ASYNC) + 1);
 }
 
 void pending_set_bytes(JSValueConst e, int field, const void *p, size_t n)
@@ -979,9 +997,9 @@ JSValue pending_answer_standby(JSValueConst reg, int i)
     pend_set_field(dst, PEND_ANSWER_STANDBY, JS_TRUE);
     pend_set_field(dst, PEND_STANDBY_LEFT, JS_FALSE);
     /* Unanswered again, so the register counts it: the transition pending_answer_rendezvous takes back down. */
-    owed = pend_sync_owed(reg);
+    owed = pend_rv_owed(reg, PEND_RV_SYNC);
     pend_set_field(dst, PEND_HAVE_VALUE, JS_FALSE);
-    pend_sync_owed_set(reg, owed + 1);
+    pend_rv_owed_set(reg, PEND_RV_SYNC, owed + 1);
     return dst;
 }
 
@@ -1100,9 +1118,10 @@ void pending_remove(JSValue *reg, int i)
        count by pending_answer_rendezvous, and engine_host_take removes exactly those. The other path here is
        engine_host_terminate, which withdraws a rendezvous the host will never answer: that IS an unanswered
        one leaving, and it is the reason this cannot be folded into the answer door. */
-    if (pending_get_int(gone, PEND_KIND) == FLOW_PENDING_HOSTREQ && pend_owed(gone) &&
-        !pending_get_int(gone, PEND_ASYNC))
-        pend_sync_owed_set(*reg, pend_sync_owed(*reg) - 1);
+    if (pending_get_int(gone, PEND_KIND) == FLOW_PENDING_HOSTREQ && pend_owed(gone)) {
+        int cls = pending_get_int(gone, PEND_ASYNC) ? PEND_RV_ASYNC : PEND_RV_SYNC;
+        pend_rv_owed_set(*reg, cls, pend_rv_owed(*reg, cls) - 1);
+    }
     pending_index_unref(gone);
     JS_FreeValue(pend_ctx(), gone);
     cow_engine_write_begin();
@@ -1136,7 +1155,9 @@ void pending_free(JSContext *ctx, JSValue *reg)
        is checked against the thing it represents for free — every release of a register, and every fork. A
        drift caught here names the register whose count went wrong; a drift never caught is a flow silently in
        or out of the pick, which is §scheduler's razor. */
-    DCHECK(pend_sync_owed(*reg) == pend_sync_owed_walk(*reg),
+    DCHECK(pend_rv_owed(*reg, PEND_RV_ASYNC) == pend_rv_owed_walk(*reg, PEND_RV_ASYNC),
+           "a register's count of the async rendezvous it is owed disagrees with its own entries at the release");
+    DCHECK(pend_rv_owed(*reg, PEND_RV_SYNC) == pend_rv_owed_walk(*reg, PEND_RV_SYNC),
            "a register's count of the synchronous requests it is owed disagrees with its own entries at the "
            "release — the count is what the per-opcode preempt hook decides blockedness on, so a flow has been "
            "spinning on an answer that had arrived, or skipped at every pick for an answer it already had");
@@ -1254,7 +1275,9 @@ JSValue pending_fork(JSValueConst reg)
        reason the audit is at these two sites and at no third: both already walk the whole register, so the
        check adds nothing to any path, and between them they cover every register that is ever released and
        every one that is ever inherited. */
-    DCHECK(pend_sync_owed(reg) == pend_sync_owed_walk(reg),
+    DCHECK(pend_rv_owed(reg, PEND_RV_ASYNC) == pend_rv_owed_walk(reg, PEND_RV_ASYNC),
+           "a register's count of the async rendezvous it is owed disagrees with its own entries at a fork");
+    DCHECK(pend_rv_owed(reg, PEND_RV_SYNC) == pend_rv_owed_walk(reg, PEND_RV_SYNC),
            "a register's count of the synchronous requests it is owed disagrees with its own entries at a fork "
            "— the sibling inherits that count, so a wrong one is about to be copied into a second flow and "
            "both will be blocked or runnable on a number neither of their registers supports");
@@ -1267,7 +1290,8 @@ JSValue pending_fork(JSValueConst reg)
        engine_sibling_assemble does not move it either: it unshares each unanswered synchronous record and mints
        a fresh rendezvous id, and a field-identical copy of an unanswered request is still an unanswered
        request. The audit above is what makes copying a number safe rather than a hope. */
-    pend_sync_owed_set(out, pend_sync_owed(reg));
+    pend_rv_owed_set(out, PEND_RV_SYNC, pend_rv_owed(reg, PEND_RV_SYNC));
+    pend_rv_owed_set(out, PEND_RV_ASYNC, pend_rv_owed(reg, PEND_RV_ASYNC));
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(reg, i);
         /* A SECOND REGISTER NAMES THIS RECORD FROM HERE ON, and the frontier's set counts registers rather than

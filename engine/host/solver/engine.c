@@ -1734,9 +1734,10 @@ const char *engine_host_requests(void) {
        Absence shows as: host-request asks costing time in proportion to `members` on a frontier none of whose
        members is blocked. */
     for (int k = 0; (f = flow_at(k)) != NULL; k++) {
-        /* A register owing no rendezvous lists nothing below: what is listed is an unanswered rendezvous, which
-           is exactly what pending_blocked counts. */
-        if (!pending_blocked(f->pending)) continue;
+        /* A register owing no rendezvous lists nothing below: what is listed is an unanswered rendezvous of
+           either class, which is what pending_rendezvous_owed reads. An async one leaves its flow runnable, so
+           the blocking count alone would never show the host an asynchronous send. */
+        if (!pending_rendezvous_owed(f->pending)) continue;
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue p = pending_entry(f->pending, i);
             JSValue o;

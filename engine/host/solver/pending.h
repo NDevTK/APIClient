@@ -538,6 +538,11 @@ int64_t pending_get_int(JSValueConst e, int field);
  * one predicate; the number is not exported until something asks for it. */
 int  pending_blocked(JSValueConst reg);
 
+/* DOES THIS REGISTER HOLD A RENDEZVOUS THE HOST STILL OWES, blocking or async — a second predicate over the
+   blocking count and its async sibling, counted for the reason above (an unanswered rendezvous of either class
+   is unshared at a fork, so one register names it). engine_host_requests skips a register for which it is 0. */
+int  pending_rendezvous_owed(JSValueConst reg);
+
 /* IS ANY ENTRY DELIVERABLE — and DELIVERABLE ASKS THE KIND, exactly as pending_blocked one line above does.
    The two predicates read the same register and only one of them was asking what an entry IS, and that
    asymmetry is the defect rather than an omission: a SYNCHRONOUS request's answer is TAKEN by the machine that
@@ -619,9 +624,9 @@ int  pending_blocked(JSValueConst reg);
          count maintained at push, remove, release, fork and answer — solver/pending_index.{c,h} and
          solver/pending.c. Its consumer exists today and is the reason any of this is worth doing:
          `pending_ready`, asked by flow_step at the top of its arm chain on EVERY step.
-   The count itself is already modelled here and needs no invention: `pend_sync_owed` is a JS own-slot on the
+   The count itself is already modelled here and needs no invention: `pend_rv_owed` is a JS own-slot on the
    register, written under cow_engine_write_begin/end, copied at the fork, and audited against
-   `pend_sync_owed_walk` by a DCHECK at the release and at the fork. A deliverable count is that pattern with
+   `pend_rv_owed_walk` by a DCHECK at the release and at the fork. A deliverable count is that pattern with
    a different predicate, and that audit is the one thing that keeps an incrementally-maintained number honest.
    HOW ITS ABSENCE SHOWS: the census already prints both halves. `pend` per live flow rises without bound while
    `pendReady` — the deliverable population, which is what these predicates are actually looking for — stays
