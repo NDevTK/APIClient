@@ -806,7 +806,7 @@ static char *cow_site_hist_json(void) {
     char *out;
 
     for (s = head; s; s = s->next) n += strlen(s->file) + 36;
-    out = malloc(n);
+    out = json_buf_block(n);
     if (!out) return NULL;
     out[len++] = '{';
     for (s = head; s; s = s->next) {
@@ -996,7 +996,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
                       "guess solver/compose.h replaced", what);
         need += w;
     }
-    out = malloc((size_t)need + 1);
+    out = json_buf_block((size_t)need + 1);
     if (!out) return NULL;
     out[0] = '{';
     hi = 1;

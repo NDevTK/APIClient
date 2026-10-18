@@ -6,9 +6,9 @@
 #include "check.h"
 #include "core/json_buf.h"
 
-/* Every block size a growth asked for since json_buf_grown_take: an upper bound on what the buffers grown in that
-   span held at any instant, since it counts a growth's old and new blocks both and a taken buffer's bytes stay
-   counted while its caller holds them. */
+/* Every block size a growth or a json_buf_block asked for since json_buf_grown_take: an upper bound on what the
+   blocks asked in that span held at any instant, since it counts a growth's old and new blocks both and a taken
+   buffer's bytes stay counted while its caller holds them. The ask is counted, granted or not. */
 static size_t g_json_grown;
 
 static void json_buf_ensure(JsonBuf *b, size_t extra)
@@ -19,6 +19,14 @@ static void json_buf_ensure(JsonBuf *b, size_t extra)
     b->b = realloc(b->b, b->cap);
     CHECK(b->b != NULL, "json_buf: OOM growing a JSON buffer — a dropped record is a report that lies by "
                         "omission");
+}
+
+char *json_buf_block(size_t n)
+{
+    DCHECK(n > 0, "json_buf: an output block of no bytes was asked — every composer's block holds at least its "
+                  "closing NUL");
+    g_json_grown += n;
+    return malloc(n);
 }
 
 size_t json_buf_grown_take(void)

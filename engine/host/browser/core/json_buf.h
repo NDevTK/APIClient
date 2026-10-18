@@ -58,8 +58,11 @@ void  json_buf_str(JsonBuf *b, const char *s);
 /* The bytes, NUL-terminated, transferred to the caller (who frees them). The buffer is empty afterwards. */
 char *json_buf_take(JsonBuf *b);
 void  json_buf_free(JsonBuf *b);
-/* Every block size the process's buffers grew to since the previous call, which bounds from above what a
-   composition's buffers held at once: a composition's measured footprint. */
+/* An output block of `n` bytes for a composer that writes its bytes itself, counted in json_buf_grown_take's
+   footprint; the caller owns and frees it. NULL on allocation failure, which the caller answers. */
+char *json_buf_block(size_t n);
+/* Every block size the process's buffers grew to, and every json_buf_block asked, since the previous call, which
+   bounds from above what a composition's blocks held at once: a composition's measured footprint. */
 size_t json_buf_grown_take(void);
 
 #endif

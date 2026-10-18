@@ -5,6 +5,7 @@
 #include "solver/engine.h"
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"
+#include "core/json_buf.h"   /* json_buf_block: the fork census's block is counted in the census's footprint */
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -697,7 +698,7 @@ char *decide_fork_json(void)
     if (spill) n += sizeof OVERFLOW_KEY * 6 + 24;
     if (site_spill) n += sizeof SITE_OVERFLOW_KEY * 6 + 24;
     if (g_fork_total) n += sizeof LIGHTEST_KEY * 6 + 24 + sizeof SITE_LIGHTEST_KEY * 6 + 24;
-    out = malloc(n);
+    out = json_buf_block(n);
     if (!out) return NULL;
     out[len++] = '{';
     /* The bound first, before the rows it qualifies, on every object that has rows, so its absence beside rows

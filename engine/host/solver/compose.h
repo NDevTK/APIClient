@@ -57,6 +57,7 @@
 #include <stdlib.h>
 
 #include "check.h"
+#include "core/json_buf.h"   /* json_buf_block: the composed block is counted in the composition's footprint */
 
 static inline char *composef(const char *fmt, ...) APICLIENT_PRINTF(1, 2);
 
@@ -80,7 +81,7 @@ static inline char *composef(const char *fmt, ...)
     CHECK(need >= 0, "a document could not be MEASURED — vsnprintf reported an encoding error, so there is no "
                      "length to allocate and any size chosen here would be the hand-counted guess this "
                      "composer replaced");
-    out = malloc((size_t)need + 1);
+    out = json_buf_block((size_t)need + 1);
     if (!out) return NULL;
     va_start(ap, fmt);
     wrote = vsnprintf(out, (size_t)need + 1, fmt, ap);
