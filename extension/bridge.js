@@ -7027,6 +7027,9 @@ self.astDispatch = async function astDispatch(msg) {
       /* The store moves only where the table did, written from the table, so it never holds a permission the
          chokepoint refused. */
       const _persistError = changed ? await prefWriteOutcome(egressPolicyPersist()) : null;
+      /* A changed policy is the host event a residue resting on refusals waits for (frontierRestHolds), and the
+         Level-1 walk reads the policy only on a round, so a round is asked for. */
+      if (changed) _hostKick();
       /* A subject the chokepoint could not widen is not probed: `safeFetchFiringRefusal` takes an absolute URL and
          throws on an unparseable one. `null` states "this origin cannot be the subject", rendered as the reason. */
       const _subjectUsable = self.safeFetchWidenable(msg.subject);
