@@ -16,6 +16,7 @@
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_intrinsic_size.h"
 #include "core/layout/flex_item.h"
+#include "core/layout/grid_baseline.h"
 #include "core/layout/grid_track.h"
 #include "core/layout/flow_placement.h"
 #include "core/layout/layout_job.h"
@@ -2026,6 +2027,7 @@ static bool bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, BfBox *result
 {
     CssDisplay d = css_computed_display(el);
     bool container = block_flow_display_is_block_container(d);
+    bool grid = css_display_spells(d, CSS_KEYWORD_GRID) || css_display_spells(d, CSS_KEYWORD_INLINE_GRID);
     /* §17.4's wrapper is decided from the same string and BEFORE it is released, for the reason the two arms
        below are written apart: a table is block-LEVEL and is not a block CONTAINER (§9.2.1), so `container`
        cannot answer for it and the arm that handles a non-container is about flex and grid. */
@@ -2056,42 +2058,21 @@ static bool bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, BfBox *result
         *result = b;
         return true;
     }
-    /* Not a block container: a flex or grid CONTAINER, whose height is its own spec's and which establishes an
-       independent formatting context, so its margins are its own and nothing inside it is this walk's. The
-       height is asked for and crashes in the section that owns it. */
+    /* Not a block container: a flex or grid container, whose height is its own spec's and which establishes an
+       independent formatting context, so its margins are its own and nothing inside it is this walk's. Its
+       baseline is its own module's too, and it can be the last box on the stack holding one, so it is never
+       skipped or substituted. A grid gives css-grid-1 §10.6 "Grid Container Baselines"' first baseline to
+       either pass: Chrome 155 does, putting an `inline-block`'s baseline on a grid's first row whatever the
+       grid's later rows hold, where §10.6's last set would take the last row. */
     if (!container) {
-        /* ITS BASELINE IS ITS OWN MODULE'S AND MUST NOT BE GUESSED. This box is on §9.4.1's stack and can
-           therefore be the LAST box holding a line box, so an answer of "no line box here" is not a skip — it
-           would hand §10.8.1's sentence the baseline of some EARLIER box, or its own bottom margin edge, and
-           both are real coordinates on a real line that nothing downstream can tell from a measured one. */
-        if (pass != BF_BASELINE_NONE)
-            DFAILF("CSS 2.2 §10.8.1 \"Leading and half-leading\" is walking §9.4.1's stack for the baseline of "
-                   "an enclosing `inline-block` — \"the baseline of its last line box in the normal flow\" — and "
-                   "reached a box on that stack that is NOT a block container (%s), so it holds no line box of "
-                   "§9.4.2's and its baseline is defined by its own module: css-flexbox-1 §8.5 \"Flex Container "
-                   "Baselines\" for a flex container, whose own words are that \"the baselines of a flex "
-                   "container are determined as follows\" over its startmost and endmost FLEX LINES, and "
-                   "css-grid-1 §10.6 \"Grid Container Baselines\" for a "
-                   "grid container. Those two are the whole of what can arrive: `bf_element_child` above puts "
-                   "exactly `block`, `flow-root`, `list-item`, `flex` and `grid` on this stack, the first three "
-                   "are block containers, and a TABLE box crashes there instead — CSS 2.1 §17.4 Tables in the "
-                   "visual formatting model's table wrapper box is what §9.4.1 would stack, and §17.5.2 Table "
-                   "width algorithms: the 'table-layout' property is missing before its §17.5.3 Table height "
-                   "algorithms baseline is. NEITHER SKIPPING NOR SUBSTITUTING "
-                   "THE BOTTOM MARGIN EDGE IS AVAILABLE HERE: this box may be the LAST one on the stack that has "
-                   "a baseline at all, so either would put a real coordinate on a real line that no reader can "
-                   "distinguish from a measured one. BUILD the module's own baseline and report it on `BfBox` "
-                   "beside `last_baseline`, in the same frame — the distance from this box's own top content "
-                   "edge — and the placement above needs no arm added for it. IT IS REACHED LATER THAN IT "
-                   "LOOKS, so a fixture aimed at it must clear one earlier gate: core/layout/line_box.c "
-                   "collects the enclosing `inline-block` as an atomic run item with its MARGIN-BOX INLINE "
-                   "SIZE, which for a `width: auto` box is CSS 2.2 §10.3.9 \"'Inline-block', non-replaced "
-                   "elements in normal flow\"'s shrink-to-fit over css-sizing-3 §5.2 \"Intrinsic "
-                   "Contributions\" — and core/layout/intrinsic_size.c crashes there for a BLOCK-LEVEL element "
-                   "child, before any baseline is asked for. So this abort shows on an `inline-block` with a "
-                   "DECLARED inline size whose §9.4.1 stack holds a flex or grid container; the same box with "
-                   "`width: auto` stops one component earlier, naming §5.2 instead",
-                   box_subject(el, nbuf, sizeof nbuf));
+        if (pass != BF_BASELINE_NONE && grid) {
+            if (!grid_container_first_baseline_ask(el, &b.has_line_box, &b.baseline)) return false;
+        } else if (pass != BF_BASELINE_NONE) {
+            DFAILF("CSS 2.2 §10.8.1 \"Leading and half-leading\"'s walk for an enclosing `inline-block`'s baseline "
+                   "reached a flex container (%s) on §9.4.1's stack, whose baseline css-flexbox-1 §8.5 \"Flex "
+                   "Container Baselines\" defines over its first and last flex lines. Build it, reported on "
+                   "`BfBox` in the frame `baseline` uses, as a grid's is", box_subject(el, nbuf, sizeof nbuf));
+        }
         b.border_h = used_value_border_edge_px(el, true);
         *result = b;
         return true;
