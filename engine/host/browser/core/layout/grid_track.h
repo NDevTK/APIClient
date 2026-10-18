@@ -9,8 +9,9 @@
  * "Grid Layout Algorithm"), so a row's item contributes at its used column width. Readers are drives over the
  * steps; an `_ask` reader returns "not yet" instead and is re-entered from its first step. */
 /* Named residual. Not covered: gutters, content alignment that moves a track, and every grid property but
- * `display`, the two track lists (core/css/css_grid_track_list.h's residual covers their grammar) and the
- * placement properties (core/layout/grid_placement.h's covers spans). Implicit tracks are `auto`, the initial
+ * `display`, the two track lists (core/css/css_grid_track_list.h's residual covers their grammar),
+ * `grid-template-areas` and the placement properties (core/layout/grid_placement.h's covers them). An explicit
+ * track the template's areas add beyond the track list is `auto`, as implicit tracks are, the initial
  * `grid-auto-rows` and `grid-auto-columns` (§7.6 "Implicit Track Sizing"). Next diff builds: gutters, CSS
  * Gaps 1's `row-gap` and `column-gap` as fixed-size tracks between the grid's tracks. How its absence would
  * show: a page's grid aborting at grid_track.c's refusal of a declared gap. */

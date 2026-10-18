@@ -14,6 +14,7 @@
 #include "core/css/css_defaulting.h"
 #include "core/css/css_display.h"
 #include "core/css/css_font_family.h"
+#include "core/css/css_grid_template_areas.h"
 #include "core/css/css_grid_track_list.h"
 #include "core/css/css_image.h"
 #include "core/css/css_length.h"
@@ -2230,6 +2231,30 @@ bool css_computed_grid_track_list(lxb_dom_element_t *el, const char *name, CssGr
     case CSS_DEFAULTING_INHERITED:
         DFAILF("`%s: inherit`, whose value is the parent's computed track list (CSS Cascade 5 §7.2 \"Inheritance\"). "
                "BUILD that read", name);
+        break;
+    case CSS_DEFAULTING_INITIAL:
+        break;
+    }
+    free(cascaded);
+    return parsed;
+}
+
+bool css_computed_grid_template_areas(lxb_dom_element_t *el, CssGridTemplateAreas *out)
+{
+    char *cascaded;
+    bool parsed = false;
+
+    DCHECK(el != NULL && out != NULL, "a computed grid template was asked for with no element or nowhere to put it");
+    out->areas = NULL;
+    out->n = out->rows = out->columns = 0;
+    cascaded = css_cv_cascaded(el, "grid-template-areas");
+    switch (css_defaulting_of("grid-template-areas", cascaded)) {
+    case CSS_DEFAULTING_DECLARED:
+        parsed = css_grid_template_areas_parse(cascaded, out);
+        break;
+    case CSS_DEFAULTING_INHERITED:
+        DFAIL("`grid-template-areas: inherit`, whose value is the parent's computed template (CSS Cascade 5 §7.2 "
+              "\"Inheritance\"). BUILD that read");
         break;
     case CSS_DEFAULTING_INITIAL:
         break;

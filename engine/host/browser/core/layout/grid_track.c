@@ -42,9 +42,6 @@ static void gt_require_supported_columns(lxb_dom_element_t *c)
         "the css-grid-1 §7.4 \"Explicit Grid Shorthand: the grid-template property\" and §7.8 \"Grid Definition "
         "Shorthand: the grid property\" expansions into the track lists";
 
-    gt_require_initial(c, "grid-template-areas", "none",
-                       "css-grid-1 §7.3 \"Named Areas: the grid-template-areas property\", whose areas count "
-                       "explicit tracks");
     gt_require_initial(c, "grid-template", "none", SHORTHAND);
     gt_require_initial(c, "grid", "none", SHORTHAND);
     gt_require_initial(c, "grid-auto-columns", "auto",
@@ -202,17 +199,6 @@ static GridTrack *gt_push(GridAxisSizing *g, CssGridTrackKind kind, double flex,
 }
 
 /* The number of explicit tracks on one axis of `container`. */
-static size_t gt_explicit_count(lxb_dom_element_t *container, bool vertical)
-{
-    CssGridTrackList list;
-    size_t n = 0;
-
-    if (css_computed_grid_track_list(container, vertical ? "grid-template-rows" : "grid-template-columns", &list))
-        n = list.n;
-    css_grid_track_list_free(&list);
-    return n;
-}
-
 /* The axis's tracks: the explicit ones, then the implicit ones §8.5's placement needs, which `grid-auto-rows`
    and `grid-auto-columns` size, both at their initial `auto` (§7.6). A percentage resolves against the
    available grid space; with none (an indefinite size, or a min-/max-content constraint) "the <percentage> must
@@ -269,8 +255,7 @@ void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, lxb
     g->contribs = NULL;
     g->ncontribs = g->contribs_cap = 0;
     g->avail = css_px(0.0);
-    grid_placement_run(container, gt_explicit_count(container, false), gt_explicit_count(container, true),
-                       &g->placement);
+    grid_placement_run(container, &g->placement);
     /* §11.2 "Track Sizing Terminology"'s available grid space: "If the grid container's size is definite, then
        use the size of its content box." A container whose size depends on its tracks is sized under the
        max-content constraint its §5.2 auto size is defined by. */
@@ -830,7 +815,7 @@ static CssPx gt_target_extent(const GridAxisSizing *g)
 void grid_track_placement(lxb_dom_element_t *container, GridPlacement *out)
 {
     DCHECK(container != NULL && out != NULL, "a grid's placement was asked for with no container or no out");
-    grid_placement_run(container, gt_explicit_count(container, false), gt_explicit_count(container, true), out);
+    grid_placement_run(container, out);
 }
 
 bool grid_track_columns_ask(lxb_dom_element_t *container)

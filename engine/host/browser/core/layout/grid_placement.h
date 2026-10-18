@@ -1,12 +1,14 @@
 /* css-grid-1 §8 "Placing Grid Items": which grid cell each grid item occupies, from §8.3 "Line-based Placement:
  * the grid-row-start, grid-column-start, grid-row-end, and grid-column-end properties", §8.4 "Placement
  * Shorthands: the grid-column, grid-row, and grid-area properties" and §8.5 "Grid Item Placement Algorithm" in
- * `grid-auto-flow: row` with sparse packing. core/layout/grid_track.h sizes the tracks the cells are in. */
-/* Named residual. Not covered: named lines and areas (`<custom-ident>`), lines before the explicit grid, a
- * row-locked item past the implicit grid's columns, and a placement shorthand declared beside one of its own
- * longhands, each refused by name. Next diff builds: named lines, from `grid-template-columns`' and
- * `grid-template-rows`' `[<custom-ident>*]`. How its absence would show: a page's grid aborting at
- * grid_placement.c's refusal of a `<custom-ident>`. */
+ * `grid-auto-flow: row` with sparse packing, over the explicit grid of §7.1 "The Explicit Grid", whose lines
+ * §7.3.2 "Implicitly-Assigned Line Names" names from the template's areas. core/layout/grid_track.h sizes the
+ * tracks the cells are in. */
+/* Named residual. Not covered: lines before the explicit grid, a row-locked item past the implicit grid's
+ * columns, and a placement shorthand declared beside one of its own longhands, each refused by name. Line names
+ * come from the template's areas alone, since core/css/css_grid_track_list.h refuses a track list's brackets.
+ * Next diff builds: implicit tracks before the explicit grid. How its absence would show: a page's grid
+ * aborting at grid_placement.c's refusal of a line before the explicit grid. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_GRID_PLACEMENT_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_GRID_PLACEMENT_H
 
@@ -34,10 +36,9 @@ typedef struct {
    Items"). Refuses, by name, a pseudo-element or text item. */
 lxb_dom_element_t *grid_item_of(lxb_dom_element_t *container, BoxTreeChild c);
 
-/* §8.5 over `container`'s grid items, with an explicit grid of `explicit_columns` by `explicit_rows` tracks.
-   The implicit grid has at least one column, which an auto-placed item needs. */
-void grid_placement_run(lxb_dom_element_t *container, size_t explicit_columns, size_t explicit_rows,
-                        GridPlacement *out);
+/* §8.5 over `container`'s grid items, in its explicit grid. The implicit grid has at least one column, which
+   an auto-placed item needs. */
+void grid_placement_run(lxb_dom_element_t *container, GridPlacement *out);
 void grid_placement_free(GridPlacement *p);
 
 #endif

@@ -116,6 +116,7 @@
 #include "core/css/css_color.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_display.h"
+#include "core/css/css_grid_template_areas.h"
 #include "core/css/css_grid_track_list.h"
 #include "core/css/css_keyword.h"
 #include "core/css/css_length.h"
@@ -153,6 +154,11 @@ bool css_computed_transform_list(lxb_dom_element_t *el, CssTransformList *out);
    releases `*out` with `css_grid_track_list_free`. The `grid-template` and `grid` shorthands are not expanded
    here; the caller refuses them. */
 bool css_computed_grid_track_list(lxb_dom_element_t *el, const char *name, CssGridTrackList *out);
+
+/* css-grid-1 §7.3's computed `grid-template-areas` on `el`, "the keyword none or a list of string values", as
+   the named areas those strings define. False for `none`, which an invalid declaration also computes to. The
+   caller releases `*out` with `css_grid_template_areas_free`. */
+bool css_computed_grid_template_areas(lxb_dom_element_t *el, CssGridTemplateAreas *out);
 
 /* THE COMPUTED VALUE of a LENGTH-VALUED property on `el` — CSS 2.1 §8.3, §8.4, §10.2 and §10.5's one line,
    "the percentage as specified or the absolute length", plus css-backgrounds-3 §3.3's snapped border widths.

@@ -4,7 +4,10 @@
 #include <string.h>
 #include <strings.h>
 
+#include <lexbor/css/syntax/tokenizer.h>
+
 #include "check.h"
+#include "core/css/css_computed_value.h"
 #include "core/css/css_style_declaration.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/flex_item.h"
@@ -36,67 +39,102 @@ lxb_dom_element_t *grid_item_of(lxb_dom_element_t *container, BoxTreeChild c)
     return lxb_dom_interface_element(c.node);
 }
 
-/* One `<grid-line>` (§8.3): `auto`, a line number, or a span. */
+/* One `<grid-line>` (§8.3): `auto`, a line number, or a span, either of which may count only the lines of one
+   name. A lone `<custom-ident>` is a line number of 1 with `ident` set, which §8.3 first matches against a
+   named area's edge and §8.4's shorthands copy across. `name` is owned (`gp_line_free`). */
 typedef enum { GP_AUTO = 0, GP_LINE, GP_SPAN } GpKind;
 typedef struct {
     GpKind kind;
     long   n;
+    char  *name;
+    bool   ident;
 } GpLine;
 
-/* `v` (its first `len` bytes) as a `<grid-line>`. A value outside the grammar is an invalid declaration, which
-   leaves the property at its initial `auto`; `<custom-ident>` (named lines and areas) is refused by name. */
-static GpLine gp_parse_line(lxb_dom_element_t *el, const char *v, size_t len)
+static const GpLine GP_LINE_AUTO = { GP_AUTO, 0, NULL, false };
+
+static void gp_line_free(GpLine *l)
 {
-    GpLine out = { GP_AUTO, 0 };
-    char tok[2][32];
-    int ntok = 0, i;
-    size_t at = 0;
-    bool span = false, have_int = false;
+    free(l->name);
+    *l = GP_LINE_AUTO;
+}
+
+static GpLine gp_line_copy(const GpLine *l)
+{
+    GpLine out = *l;
+
+    if (l->name != NULL) {
+        out.name = strdup(l->name);
+        CHECK(out.name != NULL, "css-grid-1 §8.4: out of memory copying a `<custom-ident>` across a shorthand");
+    }
+    return out;
+}
+
+static bool gp_token_is(const lxb_css_syntax_token_string_t *s, const char *lower)
+{
+    return s->length == strlen(lower) && strncasecmp((const char *)s->data, lower, s->length) == 0;
+}
+
+/* `v` (its first `len` bytes) as a `<grid-line>`, over CSS Syntax 3's tokens so an escaped `<custom-ident>`
+   arrives unescaped: `auto | <custom-ident> | [ <integer> && <custom-ident>? ] | [ span && [ <integer> ||
+   <custom-ident> ] ]`, where the `<custom-ident>` "additionally excludes the keywords span and auto". A value
+   outside the grammar is an invalid declaration, which leaves the property at its initial `auto`. */
+static GpLine gp_parse_line(const char *v, size_t len)
+{
+    GpLine out = GP_LINE_AUTO;
+    lxb_css_syntax_tokenizer_t *tkz = lxb_css_syntax_tokenizer_create();
+    lxb_css_syntax_token_t *t;
+    bool ok = true, span = false, have_int = false, is_auto = false;
     long n = 0;
-    char buf[160];
+    int count = 0;
+    char *name = NULL;
 
-    while (at < len && ntok < 3) {
-        size_t s;
+    CHECK(tkz != NULL && lxb_css_syntax_tokenizer_init(tkz) == LXB_STATUS_OK,
+          "css-grid-1 §8.3: the placement tokenizer could not be created");
+    lxb_css_syntax_tokenizer_buffer_set(tkz, (const lxb_char_t *)v, len);
+    for (t = lxb_css_syntax_token(tkz); ok; t = lxb_css_syntax_token(tkz)) {
+        CHECK(t != NULL, "css-grid-1 §8.3: the placement tokenizer failed to allocate a token");
+        if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF) break;
+        if (t->type != LXB_CSS_SYNTAX_TOKEN_WHITESPACE) {
+            count++;
+            if (t->type == LXB_CSS_SYNTAX_TOKEN_IDENT) {
+                const lxb_css_syntax_token_string_t *s = lxb_css_syntax_token_string(t);
 
-        while (at < len && isspace((unsigned char)v[at])) at++;
-        if (at >= len) break;
-        s = at;
-        while (at < len && !isspace((unsigned char)v[at])) at++;
-        if (ntok == 2)
-            DFAILF("%s's grid placement `%.*s` has three components, which css-grid-1 §8.3's grammar admits only "
-                   "with a `<custom-ident>`. BUILD named lines", box_subject(el, buf, sizeof buf), (int)len, v);
-        if (at - s >= sizeof tok[0]) return out;
-        memcpy(tok[ntok], v + s, at - s);
-        tok[ntok][at - s] = '\0';
-        ntok++;
-    }
-    if (ntok == 0) return out;
-    if (ntok == 1 && strcasecmp(tok[0], "auto") == 0) return out;
-    for (i = 0; i < ntok; i++) {
-        char *end;
-        long x;
-
-        if (strcasecmp(tok[i], "span") == 0) {
-            if (span) return out;
-            span = true;
-            continue;
+                if (gp_token_is(s, "span")) {
+                    ok = !span;
+                    span = true;
+                } else if (gp_token_is(s, "auto")) {
+                    is_auto = true;
+                } else if (name != NULL) {
+                    ok = false;
+                } else {
+                    name = malloc(s->length + 1);
+                    CHECK(name != NULL, "css-grid-1 §8.3: out of memory copying a `<custom-ident>`");
+                    memcpy(name, s->data, s->length);
+                    name[s->length] = '\0';
+                }
+            } else if (t->type == LXB_CSS_SYNTAX_TOKEN_NUMBER && !lxb_css_syntax_token_number(t)->is_float &&
+                       !have_int) {
+                have_int = true;
+                n = (long)lxb_css_syntax_token_number(t)->num;
+            } else {
+                ok = false;
+            }
         }
-        x = strtol(tok[i], &end, 10);
-        if (*end == '\0' && end != tok[i] && (isdigit((unsigned char)tok[i][0]) || tok[i][0] == '-' ||
-                                              tok[i][0] == '+')) {
-            if (have_int) return out;
-            have_int = true;
-            n = x;
-            continue;
-        }
-        DFAILF("%s's grid placement `%.*s` names a line or area by `<custom-ident>` (css-grid-1 §8.3 "
-               "\"Line-based Placement\"), or is outside its grammar. BUILD named lines and areas",
-               box_subject(el, buf, sizeof buf), (int)len, v);
+        lxb_css_syntax_token_consume(tkz);
     }
+    lxb_css_syntax_tokenizer_destroy(tkz);
     /* "An <integer> value of zero makes the declaration invalid", and a span takes `<integer [1,∞]>`. */
-    if (!have_int || n == 0 || (span && n < 0)) return out;
+    if (is_auto && count > 1) ok = false;
+    if (span && (have_int ? n < 1 : name == NULL)) ok = false;
+    if (!span && have_int && n == 0) ok = false;
+    if (!ok || count == 0 || is_auto) {
+        free(name);
+        return out;
+    }
     out.kind = span ? GP_SPAN : GP_LINE;
-    out.n = n;
+    out.n = have_int ? n : 1;
+    out.name = name;
+    out.ident = !span && !have_int;
     return out;
 }
 
@@ -112,8 +150,8 @@ static char *gp_declared(lxb_dom_element_t *el, const char *name)
     return v;
 }
 
-/* The `i`th slash-separated part of `v`, as a span of it; false when there is none. */
-static bool gp_part(const char *v, int i, const char **s, size_t *len)
+/* The `i`th slash-separated part of `v`, parsed; false when there is none. */
+static bool gp_part(const char *v, int i, GpLine *out)
 {
     const char *p = v;
 
@@ -122,9 +160,18 @@ static bool gp_part(const char *v, int i, const char **s, size_t *len)
         if (p == NULL) return false;
         p++;
     }
-    *s = p;
-    *len = strchr(p, '/') ? (size_t)(strchr(p, '/') - p) : strlen(p);
+    *out = gp_parse_line(p, strchr(p, '/') ? (size_t)(strchr(p, '/') - p) : strlen(p));
     return true;
+}
+
+/* §8.4's rule for an omitted part: "if [the other] is a <custom-ident>", it is set to that `<custom-ident>`;
+   otherwise to `auto`. */
+static GpLine gp_part_or_copy(const char *v, int i, const GpLine *from)
+{
+    GpLine out;
+
+    if (gp_part(v, i, &out)) return out;
+    return from->ident ? gp_line_copy(from) : GP_LINE_AUTO;
 }
 
 /* The start and end `<grid-line>`s of one axis of `el`, from the longhands or §8.4's shorthands. The cascade
@@ -137,28 +184,34 @@ static void gp_axis_lines(lxb_dom_element_t *el, bool rows, GpLine *start, GpLin
     const char *sh = rows ? "grid-row" : "grid-column";
     char *vs = gp_declared(el, ls), *ve = gp_declared(el, le), *vsh = gp_declared(el, sh);
     char *varea = gp_declared(el, "grid-area");
-    const char *p;
-    size_t n;
     char buf[160];
 
-    start->kind = end->kind = GP_AUTO;
-    start->n = end->n = 0;
+    *start = *end = GP_LINE_AUTO;
     if ((vsh != NULL) + (varea != NULL) + (vs != NULL || ve != NULL) > 1)
         DFAILF("%s declares a css-grid-1 §8.4 placement shorthand beside a property it sets, which only the "
                "cascade order of the two declarations resolves. BUILD the shorthands' expansion in the cascade",
                box_subject(el, buf, sizeof buf));
-    if (vs != NULL) *start = gp_parse_line(el, vs, strlen(vs));
-    if (ve != NULL) *end = gp_parse_line(el, ve, strlen(ve));
+    if (vs != NULL) *start = gp_parse_line(vs, strlen(vs));
+    if (ve != NULL) *end = gp_parse_line(ve, strlen(ve));
     /* §8.4: `grid-row`/`grid-column` set start before the slash and end after it; `grid-area` sets row-start,
-       column-start, row-end, column-end in that order. An omitted part is `auto` once `<custom-ident>`, the one
-       value that would copy across, is refused by the parse. */
+       column-start, row-end, column-end in that order, and an omitted column-start copies a row-start
+       `<custom-ident>` ("all four longhands are set to that value"). */
     if (vsh != NULL) {
-        if (gp_part(vsh, 0, &p, &n)) *start = gp_parse_line(el, p, n);
-        if (gp_part(vsh, 1, &p, &n)) *end = gp_parse_line(el, p, n);
+        (void)gp_part(vsh, 0, start);
+        *end = gp_part_or_copy(vsh, 1, start);
     }
     if (varea != NULL) {
-        if (gp_part(varea, rows ? 0 : 1, &p, &n)) *start = gp_parse_line(el, p, n);
-        if (gp_part(varea, rows ? 2 : 3, &p, &n)) *end = gp_parse_line(el, p, n);
+        GpLine row_start = GP_LINE_AUTO;
+
+        (void)gp_part(varea, 0, &row_start);
+        if (rows) {
+            *start = row_start;
+            *end = gp_part_or_copy(varea, 2, &row_start);
+        } else {
+            *start = gp_part_or_copy(varea, 1, &row_start);
+            *end = gp_part_or_copy(varea, 3, start);
+            gp_line_free(&row_start);
+        }
     }
     free(vs);
     free(ve);
@@ -166,48 +219,119 @@ static void gp_axis_lines(lxb_dom_element_t *el, bool rows, GpLine *start, GpLin
     free(varea);
 }
 
-/* A line number as a zero-based line index, over an explicit grid of `explicit_tracks` tracks: a negative one
-   "counts in reverse, starting from the end edge of the explicit grid". */
-static long gp_line_index(long n, size_t explicit_tracks)
+/* One axis of the explicit grid (§7.1 "The Explicit Grid"): its track count and the template whose areas
+   name its lines. */
+typedef struct {
+    const CssGridTemplateAreas *areas;
+    bool rows;
+    size_t explicit_tracks;
+} GpAxis;
+
+/* The line §7.3.2 "Implicitly-Assigned Line Names" names `name` on the axis: "For each named grid area foo,
+   four implicitly-assigned line names are created", `foo-start` on its start lines and `foo-end` on its end
+   lines. One area answers a name at most once on an axis, so a name names at most one line. */
+static bool gp_named_line(const GpAxis *ax, const char *name, long *out)
 {
-    return n > 0 ? n - 1 : (long)explicit_tracks + 1 + n;
+    size_t i, n = strlen(name);
+
+    for (i = 0; i < ax->areas->n; i++) {
+        const CssGridArea *a = &ax->areas->areas[i];
+        size_t k = strlen(a->name);
+
+        if (n == k + 6 && strncmp(name, a->name, k) == 0 && strcmp(name + k, "-start") == 0) {
+            *out = (long)(ax->rows ? a->row_start : a->col_start);
+            return true;
+        }
+        if (n == k + 4 && strncmp(name, a->name, k) == 0 && strcmp(name + k, "-end") == 0) {
+            *out = (long)(ax->rows ? a->row_end : a->col_end);
+            return true;
+        }
+    }
+    return false;
+}
+
+/* `l` as a zero-based line index. A number counts from the explicit grid's start, or "in reverse, starting
+   from the end edge of the explicit grid"; with a name, "only lines with that name are counted", and "if not
+   enough lines with that name exist, all implicit grid lines are assumed to have that name". A lone
+   `<custom-ident>` first matches "a grid line whose line name is <custom-ident>-start (for grid-*-start) /
+   <custom-ident>-end (for grid-*-end)". A negative answer is a line before the explicit grid. */
+static long gp_line_at(const GpAxis *ax, const GpLine *l, bool end_side)
+{
+    long at, have;
+
+    DCHECK(l->kind == GP_LINE, "a grid line index was asked of a placement that is not a line");
+    if (l->name == NULL) return l->n > 0 ? l->n - 1 : (long)ax->explicit_tracks + 1 + l->n;
+    if (l->ident) {
+        size_t k = strlen(l->name);
+        char *edge = malloc(k + 7);
+
+        CHECK(edge != NULL, "css-grid-1 §8.3: out of memory naming a grid area's edge");
+        memcpy(edge, l->name, k);
+        strcpy(edge + k, end_side ? "-end" : "-start");
+        have = gp_named_line(ax, edge, &at);
+        free(edge);
+        if (have) return at;
+    }
+    have = gp_named_line(ax, l->name, &at);
+    if (l->n > 0) return have >= l->n ? at : (long)ax->explicit_tracks + (l->n - have);
+    return have >= -l->n ? at : -((-l->n) - have);
+}
+
+/* The line a span `l` reaches from line `from`, endward or startward: "N lines from its opposite edge in the
+   corresponding direction", counting only lines of `l->name` when it has one, and assuming "all implicit grid
+   lines on the side of the explicit grid corresponding to the search direction" have that name. */
+static long gp_span_from(const GpAxis *ax, const GpLine *l, long from, bool endward)
+{
+    long at, have = 0;
+
+    DCHECK(l->kind == GP_SPAN, "a grid span was asked of a placement that is not a span");
+    if (l->name == NULL) return endward ? from + l->n : from - l->n;
+    if (gp_named_line(ax, l->name, &at) && (endward ? at > from : at < from)) have = 1;
+    if (have >= l->n) return at;
+    if (endward) return (from > (long)ax->explicit_tracks ? from : (long)ax->explicit_tracks) + (l->n - have);
+    return (from < 0 ? from : 0) - (l->n - have);
 }
 
 /* One axis's placement: its span, and whether its start track is definite. §8.3.1 "Grid Placement Conflict
    Handling" first: "If the start line is further end-ward than the end line, swap the two lines. If the start
    line is equal to the end line, remove the end line. If the placement contains two spans, remove the one
-   contributed by the end grid-placement property." A missing span is 1 (§8.5: "if they're not explicitly
-   specified, they default to 1"). */
-static bool gp_axis_resolve(lxb_dom_element_t *el, bool rows, size_t explicit_tracks, size_t *track, size_t *span)
+   contributed by the end grid-placement property. If the placement contains only a span for a named line,
+   replace it with a span of 1." A missing span is 1 (§8.5: "if they're not explicitly specified, they default
+   to 1"). */
+static bool gp_axis_resolve(lxb_dom_element_t *el, const GpAxis *ax, size_t *track, size_t *span)
 {
     GpLine s, e;
-    long a = 0, b;
+    long a = 0, b = 1;
     bool definite = true;
     char buf[160];
 
-    gp_axis_lines(el, rows, &s, &e);
-    if (s.kind == GP_SPAN && e.kind == GP_SPAN) e.kind = GP_AUTO;
-    *span = 1;
+    gp_axis_lines(el, ax->rows, &s, &e);
+    if (s.kind == GP_SPAN && e.kind == GP_SPAN) gp_line_free(&e);
     if (s.kind == GP_LINE && e.kind == GP_LINE) {
-        a = gp_line_index(s.n, explicit_tracks);
-        b = gp_line_index(e.n, explicit_tracks);
+        a = gp_line_at(ax, &s, false);
+        b = gp_line_at(ax, &e, true);
         if (a > b) { long t = a; a = b; b = t; }
-        if (b > a) *span = (size_t)(b - a);
+        if (b == a) b = a + 1;
     } else if (s.kind == GP_LINE) {
-        a = gp_line_index(s.n, explicit_tracks);
-        if (e.kind == GP_SPAN) *span = (size_t)e.n;
+        a = gp_line_at(ax, &s, false);
+        b = e.kind == GP_SPAN ? gp_span_from(ax, &e, a, true) : a + 1;
     } else if (e.kind == GP_LINE) {
-        if (s.kind == GP_SPAN) *span = (size_t)s.n;
-        a = gp_line_index(e.n, explicit_tracks) - (long)*span;
+        b = gp_line_at(ax, &e, true);
+        a = s.kind == GP_SPAN ? gp_span_from(ax, &s, b, false) : b - 1;
     } else {
+        const GpLine *sp = s.kind == GP_SPAN ? &s : &e;
+
         definite = false;
-        if (s.kind == GP_SPAN) *span = (size_t)s.n;
-        else if (e.kind == GP_SPAN) *span = (size_t)e.n;
+        b = sp->kind == GP_SPAN && sp->name == NULL ? sp->n : 1;
     }
+    gp_line_free(&s);
+    gp_line_free(&e);
     if (definite && a < 0)
         DFAILF("%s is placed before the explicit grid's first line, which css-grid-1 §8.5 meets by adding implicit "
                "tracks at the start. BUILD those tracks", box_subject(el, buf, sizeof buf));
+    DCHECK(b > a, "a grid area resolved to no tracks after css-grid-1 §8.3.1's conflict handling");
     *track = definite ? (size_t)a : 0;
+    *span = (size_t)(b - a);
     return definite;
 }
 
@@ -254,11 +378,25 @@ void grid_placement_free(GridPlacement *p)
     p->n = 0;
 }
 
-void grid_placement_run(lxb_dom_element_t *container, size_t explicit_columns, size_t explicit_rows,
-                        GridPlacement *out)
+/* §7.1: "The size of the explicit grid is determined by the larger of the number of rows/columns defined by
+   grid-template-areas and the number of rows/columns sized by grid-template-rows/grid-template-columns." */
+static size_t gp_explicit_tracks(lxb_dom_element_t *container, const CssGridTemplateAreas *areas, bool rows)
+{
+    CssGridTrackList list;
+    size_t n = 0, from_areas = rows ? areas->rows : areas->columns;
+
+    if (css_computed_grid_track_list(container, rows ? "grid-template-rows" : "grid-template-columns", &list))
+        n = list.n;
+    css_grid_track_list_free(&list);
+    return n > from_areas ? n : from_areas;
+}
+
+void grid_placement_run(lxb_dom_element_t *container, GridPlacement *out)
 {
     BoxTreeChild c;
-    size_t n = 0, cap = 0, i, columns = explicit_columns ? explicit_columns : 1, rows = explicit_rows;
+    CssGridTemplateAreas areas;
+    GpAxis row_axis, col_axis;
+    size_t n = 0, cap = 0, i, explicit_columns, explicit_rows, columns, rows;
     size_t cursor_row = 0, cursor_col = 0;
     lxb_dom_element_t **items = NULL;
     bool *row_def, *col_def;
@@ -266,6 +404,16 @@ void grid_placement_run(lxb_dom_element_t *container, size_t explicit_columns, s
     GpOccupancy o = { NULL, 0, 0 };
 
     DCHECK(out != NULL, "a grid was placed with nowhere to put it");
+    (void)css_computed_grid_template_areas(container, &areas);
+    explicit_columns = gp_explicit_tracks(container, &areas, false);
+    explicit_rows = gp_explicit_tracks(container, &areas, true);
+    row_axis.areas = col_axis.areas = &areas;
+    row_axis.rows = true;
+    col_axis.rows = false;
+    row_axis.explicit_tracks = explicit_rows;
+    col_axis.explicit_tracks = explicit_columns;
+    columns = explicit_columns ? explicit_columns : 1;
+    rows = explicit_rows;
     for (c = box_tree_first_child(container); box_tree_child_exists(c); c = box_tree_next_sibling(container, c)) {
         lxb_dom_element_t *it = grid_item_of(container, c);
 
@@ -288,8 +436,8 @@ void grid_placement_run(lxb_dom_element_t *container, size_t explicit_columns, s
     CHECK(out->cells && row_def && col_def && row_at && col_at && rs && cs,
           "css-grid-1 §8.5: out of memory placing grid items");
     for (i = 0; i < n; i++) {
-        row_def[i] = gp_axis_resolve(items[i], true, explicit_rows, &row_at[i], &rs[i]);
-        col_def[i] = gp_axis_resolve(items[i], false, explicit_columns, &col_at[i], &cs[i]);
+        row_def[i] = gp_axis_resolve(items[i], &row_axis, &row_at[i], &rs[i]);
+        col_def[i] = gp_axis_resolve(items[i], &col_axis, &col_at[i], &cs[i]);
         /* "Determine the columns in the implicit grid": every definite column position, and "if the largest
            column span among all the items without a definite column position is larger than the width of the
            implicit grid, add columns to the end of the implicit grid to accommodate that column span". */
@@ -375,4 +523,5 @@ void grid_placement_run(lxb_dom_element_t *container, size_t explicit_columns, s
     free(cs);
     free(row_cursor);
     free(o.bits);
+    css_grid_template_areas_free(&areas);
 }
