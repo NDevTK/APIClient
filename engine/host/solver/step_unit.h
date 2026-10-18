@@ -171,6 +171,8 @@
     X(LIFECYCLE,          "document-lifecycle-stage")                             \
     X(RENDERING,          "queue-rendering-opportunity")                          \
     X(TIMER,              "fire-due-timer")                                       \
+    /* a due timer older than the reply or callback the step would have run */   \
+    X(TIMER_ARRIVED,      "fire-a-timer-that-arrived-first")                      \
     X(IDLE_PERIOD,        "start-or-run-an-idle-period")                         \
     /* NO `unhandled-rejection-notify` ROW, AND ITS ABSENCE IS A STATEMENT. HTML  */ \
     /* §8.1.4.7 Unhandled promise rejections' "notify about rejected promises" is */ \

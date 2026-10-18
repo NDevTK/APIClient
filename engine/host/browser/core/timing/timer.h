@@ -50,8 +50,20 @@ int timer_due_before(JSContext *ctx, JSValueConst moment);
    `frames[0].setTimeout("x = 1")` defines `x` on the CHILD's Window, and so does
    `setTimeout.call(frames[0], "x = 1")`. */
 
-/* FIRE THE EARLIEST DUE TIMER — the event loop's step, asked by whoever DRIVES the loop and only when it has
-   nothing else to run. Nothing is queued when a timer is set: §8.1.7 runs a task from a source that has one
+/* THE ARRIVAL STAMP OF THE TIMER SOURCE'S NEXT TASK, IF IT IS ALREADY DUE at the clock's current moment, or 0.
+   §8.7 Timers's step 12 queues the task when the wait completes, so a due entry is a queued task, and its stamp
+   (on solver/flow.h's work clock) is minted the first time this sees it due. The scheduler asks at every task
+   boundary and orders the task against replies and queued callbacks by it (HTML §8.1.7.1 Definitions, "not
+   starving other task queues").
+   Named residual. Not covered: an expiry or clock that is unknown external input answers 0; an expiry passed
+   inside a task is stamped at the task's end, after a reply the host paid during it; and a program row younger
+   than a due timer still starts first. Next diff builds: the stamp over an unknown expiry through
+   event_loop_before, a stamp at the quantum yield, and the row arm asking the stamp once `seq_compiles` is
+   hoisted. Absence shows as: a due timer's task running behind work that arrived after it was due. */
+uint64_t timer_due_stamp(JSContext *ctx);
+
+/* FIRE THE EARLIEST DUE TIMER — the event loop's step, asked by whoever DRIVES the loop when it has nothing
+   else to run, or when timer_due_stamp's task is older than the reply or callback it would run instead. Nothing is queued when a timer is set: §8.1.7 runs a task from a source that has one
    DUE, and the timer source's task is due at its expiry. Asking here, at the one moment the driver knows the
    queues are empty, is what keeps virtual time from stepping over work that is already due — a long timeout
    must not land in the middle of the work it was set to outlast.

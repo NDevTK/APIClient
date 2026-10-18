@@ -121,6 +121,7 @@
 #include "core/dom/document.h"   /* §8.7 Timers's substep 9.8.5 base URL is `global`'s document's, and the
                                     task that compiles a STRING handler runs in that document's realm */
 #include "solver/engine.h"
+#include "solver/flow.h"        /* a due entry's arrival stamp is on the work clock (timer_due_stamp) */
 #include "solver/rung_entry.h"  /* this rung's denominator — the names a program must spell to ask for it */
 #include "solver/concolic.h"   /* §8.7 Timers's handler may be unknown external input, which crosses the IDL as itself */
 #include "solver/solve.h"      /* …and an unknown handler string is the @S JS-context sink */
@@ -172,7 +173,9 @@
    `TE_FN` and held a callable only, because the string arm made no entry at all; every consequence of that is
    in this file's banner. `timer_after`'s entries are always callable, which is that algorithm's own statement
    and not a property of the field. */
-enum { TE_HANDLE = 0, TE_WHEN, TE_REPEAT, TE_TIMEOUT, TE_THIS, TE_NEST, TE_SEQ, TE_HANDLER, TE_ARG0 };
+/* TE_DUE is the entry's task's arrival on the work clock (solver/flow.h's flow_work_seq_next), minted the first
+   time timer_due_stamp sees the entry due; 0 until then. */
+enum { TE_HANDLE = 0, TE_WHEN, TE_REPEAT, TE_TIMEOUT, TE_THIS, TE_NEST, TE_SEQ, TE_DUE, TE_HANDLER, TE_ARG0 };
 
 static JSClassID g_slot = JS_INVALID_CLASS_ID;
 static JSAtom   g_atom_map = JS_ATOM_NULL, g_atom_next = JS_ATOM_NULL;
@@ -501,6 +504,58 @@ int timer_due_before(JSContext *ctx, JSValueConst moment)
     return r;
 }
 
+/* See timer.h. The walk is over every global of the agent, as timer_earliest's is, and compares numbers only: an
+   unknown expiry or clock answers 0 before anything is stamped, so this asks no question a fork would decide. The
+   earliest due entry is the one timer_run_due fires next, since any entry earlier than a due one is due too. */
+uint64_t timer_due_stamp(JSContext *ctx)
+{
+    JSValue all = navigable_tree_order(ctx);
+    uint32_t i, n = arr_len(ctx, all);
+    uint64_t best = 0;
+    double best_when = 0, best_seq = 0;
+    int unknown = 0;
+
+    for (i = 0; i < n && !unknown; i++) {
+        JSValue proxy = JS_GetPropertyUint32(ctx, all, i);
+        JSContext *docctx = window_proxy_realm(ctx, proxy);
+        JSValue now = event_loop_now(docctx), q = timer_map(docctx);
+        uint32_t k, m = arr_len(docctx, q);
+        double t = 0;
+
+        unknown = !JS_IsNumber(now);
+        if (!unknown) JS_ToFloat64(docctx, &t, now);
+        for (k = 0; k < m && !unknown; k++) {
+            JSValue e = JS_GetPropertyUint32(docctx, q, k), when = JS_UNDEFINED;
+            double w = 0, due, seq;
+
+            if (JS_IsObject(e)) when = timer_entry_when(docctx, e);
+            if (JS_IsObject(e) && !JS_IsUndefined(when) && !(unknown = !JS_IsNumber(when))) {
+                JS_ToFloat64(docctx, &w, when);
+                if (w <= t) {
+                    due = timer_entry_num(docctx, e, TE_DUE);
+                    if (due == 0) {
+                        due = (double)flow_work_seq_next();
+                        JS_SetPropertyUint32(docctx, e, TE_DUE, JS_NewFloat64(docctx, due));
+                    }
+                    seq = timer_entry_num(docctx, e, TE_SEQ);
+                    if (!best || w < best_when || (w == best_when && seq < best_seq)) {
+                        best = (uint64_t)due;
+                        best_when = w;
+                        best_seq = seq;
+                    }
+                }
+            }
+            JS_FreeValue(docctx, when);
+            JS_FreeValue(docctx, e);
+        }
+        JS_FreeValue(docctx, q);
+        JS_FreeValue(docctx, now);
+        JS_FreeValue(ctx, proxy);
+    }
+    JS_FreeValue(ctx, all);
+    return unknown ? 0 : best;
+}
+
 /* §8.7 Timers's TIMER IDENTIFIER, out of THIS global's own counter — the timer initialization steps' step 2,
    "an implementation-defined integer that is greater than zero and does not already exist in global's map of
    setTimeout and setInterval IDs".
@@ -587,6 +642,7 @@ static int timer_set(JSContext *ctx, JSValueConst timeout, int repeat, int nest,
            "1 or above and every other caller of this passes step 3's own 0");
     JS_SetPropertyUint32(ctx, entry, TE_NEST, JS_NewInt32(ctx, nest));
     JS_SetPropertyUint32(ctx, entry, TE_SEQ, JS_NewFloat64(ctx, event_loop_task_seq(ctx)));
+    JS_SetPropertyUint32(ctx, entry, TE_DUE, JS_NewFloat64(ctx, 0));
     JS_SetPropertyUint32(ctx, entry, TE_HANDLER, JS_DupValue(ctx, handler));
     for (i = 0; i < (uint32_t)argc; i++)
         JS_SetPropertyUint32(ctx, entry, TE_ARG0 + i, JS_DupValue(ctx, argv[i]));
@@ -2388,6 +2444,7 @@ void timer_init(JSContext *ctx)
        documents. There is one event loop per agent and one hook slot on it, so the claim is made once, here,
        and given back once, below. */
     engine_set_timer_hook(timer_run_due);
+    engine_set_timer_due_hook(timer_due_stamp);
     agent_state_flag("timer", &g_ready, "the declaration latch");
     agent_state_atom("timer", &g_atom_map, "§8.7 Timers's map key on a global's timer record");
     agent_state_atom("timer", &g_atom_next, "§8.7 Timers's next-handle key on that record");
@@ -2473,6 +2530,7 @@ void timer_free(JSRuntime *rt)
        core/agent_state.h found in idb_transaction. solver_agent_free asserts it, and the whole platform is
        released before the solver is. */
     engine_set_timer_hook(NULL);
+    engine_set_timer_due_hook(NULL);
     /* The MAPS are the realms' — each is released with its context, which is what the per-realm slot array is
        for, and each flow's own entries go with the delta that holds them. What this owns is the two interned
        keys. */

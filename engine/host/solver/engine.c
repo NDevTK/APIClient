@@ -781,6 +781,27 @@ void engine_set_timer_hook(int (*fn)(JSContext *ctx))
     g_timer_hook = fn;
 }
 
+static uint64_t (*g_timer_due_hook)(JSContext *ctx);
+void engine_set_timer_due_hook(uint64_t (*fn)(JSContext *ctx))
+{
+    DCHECK(fn == NULL || g_timer_due_hook == NULL,
+           "a second component claimed the timer source's arrival stamp — there is one timer source per event loop");
+    g_timer_due_hook = fn;
+}
+
+/* The timer source's due task takes the turn of a younger reply or callback (HTML §8.1.7.1 Definitions: within
+   §8.1.7.3 step 2.1's implementation-defined choice of queue, arrival order starves no queue). It is due, so the
+   step fires it without moving the clock. */
+static int engine_timer_takes_turn(JSContext *ctx, Flow *f, uint64_t timer_seq, uint64_t other_seq) {
+    int fired;
+
+    if (timer_seq == 0 || timer_seq >= other_seq || flow_blocked(f)) return 0;
+    fired = g_timer_hook(ctx);
+    DCHECK(fired, "a timer the arrival stamp found due did not fire — timer_due_stamp and timer_run_due "
+                  "disagree about which entry is the timer source's next task");
+    return fired;
+}
+
 /* The event loop's other clock-driven source: §8.1.7.3's in-parallel half, which queues an update-the-rendering
    task on the rendering task source when a navigable has a rendering opportunity. Registered by the rendering
    component, like the timer step. It is asked immediately before the timer step and yields to a timer that
@@ -8568,6 +8589,13 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * this ladder); read solver/flow.h's `deliv_ready`/`deliv_framed`/`deliv_owed`, and `stepUnitRuns`
              * beside @COLD's `live`/`framed`, before blaming this arm for a frozen `deepest`. */
             uint64_t deliv_seq = flow_stack_empty(f) ? flow_pending_ready_next_seq(f) : 0;
+            /* The timer source's due task, stamped at the first task boundary that sees it due. */
+            uint64_t timer_seq = flow_stack_empty(f) && g_timer_due_hook ? g_timer_due_hook(ctx) : 0;
+            if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq) &&
+                engine_timer_takes_turn(ctx, f, timer_seq, deliv_seq)) {
+                g_step_unit = STEP_UNIT_TIMER_ARRIVED;
+                return 0;
+            }
             if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq)) {
                 /* Whether this arm took a step the flow's task queue could have had (`g_task_held_deliv`), raised
                    before the delivery, whose settle lengthens the queue. With the stack empty a queued job is a task:
@@ -8787,6 +8815,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    arrival comparison answering yes (the remaining rows are younger than a queued task),
                    `seq_compiles` 0 is a member with no row left. Different populations; their sum is asserted at
                    the accessor. */
+                if (timer_seq != 0 && !flow_task_precedes(f, timer_seq) &&
+                    engine_timer_takes_turn(ctx, f, timer_seq, UINT64_MAX)) {
+                    g_step_unit = STEP_UNIT_TIMER_ARRIVED;
+                    return 0;
+                }
                 if (job_precedes) g_task_arm_older++; else g_task_arm_no_row++;
                 g_step_unit = STEP_UNIT_RUN_TASK;
                 flow_run_one_job(ctx, f);

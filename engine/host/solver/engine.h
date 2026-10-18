@@ -158,6 +158,9 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
    browser components below register hooks for the same reason: the scheduler may not depend on the browser
    half. */
 void engine_set_timer_hook(int (*fn)(JSContext *ctx));
+/* The timer source's arrival stamp for its next task when that task is already due (core/timing/timer.h's
+   timer_due_stamp), registered by the timer component beside the step above. */
+void engine_set_timer_due_hook(uint64_t (*fn)(JSContext *ctx));
 /* HTML §8.1.7.3's in-parallel half, the rendering task source (rendering.h). Asked immediately before the timer
    step: both are due on the one virtual clock, and this one defers to a timer that expires first. */
 void engine_set_rendering_hook(int (*fn)(JSContext *ctx, bool due_only));
