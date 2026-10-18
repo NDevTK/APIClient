@@ -955,7 +955,8 @@ function clusterKeyOf(msg) {
          "missing one would key with every empty principal of its group");
   return String(msg.groupId) + "\u0000" + msg.origin;
 }
-/* The frontier key is the document's address plus its program: `address + "|" + bundle`, with the bundle id
+/* The frontier key is the document's address, identity and program: `address|identity|bundle` (frontierKeyOf,
+   whose identity half separates partitions and credential states), with the bundle id
    computed by the engine (qjs_bundle_id, a Lexbor <script> scan of the external src set, whose content-hashed
    names are the app version). A recipe is a path, not a function: solver/cold.c writes `f<chain-id>,<reward>`,
    a positional id into the decision chain that document's own scripts built, so it replays only in the same
@@ -1159,7 +1160,7 @@ function egressPolicyPersist() {
      answers in exactly the shape `safeFetchEgressStated` takes. */
   return frontierPrefPut("exploreOrigins", self.safeFetchEgressTable());
 }
-/* A frontier entry: { key: address|bundle, sourceUrl, topLevelUrl, origin, responseHeaders, html, code,
+/* A frontier entry: { key: address|identity|bundle, sourceUrl, topLevelUrl, origin, responseHeaders, html, code,
    recipes, paid, serviceUs, credentialed, provenance }, plus `shed`/`stranded` for a shed entry. Rehydration
    rebuilds the document from (html, code) and resumes the recipes, so a parked flow on any site can advance
    later even when that page is not open. */
@@ -1508,20 +1509,37 @@ async function frontierGet(key) {
 /* The cold tier's lookup, which answers why a key missed and not only whether: nothing was ever parked for
    this document, something is parked at this address under another bundle id (the key working), or this key
    is stored and the read did not return it (the only defect).
-   The key is composed `address + "|" + bundle`, so all entries for one address are a contiguous run of the
-   store's key order and a bounded `getAllKeys` finds them without deserializing any record or adding an index.
+   The key is composed `address + "|" + identity + "|" + bundle` (frontierKeyOf), so all entries for one address
+   are a contiguous run of the store's key order and a bounded `getAllKeys` finds them without deserializing
+   any record or adding an index.
    Both reads ride one transaction, a consistent snapshot against this zone's writes, so "get absent, scan
    present" is the store contradicting itself, never an interleaving, which is what entitles the DCHECK.
    A `keys` of null is the edge failing, not an empty store. */
 function frontierAddressRange(sourceUrl) {
   return IDBKeyRange.bound(sourceUrl + "|", sourceUrl + "|￿");
 }
-/* The address half of a stored key. The bundle id is base-36, so it cannot contain `|` and the last `|` is the
-   joint; a stored address that itself ends in `|<x>` sorts inside the range and is rejected here. */
+/* A document's frontier key: its address, its identity (frontierIdentityTag: the cookie partition key and
+   whether its load carries the session) and its bundle id. Two documents at one address under different
+   partitions or credential states park and resume apart. Its caller has asked the address's host. */
+function frontierKeyOf(address, origin, credentialed, bundle) {
+  DCHECK(typeof bundle === "string" && /^[0-9a-z]+$/.test(bundle),
+         "a frontier key was composed with the bundle id " + JSON.stringify(bundle) + ", not a base-36 number");
+  return address + "|" + frontierIdentityTag(address, origin, credentialed) + "|" + bundle;
+}
+/* The three halves of a stored key. The bundle id is base-36 and the identity is URI-encoded, so neither holds
+   `|` and the last two are the joints; a stored address that itself ends in `|<x>|<y>` sorts inside the
+   range and is rejected by the caller's comparison. */
 function frontierKeyAddress(key) {
-  const k = String(key);
-  const i = k.lastIndexOf("|");
+  const k = String(key), j = k.lastIndexOf("|"), i = j < 0 ? -1 : k.lastIndexOf("|", j - 1);
   return i < 0 ? null : k.slice(0, i);
+}
+function frontierKeyIdentity(key) {
+  const k = String(key), j = k.lastIndexOf("|"), i = j < 0 ? -1 : k.lastIndexOf("|", j - 1);
+  return i < 0 ? null : k.slice(i + 1, j);
+}
+function frontierKeyBundle(key) {
+  const k = String(key), j = k.lastIndexOf("|");
+  return j < 0 ? null : k.slice(j + 1);
 }
 async function frontierLookup(key, sourceUrl) {
   try {
@@ -1546,13 +1564,15 @@ async function frontierLookup(key, sourceUrl) {
      `not-asked`     — this document does not persist a residue, so the store was not asked.
      `unreadable`    — the store's read edge failed (frontierFail aborts in dev); not "never visited".
      `unvisited`     — no entry for this address under any bundle id: a first visit.
-     `other-bundle`  — entries for this address, none under this bundle id: the key doing its job. It names the
-                       observation; a redeploy is the usual cause but is an inference.
+     `other-bundle`  — entries for this address and identity, none under this bundle id: the key doing its job.
+                       It names the observation; a redeploy is the usual cause but is an inference.
+     `other-identity` — entries for this address, none under this document's identity (another partition or
+                       credential state): a different document, which resumes none of them.
      `unread`        — this key is stored and the get did not answer it; the only defect of the six.
      `hit`           — the key answered and the session resumes from it.
    `others` is the evidence beside the word, not entailed by it (a hit can have older deploys' residues
    parked beside it). It is `null` on the two arms that counted nothing. */
-const COLD_LOOKUP = ["hit", "unvisited", "other-bundle", "unread", "not-asked", "unreadable"];
+const COLD_LOOKUP = ["hit", "unvisited", "other-bundle", "other-identity", "unread", "not-asked", "unreadable"];
 function coldLookupOf(fkey, look) {
   if (look === null) return { state: "not-asked", others: null };
   if (look.keys === null) return { state: "unreadable", others: null };
@@ -1576,7 +1596,9 @@ function coldLookupOf(fkey, look) {
           "it belongs to and every visit to this document will re-explore from a boot flow for ever");
     return { state: "unread", others: others };
   }
-  return { state: others > 0 ? "other-bundle" : "unvisited", others: others };
+  if (others === 0) return { state: "unvisited", others: others };
+  const sameIdentity = look.keys.some((k) => frontierKeyIdentity(k) === frontierKeyIdentity(fkey));
+  return { state: sameIdentity ? "other-bundle" : "other-identity", others: others };
 }
 /* The one write, settled when its transaction commits (idbWrite). It rejects on failure like every edge here;
    there is no quota arm (`unlimitedStorage`), and residency is asked by frontierPut after the write lands. The
@@ -1655,9 +1677,34 @@ function frontierBodiesReady() {
         const stored = await frontierStoredForm(e);
         await frontierWrite(e.key, stored, e.html);
       }
+      await frontierKeysConverted(db);
     } catch (e) { RETHROW_FATAL(e); frontierFail("body conversion", e); }
   })();
   return _frontierBodiesConverted;
+}
+/* The one reader of the address-only key: an entry an older build keyed `address|bundle` moves to its
+   identity key (frontierKeyOf over its stored principal and session state), in one transaction that asserts
+   the new key is free. Its body is named by the same one entry, so no reference count moves. */
+async function frontierKeysConverted(db) {
+  const all = await new Promise((res, rej) => {
+    const t = db.transaction("frontier").objectStore("frontier").getAll();
+    t.onsuccess = () => res(t.result || []); t.onerror = () => rej(t.error);
+  });
+  await level1AskSites([].concat(...all.map((e) => [e.sourceUrl, e.origin])).filter((u) => u.indexOf("null") !== 0));
+  for (const e of all) {
+    const want = frontierKeyOf(e.sourceUrl, e.origin, e.credentialed, frontierKeyBundle(e.key));
+    if (want === e.key) continue;
+    await idbWriteStores(["frontier"], "default", (st) => {
+      const g = st.frontier.get(want);
+      g.onsuccess = () => {
+        DCHECK(g.result === undefined,
+               "an entry keyed " + e.key + " is being moved to its identity key " + want + ", which another " +
+               "entry already holds — one document's residue would replace another's");
+        st.frontier.put(Object.assign({}, e, { key: want }), want);
+        st.frontier.delete(e.key);
+      };
+    });
+  }
 }
 async function frontierAll() {
   try {
@@ -2046,6 +2093,17 @@ function _candRanked(cen, kind, url, row, tree) {
    document nested in a cross-site one). `origin` is the document's principal ("null" or "null:<uuid>" for an
    opaque one). Its caller has asked the address's host. */
 function documentIdentityOf(address, origin, credentialed) {
+  const pk = _documentPartitionKey(address, origin, credentialed);
+  return JSON.stringify([address, pk.topLevelSite, pk.hasCrossSiteAncestor, credentialed]);
+}
+/* The identity half of a frontier key (frontierKeyOf): the same partition key and session state, spelled
+   with no `|`. */
+function frontierIdentityTag(address, origin, credentialed) {
+  const pk = _documentPartitionKey(address, origin, credentialed);
+  return encodeURIComponent(pk.topLevelSite === null ? "" : pk.topLevelSite) + "," +
+         (pk.hasCrossSiteAncestor ? 1 : 0) + "," + (credentialed ? 1 : 0);
+}
+function _documentPartitionKey(address, origin, credentialed) {
   DCHECK(typeof address === "string" && URL.canParse(address) && typeof origin === "string" &&
          typeof credentialed === "boolean",
          "a document identity was asked of " + JSON.stringify([address, origin, credentialed]) + " — every " +
@@ -2057,7 +2115,7 @@ function documentIdentityOf(address, origin, credentialed) {
          (pk.topLevelSite === siteOf(address) && !pk.hasCrossSiteAncestor),
          "the cookie partition key of " + address + " (principal " + origin + ") is " + JSON.stringify(pk) +
          ", not the site of its own URL " + JSON.stringify(siteOf(address)));
-  return JSON.stringify([address, pk.topLevelSite, pk.hasCrossSiteAncestor, credentialed]);
+  return pk;
 }
 /* Every frontier member of a population by its identity, as {kind, label}: the resident instances and the
    loading seats (each states the identity it loads), the waiting documents and the parked rows. The first
@@ -3174,7 +3232,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   DCHECK(originOf(msg && msg.sourceUrl) !== "",
          "this zone could not serialize an origin from a document address the engine's own url.c accepted — " +
          "the frontier key would name a document by a string the two parsers do not agree is one");
-  const fkey = msg.sourceUrl + "|" + _bid;
+  await siteAsk(siteHostsOf([msg.sourceUrl, msg.origin]));
+  const fkey = frontierKeyOf(msg.sourceUrl, msg.origin, msg.credentialed, _bid);
   /* One read that answers why a key missed beside what it found (see COLD_LOOKUP): frontierLookup asks the key
      and, in the same transaction, the keys stored for this address. The three fields are written here, at the
      one moment the answer exists. */
@@ -3193,6 +3252,14 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          "DIFFERENT address (" + (prior && prior.sourceUrl) + " vs " + msg.sourceUrl + ") — the engine seeds " +
          "from recipes instead of a boot flow, so this document would be replayed along another one's " +
          "decision vectors and never explored from its own first script");
+  /* …and by a document of the same identity: a residue parked under another partition or credential state
+     would replay that document's decisions under this one's session. */
+  DCHECK(!prior || documentIdentityOf(prior.sourceUrl, prior.origin, prior.credentialed) ===
+                   documentIdentityOf(msg.sourceUrl, msg.origin, msg.credentialed),
+         "the cold tier answered this document's frontier key with a residue of another identity (" +
+         (prior && documentIdentityOf(prior.sourceUrl, prior.origin, prior.credentialed)) + " vs " +
+         documentIdentityOf(msg.sourceUrl, msg.origin, msg.credentialed) + ") — the key names the identity, " +
+         "so the store and its key have parted");
   // Phase 2: seed the frontier, fresh or from parked recipes. Each step is one slice, ended at the CPU quantum.
   /* The residue handed over, named before it is sent: solver/engine.c seeds from recipes or a boot flow and
      never both, so "" is this zone's own statement that nothing was resumed. */
@@ -5020,7 +5087,7 @@ async function hostNotice(eng, line) {
      broadcast only to live instances, so a death announced while this document is parked is missed and the
      resuming instance would hold a segment for an ended world for the rest of its process.
      What to build: a persisted index from world name to the parked document carrying a segment for it (the
-     frontier entry is keyed by address|bundle, so this is a reverse map or a store of its own), surviving a
+     frontier entry is keyed by address|identity|bundle, so this is a reverse map or a store of its own), surviving a
      browser restart as the residue does, drained into the resuming instance's `worldGone` after `begin`. */
   if (f[0] === "world.parked") {
     DCHECK(f.length >= 2 && !!f[1],
@@ -5925,7 +5992,7 @@ async function admitSeatLand(seat) {
     /* The principal resumes with the recipe: a parked flow resumes into the same world only under the same
        principal, which cannot be re-derived from the address. The stamp site refuses an empty one. */
     /* A resumed recipe is a cluster of one: the group it parked in is gone, so its group is `cold:` plus its
-       frontier key (address|bundle, unique per recipe, never a tab id), which also lets an empty principal
+       frontier key (address|identity|bundle, unique per recipe, never a tab id), which also lets an empty principal
        collide with nothing. */
     const msg = { type: "AST_ANALYZE", pageHtml: doc.html, code: doc.code, sourceUrl: doc.sourceUrl,
                   origin: doc.origin, groupId: "cold:" + seat.what.key,
@@ -6379,6 +6446,10 @@ const _hostOps = {
              String(_nov.landed) + ", paid " + String(_nov.paid) + ") — both are the landed novel " +
              "credits of one instance read after its last step, and the paid asks bound them");
       const _account = engineAccount(eng);
+      DCHECK(result._fkey === frontierKeyOf(eng.msg.sourceUrl, eng.origin, eng.msg.credentialed, eng._bundleId),
+             "a run is parking under the frontier key " + result._fkey + " while the document it stores is " +
+             frontierKeyOf(eng.msg.sourceUrl, eng.origin, eng.msg.credentialed, eng._bundleId) + " — the key " +
+             "was composed at the root from the same record, so its identity or bundle moved under the run");
       await frontierPut(result._fkey, {
         /* The recipe carries its environment: the top-level creation URL (HTML §8.1.3.5 Secure contexts decides
            from it which Web IDL §3.3.13 [SecureContext] members exist), the browser-stated principal (a resumed

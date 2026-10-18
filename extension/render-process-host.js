@@ -57,11 +57,11 @@
  * And it was FACTUALLY FALSE ABOUT THIS TREE, so it was a live landmine. `bridge.js` rehydrates a cold recipe
  * with `groupId: "cold:" + c.key` and that frontier key carries a `|` in the group half, on every cross-session
  * resume there has ever been.
- * THIS SENTENCE SAID THE KEY WAS `origin + "|" + bundleId` AND IT IS `address + "|" + bundleId`, and the wording
+ * THIS SENTENCE SAID THE KEY WAS `origin + "|" + bundleId` AND IT IS `address|identity|bundleId`, and the wording
  * is REWRITTEN rather than deleted because the retired half is the one a reader re-derives: the group id is
  * `"cold:" + key`, so `origin` is what a reader supplies for the first half when they have not opened the
- * composer. The composer is `bridge.js`'s `const fkey = msg.sourceUrl + "|" + _bid`, and that file says it in
- * prose too — "a frontier key is `address|bundle`". THE CORRECTION STRENGTHENS THIS PARAGRAPH RATHER THAN
+ * composer. The composer is `bridge.js`'s `frontierKeyOf(address, origin, credentialed, bundle)`, and that file
+ * says it in prose too. THE CORRECTION STRENGTHENS THIS PARAGRAPH RATHER THAN
  * weakening it: an ORIGIN is a scheme, host and port and admits a small character set, while an ADDRESS carries
  * a path and a QUERY, so the group half can hold very nearly anything — which is exactly why a character set was
  * the wrong instrument and injectivity is the right one. A stale coordinate that makes an argument look weaker

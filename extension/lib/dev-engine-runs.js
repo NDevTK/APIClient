@@ -76,6 +76,9 @@ function devEngineRunsSection(runs) {
       case "other-bundle": coldTxt = `cold tier MISS${_bid} — ${_oth} entr${m.coldOther === 1 ? "y" : "ies"} `
                                    + `parked at this address under OTHER bundle ids, so the bundle changed and `
                                    + `the key is correct to miss`; break;
+      case "other-identity": coldTxt = `cold tier MISS${_bid} — ${_oth} entr${m.coldOther === 1 ? "y" : "ies"} `
+                                   + `parked at this address under another partition or credential state, `
+                                   + `which are other documents`; break;
       case "unread":       coldTxt = `cold tier DEFECT${_bid} — the store enumerates this run's own key for `
                                    + `this address and answered a read of it with nothing`; break;
       case "hit":          coldTxt = `cold tier HIT${_bid}`
