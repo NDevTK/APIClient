@@ -44,24 +44,18 @@
 //
 //   node testing/egress_arm_probe.mjs
 "use strict";
-import { readFileSync } from 'node:fs';
-import { createContext, runInContext } from 'node:vm';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createContext } from 'node:vm';
+import { loadZone, processSiteRpc } from '../engine/zone.mjs';
 
-const EXT = join(dirname(fileURLToPath(import.meta.url)), '..', 'extension');
 
-/* THE CHOKEPOINT, LOADED THE WAY A HOST LOADS IT. `engine/trusted.mjs`'s own ZONE does exactly this — the
-   same two files, in the same order, into a context whose `self` is itself — because `ast-worker.html` loads
-   them in that order and a probe that assembled the zone differently would be measuring a different
-   program. The sandbox is minimal on purpose: nothing below opens a socket. */
+/* The chokepoint, loaded by engine/zone.mjs in ast-worker.html's order, as every process host loads it.
+   Nothing below opens a socket; a site question is answered from the engine's own list. */
 function zone() {
-  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder };
+  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, Headers, Response, swRpc: processSiteRpc };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/safe-fetch.js'])
-    runInContext(readFileSync(join(EXT, f), 'utf8'), sandbox, { filename: join(EXT, f) });
+  loadZone(sandbox);
   for (const n of ['safeFetchEgressStated', 'safeFetchFiringRefusal', 'safeFetchSignalVector',
                    'safeFetchDefaultArms', 'safeFetchPostRefusal'])
     if (typeof sandbox[n] !== 'function')

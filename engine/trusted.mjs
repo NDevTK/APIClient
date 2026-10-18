@@ -138,15 +138,15 @@
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readFileSync, mkdirSync, realpathSync } from 'node:fs';
-import { createContext, runInContext } from 'node:vm';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { createContext } from 'node:vm';
 import { topLevelFactFields as topLevelFacts } from './top_level_facts.mjs';
 import { NAVIGABLE_NOTICE, navigableNoticeField } from './noticegen.mjs';
 import { siteRegistrableDomains } from './psl.mjs';
 import { abortRecord } from './abort_record.mjs';
+import { loadZone } from './zone.mjs';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
-const EXT_DIR = join(ENGINE, '..', 'extension');
 
 /* A page request speaks as its document (extension/lib/speak-as.js): the extension sets the identity's
    headers with declarativeNetRequest rules scoped to the document's sends, which a process has no
@@ -189,12 +189,7 @@ export const ZONE = (() => {
   sandbox.globalThis = sandbox;
   createContext(sandbox);
   speakAsHost(sandbox);
-  for (const f of ['check.js', 'lib/site.js', 'lib/referrer-policy.js',
-                   'lib/request-identity.js', 'lib/cookie-store.js', 'speak-as-rule.js', 'lib/speak-as.js',
-                   'lib/navigable-notice.js',
-                   'lib/document-record.js',
-                   'lib/http-cache.js', 'lib/safe-fetch.js', 'lib/novelty-set.js'])
-    runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
+  loadZone(sandbox);
   if (typeof sandbox.safeFetch !== 'function')
     throw new Error('extension/lib/safe-fetch.js did not install `safeFetch` — this zone loads that file ' +
                     'verbatim rather than restating its rules, so a load that installs nothing leaves this ' +

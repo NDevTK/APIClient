@@ -88,11 +88,11 @@ import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { createContext, runInContext } from 'node:vm';
+import { createContext } from 'node:vm';
+import { loadZone, processSiteRpc } from './zone.mjs';
 import { loadavg } from 'node:os';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
-const EXT_DIR = join(ENGINE, '..', 'extension');
 
 /* TWO AUTHORITIES, ONE PORT, AND THE PAIR IS A CHOICE WITH A REASON RATHER THAN A CONVENIENCE. HTML's origin
    is the (scheme, host, port) tuple, and `127.0.0.1` and `localhost` are two different HOSTS — an IPv4 address
@@ -230,13 +230,11 @@ const PROBE_PERMITS = {
    CLAUDE.md §Fix-the-ROOT is the rule, and the alternative — state it at the call site, one line later — is
    the same window one statement narrower. */
 function loadChokepoint(peerOrigin) {
-  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder };
+  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, Headers, Response, swRpc: processSiteRpc };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/http-cache.js',
-                   'lib/safe-fetch.js'])
-    runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
+  loadZone(sandbox);
   if (typeof sandbox.safeFetch !== 'function')
     throw new Error('extension/lib/safe-fetch.js installed no `safeFetch` — this gate asks that file whether ' +
                     'the two loopback authorities may reach each other, and a load that installs nothing ' +

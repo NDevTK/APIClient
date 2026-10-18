@@ -11,13 +11,9 @@
  * over an invented misroute (the negative control, which it must reject) and over the armed reading (which must
  * carry deliveries, so a relation over nothing cannot pass).
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
+import { loadZone } from './zone.mjs';
 
-const ENGINE = dirname(fileURLToPath(import.meta.url));
-const EXT_DIR = join(ENGINE, '..', 'extension');
 
 /* This realm has no IndexedDB, so the zone's load-time restores reject through frontierFail's DFAIL; they are
    not the routing, so each is counted and any other rejection kills the run (level1.mjs's rule). */
@@ -31,15 +27,15 @@ process.on('unhandledRejection', (e) => {
 });
 async function swRpc(method) { throw new Error('this driver answers no service-worker call `' + method + '`'); }
 const ZONE = (() => {
-  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, MessageChannel, swRpc };
+  /* `_globalStoreReady` is offscreen-brain.js's read of the cumulative store, which this realm does not load;
+     it never settles, so bridge.js's start-up kick never drives the live pool under these rows. */
+  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, MessageChannel, swRpc,
+                    _globalStoreReady: new Promise(() => {}) };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   sandbox.module = { exports: {} };
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/site.js', 'lib/referrer-policy.js',
-                   'lib/request-identity.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/safe-fetch.js',
-                   'bridge.js'])
-    runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
+  loadZone(sandbox, ['bridge.js']);
   return sandbox;
 })();
 const B = ZONE.module.exports;

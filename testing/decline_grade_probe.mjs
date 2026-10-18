@@ -28,14 +28,11 @@
 //
 //   node testing/decline_grade_probe.mjs
 "use strict";
-import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { createContext, runInContext } from 'node:vm';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createContext } from 'node:vm';
 import { siteRegistrableDomains } from '../engine/psl.mjs';
+import { loadZone } from '../engine/zone.mjs';
 
-const EXT = join(dirname(fileURLToPath(import.meta.url)), '..', 'extension');
 const REACHED = 'DECLINE_GRADE_PROBE_REACHED_THE_WIRE';
 
 /* The edge of the default realm: no network, no relay. */
@@ -55,12 +52,7 @@ function zone(edge, table) {
   const sandbox = { console, URL, TextDecoder, TextEncoder, Headers, Response, fetch: edge.fetch, swRpc };
   sandbox.self = sandbox; sandbox.globalThis = sandbox;
   createContext(sandbox);
-  /* The ast-worker.html order for the files a credentialed navigation's identity is built and spoken by. */
-  for (const f of ['check.js', 'lib/site.js', 'lib/referrer-policy.js',
-                   'lib/request-identity.js', 'lib/cookie-store.js', 'speak-as-rule.js', 'lib/speak-as.js',
-                   'lib/navigable-notice.js',
-                   'lib/document-record.js', 'lib/http-cache.js', 'lib/safe-fetch.js'])
-    runInContext(readFileSync(join(EXT, f), 'utf8'), sandbox, { filename: join(EXT, f) });
+  loadZone(sandbox);
   for (const n of ['safeFetch', 'safeFetchEgressStated'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js installed no \`${n}\` — this probe reads the chokepoint's ` +

@@ -46,10 +46,10 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createContext, runInContext } from 'node:vm';
+import { createContext } from 'node:vm';
+import { loadZone } from './zone.mjs';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
-const EXT_DIR = join(ENGINE, '..', 'extension');
 
 /* THE ZONE, LOADED VERBATIM INTO A CONTEXT OF ITS OWN — `engine/trusted.mjs`'s construction, one file over,
    for the same reason: evaluating `check.js` over THIS realm would install `DCHECK`/`CHECK` into a driver
@@ -101,10 +101,7 @@ const ZONE = (() => {
   sandbox.globalThis = sandbox;
   sandbox.module = { exports: {} };
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/site.js', 'lib/referrer-policy.js',
-                   'lib/request-identity.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/safe-fetch.js',
-                   'lib/novelty-set.js', 'bridge.js'])
-    runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
+  loadZone(sandbox, ['bridge.js']);
   return sandbox;
 })();
 const B = ZONE.module.exports;
