@@ -50653,6 +50653,22 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JS_ThrowTypeError(ctx, "invalid 'in' operand");
                 goto exception;
             }
+            if (unlikely(g_concolic.is && g_concolic.is(sp[-1]))) {
+                /* Over an unknown object whether it holds the key is unknown, so a branch over the answer forks;
+                   the class's [[HasProperty]] answers true for every key, which would delete the absent arm. */
+                JSValue hb;
+
+                DCHECK(g_concolic.has_property != NULL,
+                       "a host installed the concolic value class without JSConcolicHooks.has_property");
+                hb = g_concolic.has_property(ctx, sp[-1], sp[-2]);
+                DCHECK(!JS_IsUninitialized(hb), "the `in` hook declined an operand `is` answered unknown for");
+                if (JS_IsException(hb)) goto exception;
+                JS_FreeValue(ctx, sp[-2]);
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-2] = hb;
+                sp--;
+                BREAK;
+            }
             {
                 /* EVERY object, not just a Proxy. Narrowing to one was a recognizer selecting a C fallback:
                    js_operator_in walks the whole prototype chain with JS_HasProperty, so a trap anywhere ABOVE an

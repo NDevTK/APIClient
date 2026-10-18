@@ -4740,6 +4740,56 @@ void concolic_mark_json_value(JSValueConst v) {
     if (c) c->json_value = 1;
 }
 
+/* §7.3.12 HasProperty ( O, P ) over an example, by §10.1.7.1 OrdinaryHasProperty's walk of own slots, which runs
+   none of the page's code: 1 with *has set, or 0 where a link is a Proxy, whose `has` trap is the page's. */
+static int example_has(JSContext *ctx, JSValueConst ex, JSAtom atom, int *has)
+{
+    JSValue o = JS_DupValue(ctx, ex), ev, proto;
+    int flags;
+
+    *has = 0;
+    while (JS_IsObject(o)) {
+        if (JS_IsProxy(o)) { JS_FreeValue(ctx, o); return 0; }
+        if (example_slot(ctx, o, atom, &ev, &flags)) {
+            JS_FreeValue(ctx, ev);
+            JS_FreeValue(ctx, o);
+            *has = 1;
+            return 1;
+        }
+        proto = JS_GetPrototype(ctx, o);
+        JS_FreeValue(ctx, o);
+        o = proto;
+    }
+    CHECK(!JS_IsException(o), "concolic: an example's prototype could not be read");
+    return 1;
+}
+
+JSValue concolic_has_property_hook(JSContext *ctx, JSValueConst obj, JSValueConst key) {
+    JSValueConst ops[2] = { obj, key };
+    JSValue example = JS_UNDEFINED;
+    ConcolicExState st;
+
+    if (!concolic_is(obj)) return JS_UNINITIALIZED;
+    st = concolic_example_state(obj);
+    if (st == CONCOLIC_EX_HELD || st == CONCOLIC_EX_DETERMINED) {
+        JSValue ex = concolic_example(ctx, obj);
+        JSValue kx = concolic_is(key) ? concolic_example(ctx, key) : JS_DupValue(ctx, key);
+        int has;
+
+        /* `in` over an example that is not an Object throws, and a key with no bytes names no member. */
+        if (JS_IsObject(ex) && (!concolic_is(key) || concolic_example_present(key)) && example_operable(kx)) {
+            JSAtom a = JS_ValueToAtom(ctx, kx);
+
+            CHECK(a != JS_ATOM_NULL, "concolic: OOM naming an `in` key's example");
+            if (example_has(ctx, ex, a, &has)) example = JS_NewBool(ctx, has);
+            JS_FreeAtom(ctx, a);
+        }
+        JS_FreeValue(ctx, kx);
+        JS_FreeValue(ctx, ex);
+    }
+    return concolic_new_derived(ctx, "in", ops, 2, example);
+}
+
 /* `x in concolic` / property existence: a concolic collection "has" any key, so a membership gate still runs. */
 static int concolic_exotic_has(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     (void)ctx; (void)atom;
@@ -5993,6 +6043,7 @@ static JSConcolicHooks g_hooks = {
     .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is,
     .rel = concolic_rel_hook, .type_of = concolic_typeof_hook, .is_array = concolic_isarray_hook,
     .json_value = concolic_mark_json_value, .member_never_callable = concolic_member_never_callable,
+    .has_property = concolic_has_property_hook,
     .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
     .to_bool = concolic_tobool_hook,
     .key_read = concolic_key_read_hook,

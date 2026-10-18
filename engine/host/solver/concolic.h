@@ -824,6 +824,8 @@ int         concolic_rel_hook(JSContext *ctx, JSValue *sp, int op);
 /* JSConcolicHooks.type_of — `typeof` an unknown is an unknown string, so the comparison forks. */
 JSValue     concolic_typeof_hook(JSContext *ctx, JSValueConst v);   /* JS_UNINITIALIZED = not concolic, run the real typeof */
 JSValue     concolic_isarray_hook(JSContext *ctx, JSValueConst v);  /* JS_UNINITIALIZED = not concolic, run IsArray */
+/* `key in obj` over an unknown `obj` (JSConcolicHooks.has_property); JS_UNINITIALIZED = `obj` is not concolic */
+JSValue     concolic_has_property_hook(JSContext *ctx, JSValueConst obj, JSValueConst key);
 /* JSConcolicHooks.arith / .to_str — §7.1.4 ToNumber ( arg ) and §7.1.19 ToString ( arg ) over unknown input,
    answered by the OPERATOR (the conversion boundary owes C a real primitive). The result keeps the source; the
    example is the REAL op run on the operands' examples, or absent when there is nothing concrete to run.

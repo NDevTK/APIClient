@@ -2758,6 +2758,10 @@ typedef struct JSConcolicHooks {
     /* Whether IsCallable(Get(v, key)) is false for every value the unknown `v` can be — 1 when the host can say
        so, 0 when it cannot. 27.5.1.3 step 2.i asks it of an unknown resolution with no example for `then`. */
     int (*member_never_callable)(JSContext *ctx, JSValueConst v, JSAtom key);
+    /* 13.10.1's `key in obj` over an unknown `obj`: whether it holds the key is the value's own fact, so the answer
+       is an unknown boolean derived from both operands, whose example is HasProperty over `obj`'s example where
+       the flow holds one. JS_UNINITIALIZED when `obj` is not concolic. */
+    JSValue (*has_property)(JSContext *ctx, JSValueConst obj, JSValueConst key);
     /* 7.1.4 ToNumber OVER UNKNOWN INPUT, answered where the SPEC says the operator computes — never at the
        conversion boundary, which owes C a real number. `-x`, `~x`, `x*2`, `x**2`, `++x` yield a DERIVED
        concolic that keeps the source's identity, so a later branch still forks and a later sink still solves
