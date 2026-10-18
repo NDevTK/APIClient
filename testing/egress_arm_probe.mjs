@@ -63,7 +63,7 @@ function zone() {
   for (const f of ['check.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/safe-fetch.js'])
     runInContext(readFileSync(join(EXT, f), 'utf8'), sandbox, { filename: join(EXT, f) });
   for (const n of ['safeFetchEgressStated', 'safeFetchFiringRefusal', 'safeFetchSignalVector',
-                   'safeFetchDefaultArms'])
+                   'safeFetchDefaultArms', 'safeFetchPostRefusal'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js installed no \`${n}\` — this probe reads the policy's own ` +
                       'answer rather than restating its rules, so a load that installs nothing leaves it ' +
@@ -183,6 +183,37 @@ const CONTROLS = [
 
 const URL_UNDER_TEST = 'https://example.test/x';
 
+/* A CROSS-DOCUMENT MESSAGE, DECIDED AS A FETCH WITH THE SAME SIGNALS. Each row is a `windowproxy.post`'s marks
+   and the sending document's record, as engine/trusted.mjs and bridge.js hand them to safeFetchPostRefusal. It
+   is scored against the fetch that states the same signals at the receiving origin, a page `fetch()` from the
+   same record with no cookie jar and no header list. Every row must agree with its fetch. `differs` is the
+   armed control: a post beside a fetch whose destination differs, which must disagree, so agreement below is
+   not a comparison that cannot fail. */
+const POST_ORIGIN = 'https://example.test';
+const POSTS = [
+  { label: 'post, derived path, nothing pinned (fires, as the page fetch() does)',
+    marks: 'derived,undriven,unpinned', doc: ['observed', 'undriven', 'unpinned', 'none'] },
+  { label: 'post, forced path, nothing pinned (fires: the bound is the witness)',
+    marks: 'forced,undriven,unpinned', doc: ['observed', 'undriven', 'unpinned', 'none'] },
+  { label: 'post on a path that PINNED a witness (refused: the witness conjunct)',
+    marks: 'derived,undriven,pinned', doc: ['observed', 'undriven', 'unpinned', 'none'] },
+  { label: 'post from a DRIVEN timeline (refused: the actor conjunct, this tool\'s act)',
+    marks: 'derived,driven,unpinned', doc: ['observed', 'undriven', 'unpinned', 'none'] },
+  { label: 'post from a document the zone recorded as PINNED (refused: the record\'s witness)',
+    marks: 'derived,undriven,unpinned', doc: ['derived', 'undriven', 'pinned', 'none'] },
+  { label: 'CONTROL: the pinned post beside a program load, which must DISAGREE',
+    marks: 'derived,undriven,pinned', doc: ['observed', 'undriven', 'unpinned', 'none'], differs: 'script' },
+];
+function askPost(Z, row) {
+  const m = row.marks.split(',');
+  const doc = Z.docRecord(...row.doc, 'public');
+  const post = Z.safeFetchPostRefusal({ targetOrigin: POST_ORIGIN, marks: row.marks, doc });
+  const fetch = Z.safeFetchFiringRefusal({ url: POST_ORIGIN + '/', destination: row.differs || '', provenance: m[0],
+                                           pinned: m[2], doc, actor: 'page', driven: m[1], credentialed: false,
+                                           headers: null });
+  return { post, fetch };
+}
+
 /* A site states its document record as lib/document-record.js's first four words, minted here through the
    zone's own docRecord, since the chokepoint accepts only a record that function made. The address space is
    `public`: the firing decision reads none, so every row states the one a new container has. */
@@ -252,6 +283,23 @@ function main() {
     console.log('');
     console.log(wrong + ' SCORED ROW(S) DISAGREED WITH THE POLICY. Either the arm list moved without the');
     console.log('decision moving, or the decision moved and these rows are what says so.');
+    process.exitCode = 1;
+  }
+  console.log('');
+  console.log('A CROSS-DOCUMENT MESSAGE against the fetch with the same signals (safeFetchPostRefusal):');
+  let postsWrong = 0;
+  for (const r of POSTS) {
+    const got = askPost(Z, r);
+    const agree = got.post === got.fetch;
+    const ok = r.differs ? !agree : agree;
+    if (!ok) postsWrong++;
+    console.log((ok ? '  ok   ' : '  FAIL ') + r.label);
+    console.log('    post => ' + (got.post === null ? 'FIRES' : 'REFUSED at ' + got.post) + '   fetch => ' +
+                (got.fetch === null ? 'FIRES' : 'REFUSED at ' + got.fetch));
+  }
+  if (postsWrong) {
+    console.log(postsWrong + ' POST ROW(S) WERE NOT DECIDED AS THEIR FETCH (or the control agreed): a ' +
+                'cross-document message has an arm of its own, or the comparison cannot fail.');
     process.exitCode = 1;
   }
   console.log('');

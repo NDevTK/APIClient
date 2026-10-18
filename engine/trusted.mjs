@@ -222,7 +222,7 @@ export const ZONE = (() => {
   /* lib/document-record.js's writers are on this list for the reason the policy is: this host records every
      document it provisions, and a zone assembled without them would hand the chokepoint no record, which
      `_docOf` refuses on the first request rather than here at assembly. */
-  for (const n of ['safeFetchWiden', 'safeFetchEgressStated', 'safeFetchFiringRefusal',
+  for (const n of ['safeFetchWiden', 'safeFetchEgressStated', 'safeFetchFiringRefusal', 'safeFetchPostRefusal',
                    'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'docRecord', 'docRecordJoin',
                    'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque',
                    'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordAskerRefusal',
@@ -1590,6 +1590,16 @@ async function main() {
       const go = () => {
         const t = holderOf(f[1]);
         if (!t) return false;
+        /* The one firing rule, as a fetch is judged (safeFetchPostRefusal). The record names no sending
+           document, so it is judged under the weaker-wins meet of the sending instance's records, which is
+           SECURITY.md's bound on what an engine's word can get. */
+        const refusal = ZONE.safeFetchPostRefusal({ targetOrigin: t.origin, marks: f[3],
+                                                    doc: ZONE.docRecordMeet(e.docs.map((n) => docRecords.get(n))) });
+        if (refusal) {
+          e.ready.push(decline(`windowproxy.post -> ${f[1]} — a CROSS-DOCUMENT MESSAGE this origin's egress ` +
+                               `policy refuses on \`${refusal}\`, as it would a fetch with the same signals`));
+          return true;
+        }
         t.ready.push(['route', stampOrigin(e.origin), b64(record)].join('\t'));
         flush();
         return true;
