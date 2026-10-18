@@ -35,6 +35,7 @@
 #include "core/layout/used_value.h"
 #include "solver/concolic.h"
 #include "solver/metrics.h"
+#include "solver/rest_unit.h"
 
 /* THE MEMBERS. `scrollTop` and `scrollLeft` are the two the IDL declares as `attribute` rather than `readonly
    attribute`, so their magic is a setter's magic as well as a getter's. */
@@ -1059,6 +1060,8 @@ static int js_ev_client_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         s->job = layout_job_new(LAYOUT_JOB_STEP);
         METRIC_ADD(client_extent_asks, 1);
     }
+    /* One activation is one unit, measured against the slice like each of `scrollIntoView`'s. */
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
     layout_job_enter(s->job);
     layout_job_drive_begin_resting(&d);
     while (block_flow_drive_deferred(&d)) {
@@ -1072,6 +1075,7 @@ static int js_ev_client_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     }
     layout_job_drive_end(&d);
     layout_job_leave(s->job);
+    rest_unit_end();
     if (!done) {
         layout_job_rested(s->job);
         METRIC_ADD(client_extent_rests, 1);
