@@ -711,42 +711,6 @@ static void park_rec_orphan(const Flow *f)
     park_str(rec);
 }
 
-#if APICLIENT_DEV
-/* One record of park_doc_holds_drive's walk: a hit when `rec` is the locator `orphan` and the record before it
-   named the chain `chain`. `prev` carries whether it did. */
-static int park_drive_rec(const char *rec, int over, const char *chain, const char *orphan, int *prev)
-{
-    size_t chain_n = strlen(chain);
-    int hit = *prev && !over && strcmp(rec, orphan) == 0;
-
-    *prev = !over && strncmp(rec, chain, chain_n) == 0 && rec[chain_n] == ',';
-    return hit;
-}
-
-/* Whether the document already holds a flow record whose chain field is `chain` ("f-" or "f<ordinal>") followed
-   by the locator record `orphan` ("o<hex>"): the same drive of the same body on the same path. Reads the bytes
-   in block order, as every reader does, so a record spanning two blocks is read whole. */
-static int park_doc_holds_drive(const char *chain, const char *orphan)
-{
-    char rec[48];
-    size_t n = 0, i;
-    int over = 0, prev = 0, hit = 0;
-    const ParkBlock *b;
-
-    for (b = g_park_head; b && !hit; b = b->next)
-        for (i = 0; i < b->len && !hit; i++) {
-            if (b->bytes[i] != ';') {
-                if (n < sizeof rec - 1) rec[n++] = b->bytes[i]; else over = 1;
-                continue;
-            }
-            rec[n] = 0;
-            hit = park_drive_rec(rec, over, chain, orphan, &prev);
-            n = 0; over = 0;
-        }
-    rec[n] = 0;
-    return hit || park_drive_rec(rec, over, chain, orphan, &prev);
-}
-#endif
 
 /* AN UNMADE ROUTED DELIVERY — one record per [record, senderOrigin] pair still on the flow's queue, written
    immediately AFTER the 'f' or 'c' record of the flow that holds it and belonging to it. A message a peer sent
@@ -959,6 +923,62 @@ static ParkKind park_kind_of(const Flow *f)
     if (f->cand_src) return PARK_KIND_CAND;
     return PARK_KIND_FLOW;
 }
+
+#if APICLIENT_DEV
+/* A chain's whole decision vector, oldest slot first: its arms and the questions they answer. Returns the slot
+   count; `*arms` and `*keys` are malloc'd and the caller's (NULL for an empty chain). */
+static int park_path_flatten(const void *seg, signed char **arms, uint32_t **keys)
+{
+    const void *s;
+    int n = 0, at;
+
+    for (s = seg; s; s = decide_seg_base(s)) {
+        const signed char *e;
+        n += decide_seg_arms(s, &e);
+    }
+    *arms = n ? malloc((size_t)n) : NULL;
+    *keys = n ? malloc((size_t)n * sizeof **keys) : NULL;
+    CHECK(!n || (*arms && *keys), "the cold tier could not copy a decision vector to compare two recipes");
+    for (s = seg, at = n; s; s = decide_seg_base(s)) {
+        const signed char *e;
+        int k = decide_seg_arms(s, &e);
+
+        at -= k;
+        memcpy(*arms + at, e, (size_t)k);
+        memcpy(*keys + at, decide_seg_keys(s), (size_t)k * sizeof **keys);
+    }
+    return n;
+}
+
+/* Whether two parked flows stand on the same decision vector: the same arms answering the same questions in the
+   same order, which is what a recipe replays, whichever segments hold them. */
+static int park_path_equal(const Flow *a, const Flow *b)
+{
+    signed char *ea, *eb;
+    uint32_t *ka, *kb;
+    int na = park_path_flatten(a->dec_blob ? decide_blob_seg(a->dec_blob) : NULL, &ea, &ka);
+    int nb = park_path_flatten(b->dec_blob ? decide_blob_seg(b->dec_blob) : NULL, &eb, &kb);
+    int eq = na == nb &&
+             (!na || (memcmp(ea, eb, (size_t)na) == 0 && memcmp(ka, kb, (size_t)na * sizeof *ka) == 0));
+
+    free(ea); free(eb); free(ka); free(kb);
+    return eq;
+}
+
+/* A drive already written into this park that is the same drive as `f`: the same body on the same path. Asked of
+   the members still in the registry, so a drive a partial park sold before this one is not compared. */
+static const Flow *park_same_drive_written(const Flow *f)
+{
+    const Flow *g;
+    int i;
+
+    for (i = 0; (g = flow_at(i)) != NULL; i++)
+        if (g != f && g->paged && g->orphan && g->orphan_hash == f->orphan_hash &&
+            park_kind_of(g) == PARK_KIND_FLOW && park_path_equal(g, f))
+            return g;
+    return NULL;
+}
+#endif
 
 /* DOES THIS FLOW'S RECORD NAME A SEGMENT — i.e. is it one of the flows that makes a park write 's' records at
    all. It is the same question cold_park_flow asks one line before it writes (`f->dec_blob ? decide_blob_seg
@@ -1336,17 +1356,17 @@ void cold_park_flow(Flow *f)
         /* A drive is its path and its body, so two records with both equal are one drive written twice: each
            resumes as a claimant that re-runs the same path to the same call. */
         if (f->orphan) {
-            char chain[24], orphan[18];
+            const Flow *twin = park_same_drive_written(f);
+            char loc[17];
 
-            if (id < 0) snprintf(chain, sizeof chain, "f-");
-            else        snprintf(chain, sizeof chain, "f%ld", id);
-            orphan[0] = 'o';
-            park_orphan_hex(f->orphan_hash, orphan + 1);
-            DCHECKF(!park_doc_holds_drive(chain, orphan),
-                    "the park document already holds the drive '%s;%s' — two records that are the same drive of "
-                    "the same body on the same path resume as two claimants of one drive; the flow written first "
-                    "and this one (waiting %d, driving %d) are arms of a fork the recipe does not record",
-                    chain, orphan, f->orphan_want, !JS_IsUndefined(f->fn));
+            park_orphan_hex(f->orphan_hash, loc);
+            DCHECKF(twin == NULL,
+                    "the park document already holds a drive of body o%s on this flow's path (chain %ld, cursor "
+                    "%d) — two records that are the same drive of the same body on the same path resume as two "
+                    "claimants of one drive. This one is waiting %d, driving %d; the one written first is "
+                    "waiting %d, driving %d",
+                    loc, id, f->dec_blob ? decide_blob_cursor(f->dec_blob) : -1, f->orphan_want,
+                    !JS_IsUndefined(f->fn), twin ? twin->orphan_want : -1, twin ? !JS_IsUndefined(twin->fn) : -1);
         }
 #endif
         if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", flow_reward(f));
