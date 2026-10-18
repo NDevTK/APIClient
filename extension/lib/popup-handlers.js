@@ -351,7 +351,7 @@ async function handlePopupMessage(msg, sender, sendResponse) {
     }
 
     /* THE ENGINE'S OWN RUN RECORD, WHICH NO HUMAN SURFACE HAS EVER SHOWN. solver/result.c emits eight cost
-       counters in ONE snprintf, bridge.js `assertResultDocument` checks every one of them field-for-field,
+       counters in ONE snprintf, bridge.js `resultDocumentRefusal` checks every one of them field-for-field,
        and `linesToAnalysis` writes one record per run onto `self._engineLog` — and grep found exactly one
        reader for that array, `self.rendererPoolProbe`, which has no caller anywhere in this extension or in
        testing/. So the ONLY observable that the single BFS context-switches, forks and pumps jobs rather

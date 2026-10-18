@@ -997,7 +997,7 @@ function collectKeysForService(tab, service, hostname) {
 
    §"A FIELD A CONSUMER DEFAULTS IS A FIELD NOBODY WILL NOTICE IS NEVER WRITTEN": every one of those was one
    `||` away from being a crash. Nothing here defaults an engine field any more — the two this function reads
-   are DCHECKed for their shape, and the rest are asserted by `assertResultDocument` in bridge.js.
+   are DCHECKed for their shape, and the rest are checked by `resultDocumentRefusal` in bridge.js.
 
    NOT awaited by its caller and NOT wrapped in a catch: an assertion in here (or anywhere down the dispatch)
    is an invariant abort, and an unhandled rejection is the honest shape of it. A `.catch` that printed one

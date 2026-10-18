@@ -59,302 +59,198 @@ const hasHole = (s) => astAddressHasHole(s || "");
    a `may-rest-on` row has a sighting whose path pinned a value, so some element holds a pin. */
 const WITNESS_PIN_KINDS = Object.freeze(["string", "number", "boolean", "null", "undefined", "bigint"]);
 const WITNESS_VERIFICATIONS = Object.freeze(["no-candidate", "candidate", "verified"]);
-function assertWitnessEntry(x, where) {
-  DCHECK(x && typeof x === "object" && !Array.isArray(x), "a witness entry is not an object (" + where + ")");
+/* The result document is the engine's statement and so input to this zone (in the @S half it is also the page's
+   output). linesToAnalysis refuses a whole document that fails any check below and records the run as crashed
+   with the reason, so nothing downstream reads a field these did not establish. Each checker answers null for a
+   value of its shape and otherwise the reason, naming the field; a document's reason is its first failure. */
+const docIsRecord = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+const docIsCount = (v) => typeof v === "number" && Number.isFinite(v);
+const docIsName = (v) => typeof v === "string" && v !== "";
+function docObject(v, f) { return docIsRecord(v) ? null : f + " is not an object"; }
+function docArray(v, f) { return Array.isArray(v) ? null : f + " is not an array"; }
+function docCount(v, f) { return docIsCount(v) ? null : f + " is not a finite number (" + String(v) + ")"; }
+function docEach(xs, f, check) {
+  for (let i = 0; i < xs.length; i++) {
+    const why = check(xs[i], f + "[" + i + "]");
+    if (why !== null) return why;
+  }
+  return null;
+}
+/* One witness entry, one of solver/endpoint.h's three shapes: a pin, a branch decision, an outcome decision. */
+function docWitnessEntry(x, f) {
+  if (!docIsRecord(x)) return f + " is not an object";
   const keys = Object.keys(x).sort().join(",");
-  if (keys === "kind,source,value") {
-    DCHECK(typeof x.source === "string" && x.source !== "" && typeof x.value === "string" &&
-           WITNESS_PIN_KINDS.indexOf(x.kind) >= 0,
-           "a witness pin is not {source, value, kind} with a non-empty source, a string value and one of " +
-           WITNESS_PIN_KINDS.join("/") + " (" + where + "): " + JSON.stringify(x));
-  } else if (keys === "decision,taken") {
-    DCHECK(typeof x.decision === "string" && x.decision !== "" && typeof x.taken === "boolean",
-           "a witness branch decision is not {decision, taken} with a non-empty condition and a boolean arm (" +
-           where + "): " + JSON.stringify(x));
-  } else {
-    DCHECK(keys === "completion,decision" && typeof x.decision === "string" && x.decision !== "" &&
-           Number.isInteger(x.completion) && x.completion >= 0,
-           "a witness entry is none of solver/endpoint.h's three shapes (a pin, a branch decision, an outcome " +
-           "decision) (" + where + "): " + JSON.stringify(x));
-  }
+  if (keys === "kind,source,value")
+    return docIsName(x.source) && typeof x.value === "string" && WITNESS_PIN_KINDS.indexOf(x.kind) >= 0 ? null
+      : f + " is not a pin {source, value, kind} with a non-empty source, a string value and one of " +
+        WITNESS_PIN_KINDS.join("/");
+  if (keys === "decision,taken")
+    return docIsName(x.decision) && typeof x.taken === "boolean" ? null
+      : f + " is not a branch decision {decision, taken}";
+  return keys === "completion,decision" && docIsName(x.decision) && Number.isInteger(x.completion) &&
+         x.completion >= 0 ? null : f + " is none of a pin, a branch decision or an outcome decision";
 }
-function assertEndpointWitnesses(rows) {
-  let stated = 0;
-  for (let i = 0; i < rows.length; i++) {
-    if (!("witness" in rows[i])) continue;
-    stated++;
-    const w = rows[i].witness, where = "fetchCallSites[" + i + "]";
-    DCHECK(Array.isArray(w) && w.length > 0,
-           "an @H row's `witness` is not a non-empty array (" + where + ") — solver/endpoint.c files one " +
-           "element for every sighting it records");
-    let asked = 0, pinned = 0;
-    for (const el of w) {
-      if (el === null) continue;
-      DCHECK(!!el && typeof el === "object" && Object.keys(el).sort().join(",") === "assumed,verification" &&
-             Array.isArray(el.assumed) && WITNESS_VERIFICATIONS.indexOf(el.verification) >= 0,
-             "an @H row's witness element is neither null nor {assumed: [...], verification: " +
-             WITNESS_VERIFICATIONS.join("|") + "} (" + where + "): " + JSON.stringify(el));
-      DCHECK(el.verification === "no-candidate" || el.assumed.length > 0,
-             "an @H row's witness assumed nothing and still names a verification run (" + where + ") — " +
-             "solver/endpoint.c mints a candidate only for a witness holding a pin");
-      asked++;
-      for (const x of el.assumed) {
-        assertWitnessEntry(x, where);
-        if ("source" in x) pinned++;
-      }
-    }
-    DCHECK((rows[i].witnessClass === "unasked") === (asked === 0),
-           "an @H row states `witnessClass: " + JSON.stringify(rows[i].witnessClass) + "` beside " + asked +
-           " asked sighting witness(es) (" + where + ") — both are read off the same sightings at one instant, " +
-           "so `unasked` is exactly the row no flow stood at");
-    DCHECK(rows[i].witnessClass !== "may-rest-on" || pinned > 0,
-           "an @H row states `may-rest-on` and no sighting witness holds a pin (" + where + ") — the path bit " +
-           "and the pin are written on one line of solver/decide.c");
+/* One @H row's `witness`, against the row's own `witnessClass`: `unasked` is exactly the row no flow stood at,
+   and `may-rest-on` has a sighting holding a pin (both read off one set of sightings). */
+function docWitness(row, f) {
+  const w = row.witness;
+  if (!Array.isArray(w) || w.length === 0) return f + ".witness is not a non-empty array";
+  let asked = 0, pinned = 0;
+  for (let j = 0; j < w.length; j++) {
+    const el = w[j], g = f + ".witness[" + j + "]";
+    if (el === null) continue;
+    if (!docIsRecord(el) || Object.keys(el).sort().join(",") !== "assumed,verification" ||
+        !Array.isArray(el.assumed) || WITNESS_VERIFICATIONS.indexOf(el.verification) < 0)
+      return g + " is neither null nor {assumed: [...], verification: " + WITNESS_VERIFICATIONS.join("|") + "}";
+    if (el.verification !== "no-candidate" && el.assumed.length === 0)
+      return g + " assumed nothing and still names a verification run";
+    asked++;
+    const why = docEach(el.assumed, g + ".assumed", docWitnessEntry);
+    if (why !== null) return why;
+    pinned += el.assumed.filter((x) => "source" in x).length;
   }
-  DCHECK(stated === 0 || stated === rows.length,
-         "`witness` is stated on " + stated + " of " + rows.length + " @H rows — solver/endpoint.c writes it on " +
-         "every row in one loop, so a mixed document is that emit having become conditional");
+  if ((row.witnessClass === "unasked") !== (asked === 0))
+    return f + " states witnessClass " + JSON.stringify(row.witnessClass) + " beside " + asked + " asked witness(es)";
+  if (row.witnessClass === "may-rest-on" && pinned === 0)
+    return f + " states may-rest-on and no witness holds a pin";
+  return null;
 }
-/* The contract solver/result.c composes, asserted at the seam because every field is read below and a missing
-   one would become an empty finding set reported as a clean page. */
-function assertResultDocument(r) {
-  DCHECK(r && typeof r === "object" && !Array.isArray(r),
-         "the engine's @RESULT line is not a JSON object — result_json emits one document per session");
-  DCHECK(Array.isArray(r.fetchCallSites),
-         "the engine's result document carries no fetchCallSites array — endpoint.c serializes its deduped " +
-         "endpoints into that field, so its absence is the whole learned API surface arriving as nothing");
-  assertEndpointWitnesses(r.fetchCallSites);
-  DCHECK(Array.isArray(r.securitySinks),
-         "the engine's result document carries no securitySinks array — solve.c serializes its fire-verified " +
-         "PoCs into that field, and a missing one reports an exploitable page as clean");
-  DCHECK(Array.isArray(r.pageErrors),
-         "the engine's result document carries no pageErrors array — it is the engine's own record of what " +
-         "went wrong while running the page, and the analysis reports it as the run's resolverErrors");
-  /* `pageErrorsRetracted` is disjoint from `pageErrors` (one snprintf emits both): a message the engine
-     reported and then took back — HTML §8.1.6.4 HostPromiseRejectionTracker(promise, operation), a handler
-     attached in a later task — is here, and a message in neither was never recorded. It is what tells a page that
-     raised nothing from one that handled every error it raised, so it is asserted, never defaulted. */
-  DCHECK(Array.isArray(r.pageErrorsRetracted),
-         "the engine's result document carries no pageErrorsRetracted array — result.c composes it beside " +
-         "pageErrors in the same snprintf, so its absence is that composition changed under this reader and " +
-         "a page whose rejections were all handled would be indistinguishable from one that raised nothing");
-  /* `pageErrorsExplored` is orthogonal to the pair above: each message in it is also in exactly one of them.
-     It marks throws the engine itself chose to explore — a forked completion over unknown input whose spec
-     step answers with a throw (Web IDL §3.2.15 Interface types: "Throw a TypeError.") — so they are not shown
-     to a person as their page's own errors. Asserted, never defaulted. */
-  DCHECK(Array.isArray(r.pageErrorsExplored),
-         "the engine's result document carries no pageErrorsExplored array — result.c composes it beside " +
-         "pageErrors and pageErrorsRetracted in the same composition, so its absence is that composition " +
-         "changed under this reader and every engine-minted exploration throw would be reported to a person " +
-         "as an error their own page raised");
-  /* `routedPosts` is this instance's routed-post index (solver/post_index.h): per cross-instance post whose
-     message held unknowns, which of the sender's sources sits at which member path, under the record identity
-     the receiver names its `message.data:<id>` source by. It is what joins a receiver's finding to its producer. */
-  DCHECK(Array.isArray(r.routedPosts) && r.routedPosts.every((p) =>
-           typeof p.id === "string" && /^[0-9a-f]{16}$/.test(p.id) && typeof p.target === "string" &&
-           typeof p.targetOrigin === "string" && typeof p.relation === "string" && Array.isArray(p.symbols) &&
-           p.symbols.length > 0 && p.symbols.every((s) => typeof s.source === "string" &&
-             typeof s.shape === "string" && typeof s.path === "string")),
-         "the engine's result document carries no well-formed routedPosts array — post_index.c writes each " +
-         "record with its 16-hex identity, target, targetOrigin, relation and at least one symbol, so a missing " +
-         "or short one is that composition changed under this reader");
-  /* The cost counters are emitted by result.c in one composition, so the contract is all of them and a subset
-     check would pass the very shapes it should reject. The registry families (the @S arrival census among
-     them) are asserted from `_metricsSchema` below rather than listed here.
-     This JS ships when pushed while its C writer ships only when built, so a counter added to both in one
-     commit fails here against every older artifact until the next build. The message names that cause first;
-     the assert stays, since a default would turn a name the engine stops writing into a permanent zero. */
-  for (const k of ["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun", "_unitsDone",
-                   "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked",
-                   "_routedDelivered", "_routedRefused", "_routedTasksFired",
-                   "_routedTasksTargetOrigin", "_routedTasksTargetGone", "_routedTasksThrew",
-                   "_orphansDriven", "_orphansAsked",
-                   "_orphanAskMemo", "_orphanAskEmpty", "_orphanAskTook",
-                   "_orphanWalks", "_orphanWalkEntries", "_orphanWalksFull",
-                   "_orphanWalkFullCandidates"]) {
-    DCHECK(typeof r[k] === "number",
-           "the engine's result document carries no " + k + " count. TWO CAUSES, AND THE SECOND IS THE " +
-           "ORDINARY ONE — check it first. (1) THE LOADED WASM IS OLDER THAN THIS FILE: this half of the " +
-           "contract ships the instant it is pushed and the other half ships only when someone BUILDS, so a " +
-           "field added to result.c and to this list in one commit is red for every artifact until the next " +
-           "build lands. That is not a stale contract, it is a SCHEDULED one, and it is what a freshly added " +
-           "name almost always means. Read extension/lib/qjs/qjs.mjs.build.json's `head` and ask whether the " +
-           "commit that added " + k + " is an ancestor of it; if it is not, the answer is to build, and " +
-           "nothing here is wrong. (2) Otherwise the composition changed under this seam: result.c emits " +
-           "every cost counter and the whole @S arrival census in ONE snprintf, so a field missing from a " +
-           "wasm that should have it is that snprintf having been edited without this list. NEVER SOFTEN " +
-           "THIS INTO A DEFAULT for either cause — a name the engine stops writing becomes a zero the " +
-           "diagnostic reports forever, which is the defect this loop exists to end. They are the only " +
-           "OBSERVABLE that the single BFS context-switches, forks and pumps jobs rather than running its " +
-           "flows FIFO, and the only thing that tells an empty finding set from a run that never looked");
-  }
-  assertMetricsFamilies(r);
-  /* `_wfq` (solver/result.h) is the order the frontier was in. Its shape is asserted and its names are not:
-     the object is relayed whole and popup.js renders whatever rows it carries, so a name list here would be a
-     third copy of solver/flow.h's fields. `members` is always present: `{members: 0}` with no term rows is an
-     empty frontier (a session ends by draining or parking, leaving no members), a full object is a reading,
-     and no `_wfq` is a broken contract. The rows-iff-members biconditional is asserted so the absence of rows
-     stays a positive statement. */
-  DCHECK(r._wfq && typeof r._wfq === "object" && !Array.isArray(r._wfq),
-         "the engine's result document carries no _wfq census — solver/result.c composes the WFQ's own " +
-         "ordering (solver/flow.h's WfqCensus) into that field on every document it builds, partials " +
-         "included, and it is the ONLY observable of what the one BFS is ordering its flows BY. Its absence " +
-         "has the same two causes as a missing counter above and in the same order: check first whether the " +
-         "loaded wasm predates this reader (extension/lib/qjs/qjs.mjs.build.json's `head`), then whether " +
-         "result_json's composition changed under this seam");
-  DCHECK(Number.isInteger(r._wfq.members) && r._wfq.members >= 0,
-         "the engine's WFQ census carries no `members` count — it is the row that says how many flows the " +
-         "order was taken over, so without it an empty frontier and a frontier this census could not read " +
-         "are the same document, and every term below is a reading of an unknown population");
-  DCHECK((Object.keys(r._wfq).length > 1) === (r._wfq.members > 0),
-         "the engine's WFQ census reports " + r._wfq.members + " members with " +
-         (Object.keys(r._wfq).length - 1) + " term rows — the two must agree, because the ABSENCE of the " +
-         "terms is how an empty frontier says there was no order to report. Rows beside `members: 0` are " +
-         "readings of an order that did not exist; `members > 0` with no rows is a census that ran and said " +
-         "nothing, and both would be read as the verdict `no term orders this frontier`");
-  for (const k of Object.keys(r._wfq))
-    DCHECK(typeof r._wfq[k] === "number" && Number.isFinite(r._wfq[k]),
-           "the engine's WFQ census carries a non-finite `" + k + "` — every row of it is a count, a service " +
-           "notch or a weight, and a NaN reaching a reader makes every comparison against it false, which is " +
-           "the same silent failure §engineRecordFacts asserts one level up for the Level-1 weight");
-  /* `_quantum` (solver/quantum.h) states the slice the `_wfq` order was served in and what the step census's
-     microsecond rows are priced on. The slice and every charge are engine work, the same on every host; the
-     pricing clock is CPU natively and wall time in this realm, which moves no rank. `price` is a string and
-     `priceIsCpu` a boolean, so the generic finite-number pass below would reject them; hence named asserts.
-     `quantum_json` reads only compile-time constants, so none is ever legitimately absent. */
-  DCHECK(r._quantum && typeof r._quantum === "object" && !Array.isArray(r._quantum),
-         "the engine's result document carries no _quantum — solver/quantum.c's quantum_json composes it into " +
-         "every document result.c builds, partials included. Check first whether the loaded wasm predates this " +
-         "reader (extension/lib/qjs/qjs.mjs.build.json's `head`), then whether result_json's composition changed");
-  DCHECK(Number.isSafeInteger(r._quantum.sliceWork) && r._quantum.sliceWork > 0,
-         "the engine's _quantum carries no positive integer `sliceWork` — it is solver/engine.h's " +
-         "ENGINE_QUANTUM_WORK, a compile-time constant of the artifact");
-  DCHECK(Number.isSafeInteger(r._quantum.hostYieldMs) && r._quantum.hostYieldMs >= 0,
-         "the engine's _quantum carries no `hostYieldMs` — solver/quantum.c states it per host, 0 where no host " +
-         "event loop waits on a step");
-  DCHECK(typeof r._quantum.price === "string" && r._quantum.price !== "" &&
-         typeof r._quantum.priceIsCpu === "boolean",
-         "the engine's _quantum carries no `price` string or boolean `priceIsCpu` — they say what the census's " +
-         "microsecond rows are read on, and the producer always knows it");
-  /* The subsystem censuses: solver/result.h's `_cold`, `_heap`, `_swap`, solver/decide.h's `_forkAt` and
-     solver/absent.h's `_absent`. `_absent` counts standard-owned globals the page feature-detected and this
-     engine answered with `undefined` (solver/absent.c); it separates a page with nothing to learn from one whose
-     guards took their false arm because an API is unbuilt.
-     One loop and no name list, as for `_wfq`: these are relayed whole and rendered generically by popup.js, so
-     what this consumer checks is that each is an object whose values are finite numbers or histograms.
-     The empty shape differs: `_cold`, `_heap`, `_swap` and `_absent` read state that exists at every instant, so
-     `{}` is a broken contract (asserted after this loop); `_forkAt` lists predicates that forked, so `{}` is
-     the positive statement that this document never forked. */
-  for (const k of ["_cold", "_heap", "_swap", "_forkAt", "_absent"]) {
-    DCHECK(r[k] && typeof r[k] === "object" && !Array.isArray(r[k]),
-           "the engine's result document carries no " + k + " census — solver/result.c composes it into " +
-           "every document it builds, partials included. Its absence has the same two causes as a missing " +
-           "counter above and in the same order: check first whether the loaded wasm predates this reader " +
-           "(extension/lib/qjs/qjs.mjs.build.json's `head`), then whether result_json's composition changed " +
-           "under this seam. NEVER SOFTEN IT INTO A DEFAULT — these are the only readings this zone has ever " +
-           "been handed of what the pager, the heap and the delta chains are doing on a real page");
-    /* A row is a finite number or a per-arm histogram (e.g. `_cold`'s `stepUnits` and `stepUnitRuns` over
-       solver/step_unit.h's ladder); a histogram's values are asserted one level down, so a NaN inside one is
-       caught like a NaN beside one. An empty histogram is not refused: some tables are keyed on derived keys
-       (`_heap`'s `childRealmRefSites`, `_swap`'s `cowHostRecAsksBySite`) whose `{}` is a positive statement, and
-       engine/build.mjs's census readers (`cowHostRecSiteReading`, `cowStateReading`, `coldFields`) check key
-       sets from the composer's own format string, which a hand list here cannot do.
-       Named residual: `_absent`'s per-member bucket tables have no non-empty check on the document in any
-       build. Next diff builds an `@ABSENT` reader in engine/build.mjs deriving its row set from `absent_json`'s
-       format string through `censusRowSet`. Absence shows as an @ABSENT member with `{}` buckets while the
-       member is on the census because a read was recorded.
-       Named residual: the shape check refuses `null`, which navigable.h documents as `childRealmRefSites`'
-       answer in a build without attribution, so a dev extension loading a release wasm aborts here. Next diff
-       admits `null` for that row, taken from the producer. Absence shows as a dev zone driving a release
-       artifact reporting no runs, with the @WHY naming that row. */
-    for (const f of Object.keys(r[k])) {
-      const v = r[k][f];
-      const hist = v !== null && typeof v === "object" && !Array.isArray(v);
-      DCHECK(hist || (typeof v === "number" && Number.isFinite(v)),
-             "the engine's " + k + " census carries a `" + f + "` that is neither a finite number nor a " +
-             "per-arm histogram — every row of it is a count, a byte figure, a per-switch mean or a bucket " +
-             "table keyed on solver/step_unit.h's arms, and a NaN reaching a reader makes every comparison " +
-             "against it false, which is the same silent failure asserted for the WFQ census one block up");
-      if (!hist) continue;
-      /* A histogram arm is a finite number or a positional tuple of them: solver/result.c composes each
-         `childRealmRefSites` arm as `[min, max, total]`. The rule is a shape, not a name list, and a NaN
-         anywhere inside either is still caught. It would become a name check if the census named the triple's
-         members, which navigable.h's `NavigableRealmRefSite` declares. */
-      for (const a of Object.keys(v)) {
-        const arm = v[a];
-        const tuple = Array.isArray(arm);
-        DCHECK(tuple || (typeof arm === "number" && Number.isFinite(arm)),
-               "the engine's " + k + " census carries a `" + f + "." + a + "` that is neither a finite " +
-               "number nor a positional tuple of them — a histogram arm is a count of members or of steps, " +
-               "or the fixed triple a per-site table composes, and a NaN in one makes every sum taken over " +
-               "the table false while each other row still looks like a measurement");
-        if (!tuple) continue;
-        for (let i = 0; i < arm.length; i++)
-          DCHECK(typeof arm[i] === "number" && Number.isFinite(arm[i]),
-                 "the engine's " + k + " census carries a non-finite element " + i + " of the tuple at `" +
-                 f + "." + a + "` — the triple is positional and every member of it is a count, so a NaN " +
-                 "inside one is the same silent failure as a NaN beside it");
-      }
-    }
-  }
-  for (const k of ["_cold", "_heap", "_swap", "_absent"])
-    DCHECK(Object.keys(r[k]).length > 0,
-           "the engine's " + k + " census is EMPTY — unlike `_wfq`, whose absent rows are how a drained " +
-           "frontier says there was no order to report, this one reads the frontier, the runtime, the C " +
-           "allocator or the population of global reads, and all four exist at every instant a document can " +
-           "be composed at. There is no reading in which it has no rows, so an empty object is the composer " +
-           "having stopped composing");
-  /* `_absent` is in that list and `_forkAt` is not: solver/absent.c emits its members on every census, zeroes
-     included, so `{}` is the composer having stopped, while `_forkAt`'s `{}` means the document never forked. */
-  DCHECK(["refused", "requested", "none"].indexOf(r._parkWhy) >= 0 &&
-         (r._parkWhy === "none") === (Array.isArray(r._park) && r._park.length === 0),
-         "the engine's result document says its residue was written for `" + String(r._parkWhy) + "` beside " +
-         (Array.isArray(r._park) ? r._park.length : "no") + " recipe(s) — engine_park_why answers `none` " +
-         "exactly when the park document is empty");
-  DCHECK(Array.isArray(r._park),
-         "the engine's result document carries no _park array — that is the PARKED RESIDUE (solver/cold.h), " +
-         "the recipes this zone writes to IndexedDB and hands back to qjs_begin next session. An absent one " +
-         "reads exactly like a fully-explored document, so every flow the engine paged out would be dropped " +
-         "here and the cross-session frontier would silently restart from the boot flow on every visit");
+/* The per-row facts solver/endpoint.c writes as tokens, and `addressRoot`, whose domain is null, false or a
+   non-empty string. A key is stated on every row or on none, since one instance emits one document shape. */
+const ENDPOINT_FACT_KEYS = Object.freeze(["door", "mintedAt", "addressClass", "razorClass", "witnessClass"]);
+function docEndpointRow(row, f) {
+  if (!docIsRecord(row)) return f + " is not an object";
+  for (const k of ENDPOINT_FACT_KEYS)
+    if (k in row && !docIsName(row[k])) return f + "." + k + " is not a non-empty string";
+  if ("addressRoot" in row && row.addressRoot !== null && row.addressRoot !== false && !docIsName(row.addressRoot))
+    return f + ".addressRoot is none of null, false or a non-empty string";
+  return "witness" in row ? docWitness(row, f) : null;
 }
-/* The families of solver/metrics.h's registry, asserted from the schema the document carries beside them: every
-   declared row is a number on the document and every declared identity holds, so this zone keeps no row list
-   of its own. The @S arrival census's four rows are also read by name below (linesToAnalysis), so they are
-   asserted to be declared. A missing schema has a missing counter's two causes, in the same order. */
+function docEndpoints(rows) {
+  const why = docArray(rows, "fetchCallSites") || docEach(rows, "fetchCallSites", docEndpointRow);
+  if (why !== null) return why;
+  for (const k of [...ENDPOINT_FACT_KEYS, "addressRoot", "witness"]) {
+    const stated = rows.filter((r) => k in r).length;
+    if (stated !== 0 && stated !== rows.length)
+      return "fetchCallSites states `" + k + "` on " + stated + " of " + rows.length + " rows";
+  }
+  /* solver/endpoint.c writes `addressRoot: null` on exactly the rows whose `addressClass` is `concrete`. */
+  if (rows.length && "addressRoot" in rows[0] && "addressClass" in rows[0]) {
+    const nc = rows.filter((r) => r.addressRoot === null).length;
+    const cc = rows.filter((r) => r.addressClass === "concrete").length;
+    if (nc !== cc) return "fetchCallSites has " + nc + " rows with no delivery root against " + cc + " concrete";
+  }
+  return null;
+}
+function docRoutedPost(p, f) {
+  return docIsRecord(p) && typeof p.id === "string" && /^[0-9a-f]{16}$/.test(p.id) && typeof p.target === "string" &&
+         typeof p.targetOrigin === "string" && typeof p.relation === "string" && Array.isArray(p.symbols) &&
+         p.symbols.length > 0 && p.symbols.every((s) => docIsRecord(s) && typeof s.source === "string" &&
+           typeof s.shape === "string" && typeof s.path === "string")
+    ? null : f + " is not {id: 16 hex, target, targetOrigin, relation, symbols: [{source, shape, path}, ...]}";
+}
+/* A census row is a finite number or a histogram whose arms are finite numbers or positional tuples of them
+   (solver/result.c composes each `childRealmRefSites` arm as `[min, max, total]`). */
+function docCensusRow(v, f) {
+  if (docIsCount(v)) return null;
+  if (!docIsRecord(v)) return f + " is neither a finite number nor a histogram";
+  for (const a of Object.keys(v)) {
+    const arm = v[a];
+    if (Array.isArray(arm) ? !arm.every(docIsCount) : !docIsCount(arm))
+      return f + "." + a + " is neither a finite number nor a tuple of them";
+  }
+  return null;
+}
+function docCensus(c, f, nonEmpty) {
+  const why = docObject(c, f);
+  if (why !== null) return why;
+  if (nonEmpty && Object.keys(c).length === 0) return f + " is empty";
+  for (const k of Object.keys(c)) {
+    const w = docCensusRow(c[k], f + "." + k);
+    if (w !== null) return w;
+  }
+  return null;
+}
+/* `members` is always present; term rows appear exactly when it is above zero. */
+function docWfq(w) {
+  const why = docObject(w, "_wfq");
+  if (why !== null) return why;
+  if (!Number.isInteger(w.members) || w.members < 0) return "_wfq.members is not a count";
+  if ((Object.keys(w).length > 1) !== (w.members > 0))
+    return "_wfq reports " + w.members + " members with " + (Object.keys(w).length - 1) + " term rows";
+  for (const k of Object.keys(w)) if (!docIsCount(w[k])) return "_wfq." + k + " is not a finite number";
+  return null;
+}
+function docQuantum(q) {
+  return docObject(q, "_quantum") ||
+    (Number.isSafeInteger(q.sliceWork) && q.sliceWork > 0 ? null : "_quantum.sliceWork is not a positive integer") ||
+    (Number.isSafeInteger(q.hostYieldMs) && q.hostYieldMs >= 0 ? null : "_quantum.hostYieldMs is not a count") ||
+    (docIsName(q.price) && typeof q.priceIsCpu === "boolean" ? null
+      : "_quantum carries no `price` string or boolean `priceIsCpu`");
+}
+/* The families of solver/metrics.h's registry, from the schema the document carries beside them: every declared
+   row is a number on the document and every declared identity holds, so this zone keeps no row list of its own.
+   The @S arrival census's four rows are also read by name (linesToAnalysis), so they must be declared. */
 const METRIC_KINDS = ["lifetime", "gauge", "maximum", "constant", "regime"];
 const SCENSUS_READ = ["_sourceReads", "_sinkReached", "_sinkTainted", "_sinkNeedsSender"];
-function assertMetricsFamilies(r) {
-  const schema = r._metricsSchema;
-  DCHECK(schema && typeof schema === "object" && Array.isArray(schema.families),
-         "the engine's result document carries no _metricsSchema with a `families` array — result.c composes " +
-         "solver/metrics.c's schema into every document. Check first whether the loaded wasm predates this " +
-         "reader (extension/lib/qjs/qjs.mjs.build.json's `head`), then whether result_json's composition changed");
-  for (const f of schema.families) {
-    DCHECK(typeof f.family === "string" && Array.isArray(f.rows) && f.rows.length > 0 &&
-           Array.isArray(f.identities),
-           "the engine's metrics schema carries a family with no name, no rows or no identities — " +
-           "metrics_schema_json writes all three for every family solver/metrics.h declares");
-    for (const row of f.rows) {
-      DCHECK(typeof row.key === "string" && METRIC_KINDS.includes(row.kind) && typeof row.unit === "string" &&
-             typeof row.scope === "string" && typeof row.owner === "string",
-             "the engine's metrics schema declares a `" + f.family + "` row without its key, unit, scope and " +
-             "owner, or with a kind outside " + METRIC_KINDS.join("/") + " — every METRIC(...) row names all five");
-      DCHECK(typeof r[row.key] === "number" && Number.isFinite(r[row.key]),
-             "the engine's result document carries no numeric " + row.key + ", which its own schema declares " +
-             "in the `" + f.family + "` family — the composer that splices the family's rows stopped splicing " +
-             "them, and a default here would report a row the engine stopped writing as a permanent zero");
+function docMetricsFamilies(r) {
+  const s = r._metricsSchema;
+  if (!docIsRecord(s) || !Array.isArray(s.families)) return "_metricsSchema carries no `families` array";
+  for (const fam of s.families) {
+    if (!docIsRecord(fam) || typeof fam.family !== "string" || !Array.isArray(fam.rows) || fam.rows.length === 0 ||
+        !Array.isArray(fam.identities))
+      return "_metricsSchema has a family with no name, no rows or no identities";
+    for (const row of fam.rows) {
+      if (!docIsRecord(row) || typeof row.key !== "string" || !METRIC_KINDS.includes(row.kind) ||
+          typeof row.unit !== "string" || typeof row.scope !== "string" || typeof row.owner !== "string")
+        return "_metricsSchema's `" + fam.family + "` family declares a row without key, kind, unit, scope and owner";
+      const why = docCount(r[row.key], row.key + " (declared in the `" + fam.family + "` family)");
+      if (why !== null) return why;
     }
-    for (const e of f.identities)
-      DCHECK(e.rel === "le" && r[e.sub] <= r[e.sup],
-             "the engine's result document reports " + e.sub + " = " + r[e.sub] + " and " + e.sup + " = " +
-             r[e.sup] + ", and the `" + f.family + "` family declares the first a subset of the second (" +
-             e.rel + ") — the engine's own DCHECK of it is compiled out of a release build");
+    for (const e of fam.identities)
+      if (!docIsRecord(e) || e.rel !== "le" || !(r[e.sub] <= r[e.sup]))
+        return "the `" + fam.family + "` family declares " + String(e && e.sub) + " <= " + String(e && e.sup) +
+               " and the document reports " + String(e && r[e.sub]) + " and " + String(e && r[e.sup]);
   }
-  const scensus = schema.families.find((f) => f.family === "scensus");
+  const sc = s.families.find((fam) => fam.family === "scensus");
   for (const k of SCENSUS_READ)
-    DCHECK(scensus && scensus.rows.some((row) => row.key === k),
-           "the engine's metrics schema does not declare " + k + " in the `scensus` family, and " +
-           "linesToAnalysis relays it by name — solver/metrics/scensus.def renamed or dropped the row");
+    if (!sc || !sc.rows.some((row) => row.key === k)) return "_metricsSchema's `scensus` family does not declare " + k;
+  return null;
+}
+/* The cost counters result.c emits in one composition; the registry families are checked from the schema. A
+   missing one also means a wasm built before the field was added: read extension/lib/qjs/qjs.mjs.build.json's
+   `head` before reading it as a composition change. */
+const RESULT_COUNTERS = Object.freeze(["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun",
+  "_unitsDone", "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked", "_routedDelivered",
+  "_routedRefused", "_routedTasksFired", "_routedTasksTargetOrigin", "_routedTasksTargetGone", "_routedTasksThrew",
+  "_orphansDriven", "_orphansAsked", "_orphanAskMemo", "_orphanAskEmpty", "_orphanAskTook", "_orphanWalks",
+  "_orphanWalkEntries", "_orphanWalksFull", "_orphanWalkFullCandidates"]);
+/* The whole contract solver/result.c composes, or the first field that breaks it. `complete` adds the session's
+   close: an empty `_park` means a drained frontier (`_cold.live` 0), because `finish` turns an empty park into a
+   delete of this origin's cross-session entry. */
+function resultDocumentRefusal(r, complete) {
+  let why = docObject(r, "the @RESULT document") || docEndpoints(r.fetchCallSites) ||
+    docArray(r.securitySinks, "securitySinks") || docArray(r.pageErrors, "pageErrors") ||
+    docArray(r.pageErrorsRetracted, "pageErrorsRetracted") || docArray(r.pageErrorsExplored, "pageErrorsExplored") ||
+    docArray(r.routedPosts, "routedPosts") || docEach(r.routedPosts, "routedPosts", docRoutedPost);
+  if (why !== null) return why;
+  for (const k of RESULT_COUNTERS) if ((why = docCount(r[k], k)) !== null) return why;
+  why = docMetricsFamilies(r) || docWfq(r._wfq) || docQuantum(r._quantum);
+  if (why !== null) return why;
+  /* `_forkAt` lists predicates that forked, so `{}` is a document that never forked; the other four read state
+     that exists at every instant. */
+  for (const k of ["_cold", "_heap", "_swap", "_forkAt", "_absent"])
+    if ((why = docCensus(r[k], k, k !== "_forkAt")) !== null) return why;
+  why = docArray(r._park, "_park");
+  if (why !== null) return why;
+  if (["refused", "requested", "none"].indexOf(r._parkWhy) < 0 || (r._parkWhy === "none") !== (r._park.length === 0))
+    return "_parkWhy is " + JSON.stringify(r._parkWhy) + " beside " + r._park.length + " recipe(s)";
+  if (complete) {
+    if (!docIsCount(r._cold.live)) return "_cold.live is not a finite number";
+    if (r._park.length === 0 && r._cold.live !== 0)
+      return "a complete run closed over " + r._cold.live + " live member(s) and wrote no park recipes";
+  }
+  return null;
 }
 const RUN_OUTCOMES = ["partial", "complete", "crashed", "nothing-to-run"];
 /* Writes the run's own log row. `eng` is the run's identity and is absent for records that belong to no
@@ -596,17 +492,17 @@ function linesToAnalysis(lines, msg, outcome, eng) {
       let o = null;
       try { o = JSON.parse(ln.slice(5)); } catch (_) { o = null; }
       if (o === null) { extraErrors.push({ context: "why", message: ln.slice(5) }); continue; }
-      DCHECK(typeof o.phase === "string" && typeof o.reason === "string",
-        "a check.h @WHY record parsed as JSON but is missing `phase` or `reason`. APICLIENT_ASSERT_EMIT " +
-        "writes all four fields on every line, so this is that emitter and this reader having come apart — " +
-        "and `reason` is the only field of the four that names the capability to build: " + ln.slice(5, 400));
-      extraErrors.push({ context: o.phase, message: o.reason });
+      /* The engine's own line, so input: a record missing `phase` or `reason` is relayed as its raw text. */
+      if (typeof o.phase !== "string" || typeof o.reason !== "string")
+        extraErrors.push({ context: "why", message: ln.slice(5) });
+      else extraErrors.push({ context: o.phase, message: o.reason });
     }
   }
   if (refusal === null && result !== null) {
     const missing = (typeof result !== "object" || Array.isArray(result)) ? ENGINE_DOC_FIELDS
                                                                          : ENGINE_DOC_FIELDS.filter((k) => result[k] === undefined);
     if (missing.length) refusal = "the engine's result document carries no " + missing.join(", ");
+    else refusal = resultDocumentRefusal(result, outcome === "complete");
   }
   /* A partial or complete run owes its document; its absence reported as an empty page would be a false clean
      bill. */
@@ -619,42 +515,13 @@ function linesToAnalysis(lines, msg, outcome, eng) {
     crashErr = refusal;
     outcome = "crashed";
   }
-  /* A document that is present is asserted whether or not one was required, including a crashed instance's
-     unconsumed partial, whose fields are read below. */
-  if (result) assertResultDocument(result);
   /* The instance's routed posts enter the join on every document that carries them, before this one's own
      findings are joined, so a page that posts to itself through a peer is joined on the row it arrives on. */
   if (result && eng) routedPostsTake(eng, msg, result);
   /* …and the identities it emitted join the product, partial or final, so a sibling's next step reads them. */
   if (result && eng) noveltyTake(eng, result);
-  /* A complete run with an empty `_park` must have no live members. `finish` joins `_park` into the recipe
-     string and frontierWrite deletes the origin's cross-session entry when it is empty, which is right for a
-     drained frontier (solver/cold.h) and an erasure of earlier parked flows otherwise. solver/engine.c asserts
-     `flow_count() == 0 || engine_frontier_paged()` at session close, but only in dev, while this delete runs
-     in every build.
-     One-directional: a non-empty `_park` with `live` 0 is legitimate (a peer reference can keep a session
-     live, a RAM-floor engine may have sold every flow, and a park does not free the flows it writes).
-     Scoped to `complete`, the only outcome meaning the session closed (`finish` runs on ENGINE_STEP_DONE); a
-     partial snapshot is mid-run, where a live frontier with no park is normal. `live` is asserted present on
-     its own line because assertResultDocument does not name that row. */
-  if (result && outcome === "complete") {
-    DCHECK(typeof result._cold.live === "number" && Number.isFinite(result._cold.live),
-           "a complete run's `_cold` census carries no `live` member count (`" + String(result._cold.live) +
-           "`) — it is the gauge of flows still standing when the session closed (solver/cold.c counts one per " +
-           "flow_at), and it is the only thing in this document that can say whether an empty `_park` means " +
-           "the frontier DRAINED or that its members were dropped, which is what the frontier delete below " +
-           "turns into an erasure of a previous session's residue");
-    DCHECK(result._park.length > 0 || result._cold.live === 0,
-           "a COMPLETE run closed its session over " + result._cold.live + " live frontier member(s) and " +
-           "wrote NO park recipes — every one of them holds a snapshot, a COW delta and an unexplored " +
-           "timeline, and `finish` is about to join that empty array into the empty string, which " +
-           "frontierWrite reads as DELETE THIS ORIGIN'S ENTRY. So this is both a dropped work item (CLAUDE.md " +
-           "\u00a7NO BOUNDS: a resting member is deprioritized and PAGED, never terminated) and the erasure " +
-           "of whatever a PREVIOUS session parked at this address. solver/engine.c asserts the engine half of " +
-           "this at its session close; that assert is dev-only and this delete is not");
-  }
   /* The absent-document case is handled once on its own arm, so every read on the present arm is off a
-     document assertResultDocument has checked, and none is defaulted. */
+     document resultDocumentRefusal accepted, and none is defaulted. */
   /* The counters arm reads `eng._egress`. The two callers that may pass a null `eng` (crashRecord and the
      nothing-to-run arm) never take this branch, so a null here means that split moved. */
   DCHECK(!(outcome !== "crashed" && result) || (eng && eng._egress),
@@ -803,11 +670,9 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            "request(s) asked of it — the two are raised in one loop, one `asked` per delivered pending line " +
            "and at most one refusal inside that same iteration, so a sum above the denominator is a second " +
            "site raising one of them and every share read off this pair is over a population that never ran");
-    /* The endpoint partitions are partitions: (a) each histogram sums to `endpoints`, which fails if one is
-       built over a filtered or deduped walk; (b) the `(unstated)` bucket is all or nothing, since one instance
-       emits one document shape and a key stated for some rows only is a conditional emit. */
-    /* This list is the only statement of which partitions are checked, so a histogram added above needs a line
-       here. `endpointAddressRoot` is built by a different reader; both claims hold regardless. */
+    /* The endpoint partitions are partitions: each histogram sums to `endpoints`, which fails if one is built
+       over a filtered or deduped walk. (A key stated on some rows only is refused at the door.) This list is the
+       only statement of which partitions are checked, so a histogram added above needs a line here. */
     for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt],
                       ["endpointAddressClass", m.endpointAddressClass],
                       ["endpointRazorClass", m.endpointRazorClass],
@@ -820,38 +685,7 @@ function linesToAnalysis(lines, msg, outcome, eng) {
              m.endpoints + " row(s) — both are read off the ONE `fetchCallSites` array at this composition, " +
              "so a difference is a walk that filtered or deduped rows the figure beside it still counts, and " +
              "the partition would be read as a statement about the surface a person is shown");
-      const _u = _p[1][ENDPOINT_FACT_UNSTATED] === undefined ? 0 : _p[1][ENDPOINT_FACT_UNSTATED];
-      DCHECK(_u === 0 || _u === m.endpoints,
-             "this run's `" + _p[0] + "` partition states the fact for some rows and not others (" + _u +
-             " unstated of " + m.endpoints + ") — solver/endpoint.c writes every one of these keys " +
-             "unconditionally in " +
-             "one loop over one array, so a mixed run is that emit having become conditional, and the " +
-             "bucket that means 'this artifact predates the key' would be read as a property of some " +
-             "addresses");
     }
-    /* The two readers agree on the row both can see: solver/endpoint.c emits `addressRoot: null` on exactly the
-       rows whose `addressClass` is `concrete`, from two different emit lines, so a difference is those emits
-       having parted.
-       The check is gated on both keys being stated. This JS is live when written while the engine is live only
-       after a build, so it is routinely newer than the wasm, and an artifact that emits `addressClass` but not
-       `addressRoot` passes the per-key all-or-nothing claim above (fully unstated) yet would compare 0 against
-       a real `concrete` count. popup.js follows the same rule for its partitions. */
-    const _rootUnstated = m.endpointAddressRoot[ENDPOINT_FACT_UNSTATED] === undefined
-                          ? 0 : m.endpointAddressRoot[ENDPOINT_FACT_UNSTATED];
-    const _clsUnstated = m.endpointAddressClass[ENDPOINT_FACT_UNSTATED] === undefined
-                         ? 0 : m.endpointAddressClass[ENDPOINT_FACT_UNSTATED];
-    /* Both operands are gated, since the precondition of a two-operand comparison is two-sided; gating one
-       would claim knowledge of which key is newer. */
-    const _bothStated = _rootUnstated === 0 && _clsUnstated === 0;
-    const _nc = m.endpointAddressRoot[ENDPOINT_ROOT_NO_CONCOLIC] === undefined
-                ? 0 : m.endpointAddressRoot[ENDPOINT_ROOT_NO_CONCOLIC];
-    const _cc = m.endpointAddressClass["concrete"] === undefined ? 0 : m.endpointAddressClass["concrete"];
-    DCHECK(!_bothStated || _nc === _cc,
-           "this run counts " + _nc + " address(es) with no delivery root to ask against " + _cc + " the " +
-           "engine classed `concrete`, with BOTH keys stated by this artifact for every one of its " +
-           m.endpoints + " row(s) — solver/endpoint.c writes `addressRoot: null` on exactly the rows " +
-           "whose `addressClass` is `concrete`, from the one stored class, so a difference is those two emits " +
-           "having parted and `(no-concolic)` would be read as a statement about addresses it is not about");
   }
   DCHECK(outcome !== "crashed" || (typeof crashErr === "string" && crashErr !== ""),
          "a crashed run reached the run log with no `engine-crash` line among its output — every crash path " +
@@ -6278,7 +6112,7 @@ const _hostOps = {
        run, never a snapshot read off a record that has no document. */
     if (partial._run === "crashed") { engineCrash(eng, "result", partial.resolverErrors.at(-1).message); return; }
     // Merge on any surface: an XSS-only page (verified @S PoCs, no endpoints) must surface incrementally too.
-    /* `securitySinks` is asserted on every document (assertResultDocument), and a snapshot built from the @RESULT
+    /* `securitySinks` is on every accepted document (resultDocumentRefusal), and a snapshot built from the @RESULT
        line above always has one, which is asserted rather than assumed. */
     DCHECK(analysisHasDocument(partial),
            "an incremental snapshot carried no engine document — it is parsed from the @RESULT line this " +
