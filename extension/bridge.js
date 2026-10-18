@@ -5519,23 +5519,9 @@ async function hostSchedule(pool, ops) {
       _fin++;
     }
     rd.hot = { n: hot.length, drained: _dr, unserved: _un, unservedSites: _unS, wTop: _top, wMin: _min };
-    /* A yielded engine whose service round is in flight is ranked by the account it stated at its step. If it is
-       ahead of every hot engine the round waits for it rather than deepening a lesser document: its round
-       returns at once when it has runnable work, and a stalled one ranks last. */
-    let ahead = null, aheadK = bestK;
-    for (const e of pool) {
-      if (e.state !== "fetching") continue;
-      const k = ops.key(e, tree);
-      if (level1Ahead(k, aheadK)) { ahead = e; aheadK = k; }
-    }
-    if (ahead !== null) {
-      DCHECK(ahead._readyP && typeof ahead._readyP.then === "function",
-             "an engine whose service round is in flight carries no readiness promise — it is ahead of every " +
-             "hot engine, and this round has nothing else to wait on");
-      rd.shape = "waited";
-      await Promise.race([arrived, ahead._readyP]);
-      continue;
-    }
+    /* An engine whose service round is in flight is not waited for, however it ranks: that round can wait on a
+       server for as long as the server holds a reply, which charges the leader no service and so never lowers
+       its weight. The pick is among hot engines, so a leader's return waits at most one quantum of a lesser one. */
     /* Normally step `best`. At the RAM floor, step the engine the one order says must give up its memory, after
        flagging it to park (evicted to the cold tier as replay recipes) so the item that outranks it gets the
        RAM; parking needs a step (the flag is read inside qjs_step), so that engine is targeted directly. A lone

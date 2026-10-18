@@ -536,8 +536,8 @@ const baseOps = (poolArr, o, all) => Object.assign({
        'stepping a served site while the order this round asked held a never-served site aborts');
 }
 {
-  /* B yields and its service round is in flight; it is ahead of A, so the round waits for B rather than
-     deepening A, and B takes the next slice. */
+  /* B yields and its service round is in flight; it is ahead of A, but the round steps A rather than idle the
+     thread on B's reply, and B takes the slice after its round lands. */
   const A = engM('https://a.test/', 1, 1e6, { name: 'A' });
   const Bk = engM('https://b.test/', 9, 1e6, { name: 'B' });
   const poolArr = [A, Bk];
@@ -548,17 +548,17 @@ const baseOps = (poolArr, o, all) => Object.assign({
     serviceFetch: () => new Promise((res) => setTimeout(res, 5)),
   });
   const { died } = await drive(poolArr, ops);
-  must(died === null && order[0] === 'B' && order[1] === 'B',
-       'the leader keeps the thread across its own service round instead of a lesser document deepening',
+  must(died === null && order[0] === 'B' && order[1] === 'A' && order[2] === 'B',
+       'a hot lesser document takes the thread while the leader\'s service round is in flight, and the leader ' +
+       'takes it back once its round lands',
        died ? String(died.message || died) : order);
 }
 
-/* A round waiting on an in-flight service round wakes on an arrival and asks admission again before that reply
-   lands; with no wake it asks only once the reply lands, which is the control. Both wait arms are driven: nothing
-   hot (`lesser` absent), and a leader in flight ahead of a hot lesser document. */
-async function arrivalDrive(lesser, wakes) {
+/* A round waiting on the only engine's in-flight service round wakes on an arrival and asks admission again
+   before that reply lands; with no wake it asks only once the reply lands, which is the control. */
+async function arrivalDrive(wakes) {
   const lead = engM('https://b.test/', 9, 1e6, { name: 'B' });
-  const poolArr = lesser ? [engM('https://a.test/', 1, 1e6, { name: 'A' }), lead] : [lead];
+  const poolArr = [lead];
   const newSite = pop({ waiting: [job('https://n.test/')] });
   let wake = null, arrived = false, landed = false, settle = null, inFlight = null, n = 0;
   const ops = baseOps(poolArr, {
@@ -581,11 +581,11 @@ async function arrivalDrive(lesser, wakes) {
   const { died } = await run;
   return { died, inFlight };
 }
-for (const lesser of [false, true]) {
-  const woke = await arrivalDrive(lesser, true), ctrl = await arrivalDrive(lesser, false);
+{
+  const woke = await arrivalDrive(true), ctrl = await arrivalDrive(false);
   must(woke.died === null && ctrl.died === null && woke.inFlight === true && ctrl.inFlight === false,
-       'a never-served site arriving while the round waits on ' + (lesser ? 'a leader\'s' : 'the only') +
-       ' service round is admitted before that reply lands, and only after it without the wake',
+       'a never-served site arriving while the round waits on the only service round is admitted before that ' +
+       'reply lands, and only after it without the wake',
        [woke.died ? String(woke.died.message || woke.died) : woke.inFlight,
         ctrl.died ? String(ctrl.died.message || ctrl.died) : ctrl.inFlight]);
 }
