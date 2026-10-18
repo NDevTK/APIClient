@@ -16,22 +16,22 @@
  *
  * and says of the enclosing block that its contents are "at-rules named by one of the
  * <font-feature-value-type> at-keyword tokens" or the CSS Fonts 4 §4.9.1 "Controlling Font Display Per
- * Font-Family via @font-feature-values" `font-display` descriptor. Seven names and a descriptor; there is no
- * open tail to wave through.
+ * Font-Family via @font-feature-values" `font-display` descriptor. Chrome 155 recognizes six of its seven
+ * names (no `@historical-forms`), and there is no open tail to wave through.
  *
- * THESE SEVEN ARE SUBSIDIARY AT-RULES AND NOT AT-RULES OF A STYLE SHEET, WHICH IS THE WHOLE OF WHAT THIS
+ * THESE SIX ARE SUBSIDIARY AT-RULES AND NOT AT-RULES OF A STYLE SHEET, WHICH IS THE WHOLE OF WHAT THIS
  * ANSWERS. CSS Fonts 4 §6.9.1 names them so in as many words — an `@font-feature-values` prelude is followed
  * by "a block containing multiple feature value blocks, a special type of subsidiary at-rule" — so `@swash { }`
  * written at a style sheet's top level, or inside an `@media`, is an at-rule that is invalid IN THAT CONTEXT,
  * which CSS Syntax 3 §8 "CSS stylesheets" DISCARDS. It is exactly the shape CSS Paged Media §4.3's margin
  * at-rules have (core/css/css_page.h's own entry says the same thing from the other side), and it is why the
- * seven are dropped rather than crashed on: a crash there would name a CSSOM interface to build for a rule no
+ * six are dropped rather than crashed on: a crash there would name a CSSOM interface to build for a rule no
  * user agent represents in that position.
  *
- * AND THE DROP IS NOT A FALLBACK FOR AN UNKNOWN AT-RULE. Every one of the seven is in CSS Syntax 3 §8's
+ * AND THE DROP IS NOT A FALLBACK FOR AN UNKNOWN AT-RULE. Every one of the six is in CSS Syntax 3 §8's
  * recognized-at-rule registry (a CSS specification DEFINES it), so the registry answers yes and must: what is
  * being decided here is the CONTEXT half of CSS Syntax 3 §8's sentence and not the RECOGNITION half, and the
- * two are separate questions with separate answers. Inside a `@font-feature-values` block the very same seven
+ * two are separate questions with separate answers. Inside a `@font-feature-values` block the very same six
  * names are the rule's own content — CSS Fonts 4 §12.2 makes each one a `CSSFontFeatureValuesMap` attribute of
  * the enclosing rule rather than a child rule of it — so the enclosing rule's builder consumes them, and this
  * predicate is what stops them being read as rules anywhere else.
@@ -51,22 +51,21 @@
 
 #include "quickjs.h"
 
-/* CSS Fonts 4 §6.9.1 "Basic syntax"'s seven `<font-feature-value-type>` at-rules (`@stylistic`,
-   `@historical-forms`, `@styleset`, `@character-variant`, `@swash`, `@ornaments`, `@annotation`), by the name
+/* CSS Fonts 4 §6.9.1 "Basic syntax"'s `<font-feature-value-type>` at-rules the reference browser recognizes
+   (`@stylistic`, `@styleset`, `@character-variant`, `@swash`, `@ornaments`, `@annotation`), by the name
    the parse reports: the at-rule's identifier with NO `@`, ASCII-lowercased. `false` for every other
    at-keyword.
    INSIDE a `@font-feature-values` block a true answer means the at-rule is that rule's own content, which
    CSS Fonts 4 §12.2 "The CSSFontFeatureValuesRule interface" represents as a map attribute and not as a child
    rule; ANYWHERE ELSE it means the at-rule is invalid in its context and CSS Syntax 3 §8 "CSS stylesheets"
-   discards it. A false answer says only that this at-keyword is not one of the seven — whether it is a rule at
+   discards it. A false answer says only that this at-keyword is not one of the six — whether it is a rule at
    all is the recognized-at-rule registry's question and not this one's. */
 bool css_font_feature_value_at_rule(const char *name);
 
-/* HOW MANY VALUES ONE OF THE SEVEN ADMITS PER DECLARATION — css-fonts-4 §6.9.1 "Basic syntax"'s per-block value
+/* HOW MANY VALUES ONE OF THE SIX ADMITS PER DECLARATION — css-fonts-4 §6.9.1 "Basic syntax"'s per-block value
    grammar, as the ONE number css-fonts-4 §12.2 "The CSSFontFeatureValuesRule interface"'s `set` and this
    component's block parse both read. 0 means UNBOUNDED and is a real answer rather than "unknown": §6.9.1
-   states a grammar for five of the seven and states none for `@historical-forms`, and `@styleset`'s carries a
-   `+`.
+   states a grammar for each of the six, and `@styleset`'s carries a `+`.
    §12.2'S `InvalidAccessError` IS ABOUT THIS COUNT AND NOTHING ELSE — "the set() method throws an
    InvalidAccessError exception when the input sequence to set() contains more than the limited number of
    values" — so the RANGE halves of §6.9.1's productions are not asked of a `set` at all, and must not be:
@@ -76,10 +75,10 @@ bool css_font_feature_value_at_rule(const char *name);
    the numbers MEAN, and `css/cssom/CSSFontFeatureValuesRule.html` pins it: `di: 10 9 4 5` parses and
    `set("di", 43)` stores 43.
    `name` is the at-rule's identifier with NO `@`, ASCII-lowercased — the same spelling the predicate above
-   takes. Asking it about a name that is not one of the seven is a caller error and aborts. */
+   takes. Asking it about a name that is not one of the six is a caller error and aborts. */
 unsigned css_font_feature_values_max_values(const char *name);
 
-/* css-fonts-4 §12.2's `CSSFontFeatureValuesMap` for ONE of the seven feature value blocks — `kind` being that
+/* css-fonts-4 §12.2's `CSSFontFeatureValuesMap` for ONE of the six feature value blocks — `kind` being that
  * block's at-keyword without the `@`, which is what decides the count limit above. OWNED: the caller frees.
  *
  * THE MAP ENTRIES ARE A JS ARRAY OF `[name, valuesArray]` PAIRS IN AN OWN PRIVATE-SYMBOL SLOT, which is
@@ -113,7 +112,7 @@ bool css_font_feature_values_map_is(JSContext *ctx, JSValueConst v);
 void css_font_feature_values_map_fill(JSContext *ctx, JSValueConst map, const char *block);
 
 /* ONE feature value block's declarations, serialized back — `@<kind> { <name>: <v> <v>; … }`, or NULL for a map
-   that holds nothing. For css-fonts-4 §12.2's rule's own `cssText`, which is built out of the seven maps rather
+   that holds nothing. For css-fonts-4 §12.2's rule's own `cssText`, which is built out of the six maps rather
    than out of a stored block text precisely because the maps are MUTABLE: a `set` must show through. OWNED. */
 char *css_font_feature_values_map_serialize(JSContext *ctx, JSValueConst map);
 

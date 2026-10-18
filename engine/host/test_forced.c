@@ -13378,8 +13378,15 @@ TF_UNIT void probes_custommedia(const char *js, Probe *tab, int *n) {
              "the `@media (--n)` block applied to `#a`, which an unknown condition leaves unstyled");
     fold_row(&cmedia_tt, &cmedia_why, param_value_is(js, "/api/cmedia", "i", "undefined"),
              "CSSCustomMediaRule is exposed, which Chrome 155 does not ship");
+    /* And CSS Fonts 4 §6.9.1's `@historical-forms`, which Chrome 155 does not recognize either. */
+    const char *hforms_why = NULL; int hforms_tt = 1;
+    fold_row(&hforms_tt, &hforms_why, param_value_is(js, "/api/cmedia", "h", "false"),
+             "CSSFontFeatureValuesRule has a `historicalForms` map, which Chrome 155's IDL does not declare");
+    fold_row(&hforms_tt, &hforms_why, param_value_is(js, "/api/cmedia", "s", "1"),
+             "the `@swash` block beside an ignored `@historical-forms` did not fill its map with one entry");
     const Probe rows[] = {
         { "custom-media-unrecognized", cmedia_tt, "/api/cmedia", SESS_EXPLORE, cmedia_why },
+        { "historical-forms-unrecognized", hforms_tt, "/api/cmedia", SESS_EXPLORE, hforms_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

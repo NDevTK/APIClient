@@ -270,15 +270,15 @@ typedef struct CssRuleData {
        after the at-keyword of a rule whose block this file does not store at all. One slot would have had to be
        read with the rule's type in hand at every site, which is two facts wearing one name. (OWNED) */
     JSValue font_family;
-    /* CSS Fonts 4 §12.2's SEVEN `[SameObject] readonly attribute CSSFontFeatureValuesMap` attributes, as ONE
-       Array holding the seven maps in the IDL's own declaration order. JS_NULL on every rule that is not a
+    /* CSS Fonts 4 §12.2's SIX `[SameObject] readonly attribute CSSFontFeatureValuesMap` attributes, as ONE
+       Array holding the six maps in the IDL's own declaration order. JS_NULL on every rule that is not a
        `@font-feature-values`.
-       ONE FIELD AND NOT SEVEN, which is `container_conditions`' arrangement and is what makes `[SameObject]`
+       ONE FIELD AND NOT SIX, which is `container_conditions`' arrangement and is what makes `[SameObject]`
        and the liveness `css/css-fonts/font-feature-values-map-live.html` asserts fall out for free: the maps are
        MINTED WITH THE RULE, so `rule.annotation === rule.annotation` answers true because there is one object
        and not because a getter remembered one, and a `set` through either handle is a write to that object. It
-       is not seven slots because they are the SAME fact under seven names — each is a
-       `CSSFontFeatureValuesMap` over one of CSS Fonts 4 §6.9.1's seven blocks, filled by one walk and
+       is not six slots because they are the SAME fact under six names — each is a
+       `CSSFontFeatureValuesMap` over one of CSS Fonts 4 §6.9.1's six blocks, filled by one walk and
        serialized by one rule — which is the test `at_name` and `keyframes_name` FAIL and `layer_names` passes.
        AND IT IS MINTED EAGERLY RATHER THAN ON FIRST READ, which §12.2's `size` is why: `rule.stylistic.size`
        must be 0 for a rule whose block declares no `@stylistic` (the WPT asserts exactly that), so a map that
@@ -722,13 +722,13 @@ static CssRuleData *rule_here_grouping(JSContext *ctx, JSValueConst v)
 
 /* ---- creating a rule --------------------------------------------------------------------------------------- */
 
-/* CSS Fonts 4 §12.2's SEVEN maps, in the IDL'S OWN DECLARATION ORDER — `annotation`, `ornaments`, `stylistic`,
-   `swash`, `characterVariant`, `styleset`, `historicalForms`. The order is the INDEX the getters use, so it is
-   stated once and read from one place; it is the IDL's rather than CSS Fonts 4 §6.9.1's
-   `<font-feature-value-type>` production's, and the two differ, which is why it has to be the one the
-   ATTRIBUTES are in. Each entry's `kind` is the at-keyword the block is written with — which is
-   `characterVariant`'s attribute name in the IDL's camel case and `character-variant`'s at-keyword in CSS's
-   hyphenated one, and those are two spellings of one block.
+/* CSS Fonts 4 §12.2's maps as the reference browser declares them, in the IDL'S OWN DECLARATION ORDER —
+   `annotation`, `ornaments`, `stylistic`, `swash`, `characterVariant`, `styleset`. The editors' draft adds a
+   seventh, `historicalForms`; Blink's css_font_feature_values_rule.idl at Chrome 155.0.8059.84 does not, and
+   recognizes no `@historical-forms` (css_at_rule_id.cc), so neither exists here. The order is the INDEX the
+   getters use, so it is stated once; it is the IDL's rather than CSS Fonts 4 §6.9.1's production's, and the
+   two differ. Each entry's `kind` is the at-keyword the block is written with (`characterVariant` in the IDL's
+   camel case is `character-variant` in CSS's hyphenated one: two spellings of one block).
    OWNED. Every map is minted here and none is minted anywhere else, which is what §12.2's `[SameObject]` IS. */
 static const struct { const char *attr; const char *kind; } FEATURE_MAPS[] = {
     { "annotation",       "annotation" },
@@ -737,7 +737,6 @@ static const struct { const char *attr; const char *kind; } FEATURE_MAPS[] = {
     { "swash",            "swash" },
     { "characterVariant", "character-variant" },
     { "styleset",         "styleset" },
-    { "historicalForms",  "historical-forms" },
 };
 #define FEATURE_MAPS_N ((unsigned)(sizeof FEATURE_MAPS / sizeof FEATURE_MAPS[0]))
 
@@ -796,7 +795,7 @@ static JSValue rule_new(JSContext *ctx, int proto_slot, uint16_t type, JSValueCo
     r->property_initial_value = JS_NULL;
     r->container_conditions = JS_NULL;
     r->font_family = JS_NULL;
-    /* Only a `@font-feature-values` gets the seven maps — see the record. JS_NULL on every other rule for the
+    /* Only a `@font-feature-values` gets the six maps — see the record. JS_NULL on every other rule for the
        same reason `child_rules` is JS_NULL on a rule that holds none: an empty Array would read as a rule that
        HAS the attributes and happens to have nothing in them, which is a different fact and is what the
        brand-checked getters exist to tell apart. */
@@ -1043,7 +1042,7 @@ static JSValue font_face_rule_new(JSContext *ctx, JSValueConst parent_style_shee
    rule — for a prelude outside `<font-family-name>#`, which is §6.9.1's own sentence and not this builder's
    caution: "If syntax errors occur within the <font-family-name> list, the entire rule @font-feature-values
    rule is invalid and must be ignored."
-   THE SEVEN MAPS ARRIVE EMPTY AND ARE FILLED BY `rule_built`'s CONSUME ARM, one child at a time, because
+   THE SIX MAPS ARRIVE EMPTY AND ARE FILLED BY `rule_built`'s CONSUME ARM, one child at a time, because
    §6.9.1's feature value blocks are reported to this builder as CHILD AT-RULES and a child arrives AFTER its
    parent. That is why the block's declarations are not read here: at this moment the rule's own block has been
    serialized (it holds the `font-display` descriptor and nothing else) and none of its children has been seen. */
@@ -1069,7 +1068,7 @@ static JSValue font_feature_values_rule_new(JSContext *ctx, JSValueConst parent_
 }
 
 /* CSS Fonts 4 §6.9.1's feature value declarations of ONE child block, into the rule's own map for it. Answers
-   false for a child that is not one of the seven, which is §6.9.1's own arm — "an unknown at-rule within a
+   false for a child that is not one of the six, which is §6.9.1's own arm — "an unknown at-rule within a
    @font-feature-values block (not using one of the predefined list of allowed at-keywords) makes that at-rule
    invalid and ignored, but does not invalidate the @font-feature-values rule" — and is the whole of why this
    returns a bool rather than being void: a `false` is a DROPPED child and a `true` is a consumed one, and
@@ -1096,12 +1095,12 @@ static bool rule_consume_feature_block(JSContext *ctx, JSValueConst rule, const 
         return true;
     }
     /* THE TWO PREDICATES AGREE OR ONE OF THEM IS WRONG. `css_font_feature_value_at_rule` is the membership
-       question this file already asks one arm below, and the table above is the same seven names in the IDL's
+       question this file already asks one arm below, and the table above is the same six names in the IDL's
        order; a name that passes that predicate and matches no row here would be a block with no map to fill,
        which is the one way this walk can silently lose every value of a whole block. */
     DCHECK(!css_font_feature_value_at_rule(at_name),
            "CSS Fonts 4 §6.9.1's membership predicate recognised a feature value block that this file's map "
-           "table has no row for. The two are the same seven names read from the same section — the predicate "
+           "table has no row for. The two are the same six names read from the same section — the predicate "
            "in the production's order and the table in CSS Fonts 4 §12.2's attribute order — so a name in one "
            "and not the other means a row was added to one of them alone");
     return false;
@@ -1783,7 +1782,7 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        at-rule invalid in its context, which CSS Syntax drops — so it is dropped here rather than reaching
        the crash below, which would name a capability that is already built. */
     if (pr->at_name && css_page_margin_at_rule(pr->at_name)) return JS_UNDEFINED;
-    /* AND THE SAME MIRROR FOR CSS Fonts 4 §6.9.1 "Basic syntax"'s SEVEN FEATURE VALUE BLOCKS, which are
+    /* AND THE SAME MIRROR FOR CSS Fonts 4 §6.9.1 "Basic syntax"'s SIX FEATURE VALUE BLOCKS, which are
        subsidiary at-rules of `@font-feature-values` in that section's own words — an `@font-feature-values`
        prelude is followed by "a block containing multiple feature value blocks, a special type of subsidiary
        at-rule", and the enclosing block's contents are "at-rules named by one of the <font-feature-value-type>
@@ -1794,23 +1793,15 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        and dropped here for the same reason they are: reaching the crash below would name a CSSOM interface to
        build for a rule no user agent represents in that position.
        IT IS THE CONTEXT HALF OF CSS Syntax 3 §8'S SENTENCE AND NOT THE RECOGNITION HALF, and the two are
-       separate questions this file deliberately answers from separate places. Six of the seven are in
-       `at_rule_defined`'s registry (the reference browser does not recognize `@historical-forms`), so that
-       predicate answers yes for them; what decides them here is where they were written. Reading the seven as unrecognized instead
-       would have been the shape-of-the-name inference `at_rule_dropped`'s own note records as spec-wrong.
-       THEY HAD SEVEN ROWS IN THE UNBUILT-INTERFACE TABLE BELOW AND THE ROWS WERE NOT WRONG — every one named
-       CSS Fonts 4 §12.2 "The CSSFontFeatureValuesRule interface" correctly, because inside a
-       `@font-feature-values` block each of the seven IS that interface's content. What they could not express is
-       that the interface is not the answer to the rule the PAGE wrote when it wrote one of them somewhere else:
-       the crash told its reader to build CSSFontFeatureValuesRule for a `@swash` at a sheet's top level, where
-       building it changes nothing, because a browser has no object there either. The rows come off with this
-       arm, which is the same diff the table's second assert demands.
-       CSS Fonts 4 §6.9.1 ALSO SAYS WHAT HAPPENS TO A NAME THAT IS NOT ONE OF THE SEVEN — "an unknown at-rule
+       separate questions this file deliberately answers from separate places. All six are in
+       `at_rule_defined`'s registry, so that predicate answers yes for them; what decides them here is where
+       they were written.
+       CSS Fonts 4 §6.9.1 ALSO SAYS WHAT HAPPENS TO A NAME THAT IS NOT ONE OF THE SIX — "an unknown at-rule
        within a @font-feature-values block (not using one of the predefined list of allowed at-keywords) makes
        that at-rule invalid and ignored, but does not invalidate the @font-feature-values rule" — and that is a
        sentence about the ENCLOSING rule's own body, so it belongs with the arm that builds it and not here. */
     /* AND THE OTHER SIDE OF THAT SENTENCE, WHICH MUST COME FIRST: inside a `@font-feature-values` block the
-       very same seven names ARE the rule's own content, so they reach here as rules only to be told they are
+       very same six names ARE the rule's own content, so they reach here as rules only to be told they are
        not. CSS Fonts 4 §12.2 makes each one a `CSSFontFeatureValuesMap` ATTRIBUTE of the enclosing rule rather
        than a child rule of it, and the fill has already happened in `rule_built` — which is where it has to
        happen, because that is the only place holding both the child's block and the parent's object. So this
@@ -1981,7 +1972,7 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        have and dropped here for the same reason.
        ITS BODY IS NOT READ HERE AND ITS `pr->block` IS DELIBERATELY UNSTORED. The block holds CSS Fonts 4 §4.9.1
        "Controlling Font Display Per Font-Family via @font-feature-values"' `font-display` descriptor and the
-       seven feature value blocks; the descriptor has no member in §12.2 at all, and the seven arrive as CHILD
+       six feature value blocks; the descriptor has no member in §12.2 at all, and the six arrive as CHILD
        at-rules that `rule_built` consumes into the maps. So there is no declaration block on this rule for a
        page to reach — §12.2's IDL declares no `style` — and storing one would be a second copy of the feature
        values able to disagree with the maps the moment a `set` ran. */
@@ -2022,7 +2013,7 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
            MAPS, AND THAT HAS TO HAPPEN HERE — AHEAD OF THE DROP BELOW. This is the only point in the parse
            that holds BOTH the child's serialized block and the parent's rule object, which is what a fill
            needs; `rule_from_parse` is handed the child and the parent's VALUE but is the wrong place for a
-           reason that is not arrangement — it answers a rule OBJECT, and §12.2 makes these seven not rules.
+           reason that is not arrangement — it answers a rule OBJECT, and §12.2 makes these six not rules.
            `rule_type_has_child_rules(RULE_TYPE_FONT_FEATURE_VALUES)` IS FALSE AND MUST STAY FALSE, which is
            why the arm is a special case rather than a row of that predicate. CSSOM gives a
            `@font-feature-values` no `cssRules` at all — §12.2's IDL is `interface CSSFontFeatureValuesRule :
@@ -2031,14 +2022,14 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
            empty, which is a different fact". So the drop below is the CORRECT answer for this rule's children
            and the fill is what has to come before it.
            GETTING THE ORDER WRONG LOSES EVERY FEATURE VALUE SILENTLY: the drop answers JS_UNDEFINED for each
-           child, the rule keeps its seven empty maps, `cssRules.length` is 1 and every `size` is 0 — a page
+           child, the rule keeps its six empty maps, `cssRules.length` is 1 and every `size` is 0 — a page
            reading a `@font-feature-values` that declares nothing where the sheet declared four blocks, with no
            crash anywhere and no count out of place. */
         if (enclosing_rule_type(parent_rule) == RULE_TYPE_FONT_FEATURE_VALUES) {
             if (pr->at_name)
                 (void)rule_consume_feature_block(b->ctx, parent_rule, pr->at_name,
                                                  pr->has_block ? (pr->block ? pr->block : "") : NULL);
-            /* CONSUMED OR DROPPED, THE ANSWER IS THE SAME HANDLE: a child that is one of the seven became map
+            /* CONSUMED OR DROPPED, THE ANSWER IS THE SAME HANDLE: a child that is one of the six became map
                entries and a child that is not is §6.9.1's "invalid and ignored", and neither is a rule. A
                handle is still pushed for it, which is cssom_parse_rules' own contract — "a builder keeping
                objects must return a handle for every rule it is told about, the ones it decided to drop
@@ -3055,7 +3046,7 @@ static bool starting_style_rule_serialize(JSContext *ctx, JSValueConst rule, RBu
  * CSSPageRule, CSSNamespaceRule, CSSKeyframesRule, CSSKeyframeRule and stops — so the shape is the one arm it
  * DOES state for a rule with a prelude and a body, with step 1's prefix replaced.
  *
- * IT IS BUILT OUT OF THE SEVEN MAPS AND NOT OUT OF A STORED BLOCK TEXT, AND THAT IS WHAT MAKES IT LIVE. Every
+ * IT IS BUILT OUT OF THE SIX MAPS AND NOT OUT OF A STORED BLOCK TEXT, AND THAT IS WHAT MAKES IT LIVE. Every
  * other rule in this file serializes a block it stored at the parse; §12.2's maps are MUTABLE — `set`, `delete`
  * and `clear` — so a stored text would be a second copy of the feature values, correct until the first write
  * and then silently disagreeing with what `get` answers. There is no such text on the record for that reason
@@ -3370,9 +3361,9 @@ enum { CR_PARENT_RULE = 0, CR_PARENT_STYLE_SHEET, CR_TYPE, CR_CSS_TEXT, CR_SELEC
        CR_KEYFRAMES_CSS_RULES, CR_KEYFRAMES_LENGTH, CR_LAYER_BLOCK_NAME, CR_LAYER_NAME_LIST,
        CR_PROPERTY_NAME, CR_PROPERTY_SYNTAX, CR_PROPERTY_INHERITS, CR_PROPERTY_INITIAL_VALUE,
        CR_CONTAINER_NAME, CR_CONTAINER_QUERY, CR_CONTAINER_CONDITIONS,
-       /* CSS Fonts 4 §12.2's `fontFamily` plus its SEVEN map attributes as ONE magic — the map getters differ
+       /* CSS Fonts 4 §12.2's `fontFamily` plus its SIX map attributes as ONE magic — the map getters differ
           only in WHICH index of the rule's map list they read, and that index is the attribute's own position
-          in `FEATURE_MAPS`, so a magic apiece would be seven identical bodies whose one difference a table
+          in `FEATURE_MAPS`, so a magic apiece would be six identical bodies whose one difference a table
           already states. The index is carried as `magic - CR_FEATURE_MAP_0`. */
        CR_FONT_FAMILY, CR_FEATURE_MAP_0 };
 
@@ -3706,7 +3697,7 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
     case CR_FONT_FAMILY:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_FONT_FEATURE_VALUES, "CSSFontFeatureValuesRule");
         return r ? JS_DupValue(ctx, r->font_family) : JS_EXCEPTION;
-    /* CSS Fonts 4 §12.2's SEVEN `[SameObject] readonly attribute CSSFontFeatureValuesMap` attributes —
+    /* CSS Fonts 4 §12.2's SIX `[SameObject] readonly attribute CSSFontFeatureValuesMap` attributes —
        "Maps of feature values associated with feature value names for a given font-variant-alternates value
        type", each reflecting "the values defined via a corresponding feature value block". [SameObject] is why
        this hands back the stored object rather than minting one: there is exactly one map per attribute per
@@ -3718,7 +3709,7 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
             unsigned at = (unsigned)(magic - CR_FEATURE_MAP_0);
 
             DCHECK(at < FEATURE_MAPS_N,
-                   "a `@font-feature-values` map attribute ran with an index past CSS Fonts 4 §12.2's seven — "
+                   "a `@font-feature-values` map attribute ran with an index past CSS Fonts 4 §12.2's six — "
                    "the magic IS the position in FEATURE_MAPS and the install walks that table, so a higher one "
                    "means a magic was written by hand");
             r = rule_here_typed(ctx, this_val, RULE_TYPE_FONT_FEATURE_VALUES, "CSSFontFeatureValuesRule");
@@ -5221,9 +5212,9 @@ void css_rule_install_proto(JSContext *ctx)
 
     /* CSS Fonts 4 §12.2's CSSFontFeatureValuesRule.prototype — from CSSRule directly, because that section
        declares `interface CSSFontFeatureValuesRule : CSSRule` and a `@font-feature-values` has no `cssRules`:
-       CSS Fonts 4 §6.9.1's seven feature value blocks are this interface's MAP ATTRIBUTES rather than its
+       CSS Fonts 4 §6.9.1's six feature value blocks are this interface's MAP ATTRIBUTES rather than its
        children, which is why it is not a CSSOM §6.4.5 grouping rule even though its block holds at-rules.
-       THE SEVEN MAP ACCESSORS ARE INSTALLED FROM THE TABLE THE RECORD IS BUILT FROM, so the attribute name and
+       THE SIX MAP ACCESSORS ARE INSTALLED FROM THE TABLE THE RECORD IS BUILT FROM, so the attribute name and
        the index the getter reads are one statement: a magic written by hand here could name a map the mint
        never made, and an eighth attribute would need a row in the table before it could have a magic at all. */
     font_feature_values = JS_NewObjectProto(ctx, base);
@@ -5307,7 +5298,7 @@ void css_rule_install(JSContext *ctx, JSValueConst global)
         { "CSSStartingStyleRule",  PROTO_STARTING_STYLE,  1 },
         /* CSS Fonts 4 §12.2 declares `interface CSSFontFeatureValuesRule : CSSRule` — index 0. A
            `@font-feature-values` block holds at-rules and is STILL not a CSSOM §6.4.5 grouping rule, which is
-           the IDL's own statement: CSS Fonts 4 §12.2 makes CSS Fonts 4 §6.9.1's seven feature value blocks
+           the IDL's own statement: CSS Fonts 4 §12.2 makes CSS Fonts 4 §6.9.1's six feature value blocks
            MAP ATTRIBUTES of this rule rather than children of it, so there is no `cssRules` for CSSGroupingRule
            to put there. It is the same shape CSS Animations §6.3's CSSKeyframesRule has for the opposite
            reason — that one holds real child rules and declares its own accessors for them — and the pair is

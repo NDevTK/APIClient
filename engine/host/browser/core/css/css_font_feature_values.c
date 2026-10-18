@@ -9,15 +9,17 @@
 #include "check.h"
 #include "core/css/css_font_feature_values.h"
 
-/* CSS Fonts 4 §6.9.1's `<font-feature-value-type>` alternatives, in the spec's own order — the seven feature
-   value blocks it defines, each `@<name> { <declaration-list> }`.
+/* CSS Fonts 4 §6.9.1's `<font-feature-value-type>` alternatives the reference browser recognizes, in the
+   spec's own order, each `@<name> { <declaration-list> }`. The production's seventh, `@historical-forms`, is
+   not one: Blink at Chrome 155.0.8059.84 recognizes no such at-keyword (css_at_rule_id.cc), so inside a
+   `@font-feature-values` block it is §6.9.1's unknown at-rule, "invalid and ignored".
    THE ORDER IS THE PRODUCTION'S AND NOT ASCII, deliberately: this table is READ against the spec's one line and
-   a lookup over seven names does not need a sort. Where a table's order is load-bearing for the lookup (the
+   a lookup over six names does not need a sort. Where a table's order is load-bearing for the lookup (the
    recognized-at-rule registry, which binary-searches) the order is asserted at the lookup; here it is not, so
    asserting an order the spec does not write would be a second fact able to disagree with the source it was
    transcribed from. */
 static const char *const FEATURE_VALUE_AT_RULES[] = {
-    "stylistic", "historical-forms", "styleset", "character-variant",
+    "stylistic", "styleset", "character-variant",
     "swash", "ornaments", "annotation",
 };
 
@@ -100,12 +102,10 @@ unsigned css_font_feature_values_max_values(const char *name)
        "implies cv12 1"), so the two halves of css-fonts-4 disagree about the MINIMUM and agree about the
        maximum; §6.9.2 is the section that states what the numbers mean and is followed. */
     if (strcmp(name, "character-variant") == 0) return 2;
-    /* `@styleset` is `<font-feature-index [0,20]>+` — a `+`, so no maximum; and `@historical-forms` has no
-       per-declaration grammar in §6.9.1 at all, so there is no count to state and inventing one would be
-       inventing. Both are therefore UNBOUNDED, and the two reasons are different. */
-    DCHECK(strcmp(name, "styleset") == 0 || strcmp(name, "historical-forms") == 0,
+    /* `@styleset` is `<font-feature-index [0,20]>+` — a `+`, so no maximum, which is UNBOUNDED. */
+    DCHECK(strcmp(name, "styleset") == 0,
            "css-fonts-4 §6.9.1's per-block value count was asked about an at-keyword that is not one of that "
-           "section's seven `<font-feature-value-type>` alternatives. The count is a property of WHICH block "
+           "section's six `<font-feature-value-type>` alternatives. The count is a property of WHICH block "
            "this is, so a name outside the production has none — css_font_feature_value_at_rule is the "
            "membership question and is asked first");
     return 0;
@@ -233,7 +233,7 @@ static void ffv_put(JSContext *ctx, JSValueConst map, const char *key, JSValue v
     JS_FreeValue(ctx, arr);
 }
 
-/* Which of the seven this map is — the at-keyword with no `@`, out of the own slot the mint filled. BORROWED
+/* Which of the six this map is — the at-keyword with no `@`, out of the own slot the mint filled. BORROWED
    through a C string the caller frees. */
 static char *ffv_kind(JSContext *ctx, JSValueConst map)
 {
@@ -368,7 +368,7 @@ void css_font_feature_values_map_fill(JSContext *ctx, JSValueConst map, const ch
     if (!block || !*block) return;
     kind = ffv_kind(ctx, map);
     DCHECK(kind != NULL,
-           "a CSSFontFeatureValuesMap was filled without knowing WHICH of css-fonts-4 §6.9.1's seven blocks it "
+           "a CSSFontFeatureValuesMap was filled without knowing WHICH of css-fonts-4 §6.9.1's six blocks it "
            "is. The count limit is a property of the block, so the mint stores the at-keyword and a map with "
            "none cannot judge a declaration at all");
     if (!kind) return;
@@ -649,7 +649,7 @@ JSValue css_font_feature_values_map_new(JSContext *ctx, const char *kind)
     DCHECK(g_map_class != 0,
            "a CSSFontFeatureValuesMap was built before css_font_feature_values_init declared the interface");
     DCHECK(kind != NULL && css_font_feature_value_at_rule(kind),
-           "a CSSFontFeatureValuesMap was minted for a block that is not one of css-fonts-4 §6.9.1's seven "
+           "a CSSFontFeatureValuesMap was minted for a block that is not one of css-fonts-4 §6.9.1's six "
            "`<font-feature-value-type>` at-rules. The kind is what decides §12.2's `InvalidAccessError` count, "
            "so a map with no block behind it could not judge a `set` at all");
     proto = JS_GetClassProto(ctx, g_map_class);
