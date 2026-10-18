@@ -5131,11 +5131,10 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        replay builds the call where its work runs out. An arm the replay forks before then is an ordinary arm of
        the document and drives nothing, so it carries no mark, no locator and no routed body; were it to inherit
        the claim, every arm of the replay would build the call and park as the same drive of the same body.
-       Named residual. Not covered: which arm of a fork that still records none (decide_fork_same_path: a peer's
-       answer, a delivery-time fork) the drive stood on; the claim stays with the parent, so a drive born in such a
-       sibling's timeline resumes in the parent's. Next diff builds: the peer-answer column decide.h names, so the
-       replay consumes that arm too. Absence shows as: a resumed drive emitting addresses that differ from its
-       recording session's, on a page where a peer's answer sets the state the driven body's closure reads. */
+       Staying with the parent keeps it on the drive's recorded side: a branch or completion arm is a slot the
+       replay consumes, and a peer's answer or a delivery is a commitment row ('r') that deliver_admits applies
+       when the replay re-asks, so the timeline a fork hands the sibling is one the drive's record refuses. A peer
+       whose own session ended is the exception flow_answer_fork's residual names. */
     if (parent->orphan_want) {
         sib->orphan = 0;
         sib->orphan_hash = 0;
