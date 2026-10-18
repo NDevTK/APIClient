@@ -172,16 +172,17 @@ typedef struct {
        which.
        WHAT TURNS ON IT IS THE ORPHAN QUESTION, which is why this is the fact worth carrying rather than a
        per-bucket phase table. engine.c reaches engine_orphan_seed where a flow has no program, job, delivery,
-       checkpoint or lifecycle stage DUE at the current moment AND no rendering opportunity, no due timer and
-       no idle work — so `0` orphan asks has two readings — no member has run out of PROGRAMS, or members have
-       and are held by one of the other SEVEN — and the census reported them identically.
+       checkpoint or lifecycle stage DUE at the current moment AND no rendering opportunity, no due timer, no
+       idle work and no outstanding reply — so `0` orphan asks has two readings — no member has run out of
+       PROGRAMS, or members have and are held by one of the other EIGHT — and the census reported them
+       identically.
        THE LIST HAS NOW BEEN WRONG TWICE, IN OPPOSITE DIRECTIONS, AND BOTH TIMES FOR THE SAME REASON: a list of
        rungs written down where the ladder is not. It first ended "timer, rendering opportunity, outstanding
        reply or unmodelled close request", which was the seat the seed had at the ladder's EXIT; it then said
        those three sit BELOW the two clock-driven sources, which was the seat the seed had between the lifecycle
        arm and the clock. The project owner's ordering has since put the seed BELOW all three clock-driven
-       sources, so the timer and the rendering opportunity are holders again and only the outstanding reply and
-       the close request are beneath it.
+       sources and then below the host-owed return, so the timer, the rendering opportunity and an outstanding
+       reply are holders and only the close request is beneath it.
        AND THE ARGUMENT THAT MOVED IT THE FIRST TIME IS EXACTLY WHY THE NUMBERS BELOW ARE NOW WEAKER, which is
        stated rather than discovered: a rendering opportunity is generated for ever on a document that has one,
        so a seat below it is reached only where the opportunity did NOT fire, and a zero in this row is again
