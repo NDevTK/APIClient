@@ -221,6 +221,13 @@ const POSTS = [
     record: `windowproxy.get\tpeer\t${W}\tderived,undriven,pinned\t-\tlength`,
     doc: ['observed', 'undriven', 'unpinned', 'none'], differs: 'script' },
 ];
+/* The sending document a record's world names, read as both hosts read it: the head's name, before its last two
+   colons. A root name holding a colon is the case the last-two rule exists for. */
+const WORLD_HEADS = [
+  { world: 'root:1:1', doc: 'root' },
+  { world: 'root.2-00000000000000a1:1:7,root.2-00000000000000a1:1:3', doc: 'root.2-00000000000000a1' },
+  { world: 'https://a.test/:3:9', doc: 'https://a.test/' },
+];
 function askPost(Z, row) {
   const marks = row.record.split('\t')[3];
   const m = marks.split(',');
@@ -304,6 +311,14 @@ function main() {
     process.exitCode = 1;
   }
   console.log('');
+  console.log('THE SENDING DOCUMENT a record\'s world names (docRecordWorldDocument):');
+  let headsWrong = 0;
+  for (const h of WORLD_HEADS) {
+    const got = Z.docRecordWorldDocument(h.world);
+    if (got !== h.doc) headsWrong++;
+    console.log((got === h.doc ? '  ok   ' : '  FAIL ') + JSON.stringify(h.world) + ' => ' + JSON.stringify(got));
+  }
+  if (headsWrong) process.exitCode = 1;
   console.log('A CROSS-DOCUMENT ACT against the fetch with the same signals (safeFetchCrossDocumentRefusal):');
   let postsWrong = 0;
   for (const r of POSTS) {

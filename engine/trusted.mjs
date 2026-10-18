@@ -220,7 +220,7 @@ export const ZONE = (() => {
   for (const n of ['safeFetchWiden', 'safeFetchEgressStated', 'safeFetchFiringRefusal', 'safeFetchCrossDocumentRefusal',
                    'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'docRecord', 'docRecordJoin',
                    'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque',
-                   'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordAskerRefusal',
+                   'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordWorldDocument', 'docRecordAskerRefusal',
                    'docRecordAddressSpace', 'docRecordWithAddressSpace', 'safeFetchSchemeData',
                    'safeFetchDocumentAddressSpace', 'noveltyAbsorb', 'noveltyOwed'])
     if (typeof sandbox[n] !== 'function')
@@ -1595,11 +1595,15 @@ async function main() {
       const go = () => {
         const t = holderOf(f[1]);
         if (!t) return false;
-        /* The one firing rule, as a fetch is judged (safeFetchCrossDocumentRefusal). The record names no sending
-           document, so it is judged under the weaker-wins meet of the sending instance's records, which is
-           SECURITY.md's bound on what an engine's word can get. */
-        const refusal = ZONE.safeFetchCrossDocumentRefusal({ targetOrigin: t.origin, marks: f[3],
-                                                    doc: ZONE.docRecordMeet(e.docs.map((n) => docRecords.get(n))) });
+        /* The one firing rule, as a fetch is judged (safeFetchCrossDocumentRefusal), under the sending
+           document's record: the head of the record's world names it (docRecordWorldDocument), and a name that
+           is no document of this instance is refused, as a request's asker is. */
+        const sent = askerRecord(e, [ZONE.docRecordWorldDocument(f[2])], 'asker');
+        if (sent.refusal) {
+          e.ready.push(decline(`windowproxy.post -> ${f[1]} — ${askerRefusal(e, sent.refusal)}`));
+          return true;
+        }
+        const refusal = ZONE.safeFetchCrossDocumentRefusal({ targetOrigin: t.origin, marks: f[3], doc: sent.doc });
         if (refusal) {
           e.ready.push(decline(`windowproxy.post -> ${f[1]} — a CROSS-DOCUMENT MESSAGE this origin's egress ` +
                                `policy refuses on \`${refusal}\`, as it would a fetch with the same signals`));

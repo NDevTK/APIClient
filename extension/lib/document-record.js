@@ -214,6 +214,22 @@ function docRecordNameParent(name) {
   return m ? m[1] : null;
 }
 
+/* The document a cross-instance record's world field names: the head of solver/world.c's vector, whose fields
+   are `<doc>:<session>:<serial>` joined by commas, the head first. A world is minted by a flow of exactly one
+   document, so the head names the document that sent the record (solver/engine.c's routed delivery reads it
+   the same way). The name ends at the head's last two colons, since a root may be named anything. */
+function docRecordWorldDocument(world) {
+  var head, serial, session;
+  CHECK(typeof world === "string" && world !== "", "a world's document was asked of no world vector");
+  head = world.split(",")[0];
+  serial = head.lastIndexOf(":");
+  session = serial > 0 ? head.lastIndexOf(":", serial - 1) : -1;
+  CHECK(session > 0 && /^[0-9]+$/.test(head.slice(session + 1, serial)) && /^[0-9]+$/.test(head.slice(serial + 1)),
+        "the world vector " + JSON.stringify(world) + " does not begin `<doc>:<session>:<serial>` — " +
+        "world_serialize writes every field so");
+  return head.slice(0, session);
+}
+
 /* The record a request is judged against, from the asking document's name as the engine states it on the
    pending line. A document this zone provisioned answers with its own record. One the engine created inside
    its own heap (a same-origin child or popup, or the next document of a navigable) was never provisioned;
@@ -292,5 +308,6 @@ if (typeof self !== "undefined") {
   self.docRecordMeet = docRecordMeet;
   self.docRecordOfAsker = docRecordOfAsker;
   self.docRecordNameParent = docRecordNameParent;
+  self.docRecordWorldDocument = docRecordWorldDocument;
   self.docRecordAskerRefusal = docRecordAskerRefusal;
 }

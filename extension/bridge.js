@@ -5133,11 +5133,17 @@ async function hostNotice(eng, line) {
     CHECK(!!eng.origin, "a cross-document message was posted by an instance with no recorded principal — only " +
                         "the trusted zone may state a sender's origin, and this one has none to state; carry " +
                         "the document's browser-stated origin into the cold recipe so a resumed instance keeps it");
-    /* The one firing rule, as a fetch is judged (safeFetchCrossDocumentRefusal). The record names no sending document, so
-       it is judged under the weaker-wins meet of the sending instance's records, SECURITY.md's bound on what an
-       engine's word can get. */
+    /* The one firing rule, as a fetch is judged (safeFetchCrossDocumentRefusal), under the sending document's
+       record: the head of the record's world names it (docRecordWorldDocument), and a name that is no document
+       of this instance is refused, as a request's asker is. */
+    const _sent = askerRecord(eng, [docRecordWorldDocument(f[2])], "asker");
+    if (_sent.refusal) {
+      console.warn("[bridge] windowproxy.post -> " + f[1] + " is refused: " + _sent.refusal.text);
+      engineCountRefusal(eng, _sent.refusal.token);
+      return;
+    }
     const _postRefusal = self.safeFetchCrossDocumentRefusal({ targetOrigin: target.origin, marks: f[3],
-                                                     doc: docRecordMeet([...eng.records.values()]) });
+                                                              doc: _sent.doc });
     if (_postRefusal) {
       console.warn("[bridge] windowproxy.post -> " + f[1] + " is refused on `" + _postRefusal + "`, as a fetch " +
                    "with the same signals would be");
