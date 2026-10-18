@@ -8838,7 +8838,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
                read; and no document-lifecycle stage left. That last terminates: document_lifecycle_step advances
                readiness 0 -> 1 -> 2, one stage per call, asserting it moved, and answers 0 once every document is
                at 2. */
-            else if ((orphan_step = engine_orphan_resume(ctx, f)) != 0) {
+            /* Not while a reply or an awaited row is outstanding: a reply can still call the body, and a call built
+               before it arrives puts the drive's questions ahead of the reply's on a replay or behind them,
+               whichever the network decides, so a recorded path would diverge at its first slot. */
+            else if (!seq_awaits && !pending_outstanding(f->pending) &&
+                     (orphan_step = engine_orphan_resume(ctx, f)) != 0) {
                 g_step_unit = engine_orphan_unit(orphan_step); return 0; }
             /* §8.1.7.3's in-parallel half, the first clock-driven source because it can defer: it compares the next
                rendering opportunity with the earliest timer expiry and yields to an earlier timer. Without it there
@@ -8855,21 +8859,6 @@ static int flow_step(JSContext *ctx, Flow *f) {
                visit (a period started or one callback queued), because §5.1 step 6 and §5.2 step 3.4 queue a task
                rather than loop. */
             else if (engine_clock_idle_asked(ctx)) { g_step_unit = STEP_UNIT_IDLE_PERIOD; return 0; }
-            /* The forced surface, below every source the page arranged (the project's decision, stated as the
-               rule): the three rungs above are work the page arranged (a `setTimeout`, a `requestAnimationFrame`, a
-               ResizeObserver), and a seed is work the engine forces from a body nothing asked for. "What the bundle
-               CAN do but didn't" does not include a boot-path `setTimeout(…, 0)` the bundle does do, so the page's
-               clock runs first. "Drive early, the WFQ starves the unproductive" argues against the ladder's exit,
-               not against these rungs, where it is symmetric; what breaks the symmetry is whose work it is. It is a
-               priority, not a cap: both the clock and the seed's surface keep refilling (every closure bumps the
-               orphan generation), and this rung is reached whenever the three hooks decline (no fully-active
-               navigable, or a frame strictly ahead with a reply in the air per `event_loop_may_advance`, and no due
-               timer or idle work); the close-request arm below is reached on the solvergate fixtures. Few
-               dispatches reach this boundary at all, so the holder of the clock surface is the histogram's head,
-               not this rung. The exit's two invariants hold by position: `g_orphan_claims_unmet` needs the seed's
-               rung to have answered 0 on the pass that reaches the exit. */
-            else if ((orphan_step = engine_orphan_seed(ctx, f)) != 0) {
-                g_step_unit = engine_orphan_unit(orphan_step); return 0; }
             /* Only host-owed replies, an awaited script row or a refusal remain: no progress, and not finished.
              *
              * Below the clock-driven sources, as the lifecycle arm is: a debt no task source waits on must not
@@ -8879,7 +8868,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * clock and answer 0 where it fails; a due task still runs ahead of this return. Placed above them, one
              * request in the air would take the flow out of the pick until a host event, losing every due timer and
              * rendering opportunity (testharness.js sets `all_loaded` in a `setTimeout(…, 0)` from its `load`
-             * handler and would never complete). It stays above the two arms below, which claim the run is
+             * handler and would never complete). It stays above the three arms below, which claim the run is
              * finished.
              *
              * It asks `pending_outstanding`, not `pending_count`: a register holding one answered entry has a non-
@@ -8906,6 +8895,22 @@ static int flow_step(JSContext *ctx, Flow *f) {
                             : STEP_UNIT_AWAIT_DECLINED;
                 return FLOW_STEP_OWED;
             }
+            /* The forced surface, below every source the page arranged (the project's decision, stated as the
+               rule): the three rungs above are work the page arranged (a `setTimeout`, a `requestAnimationFrame`, a
+               ResizeObserver), and a seed is work the engine forces from a body nothing asked for. "What the bundle
+               CAN do but didn't" does not include a boot-path `setTimeout(…, 0)` the bundle does do, so the page's
+               clock runs first. "Drive early, the WFQ starves the unproductive" argues against the ladder's exit,
+               not against these rungs, where it is symmetric; what breaks the symmetry is whose work it is. It is a
+               priority, not a cap: both the clock and the seed's surface keep refilling (every closure bumps the
+               orphan generation), and this rung is reached whenever the three hooks decline (no fully-active
+               navigable, or a frame strictly ahead with a reply in the air per `event_loop_may_advance`, and no due
+               timer or idle work); the close-request arm below is reached on the solvergate fixtures. Few
+               dispatches reach this boundary at all, so the holder of the clock surface is the histogram's head,
+               not this rung. The exit's two invariants hold by position: `g_orphan_claims_unmet` needs the seed's
+               rung to have answered 0 on the pass that reaches the exit. Below the owed return, because "nothing
+               called this function" is a fact only once no reply is left that could call it. */
+            else if ((orphan_step = engine_orphan_seed(ctx, f)) != 0) {
+                g_step_unit = engine_orphan_unit(orphan_step); return 0; }
             /* HTML §8.1.4.7 Unhandled promise rejections' "notify about rejected promises" is not an arm of this
                ladder: perform a microtask checkpoint runs the queue to empty and then notifies for every settings
                object of the event loop, and engine_sched_slice performs that emptying test, so the notify is called
