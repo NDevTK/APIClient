@@ -6832,8 +6832,9 @@ const QJS = join(ENGINE, "qjs");
    host is handed the same number as the address-space ceiling it arms (test_forced.c's native_ceiling_arm), so
    the RAM floor the engine sells its tail at exists on both hosts. */
 const WASM_ADDRESS_BYTES = 262144 * 65536;
-/* The wasm target, on every emcc compile and link: an object compiled for wasm32 cannot link into wasm64. */
-const WASM_TARGET = ["-sMEMORY64=1"];
+/* The wasm target, on every emcc compile and link: an object compiled for wasm32 cannot link into wasm64.
+   `-m64` is clang's spelling, which emcc maps to MEMORY64=1 and prefers over the deprecated `-sMEMORY64`. */
+const WASM_TARGET = ["-m64"];
 const HOST = join(ENGINE, "host");
 const OUT = join(HOST, "out");
 const EXT_QJS = join(ENGINE, "..", "extension", "lib", "qjs");   // where bridge.js imports the engine from
