@@ -78,6 +78,7 @@
 #include "core/url/url_search_params.h"
 #include "core/xhr/progress_event.h"
 #include "core/xhr/xml_http_request.h"
+#include "core/timing/timer.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
 #include "solver/endpoint.h"   /* the @H surface — every request host-edge funnels one endpoint into it */
@@ -151,6 +152,11 @@ typedef struct {
        §3.5.1's open() reach it; per flow, as the record is (xhr_of). A synchronous send's controller is the
        lifecycle machine's `req`, since its flow runs no page code until the answer. */
     uint32_t controller;
+    /* §3.5.6's timeout wait for that send, as HTML §8.7's "run steps after a timeout" (timer_after): its timer
+       key, armed while `timeout_armed` is set. The wait ends when the response arrives or the controller is
+       withdrawn, so both cancel it. */
+    int32_t  timeout_timer;
+    uint8_t  timeout_armed;
     /* WHAT §3.5.6 STEP 6'S REQUEST IS EVIDENCE OF, TAKEN ONCE WHERE THAT STEP RUNS — one of solver/pending.h's
        PROV_*, or -1 before there is a request to grade. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE makes the
        grade a fact about the REQUEST, and §scheduler says an operation that becomes a work item takes its
@@ -343,6 +349,20 @@ static void xhr_set_at(JSContext *ctx, XhrData *d, JSValue *slot, JSValue v,
     cow_record_set_at(ctx, d, &XHR_REC, slot, v, file, line);
 }
 #define xhr_set(ctx_, d_, slot_, v_) xhr_set_at((ctx_), (d_), (slot_), (v_), __FILE__, __LINE__)
+
+/* The asynchronous send's fetch is over for this object: its timeout wait ends, and with `withdraw` its
+   controller is also aborted or terminated (engine_host_withdraw). */
+static void xhr_end_fetch(JSContext *ctx, XhrData *d, bool withdraw)
+{
+    if (d->timeout_armed) {
+        timer_cancel(ctx, d->timeout_timer);
+        d->timeout_armed = 0;
+    }
+    if (withdraw && d->controller) {
+        engine_host_withdraw(ctx, d->controller);
+        d->controller = 0;
+    }
+}
 
 /* THE COLLECTOR'S TWO ENTRIES REACH THE RECORD THROUGH JS_GetAnyOpaque, NEVER THROUGH g_xhr_class.
  *
@@ -1002,10 +1022,7 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         /* Step 10: "Terminate this's fetch controller. A fetch can be ongoing at this point." The transfer
            ends (engine_host_withdraw) and its response is never delivered, since the rendezvous leaves the
            register with it. */
-        if (d->controller) {
-            engine_host_withdraw(ctx, d->controller);
-            d->controller = 0;
-        }
+        xhr_end_fetch(ctx, d, true);
         /* Step 11. */
         xhr_reset_request(ctx, d);
         xhr_set(ctx, d, &d->method, mval);
@@ -1719,7 +1736,10 @@ static const IdlStepDecl XHR_RESPONSE_XML_DECL = {
 /* The third mode is the ASYNCHRONOUS send's response: the machine enqueued by send() places the request and
    ends, and the delivery of the zone's answer (engine_host_request_async) calls a closure in this mode with
    it, as Fetch §4.1 "Main fetch"'s processResponse task on the networking task source. */
-enum { XHR_MODE_FETCH = 0, XHR_MODE_ERROR, XHR_MODE_RESPONSE };
+/* The fourth is §3.5.6's timeout firing for an asynchronous send: "If req's done flag is unset, then set
+   this's timed out to true and terminate this's fetch controller", after which "handle errors" runs the
+   request error steps with `timeout`. */
+enum { XHR_MODE_FETCH = 0, XHR_MODE_ERROR, XHR_MODE_RESPONSE, XHR_MODE_TIMEOUT };
 static JSValue xhr_run_closure(JSContext *ctx, JSValueConst xhr, int mode, int which);
 enum { XHR_CD_OBJECT = 0, XHR_CD_MODE, XHR_CD_EVENT };
 
@@ -2703,6 +2723,18 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
         s->transmitted = s->length = 0;
         if (mode == XHR_MODE_ERROR) { s->hdr.stage = XR_ERR_BEGIN; goto error_steps; }
+        if (mode == XHR_MODE_TIMEOUT) {
+            /* The wait's timer fired. The response arriving, abort() and open() all cancel it, so the
+               controller still stands. */
+            DCHECK(d->timeout_armed && d->controller != 0 && !d->synchronous,
+                   "an XMLHttpRequest's timeout fired for a send that is over — its arrival, abort() and "
+                   "open() cancel the timer (xhr_end_fetch)");
+            d->timeout_armed = 0;
+            d->timed_out = 1;
+            xhr_end_fetch(ctx, d, true);
+            s->hdr.stage = XR_ERR_BEGIN;
+            goto error_steps;
+        }
         if (mode == XHR_MODE_RESPONSE) {
             if (s->hdr.argc > 0) {
                 /* The zone's answer, delivered: the controller is still this object's, because abort() and
@@ -2712,6 +2744,7 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
                        "abort() and open() withdraw the rendezvous, so a delivery means the controller stands");
                 xhr_take_reply(ctx, d, s->hdr.argv[0]);
                 d->controller = 0;
+                xhr_end_fetch(ctx, d, false);
             } else if (!d->send_invoked) {
                 /* A local answer's task, after abort() or open() ended the send it answers: Fetch §2
                    Infrastructure's canceled fetch runs no processResponse. */
@@ -2774,9 +2807,26 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
                 JS_FreeValue(ctx, resume);
                 free(op);
                 s->req = 0;
+                /* §3.5.6: "Wait until either req's done flag is set or this's timeout is not 0 and this's
+                   timeout milliseconds have passed since now", on HTML §8.7's timer source, the clock the
+                   page's own timers keep. Named residual: §3.5.3's setter run during the fetch, which "will
+                   still be measured relative to the start of fetching", is not covered. The next diff keeps
+                   the start moment (event_loop_now) and re-arms for the remainder. Its absence shows as a
+                   timeout set after send() never firing. */
+                if (d->timeout != 0) {
+                    JSValue fire = xhr_run_closure(ctx, self, XHR_MODE_TIMEOUT, XHR_ERR_TIMEOUT);
+                    if (JS_IsException(fire)) return JS_STEP_ABRUPT;
+                    d->timeout_timer = timer_after(ctx, (double)d->timeout, fire);
+                    d->timeout_armed = 1;
+                    JS_FreeValue(ctx, fire);
+                }
                 return JS_STEP_DONE;
             }
-            /* §3.5.6 step 12, synchronous: "Pause until" the answer; the flow is blocked on it. */
+            /* §3.5.6 step 12, synchronous: "Pause until" the answer; the flow is blocked on it. Named
+               residual: its timeout is not covered (a Window refuses one at open() step 9 and at the setter,
+               so this is a worker's). The next diff arms the same timer over the blocking rendezvous and
+               throws TimeoutError. Its absence shows as a worker's synchronous send with a timeout never
+               throwing. */
             s->req = d->url_address == FETCH_ADDRESS_UNKNOWN ? engine_host_request_unaddressed(ctx, op)
                                                              : engine_host_request(ctx, op);
             free(op);
@@ -3569,10 +3619,7 @@ static int js_xhr_abort_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         if (!d) return JS_ThrowTypeError(ctx, "not an XMLHttpRequest"), -1;
         /* Step 1: "Abort this's fetch controller." The transfer ends (engine_host_withdraw) and its response is
            never delivered; step 2's request error steps are this object's answer. */
-        if (d->controller) {
-            engine_host_withdraw(ctx, d->controller);
-            d->controller = 0;
-        }
+        xhr_end_fetch(ctx, d, true);
         d->aborted = 1;
         /* Step 2's "if this's state is opened with this's send() invoked being true, headers received, or
            loading" — the same three-state disjunction §3.2 Garbage collection states, read from the one

@@ -14935,7 +14935,20 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
     fold_row(&xftimer_tt, &xftimer_why, param_value_only(js, "/api/xforder", "v", "timer-reply"),
              "NOT REACHED or wrong: a zero-delay timer queued after fetch() did not run before the response "
              "settled its promise (`timer-reply`)");
+    /* XHR §3.5.6's timeout: it fires for a send nothing answered in time, and an answer beats it. */
+    const char *xatime_why = NULL;
+    int xatime_tt = 1;
+    fold_row(&xatime_tt, &xatime_why, param_value_only(js, "/api/xatimedout", "v", "timeout-loadend"),
+             "NOT REACHED or wrong: an asynchronous send with a 1 ms timeout did not end in `timeout` then "
+             "`loadend`");
+    const char *xabeat_why = NULL;
+    int xabeat_tt = 1;
+    fold_row(&xabeat_tt, &xabeat_why, param_value_only(js, "/api/xabeat", "v", "load-loadend"),
+             "NOT REACHED or wrong: an answer that landed before a long timeout did not end the send in `load` "
+             "then `loadend`, with no `timeout`");
     const Probe rows[] = {
+        { "xhr-timeout", xatime_tt, "/api/xatimedout", SESS_EXPLORE, xatime_why },
+        { "xhr-timeout-beaten", xabeat_tt, "/api/xabeat", SESS_EXPLORE, xabeat_why },
         { "fetch-timer", xftimer_tt, "/api/xforder", SESS_EXPLORE, xftimer_why },
         { "xhr-timer", xatimer_tt, "/api/xaorder", SESS_EXPLORE, xatimer_why },
         { "xhr-abort", xaabort_tt, "/api/xaaborted", SESS_EXPLORE, xaabort_why },

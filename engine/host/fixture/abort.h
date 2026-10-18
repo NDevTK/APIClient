@@ -89,6 +89,24 @@ static const char HTML_ABORT[] =
     " fetch('/api/apteedab?own=' + o4 + '&clone=' + q4);"
     "})();"
     "</script>"
+    /* XHR §3.5.6's timeout, on HTML §8.7's timer source. A 1 ms timeout fires once the flow has nothing left
+       to run, before the host can answer: `timeout` then `loadend`. A long one is beaten by an answer that
+       lands while the flow is still busy, because a timer fires only when no task is runnable: `load` then
+       `loadend`. */
+    "<script>"
+    "(function () {"
+    " function watch(x, seen, path) {"
+    "  ['timeout', 'load', 'error', 'abort'].forEach(function (t) {"
+    "   x.addEventListener(t, function () { seen.push(t); }); });"
+    "  x.addEventListener('loadend', function () { seen.push('loadend'); fetch(path + '?v=' + seen.join('-')); });"
+    " }"
+    " var t1 = new XMLHttpRequest(), e1 = []; t1.open('GET', '/api/xatimeout'); t1.timeout = 1;"
+    " watch(t1, e1, '/api/xatimedout'); t1.send();"
+    " var t2 = new XMLHttpRequest(), e2 = []; t2.open('GET', '/api/xabeaten'); t2.timeout = 60000;"
+    " watch(t2, e2, '/api/xabeat'); t2.send();"
+    " for (var i = 0; i < 3000000; i++) {}"
+    "})();"
+    "</script>"
     /* Fetch §4.1 "Main fetch" queues processResponse when the response arrives, so a zero-delay timer queued
        after fetch() runs before the response settles the promise. */
     "<script>"
