@@ -1072,7 +1072,8 @@ int concolic_pin_store(const char *src, const char *root, ConcolicLit kind, cons
        The demand survives both, so this is not an early return. `e.origin == TRUSTED` is still a demand on the
        principal, unforgeable cross-origin because two Strings go straight to §7.2.14 by §7.2.13's step 1;
        refusing the pin would hand every loose origin check to a delivery from an attacker origin. */
-    DCHECK(algo == JS_CONCOLIC_EQ_LOOSE || algo == JS_CONCOLIC_EQ_STRICT,
+    DCHECK(algo == JS_CONCOLIC_EQ_LOOSE || algo == JS_CONCOLIC_EQ_STRICT ||
+           algo == JS_CONCOLIC_EQ_SAME_VALUE_ZERO,
            "an arm recorded an equality observation naming an algorithm quickjs.h does not declare — §7.2.13 "
            "and §7.2.14 differ on exactly whether the holding arm determined a value, so an unnamed one has "
            "no answer to the only question this function asks of it");
@@ -1103,7 +1104,8 @@ int concolic_pin_store(const char *src, const char *root, ConcolicLit kind, cons
     DCHECK(root != NULL, "an equality pinned an attacker value that carries no delivery ROOT — the root is "
                          "what says WHOSE bytes were demanded, and §Attacker-sources' unforgeable-origin rule "
                          "is decided by exactly that");
-    if (algo == JS_CONCOLIC_EQ_STRICT && src) {   /* NULL: the demand alone */
+    /* §7.2.10 SameValueZero ( x, y ) has §7.2.14's step 1 and differs only over NaN, so it determines too. */
+    if ((algo == JS_CONCOLIC_EQ_STRICT || algo == JS_CONCOLIC_EQ_SAME_VALUE_ZERO) && src) {   /* NULL: the demand alone */
         c = cons_entry(src);
         free(c->val); c->val = strdup(val); CHECK(c->val, "concolic: OOM pin value");
         c->valkind = (signed char)kind;
@@ -3052,6 +3054,8 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
    the comparison the component declares would fork again over the same predicate. */
 static const char *cmp_op_ident(int is_neq, JSConcolicEqOp op) {
     if (op == JS_CONCOLIC_EQ_STRICT) return is_neq ? "!==" : "===";
+    /* Not `===`'s spelling: the two answer NaN differently, so one key would let either decide the other. */
+    if (op == JS_CONCOLIC_EQ_SAME_VALUE_ZERO) return is_neq ? "!SameValueZero" : "SameValueZero";
     DCHECK(op == JS_CONCOLIC_EQ_LOOSE,
            "an equality was spelled for an algorithm quickjs.h does not declare — the identity would name a "
            "predicate no operator produces, and two real ones would compose under it");
@@ -3098,7 +3102,8 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
        none; an equality may not omit it, because JS_CONCOLIC_EQ_LOOSE is zero and an omission would claim the
        page wrote `==`. */
     DCHECK(eq_kind == OPCMP_NONE ? algo == CMP_ALGO_NONE
-                                 : (algo == JS_CONCOLIC_EQ_LOOSE || algo == JS_CONCOLIC_EQ_STRICT),
+                                 : (algo == JS_CONCOLIC_EQ_LOOSE || algo == JS_CONCOLIC_EQ_STRICT ||
+                                    algo == JS_CONCOLIC_EQ_SAME_VALUE_ZERO),
            "a comparison result's operator and its equality ALGORITHM disagree about whether it is an equality "
            "at all — an ordering carrying an algorithm names a §7.2.13/§7.2.14 reading of a predicate neither "
            "defines, and an equality without one is a pin whose arm cannot say whether it determined a value "
@@ -3473,7 +3478,8 @@ JSConcolicEqOp concolic_cmp_algo(JSValueConst v) {
            "the equality ALGORITHM was asked of a value that records no equality — an ordering and a call "
            "predicate have none, so the only answer available here would be a §7.2.13/§7.2.14 reading of a "
            "predicate neither defines, and the caller would pin off it");
-    DCHECK(c != NULL && (c->cmp_algo == JS_CONCOLIC_EQ_LOOSE || c->cmp_algo == JS_CONCOLIC_EQ_STRICT),
+    DCHECK(c != NULL && (c->cmp_algo == JS_CONCOLIC_EQ_LOOSE || c->cmp_algo == JS_CONCOLIC_EQ_STRICT ||
+                         c->cmp_algo == JS_CONCOLIC_EQ_SAME_VALUE_ZERO),
            "an equality result carries an algorithm quickjs.h does not declare — pred_new writes it beside "
            "`cmp_op` and asserts the pair there, so a value holding one without the other is minted somewhere "
            "that does not go through that mint");
@@ -3596,6 +3602,8 @@ static JSValue cmp_example(JSContext *ctx, JSValueConst a, JSValueConst b, int c
                "attached a symbol where a concrete stands");
         if (op == JS_CONCOLIC_EQ_STRICT) {
             eq = JS_IsStrictEqual(ctx, exa, exb) ? 1 : 0;
+        } else if (op == JS_CONCOLIC_EQ_SAME_VALUE_ZERO) {
+            eq = JS_IsSameValueZero(ctx, exa, exb) ? 1 : 0;
         } else {
             DCHECK(op == JS_CONCOLIC_EQ_LOOSE,
                    "an equality reached the concolic derivation naming an algorithm quickjs.h does not "
@@ -3680,7 +3688,10 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
        concolic.h's concolic_pin. */
     {
         char *sa = derived_operand_shape(ctx, a), *sb = derived_operand_shape(ctx, b);
-        shape = shapef("%s%s%s", sa, cmp_op_ident(is_neq, op), sb);
+        /* An operator is written between its operands; SameValueZero is an abstract operation, so a call. */
+        shape = op == JS_CONCOLIC_EQ_SAME_VALUE_ZERO
+                    ? shapef("%sSameValueZero(%s, %s)", is_neq ? "!" : "", sa, sb)
+                    : shapef("%s%s%s", sa, cmp_op_ident(is_neq, op), sb);
         free(sa); free(sb);
     }
     res = pred_new(ctx, cmp_op_ident(is_neq, op), src, root, root_whose_of(opq), iu, io,

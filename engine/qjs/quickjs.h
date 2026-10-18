@@ -2555,6 +2555,9 @@ typedef enum JSConcolicAddOp {
 typedef enum JSConcolicEqOp {
     JS_CONCOLIC_EQ_LOOSE,     /* 7.2.13 IsLooselyEqual ( x, y ): the `==` and `!=` operators */
     JS_CONCOLIC_EQ_STRICT,    /* 7.2.14 IsStrictlyEqual ( x, y ): the `===` and `!==` operators */
+    /* 7.2.10 SameValueZero ( x, y ): Array.prototype.includes. It differs from 7.2.14 only in that NaN is the
+       same value as NaN, so its holding arm determines the operand as `===`'s does. */
+    JS_CONCOLIC_EQ_SAME_VALUE_ZERO,
 } JSConcolicEqOp;
 
 /* WHICH OPERATOR ASKED A GLOBAL NAME AND ANSWERED WITHOUT PERFORMING A [[Get]] — the third of these enums and

@@ -91640,15 +91640,18 @@ static const char *const js_array_includes_steps[] = {
                  "23.1.3.16 step 5.a (elementK is Get(O, ToString(k)))",
                  "23.1.3.16 step 5.b (SameValueZero(searchElement, elementK) returns true)") NULL };
 
-/* Whether a search's comparison is asked of the solver: IsStrictlyEqual with an unknown operand. SameValueZero
-   (`includes`) has no predicate of its own in the comparison hook, so it keeps §7.2.11's own steps. */
+/* Whether a search's comparison is asked of the solver: IsStrictlyEqual (indexOf, lastIndexOf) or §7.2.10
+   SameValueZero (includes) with an unknown operand. */
 static bool js_array_search_asks(JSValueConst target, JSValueConst el, int eq)
 {
-    return eq == JS_EQ_STRICT && g_concolic.is && (g_concolic.is(target) || g_concolic.is(el));
+    DCHECK(eq == JS_EQ_STRICT || eq == JS_EQ_SAME_VALUE_ZERO, "an array search compares by neither of its two "
+                                                              "algorithms");
+    return g_concolic.is && (g_concolic.is(target) || g_concolic.is(el));
 }
 
-/* step_tobool_run's `op` for the search's one comparison. */
-#define ASRCH_EQ_OP "IsStrictlyEqual(searchElement, elementK) of indexOf or lastIndexOf"
+/* step_tobool_run's `op` for the search's one comparison, one per algorithm. */
+#define ASRCH_EQ_OP  "IsStrictlyEqual(searchElement, elementK) of indexOf or lastIndexOf"
+#define ASRCH_SVZ_OP "SameValueZero(searchElement, elementK) of includes"
 
 static int js_array_search_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
@@ -91749,9 +91752,9 @@ static int js_array_search_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         {
             bool hit;
 
-            /* IsStrictlyEqual over unknown input is the `===` operator's own predicate, forked through the
-               branch seam; it is held on the state because the ask suspends and a sibling re-enters here with
-               undefined placed. */
+            /* The comparison over unknown input is the comparison hook's predicate for the search's algorithm,
+               forked through the branch seam; it is held on the state because the ask suspends and a sibling
+               re-enters here with undefined placed. */
             if (js_array_search_asks(target, s->val, eq)) {
                 int b;
 
@@ -91759,7 +91762,8 @@ static int js_array_search_step(JSContext *ctx, void *st, JSValue cb_result, JSV
                     JSValue pair[2] = { js_dup(target), js_dup(s->val) };
 
                     DCHECK(g_concolic.cmp != NULL, "an unknown search operand under a host with no comparison hook");
-                    if (!g_concolic.cmp(ctx, pair + 2, false, JS_CONCOLIC_EQ_STRICT))
+                    if (!g_concolic.cmp(ctx, pair + 2, false, eq == JS_EQ_STRICT ? JS_CONCOLIC_EQ_STRICT
+                                                                                  : JS_CONCOLIC_EQ_SAME_VALUE_ZERO))
                         DFAIL("the concolic comparison hook declined an unknown search operand");
                     s->test = pair[0];
                 } else {
@@ -91767,7 +91771,7 @@ static int js_array_search_step(JSContext *ctx, void *st, JSValue cb_result, JSV
                 }
                 JS_FreeValue(ctx, cb_result);
                 cb_result = JS_UNDEFINED;
-                r = step_tobool_run(ctx, &s->hdr, s->test, ASRCH_EQ_OP, &b);
+                r = step_tobool_run(ctx, &s->hdr, s->test, eq == JS_EQ_STRICT ? ASRCH_EQ_OP : ASRCH_SVZ_OP, &b);
                 if (r) return r < 0 ? -1 : r;
                 JS_FreeValue(ctx, s->test);
                 s->test = JS_UNINITIALIZED;
@@ -95906,9 +95910,9 @@ STEP_STATE_HDR_FIRST(JSConcolicCall);
 
 /* Named residual. Not covered: an Object operand other than a builtin-protocol RegExp or a replace callback (a
    method of an object example other than one js_concolic_call_forwards names, a `.call` reached as a value
-   rather than at a call operator); the result carries no example. Next diff: `includes` forwarded, once the
-   comparison hook states SameValueZero. How its absence shows: `cfg.tags.includes('x')` over a fetched record
-   answers false on every flow, where `cfg.tags.indexOf('x') >= 0` forks.
+   rather than at a call operator); the result carries no example. Next diff: `at` forwarded, then `flat` once
+   FlattenIntoArray asks IsArray of each element through the hook. How its absence shows: an address built from
+   `cfg.tags.at(-1)` over a fetched record is a shape where `cfg.tags[cfg.tags.length - 1]` carries bytes.
    Named residual. Not covered: a throw another value of the unknown would reach while its example's run
    completes normally (`x.toFixed(d)` with an unknown `d`). Next diff: the outcome asked on every run, with the
    normal completion stated real, once a builtin whose throw no operand can reach declares so at its definition.
@@ -95940,6 +95944,7 @@ static bool js_concolic_call_forwards(JSValueConst fex)
     case STEPDEF_ARRAY_FIND_LAST_INDEX: case STEPDEF_ARRAY_SORT: case STEPDEF_ARRAY_TOSORTED:
     case STEPDEF_ARRAY_FLATMAP: case STEPDEF_ARRAY_SLICE: case STEPDEF_ARRAY_INDEXOF:
     case STEPDEF_ARRAY_LASTINDEXOF: case STEPDEF_ARRAY_CONCAT: case STEPDEF_ARRAY_JOIN:
+    case STEPDEF_ARRAY_INCLUDES:
         return true;
     default:
         return false;
