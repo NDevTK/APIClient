@@ -13391,9 +13391,9 @@ TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
              "one §7.1.21 property key");
     fold_row(&abskey_tt, &abskey_why, !param_value_is(js, "/api/abskey", "other", "false"),
              "`k + \"5\"` read the slot written under `k + \"\"` — two property names shared one slot");
-    /* `0 + s` is §13.15.3's numeric arm and `"0" + s` its string arm. A param carries an example's bytes where
-       one is held (`s` holds `undefined`), and otherwise the shape: the expression for the sum, the produced
-       string for the concatenation. `"…&t=" + ("0" + s)` joins two Strings, so no `+` appears between them. */
+    /* `0 + s` is §13.15.3's numeric arm and `"0" + s` its string arm. An address carries its example's bytes
+       where every hole holds one (`s` holds `undefined`), and otherwise shapes: the expression for the sum, the
+       produced string for the concatenation. `"…&t=" + ("0" + s)` joins two Strings, so no `+` appears. */
     const char *abssum_why = NULL; int abssum_tt = 1;
 
     fold_row(&abssum_tt, &abssum_why, !!strstr(js, "\"/api/abssum\""),
@@ -13403,11 +13403,13 @@ TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
              param_value_is(js, "/api/abssum", "n", "NaN") && param_value_is(js, "/api/abssum", "t", "0undefined"),
              "`n` is not `NaN` or `t` is not `0undefined` — over the read's `undefined` example §13.15.3 adds "
              "(ToNumeric(undefined) is NaN) and concatenates, so an arm was chosen against the example");
+    fold_row(&abssum_tt, &abssum_why, !!strstr(js, "\"/api/abssumx\""),
+             "NOT REACHED: no /api/abssumx record, so the second request of that script did not run");
     fold_row(&abssum_tt, &abssum_why,
-             param_value_is(js, "/api/abssum", "m", "0+%Math%[{__tfAbsSum}]") &&
-                 param_value_is(js, "/api/abssum", "u", "0%Math%[{__tfAbsSum}]"),
-             "`m` is not `0+%Math%[{__tfAbsSum}]` or `u` is not `0%Math%[{__tfAbsSum}]` — over an operand with no "
-             "example, a sum and a concatenation of it share a shape");
+             param_value_is(js, "/api/abssumx", "n", "0+{__tfAbsSum}") &&
+                 param_value_is(js, "/api/abssumx", "t", "0{__tfAbsSum}"),
+             "on /api/abssumx `n` is not `0+{__tfAbsSum}` or `t` is not `0{__tfAbsSum}` — beside a hole with no "
+             "example the address spells shapes, and a sum and a concatenation of one operand shared one");
     const Probe rows[] = {
         { "absent-arm", absarm_tt, "__tfAbsentGate", SESS_EXPLORE, absarm_why },
         { "absent-key-slot", abskey_tt, "__tfAbsentKey", SESS_EXPLORE, abskey_why },
