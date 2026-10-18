@@ -2146,8 +2146,8 @@ static bool uv_flex_item_cross_axis(lxb_dom_element_t *el, UvBox box, bool verti
 static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_max, CssPx *out);
 
 /* css-grid-1 §6.6 "Automatic Minimum Size of Grid Items" for `el` on one axis, in the terms of a `min-width`
-   or `min-height` value. The one implicit `auto` track in each axis meets §6.6's track conditions, so a
-   non-scroll-container item takes its content-based minimum size: "its specified size suggestion if it
+   or `min-height` value. Every item spans one track, so §6.6's flexible-track condition holds, and a
+   non-scroll-container item in a track with an `auto` minimum takes its content-based minimum size: "its specified size suggestion if it
    exists, otherwise its transferred size suggestion if that exists and the element is replaced, else its
    content size suggestion", each "clamped by the maximum size in the affected axis, if it's definite". The
    specified size suggestion is the definite preferred size, a percentage resolving against the grid area. The
@@ -2159,6 +2159,9 @@ static CssPx uv_grid_item_automatic_min(lxb_dom_element_t *el, lxb_dom_element_t
     char buf[160];
 
     if (scroll_container_is(el)) return css_px(0.0);
+    /* §6.6's second condition: "it spans at least one track in that axis whose min track sizing function is
+       auto"; otherwise "the automatic minimum size is zero, as usual". */
+    if (!grid_item_track_min_is_auto(grid, el, vertical)) return css_px(0.0);
     if (w.kind == CSS_LENGTH_ABSOLUTE) {
         m = w.px;
     } else if (w.kind == CSS_LENGTH_PERCENTAGE || w.kind == CSS_LENGTH_CALCULATED) {

@@ -14,6 +14,7 @@
 #include "core/css/css_defaulting.h"
 #include "core/css/css_display.h"
 #include "core/css/css_font_family.h"
+#include "core/css/css_grid_track_list.h"
 #include "core/css/css_image.h"
 #include "core/css/css_length.h"
 #include "core/css/css_logical.h"
@@ -2206,6 +2207,35 @@ bool css_computed_transform_list(lxb_dom_element_t *el, CssTransformList *out)
     /* ONE DERIVATION, TWO ENTRIES — the same call `computed_transform` makes for the text shape, so a list and
        its serialization can never disagree about which arm of §3's `Value:` line an element is on. */
     return css_cv_transform_list(el, spec, out);
+}
+
+bool css_computed_grid_track_list(lxb_dom_element_t *el, const char *name, CssGridTrackList *out)
+{
+    char *cascaded;
+    CssCvFontCtx slot;
+    CssFontMetrics font;
+    bool parsed = false;
+
+    DCHECK(el != NULL && out != NULL, "a computed track list was asked for with no element or nowhere to put it");
+    DCHECKF(strcmp(name, "grid-template-columns") == 0 || strcmp(name, "grid-template-rows") == 0,
+            "`%s` is not one of css-grid-1 §7.2's two track-list properties", name);
+    out->tracks = NULL;
+    out->n = 0;
+    cascaded = css_cv_cascaded(el, name);
+    switch (css_defaulting_of(name, cascaded)) {
+    case CSS_DEFAULTING_DECLARED:
+        font = css_cv_font_metrics(&slot, el, name);
+        parsed = css_grid_track_list_parse(css_cv_realm(el), &font, cascaded, out);
+        break;
+    case CSS_DEFAULTING_INHERITED:
+        DFAILF("`%s: inherit`, whose value is the parent's computed track list (CSS Cascade 5 §7.2 \"Inheritance\"). "
+               "BUILD that read", name);
+        break;
+    case CSS_DEFAULTING_INITIAL:
+        break;
+    }
+    free(cascaded);
+    return parsed;
 }
 
 /* css-lists-3 §3.3 "Image Markers: the list-style-image property"' `Computed value:` line, which is a

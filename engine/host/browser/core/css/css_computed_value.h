@@ -116,6 +116,7 @@
 #include "core/css/css_color.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_display.h"
+#include "core/css/css_grid_track_list.h"
 #include "core/css/css_keyword.h"
 #include "core/css/css_length.h"
 #include "core/css/css_transform_function.h"
@@ -145,6 +146,13 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name);
    they are one computed value. TRUE with `*out` owned by the caller — release it with
    `css_transform_list_free`. */
 bool css_computed_transform_list(lxb_dom_element_t *el, CssTransformList *out);
+
+/* css-grid-1 §7.2's computed track list of `name` — `grid-template-columns` or `grid-template-rows` — on `el`:
+   lengths absolutized, percentages kept (§7.2.5 "Computed Value of a Track Listing"). False for `none`, its
+   initial value, which an invalid declaration also computes to (core/css/css_grid_track_list.h). The caller
+   releases `*out` with `css_grid_track_list_free`. The `grid-template` and `grid` shorthands are not expanded
+   here; the caller refuses them. */
+bool css_computed_grid_track_list(lxb_dom_element_t *el, const char *name, CssGridTrackList *out);
 
 /* THE COMPUTED VALUE of a LENGTH-VALUED property on `el` — CSS 2.1 §8.3, §8.4, §10.2 and §10.5's one line,
    "the percentage as specified or the absolute length", plus css-backgrounds-3 §3.3's snapped border widths.
