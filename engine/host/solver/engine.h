@@ -448,6 +448,11 @@ void engine_headroom_at_rest(size_t bytes);
    is a dropped work item. It is engine-wide; a single flow's release asks the flow's own `paged`
    (solver/flow.h), because a partial self-park writes a tail while the rest keeps running. */
 int  engine_frontier_paged(void);
+/* Why this session's residue was written, for the result document's `_parkWhy`: "refused" when the whole frontier
+   was written because every member rests on a request the trusted zone or this engine refused (nothing but a
+   change of egress policy or of program can move it), "requested" when the residue holds members written for
+   any other reason (the host's park, a sale at the RAM floor), and "none" when nothing was written. */
+const char *engine_park_why(void);
 
 /* Take one reply that was owed to a flow this engine paged out, consuming it (a take, not a predicate). The
    partial self-park sells the cheapest member at the RAM floor, often a blocked flow whose recipe re-issues

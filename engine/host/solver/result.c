@@ -1912,7 +1912,7 @@ char *result_json(JSContext *ctx) {
                                 whether two of these documents may be compared at all. result.h and
                                 solver/quantum.h state the argument; nothing in this file composes it. */
                              "\"_novelty\":%s,"
-                             "\"_quantum\":%s,\"_park\":%s}",
+                             "\"_quantum\":%s,\"_park\":%s,\"_parkWhy\":\"%s\"}",
                      eps, sinks, errs, errsRetracted, errsExplored, posts,
                      engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), engine_units_done(), held, made, segf,
@@ -1933,7 +1933,7 @@ char *result_json(JSContext *ctx) {
                      casc.computed_asks_life, casc.computed_served_life, casc.computed_resolved_life,
                      novelty,
                      quantum,
-                     cold_park_json());
+                     cold_park_json(), engine_park_why());
         free(scensus);
         free(layoutm);
         free(schema);

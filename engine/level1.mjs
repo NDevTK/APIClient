@@ -168,8 +168,8 @@ const job = (url, o = {}) => ({ msg: { sourceUrl: url, frameId: o.frameId || 0, 
                                        credentialed: o.credentialed !== false } });
 const row = (key, url, value, pulls, o = {}) =>
   ({ key, sourceUrl: url, origin: o.origin || originOfUrl(url), credentialed: o.credentialed !== false,
-     value, pulls, at: 1, shed: false, stranded: o.stranded === true, crashed: o.crashed === true, bytes: 0,
-     rederivable: true });
+     value, pulls, at: 1, shed: false, stranded: o.stranded === true, crashed: o.crashed === true,
+     rest: o.rest === undefined ? null : o.rest, bytes: 0, rederivable: true });
 /* The key a walk over `P` gives the document at `url` with account `acct`, read through the shipped functions. */
 const keyOf = (P, url, acct) => B.level1Key(B.level1Tree(P.resident, P.idx), url, acct, true);
 /* An instance as hostSchedule and engineKey read one: a hot record with an address and a stated account. */
@@ -411,6 +411,23 @@ console.log('[level1] ── the weight that leaves the order ──');
   must(cen.exclCrashed === 1 && cen.cands === 0,
        'a residue whose resume aborted this engine is not re-admitted, and is COUNTED', cen);
   console.log('[level1]   exclCrashed      ' + JSON.stringify(cen));
+}
+{
+  /* A rest is read against the engine this zone runs and the person's egress table, so both are stated first, as
+     the offscreen document states them before its first round. */
+  ZONE.rendererProgramDigest = async () => 'a'.repeat(64);
+  await B.programDigest();
+  ZONE.safeFetchEgressStated({});
+  const rest = { program: 'a'.repeat(64), policy: B.egressPolicyNow() };
+  const walk = (r) => B._bestCandidate(pop({ idx: idxOf(row('k1', 'https://a.test/', 4, 2 * PT, { rest: r })) })).census;
+  let cen = walk(rest);
+  must(cen.exclResting === 1 && cen.cands === 0,
+       'a residue whose every member rests on a refusal is not re-admitted under the same engine and policy', cen);
+  console.log('[level1]   exclResting      ' + JSON.stringify(cen));
+  cen = walk({ program: 'b'.repeat(64), policy: rest.policy });
+  must(cen.exclResting === 0 && kindPop(cen, 'cold') === 1, 'another engine ends the rest', cen);
+  cen = walk({ program: rest.program, policy: rest.policy + ' widened' });
+  must(cen.exclResting === 0 && kindPop(cen, 'cold') === 1, 'another egress policy ends the rest', cen);
 }
 {
   const cen = B._bestCandidate(pop({ resident: [eng('https://a.test/admin')],

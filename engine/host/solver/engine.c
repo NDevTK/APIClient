@@ -10436,6 +10436,16 @@ void engine_request_park(void) {
 
 int engine_frontier_paged(void) { return g_parked; }
 
+/* Whether the park at the drained-but-owed exit was the session's only writer (engine_park_why). */
+static int g_park_refused;
+
+const char *engine_park_why(void) {
+    DCHECK(!g_park_refused || cold_park_records() > 0,
+           "the session says its residue was written for refusals and the park document holds no record");
+    if (g_park_refused) return "refused";
+    return cold_park_records() > 0 ? "requested" : "none";
+}
+
 /* Write the whole frontier down and state that it has been written: the one park, reached from the two exits that
  * end a session holding live members (the host asking for RAM back, and the engine having nothing left to convert
  * into work while members still hold snapshots). One function, since they are one act.
@@ -11801,6 +11811,8 @@ static int engine_sched_slice(void) {
      * (`engine_host_owes` answers 0). That is @S search not yet solved, waiting on a per-origin widening in a later
      * session, and a residue is what carries it there. */
     if (flow_count() > 0) {
+        /* Refused only if nothing was written before: a tail sold at the RAM floor is runnable work. */
+        g_park_refused = cold_park_records() == 0;
         engine_park_frontier(ctx, g_sess_cur);
         g_sess_cur = NULL;
     }
@@ -12441,6 +12453,7 @@ void solver_agent_free(JSContext *ctx)
        fact about one session's residue, and the latch about one frontier's members; kept, they would report the
        first session's round trip and skip the routing walk on a frontier just rebuilt with claims in it. */
     g_orphan_claims_met = 0; g_orphan_claims_unmet = 0; g_orphan_claims_closed = 0;
+    g_park_refused = 0;
     attr_shadow_free(ctx);
     endpoint_free();
     /* And the identity set with the tables whose credit sites filed it: an identity left standing would assert

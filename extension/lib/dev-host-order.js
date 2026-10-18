@@ -35,7 +35,8 @@ function devHostOrderSection(order) {
     rows.push(`left the order: ${n("exclLive")} parked residue(s) whose address a live or waiting document ` +
       `holds (that weight is carried by the instance instead), ${n("exclHeld")} whose key an instance ` +
       `already holds, ${n("exclStranded")} whose re-derivation stopped answering, ${n("exclCrashed")} whose ` +
-      `resume aborted this engine, ${n("exclSub")} waiting ` +
+      `resume aborted this engine, ${n("exclResting")} resting on refusals under this engine and egress ` +
+      `policy, ${n("exclSub")} waiting ` +
       `document(s) that are sub-frames their embedder names, and ${n("exclSeedLive")} + ` +
       `${n("exclSeedParked")} declared route(s) whose address a live document already holds or a parked ` +
       `frontier already carries`);

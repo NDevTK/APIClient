@@ -306,6 +306,11 @@ function assertResultDocument(r) {
            "having stopped composing");
   /* `_absent` is in that list and `_forkAt` is not: solver/absent.c emits its members on every census, zeroes
      included, so `{}` is the composer having stopped, while `_forkAt`'s `{}` means the document never forked. */
+  DCHECK(["refused", "requested", "none"].indexOf(r._parkWhy) >= 0 &&
+         (r._parkWhy === "none") === (Array.isArray(r._park) && r._park.length === 0),
+         "the engine's result document says its residue was written for `" + String(r._parkWhy) + "` beside " +
+         (Array.isArray(r._park) ? r._park.length : "no") + " recipe(s) — engine_park_why answers `none` " +
+         "exactly when the park document is empty");
   DCHECK(Array.isArray(r._park),
          "the engine's result document carries no _park array — that is the PARKED RESIDUE (solver/cold.h), " +
          "the recipes this zone writes to IndexedDB and hands back to qjs_begin next session. An absent one " +
@@ -885,6 +890,7 @@ function linesToAnalysis(lines, msg, outcome, eng) {
     analysis.fetchCallSites = result.fetchCallSites;
     analysis.securitySinks = result.securitySinks;
     analysis._park = result._park;
+    analysis._parkWhy = result._parkWhy;
     /* The run's novelty record, which the finish checks its parked row's value against (`landed`, `paid`). */
     analysis._novelty = result._novelty;
   }
@@ -896,10 +902,10 @@ function linesToAnalysis(lines, msg, outcome, eng) {
 function analysisHasDocument(a) {
   DCHECK(a && typeof a === "object", "an analysis record is not an object — every producer of one is in this file");
   const n = (a.fetchCallSites !== undefined) + (a.securitySinks !== undefined) + (a._park !== undefined) +
-            (a._novelty !== undefined);
-  DCHECK(n === 0 || n === 4,
-         "an analysis carries " + n + " of the four engine-document fields (fetchCallSites, securitySinks, " +
-         "_park, _novelty) — linesToAnalysis writes all four or none, because their presence IS the statement " +
+            (a._novelty !== undefined) + (a._parkWhy !== undefined);
+  DCHECK(n === 0 || n === 5,
+         "an analysis carries " + n + " of the five engine-document fields (fetchCallSites, securitySinks, " +
+         "_park, _parkWhy, _novelty) — linesToAnalysis writes all five or none, because their presence IS the statement " +
          "that an @RESULT document arrived, and a partial set would be read by every consumer as a document that " +
          "is there while one of the surfaces it travels in is silently gone");
   DCHECK(n === 4 || a._run === "crashed" || a._run === "nothing-to-run",
@@ -1149,7 +1155,8 @@ function egressPolicyPersist() {
 }
 /* A frontier entry: { key: address|identity|bundle, sourceUrl, topLevelUrl, origin, responseHeaders, html, code,
    recipes, value, pulls, at, credentialed, provenance }, plus `shed`/`stranded` for a shed entry and `crash`
-   for one whose resume aborted the engine (frontierRecordCrash). Rehydration
+   for one whose resume aborted the engine (frontierRecordCrash), and `rest` for one written because every member
+   rests on a refused request (`_parkWhy` "refused"). Rehydration
    rebuilds the document from (html, code) and resumes the recipes, so a parked flow on any site can advance
    later even when that page is not open. */
 /* The document half of a cold-tier entry, one speller for the store's writer and its reader. Recipes replay
@@ -1465,6 +1472,11 @@ function frontierRecord(e, when) {
           /^[0-9a-f]{64}$/.test(e.crash.program) && typeof e.crash.why === "string" && e.crash.why !== ""),
          "a cold-tier entry " + when + " records a crash without the engine it happened under or its cause (" +
          JSON.stringify(e.crash) + ") — the program digest is what decides whether re-running it is news");
+  DCHECK(e.rest === undefined ||
+         (e.rest !== null && typeof e.rest === "object" && typeof e.rest.program === "string" &&
+          /^[0-9a-f]{64}$/.test(e.rest.program) && typeof e.rest.policy === "string"),
+         "a cold-tier entry " + when + " rests without the program and egress policy it rests under (" +
+         JSON.stringify(e.rest) + ") — those two are what can move a residue whose every member was refused");
   DCHECK(e.stranded !== true || e.shed === true,
          "a cold-tier entry " + when + " marked STRANDED while it still holds its document — stranded means a " +
          "shed entry's proved re-derivation stopped working, and an entry with its bytes has nothing to " +
@@ -1884,6 +1896,22 @@ async function programDigest() {
          String(_programDigest) + ")");
   return _programDigest;
 }
+/* The person's egress table in one canonical spelling (sorted at every level), so two tables granting the same
+   acts compare equal whatever order they were granted in. */
+function egressPolicyNow() {
+  const t = self.safeFetchEgressTable();
+  return JSON.stringify(Object.keys(t).sort().map((o) =>
+    [o, Object.keys(t[o]).sort().map((sig) => [sig, t[o][sig].slice().sort()])]));
+}
+/* Whether a residue written because every member rests on a refusal still rests: nothing that could answer a
+   refusal has changed, neither the engine this zone runs nor the egress policy the requests were judged under.
+   A change of either is the host event the rest waits for, as FLOW_STEP_OWED waits for one inside a session. */
+function frontierRestHolds(rest, policyNow) {
+  DCHECK(_programDigest !== null,
+         "a resting cold-tier row was ranked before this zone knew which engine it runs — frontierIndex asks " +
+         "programDigest first");
+  return rest.program === _programDigest && rest.policy === policyNow;
+}
 /* Whether `e` records a crash under the engine this zone runs. Asked only after programDigest has answered. */
 function frontierCrashedHere(e) {
   if (e.crash === undefined) return false;
@@ -1912,6 +1940,7 @@ function frontierRow(e) {
   return { key: e.key, sourceUrl: e.sourceUrl, origin: e.origin, credentialed: e.credentialed,
            value: e.value, pulls: e.pulls, at: e.at,
            shed: e.shed === true, stranded: e.stranded === true, crashed: frontierCrashedHere(e),
+           rest: e.rest === undefined ? null : e.rest,
            bytes: frontierDocBytes(e), rederivable: frontierRederivable(e),
            doc: e.shed === true ? null : e.doc, docBytes: e.shed === true ? 0 : e.docBytes };
 }
@@ -2138,7 +2167,7 @@ const CAND_SPREAD = [
    `_candRanked` attaches each on the first member. */
 function _candCensus() {
   const cen = { cands: 0, candUnserved: 0, candSiteUnserved: 0, exclSub: 0, exclSeedLive: 0, exclSeedParked: 0,
-                exclLive: 0, exclHeld: 0, exclStranded: 0, exclCrashed: 0 };
+                exclLive: 0, exclHeld: 0, exclStranded: 0, exclCrashed: 0, exclResting: 0 };
   for (const k of CAND_KINDS) cen[k.pop] = 0;
   return cen;
 }
@@ -2300,6 +2329,8 @@ function _bestCandidate(pop) {
     const key = _candRanked(cen, "seed", seed.url, LEVEL1_UNSERVED, tree);
     if (!best || level1Ahead(key, best.key)) best = { kind: "seed", id, addr: seed.url, key };
   }
+  /* The egress policy, read once per walk and only if a resting row asks. */
+  let policyNow = null;
   for (const row of idx.values()) {
     if (live.has(row.sourceUrl)) {
       /* The exclusion moves the row's weight, it does not delete it: a parked entry and the tab holding its
@@ -2320,6 +2351,12 @@ function _bestCandidate(pop) {
     /* A residue whose resume aborted this engine is the finding, recorded on the entry; re-running it unchanged
        would abort the same program at the same place. A new engine is a change, so the row returns with it. */
     if (row.crashed) { cen.exclCrashed++; continue; }
+    /* A residue every member of which rests on a refused request has no move until the policy or the engine
+       changes, so re-running it re-sends the page's own requests to arrive at the same rest. */
+    if (row.rest !== null) {
+      if (policyNow === null) policyNow = egressPolicyNow();
+      if (frontierRestHolds(row.rest, policyNow)) { cen.exclResting++; continue; }
+    }
     const key = _candRanked(cen, "cold", row.sourceUrl, row, tree);
     if (!best || level1Ahead(key, best.key)) best = { kind: "cold", row, key };
   }
@@ -6581,6 +6618,8 @@ const _hostOps = {
         /* The document's Level-1 account: the resumed row's plus this instance's, so service and value are
            carried across every park and session. */
         value: _account.value, pulls: _account.pulls, at: _account.at,
+        ...(result._parkWhy === "refused" ? { rest: { program: await programDigest(), policy: egressPolicyNow() } }
+                                          : {}),
       });
     }
     /* A crashed resume is the finding about that residue: the entry keeps its recipes and records the abort
@@ -7174,6 +7213,6 @@ if (typeof module !== "undefined" && module.exports)
                      level1Rate, level1Tree, level1Key, level1Ahead,
                      level1SiteOf, LEVEL1_UNSERVED, LEVEL1_DOOR,
                      _bestCandidate, _candPopulation, _level1Record, _candCensus, CAND_KINDS, CAND_SPREAD,
-                     documentIdentityOf, _frontierMembers,
+                     documentIdentityOf, _frontierMembers, programDigest, egressPolicyNow,
                      zoneRouteSetCookies, zoneAnswerSetCookies, zoneOpenJar, zoneReclaimHeldCookies,
                      zoneTabClosed, engineDeliverDocument, clusterKeyOf };
