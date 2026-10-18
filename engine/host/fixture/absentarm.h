@@ -4,12 +4,12 @@
    and the truthy arm is one the engine chose. Each arm makes one request and then throws the same uncaught error
    with its own tag, so the probe rows can read which arm's records are graded forced and which arm's page error
    is filed as this engine's exploration.
-   A first script spends an unknown read off the global as a property key twice, once as `k + ""` and once as
-   `k`: §7.1.21 ToPropertyKey makes them one name, so the value written under one is read under the other,
-   while `k + "5"` is a different name and does not read that slot.
-   The same script adds another unknown to the Number 0 and to the String "0" and sends both in one address, so
-   the probe rows can read that a sum and a concatenation spell two shapes, and that a concatenation onto a
-   String the page already built takes the string arm.
+   A first script writes under an unknown read off the global as `k + ""` and reads back under `k`, `String(k)`
+   and `${k}`: §7.1.21 ToPropertyKey makes all four one name, so each read sees the write, while `k + "5"` is a
+   different name and does not read that slot.
+   It also adds the Number 0 and the String "0" to another unknown `s`, which holds `undefined`, so those carry
+   §13.15.3's computed bytes, and to `Math[s]`, a key read with no example, so those spell their shapes: a sum and
+   a concatenation take two arms and two shapes, and a `+` onto a String the page built takes the string arm.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_ABSENTARM_H
@@ -22,8 +22,10 @@ static const char HTML_ABSENTARM[] =
     "<!doctype html><html><body>"
     "<script>"
     "var absKo = {}; var absK = window.__tfAbsentKey; absKo[absK + ''] = 'str';"
-    "fetch('/api/abskey?same=' + (absKo[absK] === 'str') + '&other=' + (absKo[absK + '5'] === undefined));"
-    "var absS = window.__tfAbsSum; fetch('/api/abssum?n=' + (0 + absS) + '&t=' + ('0' + absS));"
+    "fetch('/api/abskey?same=' + (absKo[absK] === 'str') + '&str=' + (absKo[String(absK)] === 'str') +"
+    " '&tpl=' + (absKo[`${absK}`] === 'str') + '&other=' + (absKo[absK + '5'] === undefined));"
+    "var absS = window.__tfAbsSum, absM = Math[absS];"
+    "fetch('/api/abssum?n=' + (0 + absS) + '&t=' + ('0' + absS) + '&m=' + (0 + absM) + '&u=' + ('0' + absM));"
     "</script>"
     "<script>"
     "function absBoom(tag) { throw new Error('absBOOM' + tag); }"

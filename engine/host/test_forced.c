@@ -13391,19 +13391,23 @@ TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
              "one §7.1.21 property key");
     fold_row(&abskey_tt, &abskey_why, !param_value_is(js, "/api/abskey", "other", "false"),
              "`k + \"5\"` read the slot written under `k + \"\"` — two property names shared one slot");
-    /* `0 + s` is §13.15.3's numeric arm and `"0" + s` its string arm, so the address spells the first as an
-       expression and the second as the string it produced; and `"…&t=" + ("0" + s)` joins two Strings, so no
-       `+` appears between them. */
+    /* `0 + s` is §13.15.3's numeric arm and `"0" + s` its string arm. A param carries an example's bytes where
+       one is held (`s` holds `undefined`), and otherwise the shape: the expression for the sum, the produced
+       string for the concatenation. `"…&t=" + ("0" + s)` joins two Strings, so no `+` appears between them. */
     const char *abssum_why = NULL; int abssum_tt = 1;
 
     fold_row(&abssum_tt, &abssum_why, !!strstr(js, "\"/api/abssum\""),
              "NOT REACHED: no /api/abssum record, so the script adding the absent global did not run, or the "
              "address lost its query structure because a concatenation onto it took the numeric arm");
     fold_row(&abssum_tt, &abssum_why,
-             param_value_is(js, "/api/abssum", "n", "0+{__tfAbsSum}") &&
-                 param_value_is(js, "/api/abssum", "t", "0{__tfAbsSum}"),
-             "`n` is not `0+{__tfAbsSum}` or `t` is not `0{__tfAbsSum}` — a sum and a concatenation of one "
-             "operand share a shape");
+             param_value_is(js, "/api/abssum", "n", "NaN") && param_value_is(js, "/api/abssum", "t", "0undefined"),
+             "`n` is not `NaN` or `t` is not `0undefined` — over the read's `undefined` example §13.15.3 adds "
+             "(ToNumeric(undefined) is NaN) and concatenates, so an arm was chosen against the example");
+    fold_row(&abssum_tt, &abssum_why,
+             param_value_is(js, "/api/abssum", "m", "0+%Math%[{__tfAbsSum}]") &&
+                 param_value_is(js, "/api/abssum", "u", "0%Math%[{__tfAbsSum}]"),
+             "`m` is not `0+%Math%[{__tfAbsSum}]` or `u` is not `0%Math%[{__tfAbsSum}]` — over an operand with no "
+             "example, a sum and a concatenation of it share a shape");
     const Probe rows[] = {
         { "absent-arm", absarm_tt, "__tfAbsentGate", SESS_EXPLORE, absarm_why },
         { "absent-key-slot", abskey_tt, "__tfAbsentKey", SESS_EXPLORE, abskey_why },
