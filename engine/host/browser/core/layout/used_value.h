@@ -124,6 +124,12 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name);
    associated box and it is not inline). */
 CssPx used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical);
 
+/* The entry above asked under a step machine's resting drive (core/layout/layout_job.h): the layout it reads
+   (the containing-block chain's intrinsic widths and the box's content-based height) is asked first, so it
+   rests with its questions suspended, and the extent is then computed over the answered memo. False ("not
+   yet") with `*out` unwritten when an operand was deferred. */
+bool used_value_padding_edge_ask(lxb_dom_element_t *el, bool vertical, CssPx *out);
+
 /* The used extent of the border edge on one axis: CSS 2.1 §8.1 "Box dimensions"' "border edge surrounds the
    box's border", whose "four border edges define the box's border box". It is the padding edge plus the two
    border widths, an entry for the padding edge's reason (which box `used_value_px` returned is §3.3's

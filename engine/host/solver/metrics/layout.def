@@ -6,7 +6,10 @@
    with its job alive, and `_layoutServedAcrossRest` the memo answers recorded before such a rest and served
    after it: a nonzero value is a job that suspended and resumed with its memo. `_layoutLineItems` counts the
    items line box fills took under a resting drive and `_layoutFillRests` the asks a fill answered "not yet"
-   because those were spent: a nonzero value is a CSS 2.2 §9.4.2 context that rested inside its fill. */
+   because those were spent: a nonzero value is a CSS 2.2 §9.4.2 context that rested inside its fill.
+   `_layoutClientExtentAsks` counts the reads of CSSOM VIEW §6's `clientWidth`/`clientHeight` that reached step
+   3's padding edge and `_layoutClientExtentRests` the rests those reads took, a subset of `_layoutJobRests`, so
+   one read takes 1 + rests/asks activations on average. */
 METRIC(bf_asks,            "_layoutBfAsks",           LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(bf_served,          "_layoutBfServed",         LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(bf_deferred,        "_layoutBfDeferred",       LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
@@ -17,6 +20,9 @@ METRIC(job_rests,          "_layoutJobRests",         LIFETIME, "rest", AGENT, "
 METRIC(served_across_rest, "_layoutServedAcrossRest", LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(line_items,         "_layoutLineItems",        LIFETIME, "item", AGENT, "core/layout/layout_job.c", INT)
 METRIC(fill_rests,         "_layoutFillRests",        LIFETIME, "ask",  AGENT, "core/layout/line_box.c",   INT)
+METRIC(client_extent_asks,  "_layoutClientExtentAsks",  LIFETIME, "ask",  AGENT, "core/dom/element_view.c", INT)
+METRIC(client_extent_rests, "_layoutClientExtentRests", LIFETIME, "rest", AGENT, "core/dom/element_view.c", INT)
 IDENTITY_LE(bf_served,          bf_asks)
 IDENTITY_LE(bf_deferred,        bf_asks)
 IDENTITY_LE(served_across_rest, bf_served)
+IDENTITY_LE(client_extent_rests, job_rests)

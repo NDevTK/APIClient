@@ -4562,6 +4562,30 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name)
     return answer;
 }
 
+/* The operands a used length of `el` lays out, asked so a resting drive can defer them: the intrinsic inline
+   sizes every width on §10.1's containing-block chain reads (`used_value_width_ask`), since a percentage or an
+   `auto` width resolves against the next one up, and for a vertical length the box's §10.6.3 content-based
+   height where its `height` behaves as auto. False ("not yet") when one was deferred. */
+static bool uv_operands_ask(lxb_dom_element_t *el, bool vertical)
+{
+    lxb_dom_element_t *x;
+    CssPx h;
+
+    for (x = el; x != NULL; x = uv_cb(x).element)
+        if (!used_value_width_ask(x)) return false;
+    if (vertical && uv_box_kind(el) != UV_BOX_INLINE && used_value_height_behaves_as_auto(el))
+        return block_flow_auto_height_ask(el, &h);
+    return true;
+}
+
+bool used_value_padding_edge_ask(lxb_dom_element_t *el, bool vertical, CssPx *out)
+{
+    DCHECK(el != NULL && out != NULL, "a padding edge's extent was asked for with no element or no answer");
+    if (!uv_operands_ask(el, vertical)) return false;
+    *out = used_value_padding_edge_px(el, vertical);
+    return true;
+}
+
 /* CSS 2.1 §10.3.7's and §10.6.4's USED `left` or `top`, out of the same solve that answers this box's size
    and its margins — see `uv_abs_solve`. The SIZE it is solved against is the one §10.4/§10.7's final pass ran
    with, which is what `uv_sized` reports and why this entry does not read the property. */

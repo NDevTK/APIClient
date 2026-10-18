@@ -61,6 +61,8 @@ struct LayoutJob {
     size_t    memo_used;
     uint64_t  gen;       /* starts at 1, so a zeroed slot is never live */
     uint64_t  rests;
+    const char *drive_file;   /* the innermost open drive's site */
+    int         drive_line;
     bool      driven;
     LayoutJobDriver driver;
     FlowPlacementRecord placement;   /* core/layout/flow_placement.h's three facts, for this job */
@@ -323,7 +325,7 @@ IntrinsicSizeRecord *layout_job_intrinsic_sizes(void)
 
 /* ---- the drive ------------------------------------------------------------------------------------------ */
 
-void layout_job_drive_begin(LayoutJobDrive *d)
+void layout_job_drive_begin_at(LayoutJobDrive *d, const char *file, int line)
 {
     LayoutJob *job = lj_current();
 
@@ -331,6 +333,12 @@ void layout_job_drive_begin(LayoutJobDrive *d)
     d->base = job->base;
     d->nest = job->nest;
     d->rests = false;
+    d->file = file;
+    d->line = line;
+    d->outer_file = job->drive_file;
+    d->outer_line = job->drive_line;
+    job->drive_file = file;
+    job->drive_line = line;
     job->base = job->n;
     job->nest = 0;
     job->drives++;
@@ -349,6 +357,12 @@ void layout_job_drive_begin_resting(LayoutJobDrive *d)
     d->base = job->base;
     d->nest = job->nest;
     d->rests = true;
+    d->file = __FILE__;
+    d->line = __LINE__;
+    d->outer_file = job->drive_file;
+    d->outer_line = job->drive_line;
+    job->drive_file = d->file;
+    job->drive_line = d->line;
     job->base = 0;
     job->nest = 0;
     job->drives++;
@@ -363,6 +377,12 @@ void layout_job_drive_begin_resting(LayoutJobDrive *d)
 static bool lj_allowance_spent(const LayoutJob *job)
 {
     return job->quota == 0 || job->scan == 0 || job->line_items == 0 || job->line_metrics == 0;
+}
+
+bool layout_job_drive_pending(const LayoutJobDrive *d)
+{
+    DCHECK(d->job == lj_current(), "a drive was asked about under a job other than the one it began on");
+    return d->job->n > d->job->base;
 }
 
 bool layout_job_drive_spent(const LayoutJobDrive *d)
@@ -465,6 +485,8 @@ void layout_job_drive_end(LayoutJobDrive *d)
     job->base = d->base;
     job->nest = d->nest;
     job->drives--;
+    job->drive_file = d->outer_file;
+    job->drive_line = d->outer_line;
     if (d->rests) job->resting = false;
     if (job == &g_sync && job->drives == 0) lj_memo_shed(job);
 }
@@ -496,6 +518,15 @@ LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at)
         *at = lj_push(job, q, LJ_SUSPENDED);
         METRIC_ADD(bf_deferred, 1);
         return LAYOUT_ASK_DEFERRED;
+    }
+    if (job->resting && job->drives > 1) {
+        char ask[LAYOUT_QUESTION_ASK_CAP], chain[LAYOUT_QUESTION_CHAIN_CAP];
+        bool cut = false;
+
+        DFAILF("%s:%d opens a drive inside a resting layout job, and %s would run to completion under it, so the "
+               "step machine owning the job cannot rest there (open: %s). BUILD that caller as an ask that "
+               "answers \"not yet\" to the resting drive", job->drive_file, job->drive_line,
+               layout_question_ask(q, ask, sizeof ask), layout_question_chain(8, chain, sizeof chain, &cut));
     }
     *at = lj_push(job, q, LJ_COMPUTING);
     job->nest++;

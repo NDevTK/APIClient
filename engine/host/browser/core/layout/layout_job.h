@@ -25,11 +25,11 @@
  * flow's writes stay in that flow's delta. A host-time baseline write while a driven job is alive is
  * refused at solver/dom_cow.c for the same reason. */
 /* NAMED RESIDUAL, the synchronous job. Not covered: every layout entry but CSSOM VIEW §6's
- * `scrollIntoView` (core/dom/element_view.c) and the paint (core/paint/document_paint.c) runs on the
- * thread's synchronous job, which never rests, so a page's flow cannot be preempted while one of those
- * entries lays out. Next: each such member becomes a step machine that owns a driven job, as
- * `scrollIntoView` does. How its absence shows: a flow's slice overrun inside a layout member that is not
- * `scrollIntoView`, with `_layoutJobRests` flat. */
+ * `scrollIntoView`, `clientWidth` and `clientHeight` (core/dom/element_view.c) and the paint
+ * (core/paint/document_paint.c) runs on the thread's synchronous job, which never rests, so a page's flow
+ * cannot be preempted while one of those entries lays out. Next: CSSOM VIEW §6's `getBoundingClientRect`
+ * as a step machine that owns a driven job, as `clientWidth` does. How its absence shows: a flow's slice
+ * overrun inside a layout member that is not one of those three, with `_layoutJobRests` flat. */
 
 /* The resting drive. `scrollIntoView`'s step machine is the drive of its scrolling-area walk: a node's
  * border-box origin through CSS 2.1 §10.1's second case and through §9.4.2's line boxes (the establishing box,
@@ -38,13 +38,6 @@
  * and the next activation computes them before it retries the node. A resting drive also stops once it has
  * laid out rest_unit_items(REST_UNIT_LAYOUT_BOXES) boxes in one activation, so a node whose derivation is wide
  * rests mid-node, and a body whose child list is long rests mid-walk, rather than only a deep one. */
-/* NAMED RESIDUAL, drives that are not rest points. Not covered: core/layout/block_flow.c's auto-height entry
- * is still driven where core/layout/used_value.c sizes a box for a caller inside the walk outside a line (an
- * absolutely positioned box whose positioned ancestor is a table or a flex or grid item, an `inline-block`
- * whose `min-height` or `max-height` is a content keyword, and intrinsic_block_size.c's flex item sizes), so
- * those compute what they deferred inside the same activation. Next: intrinsic_block_size.c's block size as an
- * ask, propagated through the flex line's item sizes. How its absence shows: the REST_UNIT_LAYOUT_DESCENDANTS
- * bracket's CPU assert naming a unit whose heavy node is a flex item. */
 
 /* NAMED RESIDUAL, cycles that cross no question kind. Not covered: the layout call graph has recursion
  * cycles that pass through none of the three kinds (intrinsic sizes, line-box atomic extents, the
@@ -143,13 +136,18 @@ IntrinsicSizeRecord *layout_job_intrinsic_sizes(void);
    and marks the stack; `next` hands back the topmost suspended question above the mark, now computing, or
    answers false when none is left; `end` asserts the stack is back at the mark. */
 typedef struct LayoutJobDrive {
-    LayoutJob *job;
-    size_t     base;
-    unsigned   nest;
-    bool       rests;   /* begun by `layout_job_drive_begin_resting` */
+    LayoutJob  *job;
+    size_t      base;
+    unsigned    nest;
+    bool        rests;      /* begun by `layout_job_drive_begin_resting` */
+    const char *file;       /* the site that began it, and the job's innermost drive site it replaced */
+    int         line;
+    const char *outer_file;
+    int         outer_line;
 } LayoutJobDrive;
 
-void layout_job_drive_begin(LayoutJobDrive *d);
+void layout_job_drive_begin_at(LayoutJobDrive *d, const char *file, int line);
+#define layout_job_drive_begin(d) layout_job_drive_begin_at((d), __FILE__, __LINE__)
 bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at);
 void layout_job_drive_end(LayoutJobDrive *d);
 
@@ -161,6 +159,9 @@ void layout_job_drive_end(LayoutJobDrive *d);
    leaves suspended entries in place for the next activation and asserts none is computing. */
 void layout_job_drive_begin_resting(LayoutJobDrive *d);
 bool layout_job_drive_spent(const LayoutJobDrive *d);
+/* Whether a question is left suspended above the drive's mark: what an ask that answered "not yet" leaves
+   when the drive's allowances are not what stopped it. */
+bool layout_job_drive_pending(const LayoutJobDrive *d);
 
 /* Whether a line box fill (core/layout/line_box.h) may take another step in this activation, and the items and
    box metrics a step took. Outside a resting drive, or under a drive nested inside a body, a fill runs to
@@ -182,7 +183,9 @@ typedef enum {
 /* Ask a BF_BOX or BF_WALK question. Asserts a drive is open: every ask has one beneath it on the C stack. The
    question is deferred when the drive already hosts rest_unit_items(REST_UNIT_LAYOUT_QUESTIONS) computing
    bodies, or when a resting drive is innermost and has spent its boxes. A BF_BOX open takes one box; a stack
-   counts its steps instead. */
+   counts its steps instead. A body opened under a drive nested inside a resting job runs to completion in the
+   activation, so the step machine owning the job could not rest there: that is a DFAIL naming the nested
+   drive's site, whose caller is to become an ask propagated to the resting drive. */
 LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at);
 
 /* The computing body at `at` completed: asserts it is the top, pops and memoizes it. */

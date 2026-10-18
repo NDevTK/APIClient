@@ -1094,6 +1094,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/griditem.h"
 #include "fixture/contentsflex.h"
 #include "fixture/inlineflex.h"
+#include "fixture/clientextent.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1530,6 +1531,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "griditem", HTML_GRIDITEM },
     { "contentsflex", HTML_CONTENTSFLEX },
     { "inlineflex", HTML_INLINEFLEX },
+    { "clientextent", HTML_CLIENTEXTENT },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -13772,6 +13774,35 @@ TF_UNIT void probes_svgelement(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `clientextent` document (fixture/clientextent.h). */
+TF_UNIT void probes_clientextent(const char *js, Probe *tab, int *n) {
+    /* CSSOM VIEW §6's `clientHeight`/`clientWidth` answers, and the rest the first one takes, read from the
+       counter element_view.c raises where the step machine yields. */
+    const char *rests = strstr(js, "\"_layoutClientExtentRests\":");
+    long nrests = rests ? strtol(rests + strlen("\"_layoutClientExtentRests\":"), NULL, 10) : -1;
+    const char *cext_why = NULL; int cext_tt = 1;
+    const char *cextr_why = NULL; int cextr_tt = 1;
+
+    fold_row(&cext_tt, &cext_why, !!strstr(js, "\"/api/cext\""),
+             "NOT REACHED: there is no /api/cext record at all, so the document aborted before its fetch");
+    fold_row(&cext_tt, &cext_why, param_value_is(js, "/api/cext", "h", "130"),
+             "CSSOM VIEW §6 step 3: `clientHeight` is not the 130px padding edge of twelve 10px rows");
+    fold_row(&cext_tt, &cext_why, param_value_is(js, "/api/cext", "w", "86"),
+             "CSSOM VIEW §6 step 3: `clientWidth` is not the shrink-to-fit inline-block's 86px padding edge");
+    fold_row(&cext_tt, &cext_why, param_value_is(js, "/api/cext", "s", "0"),
+             "CSSOM VIEW §6 step 1: an inline box's `clientWidth` is not 0");
+    fold_row(&cextr_tt, &cextr_why, rests != NULL,
+             "the result document carries no `_layoutClientExtentRests` row from solver/metrics/layout.def");
+    fold_row(&cextr_tt, &cextr_why, nrests >= 1,
+             "CSSOM VIEW §6's `clientHeight` over a content height wider than one activation took no rest, so it "
+             "ran to completion instead of yielding with its questions suspended");
+    const Probe rows[] = {
+        { "client-extent-values", cext_tt, "/api/cext", SESS_EXPLORE, cext_why },
+        { "client-extent-rests", cextr_tt, "/api/cext", SESS_EXPLORE, cextr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -17422,6 +17453,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_griditem(js, probes, &np);
     probes_contentsflex(js, probes, &np);
     probes_inlineflex(js, probes, &np);
+    probes_clientextent(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);

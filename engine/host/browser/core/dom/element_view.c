@@ -34,6 +34,7 @@
 #include "core/layout/table_box.h"
 #include "core/layout/used_value.h"
 #include "solver/concolic.h"
+#include "solver/metrics.h"
 
 /* THE MEMBERS. `scrollTop` and `scrollLeft` are the two the IDL declares as `attribute` rather than `readonly
    attribute`, so their magic is a setter's magic as well as a getter's. */
@@ -975,7 +976,8 @@ static JSValue ev_scroll_extent(JSContext *ctx, const EvTarget *t, bool vertical
 
 /* ---- §6's `clientWidth`, `clientHeight`, `clientTop` and `clientLeft` ------------------------------------- */
 
-static JSValue ev_client_extent(JSContext *ctx, const EvTarget *t, bool vertical)
+/* Steps 1 and 2, which read no layout: true with `*out` answered, false for step 3's padding edge. */
+static bool ev_client_extent_direct(JSContext *ctx, const EvTarget *t, bool vertical, JSValue *out)
 {
     /* Step 1: "If the element has no associated box OR IF THE BOX IS INLINE, return zero." Both halves are now
        decided from the computed `display` — the second one used to be waved through on the grounds that the two
@@ -983,7 +985,10 @@ static JSValue ev_client_extent(JSContext *ctx, const EvTarget *t, bool vertical
        `body` `display: block`), which said nothing about the elements step 3 reaches. `span.clientWidth` is 0
        in every user agent, and this is where that is decided: an inline box has a padding edge in the box model
        and §6 declines to report it, so step 3 below must never be asked about one. */
-    if (!t->has_box || ev_box_is_inline(t)) return ev_long(ctx, 0.0);
+    if (!t->has_box || ev_box_is_inline(t)) {
+        *out = ev_long(ctx, 0.0);
+        return true;
+    }
     /* Step 2 — the ROOT ELEMENT outside quirks mode, and the BODY inside it, are answered with the VIEWPORT and
        never with their own box. `document.documentElement.clientWidth` is how most of the web asks how wide the
        viewport is. "Excluding the size of a rendered scroll bar (if any)" removes nothing: none is rendered. */
@@ -992,8 +997,9 @@ static JSValue ev_client_extent(JSContext *ctx, const EvTarget *t, bool vertical
                "a CSSOM VIEW §6 client extent reached its viewport branch for an element whose document is not "
                "being presented — step 1 admits only an element with an associated box, which is defined over "
                "exactly that");
-        return ev_env_long(ctx, t, vertical ? "clientHeight" : "clientWidth",
+        *out = ev_env_long(ctx, t, vertical ? "clientHeight" : "clientWidth",
                            vertical ? viewport_height(t->dctx) : viewport_width(t->dctx));
+        return true;
     }
     /* Step 3 — "the unscaled width of the padding edge excluding the width of any rendered scrollbar between
        the padding edge and the border edge". The scrollbar term is zero for the reason every other member here
@@ -1009,8 +1015,78 @@ static JSValue ev_client_extent(JSContext *ctx, const EvTarget *t, bool vertical
        among them: CSS 2.1 §10.3.7's constraint equation is built over the static position §9.4.1's own walk
        reads out, so this member answers a real number for one. What still crashes there is a box whose
        content this engine cannot measure, inside the intrinsic walk, naming what it met. */
-    return ev_length_long(ctx, used_value_padding_edge_px(lxb_dom_interface_element(t->node), vertical));
+    return false;
 }
+
+/* Step 3 is the step machine's: the padding edge's layout is asked under a resting drive on the job the state
+   owns, so a box whose layout is wide rests between activations with its questions suspended, as
+   `scrollIntoView` does. Steps 1 and 2 answer in the first activation. */
+#define EV_CLIENT_STAGES(X) \
+    X(EV_CLIENT_MEASURE, "CSSOM VIEW §6 \"Extensions to the Element Interface\" clientWidth / clientHeight " \
+                         "(steps 1-2, then step 3's padding edge, one resting drive per activation)")
+enum { IDL_STEP_STAGE_BASE(EV_CLIENT_STAGES) EV_CLIENT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const EV_CLIENT_STEPS[] = { EV_CLIENT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    LayoutJob *job;   /* owned, declared through layout_job_step_ops; NULL until step 3 */
+} EvClientState;
+
+static void ev_client_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    EvClientState *s = st;
+
+    v->tree(ctx, (void **)&s->job, NULL, 0, &layout_job_step_ops);
+}
+
+static int js_ev_client_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    EvClientState *s = st;
+    bool vertical = idl_step_magic(hdr) == EV_CLIENT_HEIGHT, done = false;
+    lxb_dom_element_t *el;
+    LayoutJobDrive d;
+    EvTarget t;
+    CssPx px = css_px(0.0);
+
+    (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
+    STEP_DISPATCH(EV_CLIENT_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(EV_CLIENT_MEASURE);
+    ev_target(hdr->this_val, &t);
+    if (s->job == NULL && ev_client_extent_direct(ctx, &t, vertical, presult)) return JS_STEP_DONE;
+    el = lxb_dom_interface_element(t.node);
+    if (s->job == NULL) {
+        s->job = layout_job_new(LAYOUT_JOB_STEP);
+        METRIC_ADD(client_extent_asks, 1);
+    }
+    layout_job_enter(s->job);
+    layout_job_drive_begin_resting(&d);
+    while (block_flow_drive_deferred(&d)) {
+        if (used_value_padding_edge_ask(el, vertical, &px)) {
+            done = true;
+            break;
+        }
+        DCHECK(layout_job_drive_spent(&d) || layout_job_drive_pending(&d),
+               "CSSOM VIEW §6's client extent answered \"not yet\" with no question suspended and no allowance "
+               "spent, so its next activation would ask the same thing over the same state for ever");
+    }
+    layout_job_drive_end(&d);
+    layout_job_leave(s->job);
+    if (!done) {
+        layout_job_rested(s->job);
+        METRIC_ADD(client_extent_rests, 1);
+        return JS_STEP_YIELD;
+    }
+    *presult = ev_length_long(ctx, px);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl EV_CLIENT_STEP = {
+    js_ev_client_step, sizeof(EvClientState), ev_client_visit, NULL,
+    "CSSOM VIEW §6 \"Extensions to the Element Interface\" clientWidth / clientHeight",
+    EV_CLIENT_STEPS
+};
+static int g_id_client_width = -1, g_id_client_height = -1;
 
 /* CSSOM VIEW §6's `clientTop`/`clientLeft`, in the spec's own two steps. Step 2 is "return the unscaled
    COMPUTED VALUE of the border-top-width / border-left-width property plus the width of any scrollbar rendered
@@ -1500,8 +1576,11 @@ static JSValue ev_get_member(JSContext *ctx, const EvTarget *t, ElementViewMembe
     case EV_SCROLL_LEFT:    return ev_scroll_position(ctx, t, false);
     case EV_SCROLL_HEIGHT:  return ev_scroll_extent(ctx, t, true);
     case EV_SCROLL_WIDTH:   return ev_scroll_extent(ctx, t, false);
-    case EV_CLIENT_HEIGHT:  return ev_client_extent(ctx, t, true);
-    case EV_CLIENT_WIDTH:   return ev_client_extent(ctx, t, false);
+    case EV_CLIENT_HEIGHT:
+    case EV_CLIENT_WIDTH:
+        DFAIL("CSSOM VIEW §6's `clientWidth`/`clientHeight` reached the plain getter; they are step machines "
+              "(EV_CLIENT_STEP) installed through idl_install_accessor_step");
+        break;
     case EV_CLIENT_TOP:     return ev_client_edge(ctx, t, true);
     case EV_CLIENT_LEFT:    return ev_client_edge(ctx, t, false);
     }
@@ -1644,6 +1723,10 @@ void element_view_init(JSContext *ctx)
     idl_this_iface(element_is, "Element");
     g_id_scroll          = ev_declare_scroll(ctx, EV_SCROLL_ABSOLUTE);
     g_id_scroll_by       = ev_declare_scroll(ctx, EV_SCROLL_RELATIVE);
+    g_id_client_width = idl_getter_id_step(ctx, &EV_CLIENT_STEP, EV_CLIENT_WIDTH);
+    idl_this_iface(element_is, "Element");
+    g_id_client_height = idl_getter_id_step(ctx, &EV_CLIENT_STEP, EV_CLIENT_HEIGHT);
+    idl_this_iface(element_is, "Element");
     g_id_scroll_into_view = idl_method_id_step(ctx, EV_SCROLL_INTO_VIEW_ARGS, 1,
                                                EV_SCROLL_INTO_VIEW_OPTIONS,
                                                (int)(sizeof EV_SCROLL_INTO_VIEW_OPTIONS /
@@ -1683,10 +1766,8 @@ void element_view_install(JSContext *ctx, JSValueConst proto)
                               element_is, "Element");
     idl_install_accessor_this(ctx, proto, "clientLeft",   js_ev_get, EV_CLIENT_LEFT,   -1,
                               element_is, "Element");
-    idl_install_accessor_this(ctx, proto, "clientWidth",  js_ev_get, EV_CLIENT_WIDTH,  -1,
-                              element_is, "Element");
-    idl_install_accessor_this(ctx, proto, "clientHeight", js_ev_get, EV_CLIENT_HEIGHT, -1,
-                              element_is, "Element");
+    idl_install_accessor_step(ctx, proto, "clientWidth", g_id_client_width, -1);
+    idl_install_accessor_step(ctx, proto, "clientHeight", g_id_client_height, -1);
     idl_install_method(ctx, proto, "getClientRects", g_id_client_rects);
     idl_install_method(ctx, proto, "getBoundingClientRect", g_id_bounding_rect);
     /* §3.7.7's `length` is §3.6's OWN NUMBER for an overloaded operation: the smallest argument-list length
