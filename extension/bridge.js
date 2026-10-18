@@ -903,22 +903,23 @@ function linesToAnalysis(lines, msg, outcome, eng) {
   }
   return analysis;
 }
-/* Whether an analysis carries an engine document, asked in one place so the three fields cannot drift apart
+/* Whether an analysis carries an engine document, asked in one place so the four fields cannot drift apart
    across consumers. True means an @RESULT arrived and was asserted; false means none did and `_run` says which
-   absence. A record with some but not all of the trio is linesToAnalysis broken. */
+   absence. A record with some but not all of the four is linesToAnalysis broken. */
 function analysisHasDocument(a) {
   DCHECK(a && typeof a === "object", "an analysis record is not an object — every producer of one is in this file");
-  const n = (a.fetchCallSites !== undefined) + (a.securitySinks !== undefined) + (a._park !== undefined);
-  DCHECK(n === 0 || n === 3,
-         "an analysis carries " + n + " of the three engine-document fields (fetchCallSites, securitySinks, " +
-         "_park) — linesToAnalysis writes all three or none, because their presence IS the statement that an " +
-         "@RESULT document arrived, and a partial set would be read by every consumer as a document that is " +
-         "there while one of the surfaces it travels in is silently gone");
-  DCHECK(n === 3 || a._run === "crashed" || a._run === "nothing-to-run",
+  const n = (a.fetchCallSites !== undefined) + (a.securitySinks !== undefined) + (a._park !== undefined) +
+            (a._novelty !== undefined);
+  DCHECK(n === 0 || n === 4,
+         "an analysis carries " + n + " of the four engine-document fields (fetchCallSites, securitySinks, " +
+         "_park, _novelty) — linesToAnalysis writes all four or none, because their presence IS the statement " +
+         "that an @RESULT document arrived, and a partial set would be read by every consumer as a document that " +
+         "is there while one of the surfaces it travels in is silently gone");
+  DCHECK(n === 4 || a._run === "crashed" || a._run === "nothing-to-run",
          "an analysis marked `" + a._run + "` carries no engine document — only a crashed instance and a page " +
          "with nothing to run may lack one, so a partial/complete run without one is the @RESULT relay broken " +
          "and reporting it as a page with no API surface is a false clean bill");
-  return n === 3;
+  return n === 4;
 }
 self.analysisHasDocument = analysisHasDocument;   // read by offscreen-brain.js and lib/merge.js across the zone's one realm
 
@@ -6276,9 +6277,9 @@ const _hostOps = {
          result's `_novelty.landed`, both novelty_landed_value with no step between. `_novelty.paid` also counts
          a novel credit made on host time, which no flow was paid, so it is the bound and not the value. */
       const _nov = result._novelty;
-      DCHECK(_nov && _nov.landed === eng.level1.paid && _nov.landed <= _nov.paid,
+      DCHECK(_nov.landed === eng.level1.paid && _nov.landed <= _nov.paid,
              "a parked run's novel value disagrees with its own result (account " + eng.level1.paid + ", landed " +
-             String(_nov && _nov.landed) + ", paid " + String(_nov && _nov.paid) + ") — both are the landed novel " +
+             String(_nov.landed) + ", paid " + String(_nov.paid) + ") — both are the landed novel " +
              "credits of one instance read after its last step, and the paid asks bound them");
       const _account = engineAccount(eng);
       await frontierPut(result._fkey, {
