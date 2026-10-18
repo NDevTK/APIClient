@@ -13778,8 +13778,21 @@ static int JS_AutoInitProperty(JSContext *ctx, JSObject *p, JSAtom prop,
 
     realm = js_autoinit_get_realm(pr);
     func = js_autoinit_func_table[js_autoinit_get_id(pr)];
-    /* 'func' shall not modify the object properties 'pr' */
-    val = func(realm, p, prop, pr->u.init.opaque);
+    /* The value is as old as its slot: ECMAScript 10.2.5 MakeConstructor defines a function's "prototype" when the
+       function is made, and a lazy intrinsic exists with its holder, so what the realization allocates takes the
+       holder's fork generation. Under the running flow's it would be private to that flow (no write to it
+       captured) while the holder's slot, shared with every sibling, hands the same object to them all. */
+    {
+        uint32_t running_gen = g_flow_gen;
+
+        g_flow_gen = p->flow_gen;
+        /* 'func' shall not modify the object properties 'pr' */
+        val = func(realm, p, prop, pr->u.init.opaque);
+        DCHECK(g_flow_gen == p->flow_gen,
+               "an autoinit realization forked — the realizers run none of the page's code, so nothing inside one "
+               "can take a branch");
+        g_flow_gen = running_gen;
+    }
     js_autoinit_free(ctx->rt, pr);
     prs->flags &= ~JS_PROP_TMASK;
     pr->u.value = JS_UNDEFINED;
