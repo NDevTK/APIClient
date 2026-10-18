@@ -2507,7 +2507,8 @@ const NAVIGATION_DESTINATIONS = Object.freeze(["document", "embed", "frame", "if
    refuses by construction. */
 const DOC_REFUSAL_ARMS = Object.freeze(["rendezvous", "report", "none"]);
 /* `speakerOf` resolves the speaker (documentSpeaker's, seedSpeaker's) whose session a load the browser would
-   credential carries, or null when it has none, which loads without the session. */
+   credential carries, or null when it has none, which loads without the session. Every answer states
+   `credentialed`, whether this load carried the session, which the loaded document's record keeps. */
 async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, refusalArm,
                               actor, driven, pinned, request, speakerOf, readerOpaque) {
   DCHECK(!!request && NAVIGATION_DESTINATIONS.indexOf(request.destination) >= 0 &&
@@ -2585,9 +2586,10 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, ref
   if (new URL(abs).protocol === "data:") {
     const d = await self.safeFetchSchemeData(abs);
     if (d.refusal)
-      return { url: abs, headers: {}, bytes: null, declined: null, setCookies: [],
+      return { url: abs, headers: {}, bytes: null, declined: null, setCookies: [], credentialed: false,
                unavailable: { kind: "network", detail: d.statusText } };
-    return { url: abs, headers: d.headers, bytes: d.body, unavailable: null, declined: null, setCookies: [] };
+    return { url: abs, headers: d.headers, bytes: d.body, unavailable: null, declined: null, setCookies: [],
+             credentialed: false };
   }
   const speaker = !readerOpaque && navigationCarriesSession(abs, principalOrigin) ? await speakerOf() : null;
   const credentialed = speaker !== null;
@@ -2688,11 +2690,11 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, ref
            field telling "no load attempted" (creator-origin `about:blank`) from "a load failed" (opaque error
            page). */
         return { url: finalUrl, headers: {}, bytes: null, unavailable: null, declined: r.refusal.reason,
-                 setCookies: [] };
+                 setCookies: [], credentialed };
       }
     }
     if (r.status === 0)
-      return { url: finalUrl, headers: {}, bytes: null, declined: null, setCookies: [],
+      return { url: finalUrl, headers: {}, bytes: null, declined: null, setCookies: [], credentialed,
                unavailable: { kind: "network", detail: r.statusText } };
     /* The response's credentialed Set-Cookie fields, each with the URL it answered, for the asking flow's own
        jar: stored during the fetch (Fetch §4.7), so an error response's count too. */
@@ -2700,18 +2702,18 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, ref
     /* Not OK is a load that did not load: the navigable shows an error page at the URL the response came from.
        An error response's body is never used as the document. */
     if (!r.ok)
-      return { url: finalUrl, headers: {}, bytes: null, declined: null, setCookies: r.setCookies,
+      return { url: finalUrl, headers: {}, bytes: null, declined: null, setCookies: r.setCookies, credentialed,
                unavailable: { kind: "status", status: r.status } };
     /* The bytes, because a Document is parsed from a byte sequence: HTML §13.2.3.2 Determining the character
        encoding is the engine's algorithm. And the whole header list: which names matter (opener policy,
        embedder policy, `Origin-Agent-Cluster`) is the engine's question. */
     return { url: finalUrl, headers: r.headers, bytes: r.body, unavailable: null, declined: null,
-             setCookies: r.setCookies };
+             setCookies: r.setCookies, credentialed };
   } catch (e) {
     /* A thrown fetch is a network error (Fetch §5.6 Fetch methods) and a real outcome; an invariant abort
        thrown through this catch is not, so it is rethrown. */
     RETHROW_FATAL(e);
-    return { url: abs, headers: {}, bytes: null, declined: null, setCookies: [],
+    return { url: abs, headers: {}, bytes: null, declined: null, setCookies: [], credentialed,
              unavailable: { kind: "network", detail: String((e && e.message) || e) } };
   }
 }
@@ -5792,15 +5794,15 @@ async function admitSeatLand(seat) {
        WindowProxy for it, so it is a top-level traversable in a group this zone mints. The principal is the
        declaring document's browser-stated origin carried on the work item, never `originOf(url)` (a sandboxed
        document's address is ordinary while its origin is opaque); the addresses were compared above.
-       `credentialed` is computed from that principal with navigationLoad's own predicate, so it states the load
-       that happened. `topLevelUrl` is its own address after redirects (HTML §8.1.3.1, §7.5.1's `creationURL`). */
+       `credentialed` is the load's own answer, so it states the load that happened. `topLevelUrl` is its own
+       address after redirects (HTML §8.1.3.1, §7.5.1's `creationURL`). */
     /* The provenance carried into the residue this run parks: the load was decided from `seed.provenance`, so
        the stored grade must agree (at a widened origin a forced declaration passes `_seedRefusal`). */
     const _seedDoc = seed.doc;
     const msg = { type: "AST_ANALYZE", sourceUrl: loaded.url, origin: principalOf(_seedDoc, seed.principalOrigin),
                   groupId: "seed:" + (_nextSeedGroup++), responseHeaders: loaded.headers,
                   topLevelUrl: loaded.url,
-                  credentialed: navigationCarriesSession(loaded.url, seed.principalOrigin),
+                  credentialed: loaded.credentialed,
                   /* The declaring instance's record joined with the declaration's words, as for a child
                      navigable. */
                   provenance: _seedDoc.reach, arrival: docRecordArrival(_seedDoc),
@@ -6835,6 +6837,7 @@ self.astDispatch = async function astDispatch(msg) {
        response's URL, as `fetchedDocument` does for a child navigable. */
     msg.sourceUrl = loaded.url;
     msg.responseHeaders = loaded.headers;
+    msg.credentialed = loaded.credentialed;
     /* The word the load was performed under, written onto the record (this run persists, so its residue is
        re-fetched later from what this states); the same constant as the load, so the two cannot disagree. */
     msg.provenance = PROVENANCE_OBSERVED;

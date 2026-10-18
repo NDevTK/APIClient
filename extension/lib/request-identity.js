@@ -47,8 +47,14 @@ async function engineIdentity(origin, docUrl, docKey) {
         "an engine identity's document URL " + JSON.stringify(docUrl) + " is not of its cluster origin " +
         JSON.stringify(origin) + " — the zone speaks as the origin it assigned, never as one a URL names");
   await siteAsk(siteHostsOf([origin === "null" ? docUrl : origin]));
-  const site = origin === "null" ? siteOf(docUrl) : siteOf(origin + "/");
-  return { origin, docUrl, partitionKey: { topLevelSite: site, hasCrossSiteAncestor: false }, docKey };
+  return { origin, docUrl, partitionKey: enginePartitionKey(origin, docUrl), docKey };
+}
+
+/* The cookie partition key of an engine instance's document of cluster origin `origin` at `docUrl`, as
+   engineIdentity states it (and with its residual: no cross-site ancestor). Synchronous; its caller has asked
+   the host. */
+function enginePartitionKey(origin, docUrl) {
+  return { topLevelSite: origin === "null" ? siteOf(docUrl) : siteOf(origin + "/"), hasCrossSiteAncestor: false };
 }
 
 /* RFC 6265bis §5.2 "Same-site" and "cross-site" Requests: same-site when the request URL's origin is same
