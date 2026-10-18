@@ -89,6 +89,15 @@ static const char HTML_ABORT[] =
     " fetch('/api/apteedab?own=' + o4 + '&clone=' + q4);"
     "})();"
     "</script>"
+    /* Fetch §4.1 "Main fetch" queues processResponse when the response arrives, so a zero-delay timer queued
+       after fetch() runs before the response settles the promise. */
+    "<script>"
+    "(function () {"
+    " var seen = [];"
+    " fetch('/api/xffetch').then(function () { seen.push('reply'); fetch('/api/xforder?v=' + seen.join('-')); });"
+    " setTimeout(function () { seen.push('timer'); }, 0);"
+    "})();"
+    "</script>"
     /* XHR §3.5.6's asynchronous send() fetches in parallel, so its flow runs on: a zero-delay timer queued
        after send() runs before the send's `load`. §3.5.7 abort() and §3.5.1 open() reach the fetch controller
        the send set, on the line after it: abort() answers with its request error steps, open() ends the send

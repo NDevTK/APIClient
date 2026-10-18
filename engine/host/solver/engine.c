@@ -1335,12 +1335,23 @@ int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) 
  *
  * A session that is over is refused before the walk, as a late answer is (g_host_answers_late): no scheduler is
  * left to pick the flow and no one will drain the notice. It is still counted. */
-/* A rendezvous's answer is on record (pending_answer_rendezvous). An async one is then a task of its flow
-   (Fetch §4.1 "Main fetch" queues processResponse when the response arrives), so its arrival stamp is minted
-   now: a task the page queued after the ask is older than the response and runs first. */
-static void rendezvous_answered(Flow *f, JSValueConst e) {
-    pending_answer_rendezvous(f->pending, e);
-    if (pending_get_int(e, PEND_ASYNC)) pending_set_int(e, PEND_WORK_SEQ, (int64_t)flow_work_seq_next());
+/* A reply ARRIVES: its value is on the entry and it is answered, through the register for a rendezvous
+   (pending_answer_rendezvous) and the generic door otherwise. A reply the delivery takes is a task of its flow
+   from this instant (Fetch §4.1 "Main fetch" queues processResponse when the response arrives), so its arrival
+   stamp is minted here and a task the page queued after the request is older and runs first. A blocking
+   rendezvous is taken at its asker's park and is no task. `f` is the register's flow, needed only for a
+   rendezvous; a shared park record's arrival is one instant for every flow naming it. A reply answered inside
+   the park that asked (a blocked request, a local scheme, a supplied value) arrives at its push, whose stamp
+   is that instant already. */
+static void reply_arrived(Flow *f, JSValueConst e) {
+    if (pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ) {
+        DCHECK(f != NULL, "a rendezvous's answer arrived with no register to lower its blocked count on");
+        pending_answer_rendezvous(f->pending, e);
+        if (!pending_get_int(e, PEND_ASYNC)) return;
+    } else {
+        pending_set(e, PEND_HAVE_VALUE, JS_TRUE);
+    }
+    pending_set_int(e, PEND_WORK_SEQ, (int64_t)flow_work_seq_next());
 }
 
 /* `fetch.cancel<TAB><host name>`: the zone is asked to stop the transfer of the rendezvous it knows as `req`. */
@@ -1565,7 +1576,7 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const ch
                    registers naming it, so the walk that found the register states it. The generic `pending_set`
                    refuses this field on a synchronous record (solver/pending.h), so a path settling one without
                    a register crashes instead of leaving a flow blocked with its answer on it. */
-                rendezvous_answered(f, p);
+                reply_arrived(f, p);
                 /* The flow is askable again: this is the event a flow parked on a synchronous request waits
                    for, so the mark comes off here, on the flow the answer reached (flow.h). The first answer
                    stops at the first flow because an unanswered synchronous request is not shared by a fork
@@ -3960,7 +3971,7 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
             reply_driven = reply_driven < 0 ? rd : (reply_driven && rd);
         }
         pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
-        pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
+        reply_arrived(NULL, p);
         n++;
         JS_FreeValue(ctx, p);
     }
@@ -5717,10 +5728,8 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
                site and make a declined navigation look like a document that threw. And through the register
                (pending_answer_rendezvous), since `haveValue` here is the write that unblocks the flow. */
             pending_set(pe, PEND_COMPLETION, JS_NewInt32(ctx, ENGINE_COMPLETION_NORMAL));
-            rendezvous_answered(f, pe);
-        } else {
-            pending_set_int(pe, PEND_HAVE_VALUE, 1);
         }
+        reply_arrived(f, pe);
         JS_FreeValue(ctx, pe);
         /* What this path is evidence of from now: everything after stands on an unobserved outcome, so every
            request it builds is forced (pending_prov_compose reads the mark at the park) and every endpoint a

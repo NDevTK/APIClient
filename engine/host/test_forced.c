@@ -14929,7 +14929,14 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
     fold_row(&xaopen_tt, &xaopen_why, xc_n >= 2 && xc_distinct == xc_n,
              "open() during an asynchronous send did not terminate its controller with its own "
              "`fetch.cancel<TAB><id>` beside abort()'s");
+    /* The same ordering for fetch(): its response is a task from its arrival, not from the call. */
+    const char *xftimer_why = NULL;
+    int xftimer_tt = 1;
+    fold_row(&xftimer_tt, &xftimer_why, param_value_only(js, "/api/xforder", "v", "timer-reply"),
+             "NOT REACHED or wrong: a zero-delay timer queued after fetch() did not run before the response "
+             "settled its promise (`timer-reply`)");
     const Probe rows[] = {
+        { "fetch-timer", xftimer_tt, "/api/xforder", SESS_EXPLORE, xftimer_why },
         { "xhr-timer", xatimer_tt, "/api/xaorder", SESS_EXPLORE, xatimer_why },
         { "xhr-abort", xaabort_tt, "/api/xaaborted", SESS_EXPLORE, xaabort_why },
         { "xhr-open", xaopen_tt, "/api/xareopened", SESS_EXPLORE, xaopen_why },
