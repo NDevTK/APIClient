@@ -749,6 +749,40 @@ static const TfServed *tf_served_at(const char *abs) {
     return NULL;
 }
 
+/* The (address, witness mark, provenance) triples the zone was shown, deduplicated: the egress signals a request
+   carries are on its pending line and not in the result document, so a row about them reads this. */
+typedef struct { char *url, *pinned, *prov; } TfSeenLine;
+static TfSeenLine *g_tf_seen;
+static int g_tf_seen_n, g_tf_seen_cap;
+
+static void tf_seen_note(const char *url, const char *pinned, const char *prov) {
+    for (int i = 0; i < g_tf_seen_n; i++)
+        if (!strcmp(g_tf_seen[i].url, url) && !strcmp(g_tf_seen[i].pinned, pinned) &&
+            !strcmp(g_tf_seen[i].prov, prov))
+            return;
+    if (g_tf_seen_n == g_tf_seen_cap) {
+        g_tf_seen_cap = g_tf_seen_cap ? 2 * g_tf_seen_cap : 64;
+        g_tf_seen = realloc(g_tf_seen, (size_t)g_tf_seen_cap * sizeof *g_tf_seen);
+        CHECK(g_tf_seen != NULL, "the fixture could not grow its record of the pending lines it was shown");
+    }
+    g_tf_seen[g_tf_seen_n].url = strdup(url);
+    g_tf_seen[g_tf_seen_n].pinned = strdup(pinned);
+    g_tf_seen[g_tf_seen_n].prov = strdup(prov);
+    CHECK(g_tf_seen[g_tf_seen_n].url && g_tf_seen[g_tf_seen_n].pinned && g_tf_seen[g_tf_seen_n].prov,
+          "the fixture could not record a pending line it was shown");
+    g_tf_seen_n++;
+}
+
+/* Whether a line whose address begins with `prefix` was shown with witness mark `pinned` and, unless `prov` is
+   NULL, provenance `prov`. */
+static int tf_seen_line(const char *prefix, const char *pinned, const char *prov) {
+    for (int i = 0; i < g_tf_seen_n; i++)
+        if (!strncmp(g_tf_seen[i].url, prefix, strlen(prefix)) && !strcmp(g_tf_seen[i].pinned, pinned) &&
+            (!prov || !strcmp(g_tf_seen[i].prov, prov)))
+            return 1;
+    return 0;
+}
+
 static int fixture_provide(JSContext *ctx) {
     const char *urls = engine_pending_fetches();
     int filled = 0;
@@ -806,6 +840,7 @@ static int fixture_provide(JSContext *ctx) {
         abs = ok ? url_serialize(&rec, /*exclude_fragment*/ false) : NULL;
         url_record_free(&rec);
         CHECK(abs, "the fixture could not serialize the URL it is answering");
+        tf_seen_note(abs, pinned, provenance);
         /* THE ONE REPLY RECORD every host delivers — the same shape the trusted zone stringifies as JSON. */
         /* `application/json` is what this fixture SERVES, stated by the host that serves it — the same
            position the trusted zone is in when it stamps `computedType` on a real reply (fetch.h). */
@@ -12897,6 +12932,22 @@ TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
     fold_row(&rootjar_tt, &rootjar_why, param_value_is(js, "/api/rootjar", "c", "rootc%3D1"),
              "the root document's first script read no `rootc=1` — the fields its own response set were not in the "
              "agent's jar before its scripts ran (cookie_jar_receive_http_pairs at the baseline)");
+    /* A request from an about:blank child's realm carries its flow's witness mark: the arm that pinned
+       `region` against the reply is `pinned` (which extension/lib/safe-fetch.js's default arms refuse), and the
+       unpinned control is `unpinned` (which they fire). */
+    const char *blankpin_why = NULL; int blankpin_tt = 1;
+    fold_row(&blankpin_tt, &blankpin_why,
+             tf_seen_line("https://x.test/api/blankobs?r=us-west-2", PENDING_PINNED_NO, NULL),
+             "NOT REACHED or not unpinned: no `unpinned` pending line for the about:blank child's control request, "
+             "so the child realm's fetch never parked from the arm that agrees with the reply");
+    fold_row(&blankpin_tt, &blankpin_why,
+             tf_seen_line("https://x.test/api/blankpin?r=eu-west-9", PENDING_PINNED_YES, PENDING_PROVENANCE_FORCED),
+             "no `pinned` `forced` pending line for the about:blank child's request on the arm that pinned "
+             "`region` against the reply — the child realm's request did not carry its flow's marks");
+    fold_row(&blankpin_tt, &blankpin_why,
+             !tf_seen_line("https://x.test/api/blankpin", PENDING_PINNED_NO, NULL),
+             "the about:blank child's request on the pinning arm was shown `unpinned`, so the egress default would "
+             "fire a value the fork chose as the page's own request");
     /* §7.2.5.1: a cross-origin proxy answers `closed` and refuses `name`. */
     /* THE NEGATIVE STAYS WHOLE-DOCUMENT AND THE POSITIVES DO NOT, which is this file's own discriminator: a
        superstring or a neighbouring record can only make `!strstr` fail EARLY, never pass, so `LEAKED`
@@ -13065,6 +13116,7 @@ TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
         { "nav-door", navdoor_tt, "/navhidden", SESS_EXPLORE, navdoor_why },
         { "flow-jar", flowjar_tt, "/api/ckgate", SESS_EXPLORE, flowjar_why },
         { "root-jar", rootjar_tt, "/api/rootjar", SESS_EXPLORE, rootjar_why },
+        { "blank-pin", blankpin_tt, "/api/blankgate", SESS_EXPLORE, blankpin_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
         { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE, xdocread_why },
         { "xdoc-job", xdocjob_tt, "/api/xdocjob", SESS_EXPLORE, xdocjob_why },

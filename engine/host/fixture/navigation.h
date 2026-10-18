@@ -151,6 +151,14 @@ static const char HTML_NAVIGATION[] =
     " fetch('/api/ckwait').then(function(){ return fetch('/api/ckwait'); }).then(function(){"
     " return fetch('/api/ckwait'); }).then(function(){"
     " fetch('/api/cookiesib?c=' + encodeURIComponent(document.cookie || 'none')); }); });</script>"
+    /* A request made from an initial about:blank Document (HTML §7.3.1 "Creating a new browsing context"), whose
+       realm runs on the creating flow. The `=== 'eu-west-9'` arm contradicts the reply and pins `region`, so its
+       request rests on a value the fork chose and must state `pinned`; the other arm's states `unpinned`. The
+       `blank-pin` row reads both pending lines. Absolute addresses keep the about:blank base URL out of it. */
+    "<script>var _bf = document.createElement('iframe'); document.body.appendChild(_bf);"
+    "fetch('/api/blankgate').then(function(r){ return r.json(); }).then(function(c){"
+    " if (c.region === 'eu-west-9') _bf.contentWindow.fetch('https://x.test/api/blankpin?r=' + c.region);"
+    " else _bf.contentWindow.fetch('https://x.test/api/blankobs?r=' + c.region); });</script>"
     TF_CANVAS_INK
     "</body></html>";
 

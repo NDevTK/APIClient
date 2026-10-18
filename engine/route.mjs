@@ -17,8 +17,8 @@
 
    WHAT THIS EXERCISES BEYOND DELIVERY. Record 1's world is `a`'s root world and has no ancestry, so the
    receiving instance materializes a segment for it from its own baseline. Records 2 and 3 are posted by the two
-   arms of `if (__FLAGS.admin)`: the primary keeps the root world (its segment already exists), the sibling's
-   world is a CHILD whose vector names the root as its nearest ancestor — so its segment is materialized by
+   arms of `if (__FLAGS.role === "admin")`: the primary keeps the root world (its segment already exists), the
+   sibling's world is a CHILD whose vector names the root as its nearest ancestor — so its segment is materialized by
    FORKING the segment record 1 created. That fork is world_segment's nearest-first materialization, and until
    this fixture drove it, nothing outside a self-test had ever called it.
 
@@ -96,7 +96,7 @@ const boot = factory.default ?? factory;
 const HTML_A = `<!doctype html><script>
   var w = window.open("https://b.test/child", "child");
   w.postMessage({hello:"root", n: w.length}, "*");
-  if (__FLAGS.admin) { w.postMessage({hello:"admin"}, "*"); } else { w.postMessage({hello:"public"}, "*"); }
+  if (__FLAGS.role === "admin") { w.postMessage({hello:"admin"}, "*"); } else { w.postMessage({hello:"public"}, "*"); }
   w.postMessage({hello:"length", n: w.length}, "*");
   fetch("/resume").then(function () { fetch("/closed?v=" + (typeof w.closed) + ":" + w.closed); });
 </script>`;
@@ -279,6 +279,8 @@ const routedTo = new Map();
    witnesses is that the receiving page's own code RAN; how many times it ran is the engine's to state (the
    four ends of §9.3.3 step 8's task, read off `qjs_result` at the bottom of this file). */
 const got = [];
+/* Every `/got` pending line with the witness mark the receiving engine stated for it, one entry per listing. */
+const gotMarks = [];
 /* EVERY CROSS-AGENT OPERATION THIS ZONE WAS ASKED TO PERFORM, keyed by the asking engine's request id, and
    whether it was ever answered. Keyed rather than counted because `qjs_host_requests` deliberately does NOT
    dedupe — an unanswered request is re-reported on every single step, so a count would be a step count, and
@@ -425,7 +427,10 @@ async function service(e) {
       fail(`a pending line states the drive mark \`${driven}\`, which is neither token solver/engine.h declares`);
     if (u.includes('/hold')) continue;
     if (u.includes('/resume') && resumeOwed) { if (e === engines[0]) resumeSeen = true; continue; }
-    if (u.includes('/got')) { got.push(u); console.log(`  [${e.docId}] DELIVERED: ${u}`); }
+    if (u.includes('/got')) {
+      got.push(u); gotMarks.push({ u, pinned, provenance });
+      console.log(`  [${e.docId}] DELIVERED: ${u}`);
+    }
     if (u.includes('/closed')) { closedReports.push({ asker: e.tag, url: u });
                                  console.log(`  [${e.tag}] READ BACK: ${u}`); }
     /* THE ONE REPLY RECORD every host of this engine delivers, crossing as JSON so it carries its type. This
@@ -967,6 +972,32 @@ if (!got.length) {
 }
 if (!forked) fail("no segment was materialized by forking an ancestor — the world vector's ancestry was carried " +
                   'and never used');
+/* The sender's path marks reach the receiver's own request. `a`'s admin arm pinned `__FLAGS.role` on an arm no
+   example confirmed, so `b`'s request after taking that record rests on a witness `a`'s fork chose and states
+   `pinned`, which the egress default refuses; the root and public records come from unpinned paths and their
+   requests state `unpinned`, which it fires. A pinned admin line with an unpinned control is the pair; either
+   missing means the fork or the delivery was not reached. Folding is toward the permissive member
+   (engine_pending_fetches), and every member of the admin line took the admin record. */
+{
+  const admin = gotMarks.filter((g) => g.u.includes('hello=admin'));
+  const plain = gotMarks.filter((g) => g.u.includes('hello=root') || g.u.includes('hello=public'));
+  if (!admin.length || !plain.length)
+    fail(`the receiving page issued ${admin.length} /got line(s) for the pinned arm's record and ${plain.length} ` +
+         'for the unpinned ones — both are needed to say whether a sender\'s witness mark crosses');
+  const lost = admin.filter((g) => g.pinned !== 'pinned');
+  if (lost.length)
+    fail(`${lost.length} /got line(s) for the record \`a\`'s pinned arm posted state \`${lost[0].pinned}\` — the ` +
+         "receiving timeline did not take the sender's witness mark, so a fork's chosen value fires in `b` as " +
+         `the page's own request: ${lost[0].u}`);
+  /* The control is asked of the set and not of each line: after the park a resumed `a` posts again, and a `b`
+     timeline that already took the admin record issues its root line pinned, as it should. */
+  if (!plain.some((g) => g.pinned === 'unpinned'))
+    fail(`all ${plain.length} /got line(s) for records from unpinned paths state \`pinned\` — no receiving ` +
+         `timeline issued the control request unpinned: ${plain[0].u}`);
+  console.log(`witness marks across the seam: ${admin.length} pinned-arm line(s) pinned; ` +
+              `${plain.filter((g) => g.pinned === 'unpinned').length} of ${plain.length} unpinned-path line(s) ` +
+              'unpinned');
+}
 /* A zero here would mean `w.length` resolved without reaching the peer: HTML §7.2.2.2 Indexed access on the
    Window object answers it from the PEER's active document's child navigables. */
 if (!reads.size)
