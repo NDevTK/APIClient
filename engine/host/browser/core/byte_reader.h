@@ -13,7 +13,18 @@
    completion inside the read, and it is why `json()`'s SyntaxError arrives at the page's `.catch` rather than
    out of the call itself. */
 typedef JSValue (*ByteReaderMake)(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len);
-typedef struct { const char *name; ByteReaderMake make; } ByteReader;
+/* WHAT A READER RESOLVES WITH WHEN THE BODY IS UNKNOWN EXTERNAL INPUT, which `take` hands over as a value
+   because its bytes cannot be spelled. SELF resolves with the unknown itself: text()'s UTF-8 decode undoes
+   §5.2's UTF-8 encode of a scalar value string. CALL resolves with what `callee` (this realm's function,
+   owned) returns over it, and rejects with its throw: json()'s parse JSON from bytes is %JSON.parse%. NONE, the
+   zero, is a reader with no answer, and the machine crashes naming it. */
+typedef enum { BYTE_READER_UNKNOWN_NONE = 0, BYTE_READER_UNKNOWN_SELF, BYTE_READER_UNKNOWN_CALL } ByteReaderUnknown;
+typedef struct {
+    const char *name;
+    ByteReaderMake make;
+    ByteReaderUnknown unknown;
+    JSValue (*callee)(JSContext *ctx);   /* CALL's function; NULL for every other answer */
+} ByteReader;
 
 /* AN INTERFACE THAT HAS READERS: how to recognise one of its objects, how to get the bytes out, and which
    readers its IDL lists.
@@ -47,9 +58,12 @@ typedef struct { const char *name; ByteReaderMake make; } ByteReader;
    reply that
    name it twice split every predicate over its bytes in two. `script#__NEXT_DATA__` and `gon.current_user_id`
    are what a name minted from something other than an address looks like. */
+/* `*punknown` IS THE THIRD ANSWER: a body whose content is unknown external input (an owned concolic), which
+   each reader answers by its ByteReaderUnknown. JS_UNDEFINED for every body that has bytes or a stream. */
 typedef struct {
     bool (*is)(JSValueConst v);
-    int  (*take)(JSContext *ctx, JSValueConst v, const char **bytes, size_t *len, JSValue *pstream);
+    int  (*take)(JSContext *ctx, JSValueConst v, const char **bytes, size_t *len, JSValue *pstream,
+                 JSValue *punknown);
     const char      *iface;
     const ByteReader *readers;
     int               nreaders;

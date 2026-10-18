@@ -1022,6 +1022,23 @@ JSValue response_new(JSContext *ctx, JSValueConst url_list, int status, const ch
     return obj;
 }
 
+JSValue response_new_unknown(JSContext *ctx, JSValueConst url_list, int status, const char *status_text,
+                             const HeaderList *headers, JSValueConst unknown, int cors)
+{
+    JSValue obj = response_new(ctx, url_list, status, status_text, headers, "", 0, cors);
+    ResponseData *d;
+
+    if (JS_IsException(obj))
+        return obj;
+    d = JS_GetOpaque(obj, g_response_class);
+    DCHECK(d != NULL, "response_new answered an object that is not a Response");
+    if (body_state_set_unknown(ctx, &d->body, unknown) < 0) {
+        JS_FreeValue(ctx, obj);
+        return JS_EXCEPTION;
+    }
+    return obj;
+}
+
 JSValue response_new_opaque(JSContext *ctx)
 {
     ResponseData *d;

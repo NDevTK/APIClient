@@ -426,9 +426,9 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
     pending_set_int(e, PEND_ADDRESS, (int)req->address);
     /* AN ADDRESS WITH NO BYTES IS NOT FETCHABLE, and nothing asks a host for it: its URL is the display shape of
        an unknown, this engine's annotation, never a URL. It is declined here as the trusted zone declines a
-       request it will not make, so flow_decline_fork gives it the same two arms: one parked on the request,
-       owed by input (a later session whose run has an example grounds the address and fires it), and one
-       taking §5.6's network error. The record keeps the address as its key and the reason as its account; the
+       request it will not make, so flow_decline_fork gives it two arms: one parked on the request, owed by
+       input (a later session whose run has an example grounds the address and fires it), and one taking §5.6's
+       network error (no success arm: flow_decline_success_arm). The record keeps the address as its key and the reason as its account; the
        join never lists a declined record. */
     if (req->address == FETCH_ADDRESS_UNKNOWN) {
         pending_set(e, PEND_DECLINED, JS_NewString(ctx, PENDING_DECLINED_UNADDRESSED));
@@ -4725,6 +4725,14 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                 JS_FreeValue(ctx, ul);
             }
 #endif
+            /* A reply no server sent (fetch_reply_unknown, flow_decline_fork's success arm) is an outcome nothing
+               observed, so from its delivery on this flow stands on a forced arm: what the page builds from it
+               is graded forced and kept out of the derived pool, as the same decline's failure arm is. Marked
+               here rather than at the fork because a sibling is born with no mark its parent lacks. */
+            if (fetch_reply_unobserved(ctx, pv)) {
+                flow_mark_forced_arm();
+                DCHECK(flow_path_forced(f), "a flow took a reply no server sent and its path is not forced");
+            }
             /* A reply whose bytes are JavaScript is a program: a fetch whose body is JavaScript is always fetched
                and executed (a lazy chunk reveals real endpoints), whether or not the page hands it to a
                `<script>`. engine_queue_fetched_script runs it. Here, not in reply_decode_learn, which runs on the
@@ -5489,19 +5497,76 @@ static int flow_answer_exhausted(const Flow *f) {
     return hit;
 }
 
+/* The success arm of a declined `fetch()`: the server, had it been asked, decides the status, headers and body, so
+ * where the domain permits the success path that path runs, on a reply whose body is unknown (fetch_reply_unknown).
+ * It is assembled from its own clone of the flow at the decline, beside the waiting arm, and its copy of record `i`
+ * is answered with that reply. Its path is marked forced when the reply is delivered (flow_deliver_one_reply),
+ * because a sibling is born with no mark its parent lacks. A `same-origin` request to another origin has no
+ * success to explore.
+ * Named residual. Not covered: an XMLHttpRequest's declined send, whose answer is a host request's
+ * (FLOW_PENDING_HOSTREQ) and has no reply record to be unknown, and a `fetch()` of an address with no bytes.
+ * Next diff builds: the same arm through engine_host_answer's record, and a reply record whose URL list is the
+ * unknown address. How its absence shows: an address built from `xhr.response` behind a declined send is reached
+ * on no flow while the same address behind a declined `fetch()` is. */
+static void flow_decline_success_arm(JSContext *ctx, Flow *f, int i, int in_program, int in_job) {
+    JSValue e = pending_entry(f->pending, i), uv, mv;
+    const char *u, *m;
+    JSValue reply, se;
+    JSValue *clone;
+    void *parked;
+    Flow *sib;
+
+    /* An address with no bytes (pending_park_request's own decline) names no URL for a reply to come from, so it
+       keeps the two arms it had. That is the residual above's second gap: its success path is not explored. */
+    if (pending_get_int(e, PEND_ADDRESS) == FETCH_ADDRESS_UNKNOWN) {
+        JS_FreeValue(ctx, e);
+        return;
+    }
+    uv = pending_get(e, PEND_URL);
+    mv = pending_get(e, PEND_MODE);
+    u = JS_ToCString(ctx, uv);
+    m = JS_ToCString(ctx, mv);
+    CHECK(u != NULL && m != NULL, "engine: OOM reading a declined fetch's address and mode");
+    reply = fetch_reply_unknown(ctx, u, m);
+    JS_FreeCString(ctx, u);
+    JS_FreeCString(ctx, m);
+    JS_FreeValue(ctx, uv);
+    JS_FreeValue(ctx, mv);
+    JS_FreeValue(ctx, e);
+    if (JS_IsUninitialized(reply))
+        return;
+    clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
+    parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
+    CHECK(!in_program || clone != NULL,
+          "engine: a flow parked on a declined fetch could not be cloned for the arm that explores its success");
+    CHECK(!in_job || parked != NULL,
+          "engine: a flow parked on a declined fetch inside a job could not have its continuation cloned");
+    sib = engine_sibling_assemble(ctx, f, clone,
+                                  decide_fork_same_path("(the trusted zone declined this request — the arm takes a "
+                                                        "reply no server sent)"),
+                                  concolic_pins_suspend(), flow_path_marks(f));
+    DCHECK(sib->parked == NULL, "a freshly assembled arm already holds parked continuations");
+    sib->parked = parked;
+    se = pending_unshare(sib->pending, i);
+    pending_set_int(se, PEND_DECLINE_TAKEN, 1);
+    pending_set(se, PEND_VALUE, reply);
+    pending_set_int(se, PEND_HAVE_VALUE, 1);
+    JS_FreeValue(ctx, se);
+}
+
 /* One arm per declined request: the fork a refusal owes. The trusted zone grades each refusal on one axis: would a
  * real browser making this request also get Fetch §5.6 Fetch methods' network error? Where it would (a blocked
  * scheme, a CORS failure, a CORB-blocked body) the reply arrives as that error. Where it would not (the firing
  * policy declining an act at an unwidened origin, the destructive deny list, a method the chokepoint cannot
- * issue) the request is declined and the outcome is unobserved, so both arms run:
+ * issue) the request is declined and the outcome is unobserved, so every arm runs:
  *   - the waiting arm, the sibling assembled below, keeps the unanswered record and stays parked at the line that
- *     asked, a parked search that fires the day the origin is widened. It holds no reply, status or example: a
- *     synthesized 200 would be an invented datum.
+ *     asked, a parked search that fires the day the origin is widened. It holds no reply, status or example.
+ *   - for a `fetch()`, the success arm (flow_decline_success_arm): a reply no server sent, graded forced.
  *   - the failure arm, this flow, takes §5.6's network error (JS_NULL) and runs the page's `catch`, where bundles
  *     keep fallback endpoints, retry hosts and degraded-mode configuration. Its path is marked forced in the
  *     same operation as the fork (flow_mark_forced_arm), so nothing it builds is ever graded derived; the
  *     waiting arm inherits the path as it stood before.
- * It runs where flow_answer_fork does, for the same reasons, one arm per step. Every kind takes the same JS_NULL,
+ * It runs where flow_answer_fork does, for the same reasons, one decline per step. Every kind takes the same JS_NULL,
  * and flow_deliver_one_reply turns it into each kind's own failure (a rejected `fetch()`, §4.12.1.1's null result,
  * HostLoadImportedModule's TypeError, a `<link>`'s error branch), so this holds no per-kind knowledge of the
  * outcome beyond the synchronous kind's completion below. */
@@ -5596,6 +5661,8 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
                "— it is the arm that goes on waiting for the real one, so an answered copy would resume it "
                "over a reply nobody sent and an unrefused copy would be re-listed to the host and re-declined");
         JS_FreeValue(ctx, se);
+        if (kind == FLOW_PENDING_RESOLVE)
+            flow_decline_success_arm(ctx, f, i, in_program, in_job);
         /* This flow's copy, answered with §5.6's network error (JS_NULL, core/fetch/fetch.h). The delivery owns
            what each kind does with it; this states the outcome. */
         pe = pending_unshare(f->pending, i);

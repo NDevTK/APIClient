@@ -852,8 +852,9 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
  * tool makes, where a network error would be an observation that does not exist and would spend the page's
  * failure path before the person could widen the origin. The zone grades its own refusal
  * (extension/lib/safe-fetch.js).
- *   The refusal makes the flow fork: one arm keeps waiting with no invented reply, the other takes the network
- * error with its path marked forced. flow_decline_fork builds the pair at a scheduler step, because an arm
+ *   The refusal makes the flow fork: one arm keeps waiting with no invented reply, one takes the network error
+ * with its path marked forced, and for a `fetch()` one takes a reply no server sent, with an unknown body, also
+ * forced (core/fetch/fetch.h's fetch_reply_unknown). flow_decline_fork builds the arms at a scheduler step, because an arm
  * minted between steps would clone whichever flow ran last; this only records the fact. `reason` is the zone's
  * own words and is copied. */
 int engine_decline(JSContext *ctx, const char *method, const char *mode, const char *referrer_policy,

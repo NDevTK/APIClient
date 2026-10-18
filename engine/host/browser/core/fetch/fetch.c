@@ -16,6 +16,7 @@
  * cannot reach, so the promise is PENDING and the URL goes on the flow's own register: the trusted host fetches
  * it, qjs_provide fills the entry, and the flow's continuation resumes with the body. The flow cannot finish
  * while a reply is owed, which is what keeps reply-gated code reachable. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -40,6 +41,8 @@
 #include "core/fetch/body.h"
 #include "core/byte_reader.h"   /* Infra's parse JSON from bytes, shared with `Response.json()` */
 #include "core/fetch/response.h"
+#include "core/fetch/reply_source.h"   /* the one spelling of a reply's source identity */
+#include "core/url/origin.h"           /* §4.1's response tainting against this agent's origin */
 #include "core/streams/readable_stream.h"
 #include "core/fetch/request.h"
 #include "core/dom/abort.h"    /* §5.6 step 4's already-aborted signal, and RequestInit's one interface brand */
@@ -799,9 +802,17 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
                    "the reply delivery read a NULL status message off a record that is not a network error — "
                    "fetch_reply_status_text answers NULL for the JSON `null` alone, and this arm already "
                    "tested for that, so the two disagree about which reply has no response at all");
-            s->value = response_new(ctx, ul_v, status, stx,
-                                    hl.n ? &hl : NULL, (const char *)body, body_len,
-                                    fetch_reply_type(ctx, body_v) == FETCH_REPLY_CORS);
+            {
+                /* A reply no server sent carries its body as an unknown (fetch_reply_unknown). */
+                JSValue ub = fetch_reply_unknown_body(ctx, body_v);
+                int cors = fetch_reply_type(ctx, body_v) == FETCH_REPLY_CORS;
+
+                s->value = concolic_is(ub)
+                               ? response_new_unknown(ctx, ul_v, status, stx, hl.n ? &hl : NULL, ub, cors)
+                               : response_new(ctx, ul_v, status, stx, hl.n ? &hl : NULL, (const char *)body,
+                                              body_len, cors);
+                JS_FreeValue(ctx, ub);
+            }
             header_list_free(&hl);
             free(stx);
             JS_FreeValue(ctx, ul_v);
@@ -1204,6 +1215,98 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
     CHECK(JS_DefinePropertyValueStr(ctx, o, "type", v, JS_PROP_C_W_E) >= 0,
           "fetch: a reply record refused its response type");
     return o;
+}
+
+JSValue fetch_reply_unknown(JSContext *ctx, const char *url, const char *mode)
+{
+    const char *list[1] = { url };
+    FetchMode m = fetch_mode_of_token(mode);
+    UrlRecord u;
+    const char *type;
+    JSValue o;
+    bool same;
+
+    url_record_init(&u);
+    /* The address a park carries went through the URL parser, so it parses again. */
+    CHECK(fetch_parse_url(ctx, &u, url, strlen(url)), "fetch: a declined request's address does not parse");
+    same = origin_same_as_url(origin_agent(), &u);
+    url_record_free(&u);
+    /* §4.1 Main fetch's response tainting: same origin is basic, `cors` is cors, `no-cors` is opaque. A
+       `same-origin` request to another origin is a network error, which the failure arm already is. */
+    type = same ? "basic" : m == FETCH_MODE_CORS ? "cors" : m == FETCH_MODE_NO_CORS ? "opaque" : NULL;
+    if (!type)
+        return JS_UNINITIALIZED;
+    if (!strcmp(type, "opaque")) {
+        o = fetch_reply_new(ctx, 200, "", NULL, "", 0, list, 1, "", type);
+    } else {
+        char *src = reply_source_name(url, strlen(url)), *shape;
+        size_t n;
+        JSValue body;
+
+        CHECK(src != NULL, "fetch: a declined request's address has no reply source name");
+        n = strlen(src) + 3;
+        shape = malloc(n);
+        CHECK(shape != NULL, "fetch: OOM spelling an unknown reply body's provenance");
+        snprintf(shape, n, "{%s}", src);   /* a source's shape is its provenance in braces (concolic.h) */
+        /* The world's: a server states these bytes, and no example: no server was asked. */
+        body = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
+        free(shape);
+        free(src);
+        if (concolic_is(body)) {
+            o = fetch_reply_new(ctx, 200, "", NULL, "", 0, list, 1, "", type);
+            /* Whatever bytes a server sends, text() makes a String of them. */
+            concolic_mark_json_value(body);
+            CHECK(JS_DefinePropertyValueStr(ctx, o, "unknownBody", body, JS_PROP_C_W_E) >= 0,
+                  "fetch: a reply record refused its unknown body");
+        } else {
+            /* A candidate re-fire substituted its payload at this source: those are the body's bytes. */
+            size_t bl = 0;
+            const char *bs;
+
+            DCHECK(JS_IsString(body), "an unknown reply body's source answered neither an unknown nor bytes");
+            bs = JS_ToCStringLen(ctx, &bl, body);
+            CHECK(bs != NULL, "fetch: OOM reading a candidate's reply body");
+            o = fetch_reply_new(ctx, 200, "", NULL, bs, bl, list, 1, "", type);
+            JS_FreeCString(ctx, bs);
+            JS_FreeValue(ctx, body);
+        }
+    }
+    CHECK(JS_DefinePropertyValueStr(ctx, o, "unobserved", JS_TRUE, JS_PROP_C_W_E) >= 0,
+          "fetch: a reply record refused its unobserved mark");
+    return o;
+}
+
+/* One of fetch_reply_unknown's two fields, read as the record's OWN slot: every other record lacks both, and a
+   [[Get]] would then walk the page's Object.prototype and could run its getter. Owned, or JS_UNDEFINED. */
+static JSValue fetch_reply_own_field(JSContext *ctx, JSValueConst reply, const char *name)
+{
+    JSAtom a = JS_NewAtom(ctx, name);
+    JSValue v = JS_UNDEFINED;
+    int r;
+
+    CHECK(a != JS_ATOM_NULL, "fetch: OOM naming a reply record's field");
+    r = JS_GetOwnSlot(ctx, &v, reply, a);
+    JS_FreeAtom(ctx, a);
+    CHECK(r >= 0, "fetch: reading a reply record's own field threw");
+    return r ? v : JS_UNDEFINED;
+}
+
+bool fetch_reply_unobserved(JSContext *ctx, JSValueConst reply)
+{
+    JSValue v;
+    bool r;
+
+    if (!JS_IsObject(reply)) return false;   /* a network error is nobody's reply */
+    v = fetch_reply_own_field(ctx, reply, "unobserved");
+    r = JS_IsBool(v) && JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+    return r;
+}
+
+JSValue fetch_reply_unknown_body(JSContext *ctx, JSValueConst reply)
+{
+    DCHECK(JS_IsObject(reply), "an unknown body was asked of something that is not a reply record");
+    return fetch_reply_own_field(ctx, reply, "unknownBody");
 }
 
 FetchReplyType fetch_reply_type(JSContext *ctx, JSValueConst reply)

@@ -24,6 +24,7 @@
 #include "core/encoding/text_stream.h"
 #include "core/fetch/body.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/file/blob.h"
 #include "core/html/form_data.h"
 #include "core/url/url.h"
@@ -855,12 +856,14 @@ static bool body_stream_errored(const BodyState *b)
 }
 
 static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, size_t *plen,
-                     JSValue *pstream)
+                     JSValue *pstream, JSValue *punknown)
 {
     const BodyIface *f = body_iface_of(this_val);
     BodyState *b;
+    int unknown;
 
     *pstream = JS_UNDEFINED;
+    *punknown = JS_UNDEFINED;
     if (!f) {
         JS_ThrowTypeError(ctx, "not a Request or a Response");
         return -1;
@@ -870,39 +873,13 @@ static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, 
         const char *tb = NULL;
         size_t tlen = 0;
 
-        if (body_state_content(b, &tb, &tlen) == BODY_SHAPE) {
-            /* NAMED RESIDUAL — §5.3's readers over an UNKNOWN body.
-               WHAT IS NOT COVERED: `text()`, `json()`, `arrayBuffer()`, `bytes()`, `blob()` and `formData()`
-               on a body whose content is unknown external input. Handing them the DISPLAY SHAPE would resolve
-               the page's own promise with a string it never wrote, which is worse than this abort: it is a
-               fabricated value that then propagates.
-               WHAT THE NEXT DIFF BUILDS: a VALUE answer beside `*pstream` on core/byte_reader.h's `take`.
-               That slot is already the precedent — its own header calls it the other answer `take` can give,
-               for a body that IS a stream — and beside it goes a per-reader decision, because only `text()`
-               has a free one: §5.2 encodes a scalar value string to UTF-8 and §5.3 decodes it back, so the
-               round trip is the identity and `text()` resolves WITH the unknown, opaque-infectious, so a
-               page's own `JSON.parse(await r.text())` forks where the spec says it does. `json()` must run
-               the REAL parser over the unknown, which forks on its throw arm (CLAUDE.md §a-JS-engine-
-               encoding-builtin-is-modeled-faithfully), and the three container readers owe a container over
-               bytes of unknown LENGTH, which is a separate question none of them can answer today.
-               HOW ITS ABSENCE SHOWS: this abort, on a page that reads back a Request or Response it built out
-               of unknown external input — `new Response(cfg.payload).text()`. It does NOT show on a reply
-               read from the network, whose bytes are real and whose provenance byte_reader_content already
-               carries. */
-            DFAIL("Fetch §5.3 Body mixin's consume body was asked for the bytes of a body that is UNKNOWN "
-                  "EXTERNAL INPUT — §5.2's string arm held the VALUE because its UTF-8 encoding is not a byte "
-                  "sequence this engine can spell. Build a value answer beside `*pstream` on "
-                  "core/byte_reader.h's `take`, with text() resolving WITH the unknown (the encode/decode "
-                  "round trip is the identity on a scalar value string) and json() running the real parser "
-                  "over it");
-            JS_ThrowTypeError(ctx, "this engine cannot yet read back a body whose bytes are unknown external "
-                                   "input");
-            return -1;
-        }
-        /* THE EMPTY STRING RATHER THAN NULL for the two arms that have no bytes, because the readers below
-           run §6's UTF-8 decode over whatever this hands them and a NULL is not a zero-length byte sequence. */
-        *pbody = tb ? tb : "";
-        *plen  = tlen;
+        /* An unknown body is handed over as its value (core/byte_reader.h), never as its display shape, which
+           would resolve the page's promise with characters it never wrote. */
+        unknown = body_state_content(b, &tb, &tlen) == BODY_SHAPE;
+        /* THE EMPTY STRING RATHER THAN NULL for the arms that have no bytes, because the readers below run §6's
+           UTF-8 decode over whatever this hands them and a NULL is not a zero-length byte sequence. */
+        *pbody = unknown || !tb ? "" : tb;
+        *plen  = unknown ? 0 : tlen;
     }
     /* A NULL BODY IS NEVER DISTURBED. §5.3's consume returns an empty byte sequence without touching the
        stream when the body is null, so `new Response()` reads as "" as many times as it is asked and its
@@ -922,6 +899,8 @@ static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, 
        bytes arriving. */
     if (!JS_IsUndefined(b->stream) && readable_stream_is(b->stream) && (!b->bytes || body_stream_errored(b)))
         *pstream = JS_DupValue(ctx, b->stream);
+    else if (unknown)
+        *punknown = JS_DupValue(ctx, b->unknown);
     return 0;
 }
 
@@ -982,13 +961,39 @@ static JSValue body_read_blob(JSContext *ctx, JSValueConst recv, const char *byt
     return r;
 }
 
+/* %JSON.parse%, captured per realm before its scripts run: json()'s parse JSON from bytes is Infra §6's call of
+   the original function, which a page replacing `JSON.parse` does not change. */
+static JSClassID g_json_parse_slot = JS_INVALID_CLASS_ID;
+
+/* OWNED: the caller frees. */
+static JSValue body_json_parse(JSContext *ctx)
+{
+    DCHECK(g_json_parse_slot != JS_INVALID_CLASS_ID,
+           "json() asked for %JSON.parse% before body_declare declared its slot");
+    return realm_value_get(ctx, g_json_parse_slot);
+}
+
+static void body_install_realm(JSContext *ctx)
+{
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue json = JS_GetPropertyStr(ctx, global, "JSON");
+    JSValue parse = JS_GetPropertyStr(ctx, json, "parse");
+
+    CHECK(JS_IsFunction(ctx, parse), "%JSON.parse% is not a function — json() has no parser to run");
+    realm_value_set(ctx, g_json_parse_slot, parse);
+    JS_FreeValue(ctx, json);
+    JS_FreeValue(ctx, global);
+}
+
+/* Over an unknown body (core/byte_reader.h): text() resolves with the unknown, json() parses it, and the
+   containers owe a byte sequence of unknown length, which none of them can answer yet. */
 static const ByteReader BODY_READERS[] = {
-    { "text",        byte_reader_text },
-    { "json",        byte_reader_json },
-    { "arrayBuffer", byte_reader_array_buffer },
-    { "bytes",       byte_reader_bytes },
-    { "blob",        body_read_blob },
-    { "formData",    body_read_form_data },
+    { "text",        byte_reader_text,         BYTE_READER_UNKNOWN_SELF, NULL },
+    { "json",        byte_reader_json,         BYTE_READER_UNKNOWN_CALL, body_json_parse },
+    { "arrayBuffer", byte_reader_array_buffer, BYTE_READER_UNKNOWN_NONE, NULL },
+    { "bytes",       byte_reader_bytes,        BYTE_READER_UNKNOWN_NONE, NULL },
+    { "blob",        body_read_blob,           BYTE_READER_UNKNOWN_NONE, NULL },
+    { "formData",    body_read_form_data,      BYTE_READER_UNKNOWN_NONE, NULL },
 };
 
 /* WHERE A BODY'S BYTES CAME FROM — core/byte_reader.h's question, and the MIXIN's answer to it is to ask the
@@ -1244,6 +1249,11 @@ int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCon
         /* §5.3's `textStream()` is declared on the same include and for the same reason: one algorithm, whose
            receiver decides which interface it is running for. */
         g_body_text_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_body_text_decl, 0);
+        g_json_parse_slot = realm_value_declare(ctx, "%JSON.parse% (Body json())");
+        realm_declare_intrinsic(body_install_realm);
+        agent_state_realm_slot("request", &g_json_parse_slot,
+                               "Fetch §5.3 Body mixin's per-realm %JSON.parse%, the parser json() runs over an "
+                               "unknown body");
         /* THE MIXIN'S OWN AGENT STATE, DECLARED ON THE FIRST INCLUDE — core/agent_state.h. The ROW IS
            `request` AND NOT THIS FILE'S NAME, because a row is a DECLARE and a RELEASE core/platform.c
            itself calls and this file is on neither column: it is reached only through the two interfaces

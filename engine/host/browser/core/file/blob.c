@@ -438,10 +438,12 @@ JSValue blob_url_lookup(JSContext *ctx, const char *url, size_t len)
  * NO LATCH. §3.3 reads the Blob's byte sequence, which does not change and is not consumed — `await b.text()`
  * twice gives the text twice, where the same two calls on a Response are a TypeError. That one function is the
  * whole of what File API declares differently from Fetch. */
-static int blob_take(JSContext *ctx, JSValueConst v, const char **bytes, size_t *len, JSValue *pstream)
+static int blob_take(JSContext *ctx, JSValueConst v, const char **bytes, size_t *len, JSValue *pstream,
+                     JSValue *punknown)
 {
-    /* A Blob's bytes are always here: §3 makes it an immutable byte sequence, never a stream. */
+    /* A Blob's bytes are always here: §3 makes it an immutable byte sequence, never a stream or an unknown. */
     *pstream = JS_UNDEFINED;
+    *punknown = JS_UNDEFINED;
     BlobObj *b = JS_GetOpaque(v, g_blob_class);
     if (!b) {
         JS_ThrowTypeError(ctx, "not a Blob");
@@ -590,10 +592,11 @@ static char *blob_reader_source(JSContext *ctx, JSValueConst recv, bool *attacke
    shared implementation is what asks for it. The two below answer with the real bytes: an ArrayBuffer is a
    buffer of bytes and not a value the solver's domain is over, and handing back a concolic in its place would
    break `new Uint8Array(await f.arrayBuffer())`, which is the ordinary way a page reads one. */
+/* A Blob's take never answers an unknown, so no reader has an answer for one. */
 static const ByteReader BLOB_READERS[] = {
-    { "text",        byte_reader_text },
-    { "arrayBuffer", byte_reader_array_buffer },
-    { "bytes",       byte_reader_bytes },
+    { "text",        byte_reader_text,         BYTE_READER_UNKNOWN_NONE, NULL },
+    { "arrayBuffer", byte_reader_array_buffer, BYTE_READER_UNKNOWN_NONE, NULL },
+    { "bytes",       byte_reader_bytes,        BYTE_READER_UNKNOWN_NONE, NULL },
 };
 
 static const ByteReaderIface BLOB_READER_IFACE = {

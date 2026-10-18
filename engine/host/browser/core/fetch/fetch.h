@@ -477,6 +477,22 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
                         const char *body, size_t body_len, const char *const *url_list, int url_list_n,
                         const char *computed_type, const char *type);
 
+/* A REPLY NO SERVER SENT: what a request the trusted zone declined is answered with on the arm that explores its
+   success path (solver/engine.c's flow_decline_fork). The server decides the status, headers and body, so the
+   body is unknown external input: a concolic standing for its text, sourced at `url`'s reply name
+   (core/fetch/reply_source.h), with no example. The type is §4.1 Main fetch's response tainting under `mode`
+   against this agent's origin; an opaque reply carries no body to be unknown, and JS_UNINITIALIZED answers a
+   `same-origin` request to another origin, whose only completion is the network error. The record states
+   `unobserved`, which the delivery reads to mark its flow forced.
+   Named residual. Not covered: the status is 200 and the header list is absent, where the server's are an
+   unknown ok status and unknown headers. Next diff builds: an unknown status bounded to 200-299 on the record,
+   which §5.5's `status` and `ok` getters answer from. How its absence shows: a branch over `r.status === 201`
+   on this arm takes one side without forking. */
+JSValue fetch_reply_unknown(JSContext *ctx, const char *url, const char *mode);
+/* Whether a record is fetch_reply_unknown's, and its unknown body (owned, or JS_UNDEFINED for one of bytes). */
+bool    fetch_reply_unobserved(JSContext *ctx, JSValueConst reply);
+JSValue fetch_reply_unknown_body(JSContext *ctx, JSValueConst reply);
+
 /* WHICH FILTERED RESPONSE THE REPLY IS — Fetch §2.2.6 "Responses"' basic, CORS and opaque filtered responses,
    chosen by the host that performed the fetch from the request's mode and origin (Fetch §4.1 "Main fetch"'s
    response tainting). The record's `type` field states it; a C host states `basic` for what it serves. The

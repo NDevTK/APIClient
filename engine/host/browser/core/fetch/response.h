@@ -29,6 +29,10 @@ JSValue response_url_list(JSContext *ctx, const char *const *urls, int n);
    has already narrowed to what that filter exposes; otherwise the type is "basic". */
 JSValue response_new(JSContext *ctx, JSValueConst url_list, int status, const char *status_text,
                      const HeaderList *headers, const char *body, size_t body_len, int cors);
+/* The same, over a body whose content is unknown external input (`unknown`, a concolic standing for its text;
+   core/fetch/body.h's `unknown`): fetch_reply_unknown's record. */
+JSValue response_new_unknown(JSContext *ctx, JSValueConst url_list, int status, const char *status_text,
+                             const HeaderList *headers, JSValueConst unknown, int cors);
 /* Fetch §2.2.6 "Responses"' OPAQUE FILTERED RESPONSE: "a filtered response whose type is "opaque", URL list
    is « », status is 0, status message is the empty byte sequence, header list is « », body is null, and body
    info is a new response body info." It is what a `no-cors` `fetch()` of another origin resolves with. */

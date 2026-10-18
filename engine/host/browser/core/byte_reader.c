@@ -78,6 +78,9 @@ static const ByteReaderIface *iface_of(JSValueConst v)
       "Fetch §5.3 Body mixin's consume body step 6 → fully read a body step 4 (get a reader for the stream)") \
     X(BR_FIRST_READ, \
       "Fetch §5.3 Body mixin's consume body step 6 → fully read a body step 5 (read all bytes from the reader)") \
+    X(BR_CONVERT, \
+      "Fetch §5.3 Body mixin's consume body step 4 (successSteps: convertBytesToJSValue over a body of unknown " \
+      "external input, the reader's own call; a throw is step 4's errorSteps)") \
     X(BR_SETTLE, \
       "Fetch §5.3 Body mixin's consume body steps 3-4 (resolve promise with the converted value, or reject " \
       "error) — 27.5.1.3 step 2.f's `then` read reaches the page's own prototype chain")
@@ -124,16 +127,30 @@ static JSValue js_byte_reader_fini(JSContext *ctx, void *st, bool take_result)
    with it, which is the request. Nothing in the take runs the page's code — the bytes are the host's and the
    latch, where there is one, is the declaring component's — which is why every reader is one machine with an
    index and not one machine each. */
+/* The NATIVE capability: %Promise% with no subclass in sight, so building it constructs nothing of the page's.
+   Only the settle is the page's, and that is the request. 0, or -1 with a throw live. */
+static int byte_reader_capability(JSContext *ctx, JSByteReaderState *s, int reject)
+{
+    JSValue funcs[2];
+
+    s->promise = JS_NewPromiseCapability(ctx, funcs);
+    if (JS_IsException(s->promise)) return -1;
+    s->func = funcs[reject];
+    JS_FreeValue(ctx, funcs[reject ^ 1]);
+    return 0;
+}
+
 static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSByteReaderState *s = st;
-    JSValue settled, funcs[2];
+    JSValue settled;
     int reject = 0, r;
 
     if (s->hdr.stage == BR_TAKE) {
         const char *bytes = NULL;
         size_t len = 0;
         const ByteReaderIface *f = iface_of(s->hdr.this_val);
+        JSValue unknown;
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
@@ -146,24 +163,62 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         }
         DCHECK(s->hdr.arg >= 0 && s->hdr.arg < f->nreaders,
                "a byte reader ran with an index its interface does not declare");
-        if (f->take(ctx, s->hdr.this_val, &bytes, &len, &s->stream) < 0) {
+        if (f->take(ctx, s->hdr.this_val, &bytes, &len, &s->stream, &unknown) < 0) {
             s->value = JS_GetException(ctx);
             reject = 1;
         } else if (!JS_IsUndefined(s->stream)) {
+            DCHECK(JS_IsUndefined(unknown), "a body's take answered both a stream and an unknown");
             STEP_GOTO(s->hdr.stage, BR_ACQUIRE, &s->cphase, NULL);
+        } else if (!JS_IsUndefined(unknown)) {
+            const ByteReader *rd = &f->readers[s->hdr.arg];
+
+            DCHECK(concolic_is(unknown), "a body's take answered an unknown that is not one");
+            s->value = unknown;
+            if (rd->unknown == BYTE_READER_UNKNOWN_CALL) {
+                DCHECK(rd->callee != NULL, "a reader answers an unknown body by a call and names no function");
+                STEP_GOTO(s->hdr.stage, BR_CONVERT, &s->cphase, NULL);
+            } else if (rd->unknown != BYTE_READER_UNKNOWN_SELF) {
+                DFAILF("%s.%s() was asked to read a body of unknown external input — it owes a container over a "
+                       "byte sequence of unknown length. Build that container (an ArrayBuffer whose length and "
+                       "bytes are unknowns) and give the reader its ByteReaderUnknown answer",
+                       f->iface, rd->name);
+                JS_FreeValue(ctx, s->value);
+                JS_ThrowTypeError(ctx, "this engine cannot yet read a body of unknown bytes as a container");
+                s->value = JS_GetException(ctx);
+                reject = 1;
+            }
         } else {
             s->value = f->readers[s->hdr.arg].make(ctx, s->hdr.this_val, bytes ? bytes : "", bytes ? len : 0);
             if (JS_IsException(s->value)) { s->value = JS_GetException(ctx); reject = 1; }
         }
         if (s->hdr.stage == BR_TAKE) {
-            /* The NATIVE capability: %Promise% with no subclass in sight, so building it constructs nothing of
-               the page's. Only the settle below is the page's, and that is the request. */
-            s->promise = JS_NewPromiseCapability(ctx, funcs);
-            if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
-            s->func = funcs[reject];
-            JS_FreeValue(ctx, funcs[reject ^ 1]);
+            if (byte_reader_capability(ctx, s, reject) < 0) return JS_STEP_ABRUPT;
             STEP_GOTO(s->hdr.stage, BR_SETTLE, &s->cphase, NULL);
         }
+    }
+
+    if (s->hdr.stage == BR_CONVERT) {
+        /* The reader's own call over the unknown, which is the page's code only in that it can fork: JSON.parse
+           over unknown text asks its two completions through the branch seam. */
+        const ByteReaderIface *f = iface_of(s->hdr.this_val);
+        JSValue fn, out;
+
+        DCHECK(f != NULL, "a byte reader lost its interface between two of its own stages");
+        fn = f->readers[s->hdr.arg].callee(ctx);
+        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), fn, JS_UNDEFINED, 1, (JSValueConst *)&s->value,
+                          cb_result, &out, out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
+        if (r > 0) return r;
+        cb_result = JS_UNDEFINED;
+        JS_FreeValue(ctx, s->value);
+        if (JS_IsException(out)) {
+            s->value = JS_GetException(ctx);
+            reject = 1;
+        } else {
+            s->value = out;
+        }
+        if (byte_reader_capability(ctx, s, reject) < 0) return JS_STEP_ABRUPT;
+        STEP_GOTO(s->hdr.stage, BR_SETTLE, &s->cphase, NULL);
     }
 
     if (s->hdr.stage == BR_ACQUIRE) {
