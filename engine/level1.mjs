@@ -764,27 +764,45 @@ async function mintDrive(minted, slices) {
   const fmt = m[1].replace(/\\"/g, '"');
   const argsOf = (vals) => { let i = 0; return fmt.replace(/%(?:d|\.17g)/g, () => String(vals[i++])); };
   const reply = (vals) => async () => ({ account: argsOf(vals), workingSetBytes: 65536 });
-  const e = { state: 'hot', msg: { sourceUrl: 'https://a.test/' },
+  const e = { state: 'hot', msg: { sourceUrl: 'https://a.test/' }, lines: [],
               r: { renderer: { getLevel1Account: reply([1, 3, 2]) } } };
-  let died = null;
+  let died = null, answers = [];
   try {
-    await B.engineRecordFacts(e);
+    answers.push(await B.engineRecordFacts(e));
     e.r.renderer.getLevel1Account = reply([1, 5, 4]);
-    await B.engineRecordFacts(e);
+    answers.push(await B.engineRecordFacts(e));
   } catch (x) { died = x; }
-  must(died === null && e.level1.runnable === true && e.level1.paid === 5 && e.level1.pulls === 4 &&
-       e.level1.acct.value === 5 && e.level1.acct.pulls === 4,
+  must(died === null && answers.every((x) => x === null) && !e._crashed && e.level1.runnable === true &&
+       e.level1.paid === 5 && e.level1.pulls === 4 && e.level1.acct.value === 5 && e.level1.acct.pulls === 4,
        'engineRecordFacts takes the account main.c composes and credits its counters\' differences to the ranked ' +
        'account',
-       died ? String(died.message || died) : { format: fmt, level1: e.level1 });
-  /* The control: the ranked account's own shape is not what the engine states, and is refused. */
-  const ranked = '{"runnable":1,"value":3,"pulls":2,"at":1}';
-  const ctrl = { state: 'hot', msg: { sourceUrl: 'https://a.test/' },
-                 r: { renderer: { getLevel1Account: async () => ({ account: ranked, workingSetBytes: 65536 }) } } };
-  let refused = false;
-  try { await B.engineRecordFacts(ctrl); } catch (x) { refused = !!(x && x.apiclientFatal); }
-  must(refused, 'an account in the ranked shape, with no `paid`, is refused at the engine edge');
-  console.log('[level1]   engine account   format ' + fmt);
+       died ? String(died.message || died) : { format: fmt, answers, level1: e.level1 });
+  /* The controls: replies main.c never composes, each refused as the instance's answer. The instance keeps the
+     facts of its last accepted reply, is marked crashed, and the run its lines compose reads crashed with a
+     `result-refused` row naming the field. The ranked account's own shape is the first. */
+  const invented = [
+    ['the ranked shape, with no `paid`', '{"runnable":1,"value":3,"pulls":2,"at":1}', 65536, '`paid`'],
+    ['`runnable` outside 0 and 1', argsOf([2, 5, 4]), 65536, '`runnable`'],
+    ['counters below the last reading', argsOf([1, 4, 4]), 65536, 'fell below'],
+    ['an account that is not JSON', '{"runnable":1,', 65536, 'is not an object'],
+    ['a working set off the page grain', argsOf([1, 5, 4]), 65537, 'WASM pages'],
+  ];
+  for (const [label, account, workingSetBytes, names] of invented) {
+    const ctrl = { state: 'hot', msg: { sourceUrl: 'https://a.test/' }, lines: [],
+                   level1: { runnable: true, paid: 5, pulls: 4, acct: { value: 5, pulls: 4, at: 1 } },
+                   r: { renderer: { getLevel1Account: async () => ({ account, workingSetBytes }) } } };
+    const kept = JSON.stringify(ctrl.level1);
+    let why = null, threw = null;
+    try { why = await B.engineRecordFacts(ctrl); } catch (x) { threw = x; }
+    const run = threw ? null : ZONE.linesToAnalysis(ctrl.lines, ctrl.msg, 'crashed', null);
+    const rows = run ? run.resolverErrors.filter((x) => x.context === 'result-refused') : [];
+    must(threw === null && typeof why === 'string' && why.includes(names) && ctrl._crashed === true &&
+         JSON.stringify(ctrl.level1) === kept && run._run === 'crashed' && rows.length === 1 &&
+         rows[0].message === why,
+         'a Level-1 reply with ' + label + ' is refused as the instance\'s answer and its run reads crashed',
+         threw ? String(threw.message || threw) : { why, crashed: ctrl._crashed, run: run && run._run, rows });
+  }
+  console.log('[level1]   engine account   format ' + fmt + '; ' + invented.length + ' invented replies driven');
 }
 
 console.log('[level1] ── verdict ──');

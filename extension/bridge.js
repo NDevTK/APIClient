@@ -481,7 +481,11 @@ function linesToAnalysis(lines, msg, outcome, eng) {
          text cannot be mistaken for it. Non-JSON `@E` lines are other diagnostics, recorded above. */
       try {
         const o = JSON.parse(ln.slice(3));
-        if (o && o.phase === "engine-crash" && typeof o.err === "string") crashErr = o.err;
+        if (o && o.phase === "engine-crash" && typeof o.err === "string") {
+          crashErr = o.err;
+          /* engineRefuse's line: an instance answer this zone refused, recorded as the document's refusal is. */
+          if (o.stage === "result-refused") extraErrors.push({ context: "result-refused", message: o.err });
+        }
       } catch (_) { /* not the crash line; it is already recorded as an engine error above */ }
     } else if (ln.startsWith("@WHY ")) {
       /* An engine diagnostic for a zero-result or resource path, surfaced so no flow fails silently. Two
@@ -607,7 +611,7 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            it is a different observer at a different moment, so no quotient against `heap` is composed. A wasm
            Memory never shrinks, so the latest value is the high-water mark and a share of the per-module ceiling
            is sound; `_residentBytes` sums it across engines against a device RAM floor, a different question.
-           engineRecordFacts asserts the whole-wasm-page shape where the value enters this zone. */
+           level1AccountRefusal refuses any other shape where the value enters this zone. */
         workingSetBytes: eng.residentBytes,
         endpoints: result.fetchCallSites.length, sinks: result.securitySinks.length,
         /* What composed each address (`door`) and whether the page's own code had run when it did
@@ -3039,9 +3043,15 @@ function engineBootFailed(eng, e) {
          "place the engine's own @WHY survives a rejected ABI call, and a shape this cannot scan is that root " +
          "line being discarded at the one site that holds it");
   const root = _rl === undefined ? "" : rootWhyLine(_rl);
-  const err = root ? (m + " | ROOT: " + root) : m;
-  crashBanner("create", err);
-  for (const w of eng._resolvers) w.resolve(crashRecord("create", err, w.msg, eng));
+  /* A boot engineRoot failed because this zone refused the instance's first reply: engineRefuse has bannered
+     it, and each record carries the refusal under its own stage. */
+  const refused = !!(e && e.zoneRefused);
+  DCHECK(refused === !!eng._crashed,
+         "a boot failed with refusal " + refused + " on an instance whose crashed mark is " + !!eng._crashed +
+         " — only engineRefuse marks an instance before it becomes hot, and engineRoot throws a refusal for it");
+  const err = refused ? m : root ? (m + " | ROOT: " + root) : m;
+  if (!refused) crashBanner("create", err);
+  for (const w of eng._resolvers) w.resolve(crashRecord(refused ? "result-refused" : "create", err, w.msg, eng));
   eng._resolvers.length = 0;
   _reserveStats.failed++;
 }
@@ -3709,7 +3719,9 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      a top-flow weight now exists, and the facts are written before the state that makes them readable, so the
      ranking and RAM floor never see a hot engine that has not reported. Its site is asked first. */
   await level1AskSites([eng.msg.sourceUrl]);
-  await engineRecordFacts(eng);
+  /* A refused first reply leaves nothing to rank, so the boot fails with the refusal as its cause. */
+  const refused = await engineRecordFacts(eng);
+  if (refused !== null) throw Object.assign(new Error(refused), { zoneRefused: true });
   eng.state = "hot";
 }
 /* A second document of an agent cluster joins the instance already running it, with the same arguments
@@ -3921,23 +3933,16 @@ async function engineRequestPolicyVerdict(documentId, url) {
    this zone has with an instance (seed, step, service), because an instance behind the frame boundary answers
    only by message and there is no value to read on the line that ranks. hostSchedule ranks, advances the
    winner and re-ranks, so the engine that just worked has the freshest numbers and one that did none has
-   numbers that cannot have moved. qjs_level1_account DCHECKs `g_begun`, which qjs_begin sets. */
+   numbers that cannot have moved. qjs_level1_account DCHECKs `g_begun`, which qjs_begin sets.
+   The reply is the instance's statement and so input: one that fails level1AccountRefusal is refused through
+   engineRefuse and nothing is recorded, so the instance keeps the facts its last accepted reply stated. Answers
+   the refusal, or null for an accepted reply. */
 async function engineRecordFacts(eng) {
   const _rank = await eng.r.renderer.getLevel1Account();
-  const a = JSON.parse(_rank.account);
-  DCHECK(a && (a.runnable === 0 || a.runnable === 1),
-         "the engine's Level-1 account states no runnability (`" + _rank.account + "`) — it is the one fact of " +
-         "the frontier's order Level 1 reads, and without it a drained engine would be stepped for ever");
-  /* The engine states lifetime counters (`paid`, `pulls`), not a ranked account: level1Credit makes the account
-     from their differences below, so the account's own check applies to `acct`, not to this reply. */
-  DCHECK(Number.isFinite(a.paid) && a.paid >= 0 && Number.isFinite(a.pulls) && a.pulls >= 0,
-         "the engine's Level-1 account (`" + _rank.account + "`) states no finite non-negative `paid` and " +
-         "`pulls` — main.c's qjs_level1_account writes both on every answer");
-  /* Both are lifetime counters of the instance, so a reading below the last one is a second instance answering
-     under this record or a counter that was reset. */
-  DCHECK(eng.level1 === undefined || (a.paid >= eng.level1.paid && a.pulls >= eng.level1.pulls),
-         "an instance's Level-1 account fell (" + JSON.stringify(eng.level1) + " then " + _rank.account + ") — " +
-         "`paid` and `pulls` only climb within one instance");
+  let a;
+  try { a = JSON.parse(_rank.account); } catch (_) { a = undefined; }
+  const why = level1AccountRefusal(_rank.account, a, _rank.workingSetBytes, eng.level1);
+  if (why !== null) { engineRefuse(eng, why); return why; }
   /* The instance's lifetime counters are kept to difference the next reading against; what ranks is the
      discounted account they credit, at the product's size now. */
   const was = eng.level1 === undefined ? { paid: 0, pulls: 0, acct: LEVEL1_UNSERVED } : eng.level1;
@@ -3945,13 +3950,25 @@ async function engineRecordFacts(eng) {
                  acct: level1Credit(was.acct, a.paid - was.paid, a.pulls - was.pulls, level1ProductSize()) };
   /* The working set as the frame stated it on the call above: `workingSetBytes` is a declared reply field of
      every `content.mojom.Renderer` method, and only a call can grow the memory, so the reply just awaited is
-     the freshest value. WASM memory is a whole number of 64 KiB pages. */
-  const b = _rank.workingSetBytes;
-  DCHECK(Number.isInteger(b) && b > 0 && b % 65536 === 0,
-         "an instance reported a working set that is not a whole number of WASM pages (" + b + ") — HEAPU8 is " +
-         "the view over the entire linear memory, which is allocated and grown in 64 KiB pages, so a length " +
-         "outside that is a view onto something other than this engine's memory");
-  eng.residentBytes = b;
+     the freshest value. */
+  eng.residentBytes = _rank.workingSetBytes;
+  return null;
+}
+/* The Level-1 reply's contract, or the first field that breaks it. main.c's qjs_level1_account states
+   `runnable` (0 or 1) and the lifetime counters `paid` and `pulls`, which only climb within one instance (`last`
+   is the instance's previous accepted reading, or undefined); a ranked account's shape is not this reply. The
+   frame states its linear memory's length, which WASM allocates and grows in 64 KiB pages. */
+function level1AccountRefusal(raw, a, bytes, last) {
+  const f = "the instance's Level-1 account (" + JSON.stringify(raw) + ")";
+  const why = docObject(a, f);
+  if (why !== null) return why;
+  if (a.runnable !== 0 && a.runnable !== 1) return f + " states `runnable` neither 0 nor 1";
+  for (const k of ["paid", "pulls"])
+    if (!docIsCount(a[k]) || a[k] < 0) return f + " states no finite non-negative `" + k + "`";
+  if (last !== undefined && (a.paid < last.paid || a.pulls < last.pulls))
+    return f + " fell below the instance's last reading (paid " + last.paid + ", pulls " + last.pulls + ")";
+  return Number.isInteger(bytes) && bytes > 0 && bytes % 65536 === 0 ? null
+    : "the instance's working set (" + String(bytes) + ") is not a whole number of 64 KiB WASM pages";
 }
 /* The document's account: the stored row this instance resumed (engineRoot's `prior`) plus the instance's own
    lifetime counters, so a document's service survives a park. */
@@ -3968,7 +3985,7 @@ function engineKey(eng, tree) {
          "instance that has stated its account can be ranked");
   DCHECK(eng.level1 !== undefined,
          "an engine that has been rooted carries no Level-1 account — engineRecordFacts writes one before the " +
-         "record first becomes hot and at the end of every round since");
+         "record first becomes hot (a refused first reply fails the boot) and keeps it on every later round");
   return level1Key(tree, eng.msg.sourceUrl, engineAccount(eng), eng.level1.runnable, LEVEL1_DOOR.instance);
 }
 /* One delivery, both channels, so no call site carries the record and forgets the bytes. `rep` is what
@@ -5355,7 +5372,9 @@ function crashBanner(stage, m) {   // every abort path (create, step, teardown) 
      caught: the crash path must always announce itself. The counter is declared at load, so "no crash"
      differs from "bridge.js not loaded". */
   self._engineCrashOccurred++;
-  console.error("\n==== ENGINE CRASH (" + stage + ") — WASM ABORTED, run marked crashed, NOT swallowed ====\n" + m + "\n");
+  console.error("\n==== ENGINE CRASH (" + stage + ") — " +
+                (stage === "result-refused" ? "THIS ZONE REFUSED THE INSTANCE'S ANSWER" : "WASM ABORTED") +
+                ", run marked crashed, NOT swallowed ====\n" + m + "\n");
 }
 // The C-side CHECK/DCHECK prints its @WHY/@E root line (phase/cond/at/reason) to the frame's line buffer
 // immediately before abort(), so every crash path puts that root line in the banner and the crash record:
@@ -5376,6 +5395,16 @@ function engineCrash(eng, stage, e) {
   const err = root ? (m + " | ROOT: " + root) : m;   // the crash record carries its cause, not only the console banner
   eng.lines.push('@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(err) + "}");
   crashBanner(stage, err);
+}
+/* This zone refusing an instance's answer (a result document, a Level-1 reply): the instance is retired as
+   crashed with the refusal as its cause, and linesToAnalysis reads the `result-refused` stage into the run's
+   `result-refused` row. Its memory did not abort, so no root @WHY is appended; it is asked nothing more
+   (`step` and engineFinalize skip a crashed instance) and is finalized at its next step. */
+function engineRefuse(eng, why) {
+  DCHECK(typeof why === "string" && why !== "", "an instance was refused with no stated reason");
+  eng._crashed = true;
+  eng.lines.push('@E {"phase":"engine-crash","stage":"result-refused","err":' + JSON.stringify(why) + "}");
+  crashBanner("result-refused", why);
 }
 // A crash before the engine ran a line of the page (a creation or boot abort): `_run:"crashed"`, never a quiet
 // empty result.
@@ -6110,7 +6139,7 @@ const _hostOps = {
     /* A refused snapshot is the instance's output failing this zone's door, so the instance is retired as
        crashed with the refusal as its cause (the step op finalizes a crashed instance); the person sees a crashed
        run, never a snapshot read off a record that has no document. */
-    if (partial._run === "crashed") { engineCrash(eng, "result", partial.resolverErrors.at(-1).message); return; }
+    if (partial._run === "crashed") { engineRefuse(eng, partial.resolverErrors.at(-1).message); return; }
     // Merge on any surface: an XSS-only page (verified @S PoCs, no endpoints) must surface incrementally too.
     /* `securitySinks` is on every accepted document (resultDocumentRefusal), and a snapshot built from the @RESULT
        line above always has one, which is asserted rather than assumed. */
@@ -6147,7 +6176,8 @@ const _hostOps = {
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "step", e); return 0; }   // crashed instance: finalize it (loud) rather than keep stepping a dead engine
     /* The round ends here, so the re-rank reads what this step left: the frontier it advanced and the memory it
        grew. A crashed instance is not asked; the branch above hands it to finish(). */
-    await engineRecordFacts(eng);
+    /* A refused reply retires the instance now, through DONE. */
+    if ((await engineRecordFacts(eng)) !== null) return 0;
     return st;
   },
   /* One service round, with no second op: engineServiceFetch ends by servicing host requests, so a separate
