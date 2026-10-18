@@ -11,8 +11,8 @@
  * C's count and all run; D-rank: below D's own code at the same unit count. E-moved: the same bytes at
  * `/static/bundle.js?v=2` give C's identities; F-changed: one appended comment gives none. G-twice: a script
  * compiled twice drives one identity twice, the second lowered by the first. Z-own: the zone hands an instance
- * its partition less its own drives. Exit 0 when every row holds, 1 when one fails, 3 when none fails and a
- * row's witness was not reached. */
+ * its partition less its own drives; Z-grew: two of its results between handovers hand each drive once, at the
+ * total. Exit 0 when every row holds, 1 when one fails, 3 when none fails and a row's witness was not reached. */
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
@@ -258,6 +258,23 @@ const shopKnown = ZONE.noveltyOwed(SHOP, { spelling: null, n: 0 }, new Map());
   const drives = (t) => t === null ? 0 : t.split('\n').filter((l) => l.startsWith('drive ')).length;
   row('Z-own', drives(back) === 0 && drives(fresh) === cDrives.size && cDrives.size > 0,
       `${drives(back)} drive line(s) handed back to the reporter, ${drives(fresh)} to a fresh instance`);
+}
+{
+  /* Two results of one instance between handovers, its drive counts rising: each identity is handed once, at
+     the partition's total, and the reporter is handed none of its own back. */
+  const GREW = 'https://grew.test', mine = new Map();
+  const twice = { spelling: C._novelty.spelling, identities: C._novelty.identities.map((l) =>
+    /^drive [0-9a-f]{32} \d+$/.test(l) ? l.replace(/\d+$/, (n) => String(2 * Number(n))) : l) };
+  ZONE.noveltyAbsorb(GREW, C._novelty, mine);
+  ZONE.noveltyAbsorb(GREW, twice, mine);
+  const back = ZONE.noveltyOwed(GREW, { spelling: null, n: 0 }, mine);
+  const fresh = ZONE.noveltyOwed(GREW, { spelling: null, n: 0 }, new Map());
+  const lines = (t) => t === null ? [] : t.split('\n').filter((l) => l.startsWith('drive '));
+  const want = twice.identities.filter((l) => l.startsWith('drive ')).sort();
+  row('Z-grew', lines(back).length === 0 && JSON.stringify(lines(fresh).sort()) === JSON.stringify(want) &&
+      want.length > 0,
+      `${lines(back).length} drive line(s) handed back to the reporter, ${lines(fresh).length} of ` +
+      `${want.length} to a fresh instance`);
 }
 console.log(failed ? `${failed} row(s) FAILED` : unreached ? `${unreached} row(s) NOT REACHED` : 'every row holds');
 process.exit(failed ? 1 : unreached ? 3 : 0);

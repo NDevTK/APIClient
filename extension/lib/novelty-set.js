@@ -77,9 +77,11 @@ function noveltyAbsorb(partition, nov, counted) {
 /* What an instance has not yet been handed of `partition`, as solver/novelty.h's set text, or null when it is
    owed nothing. `handed` is the instance's own record, `{spelling, n}`, `{spelling: null, n: 0}` before its
    first handover; it is advanced here, in the same turn the caller sends the text, so no line can be absorbed
-   between the read and the record. `counted` is the same instance's absorb record: a counted line is handed
-   less what that instance reported, because the engine adds its own drives to what it is handed, and a line
-   left at zero is not handed. A count that rose is a later line; the engine keeps the largest. */
+   between the read and the record. `counted` is the same instance's absorb record: a counted identity is handed
+   once, at the partition's current total less what that instance reported, because the engine adds its own
+   drives to what it is handed, and an identity left at zero is not handed. Every line of that identity since
+   the last handover is superseded by the total, and a line older than the instance's own latest report can
+   hold less than it. */
 function noveltyOwed(partition, handed, counted) {
   DCHECK(!!handed && (handed.spelling === null || typeof handed.spelling === "string") &&
          Number.isInteger(handed.n) && handed.n >= 0,
@@ -94,12 +96,17 @@ function noveltyOwed(partition, handed, counted) {
   handed.spelling = p.spelling;
   handed.n = p.lines.length;
   let text = p.spelling + "\n";
+  const told = new Set();
   for (let i = from; i < p.lines.length; i++) {
     const line = p.lines[i];
     if (p.plain.has(line)) { text += line + "\n"; continue; }
-    const cut = line.lastIndexOf(" "), key = line.slice(0, cut);
-    const others = Number(line.slice(cut + 1)) - (counted.has(key) ? counted.get(key) : 0);
-    DCHECK(others >= 0, "an instance reported more drives of " + key + " than its partition counts in all");
+    const key = line.slice(0, line.lastIndexOf(" "));
+    if (told.has(key)) continue;
+    told.add(key);
+    const others = p.counts.get(key) - (counted.has(key) ? counted.get(key) : 0);
+    DCHECK(others >= 0,
+           "an instance's own count of " + key + " exceeds its partition's total, which is the sum of every " +
+           "reporter's latest count including this one's");
     if (others > 0) text += key + " " + others + "\n";
   }
   return text;
