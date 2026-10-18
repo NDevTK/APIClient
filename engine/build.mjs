@@ -9312,6 +9312,15 @@ STAGES.push(onHost(runProgram("egress default-arm probe", [join(ROOT, "testing",
                        "to fix the probe. Nothing here stores a copy of the ARM LIST, so a widening that keeps " +
                        "those two rows passes unchanged."),
   STAGE_HOST.SOURCE));
+/* The HTTP cache (extension/lib/http-cache.js) through engine/trusted.mjs's own zone, against a loopback
+   server that counts what reached it: a fresh hit, no-store, Vary, an unsafe method's invalidation and the
+   partition boundary. It compiles nothing and reads no artifact, so it is a source stage. Exit 2 is a
+   failed control (a row's first send never arrived), 1 a row whose count Fetch §4.6 does not predict. */
+STAGES.push(onHost(runProgram("http cache rows", [join(ROOT, "testing", "http_cache_rows.mjs")],
+                       "a row's server count is not what Fetch §4.6 over RFC 9111 predicts for it: read the " +
+                       "row's own line, which names the count and the expectation. Exit 2 means a row's first " +
+                       "send never reached the server, so nothing was a reading."),
+  STAGE_HOST.SOURCE));
 /* THE FIFTH AREA: IS EVERY FILE IN THE TEST CORPUS COLLECTED BY SOMEBODY. §Testing — "A TEST FILE THE GATE
    DOES NOT COLLECT IS AN EXCLUDED TEST, AND AN EXCLUDED TEST IS A FAILURE … worse, because the total LOOKS
    complete." engine/gate_collect.mjs is the walk that answers it: a file under engine/tests is either a

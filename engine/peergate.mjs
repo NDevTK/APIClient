@@ -234,7 +234,8 @@ function loadChokepoint(peerOrigin) {
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   createContext(sandbox);
-  for (const f of ['check.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/safe-fetch.js'])
+  for (const f of ['check.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/http-cache.js',
+                   'lib/safe-fetch.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
   if (typeof sandbox.safeFetch !== 'function')
     throw new Error('extension/lib/safe-fetch.js installed no `safeFetch` — this gate asks that file whether ' +

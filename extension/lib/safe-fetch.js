@@ -1570,6 +1570,19 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
       return "header-not-allowed:" + unsafe[j];
   return null;
 }
+/* The facts and the header set ({name: value, or null for a field the rule removes}) of a send speaking as
+   `identity` to the last URL of `urlList`, with its Cookie only where `credentialed`. The cache asks it
+   before a send to compare Vary fields, and `_speakAs` asks it for the send itself. */
+async function _speakAsRequest(identity, urlList, method, mode, destination, credentialed) {
+  CHECK(typeof speakAsHeaders === "function",
+        "a request states an identity on a host that loads no lib/speak-as.js — the identity's headers would " +
+        "be dropped and the request would go out as this extension");
+  CHECK(!!identity.client && typeof identity.client.docKey === "string",
+        "a request speaks as facts with no document key — a speak-as rule is scoped to one document's sends");
+  var facts = credentialed ? identity : Object.assign({}, identity, { credentials: "omit" });
+  var cookie = await cookieHeaderFor(facts, urlList[urlList.length - 1]);
+  return { facts: facts, headers: speakAsHeaders(facts, method, mode, destination, urlList, cookie) };
+}
 /* A request that speaks as an identity (lib/request-identity.js's identityFor answer) runs `send(speak)`, where
    `speak` is {request, preflight}: the speak-as ({docKey, origin, stated, headers}) its own wire send carries,
    and, when `preflightNames` is a list, its OPTIONS send's, for the last URL of `urlList` (Fetch §2.2.5's URL
@@ -1581,24 +1594,20 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
    observed state. The zone's own fetch omits credentials, so this extension's jar neither adds nor receives
    a cookie. `stated` is null, or the operator tier's Send-panel record (safeFetchStatedShape),
    whose Origin and Referer replace the identity's on every header set of the send. A request with no identity
-   runs `send(null)` as this extension, uncredentialed. */
+   runs `send(null)` as this extension, uncredentialed. A reply's `requestHeaders` is the speak-as set its
+   send carried ({} for none). */
 async function _speakAs(identity, urlList, method, mode, destination, credentialed, jarTakesReply, preflightNames,
                         stated, init, send) {
   var href = urlList[urlList.length - 1];
   if (!identity) {
     var bare = await send(null);
-    if (bare.resp) bare.setCookies = [];
+    if (bare.resp) { bare.setCookies = []; bare.requestHeaders = {}; }
     return bare;
   }
-  CHECK(typeof speakAsHeaders === "function",
-        "a request states an identity on a host that loads no lib/speak-as.js — the identity's headers would " +
-        "be dropped and the request would go out as this extension");
-  CHECK(!!identity.client && typeof identity.client.docKey === "string",
-        "a request speaks as facts with no document key — a speak-as rule is scoped to one document's sends");
-  var facts = credentialed ? identity : Object.assign({}, identity, { credentials: "omit" });
-  var cookie = await cookieHeaderFor(facts, href);
+  var composed = await _speakAsRequest(identity, urlList, method, mode, destination, credentialed);
+  var facts = composed.facts;
   init.credentials = "omit";
-  var rules = [{ method: method, headers: speakAsHeaders(facts, method, mode, destination, urlList, cookie) }];
+  var rules = [{ method: method, headers: composed.headers }];
   if (preflightNames !== null)
     rules.push({ method: "OPTIONS", headers: speakAsPreflightHeaders(facts, method, destination, urlList, preflightNames) });
   if (stated !== null)
@@ -1615,6 +1624,7 @@ async function _speakAs(identity, urlList, method, mode, destination, credential
   };
   var sent = await send({ request: speakOf(rules[0]), preflight: rules.length > 1 ? speakOf(rules[1]) : null });
   if (!sent.resp) return sent;
+  sent.requestHeaders = rules[0].headers;
   /* Fetch §4.7 "HTTP-network fetch": "If includeCredentials is true, then the user agent should parse and store
      response `Set-Cookie` headers", which cookieArmFor's "listed" arm is. The fields also ride the reply as
      [request URL, field] pairs (`setCookies`), which the asking flow's own jar applies (the engine's
@@ -1929,14 +1939,14 @@ async function _readBody(resp, sink, gated) {
    egress policy's firing walk; CORB for script-like destinations; for a page's request, Fetch §4.1 "Main
    fetch"' response tainting (`cors` passes §4.10 "CORS check" and is CORS-filtered, cross-origin `no-cors` is
    opaque, cross-origin `same-origin` is a network error), stated as the record's `type`. Every gate before
-   the wire judges each URL of a redirect chain before it is sent; every gate on the reply, the landed URL.
-   Principals, per call: the asking document's record (`opts.doc`) carries the IP address space the SSRF
-   target is classified against; `opts.pageOrigin` (`MessageSender.origin` or the host-assigned cluster
-   origin, never parsed from a URL or taken from the engine) is the SOP principal and every page request's
-   origin; an opaque one is same-origin with nothing. Credentialed callers are `bridge.js`'s `navigationLoad`
-   and `frontierRederive`, where `navigationCarriesSession` holds; `fetched` and `fetchedXhr` are not.
-   Every caller states `destination`, `mode`, `provenance`, `pinned`, `doc`, `actor`, `credentialed` and
-   `credentials`, asserted at the entry. */
+   the wire judges each URL of a redirect chain before it is sent (a hop the HTTP cache answers, Fetch §4.6,
+   is sent by no one); every gate on the reply, the landed URL. Principals, per call: the asking document's
+   record (`opts.doc`) carries the IP address space the SSRF target is classified against; `opts.pageOrigin`
+   (`MessageSender.origin` or the host-assigned cluster origin, never parsed from a URL or taken from the
+   engine) is the SOP principal and every page request's origin; an opaque one is same-origin with nothing.
+   Credentialed callers are `bridge.js`'s `navigationLoad` and `frontierRederive`, where
+   `navigationCarriesSession` holds; `fetched` and `fetchedXhr` are not. Every caller states `destination`,
+   `mode`, `provenance`, `pinned`, `doc`, `actor`, `credentialed` and `credentials`, asserted at the entry. */
 async function safeFetch(url, opts) {
   opts = opts || {};
   /* The option set this file reads is closed, so a caller's statement it will not read is refused at the
@@ -2070,29 +2080,6 @@ async function safeFetch(url, opts) {
     if (_lessPublicThan(_targetSpace, _pageSpace))
       return _refused("network", "blocked-local-network" + (_hop ? "-redirect:" : ":") + _targetSpace + "-from-" +
                       _pageSpace, [parsed.href], {});
-    /* The firing decision, before this URL is requested (see `_firingRefusal`). Decline: no browser refuses
-       this; this tool declines to spend the act. The flow parks rather than running its failure path, so it
-       fires the day the origin is widened, and the address is still reported. A widening is a statement
-       about one host, so a hop to another is asked again, and `url-authority` reads the hop's own address. */
-    var _signalFacts = { url: _current, destination: destination, provenance: provenance,
-                         pinned: pinnedMark, doc: doc, actor: actor, driven: driven,
-                         credentialed: credentialed, headers: _headerList };
-    var _ptok = _firingRefusal(_signalFacts);
-    if (_ptok)
-      return _refused("decline", "blocked-signal" + (_hop ? "-redirect:" : ":") + _ptok,
-                      _exposedUrlList(_urlList), {});
-    /* The destructive-path deny list, before this URL is requested (see `_destructiveToken`). It is scoped to
-       credentialed requests, because without cookies a logout path ends no session, and to provenance other
-       than `observed`. An `observed` credentialed request is the ambient seed: the person's own browser just
-       made this exact request in this profile, so refusing to repeat it prevents nothing. Decline, and
-       permanent: no widening reopens this list. A browser would send this request; this tool will not send
-       it with the person's session, and a hop is sent with it, so a hop is asked too. */
-    if (credentialed && provenance !== "observed") {
-      var _dtok = _destructiveToken(_current);
-      if (_dtok)
-        return _refused("decline", "blocked-destructive" + (_hop ? "-redirect:" : ":") + _dtok,
-                        _exposedUrlList(_urlList), {});
-    }
     /* Fetch §4.1 "Main fetch": a `cors`-tainted request whose use-CORS-preflight flag is set, or whose method
        is not CORS-safelisted, or whose header list has CORS-unsafe names, runs §4.4 "HTTP fetch" with
        makeCORSPreflight, and with no CORS-preflight cache §4.4 always runs §4.8 "CORS-preflight fetch" first.
@@ -2108,30 +2095,94 @@ async function safeFetch(url, opts) {
           "safeFetch must CORS-preflight this request and was handed no request identity — Fetch §4.8's " +
           "preflight carries the request's origin and is CORS-checked against it, and that origin is the " +
           "trusted zone's `identityFor(request)`, which the caller passes as `opts.identity`");
-    var init = { method: _method, credentials: "omit", redirect: "manual" };
-    /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the
-       model for the request this file issues (an uncredentialed GET whose forbidden header names the browser
-       strips) and is refused on a cookie-bearing one by `_credentialedOf`. This file never adds auth headers;
-       cookies, in credentialed mode, are the identity's (`_speakAs`) and are gated by the SOP/CORS check. */
-    if (_headerList) init.headers = _headerList;
-    if (opts.signal) init.signal = opts.signal;
-    /* Fetch §4.1 "Main fetch": the preflight (§4.8) and then the request, as one send. A request with an
-       identity speaks as it (`_speakAs`); a preflight failure is a network error and the request is never
-       sent. Credentials ride where Fetch §4.4 includes them: mode `include`, or `same-origin` while the
+    /* Credentials ride where Fetch §4.4 "HTTP fetch" includes them: mode `include`, or `same-origin` while the
        tainting is `basic`. */
     var _cookies = credentialed && (!_identity || _identity.credentials === "include" || _tainting === "basic");
-    var _sent = await _speakAs(_identity, _urlList, _method, mode, destination, _cookies, _isPageAct(_signalFacts),
-                               _preflight ? _unsafeNames : null, null, init, async function (speak) {
-      if (_preflight) {
-        var _pf = await _corsPreflight(_current.href, _method, _headerList || [], opts.credentials,
-                                       opts.useCorsPreflight, _serializedOrigin, opts.signal, speak.preflight);
-        if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + _current.origin,
-                                            [parsed.href], {}) };
+    /* Fetch §4.6 "HTTP-network-or-cache fetch", asked before the firing decision: a hit sends nothing, so it
+       is no act to judge. The partition is the identity's (lib/http-cache.js's httpCacheFor), and the Vary
+       fields are the header list and the speak-as set this send would carry, composed only for a URL the
+       cache holds, so a request it cannot answer reads no cookie before its firing decision.
+       Named residual. Not covered: a request that needs a CORS preflight is never answered from the cache,
+       since the preflight is a send and §4.4 runs it before §4.6. Next diff: judge and send the preflight,
+       then select. Its absence shows as a repeat send of a fresh reply to a request with CORS-unsafe
+       headers. */
+    var _cache = httpCacheFor(_identity ? _identity.partitionKey : null);
+    var _cacheFields = null, _cacheMode = "no-store", _stored = null, _sent;
+    if (_cache !== null) {
+      _cacheFields = httpCacheRequestFields(_headerList, {});
+      _cacheMode = httpCacheMode("default", _cacheFields);
+      if (_cacheMode !== "no-store" && !_preflight && httpCacheHolds(_cache, _current.href))
+        _stored = httpCacheSelect(_cache, _current.href, _method, httpCacheRequestFields(_headerList,
+          (await _speakAsRequest(_identity, _urlList, _method, mode, destination, _cookies)).headers), Date.now());
+    }
+    if (_stored !== null) {
+      /* A hit is a reply read with no send, so an entry of another partition would hand this document the
+         answer to another cookie jar's request. */
+      CHECK(_stored.entry.partition.topLevelSite === _identity.partitionKey.topLevelSite &&
+            _stored.entry.partition.hasCrossSiteAncestor === _identity.partitionKey.hasCrossSiteAncestor,
+            "the HTTP cache answered " + _current.href + " for the partition " +
+            JSON.stringify(_identity.partitionKey) + " with an entry stored for " +
+            JSON.stringify(_stored.entry.partition) + " — Fetch §2.8 gives each network partition key its own cache");
+      /* The record carries no grade: the host attaches the asking flow's provenance where it delivers the
+         reply, so a forced arm answered here stays forced and is never merged into observed data. */
+      _sent = { resp: httpCacheResponse(_stored), setCookies: [] };
+    } else {
+      /* The firing decision, before this URL is requested (see `_firingRefusal`). Decline: no browser
+         refuses this; this tool declines to spend the act. The flow parks rather than running its failure
+         path, so it fires the day the origin is widened, and the address is still reported. A widening is a
+         statement about one host, so a hop to another is asked again, and `url-authority` reads the hop's
+         own address. */
+      var _signalFacts = { url: _current, destination: destination, provenance: provenance,
+                           pinned: pinnedMark, doc: doc, actor: actor, driven: driven,
+                           credentialed: credentialed, headers: _headerList };
+      var _ptok = _firingRefusal(_signalFacts);
+      if (_ptok)
+        return _refused("decline", "blocked-signal" + (_hop ? "-redirect:" : ":") + _ptok,
+                        _exposedUrlList(_urlList), {});
+      /* The destructive-path deny list, before this URL is requested (see `_destructiveToken`). It is scoped
+         to credentialed requests, because without cookies a logout path ends no session, and to provenance
+         other than `observed`. An `observed` credentialed request is the ambient seed: the person's own
+         browser just made this exact request in this profile, so refusing to repeat it prevents nothing.
+         Decline, and permanent: no widening reopens this list. A browser would send this request; this tool
+         will not send it with the person's session, and a hop is sent with it, so a hop is asked too. */
+      if (credentialed && provenance !== "observed") {
+        var _dtok = _destructiveToken(_current);
+        if (_dtok)
+          return _refused("decline", "blocked-destructive" + (_hop ? "-redirect:" : ":") + _dtok,
+                          _exposedUrlList(_urlList), {});
       }
-      init.speakAs = speak === null ? null : speak.request;
-      return { resp: await _wire(_current.href, init) };
-    });
-    if (_sent.refusal) return _sent.refusal;
+      var init = { method: _method, credentials: "omit", redirect: "manual" };
+      /* The caller's header list. On the XHR path it is the analysed bundle's own list, which is within the
+         model for the request this file issues (an uncredentialed GET whose forbidden header names the
+         browser strips) and is refused on a cookie-bearing one by `_credentialedOf`. This file never adds
+         auth headers; cookies, in credentialed mode, are the identity's (`_speakAs`) and are gated by the
+         SOP/CORS check. The cache mode's fields (httpCacheModeHeaders) are appended after the preflight
+         decision, as §4.6 appends them to its own copy of the request. */
+      var _sentList = _cache === null ? _headerList
+        : (_headerList || []).concat(httpCacheModeHeaders(_cacheMode, _cacheFields));
+      if (_sentList && _sentList.length) init.headers = _sentList;
+      if (opts.signal) init.signal = opts.signal;
+      /* Fetch §4.1 "Main fetch": the preflight (§4.8) and then the request, as one send. A request with an
+         identity speaks as it (`_speakAs`); a preflight failure is a network error and the request is never
+         sent. */
+      var _requestTime = Date.now();
+      _sent = await _speakAs(_identity, _urlList, _method, mode, destination, _cookies, _isPageAct(_signalFacts),
+                             _preflight ? _unsafeNames : null, null, init, async function (speak) {
+        if (_preflight) {
+          var _pf = await _corsPreflight(_current.href, _method, _headerList || [], opts.credentials,
+                                         opts.useCorsPreflight, _serializedOrigin, opts.signal, speak.preflight);
+          if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + _current.origin,
+                                              [parsed.href], {}) };
+        }
+        init.speakAs = speak === null ? null : speak.request;
+        return { resp: await _wire(_current.href, init) };
+      });
+      if (_sent.refusal) return _sent.refusal;
+      if (_cache !== null)
+        httpCacheForwarded(_cache, _cacheMode, _identity.partitionKey, _current.href, _method,
+                           httpCacheRequestFields(init.headers, _sent.requestHeaders), _sent.resp,
+                           _requestTime, Date.now());
+    }
     resp = _sent.resp;
     DCHECK(Array.isArray(_sent.setCookies), "a send answered no Set-Cookie list — _speakAs states one for every reply");
     _setCookieList = _setCookieList.concat(_sent.setCookies);
@@ -2463,6 +2514,12 @@ async function safeFetchOperator(url, opts) {
     });
     if (sent.refusal) return sent.refusal;
     resp = sent.resp;
+    /* The person's send is in the "no-store" cache mode: it reads its answer from the server and stores
+       nothing. It still invalidates (httpCacheInvalidate), since an unsafe method the server accepted changes
+       what the partition's stored responses describe. Its header list is sent as typed, so §4.6's no-store
+       fields are not appended to it. */
+    var cache = httpCacheFor(identity.partitionKey);
+    if (cache !== null) httpCacheInvalidate(cache, method, current.href, resp.status);
     var redirect = await _redirectOf(resp);
     if (redirect === null) break;
     var next = _followRedirect(redirect, { url: current, urlList: urlList, method: method, body: body,

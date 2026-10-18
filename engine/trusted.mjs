@@ -138,7 +138,7 @@
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import { topLevelFactFields as topLevelFacts } from './top_level_facts.mjs';
 import { NAVIGABLE_NOTICE, navigableNoticeField } from './noticegen.mjs';
@@ -181,8 +181,9 @@ function speakAsHost(sandbox) {
    `URL`, `TextDecoder`, `TextEncoder` and the `fetch` speakAsHost wraps come from this realm — which is also
    why nothing below may `instanceof` a value that came back out of it: a Uint8Array minted in that realm is
    not this realm's Uint8Array, and `ArrayBuffer.isView` is the cross-realm question. */
-const ZONE = (() => {
-  const sandbox = { console, URL, TextDecoder, TextEncoder };
+export const ZONE = (() => {
+  /* `Response` is what lib/http-cache.js answers a hit with, as the wire's own fetch answers a send. */
+  const sandbox = { console, URL, TextDecoder, TextEncoder, Response };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   createContext(sandbox);
@@ -191,7 +192,7 @@ const ZONE = (() => {
                    'lib/request-identity.js', 'lib/cookie-store.js', 'speak-as-rule.js', 'lib/speak-as.js',
                    'lib/navigable-notice.js',
                    'lib/document-record.js',
-                   'lib/safe-fetch.js', 'lib/novelty-set.js'])
+                   'lib/http-cache.js', 'lib/safe-fetch.js', 'lib/novelty-set.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
   if (typeof sandbox.safeFetch !== 'function')
     throw new Error('extension/lib/safe-fetch.js did not install `safeFetch` — this zone loads that file ' +
@@ -2339,4 +2340,5 @@ function routedPostJoin(instances) {
   }
 }
 
-await main();
+/* Run as a program, this file is the host; imported, it hands out its zone (testing/http_cache_rows.mjs). */
+if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

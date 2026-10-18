@@ -52,14 +52,14 @@ function zone(edge, table) {
      (engine/psl.mjs), as engine/trusted.mjs answers it. */
   const swRpc = (api, args) => api === 'site.registrableDomains' ? Promise.resolve(siteRegistrableDomains(args))
                                                                  : edge.swRpc(api, args);
-  const sandbox = { console, URL, TextDecoder, TextEncoder, Headers, fetch: edge.fetch, swRpc };
+  const sandbox = { console, URL, TextDecoder, TextEncoder, Headers, Response, fetch: edge.fetch, swRpc };
   sandbox.self = sandbox; sandbox.globalThis = sandbox;
   createContext(sandbox);
   /* The ast-worker.html order for the files a credentialed navigation's identity is built and spoken by. */
   for (const f of ['check.js', 'lib/site.js', 'lib/referrer-policy.js',
                    'lib/request-identity.js', 'lib/cookie-store.js', 'speak-as-rule.js', 'lib/speak-as.js',
                    'lib/navigable-notice.js',
-                   'lib/document-record.js', 'lib/safe-fetch.js'])
+                   'lib/document-record.js', 'lib/http-cache.js', 'lib/safe-fetch.js'])
     runInContext(readFileSync(join(EXT, f), 'utf8'), sandbox, { filename: join(EXT, f) });
   for (const n of ['safeFetch', 'safeFetchEgressStated'])
     if (typeof sandbox[n] !== 'function')
