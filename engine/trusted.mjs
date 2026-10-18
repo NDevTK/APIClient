@@ -1748,7 +1748,8 @@ async function main() {
       e.result = line.slice('@RESULT '.length);
       e.results += 1;
       /* Its identities join the product under the origin this zone provisioned the cluster at. */
-      ZONE.noveltyAbsorb(e.origin, JSON.parse(e.result)._novelty, e.noveltyCounted);
+      for (const x of ZONE.noveltyAbsorb(e.origin, JSON.parse(e.result)._novelty, e.noveltyCounted).refused)
+        console.error(`[trusted] [${e.tag}] a novelty line was refused (${x.reason}): ${x.line}`);
       console.error(`[trusted] [${e.tag}] @RESULT#${e.results} ${line}`);
       return;
     }

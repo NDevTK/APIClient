@@ -27,11 +27,13 @@ function noveltyProductSize() {
 /* Partitions whose lines grew since noveltyTakeDirty last ran, for the persistence edge. */
 const _noveltyDirty = new Set();
 
-/* Folds one result document's `_novelty` into `partition`; answers how many lines were new. `counted` is the
-   emitting instance's own record (a Map, `<kind> <hex>` -> the count it last reported), because a result is
-   re-composed whole on every partial: a counted line adds what the instance's count rose by since its last
-   result, so one drive is counted once however many results repeat it. A result under another spelling than the
-   partition holds is a build that digests differently, so the partition is replaced rather than mixed. */
+/* Folds one result document's `_novelty` into `partition`; answers `{added, refused}`: how many lines were new,
+   and each line refused with its reason. `counted` is the emitting instance's own record (a Map, `<kind> <hex>`
+   -> the count it last reported), because a result is re-composed whole on every partial: a counted line adds
+   what the instance's count rose by since its last result, so one drive is counted once however many results
+   repeat it. A result under another spelling than the partition holds is a build that digests differently, so
+   the partition is replaced rather than mixed. The lines are the engine's statement and so input: one that is
+   not an identity, or a count below that instance's last, is refused and changes nothing. */
 function noveltyAbsorb(partition, nov, counted) {
   DCHECK(typeof partition === "string", "a novelty partition is not an origin string: " + String(partition));
   /* Asked by shape and not by `instanceof`: engine/trusted.mjs loads this file into a realm of its own and
@@ -49,10 +51,13 @@ function noveltyAbsorb(partition, nov, counted) {
     _noveltyParts.set(partition, p);
   }
   let added = 0;
+  const refused = [];
   for (const line of nov.identities) {
     const m = typeof line === "string" ? /^([a-z]+ [0-9a-f]{32})(?: ([1-9][0-9]*))?$/.exec(line) : null;
-    DCHECK(m !== null, "a `_novelty.identities` entry is not `<kind> <32 hex>[ <count>]`: " + JSON.stringify(line));
-    if (m === null) continue;
+    if (m === null) {
+      refused.push({ line: String(line), reason: "not `<kind> <32 hex>[ <count>]`" });
+      continue;
+    }
     if (m[2] === undefined) {
       if (p.plain.has(line)) continue;
       p.plain.add(line);
@@ -62,8 +67,11 @@ function noveltyAbsorb(partition, nov, counted) {
     }
     const key = m[1], n = Number(m[2]);
     const last = counted.has(key) ? counted.get(key) : 0;
-    DCHECK(n >= last, "an instance reported fewer drives of " + key + " than its previous result did");
-    if (n <= last) continue;
+    if (n < last) {
+      refused.push({ line, reason: "a count below the " + last + " this instance reported before" });
+      continue;
+    }
+    if (n === last) continue;
     counted.set(key, n);
     const total = (p.counts.has(key) ? p.counts.get(key) : 0) + (n - last);
     p.counts.set(key, total);
@@ -71,7 +79,7 @@ function noveltyAbsorb(partition, nov, counted) {
     added++;
   }
   if (added) _noveltyDirty.add(partition);
-  return added;
+  return { added, refused };
 }
 
 /* What an instance has not yet been handed of `partition`, as solver/novelty.h's set text, or null when it is
@@ -131,7 +139,10 @@ function noveltyTakeDirty() {
 function noveltyRestore(rec) {
   DCHECK(!!rec && typeof rec.partition === "string" && typeof rec.spelling === "string" &&
          Array.isArray(rec.lines), "a persisted novelty record is not {partition, spelling, lines}");
-  noveltyAbsorb(rec.partition, { spelling: rec.spelling, identities: rec.lines }, new Map());
+  const r = noveltyAbsorb(rec.partition, { spelling: rec.spelling, identities: rec.lines }, new Map());
+  DCHECK(r.refused.length === 0,
+         "a persisted novelty record holds a line the absorb refuses (" + JSON.stringify(r.refused[0]) + ") — " +
+         "the record is this zone's own write of lines it accepted");
   _noveltyDirty.delete(rec.partition);
 }
 

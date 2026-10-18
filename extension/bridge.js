@@ -1084,7 +1084,10 @@ function noveltyPersistSoon() {
 /* One result document's identities into the emitting instance's partition: the origin this zone stamped on
    its cluster (lib/novelty-set.js says why it is never the engine's word). */
 function noveltyTake(eng, result) {
-  if (noveltyAbsorb(eng.origin, result._novelty, eng._noveltyCounted) > 0) noveltyPersistSoon();
+  const r = noveltyAbsorb(eng.origin, result._novelty, eng._noveltyCounted);
+  for (const x of r.refused)
+    console.warn("[bridge] " + eng.msg.sourceUrl + ": a novelty line was refused (" + x.reason + "): " + x.line);
+  if (r.added > 0) noveltyPersistSoon();
 }
 /* What `eng` is owed of its partition, handed now; called at its boot before Init and before each step, so
    it is serialized with the instance's other calls. */
