@@ -998,16 +998,13 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            means for the RESPONSE is that it is discarded, which step 11's `send() invoked = false` already
            decides: §3.5.6's "handle errors" step 1 returns for an object that is not sending, and the
            lifecycle machine's XR_RESPONSE reads that and finishes without firing anything.
-           NAMED RESIDUAL — that is correct for the response and NARROWER than step 10, which also stops the
-           TRANSFER. NOT COVERED: the rendezvous the in-flight send parked on is left outstanding, so the
-           trusted zone finishes a fetch whose reply nothing will read (§3.5.7 "The abort() method" calls that
-           "any network activity"). WHAT THE NEXT DIFF BUILDS: the fetch controller reachable from the OBJECT
-           rather than from the lifecycle machine's step state — this method and §3.5.7's are different
-           machines and neither can see the other's `s->req` — so both can call solver/engine.h's
-           `engine_host_terminate`, which js_xhr_run_fini already calls for §3.2 Garbage collection. HOW ITS
-           ABSENCE SHOWS: `open()` during a send leaves one entry in the frontier's outstanding join and the
-           census reports the ask unpaid and unwithdrawn (hostAsked − hostAnswered − hostTerminated) until the
-           zone's own reply lands and is refused by engine_host_answer as naming no register. */
+           Named residual: correct for the response and narrower than step 10, which also stops the transfer.
+           Not covered: open() or XHR §3.5.7 "The abort() method" reaching an in-flight send's controller.
+           Neither can run mid-send today, because an asynchronous send() parks on its rendezvous with the flow
+           blocked (solver/engine.h's engine_host_terminate states that residual). The next diff makes that send
+           a park its flow is not blocked on and puts the controller on the object, so both call
+           engine_host_terminate, as js_xhr_run_fini does for XHR §3.2 "Garbage collection". Its absence shows
+           as a zero-delay timer queued just after an asynchronous send() running only after the load events. */
         /* Step 11. */
         xhr_reset_request(ctx, d);
         xhr_set(ctx, d, &d->method, mval);

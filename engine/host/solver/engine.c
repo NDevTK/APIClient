@@ -1321,6 +1321,21 @@ void engine_host_terminate(JSContext *ctx, uint32_t req) {
             DCHECK(!pending_get_int(p, PEND_ANSWER_FIXED),
                    "a rendezvous was withdrawn through an arm's register rather than the issuer's — an arm carries "
                    "the issuer's id with its answer already fixed");
+#if APICLIENT_DEV
+            {
+                /* The notice below is `fetch.cancel`, so what it withdraws is a network send: the two
+                   rendezvous the zone answers out of the network. A cross-agent operation is given back by
+                   engine_retract_operations, never through here. */
+                JSValue ov = pending_get(p, PEND_OP);
+                const char *op = JS_ToCString(ctx, ov);
+                DCHECK(op != NULL && (!strncmp(op, "xhr.send\t", 9) || !strncmp(op, "document.fetch\t", 15)),
+                       "a rendezvous that is not a network send was withdrawn as one — engine_host_terminate tells "
+                       "the zone `fetch.cancel`; give a cross-agent operation back through "
+                       "engine_retract_operations");
+                JS_FreeCString(ctx, op);
+                JS_FreeValue(ctx, ov);
+            }
+#endif
             JS_FreeValue(ctx, p);
             pending_remove(&f->pending, i);
             /* The flow is askable again: a withdrawal is the host event flow_set_host_owed's mark waits for.
@@ -1332,14 +1347,22 @@ void engine_host_terminate(JSContext *ctx, uint32_t req) {
         if (held) break;
     }
     g_host_terminated++;
-    /* The zone is asked to stop the transfer: XHR §3.5.7 The abort() method's "Cancels any network activity",
-       which only the trusted zone can do. A one-way notice: the engine's withdrawal is already complete, and a
-       transfer that lands anyway is refused at engine_host_answer's ENGINE_ANSWER_HOST arm. Sent whether or not
-       a register held the id, since the transfer is the zone's state. */
+    /* The zone is asked to stop the transfer, which only it can do: `fetch.cancel<TAB><id>`, the notice an
+       aborted park sends (engine_pending_fetch_cancel), naming the request by the key its answer would come
+       back under. Fetch §2 Infrastructure makes a terminated and an aborted controller both canceled, and the
+       error abort records is the page's, never the zone's, so the zone owes both one act. A one-way notice:
+       the engine's withdrawal is already complete, and a transfer that lands anyway is refused at
+       engine_host_answer's ENGINE_ANSWER_HOST arm. Sent whether or not a register held the id, since the
+       transfer is the zone's state. */
     {
-        char rec[48];
-        snprintf(rec, sizeof rec, "hostreq.terminate\t%u", req);
+        char id[16];
+        const char *fields[1] = { id };
+        char *rec;
+
+        snprintf(id, sizeof id, "%u", req);
+        rec = engine_notice_build("fetch.cancel", fields, 1);
         engine_host_notify(ctx, rec);
+        free(rec);
     }
 }
 

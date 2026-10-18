@@ -3417,7 +3417,10 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   // The XMLHttpRequest fetch (XHR §3.5.6 The send() method) through the same chokepoint. `rec` is the
   // engine's JSON request record (method, url, headers, body); the answer is the reply shape fetch_reply_new
   // builds, and a null body is the network error §3.5.6's handle errors turns into an `error` event.
-  const fetchedXhr = async (rec, doc) => {
+  const fetchedXhr = async (rec, doc, signal) => {
+    DCHECK(signal instanceof AbortSignal,
+           "an XMLHttpRequest send reached the fetch relay with no abort signal — engineIssue owns one per send, " +
+           "and a `fetch.cancel` notice naming its rendezvous ends the send through it");
     let q = null;
     /* The request record is the engine's, crossing as JSON so it carries its types; unparseable text is
        xml_http_request.c writing something other than its record, so it aborts rather than becoming an
@@ -3520,7 +3523,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
                                             driven: q.driven,
                                             doc, actor: "page",
                                             credentialed: false, useCorsPreflight: q.useCorsPreflight,
-                                            credentials: q.credentials, headers: q.headers,
+                                            credentials: q.credentials, headers: q.headers, signal,
                                             identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, "engine:" + eng.docId, abs,
                                                                           q.credentials, q.mode,
                                                                           q.referrerPolicy, q.referrer) });
@@ -4037,13 +4040,25 @@ function engineIssue(eng, key, start, deliver) {
          "stall arm into the full-speed spin it exists to prevent");
   return 1;
 }
-/* Fetch §2 Infrastructure's "abort a fetch controller", on the zone's side: the engine's `fetch.cancel` notice
-   says no flow is owed the request keyed like engine_provide (solver/engine.c's engine_pending_fetch_cancel).
-   The send ends through its signal (safe-fetch.js disconnects the wire's port, and wire.js aborts the platform
-   fetch), and it leaves the in-flight set, so a reply that landed meanwhile is never delivered and a later park
-   of the same key is issued anew. A key not in flight was cancelled before any round issued it. */
-function engineCancel(eng, method, mode, referrerPolicy, referrer, url) {
-  const key = "fetch\n" + method + "\n" + mode + "\n" + referrerPolicy + "\n" + referrer + "\n" + url;
+/* The in-flight key of a request, from the identity its answer is delivered under: the five-field pair of a
+   park (`engine_provide`, `engine_decline`), or the rendezvous id of a host request (`engine_host_answer`),
+   whichever operation it carries, since one id is one rendezvous. The issue sites and engineCancel both key
+   through here, so a cancel names the send it ends. */
+function inflightKey(identity) {
+  DCHECK(Array.isArray(identity) && (identity.length === 1 || identity.length === 5) &&
+         identity.every((x) => typeof x === "string"),
+         "a request identity is neither a rendezvous id nor the five-field pair: " + JSON.stringify(identity));
+  return (identity.length === 1 ? "req\n" : "fetch\n") + identity.join("\n");
+}
+/* Fetch §2 Infrastructure's "abort a fetch controller" or "terminate", on the zone's side: the two are one act
+   here, since both leave the controller canceled and an abort's error is the page's. The engine's
+   `fetch.cancel` notice says no flow is owed the request (solver/engine.c's engine_pending_fetch_cancel for a
+   park, engine_host_terminate for a rendezvous). The send ends through its signal (safe-fetch.js disconnects
+   the wire's port, and wire.js aborts the platform fetch), and it leaves the in-flight set, so a reply that
+   landed meanwhile is never delivered and a later request of the same key is issued anew. A key not in flight
+   was cancelled before any round issued it. */
+function engineCancel(eng, identity) {
+  const key = inflightKey(identity);
   const rec = eng._inflight.get(key);
   if (rec === undefined) return;
   rec.cancelled = true;
@@ -4108,7 +4123,7 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
     /* The dedup key is the five-field identity the engine parked on, the key the answer is delivered under
        (`engine_provide` and `engine_decline` key on it, and `engine_pending_fetches` dedups over it). It uses
        the raw address off the line, never the absolute URL `fetched` resolves. */
-    const key = "fetch\n" + method + "\n" + mode + "\n" + referrerPolicy + "\n" + referrer + "\n" + url;
+    const key = inflightKey([method, mode, referrerPolicy, referrer, url]);
     /* An entry stays listed until answered and this visits the list every slice, so without the dedup one
        page `fetch` would become one request per round. */
     if (eng._inflight.has(key)) continue;
@@ -4882,11 +4897,13 @@ async function hostNotice(eng, line) {
      since releasing an unheld world is a no-op, and only this zone knows the other instances. A booting
      instance is skipped because both delivery branches wait for `_readyP`, so it holds no foreign world
      (qjs_world_gone asserts the frontier was seeded). */
-  /* `fetch.cancel <method> <mode> <referrer policy> <referrer> <url>` — no flow is owed this request any more. */
+  /* `fetch.cancel <identity>` — no flow is owed this request any more; the identity is a park's five-field pair
+     or a rendezvous id (inflightKey). */
   if (f[0] === "fetch.cancel") {
-    DCHECK(f.length === 6 && f[1] !== "" && f[2] !== "" && f[4] !== "" && f[5] !== "",
-           "a fetch.cancel notice is not the five-field key engine_provide reads: " + line);
-    engineCancel(eng, f[1], f[2], f[3], f[4], f[5]);
+    DCHECK(f.length === 2 ? /^[1-9][0-9]*$/.test(f[1])
+                          : f.length === 6 && f[1] !== "" && f[2] !== "" && f[4] !== "" && f[5] !== "",
+           "a fetch.cancel notice names neither a rendezvous id nor the five-field pair: " + line);
+    engineCancel(eng, f.slice(1));
     return;
   }
   if (f[0] === "world.gone") {
@@ -5049,8 +5066,8 @@ async function engineServiceHostRequests(eng) {
          `_readBody`. Keyed on the request id, not a (method, url) pair (wpt_runner.c's `wpt_request_asked_id`
          beside `wpt_request_asked`): the answer is delivered against `engine_host_answer`'s id, and two
          identical questions from two flows are two ids. Sibling flows run while it waits. */
-      did += engineIssue(eng, "xhr\n" + id,
-        () => eng.fetchedXhr(op.slice("xhr.send\t".length), askerDoc),
+      did += engineIssue(eng, inflightKey([String(id)]),
+        (signal) => eng.fetchedXhr(op.slice("xhr.send\t".length), askerDoc, signal),
         // Completion 0 is normal (ECMA-262 §6.2.4 The Completion Record Specification Type): this zone fetched
         // bytes and ran no program that could throw. A relayed cross-agent operation answers 1 with the thrown
         // value, so the asking page's `try`/`catch` runs.
@@ -5082,7 +5099,7 @@ async function engineServiceHostRequests(eng) {
     /* Issued, not awaited, for the XHR seam's reason (a page states a document load with `location.href` or an
        `iframe src`, and its body may never end), keyed on the request id. The asking navigable stays parked on
        its load; every other flow keeps running. */
-    did += engineIssue(eng, "doc\n" + id,
+    did += engineIssue(eng, inflightKey([String(id)]),
       /* `rendezvous`: engineDeliverDocument routes `r.declined` to `hostDecline` against the id the engine is
          parked on, so the navigable keeps the `about:blank` HTML §7.3.1.3 created it holding. */
       () => eng.fetchedDocument(fetchArgs.slice(initTab + 1), fetchArgs.slice(0, fetchTab),

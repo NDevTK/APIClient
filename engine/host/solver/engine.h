@@ -513,14 +513,15 @@ int      engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *pres
  * so a destroyed machine's entry would leave the flow blocked forever by nobody; this removes the entry and
  * runs flow_clear_host_owed, so the flow is askable on the next pick with its snapshot untouched.
  *   It is terminate, not abort: terminate carries no error, and at these callers nothing is left to catch one.
- * The zone is asked to stop the transfer with a `hostreq.terminate<TAB><id>` notice; a late answer to a
+ * The zone is asked to stop the transfer with a `fetch.cancel<TAB><id>` notice; a late answer to a
  * withdrawn id finds no register and engine_host_answer returns 0. It answers nothing, since no caller can yet
  * act on whether the id was live; withdrawals are counted (EngineFrontierCensus's host_terminated).
- *   Named residual: not covered is "abort a fetch controller", whose error is delivered (XHR §3.5.7 "The
- * abort() method" step 1; Fetch §5.6 "Fetch methods"); the next diff builds `engine_host_abort(ctx, req,
- * reason)` answering with ENGINE_COMPLETION_THROW, which needs the id reachable from the aborted object and a
- * `signal` on `fetch()`; its absence shows as `xhr.abort()` mid-flight firing abort/loadend twice, once more
- * when the unstopped reply lands. */
+ *   Named residual: not covered is a withdrawal the page makes while the send is in flight (XHR §3.5.7 "The
+ * abort() method" step 1, §3.5.1 "The open() method" step 10). An asynchronous send() parks on this
+ * rendezvous with its flow blocked, so no page code of that flow runs until the answer, where §3.5.6 fetches
+ * in parallel. The next diff makes an asynchronous send a park its flow is not blocked on, with the controller
+ * on the object, so abort() and open() reach it. Its absence shows as a zero-delay timer the page queues just
+ * after an asynchronous send() running only after that request's load events. */
 void     engine_host_terminate(JSContext *ctx, uint32_t req);
 
 /* Who computed an answer; a parameter because the two have different multiplicities. A host answer is a value

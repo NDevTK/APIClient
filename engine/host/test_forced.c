@@ -5357,8 +5357,8 @@ static int tf_xhr_declined(const char *op, size_t len) {
     return at_url && !is_get;
 }
 
-/* The address field of every `fetch.cancel` notice the engine sent (solver/engine.c's
-   engine_pending_fetch_cancel), in arrival order. */
+/* The last field of every `fetch.cancel` notice the engine sent, in arrival order: a park's address
+   (solver/engine.c's engine_pending_fetch_cancel) or a rendezvous id (engine_host_terminate). */
 static char **g_tf_cancel;
 static int g_tf_cancel_n;
 
@@ -5369,9 +5369,9 @@ static void tf_cancel_record(const char *rec, size_t len)
 
     while (url > rec && url[-1] != '\t') url--;
     for (const char *q = rec; q < rec + len; q++) tabs += *q == '\t';
-    DCHECK(tabs == 5 && url < rec + len,
-           "a fetch.cancel notice is not `fetch.cancel<TAB>METHOD<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>"
-           "URL` — engine_pending_fetch_cancel writes the five-field key engine_provide reads");
+    DCHECK((tabs == 5 || tabs == 1) && url < rec + len,
+           "a fetch.cancel notice is neither `fetch.cancel<TAB>METHOD<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>"
+           "URL` nor `fetch.cancel<TAB><id>` — the engine names a request by the key its answer is delivered under");
     g_tf_cancel = realloc(g_tf_cancel, (size_t)(g_tf_cancel_n + 1) * sizeof *g_tf_cancel);
     CHECK(g_tf_cancel != NULL, "the fixture could not record a fetch.cancel notice");
     g_tf_cancel[g_tf_cancel_n] = strndup(url, (size_t)(rec + len - url));

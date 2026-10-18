@@ -971,7 +971,13 @@ async function main() {
      `doc` the asking document's record (askerRecord). A
      policy refusal is a decline, which the engine forks into a waiting arm and a failure arm; a network
      refusal is §3.5.6's network error, an answer with no body, so the page's XHR runs its error steps. */
-  const workXhr = async (e, id, doc, record) => {
+  const workXhr = async (e, id, doc, record, send) => {
+    /* Every answer leaves through here, so a cancelled send's never reaches the engine (`fetch.cancel`). */
+    const settle = (rec) => {
+      if (send.cancelled) return;
+      send.queued = rec;
+      e.ready.push(rec);
+    };
     const q = JSON.parse(record);
     for (const k of ['method', 'url', 'credentials', 'mode', 'provenance', 'pinned', 'driven'])
       if (typeof q[k] !== 'string' || q[k] === '')
@@ -988,25 +994,32 @@ async function main() {
       throw new Error(`the engine's xhr.send record states the mode \`${q.mode}\` — XHR §3.5.6 "The send() ` +
                       'method" builds every request in cors mode');
     const methodRefusal = ZONE.safeFetchMethodRefusal(q.method);
-    if (methodRefusal) { e.ready.push(declineAnswer(id, `${q.method} ${q.url} — ${methodRefusal.reason}`)); return; }
+    if (methodRefusal) { settle(declineAnswer(id, `${q.method} ${q.url} — ${methodRefusal.reason}`)); return; }
     const abs = new URL(q.url, e.docUrl).href;
-    const raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, destination: '',
-                                            mode: q.mode, provenance: q.provenance, pinned: q.pinned, driven: q.driven,
-                                            actor: 'page', doc, credentialed: false,
-                                            credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
-                                            headers: q.headers.length ? q.headers : undefined,
-                                            identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, 'engine:' + e.docId, abs,
-                                                                               q.credentials, q.mode,
-                                                                               q.referrerPolicy, q.referrer) });
+    /* A send the engine withdrew mid-body throws out of safeFetch's body read; nobody is owed that answer. */
+    let raw;
+    try {
+      raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, destination: '',
+                                        mode: q.mode, provenance: q.provenance, pinned: q.pinned, driven: q.driven,
+                                        actor: 'page', doc, credentialed: false, signal: send.controller.signal,
+                                        credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
+                                        headers: q.headers.length ? q.headers : undefined,
+                                        identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, 'engine:' + e.docId, abs,
+                                                                           q.credentials, q.mode,
+                                                                           q.referrerPolicy, q.referrer) });
+    } catch (err) {
+      if (send.cancelled) return;
+      throw err;
+    }
     if (raw.refusal && raw.refusal.kind === 'decline') {
-      e.ready.push(declineAnswer(id, `${q.method} ${abs} — ${raw.refusal.reason}`));
+      settle(declineAnswer(id, `${q.method} ${abs} — ${raw.refusal.reason}`));
       return;
     }
     const rec = replyRecord(raw, `the XMLHttpRequest ${abs}`);
     const meta = rec ? { status: rec.meta.status, statusText: rec.meta.statusText, headers: rec.meta.headers,
                          computedType: rec.meta.computedType }
                      : { status: 0, statusText: raw.statusText, headers: [] };
-    e.ready.push(['answer', String(id), b64(JSON.stringify(meta)), '0', rec ? b64(rec.bytes) : ABSENT].join('\t'));
+    settle(['answer', String(id), b64(JSON.stringify(meta)), '0', rec ? b64(rec.bytes) : ABSENT].join('\t'));
   };
 
   const workFetch = async (e, method, destination, initiator, provenance, pinned, driven, credentials, mode,
@@ -1649,26 +1662,33 @@ async function main() {
       parkedWorlds.push(f[1]);
       return;
     }
-    /* `fetch.cancel <method> <mode> <referrer policy> <referrer> <url>` — no flow is owed this request any more
-       (solver/engine.c's engine_pending_fetch_cancel). Its send ends through its signal and its key is released,
-       so its answer is never written and a later park of the same key is worked anew. A key with no send was
-       cancelled before this zone was shown it. */
+    /* `fetch.cancel <identity>` — no flow is owed this request any more: a park's five-field pair
+       (solver/engine.c's engine_pending_fetch_cancel) or a rendezvous id (engine_host_terminate), the two keys
+       its answer would be written under. Fetch §2 Infrastructure makes an aborted and a terminated controller
+       both canceled, so both are one act here. The send ends through its signal and its key is released, so its
+       answer is never written and a later park of the same key is worked anew. A key with no send was cancelled
+       before this zone was shown it. A rendezvous may be withdrawn after its answer was written, which the
+       engine refuses as naming no register; a park is cancelled only while no answer has reached it. */
     if (f[0] === 'fetch.cancel') {
-      if (f.length !== 6) throw new Error(`a fetch.cancel notice is not the five-field key: ${record}`);
-      const key = fetchKey(f[1], f[2], f[3], f[4], f[5]);
+      if (f.length !== 6 && !(f.length === 2 && /^[1-9][0-9]*$/.test(f[1])))
+        throw new Error(`a fetch.cancel notice names neither a rendezvous id nor the five-field pair: ${record}`);
+      const key = f.length === 2 ? `req:${f[1]}` : fetchKey(f[1], f[2], f[3], f[4], f[5]);
       const send = e.sends.get(key);
       if (send === undefined) return;
       send.cancelled = true;
       e.sends.delete(key);
       e.answered.delete(key);
       /* An answer already queued for the next write is taken back with its key. */
-      if (send.queued !== undefined) {
+      if (send.queued !== undefined && isFetchKey(key)) {
         const at = e.ready.indexOf(send.queued), ak = e.releaseOnWrite.indexOf(key);
         if (at < 0 || ak < 0)
           throw new Error(`a cancelled send's queued answer is not on the next write: ${record} — payRound ` +
                           'releases a send with its key, so a send still recorded has its answer queued');
         e.ready.splice(at, 1);
         e.releaseOnWrite.splice(ak, 1);
+      } else if (send.queued !== undefined) {
+        const at = e.ready.indexOf(send.queued);
+        if (at >= 0) e.ready.splice(at, 1);
       }
       send.controller.abort();
       return;
@@ -1954,7 +1974,9 @@ async function main() {
                         '0', b64(loaded.bytes)].join('\t'));
         })());
       } else if (op.startsWith('xhr.send\t')) {
-        track(e, key, workXhr(e, id, doc, op.slice('xhr.send\t'.length)));
+        const send = { controller: new AbortController(), cancelled: false, queued: undefined };
+        e.sends.set(key, send);
+        track(e, key, workXhr(e, id, doc, op.slice('xhr.send\t'.length), send));
       } else {
         /* A REQUEST THIS ZONE DOES NOT CARRY IS REFUSED IN WORDS AND NOT LEFT SILENT: leaving it unanswered
            parks the asking flow for the rest of the session while the frontier reports nothing, which from

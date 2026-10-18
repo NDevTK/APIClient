@@ -504,7 +504,7 @@ static bool wpt_request_asked_id(uint32_t id)
     int i;
     for (i = 0; i < g_inflight_n; i++)
         if (g_inflight[i].deliver != WPT_DELIVER_FETCH && g_inflight[i].deliver != WPT_DELIVER_SYNC &&
-            g_inflight[i].id == id) return true;
+            !g_inflight[i].cancelled && g_inflight[i].id == id) return true;
     return false;
 }
 
@@ -1851,21 +1851,33 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        Only `world.parked` is park-only: engine_notify_worlds_parked's one caller is inside the park (engine.c),
        so one outside a park is a park this host did not ask for. engine_notify_worlds_gone is also called by
        solver/flow.c's flow_release whenever a flow leaves the frontier, which is ordinary traffic. */
-    /* `fetch.cancel <method> <mode> <referrer policy> <referrer> <url>`: no flow is owed this request any more
-       (engine_pending_fetch_cancel). A send already on a connection finishes its bytes, since an HTTP/1.1
-       exchange ends only with its message or its connection, and is marked so its reply reaches nobody
-       (wpt_request_finish releases its record). One never sent has its record released here. */
-    if (nf == 6 && !strcmp(f[0], "fetch.cancel")) {
+    /* `fetch.cancel <identity>`: no flow is owed this request any more. The identity is a park's
+       `<method> <mode> <referrer policy> <referrer> <url>` (engine_pending_fetch_cancel) or a rendezvous id
+       (engine_host_terminate), the key its reply would be delivered under. A send already on a connection
+       finishes its bytes, since an HTTP/1.1 exchange ends only with its message or its connection, and is
+       marked so its reply reaches nobody (wpt_request_finish releases a park's record). A park never sent has
+       its record released here. */
+    if ((nf == 6 || nf == 2) && !strcmp(f[0], "fetch.cancel")) {
         int i, sent = 0;
-        for (i = 0; i < g_inflight_n; i++)
-            if (g_inflight[i].deliver == WPT_DELIVER_FETCH && !g_inflight[i].cancelled &&
-                !strcmp(g_inflight[i].method, f[1]) && !strcmp(g_inflight[i].mode, f[2]) &&
-                !strcmp(g_inflight[i].referrer_policy, f[3]) && !strcmp(g_inflight[i].referrer, f[4]) &&
-                !strcmp(g_inflight[i].url, f[5])) {
-                g_inflight[i].cancelled = 1;
-                sent = 1;
-            }
-        for (i = 0; !sent && i < g_owed_n; i++)
+        uint32_t id = 0;
+
+        if (nf == 2) {
+            char *endp;
+            unsigned long v = strtoul(f[1], &endp, 10);
+            DCHECK(*f[1] && *endp == '\0' && v != 0 && v <= UINT32_MAX,
+                   "a fetch.cancel notice's rendezvous id is not a number — engine_host_terminate writes the id "
+                   "engine_host_requests listed");
+            id = (uint32_t)v;
+        }
+        for (i = 0; i < g_inflight_n; i++) {
+            WptRequest *r = &g_inflight[i];
+            int named = nf == 2
+                ? r->deliver != WPT_DELIVER_FETCH && r->deliver != WPT_DELIVER_SYNC && r->id == id
+                : r->deliver == WPT_DELIVER_FETCH && !strcmp(r->method, f[1]) && !strcmp(r->mode, f[2]) &&
+                  !strcmp(r->referrer_policy, f[3]) && !strcmp(r->referrer, f[4]) && !strcmp(r->url, f[5]);
+            if (named && !r->cancelled) { r->cancelled = 1; sent = 1; }
+        }
+        for (i = 0; nf == 6 && !sent && i < g_owed_n; i++)
             if (!strcmp(g_owed[i].url, f[5]) && !strcmp(g_owed[i].method, f[1])) { wpt_owed_forget(i); break; }
         free(whole);
         return;
