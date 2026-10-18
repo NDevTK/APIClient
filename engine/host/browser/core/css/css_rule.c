@@ -4668,6 +4668,11 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        CSS Properties and Values API 1 §2.4), which is a step below the cascade and reads the registration rather than
        this rule list. */
     if (r->type == RULE_TYPE_PROPERTY) return true;
+    /* Nor does an `@font-feature-values`: CSS Fonts 4 §6.9 "Defining font specific alternates: the
+       @font-feature-values rule" names feature values for font families, and has no selector. Those values reach
+       an element only through §6.8 "Alternates and swashes: the font-variant-alternates property", at font
+       feature resolution, below the cascade. */
+    if (r->type == RULE_TYPE_FONT_FEATURE_VALUES) return true;
     /* A CSS Cascade 5 §6.4.4.2 `@layer` STATEMENT CONTRIBUTES ONLY TO THE ORDER, which is the whole of what the
        at-rule is for: CSS Cascade 5 §6.4.1 "Declaring Cascade Layers" lists it as "declaring a named layer
        without assigning any rules", so there is nothing inside it for a selector to match and nothing to emit.
