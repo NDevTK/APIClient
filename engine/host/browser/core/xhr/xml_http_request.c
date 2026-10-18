@@ -1394,6 +1394,10 @@ static JSValue xhr_reply_content(JSContext *ctx, XhrData *d, JSValue value)
     /* THE WORLD'S: a reply is bytes a SERVER stated, which the comment above already distinguishes from the
        attacker door. Either way nothing in the document this engine was served spells them. */
     r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, value);   /* consumes `value` as the example */
+    /* The text arms make a String and the json arm a ParseJSON value, whatever the reply sends. A pin answers
+       the bytes themselves, whose reads are real. */
+    if (concolic_is(r))
+        concolic_mark_json_value(r);
     free(shape);
     free(src);
     return r;

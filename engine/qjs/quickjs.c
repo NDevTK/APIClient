@@ -109291,8 +109291,14 @@ static JSValue js_json_parse_vfini(JSContext *ctx, void *st, bool take_result)
         DCHECK(g_concolic.builtin != NULL,
                "JSON.parse took its unknown-text arm in a host with no derivation hook — the completion has "
                "nothing to carry the source's identity, so the value would leave here as a bare parse result");
-        if (take_result)
+        if (take_result) {
             r = js_concolic_derive(ctx, unknown, "JSON.parse", r);
+            /* `early` is set exactly when no reviver is callable, and then step 4 returns ParseJSON's value. */
+            DCHECK(g_concolic.json_value != NULL,
+                   "JSON.parse took its unknown-text arm in a host that cannot state a ParseJSON value");
+            if (s->early && g_concolic.is(r))
+                g_concolic.json_value(r);
+        }
         JS_FreeValue(ctx, unknown);
     }
     return r;

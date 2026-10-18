@@ -119,6 +119,13 @@ int         concolic_root_whose_all(JSValueConst v, ConcolicRootWhose whose);
 JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, ConcolicRootWhose whose,
                      JSValue example);
 
+/* State that every reply could only make `v` a value ECMAScript §25.5.2.1 ParseJSON ( text ) produces: a
+   String, Number, Boolean, null, or an object an Array or Object literal defines, whose own keys are Strings.
+   A reader whose value is the reply's content says it of its own mint (a body's text() or json(), an
+   XMLHttpRequest's text or json response, JSON.parse with no callable reviver). Its members carry the fact,
+   and a Symbol-keyed read of one is answered by its type's intrinsic chain. `v` must be a concolic. */
+void concolic_mark_json_value(JSValueConst v);
+
 /* Predicates + accessors — the ONLY concolic test is this domain-carrying one (never a binary know-nothing). */
 int         concolic_is(JSValueConst v);              /* 1 iff v is a concolic value */
 const char *concolic_shape_c(JSValueConst v);         /* display shape (NULL if not concolic) */

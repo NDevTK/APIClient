@@ -177,6 +177,15 @@ typedef struct {
        step 1.c.iii, §22.1.3.5), so a later `+` over it takes the string arm with no example. Written at that
        mint only; 0 says nothing about the type. */
     uint8_t is_string;
+    /* Whether every reply could only make this a value ECMAScript §25.5.2.1 ParseJSON ( text ) produces, or
+       `undefined` where a member is absent: a String, Number, Boolean or null, or an object an ObjectLiteral
+       (ECMAScript §13.2.5.5 Runtime Semantics: Evaluation) or an ArrayLiteral (ECMAScript §13.2.4.2 Runtime
+       Semantics: Evaluation) defines. Such an object's
+       own keys are all Strings (ECMAScript §13.2.5.6 Runtime Semantics: PropertyDefinitionEvaluation makes
+       `__proto__` an own data property under ParseJSON) and its [[Prototype]] is its type's intrinsic, so a
+       read the own members cannot answer is a read of an intrinsic chain (json_chain_member). Written by
+       concolic_mark_json_value at a reply's mint and by concolic_exotic_get on a member; 0 says nothing. */
+    uint8_t json_value;
 } Concolic;
 
 /* One disposer for an owned list of spelled strings, shared by every record that holds one (a call predicate's
@@ -2823,6 +2832,100 @@ static int example_member(JSContext *ctx, JSValueConst parent_example, JSAtom at
     return held;
 }
 
+/* The [[Prototype]] of each type a ParseJSON value can have, as this realm's intrinsic: an ObjectLiteral's
+   %Object.prototype% (ECMAScript §13.2.5.5 Runtime Semantics: Evaluation), an ArrayLiteral's ArrayCreate
+   default %Array.prototype% (ECMAScript §10.4.2.2 ArrayCreate ( length [ , proto ] ) step 2), and what
+   ECMAScript §7.1.20 ToObject ( arg ) wraps a String, Number or Boolean base in. null has no chain: ECMAScript
+   §6.2.5.5 GetValue ( refRecord ) step 3.a throws first. */
+static const JSClassID json_type_class[] = {
+    JS_CLASS_OBJECT, JS_CLASS_ARRAY, JS_CLASS_STRING, JS_CLASS_NUMBER, JS_CLASS_BOOLEAN,
+};
+
+/* §10.1.8.1 OrdinaryGet ( obj, propertyKey, receiver ) for a key no own member of a JSON value holds, asked of
+   every type the value can have, since a reply decides the type. 1 with `*out` owned when every chain answers
+   the same data value (SameValue; `undefined` where no link holds the key): the read's answer whichever type
+   the reply sends. 0 when two chains disagree, or one holds an accessor or a Proxy, whose answer is the
+   page's code. `own_length` leaves out the Array and String chains, whose own `length` answers first. */
+static int json_chain_member(JSContext *ctx, JSAtom atom, int own_length, JSValue *out)
+{
+    JSValue first = JS_UNINITIALIZED;
+    size_t i;
+
+    *out = JS_UNDEFINED;
+    for (i = 0; i < sizeof json_type_class / sizeof json_type_class[0]; i++) {
+        JSClassID id = json_type_class[i];
+        JSValue proto, v;
+        int held, same;
+
+        if (own_length && (id == JS_CLASS_ARRAY || id == JS_CLASS_STRING))
+            continue;
+        proto = JS_GetClassProto(ctx, id);
+        DCHECK(JS_IsObject(proto), "a realm answered a JSON type's intrinsic prototype with no object — the "
+                                   "realm is built with all five, so this one was built without one");
+        held = example_member(ctx, proto, atom, &v);
+        JS_FreeValue(ctx, proto);
+        if (!held) {
+            JS_FreeValue(ctx, first);
+            return 0;
+        }
+        if (JS_IsUninitialized(first)) {
+            first = v;
+            continue;
+        }
+        same = JS_IsSameValue(ctx, first, v);
+        JS_FreeValue(ctx, v);
+        if (!same) {
+            JS_FreeValue(ctx, first);
+            return 0;
+        }
+    }
+    DCHECK(!JS_IsUninitialized(first), "no JSON type's chain was asked — at least the Object chain always is");
+    *out = first;
+    return 1;
+}
+
+/* What a Symbol-keyed read of a JSON value stands on, asserted of its example, which is the parse's own
+   output: it holds no own member under `atom`, and its [[Prototype]] is this realm's %Object.prototype% or
+   %Array.prototype%, so the realm json_chain_member reads intrinsics from is the one that parsed it. */
+static void json_value_assert_read(JSContext *ctx, const Concolic *c, JSAtom atom)
+{
+#if APICLIENT_DEV
+    JSValue proto, op, ap, ev;
+    int eflags, own;
+
+    if (!c->ex_has)
+        return;
+    own = example_slot(ctx, c->example, atom, &ev, &eflags);
+    JS_FreeValue(ctx, ev);
+    DCHECK(!own, "a JSON value's example holds a Symbol-keyed own member — ParseJSON keys every member by a "
+                 "String, so this example was built by something other than the parse that minted the value");
+    if (!JS_IsObject(c->example))
+        return;
+    proto = JS_GetPrototype(ctx, c->example);
+    op = JS_GetClassProto(ctx, JS_CLASS_OBJECT);
+    ap = JS_GetClassProto(ctx, JS_CLASS_ARRAY);
+    DCHECK(JS_IsSameValue(ctx, proto, op) || JS_IsSameValue(ctx, proto, ap),
+           "a JSON value's example has a [[Prototype]] that is neither this realm's %Object.prototype% nor its "
+           "%Array.prototype% — it was parsed in another realm, and the chains json_chain_member reads are this "
+           "one's. Carry the parsing realm on the value and read that realm's intrinsics");
+    JS_FreeValue(ctx, proto);
+    JS_FreeValue(ctx, op);
+    JS_FreeValue(ctx, ap);
+#else
+    (void)ctx; (void)c; (void)atom;
+#endif
+}
+
+/* Whether a property key is a Symbol: the one key kind no ParseJSON object holds. */
+static int atom_is_symbol(JSContext *ctx, JSAtom atom)
+{
+    JSValue k = JS_AtomToValue(ctx, atom);
+    int sym = JS_IsSymbol(k);
+
+    JS_FreeValue(ctx, k);
+    return sym;
+}
+
 /* Exotic [[Get]]: reading any field of a concolic value yields a derived concolic carrying the field-path
    identity ("{state}.admin"), which is also the @S injection identity. This lets `if (state.admin)` fork and
    lets a candidate inject at a precise source. The derived value carries the parent's example read through,
@@ -2870,6 +2973,22 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
         if (JS_IsUndefined(bex) || JS_IsNull(bex)) flow_mark_forced_arm();
         JS_FreeValue(ctx, bex);
     }
+    /* A JSON value's own keys are Strings, so a Symbol names none of them and the read is its type's chain.
+       Where every type's chain agrees, that answer is the read's whatever the reply sends: concrete, with no
+       unknown to fork on or to deliver a candidate at.
+       Named residual. Not covered: chains that disagree (Array and String hold @@iterator; Object, Number and
+       Boolean do not) leave the read the unknown member below. Next diff: ask the type through the branch seam
+       and answer each arm from its own chain. How its absence shows: a flow that decided `Array.isArray(x)`
+       still forks a branch over `x[Symbol.iterator]`. */
+    if (c->json_value && atom_is_symbol(ctx, atom)) {
+        JSValue v;
+
+        json_value_assert_read(ctx, c, atom);
+        if (json_chain_member(ctx, atom, 0, &v)) {
+            free(shape); free(ident);
+            return v;
+        }
+    }
     /* src = the field path (a precise @S injection point); root = the parent's, unchanged. A field of an
        unknown object is controlled separately, hence the new injection identity, but arrives by the same route
        as the object's bytes, and a report must say so. */
@@ -2883,6 +3002,23 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
 
             DCHECK(rc != NULL, "a member read was minted as something that is not a concolic value");
             rc->ex_has = 1;
+        }
+    }
+    /* A String-keyed member of a JSON value is an own member, itself a JSON value, or absent, when the read
+       goes to the type's chain. Where no chain holds the key, the absent read is `undefined` and the member is
+       a JSON value too. An Array's or String's own `length` answers before its chain, so that chain is not
+       asked for it. */
+    if (c->json_value && !atom_is_symbol(ctx, atom)) {
+        Concolic *rc = JS_GetOpaque(r, g_concolic_class);
+        const char *name = JS_AtomToCString(ctx, atom);
+        int is_len = name && !strcmp(name, "length");
+        JSValue v;
+
+        if (name) JS_FreeCString(ctx, name);
+        DCHECK(rc != NULL, "a member read was minted as something that is not a concolic value");
+        if (json_chain_member(ctx, atom, is_len, &v)) {
+            rc->json_value = JS_IsUndefined(v);
+            JS_FreeValue(ctx, v);
         }
     }
     /* A member read's `src` is its own shape, so it names this value: the precondition the `pin_of` arm above
@@ -4562,6 +4698,14 @@ JSValue concolic_isarray_hook(JSContext *ctx, JSValueConst v) {
     return r;
 }
 
+void concolic_mark_json_value(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+
+    DCHECK(c != NULL, "a value was marked as ParseJSON's that is not a concolic — the reply readers mark what "
+                      "their own mint returned, and a pin or a candidate answers bytes, which they do not mark");
+    if (c) c->json_value = 1;
+}
+
 /* `x in concolic` / property existence: a concolic collection "has" any key, so a membership gate still runs. */
 static int concolic_exotic_has(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     (void)ctx; (void)atom;
@@ -5814,6 +5958,7 @@ static int compile_global_named_dispatch(const char *name, int typeof_only) {
 static JSConcolicHooks g_hooks = {
     .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is,
     .rel = concolic_rel_hook, .type_of = concolic_typeof_hook, .is_array = concolic_isarray_hook,
+    .json_value = concolic_mark_json_value,
     .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
     .to_bool = concolic_tobool_hook,
     .key_read = concolic_key_read_hook,

@@ -337,6 +337,10 @@ static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, JSValue va
        construction rather than by this line and that one matching. */
     r = attacker ? concolic_source_wrap(ctx, shape, src, value)
                  : concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, value);
+    /* Whatever bytes a reply sends, text() makes a String and json() a ParseJSON value. A pin or a candidate
+       answers the bytes themselves, whose reads are real. */
+    if (concolic_is(r))
+        concolic_mark_json_value(r);
     free(shape);
     free(src);
     return r;
