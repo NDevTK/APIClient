@@ -2947,28 +2947,20 @@ int64_t flow_silence_notch(const Flow *f) {
     return (flow_own_silence(f) + acct_family_us(f)) / FLOW_SERVICE_US;
 }
 
-/* And the two pieces of that notch its published halves do not account for. The notch is `(own + fam) / S` and
-   the rows beside it are `own / S` and `fam / S`, which do not sum to it: integer division of a sum is the sum of
-   the divisions plus a carry, a whole notch (FLOW_AGE_QUANTUM, 0.012 points) against a whole-order spread of a few
-   hundredths on real documents. Write `own = k*S + p` and `fam = K*S + R`, with `p` and `R` the residues and `S` =
-   FLOW_SERVICE_US. Then, exactly for every non-negative pair,
-        notch = k + K + (p + R >= S)
-   and the three terms have three tempos:
-     k  moves only when the flow being CHARGED crosses a quantum, and flow_age_running charges exactly one member,
-        the running one, so between two dispatches this moves for AT MOST ONE MEMBER of the frontier.
-     K  is the family's, read by every member through one pointer: a common offset that orders nothing within a
-        family, and a real page's frontier is one family.
-     the carry is one bit, and its threshold `S - R` is common and sweeps downward as the family burns, so members
-        cross it in descending order of `p`: the boundary moving, not a member being re-keyed.
-   So the carry is the one part of a non-running member's weight that moves with no write to that member, which
-   is why the order's index orders each bucket's members by `p` rather than keying them on the carry: the
-   threshold is read once per family at the query (flow_ix_carry_from), a subtree wholly above it is bounded at the
-   family's coordinate one notch on, and no crossing re-keys anyone. The weight prices the notch in two integers,
-   `k` in the member's key and `K + carry` in the family's coordinate (acct_family_coord), each one multiply of one
-   exact integer, so a family crossing that trades a carry for a `K` leaves the bits as they were.
-   The identity is a theorem of integer division for non-negative operands (flow_age_running asserts the charge's
-   sign), so it is not asserted; what can fail (nothing else in the weight moves between two frontier generations)
-   is asserted in engine.c's preempt hook over its cached rival. */
+/* And the two pieces of that notch its published halves do not account for: `(own + fam) / S` is not
+   `own / S + fam / S` but differs from it by a carry of one notch (FLOW_AGE_QUANTUM). With `own = k*S + p`,
+   `fam = K*S + R` and `S` = FLOW_SERVICE_US, exactly for non-negative operands, notch = k + K + (p + R >= S).
+   The terms move at three tempos. `k` moves only for the member being charged (flow_age_running charges the running
+   one), so for at most one member per dispatch. `K` is the family's, read through one pointer: a common offset that
+   orders nothing within a family, and a real page's frontier is one family. The carry's threshold `S - R` is common
+   and sweeps down as the family burns, so members cross it in descending `p`: the boundary moves, no member is
+   re-keyed. So the carry is the one part of a non-running member's weight that moves with no write to it, and the
+   order's index orders each bucket by `p`: the threshold is read once per family at the query (flow_ix_carry_from),
+   and a subtree wholly above it is bounded at the family's coordinate one notch on. The weight prices the notch in
+   two integers, `k` in the member's key and `K + carry` in the family's coordinate (acct_family_coord), each one
+   multiply of an exact integer, so a crossing that trades a carry for a `K` leaves the bits as they were. The
+   identity is a theorem for non-negative operands (flow_age_running asserts the charge's sign), so it is not
+   asserted; what can fail is asserted in engine.c's preempt hook over its cached rival. */
 int64_t flow_silence_phase(const Flow *f) { return flow_own_silence(f) % FLOW_SERVICE_US; }
 
 /* And the bit itself, which with the family notch is the part of a non-running member's weight that moves with no
