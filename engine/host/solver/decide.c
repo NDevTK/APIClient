@@ -13,6 +13,7 @@
 
 static void *decide_fork_blob(int cursor, int arm, uint32_t asked);   /* the sibling's hot state (below) */
 static void *decide_fork_handoff(int arm);   /* …and the same, where no question could be spelled (below) */
+static int dec_replay(uint32_t asked);       /* the recorded arm at the cursor (below) */
 /* Nothing the run observed says which arm is the real one: decide_real_arm's answer for an example-free value,
    which dec_fork_here and decide_note_forced_arm read as "make no claim". Named once because three functions
    spell it, and decide_arm already answers -1 for "not concolic" and decide_value_arm for "not decided". */
