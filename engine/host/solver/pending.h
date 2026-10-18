@@ -268,16 +268,16 @@ int pending_driven_compose(int kind, int path_driven);
  * ITS REASON IS THE ZONE'S OWN WORDS AND IS THE ONLY ACCOUNT ANYBODY GETS of a request nobody made, which is
  * why it is the field's VALUE rather than a boolean beside a reason kept elsewhere: JS_NULL is "this zone has
  * refused nothing", and a string is the refusal with the sentence that explains it. */
-/* `declineTaken` IS WHETHER *THIS REGISTER'S* NAMING OF THAT RECORD HAS ALREADY FORKED ITS FAILURE ARM, and
+/* `declineTaken` IS WHETHER *THIS REGISTER'S* NAMING OF THAT RECORD HAS ALREADY FORKED ITS ARMS, and
  * without it the decline is a SPIN rather than a fork.
  *
- * A declined request has TWO feasible outcomes and this engine must explore both (CLAUDE.md §Solver-half:
- * where the domain permits both, BOTH arms run). One arm goes on WAITING — it is the success arm, and it is
- * un-fabricated: it holds no reply, invents no status and no bytes, and it fires the day the origin is widened.
- * The other takes §5.6's network error and runs the page's `.catch`, which is where bundles keep their fallback
- * endpoints, their retry hosts and their degraded-mode configuration. flow_decline_fork builds that pair, and
- * having built it once for a register it must never build it again: a second arm would be a byte-identical
- * timeline of the same flow, which is duplication and not exploration.
+ * A declined request's outcome is unobserved and this engine must explore it: where the domain permits more
+ * than one outcome, every one of them runs. One arm goes on WAITING: it holds no reply, invents no status and no
+ * bytes, and it fires the day the origin is widened. One takes §5.6's network error and runs the page's
+ * `.catch`, where bundles keep their fallback endpoints, retry hosts and degraded-mode configuration. For a
+ * `fetch()` one takes a reply no server sent, graded forced (core/fetch/fetch.h's fetch_reply_unknown).
+ * flow_decline_fork builds those arms, and having built them once for a register it must never build them
+ * again: a second set would be byte-identical timelines of the same flow, duplication and not exploration.
  * IT IS PER REGISTER AND NOT PER RECORD, WHICH IS WHY THE FORK UNSHARES BOTH SIDES. pending_fork SHARES a
  * record between an arm and its parent, so N flows can be parked on ONE record — and each of them is a
  * DIFFERENT timeline that diverged after the park, so each owes its own failure arm. A mark written on the
@@ -425,6 +425,8 @@ int pending_driven_compose(int kind, int path_driven);
     /* the zone has refused nothing about this request — see the two fields below */   \
     X(DECLINED,   "declined",  PEND_SHARE,  JS_NULL)                                   \
     X(DECLINE_TAKEN, "declineTaken", PEND_SHARE, JS_FALSE)                             \
+    /* a reply that came back with a status that is not ok has had its success arm forked (engine.c) */    \
+    X(SUCCESS_TAKEN, "successTaken", PEND_SHARE, JS_FALSE)                             \
     /* WHEN THIS REPLY WAS ASKED FOR, ON THE CLOCK THE PROGRAM SEQUENCE AND THE JOB QUEUE ARE BOTH NAMED BY —
        solver/flow.h's `g_work_seq`, which this register is the THIRD carrier to join. flow_task_precedes'
        own banner states the argument for two carriers and states it for this one without naming it: "a fixed

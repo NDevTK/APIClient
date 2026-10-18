@@ -1300,12 +1300,13 @@ JSValue pending_unshare(JSValueConst reg, int i)
        holds by construction rather than a promise about what the zone intends to do next. The wait it leaves
        the arm in is the PARK §@S requires, with the refusal's own reason on the record as the something that
        says so; the failure arm forked beside it takes its own private copy, which was never in the set
-       either. */
-    DCHECK(pending_get_int(src, PEND_KIND) == FLOW_PENDING_HOSTREQ || pending_entry_declined(src),
-           "a pending record that is neither a synchronous host request nor a DECLINED one was unshared — a "
-           "fetch record copied here would leave the copy outside the frontier's outstanding set while the "
-           "original still answers for the address, so the host would answer the original and the arm holding "
-           "the copy would wait for the rest of the session with nothing anywhere to say so");
+       either. An ANSWERED record is admitted for the same reason: the fill that answered it took it out. */
+    DCHECK(pending_get_int(src, PEND_KIND) == FLOW_PENDING_HOSTREQ || pending_entry_declined(src) ||
+               pending_get_int(src, PEND_HAVE_VALUE),
+           "a pending record that is neither a synchronous host request nor a DECLINED nor an answered one was "
+           "unshared — a fetch record copied here would leave the copy outside the frontier's outstanding set "
+           "while the original still answers for the address, so the host would answer the original and the "
+           "arm holding the copy would wait for the rest of the session with nothing anywhere to say so");
     dst = pend_entry_copy(src);
     /* AND THE REGISTER'S COUNT OF WHAT BLOCKS ITS FLOW IS UNTOUCHED, WHICH IS A STATEMENT AND NOT AN OMISSION.
        pend_entry_copy goes through PENDING_FIELDS, so the copy carries the source's `kind` and `haveValue`
