@@ -8,14 +8,12 @@
  * The track arithmetic after the last item is a constant step. Columns are sized before rows (css-grid-1 §11
  * "Grid Layout Algorithm"), so a row's item contributes at its used column width. Readers are drives over the
  * steps; an `_ask` reader returns "not yet" instead and is re-entered from its first step. */
-/* Named residual. Not covered: line-based placement, gutters, content alignment that moves a track, spanning
- * items, and every grid property but `display` and the two track lists (core/css/css_grid_track_list.h's own
- * residual covers the grammar). §8.5 "Grid Item Placement Algorithm" places every item in row flow, one per
- * cell: item k at column k mod C and row k div C over the explicit columns, C being at least one, with
- * implicit `auto` rows past the explicit ones (§7.6 "Implicit Track Sizing: the grid-auto-rows and
- * grid-auto-columns properties"' initial value). Next diff builds: §8.3 "Line-based Placement" over the
- * `grid-row-*` and `grid-column-*` properties. How its absence would show: a page's grid aborting at
- * grid_track.c's refusal of a declared placement property. */
+/* Named residual. Not covered: gutters, content alignment that moves a track, and every grid property but
+ * `display`, the two track lists (core/css/css_grid_track_list.h's residual covers their grammar) and the
+ * placement properties (core/layout/grid_placement.h's covers spans). Implicit tracks are `auto`, the initial
+ * `grid-auto-rows` and `grid-auto-columns` (§7.6 "Implicit Track Sizing"). Next diff builds: gutters, CSS
+ * Gaps 1's `row-gap` and `column-gap` as fixed-size tracks between the grid's tracks. How its absence would
+ * show: a page's grid aborting at grid_track.c's refusal of a declared gap. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_GRID_TRACK_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_GRID_TRACK_H
 
@@ -27,6 +25,7 @@
 #include "core/css/css_grid_track_list.h"
 #include "core/css/css_length.h"
 #include "core/layout/box_tree.h"
+#include "core/layout/grid_placement.h"
 
 /* What an axis is sized under: the available grid space (§11.2), or a min-content or max-content constraint
    (css-sizing-3 §2.1 "Auto Box Sizes"), under which §11.6's free space is zero or infinite. */
@@ -47,16 +46,17 @@ typedef struct {
     bool             growth_inf, has_items;
 } GridTrack;
 
-/* One run of §11.3 over one axis of `container`. `columns` is §8.5's column count every placement is read
-   from. `target` is the item whose track is wanted, or NULL; `target_index` its item number once `found`.
-   `tracks` is owned (released by `grid_axis_sizing_end`), the explicit tracks then any implicit rows. */
+/* One run of §11.3 over one axis of `container`. `placement` is §8.5's cell for every item (owned). `target`
+   is the item whose track is wanted, or NULL; `target_index` its item number once `found`. `tracks` is owned,
+   the explicit tracks then the implicit ones; both are released by `grid_axis_sizing_end`. */
 typedef struct {
     lxb_dom_element_t   *container, *target;
     bool                 vertical;
     GridSizingConstraint constraint;
     BoxTreeChild         cursor;
     bool                 items_done, sized, found;
-    size_t               columns, items, target_index;
+    GridPlacement        placement;
+    size_t               items, target_index;
     GridTrack           *tracks;
     size_t               ntracks, capacity;
     CssPx                avail;

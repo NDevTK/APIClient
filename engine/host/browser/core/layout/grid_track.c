@@ -9,7 +9,7 @@
 #include "core/css/css_style_declaration.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
-#include "core/layout/flex_item.h"
+#include "core/layout/grid_placement.h"
 #include "core/layout/grid_track.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/layout_job.h"
@@ -74,75 +74,20 @@ static void gt_require_supported_rows(lxb_dom_element_t *c)
                        "grid-gap properties\" as the row gutters");
 }
 
-/* An item's side: an item placed by a line is not auto-placed, on either axis. */
-static void gt_require_auto_placement(lxb_dom_element_t *item)
-{
-    static const char PLACEMENT[] =
-        "css-grid-1 §8.3 \"Line-based Placement\" and §8.5 \"Grid Item Placement Algorithm\" for an item with "
-        "a definite position";
-
-    gt_require_initial(item, "grid-column-start", "auto", PLACEMENT);
-    gt_require_initial(item, "grid-column-end", "auto", PLACEMENT);
-    gt_require_initial(item, "grid-column", "auto", PLACEMENT);
-    gt_require_initial(item, "grid-area", "auto", PLACEMENT);
-    gt_require_initial(item, "grid-row-start", "auto", PLACEMENT);
-    gt_require_initial(item, "grid-row-end", "auto", PLACEMENT);
-    gt_require_initial(item, "grid-row", "auto", PLACEMENT);
-}
-
-/* The grid item box-tree child `c` of `container` is, or NULL for a child that is none. css-grid-1 §6 "Grid
-   Items" states css-flexbox-1 §4's rule word for word — "Each in-flow child of a grid container becomes a grid
-   item, and each child text sequence is wrapped in an anonymous block container grid item", a white-space-only
-   sequence not rendered — and §9 takes an absolutely positioned child out of the grid's layout, as §4.1 does a
-   flex container's, so §4's classification answers for a grid. */
-static lxb_dom_element_t *gt_item_of(lxb_dom_element_t *container, BoxTreeChild c)
-{
-    char buf[160];
-
-    if (box_tree_child_is_pseudo(c))
-        DFAILF("%s has a pseudo-element child box, which css-grid-1 §6 \"Grid Items\" makes a grid item. "
-               "BUILD the pseudo-element as an item of the track sizing",
-               box_subject(container, buf, sizeof buf));
-    switch (flex_item_child_kind(container, c.node)) {
-    case FLEX_ITEM_CHILD_NONE:
-        return NULL;
-    case FLEX_ITEM_CHILD_TEXT:
-        DFAILF("%s has a child text sequence, which css-grid-1 §6 wraps in an anonymous block container grid "
-               "item. BUILD that item's contributions (core/layout/intrinsic_size.h's run sizes)",
-               box_subject(container, buf, sizeof buf));
-        return NULL;
-    case FLEX_ITEM_CHILD_ELEMENT:
-        break;
-    }
-    return lxb_dom_interface_element(c.node);
-}
-
-/* `item`'s number among `container`'s grid items, in order-modified document order (§8.5 places them in it;
-   `order` is refused by the flex item classification it shares). */
+/* `item`'s number among `container`'s grid items, in order-modified document order. */
 static size_t gt_item_index(lxb_dom_element_t *container, lxb_dom_element_t *item)
 {
     BoxTreeChild c;
     size_t k = 0;
 
     for (c = box_tree_first_child(container); box_tree_child_exists(c); c = box_tree_next_sibling(container, c)) {
-        lxb_dom_element_t *it = gt_item_of(container, c);
+        lxb_dom_element_t *it = grid_item_of(container, c);
 
         if (it == item) return k;
         if (it != NULL) k++;
     }
     DFAIL("a grid item's placement was asked for an element the container's grid items do not include");
     return 0;
-}
-
-/* §8.5's column count C: the explicit columns, or the one implicit column a grid without them gets. */
-static size_t gt_column_count(lxb_dom_element_t *container)
-{
-    CssGridTrackList list;
-    size_t n = 1;
-
-    if (css_computed_grid_track_list(container, "grid-template-columns", &list)) n = list.n;
-    css_grid_track_list_free(&list);
-    return n;
 }
 
 /* css-grid-1 §11.5's minimum contribution: "if the item's computed preferred size behaves as auto or depends
@@ -256,17 +201,29 @@ static GridTrack *gt_push(GridAxisSizing *g, CssGridTrackKind kind, double flex,
     return t;
 }
 
-/* The explicit tracks of the axis. A percentage resolves against the available grid space; with none (an
-   indefinite size, or a min-/max-content constraint) "the <percentage> must be treated as auto" (§7.2.1
-   "Track Sizes"). A grid with no explicit columns has one implicit `auto` column. */
+/* The number of explicit tracks on one axis of `container`. */
+static size_t gt_explicit_count(lxb_dom_element_t *container, bool vertical)
+{
+    CssGridTrackList list;
+    size_t n = 0;
+
+    if (css_computed_grid_track_list(container, vertical ? "grid-template-rows" : "grid-template-columns", &list))
+        n = list.n;
+    css_grid_track_list_free(&list);
+    return n;
+}
+
+/* The axis's tracks: the explicit ones, then the implicit ones §8.5's placement needs, which `grid-auto-rows`
+   and `grid-auto-columns` size, both at their initial `auto` (§7.6). A percentage resolves against the
+   available grid space; with none (an indefinite size, or a min-/max-content constraint) "the <percentage> must
+   be treated as auto" (§7.2.1 "Track Sizes"). */
 static void gt_tracks_init(GridAxisSizing *g)
 {
     CssGridTrackList list;
-    bool any = css_computed_grid_track_list(g->container, g->vertical ? "grid-template-rows" : "grid-template-columns",
-                                            &list);
-    size_t i;
+    size_t i, total = g->vertical ? g->placement.rows : g->placement.columns;
 
-    if (!any && !g->vertical) gt_push(g, CSS_GRID_TRACK_AUTO, 0.0, css_px(0.0));
+    (void)css_computed_grid_track_list(g->container, g->vertical ? "grid-template-rows" : "grid-template-columns",
+                                       &list);
     for (i = 0; i < list.n; i++) {
         const CssGridTrackSize *s = &list.tracks[i];
 
@@ -282,6 +239,7 @@ static void gt_tracks_init(GridAxisSizing *g)
         }
     }
     css_grid_track_list_free(&list);
+    while (g->ntracks < total) gt_push(g, CSS_GRID_TRACK_AUTO, 0.0, css_px(0.0));
 }
 
 void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, lxb_dom_element_t *target,
@@ -309,7 +267,8 @@ void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, lxb
     g->tracks = NULL;
     g->ntracks = g->capacity = 0;
     g->avail = css_px(0.0);
-    g->columns = gt_column_count(container);
+    grid_placement_run(container, gt_explicit_count(container, false), gt_explicit_count(container, true),
+                       &g->placement);
     /* §11.2 "Track Sizing Terminology"'s available grid space: "If the grid container's size is definite, then
        use the size of its content box." A container whose size depends on its tracks is sized under the
        max-content constraint its §5.2 auto size is defined by. */
@@ -538,14 +497,15 @@ bool grid_axis_sizing_step(GridAxisSizing *g)
         g->items_done = true;
         return true;
     }
-    item = gt_item_of(g->container, g->cursor);
+    item = grid_item_of(g->container, g->cursor);
     if (item != NULL) {
-        size_t t = g->vertical ? g->items / g->columns : g->items % g->columns;
+        GridCell cell;
+        size_t t;
 
-        gt_require_auto_placement(item);
-        /* §7.5 "The Implicit Grid": an item placed past the explicit rows creates implicit rows, sized by
-           `grid-auto-rows`, whose initial value is `auto`. */
-        while (t >= g->ntracks) gt_push(g, CSS_GRID_TRACK_AUTO, 0.0, css_px(0.0));
+        DCHECK(g->items < g->placement.n, "a grid axis met more items than its placement placed");
+        cell = g->placement.cells[g->items];
+        t = g->vertical ? cell.row : cell.col;
+        DCHECK(t < g->ntracks, "a grid item was placed in a track the axis does not have");
         if (g->tracks[t].kind != CSS_GRID_TRACK_BREADTH) {
             CssPx minc, maxc;
 
@@ -575,6 +535,7 @@ void grid_axis_sizing_end(GridAxisSizing *g)
     free(g->tracks);
     g->tracks = NULL;
     g->ntracks = g->capacity = 0;
+    grid_placement_free(&g->placement);
 }
 
 /* ---- readers -------------------------------------------------------------------------------------------- */
@@ -605,7 +566,7 @@ static void gt_run_drive(GridAxisSizing *g, lxb_dom_element_t *container, lxb_do
 static size_t gt_target_track(const GridAxisSizing *g)
 {
     DCHECK(g->found, "a grid item's track was read from a run that never reached the item");
-    return g->vertical ? g->target_index / g->columns : g->target_index % g->columns;
+    return g->vertical ? g->placement.cells[g->target_index].row : g->placement.cells[g->target_index].col;
 }
 
 bool grid_track_columns_ask(lxb_dom_element_t *container)
@@ -714,12 +675,16 @@ bool grid_container_inline_sizes_ask(lxb_dom_element_t *container, CssPx *min_co
 bool grid_item_track_min_is_auto(lxb_dom_element_t *container, lxb_dom_element_t *item, bool vertical)
 {
     CssGridTrackList list;
-    size_t k = gt_item_index(container, item), columns = gt_column_count(container);
-    size_t t = vertical ? k / columns : k % columns;
-    bool any = css_computed_grid_track_list(container, vertical ? "grid-template-rows" : "grid-template-columns",
-                                            &list);
-    bool autoish = !any || t >= list.n || list.tracks[t].kind != CSS_GRID_TRACK_BREADTH;
+    GridPlacement p;
+    size_t k = gt_item_index(container, item), t;
+    bool any, autoish;
 
+    grid_placement_run(container, gt_explicit_count(container, false), gt_explicit_count(container, true), &p);
+    DCHECK(k < p.n, "a grid item's track was asked for an item its container's placement did not place");
+    t = vertical ? p.cells[k].row : p.cells[k].col;
+    grid_placement_free(&p);
+    any = css_computed_grid_track_list(container, vertical ? "grid-template-rows" : "grid-template-columns", &list);
+    autoish = !any || t >= list.n || list.tracks[t].kind != CSS_GRID_TRACK_BREADTH;
     css_grid_track_list_free(&list);
     return autoish;
 }
@@ -731,6 +696,5 @@ CssPx grid_item_content_size_suggestion_inline(lxb_dom_element_t *container, lxb
            "container named");
     DCHECK(!scroll_container_is(item), "css-grid-1 §6.6 gives a scroll container no content-based minimum");
     gt_require_supported_columns(container);
-    gt_require_auto_placement(item);
     return gt_content_size_suggestion(item);
 }
