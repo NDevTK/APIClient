@@ -11,6 +11,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/css/css_computed_style.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/css/css_transform_matrix.h"
@@ -1492,24 +1493,37 @@ static JSValue js_ev_bounding_rect(JSContext *ctx, JSValueConst this_val, int ar
 
 /* ---- the members, the declaration and the per-realm install ---------------------------------------------- */
 
-static JSValue js_ev_get(JSContext *ctx, JSValueConst this_val, int magic)
+static JSValue ev_get_member(JSContext *ctx, const EvTarget *t, ElementViewMember member)
 {
-    EvTarget t;
-
-    ev_target(this_val, &t);
-    switch ((ElementViewMember)magic) {
-    case EV_SCROLL_TOP:     return ev_scroll_position(ctx, &t, true);
-    case EV_SCROLL_LEFT:    return ev_scroll_position(ctx, &t, false);
-    case EV_SCROLL_HEIGHT:  return ev_scroll_extent(ctx, &t, true);
-    case EV_SCROLL_WIDTH:   return ev_scroll_extent(ctx, &t, false);
-    case EV_CLIENT_HEIGHT:  return ev_client_extent(ctx, &t, true);
-    case EV_CLIENT_WIDTH:   return ev_client_extent(ctx, &t, false);
-    case EV_CLIENT_TOP:     return ev_client_edge(ctx, &t, true);
-    case EV_CLIENT_LEFT:    return ev_client_edge(ctx, &t, false);
+    switch (member) {
+    case EV_SCROLL_TOP:     return ev_scroll_position(ctx, t, true);
+    case EV_SCROLL_LEFT:    return ev_scroll_position(ctx, t, false);
+    case EV_SCROLL_HEIGHT:  return ev_scroll_extent(ctx, t, true);
+    case EV_SCROLL_WIDTH:   return ev_scroll_extent(ctx, t, false);
+    case EV_CLIENT_HEIGHT:  return ev_client_extent(ctx, t, true);
+    case EV_CLIENT_WIDTH:   return ev_client_extent(ctx, t, false);
+    case EV_CLIENT_TOP:     return ev_client_edge(ctx, t, true);
+    case EV_CLIENT_LEFT:    return ev_client_edge(ctx, t, false);
     }
     DFAIL("a CSSOM VIEW §6 Element member was read with a magic no member of this file declares — the magic IS "
           "the member, so an unknown one means a name was installed without a case to answer it");
     return JS_UNDEFINED;
+}
+
+/* One getter is one layout activation: the hold keeps the synchronous job's cascade record for the whole
+   member, so every element and property the member's layout asks is cascaded once rather than once per ask
+   (core/css/css_cascade_pass.h). The member still runs to completion on that job. */
+static JSValue js_ev_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    CssComputedStyleHold hold;
+    EvTarget t;
+    JSValue v;
+
+    ev_target(this_val, &t);
+    css_computed_style_hold_begin(&hold);
+    v = ev_get_member(ctx, &t, (ElementViewMember)magic);
+    css_computed_style_hold_end(&hold);
+    return v;
 }
 
 /* §4's `ScrollToOptions`, WHICH §6's THREE MEMBERS TAKE — declared where they are declared, because a
