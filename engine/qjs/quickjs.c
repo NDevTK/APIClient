@@ -54016,11 +54016,66 @@ static int tramp_cont_relink_outer(JSContext *ctx, void *clone, uint8_t kind)
            "a callback/accessor frame OWNS its arguments, and one with none has no argument buffer, so a "   \
            "pointer INTO the request's own storage means some call entry started borrowing it again")
 
+/* Which owned block of a step machine holds a pointer: a visit (the machine's own ownership declaration) whose
+   `array` and `buf` operations test each block and record the SLOT naming the one that holds it. The visit
+   operations take no context argument, so the question rides this record for the length of one
+   step_owned_block_of call, which runs no page code and cannot be re-entered. */
+static struct { const uint8_t *q; void **slot; size_t off; } g_step_locate;
+static void step_locate_val(JSContext *ctx, JSValue *slot) { (void)ctx; (void)slot; }
+static void step_locate_strbuf(JSContext *ctx, StringBuffer *slot) { (void)ctx; (void)slot; }
+static void step_locate_props(JSContext *ctx, JSPropertyEnum **slot, uint32_t n) { (void)ctx; (void)slot; (void)n; }
+static void step_locate_slots(JSContext *ctx, struct ValueSlot **slot, int64_t cap, int64_t from, int64_t to)
+{ (void)ctx; (void)slot; (void)cap; (void)from; (void)to; }
+static void step_locate_test(void **slot, size_t bytes)
+{
+    const uint8_t *b = *slot;
+    if (b && g_step_locate.slot == NULL && g_step_locate.q >= b && g_step_locate.q < b + bytes) {
+        g_step_locate.slot = slot;
+        g_step_locate.off = (size_t)(g_step_locate.q - b);
+    }
+}
+static void step_locate_buf(JSContext *ctx, void **slot, size_t bytes) { (void)ctx; step_locate_test(slot, bytes); }
+static void step_locate_atom(JSContext *ctx, JSAtom *slot) { (void)ctx; (void)slot; }
+static void step_locate_machine(JSContext *ctx, void **slot) { (void)ctx; (void)slot; }
+static void step_locate_array(JSContext *ctx, void **slot, size_t size, int n, int cap,
+                              void (*each)(JSContext *, void *, JSStepVisit *))
+{ (void)ctx; (void)n; (void)each; step_locate_test(slot, size * (size_t)(cap > 0 ? cap : 0)); }
+static void step_locate_shared(JSContext *ctx, void **slot, int *refs, void (*destroy)(JSContext *, void *))
+{ (void)ctx; (void)slot; (void)refs; (void)destroy; }
+static void step_locate_maprec(JSContext *ctx, struct JSMapRecord **slot) { (void)ctx; (void)slot; }
+static void step_locate_reexec(JSContext *ctx, REExecContext *ec, uint8_t **capture)
+{ (void)ctx; (void)ec; (void)capture; }
+static void step_locate_tree(JSContext *ctx, void **root, void **cursors[], int ncursors, const JSStepTreeOps *ops)
+{ (void)ctx; (void)root; (void)cursors; (void)ncursors; (void)ops; }
+static void step_locate_cache(JSContext *ctx, void **slot, void (*destroy)(JSContext *, void *))
+{ (void)ctx; (void)slot; (void)destroy; }
+static const JSStepVisit js_step_visit_locate = { step_locate_val, step_locate_strbuf, step_locate_props,
+                                                  step_locate_slots, step_locate_buf, step_locate_atom,
+                                                  step_locate_machine, step_locate_array, step_locate_shared,
+                                                  step_locate_maprec, step_locate_reexec, step_locate_tree,
+                                                  step_locate_cache };
+
+/* The slot of the step state `h` naming the owned array or buffer that holds `q`, with q's byte offset into it,
+   or NULL. The slot's offset from `h` is the same in a byte-copied clone of `h`, whose slot names the clone's own
+   copy of the block. */
+static void **step_owned_block_of(JSContext *ctx, const JSStepHdr *h, const void *q, size_t *off)
+{
+    void **slot;
+
+    g_step_locate.q = q; g_step_locate.slot = NULL; g_step_locate.off = 0;
+    h->def->visit(ctx, (void *)h, (JSStepVisit *)&js_step_visit_locate);
+    slot = g_step_locate.slot;
+    *off = g_step_locate.off;
+    g_step_locate.q = NULL; g_step_locate.slot = NULL;
+    return slot;
+}
+
 /* Moves the borrowed argument window of `cst`, the sibling's copy of the parked construct `ost`, into the
    sibling's copy of the storage holding it: the base frame's buffer (`ob`/`cb`, `bslots` slots), one of the
-   chain's frame buffers (`oa[j]`/`ca[j]`), or the cb buffer of the step machine that requested the construct. */
-static void clone_ctor_proto_window(const JSCtorProto *ost, JSCtorProto *cst, TrampFrame **oa, TrampFrame **ca,
-                                    int n, JSStackFrame *ob, JSStackFrame *cb, int bslots)
+   chain's frame buffers (`oa[j]`/`ca[j]`), or the state or an owned block of the step machine that requested the
+   construct (a JS_STEP_CONSTRUCT request's `[ctor, args...]` buffer). */
+static void clone_ctor_proto_window(JSContext *ctx, const JSCtorProto *ost, JSCtorProto *cst, TrampFrame **oa,
+                                    TrampFrame **ca, int n, JSStackFrame *ob, JSStackFrame *cb, int bslots)
 {
     const JSValue *q = (const JSValue *)ost->args;
     int j;
@@ -54046,6 +54101,18 @@ static void clone_ctor_proto_window(const JSCtorProto *ost, JSCtorProto *cst, Tr
                    "was moved into it");
             cst->args = (JSValueConst *)((uint8_t *)cst->outer + ((const uint8_t *)q - o0));
             return;
+        }
+        {
+            size_t boff;
+            void **oslot = step_owned_block_of(ctx, oh, q, &boff);
+            if (oslot) {
+                void **cslot = (void **)((uint8_t *)cst->outer + ((const uint8_t *)oslot - o0));
+                DCHECK(cst->outer != ost->outer && *cslot != *oslot,
+                       "clone_deep_flow: a parked construct's requester was not cloned, or its clone shares the "
+                       "owned block the argument window lies in");
+                cst->args = (JSValueConst *)((uint8_t *)*cslot + boff);
+                return;
+            }
         }
     }
     DFAIL("clone_deep_flow: a construct parked on its new.target's prototype read borrows an argument window "
@@ -54708,7 +54775,7 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                        "clone_deep_flow: the sibling's continuation chain does not have the parent's shape");
                 if (olk == CONT_CTOR_PROTO && ((JSCtorProto *)ost)->args_owned == NULL
                     && ((JSCtorProto *)ost)->args != NULL)
-                    clone_ctor_proto_window(ost, cst, oa, ca, n, ob, cb, bslots);
+                    clone_ctor_proto_window(ctx, ost, cst, oa, ca, n, ob, cb, bslots);
                 ost = onx; cst = cnx; olk = onk; clk = cnk;
             }
         }
