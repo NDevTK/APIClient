@@ -395,6 +395,9 @@ METRIC(step_reached_idle_life, "stepReachedIdleLife", LIFETIME, "ask", PROCESS, 
    asserted where both are in one hand. */
 METRIC(clock_advance_asked_life, "clockAdvanceAskedLife", LIFETIME, "ask", PROCESS, "core/timing/event_loop.c", INT)
 METRIC(clock_advance_declined_life, "clockAdvanceDeclinedLife", LIFETIME, "ask", PROCESS, "core/timing/event_loop.c", INT)
+/* Of those refusals, how many a timer's deadline asked against the owed replies' arrival
+   (event_loop_deadline_first): counted at the ask, so at most `clockAdvanceDeclinedLife`. */
+METRIC(clock_deadline_race_asked_life, "clockDeadlineRaceAskedLife", LIFETIME, "ask", PROCESS, "core/timing/event_loop.c", INT)
 /* `outOfPrograms` separates a member inside its last program from one past the last row, which
    a cursor value cannot: only the latter reaches engine.c's orphan arm. Its three parts also
    name members never dispatched or suspended in a live frame (the ladder sits below

@@ -247,41 +247,28 @@ uint64_t event_loop_work_banked_life(void);
  * nothing left to run, reports itself host-owed, and the scheduler suspends it until the host pays — the
  * ordinary park, at its own weight, holding every work item it had. Nothing is dropped, capped or reordered.
  *
- * RESIDUAL — NARROWER THAN HTML §8.7 Timers, AND NAMED BECAUSE THE CODE IS RIGHT AND NOT UNFINISHED.
- *   WHAT IS NOT COVERED: a timer a real browser fires WHILE a request is still in the air. Real time passes
- *     during the wait and reaches the expiry; this clock's two movers are a flow's own retired work and this
- *     jump, and a flow parked on the host retires none — so an expiry ahead of the clock is reached by the
- *     reply arriving first, never by the waiting itself.
- *   WHAT THE NEXT DIFF BUILDS: a duration the HOST contributes to the waiting flow's timeline — time the flow
- *     spent owed, entering this clock as an amount the flow did not compute — so that an expiry can be
- *     reached by waiting as well as by working, and the order between a deadline and a reply is decided by
- *     two moments rather than by which mechanism happens to move.
- *   HOW ITS ABSENCE SHOWS: a page that arms `setTimeout(() => controller.abort(), N)` around a `fetch()`
- *     never aborts — the abort runs after the reply lands, or not at all if no reply ever does.
- *   AND THE `NEXT DIFF` CLAUSE IS WRONG, DERIVED RATHER THAN GUESSED, AND IS KEPT IN ITS OWN WORDS BECAUSE IT
- *     IS THE DESIGN A READER RE-DERIVES FROM THE SPEC HALF ABOVE IT. A duration the HOST contributes is REAL
- *     ELAPSED TIME, and §Testing's solver differential requires a document's finding set to be a function of
- *     THE DOCUMENT ALONE under several schedules — so a clock any part of which is wall-derived makes the
- *     finding set schedule-dependent and that gate unsatisfiable by construction. The clause would buy the
- *     spec's ordering and spend the one property the whole differential rests on.
- *     WHAT THE SPEC HALF ACTUALLY NAMES IS AN UNKNOWN, WHICH THIS ENGINE ALREADY HAS A MECHANISM FOR. Whether
- *     the reply lands before the expiry depends on NETWORK LATENCY, which is external input, and §Solver-half
- *     calls unknown external input the most general concolic value and FORKS control flow over one. So the
- *     order between a deadline and an arrival is a branch, not a quantity: the PRIMARY arm delivers the reply
- *     (which is what happens today, and it is the arm that carries a concrete example because the engine is
- *     holding the bytes), and the forced sibling advances this clock to the expiry and fires the timer with the
- *     reply still parked in the register. Both worlds are explored whatever the real timing was, which is the
- *     property the host-duration design cannot have.
- *     WHAT IS MEASURED AND WHAT IS NOT. The licence above is almost never the refuser on a healthy run: on
- *     app.gitpod.io at a release artifact the pair reads `asked` in the thousands with `declined` at ONE, so
- *     the 142 descents the timer rung declined on that run were 141 "no source due" and one refusal. The
- *     population this residual is about is therefore NOT the common case there, and whether it is the whole of
- *     a run that fires NO timer at all is a reading of the same pair on such a run — which is why the pair
- *     exists and is not yet taken.
- *     SO THE NEXT DIFF IS THE FORK AND ITS PRECONDITION IS A PREDICATE OVER THE LATENCY, not a field on a
- *     reply: nothing crosses the ABI, nothing is stated by the trusted zone, and the two arms are this
- *     scheduler's ordinary ones. */
+ * WHERE A TIMER'S DEADLINE IS THE MOMENT AHEAD, THE ORDER IS NOT DECLINED BUT ASKED: event_loop_deadline_first
+ * below. Whether the replies in flight arrive before the deadline depends on network latency, which is external
+ * input, so their arrival is an unknown moment and the order is a predicate over it, forked where both answers are
+ * possible: one arm moves the clock and fires the timer with the replies still owed, the other waits for them.
+ * HTML §8.1.7.3 Processing model step 2.1 leaves the choice between task queues to the user agent ("chosen in an
+ * implementation-defined manner"), and §8.7 Timers's run steps after a timeout lets the wait run long ("Optionally,
+ * wait a further implementation-defined length of time"), so both orders are browsers' orders. The rendering
+ * source's frame still declines here. */
 int event_loop_may_advance(void);
+
+/* DOES THE DEADLINE `when`, AHEAD OF THE CLOCK, COME BEFORE THE REPLIES THIS FLOW IS OWED? 1 when nothing is owed
+   (event_loop_may_advance); otherwise the predicate `when` < the replies' arrival, asked through event_loop_before
+   (a restartable fork, so only between a flow's tasks), and a 1 licenses the one forward move to `when` that
+   follows. Named residual. Not covered: the arrival is one unknown per timeline, so a deadline raced once is not
+   raced again against a request issued after that race, and two deadlines are asked independently of their own
+   order. Next diff builds: an arrival named by the requests in flight, ordered with the deadlines it is asked
+   against. Absence shows as: a timer that waited for one reply also waiting, unforked, for a later one. */
+int event_loop_deadline_first(JSContext *ctx, JSValueConst when);
+
+/* How often event_loop_deadline_first asked its predicate: a lifetime count of the ask, ahead of the answer, so
+   it is at most the licence's refusals. */
+void event_loop_deadline_race_census(long *asked);
 
 /* HOW OFTEN THAT LICENCE WAS WANTED AND HOW OFTEN IT WAS REFUSED — the partition of a count solver/result.c
    already publishes, and the reason it needs one. `stepReachedIdleLife` is exactly the descents the TIMER rung

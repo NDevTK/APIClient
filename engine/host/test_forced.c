@@ -14988,7 +14988,17 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
     fold_row(&xabeat_tt, &xabeat_why, param_value_only_undriven(js, "/api/xabeat", "v", "load-loadend"),
              "NOT REACHED or wrong: an answer that landed before a long timeout did not end the send in `load` "
              "then `loadend`, with no `timeout`");
+    /* A deadline raced against a reply in flight: both orders, and nothing else. */
+    const char *xrace_why = NULL;
+    int xrace_tt = 1;
+    const int xr_rt = param_undriven_count(js, "/api/xraceorder", "v", "reply-timer");
+    const int xr_tr = param_undriven_count(js, "/api/xraceorder", "v", "timer-reply");
+    fold_row(&xrace_tt, &xrace_why,
+             xr_rt > 0 && xr_tr > 0 && xr_rt + xr_tr == param_undriven_count(js, "/api/xraceorder", "v", NULL),
+             "NOT REACHED or wrong: a 50 ms timer set beside a fetch() still in flight did not run in both orders "
+             "against the reply (`reply-timer` and `timer-reply`), or an arm recorded another order");
     const Probe rows[] = {
+        { "deadline-race", xrace_tt, "/api/xraceorder", SESS_EXPLORE, xrace_why },
         { "xhr-timeout", xatime_tt, "/api/xatimedout", SESS_EXPLORE, xatime_why },
         { "xhr-timeout-beaten", xabeat_tt, "/api/xabeat", SESS_EXPLORE, xabeat_why },
         { "fetch-timer", xftimer_tt, "/api/xforder", SESS_EXPLORE, xftimer_why },

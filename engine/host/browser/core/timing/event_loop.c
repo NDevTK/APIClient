@@ -16,7 +16,7 @@
    that is answered by the object's properties riding the per-flow COW delta rather than by a second object. */
 static JSValue g_rec = JS_UNDEFINED;
 static JSAtom  g_atom_now = JS_ATOM_NULL, g_atom_render = JS_ATOM_NULL, g_atom_seq = JS_ATOM_NULL,
-               g_atom_nest = JS_ATOM_NULL, g_atom_work = JS_ATOM_NULL;
+               g_atom_nest = JS_ATOM_NULL, g_atom_work = JS_ATOM_NULL, g_atom_licence = JS_ATOM_NULL;
 
 /* A FIELD OF THE RECORD, as the VALUE it is. OWNED. The two moments may be unknown external input; the
    insertion counter may not, and el_num_get below is where that half is asserted. */
@@ -125,8 +125,9 @@ void event_loop_init(JSContext *ctx)
     g_atom_seq = JS_NewAtom(ctx, "taskInsertionOrder");
     g_atom_nest = JS_NewAtom(ctx, "runningTimerNestingLevel");
     g_atom_work = JS_NewAtom(ctx, "retiredWorkSinceBase");
+    g_atom_licence = JS_NewAtom(ctx, "deadlineBeforeReplies");
     CHECK(g_atom_now != JS_ATOM_NULL && g_atom_render != JS_ATOM_NULL && g_atom_seq != JS_ATOM_NULL
-          && g_atom_nest != JS_ATOM_NULL && g_atom_work != JS_ATOM_NULL,
+          && g_atom_nest != JS_ATOM_NULL && g_atom_work != JS_ATOM_NULL && g_atom_licence != JS_ATOM_NULL,
           "event loop: the record's own keys could not be interned");
     /* NULL-PROTOTYPED, like §8.12 Animation frames's map: this is the loop's own storage and never the page's object, so it
        carries no members a page could have replaced. */
@@ -143,6 +144,9 @@ void event_loop_init(JSContext *ctx)
        itself rather than a sum that happens to equal it — see event_loop_now on why that distinction is load
        bearing for §8.1.7.1's last render opportunity time. */
     JS_SetProperty(ctx, g_rec, g_atom_work, JS_NewFloat64(ctx, 0));
+    /* 1 between event_loop_deadline_first answering that a deadline comes before the owed replies and the move
+       to it; a per-flow fact, so it rides the delta like the clock. */
+    JS_SetProperty(ctx, g_rec, g_atom_licence, JS_NewFloat64(ctx, 0));
     /* THE CLOCK STARTS AT A KNOWN MOMENT and becomes unknown only where a task source's own due moment is —
        which is what makes HIGH RESOLUTION TIME Level 3 §4 Time Origin, stamped from this clock at every
        realm's creation, a real number for every document created before the first such task fires. */
@@ -164,6 +168,8 @@ void event_loop_init(JSContext *ctx)
     agent_state_atom("event_loop", &g_atom_work,
                      "the retired-work key on that record — the clock's second mover, the work performed since "
                      "the base was last set absolutely");
+    agent_state_atom("event_loop", &g_atom_licence,
+                     "the key on that record licensing one move to a deadline that came before the owed replies");
 }
 
 /* THE RUNTIME, NOT A REALM, and it is core/platform.c's release column that calls it — see core/platform.h.
@@ -186,7 +192,8 @@ void event_loop_free(JSRuntime *rt)
     JS_FreeAtomRT(rt, g_atom_seq);
     JS_FreeAtomRT(rt, g_atom_nest);
     JS_FreeAtomRT(rt, g_atom_work);
-    g_atom_now = g_atom_render = g_atom_seq = g_atom_nest = g_atom_work = JS_ATOM_NULL;
+    JS_FreeAtomRT(rt, g_atom_licence);
+    g_atom_now = g_atom_render = g_atom_seq = g_atom_nest = g_atom_work = g_atom_licence = JS_ATOM_NULL;
 }
 
 /* THE CLOCK IS THE BASE PLUS THE WORK RETIRED SINCE THE BASE — see event_loop.h for why it is stored as two
@@ -406,7 +413,32 @@ JSValue event_loop_moment_plus(JSContext *ctx, JSValueConst moment, JSValueConst
    containment false from the first session close onward, which is the mismatch that file names as the wrong
    precedent to copy.
    A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on either, and the licence's answer is unchanged. */
-static long g_advance_asked, g_advance_declined;
+static long g_advance_asked, g_advance_declined, g_deadline_race_asked;
+
+void event_loop_deadline_race_census(long *asked)
+{
+    DCHECK(asked != NULL, "the deadline race's census was asked with nowhere to put its count");
+    *asked = g_deadline_race_asked;
+}
+
+/* The replies' arrival, as a source: the network states it and nothing in this engine computed it. */
+static const char EL_ARRIVAL[] = "HTML §8.1.7.3 Processing model: the arrival of the replies in flight";
+
+int event_loop_deadline_first(JSContext *ctx, JSValueConst when)
+{
+    char shape[sizeof EL_ARRIVAL + 2];
+    JSValue arrival;
+    int first;
+
+    if (event_loop_may_advance()) return 1;
+    snprintf(shape, sizeof shape, "{%s}", EL_ARRIVAL);   /* a source's shape is its provenance in braces */
+    g_deadline_race_asked++;
+    arrival = concolic_new(ctx, shape, EL_ARRIVAL, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
+    first = event_loop_before(ctx, when, arrival);
+    JS_FreeValue(ctx, arrival);
+    if (first) el_num_set(ctx, g_atom_licence, 1);
+    return first;
+}
 
 void event_loop_advance_census(long *asked, long *declined)
 {
@@ -477,7 +509,8 @@ void event_loop_advance_to(JSContext *ctx, JSValueConst when, JSValueConst due)
        own ask (`now < when`), read and never re-evaluated: over an unknown expiry a comparison is an arm to
        take, and an assertion that forks manufactures the world in which it holds. -1 is "never asked", which
        is a caller that did not go through the ordering at all and is caught by the monotonicity read above. */
-    DCHECK(event_loop_before_decided(ctx, now, when) != 1 || event_loop_may_advance(),
+    DCHECK(event_loop_before_decided(ctx, now, when) != 1 || el_num_get(ctx, g_atom_licence) == 1 ||
+           event_loop_may_advance(),
            "the event loop's clock was jumped FORWARD to a moment it has not reached while the host still "
            "owes this flow a reply — HTML has no step that moves a clock (every read of the unsafe shared "
            "current time in §8.1.7.3 Processing model is a read, and both task sources become due by a WAIT), "
@@ -488,6 +521,7 @@ void event_loop_advance_to(JSContext *ctx, JSValueConst when, JSValueConst due)
            "reports NO SOURCE DUE (a task whose expiry the clock has not reached is not a runnable task under "
            "§8.1.7.3 step 2) and the flow parks host-owed until the host pays");
     JS_FreeValue(ctx, now);
+    el_num_set(ctx, g_atom_licence, 0);   /* the licence covers this one move */
     el_set(ctx, g_atom_now, when);
     /* THE MOVE IS ABSOLUTE, SO THE WORK IT SUBSUMED IS SPENT. `when` is at or after the moment the loop stood
        at — which is what the invariant above establishes and what the caller's own ask decided — and that

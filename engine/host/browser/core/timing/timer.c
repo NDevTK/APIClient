@@ -1397,8 +1397,9 @@ int timer_run_due(JSContext *ctx)
             /* Neither is before the other, so the expiry IS the moment the loop stands at: the task is due
                now and the move retires the work that got here without manufacturing any time. */
             event_loop_advance_to(docctx, whenv, whenv);
-        } else if (!event_loop_may_advance()) {
-            /* STRICTLY AHEAD, AND THE CLOCK MAY NOT MANUFACTURE THIS TASK'S DUENESS. Under HTML §8.7 Timers
+        } else if (!event_loop_deadline_first(docctx, whenv)) {
+            /* STRICTLY AHEAD, AND IN THIS TIMELINE THE OWED REPLIES ARRIVE FIRST (event_loop_deadline_first
+               asked their arrival against this expiry; its other arm moves the clock below). Under HTML §8.7 Timers
                the wait that makes this task due runs "in parallel" with everything else, so a reply the host
                owes this flow can land first; this engine's jump cannot represent that and would decide it.
                NOTHING IS DROPPED AND NOTHING IS CAPPED. The entry stays in the map at its own expiry, and the
