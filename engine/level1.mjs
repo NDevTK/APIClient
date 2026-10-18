@@ -168,7 +168,8 @@ const job = (url, o = {}) => ({ msg: { sourceUrl: url, frameId: o.frameId || 0, 
                                        credentialed: o.credentialed !== false } });
 const row = (key, url, value, pulls, o = {}) =>
   ({ key, sourceUrl: url, origin: o.origin || originOfUrl(url), credentialed: o.credentialed !== false,
-     value, pulls, at: 1, shed: false, stranded: o.stranded === true, bytes: 0, rederivable: true });
+     value, pulls, at: 1, shed: false, stranded: o.stranded === true, crashed: o.crashed === true, bytes: 0,
+     rederivable: true });
 /* The key a walk over `P` gives the document at `url` with account `acct`, read through the shipped functions. */
 const keyOf = (P, url, acct) => B.level1Key(B.level1Tree(P.resident, P.idx), url, acct, true);
 /* An instance as hostSchedule and engineKey read one: a hot record with an address and a stated account. */
@@ -404,6 +405,12 @@ console.log('[level1] ── the weight that leaves the order ──');
   must(cen.exclStranded === 1 && cen.cands === 0,
        'a stranded residue has no bytes to build an instance over, so it is excluded and COUNTED', cen);
   console.log('[level1]   exclStranded     ' + JSON.stringify(cen));
+}
+{
+  const cen = B._bestCandidate(pop({ idx: idxOf(row('k1', 'https://a.test/', 4, 2 * PT, { crashed: true })) })).census;
+  must(cen.exclCrashed === 1 && cen.cands === 0,
+       'a residue whose resume aborted this engine is not re-admitted, and is COUNTED', cen);
+  console.log('[level1]   exclCrashed      ' + JSON.stringify(cen));
 }
 {
   const cen = B._bestCandidate(pop({ resident: [eng('https://a.test/admin')],

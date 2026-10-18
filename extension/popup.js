@@ -1048,7 +1048,8 @@ async function renderFrontierShare(bytes) {
     bytes === undefined ? { type: "FRONTIER_SHARE" } : { type: "FRONTIER_SHARE", bytes });
   DCHECK(r && typeof r.share === "number" && typeof r.docBytes === "number" &&
          typeof r.overShare === "number" && typeof r.shed === "number" &&
-         typeof r.stranded === "number" && typeof r.rederived === "number" && typeof r.entries === "number",
+         typeof r.stranded === "number" && typeof r.rederived === "number" && typeof r.entries === "number" &&
+         typeof r.crashed === "number",
          "the frontier-share command answered without the store's own numbers — this row is the only place " +
          "the user can see what the setting is doing, and a partial answer would render a policy that looks " +
          "as if it had never had to act");
@@ -1058,6 +1059,7 @@ async function renderFrontierShare(bytes) {
     mb(r.docBytes) + " MB stored across " + r.entries + " parked page(s)" +
     (r.overShare > 0 ? "; " + mb(r.overShare) + " MB over the share is the only copy there is and was kept" : "") +
     "; " + r.shed + " shed, " + r.rederived + " fetched back, " + r.stranded + " could not be" +
+    (r.crashed > 0 ? "; " + r.crashed + " stopped because resuming it crashed this engine" : "") +
     (r.persistError ? "; NOT SAVED for the next session (" + r.persistError + ")" : "");
 }
 

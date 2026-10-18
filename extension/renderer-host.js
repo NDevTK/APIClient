@@ -125,7 +125,10 @@
                         names[i] + ") — every renderer is built out of these five and there is no other way " +
                         "to get them into an opaque-origin frame");
       var bufs = await Promise.all(rs.map(function (r) { return r.arrayBuffer(); }));
+      var sum = new Uint8Array(await crypto.subtle.digest("SHA-256", bufs[4]));
       return {
+        /* The engine's identity: SHA-256 of the WASM every renderer of this zone runs, lower-case hex. */
+        digest: Array.from(sum, function (b) { return (b < 16 ? "0" : "") + b.toString(16); }).join(""),
         check: new Blob([bufs[0]], { type: "text/javascript" }),
         mojo: new Blob([bufs[1]], { type: "text/javascript" }),
         mojom: new Blob([bufs[2]], { type: "text/javascript" }),
@@ -608,6 +611,9 @@
     return r;
   }
   self.rendererLaunch = rendererLaunch;
+  /* Which engine this zone's renderers run, by its bytes: a fact a stored record can be stamped with, so a later
+     zone can tell whether the program that produced it is the one it runs. */
+  self.rendererProgramDigest = async function rendererProgramDigest() { return (await programOnce()).digest; };
 
   /* THE PROVISIONING, EXERCISED — AND EXERCISED PLURAL, WHICH IS THE ONLY VERSION OF THIS THAT PROVES
      ANYTHING. SECURITY.md: "A HOST THAT CANNOT PROVISION A SECOND INSTANCE HAS NOT TESTED THE TRANSPORT, AND

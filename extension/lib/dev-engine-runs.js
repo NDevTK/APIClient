@@ -81,6 +81,8 @@ function devEngineRunsSection(runs) {
                                    + `which are other documents`; break;
       case "unread":       coldTxt = `cold tier DEFECT${_bid} — the store enumerates this run's own key for `
                                    + `this address and answered a read of it with nothing`; break;
+      case "crashed":      coldTxt = `cold tier holds a residue${_bid} whose resume aborted this engine — `
+                                   + `booted fresh instead of re-running it`; break;
       case "hit":          coldTxt = `cold tier HIT${_bid}`
                                    + (m.coldOther ? ` — ${_oth} further entr${m.coldOther === 1 ? "y" : "ies"} `
                                                   + `parked at this address under other bundle ids` : ""); break;

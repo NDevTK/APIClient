@@ -1148,7 +1148,8 @@ function egressPolicyPersist() {
   return frontierPrefPut("exploreOrigins", self.safeFetchEgressTable());
 }
 /* A frontier entry: { key: address|identity|bundle, sourceUrl, topLevelUrl, origin, responseHeaders, html, code,
-   recipes, value, pulls, at, credentialed, provenance }, plus `shed`/`stranded` for a shed entry. Rehydration
+   recipes, value, pulls, at, credentialed, provenance }, plus `shed`/`stranded` for a shed entry and `crash`
+   for one whose resume aborted the engine (frontierRecordCrash). Rehydration
    rebuilds the document from (html, code) and resumes the recipes, so a parked flow on any site can advance
    later even when that page is not open. */
 /* The document half of a cold-tier entry, one speller for the store's writer and its reader. Recipes replay
@@ -1459,6 +1460,11 @@ function frontierRecord(e, when) {
   DCHECK(e.html === undefined,
          "a stored cold-tier entry " + when + " holds its document inline — the store names a document by its " +
          "digest (lib/body-store.js), and frontierBodiesReady converts every entry an older build wrote");
+  DCHECK(e.crash === undefined ||
+         (e.crash !== null && typeof e.crash === "object" && typeof e.crash.program === "string" &&
+          /^[0-9a-f]{64}$/.test(e.crash.program) && typeof e.crash.why === "string" && e.crash.why !== ""),
+         "a cold-tier entry " + when + " records a crash without the engine it happened under or its cause (" +
+         JSON.stringify(e.crash) + ") — the program digest is what decides whether re-running it is news");
   DCHECK(e.stranded !== true || e.shed === true,
          "a cold-tier entry " + when + " marked STRANDED while it still holds its document — stranded means a " +
          "shed entry's proved re-derivation stopped working, and an entry with its bytes has nothing to " +
@@ -1557,9 +1563,12 @@ async function frontierLookup(key, sourceUrl) {
                        credential state): a different document, which resumes none of them.
      `unread`        — this key is stored and the get did not answer it; the only defect of the six.
      `hit`           — the key answered and the session resumes from it.
+     `crashed`       — the key answered with a residue whose resume aborted this engine: the session boots
+                       fresh instead, since re-running it unchanged repeats the abort (frontierRecordCrash).
    `others` is the evidence beside the word, not entailed by it (a hit can have older deploys' residues
    parked beside it). It is `null` on the two arms that counted nothing. */
-const COLD_LOOKUP = ["hit", "unvisited", "other-bundle", "other-identity", "unread", "not-asked", "unreadable"];
+const COLD_LOOKUP = ["hit", "crashed", "unvisited", "other-bundle", "other-identity", "unread", "not-asked",
+                     "unreadable"];
 function coldLookupOf(fkey, look) {
   if (look === null) return { state: "not-asked", others: null };
   if (look.keys === null) return { state: "unreadable", others: null };
@@ -1572,7 +1581,7 @@ function coldLookupOf(fkey, look) {
          "document's own address did not name it — the two halves are one read transaction, so this is the " +
          "address range or the separator split disagreeing with the key engineRoot composed, and the " +
          "sibling-entry count every other arm reports would be a count over a different address");
-  if (look.entry) return { state: "hit", others: others };
+  if (look.entry) return { state: frontierCrashedHere(look.entry) ? "crashed" : "hit", others: others };
   if (held) {
     /* Reading (c): both halves are this zone's records under its keys in one snapshot, so this is the store
        contradicting itself. Release returns the word, leaving the state a miss leaves (`prior` null, the engine
@@ -1633,6 +1642,27 @@ async function frontierPut(key, entry) {
        inside its share does one comparison. */
     await frontierResidency();
   } catch (e) { RETHROW_FATAL(e); frontierFail("write", e); }
+}
+/* Record on the stored entry `prior` that resuming it aborted this engine with the root line `why`. The recipes,
+   document and account are kept: the residue is evidence, and a later engine may run it. */
+async function frontierRecordCrash(prior, why) {
+  const program = await programDigest();
+  DCHECK(prior && typeof prior.key === "string" && typeof prior.recipes === "string" && prior.recipes !== "",
+         "a crash was recorded against no stored residue — only a run that resumed recipes records one");
+  DCHECK(!frontierCrashedHere(prior),
+         "a residue already recorded as aborting this engine was resumed and aborted it again — engineRoot boots " +
+         "such a document fresh and the Level-1 walk excludes its row, so a third door re-admitted it");
+  DCHECK(typeof why === "string" && why !== "",
+         "a crashed run left no root line to record — engineCrash writes the @E line every crash carries");
+  const entry = Object.assign({}, prior, { crash: { program: program, why: why } });
+  frontierRecord(entry, "recorded a crash");
+  try {
+    await frontierBodiesReady();
+    await frontierWrite(entry.key, entry, entry.shed === true ? undefined : await frontierBody(entry.doc));
+    if (_frontierIndexBuilt) _frontierIndex.set(entry.key, frontierRow(entry));
+  } catch (e) { RETHROW_FATAL(e); frontierFail("write", e); }
+  DCHECK(!_frontierIndexBuilt || _frontierIndex.get(entry.key).crashed === true,
+         "a recorded crash did not reach the ranking view — the Level-1 walk would offer the residue again");
 }
 /* A stored document's bytes, by the digest its entry names. */
 async function frontierBody(digest) {
@@ -1844,6 +1874,24 @@ function level1Ahead(a, b) {
    entry cannot disagree; it is built once per zone lifetime from the store. */
 const _frontierIndex = new Map();   // key -> frontierRow(entry): { key, sourceUrl, value, pulls, at, shed, stranded, bytes, rederivable }
 let _frontierIndexBuilt = false;
+/* The engine this zone runs (renderer-host's rendererProgramDigest), read once per zone lifetime: a crash on a
+   cold entry names the program it happened under, and only that program's re-run of the residue repeats it. */
+let _programDigest = null;
+async function programDigest() {
+  if (_programDigest === null) _programDigest = await self.rendererProgramDigest();
+  DCHECK(typeof _programDigest === "string" && /^[0-9a-f]{64}$/.test(_programDigest),
+         "renderer-host named the engine it runs with something that is not a SHA-256 digest (" +
+         String(_programDigest) + ")");
+  return _programDigest;
+}
+/* Whether `e` records a crash under the engine this zone runs. Asked only after programDigest has answered. */
+function frontierCrashedHere(e) {
+  if (e.crash === undefined) return false;
+  DCHECK(_programDigest !== null,
+         "a cold-tier entry recording a crash was read before this zone knew which engine it runs — " +
+         "frontierIndex, engineRoot and frontierRecordCrash ask programDigest first");
+  return e.crash.program === _programDigest;
+}
 function frontierRow(e) {
   DCHECK(typeof e.key === "string" && e.key !== "",
          "a cold-tier entry carries no key — it is the name the pool holds this item under while it ranks it, " +
@@ -1863,12 +1911,13 @@ function frontierRow(e) {
      opens an entry to learn its size. */
   return { key: e.key, sourceUrl: e.sourceUrl, origin: e.origin, credentialed: e.credentialed,
            value: e.value, pulls: e.pulls, at: e.at,
-           shed: e.shed === true, stranded: e.stranded === true,
+           shed: e.shed === true, stranded: e.stranded === true, crashed: frontierCrashedHere(e),
            bytes: frontierDocBytes(e), rederivable: frontierRederivable(e),
            doc: e.shed === true ? null : e.doc, docBytes: e.shed === true ? 0 : e.docBytes };
 }
 async function frontierIndex() {
   if (_frontierIndexBuilt) return _frontierIndex;
+  await programDigest();
   const all = await frontierAll();
   /* Rows restored from an earlier session name hosts this session has not asked. */
   await level1AskSites(all.filter((e) => e && typeof e.sourceUrl === "string").map((e) => e.sourceUrl));
@@ -2089,7 +2138,7 @@ const CAND_SPREAD = [
    `_candRanked` attaches each on the first member. */
 function _candCensus() {
   const cen = { cands: 0, candUnserved: 0, candSiteUnserved: 0, exclSub: 0, exclSeedLive: 0, exclSeedParked: 0,
-                exclLive: 0, exclHeld: 0, exclStranded: 0 };
+                exclLive: 0, exclHeld: 0, exclStranded: 0, exclCrashed: 0 };
   for (const k of CAND_KINDS) cen[k.pop] = 0;
   return cen;
 }
@@ -2268,6 +2317,9 @@ function _bestCandidate(pop) {
     /* A stranded residue has no bytes to build an instance over, so it is not a candidate; its recipes remain
        and the next visit resumes them through engineRoot's frontierGet. */
     if (row.stranded) { cen.exclStranded++; continue; }
+    /* A residue whose resume aborted this engine is the finding, recorded on the entry; re-running it unchanged
+       would abort the same program at the same place. A new engine is a change, so the row returns with it. */
+    if (row.crashed) { cen.exclCrashed++; continue; }
     const key = _candRanked(cen, "cold", row.sourceUrl, row, tree);
     if (!best || level1Ahead(key, best.key)) best = { kind: "cold", row, key };
   }
@@ -3000,6 +3052,12 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, inherited,
     } catch (e) {
       engineBootFailed(eng, e);
       RETHROW_FATAL(e);
+      /* An engine abort while resuming a residue (cold_resume runs inside Begin) is recorded on that entry, as
+         a crashed step's is at `finish`. */
+      if (eng._residueEntry !== null) {
+        const lines = e && Array.isArray(e.rendererLines) ? e.rendererLines : [];
+        await frontierRecordCrash(eng._residueEntry, rootWhyLine(lines) || String((e && e.message) || e));
+      }
     }
   })();
   return eng;
@@ -3042,7 +3100,7 @@ function engineReserve(cluster, docId, msg, referenced) {
                 groupId: msg.groupId, _resumed: null, referenced,
                 /* Whether engineRoot has opened this instance's jar to zoneRouteSetCookies. */
                 cookiesOpen: false,
-                _coldLookup: null, _coldOther: null, _bundleId: null,
+                _coldLookup: null, _coldOther: null, _bundleId: null, _residueEntry: null,
                 origin: msg.origin, _resolvers: [], _remoteAsked: new Set(),
                 /* The requests this zone has asked for and not yet answered to the engine, keyed as the
                    answering seam is keyed. The engine re-lists a request with neither value nor refusal every
@@ -3269,6 +3327,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      and, in the same transaction, the keys stored for this address. The three fields are written here, at the
      one moment the answer exists. */
   const _look = persist ? await frontierLookup(fkey, msg.sourceUrl) : null;
+  if (_look && _look.entry) await programDigest();
   const _cl = coldLookupOf(fkey, _look);
   eng._coldLookup = _cl.state; eng._coldOther = _cl.others; eng._bundleId = _bid;
   /* The word and the residue come from one read and are not asserted against each other: `hit` is defined by
@@ -3294,7 +3353,13 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   // Phase 2: seed the frontier, fresh or from parked recipes. Each step is one slice, ended at the work quantum.
   /* The residue handed over, named before it is sent: solver/engine.c seeds from recipes or a boot flow and
      never both, so "" is this zone's own statement that nothing was resumed. */
-  const _residue = (prior && prior.recipes) ? prior.recipes : "";
+  const _residue = (prior && prior.recipes && _cl.state !== "crashed") ? prior.recipes : "";
+  DCHECK(_residue === "" || !frontierCrashedHere(prior),
+         "a residue this engine already aborted on is about to be resumed again — the lookup's `crashed` word " +
+         "boots the session fresh, so this is the word and the residue disagreeing");
+  /* Named before Begin, which is where cold_resume runs: an abort there is this residue's crash as much as one
+     in a later step. */
+  eng._residueEntry = _residue !== "" ? prior : null;
   await rend.renderer.begin({ recipes: _residue });
   /* An open referrer policy entry's answer, read after Begin and before any step so it is the parse's
      (documentReferrerPolicy). A live seed's root keeps the browser's documentId as its name (engineCreate). */
@@ -6518,6 +6583,11 @@ const _hostOps = {
         value: _account.value, pulls: _account.pulls, at: _account.at,
       });
     }
+    /* A crashed resume is the finding about that residue: the entry keeps its recipes and records the abort
+       under this engine, so the person sees it and no admission re-runs it unchanged. A crash of a fresh boot
+       resumed nothing and records nothing on an entry. */
+    if (result._run === "crashed" && eng._residueEntry !== null)
+      await frontierRecordCrash(eng._residueEntry, rootWhyLine(eng.lines));
     if (!engineHasLiveCaller(eng)) {
       /* No live caller (a child document or a rehydrated recipe): its findings merge into the cumulative store
          here. Not caught, so the merge's own contract asserts (_mergeFrontierResult) are seen. */
@@ -6846,6 +6916,7 @@ self.astDispatch = async function astDispatch(msg) {
                                         docBytes: _frontierStats.docBytes, overShare: _frontierStats.overShare,
                                         shed: _frontierStats.shed, stranded: _frontierStats.stranded,
                                         rederived: _frontierStats.rederived,
+                                        crashed: [..._index.values()].filter((r) => r.crashed).length,
                                         entries: _index.size } };
     }
     /* ─── The person's egress sentence, and the extension's one door onto it ─────────────────────────────
