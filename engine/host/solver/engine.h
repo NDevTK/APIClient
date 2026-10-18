@@ -613,11 +613,12 @@ void engine_perform(JSContext *ctx, const char *token, const char *record);
 
 /* What the ask side did, as lifetime counts. `asks` is how many cross-agent operations reached this instance,
  * raised before any check can refuse them; `attached` is how many (operation, timeline) pairs engine_perform
- * made. Together they split a zero `flows` in engine_retract_census three ways: nothing arrived; every live
- * timeline contradicted the addressee; or every holder left before the park. `flows <= attached` is asserted
- * in test_forced.c's park ladder. `attached` and `asks` have no order, since one arrival attaches to every
- * live timeline. */
-void        engine_perform_census(long *asks, long *attached);
+ * made; `inherited` is how many fork arms began holding a question their parent held. Together they split a
+ * zero `flows` in engine_retract_census three ways: nothing arrived; every live timeline contradicted the
+ * addressee; or every holder left before the park. `flows <= attached + inherited` is asserted in
+ * test_forced.c's park ladder, since a holder got its question one of those two ways. `attached` and `asks`
+ * have no order, since one arrival attaches to every live timeline. */
+void        engine_perform_census(long *asks, long *attached, long *inherited);
 
 /* Which timeline of `doc_name` flow `f` has already committed to: the addressee a cross-agent operation
  * carries, read from the commitment record (flow.h). Heap; the caller frees. NULL means the flow addresses

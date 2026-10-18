@@ -3052,13 +3052,16 @@ char *engine_flow_addressee(JSContext *ctx, Flow *f, const char *doc_name)
    ask, not the outcome. Together they split engine_retract_census's `flows` of 0 at a park into its three
    readings: (i) no question arrived (the asking path or the zone's routing); (ii) one arrived and every live
    timeline contradicted the addressee the peer named (the `attached > 0` DCHECK at this function's foot, in
-   release); (iii) one was attached and every holder left the frontier before the park walked. */
-static long g_perform_asks, g_perform_attached;
+   release); (iii) one was attached and every holder left the frontier before the park walked. `inherited` is the
+   third count: the arms a fork made that hold a question their parent held (engine_sibling_assemble copies the
+   queue and the row tokens), which holders that engine_perform never attached to. */
+static long g_perform_asks, g_perform_attached, g_perform_inherited;
 
-void engine_perform_census(long *asks, long *attached)
+void engine_perform_census(long *asks, long *attached, long *inherited)
 {
-    DCHECK(asks != NULL && attached != NULL, "the cross-agent ask census was asked to fill nothing");
-    *asks = g_perform_asks; *attached = g_perform_attached;
+    DCHECK(asks != NULL && attached != NULL && inherited != NULL,
+           "the cross-agent ask census was asked to fill nothing");
+    *asks = g_perform_asks; *attached = g_perform_attached; *inherited = g_perform_inherited;
 }
 
 void engine_perform(JSContext *ctx, const char *token, const char *record)
@@ -4961,6 +4964,10 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        was asked of the arm too, and the arm answers under its own delta (§7.2.1's multiplicity when a document's
        state is its flows). Each arm starts its own copy; the [record, token] entries are shared. */
     sib->perform_q = perform_q_fork(ctx, parent);
+    /* The arm now holds every question its parent held, queued or started, without engine_perform attaching it
+       there; counted, so the park's holder count is bounded by attaches plus inheritances. Asked after both
+       copies (the row tokens above, the queue on the line before). */
+    if (flow_owes_answer(sib)) g_perform_inherited++;
     /* The unmade deliveries by the same split: a message that arrived in this timeline before the branch arrived
        in the arm too, which is one message in two timelines, not one delivered twice. */
     sib->deliver_q = flow_deliver_fork(ctx, parent);

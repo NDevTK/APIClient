@@ -15974,24 +15974,25 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
        last-holder rule the row exists for. A finding about a contract is a finding; it is not a licence to
        change the contract. */
     long retract_flows = 0, retract_started = 0, retract_back = 0;
-    long perform_asks = 0, perform_attached = 0;
+    long perform_asks = 0, perform_attached = 0, perform_inherited = 0;
     int cold_park_remoteop, cold_park_remoteop_once, cold_park_remoteop_asked, cold_park_remoteop_many;
     int cold_park_remoteop_arrived, cold_park_remoteop_attached;
     engine_retract_census(&retract_flows, &retract_started, &retract_back);
     /* AND WHAT THE ASK SIDE DID, which is a different pair of events from what the RETRACTION found and was
        unpublished until there was a rung that needed it. Both are lifetime counts; see solver/engine.h. */
-    engine_perform_census(&perform_asks, &perform_attached);
-    /* THE CONTAINMENT, ASSERTED WHERE BOTH NUMBERS ARE IN ONE HAND rather than restated in either producer's
-       header. A member cannot hold a question that was never attached to it, so the park's `flows` is bounded
-       by the ask side's `attached` — and that bound is the whole of why the ladder's lowest 0 is a
-       LOCALISATION rather than three readings of one number.
+    engine_perform_census(&perform_asks, &perform_attached, &perform_inherited);
+    /* THE CONTAINMENT, ASSERTED WHERE THE NUMBERS ARE IN ONE HAND rather than restated in either producer's
+       header. A member holds a question only because engine_perform attached it there or because the member
+       is a fork arm of a holder (engine_sibling_assemble copies both places a question lives), so the park's
+       `flows` is bounded by `attached + inherited` — and that bound is the whole of why the ladder's lowest 0
+       is a LOCALISATION rather than three readings of one number.
        IT IS ONE-SIDED ON PURPOSE. `attached <= perform_asks` is FALSE and asserting it would fire on the
        ordinary case: one arrival is attached to EVERY live timeline, so a forked document makes `attached`
        many times `asks` and no order between those two means anything at all. */
-    DCHECK(retract_flows <= perform_attached,
-           "more members held a cross-agent question at this park than engine_perform ever ATTACHED — a "
-           "question reached a flow's arrival slot or a program's row without going through the attach loop, "
-           "so something other than engine_perform is writing the place the retraction walks");
+    DCHECK(retract_flows <= perform_attached + perform_inherited,
+           "more members held a cross-agent question at this park than engine_perform ever ATTACHED plus the "
+           "fork arms that inherited one — a question reached a flow's arrival slot or a program's row through "
+           "neither the attach loop nor a fork, so a third path is writing the place the retraction walks");
     /* The token claim, made after the park rather than where this host requests it: solver/engine.c parks by
        two exits (the host's request, and a session closed over survivors resting on a refusal), both walk
        engine_retract_span, and only the first passes through fixture_want_park. `started` is the strip's own
