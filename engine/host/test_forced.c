@@ -13309,9 +13309,20 @@ TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
              "one §7.1.21 property key");
     fold_row(&abskey_tt, &abskey_why, !param_value_is(js, "/api/abskey", "other", "false"),
              "`k + \"5\"` read the slot written under `k + \"\"` — two property names shared one slot");
+    /* `0 + s` is §13.15.3's numeric arm and `"0" + s` its string arm, so the address spells the first as an
+       expression and the second as the string it produced; and `"…&t=" + ("0" + s)` joins two Strings, so no
+       `+` appears between them. */
+    const char *abssum_why = NULL; int abssum_tt = 1;
+
+    fold_row(&abssum_tt, &abssum_why, !!strstr(js, "abssum?n="),
+             "NOT REACHED: no /api/abssum record, so the script adding the absent global did not run");
+    fold_row(&abssum_tt, &abssum_why, !!strstr(js, "abssum?n=0+__tfAbsSum&t=0__tfAbsSum"),
+             "the address does not spell `0 + s` as `0+…` and `\"0\" + s` as `0…` — a sum and a concatenation of "
+             "one operand share a shape, or a concatenation onto a String the page built took the numeric arm");
     const Probe rows[] = {
         { "absent-arm", absarm_tt, "__tfAbsentGate", SESS_EXPLORE, absarm_why },
         { "absent-key-slot", abskey_tt, "__tfAbsentKey", SESS_EXPLORE, abskey_why },
+        { "absent-sum-shape", abssum_tt, "__tfAbsSum", SESS_EXPLORE, abssum_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

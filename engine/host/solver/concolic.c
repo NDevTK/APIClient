@@ -172,6 +172,10 @@ typedef struct {
        other bytes are the page's own; NULL on every other value, whose whole shape spells one unknown. Owned. */
     int *hole_span;
     int  hole_n;
+    /* Whether this value is a String whatever its bytes: a concatenation's string arm returns one (§13.15.3
+       step 1.c.iii, §22.1.3.5), so a later `+` over it takes the string arm with no example. Written at that
+       mint only; 0 says nothing about the type. */
+    uint8_t is_string;
 } Concolic;
 
 /* One disposer for an owned list of spelled strings, shared by every record that holds one (a call predicate's
@@ -5612,7 +5616,9 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     }
     /* Step 1.c is a disjunction, so one String operand decides the string arm whether or not the other has an
        example; the result's shape is then the page's bytes around its operands' holes. */
-    int string_arm = op == JS_CONCOLIC_ADD_CONCAT || (hava && JS_IsString(exa)) || (havb && JS_IsString(exb));
+    Concolic *ka = ca ? JS_GetOpaque(a, g_concolic_class) : NULL, *kb = cb ? JS_GetOpaque(b, g_concolic_class) : NULL;
+    int string_arm = op == JS_CONCOLIC_ADD_CONCAT || (hava && JS_IsString(exa)) || (havb && JS_IsString(exb)) ||
+                     (ka && ka->is_string) || (kb && kb->is_string);
     JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
     /* The shape, by the arm. On the string arm it is the string the concatenation produced, so
        `"/api/" + cfg.region` renders `/api/{cfg.region}`, the @H provenance the endpoint surface is built from
@@ -5661,7 +5667,12 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     JSValue result = concolic_derived(ctx, shape, src, root, derived_root_whose(ops, 2), ident, example);
                                                               /* consumes example and ident */
     if (af) aff_attach(result, af);
-    if (string_arm) hole_spans_concat(result, a, strlen(sha), b);
+    if (string_arm) {
+        Concolic *rs = JS_GetOpaque(result, g_concolic_class);
+
+        hole_spans_concat(result, a, strlen(sha), b);
+        if (rs) rs->is_string = 1;
+    }
     /* `x + ""` and `"" + x`: §13.15.3 step 1.c returns ToString(ToPrimitive(x)) concatenated with nothing, so
        the result is the string form of the one unknown operand. Recorded through a chain, so `(x + "") + ""`
        names `x` too. */

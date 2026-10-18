@@ -7,6 +7,9 @@
    A first script spends an unknown read off the global as a property key twice, once as `k + ""` and once as
    `k`: §7.1.21 ToPropertyKey makes them one name, so the value written under one is read under the other,
    while `k + "5"` is a different name and does not read that slot.
+   The same script adds another unknown to the Number 0 and to the String "0" and sends both in one address, so
+   the probe rows can read that a sum and a concatenation spell two shapes, and that a concatenation onto a
+   String the page already built takes the string arm.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_ABSENTARM_H
@@ -20,6 +23,7 @@ static const char HTML_ABSENTARM[] =
     "<script>"
     "var absKo = {}; var absK = window.__tfAbsentKey; absKo[absK + ''] = 'str';"
     "fetch('/api/abskey?same=' + (absKo[absK] === 'str') + '&other=' + (absKo[absK + '5'] === undefined));"
+    "var absS = window.__tfAbsSum; fetch('/api/abssum?n=' + (0 + absS) + '&t=' + ('0' + absS));"
     "</script>"
     "<script>"
     "function absBoom(tag) { throw new Error('absBOOM' + tag); }"
