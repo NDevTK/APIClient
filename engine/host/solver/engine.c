@@ -2061,37 +2061,21 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
     return verdict;
 }
 
-/* Is a commitment to receiving `vec` already implied by this timeline's record? One fact with two callers: the
- * arm a delivery forecloses and the commitment it records are minted together or not at all.
+/* Is a commitment to receiving `vec` already implied by this timeline's record? The arm a delivery forecloses
+ * and the commitment it records share this answer, so they are minted together or not at all. A world's
+ * ancestors are totally ordered, so a received commitment at or above `vec` refuses all `vec` would, and its arm
+ * forecloses a subtree holding `vec`; foreclosed rows are not read. The test is not "any commitment below the
+ * nearest named ancestor": world_ancestry keeps only worlds that crossed as a head, so that ancestor is the
+ * nearest sender, not a fork point, and suppressing on it retires an arm on the receiver's own record.
  *
- * A world's ancestors are totally ordered, so pairwise-comparable received worlds form a chain, and a commitment
- * at or above `vec` refuses everything `vec` would; the row is redundant, and so is the arm ¬`vec`, since the arm
- * minted for the deeper commitment forecloses a subtree containing `vec`. Foreclosed rows are not read: being on
- * the far side of some branch says nothing about whether this is the first delivery from `vec`.
+ * Named residual. Not covered: k mutually contradicting worlds under one named ancestor yield k+1 arms, one a
+ * timeline no sender was in. Next diff builds: a vector naming a retired fork point once its other subtree has
+ * sent (world.h: an unfiltered chain grows with branches taken), so world_vec_fork_point names a real branch.
+ * Absence shows as: live flows tracking the peer's distinct sent worlds, refusals growing as their product.
  *
- * The test is deliberately not "any commitment below the vector's nearest named ancestor": world_ancestry
- * filters the chain to worlds that have themselves crossed as a head, so the nearest named ancestor is the
- * nearest one that sent, not a fork point, and twenty siblings naming one ancestor is the ordinary shape of a
- * peer whose boot flow forks. Suppressing on that would retire an arm on an observation about the receiver's own
- * commitments, which falsifies nothing about the sender.
- *
- * Named residual. Not covered: with the nearest named ancestor standing in for a fork point, k mutually
- * contradicting worlds under it produce k+1 arms where the sender's forest has k leaves, so one arm is a timeline
- * no sender was in; uncertainty keeps it. Next diff builds: a vector naming a retired fork point exactly when its
- * other subtree has sent something (not an unfiltered chain, which world.h explains grows with branches taken
- * rather than fork depth); then world_vec_fork_point answers about a real branch and the arms collapse to the
- * sender's leaves. Absence shows as: the receiver's live flow count tracking the peer's distinct sent worlds,
- * and refusals growing as their product, because engine_route attaches every record to every live flow.
- *
- * `covering`, when non-NULL, receives the weakest arm among the covering rows (written only when the answer
- * is 1). Deciding to push a row needs the bit; deciding that an arm exists needs the arm, and a second producer's
- * row (an answer commitment) can cover a delivery. Several received rows may cover one vector, so the answer is
- * the weakest of them rather than the first match, which would depend on push order.
- *
- * `need_arm` asks whether a commitment that has an other side is implied. A row with no arm (a root world heard
- * from while its sender carried no mark) does not imply one: a root world's flow can take a mark later without
- * forking (a cold-resumed replay re-pins as it runs under a fresh root), and its marked delivery owes the
- * timeline that never received it, so only the arm-free commitment that row states is covered. */
+ * `covering`, when non-NULL and the answer is 1, gets the weakest covering row's arm (answer commitments too),
+ * never the first match. Under `need_arm` an arm-free row (a root world heard while unmarked) covers nothing:
+ * that flow can take a mark without forking, and its marked delivery owes the timeline that never received it. */
 static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec, bool need_arm,
                                   FlowCommitArm *covering)
 {
