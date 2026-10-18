@@ -14768,15 +14768,17 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
              "an abort over a response unread since its clone did not error that response alone — its own "
              "branch must reject with an AbortError (`own`) and the clone's branch must read (`clone`)");
     /* Fetch §5.6 step 11's "abort controller", as the engine's cancel edge: an aborted park still owed a reply
-       tells the host to end its send, once, and a park whose reply already arrived tells it nothing. */
+       tells the host to end its send, and a park whose reply already arrived tells it nothing. The document
+       forks before this statement runs, so each flow issues its own record and cancels it: one notice per
+       flow, at least one. */
     const char *apcancel_why = NULL;
     int apcancel_tt = 1;
     fold_row(&apcancel_tt, &apcancel_why, param_value_only(js, "/api/apcancelled", "v", "AbortError"),
              "NOT REACHED or wrong: a fetch whose signal was aborted while its reply was owed did not reject "
              "with an AbortError");
-    fold_row(&apcancel_tt, &apcancel_why, tf_cancelled("/api/apcancel") == 1,
-             "an aborted park still owed its reply did not send exactly one `fetch.cancel` notice — the host "
-             "would go on with a send no flow is owed (solver/engine.c's engine_pending_fetch_cancel)");
+    fold_row(&apcancel_tt, &apcancel_why, tf_cancelled("/api/apcancel") >= 1,
+             "an aborted park still owed its reply sent no `fetch.cancel` notice — the host would go on with a "
+             "send no flow is owed (solver/engine.c's engine_pending_fetch_cancel)");
     fold_row(&apcancel_tt, &apcancel_why, tf_cancelled("/api/apread") == 0 && tf_cancelled("/api/apunread") == 0,
              "a park whose reply had already arrived sent a `fetch.cancel` notice — its send is over, and the "
              "host would be told to end a request it already answered");
