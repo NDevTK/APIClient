@@ -92,17 +92,24 @@ static const char HTML_NAVIGATION[] =
        relative URL resolves against this document. Fetch §5.6 "Fetch methods" reads the receiver's realm
        ("Let relevantRealm be this's relevant realm"), so the response is this realm's `Response`. The same
        function called with the removed window as its receiver rejects with a TypeError in Chrome 155. The
-       fixture host echoes each request's referrer, and this document's own `fetch` is the control. */
-    "var _sbI = document.createElement('iframe'); _sbI.hidden = true; document.head.appendChild(_sbI);"
-    "var _sbW = _sbI.contentWindow, _sbF = _sbW.fetch; document.head.removeChild(_sbI);"
-    "var _sbO = { method: 'POST', body: 'x', keepalive: true, referrerPolicy: 'unsafe-url' };"
-    "Promise.all([fetch('/api/sbxctl', _sbO), _sbF.bind(window)('/api/sbxsend', _sbO)]).then(function (rs) {"
-    " var a = rs[0].headers.get('x-echo-referrer'), b = rs[1].headers.get('x-echo-referrer');"
-    " fetch('/api/sbxbound?v=' + (a === b ? 'same' : 'differ') + '&m=' + rs[1].headers.get('x-echo-method')"
-    " + '&realm=' + (rs[1] instanceof Response ? 'this' : 'other'));"
-    "}, function (e) { fetch('/api/sbxbound?v=rejected' + e.name); });"
-    "_sbF.call(_sbW, '/api/sbxdead', { method: 'POST', body: 'x' }).then(function () {"
-    " fetch('/api/sbxdetached?v=resolved'); }, function (e) { fetch('/api/sbxdetached?v=' + e.name); });"
+       fixture host echoes each request's referrer, and this document's own `fetch` is the control. All three
+       calls are made on the line after the removal, before any task can run. Each outcome is reported from the
+       one arm that ran, inside one async function: a `.then` callback that never runs is driven as an orphan
+       with symbolic arguments, and its address would carry values no browser sends. */
+    "(async function () {"
+    " var I = document.createElement('iframe'); I.hidden = true; document.head.appendChild(I);"
+    " var W = I.contentWindow, F = W.fetch; document.head.removeChild(I);"
+    " var o = { method: 'POST', body: 'x', keepalive: true, referrerPolicy: 'unsafe-url' };"
+    " var both = Promise.all([fetch('/api/sbxctl', o), F.bind(window)('/api/sbxsend', o)]);"
+    " var dead = F.call(W, '/api/sbxdead', { method: 'POST', body: 'x' });"
+    " var q; try { var rs = await both;"
+    "  q = (rs[0].headers.get('x-echo-referrer') === rs[1].headers.get('x-echo-referrer') ? 'same' : 'differ')"
+    "   + '&m=' + rs[1].headers.get('x-echo-method') + '&realm=' + (rs[1] instanceof Response ? 'this' : 'other');"
+    " } catch (e) { q = 'rejected' + e.name; }"
+    " fetch('/api/sbxbound?v=' + q);"
+    " var d; try { await dead; d = 'resolved'; } catch (e) { d = e.name; }"
+    " fetch('/api/sbxdetached?v=' + d);"
+    "})();"
 
     /* HTML §7.4.4 "Non-fragment synchronous \"navigations\""' URL AND HISTORY UPDATE STEPS, reached as every
        client-side router reaches them: §7.2.5 "The History interface"'s `pushState` with a url — the one
