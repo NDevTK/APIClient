@@ -15,8 +15,9 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_THREAD_WORK_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_THREAD_WORK_H
 
-/* Named residual. Not covered: host work that is neither a parse nor a decode charges nothing, which today is
-   layout (the rest-unit kinds REST_UNIT_LAYOUT_*) and C builtins over their input (JSON, codecs, sorts without a
+/* Named residual. Not covered: host work that is neither a parse, a decode nor a constraint probe charges
+   nothing, which today is layout (every REST_UNIT_LAYOUT_* kind, LINE_METRICS included, so rest_unit.c's bound
+   (2) reads zero for them), a fork's snapshot and C builtins over their input (JSON, codecs, sorts without a
    callback), so the slice and the aging do not see it. Next diff builds: a kind per such component, charged by
    its input at a rate read off this census, as the four below are. Absence shows as: a step whose `stepUs` is
    large against its `stepWork` beside the census's per-opcode price. */
@@ -24,6 +25,10 @@
 #define THREAD_WORK_UNITS_PER_KIB_DECODE 41
 #define THREAD_WORK_UNITS_PER_KIB_HTML 78
 #define THREAD_WORK_UNITS_PER_KIB_CSS 490
+/* A constraint-store probe hashes its whole key (solver/concolic.c's cons_hash): 1.25 ns per byte at -O1 on the
+   calibration box, so 6 units per KiB. A key is the predicate's spelling and grows with the path that built
+   it, which is why a probe is priced by its bytes and not per call. */
+#define THREAD_WORK_UNITS_PER_KIB_CONSTRAINT 6
 
 #include <stddef.h>
 #include <stdint.h>
@@ -33,6 +38,7 @@ typedef enum {
     THREAD_WORK_DECODE,         /* Encoding §6.1 decode (core/encoding/encoding.c's encoding_decode) */
     THREAD_WORK_HTML_PARSE,     /* bytes fed to an HTML parser (core/html/html_parse.c, fragment_parser.c) */
     THREAD_WORK_CSS_PARSE,      /* a style sheet's rules parsed from text (core/css/css_style_sheet.c) */
+    THREAD_WORK_CONSTRAINT,     /* a path-constraint key hashed for a probe (solver/concolic.c's cons_hash) */
     THREAD_WORK_N
 } ThreadWorkKind;
 

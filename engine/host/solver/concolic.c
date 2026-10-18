@@ -10,6 +10,7 @@
 #include "solver/endpoint.h"  /* the @H surface is told which globals a program names (`.global_named`) */
 #include "solver/rung_entry.h" /* the scheduler is told the arms a program asks for by name */
 #include "solver/metrics.h"   /* the attacker-source mint raises `_sourceReads` */
+#include "core/timing/thread_work.h"   /* a constraint probe is priced by the bytes it hashes */
 #include "check.h"
 #include <stdarg.h>
 #include <stdlib.h>
@@ -875,9 +876,16 @@ static int g_ex_contra_any;
    under a clear latch cannot exist. */
 static int g_pin_any;
 
-static uint32_t cons_hash(const char *k) {   /* FNV-1a over the constraint key */
+/* Above zero while an assert reads the store: a read made only to check an invariant prices nothing, so a dev
+   build retires the same work as a release one. */
+static int g_cons_unpriced;
+/* FNV-1a over a constraint key, priced by its bytes: the probe is the store's one primitive and its cost is the
+   key's length, which grows with the path that spelled it. */
+static uint32_t cons_hash(const char *k) {
+    const char *p = k;
     uint32_t h = 2166136261u;
-    while (*k) { h ^= (unsigned char)*k++; h *= 16777619u; }
+    while (*p) { h ^= (unsigned char)*p++; h *= 16777619u; }
+    if (!g_cons_unpriced) thread_work_charge(THREAD_WORK_CONSTRAINT, (uint64_t)(p - k));
     return h;
 }
 /* The one probe, over the head's index or a segment's (a segment's index is the head's, handed over unchanged
@@ -1833,6 +1841,15 @@ int concolic_src_pinned(const char *src) {
     if (!src) return 0;
     e = cons_lookup(src);
     return (e && e->val) ? 1 : 0;
+}
+/* The same question asked by an assert, which prices nothing (g_cons_unpriced). */
+static int src_pinned_unpriced(const char *src) {
+    int r;
+
+    g_cons_unpriced++;
+    r = concolic_src_pinned(src);
+    g_cons_unpriced--;
+    return r;
 }
 
 /* One entry of an enumeration over the constraint (concolic.h's concolic_pins_each and
@@ -2983,7 +3000,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
        The candidate arm has already returned, so no substitution disjunct is needed here (concolic_new's copy
        needs one because its candidate path falls through). This goes when `pin_of` is routed through the
        predicate, making the divergence unspellable. */
-    DCHECK(!concolic_src_pinned(shape),
+    DCHECK(!src_pinned_unpriced(shape),
            "a source this flow had PINNED reached the ordinary member mint — `pin_of` answered NO PIN for a "
            "path `concolic_src_pinned` says is pinned, so the two spellings of one question over one chain "
            "have diverged. Every later read of this member composes a value this flow has already proved "
@@ -5497,7 +5514,7 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, Concoli
     }
     /* The tie `concolic_exotic_get`'s pin arm asserts. A candidate re-fire skips the arm deliberately, so a
        pinned source then reaches the mint and concolic_derived returns the attacker's bytes. */
-    DCHECK(cand_matches(src) || !src || !concolic_src_pinned(src),
+    DCHECK(cand_matches(src) || !src || !src_pinned_unpriced(src),
            "a source this flow had PINNED reached the ordinary source mint on a path no candidate is "
            "substituting — `pin_of` answered NO PIN for a path `concolic_src_pinned` says is pinned, so the "
            "two tests over one chain have diverged and this read is about to mint an unknown for a value the "
@@ -5545,7 +5562,7 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, Concoli
            the contract every consumer reads off the return; the two early returns are invisible in the
            signature, so a consumer must not assert that a source mint is always concolic. Stated over the whole
            function rather than this path, so it survives a reordering of the arms. */
-        DCHECK(concolic_is(r) || concolic_src_determined(src),
+        DCHECK(concolic_is(r) || cand_matches(src) || src_pinned_unpriced(src),
                "the source mint answered a value that is not concolic for a source this flow has NEITHER "
                "pinned NOR substituted a candidate at — the two early returns above are the only arms "
                "entitled to answer a plain value, so this is a derivation that lost the triple and every "
