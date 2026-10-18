@@ -65,12 +65,14 @@ export const RENDERER = MOJO.interfaceOf('content.mojom.Renderer');
    closure variable inside `createExportWrapper`'s returned arrow, so `String(M._qjs_init)` does not contain
    it; a check written that way parses nothing, matches nothing and passes always, which is the vacuous check
    this whole neighbourhood exists to prevent. The declaration is in the emitted text, which is where
-   `assertEngineAbiPairing` already reads it from, so this asks the same artifact the same question. */
+   `assertEngineAbiPairing` already reads it from, so this asks the same artifact the same question. The
+   name is quoted with either quotation mark, one mark per wrapper, since emscripten's spelling of the
+   string differs between its releases. */
 function glueArity(entry) {
   const src = readFileSync(GLUE_PATH, 'utf8');
   const m = src.match(
-    new RegExp(`createExportWrapper\\("${entry}",\\s*wasmExports\\["${entry}"\\],\\s*(\\d+)\\)`));
-  const n = Number((m || [])[1]);
+    new RegExp(`createExportWrapper\\((["'])${entry}\\1,\\s*wasmExports\\[\\1${entry}\\1\\],\\s*(\\d+)\\)`));
+  const n = Number((m || [])[2]);
   if (!Number.isFinite(n))
     throw new Error(`renderer_abi.mjs could not read \`${entry}\`'s declared arity out of ${GLUE_PATH} — the ` +
       "glue's shape changed, and an unanswerable check must say so rather than pass.");
