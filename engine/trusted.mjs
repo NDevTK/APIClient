@@ -143,6 +143,7 @@ import { createContext, runInContext } from 'node:vm';
 import { topLevelFactFields as topLevelFacts } from './top_level_facts.mjs';
 import { NAVIGABLE_NOTICE, navigableNoticeField } from './noticegen.mjs';
 import { siteRegistrableDomains } from './psl.mjs';
+import { abortRecord } from './abort_record.mjs';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const EXT_DIR = join(ENGINE, '..', 'extension');
@@ -742,7 +743,7 @@ async function main() {
                       '— an instance IS its (group, origin) agent cluster, so a second one splits one heap in ' +
                       'two and a missing group would merge every group of that origin into one');
     const child = spawn(bin, paintDir === null ? ['--abi'] : ['--abi', '--paint-dir', paintDir],
-                        { stdio: ['pipe', 'pipe', 'inherit'] });
+                        { stdio: ['pipe', 'pipe', 'pipe'] });
     const e = {
       docId, docUrl: url, origin, child, group, referenced,
       /* Every document this instance holds: its root and each one joined into it (`join`). */
@@ -778,7 +779,26 @@ async function main() {
          engine's whole verification story is that its asserts fire loudly, and the party relaying that was
          erasing the one field that says one fired. */
       closed: new Promise((res) => child.on('close', (code, signal) => res({ code, signal }))),
+      /* The first check.h record (`@WHY` for a DCHECK, `@E` for a CHECK) the child wrote on stderr, which is
+         forwarded unchanged: `ended` names it, so an abort from a CHECK is not read as one that printed
+         nothing. */
+      abort: null,
     };
+    {
+      let tail = '';
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk) => {
+        process.stderr.write(chunk);
+        if (e.abort !== null) return;
+        tail += chunk;
+        let nl;
+        while (e.abort === null && (nl = tail.indexOf('\n')) >= 0) {
+          e.abort = abortRecord(tail.slice(0, nl));
+          tail = tail.slice(nl + 1);
+        }
+        if (e.abort !== null) tail = '';
+      });
+    }
     child.stdout.setEncoding('utf8');   /* a StringDecoder, so a multi-byte character split across two chunk
                                            boundaries is not two replacement characters — the @RESULT line is
                                            the engine's own JSON and carries whatever a page put in it */
@@ -2039,7 +2059,8 @@ async function main() {
     e.live = false;
     ({ code: e.exit, signal: e.signal } = await e.closed);
     /* HOW THIS INSTANCE ENDED, IN ONE PHRASE, so every reader below states the same fact the same way. */
-    e.ended = e.signal ? `on ${e.signal}` : `with code ${e.exit}`;
+    e.ended = (e.signal ? `on ${e.signal}` : `with code ${e.exit}`) +
+              (e.abort !== null ? ` after the engine's record ${e.abort}` : '');
     /* AN INSTANCE LEAVING CAN BE WHAT UNBLOCKS THE REST — the stuck answer is GLOBAL, so it is re-asked here
        as well as at every stall. */
     retryHeld();
