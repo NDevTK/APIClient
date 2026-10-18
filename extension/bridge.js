@@ -1773,11 +1773,17 @@ function frontierRow(e) {
          "a cold-tier entry carries no document address — the pool excludes a parked item whose document a " +
          "LIVE tab already holds, and an item with no address is one it would rehydrate into a second " +
          "instance beside the tab that is already running it");
+  /* The principal and the session state are the rest of the entry's document identity (documentIdentityOf). */
+  DCHECK(typeof e.origin === "string" && typeof e.credentialed === "boolean",
+         "a cold-tier entry does not state its principal and whether its load carried the session (" +
+         JSON.stringify([e.origin, e.credentialed]) + ") — they are the parked document's identity, which a " +
+         "declared route of the same document lands on");
   /* The state bits the order reads, decided here as strict booleans (frontierRecord asserted what their absence
      means): `shed` has given its document up, `stranded` failed to re-derive it and is no longer a cold
      candidate (only a visit resumes it). The two residency numbers are computed here too, so residency never
      opens an entry to learn its size. */
-  return { key: e.key, sourceUrl: e.sourceUrl, paid: e.paid, serviceUs: e.serviceUs,
+  return { key: e.key, sourceUrl: e.sourceUrl, origin: e.origin, credentialed: e.credentialed,
+           paid: e.paid, serviceUs: e.serviceUs,
            shed: e.shed === true, stranded: e.stranded === true,
            bytes: frontierDocBytes(e), rederivable: frontierRederivable(e),
            doc: e.shed === true ? null : e.doc, docBytes: e.shed === true ? 0 : e.docBytes };
@@ -2033,6 +2039,44 @@ function _candRanked(cen, kind, url, row, tree) {
   }
   return key;
 }
+/* A document's identity: its address, the cookie partition key it loads under and whether its load carries the
+   session, which decide which bytes and which credentials a load of it gets. Two declarations or members with
+   one identity are one document; a different partition or credential state is a different one. The partition
+   is enginePartitionKey's, the one this zone speaks with (so it carries engineIdentity's residual for a
+   document nested in a cross-site one). `origin` is the document's principal ("null" or "null:<uuid>" for an
+   opaque one). Its caller has asked the address's host. */
+function documentIdentityOf(address, origin, credentialed) {
+  DCHECK(typeof address === "string" && URL.canParse(address) && typeof origin === "string" &&
+         typeof credentialed === "boolean",
+         "a document identity was asked of " + JSON.stringify([address, origin, credentialed]) + " — every " +
+         "member states its address, its principal and whether its load carried the session");
+  const pk = enginePartitionKey(stampOrigin(origin), address);
+  /* The partition key of an http(s) document of a tuple origin is the site of its own URL: the two agree
+     unless the document's address is cross-site to its principal. */
+  DCHECK(!_isRealOrigin(origin) || !/^https?:$/.test(new URL(address).protocol) ||
+         (pk.topLevelSite === siteOf(address) && !pk.hasCrossSiteAncestor),
+         "the cookie partition key of " + address + " (principal " + origin + ") is " + JSON.stringify(pk) +
+         ", not the site of its own URL " + JSON.stringify(siteOf(address)));
+  return JSON.stringify([address, pk.topLevelSite, pk.hasCrossSiteAncestor, credentialed]);
+}
+/* Every frontier member of a population by its identity, as {kind, label}: the resident instances and the
+   loading seats (each states the identity it loads), the waiting documents and the parked rows. The first
+   member of an identity is the one named. */
+function _frontierMembers(pop) {
+  const m = new Map();
+  const add = (id, kind, label) => { if (!m.has(id)) m.set(id, { kind, label }); };
+  for (const e of pop.resident) {
+    if (e.state === "loading") { add(e.identity, "resident", "a loading " + e.what.kind + " seat"); continue; }
+    add(documentIdentityOf(e.msg.sourceUrl, e.origin, e.msg.credentialed), "resident",
+        "a " + e.state + " instance at " + e.msg.sourceUrl);
+  }
+  for (const job of pop.waiting)
+    add(documentIdentityOf(job.msg.sourceUrl, job.msg.origin, job.msg.credentialed), "waiting",
+        "a waiting document at " + job.msg.sourceUrl);
+  for (const row of pop.idx.values())
+    add(documentIdentityOf(row.sourceUrl, row.origin, row.credentialed), "cold", "the parked entry " + row.key);
+  return m;
+}
 /* The population the order is taken over, composed in one place and handed in, so the Level-1 order (which
    exists only in this zone) can be asked over a population a driver supplies. It is a composer, not accessors:
    what is under test is the walk, so the privates stay private, and both production call sites take the same
@@ -2082,9 +2126,8 @@ function _bestCandidate(pop) {
   const waitingAddrs = new Set();
   for (const job of waiting)
     if (!(job.msg.frameId && _isRealOrigin(job.msg.origin))) waitingAddrs.add(job.msg.sourceUrl);
-  /* Declared routes ask the same index whether a parked frontier already exists at their address; one that
-     does is already a work item (its admission fetches the document back), so the seed walk leaves it there. */
-  for (const addr of seeds.keys()) waitingAddrs.add(addr);
+  /* A declared route is ranked by its address's account too. */
+  for (const seed of seeds.values()) waitingAddrs.add(seed.url);
   const byAddress = new Map();
   if (waitingAddrs.size) for (const row of idx.values()) {
     if (!waitingAddrs.has(row.sourceUrl)) continue;
@@ -2108,18 +2151,16 @@ function _bestCandidate(pop) {
     const key = _candRanked(cen, "doc", job.msg.sourceUrl, known !== undefined ? known : LEVEL1_UNSERVED, tree);
     if (!best || level1Ahead(key, best.key)) best = { kind: "doc", job, key };
   }
-  /* Declared routes: the third kind, ranked by the same weight over the same index. An address a live or waiting document holds leaves the order
-     (that document is its exploration) and is counted, so "no route declared" and "every route already being
-     explored" differ. Nothing is dropped: the entry stays in `_seeds`. */
-  for (const addr of seeds.keys()) {
-    if (live.has(addr)) { cen.exclSeedLive++; continue; }
-    /* An address with a parked frontier leaves too: that residue's admission is a visit to it, and a seed
-       beside it would fetch one address twice for one exploration. Nothing is refused; when the residue
-       drains (frontierPut deletes an entry with empty recipes) the address is admitted again. */
-    if (byAddress.get(addr) !== undefined) { cen.exclSeedParked++; continue; }
-    /* What is left has never been served: no live holder, no waiting document, no stored row. */
-    const key = _candRanked(cen, "seed", addr, LEVEL1_UNSERVED, tree);
-    if (!best || level1Ahead(key, best.key)) best = { kind: "seed", addr, key };
+  /* Declared routes: the third kind, ranked by the same weight over the same index. A declaration whose
+     document a member already is (documentIdentityOf) leaves the order, counted by the member's kind, so "no
+     route declared" and "every route already a member" differ; `admit` consumes it. */
+  const members = seeds.size ? _frontierMembers(pop) : null;
+  for (const [id, seed] of seeds) {
+    const holder = members.get(id);
+    if (holder !== undefined) { if (holder.kind === "cold") cen.exclSeedParked++; else cen.exclSeedLive++; continue; }
+    /* What is left has never been served: no member holds its document. */
+    const key = _candRanked(cen, "seed", seed.url, LEVEL1_UNSERVED, tree);
+    if (!best || level1Ahead(key, best.key)) best = { kind: "seed", id, addr: seed.url, key };
   }
   for (const row of idx.values()) {
     if (live.has(row.sourceUrl)) {
@@ -2506,6 +2547,11 @@ const NAVIGATION_DESTINATIONS = Object.freeze(["document", "embed", "frame", "if
    The test is written in the positive (`!== "rendezvous" && !== "report"`), so an unstated or misspelled word
    refuses by construction. */
 const DOC_REFUSAL_ARMS = Object.freeze(["rendezvous", "report", "none"]);
+/* Whether a §7.4 load of `abs` read by an opaque (`readerOpaque`) or principal-`principalOrigin` document asks
+   its speaker for the session: never for an opaque reader (an opaque origin is same-origin with nothing). */
+function navigationCredentialed(abs, principalOrigin, readerOpaque) {
+  return !readerOpaque && navigationCarriesSession(abs, principalOrigin);
+}
 /* `speakerOf` resolves the speaker (documentSpeaker's, seedSpeaker's) whose session a load the browser would
    credential carries, or null when it has none, which loads without the session. Every answer states
    `credentialed`, whether this load carried the session, which the loaded document's record keeps. */
@@ -2591,7 +2637,7 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, ref
     return { url: abs, headers: d.headers, bytes: d.body, unavailable: null, declined: null, setCookies: [],
              credentialed: false };
   }
-  const speaker = !readerOpaque && navigationCarriesSession(abs, principalOrigin) ? await speakerOf() : null;
+  const speaker = navigationCredentialed(abs, principalOrigin, readerOpaque) ? await speakerOf() : null;
   const credentialed = speaker !== null;
   /* The request as the speaker's client composed it, where the speaker knows it (a sub-frame seed). */
   DCHECK(speaker === null || speaker.request === null ||
@@ -4828,12 +4874,17 @@ async function hostNotice(eng, line) {
        provenance is stored from the record (always `derived` here, since a refused one returned above);
        navigationLoad asserts the vocabulary on the way out. */
     await level1AskSites([f[1]]);
-    if (!_seeds.has(f[1]))
-      /* The declaring document's reach grade travels with the item for the same reason. */
-      /* `doc` is the seed's own record, the declaring document's joined with the declaration's words. */
-      _seeds.set(f[1], { url: f[1], principalUrl: eng.msg.sourceUrl, principalOrigin: eng.origin,
-                         provenance: f[2], driven: f[3], pinned: f[4], fromDoc: _seedFrom.issuerDoc,
-                         doc: childDocRecord(_seedFrom.from, f[2], f[3], f[4]) });
+    /* The declaring document's reach grade travels with the item for the same reason. */
+    /* `doc` is the seed's own record, the declaring document's joined with the declaration's words, and the
+       identity is the one its load would have: navigationLoad's own session predicate over that record. */
+    const _seedDoc = childDocRecord(_seedFrom.from, f[2], f[3], f[4]);
+    const _seedId = documentIdentityOf(f[1], eng.origin,
+                                       navigationCredentialed(f[1], eng.origin, docRecordOpaque(_seedDoc)));
+    _seedCensus.declared++;
+    if (_seeds.has(_seedId)) _seedCensus.landedOnDeclared++;
+    else _seeds.set(_seedId, { url: f[1], identity: _seedId, principalUrl: eng.msg.sourceUrl,
+                               principalOrigin: eng.origin, provenance: f[2], driven: f[3], pinned: f[4],
+                               fromDoc: _seedFrom.issuerDoc, doc: _seedDoc });
     /* This router runs inside serviceFetch, so the kick finds a round in flight and wakes it if it is waiting
        on another engine; `admit` ranks this entry next round. */
     _hostKick();
@@ -5659,7 +5710,15 @@ const _waiting = [];
    admitted address leaves the map and may be declared again, and membership is never refused; the weight
    decides when the fetch is spent. It is in memory only: the declaring document's residue replays its router,
    which declares the route again. */
-const _seeds = new Map();   // absolute address -> { url, principalUrl, principalOrigin, provenance, reach }
+const _seeds = new Map();   // document identity -> { url, identity, principalUrl, principalOrigin, provenance, … }
+/* Declared routes, counted where each question is asked: `declared` at the notice, `landedOnDeclared` when an
+   identical declaration was already registered, `landedOnMember` when `admit` found a member holding it (which
+   member, in `_seedLandings`), `loaded` when admitted. Within one sample, declared = the other three plus
+   `_seeds.size`. */
+const _seedCensus = { declared: 0, landedOnDeclared: 0, landedOnMember: 0, loaded: 0 };
+const _seedLandings = new Map();   // member label -> declarations consumed by it
+self._seedCensus = _seedCensus;
+self._seedLandings = _seedLandings;
 let _heldRoutes = 0;       // the serial a declared route's load names its declaring document by (`held:route:<n>`)
 let _hostDriving = false;
 /* A kick that finds a round in flight is an arrival for that round: `_hostArrived` says one came since the
@@ -5725,7 +5784,10 @@ function admitLoadSeat(what, load) {
   DCHECK(typeof load === "function",
          "an admission seat was taken with no load to perform — the seat exists so the round can RETURN while " +
          "a document arrives, so one with nothing arriving is a slot nothing will ever clear");
-  const seat = { state: "loading", what: what, landed: null, failed: null, settled: false,
+  DCHECK(typeof what.identity === "string",
+         "an admission seat was taken with no identity of the document it loads — the seat is that document's " +
+         "frontier member until it lands, and a member with no identity is one a declaration cannot land on");
+  const seat = { state: "loading", what: what, identity: what.identity, landed: null, failed: null, settled: false,
                  /* Absent by value rather than omitted, so pool walks that do not check state read `null`
                     and never match a seat (`hostHolderOf`, `hostClusterOf`, `_bestCandidate`, hostClear). */
                  cluster: null, docId: null, topDocId: null, joinedDocIds: [], msg: null, r: null,
@@ -6148,6 +6210,22 @@ const _hostOps = {
     /* `pick` is null where the order was not asked (no headroom: a reservation, a loading seat, or the floor,
        where evictee asks instead), and `pick.best` is null where it was asked and had no members; the census
        carries the two facts apart. */
+    /* A declaration whose document is already a frontier member, hot or cold, is that member: it adds no load,
+       and the member's frontier carries the work. It leaves the register here, counted with the member. */
+    if (_seeds.size) {
+      const _members = _frontierMembers(_candPopulation(_coldRanking));
+      for (const [id] of [..._seeds]) {
+        const on = _members.get(id);
+        if (on === undefined) continue;
+        _seeds.delete(id);
+        _seedCensus.landedOnMember++;
+        _seedLandings.set(on.label, (_seedLandings.get(on.label) || 0) + 1);
+      }
+    }
+    DCHECK(_seedCensus.declared === _seedCensus.landedOnDeclared + _seedCensus.landedOnMember +
+                                    _seedCensus.loaded + _seeds.size,
+           "the declared routes do not add up: " + JSON.stringify(_seedCensus) + " with " + _seeds.size +
+           " registered — every declaration is counted once at the notice and leaves the register one way");
     const pick = _admissionHasHeadroom() ? _bestCandidate(_candPopulation(_coldRanking)) : null;
     const cand = pick ? pick.best : null;
     if (cand) {
@@ -6162,13 +6240,20 @@ const _hostOps = {
          item. It leaves the register first and unconditionally: a failed load has still spent the fetch, and
          the declaring document's residue declares the route again. */
       if (cand.kind === "seed") {
-        const seed = _seeds.get(cand.addr);
+        const seed = _seeds.get(cand.id);
         DCHECK(seed !== undefined,
                "the admission order picked a declared route that is no longer declared — `_seeds` is written " +
                "by the notice router and spliced only here, so a pick with no entry is the order and the " +
                "register having parted, and the address about to be loaded would be one nothing named");
-        _seeds.delete(cand.addr);
+        _seeds.delete(cand.id);
         if (!seed) return pick.census;
+        _seedCensus.loaded++;
+        /* No member holds the document this load makes: the order excluded every declaration one does. */
+        const _holder = _frontierMembers(_candPopulation(_coldRanking)).get(seed.identity);
+        DCHECK(_holder === undefined,
+               "a declared route at " + seed.url + " is about to be loaded while " +
+               (_holder && _holder.label) + " already holds that document (" + seed.identity + ") — its " +
+               "declaration is that member and adds no load");
         /* The fetch is issued on a seat rather than awaited, so a route whose body never ends cannot freeze the
            Level-1 loop: the seat is a pool member `_admissionHasHeadroom` counts, and the wait arm waits on it
            only when nothing is rankable. Only the network body is off-round; refusals, the message, the cluster
@@ -6237,7 +6322,9 @@ const _hostOps = {
       /* The store read and a shed entry's re-derivation are issued on one seat, for the seed arm's reason (the
          re-derivation is a remote body); they are one question, since `shed` is a field of the entry and which
          read is needed is known only after the first answers. admitSeatLand makes every decision on a round. */
-      admitLoadSeat({ kind: "cold", key: cand.row.key }, async () => {
+      admitLoadSeat({ kind: "cold", key: cand.row.key,
+                      identity: documentIdentityOf(cand.row.sourceUrl, cand.row.origin, cand.row.credentialed) },
+                    async () => {
         const stored = await frontierGet(cand.row.key);
         return { stored: stored, back: stored && stored.shed ? await frontierRederive(stored) : null,
                  body: stored && !stored.shed ? await frontierBody(stored.doc) : null };
@@ -6305,7 +6392,7 @@ const _hostOps = {
            bytes back; bound to a local above so the field's receiver is a name an auditor can anchor. */
         provenance: _parkProvenance, arrival: eng.msg.arrival, sandbox: eng.msg.sandbox,
         addressSpace: eng.msg.addressSpace,
-        credentialed: !!eng.msg.credentialed, recipes: result._park.join(";"),
+        credentialed: eng.msg.credentialed, recipes: result._park.join(";"),
         /* The document's Level-1 account: the resumed row's plus this instance's, so service and value are
            carried across every park and session. */
         paid: _account.paid, serviceUs: _account.serviceUs,
@@ -6526,6 +6613,8 @@ async function hostClear() {
   /* Routes declared this session go with the frontier they were work items on, or the next idle kick would
      fetch a page of an origin the person asked to forget. A declaration has no caller to reject. */
   _seeds.clear();
+  _seedCensus.declared = _seedCensus.landedOnDeclared = _seedCensus.landedOnMember = _seedCensus.loaded = 0;
+  _seedLandings.clear();
   const dropped = _pool.splice(0);
   /* Pairs held for clusters of a session the person asked to forget go with it. */
   _heldCookies.clear();
@@ -6893,5 +6982,6 @@ if (typeof module !== "undefined" && module.exports)
   module.exports = { hostSchedule, engineKey, level1Weight, level1Rate, level1Tree, level1Key, level1Ahead,
                      level1SiteOf, LEVEL1_UNSERVED, LEVEL1_DOOR,
                      _bestCandidate, _candPopulation, _level1Record, _candCensus, CAND_KINDS, CAND_SPREAD,
+                     documentIdentityOf, _frontierMembers,
                      zoneRouteSetCookies, zoneAnswerSetCookies, zoneOpenJar, zoneReclaimHeldCookies,
                      zoneTabClosed, engineDeliverDocument, clusterKeyOf };
