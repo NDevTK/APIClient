@@ -13314,11 +13314,14 @@ TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
        `+` appears between them. */
     const char *abssum_why = NULL; int abssum_tt = 1;
 
-    fold_row(&abssum_tt, &abssum_why, !!strstr(js, "abssum?n="),
-             "NOT REACHED: no /api/abssum record, so the script adding the absent global did not run");
-    fold_row(&abssum_tt, &abssum_why, !!strstr(js, "abssum?n=0+__tfAbsSum&t=0__tfAbsSum"),
-             "the address does not spell `0 + s` as `0+…` and `\"0\" + s` as `0…` — a sum and a concatenation of "
-             "one operand share a shape, or a concatenation onto a String the page built took the numeric arm");
+    fold_row(&abssum_tt, &abssum_why, !!strstr(js, "\"/api/abssum\""),
+             "NOT REACHED: no /api/abssum record, so the script adding the absent global did not run, or the "
+             "address lost its query structure because a concatenation onto it took the numeric arm");
+    fold_row(&abssum_tt, &abssum_why,
+             param_value_is(js, "/api/abssum", "n", "0+{__tfAbsSum}") &&
+                 param_value_is(js, "/api/abssum", "t", "0{__tfAbsSum}"),
+             "`n` is not `0+{__tfAbsSum}` or `t` is not `0{__tfAbsSum}` — a sum and a concatenation of one "
+             "operand share a shape");
     const Probe rows[] = {
         { "absent-arm", absarm_tt, "__tfAbsentGate", SESS_EXPLORE, absarm_why },
         { "absent-key-slot", abskey_tt, "__tfAbsentKey", SESS_EXPLORE, abskey_why },
