@@ -89,6 +89,29 @@ static const char HTML_ABORT[] =
     " fetch('/api/apteedab?own=' + o4 + '&clone=' + q4);"
     "})();"
     "</script>"
+    /* XHR §3.5.6's asynchronous send() fetches in parallel, so its flow runs on: a zero-delay timer queued
+       after send() runs before the send's `load`. §3.5.7 abort() and §3.5.1 open() reach the fetch controller
+       the send set, on the line after it: abort() answers with its request error steps, open() ends the send
+       with no event, and neither reply is delivered. */
+    "<script>"
+    "(function () {"
+    " var x = new XMLHttpRequest(), seen = []; x.open('GET', '/api/xatimer');"
+    " x.onload = function () { seen.push('load'); fetch('/api/xaorder?v=' + seen.join('-')); };"
+    " x.send(); setTimeout(function () { seen.push('timer'); }, 0);"
+    " var y = new XMLHttpRequest(), ev = []; y.open('GET', '/api/xaabort');"
+    " ['abort', 'load', 'error', 'loadend'].forEach(function (t) {"
+    "  y.addEventListener(t, function () { ev.push(t); }); });"
+    " y.send(); y.abort();"
+    " var z = new XMLHttpRequest(), zv = []; z.open('GET', '/api/xaopen');"
+    " ['abort', 'load', 'error', 'loadend'].forEach(function (t) {"
+    "  z.addEventListener(t, function () { zv.push(t); }); });"
+    " z.send(); z.open('GET', '/api/xaopen2');"
+    " setTimeout(function () {"
+    "  fetch('/api/xaaborted?v=' + ev.join('-') + '&rs=' + y.readyState);"
+    "  fetch('/api/xareopened?v=' + (zv.join('-') || 'none') + '&rs=' + z.readyState);"
+    " }, 0);"
+    "})();"
+    "</script>"
     /* A request aborted while its reply is still owed: the abort runs on the line after the call, before the
        host can answer, so the engine tells the host to end the send, and the page sees an AbortError. */
     "<script>"

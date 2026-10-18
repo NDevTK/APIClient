@@ -397,6 +397,9 @@ int pending_driven_compose(int kind, int path_driven);
          AT THE FIRST ASK THE TWO ARE EQUAL, which is why `mint_req` is still called exactly once there and the
        asked/answered inequality is untouched; they diverge only where a fork re-mints this one. */             \
     X(REQ_HOST,   "reqHost",   PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))                \
+    /* a host rendezvous its flow is NOT blocked on: the answer is delivered to RESOLVE \
+       as a task (pending_mark_async). Every rendezvous is pushed blocking. */          \
+    X(ASYNC,      "async",     PEND_SHARE,  JS_FALSE)                                  \
     X(OP,         "op",        PEND_SHARE,  JS_NULL)                                   \
     X(METHOD,     "method",    PEND_SHARE,  JS_NULL)                                   \
     /* no DESTINATION STATED, which the join refuses to list rather than classifying */ \
@@ -525,7 +528,7 @@ int64_t pending_get_int(JSValueConst e, int field);
  * (engine_sibling_assemble unshares it and mints a fresh rendezvous id, because its answer is computed under
  * the ASKING flow's world), so exactly one register can name it — the same sentence engine_host_answer's walk
  * already stops on its first hit for. Every transition of this count therefore has exactly one register, and
- * the one transition that happens outside this file is HANDED it (`pending_answer_sync` below).
+ * the one transition that happens outside this file is HANDED it (`pending_answer_rendezvous` below).
  *
  * THE COUNT IS THE FACT AND THIS IS A PREDICATE OVER IT. A caller that comes to want HOW MANY reads the same
  * number through a second predicate over the one fact, never a second bit that can disagree with this one
@@ -603,7 +606,7 @@ int  pending_blocked(JSValueConst reg);
    AND IT DOES NOT LAND IN THIS FILE'S FOUR. Every membership call site is in solver/pending.c and every one
    has its register in hand, so the signatures are ours; the write that must reach the registers is not. Of
    the five `PEND_HAVE_VALUE` writers, four are on tracked records and the refusal's is not, so that one has
-   to go through a door that is HANDED the register — which is what `pending_answer_sync` already is, for the
+   to go through a door that is HANDED the register — which is what `pending_answer_rendezvous` already is, for the
    one other kind whose count no index can reach. In landing order, and it is ONE landing because a count that
    misses a transition is worse than a walk:
      (1) the register-carrying answer door, plus the widening of `pending_set`'s existing refusal so
@@ -767,7 +770,7 @@ int pending_next_deliverable(JSValueConst reg);
 uint64_t pending_ready_next_seq(JSValueConst reg);
 
 /* Set a field. `v` is consumed. `pending_set_int` is the same for the numeric ones.
-   IT REFUSES ONE WRITE: `PEND_HAVE_VALUE` on a SYNCHRONOUS request. See `pending_answer_sync` below — this
+   IT REFUSES ONE WRITE: `PEND_HAVE_VALUE` on a SYNCHRONOUS request. See `pending_answer_rendezvous` below — this
    door has the record and the transition needs the register, so the refusal is what stops the count from
    becoming a second representation that drifts. */
 void pending_set(JSValueConst e, int field, JSValue v);
@@ -791,7 +794,13 @@ void pending_set_int(JSValueConst e, int field, int64_t v);
  * least one, and that this register actually HOLDS the record — because a fact carried as a parameter is a
  * fact that has to be checked at the site relying on it, and the register is exactly the half the record
  * cannot confirm on its own. */
-void pending_answer_sync(JSValueConst reg, JSValueConst e);
+void pending_answer_rendezvous(JSValueConst reg, JSValueConst e);
+
+/* Make the host rendezvous `e`, just pushed onto `reg`, one its flow is not blocked on: XHR §3.5.6's
+   asynchronous send() fetches in parallel, so the flow runs on and the answer is delivered to `e`'s RESOLVE as
+   a task (flow_deliver_one_reply). Gives back the blocked count the push raised. `e` must be an unanswered,
+   not yet async HOSTREQ on `reg`. */
+void pending_mark_async(JSValueConst reg, JSValueConst e);
 /* A field whose value is BYTES — the request body. Held as an ArrayBuffer, which is the honest shape for
    bytes that may not be text and the one XMLHttpRequest already uses for the same data. */
 void pending_set_bytes(JSValueConst e, int field, const void *p, size_t n);

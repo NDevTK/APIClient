@@ -146,6 +146,11 @@ typedef struct {
     uint8_t  response_object_failure;   /* §3's response object being `failure` rather than an object */
     uint8_t  network_error;             /* the response IS §3's initial "network error" */
     uint8_t  aborted;                   /* the response's aborted flag */
+    /* §3's fetch controller for an ASYNCHRONOUS send in flight: its rendezvous's machine name
+       (solver/engine.h's engine_host_request_async), 0 when none. On the object, so §3.5.7's abort() and
+       §3.5.1's open() reach it; per flow, as the record is (xhr_of). A synchronous send's controller is the
+       lifecycle machine's `req`, since its flow runs no page code until the answer. */
+    uint32_t controller;
     /* WHAT §3.5.6 STEP 6'S REQUEST IS EVIDENCE OF, TAKEN ONCE WHERE THAT STEP RUNS — one of solver/pending.h's
        PROV_*, or -1 before there is a request to grade. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE makes the
        grade a fact about the REQUEST, and §scheduler says an operation that becomes a work item takes its
@@ -994,17 +999,13 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             return JS_ThrowDOMException(ctx, "InvalidAccessError",
                                         "a synchronous open() with a timeout or a responseType set"), -1;
         }
-        /* Step 10 terminates the fetch controller ("A fetch can be ongoing at this point"). What "terminate"
-           means for the RESPONSE is that it is discarded, which step 11's `send() invoked = false` already
-           decides: §3.5.6's "handle errors" step 1 returns for an object that is not sending, and the
-           lifecycle machine's XR_RESPONSE reads that and finishes without firing anything.
-           Named residual: correct for the response and narrower than step 10, which also stops the transfer.
-           Not covered: open() or XHR §3.5.7 "The abort() method" reaching an in-flight send's controller.
-           Neither can run mid-send today, because an asynchronous send() parks on its rendezvous with the flow
-           blocked (solver/engine.h's engine_host_terminate states that residual). The next diff makes that send
-           a park its flow is not blocked on and puts the controller on the object, so both call
-           engine_host_terminate, as js_xhr_run_fini does for XHR §3.2 "Garbage collection". Its absence shows
-           as a zero-delay timer queued just after an asynchronous send() running only after the load events. */
+        /* Step 10: "Terminate this's fetch controller. A fetch can be ongoing at this point." The transfer
+           ends (engine_host_withdraw) and its response is never delivered, since the rendezvous leaves the
+           register with it. */
+        if (d->controller) {
+            engine_host_withdraw(ctx, d->controller);
+            d->controller = 0;
+        }
         /* Step 11. */
         xhr_reset_request(ctx, d);
         xhr_set(ctx, d, &d->method, mval);
@@ -1703,21 +1704,27 @@ static const IdlStepDecl XHR_RESPONSE_XML_DECL = {
  * CLOSURE over [xhr, mode, event name] so it can be reached two ways from one definition:
  *   - `send()` on a SYNCHRONOUS object CALLS it (step_call_run), so the send machine parks on the call and the
  *     flow suspends inside send() exactly as §3.5.6's "Pause until…" says;
- *   - `send()` on an ASYNCHRONOUS object ENQUEUES it as a task, so send() returns and the response is processed
- *     in its own turn of the event loop;
+ *   - `send()` on an ASYNCHRONOUS object CALLS it too, and the machine places the request and ends: the
+ *     zone's answer is delivered to a closure in XHR_MODE_RESPONSE as a task of the flow, which runs on in
+ *     the meantime (solver/engine.h's engine_host_request_async);
  *   - `abort()` CALLS it in error mode, because the request error steps §3.5.7 The abort() method step 2 runs
  *     are §3.5.6 The send() method's own — that is where the standard DEFINES them — so they are the identical
  *     sequence rather than a second one.
  * Writing the sequences twice — once for the send machine and once for a task — is how two copies of an event
  * order drift, and the order IS the spec. */
-enum { XHR_MODE_FETCH = 0, XHR_MODE_ERROR };
+/* The third mode is the ASYNCHRONOUS send's response: the machine enqueued by send() places the request and
+   ends, and the delivery of the zone's answer (engine_host_request_async) calls a closure in this mode with
+   it, as Fetch §4.1 "Main fetch"'s processResponse task on the networking task source. */
+enum { XHR_MODE_FETCH = 0, XHR_MODE_ERROR, XHR_MODE_RESPONSE };
+static JSValue xhr_run_closure(JSContext *ctx, JSValueConst xhr, int mode, int which);
 enum { XHR_CD_OBJECT = 0, XHR_CD_MODE, XHR_CD_EVENT };
 
 #define RUN_STAGES(X) \
     X(XR_FETCH,     "XHR §3.5.6 send() step 5's \"fetching req\" (place the request with the trusted zone, " \
                     "which SECURITY.md makes the only holder of network policy)") \
-    X(XR_WAIT,      "XHR §3.5.6 send() step 5's \"Pause until either processedResponse is true or …\" (the " \
-                    "flow is suspended on the host's answer; siblings run)") \
+    X(XR_WAIT,      "XHR §3.5.6 send() step 5's \"Pause until either processedResponse is true or …\" (a " \
+                    "synchronous send's flow is blocked on the host's answer; an asynchronous send's response " \
+                    "arrives here already taken)") \
     X(XR_RESPONSE,  "XHR §3.5.6 send() step 5's processResponse steps 1-4 (set this's response, handle " \
                     "errors, set the state to headers received)") \
     X(XR_RSC_HEADERS, "XHR §3.5.6 send() step 5's processResponse steps 5-7 (fire an event named " \
@@ -2692,6 +2699,24 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
         s->transmitted = s->length = 0;
         if (mode == XHR_MODE_ERROR) { s->hdr.stage = XR_ERR_BEGIN; goto error_steps; }
+        if (mode == XHR_MODE_RESPONSE) {
+            if (s->hdr.argc > 0) {
+                /* The zone's answer, delivered: the controller is still this object's, because abort() and
+                   open() take the rendezvous off the register with it. */
+                DCHECK(d->controller != 0 && !d->synchronous,
+                       "an asynchronous send's response was delivered to an object with no fetch controller — "
+                       "abort() and open() withdraw the rendezvous, so a delivery means the controller stands");
+                xhr_take_reply(ctx, d, s->hdr.argv[0]);
+                d->controller = 0;
+            } else if (!d->send_invoked) {
+                /* A local answer's task, after abort() or open() ended the send it answers: Fetch §2
+                   Infrastructure's canceled fetch runs no processResponse. */
+                return JS_STEP_DONE;
+            }
+            s->req = 0;
+            s->hdr.stage = XR_WAIT;
+            goto wait;
+        }
         /* §3.5.6 STEP 6 — "Let req be a new request, initialized as follows" — AND THE ONE FACT ABOUT THAT
            REQUEST THIS ENGINE STATES THAT THE STANDARD'S ELEVEN MEMBERS DO NOT: what it is evidence of.
            ASKED HERE, ONCE, BECAUSE THIS IS THE TURN THE REQUEST IS CREATED ON. `engine_prov_of_running_path`
@@ -2717,6 +2742,16 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
            the wait below has nothing to wait for. */
         if (xhr_main_fetch_local(ctx, d)) {
             s->req = 0;
+            if (!d->synchronous) {
+                /* Answered here, and still processResponse is a task queued on the networking task source
+                   (Fetch §4.1 "Main fetch"), never run inside send(). No argument: the response is on the
+                   record already. */
+                JSValue resume = xhr_run_closure(ctx, self, XHR_MODE_RESPONSE, XHR_ERR_NONE);
+                if (JS_IsException(resume)) return JS_STEP_ABRUPT;
+                JS_EnqueueCallTask(ctx, resume, 0, NULL, TASK_SOURCE_NETWORKING);
+                JS_FreeValue(ctx, resume);
+                return JS_STEP_DONE;
+            }
             s->hdr.stage = XR_WAIT;
         } else {
             char *op = xhr_request_op(ctx, d);
@@ -2724,14 +2759,29 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
             DCHECK(d->url_address != FETCH_ADDRESS_UNPLACED,
                    "an XMLHttpRequest reached §3.5.6 send() with no address class — §3.5.1 open() states it");
             /* An address with no bytes is not fetchable: the rendezvous is refused before any host sees it. */
+            if (!d->synchronous) {
+                /* §3.5.6 step 11: "Fetch req" in parallel. The flow runs on; the answer is delivered to a closure
+                   in XHR_MODE_RESPONSE, and this task ends. */
+                JSValue resume = xhr_run_closure(ctx, self, XHR_MODE_RESPONSE, XHR_ERR_NONE);
+                if (JS_IsException(resume)) { free(op); return JS_STEP_ABRUPT; }
+                d->controller = d->url_address == FETCH_ADDRESS_UNKNOWN
+                    ? engine_host_request_unaddressed_async(ctx, op, resume)
+                    : engine_host_request_async(ctx, op, resume);
+                JS_FreeValue(ctx, resume);
+                free(op);
+                s->req = 0;
+                return JS_STEP_DONE;
+            }
+            /* §3.5.6 step 12, synchronous: "Pause until" the answer; the flow is blocked on it. */
             s->req = d->url_address == FETCH_ADDRESS_UNKNOWN ? engine_host_request_unaddressed(ctx, op)
                                                              : engine_host_request(ctx, op);
             free(op);
             s->hdr.stage = XR_WAIT;
-            return JS_STEP_YIELD;   /* the flow is BLOCKED on the answer; siblings run meanwhile */
+            return JS_STEP_YIELD;
         }
     }
 
+wait:
     if (s->hdr.stage == XR_WAIT) {
         JSValueConst answer = JS_UNDEFINED;
         JS_FreeValue(ctx, in);
@@ -3064,36 +3114,18 @@ error_steps:
     return JS_STEP_DONE;
 }
 
-/* XHR §3.2 Garbage collection's SECOND PARAGRAPH, at the one moment it can apply: "If an XMLHttpRequest object
- * is garbage collected while its connection is still open, the user agent must terminate the XMLHttpRequest
- * object's fetch controller."
- *
- * THE MACHINE'S TEARDOWN IS WHEN THE CONNECTION LOSES ITS ONLY READER, which is why the requirement lands here
- * and not in xhr_finalizer. The block above states that this closure IS the reference discharging §3.2's first
- * paragraph, so by the time the object itself is collected this machine is already gone — and it is gone
- * through here. `s->req` is this component's fetch controller: XR_WAIT clears it the instant the answer is
- * taken, so a non-zero one at teardown says the machine was abandoned with a request still outstanding with
- * the trusted zone (a flow dropped under HTML §7.5.10 Destroying documents, or a chain freed under a throw).
- * Nothing takes that entry afterwards: it is a register slot whose only reader has been freed, which is
- * precisely the leak §COW names — malloc'd platform state the runtime's own GC walk cannot see.
- *
- * AND IT IS DISCHARGED BY WITHDRAWING THE RENDEZVOUS, which is what `engine_host_terminate` is: Fetch §2
- * Infrastructure's "To terminate a fetch controller controller, set controller's state to 'terminated'" —
- * the entry leaves whichever register holds it, the flow that was BLOCKED on it (pending_blocked) is made
- * askable again, and the trusted zone is asked to stop the transfer. Terminate and not ABORT: §2
- * Infrastructure's abort carries an "AbortError" DOMException to deliver, and §3.2's object has been collected,
- * so there is no continuation left standing at the read for one to be raised at.
- *
- * A REPLY THAT HAS ALREADY LANDED ON THE ENTRY GOES WITH IT, and that is this paragraph's correction rather
- * than a loss: it used to say taking an already-arrived answer and dropping it "is not the same act and must
- * not stand in for it". The act it warned about was taking through `engine_host_take`, which is a machine
- * consuming its answer and would leave an UNANSWERED sibling entry outstanding for ever. Withdrawal asks the
- * register a different question — it removes the entry whatever state it is in — and a value whose only reader
- * has been freed is a reply, never a work item. §3.5.1 "The open() method" step 10 says the same thing from the
- * other end: "Terminate this's fetch controller. A fetch can be ongoing at this point."
- *
- * `take_result` is not read because this machine's completion is undefined on every path — the driver's own
- * `fini ? fini(…) : JS_UNDEFINED` is what it returned before this existed, and the return is unchanged. */
+/* XHR §3.2 "Garbage collection"'s second paragraph for a SYNCHRONOUS send: "If an XMLHttpRequest object is
+ * garbage collected while its connection is still open, the user agent must terminate the XMLHttpRequest
+ * object's fetch controller." This machine's teardown is when the connection loses its only reader, so the
+ * requirement lands here and not in xhr_finalizer. `s->req` is a synchronous send's controller; XR_WAIT clears
+ * it when the answer is taken, so a non-zero one at teardown is a machine abandoned with its request
+ * outstanding (a flow dropped under HTML §7.5.10, or a chain freed under a throw). An asynchronous send's
+ * controller is the object's `controller`, and its machine has ended once the request is placed; the flow's
+ * release withdraws it (solver/engine.c's flow_withdraw_async_sends).
+ * engine_host_terminate is Fetch §2 Infrastructure's terminate: the entry leaves its register, a reply already
+ * on it goes with it, the blocked flow is askable again, and the zone is asked to stop the transfer. Terminate
+ * and not abort, because nothing is left standing at the read to raise an abort's error at. `take_result` is
+ * not read: this machine's completion is undefined on every path. */
 static JSValue js_xhr_run_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSXhrRunState *s = st;
@@ -3411,44 +3443,21 @@ static int js_xhr_send_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
     }
 
     DCHECK(hdr->stage == SEND_RUN, "the send() machine resumed at a stage §3.5.6 does not have");
-    if (!d->synchronous) {
-        /* ASYNCHRONOUS: the fetch and everything that processes its response are a TASK, so send() returns to
-           the page here — which is the whole of what `async` means. */
-        JSValue fn = xhr_run_closure(ctx, hdr->this_val, XHR_MODE_FETCH, XHR_ERR_NONE);
-        JS_FreeValue(ctx, in);
-        if (JS_IsException(fn)) return -1;
-        /* NO TASK SOURCE, AND THAT IS A STATEMENT ABOUT §3.5.6 RATHER THAN A GAP. Its asynchronous arm
-           QUEUES NOTHING: it fires `loadstart`, binds the processResponse callbacks, sets the fetch controller
-           from a fetch with `useParallelQueue set to true`, and returns. No task source put this work item
-           anywhere, so inventing one would order the rest of `send()` against the page's real tasks by a fact
-           no standard states. What this engine does with a fetch run off a parallel queue is make it a work
-           item on the one frontier, which is why it reaches a TASK queue at all. */
-        JS_EnqueueCallTask(ctx, fn, 0, NULL, TASK_SOURCE_NOT_A_TASK);
-        JS_FreeValue(ctx, fn);
-        /* AND THE CONSTRUCTION COMPLETED — §3.5.6 step 12's fetch is placed and this state is done with it.
-           It is a PLACEMENT and not an offer: the address reaches the @H surface from the machine enqueued
-           above, which this state will be torn down before. Asserted rather than assumed to happen once,
-           because a second placement from one send would double this edge's share of the completions while
-           the partition below still summed. */
-        DCHECK(!s->placed,
-               "an XMLHttpRequest send state placed §3.5.6's fetch twice — this arm returns to the page, so a "
-               "second arrival is a re-entry the machine's own stage assert did not refuse, and the edge "
-               "census would count one construction as two completions");
-        s->placed = 1;
-        endpoint_xhr_edge_placed();
-        *presult = JS_UNDEFINED;
-        return 0;
-    }
-    /* SYNCHRONOUS: §3.5.6's "Pause until either processedResponse is true or …". The machine CALLS the
-       lifecycle machine, so this flow parks on that call and the lifecycle machine parks on the host — one
-       suspension, at the exact line the page wrote, resumable at any depth. A request error inside it THROWS,
-       which is §3.5.6's request error steps step 4 and reaches the page as send()'s own exception. */
+    /* §3.5.6's fetch, through the lifecycle machine, CALLED from here in both arms. Asynchronous: "Set this's
+       fetch controller to the result of fetching req" inside send(), so the machine places the request and
+       returns at once, and its response arrives as a task (XHR_MODE_RESPONSE). Synchronous: "Pause until"
+       the answer, so this flow parks on the call and the lifecycle machine parks on the host — one
+       suspension, at the exact line the page wrote. A request error inside it THROWS, which is §3.5.6's
+       request error steps step 4 and reaches the page as send()'s own exception. */
     if (JS_IsUndefined(s->fn)) {
         s->fn = xhr_run_closure(ctx, hdr->this_val, XHR_MODE_FETCH, XHR_ERR_NONE);
         if (JS_IsException(s->fn)) { s->fn = JS_UNDEFINED; JS_FreeValue(ctx, in); return -1; }
-        /* THE SAME COMPLETION FOR §3.5.6 STEP 13, INSIDE THIS `if` AND NOT BELOW IT. The synchronous arm PARKS
-           in the call beneath and re-enters SEND_RUN, and this block is the one that runs once — so the flag
-           and the raise sit where the closure is minted rather than where the call is made. */
+        /* THE PLACEMENT, INSIDE THIS `if` AND NOT BELOW IT. The synchronous arm PARKS in the call beneath and
+           re-enters SEND_RUN, and this block is the one that runs once — so the flag and the raise sit where
+           the closure is minted rather than where the call is made. */
+        DCHECK(!s->placed,
+               "an XMLHttpRequest send state placed §3.5.6's fetch twice — the edge census would count one "
+               "construction as two completions");
         s->placed = 1;
         endpoint_xhr_edge_placed();
     }
@@ -3554,6 +3563,12 @@ static int js_xhr_abort_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         s->fn = JS_UNDEFINED;
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
         if (!d) return JS_ThrowTypeError(ctx, "not an XMLHttpRequest"), -1;
+        /* Step 1: "Abort this's fetch controller." The transfer ends (engine_host_withdraw) and its response is
+           never delivered; step 2's request error steps are this object's answer. */
+        if (d->controller) {
+            engine_host_withdraw(ctx, d->controller);
+            d->controller = 0;
+        }
         d->aborted = 1;
         /* Step 2's "if this's state is opened with this's send() invoked being true, headers received, or
            loading" — the same three-state disjunction §3.2 Garbage collection states, read from the one

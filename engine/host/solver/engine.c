@@ -1125,6 +1125,41 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
     return id;
 }
 
+/* The running flow's rendezvous under machine name `req`, owned; JS_UNDEFINED when it holds none. A flow's
+   machine names are unique (asserted at engine_host_request). */
+static JSValue host_request_entry_of(JSContext *ctx, Flow *f, uint32_t req, int *slot) {
+    for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+        JSValue e = pending_entry(f->pending, i);
+        if (pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ && (uint32_t)pending_get_int(e, PEND_REQ) == req) {
+            if (slot) *slot = i;
+            return e;
+        }
+        JS_FreeValue(ctx, e);
+    }
+    return JS_UNDEFINED;
+}
+
+/* See engine.h. The push counts every rendezvous as blocking; pending_mark_async gives that count back before
+   the asker returns, so the flow is runnable on the step that asked. */
+static uint32_t host_request_make_async(JSContext *ctx, uint32_t id, JSValueConst deliver) {
+    Flow *f = flow_running();
+    JSValue e = host_request_entry_of(ctx, f, id, NULL);
+
+    DCHECK(JS_IsFunction(ctx, deliver), "an async host rendezvous was asked with no delivery — its answer would "
+                                        "be owed to nobody and its flow could never finish");
+    DCHECK(!JS_IsUndefined(e), "an async host rendezvous is not on its flow's register after the ask");
+    pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, deliver));
+    pending_mark_async(f->pending, e);
+    JS_FreeValue(ctx, e);
+    DCHECK(!flow_blocked(f), "an async host rendezvous left its flow blocked — the flow is meant to run on while "
+                             "the zone fetches");
+    return id;
+}
+
+uint32_t engine_host_request_async(JSContext *ctx, const char *op, JSValueConst deliver) {
+    return host_request_make_async(ctx, engine_host_request(ctx, op), deliver);
+}
+
 /* Has the host answered `req`? The asking machine's re-entry read. The value is borrowed: it stays on the register
    until the machine takes it, so a re-entry that yields again can read it once more. */
 int engine_host_answered(uint32_t req, JSValueConst *out) {
@@ -1204,6 +1239,8 @@ JSValue engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion) {
         if ((uint32_t)pending_get_int(e, PEND_REQ) == req) {
             JSValue c;
             DCHECK(pending_get_int(e, PEND_HAVE_VALUE), "a host answer was taken before it arrived");
+            DCHECK(!pending_get_int(e, PEND_ASYNC), "an async rendezvous's answer was taken by its asker — it is "
+                                                   "delivered to its RESOLVE as a task (flow_deliver_one_reply)");
             /* Type and value are one write (engine_host_answer), so an answered request without a type is a
                delivery that went around this file; reading it as a normal completion would be a silent lie. */
             c = pending_get(e, PEND_COMPLETION);
@@ -1298,6 +1335,62 @@ int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) 
  *
  * A session that is over is refused before the walk, as a late answer is (g_host_answers_late): no scheduler is
  * left to pick the flow and no one will drain the notice. It is still counted. */
+/* A rendezvous's answer is on record (pending_answer_rendezvous). An async one is then a task of its flow
+   (Fetch §4.1 "Main fetch" queues processResponse when the response arrives), so its arrival stamp is minted
+   now: a task the page queued after the ask is older than the response and runs first. */
+static void rendezvous_answered(Flow *f, JSValueConst e) {
+    pending_answer_rendezvous(f->pending, e);
+    if (pending_get_int(e, PEND_ASYNC)) pending_set_int(e, PEND_WORK_SEQ, (int64_t)flow_work_seq_next());
+}
+
+/* `fetch.cancel<TAB><host name>`: the zone is asked to stop the transfer of the rendezvous it knows as `req`. */
+static void host_cancel_notify(JSContext *ctx, uint32_t req) {
+    char id[16];
+    const char *fields[1] = { id };
+    char *rec;
+
+    snprintf(id, sizeof id, "%u", req);
+    rec = engine_notice_build("fetch.cancel", fields, 1);
+    engine_host_notify(ctx, rec);
+    free(rec);
+}
+
+/* See engine.h. */
+int engine_host_withdraw(JSContext *ctx, uint32_t req) {
+    Flow *f = flow_running();
+    int slot = -1, owed;
+    uint32_t host;
+    JSValue e;
+
+    DCHECK(f != NULL && req != 0, "a fetch controller was withdrawn with no flow or no rendezvous to withdraw");
+    e = host_request_entry_of(ctx, f, req, &slot);
+    if (JS_IsUndefined(e)) return 0;
+    DCHECK(pending_get_int(e, PEND_ASYNC),
+           "the page withdrew a blocking rendezvous — a blocked flow runs no page code, so only an async send's "
+           "controller can be reached from the page");
+    owed = !pending_get_int(e, PEND_HAVE_VALUE);
+    host = (uint32_t)pending_get_int(e, PEND_REQ_HOST);
+    JS_FreeValue(ctx, e);
+    pending_remove(&f->pending, slot);
+    g_host_terminated++;
+    if (owed && g_sess_live) host_cancel_notify(ctx, host);
+    return 1;
+}
+
+/* A flow leaving the frontier unfinished (the pager's sale, a retirement) takes its async sends with it, and
+   no machine of theirs is suspended to say so at its fini: the zone is told to end each one still owed. */
+static void flow_withdraw_async_sends(JSContext *ctx, Flow *f) {
+    for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+        JSValue e = pending_entry(f->pending, i);
+        if (pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ && pending_get_int(e, PEND_ASYNC) &&
+            !pending_get_int(e, PEND_HAVE_VALUE)) {
+            g_host_terminated++;
+            if (g_sess_live) host_cancel_notify(ctx, (uint32_t)pending_get_int(e, PEND_REQ_HOST));
+        }
+        JS_FreeValue(ctx, e);
+    }
+}
+
 void engine_host_terminate(JSContext *ctx, uint32_t req) {
     int held = 0;
 
@@ -1354,16 +1447,7 @@ void engine_host_terminate(JSContext *ctx, uint32_t req) {
        the engine's withdrawal is already complete, and a transfer that lands anyway is refused at
        engine_host_answer's ENGINE_ANSWER_HOST arm. Sent whether or not a register held the id, since the
        transfer is the zone's state. */
-    {
-        char id[16];
-        const char *fields[1] = { id };
-        char *rec;
-
-        snprintf(id, sizeof id, "%u", req);
-        rec = engine_notice_build("fetch.cancel", fields, 1);
-        engine_host_notify(ctx, rec);
-        free(rec);
-    }
+    host_cancel_notify(ctx, req);
 }
 
 /* Delivers an answer, routed by id to the call site that asked; never broadcast like a fetched body, because it
@@ -1481,7 +1565,7 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, const ch
                    registers naming it, so the walk that found the register states it. The generic `pending_set`
                    refuses this field on a synchronous record (solver/pending.h), so a path settling one without
                    a register crashes instead of leaving a flow blocked with its answer on it. */
-                pending_answer_sync(f->pending, p);
+                rendezvous_answered(f, p);
                 /* The flow is askable again: this is the event a flow parked on a synchronous request waits
                    for, so the mark comes off here, on the flow the answer reached (flow.h). The first answer
                    stops at the first flow because an unanswered synchronous request is not shared by a fork
@@ -4005,6 +4089,10 @@ static int g_unaddressed_opened;
 /* See engine.h. The rendezvous is opened and marked; the scheduler refuses it once the step returns. A refusal
    written while the step runs lands before the step's own host-owed report, which would then hold the flow out
    of the pick with nothing left to clear it. */
+uint32_t engine_host_request_unaddressed_async(JSContext *ctx, const char *op, JSValueConst deliver) {
+    return host_request_make_async(ctx, engine_host_request_unaddressed(ctx, op), deliver);
+}
+
 uint32_t engine_host_request_unaddressed(JSContext *ctx, const char *op) {
     Flow *f = flow_running();
     uint32_t req = engine_host_request(ctx, op);
@@ -4249,7 +4337,7 @@ static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, Scri
  * order; this selects by register position, which swap-removes (pending_remove, engine_host_take) permute (A B C
  * D deliver A, D, B, C). Next diff builds: an arrival ordinal on the record (a PENDING_FIELDS entry, PEND_SHARE
  * for `value`'s reason) minted monotonically in `pend_set_field`, where both write doors (`pending_set` and
- * `pending_answer_sync`) meet and pend_index_sync dispatches, and the selector choosing the smallest. Absence
+ * `pending_answer_rendezvous`) meet and pend_index_sync dispatches, and the selector choosing the smallest. Absence
  * shows as: engine/solvergate.mjs's `lastreply` schedule disagreeing with `direct` on a corpus document whose
  * two concurrently answered fetches' `.then` handlers observe each other. */
 static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
@@ -4296,7 +4384,7 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
            "modulepreload" step 14.1, §4.6.8.20 Link type "preload"'s network-error branch), read by
            core/html/html_link.c's deliveries. The test stays negative so the DCHECK below can fail: a new kind
            delivered with no arm of its own crashes on it. */
-        if (kind != FLOW_PENDING_RESOLVE && kind != FLOW_PENDING_RESOURCE &&
+        if (kind != FLOW_PENDING_RESOLVE && kind != FLOW_PENDING_RESOURCE && kind != FLOW_PENDING_HOSTREQ &&
             (JS_IsNull(pv) || !script_fetch_status_ok(fetch_reply_status(ctx, pv)) ||
              (kind == FLOW_PENDING_MODULE && !module_reply_is_javascript(ctx, pv)))) {
             DCHECK(kind == FLOW_PENDING_SCRIPT || kind == FLOW_PENDING_DOCSCRIPT ||
@@ -4517,6 +4605,20 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
             }
             JS_FreeValue(ctx, resolve);
             JS_FreeValue(ctx, sv);
+        } else if (kind == FLOW_PENDING_HOSTREQ) {
+            /* An async rendezvous (engine_host_request_async): the answer goes to the asker's processResponse
+               as a task of this flow. A zone answer is a normal completion, a network error included. */
+            JSValue deliver = pending_get(p, PEND_RESOLVE);
+            DCHECK(pending_get_int(p, PEND_ASYNC) && JS_IsFunction(ctx, deliver),
+                   "a blocking rendezvous reached the reply delivery — its asking machine takes it at its park");
+            DCHECK(pending_get_int(p, PEND_COMPLETION) == ENGINE_COMPLETION_NORMAL,
+                   "an async rendezvous was answered with a throw — the zone answers a fetch out of the network, "
+                   "and a network error is a value");
+            if (JS_CallAsFlow(ctx, deliver, pv) < 0) {
+                JSValue exc = JS_GetException(ctx);
+                JS_FreeValue(ctx, exc);   /* a listener's throw is the page's to observe, not this step's */
+            }
+            JS_FreeValue(ctx, deliver);
         } else if (kind == FLOW_PENDING_RESOURCE) {
             /* A browser algorithm's own subresource: the record goes to that algorithm's completion steps and
                nothing is queued, since none of these algorithms evaluates anything now. HTML §4.6.8.12 Link type
@@ -5429,7 +5531,7 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
         reason = pending_get(e, PEND_DECLINED);
         /* A synchronous request can be here: engine_host_decline reaches it by rendezvous id, since it has no
            address for `pending_index_find`. The failure side is kind-aware in exactly two writes below: the
-           completion engine_host_take requires (type and value are one write), and `pending_answer_sync` instead
+           completion engine_host_take requires (type and value are one write), and `pending_answer_rendezvous` instead
            of a bare `haveValue`, since the register carries `pending_blocked`'s count (solver/pending.h). For a
            §7.4 navigation the waiting arm holds the record with no value, so `engine_host_answered` keeps
            answering no, NAV_LOAD_CREATE never runs, and the navigable keeps the initial `about:blank` §7.3.1.3
@@ -5503,9 +5605,9 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
             /* For this kind the completion and value are one write (engine_host_take asserts it). The network
                error is a normal completion carrying null, never a throw, which would re-raise at the parked call
                site and make a declined navigation look like a document that threw. And through the register
-               (pending_answer_sync), since `haveValue` here is the write that unblocks the flow. */
+               (pending_answer_rendezvous), since `haveValue` here is the write that unblocks the flow. */
             pending_set(pe, PEND_COMPLETION, JS_NewInt32(ctx, ENGINE_COMPLETION_NORMAL));
-            pending_answer_sync(f->pending, pe);
+            rendezvous_answered(f, pe);
         } else {
             pending_set_int(pe, PEND_HAVE_VALUE, 1);
         }
@@ -10193,6 +10295,7 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
        member, as at the retirement arm (engine.h). */
     { const int was_cand = tail->cand_src != NULL;
       engine_retract_flow(g_sess_ctx, tail);
+      flow_withdraw_async_sends(g_sess_ctx, tail);
       cold_park_flow(tail);
       flow_release(g_sess_ctx, tail);
       cold_park_spare_refill();   /* the sale freed memory: re-hold the block the next sale opens at the floor */
@@ -11260,6 +11363,7 @@ static int engine_sched_slice(void) {
                 /* A timeline that does not exist leaves without finishing: nothing it did is an outcome. Switched
                    out first, as the pager's sale, since the release frees what a parked flow holds. */
                 if (flow_paint_owed(cur)) flow_clear_paint_owed(cur);
+                flow_withdraw_async_sends(ctx, cur);
                 flow_switch_out(ctx, cur);
                 cur->retired = 1;
                 flow_release(ctx, cur);

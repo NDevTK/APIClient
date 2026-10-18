@@ -5064,13 +5064,13 @@ async function engineServiceHostRequests(eng) {
     }
     // The XMLHttpRequest fetch (XHR §3.5.6 The send() method) is the other answer this zone can give: a network
     // fetch through safeFetch. The record carries method, headers and body because the chokepoint decides SOP,
-    // CORS, method and credentials. The flow stays suspended at its `send()` line, which is what a synchronous
-    // XMLHttpRequest is.
+    // CORS, method and credentials. A synchronous XMLHttpRequest's flow stays suspended at its `send()` line; an
+    // asynchronous one's runs on, and the answer is delivered to it as a task.
     if (op.startsWith("xhr.send\t")) {
       /* Issued, not awaited, through the same door as the pending seam, since `fetchedXhr` reaches the same
          `_readBody`. Keyed on the request id, not a (method, url) pair (wpt_runner.c's `wpt_request_asked_id`
          beside `wpt_request_asked`): the answer is delivered against `engine_host_answer`'s id, and two
-         identical questions from two flows are two ids. Sibling flows run while it waits. */
+         identical questions from two flows are two ids. */
       did += engineIssue(eng, inflightKey([String(id)]),
         (signal) => eng.fetchedXhr(op.slice("xhr.send\t".length), askerDoc, signal),
         // Completion 0 is normal (ECMA-262 §6.2.4 The Completion Record Specification Type): this zone fetched

@@ -294,13 +294,14 @@ static int pend_sync_owed_walk(JSValueConst reg)
 
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(reg, i);
-        if (pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ && pend_owed(e)) c++;
+        if (pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ && pend_owed(e) &&
+            !pending_get_int(e, PEND_ASYNC)) c++;
         JS_FreeValue(pend_ctx(), e);
     }
     return c;
 }
 
-/* WHICH SLOT OF THIS REGISTER NAMES THIS RECORD, or -1 — the half of `pending_answer_sync`'s pairing that only
+/* WHICH SLOT OF THIS REGISTER NAMES THIS RECORD, or -1 — the half of `pending_answer_rendezvous`'s pairing that only
    the register can confirm, since a record carries no way back to the registers that name it (which is the
    whole reason that door takes one). O(entries) and affordable for exactly the reason the walk above is: it
    runs once per synchronous answer and never on the hook's path. */
@@ -331,7 +332,7 @@ int pending_blocked(JSValueConst reg) { return pend_sync_owed(reg) > 0; }
 static int pend_deliverable(JSValueConst e)
 {
     return pending_get_int(e, PEND_HAVE_VALUE) != 0 &&
-           pending_get_int(e, PEND_KIND) != FLOW_PENDING_HOSTREQ;
+           (pending_get_int(e, PEND_KIND) != FLOW_PENDING_HOSTREQ || pending_get_int(e, PEND_ASYNC));
 }
 
 /* WHICH ENTRY THE NEXT DELIVERY WILL TAKE — the ONE answer to that question in this engine, and the reason it
@@ -822,7 +823,7 @@ void pending_set(JSValueConst e, int field, JSValue v)
     /* THE ONE WRITE THIS DOOR REFUSES, AND THE REFUSAL IS WHAT KEEPS THE COUNT HONEST. Settling a SYNCHRONOUS
        request changes what `pending_blocked` answers, and that answer is held by the REGISTER — which this
        door does not have and cannot find, because a record carries no way back to the registers naming it.
-       So the transition has its own door (pending_answer_sync) that is HANDED the register, and this one
+       So the transition has its own door (pending_answer_rendezvous) that is HANDED the register, and this one
        crashes rather than doing half of it: a synchronous answer written here would settle the entry while
        the count went on saying the flow is blocked, and the pick would skip that flow for the rest of the
        session with nothing anywhere to say so. */
@@ -830,7 +831,7 @@ void pending_set(JSValueConst e, int field, JSValue v)
            "a SYNCHRONOUS host request was answered through the generic field door — the register holds the "
            "count that decides whether its flow is blocked and this door has only the record, so the entry "
            "would be settled while the flow went on reading as blocked and was skipped at every pick. Write it "
-           "through pending_answer_sync, which is handed the register");
+           "through pending_answer_rendezvous, which is handed the register");
     pend_set_field(e, field, v);
 }
 
@@ -839,7 +840,7 @@ void pending_set_int(JSValueConst e, int field, int64_t v)
     pending_set(e, field, JS_NewInt64(pend_ctx(), v));
 }
 
-void pending_answer_sync(JSValueConst reg, JSValueConst e)
+void pending_answer_rendezvous(JSValueConst reg, JSValueConst e)
 {
     int owed;
 
@@ -858,12 +859,34 @@ void pending_answer_sync(JSValueConst reg, JSValueConst e)
            "wrong one settles the entry while the flow actually parked on it keeps its count, and that flow is "
            "then skipped at every pick for the rest of the session");
 #endif
+    /* An async rendezvous never counted toward pending_blocked (pending_mark_async gave its count back). */
+    if (pending_get_int(e, PEND_ASYNC)) {
+        pend_set_field(e, PEND_HAVE_VALUE, JS_TRUE);
+        return;
+    }
     owed = pend_sync_owed(reg);
     DCHECK(owed > 0,
            "a register was told one of its synchronous requests has been answered while it counts none "
            "outstanding — the count is raised at the push of every entry of that kind and lowered only here "
            "and at the removal of an unanswered one, so this is one transition that reached the register twice");
     pend_set_field(e, PEND_HAVE_VALUE, JS_TRUE);
+    pend_sync_owed_set(reg, owed - 1);
+}
+
+void pending_mark_async(JSValueConst reg, JSValueConst e)
+{
+    int owed = pend_sync_owed(reg);
+
+    DCHECK(pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ && !pending_get_int(e, PEND_HAVE_VALUE) &&
+           !pending_get_int(e, PEND_ASYNC),
+           "a record that is not an unanswered blocking host rendezvous was made async — the push counts every "
+           "rendezvous as blocking, and this gives back exactly that one count");
+#if APICLIENT_DEV
+    DCHECK(pend_slot_of(reg, e) >= 0, "a rendezvous was made async through a register that does not hold it");
+#endif
+    DCHECK(owed > 0, "a rendezvous was made async on a register that counts no blocking rendezvous — its push "
+                     "raised the count this gives back");
+    pend_set_field(e, PEND_ASYNC, JS_TRUE);
     pend_sync_owed_set(reg, owed - 1);
 }
 
@@ -942,8 +965,10 @@ JSValue pending_answer_standby(JSValueConst reg, int i)
     int owed;
 
     DCHECK(pending_get_int(src, PEND_KIND) == FLOW_PENDING_HOSTREQ && pending_get_int(src, PEND_HAVE_VALUE) &&
-           !pending_get_int(src, PEND_ANSWER_FIXED) && !pending_get_int(src, PEND_ANSWER_EXHAUSTED),
-           "a standby was made from an entry that is not an answered peer request awaiting further answers");
+           !pending_get_int(src, PEND_ANSWER_FIXED) && !pending_get_int(src, PEND_ANSWER_EXHAUSTED) &&
+           !pending_get_int(src, PEND_ASYNC),
+           "a standby was made from an entry that is not an answered blocking peer request awaiting further "
+           "answers — an async rendezvous is a zone fetch, answered once");
     JS_FreeValue(pend_ctx(), src);
     dst = pending_unshare(reg, i);
     pend_set_field(dst, PEND_VALUE, JS_UNDEFINED);
@@ -953,7 +978,7 @@ JSValue pending_answer_standby(JSValueConst reg, int i)
     pend_set_field(dst, PEND_EXTRA, JS_NULL);
     pend_set_field(dst, PEND_ANSWER_STANDBY, JS_TRUE);
     pend_set_field(dst, PEND_STANDBY_LEFT, JS_FALSE);
-    /* Unanswered again, so the register counts it: the transition pending_answer_sync takes back down. */
+    /* Unanswered again, so the register counts it: the transition pending_answer_rendezvous takes back down. */
     owed = pend_sync_owed(reg);
     pend_set_field(dst, PEND_HAVE_VALUE, JS_FALSE);
     pend_sync_owed_set(reg, owed + 1);
@@ -1072,10 +1097,11 @@ void pending_remove(JSValue *reg, int i)
     /* …AND SO IS THE COUNT OF WHAT BLOCKS THIS FLOW, read off the record BEFORE the swap for the same reason
        the naming is given back before it: after the swap the slot holds a different record and what left is
        unrecoverable. An UNANSWERED one only — an answered synchronous rendezvous was already taken off the
-       count by pending_answer_sync, and engine_host_take removes exactly those. The other path here is
+       count by pending_answer_rendezvous, and engine_host_take removes exactly those. The other path here is
        engine_host_terminate, which withdraws a rendezvous the host will never answer: that IS an unanswered
        one leaving, and it is the reason this cannot be folded into the answer door. */
-    if (pending_get_int(gone, PEND_KIND) == FLOW_PENDING_HOSTREQ && pend_owed(gone))
+    if (pending_get_int(gone, PEND_KIND) == FLOW_PENDING_HOSTREQ && pend_owed(gone) &&
+        !pending_get_int(gone, PEND_ASYNC))
         pend_sync_owed_set(*reg, pend_sync_owed(*reg) - 1);
     pending_index_unref(gone);
     JS_FreeValue(pend_ctx(), gone);

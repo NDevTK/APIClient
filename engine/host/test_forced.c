@@ -5379,6 +5379,22 @@ static void tf_cancel_record(const char *rec, size_t len)
     g_tf_cancel_n++;
 }
 
+/* The id-form `fetch.cancel` notices (engine_host_withdraw and engine_host_terminate): how many there were,
+   and how many named an id no earlier one did. */
+static void tf_cancel_ids(int *n, int *distinct)
+{
+    *n = *distinct = 0;
+    for (int i = 0; i < g_tf_cancel_n; i++) {
+        const char *c = g_tf_cancel[i];
+        int dup = 0;
+
+        if (!*c || strspn(c, "0123456789") != strlen(c)) continue;
+        (*n)++;
+        for (int j = 0; j < i && !dup; j++) dup = !strcmp(g_tf_cancel[j], c);
+        if (!dup) (*distinct)++;
+    }
+}
+
 /* How many `fetch.cancel` notices named an address ending in `path`. */
 static int tf_cancelled(const char *path)
 {
@@ -5622,6 +5638,23 @@ static int hostreq_answer_all(JSContext *ctx)
                     }
                     JS_DefinePropertyValueStr(ctx, v, "setCookies", cookies, JS_PROP_C_W_E);
                 }
+            } else if (!strncmp(tab + 1, "xhr.send\t", 9) && memmem(tab + 1, (size_t)(end - tab - 1),
+                                                                      "/api/xa", 7) != NULL) {
+                /* The abort document's asynchronous-send rows: a 200 reply record (fetch_reply_new), so the
+                   object reaches `load`. Its URL is the record's own `url` member, which xhr_request_op writes as
+                   a JSON string with no escapes in these addresses. */
+                const char *u0 = memmem(tab + 1, (size_t)(end - tab - 1), "\"url\":\"", 7);
+                const char *u1 = u0 ? memchr(u0 + 7, '"', (size_t)(end - (u0 + 7))) : NULL;
+                char *url;
+                HeaderList none = { 0 };
+
+                DCHECK(u0 != NULL && u1 != NULL, "an xhr.send record carried no `url` member — xhr_request_op "
+                                                 "writes one on every request");
+                url = strndup(u0 + 7, (size_t)(u1 - (u0 + 7)));
+                CHECK(url != NULL, "the fixture could not copy an XMLHttpRequest's address");
+                v = fetch_reply_new(ctx, 200, "OK", &none, "x", 1, (const char *const *)&url, 1, "text/plain",
+                                    "basic");
+                free(url);
             } else {
                 v = JS_NewStringLen(ctx, tab + 1, (size_t)(end - tab - 1));
             }
@@ -14852,7 +14885,39 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
     fold_row(&apcancel_tt, &apcancel_why, tf_cancelled("/api/apread") == 0 && tf_cancelled("/api/apunread") == 0,
              "a park whose reply had already arrived sent a `fetch.cancel` notice — its send is over, and the "
              "host would be told to end a request it already answered");
+    /* XHR §3.5.6's asynchronous send() fetches in parallel: a zero-delay timer queued after it runs before
+       its `load`. */
+    const char *xatimer_why = NULL;
+    int xatimer_tt = 1;
+    fold_row(&xatimer_tt, &xatimer_why, param_value_only(js, "/api/xaorder", "v", "timer-load"),
+             "NOT REACHED or wrong: a zero-delay timer queued after an asynchronous send() did not run before "
+             "that send's load event (`timer-load`), or the send never loaded");
+    /* §3.5.7 abort() mid-send: step 1 aborts the controller and the zone is told to end the send, once per
+       flow (each flow's rendezvous has its own id); step 2's request error steps are the page's answer. */
+    int xc_n, xc_distinct;
+    tf_cancel_ids(&xc_n, &xc_distinct);
+    const char *xaabort_why = NULL;
+    int xaabort_tt = 1;
+    fold_row(&xaabort_tt, &xaabort_why, param_value_only(js, "/api/xaaborted", "v", "abort-loadend") &&
+                                        param_value_only(js, "/api/xaaborted", "rs", "0"),
+             "abort() during an asynchronous send did not answer locally with `abort` then `loadend` and no "
+             "`load` or `error`, leaving readyState 0");
+    fold_row(&xaabort_tt, &xaabort_why, xc_n >= 1 && xc_distinct == xc_n,
+             "an aborted asynchronous send did not send one `fetch.cancel<TAB><id>` per aborting flow — none "
+             "arrived, or one rendezvous was cancelled twice");
+    /* §3.5.1 open() mid-send: step 10 terminates the controller the same way, and fires nothing. */
+    const char *xaopen_why = NULL;
+    int xaopen_tt = 1;
+    fold_row(&xaopen_tt, &xaopen_why, param_value_only(js, "/api/xareopened", "v", "none") &&
+                                      param_value_only(js, "/api/xareopened", "rs", "1"),
+             "open() during an asynchronous send did not end it silently, leaving readyState 1 with no event");
+    fold_row(&xaopen_tt, &xaopen_why, xc_n >= 2 && xc_distinct == xc_n,
+             "open() during an asynchronous send did not terminate its controller with its own "
+             "`fetch.cancel<TAB><id>` beside abort()'s");
     const Probe rows[] = {
+        { "xhr-timer", xatimer_tt, "/api/xaorder", SESS_EXPLORE, xatimer_why },
+        { "xhr-abort", xaabort_tt, "/api/xaaborted", SESS_EXPLORE, xaabort_why },
+        { "xhr-open", xaopen_tt, "/api/xareopened", SESS_EXPLORE, xaopen_why },
         { "abort-cancel", apcancel_tt, "/api/apcancelled", SESS_EXPLORE, apcancel_why },
         { "abort-after-answer", apabort_tt, "/api/apabort", SESS_EXPLORE, apabort_why },
         { "abort", abortfire_tt, "/api/aborted", SESS_EXPLORE, abortfire_why },

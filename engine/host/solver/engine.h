@@ -489,6 +489,18 @@ int64_t engine_service_us(void);
    rendezvous, never the request text: the answer is computed under the asking flow's world, so two identical
    questions from two flows have two answers. */
 uint32_t engine_host_request(JSContext *ctx, const char *op);
+/* The same rendezvous, with the running flow NOT blocked on it: XHR §3.5.6's asynchronous send() fetches in
+   parallel, so the flow runs on and, when the answer lands, `deliver` is called with it as a task of this flow
+   (Fetch §4.1 "Main fetch"'s processResponse is queued on the networking task source). The entry is the
+   flow's own, forked per arm as every rendezvous is; the flow cannot finish while it is owed. Returns the
+   machine name, which the caller keeps as its fetch controller for engine_host_withdraw. */
+uint32_t engine_host_request_async(JSContext *ctx, const char *op, JSValueConst deliver);
+/* Fetch §2 Infrastructure's abort or terminate of the controller `req` names, from the page's own code on the
+   flow that holds it (XHR §3.5.7 "The abort() method" step 1, §3.5.1 "The open() method" step 10): the
+   running flow's async rendezvous whose machine name is `req` leaves its register, and while it is still
+   unanswered the zone is told `fetch.cancel<TAB><host name>` (engine_host_terminate's notice). An answer that
+   has landed but not been delivered is dropped with the entry. Returns 1 if an entry was withdrawn. */
+int      engine_host_withdraw(JSContext *ctx, uint32_t req);
 /* Whether request `req` has been answered. `*out` is borrowed, so a machine re-entered before it is ready to
    consume may read it again. It reports the answer's arrival, whatever its completion type. */
 int      engine_host_answered(uint32_t req, JSValueConst *out);
@@ -507,21 +519,17 @@ JSValue  engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion);
    local operation would raise it, and returns JS_STEP_ABRUPT (quickjs-step.h). */
 int      engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult);
 
-/* Withdraw a rendezvous: Fetch §2 Infrastructure's "To terminate a fetch controller controller, set
- * controller's state to 'terminated'", for XHR §3.5.1 "The open() method" step 10 and XHR §3.2 "Garbage
- * collection". A flow with an unanswered synchronous request is blocked (pending_blocked) until a host event,
- * so a destroyed machine's entry would leave the flow blocked forever by nobody; this removes the entry and
- * runs flow_clear_host_owed, so the flow is askable on the next pick with its snapshot untouched.
+/* Withdraw a rendezvous at its asker's teardown: Fetch §2 Infrastructure's "To terminate a fetch controller
+ * controller, set controller's state to 'terminated'", for XHR §3.2 "Garbage collection" when a synchronous
+ * send's machine is torn down with its request outstanding. A flow with an unanswered synchronous request is
+ * blocked (pending_blocked) until a host event, so a destroyed machine's entry would leave the flow blocked
+ * forever by nobody; this removes the entry and runs flow_clear_host_owed, so the flow is askable on the next
+ * pick with its snapshot untouched. It walks the frontier by the host's name, since a teardown need not run on
+ * the holding flow. A withdrawal the page makes is engine_host_withdraw, on its own flow.
  *   It is terminate, not abort: terminate carries no error, and at these callers nothing is left to catch one.
  * The zone is asked to stop the transfer with a `fetch.cancel<TAB><id>` notice; a late answer to a
- * withdrawn id finds no register and engine_host_answer returns 0. It answers nothing, since no caller can yet
- * act on whether the id was live; withdrawals are counted (EngineFrontierCensus's host_terminated).
- *   Named residual: not covered is a withdrawal the page makes while the send is in flight (XHR §3.5.7 "The
- * abort() method" step 1, §3.5.1 "The open() method" step 10). An asynchronous send() parks on this
- * rendezvous with its flow blocked, so no page code of that flow runs until the answer, where §3.5.6 fetches
- * in parallel. The next diff makes an asynchronous send a park its flow is not blocked on, with the controller
- * on the object, so abort() and open() reach it. Its absence shows as a zero-delay timer the page queues just
- * after an asynchronous send() running only after that request's load events. */
+ * withdrawn id finds no register and engine_host_answer returns 0. Withdrawals are counted
+ * (EngineFrontierCensus's host_terminated). */
 void     engine_host_terminate(JSContext *ctx, uint32_t req);
 
 /* Who computed an answer; a parameter because the two have different multiplicities. A host answer is a value
@@ -700,6 +708,8 @@ long engine_unaddressed_total(void);
    returns, before any host is shown it, so the flow takes flow_decline_fork's two arms. Returns the rendezvous
    id. */
 uint32_t engine_host_request_unaddressed(JSContext *ctx, const char *op);
+/* engine_host_request_async's form of the same refusal: the failure arm's network error is delivered. */
+uint32_t engine_host_request_unaddressed_async(JSContext *ctx, const char *op, JSValueConst deliver);
 
 /* Whether the address may rest on a witness this engine chose: a second field, not a fourth provenance word,
  * because provenance grades what a reply is worth while this decides whether the act may be spent, and a
