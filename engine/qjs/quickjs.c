@@ -71401,6 +71401,8 @@ typedef struct JSImportOpts {
     JSValue attrs_obj;     /* options.with (owned) */
     JSValue attrs;         /* the null-prototype attribute record being built (owned) */
     JSEnumKeys *ek;        /* 7.3.23 over attrs_obj, key+value (owned) */
+    uint8_t call_phase;    /* step_call_run's cursor for the resolve below */
+    JSValue call_cb[3];    /* [this, resolve, namespace]: the call request's buffer (owned while it stands) */
 } JSImportOpts;
 
 /* The abrupt completion of any of steps 8-11 is a REJECTION. `err` is consumed. Always returns 0: the opcode
@@ -71409,23 +71411,6 @@ static int js_import_opts_reject(JSContext *ctx, JSImportOpts *s, JSValue err)
 {
     JSValue rr = JS_Call(ctx, s->funcs[1], JS_UNDEFINED, 1, vc(&err));
     JS_FreeValue(ctx, err);
-    JS_FreeValue(ctx, rr);
-    return 0;
-}
-
-/* §13.3.10.2 EvaluateImportCall's ToString(specifier) OVER UNKNOWN EXTERNAL INPUT. `import(x)` where x is
-   unknown names no module, and the step after the coercion is HostLoadImportedModule — so there is nothing to
-   fetch, nothing to link and nothing to evaluate, and the module NAMESPACE the capability settles with is
-   itself unknown. That is the operator's answer and it is a value, not a rejection: rejecting would hand the
-   page a completion its own `catch` swallows and end the exploration of everything the chunk's exports reach,
-   while a derived concolic keeps `import(x).then(m => m.render())` running with the source still attached —
-   §solver's "code-loading async ALWAYS executes", as close as it can be honoured when the address is unknown.
-   The specifier's SHAPE is what the @H surface then reports for the chunk that could not be named.
-   Always returns 0: the opcode completes normally with the promise, exactly as the reject path does. */
-static int js_import_opts_resolve_unknown(JSContext *ctx, JSImportOpts *s, JSValue ns)
-{
-    JSValue rr = JS_Call(ctx, s->funcs[0], JS_UNDEFINED, 1, vc(&ns));
-    JS_FreeValue(ctx, ns);
     JS_FreeValue(ctx, rr);
     return 0;
 }
@@ -71452,7 +71437,9 @@ static int js_import_opts_enqueue(JSContext *ctx, JSImportOpts *s)
                      "empty and a non-Object rejects)") \
     X(IMPOPTS_ATTRS, "13.3.10.2 steps 11.d.ii-11.d.iv (entries is EnumerableOwnProperties(attributesObj, " \
                      "key+value) - the ownKeys trap, then per key a getOwnPropertyDescriptor and a Get, " \
-                     "interleaved in that order - and each entry's key and value are validated)")
+                     "interleaved in that order - and each entry's key and value are validated)") \
+    X(IMPOPTS_RESOLVE, "13.3.10.3 ContinueDynamicImport step 6.d.ii over an unknown specifier's namespace " \
+                       "(Call(promiseCapability.[[Resolve]], undefined, << namespace >>) has returned)")
 enum { IMPOPTS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_import_opts_steps[] = { IMPOPTS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -71469,6 +71456,7 @@ static int js_import_opts_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         s->promise = JS_UNDEFINED; s->funcs[0] = JS_UNDEFINED; s->funcs[1] = JS_UNDEFINED;
         s->basename_val = JS_UNDEFINED; s->spec_str = JS_UNDEFINED;
         s->attrs_obj = JS_UNDEFINED; s->attrs = JS_UNDEFINED;
+        s->call_cb[0] = JS_UNDEFINED; s->call_cb[1] = JS_UNDEFINED; s->call_cb[2] = JS_UNDEFINED;
         /* the REFERRER, read here because it comes off the live stack frame and the machine is about to
            suspend into somewhere else entirely. */
         basename = JS_GetScriptOrModuleName(ctx, 0);
@@ -71487,10 +71475,22 @@ static int js_import_opts_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
            UNKNOWN EXTERNAL INPUT REACHES HERE UNCOERCED, because js_toprim_operand excludes a concolic (§7.1.1
            over one is the identity) — so the operator answers before the coercion, which owes C a real
            JSString and can only abort. */
+        /* Over an unknown specifier there is nothing to fetch, link or evaluate, so the operator answers: the
+           namespace the capability settles with is itself unknown, and settling is a value, not a rejection, so
+           `import(x).then(m => m.render())` keeps running with the source attached. §13.3.10.3 step 6.d.ii's
+           Call of the resolve function performs §27.5.1.3 step 2.f's Get(namespace, "then"), so it is a call
+           request and the resolving function's own machine runs it on the trampoline. */
         {
-            JSValue ns = js_concolic_derive(ctx, step_arg(&s->hdr, 0), "import", JS_UNDEFINED);
-            if (!JS_IsUninitialized(ns))
-                return js_import_opts_resolve_unknown(ctx, s, ns);
+            JSValue ns = js_concolic_derive(ctx, step_arg(&s->hdr, 0), "import", JS_UNDEFINED), out;
+
+            if (!JS_IsUninitialized(ns)) {
+                s->hdr.stage = IMPOPTS_RESOLVE;
+                r = step_call_run(ctx, &s->call_phase, STEP_CB(s->call_cb), s->funcs[0],
+                                  JS_UNDEFINED, 1, vc(&ns), JS_UNDEFINED, &out, out_cb, out_argc);
+                JS_FreeValue(ctx, ns);
+                DCHECK(r == JS_STEP_CALL, "a call request answered before it was issued");
+                return r;
+            }
         }
         s->spec_str = JS_ToString(ctx, step_arg(&s->hdr, 0));
         if (JS_IsException(s->spec_str)) {
@@ -71536,6 +71536,16 @@ static int js_import_opts_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         cb_result = JS_UNDEFINED;
     }
 
+    if (s->hdr.stage == IMPOPTS_RESOLVE) {
+        JSValue out;
+
+        r = step_call_run(ctx, &s->call_phase, STEP_CB(s->call_cb), JS_UNDEFINED, JS_UNDEFINED, 1,
+                          NULL, cb_result, &out, out_cb, out_argc);
+        DCHECK(r == 0, "the resolve call request parked twice");
+        if (JS_IsException(out)) return -1;   /* step 6.d.ii's `!`: only an internal failure throws */
+        JS_FreeValue(ctx, out);
+        return 0;
+    }
     DCHECK(s->hdr.stage == IMPOPTS_ATTRS, "import()'s options machine resumed in no stage");
     if (JS_IsException(cb_result))
         return js_import_opts_reject(ctx, s, JS_GetException(ctx));
@@ -71575,6 +71585,9 @@ static void js_import_opts_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->attrs_obj);
     v->val(ctx, &s->attrs);
     v->array(ctx, (void **)&s->ek, sizeof(JSEnumKeys), 1, 1, js_enum_keys_visit);
+    v->val(ctx, &s->call_cb[0]);
+    v->val(ctx, &s->call_cb[1]);
+    v->val(ctx, &s->call_cb[2]);
 }
 
 static JSValue js_import_opts_fini(JSContext *ctx, void *st, bool take_result)

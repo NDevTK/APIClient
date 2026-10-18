@@ -12295,6 +12295,19 @@ TF_UNIT void probes_modules(const char *js, Probe *tab, int *n) {
     fold_row(&mmetaext_tt, &mmetaext_why,
              param_value_is(js, "/api/mmetaext", "u", "mxURL") && param_value_is(js, "/api/mmetaext", "r", "mxRES"),
              "an external module's import.meta.url is not its own address, or `resolve` did not resolve against it");
+    /* ECMAScript §27.5.1.3 resolveSteps step 2.f over the page's code. `then-getter`: the getter's function
+       receives the resolving functions in a rest parameter and fulfils with `tgOK`. `import-unknown`: the
+       unknown namespace is adopted on the trampoline, and an arm that fulfils runs the `then` callback. */
+    const char *thengetter_why = NULL;
+    int thengetter_tt = 1;
+    fold_row(&thengetter_tt, &thengetter_why, param_value_is(js, "/api/thengetter", "w", "tgOK"),
+             "a promise resolved with a thenable whose `then` is a getter did not fulfil with `tgOK` — no "
+             "/api/thengetter record means the getter, its rest-parameter call or the reaction did not run");
+    const char *impunk_why = NULL;
+    int impunk_tt = 1;
+    fold_row(&impunk_tt, &impunk_why, param_value_is(js, "/api/impunk", "w", "iuRES"),
+             "no arm of `import()` over an unknown specifier fulfilled — a `TypeError` value is the rejection "
+             "arm alone, and no record means the resolve never ran");
     /* §16.2.1.7.3.1 InitializeEnvironment's BINDING, asked at the module body's own level and again from two
        closures down. The pair is entailed — the nested read cannot be reported on while the statement has not
        run — and the statement that answers them names WHICH of two opposite repairs a 0 is: the prologue that
@@ -12567,6 +12580,8 @@ TF_UNIT void probes_modules(const char *js, Probe *tab, int *n) {
         { "module-tla", modtla_tt, "/api/modtla", SESS_EXPLORE, modtla_why },
         { "module-meta-inline", mmetain_tt, "/api/mmetain", SESS_EXPLORE, mmetain_why },
         { "module-meta-external", mmetaext_tt, "/chunk/mdmeta.js", SESS_EXPLORE, mmetaext_why },
+        { "then-getter", thengetter_tt, "/api/thengetter", SESS_EXPLORE, thengetter_why },
+        { "import-unknown", impunk_tt, "/api/impunk", SESS_EXPLORE, impunk_why },
         /* §16.2.1.7.3.1's BINDING. `mfd-top` stands first because it is what says whether the row below it is
            about the closure chain or about how far the run got. */
         { "mfd-top", mfdtop_tt, "/api/mfdtop", SESS_EXPLORE, mfdtop_why },

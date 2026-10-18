@@ -134,6 +134,16 @@ static const char HTML_MODULES[] =
     " } catch (e) { fetch('/api/mmetain?u=' + e.name); }"
     " import('/chunk/mdmeta.js');"
     "</script>"
+    /* ECMAScript §27.5.1.3 CreateResolvingFunctions' resolveSteps step 2.f, Get(resolution, "then"), as the
+       page's code: a `then` getter whose function takes its callbacks as a rest parameter (`then-getter`), and
+       `import()` over an unknown specifier, whose unknown namespace is resolved through the same step
+       (`import-unknown`). */
+    "<script>"
+    "new Promise(function (r) { r({ get then() { return function (...cb) { cb[0]('tgOK'); }; } }); })"
+    ".then(function (v) { fetch('/api/thengetter?w=' + v); });"
+    "import(window.__tfImportSpec).then(function () { fetch('/api/impunk?w=iuRES'); },"
+    " function (e) { fetch('/api/impunk?w=' + e.name); });"
+    "</script>"
     /* WEB CRYPTOGRAPHY §29.4.5 AES-GCM EXPORT KEY — `generateKey` then `exportKey` in three formats, the
        reachability witness for §14.3.6 and §14.3.10.
        EVERY EMITTED PAYLOAD IS A CONSTANT: `kty`, `alg` and the `key_ops` members are literals this engine wrote
