@@ -965,8 +965,75 @@ static int park_path_equal(const Flow *a, const Flow *b)
     return eq;
 }
 
-/* A drive already written into this park that is the same drive as `f`: the same body on the same path. Asked of
-   the members still in the registry, so a drive a partial park sold before this one is not compared. */
+/* `*buf` (length `*len`) with `kind`, `a`, `b` and a record separator appended; grown with realloc. */
+static void park_rows_put(char **buf, size_t *len, char kind, const char *a, const char *b)
+{
+    size_t need = 1 + strlen(a) + 1 + strlen(b) + 1;
+    char *grown = realloc(*buf, *len + need + 1);
+
+    CHECK(grown, "the cold tier could not compose a flow's rows to compare two recipes");
+    *buf = grown;
+    *len += (size_t)sprintf(grown + *len, "%c%s\x01%s\x02", kind, a, b);
+}
+static int park_row_cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+
+/* One flow's 'r' rows, sorted since their order carries nothing, then its 'm' rows in queue order, which the
+   reader keeps. malloc'd, the caller's. */
+static char *park_rows_text(const Flow *f)
+{
+    JSContext *qctx = pending_ctx();
+    int n = flow_world_commits(f), q = flow_deliver_pending(f), k;
+    char **rows = n ? calloc((size_t)n, sizeof *rows) : NULL;
+    char *out = NULL;
+    size_t len = 0;
+
+    CHECK(!n || rows, "the cold tier could not list a flow's commitments to compare two recipes");
+    for (k = 0; k < n; k++) {
+        JSValue e = flow_world_commit_at(f, k), vv = JS_GetPropertyUint32(qctx, e, 0);
+        JSValue tv = JS_GetPropertyUint32(qctx, e, 1), av = JS_GetPropertyUint32(qctx, e, 2);
+        const char *vec = JS_ToCString(qctx, vv);
+        char flags[32];
+        size_t l = 0;
+
+        CHECK(vec != NULL, "the cold tier could not read a commitment to compare two recipes");
+        snprintf(flags, sizeof flags, "%d,%d", JS_VALUE_GET_INT(tv), JS_VALUE_GET_INT(av));
+        park_rows_put(&rows[k], &l, 'r', vec, flags);
+        JS_FreeCString(qctx, vec);
+        JS_FreeValue(qctx, vv); JS_FreeValue(qctx, tv); JS_FreeValue(qctx, av); JS_FreeValue(qctx, e);
+    }
+    if (n) qsort(rows, (size_t)n, sizeof *rows, park_row_cmp);
+    park_rows_put(&out, &len, '-', "", "");
+    for (k = 0; k < n; k++) {
+        park_rows_put(&out, &len, '+', rows[k], "");
+        free(rows[k]);
+    }
+    free(rows);
+    for (k = 0; k < q; k++) {
+        JSValue e = flow_deliver_entry(f, k), rv = JS_GetPropertyUint32(qctx, e, 0);
+        JSValue ov = JS_GetPropertyUint32(qctx, e, 1);
+        const char *rec = JS_ToCString(qctx, rv), *org = JS_ToCString(qctx, ov);
+
+        CHECK(rec && org, "the cold tier could not read a delivery to compare two recipes");
+        park_rows_put(&out, &len, 'm', rec, org);
+        JS_FreeCString(qctx, rec); JS_FreeCString(qctx, org);
+        JS_FreeValue(qctx, rv); JS_FreeValue(qctx, ov); JS_FreeValue(qctx, e);
+    }
+    return out;
+}
+
+/* Whether two parked flows write the same 'r' and 'm' rows: the rest of what a recipe replays beside its path. */
+static int park_rows_equal(const Flow *a, const Flow *b)
+{
+    char *ta = park_rows_text(a), *tb = park_rows_text(b);
+    int eq = strcmp(ta, tb) == 0;
+
+    free(ta); free(tb);
+    return eq;
+}
+
+/* A drive already written into this park that is the same drive as `f`: the same body on the same path, in the
+   same sending timelines and owing the same messages, which is everything its records say. Asked of the members
+   still in the registry, so a drive a partial park sold before this one is not compared. */
 static const Flow *park_same_drive_written(const Flow *f)
 {
     const Flow *g;
@@ -974,7 +1041,7 @@ static const Flow *park_same_drive_written(const Flow *f)
 
     for (i = 0; (g = flow_at(i)) != NULL; i++)
         if (g != f && g->paged && g->orphan && g->orphan_hash == f->orphan_hash &&
-            park_kind_of(g) == PARK_KIND_FLOW && park_path_equal(g, f))
+            park_kind_of(g) == PARK_KIND_FLOW && park_path_equal(g, f) && park_rows_equal(g, f))
             return g;
     return NULL;
 }
@@ -1362,11 +1429,12 @@ void cold_park_flow(Flow *f)
             park_orphan_hex(f->orphan_hash, loc);
             DCHECKF(twin == NULL,
                     "the park document already holds a drive of body o%s on this flow's path (chain %ld, cursor "
-                    "%d) — two records that are the same drive of the same body on the same path resume as two "
-                    "claimants of one drive. This one is waiting %d, driving %d; the one written first is "
-                    "waiting %d, driving %d",
-                    loc, id, f->dec_blob ? decide_blob_cursor(f->dec_blob) : -1, f->orphan_want,
-                    !JS_IsUndefined(f->fn), twin ? twin->orphan_want : -1, twin ? !JS_IsUndefined(twin->fn) : -1);
+                    "%d) with the same %d commitment(s) and %d undelivered message(s) — two records that say "
+                    "the same thing resume as two claimants of one drive. This one is waiting %d, driving %d; "
+                    "the one written first is waiting %d, driving %d",
+                    loc, id, f->dec_blob ? decide_blob_cursor(f->dec_blob) : -1, flow_world_commits(f),
+                    flow_deliver_pending(f), f->orphan_want, !JS_IsUndefined(f->fn),
+                    twin ? twin->orphan_want : -1, twin ? !JS_IsUndefined(twin->fn) : -1);
         }
 #endif
         if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", flow_reward(f));
