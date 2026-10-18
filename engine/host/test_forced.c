@@ -13382,11 +13382,21 @@ TF_UNIT void probes_custommedia(const char *js, Probe *tab, int *n) {
     const char *hforms_why = NULL; int hforms_tt = 1;
     fold_row(&hforms_tt, &hforms_why, param_value_is(js, "/api/cmedia", "h", "false"),
              "CSSFontFeatureValuesRule has a `historicalForms` map, which Chrome 155's IDL does not declare");
+    /* `(--n)` is unknown in every environment, so its answer reads no environment fact and is no source. */
+    const char *mconst_why = NULL; int mconst_tt = 1;
+    fold_row(&mconst_tt, &mconst_why,
+             emitted_record_has(js, "/api/cmedia", "\"name\":\"m\",\"location\":\"query\",\"valueClass\":\"concrete\""),
+             "no /api/cmedia record carries `m` as a concrete param");
+    fold_row(&mconst_tt, &mconst_why,
+             !emitted_record_has(js, "/api/cmedia", "\"name\":\"m\",\"location\":\"query\",\"valueClass\":\"unknown\""),
+             "matchMedia('(--n)').matches reached the address as an environment source, though no environment "
+             "can make an unknown query match");
     fold_row(&hforms_tt, &hforms_why, param_value_is(js, "/api/cmedia", "s", "1"),
              "the `@swash` block beside an ignored `@historical-forms` did not fill its map with one entry");
     const Probe rows[] = {
         { "custom-media-unrecognized", cmedia_tt, "/api/cmedia", SESS_EXPLORE, cmedia_why },
         { "historical-forms-unrecognized", hforms_tt, "/api/cmedia", SESS_EXPLORE, hforms_why },
+        { "media-query-constant-not-a-source", mconst_tt, "/api/cmedia", SESS_EXPLORE, mconst_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

@@ -1354,9 +1354,9 @@ static int eval_cond(const MqCond *c, const MqEnv *e)
     return MQ_FALSE;
 }
 
-/* §2.2: this user agent's media type. It renders a document for a screen — every geometric answer it gives is
+/* MQ4 §2.3 "Media Types": this user agent's media type. It renders a document for a screen — every geometric answer it gives is
    a viewport's — so `screen` is what it IS, and `print` is a different rendering it does not perform. `all`
-   matches every type by definition. The types §2.2 deprecates (`tty`, `tv`, `projection`, `handheld`,
+   matches every type by definition. The types §2.3 deprecates (`tty`, `tv`, `projection`, `handheld`,
    `braille`, `embossed`, `aural`, `speech`) "must never match", which is the same answer an unknown type gets
    and is why there is no list of them here. */
 static bool type_matches(const char *type)
@@ -1386,6 +1386,86 @@ bool media_query_matches(JSContext *ctx, const MediaQuerySet *set)
     for (i = 0; i < set->n; i++)
         if (query_matches(&set->q[i], &e)) return true;
     return false;
+}
+
+/* Which of MQ4 §3.1 "Evaluating Media Queries"' three answers a condition can give over every environment,
+   as a mask of `1 << MQ_*`: an understood feature is an environment question and can give either truth
+   value, and `<general-enclosed>` is unknown in all of them. Two leaves are taken as independent, which can
+   only widen the mask. */
+static unsigned mq_range_lift(int (*op)(int, int), unsigned a, unsigned b)
+{
+    unsigned r = 0;
+    int x, y;
+
+    for (x = MQ_FALSE; x <= MQ_UNKNOWN; x++)
+        for (y = MQ_FALSE; y <= MQ_UNKNOWN; y++)
+            if ((a & (1u << x)) && (b & (1u << y))) r |= 1u << op(x, y);
+    return r;
+}
+
+static unsigned mq_range_not(unsigned a)
+{
+    unsigned r = 0;
+    int x;
+
+    for (x = MQ_FALSE; x <= MQ_UNKNOWN; x++)
+        if (a & (1u << x)) r |= 1u << mq_not(x);
+    return r;
+}
+
+static unsigned cond_range(const MqCond *c)
+{
+    unsigned r;
+    int i;
+
+    switch (c->op) {
+    case MQC_FEATURE:
+        return c->feat.unknown ? 1u << MQ_UNKNOWN : (1u << MQ_FALSE) | (1u << MQ_TRUE);
+    case MQC_NOT:
+        return mq_range_not(cond_range(c->kids[0]));
+    case MQC_AND:
+    case MQC_OR:
+        DCHECK(c->nkids >= 2, "an `and`/`or` media condition was built with fewer than two operands");
+        r = cond_range(c->kids[0]);
+        for (i = 1; i < c->nkids; i++)
+            r = mq_range_lift(c->op == MQC_AND ? mq_and : mq_or, r, cond_range(c->kids[i]));
+        return r;
+    }
+    DFAIL("a media condition with no operator reached the environment-range walk");
+    return 0;
+}
+
+/* `query_matches`'s answer over every environment: 1 when it matches in all of them, 0 when in none, -1 when
+   the environment decides. MQ4 §2.3 "Media Types"' `screen` and `print` are the types an environment can
+   switch between; `all` matches every one and every other type none. */
+static int query_constant(const MqQuery *q)
+{
+    unsigned r;
+
+    if (q->invalid) return 0;
+    if (!q->type[0] || !strcmp(q->type, "all")) r = 1u << MQ_TRUE;
+    else if (!strcmp(q->type, "screen") || !strcmp(q->type, "print")) r = (1u << MQ_FALSE) | (1u << MQ_TRUE);
+    else r = 1u << MQ_FALSE;
+    if (q->cond) r = mq_range_lift(mq_and, r, cond_range(q->cond));
+    if (q->qualifier == 1) r = mq_range_not(r);
+    if (r == 1u << MQ_TRUE) return 1;
+    return (r & (1u << MQ_TRUE)) ? -1 : 0;
+}
+
+/* The list's answer over every environment, as `query_constant` gives a member's. A list matches when any
+   member does (MQ4 §2.1 "Combining Media Queries") and the empty list always does, so one member true
+   everywhere decides it, and it is false everywhere only when every member is. */
+static int set_constant(const MediaQuerySet *set)
+{
+    int i, k, r = 0;
+
+    if (set->n == 0) return 1;
+    for (i = 0; i < set->n; i++) {
+        k = query_constant(&set->q[i]);
+        if (k == 1) return 1;
+        if (k == -1) r = -1;
+    }
+    return r;
 }
 
 /* ---- the CSSOM-facing answer — see media_query.h for why it is spelled HERE ---------------------------------- */
@@ -1429,8 +1509,20 @@ JSValue media_query_matches_value(JSContext *ctx, const MediaQuerySet *set)
 {
     char *shape, *src;
     JSValue v;
+    int k;
 
     DCHECK(set != NULL, "a media query list's CSSOM answer was asked for after it was freed");
+    /* An answer no environment can change reads no environment fact, so it is no source: `(--n)` is unknown,
+       and therefore false, in every user agent. */
+    k = set_constant(set);
+    if (k >= 0) {
+        bool m = media_query_matches(ctx, set);
+
+        DCHECKF(m == (k == 1), "the environment-range walk calls this query list %s in every environment and "
+                "the evaluator answers %s in this one; the two read one AST and must agree",
+                k ? "true" : "false", m ? "true" : "false");
+        return JS_NewBool(ctx, m);
+    }
     mq_source(ctx, set, &shape, &src);
     /* concolic_source_wrap hands back the plain boolean where no source overlay is installed (a conformance
        host), which is what keeps this component testable against the standard. */
