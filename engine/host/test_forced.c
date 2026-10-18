@@ -9111,14 +9111,15 @@ static int param_value_only(const char *js, const char *url, const char *pname, 
     return mine > 0 && mine == param_value_count(js, url, pname);
 }
 
-/* `param_value_only` over the records of requests the page's own control flow made (`"driven":false`), the
-   reader for a row about WHEN the event loop ran a handler. A driven record is the handler called by orphan
-   driving with no event behind it, so its value states what the handler computes, never the order. */
-static int param_value_only_undriven(const char *js, const char *url, const char *pname, const char *val) {
+/* How many of one param's values are `val` (every value for NULL) over the records of requests the page's own
+   control flow made (`"driven":false`), the reader for a row about WHEN the event loop ran a handler. A driven
+   record is the handler called by orphan driving with no event behind it, so its value states what the
+   handler computes, never the order. */
+static int param_undriven_count(const char *js, const char *url, const char *pname, const char *val) {
     EmittedRec r[EMITTED_REC_MAX];
     const char *v, *b;
-    size_t n, m = strlen(val);
-    int cnt = emitted_records(js, url, r, EMITTED_REC_MAX), i, all = 0, mine = 0;
+    size_t n, m = val ? strlen(val) : 0;
+    int cnt = emitted_records(js, url, r, EMITTED_REC_MAX), i, k = 0;
 
     for (i = 0; i < cnt; i++) {
         if (!memmem(r[i].b, r[i].n, "\"driven\":false", 14)) {
@@ -9126,12 +9127,17 @@ static int param_value_only_undriven(const char *js, const char *url, const char
                    "endpoint_json_array writes a record with no `driven` field — it emits one on every record");
             continue;
         }
-        for (v = param_values_in(&r[i], pname); v && (v = param_value_next(v, &b, &n)) != NULL; ) {
-            all++;
-            if (n == m && memcmp(b, val, m) == 0) mine++;
-        }
+        for (v = param_values_in(&r[i], pname); v && (v = param_value_next(v, &b, &n)) != NULL; )
+            if (!val || (n == m && memcmp(b, val, m) == 0)) k++;
     }
-    return mine > 0 && mine == all;
+    return k;
+}
+
+/* `param_value_only` over the undriven records, of which there is at least one. */
+static int param_value_only_undriven(const char *js, const char *url, const char *pname, const char *val) {
+    const int mine = param_undriven_count(js, url, pname, val);
+
+    return mine > 0 && mine == param_undriven_count(js, url, pname, NULL);
 }
 
 /* THE STAGE AN @S SEARCH REACHED, read off the entry the report already carries. ONE boolean per sink
@@ -14961,9 +14967,13 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
     /* A fetch() reply ordered by its arrival against a port message posted before it arrived. */
     const char *xfmsg_why = NULL;
     int xfmsg_tt = 1;
-    fold_row(&xfmsg_tt, &xfmsg_why, param_value_only_undriven(js, "/api/xfmorder", "v", "message-reply"),
-             "NOT REACHED or wrong: a port message posted after fetch() and before its reply arrived did not "
-             "run before the reply settled the promise (`message-reply`)");
+    /* `reply` is right in a timeline whose answer arrived before postMessage(); a call stamp gives it in every
+       timeline, since the park is pushed before the message task, so `message-reply` somewhere is the claim. */
+    const int xfm_mr = param_undriven_count(js, "/api/xfmorder", "v", "message-reply");
+    const int xfm_r = param_undriven_count(js, "/api/xfmorder", "v", "reply");
+    fold_row(&xfmsg_tt, &xfmsg_why, xfm_mr > 0 && xfm_mr + xfm_r == param_undriven_count(js, "/api/xfmorder", "v", NULL),
+             "NOT REACHED or wrong: no timeline ran a port message posted after fetch() and before its reply "
+             "arrived ahead of that reply (`message-reply`), or one recorded an order that is neither");
     /* XHR §3.5.6's timeout: it fires for a send nothing answered in time, and an answer beats it. */
     const char *xatime_why = NULL;
     int xatime_tt = 1;

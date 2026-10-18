@@ -92,7 +92,9 @@ static const char HTML_ABORT[] =
     /* XHR §3.5.6's timeout, on HTML §8.7's timer source. The host answers between slices, so a 1 ms timeout
        sent in a task whose loop moves the work clock past it, inside one slice, fires before the answer:
        `timeout` then `loadend`. The clock never jumps to a deadline while a reply is in flight
-       (event_loop_may_advance), so a 60 s timeout is beaten by the host's answer: `load` then `loadend`. */
+       (event_loop_may_advance), so a 60 s timeout is beaten by the host's answer: `load` then `loadend`.
+       The 1 ms send's task queues the fetch-message task below last, so that task's long loop runs after
+       this timeout has fired. */
     "<script>"
     "(function () {"
     " function watch(x, seen, path) {"
@@ -103,7 +105,8 @@ static const char HTML_ABORT[] =
     " setTimeout(function () {"
     "  var t1 = new XMLHttpRequest(), e1 = []; t1.open('GET', '/api/xatimeout'); t1.timeout = 1;"
     "  watch(t1, e1, '/api/xatimedout'); t1.send();"
-    "  for (var i = 0; i < 20000; i++) {}"
+    "  for (var i = 0; i < 30000; i++) {}"
+    "  setTimeout(function () { window.xfmsgTask(); }, 0);"
     " }, 0);"
     " var t2 = new XMLHttpRequest(), e2 = []; t2.open('GET', '/api/xabeaten'); t2.timeout = 60000;"
     " watch(t2, e2, '/api/xabeat'); t2.send();"
@@ -142,16 +145,17 @@ static const char HTML_ABORT[] =
     "})();"
     "</script>"
     /* A fetch() reply is a networking task from its arrival, so a port message posted before the reply
-       arrives runs first. The task runs after every zero-delay timer above, and its loop spans slices so the
-       host answers the fetch while it runs: `message-reply`. */
+       arrives runs first. The task (queued by the 1 ms timeout's task above) loops across slices so the host
+       answers the fetch while it runs: `message-reply`, or `reply` in a timeline where a slice ended between
+       fetch() and postMessage() and the answer arrived there. */
     "<script>"
-    "setTimeout(function () {"
+    "window.xfmsgTask = function () {"
     " var mc = new MessageChannel(), order = [];"
     " mc.port1.onmessage = function () { order.push('message'); };"
     " fetch('/api/xfmsg').then(function () { order.push('reply'); fetch('/api/xfmorder?v=' + order.join('-')); });"
     " mc.port2.postMessage(0);"
     " for (var i = 0; i < 3000000; i++) {}"
-    "}, 0);"
+    "};"
     "</script>"
     /* A request aborted while its reply is still owed: the abort runs on the line after the call, before the
        host can answer, so the engine tells the host to end the send, and the page sees an AbortError. */
