@@ -6409,14 +6409,17 @@ const _hostOps = {
     /* The step that answered DONE may have emitted notices before its frontier drained (a flow declares a route
        and ends), and only a service round drains them, which a DONE step never gets. They are acted on here,
        while the instance is still a pool member, as a round would. A synchronous request needs a parked flow,
-       so none can be owed by a drained frontier. */
-    for (const line of owedList("GetHostNotices", (await eng.r.renderer.getHostNotices()).notices))
-      await hostNotice(eng, line);
-    const _owedAtDone = owedList("GetHostRequests", (await eng.r.renderer.getHostRequests()).requests);
-    DCHECK(_owedAtDone.length === 0,
-           "an engine answered DONE while owing " + _owedAtDone.length + " host request(s) (" +
-           JSON.stringify(_owedAtDone.slice(0, 3)) + ") — a request is a parked flow's, and a drained frontier " +
-           "holds none, so finalizing would discard a flow the engine still counts");
+       so none can be owed by a drained frontier. A crashed instance is not asked, as engineFinalize does not ask
+       it for a result: its frame is gone and what it printed is already in `eng.lines`. */
+    if (!eng._crashed) {
+      for (const line of owedList("GetHostNotices", (await eng.r.renderer.getHostNotices()).notices))
+        await hostNotice(eng, line);
+      const _owedAtDone = owedList("GetHostRequests", (await eng.r.renderer.getHostRequests()).requests);
+      DCHECK(_owedAtDone.length === 0,
+             "an engine answered DONE while owing " + _owedAtDone.length + " host request(s) (" +
+             JSON.stringify(_owedAtDone.slice(0, 3)) + ") — a request is a parked flow's, and a drained " +
+             "frontier holds none, so finalizing would discard a flow the engine still counts");
+    }
     const i = _pool.indexOf(eng); if (i >= 0) _pool.splice(i, 1);
     zoneReclaimHeldCookies(eng.groupId);
     const result = await engineFinalize(eng);
