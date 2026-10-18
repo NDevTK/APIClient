@@ -344,7 +344,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // Any other extension-page message (the popup's GET_STATE etc.) is handled by
   // the brain, which receives the same broadcast directly. The SW's only job is
-  // to make sure the brain is alive to receive it (and to resume any grind).
+  // to make sure the brain is alive to receive it.
   ensureOffscreen().catch((e) => {
     // The popup just asked the brain for state and we couldn't even WAKE the
     // offscreen document — the popup will time out waiting for the broadcast

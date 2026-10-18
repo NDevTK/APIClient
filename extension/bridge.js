@@ -6306,6 +6306,9 @@ function _hostKick() {
 /* The offscreen kicks the pool on idle so parked cold recipes are pulled in (admission re-checks the frontier)
    even when no new document arrives, so the one attention keeps advancing across sessions. */
 self.kickHostPool = _hostKick;
+/* A browser restart resumes the parked frontier by value order with no page visited, so the pool is kicked
+   when this document starts, once the cumulative store that a resumed engine's findings merge into is read. */
+_globalStoreReady.then(_hostKick);
 
 /* The pool, observed through the boundary it runs behind. renderer-host.js's `rendererProbe` proves the
    transport; this proves the product: the pool builds its instances as renderers, a real page's findings came

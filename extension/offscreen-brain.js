@@ -68,8 +68,8 @@ function sendToOffscreen(msg) {
                 "install. Read bridge.js's own error to tell them apart"));
   return self.astDispatch(msg);
 }
-// The offscreen document's lifecycle + the cross-session resume kick are owned by
-// the thin service worker (background.js). Nothing to create from inside it.
+// The offscreen document's lifecycle is owned by the service worker (background.js), which creates it at
+// the worker's start; nothing creates it from inside.
 function ensureOffscreen() { return Promise.resolve(); }
 
 // Privileged chrome.tabs.* / webNavigation.* calls the offscreen can't make — the
