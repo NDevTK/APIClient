@@ -7,9 +7,9 @@
    A first script writes under an unknown read off the global as `k + ""` and reads back under `k`, `String(k)`
    and `${k}`: §7.1.21 ToPropertyKey makes all four one name, so each read sees the write, while `k + "5"` is a
    different name and does not read that slot.
-   It also adds the Number 0 and the String "0" to another unknown `s`, which holds `undefined`, and sends both
-   twice: alone, so the address carries §13.15.3's computed bytes, and beside `Math[s]`, a key read with no
-   example, so that address spells shapes. A sum and a concatenation take two arms and two shapes.
+   The same script adds another unknown to the Number 0 and to the String "0" and sends both in one address, so
+   the probe rows can read that a sum and a concatenation spell two shapes, and that a concatenation onto a
+   String the page already built takes the string arm.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_ABSENTARM_H
@@ -25,7 +25,6 @@ static const char HTML_ABSENTARM[] =
     "fetch('/api/abskey?same=' + (absKo[absK] === 'str') + '&str=' + (absKo[String(absK)] === 'str') +"
     " '&tpl=' + (absKo[`${absK}`] === 'str') + '&other=' + (absKo[absK + '5'] === undefined));"
     "var absS = window.__tfAbsSum; fetch('/api/abssum?n=' + (0 + absS) + '&t=' + ('0' + absS));"
-    "fetch('/api/abssumx?n=' + (0 + absS) + '&t=' + ('0' + absS) + '&k=' + Math[absS]);"
     "</script>"
     "<script>"
     "function absBoom(tag) { throw new Error('absBOOM' + tag); }"

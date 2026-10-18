@@ -18686,6 +18686,16 @@ static JSValue JS_ToPrimitiveFree(JSContext *ctx, JSValue val, int hint)
 {
     if (JS_VALUE_GET_TAG(val) != JS_TAG_OBJECT)
         return val;
+    /* An unknown is its own primitive under every hint. That is exact for a primitive, and the two hints give
+       one string for structured or JSON data under the realm's own prototype methods (§7.1.1.1
+       OrdinaryToPrimitive's two method orders agree there; §21.4.4.45 makes a Date's default the string hint).
+       Named residual. Not covered: an unknown that is an Object with page code behind §7.1.1 (its own or an
+       inherited @@toPrimitive, valueOf or toString), which a driven orphan's argument or receiver can be, since
+       its never-run caller could pass one; there the hint picks which method answers.
+       Next diff builds: such an unknown's ToPrimitive answers the derived unknown that §7.1.1 step 1.b.iv's Call
+       (or OrdinaryToPrimitive's) returns, its identity naming the hint, so `x + ""` concatenates that and
+       solver/concolic.c's str_of_record names its property key from it rather than from `x`.
+       Absence shows as: no derived value's shape or identity anywhere names a ToPrimitive hint. */
     if (js_value_is_concolic(val))
         return val;
 #if APICLIENT_DEV
