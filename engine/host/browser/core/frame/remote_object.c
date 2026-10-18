@@ -637,17 +637,14 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
         JSValueConst nav = window_proxy_navigable_of(ctx, v);   /* the two spellings, resolved in one place */
 
         if (!JS_IsUndefined(nav)) return nav_encode(ctx, nav);
-        /* AND THE THIRD SPELLING IS NOT ONE. An instance is an origin-keyed agent CLUSTER, so a Window global
-           of ANOTHER realm of this agent can reach here — and it is a navigable this file cannot name, because
-           window_proxy_navigable_of resolves a global against the realm it was handed. Crossing it as an
-           object would lend that navigable as `o<doc>:<gen>:<id>`, which is the whole failure above. */
+        /* A Window global of another realm of this agent resolves above too: window_proxy_navigable_of finds
+           the live navigable whose realm's global it is. What is left is a Window whose document was
+           destroyed, which no live navigable holds; crossing it as an object would lend a navigable as
+           `o<doc>:<gen>:<id>`, which is the failure above. */
         DCHECK(!window_is(v),
-               "a Window global of another realm of THIS agent was about to cross an agent boundary as a "
-               "generic object reference. It is a navigable and must cross as its IDENTITY, but the mapping "
-               "from a global to its navigable is asked of the realm the encoder was handed, and this value "
-               "belongs to a different one. Reach the navigable from the WINDOW rather than from the realm — "
-               "the global's own realm is what document_window_proxy is keyed on — or encode in the realm the "
-               "value came out of, which is what flow_answer_perform already does for the value it answers");
+               "a Window whose document was destroyed was about to cross an agent boundary as a generic object "
+               "reference. It is a navigable and must cross as its identity: record the navigable on the Window "
+               "when its realm is made, so the edge survives the realm's release");
     }
     if (JS_IsObject(v)) {
         /* AN OBJECT CROSSES AS ITS NAME, AND THE NAME SAYS WHOSE. A value that is ALREADY a reference re-emits
