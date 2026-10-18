@@ -180,7 +180,7 @@ function _wireRelaySend(href, init, held) {
       fail(m.error);
       port.disconnect();
     });
-    port.postMessage({ href: href, scope: held === null ? null : held.scope,
+    port.postMessage({ href: href, scope: held === null ? null : held.scope, rule: held === null ? null : held.ruleId,
                        init: { method: init.method, headers: init.headers === undefined ? null : init.headers, body: body } });
   });
 }

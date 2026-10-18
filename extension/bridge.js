@@ -1809,6 +1809,12 @@ async function frontierIndex() {
    A failure is not a @WHY (the world may retire a route): it is recorded on the entry, which stops being a
    cold candidate, and in `_frontierStats.stranded`. The recipes are untouched, so the next visit resumes. */
 async function frontierRederive(e) {
+  /* The parked document speaks as itself for this one load and for nothing else, so it ends with the load. */
+  const held = "held:frontier:" + e.key;
+  try { return await _frontierRederive(e, held); }
+  finally { speakAsDocumentEnded(held); }
+}
+async function _frontierRederive(e, held) {
   DCHECK(e.shed === true,
          "a cold-tier entry that still holds its document was sent to be re-derived — the fetch would replace " +
          "bytes this store already has, and the round would pay a network round trip to learn nothing");
@@ -1839,7 +1845,7 @@ async function frontierRederive(e) {
                                                   credentialed: navigationCarriesSession(e.sourceUrl, e.origin),
                                                   /* A parked document is one only this zone holds. */
                                                   identity: navigationCarriesSession(e.sourceUrl, e.origin)
-                                                    ? await navigationIdentity({ identity: await engineIdentity(e.origin, e.sourceUrl, "held:" + e.key),
+                                                    ? await navigationIdentity({ identity: await engineIdentity(e.origin, e.sourceUrl, held),
                                                                            referrer: "none", policy: null,
                                                                            request: null },
                                                                          e.sourceUrl, DOCUMENT_REQUEST_UNSTATED)
@@ -2193,12 +2199,11 @@ function responseFieldLines(h) {
    documentSpeaker: a load the document `msg` describes makes for a child navigable, whose client is that
    document: the browser's frame (frameIdentity, by its id and its tab, which is its group) when the browser
    holds it, and engineIdentity for one only this zone holds (a peer-announced child, a rehydrated recipe). */
-function documentSpeaker(msg) {
+function documentSpeaker(msg, docKey) {
   return async () => {
     const live = typeof msg.documentId === "string" && typeof msg.groupId === "number";
     const identity = live ? await frameIdentity(msg.groupId, msg.documentId)
-      : await engineIdentity(msg.origin, msg.sourceUrl, typeof msg.documentId === "string" && msg.documentId !== ""
-                               ? "engine:" + msg.documentId : "held:" + msg.origin + " " + msg.sourceUrl);
+      : await engineIdentity(msg.origin, msg.sourceUrl, docKey);
     if (identity === null) return null;
     return { identity, referrer: "client", policy: live ? await documentReferrerPolicy(msg.documentId) : null,
              request: null };
@@ -3382,7 +3387,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
        issuer's for a swap or a navigation (askerRecord). */
     DCHECK(docRecordIs(doc), "a §7.4 document load was asked for with no issuing document's record");
     const r = await navigationLoad(u, msg.sourceUrl, msg.origin, provenance, doc,
-                                   refusalArm, /*actor*/"page", driven, pinned, request, documentSpeaker(msg),
+                                   refusalArm, /*actor*/"page", driven, pinned, request,
+                                   documentSpeaker(msg, "engine:" + eng.docId),
                                    readerOpaque);
     /* `declined` crosses (engineDeliverDocument routes it to the rendezvous, so the navigable keeps the
        `about:blank` it was created holding); `unavailable` does not, since nothing here reads it. */
@@ -5611,6 +5617,7 @@ const _waiting = [];
    decides when the fetch is spent. It is in memory only: the declaring document's residue replays its router,
    which declares the route again. */
 const _seeds = new Map();   // absolute address -> { url, principalUrl, principalOrigin, provenance, reach }
+let _heldRoutes = 0;       // the serial a declared route's load names its declaring document by (`held:route:<n>`)
 let _hostDriving = false;
 /* The reservation ledger, cumulative because the state it describes is transient: an empty pool after an
    analysis looks the same whether reservations ran or not. Each reservation is counted where made and each
@@ -6116,6 +6123,8 @@ const _hostOps = {
            only when nothing is rankable. Only the network body is off-round; refusals, the message, the cluster
            check and the boot happen in admitSeatLand at the top of a round, so an invariant abort still reaches
            hostSchedule's failure arm. */
+        /* The declaring document speaks as itself for this one load, so it ends with the load. */
+        const held = "held:route:" + (++_heldRoutes);
         admitLoadSeat({ kind: "seed", seed: seed },
                       () => navigationLoad(seed.url, seed.principalUrl, seed.principalOrigin, seed.provenance,
                                            seed.fromDoc,
@@ -6132,11 +6141,10 @@ const _hostOps = {
                                            /*actor*/"page", seed.driven, seed.pinned, DOCUMENT_REQUEST_UNSTATED,
                                            /* A declared route is a document only this zone holds. */
                                            async () => ({ identity: await engineIdentity(stampOrigin(seed.principalOrigin),
-                                                                                   seed.principalUrl,
-                                                                                   "held:" + seed.principalOrigin + " " +
-                                                                                   seed.principalUrl),
+                                                                                   seed.principalUrl, held),
                                                           referrer: "none", policy: null, request: null }),
-                                           docRecordOpaque(seed.doc)));
+                                           docRecordOpaque(seed.doc))
+                        .finally(() => speakAsDocumentEnded(held)));
         return pick.census;
       }
       if (cand.kind === "doc") {

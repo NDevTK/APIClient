@@ -33,10 +33,8 @@ async function frameIdentityOf(f) {
 
 /* An engine instance's document: the cluster origin this zone assigned at engineCreate, the URL it loaded,
    and `docKey`, this zone's name for it (`engine:<docId>` for an instance's document, which ends with the
-   document or the instance; `held:` for one only this zone holds).
-   Named residual: a `held:` document has no end event. The next diff ends it when its frontier entry or
-   route is retired. Its absence shows as such a document's speak-as rules leaving only by retirement under
-   declarativeNetRequest's session limits. Not covered: a document nested in a cross-site one, whose partition key has a cross-site
+   document or the instance; `held:` for one only this zone holds, a parked frontier entry or a declared
+   route's declaring document, which speaks for one load and ends when that load settles). Not covered: a document nested in a cross-site one, whose partition key has a cross-site
    ancestor; the next diff passes the ancestor origins engineCreate already holds. Its absence shows as
    such a document's cross-site sends carrying no partitioned cookies. */
 async function engineIdentity(origin, docUrl, docKey) {

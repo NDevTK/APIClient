@@ -179,8 +179,8 @@ async function _speakAsFlush() {
 }
 
 /* The scope a send of `method` to the fragment-less `url` speaking as `speak` ({docKey, origin, stated,
-   headers}) runs under, as {scope, release}: the rule of its document and key, installed if it is not, and
-   counted in flight until `release()`. */
+   headers}) runs under, as {scope, ruleId, release}: the rule of its document and key, installed if it is
+   not, and counted in flight until `release()`. */
 async function speakAsAcquire(url, method, speak) {
   CHECK(typeof speak.docKey === "string" && speak.docKey !== "",
         "a send speaks as an identity with no document key — a rule is scoped to one document's sends");
@@ -220,7 +220,7 @@ async function speakAsAcquire(url, method, speak) {
     }
   }
   let released = false;
-  return { scope: e.scope, release: () => {
+  return { scope: e.scope, ruleId: e.ruleId, release: () => {
     DCHECK(!released, "a speak-as scope was released twice");
     released = true;
     e.inFlight--;

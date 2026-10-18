@@ -91,10 +91,11 @@ chrome.webRequest.onSendHeaders.addListener((d) => {
           "rules " + JSON.stringify(matched.map((r) => r.id)));
     return;
   }
-  // A rule's prefix holds its scope, so the one rule that matches a send's URL is its own scope's.
-  CHECK(matched.length === (rec !== undefined && rec.scope !== null ? 1 : 0),
+  CHECK(rec !== undefined && rec.scope !== null ? matched.length === 1 && matched[0].id === rec.ruleId
+                                                 : matched.length === 0,
         "the request " + d.method + " " + d.url + " (initiator " + d.initiator + ") matched the speak-as rules " +
-        JSON.stringify(matched.map((r) => r.id)) + ", not exactly its own send's — a rule changed a request it " +
+        JSON.stringify(matched.map((r) => r.id)) + ", not exactly its own send's rule " +
+        JSON.stringify(rec === undefined ? null : rec.ruleId) + " — a rule changed a request it " +
         "was not installed for");
   const expect = Object.assign({}, before);
   if (matched.length === 1)
@@ -146,8 +147,8 @@ function _wireBytes(b64) {
   return u;
 }
 
-/* One send: `m` is {href, scope, init: {method, headers: [[name, value]] | null, body: null | {text} | {b64}}},
-   `href` fragment-less and `scope` its speak-as rule's or null. The port is answered {head: {status,
+/* One send: `m` is {href, scope, rule, init: {method, headers: [[name, value]] | null, body: null | {text} |
+   {b64}}}, `href` fragment-less, and `scope` and `rule` its speak-as rule's scope and id, or null. The port is answered {head: {status,
    statusText, headers, setCookie}}, then {chunk: base64} per body chunk, then {end}; or {error} for Fetch
    §5.6's network error. A 3xx's head is the record webRequest reported and its body is none. A data: URL has
    no webRequest event, no fragment and no Set-Cookie. No answer carries the send's fragment. */
@@ -157,10 +158,13 @@ async function _wireSend(port, m, signal) {
         "a wire send names no fragment-less http(s) or data: URL and method — lib/safe-fetch.js's _wire states both");
   CHECK(m.scope === null || (typeof m.scope === "string" && SPEAK_AS_SCOPE.test(m.scope) && !m.href.startsWith("data:")),
         "a wire send names the scope " + JSON.stringify(m.scope) + ", which is not a document token and an index");
+  CHECK(m.scope === null ? m.rule === null : _speakAsInFamily(m.rule),
+        "a wire send's scope " + JSON.stringify(m.scope) + " names the rule " + JSON.stringify(m.rule) +
+        " — a send that speaks as a document names its rule, and one that does not names none");
   const data = m.href.startsWith("data:");
   const nonce = _wireNonce();
   const url = data ? m.href : m.href + "#t=" + (m.scope === null ? "" : m.scope + ".") + nonce;
-  const rec = { url, scope: m.scope, nonce, requestId: null };
+  const rec = { url, scope: m.scope, ruleId: m.rule, nonce, requestId: null };
   rec.redirect = new Promise((resolve) => { rec.resolveRedirect = resolve; });
   rec.setCookie = new Promise((resolve) => { rec.resolveSetCookie = resolve; });
   if (!data) _wireBySend.set(nonce, rec);

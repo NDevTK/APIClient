@@ -376,7 +376,8 @@ from a browser-initiated navigation, measured), where Fetch §3.1.3's same-site 
   A preflighted send's OPTIONS request gets Fetch §4.8's own set.
 - `speak-as-rule.js`, in the service worker, sets them through `declarativeNetRequest` session rules, each
   scoped to one document's sends. A document (`docKey` on the identity: `frame:<documentId>`,
-  `engine:<docId>`, `held:` for one only this zone holds, and `<frame>+<jar>` for a frame speaking with
+  `engine:<docId>`, `held:` for one only this zone holds (a parked frontier entry re-deriving its own
+  document, a declared route's declaring document), and `<frame>+<jar>` for a frame speaking with
   another frame's cookie partition) gets a fresh 128-bit token at its first send that speaks as it. A rule
   carries one send's computed headers and matches this extension's initiator, `tabIds: [TAB_ID_NONE]`, the
   method, and a URL that begins with the send's fragment-less URL and `#t=<token>.<k>.`, where `k` numbers
@@ -399,7 +400,8 @@ from a browser-initiated navigation, measured), where Fetch §3.1.3's same-site 
   across documents. The sends that start while an update is in flight share the next `updateSessionRules`
   call, and the zone CHECKs that the family then installed is exactly its own record. A document's rules
   are removed when it ends (an engine document's navigation away or its instance's teardown, a browser
-  document's destruction), each once no send runs under it. Every `updateSessionRules` call flushes the
+  document's destruction, and for a document only this zone holds, the one load it speaks for settling),
+  each once no send runs under it. Every `updateSessionRules` call flushes the
   browser's whole back/forward cache (`CacheFlushed`, measured in Chrome 155), which is why a rule outlives
   its send.
 - The worker checks every no-tab request a rule could match (`onSendHeaders`, which reports after
@@ -426,8 +428,6 @@ Residuals, each a difference from the document's own request:
   reports and a server never receives. `initiatorDomains` matches a host and not a scheme, so a no-tab request
   from a document whose host is this extension's id would satisfy the initiator condition; it cannot carry a
   live token, and the worker's header CHECK covers it.
-- A document only this zone holds (`held:`, a frontier entry or a declared route) has no end event, so its
-  rules leave only by the session limits' retirement.
 - The header names a rule adds arrive lower-case and after the browser's own headers.
 - The order between unpartitioned and partitioned cookies of equal path length is not the browser's.
   `chrome.cookies` states no creation time.
