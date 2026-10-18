@@ -4173,21 +4173,17 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
                   "box and returns from `uv_sized` before this function is entered at all. A reader who "
                   "re-derives the old sentence goes looking for a refusal that no longer exists. BUILD the "
                   "one the box in front of you is");
-        if (box == UV_BOX_INLINE_FLEX_GRID)
-            DFAIL("an INLINE-LEVEL FLEX OR GRID CONTAINER with `height: auto`. Both modules give the container "
-                  "the same automatic block size and neither of them is §10.6.3's walk: css-grid-1 §5.2 "
-                  "\"Sizing Grid Containers\" says \"in both inline and block formatting contexts, the grid "
-                  "container's auto block size is its MAX-CONTENT SIZE\", which the same section states as "
-                  "\"the sum of the grid container's track sizes (including gutters) in the appropriate axis\", "
-                  "and css-flexbox-1 §9.9 \"Intrinsic Sizes\" says the container's content-based logical "
-                  "heights \"use the max-content size\", which §9.9.2 \"Flex Container Intrinsic Cross Sizes\" "
-                  "derives from the FLEX LINES. Two grid items in one row do not stack and two flex items on "
-                  "one line do not either, so §10.6.3's collapsing column of block-level children would answer "
-                  "a number from the wrong algorithm. BUILD the module this box's `display` names — its track "
-                  "sizing (css-grid-1 §11.3 \"Track Sizing Algorithm\") or its line and cross sizing "
-                  "(css-flexbox-1 §9.4 \"Cross Size Determination\") — over the container's own used main size, "
-                  "which is the arm below and is the same absence one axis over");
-        DCHECK(box == UV_BOX_BLOCK_FLOW || box == UV_BOX_FLOAT || box == UV_BOX_INLINE_BLOCK,
+        /* css-grid-1 §5.2 "Sizing Grid Containers": "In both inline and block formatting contexts, the grid
+           container's auto block size is its max-content size", which the walk below answers for either. */
+        if (box == UV_BOX_INLINE_FLEX_GRID && !css_computed_display_is(el, CSS_KEYWORD_INLINE_GRID))
+            DFAIL("an INLINE-LEVEL FLEX CONTAINER with `height: auto`. css-flexbox-1 §9.9 \"Intrinsic Sizes\" says "
+                  "the container's content-based logical heights \"use the max-content size\", which §9.9.2 "
+                  "\"Flex Container Intrinsic Cross Sizes\" derives from the FLEX LINES, not §10.6.3's column of "
+                  "block-level children. BUILD its line and cross sizing (css-flexbox-1 §9.4 \"Cross Size "
+                  "Determination\") over the container's own used main size, which is the arm below and is the "
+                  "same absence one axis over");
+        DCHECK(box == UV_BOX_BLOCK_FLOW || box == UV_BOX_FLOAT || box == UV_BOX_INLINE_BLOCK ||
+                   box == UV_BOX_INLINE_FLEX_GRID,
                "an `auto` height reached §10.6.3's walk on a box type whose own section is elsewhere — every "
                "one of them has left through its own crash above, so uv_box_kind's list and this one have come "
                "apart");
