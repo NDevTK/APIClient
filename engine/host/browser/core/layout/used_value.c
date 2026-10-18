@@ -1725,6 +1725,23 @@ static bool uv_cb_width_agrees(lxb_dom_element_t *el, const lxb_dom_element_t *c
     return now.element == cb;
 }
 
+/* The grid container `el` is a grid item of, or NULL: css-grid-1 §6 "Grid Items"' in-flow child of a box whose
+   `display` is `grid` or `inline-grid`, through the box tree's `contents` splice. A box-less element and an
+   absolutely positioned one (§9) are no item. */
+static lxb_dom_element_t *uv_grid_item_container(lxb_dom_element_t *el)
+{
+    CssDisplay own, pd;
+
+    own = css_computed_display(el);
+    if (own.kind == CSS_DISPLAY_BOX) return NULL;
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) ||
+        css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED))
+        return NULL;
+    if (!css_box_parent_display(lxb_dom_interface_node(el), &pd)) return NULL;
+    if (!css_display_spells(pd, CSS_KEYWORD_GRID) && !css_display_spells(pd, CSS_KEYWORD_INLINE_GRID)) return NULL;
+    return box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
+}
+
 /* THE CONTAINING BLOCK'S WIDTH — §10.1's first case answered by the viewport, its second by the CONTENT EDGE
    of the ancestor box, and §17.4's wrapper by §17.4's own sentence.
    ASKED OF THE PASS FIRST, FOR core/layout/flow_placement.h's REASON AND NOT AS AN OPTIMISATION OF THIS
@@ -2468,23 +2485,6 @@ CssPx used_value_default_replaced_size(bool vertical)
  * over the whole subtree; the substituted pass never runs it, because the substituted value is a length. So a
  * declared `min-height` on every level of a tree adds one walk in total, not one per level. */
 static lxb_dom_element_t *uv_flex_item_container(lxb_dom_element_t *el, UvBox box);
-
-/* The grid container `el` is a grid item of, or NULL: css-grid-1 §6 "Grid Items"' in-flow child of a box whose
-   `display` is `grid` or `inline-grid`, through the box tree's `contents` splice. A box-less element and an
-   absolutely positioned one (§9) are no item. */
-static lxb_dom_element_t *uv_grid_item_container(lxb_dom_element_t *el)
-{
-    CssDisplay own, pd;
-
-    own = css_computed_display(el);
-    if (own.kind == CSS_DISPLAY_BOX) return NULL;
-    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) ||
-        css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED))
-        return NULL;
-    if (!css_box_parent_display(lxb_dom_interface_node(el), &pd)) return NULL;
-    if (!css_display_spells(pd, CSS_KEYWORD_GRID) && !css_display_spells(pd, CSS_KEYWORD_INLINE_GRID)) return NULL;
-    return box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
-}
 
 static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *opposite, CssLength len, UvBox box,
                        const CssLength *size_len);
