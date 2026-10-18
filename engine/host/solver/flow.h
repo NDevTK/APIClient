@@ -54,11 +54,11 @@ typedef struct FlowAcct FlowAcct;
 
 /* A node of one of the order's leftist max-heaps (flow.c's flow_ix_* banner), embedded in the record it orders so
    the index allocates nothing. It carries a copy of the order's key (flow.c's FlowOrderKey: `key` the weight, then
-   the partial sums `x`, `self` and `ikey`, then the birth sequence `seq`), and every heap is ordered by it. `s` is
-   the null-path length; `off`, the family's coordinate, and `kind` are used only by a query's queue. */
+   the partial sums `x` and `ikey`, then the birth sequence `seq`), and every heap is ordered by it. `s` is the
+   null-path length; `off`, the family's coordinate with no carry, and `kind` are used only by a query's queue. */
 typedef struct FlowIxNode {
     struct FlowIxNode *l, *r, *up;
-    double key, x, self, ikey, off;
+    double key, x, ikey, off;
     uint64_t seq;
     int s;
     unsigned char kind;
@@ -559,7 +559,7 @@ typedef struct Flow {
        `key_stamped` rather than a sentinel generation, because `g_gen` starts at zero and flow_registry_init
        resets it. Dev-only in field and check, since stamping is a call per member per scan. */
     /* Named residual. Not covered: `ikey_last` is a third evaluation per member per scan. flow_order_key now
-       contains flow_index_key and, with no carry, flow_member_key as partial sums, but the walk stamps them apart
+       contains flow_index_key and flow_member_key as partial sums, but the walk stamps them apart
        from its weighing. Next diff builds: the walk stamping flow_order_key's own partial sums, taken once with
        the weighing, so one evaluation covers the claims and this field is deleted. Absence shows as: a key check
        that passes while the index's key moved by an amount the bucket term compensated. */

@@ -2962,17 +2962,18 @@ int64_t flow_silence_notch(const Flow *f) {
         cross it in descending order of `p`: the boundary moving, not a member being re-keyed.
    So the carry is the one part of a non-running member's weight that moves with no write to that member, which
    is why the order's index orders each bucket's members by `p` rather than keying them on the carry: the
-   threshold is read once per family at the query (flow_ix_carry_from), a subtree wholly above it is bounded one
-   quantum lower, and no crossing re-keys anyone. Not a term and not a second spelling of the notch: `-(double)notch
-   * FLOW_AGE_QUANTUM` is one multiply of one exact integer, and the index's exact comparison stays flow_weight's.
+   threshold is read once per family at the query (flow_ix_carry_from), a subtree wholly above it is bounded at the
+   family's coordinate one notch on, and no crossing re-keys anyone. The weight prices the notch in two integers,
+   `k` in the member's key and `K + carry` in the family's coordinate (acct_family_coord), each one multiply of one
+   exact integer, so a family crossing that trades a carry for a `K` leaves the bits as they were.
    The identity is a theorem of integer division for non-negative operands (flow_age_running asserts the charge's
    sign), so it is not asserted; what can fail (nothing else in the weight moves between two frontier generations)
    is asserted in engine.c's preempt hook over its cached rival. */
 int64_t flow_silence_phase(const Flow *f) { return flow_own_silence(f) % FLOW_SERVICE_US; }
 
-/* And the bit itself, the one part of a non-running member's weight that moves with no generation bump behind it.
-   `int`, not `int64_t`, because its only readers count members carrying it: a {0,1} quantity typed as 64 bits
-   invites summing it into a notch. */
+/* And the bit itself, which with the family notch is the part of a non-running member's weight that moves with no
+   generation bump behind it. `int`, not `int64_t`: its readers count members carrying it, and acct_family_coord adds
+   it to the family's notch before the multiply. */
 int flow_silence_carry(const Flow *f) {
     return (flow_silence_phase(f) + acct_family_us(f) % FLOW_SERVICE_US) >= FLOW_SERVICE_US;
 }
@@ -3200,7 +3201,7 @@ static double flow_index_key(const Flow *f) {
    flow_index_key above. One quantity, two questions, and the stricter decides the composition: what must stand
    still between generations includes the bucket term, or flow_pick_walk's stamps go blind to a fork re-ranking a whole
    arm; what an index is keyed on excludes it. Two functions over one composition.
-   flow_weight is the family's coordinate plus this member's, minus a carry bit: the reward and the family notch are
+   flow_weight is the family's coordinate at the member's carry bit plus this: the reward and the family notch are
    read through one pointer by every arm, a common offset that orders nothing within a family, and
    flow_silence_phase decomposes the carry out as one bit against a family threshold. Not a term and nothing ranks by
    it: a weight rebuilt as this plus the family's halves would sum three products where flow_weight sums one and
@@ -3256,32 +3257,35 @@ static double flow_member_key(const Flow *f) {
    (`1.0/(1.0+0.0)`, `(1 + 1 + (N-2))/N` as `N/N` for this small integral N, `1.0/1.0`, a zero notch times any
    price), so an epsilon would only be room for the next unranged term. The caller's address is not threaded: every
    route in is a request to rank a flow, and the remedy is always an edit to the terms summed below, here. */
-/* The family's coordinate: its reward less its whole notches of silence, the part of the weight every member of the
-   family reads through one pointer. The order's index reads it once per family per ask, through this function, so
-   the index's bound and the weight share the expression. */
-static double acct_family_coord(const FlowAcct *fam) {
-    return acct_root_val(fam) - (double)(fam->fam_us / FLOW_SERVICE_US) * FLOW_AGE_QUANTUM;
+/* The family's coordinate at a carry: its reward less its whole notches of silence plus the member's carry bit, the
+   part of the weight a member reads through its family's pointer. The notch and the carry are added as integers
+   before the one multiply, so a crossing of the family notch that clears a member's carry (`K + 1 + 0` for
+   `K + 1`) gives the same bits, and a non-running member's `K + carry` (its total notch less its own) only grows,
+   so its weight only falls. The order's index reads the coordinate per family and carry class, through this
+   function, so the index's bound and the weight share the expression. */
+static double acct_family_coord(const FlowAcct *fam, int carry) {
+    return acct_root_val(fam) - (double)(fam->fam_us / FLOW_SERVICE_US + carry) * FLOW_AGE_QUANTUM;
 }
 
 static double flow_family_coord(const Flow *f) {
-    return f->family ? acct_family_coord(f->family) : 0.0;   /* departed: its node is gone and so is its rank */
+    /* departed: its node is gone and so is its rank */
+    return f->family ? acct_family_coord(f->family, flow_silence_carry(f)) : 0.0;
 }
 
-/* The order's key. The weight is composed in the order the index bounds it: the family's coordinate, plus the
-   bucket offset, plus the member's key less its carry (`notch = k + K + carry`, flow_silence_phase). Each partial
+/* The order's key. The weight is composed in the order the index bounds it: the family's coordinate at the member's
+   carry (`notch = k + K + carry`, flow_silence_phase), plus the bucket offset plus the member's key. Each partial
    sum is kept, because rounding can make two members with unequal operands weigh one double: a tie in the weight
-   goes to the larger bucket-relative sum, then the larger carried key, then the larger key, and only an exact tie
-   in all four goes to the older member by birth sequence, the queue's oldest-arm-first order. */
+   goes to the larger bucket-relative sum, then the larger key, and only an exact tie in all three goes to the older
+   member by birth sequence, the queue's oldest-arm-first order. */
 typedef struct {
-    double w, x, self, ikey;
+    double w, x, ikey;
     uint64_t seq;
 } FlowOrderKey;
 
 static FlowOrderKey flow_order_key(const Flow *f) {
     FlowOrderKey o;
     o.ikey = flow_index_key(f);
-    o.self = flow_silence_carry(f) ? o.ikey - FLOW_AGE_QUANTUM : o.ikey;
-    o.x = flow_branch_bonus(f) + o.self;
+    o.x = flow_branch_bonus(f) + o.ikey;
     o.w = flow_family_coord(f) + o.x;
     o.seq = f->ix_t.seq;
     return o;
@@ -3291,7 +3295,6 @@ static FlowOrderKey flow_order_key(const Flow *f) {
 static int flow_order_cmp(const FlowOrderKey *a, const FlowOrderKey *b) {
     if (a->w != b->w) return a->w > b->w ? 1 : -1;
     if (a->x != b->x) return a->x > b->x ? 1 : -1;
-    if (a->self != b->self) return a->self > b->self ? 1 : -1;
     if (a->ikey != b->ikey) return a->ikey > b->ikey ? 1 : -1;
     if (a->seq != b->seq) return a->seq < b->seq ? 1 : -1;
     return 0;
@@ -3303,13 +3306,15 @@ static int flow_order_above(const Flow *a, const Flow *b) {
 }
 
 static double flow_nonreward(const Flow *f) {
-    /* The weight's own composition with the reward left out: the family's aging, then the bucket-relative sum. */
-    double x = flow_order_key(f).x, n = -(double)flow_family_notch(f) * FLOW_AGE_QUANTUM + x;
-    /* And with no carry, the bucket-relative sum is flow_member_key: the same two operands added in the other
-       order, which binary64 addition does not distinguish. A summand that reached one and not the other fires. */
-    DCHECK(flow_silence_carry(f) || flow_member_key(f) == x,
-           "the member half of the WFQ's weight differs from flow_member_key with no carry — there the two are the "
-           "bucket term plus flow_index_key, so a summand reached one and not the other");
+    /* The weight's own composition with the reward left out: the family's aging at the member's carry, then the
+       bucket-relative sum. */
+    double x = flow_order_key(f).x;
+    double n = -(double)(flow_family_notch(f) + flow_silence_carry(f)) * FLOW_AGE_QUANTUM + x;
+    /* And the bucket-relative sum is flow_member_key: the same two operands added in the other order, which
+       binary64 addition does not distinguish. A summand that reached one and not the other fires. */
+    DCHECK(flow_member_key(f) == x,
+           "the member half of the WFQ's weight differs from flow_member_key — both are the bucket term plus "
+           "flow_index_key, so a summand reached one and not the other");
     return n;
 }
 
@@ -3343,16 +3348,15 @@ static int ix_s(const FlowIxNode *n) { return n ? n->s : 0; }
 static int ix_above(const FlowIxNode *a, const FlowIxNode *b) {
     if (a->key != b->key) return a->key > b->key;
     if (a->x != b->x) return a->x > b->x;
-    if (a->self != b->self) return a->self > b->self;
     if (a->ikey != b->ikey) return a->ikey > b->ikey;
     return a->seq < b->seq;
 }
 
-static void ix_set(FlowIxNode *n, double key, double x, double self, double ikey, uint64_t seq) {
-    DCHECK(key == key && x == x && self == self && ikey == ikey,
+static void ix_set(FlowIxNode *n, double key, double x, double ikey, uint64_t seq) {
+    DCHECK(key == key && x == x && ikey == ikey,
            "a key entered the order's index as NaN — it compares false both ways, so the heap order and every bound "
            "read through it would be undefined");
-    n->key = key; n->x = x; n->self = self; n->ikey = ikey; n->seq = seq;
+    n->key = key; n->x = x; n->ikey = ikey; n->seq = seq;
 }
 
 /* Meld two leftist heaps and return the root (whose `up` the caller sets). The recursion runs down the two right
@@ -3478,9 +3482,10 @@ static int64_t flow_ix_carry_from(const FlowAcct *fam) {
     return FLOW_SERVICE_US - fam->fam_us % FLOW_SERVICE_US;
 }
 
-/* A carried key, flow_order_key's `self` over a stored key: less the quantum when the phase carries. */
-static double ix_carried(double key, int carries) {
-    return carries ? key - FLOW_AGE_QUANTUM : key;
+/* The family coordinate a query entry is keyed over: the carried one when every member below the entry carries, and
+   otherwise `off`, the uncarried one, which is at least the carried one and so bounds both carry classes. */
+static double ix_coord(const FlowAcct *fam, double off, int carries) {
+    return carries ? acct_family_coord(fam, 1) : off;
 }
 
 /* Re-file a bucket in its family's heaps after its treap or its offset moved, and the family on the list after its
@@ -3493,10 +3498,10 @@ static void flow_ix_bucket_sync(FlowAcct *br, FlowAcct *fam) {
     if (br->ix_members) {
         const FlowIxTreap *t = br->ix_members;
         double b = acct_branch_offset(br), x = b + t->max;
-        ix_set(&br->ix_b, x, x, t->max, t->max, t->floor);
+        ix_set(&br->ix_b, x, x, t->max, t->floor);
         ix_push(&fam->ix_buckets, &br->ix_b); br->ix_bin = 1;
         if (t->nmax > -INFINITY) {
-            ix_set(&br->ix_bn, b + t->nmax, 0.0, 0.0, 0.0, 0);
+            ix_set(&br->ix_bn, b + t->nmax, 0.0, 0.0, 0);
             ix_push(&fam->ix_nbuckets, &br->ix_bn); br->ix_bnin = 1;
         }
     }
@@ -3588,7 +3593,7 @@ static void flow_ix_insert(Flow *f) {
         ix_t_insert(&br->ix_members, &f->ix_t);
         c = &f->ix_t;
     }
-    ix_set(&f->ix_c, 0.0, 0.0, 0.0, 0.0, f->ix_t.seq);
+    ix_set(&f->ix_c, 0.0, 0.0, 0.0, f->ix_t.seq);
     ix_push(&c->cls, &f->ix_c);
     c->ncls++;
     if (f->picks == 0) c->nnever++;
@@ -3655,20 +3660,21 @@ typedef struct {
     int64_t weighed, entries;
 } FlowIxAnswer;
 
-/* Push a query entry: `n`'s key over the family coordinate `fc`, with `fc` kept for the entries below it. */
-static void ix_q_push(FlowIxNode **q, FlowIxNode *n, double fc, double x, double self, double ikey, uint64_t seq,
+/* Push a query entry: `n`'s key over the family coordinate `fc`, with `off`, the family's uncarried coordinate,
+   kept for the entries below it. */
+static void ix_q_push(FlowIxNode **q, FlowIxNode *n, double off, double fc, double x, double ikey, uint64_t seq,
                       unsigned char kind) {
-    ix_set(n, fc + x, x, self, ikey, seq);
-    n->off = fc; n->kind = kind;
+    ix_set(n, fc + x, x, ikey, seq);
+    n->off = off; n->kind = kind;
     ix_push(q, n);
 }
 
 /* A treap subtree as a query entry, bounded by its largest key, carried when the whole subtree carries. A subtree
    straddling the threshold is read uncarried: one root-to-leaf path of each treap. */
 static void ix_q_push_tree(FlowIxNode **q, const FlowIxNode *parent, FlowIxTreap *n, double b, int64_t from) {
-    double self = ix_carried(n->max, n->lo >= from);
     FlowIxNode *e = &IX_TREAP_FLOW(n)->ix_qt;
-    ix_q_push(q, e, parent->off, b + self, self, n->max, n->floor, IX_Q_TREE);
+    ix_q_push(q, e, parent->off, ix_coord(IX_TREAP_FLOW(n)->family, parent->off, n->lo >= from), b + n->max, n->max,
+              n->floor, IX_Q_TREE);
     DCHECK(!ix_above(e, parent), "a treap subtree's bound in the order's index ranks above the entry it was opened "
                                  "from — a bucket's key or a parent's aggregates are stale against its treap");
 }
@@ -3699,8 +3705,8 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
        `branches`. */
     for (fam = g_ix_fams; fam; fam = fam->ix_fnext) {
         FlowIxNode *top = fam->ix_buckets;
-        ix_q_push(&q, &IX_BUCKET(top)->ix_q, acct_family_coord(fam), top->x, top->self, top->ikey, top->seq,
-                  IX_Q_BUCKET);
+        double fc = acct_family_coord(fam, 0);
+        ix_q_push(&q, &IX_BUCKET(top)->ix_q, fc, fc, top->x, top->ikey, top->seq, IX_Q_BUCKET);
     }
     while (q) {
         FlowIxNode *e = q;
@@ -3711,7 +3717,7 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
         if (e->kind == IX_Q_SELF) {
             Flow *m = (Flow *)((char *)e - offsetof(Flow, ix_qs));
             FlowOrderKey o = flow_order_key(m);
-            DCHECKF(e->key == o.w && e->x == o.x && e->self == o.self && e->ikey == o.ikey && e->seq == o.seq &&
+            DCHECKF(e->key == o.w && e->x == o.x && e->ikey == o.ikey && e->seq == o.seq &&
                         m->ix_t.phase == flow_silence_phase(m),
                     "the order's index keyed a member off its weight (weight %.17g, index %.17g, key %.17g, fresh key "
                     "%.17g, phase %lld, fresh phase %lld) — the index and flow_order_key compose different "
@@ -3734,14 +3740,14 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
                 FlowIxNode *ce;
                 if (!c) continue;
                 ce = &IX_BUCKET(c)->ix_q;
-                ix_q_push(&q, ce, e->off, c->x, c->self, c->ikey, c->seq, IX_Q_BUCKET);
+                ix_q_push(&q, ce, e->off, e->off, c->x, c->ikey, c->seq, IX_Q_BUCKET);
                 DCHECK(!ix_above(ce, e), "a bucket heap of the order's index lost its order — a child bucket ranks "
                                          "above its parent");
             }
         } else {
             Flow *r = (Flow *)((char *)e - offsetof(Flow, ix_qt)), *m = r;
             FlowAcct *br = r->acct->branch;
-            double b = acct_branch_offset(br), self;
+            double b = acct_branch_offset(br);
             int64_t from = flow_ix_carry_from(r->family);
             /* The class through its oldest member that is neither the seed nor the excluded one. */
             if (m == seed || m == exclude) {
@@ -3751,8 +3757,8 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
             }
             if (m) {
                 FlowIxNode *se = &m->ix_qs;
-                self = ix_carried(r->ix_t.key, r->ix_t.phase >= from);
-                ix_q_push(&q, se, e->off, b + self, self, r->ix_t.key, m->ix_t.seq, IX_Q_SELF);
+                ix_q_push(&q, se, e->off, ix_coord(r->family, e->off, r->ix_t.phase >= from), b + r->ix_t.key,
+                          r->ix_t.key, m->ix_t.seq, IX_Q_SELF);
                 a.weighed++;
                 DCHECK(!ix_above(se, e), "a class's own key in the order's index ranks above its subtree's bound — "
                                          "a treap aggregate is stale");
@@ -3774,8 +3780,9 @@ static int flow_ix_never_at(double bw, int64_t *entries) {
     FlowAcct *fam;
     for (fam = g_ix_fams; fam; fam = fam->ix_fnext) {
         FlowIxNode *top = fam->ix_nbuckets;
+        double fc = acct_family_coord(fam, 0);
         if (!top) continue;
-        ix_q_push(&q, &IX_NBUCKET(top)->ix_q, acct_family_coord(fam), top->key, 0.0, 0.0, 0, IX_Q_BUCKET);
+        ix_q_push(&q, &IX_NBUCKET(top)->ix_q, fc, fc, top->key, 0.0, 0, IX_Q_BUCKET);
     }
     while (q) {
         FlowIxNode *e = q;
@@ -3798,11 +3805,11 @@ static int flow_ix_never_at(double bw, int64_t *entries) {
             DCHECK(br->ix_bnin && t != NULL && t->nmax > -INFINITY && br->ix_bn.key == b + t->nmax,
                    "a bucket in the order's never-dispatched heap holds no never-dispatched member, or its key is not "
                    "its offset plus its treap's `nmax` — flow_ix_bucket_sync files it from both");
-            ix_q_push(&q, &IX_TREAP_FLOW(t)->ix_qt, e->off, b + ix_carried(t->nmax, t->lo >= from), 0.0, 0.0, 0,
-                      IX_Q_TREE);
-            if (br->ix_bn.l) ix_q_push(&q, &IX_NBUCKET(br->ix_bn.l)->ix_q, e->off, br->ix_bn.l->key, 0.0, 0.0, 0,
+            ix_q_push(&q, &IX_TREAP_FLOW(t)->ix_qt, e->off, ix_coord(IX_TREAP_FLOW(t)->family, e->off, t->lo >= from),
+                      b + t->nmax, 0.0, 0, IX_Q_TREE);
+            if (br->ix_bn.l) ix_q_push(&q, &IX_NBUCKET(br->ix_bn.l)->ix_q, e->off, e->off, br->ix_bn.l->key, 0.0, 0,
                                        IX_Q_BUCKET);
-            if (br->ix_bn.r) ix_q_push(&q, &IX_NBUCKET(br->ix_bn.r)->ix_q, e->off, br->ix_bn.r->key, 0.0, 0.0, 0,
+            if (br->ix_bn.r) ix_q_push(&q, &IX_NBUCKET(br->ix_bn.r)->ix_q, e->off, e->off, br->ix_bn.r->key, 0.0, 0,
                                        IX_Q_BUCKET);
         } else {
             Flow *r = (Flow *)((char *)e - offsetof(Flow, ix_qt));
@@ -3812,13 +3819,13 @@ static int flow_ix_never_at(double bw, int64_t *entries) {
             FlowIxTreap *c[2] = { r->ix_t.l, r->ix_t.r };
             if (r->ix_t.nnever > 0) {
                 Flow *m = IX_CLASS_FLOW(r->ix_t.cls);
-                ix_q_push(&q, &m->ix_qs, e->off, b + ix_carried(r->ix_t.key, r->ix_t.phase >= from), 0.0, 0.0, 0,
-                          IX_Q_SELF);
+                ix_q_push(&q, &m->ix_qs, e->off, ix_coord(r->family, e->off, r->ix_t.phase >= from),
+                          b + r->ix_t.key, 0.0, 0, IX_Q_SELF);
             }
             for (int i = 0; i < 2; i++)
                 if (c[i] && c[i]->nmax > -INFINITY)
-                    ix_q_push(&q, &IX_TREAP_FLOW(c[i])->ix_qt, e->off, b + ix_carried(c[i]->nmax, c[i]->lo >= from),
-                              0.0, 0.0, 0, IX_Q_TREE);
+                    ix_q_push(&q, &IX_TREAP_FLOW(c[i])->ix_qt, e->off,
+                              ix_coord(r->family, e->off, c[i]->lo >= from), b + c[i]->nmax, 0.0, 0, IX_Q_TREE);
         }
     }
     return 0;
@@ -4302,8 +4309,7 @@ static void flow_ix_check(void) {
         in++;
         {
             double w = flow_weight(m), k = flow_index_key(m), b = acct_branch_offset(br);
-            double self = ix_carried(t->key, t->phase >= flow_ix_carry_from(m->family));
-            double bound = acct_family_coord(m->family) + (b + self);
+            double bound = acct_family_coord(m->family, t->phase >= flow_ix_carry_from(m->family)) + (b + t->key);
             DCHECKF(t->key == k && t->phase == flow_silence_phase(m) && bound == w,
                     "the order's index holds a stale key or phase for a member, or its composition does not give the "
                     "member's weight (key %.17g, fresh %.17g, phase %lld, fresh %lld, weight %.17g, index %.17g) — a "
@@ -4346,7 +4352,7 @@ static void flow_ix_check(void) {
             const FlowIxTreap *tr = br->ix_members;
             double b = acct_branch_offset(br);
             const FlowIxNode *n = &br->ix_b, *nn = &br->ix_bn;
-            DCHECK(br->ix_bin && n->key == b + tr->max && n->x == n->key && n->self == tr->max &&
+            DCHECK(br->ix_bin && n->key == b + tr->max && n->x == n->key &&
                        n->ikey == tr->max && n->seq == tr->floor &&
                        (!n->l || (n->l->up == n && !ix_above(n->l, n))) &&
                        (!n->r || (n->r->up == n && !ix_above(n->r, n))) &&
