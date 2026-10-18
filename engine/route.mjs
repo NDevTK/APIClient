@@ -17,10 +17,10 @@
 
    WHAT THIS EXERCISES BEYOND DELIVERY. Record 1's world is `a`'s root world and has no ancestry, so the
    receiving instance materializes a segment for it from its own baseline. Records 2 and 3 are posted by the two
-   arms of `if (__FLAGS.role === "admin")`: the primary keeps the root world (its segment already exists), the
-   sibling's world is a CHILD whose vector names the root as its nearest ancestor — so its segment is materialized by
-   FORKING the segment record 1 created. That fork is world_segment's nearest-first materialization, and until
-   this fixture drove it, nothing outside a self-test had ever called it.
+   arms of `if (__FLAGS.role === "admin")`. The fork retires the root world and mints a child for each arm
+   (solver/world.h's world_mint_child), so both records carry a CHILD whose vector names the root as its
+   nearest ancestor, and each segment is materialized by forking the segment record 1 created. That fork is
+   world_segment's nearest-first materialization.
 
    AND IT ASKS THE READ, which is the half the ABI has no entry for and which nothing had ever asked. HTML
    §7.2.1.3.1 CrossOriginProperties ( O )'s cross-origin allowlist is a fixed THIRTEEN, and of them TWO cannot
