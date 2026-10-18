@@ -4,6 +4,7 @@
 #include "check.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 /* base.h, not core/lexbor.h: the four allocator pointers and lexbor_memory_setup are declared there, and
    LXB_STATUS_OK — which is what says the setup took — is declared only here. */
@@ -32,6 +33,15 @@ void *reclaim_malloc(size_t size)
         if (p || size == 0 || !g_rt || !JS_ReclaimMemory(g_rt, size))
             return p;
     }
+}
+
+char *reclaim_strdup(const char *s)
+{
+    size_t n = strlen(s) + 1;
+    char *r = reclaim_malloc(n);
+
+    if (r) memcpy(r, s, n);
+    return r;
 }
 
 void *reclaim_realloc(void *dst, size_t size)

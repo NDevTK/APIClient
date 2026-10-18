@@ -618,7 +618,7 @@ static char *ident_of_operand(JSContext *ctx, JSValueConst v)
         const char *id = concolic_ident_c(v);
         char *r;
         if (!id) return NULL;
-        r = strdup(id);
+        r = reclaim_strdup(id);   /* a running flow's allocation: it sells the frontier's tail before it fails */
         CHECK(r, "concolic: OOM copying an operand's identity");
         return r;
     }

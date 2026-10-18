@@ -94,6 +94,8 @@
 void *reclaim_malloc(size_t size);
 void *reclaim_realloc(void *ptr, size_t size);
 void *reclaim_calloc(size_t num, size_t size);
+/* strdup through reclaim_malloc: a copy of `s`, freed by free(), NULL only when nothing was left to sell. */
+char *reclaim_strdup(const char *s);
 
 /* Route this instance's OTHER allocators into `cb`, and install `cb` as the runtime's own reclaim hook. One
    call, because "which allocators refuse through the edge" is one fact and a second install site is a list to
