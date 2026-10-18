@@ -898,6 +898,8 @@ function linesToAnalysis(lines, msg, outcome, eng) {
     analysis.fetchCallSites = result.fetchCallSites;
     analysis.securitySinks = result.securitySinks;
     analysis._park = result._park;
+    /* The run's novelty record, which the finish checks its parked row's value against (`landed`, `paid`). */
+    analysis._novelty = result._novelty;
   }
   return analysis;
 }
