@@ -84,6 +84,7 @@ function swRpc(api) {
     return r.result;
   });
 }
+speakAsStart();
 
 // Every external fetch goes out from this document through lib/safe-fetch.js, loaded before this file:
 // `safeFetch` for the engine and this tool, `safeFetchOperator` for a person's act speaking as a frame.

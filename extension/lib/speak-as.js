@@ -97,7 +97,8 @@ function speakAsPreflightHeaders(facts, method, destination, urlList, unsafeName
    inFlight, installed, ended}, whose `scope` `<token>.<k>` names it in the URL's fragment. Two header sets for
    one method and URL are two scopes, so no send waits for another. `_speakAsRules` holds every entry by rule
    id in the order of last use; an entry is `installed` once its update succeeded. The family's only writer
-   after `speakAs.clearFamily` is this document, and one update runs at a time (`_speakAsFlush`). */
+   after `speakAs.clearFamily` is this document, and one update runs at a time (`_speakAsFlush`).
+   `_speakAsFamily` is that clear (speakAsStart), then its answer: the family's limits. */
 const _speakAsDocs = new Map();
 const _speakAsRules = new Map();
 let _speakAsNextId = SPEAK_AS_RULE_MIN;
@@ -105,6 +106,15 @@ let _speakAsFamily = null;
 let _speakAsAdds = [];
 let _speakAsRemoves = [];
 let _speakAsFlushing = false;
+
+/* Session rules outlive the document that installed them, and a previous document's rules are removed only
+   here, so this document clears the family when it starts, whether or not it ever sends. Every send waits
+   for the clear and fails with its failure. Called once, when swRpc exists. */
+function speakAsStart() {
+  CHECK(_speakAsFamily === null, "the speak-as family was cleared twice by one document");
+  _speakAsFamily = swRpc("speakAs.clearFamily");
+  _speakAsFamily.catch((e) => console.error("[speak-as] the family could not be cleared:", e && e.message || e));
+}
 
 function _speakAsMintId() {
   CHECK(_speakAsRules.size <= SPEAK_AS_RULE_MAX - SPEAK_AS_RULE_MIN, "every id of the speak-as rule family is installed");
@@ -184,7 +194,7 @@ async function _speakAsFlush() {
 async function speakAsAcquire(url, method, speak) {
   CHECK(typeof speak.docKey === "string" && speak.docKey !== "",
         "a send speaks as an identity with no document key — a rule is scoped to one document's sends");
-  if (_speakAsFamily === null) _speakAsFamily = swRpc("speakAs.clearFamily");
+  CHECK(_speakAsFamily !== null, "a send spoke as a document before this document cleared the speak-as family");
   _speakAsFamily = await _speakAsFamily;
   let doc = _speakAsDocs.get(speak.docKey);
   if (doc === undefined) {
