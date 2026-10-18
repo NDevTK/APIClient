@@ -226,11 +226,24 @@ typedef struct Flow {
        work is not in its recipe: re-running the document never calls the function, so the recipe also carries a
        function locator (`orphan_hash`) and a resumed flow drives the body it names. Inherited by a fork. */
     int orphan;
-    /* Where that function is, in a form a later session can find: quickjs's JS_OrphanHash, the content of the
-       script the body was compiled from and its position in that script. `fn` dies with the session; this
-       crosses the tier, stamped when the drive is created and carried unchanged by every arm. 0 for a flow that
-       is not a driven orphan, which the park asserts. */
+    /* Where the function `fn` is, in a form a later session can find: quickjs's JS_OrphanHash, the content of
+       the script the body was compiled from and its position in that script. `fn` dies with the session; this is
+       the name of the drive being run now, stamped when the call is built and carried by every arm. 0 for a flow
+       that is not a driven orphan, and for a resumed drive that has built no call yet. */
     uint64_t orphan_hash;
+    /* The drives this flow stands in, oldest first, each by its locator: a drive seeded by a flow that is itself
+       driving extends that flow's chain, so a body called in the state another uncalled body left is named after
+       it. malloc'd and owned (flow_orphan_chain_push); the park writes one 'o' record per member in this order and
+       the rebuild reads them back into it. 0 and NULL for a flow that is not a drive. */
+    uint64_t *orphan_chain;
+    int orphan_chain_n;
+    /* How many members of the chain have had their call built in this session: all of them for a seeded drive,
+       none yet for a resumed one, whose claim waits for member `orphan_claim_at` and advances as each call is
+       built. */
+    int orphan_claim_at;
+    /* The body a resumed drive's open claim was handed (engine.c's engine_orphan_route), held until the flow runs
+       out of work and builds its call; JS_UNDEFINED while the claim is open or none is. Owned. */
+    JSValue orphan_claim_fn;
     /* How many drives of this body's identity (solver/novelty.h's NOVELTY_DRIVE: quickjs's content locator)
        were known when this drive was seeded: the product's, from every other document and session of this
        cluster, and this instance's own earlier drives of it, a second compile of the same bytes included. A
@@ -239,11 +252,12 @@ typedef struct Flow {
        fork, so every arm of one drive reads one number at every instant; 0 for every flow that is not a seeded
        drive, a resumed one included (its own recorded drive is the drive it resumes). */
     int64_t orphan_seen;
-    /* Is this drive still waiting for its function? Set only by the cold tier's rebuild. A resumed session's
-       heap holds the closure only once the document's own replay creates it and some flow takes it as an
-       orphan; until then this flow replays the document like any other. `fn` tells the two states apart:
-       undefined while waiting, the re-taken function once handed one. The flow then builds its own call frame in
-       its own timeline, because the receiver and arguments are concolic objects owned by the minting flow. */
+    /* Does this resumed drive still have a chain member whose call it has not built? Set by the cold tier's
+       rebuild and cleared when the last member's call is built. A resumed session's heap holds the closure only
+       once the document's own replay creates it and some flow takes it as an orphan; until then this flow
+       replays like any other. `orphan_claim_fn` tells the two states apart: undefined while waiting, the re-taken
+       function once handed one. The flow then builds its own call frame in its own timeline, because the
+       receiver and arguments are concolic objects owned by the minting flow. */
     int orphan_want;
     /* The callee's declared formal parameter count, handed over by the take beside the function. Live state, not
        part of the recipe, since it is a fact about the body this session compiled. Meaningful only while
@@ -1539,6 +1553,9 @@ void  flow_set_running(Flow *f);
 Flow *flow_running(void);
 /* A just-seeded drive's product count (flow.h's `orphan_seen`), re-keyed and raised as a rank change. */
 void  flow_set_orphan_seen(Flow *f, int64_t seen);
+/* A flow's chain of drives (`orphan_chain`): one more member, or an arm's copy of its parent's first `n`. */
+void  flow_orphan_chain_push(Flow *f, uint64_t hash);
+void  flow_orphan_chain_copy(Flow *dst, const Flow *src, int n);
 /* A new @H/@S from the running flow: raise reward, reset aging. Answers 1 when an account was paid and 0 on the
    dropped arm (no flow holds the thread). */
 int   flow_credit_emit(double v);

@@ -1000,6 +1000,32 @@ int flow_credit_emit(double v) {
    and it is written before the drive is ever dispatched. Two drives seeded at two instants may read two counts:
    the count is a fact about the product at the drive's arrival, as the clock it is placed at is, and not about any
    executed prefix, so nothing on either drive's path could make them agree. */
+/* Append `hash` to `f`'s chain of drives (flow.h's `orphan_chain`). A member names a body, and one body is not
+   driven twice in one chain: a take hands a body over once per timeline. */
+void flow_orphan_chain_push(Flow *f, uint64_t hash)
+{
+    uint64_t *grown;
+    int i;
+
+    DCHECK(hash != 0, "a drive was added to a chain with the locator that means 'not a drive'");
+    for (i = 0; i < f->orphan_chain_n; i++)
+        DCHECK(f->orphan_chain[i] != hash,
+               "a body was added to a chain of drives that already holds it — a take hands a body over once per "
+               "timeline, so the second member names a drive this flow cannot have been seeded with");
+    grown = realloc(f->orphan_chain, (size_t)(f->orphan_chain_n + 1) * sizeof *grown);
+    CHECK(grown, "engine: OOM extending a flow's chain of drives");
+    f->orphan_chain = grown;
+    f->orphan_chain[f->orphan_chain_n++] = hash;
+}
+
+/* `dst`'s chain becomes the first `n` members of `src`'s: an arm stands in the drives its parent has called. */
+void flow_orphan_chain_copy(Flow *dst, const Flow *src, int n)
+{
+    DCHECK(dst->orphan_chain_n == 0 && n >= 0 && n <= src->orphan_chain_n,
+           "an arm's chain of drives was copied over one it already had, or from past its parent's");
+    for (int i = 0; i < n; i++) flow_orphan_chain_push(dst, src->orphan_chain[i]);
+}
+
 void flow_set_orphan_seen(Flow *f, int64_t seen) {
     DCHECK(f != NULL && f->orphan && f->picks == 0 && seen >= 0,
            "a product drive count was written on a flow that is not a just-seeded, never-dispatched drive");
@@ -1976,6 +2002,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     f->family = f->acct;
     g_acct_live++;
     f->cand_src = NULL; f->cand_payload = NULL; f->cand_sink = NULL; f->cand_vfy = NULL;
+    f->orphan_claim_fn = JS_UNDEFINED;
     f->last_compiled = -1;   /* nothing compiled yet; see the no-replay DCHECK at the compile site */
     /* Nothing interposed yet; flow.h says why the pair is what says so and why -1 is a cursor no program can stand
        at. */
@@ -5479,6 +5506,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
         /* The candidate it was verifying: both strings are this flow's copies, freed nowhere else for a removed flow
            (the teardown walks the flows still there). `cand_sink` is static text. */
         free(f->cand_src); free(f->cand_payload); free(f->cand_vfy);
+        free(f->orphan_chain);
+        JS_FreeValue(ctx, f->orphan_claim_fn);
         /* And its place in the fork tree. Its work is already on the family's account (flow_age_running
            charges as it is consumed), so there is nothing to hand up; what is left is the node's lifetime, the owner
            mark coming down so a compression can walk past it, and the reference going. This is a Flow's one exit.

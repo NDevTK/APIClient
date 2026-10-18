@@ -690,25 +690,26 @@ static void park_orphan_hex(uint64_t hash, char out[17])
     out[16] = 0;
 }
 
+/* One 'o' record per member of `f`'s chain of drives, oldest first, which is the order a resumed claimant builds
+   their calls in. */
 static void park_rec_orphan(const Flow *f)
 {
     char rec[17];
+    int k;
 
-    DCHECK(f->orphan,
-           "the cold tier was asked to name the function of a flow that is not a driven orphan — the record "
-           "would tell a later session to call something this flow never called");
-    /* THE LOCATOR EXISTS, asserted where it is written rather than trusted from where it was stamped.
-       engine_orphan_seed stamps it at the one point a drive is created and a fork inherits it with the mark, so
-       a drive without one is a third path into being an orphan that nobody has named — and the record it would
-       write is sixteen zeros, which is a perfectly valid name for a body that does not exist. */
-    DCHECK(f->orphan_hash != 0,
-           "a driven orphan was parked with no function locator — its record would name a body no session can "
-           "find, so the resumed drive would wait for a function that is never handed to it and finish having "
-           "called nothing, which is precisely the silent drop this record exists to prevent");
-    park_orphan_hex(f->orphan_hash, rec);
-    park_open_rec();
-    park_str("o");
-    park_str(rec);
+    DCHECK(f->orphan && f->orphan_chain_n > 0,
+           "the cold tier was asked to name the functions of a flow that is not a driven orphan, or of a drive "
+           "with no chain — the record would tell a later session to call something this flow never called");
+    for (k = 0; k < f->orphan_chain_n; k++) {
+        /* THE LOCATOR EXISTS, asserted where it is written: sixteen zeros is a valid name for no body. */
+        DCHECK(f->orphan_chain[k] != 0,
+               "a driven orphan was parked with a chain member naming no body — the resumed drive would wait for "
+               "a function that is never handed to it");
+        park_orphan_hex(f->orphan_chain[k], rec);
+        park_open_rec();
+        park_str("o");
+        park_str(rec);
+    }
 }
 
 
@@ -1040,7 +1041,8 @@ static const Flow *park_same_drive_written(const Flow *f)
     int i;
 
     for (i = 0; (g = flow_at(i)) != NULL; i++)
-        if (g != f && g->paged && g->orphan && g->orphan_hash == f->orphan_hash &&
+        if (g != f && g->paged && g->orphan && g->orphan_chain_n == f->orphan_chain_n &&
+            memcmp(g->orphan_chain, f->orphan_chain, (size_t)f->orphan_chain_n * sizeof *f->orphan_chain) == 0 &&
             park_kind_of(g) == PARK_KIND_FLOW && park_path_equal(g, f) && park_rows_equal(g, f))
             return g;
     return NULL;
@@ -1145,7 +1147,7 @@ void cold_park_preview(ColdPreview *out)
         /* AND THE DRIVES AMONG THEM, which is a row of its own for the reason park_rec_orphan gives: it is not
            a KIND, so it is not counted by the switch above and a host reading only the two kinds would be
            shown a residue one record per drive smaller than the one it is about to be handed. */
-        if (f->orphan) out->orphans++;
+        if (f->orphan) out->orphans += f->orphan_chain_n;
         /* …AND THE TWO ROWS OF THE FLOW RECORD THAT ARE ABOUT A PEER, for the orphan locator's reason exactly:
            neither is a KIND, so neither is counted by the switch, and a host shown only the kinds is shown a
            residue smaller than the one it is handed by one record per commitment and one per unmade delivery.
@@ -1426,13 +1428,14 @@ void cold_park_flow(Flow *f)
             const Flow *twin = park_same_drive_written(f);
             char loc[17];
 
-            park_orphan_hex(f->orphan_hash, loc);
+            park_orphan_hex(f->orphan_chain[f->orphan_chain_n - 1], loc);
             DCHECKF(twin == NULL,
-                    "the park document already holds a drive of body o%s on this flow's path (chain %ld, cursor "
-                    "%d) with the same %d commitment(s) and %d undelivered message(s) — two records that say "
-                    "the same thing resume as two claimants of one drive. This one is waiting %d, driving %d; "
-                    "the one written first is waiting %d, driving %d",
-                    loc, id, f->dec_blob ? decide_blob_cursor(f->dec_blob) : -1, flow_world_commits(f),
+                    "the park document already holds a chain of %d drive(s) ending in body o%s on this flow's path "
+                    "(chain %ld, cursor %d) with the same %d commitment(s) and %d undelivered message(s) — two "
+                    "records that say the same thing resume as two claimants of one drive. This one is waiting "
+                    "%d, driving %d; the one written first is waiting %d, driving %d",
+                    f->orphan_chain_n, loc, id, f->dec_blob ? decide_blob_cursor(f->dec_blob) : -1,
+                    flow_world_commits(f),
                     flow_deliver_pending(f), f->orphan_want, !JS_IsUndefined(f->fn),
                     twin ? twin->orphan_want : -1, twin ? !JS_IsUndefined(twin->fn) : -1);
         }
@@ -1460,8 +1463,12 @@ void cold_park_flow(Flow *f)
                "a driven orphan's recorded locator does not name the function it is driving — the record about "
                "to be written would send a later session to a different body and run this flow's recorded path "
                "through code that never took it");
+        DCHECK(f->orphan_claim_at >= 1 || JS_IsUndefined(f->fn),
+               "a drive that has built no call holds a function");
+        DCHECK(f->orphan_claim_at == 0 || f->orphan_chain[f->orphan_claim_at - 1] == f->orphan_hash,
+               "a drive's running body is not the last member of its chain whose call it built");
         park_rec_orphan(f);
-        g_parked_census.orphans++;
+        g_parked_census.orphans += f->orphan_chain_n;
     }
     /* …AND WHICH SENDING TIMELINES THIS ONE IS IN, BEFORE THE MESSAGES IT STILL OWES, because the commitments
        are what decide whether it may make them. A resumed flow that lost them would re-admit a message its own
@@ -1961,6 +1968,8 @@ int cold_resume(JSContext *ctx, const char *recipes)
        states by writing a flow's deliveries immediately after it. NULL until the first 'f' or 'c', so an 'm'
        that arrives before one is refused rather than attached to whatever came next. */
     Flow *last_flow = NULL;
+    /* The flows the 'o' records made drives of: each chain counts once, however many members it has. */
+    long drives = 0;
 
     DCHECK(recipes != NULL && *recipes != '\0',
            "the cold tier was asked to resume an empty park document — a document with no residue DELETES its "
@@ -2288,15 +2297,20 @@ int cold_resume(JSContext *ctx, const char *recipes)
                        "may, so the name would send this drive to a body no session ever recorded");
                 hash = (hash << 4) | (uint64_t)hv;
             }
-            DCHECK(!last_flow->orphan,
-                   "two orphan locators were written for one flow — a flow drives ONE function, so the second "
-                   "would silently replace the first and the drive the residue was saved for would be gone");
+            /* THE CHAIN'S SHAPE: each locator names a body, and they arrive in seeding order, every one before
+               the flow's 'r' and 'm' rows, because the writer emits the chain whole, right after the flow. */
             DCHECK(hash != 0,
                    "a parked orphan locator is all zeroes — no body hashes to the value this file uses to mean "
                    "'not a drive', so this record names nothing and the flow would wait for ever");
+            DCHECK(flow_world_commits(last_flow) == 0 && flow_deliver_pending(last_flow) == 0,
+                   "a parked orphan locator follows its flow's commitment or delivery rows — park_rec_orphan "
+                   "writes a flow's whole chain before them, so this member is out of seeding order");
+            if (!last_flow->orphan) drives++;
             last_flow->orphan = 1;
-            last_flow->orphan_hash = hash;
+            last_flow->orphan_hash = 0;
             last_flow->orphan_want = 1;
+            last_flow->orphan_claim_at = 0;
+            flow_orphan_chain_push(last_flow, hash);
             g_resumed.orphans++;
         } else if (kind == 'v') {
             /* A WITNESS VERIFICATION COMES BACK AS ITS SUBSTITUTION, ITS KEY AND ITS PATH — park_rec_vfy's
@@ -2536,10 +2550,9 @@ int cold_resume(JSContext *ctx, const char *recipes)
        it is a FIELD of the flow written before it, so it can only ever be a subset of them. Stated rather than
        folded in: a reader who saw the two counters side by side and added all three would be asserting that a
        document with a drive in it rebuilt one flow too many. */
-    DCHECK(g_resumed.orphans <= flows,
-           "the rebuild read more orphan locators than it rebuilt flows — an 'o' record names the flow before "
-           "it, so more of them than there are flows means at least one was bound to a flow that already had "
-           "one and a drive the residue was saved for is gone");
+    DCHECK(drives <= flows && drives <= g_resumed.orphans,
+           "the rebuild made more drives than it rebuilt flows, or than it read locators — an 'o' record names "
+           "the flow before it and every drive has at least one");
     /* AND THE TOTAL AND ITS PARTS ARE ONE NUMBER READ TWO WAYS, WHICH IS park_doc_agrees ASKED AT THE OTHER
        END. cold.h says the two ends "are asked the same question in the same shape … because they are one
        round trip", and until now only the WRITER asserted it: the read side had the flow-producing sum above,

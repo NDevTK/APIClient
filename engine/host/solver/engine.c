@@ -5128,26 +5128,27 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
         sib->cand_resumed = parent->cand_resumed;
     }
     /* Being a driven orphan travels: an arm of an orphan drive is that drive continued, no more reproducible from
-       a decision vector than its parent, so the cold tier must refuse it too. */
-    sib->orphan = parent->orphan;
-    /* The name of the function it drives travels by the same sentence: the arm's recipe must say which body to
-       re-take, and the park asserts a drive has a name. */
-    sib->orphan_hash = parent->orphan_hash;
+       a decision vector than its parent, so it carries the drives its parent has called (their chain, the body
+       running now in `fn` and its name) and the cold tier writes them for it. */
     sib->orphan_want = 0;
     sib->orphan_argc = 0;
     /* The wait does not travel. A parked drive is one flow, so its claim is held by one: the claimant, whose
-       replay builds the call where its work runs out. An arm the replay forks before then is an ordinary arm of
-       the document and drives nothing, so it carries no mark, no locator and no routed body; were it to inherit
-       the claim, every arm of the replay would build the call and park as the same drive of the same body.
-       Staying with the parent keeps it on the drive's recorded side: a branch or completion arm is a slot the
+       replay builds each call where its work runs out. An arm the replay forks before a call is built is an arm
+       of the drives already called (none, before the first), so it carries only those; were it to inherit the
+       claim, every arm of the replay would build the call and park as the same drive of the same body. Staying
+       with the parent keeps the claim on the drive's recorded side: a branch or completion arm is a slot the
        replay consumes, and a peer's answer or a delivery is a commitment row ('r') that deliver_admits applies
        when the replay re-asks, so the timeline a fork hands the sibling is one the drive's record refuses. A peer
        whose own session ended is the exception flow_answer_fork's residual names. */
-    if (parent->orphan_want) {
-        sib->orphan = 0;
-        sib->orphan_hash = 0;
-        JS_FreeValue(ctx, sib->fn);
-        sib->fn = JS_UNDEFINED;
+    {
+        int called = parent->orphan_want ? parent->orphan_claim_at : parent->orphan_chain_n;
+
+        DCHECK(!parent->orphan || called > 0 || JS_IsUndefined(parent->fn),
+               "a drive that has called nothing holds a function — `fn` is written when a call is built");
+        sib->orphan = parent->orphan && called > 0;
+        sib->orphan_hash = sib->orphan ? parent->orphan_hash : 0;
+        if (sib->orphan) flow_orphan_chain_copy(sib, parent, called);
+        sib->orphan_claim_at = sib->orphan_chain_n;
     }
     /* A field added to the candidate identity is an obligation here: the fields are copied one by one so that a
        new one is visible, and this checks they arrived. */
@@ -5985,7 +5986,7 @@ static int engine_orphan_claim_open(void) {
     int i;
 
     for (i = 0; (fl = flow_at(i)) != NULL; i++)
-        if (fl->orphan_want && JS_IsUndefined(fl->fn)) return 1;
+        if (fl->orphan_want && JS_IsUndefined(fl->orphan_claim_fn)) return 1;
     return 0;
 }
 
@@ -6019,9 +6020,13 @@ static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64
     int i, open = 0, n = 0;
 
     for (i = 0; (fl = flow_at(i)) != NULL; i++) {
-        if (!fl->orphan_want || !JS_IsUndefined(fl->fn)) continue;
+        if (!fl->orphan_want || !JS_IsUndefined(fl->orphan_claim_fn)) continue;
         open++;
-        if (fl->orphan_hash != hash) continue;
+        /* The claim is for the next member of the chain only: the calls are built in the order they were seeded. */
+        DCHECK(fl->orphan_claim_at < fl->orphan_chain_n,
+               "a flow holds an open orphan claim past the end of its chain of drives — `orphan_want` clears when "
+               "the last member's call is built");
+        if (fl->orphan_chain[fl->orphan_claim_at] != hash) continue;
         /* A claimant in another timeline than the one that built this closure cannot reach it; a compile of the
            same bytes in the claimant's own timeline is the body it waits for. */
         if (!engine_world_reaches_fn(fl->world, fn)) continue;
@@ -6031,7 +6036,7 @@ static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64
         /* Only the function crosses here; the claimant builds its call later in its own timeline, because the
            receiver and arguments are concolic objects that, minted under this flow's stamp, would be this flow's
            private state, outside every delta. */
-        fl->fn = JS_DupValue(ctx, fn);
+        fl->orphan_claim_fn = JS_DupValue(ctx, fn);
         fl->orphan_argc = argc;
         n++;
     }
@@ -6181,19 +6186,30 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
      * out exactly here and the call's arms are the next in the same chain. Adopting earlier would put the call in
      * front of programs still to replay. It is this flow, not a sibling: the recipe named one flow, whose reward
      * and decision chain are the drive's. */
-    if (f->orphan_want && !JS_IsUndefined(f->fn)) {
-        DCHECK(f->orphan && f->orphan_hash != 0,
-               "a flow waits to adopt an orphan without being one — `orphan_want` is written only by the cold tier's "
-               "rebuild, beside the mark and the locator");
+    if (f->orphan_want && !JS_IsUndefined(f->orphan_claim_fn)) {
+        uint64_t hash;
+
+        DCHECK(f->orphan && f->orphan_claim_at < f->orphan_chain_n,
+               "a flow waits to adopt an orphan without being one, or past its chain — `orphan_want` is written only "
+               "by the cold tier's rebuild, beside the mark and the chain, and clears at the chain's end");
         DCHECK(flow_running() == f,
                "a resumed orphan drive built its call frame while another flow was switched in — the receiver and "
                "arguments would carry that flow's generation");
+        hash = f->orphan_chain[f->orphan_claim_at];
         g_orphans_driven++;
-        base = engine_orphan_call(ctx, f->fn, f->orphan_argc, f->orphan_hash);
+        base = engine_orphan_call(ctx, f->orphan_claim_fn, f->orphan_argc, hash);
         f->frame = base;
+        /* The body handed over is now the one running: it moves into `fn` under its own name, and the claim moves
+           to the next member, which the walks may route as soon as it exists. */
+        JS_FreeValue(ctx, f->fn);
+        f->fn = f->orphan_claim_fn;
+        f->orphan_claim_fn = JS_UNDEFINED;
+        f->orphan_hash = hash;
+        f->orphan_claim_at++;
+        f->orphan_want = f->orphan_claim_at < f->orphan_chain_n;
+        if (f->orphan_want) g_orphan_claims_closed = 0;
         /* Not counted again here: `orphanClaimsMet` counts hand-overs by the routing walk (from a take or from a
            body's creation, engine_orphan_born), and each hand-over reaches this line once. */
-        f->orphan_want = 0;
         return ORPHAN_STEP_RESUMED;
     }
     return 0;
@@ -6309,12 +6325,19 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
                                   concolic_pins_suspend(), flow_path_marks(f));
     sib->orphan = 1;
     /* The function it drives, flow.h's `fn`, so a walk of the frontier can say which functions are being driven.
-       The assembly dup'd the parent's (undefined), which is given back here. */
+       The assembly dup'd the parent's, which is given back here. */
     JS_FreeValue(ctx, sib->fn);
     sib->fn = JS_DupValue(ctx, t.fn);
     /* The name that outlives it, written by the park and used by a later session to find the body. Stamped at
-       the one place a drive is created; its arms inherit it with the mark (engine_sibling_assemble). */
+       the one place a drive is created; its arms inherit it with the mark (engine_sibling_assemble). A drive seeded
+       by a flow that is itself driving is called in the state that drive left, so it is named after the drives
+       the seeding flow has called: the assembly copied those, and this one is appended in seeding order. */
     sib->orphan_hash = hash;
+    DCHECK(sib->orphan_chain_n == (f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0),
+           "a seeded drive's chain does not begin with the drives its seeding flow has called — the assembly copies "
+           "exactly those");
+    flow_orphan_chain_push(sib, hash);
+    sib->orphan_claim_at = sib->orphan_chain_n;
     /* And how much of this body the product had already explored, read at the seed: the drive's key is the
        body's locator (solver/novelty.h's NOVELTY_DRIVE), which is its script's content and its position there,
        so one bundle at two addresses is one key. The count lowers this drive's optimism and never removes it.
@@ -9057,7 +9080,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    engine_orphan_resume builds the call, returns on exactly that pair and stands above every
                    clock-driven source, so only the two reads disagreeing reach the assert. */
                 if (f->orphan_want) {
-                    DCHECK(JS_IsUndefined(f->fn),
+                    DCHECK(JS_IsUndefined(f->orphan_claim_fn),
                            "a flow holds an open orphan claim and a body at the same time — "
                            "engine_orphan_resume's rung returns on exactly that pair and stands above every "
                            "clock-driven source, so reaching the exit in that state means the two reads "

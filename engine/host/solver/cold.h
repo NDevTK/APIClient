@@ -558,7 +558,7 @@ void cold_census_release(ColdCensus *out);
  *                                 does not detect — so every emit of the search aborted on solve.c's own
  *                                 assert, and a release build rendered "nothing carries these bytes" over a
  *                                 payload whose delivery the ended session knew exactly.
- *     o<locator-hex>              WHICH FUNCTION A DRIVEN ORPHAN IS DRIVING — sixteen lower-case hex digits,
+ *     o<locator-hex>              EACH FUNCTION A DRIVEN ORPHAN DRIVES, one per chain member in seeding order —
  *                                 quickjs's JS_OrphanHash of the script the body was compiled from, the
  *                                 position in that script, and the body's own source text. It belongs to the
  *                                 flow record IMMEDIATELY BEFORE IT, the same positional binding an unmade
@@ -682,7 +682,7 @@ typedef struct {
        kind here and not a constant like 'g' because there are as many as this instance answered peers, and
        zero is a real and different answer: an instance that never answered anything. */
     long worlds;
-    /* 'o': the function locators — one per flow that is a DRIVEN ORPHAN. Not a kind and so not part of
+    /* 'o': the function locators — one per member of each DRIVEN ORPHAN's chain. Not a kind and so not part of
        flows+cands: it is a field of the record before it, which is why it is counted separately rather than
        added to either. Zero is a real answer and a loud one on a large bundle — it means this park is carrying
        no forced invocation at all, so the next session inherits the document's explored paths and none of its
@@ -934,9 +934,9 @@ typedef struct {
        session that wrote the residue still agree about what the source can carry. */
     long cands_withdrawn;
     long worlds;   /* 'w': foreign world segments re-materialized from the vectors that first built them */
-    /* 'o': the drives this rebuild inherited — flows waiting to be handed back the function they were driving.
-       It is a SUBSET of `flows`+`cands` and never a summand of them, because an 'o' record names the flow
-       before it rather than producing one. It is also the first half of the round trip's only observable: the
+    /* 'o': the locators this rebuild inherited, one per member of each drive's chain — the functions resumed
+       flows wait to be handed back, in the order they build their calls. Never a summand of `flows`+`cands`,
+       because an 'o' record names the flow before it rather than producing one. It is also the first half of the round trip's only observable: the
        engine reports it against how many of those waits a take SATISFIED and how many waiting flows FINISHED
        never having been handed a body (`orphanClaims`/`orphanClaimsMet`/`orphanClaimsUnmet`). The last is the
        verdict — ZERO on a document whose bytes did not change between two sessions. This count bounds both: a
