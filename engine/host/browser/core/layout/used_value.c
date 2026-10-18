@@ -3011,7 +3011,7 @@ static CssPx uv_shrink_to_fit_width(lxb_dom_element_t *el, CssLength size_len, U
     IntrinsicInlineSizes in = intrinsic_inline_sizes(el);
     CssPx margins, available, content;
 
-    DCHECK(box == UV_BOX_FLOAT || box == UV_BOX_INLINE_BLOCK,
+    DCHECK(box == UV_BOX_FLOAT || box == UV_BOX_INLINE_BLOCK || box == UV_BOX_INLINE_FLEX_GRID,
            "the shrink-to-fit width was computed for a box neither CSS 2.2 §10.3.5 nor §10.3.9 covers. §10.3.7 "
            "sends an absolutely positioned box's `auto` width here too, in its rules 1 and 3, but with a "
            "DIFFERENT available width — the containing block's minus `left` and `right` as well as the six "
@@ -4249,30 +4249,17 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
               "css-flexbox-1's algorithms see this box among the flex container's items. BUILD the splice in the "
               "box tree so its parent is that container");
     }
+    /* An inline-level grid container "is sized as an atomic inline-level box (such as an inline-block)"
+       (css-grid-1 §5.2 "Sizing Grid Containers"), which is §10.3.9's shrink-to-fit over the module's own
+       intrinsic sizes (core/layout/intrinsic_size.h answers them for a grid container). */
+    if (box == UV_BOX_INLINE_FLEX_GRID && css_computed_display_is(el, CSS_KEYWORD_INLINE_GRID))
+        return uv_shrink_to_fit_width(el, len, box);
     if (box == UV_BOX_INLINE_FLEX_GRID)
-        DFAIL("an INLINE-LEVEL FLEX OR GRID CONTAINER with `width: auto`. It is CSS 2.2 §9.2.2's ATOMIC "
-              "INLINE-LEVEL box, so its own module sends it to the section this file already runs for an "
-              "inline-block — css-grid-1 §5.2 \"Sizing Grid Containers\" says it \"is sized as an atomic "
-              "inline-level box (such as an inline-block)\" and css-flexbox-1 §9.2 \"Line Length "
-              "Determination\" says \"determine the main size of the flex container using the rules of the "
-              "formatting context in which it participates\" — which is §10.3.9's shrink-to-fit. WHAT IS "
-              "MISSING IS NEITHER THE FORMULA NOR THE AVAILABLE WIDTH, and that is the whole difference "
-              "between this arm and the absolutely positioned one above: §10.3.9 sends this box to §10.3.5's "
-              "three-term `min(max(preferred minimum width, available width), preferred width)`, which "
-              "`uv_shrink_to_fit_width` computes, over an available width that IS §10.3.5's six-term one. It "
-              "is the TWO INTRINSIC TERMS. core/layout/intrinsic_size.c measures them by laying the box's own "
-              "text out under CSS 2.2 §9.4.2's line boxes and crashes for a box that is not a block container, "
-              "and this one is not: css-flexbox-1 §3 says \"flex containers are not block containers\" and "
-              "css-grid-1 §5.1 says \"grid containers are not block containers\", and what is inside one is "
-              "flex lines or grid tracks rather than line boxes. So the "
-              "two terms are the MODULE's — css-flexbox-1 §9.9.1 \"Flex Container Intrinsic Main Sizes\" (the "
-              "max-content main size is the largest per-line sum of the items' flexed sizes; §9.9.1.3 gives a "
-              "multi-line container's min-content main size as the largest min-content contribution) and "
-              "css-grid-1 §5.2 (\"the max-content size (min-content size) of a grid container is the sum of "
-              "the grid container's track sizes (including gutters) in the appropriate axis, when the grid is "
-              "sized under a max-content constraint (min-content constraint)\"). BUILD the one this box's "
-              "`display` names as a second producer of `IntrinsicInlineSizes`; the shrink-to-fit above then "
-              "runs unchanged over it");
+        DFAIL("an INLINE-LEVEL FLEX CONTAINER with `width: auto`, which css-flexbox-1 §9.2 \"Line Length "
+              "Determination\" sizes \"using the rules of the formatting context in which it participates\": "
+              "§10.3.9's shrink-to-fit over css-flexbox-1 §9.9.1 \"Flex Container Intrinsic Main Sizes\". BUILD "
+              "that route as the inline grid's above, checking core/layout/flex_intrinsic_size.h's pair against "
+              "the reference browser first");
     DCHECK(box == UV_BOX_BLOCK_FLOW,
            "an `auto` width reached §10.3.3's constraint equation on a box that is not block-level in normal "
            "flow — every other box type in uv_box_kind's list has left through its own section above, so the "

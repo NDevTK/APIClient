@@ -13,6 +13,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/flex_intrinsic_size.h"
+#include "core/layout/grid_track.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/inline_run_walk.h"
 #include "core/layout/intrinsic_size.h"
@@ -1090,6 +1091,11 @@ bool intrinsic_inline_sizes_ask(lxb_dom_element_t *el)
     d = css_computed_display(el);
     if (flex_item_display_is_flex_container(d)) return flex_intrinsic_inline_sizes_ask(el);
     if (table_box_kind_generates_table_box(table_box_kind(d))) return is_table_ask(el);
+    if (css_display_spells(d, CSS_KEYWORD_GRID) || css_display_spells(d, CSS_KEYWORD_INLINE_GRID)) {
+        CssPx min_content, max_content;
+
+        return grid_container_inline_sizes_ask(el, &min_content, &max_content);
+    }
     if (!block_flow_display_is_block_container(d)) return true;
     if (block_flow_establishes_inline_context(el)) {
         BlockFlowRun whole;
@@ -1122,6 +1128,8 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
         bool container = block_flow_display_is_block_container(d);
         bool flex = flex_item_display_is_flex_container(d);
         bool table = table_box_kind_generates_table_box(table_box_kind(d));
+        bool grid = css_display_spells(d, CSS_KEYWORD_GRID) || css_display_spells(d, CSS_KEYWORD_INLINE_GRID);
+        char nbuf[160];
 
         /* css-flexbox-1 §3 "Flex Containers: the flex and inline-flex display values"' box: css-flexbox-1 §9.9's
            answer is the same pair in the same box. */
@@ -1129,58 +1137,22 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
         /* CSS 2.1 §17.2 The CSS table model's `table` and `inline-table`: §17.5.2.2 Automatic table layout's pair
            in the same box; one arm because only §17.4's wrapper (the caller's question) tells them apart. */
         if (table) return is_table_sizes(el);
+        /* css-grid-1 §5.2 "Sizing Grid Containers": "The max-content size (min-content size) of a grid container
+           is the sum of the grid container's track sizes (including gutters) in the appropriate axis, when the
+           grid is sized under a max-content constraint (min-content constraint)." */
+        if (grid) {
+            LayoutJobDrive drive;
+
+            layout_job_drive_begin(&drive);
+            while (!grid_container_inline_sizes_ask(el, &out.min_content, &out.max_content))
+                (void)block_flow_drive_deferred(&drive);
+            layout_job_drive_end(&drive);
+            return out;
+        }
         if (!container)
-            DFAIL("css-sizing-3 §5.1's intrinsic inline sizes were asked of a box that is NOT A BLOCK CONTAINER, "
-                  "so neither of CSS 2.2 §9.4's two formatting contexts is what lays its content out and "
-                  "neither §9.4.2's line boxes nor §9.4.1's stack is the algorithm. Which module owns it is its "
-                  "own `display`, and TWO OF THE THREE HAVE LEFT THROUGH ARMS ABOVE THIS LINE, so what still "
-                  "reaches this crash is the GRID and whatever `display` no module here models. "
-                  "A TABLE-INTERNAL BOX IS NOT ONE OF THEM AND MUST NOT BE ANSWERED AS IF IT WERE: a "
-                  "`table-cell` and a `table-caption` ARE block containers and took neither arm nor this "
-                  "crash, and a row, a row group and a column box have no intrinsic inline size of their own "
-                  "at all — CSS 2.1 §17.5 Visual layout of table contents' rules 1 and 2 give a row the whole "
-                  "grid row, so its width is the TABLE's and the question belongs to the table box above it "
-                  "(core/layout/table_box.h's `table_box_table_of`). Reaching this crash with one means "
-                  "core/layout/block_flow.c's classification let a misparented box through, which is where "
-                  "§17.2.1 Anonymous table objects is owed and not here. "
-                  "A FLEX CONTAINER LEFT THROUGH THE LINE ABOVE AND THIS SENTENCE USED TO SEND ITS READER TO "
-                  "BUILD FLEX LINE BREAKING FOR IT: it said css-flexbox-1 §9.9 \"Intrinsic Sizes\" derives a "
-                  "flex container's intrinsic sizes from its flex lines, and §9.9 says the opposite for the "
-                  "two arms an INLINE size can reach — §9.9.1 \"Flex Container Intrinsic Main Sizes\" states "
-                  "that \"an implementation is conformant to CSS Flexible Box Layout if it conforms to either "
-                  "the Ideal Algorithm or the Web-compatible Algorithm\", and the second of those is a sum "
-                  "over ITEMS with no line in it. The reader who followed the old sentence would have built "
-                  "the whole of §9.3 \"Main Size Determination\" before writing a single contribution. "
-                  "core/layout/flex_intrinsic_size.h is the component, and what it still refuses it refuses by "
-                  "name. "
-                  "A TABLE LEFT THROUGH THE LINE ABOVE AND THIS SENTENCE USED TO SEND ITS READER TO BUILD "
-                  "IT: it is core/layout/table_width.h's `table_intrinsic_inline_sizes`, and what the retired "
-                  "clause got RIGHT is worth keeping because it is why that entry is an EXPORT and not a "
-                  "layout — §17.5.2.2 Automatic table layout names the pair this function returns in its own "
-                  "final rules, \"the minimum width required by all the columns plus cell spacing or borders "
-                  "(MIN)\" and \"the maximum width required by the columns plus cell spacing or borders "
-                  "(MAX)\", over per-column minima and maxima core/layout/table_column_width.h already "
-                  "exports. IT WAS INCOMPLETE ON TWO POINTS AND BOTH CHANGED THE CODE, which is the record a "
-                  "reader re-deriving this needs rather than the instruction. It named MIN and MAX and NOT "
-                  "CAPMIN, and §17.5.2.2's rule this is the evaluation of carries all three — a producer "
-                  "returning the bare column sums reports a table narrower than a caption its own §17.4 "
-                  "wrapper has to hold. And it said EXPORT without saying WHAT MUST NOT BE EXPORTED: the "
-                  "obvious reading is `table_widths`, whose answer is a USED width, and that reads the "
-                  "CONTAINING BLOCK — which for a table inside a float or an inline-block returns through CSS "
-                  "2.2 §10.3.5's shrink-to-fit into THIS function for the ancestor, so the naive export "
-                  "recurses until the C stack ends on an ordinary document. The pair is containing-block-free "
-                  "by css-sizing-3 §5.1's own definition, which removes the preferred size and thereby "
-                  "§17.5.2.1 Fixed table layout with it. WHAT IS LEFT AS A LAYOUT IS THE GRID, "
-                  "AND ITS SECTION NUMBER USED TO BE WRONG HERE — this line said css-grid-2 §11.5, which is "
-                  "\"Aligning the Grid: the justify-content and align-content properties\" and decides nothing "
-                  "about a size. The sentence that governs is css-grid-2 §5.2 \"Sizing Grid Containers\": \"The "
-                  "max-content size (min-content size) of a grid container is the sum of the grid container's "
-                  "track sizes (including gutters) in the appropriate axis, when the grid is sized under a "
-                  "max-content constraint (min-content constraint).\" So the operand is the TRACKS, which is "
-                  "css-grid-2 §12.5 \"Resolve Intrinsic Track Sizes\", which is a step of "
-                  "css-grid-2 §12.3 \"Track Sizing Algorithm\" — a whole chapter away from where this "
-                  "crash pointed. That arm needs its own box tree and its own track list first and is "
-                  "not this walk with a different accumulator");
+            DFAILF("css-sizing-3 §5.1's intrinsic inline sizes were asked of %s, which is not a block container "
+                   "and whose `display` no module here sizes (the flex, table and grid arms are above). BUILD that "
+                   "module's intrinsic inline sizes", box_subject(el, nbuf, sizeof nbuf));
     }
     /* CSS 2.2 §9.2.1 "Block-level elements and block boxes"' alternative, asked once over the whole child list
        before either algorithm: "A block container box either contains only block-level boxes or establishes an
