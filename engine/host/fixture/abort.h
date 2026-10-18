@@ -89,10 +89,10 @@ static const char HTML_ABORT[] =
     " fetch('/api/apteedab?own=' + o4 + '&clone=' + q4);"
     "})();"
     "</script>"
-    /* XHR §3.5.6's timeout, on HTML §8.7's timer source. The fixture never answers /api/xahang, so its 1 ms
-       timeout fires once work has moved the clock past it: `timeout` then `loadend`. The clock never jumps to
-       a deadline while a reply is in flight (event_loop_may_advance), so a 60 s timeout is beaten by the
-       host's answer: `load` then `loadend`. */
+    /* XHR §3.5.6's timeout, on HTML §8.7's timer source. The host answers between slices, so a 1 ms timeout
+       sent in a task whose loop moves the work clock past it, inside one slice, fires before the answer:
+       `timeout` then `loadend`. The clock never jumps to a deadline while a reply is in flight
+       (event_loop_may_advance), so a 60 s timeout is beaten by the host's answer: `load` then `loadend`. */
     "<script>"
     "(function () {"
     " function watch(x, seen, path) {"
@@ -100,8 +100,11 @@ static const char HTML_ABORT[] =
     "   x.addEventListener(t, function () { seen.push(t); }); });"
     "  x.addEventListener('loadend', function () { seen.push('loadend'); fetch(path + '?v=' + seen.join('-')); });"
     " }"
-    " var t1 = new XMLHttpRequest(), e1 = []; t1.open('GET', '/api/xahang'); t1.timeout = 1;"
-    " watch(t1, e1, '/api/xatimedout'); t1.send();"
+    " setTimeout(function () {"
+    "  var t1 = new XMLHttpRequest(), e1 = []; t1.open('GET', '/api/xatimeout'); t1.timeout = 1;"
+    "  watch(t1, e1, '/api/xatimedout'); t1.send();"
+    "  for (var i = 0; i < 20000; i++) {}"
+    " }, 0);"
     " var t2 = new XMLHttpRequest(), e2 = []; t2.open('GET', '/api/xabeaten'); t2.timeout = 60000;"
     " watch(t2, e2, '/api/xabeat'); t2.send();"
     "})();"

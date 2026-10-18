@@ -5639,12 +5639,6 @@ static int hostreq_answer_all(JSContext *ctx)
                     JS_DefinePropertyValueStr(ctx, v, "setCookies", cookies, JS_PROP_C_W_E);
                 }
             } else if (!strncmp(tab + 1, "xhr.send\t", 9) && memmem(tab + 1, (size_t)(end - tab - 1),
-                                                                      "/api/xahang", 11) != NULL) {
-                /* The abort document's timeout row: a server that never answers, so only the send's own
-                   timeout ends it. */
-                p = end + 1;
-                continue;
-            } else if (!strncmp(tab + 1, "xhr.send\t", 9) && memmem(tab + 1, (size_t)(end - tab - 1),
                                                                       "/api/xa", 7) != NULL) {
                 /* The abort document's asynchronous-send rows: a 200 reply record (fetch_reply_new), so the
                    object reaches `load`. Its URL is the record's own `url` member, which xhr_request_op writes as
