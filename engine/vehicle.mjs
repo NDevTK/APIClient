@@ -6,8 +6,8 @@
  *   - each statement's value in the final @H table (the one printed after `@RESULT`) and the fixture's own
  *     verdict line: when both runs completed;
  *   - every @H table paired by the `@HWORK` work total it was composed at, and the work retired by a completed
- *     run: only when both hosts announce the same `@QUANTUM` slice, because a slice in different currencies
- *     interleaves flows differently and the two runs then take different paths through one document.
+ *     run: only when both hosts announce the same `@QUANTUM` slice, because slices that end at different points
+ *     interleave flows differently and the two runs then take different paths through one document.
  *   node engine/vehicle.mjs --native <bin> --wasm <qjs.js> [--wasm-node <node>] [--cpu <s>] [--jobs <n>]
  *                           --out <dir> <doc>...
  * runs each named document on both hosts under the CPU budget and prints one comparison per document. */
@@ -22,6 +22,17 @@ import { crashIdentity } from "./abort_record.mjs";
 /* The fixture's verdict sentences, in test_forced.c's main() after the final table. */
 const VERDICTS = [["PASS:", "PASS"], ["FAIL:", "FAIL"], ["[test-forced] NOT ASKED", "NOT ASKED"],
                   ["LIFECYCLE:", "LIFECYCLE"]];
+
+/* The slice an `@QUANTUM` line announces (solver/quantum.c's quantum_json), as the text two hosts compare: the work
+   budget and the wall-time host yield, which ends a slice early on the emscripten host. `price` and `priceIsCpu`
+   name the clock census rows are priced on, which is not the slice, so they are left out. */
+function sliceOf(text, where) {
+  const j = JSON.parse(text);
+  if (!Number.isInteger(j.sliceWork) || !Number.isInteger(j.hostYieldMs))
+    throw new Error(`${where}: an @QUANTUM line carries no integer \`sliceWork\` and \`hostYieldMs\`: ${text} — ` +
+                    `solver/quantum.c's quantum_json composes both, so the composer and this reader disagree`);
+  return `${j.sliceWork} work units` + (j.hostYieldMs > 0 ? `, ended early by a ${j.hostYieldMs} ms host yield` : ``);
+}
 
 /* One run's reading. `out` is the run's whole captured output, `signal` its terminating signal or null, and
    `where` names the artifact for the one throw probeTables can make. A final line with no newline is a write
@@ -42,7 +53,7 @@ export function vehicleReading(out, signal, where) {
       cold = { census: r._cold, terminal: true };
       continue;
     }
-    if (line.startsWith("@QUANTUM ")) { if (quantum === null) quantum = line.slice(9); continue; }
+    if (line.startsWith("@QUANTUM ")) { if (quantum === null) quantum = sliceOf(line.slice(9), where); continue; }
     if (line.startsWith("@COLD {")) {
       if (!completed) cold = { census: JSON.parse(line.slice(6)), terminal: false };
       continue;
@@ -150,7 +161,7 @@ export function compareVehicle(doc, nat, veh) {
       fail(`the completed runs retired different work: native ${nat.work.retired}, wasm ${veh.work.retired}`);
     work = `exact (one slice on both hosts: ${nat.quantum}); native ${workText(nat)}; wasm ${workText(veh)}`;
   } else {
-    work = `not yet exact: the hosts slice in different currencies (native ${nat.quantum ?? "no @QUANTUM"}; ` +
+    work = `not yet exact: the hosts end their slices at different points (native ${nat.quantum ?? "no @QUANTUM"}; ` +
            `wasm ${veh.quantum ?? "no @QUANTUM"}), so their paths differ and their work is reported, not ` +
            `compared; native ${workText(nat)}; wasm ${workText(veh)}` +
            (nat.work !== null && veh.work !== null && nat.work.terminal && veh.work.terminal
