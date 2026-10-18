@@ -89,10 +89,10 @@ static const char HTML_ABORT[] =
     " fetch('/api/apteedab?own=' + o4 + '&clone=' + q4);"
     "})();"
     "</script>"
-    /* XHR §3.5.6's timeout, on HTML §8.7's timer source. A 1 ms timeout fires once the flow has nothing left
-       to run, before the host can answer: `timeout` then `loadend`. A long one is beaten by an answer that
-       lands while the flow is still busy, because a timer fires only when no task is runnable: `load` then
-       `loadend`. */
+    /* XHR §3.5.6's timeout, on HTML §8.7's timer source. The fixture never answers /api/xahang, so its 1 ms
+       timeout fires once work has moved the clock past it: `timeout` then `loadend`. The clock never jumps to
+       a deadline while a reply is in flight (event_loop_may_advance), so a 60 s timeout is beaten by the
+       host's answer: `load` then `loadend`. */
     "<script>"
     "(function () {"
     " function watch(x, seen, path) {"
@@ -100,11 +100,10 @@ static const char HTML_ABORT[] =
     "   x.addEventListener(t, function () { seen.push(t); }); });"
     "  x.addEventListener('loadend', function () { seen.push('loadend'); fetch(path + '?v=' + seen.join('-')); });"
     " }"
-    " var t1 = new XMLHttpRequest(), e1 = []; t1.open('GET', '/api/xatimeout'); t1.timeout = 1;"
+    " var t1 = new XMLHttpRequest(), e1 = []; t1.open('GET', '/api/xahang'); t1.timeout = 1;"
     " watch(t1, e1, '/api/xatimedout'); t1.send();"
     " var t2 = new XMLHttpRequest(), e2 = []; t2.open('GET', '/api/xabeaten'); t2.timeout = 60000;"
     " watch(t2, e2, '/api/xabeat'); t2.send();"
-    " for (var i = 0; i < 3000000; i++) {}"
     "})();"
     "</script>"
     /* Fetch §4.1 "Main fetch" queues processResponse when the response arrives, so a zero-delay timer queued
@@ -138,6 +137,18 @@ static const char HTML_ABORT[] =
     "  fetch('/api/xareopened?v=' + (zv.join('-') || 'none') + '&rs=' + z.readyState);"
     " }, 0);"
     "})();"
+    "</script>"
+    /* A fetch() reply is a networking task from its arrival, so a port message posted before the reply
+       arrives runs first. The task runs after every zero-delay timer above, and its loop spans slices so the
+       host answers the fetch while it runs: `message-reply`. */
+    "<script>"
+    "setTimeout(function () {"
+    " var mc = new MessageChannel(), order = [];"
+    " mc.port1.onmessage = function () { order.push('message'); };"
+    " fetch('/api/xfmsg').then(function () { order.push('reply'); fetch('/api/xfmorder?v=' + order.join('-')); });"
+    " mc.port2.postMessage(0);"
+    " for (var i = 0; i < 3000000; i++) {}"
+    "}, 0);"
     "</script>"
     /* A request aborted while its reply is still owed: the abort runs on the line after the call, before the
        host can answer, so the engine tells the host to end the send, and the page sees an AbortError. */

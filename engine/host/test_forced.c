@@ -5639,6 +5639,12 @@ static int hostreq_answer_all(JSContext *ctx)
                     JS_DefinePropertyValueStr(ctx, v, "setCookies", cookies, JS_PROP_C_W_E);
                 }
             } else if (!strncmp(tab + 1, "xhr.send\t", 9) && memmem(tab + 1, (size_t)(end - tab - 1),
+                                                                      "/api/xahang", 11) != NULL) {
+                /* The abort document's timeout row: a server that never answers, so only the send's own
+                   timeout ends it. */
+                p = end + 1;
+                continue;
+            } else if (!strncmp(tab + 1, "xhr.send\t", 9) && memmem(tab + 1, (size_t)(end - tab - 1),
                                                                       "/api/xa", 7) != NULL) {
                 /* The abort document's asynchronous-send rows: a 200 reply record (fetch_reply_new), so the
                    object reaches `load`. Its URL is the record's own `url` member, which xhr_request_op writes as
@@ -9109,6 +9115,29 @@ static int param_value_only(const char *js, const char *url, const char *pname, 
     const int mine = param_value_count_of(js, url, pname, val);
 
     return mine > 0 && mine == param_value_count(js, url, pname);
+}
+
+/* `param_value_only` over the records of requests the page's own control flow made (`"driven":false`), the
+   reader for a row about WHEN the event loop ran a handler. A driven record is the handler called by orphan
+   driving with no event behind it, so its value states what the handler computes, never the order. */
+static int param_value_only_undriven(const char *js, const char *url, const char *pname, const char *val) {
+    EmittedRec r[EMITTED_REC_MAX];
+    const char *v, *b;
+    size_t n, m = strlen(val);
+    int cnt = emitted_records(js, url, r, EMITTED_REC_MAX), i, all = 0, mine = 0;
+
+    for (i = 0; i < cnt; i++) {
+        if (!memmem(r[i].b, r[i].n, "\"driven\":false", 14)) {
+            DCHECK(memmem(r[i].b, r[i].n, "\"driven\":true", 13) != NULL,
+                   "endpoint_json_array writes a record with no `driven` field — it emits one on every record");
+            continue;
+        }
+        for (v = param_values_in(&r[i], pname); v && (v = param_value_next(v, &b, &n)) != NULL; ) {
+            all++;
+            if (n == m && memcmp(b, val, m) == 0) mine++;
+        }
+    }
+    return mine > 0 && mine == all;
 }
 
 /* THE STAGE AN @S SEARCH REACHED, read off the entry the report already carries. ONE boolean per sink
@@ -14904,7 +14933,7 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
        its `load`. */
     const char *xatimer_why = NULL;
     int xatimer_tt = 1;
-    fold_row(&xatimer_tt, &xatimer_why, param_value_only(js, "/api/xaorder", "v", "timer-load"),
+    fold_row(&xatimer_tt, &xatimer_why, param_value_only_undriven(js, "/api/xaorder", "v", "timer-load"),
              "NOT REACHED or wrong: a zero-delay timer queued after an asynchronous send() did not run before "
              "that send's load event (`timer-load`), or the send never loaded");
     /* §3.5.7 abort() mid-send: step 1 aborts the controller and the zone is told to end the send, once per
@@ -14932,24 +14961,31 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
     /* The same ordering for fetch(): its response is a task from its arrival, not from the call. */
     const char *xftimer_why = NULL;
     int xftimer_tt = 1;
-    fold_row(&xftimer_tt, &xftimer_why, param_value_only(js, "/api/xforder", "v", "timer-reply"),
+    fold_row(&xftimer_tt, &xftimer_why, param_value_only_undriven(js, "/api/xforder", "v", "timer-reply"),
              "NOT REACHED or wrong: a zero-delay timer queued after fetch() did not run before the response "
              "settled its promise (`timer-reply`)");
+    /* A fetch() reply ordered by its arrival against a port message posted before it arrived. */
+    const char *xfmsg_why = NULL;
+    int xfmsg_tt = 1;
+    fold_row(&xfmsg_tt, &xfmsg_why, param_value_only_undriven(js, "/api/xfmorder", "v", "message-reply"),
+             "NOT REACHED or wrong: a port message posted after fetch() and before its reply arrived did not "
+             "run before the reply settled the promise (`message-reply`)");
     /* XHR §3.5.6's timeout: it fires for a send nothing answered in time, and an answer beats it. */
     const char *xatime_why = NULL;
     int xatime_tt = 1;
-    fold_row(&xatime_tt, &xatime_why, param_value_only(js, "/api/xatimedout", "v", "timeout-loadend"),
+    fold_row(&xatime_tt, &xatime_why, param_value_only_undriven(js, "/api/xatimedout", "v", "timeout-loadend"),
              "NOT REACHED or wrong: an asynchronous send with a 1 ms timeout did not end in `timeout` then "
              "`loadend`");
     const char *xabeat_why = NULL;
     int xabeat_tt = 1;
-    fold_row(&xabeat_tt, &xabeat_why, param_value_only(js, "/api/xabeat", "v", "load-loadend"),
+    fold_row(&xabeat_tt, &xabeat_why, param_value_only_undriven(js, "/api/xabeat", "v", "load-loadend"),
              "NOT REACHED or wrong: an answer that landed before a long timeout did not end the send in `load` "
              "then `loadend`, with no `timeout`");
     const Probe rows[] = {
         { "xhr-timeout", xatime_tt, "/api/xatimedout", SESS_EXPLORE, xatime_why },
         { "xhr-timeout-beaten", xabeat_tt, "/api/xabeat", SESS_EXPLORE, xabeat_why },
         { "fetch-timer", xftimer_tt, "/api/xforder", SESS_EXPLORE, xftimer_why },
+        { "fetch-message", xfmsg_tt, "/api/xfmorder", SESS_EXPLORE, xfmsg_why },
         { "xhr-timer", xatimer_tt, "/api/xaorder", SESS_EXPLORE, xatimer_why },
         { "xhr-abort", xaabort_tt, "/api/xaaborted", SESS_EXPLORE, xaabort_why },
         { "xhr-open", xaopen_tt, "/api/xareopened", SESS_EXPLORE, xaopen_why },
