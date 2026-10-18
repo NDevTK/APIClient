@@ -13830,6 +13830,10 @@ TF_UNIT void probes_windowthis(const char *js, Probe *tab, int *n) {
         { "fr", "HTML §7.2.2: `frames` is not `window`" },
         { "ww", "HTML §7.2.2: `window.window` is not `window`" },
         { "sl", "ECMAScript §10.2.1.2 step 5.a: a sloppy function's undefined `this` is not `window`" },
+        { "pa", "HTML §7.2.2.4: a top-level navigable's `parent` is not `window`" },
+        { "tp", "HTML §7.2.2.4: a top-level navigable's `top` is not `window`" },
+        { "lt", "DOM §2.9 Dispatching events (inner invoke): a Window listener's callback `this` is not `window`" },
+        { "lc", "DOM §2.2 Interface Event: a Window listener's `event.currentTarget` is not `window`" },
     };
     const char *wt_why = NULL; int wt_tt = 1;
     size_t i;

@@ -63,6 +63,7 @@
 #include "core/events/keyboard_event.h"
 #include "core/events/focus_event.h"
 #include "core/events/event_path.h"
+#include "core/frame/window_proxy.h"   /* a Window target is handed to script as its WindowProxy */
 #include "core/timing/hr_time.h"
 #include "solver/concolic.h"   /* §2.2's timeStamp is a duration off a clock a moment may be unknown on */
 
@@ -580,6 +581,11 @@ static JSValue js_event_get(JSContext *ctx, JSValueConst this_val, int magic)
     }
     v = JS_GetPropertyStr(ctx, slots, SLOT_NAME[magic]);
     JS_FreeValue(ctx, slots);
+    if (magic == 1 || magic == 2) {   /* target, currentTarget: an EventTarget the dispatch holds */
+        JSValue sv = JS_DupValue(ctx, window_proxy_script_value(ctx, v));
+        JS_FreeValue(ctx, v);
+        return sv;
+    }
     return v;
 }
 
@@ -670,6 +676,15 @@ static JSValue js_event_flag(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
+/* An invocation target as composedPath hands it to script (window_proxy_script_value). Takes `t`; owned. */
+static JSValue path_script_value(JSContext *ctx, JSValue t)
+{
+    JSValue sv = JS_DupValue(ctx, window_proxy_script_value(ctx, t));
+
+    JS_FreeValue(ctx, t);
+    return sv;
+}
+
 /* §2.2 composedPath — THIS'S PATH, which §2.9 built and which this file now holds. It used to answer with the
    current target alone, because there was no walk to have a path from; there is one, and answering a walk's
    whole path with its last entry is not a smaller answer, it is a different one.
@@ -742,7 +757,8 @@ static JSValue js_event_composed_path(JSContext *ctx, JSValueConst this_val, int
 
             if (event_path_root_of_closed_tree(ctx, item)) hidden++;
             if (hidden <= max_hidden)
-                JS_SetPropertyUint32(ctx, before, kept++, event_path_invocation_target(ctx, item));
+                JS_SetPropertyUint32(ctx, before, kept++,
+                                     path_script_value(ctx, event_path_invocation_target(ctx, item)));
             if (event_path_slot_in_closed_tree(ctx, item)) {
                 hidden--;
                 if (hidden < max_hidden) max_hidden = hidden;
@@ -756,7 +772,7 @@ static JSValue js_event_composed_path(JSContext *ctx, JSValueConst this_val, int
     /* step 6, in its place in the ANSWER rather than in the algorithm's order: composedPath is built by
        appending the current target and then prepending the inner half, and the two together are the entries up
        to and including it, in path order. */
-    JS_SetPropertyUint32(ctx, arr, out++, JS_DupValue(ctx, current));
+    JS_SetPropertyUint32(ctx, arr, out++, JS_DupValue(ctx, window_proxy_script_value(ctx, current)));
     /* steps 14-16: outward toward the root, APPENDING, with the two flags swapped. */
     hidden = max_hidden = current_hidden;
     for (index = current_index + 1; index < (int32_t)n; index++) {
@@ -764,7 +780,7 @@ static JSValue js_event_composed_path(JSContext *ctx, JSValueConst this_val, int
 
         if (event_path_slot_in_closed_tree(ctx, item)) hidden++;
         if (hidden <= max_hidden)
-            JS_SetPropertyUint32(ctx, arr, out++, event_path_invocation_target(ctx, item));
+            JS_SetPropertyUint32(ctx, arr, out++, path_script_value(ctx, event_path_invocation_target(ctx, item)));
         if (event_path_root_of_closed_tree(ctx, item)) {
             hidden--;
             if (hidden < max_hidden) max_hidden = hidden;

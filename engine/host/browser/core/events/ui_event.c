@@ -397,6 +397,11 @@ static JSValue js_ue_get(JSContext *ctx, JSValueConst this_val, int magic)
     }
     v = JS_GetPropertyStr(ctx, slots, UE_SLOT[magic]);
     JS_FreeValue(ctx, slots);
+    if (magic == UE_VIEW) {   /* a Window the event holds, handed to script as its WindowProxy */
+        JSValue sv = JS_DupValue(ctx, window_proxy_script_value(ctx, v));
+        JS_FreeValue(ctx, v);
+        return sv;
+    }
     return v;
 }
 

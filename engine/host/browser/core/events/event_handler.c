@@ -38,6 +38,7 @@
 #include "core/events/event.h"
 #include "core/events/event_handler.h"
 #include "core/events/event_target.h"
+#include "core/frame/window_proxy.h"   /* the callback this value for a Window target is its WindowProxy */
 
 /* WHERE ONE INVOCATION RESTS, AS §8.1.8.1 NUMBERS ITS STEPS. Zero is "no invocation in flight" and is what the
    caller's own resume routing reads, so the first real stage is 1. */
@@ -177,12 +178,14 @@ int event_handler_run(JSContext *ctx, EventHandlerWork *w, JSStepHdr *hdr, uint8
                    "`onerror` — the five-argument invocation is `OnErrorEventHandlerNonNull`'s and no other "
                    "event handler IDL attribute declares it");
             error_event_handler_arguments(ctx, event, argv);
-            r = step_call_run(ctx, cphase, cb, cb_cap, callback, current, 5, (JSValueConst *)argv,
+            r = step_call_run(ctx, cphase, cb, cb_cap, callback, window_proxy_script_value(ctx, current), 5,
+                              (JSValueConst *)argv,
                               in, &w->rv, out_cb, out_argc);
             for (i = 0; i < 5; i++)
                 JS_FreeValue(ctx, argv[i]);
         } else {
-            r = step_call_run(ctx, cphase, cb, cb_cap, callback, current, 1, &event,
+            r = step_call_run(ctx, cphase, cb, cb_cap, callback, window_proxy_script_value(ctx, current), 1,
+                              &event,
                               in, &w->rv, out_cb, out_argc);
         }
         in = JS_UNDEFINED;   /* the request took it */

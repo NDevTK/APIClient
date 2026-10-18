@@ -255,10 +255,14 @@ typedef enum {
 WindowProxyDocumentState window_proxy_document_state(uint32_t doc);
 
 /* THE NAVIGABLE A VALUE NAMES, whichever of its two spellings it is: the value itself when it IS a
-   WindowProxy, and the asking realm's WindowProxy when it is that realm's Window GLOBAL — win_or_proxy's
-   mapping read the other way round, stated here so a caller that must not tell the two apart (an encoder
-   handing a navigable to another agent) cannot. JS_UNDEFINED when the value is neither. BORROWED. */
+   WindowProxy, and the asking realm's WindowProxy when it is that realm's Window GLOBAL, stated here so a caller
+   that must not tell the two apart (an encoder handing a navigable to another agent) cannot. JS_UNDEFINED when
+   the value is neither. BORROWED. */
 JSValueConst window_proxy_navigable_of(JSContext *ctx, JSValueConst v);
+
+/* The ECMAScript value script is handed for `v`: a Window's navigable's WindowProxy, anything else itself
+   (HTML §7.2.3). For a member answering with a value an algorithm holds, such as an event's target. BORROWED. */
+JSValueConst window_proxy_script_value(JSContext *ctx, JSValueConst v);
 
 /* §7.2.2.1's IS CLOSING. The proxy a page is holding stays the object it was — the spec files check that it
    does — and reports `closed` from here on. Captured into the RUNNING FLOW's delta, so a sibling arm that
@@ -632,14 +636,10 @@ int window_proxy_record_member_of_document(JSContext *ctx, uint32_t doc, const c
    component holds and about to read ProxyData out of. It is NOT the Web IDL type test — see below. */
 bool window_proxy_is(JSValueConst v);
 
-/* THE Web IDL TYPE `WindowProxy`, which is a different question and had only one answer for both. A page's own
-   `window` is a WindowProxy — §7.2.2 says `window`, `self` and `frames` all return one — but in this engine
-   that object is the realm's GLOBAL, because a navigable's proxy answering for ITSELF would make
-   `window === window.parent` false at top level and `frame.contentWindow.parent === window` false (win_or_proxy
-   states that mapping once, and this is the same mapping asked as a type test). So the class brand alone
-   rejected the one WindowProxy every page actually holds: `new MessageEvent('m', {source: window})` threw a
-   TypeError saying `window` was not a WindowProxy. Takes ctx because "is it a window" and "is it THIS realm's
-   window" are the same question here. */
+/* THE Web IDL TYPE `WindowProxy`, which is a different question. A page's own `window` is a WindowProxy (§7.2.2
+   says `window`, `self` and `frames` all return one, the realm's [[GlobalThisValue]]), and the realm's global
+   object implements Window as well and still reaches a page where the engine hands it out as a receiver, so it
+   is admitted as itself. Takes ctx because "is it THIS realm's global" is asked of the realm. */
 bool window_proxy_is_window(JSContext *ctx, JSValueConst v);
 
 /* IS THE NAVIGABLE'S ACTIVE DOCUMENT IN ANOTHER INSTANCE? Asked of the world registry as "does this agent hold

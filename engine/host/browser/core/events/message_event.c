@@ -266,6 +266,11 @@ static JSValue js_me_get(JSContext *ctx, JSValueConst this_val, int magic)
                                        "does not answer");
     v = JS_GetPropertyStr(ctx, slots, ME_NAMES[magic]);
     JS_FreeValue(ctx, slots);
+    if (magic == ME_SOURCE) {   /* a Window the event holds, handed to script as its WindowProxy */
+        JSValue sv = JS_DupValue(ctx, window_proxy_script_value(ctx, v));
+        JS_FreeValue(ctx, v);
+        return sv;
+    }
     return v;
 }
 

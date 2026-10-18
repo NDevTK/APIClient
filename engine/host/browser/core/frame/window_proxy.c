@@ -377,8 +377,8 @@ bool window_proxy_is_window(JSContext *ctx, JSValueConst v)
 
     if (window_proxy_is(v))
         return true;
-    /* The asking realm stands for itself as its global: win_or_proxy's mapping, asked as a type test rather than
-       performed as a substitution, so one place decides it. */
+    /* The asking realm's own global implements Window too (window_proxy_implements_window), so it passes the
+       type test as itself. */
     g = JS_GetGlobalObject(ctx);
     same = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(v);
     JS_FreeValue(ctx, g);
@@ -505,9 +505,9 @@ static JSValueConst live_nav_of_document(uint32_t doc)
 }
 
 /* Which of this agent's navigables has `global` as its active document's realm's global object, in the
-   timeline that is asking; JS_UNDEFINED when none does. The Window -> navigable edge for ANOTHER realm's Window:
-   win_or_proxy hands a realm its own global in place of its own proxy, so `f.bind(window)` with `f` taken from
-   another window carries this realm's global into that realm's member as the receiver. A destroyed navigable's
+   timeline that is asking; JS_UNDEFINED when none does. The Window -> navigable edge for ANOTHER realm's Window,
+   which a page reaches as a receiver wherever a realm's global object is still handed out (an event listener's
+   `this` for a Window target), so `f.call(thatGlobal)` with `f` from this realm asks about it. A destroyed navigable's
    realm is null (window_proxy_set_destroyed), so the Window of a destroyed document is named by no row. Ctx-free
    for the reason live_nav_of_document is. */
 static JSValueConst live_nav_of_global(JSValueConst global)
@@ -2381,11 +2381,9 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
  * other document's Window, which is what makes the handler fire, since that Window is what the event path walks.
  * A forward of the value would pass a round-trip test and leave the listener on a stand-in nothing dispatches to.
  *
- * §7.2.3's own surface is not forwarded, by this engine's Window/WindowProxy duality: `window` in a realm is that
- * realm's global here (win_or_proxy states the mapping once), so `otherW.parent` is answered by the reading
- * realm's member. Forwarded, it would run the other realm's `parent` getter, which maps its own navigable onto its
- * global and hands back a proxy the reading page has never seen, making `frame.contentWindow.parent === window`
- * false. The same holds for `self`, `top`, `frames`, `window` and `globalThis`. */
+ * §7.2.3's own surface is not forwarded: `self`, `top`, `parent`, `frames`, `window` and `globalThis` are the
+ * navigable's own state (see the member surface below), which this agent holds whether or not it holds the
+ * active document, so `otherW.parent` is answered by the reading realm's member. */
 /* The carve-out is asked of the prototype, which is that surface. A list written out here would be a second copy
  * of window_proxy_install_proto's, and a name it fell behind (`postMessage` is window_message.c's; `focus` and
  * `blur` are focus_install_window_members') would be handed to the other document's Window while this object's
@@ -2588,8 +2586,7 @@ static int proxy_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
            object is shared by every proxy in the realm, so no per-proxy entry can be taken out. What closes it is
            what closes §7.2.3.6's local define: route the operation to W (which owns each of these names;
            proxy_own_keys asserts it) and let W's descriptor be what §7.2.3.5 step 3 answers, which needs the
-           reading realm's Window/WindowProxy identity mapping applied to the forwarded value (win_or_proxy read
-           backwards for a value produced in another realm). */
+           reading realm's Window/WindowProxy identity mapping applied to the forwarded value. */
         DFAIL("`delete` of one of §7.2.3's own surface names on a WindowProxy. The surface answers the name as "
               "an OWN, configurable property and is shared by every proxy in the realm, so nothing here can "
               "remove it and reporting success would leave [[Delete]] and [[GetOwnProperty]] disagreeing. "
@@ -2880,31 +2877,11 @@ JSValue window_proxy_top_navigable(JSContext *ctx, JSValueConst self)
     }
 }
 
-/* The scriptable `top` and the top navigable are not the same answer. `window.top` of the asking realm's own
-   navigable is that realm's global (win_or_proxy below), because `window === window.top` is an identity every
-   page rests on; the tree walk HTML §8.1.7.3 step 2 makes wants the top-level traversable's navigable, a
-   WindowProxy in every case including that one. A walk given the scriptable answer would reach a Window, find it
-   is not a proxy, and collect no documents. */
-
-/* The asking realm stands for itself as its global: the one mapping between the two spellings of a window, used
-   by every member that can answer with a navigable. In the spec `window`, `self`, `frames`, `parent` and `top` of
-   a top-level navigable are all one object, its WindowProxy. Here the global is what a page holds as `window`, so
-   answering with the asking realm's own proxy would make `window === window.parent` false at top level and
-   `frame.contentWindow.parent === window` false in the corpus's iframe probe. Another navigable is its proxy;
-   this one is the global. Stated once here, because a copy on one side only would answer with a proxy the page
-   has never seen. */
-static JSValue win_or_proxy(JSContext *ctx, JSValue v)
-{
-    /* Only an object can name a navigable, and this mapping is asked about values that are not one: §7.2.2.4's
-       `opener` is null for a navigable nothing opened, and `parent`/`top` are null for a destroyed one. A JSValue
-       carrying no pointer has none to read (JS_MKVAL initialises the union's `int32` and leaves the rest
-       unspecified), so comparing one against this realm's proxy would compare whatever that union holds. */
-    if (JS_IsObject(v) && JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(document_window_proxy(ctx))) {
-        JS_FreeValue(ctx, v);
-        return JS_GetGlobalObject(ctx);
-    }
-    return v;
-}
+/* Every member below that answers with a navigable answers with its WindowProxy, the object a page holds as
+   `window` in that navigable's realm (its [[GlobalThisValue]], which document.c supplies), so
+   `window === window.top` at top level and `frame.contentWindow.parent === window` are one object compared with
+   itself. The scriptable `top` and the top navigable HTML §8.1.7.3 step 2 walks to differ only in §7.2.2.4's
+   null test. */
 
 /* HTML §7.2.2 "The Window object": "A Window's navigable is the navigable whose active document is the Window's
  * associated Document's, or null if there is no such navigable." §7.2.2.4 opens `top`, `parent` and
@@ -2993,19 +2970,16 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
        accessors, so reading them would reach a getter from a C activation with no flow base. */
     switch (magic) {
     case WP_WINDOW: case WP_SELF: case WP_FRAMES: case WP_GLOBALTHIS:
-        /* The navigable, mapped, not the raw receiver: §7.2.3.7 makes `w.window` the WindowProxy, and for the
-           asking realm's own navigable the object a page holds as `window` is the global (win_or_proxy). §3.7.6's
-           missing receiver resolves to this realm's navigable, and handing that back unmapped would make
-           `windowGet() === window` false for the one realm that can ask it. */
-        return win_or_proxy(ctx, JS_DupValue(ctx, nav));
+        /* The navigable, not the raw receiver: §7.2.2's getter steps return the realm's [[GlobalThisValue]],
+           the navigable's WindowProxy, and §3.7.6's missing receiver resolves to this realm's navigable. */
+        return JS_DupValue(ctx, nav);
     case WP_PARENT:
         /* HTML §7.2.2.4 "Accessing related windows"' parent getter steps: "Let navigable be this's navigable. If
            navigable is null, then return null. If navigable's parent is not null, then set navigable to
            navigable's parent. Return navigable's active WindowProxy." Step 2 is the null test WP_TOP below
            explains. */
         if (window_proxy_navigable_null(ctx, nav)) return JS_NULL;
-        return win_or_proxy(ctx, JS_IsUndefined(p->parent) ? JS_DupValue(ctx, nav)
-                                                           : JS_DupValue(ctx, p->parent));
+        return JS_DupValue(ctx, JS_IsUndefined(p->parent) ? nav : p->parent);
     case WP_TOP:
         /* §7.2.2.4's top getter steps: "If this's navigable is null, then return null. Return this's navigable's
          * top-level traversable's active WindowProxy." Both steps: §7.2.2.4 closes with a worked example whose
@@ -3023,7 +2997,7 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
          * does not sever, so a detached navigable would walk to a live traversable and answer with a window no
          * longer above it. */
         if (window_proxy_navigable_null(ctx, nav)) return JS_NULL;
-        return win_or_proxy(ctx, window_proxy_top_navigable(ctx, nav));
+        return window_proxy_top_navigable(ctx, nav);
     case WP_OPENER:
         /* §7.2.2.4's opener getter steps: "Let current be this's browsing context. If current is null, then return
            null. If current's opener browsing context is null, then return null. Return current's opener browsing
@@ -3033,7 +3007,7 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            on the next line and a closed popup's behind a `step_timeout`, because §7.3.1.6's sever is synchronous
            and §7.2.2.1's close is a task. */
         if (window_proxy_browsing_context_null(ctx, nav)) return JS_NULL;
-        return win_or_proxy(ctx, JS_DupValue(ctx, p->opener));
+        return JS_DupValue(ctx, p->opener);
     case WP_NAME:
         return window_proxy_name_value(ctx, nav);
     case WP_DOCUMENT:
@@ -3218,10 +3192,8 @@ JSValue window_proxy_opener(JSContext *ctx, JSValueConst proxy)
     return proxy_member_get(ctx, proxy, WP_OPENER);
 }
 
-/* §7.2.2.4's `opener` as the navigable, which an engine walk wants and the member must not give it: win_or_proxy
-   maps this document's own navigable onto the global, because `w.opener === window` is the identity an opened
-   page rests on, and a Window is not a WindowProxy. The distinction window_proxy_parent_navigable draws, for the
-   same reason. */
+/* §7.2.2.4's `opener` as the navigable, which an engine walk wants: the member's object without its §7.2.1
+   origin check and its browsing-context null test, the distinction window_proxy_parent_navigable draws. */
 JSValue window_proxy_opener_navigable(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
@@ -3229,24 +3201,39 @@ JSValue window_proxy_opener_navigable(JSContext *ctx, JSValueConst proxy)
     return JS_DupValue(ctx, p->opener);
 }
 
-/* The navigable a value names: win_or_proxy's mapping read backwards, in one place for its reason: a Window and
-   its WindowProxy are two spellings of one navigable, and a caller that has to treat them as one (an encoder
-   handing a navigable to another agent) must not be where that is decided. */
+/* The navigable a value names, in one place for its reason: a Window and its WindowProxy are two spellings of
+   one navigable, and a caller that has to treat them as one (an encoder handing a navigable to another agent)
+   must not be where that is decided. */
 JSValueConst window_proxy_navigable_of(JSContext *ctx, JSValueConst v)
 {
     JSValue g;
     bool is_global;
 
     if (window_proxy_is(v)) return v;
-    /* The same non-object rule win_or_proxy states, in this direction: §3.7.6's receiver may be any value a page
-       can write (`openerGet.call(42)` is a TypeError, not a question about a global), and a primitive has no
-       pointer to compare. */
+    /* §3.7.6's receiver may be any value a page can write (`openerGet.call(42)` is a TypeError, not a question
+       about a global), and a primitive has no pointer to compare. */
     if (!JS_IsObject(v)) return JS_UNDEFINED;
     g = JS_GetGlobalObject(ctx);
     is_global = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(v);
     JS_FreeValue(ctx, g);
     if (is_global) return document_window_proxy(ctx);
     return window_is(v) ? live_nav_of_global(v) : JS_UNDEFINED;
+}
+
+/* HTML §7.2.3 "The WindowProxy exotic object": script reaches a Window through the WindowProxy wrapping it, the
+   realm's [[GlobalThisValue]], while the platform's own algorithms (an event's target, its path) hold the Window.
+   So a Window an algorithm hands to script as a value is that proxy, as Blink's conversion of a DOMWindow is, and
+   `e.currentTarget === window` compares one object with itself. Any other value is itself. BORROWED. */
+JSValueConst window_proxy_script_value(JSContext *ctx, JSValueConst v)
+{
+    JSValueConst nav;
+
+    if (!JS_IsObject(v) || !window_is(v)) return v;
+    nav = window_proxy_navigable_of(ctx, v);
+    DCHECK(!JS_IsUndefined(nav),
+           "a Window whose realm no live navigable holds was handed to script — its document was destroyed. "
+           "Record the navigable on the Window when its realm is made, so its WindowProxy is still known");
+    return JS_IsUndefined(nav) ? v : nav;
 }
 
 /* §3.7.6's first clause, written once: "if it is not null or undefined". Its two consumers want different answers
@@ -3311,7 +3298,7 @@ bool window_proxy_receiver_is_own_realm(JSContext *ctx, JSValueConst js_value)
  * `Object.getOwnPropertyDescriptor(self, "opener").get.call(popup)` (opener-string.window.js's last assertion)
  * is that call written by hand. Both answer about the receiver's navigable, not the reading document's. */
 /* Four arms, each a different fact:
- *   a WindowProxy is the navigable (win_or_proxy's mapping read backwards, window_proxy_navigable_of);
+ *   a WindowProxy is the navigable (window_proxy_navigable_of);
  *   this realm's global is this realm's navigable, the same mapping in the same place;
  *   null or undefined is §3.7.6's fallback to the defining realm's global, `ctx` here, because
  *     js_call_c_function sets it to the member's own realm, which is the realm §3.7.6 names;

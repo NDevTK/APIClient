@@ -398,9 +398,8 @@ static JSValue js_win_frame_element(JSContext *ctx, JSValueConst this_val, int m
     return container;   /* Step 6 */
 }
 
-/* §7.2.2.4's BROWSING-CONTEXT LINKS — see window_proxy.h. The mapping between a window's two spellings
- * (another navigable is its PROXY, this one is the global) is window_proxy.c's `win_or_proxy`, applied by
- * every member that can answer with a navigable.
+/* §7.2.2.4's BROWSING-CONTEXT LINKS — see window_proxy.h. Every member that answers with a navigable answers
+ * with its WindowProxy, which in the navigable's own realm is the [[GlobalThisValue]] a page holds as `window`.
  *
  * §7.2.2's NAVIGABLE-SCOPED MEMBERS ARE ANSWERED ABOUT THEIR RECEIVER, and every one below reads it through
  * the one place that resolves it: Web IDL §3.7.6 Attributes' `jsValue` — "the this value, if it is not null or

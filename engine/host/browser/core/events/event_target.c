@@ -35,6 +35,7 @@
 #include "core/events/mouse_event.h"   /* §2.9 step 6.4 asks a BRAND, which a PointerEvent answers too */
 #include "core/events/pointer_event.h" /* §6.5's click() fires a synthetic POINTER event — §8.1.8.3 step 1 */
 #include "core/events/report_exception.h"
+#include "core/frame/window_proxy.h"   /* inner invoke's `this` for a Window target is its WindowProxy */
 #include "solver/result.h"   /* §3.2.15's refusal on a forked arm is this engine's own throw — see the AEL_SIGNAL stage */
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
@@ -4305,8 +4306,8 @@ resume_listener:
                 }
                 goto listener_returned;  /* the algorithm consumed the return value; there is no `ignored` */
             }
-            r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), fn, s->cur, 1, (JSValueConst *)&s->ev,
-                              cb_result, &ignored, out_cb, out_argc);
+            r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), fn, window_proxy_script_value(ctx, s->cur), 1,
+                              (JSValueConst *)&s->ev, cb_result, &ignored, out_cb, out_argc);
             JS_FreeValue(ctx, fn);   /* the request DUP'd it into the buffer, which is what holds it parked */
             cb_result = JS_UNDEFINED;
             if (r > 0) return r;         /* parked ON THIS LISTENER; the resume comes back to it */
