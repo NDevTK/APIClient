@@ -114,7 +114,7 @@ const PT = 100;
 const SLICE = 1;
 /* Every host the driver ranks is asked first, as each production entry point asks before its member joins. */
 await ZONE.siteAsk(Object.keys(SITE_TABLE));
-for (const n of ['hostSchedule', 'engineKey', 'level1Index', 'level1Tree', 'level1Key', '_bestCandidate',
+for (const n of ['hostSchedule', 'engineKey', 'engineRecordFacts', 'level1Index', 'level1Tree', 'level1Key', '_bestCandidate',
                  '_candPopulation', '_level1Record', '_candCensus', 'CAND_KINDS', 'CAND_SPREAD'])
   if (B[n] === undefined)
     throw new Error('extension/bridge.js did not export `' + n + '` — this driver is the only reader of the ' +
@@ -751,6 +751,43 @@ async function mintDrive(minted, slices) {
        { mintingSite: mM, kidsServed, kidSlicesBeforeRoot, firstRoot });
   console.log('[level1]   minting          P ' + pM + ' / M ' + mM + ' of ' + mint.order.length +
               ' slices (control P ' + pC + ' / M ' + mC + '); minted documents served ' + kidsServed);
+}
+
+/* ─── THE ENGINE'S ACCOUNT, AS main.c COMPOSES IT ───────────────────────────────────────────────────────
+   engineRecordFacts reads `getLevel1Account`'s reply, which engine/host/main.c's qjs_level1_account composes
+   with one snprintf. The reply here is formatted from that format string, read out of main.c at run time, so a
+   field the composer renames or drops fails this relation rather than the first live engine. */
+{
+  const src = readFileSync(join(ENGINE, 'host', 'main.c'), 'utf8');
+  const fn = src.indexOf('qjs_level1_account(');
+  const m = fn < 0 ? null : /snprintf\(buf, sizeof buf, "((?:[^"\\]|\\.)*)"/.exec(src.slice(fn));
+  if (!m)
+    throw new Error('engine/host/main.c no longer composes qjs_level1_account with one snprintf into `buf` — ' +
+                    'this relation formats the reply from that string, so re-point it at the composer');
+  const fmt = m[1].replace(/\\"/g, '"');
+  const argsOf = (vals) => { let i = 0; return fmt.replace(/%(?:d|\.17g)/g, () => String(vals[i++])); };
+  const reply = (vals) => async () => ({ account: argsOf(vals), workingSetBytes: 65536 });
+  const e = { state: 'hot', msg: { sourceUrl: 'https://a.test/' },
+              r: { renderer: { getLevel1Account: reply([1, 3, 2]) } } };
+  let died = null;
+  try {
+    await B.engineRecordFacts(e);
+    e.r.renderer.getLevel1Account = reply([1, 5, 4]);
+    await B.engineRecordFacts(e);
+  } catch (x) { died = x; }
+  must(died === null && e.level1.runnable === true && e.level1.paid === 5 && e.level1.pulls === 4 &&
+       e.level1.acct.value === 5 && e.level1.acct.pulls === 4,
+       'engineRecordFacts takes the account main.c composes and credits its counters\' differences to the ranked ' +
+       'account',
+       died ? String(died.message || died) : { format: fmt, level1: e.level1 });
+  /* The control: the ranked account's own shape is not what the engine states, and is refused. */
+  const ranked = '{"runnable":1,"value":3,"pulls":2,"at":1}';
+  const ctrl = { state: 'hot', msg: { sourceUrl: 'https://a.test/' },
+                 r: { renderer: { getLevel1Account: async () => ({ account: ranked, workingSetBytes: 65536 }) } } };
+  let refused = false;
+  try { await B.engineRecordFacts(ctrl); } catch (x) { refused = !!(x && x.apiclientFatal); }
+  must(refused, 'an account in the ranked shape, with no `paid`, is refused at the engine edge');
+  console.log('[level1]   engine account   format ' + fmt);
 }
 
 console.log('[level1] ── verdict ──');

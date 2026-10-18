@@ -7219,7 +7219,7 @@ console.debug("[ast-worker v2] bridge ready (self.astDispatch + self.rendererPoo
    declarations (`CAND_KINDS`, `CAND_SPREAD`, `_candCensus`) travel with it because the census's contract is
    stated in them, and a driver's own copy would go stale silently. */
 if (typeof module !== "undefined" && module.exports)
-  module.exports = { hostSchedule, engineKey, level1Index, level1KlUcb, level1At, level1Sum, level1Credit,
+  module.exports = { hostSchedule, engineKey, engineRecordFacts, level1Index, level1KlUcb, level1At, level1Sum, level1Credit,
                      level1Rate, level1Tree, level1Key, level1Ahead,
                      level1SiteOf, LEVEL1_UNSERVED, LEVEL1_DOOR,
                      _bestCandidate, _candPopulation, _level1Record, _candCensus, CAND_KINDS, CAND_SPREAD,
