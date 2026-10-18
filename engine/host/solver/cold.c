@@ -690,6 +690,10 @@ static void park_orphan_hex(uint64_t hash, char out[17])
     out[16] = 0;
 }
 
+/* WHAT THIS SESSION'S PARK DOCUMENT HOLDS, PER KIND — see cold.h for why a total cannot answer the question a
+   reader of a round trip is actually asking. Counted at the WRITE, so it cannot disagree with the records. */
+static ColdParked g_parked_census;
+
 /* One 'o' record per member of `f`'s chain of drives, oldest first, which is the order a resumed claimant builds
    their calls in. */
 static void park_rec_orphan(const Flow *f)
@@ -709,6 +713,7 @@ static void park_rec_orphan(const Flow *f)
         park_open_rec();
         park_str("o");
         park_str(rec);
+        g_parked_census.orphans++;   /* per record, since the next record's open checks the census */
     }
 }
 
@@ -795,10 +800,6 @@ static void park_rec_deliver(const char *record, const char *sender_origin)
    resuming onto a path nothing ever took, with no crash anywhere to say so. An identity that dies with the
    thing it identifies cannot be re-used, so the fifty lines of open addressing are gone rather than guarded. */
 static long g_park_segs;   /* the next ordinal — dense and ascending across the WHOLE document */
-
-/* WHAT THIS SESSION'S PARK DOCUMENT HOLDS, PER KIND — see cold.h for why a total cannot answer the question a
-   reader of a round trip is actually asking. Counted at the WRITE, so it cannot disagree with the records. */
-static ColdParked g_parked_census;
 
 void cold_parked(ColdParked *out)
 {
@@ -1468,7 +1469,6 @@ void cold_park_flow(Flow *f)
         DCHECK(f->orphan_claim_at == 0 || f->orphan_chain[f->orphan_claim_at - 1] == f->orphan_hash,
                "a drive's running body is not the last member of its chain whose call it built");
         park_rec_orphan(f);
-        g_parked_census.orphans += f->orphan_chain_n;
     }
     /* …AND WHICH SENDING TIMELINES THIS ONE IS IN, BEFORE THE MESSAGES IT STILL OWES, because the commitments
        are what decide whether it may make them. A resumed flow that lost them would re-admit a message its own
