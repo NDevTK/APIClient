@@ -14757,6 +14757,16 @@ TF_UNIT void probes_abort(const char *js, Probe *tab, int *n) {
                                         param_value_only(js, "/api/apabort", "late", "AbortError"),
              "the page's own reads around an abort differ from Chrome 155's: a body read before the abort "
              "must keep its bytes (`own`), and one read after it must reject with an AbortError (`late`)");
+    /* A clone teed before the abort reads every byte: §5.6's abort errors only the response's own body, and
+       the tee forwards only its source's error to the clone's branch (Streams §4.9.1 ReadableByteStreamTee).
+       Chrome 155 rejects the first clone; this row states the spec. */
+    fold_row(&apabort_tt, &apabort_why, param_value_only(js, "/api/apabort", "clone", "read"),
+             "a clone teed before the abort, from a response read to its end, did not read its bytes — Fetch "
+             "§5.6's abort errors only the response's own body, which was closed");
+    fold_row(&apabort_tt, &apabort_why, param_value_only(js, "/api/apteedab", "own", "AbortError") &&
+                                        param_value_only(js, "/api/apteedab", "clone", "read"),
+             "an abort over a response unread since its clone did not error that response alone — its own "
+             "branch must reject with an AbortError (`own`) and the clone's branch must read (`clone`)");
     /* Fetch §5.6 step 11's "abort controller", as the engine's cancel edge: an aborted park still owed a reply
        tells the host to end its send, once, and a park whose reply already arrived tells it nothing. */
     const char *apcancel_why = NULL;

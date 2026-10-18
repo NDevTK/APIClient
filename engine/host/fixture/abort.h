@@ -60,9 +60,11 @@ static const char HTML_ABORT[] =
        so a body the page finished reading stays read and one it had not started rejects with the signal's
        reason; Chrome 155 answers the same. The request is the page's either way, so both stay recorded. Each
        read is reported by whether it settled: the reply's bytes are unknown external input, so a test of their
-       length would fork. `clone` reports what a clone taken at the answer reads after the abort: Chrome 155 rejects it with an
-       AbortError although every byte had arrived, where Fetch §2.2.4 "Bodies"' clone a body tees the stream
-       and the abort errors only this response's branch. */
+       length would fork. `clone` is a clone taken at the answer, read after the abort. Fetch §2.2.4 "Bodies"'
+       clone a body tees the stream and keeps out1 for the response; §5.6's abort errors only the response's
+       own body, and Streams §4.9.1's ReadableByteStreamTee forwards to both branches only the source's
+       error, so the clone reads every byte. Chrome 155 rejects it with an AbortError instead; the row follows
+       the spec. */
     "<script>"
     "(async function () {"
     " var c = new AbortController();"
@@ -73,6 +75,18 @@ static const char HTML_ABORT[] =
     " var r2 = await fetch('/api/apunread', { method: 'POST', body: 'x', signal: c2.signal });"
     " c2.abort(); var late; try { await r2.text(); late = 'read'; } catch (e) { late = e.name; }"
     " fetch('/api/apabort?own=' + own + '&late=' + late + '&clone=' + kv);"
+    "})();"
+    "</script>"
+    /* The same tee with the response unread at the abort: out1 is readable, so the abort errors it and the
+       response's read rejects with the reason, while the clone's branch is untouched and reads. */
+    "<script>"
+    "(async function () {"
+    " var c4 = new AbortController();"
+    " var r4 = await fetch('/api/apteed', { method: 'POST', body: 'x', signal: c4.signal });"
+    " var k4 = r4.clone(); c4.abort();"
+    " var o4; try { await r4.text(); o4 = 'read'; } catch (e) { o4 = e.name; }"
+    " var q4; try { await k4.text(); q4 = 'read'; } catch (e) { q4 = e.name; }"
+    " fetch('/api/apteedab?own=' + o4 + '&clone=' + q4);"
     "})();"
     "</script>"
     /* A request aborted while its reply is still owed: the abort runs on the line after the call, before the
