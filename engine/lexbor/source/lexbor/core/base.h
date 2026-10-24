@@ -71,7 +71,9 @@ typedef enum {
     LXB_STATUS_NEXT,
     LXB_STATUS_STOP,
     LXB_STATUS_WARNING,
-    LXB_STATUS_SKIPPED
+    LXB_STATUS_SKIPPED,
+    /* A run returned between two tokens because its parser's yield hook asked; its state is in the parser. */
+    LXB_STATUS_SUSPENDED
 }
 lexbor_status_t;
 

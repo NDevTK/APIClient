@@ -126,6 +126,10 @@ typedef enum {
 }
 lxb_css_parser_stage_t;
 
+/* Asked between two tokens of a run; true suspends it (LXB_STATUS_SUSPENDED) with its state in the parser. */
+typedef bool
+(*lxb_css_parser_yield_f)(lxb_css_parser_t *parser, void *ctx);
+
 struct lxb_css_parser {
     /* Modules */
     lxb_css_syntax_tokenizer_t          *tkz;
@@ -165,6 +169,10 @@ struct lxb_css_parser {
     bool                                my_tkz;
 
     lxb_status_t                        status;
+
+    /* The yield hook and its context; NULL runs a parse to its end. */
+    lxb_css_parser_yield_f              yield;
+    void                                *yield_ctx;
 };
 
 struct lxb_css_parser_state {

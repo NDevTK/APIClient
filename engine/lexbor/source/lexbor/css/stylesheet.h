@@ -82,6 +82,13 @@ LXB_API lxb_status_t
 lxb_css_stylesheet_parse(lxb_css_stylesheet_t *sst, lxb_css_parser_t *parser,
                          const lxb_char_t *data, size_t length);
 
+/* With a yield hook on `parser` (and its selectors set), the parse above can answer LXB_STATUS_SUSPENDED with
+ * `sst->root` holding the rules so far; this continues it. On a failure the partial list is destroyed and
+ * `sst->root` is NULL. */
+LXB_API lxb_status_t
+lxb_css_stylesheet_parse_resume(lxb_css_stylesheet_t *sst,
+                                lxb_css_parser_t *parser);
+
 
 #ifdef __cplusplus
 } /* extern "C" */

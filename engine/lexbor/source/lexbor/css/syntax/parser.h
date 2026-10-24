@@ -19,6 +19,10 @@ extern "C" {
 LXB_API lxb_status_t
 lxb_css_syntax_parser_run(lxb_css_parser_t *parser);
 
+/* Continues a run that returned LXB_STATUS_SUSPENDED; the stage becomes END once it ends. */
+LXB_API lxb_status_t
+lxb_css_syntax_parser_resume(lxb_css_parser_t *parser);
+
 LXB_API const lxb_css_syntax_token_t *
 lxb_css_syntax_parser_token(lxb_css_parser_t *parser);
 

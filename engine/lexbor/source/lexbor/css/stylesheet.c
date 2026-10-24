@@ -78,6 +78,11 @@ lxb_css_stylesheet_parse(lxb_css_stylesheet_t *sst, lxb_css_parser_t *parser,
     }
 
     if (parser->selectors == NULL) {
+        /* A run that can suspend outlives this frame, so its selectors are the caller's. */
+        if (parser->yield != NULL) {
+            return LXB_STATUS_ERROR_WRONG_ARGS;
+        }
+
         status = lxb_css_selectors_init(&selectors);
         if (status != LXB_STATUS_OK) {
             return status;
@@ -107,5 +112,27 @@ lxb_css_stylesheet_parse(lxb_css_stylesheet_t *sst, lxb_css_parser_t *parser,
 
     sst->root = &list->rule;
 
-    return LXB_STATUS_OK;
+    return parser->status == LXB_STATUS_SUSPENDED ? LXB_STATUS_SUSPENDED
+                                                  : LXB_STATUS_OK;
+}
+
+lxb_status_t
+lxb_css_stylesheet_parse_resume(lxb_css_stylesheet_t *sst,
+                                lxb_css_parser_t *parser)
+{
+    lxb_status_t status;
+
+    if (sst == NULL || parser == NULL || sst->root == NULL) {
+        return LXB_STATUS_ERROR_WRONG_ARGS;
+    }
+
+    status = lxb_css_syntax_parser_resume(parser);
+    if (status == LXB_STATUS_SUSPENDED || status == LXB_STATUS_OK) {
+        return status;
+    }
+
+    lxb_css_rule_list_destroy(lxb_css_rule_list(sst->root), true);
+    sst->root = NULL;
+
+    return status;
 }

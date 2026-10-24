@@ -268,10 +268,36 @@ lxb_css_syntax_parser_run(lxb_css_parser_t *parser)
 
         while (parser->rules->state(parser, token,
                                     parser->rules->context) == false) {};
+
+        if (parser->loop && parser->yield != NULL
+            && parser->yield(parser, parser->yield_ctx))
+        {
+            return LXB_STATUS_SUSPENDED;
+        }
     }
     while (parser->loop);
 
     return parser->status;
+}
+
+lxb_status_t
+lxb_css_syntax_parser_resume(lxb_css_parser_t *parser)
+{
+    lxb_status_t status;
+
+    if (parser->stage != LXB_CSS_PARSER_RUN) {
+        return LXB_STATUS_ERROR_WRONG_STAGE;
+    }
+
+    status = lxb_css_syntax_parser_run(parser);
+    if (status == LXB_STATUS_SUSPENDED) {
+        return status;
+    }
+
+    parser->status = status;
+    parser->stage = LXB_CSS_PARSER_END;
+
+    return status;
 }
 
 const lxb_css_syntax_token_t *

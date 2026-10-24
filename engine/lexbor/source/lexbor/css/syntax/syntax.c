@@ -52,6 +52,11 @@ lxb_css_syntax_parse_list_rules(lxb_css_parser_t *parser,
     parser->stage = LXB_CSS_PARSER_RUN;
 
     parser->status = lxb_css_syntax_parser_run(parser);
+    if (parser->status == LXB_STATUS_SUSPENDED) {
+        /* The stage stays RUN; lxb_css_syntax_parser_resume continues it. */
+        return list;
+    }
+
     if (parser->status != LXB_STATUS_OK) {
         goto failed;
     }

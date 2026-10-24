@@ -121,6 +121,7 @@
 #include "core/css/css_shorthand.h"
 #include "core/css/css_var.h"   /* css-variables-1 §3's var(), for the parse-time rule below */
 #include "core/timing/thread_work.h"
+#include "solver/engine.h"   /* ENGINE_QUANTUM_WORK, the work a sheet parse charges between suspensions */
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
@@ -1391,18 +1392,50 @@ static void cssd_sheet_parse_free(void)
     g_sheet_parse_n = 0;
 }
 
-/* A style sheet parse over `g_parser`, which the caller has given its arena: CSS parse work, counted and
-   charged by its bytes as css_style_sheet.c's rule build is. */
+/* A sheet parse's meter: how many of its bytes the tokenizer has passed that are already charged. */
+typedef struct {
+    size_t len, charged;
+} CssdParseMeter;
+
+/* The parser's yield hook: between two tokens, once the bytes tokenized since the last charge cost a work
+   quantum, they are charged and the run suspends. Charging only there keeps thread_work_charge's per-call
+   rounding to one unit per quantum. */
+static bool cssd_parse_yield(lxb_css_parser_t *parser, void *ctx)
+{
+    CssdParseMeter *m = ctx;
+    size_t at = (size_t)(parser->tkz->in_p - parser->tkz->in_begin), fresh;
+
+    DCHECK(at >= m->charged && at <= m->len, "a sheet's tokenizer stands outside the bytes it was handed");
+    fresh = at - m->charged;
+    if ((uint64_t)fresh * THREAD_WORK_UNITS_PER_KIB_CSS / 1024 < (uint64_t)ENGINE_QUANTUM_WORK) return false;
+    thread_work_charge(THREAD_WORK_CSS_PARSE, fresh);
+    m->charged = at;
+    return true;
+}
+
+/* A style sheet parse over `g_parser`, which the caller has given its arena: CSS parse work, charged by its
+   bytes a quantum at a time as lexbor's run suspends at the yield hook.
+   NAMED RESIDUAL: every caller is a C activation that cannot park (a sheet's text set from script, the
+   cascade's per-sheet parse), so the run is resumed here at once and only the charge is per quantum. The next
+   diff gives the parse its own parser and selectors in a record a flow carries, so a suspended run parks with
+   the flow. Its absence shows as a single sheet's parse spanning several quanta of one flow's slice. */
 static bool cssd_stylesheet_parse(lxb_css_stylesheet_t *sst, const char *text, size_t len)
 {
+    CssdParseMeter m = { len, 0 };
     ThreadWorkSpan tw;
-    bool ok;
+    lxb_status_t st;
 
+    DCHECK(g_parser->yield == NULL, "a sheet parse began while another parse's yield hook was set");
     thread_work_begin(&tw);
-    ok = lxb_css_stylesheet_parse(sst, g_parser, (const lxb_char_t *)text, len) == LXB_STATUS_OK;
+    g_parser->yield = cssd_parse_yield;
+    g_parser->yield_ctx = &m;
+    st = lxb_css_stylesheet_parse(sst, g_parser, (const lxb_char_t *)text, len);
+    while (st == LXB_STATUS_SUSPENDED) st = lxb_css_stylesheet_parse_resume(sst, g_parser);
+    g_parser->yield = NULL;
+    g_parser->yield_ctx = NULL;
+    thread_work_charge(THREAD_WORK_CSS_PARSE, len - m.charged);
     thread_work_end(&tw, THREAD_WORK_CSS_PARSE, len);
-    thread_work_charge(THREAD_WORK_CSS_PARSE, len);
-    return ok;
+    return st == LXB_STATUS_OK;
 }
 
 /* THE PARSE OF `text`, WHICH IS EITHER THE ONE SLOT `si` ALREADY HOLDS OF THESE EXACT BYTES OR A FRESH ONE
