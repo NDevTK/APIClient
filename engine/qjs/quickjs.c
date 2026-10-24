@@ -53706,9 +53706,10 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_STEP: case CONT_STEP_YIELD:
         *out_kind = ((JSStepHdr *)st)->outer_kind;
         return ((JSStepHdr *)st)->outer;
-    case CONT_GETPROP_YIELD:
-        /* a keyed property OPERATION parked at its own re-entry: what waits on it is what asked for the
-           property — a step machine, a coercion sequence, a bytecode operator's own record. */
+    case CONT_GETPROP_YIELD: case CONT_TRAP_GET:
+        /* a keyed property OPERATION parked at its own re-entry, or waiting on the read of its Proxy handler's
+           trap: what waits on it is what asked for the property — a step machine, a coercion sequence, a
+           bytecode operator's own record, or the next handler level's operation. */
         *out_kind = ((JSTrapGet *)st)->outer_kind;
         return ((JSTrapGet *)st)->outer;
     case CONT_GETPROP:
@@ -53837,7 +53838,7 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
     case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
-    case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
+    case CONT_ITER_NEXT_OP: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
     case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
@@ -53870,7 +53871,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     switch ((enum ContKind)kind) {
     case CONT_STEP: case CONT_STEP_YIELD:
         ((JSStepHdr *)st)->outer = outer; ((JSStepHdr *)st)->outer_kind = outer_kind; return;
-    case CONT_GETPROP_YIELD:
+    case CONT_GETPROP_YIELD: case CONT_TRAP_GET:
         ((JSTrapGet *)st)->outer = outer; ((JSTrapGet *)st)->outer_kind = outer_kind; return;
     case CONT_GETPROP:
         ((JSGetProp *)st)->outer = outer; ((JSGetProp *)st)->outer_kind = outer_kind; return;
@@ -53912,7 +53913,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
     case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
-    case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
+    case CONT_ITER_NEXT_OP: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
     case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
@@ -53991,6 +53992,10 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
            LINK under it. The same record is a frame's own cont_state when the callee is a bytecode accessor or
            trap, which is why one clone serves both walks. */
         return js_getprop_clone(ctx, (const JSGetProp *)st);
+    case CONT_TRAP_GET:
+        /* A Proxy operation waiting on the read of its handler's trap, which is a keyed operation on the handler
+           and, for a handler that is itself a Proxy, the next level's operation waiting on the next read. */
+        return js_trapget_clone(ctx, (const JSTrapGet *)st);
     case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET: {
         /* A CONSUMER UNDER THE KEYED OPERATION IT ISSUED — `[...src]`, `new Uint8Array(src)`, `new Map(src)`
            whose iterator's `next` is a getter (51), or whose result's `done`/`value`, entry element or
@@ -54039,7 +54044,7 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_EXEC:
     case CONT_PROMISE_TRY: case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE:
-    case CONT_ITER_CLOSE_CALL: case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE:
+    case CONT_ITER_CLOSE_CALL: case CONT_ITER_NEXT_OP: case CONT_FOROF_ACQUIRE:
     case CONT_FOROF_GET: case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP:
     case CONT_PROMISE_CAP: case CONT_PROMISE_TRY_SETTLE:
     case CONT_ITER_HELPER_GET: case CONT_ITER_CALL_GET:
@@ -54071,7 +54076,7 @@ CONT_KIND_SWITCH_CHECKED_END
 static JSDescFacts **cont_desc_out_slot(void *st, uint8_t kind)
 {
     if (kind == CONT_GETPROP) return &((JSGetProp *)st)->desc_out;
-    if (kind == CONT_GETPROP_YIELD) return &((JSTrapGet *)st)->desc_out;
+    if (kind == CONT_GETPROP_YIELD || kind == CONT_TRAP_GET) return &((JSTrapGet *)st)->desc_out;
     if (kind == CONT_GOPD_DESC) return &((JSGopdDesc *)st)->desc_out;
     return NULL;
 }
@@ -55076,8 +55081,9 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         tramp_cont_free(ctx, rest, left);
         return;
     }
-    case CONT_GETPROP_YIELD: {
-        /* A KEYED PROPERTY OPERATION PARKED AT ITS OWN RE-ENTRY, released with nobody to answer to — a
+    case CONT_GETPROP_YIELD: case CONT_TRAP_GET: {
+        /* A KEYED PROPERTY OPERATION PARKED AT ITS OWN RE-ENTRY, or waiting on its handler's trap read
+           (CONT_TRAP_GET, one record per level of a handler that is a Proxy), released with nobody to answer to — a
            cold-tier tail dropped, a flow destroyed under a throw. The operation can never finish, so whatever
            asked for the property can never be answered either and goes with it, which is what every other arm
            in this walk does with its requester. Taken BEFORE the free, because the free is what makes the
@@ -55344,7 +55350,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
     case CONT_IMPORT: case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
     case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
-    case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
+    case CONT_ITER_NEXT_OP: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
     case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:

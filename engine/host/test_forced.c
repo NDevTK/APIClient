@@ -1102,6 +1102,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/typefacet.h"
 #include "fixture/windowthis.h"
 #include "fixture/intl.h"
+#include "fixture/contchain.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1540,6 +1541,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "typefacet", HTML_TYPEFACET },
     { "windowthis", HTML_WINDOWTHIS },
     { "intl", HTML_INTL },
+    { "contchain", HTML_CONTCHAIN },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -13866,6 +13868,23 @@ TF_UNIT void probes_clientextent(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `contchain` document (fixture/contchain.h). */
+TF_UNIT void probes_contchain(const char *js, Probe *tab, int *n) {
+    /* The waiting arm parks inside a 100000-link continuation chain and is released with the frontier; the
+       failure arm unwinds the chain with the declined send's NetworkError and reaches the fetch. */
+    const char *cc_why = NULL; int cc_tt = 1;
+    fold_row(&cc_tt, &cc_why, !!strstr(js, "\"/api/contchain\""),
+             "NOT REACHED: there is no /api/contchain record at all, so no arm came back out of the chain");
+    fold_row(&cc_tt, &cc_why, param_value_is(js, "/api/contchain", "d", "100000"),
+             "the chain was not the document's 100000 handler levels deep");
+    fold_row(&cc_tt, &cc_why, param_value_is(js, "/api/contchain", "out", "NetworkError"),
+             "XHR §3.5.6 The send() method: the declined synchronous send did not throw a NetworkError out through the chain");
+    const Probe rows[] = {
+        { "continuation-chain-release", cc_tt, "/api/contchain", SESS_EXPLORE, cc_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -17584,6 +17603,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_griditem(js, probes, &np);
     probes_contentsflex(js, probes, &np);
     probes_inlineflex(js, probes, &np);
+    probes_contchain(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
