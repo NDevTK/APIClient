@@ -50696,7 +50696,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    answer: one implementation, not one here and another there. */
                 wh = js_mallocz(ctx, sizeof(*wh));
                 if (unlikely(!wh)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                wh->atom = atom; wh->diff = diff; wh->op = (uint8_t)opcode; wh->is_with = (uint8_t)is_with;
+                wh->atom = JS_DupAtom(ctx, atom); wh->diff = diff; wh->op = (uint8_t)opcode;
+                wh->is_with = (uint8_t)is_with;
                 wh->phase = WH_HAS; wh->arr = JS_UNDEFINED; wh->base = 1; wh->jumps = 1;
                 wh->vdepth = (opcode == OP_with_put_var) ? 2 : 0;
                 gp_obj = sp[-1]; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
