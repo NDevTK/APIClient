@@ -53687,6 +53687,11 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
            than defaulted, for CONT_PROMISE_ALL's reason — a requester that reads as absent is indistinguishable
            from one this walk simply does not know, and only one of those is correct. */
         return NULL;
+    case CONT_FOROF_UNPACK:
+        /* TERMINAL FOR THE SAME REASON: the for-of / iterator-next tail places its value and done pair on the
+           operand stack of the frame that issued it (do_forof_unpack_step), and the record has no requester
+           field. */
+        return NULL;
     case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD:
         /* 7.3.19 IS TERMINAL FOR THE SAME REASON, and the record says so by having no `outer` field at all: the
            finished List is handed to do_apply_tramp / do_construct_dispatch, which place their result on the
@@ -53793,7 +53798,7 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
     case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
-    case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
+    case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
     case CONT_DEFINE_CLASS:
@@ -53856,7 +53861,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_ACQUIRE_GET:
         ((JSAcquireGet *)st)->consumer = outer; ((JSAcquireGet *)st)->consumer_kind = outer_kind; return;
     /* Terminal: cont_outer_get answers no link for these, so there is nothing to write back. */
-    case CONT_OP_KEYED: case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: case CONT_PROMISE_ALL:
+    case CONT_OP_KEYED: case CONT_FOROF_UNPACK: case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: case CONT_PROMISE_ALL:
     case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
     case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP: case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET:
     case CONT_AFS_CONT: case CONT_WITH_HAS: case CONT_NONE:
@@ -53868,7 +53873,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
     case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
-    case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
+    case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
     case CONT_DEFINE_CLASS:
@@ -53917,6 +53922,18 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         return js_array_len_clone(ctx, (const JSArrayLen *)st);
     case CONT_OP_KEYED:
         return js_op_keyed_clone(ctx, (const JSOpKeyed *)st);
+    case CONT_FOROF_UNPACK: {
+        /* The for-of / iterator-next tail waiting under its `done` or `value` read, which a getter or a Proxy
+           `get` trap on the iterator result answers and can fork inside. The record owns the result; the enum
+           record its offset names is on the frame's stack, which the frame clone carries. */
+        const JSForOfUnpack *fu = st;
+        JSForOfUnpack *n = js_malloc(ctx, sizeof(*n));
+        if (unlikely(!n))
+            return NULL;
+        *n = *fu;
+        n->res = js_dup(fu->res);
+        return n;
+    }
     case CONT_ARG_LIST:
         /* 7.3.19's sequence IN ITS LINK ROLE — under whichever read it is waiting on: its `length` Get, its
            ToPrimitive, or an element Get. Both of the page's operations it performs can fork, so this is
@@ -53983,7 +54000,7 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     case CONT_ITER_CLOSE_CALL: case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE:
     case CONT_FOROF_GET: case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP:
     case CONT_PROMISE_CAP: case CONT_PROMISE_TRY_SETTLE:
-    case CONT_ITER_HELPER_GET: case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET:
+    case CONT_ITER_HELPER_GET: case CONT_ITER_CALL_GET:
     case CONT_ITER_CALL_GET_NOARG: case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET:
     case CONT_FOROF_ENUMREC_WRAP: case CONT_ITER_FROM_NEXT_GET:
     case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV: case CONT_DEFINE_CLASS:
@@ -55068,6 +55085,15 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         js_free_rt(rt, ok);
         return;
     }
+    case CONT_FOROF_UNPACK: {
+        /* TERMINAL, as above: the pair's destination and the enum record are the frame's operand stack, which
+           the frame's own arm releases. Only the iterator result is this record's. The other direction of
+           tramp_cont_clone_one's arm. */
+        JSForOfUnpack *fu = st;
+        JS_FreeValue(ctx, fu->res);
+        js_free_rt(rt, fu);
+        return;
+    }
     case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: {
         /* 7.3.19's SEQUENCE, TERMINAL for cont_outer_get's reason — the finished List goes to a call, whose
            result is the operand stack's, so there is nothing above it to release and the walk stops here.
@@ -55279,7 +55305,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
     case CONT_ITER_NEXT_OP: case CONT_TRAP_GET: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
     case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
-    case CONT_FOROF_UNPACK: case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
+    case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
     case CONT_DEFINE_CLASS:
