@@ -10,57 +10,60 @@
 #include "core/css/css_transform_function.h"
 #include "core/json_buf.h"
 
-/* WHICH PRODUCTION A FUNCTION'S ARGUMENTS ARE, which §7.1 "2D Transform Functions" fixes per function: every
-   argument of one function is the same production, and no function mixes two. That is what lets the three
-   arrays on `CssTransformFunction` be alternatives rather than a union a reader has to decode. */
+/* One argument's production. css-transforms-1 §7.1 "2D Transform Functions" gives every argument of a function
+   the same one; css-transforms-2 §12.2 "3D Transform Functions" mixes them (rotate3d() is three numbers and an
+   angle, translate3d() two length-percentages and a length), so a grammar row spells its productions in order.
+   Each production fills its own array of CssTransformFunction in the order written. */
 typedef enum {
-    CSS_TF_ARG_NUMBER = 0,              /* `<number>` */
-    CSS_TF_ARG_LENGTH_PERCENTAGE,       /* `<length-percentage>` */
-    CSS_TF_ARG_ANGLE                    /* `[ <angle> | <zero> ]` */
+    CSS_TF_ARG_NUMBER = 'n',               /* `<number>` */
+    CSS_TF_ARG_NUMBER_PERCENTAGE = 'p',    /* `[ <number> | <percentage> ]`, css-transforms-2 §12's scales */
+    CSS_TF_ARG_LENGTH_PERCENTAGE = 'L',    /* `<length-percentage>` */
+    CSS_TF_ARG_LENGTH = 'l',               /* `<length>` */
+    CSS_TF_ARG_ANGLE = 'a',                /* `[ <angle> | <zero> ]` */
+    CSS_TF_ARG_PERSPECTIVE = 'v'           /* `[ <length [0,∞]> | none ]` */
 } CssTfArgType;
 
-/* §7.1's ELEVEN GRAMMARS, TRANSCRIBED. `min`/`max` are the argument counts the production admits — one of them
-   for a `#{6}` or a single required argument, two where §7.1 writes an optional second. */
+/* The grammars of css-transforms-1 §7.1 and css-transforms-2 §12.1 "2D Transform Functions" and §12.2, in
+   CssTransformFnKind's order. `args` is one production per position; a single letter covers every position.
+   `min`/`max` are the argument counts the production admits. */
 static const struct {
     const char        *name;
     CssTransformFnKind kind;
-    CssTfArgType       arg;
+    const char        *args;
     unsigned           min, max;
 } CSS_TF_GRAMMAR[] = {
-    /* matrix() = matrix( <number>#{6} ) */
-    { "matrix",     CSS_TF_MATRIX,      CSS_TF_ARG_NUMBER,             6, 6 },
-    /* translate() = translate( <length-percentage> , <length-percentage>? ) */
-    { "translate",  CSS_TF_TRANSLATE,   CSS_TF_ARG_LENGTH_PERCENTAGE,  1, 2 },
-    /* translateX() = translateX( <length-percentage> ) */
-    { "translateX", CSS_TF_TRANSLATE_X, CSS_TF_ARG_LENGTH_PERCENTAGE,  1, 1 },
-    /* translateY() = translateY( <length-percentage> ) */
-    { "translateY", CSS_TF_TRANSLATE_Y, CSS_TF_ARG_LENGTH_PERCENTAGE,  1, 1 },
-    /* scale() = scale( <number> , <number>? ) */
-    { "scale",      CSS_TF_SCALE,       CSS_TF_ARG_NUMBER,             1, 2 },
-    /* scaleX() = scaleX( <number> ) */
-    { "scaleX",     CSS_TF_SCALE_X,     CSS_TF_ARG_NUMBER,             1, 1 },
-    /* scaleY() = scaleY( <number> ) */
-    { "scaleY",     CSS_TF_SCALE_Y,     CSS_TF_ARG_NUMBER,             1, 1 },
-    /* rotate() = rotate( [ <angle> | <zero> ] ) */
-    { "rotate",     CSS_TF_ROTATE,      CSS_TF_ARG_ANGLE,              1, 1 },
-    /* skew() = skew( [ <angle> | <zero> ] , [ <angle> | <zero> ]? ) */
-    { "skew",       CSS_TF_SKEW,        CSS_TF_ARG_ANGLE,              1, 2 },
-    /* skewX() = skewX( [ <angle> | <zero> ] ) */
-    { "skewX",      CSS_TF_SKEW_X,      CSS_TF_ARG_ANGLE,              1, 1 },
-    /* skewY() = skewY( [ <angle> | <zero> ] ) */
-    { "skewY",      CSS_TF_SKEW_Y,      CSS_TF_ARG_ANGLE,              1, 1 }
+    { "matrix",      CSS_TF_MATRIX,      "n",    6, 6 },    /* matrix( <number>#{6} ) */
+    { "translate",   CSS_TF_TRANSLATE,   "L",    1, 2 },    /* translate( <length-percentage> , <length-percentage>? ) */
+    { "translateX",  CSS_TF_TRANSLATE_X, "L",    1, 1 },
+    { "translateY",  CSS_TF_TRANSLATE_Y, "L",    1, 1 },
+    { "scale",       CSS_TF_SCALE,       "p",    1, 2 },    /* scale( [ <number> | <percentage> ]#{1,2} ) */
+    { "scaleX",      CSS_TF_SCALE_X,     "p",    1, 1 },
+    { "scaleY",      CSS_TF_SCALE_Y,     "p",    1, 1 },
+    { "rotate",      CSS_TF_ROTATE,      "a",    1, 1 },    /* rotate( [ <angle> | <zero> ] ) */
+    { "skew",        CSS_TF_SKEW,        "a",    1, 2 },
+    { "skewX",       CSS_TF_SKEW_X,      "a",    1, 1 },
+    { "skewY",       CSS_TF_SKEW_Y,      "a",    1, 1 },
+    { "matrix3d",    CSS_TF_MATRIX3D,    "n",    16, 16 },  /* matrix3d( <number>#{16} ) */
+    { "translate3d", CSS_TF_TRANSLATE3D, "LLl",  3, 3 },    /* ( <length-percentage> , <length-percentage> , <length> ) */
+    { "translateZ",  CSS_TF_TRANSLATE_Z, "l",    1, 1 },
+    { "scale3d",     CSS_TF_SCALE3D,     "p",    3, 3 },    /* scale3d( [ <number> | <percentage> ]#{3} ) */
+    { "scaleZ",      CSS_TF_SCALE_Z,     "p",    1, 1 },
+    { "rotate3d",    CSS_TF_ROTATE3D,    "nnna", 4, 4 },    /* ( <number> , <number> , <number> , [ <angle> | <zero> ] ) */
+    { "rotateX",     CSS_TF_ROTATE_X,    "a",    1, 1 },
+    { "rotateY",     CSS_TF_ROTATE_Y,    "a",    1, 1 },
+    { "rotateZ",     CSS_TF_ROTATE_Z,    "a",    1, 1 },
+    { "perspective", CSS_TF_PERSPECTIVE, "v",    1, 1 }     /* perspective( [ <length [0,∞]> | none ] ) */
 };
 
-/* css-transforms-2 §12.2 "3D Transform Functions", BY NAME, and the list is what separates a gap from an
-   authoring mistake rather than decoration on the crash. A function nothing enumerates is invalid input and is
-   dropped; one a STANDARD enumerates is a capability this engine has not built, and answering `none` for it
-   would report a WRONG transform in place of an absent one. Transcribed from that section's own grammars:
-   matrix3d(), translate3d(), translateZ(), scale3d(), scaleZ(), rotate3d(), rotateX(), rotateY(), rotateZ()
-   and perspective(). */
-static const char *const CSS_TF_LEVEL2[] = {
-    "matrix3d", "translate3d", "translateZ", "scale3d", "scaleZ",
-    "rotate3d", "rotateX", "rotateY", "rotateZ", "perspective"
-};
+/* The production of argument `i` of grammar row `g`. */
+static CssTfArgType css_tf_arg_type(size_t g, unsigned i)
+{
+    size_t n = strlen(CSS_TF_GRAMMAR[g].args);
+
+    DCHECK(n == 1 || n == CSS_TF_GRAMMAR[g].max,
+           "a transform grammar row spells neither one production nor one per argument");
+    return (CssTfArgType)CSS_TF_GRAMMAR[g].args[n == 1 ? 0 : i];
+}
 
 /* CSS Syntax §4.2 "Definitions"' WHITESPACE — "A newline, U+0009 CHARACTER TABULATION, or U+0020 SPACE" —
    with §3.3 "Preprocessing the input stream"'s two newline spellings folded in, because the value reaching
@@ -274,14 +277,56 @@ static bool css_tf_length_valid(const char *s, const char *e)
     return css_length_is_length_unit(p, ulen);
 }
 
+/* `[ <number> | <percentage> ]`: css-transforms-2 §12 "The Transform Functions" makes a percentage in a scale
+   "equivalent to a number", and it "serializes as a number in specified values", so it is stored as one. */
+static bool css_tf_number_percentage(bool absolutize, const char *s, const char *e, double *out)
+{
+    if (memchr(s, '(', (size_t)(e - s)) != NULL) {
+        size_t n = (size_t)(e - s);
+
+        if (!absolutize)
+            return css_math_matches(s, n, CSS_MATH_PROD_NUMBER) || css_math_matches(s, n, CSS_MATH_PROD_PERCENTAGE);
+        css_tf_reject_math(s, e);
+        if (css_math_matches(s, n, CSS_MATH_PROD_PERCENTAGE))
+            DFAIL("css-values-4 §10 admits a math function for a scale's <percentage>, and this file evaluates "
+                  "none; build it with the <number> arm css_tf_reject_math names");
+        return false;
+    }
+    if (e > s && e[-1] == '%') {
+        if (!css_tf_number(s, e - 1, out)) return false;
+        *out /= 100.0;
+        return true;
+    }
+    return css_tf_number(s, e, out);
+}
+
+/* `<length>` over a whole span, a `<length-percentage>` without the percentage: css-transforms-2 §12.2's
+   translateZ() and translate3d()'s third argument, and perspective()'s. `nonnegative` is the `[0,∞]` range,
+   which refuses a negative literal; a math function's value is clamped to it (css-values-4 §10.12 "Range
+   Checking"), not refused. */
+static bool css_tf_length_only(JSContext *realm, const CssFontMetrics *font, bool absolutize, const char *s,
+                               const char *e, bool nonnegative, CssLength *out)
+{
+    bool math = memchr(s, '(', (size_t)(e - s)) != NULL;
+
+    if (!math && e > s && e[-1] == '%') return false;
+    if (!math && nonnegative && *s == '-') return false;
+    if (!absolutize)
+        return math ? css_math_matches(s, (size_t)(e - s), CSS_MATH_PROD_LENGTH) : css_tf_length_valid(s, e);
+    if (!css_tf_length(realm, font, s, e, out)) return false;
+    if (out->kind != CSS_LENGTH_ABSOLUTE) return false;
+    if (nonnegative && out->px.px < 0.0) out->px = css_px(0.0);
+    return true;
+}
+
 /* ONE `<transform-function>`'s arguments, split on the commas its own grammar writes. `s`..`e` is the text
-   BETWEEN the function's parentheses. A comma nested inside a further function — `min()`, `calc()` — belongs
-   to that function and not to this list, which is why the split tracks depth rather than scanning for commas. */
+   BETWEEN the function's parentheses; `g` is its grammar row. A comma nested inside a further function —
+   `min()`, `calc()` — belongs to that function and not to this list, which is why the split tracks depth. */
 static bool css_tf_args(JSContext *realm, const CssFontMetrics *font, bool absolutize, const char *s,
-                        const char *e, CssTfArgType type, unsigned min, unsigned max, CssTransformFunction *fn)
+                        const char *e, size_t g, CssTransformFunction *fn)
 {
     const char *arg = s;
-    unsigned depth = 0;
+    unsigned depth = 0, n_num = 0, n_len = 0, n_ang = 0;
 
     fn->argc = 0;
     for (;;) {
@@ -289,17 +334,13 @@ static bool css_tf_args(JSContext *realm, const CssFontMetrics *font, bool absol
         const char *stop;
         const char *as, *ae;
 
-        /* The body this walks was delimited by the caller's own paren match, so it is BALANCED and `depth`
-           can never be decremented below zero — which is what makes an unsigned counter the right shape here
-           rather than one that has to represent a state its producer cannot create. */
+        /* The body was delimited by the caller's own paren match, so it is balanced and `depth` cannot go
+           below zero. */
         while (p < e && (depth > 0 || *p != ',')) {
             if (*p == '(') depth++;
             else if (*p == ')') {
-                DCHECK(depth > 0,
-                       "a transform function's argument list closed a parenthesis it never opened, and the "
-                       "span this walks is the text BETWEEN a matched pair core/css/css_transform_function.c "
-                       "found by depth — so the body is balanced and this is that match and this walk "
-                       "disagreeing about where the function ends");
+                DCHECK(depth > 0, "a transform function's argument list closed a parenthesis it never opened "
+                                  "inside a span its caller matched by depth");
                 depth--;
             }
             p++;
@@ -308,52 +349,62 @@ static bool css_tf_args(JSContext *realm, const CssFontMetrics *font, bool absol
         as = arg;
         ae = stop;
         css_tf_trim(&as, &ae);
-        /* An EMPTY argument is not a production §7.1 writes, and it is how a trailing or doubled comma
-           arrives. It is refused here rather than reaching a reader that would see an empty span. */
+        /* An empty argument is no production; it is how a trailing or doubled comma arrives. */
         if (as == ae) return false;
-        if (fn->argc >= max) return false;
-        switch (type) {
+        if (fn->argc >= CSS_TF_GRAMMAR[g].max) return false;
+        switch (css_tf_arg_type(g, fn->argc)) {
         case CSS_TF_ARG_NUMBER:
+            DCHECK(n_num < CSS_TF_ARG_MAX, "a grammar row admits more numbers than CssTransformFunction holds");
             /* The grammar alone asks a math function its §10.9 type; only a value has to evaluate one. */
             if (!absolutize && memchr(as, '(', (size_t)(ae - as)) != NULL) {
                 if (!css_math_matches(as, (size_t)(ae - as), CSS_MATH_PROD_NUMBER)) return false;
+                n_num++;
                 break;
             }
             css_tf_reject_math(as, ae);
-            if (!css_tf_number(as, ae, &fn->number[fn->argc])) return false;
+            if (!css_tf_number(as, ae, &fn->number[n_num++])) return false;
+            break;
+        case CSS_TF_ARG_NUMBER_PERCENTAGE:
+            DCHECK(n_num < CSS_TF_ARG_MAX, "a grammar row admits more numbers than CssTransformFunction holds");
+            if (!css_tf_number_percentage(absolutize, as, ae, &fn->number[n_num++])) return false;
             break;
         case CSS_TF_ARG_LENGTH_PERCENTAGE:
-            /* NOT A REFUSAL, BECAUSE A TABLE TYPO IS NOT AN AUTHORING MISTAKE. `max` is already 2 for every
-               row with this production, so an argument past the second means the transcription of §7.1 above
-               disagrees with the array it writes into — this codebase's own data, which is what a DCHECK may
-               stand on and what a `return false` would have hidden as a dropped declaration. */
-            DCHECK(fn->argc < 2,
-                   "a `<length-percentage>` transform function accepted more than two arguments, and "
-                   "css-transforms-1 §7.1 \"2D Transform Functions\" writes at most two in any translation's "
-                   "grammar — so CSS_TF_GRAMMAR's `max` column and CssTransformFunction's `length` array "
-                   "disagree about the same section");
-            if (absolutize ? !css_tf_length(realm, font, as, ae, &fn->length[fn->argc])
+            DCHECK(n_len < CSS_TF_LENGTH_MAX, "a grammar row admits more lengths than CssTransformFunction holds");
+            if (absolutize ? !css_tf_length(realm, font, as, ae, &fn->length[n_len])
                            : !css_tf_length_valid(as, ae))
                 return false;
+            n_len++;
             break;
-        case CSS_TF_ARG_ANGLE:
-            DCHECK(fn->argc < 2,
-                   "an `[ <angle> | <zero> ]` transform function accepted more than two arguments, and "
-                   "css-transforms-1 §7.1 \"2D Transform Functions\" writes at most two in any rotation's or "
-                   "skew's grammar — so CSS_TF_GRAMMAR's `max` column and CssTransformFunction's `angle` array "
-                   "disagree about the same section");
-            if (!absolutize && memchr(as, '(', (size_t)(ae - as)) != NULL) {
-                if (!css_math_matches(as, (size_t)(ae - as), CSS_MATH_PROD_ANGLE)) return false;
+        case CSS_TF_ARG_LENGTH:
+            DCHECK(n_len < CSS_TF_LENGTH_MAX, "a grammar row admits more lengths than CssTransformFunction holds");
+            if (!css_tf_length_only(realm, font, absolutize, as, ae, false, &fn->length[n_len])) return false;
+            n_len++;
+            break;
+        case CSS_TF_ARG_PERSPECTIVE:
+            DCHECK(n_len < CSS_TF_LENGTH_MAX, "a grammar row admits more lengths than CssTransformFunction holds");
+            if (css_tf_name_is(as, (size_t)(ae - as), "none")) {
+                fn->perspective_none = true;
                 break;
             }
-            if (!css_tf_angle(as, ae, &fn->angle[fn->argc], fn->angle_unit[fn->argc])) return false;
+            if (!css_tf_length_only(realm, font, absolutize, as, ae, true, &fn->length[n_len])) return false;
+            n_len++;
+            break;
+        case CSS_TF_ARG_ANGLE:
+            DCHECK(n_ang < CSS_TF_ANGLE_MAX, "a grammar row admits more angles than CssTransformFunction holds");
+            if (!absolutize && memchr(as, '(', (size_t)(ae - as)) != NULL) {
+                if (!css_math_matches(as, (size_t)(ae - as), CSS_MATH_PROD_ANGLE)) return false;
+                n_ang++;
+                break;
+            }
+            if (!css_tf_angle(as, ae, &fn->angle[n_ang], fn->angle_unit[n_ang])) return false;
+            n_ang++;
             break;
         }
         fn->argc++;
         if (stop == e) break;
         arg = stop + 1;                                      /* past the comma */
     }
-    return fn->argc >= min;
+    return fn->argc >= CSS_TF_GRAMMAR[g].min;
 }
 
 /* CSS Syntax §4.3.7's escapes, asked of the whole value: see the crash. */
@@ -400,37 +451,17 @@ static bool css_tf_function(JSContext *realm, const CssFontMetrics *font, bool a
     } while (p < end && depth > 0);
     if (depth != 0) return false;
     body = open + 1;                                     /* p is one past the matching ')' */
-    for (i = 0; i < sizeof CSS_TF_LEVEL2 / sizeof CSS_TF_LEVEL2[0]; i++)
-        if (css_tf_name_is(name, nlen, CSS_TF_LEVEL2[i]))
-            DFAILF("css-transforms-2 §12.2 \"3D Transform Functions\" defines `%s()` and this engine "
-                   "implements no level 2, so this is a capability that is MISSING rather than an "
-                   "authoring mistake — CSS Syntax §2.2 \"Error Handling\"'s dropped declaration is the "
-                   "answer for a value no standard names, and answering it here would report the author's "
-                   "transform as `none` and hand every consumer a WRONG matrix rather than an absent one. "
-                   "WHAT TO BUILD: §12.2's ten grammars beside §7.1's table in this file, and with them "
-                   "the third row and column css-transforms-2 §11 \"Current Transformation Matrix\" gives "
-                   "every function — the 2D matrix this file's consumers reduce to is that 4x4 with the "
-                   "Z axis left as the identity, so the two land together or a translate3d() computes as "
-                   "a translate(). HOW ITS ABSENCE SHOWS: a page whose transform names any 3D function "
-                   "aborts here rather than computing. THE RELEASE ARM IS THE LINE BELOW AND IT IS A "
-                   "STATE RATHER THAN A SILENCE: with the abort compiled out the name matches no row of "
-                   "CSS_TF_GRAMMAR either, so the value is refused, the declaration is dropped and the "
-                   "element computes §3's `Initial:` value of `none` — which every consumer of this "
-                   "component already handles as the identity, so the pair of arms leaves no state a "
-                   "sibling has to test for",
-                   CSS_TF_LEVEL2[i]);
     for (i = 0; i < sizeof CSS_TF_GRAMMAR / sizeof CSS_TF_GRAMMAR[0]; i++) {
         if (!css_tf_name_is(name, nlen, CSS_TF_GRAMMAR[i].name)) continue;
         memset(fn, 0, sizeof *fn);
         fn->kind = CSS_TF_GRAMMAR[i].kind;
-        if (!css_tf_args(realm, font, absolutize, body, p - 1, CSS_TF_GRAMMAR[i].arg, CSS_TF_GRAMMAR[i].min,
-                         CSS_TF_GRAMMAR[i].max, fn))
-            return false;
+        DCHECK(CSS_TF_GRAMMAR[i].kind == (CssTransformFnKind)i,
+               "CSS_TF_GRAMMAR is out of CssTransformFnKind's order, and the serializer indexes it by kind");
+        if (!css_tf_args(realm, font, absolutize, body, p - 1, i, fn)) return false;
         *pp = p;
         return true;
     }
-    /* A name §7.1 does not write and css-transforms-2 §12.2 does not write either is a function no
-       standard this engine knows enumerates, which is CSS Syntax §2.2's invalid declaration. */
+    /* A name neither level writes is CSS Syntax §2.2's invalid declaration. */
     return false;
 }
 
@@ -534,7 +565,7 @@ char *css_transform_list_serialize(const CssTransformList *list)
     memset(&b, 0, sizeof b);
     for (i = 0; i < list->n; i++) {
         const CssTransformFunction *fn = &list->fn[i];
-        unsigned a;
+        unsigned a, n_num = 0, n_len = 0, n_ang = 0;
 
         /* §8 "The Transform Function Lists": "If a list of <transform-function>s is provided, then the net
            effect is as if each transform function had been specified separately in the order provided." The
@@ -544,34 +575,34 @@ char *css_transform_list_serialize(const CssTransformList *list)
         json_buf_raw(&b, CSS_TF_GRAMMAR[fn->kind].name);
         json_buf_raw(&b, "(");
         for (a = 0; a < fn->argc; a++) {
+            char *t = NULL;
+
             /* §3.1: "following each serialized comma with a single space". */
             if (a > 0) json_buf_raw(&b, ", ");
-            switch (CSS_TF_GRAMMAR[fn->kind].arg) {
-            case CSS_TF_ARG_NUMBER: {
-                char *t = css_length_serialize_number(fn->number[a], "");
-
-                json_buf_raw(&b, t);
-                free(t);
+            switch (css_tf_arg_type((size_t)fn->kind, a)) {
+            case CSS_TF_ARG_NUMBER:
+            case CSS_TF_ARG_NUMBER_PERCENTAGE:
+                /* css-transforms-2 §12: a scale's percentage "serializes as a number in specified values". */
+                t = css_length_serialize_number(fn->number[n_num++], "");
                 break;
-            }
-            case CSS_TF_ARG_LENGTH_PERCENTAGE: {
-                char *t = css_tf_length_text(&fn->length[a]);
-
-                json_buf_raw(&b, t);
-                free(t);
+            case CSS_TF_ARG_LENGTH_PERCENTAGE:
+            case CSS_TF_ARG_LENGTH:
+                t = css_tf_length_text(&fn->length[n_len++]);
                 break;
-            }
-            case CSS_TF_ARG_ANGLE: {
+            case CSS_TF_ARG_PERSPECTIVE:
+                t = fn->perspective_none ? strdup("none") : css_tf_length_text(&fn->length[n_len++]);
+                CHECK(t != NULL, "css-transforms-2 §12.2: OOM serializing perspective()");
+                break;
+            case CSS_TF_ARG_ANGLE:
                 /* The unit is appended verbatim, and the empty one is §7's `<zero>` — "a <zero> behaves the
                    same as 0deg (\"unitless 0\" angles are preserved for legacy compat)" — so the bare number
                    §7 says is PRESERVED is what comes back out. */
-                char *t = css_length_serialize_number(fn->angle[a], fn->angle_unit[a]);
-
-                json_buf_raw(&b, t);
-                free(t);
+                t = css_length_serialize_number(fn->angle[n_ang], fn->angle_unit[n_ang]);
+                n_ang++;
                 break;
             }
-            }
+            json_buf_raw(&b, t);
+            free(t);
         }
         json_buf_raw(&b, ")");
     }

@@ -34,17 +34,14 @@
  *   from the parse is that answer, and the caller falls to §3's `Initial:` value of `none`. It is also the
  *   only answer CLAUDE.md's rule about foreign bytes permits: a stylesheet is a STRANGER'S text, so a
  *   `DCHECK` standing on its shape would hand any page an abort switch for this engine.
- *   A CAPABILITY THIS ENGINE HAS NOT BUILT CRASHES BY NAME. `translate3d(…)` is not a mistake — css-transforms-2
- *   §12.2 "3D Transform Functions" defines it and this engine implements no level 2 — so answering `none` for
- *   it would drop an author's own declaration and report a WRONG transform rather than an absent one.
- *   THE DISCRIMINATOR IS WHO ENUMERATES THE NAME: a function a STANDARD names is a gap, and one nobody names
- *   is invalid input. That is the only thing separating the two, and it is why the level-2 names are written
- *   out below rather than left to a catch-all.
+ *   A CAPABILITY THIS ENGINE HAS NOT BUILT CRASHES BY NAME (an escape, a math function it cannot evaluate):
+ *   answering `none` for valid CSS would report a WRONG transform rather than an absent one. Both levels'
+ *   functions are parsed: css-transforms-1 §7.1 "2D Transform Functions" and css-transforms-2 §12.2 "3D
+ *   Transform Functions", with §12.1's percentages in the scales.
  *
- * A NUMBER IS NOT A LENGTH AND THE THREE ARGUMENT TYPES ARE CARRIED APART. §7.1 "2D Transform Functions" gives
- * each function ONE argument production — `<number>` for matrix() and the scales, `<length-percentage>` for
- * the translations, `[ <angle> | <zero> ]` for the rotation and the skews — so the kind decides which of the
- * three arrays below is the value and no argument is ever both. A LENGTH is the only one css-transforms-1 §3
+ * A NUMBER IS NOT A LENGTH AND THE THREE ARGUMENT TYPES ARE CARRIED APART. Each argument's production —
+ * `<number>` (a scale's percentage stored as its number), a length, or `[ <angle> | <zero> ]` — fills its own
+ * array below in the order written, so rotate3d()'s three numbers and one angle are number[0..2] and angle[0]. A LENGTH is the only one css-transforms-1 §3
  * "The transform Property" absolutizes; an angle and a number are carried AS SPECIFIED, because that section's
  * own words are "as specified, but with lengths made absolute", which says
  * precisely which one moves. That is why `angle_unit` exists: `rotate(1turn)` computes to `rotate(1turn)` and
@@ -67,8 +64,7 @@
 #include "quickjs.h"
 #include "core/css/css_length.h"
 
-/* §7.1's ELEVEN FUNCTIONS, in the order that section writes them, which is also §3's `Canonical order:` line
-   ("per grammar") and therefore the order a serialization states its arguments in. */
+/* §7.1's eleven functions and css-transforms-2 §12.2's ten, each in the order its section writes them. */
 typedef enum {
     CSS_TF_MATRIX = 0,
     CSS_TF_TRANSLATE,
@@ -80,12 +76,24 @@ typedef enum {
     CSS_TF_ROTATE,
     CSS_TF_SKEW,
     CSS_TF_SKEW_X,
-    CSS_TF_SKEW_Y
+    CSS_TF_SKEW_Y,
+    CSS_TF_MATRIX3D,
+    CSS_TF_TRANSLATE3D,
+    CSS_TF_TRANSLATE_Z,
+    CSS_TF_SCALE3D,
+    CSS_TF_SCALE_Z,
+    CSS_TF_ROTATE3D,
+    CSS_TF_ROTATE_X,
+    CSS_TF_ROTATE_Y,
+    CSS_TF_ROTATE_Z,
+    CSS_TF_PERSPECTIVE
 } CssTransformFnKind;
 
-/* `matrix( <number>#{6} )` is the widest argument list §7.1 defines, so six is the bound for every function
-   here rather than a number chosen for headroom. */
-#define CSS_TF_ARG_MAX 6
+/* The widest lists the two levels define: `matrix3d( <number>#{16} )`, translate3d()'s three lengths, and
+   skew()'s two angles. */
+#define CSS_TF_ARG_MAX 16
+#define CSS_TF_LENGTH_MAX 3
+#define CSS_TF_ANGLE_MAX 2
 
 /* The longest §7.1 angle unit is `turn` at four bytes (css-values-4 §7.1 "Angle Units: the <angle> type and
    deg, grad, rad, turn units" defines exactly four), so a unit that does not fit is not one of them and the
@@ -102,10 +110,11 @@ typedef enum {
 typedef struct {
     CssTransformFnKind kind;
     unsigned           argc;
-    double             number[CSS_TF_ARG_MAX];              /* matrix(), scale(), scaleX(), scaleY() */
-    CssLength          length[2];                           /* translate(), translateX(), translateY() */
-    double             angle[2];                            /* rotate(), skew(), skewX(), skewY() */
-    char               angle_unit[2][CSS_TF_ANGLE_UNIT_MAX];
+    double             number[CSS_TF_ARG_MAX];              /* matrices, scales, rotate3d()'s axis */
+    CssLength          length[CSS_TF_LENGTH_MAX];           /* translations, perspective() */
+    double             angle[CSS_TF_ANGLE_MAX];             /* rotations, skews */
+    char               angle_unit[CSS_TF_ANGLE_MAX][CSS_TF_ANGLE_UNIT_MAX];
+    bool               perspective_none;                    /* perspective(none), which writes no length */
 } CssTransformFunction;
 
 /* `<transform-list> = <transform-function>+`, which is §3's own production and is why `n` is never zero for a
@@ -131,7 +140,7 @@ bool css_transform_list_parse(JSContext *realm, const CssFontMetrics *font, cons
 /* Does `value`/`len` hold exactly ONE `<transform-function>` by §7's grammar — CSS Properties and Values API 1
    §5.1's question for a registered property whose syntax names that type (core/css/css_syntax_match.c). It
    decides the grammar alone: nothing is absolutized, a math function is asked its css-values-4 §10.9 type and
-   not evaluated, and a level-2 name crashes by name as it does in the list parse. */
+   not evaluated. */
 bool css_transform_function_matches(const char *value, size_t len);
 
 /* Releases a list `css_transform_list_parse` wrote. Idempotent over a zeroed list, so a caller may release on

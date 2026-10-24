@@ -136,6 +136,22 @@ static CssTransformMatrix css_tm_of_function(const CssTransformFunction *fn)
     case CSS_TF_TRANSLATE_Y:
         out.f = css_tm_translation_px(&fn->length[0]);
         break;
+    case CSS_TF_MATRIX3D:
+    case CSS_TF_TRANSLATE3D:
+    case CSS_TF_TRANSLATE_Z:
+    case CSS_TF_SCALE3D:
+    case CSS_TF_SCALE_Z:
+    case CSS_TF_ROTATE3D:
+    case CSS_TF_ROTATE_X:
+    case CSS_TF_ROTATE_Y:
+    case CSS_TF_ROTATE_Z:
+    case CSS_TF_PERSPECTIVE:
+        DFAIL("css-transforms-2 §12.2 \"3D Transform Functions\": this element's list holds a 3D function, and "
+              "this component's matrix is the 3x2 2D one, which has no Z row or column. BUILD css-transforms-2 "
+              "§6 \"Current Transformation Matrix\"'s 4x4 here and in css_transform_matrix.h, with each "
+              "function's matrix from §16 \"Mathematical Description of Transform Functions\", and flatten "
+              "only where a consumer maps a rectangle");
+        break;
     default:
         DFAIL("css-transforms-1 §2 \"The Transform Rendering Model\" computes an element's transformation "
               "matrix in FOUR steps — \"Start with the identity matrix.\", \"Translate by the computed X and Y "

@@ -22972,6 +22972,25 @@ TF_UNIT void css_property_grammar_selftest(void)
         { "<transform-list>", "rotate(45deg) scale(2)", true, "§5.1's pre-multiplied `<transform-function>+`" },
         { "<transform-function>", "spin(45deg)", false,
           "THE NEGATIVE CONTROL: a function no transforms level names is invalid, not a crash" },
+        /* css-transforms-2 §12.2 "3D Transform Functions" and §12.1's percentage scales. */
+        { "<transform-function>", "translateZ(10px)", true, "`translateZ( <length> )`" },
+        { "<transform-function>", "translate3d(1px, 50%, 2px)", true,
+          "`translate3d( <length-percentage> , <length-percentage> , <length> )`" },
+        { "<transform-function>", "translate3d(1px, 2px, 50%)", false, "the third argument is a `<length>`" },
+        { "<transform-function>", "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)", true,
+          "`matrix3d( <number>#{16} )`" },
+        { "<transform-function>", "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0)", false,
+          "`#{16}` is exactly sixteen" },
+        { "<transform-function>", "rotate3d(1, 0, 0, 45deg)", true,
+          "three numbers and an angle, two productions in one function" },
+        { "<transform-function>", "rotate3d(1, 0, 0, 1)", false, "the fourth argument is an angle" },
+        { "<transform-function>", "rotateX(0)", true, "§12.2's `<zero>` behaves as 0deg" },
+        { "<transform-function>", "scale3d(50%, 1, 2)", true, "`[ <number> | <percentage> ]#{3}`" },
+        { "<transform-function>", "scale(150%)", true, "§12.1's scale accepts a percentage" },
+        { "<transform-function>", "perspective(none)", true, "`perspective( [ <length [0,∞]> | none ] )`" },
+        { "<transform-function>", "perspective(100px)", true, "a non-negative `<length>`" },
+        { "<transform-function>", "perspective(-1px)", false, "`[0,∞]` refuses a negative literal" },
+        { "<transform-function>", "perspective(50%)", false, "a percentage is no `<length>`" },
     };
     unsigned i;
 
