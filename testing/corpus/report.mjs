@@ -1368,6 +1368,10 @@ const ordState = (m) => {
   if (typeof ph === 'number' && ph > 0)
     return { w: 'PLATEAU', why: ph + ' retention(s) of ' + pa + ' askable scan(s), none of them between '
       + 'units — a value yield doing what it is specified to do, so no ordering claim' };
+  /* A frontier that only ever held one member has nothing to order, so no ordering word applies to it; why
+     that one member did so little is a question for the run's own wall and delivery rows. */
+  if (M <= 1)
+    return { w: 'SOLE', why: 'the frontier held ' + M + ' member over ' + T + ' dispatch(es): nothing to order' };
   if (typeof pm === 'number' && T > 0 && pm >= THR_HOG * T)
     return { w: 'MONOPOLIZER', why: 'picksMax ' + pm + ' of ' + T + ' dispatches on ONE member' };
   if (P <= 0) return { w: 'UNREACHED', why: 'no member was ever picked: ' + T + ' dispatch(es)' };
