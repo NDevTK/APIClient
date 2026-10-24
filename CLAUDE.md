@@ -103,7 +103,7 @@ A comment is read by every agent that opens the file, so its cost is paid on eve
 - JavaScript is only the irreducible platform edge, per SECURITY.md: the trusted `safeFetch` chokepoint, IndexedDB/`chrome.*` relays, WASM loading, and popup rendering. Working JS is not moved into C by rule; what belongs in C is what a flow needs mid-execution (it must fork per arm and park with the flow). Type sniffing stays in `safeFetch`. No per-file "becomes C" ledger.
 - Every bridge edge DCHECKs the engine↔JS contract.
 - Use established browser and engine names and tools: Chromium's DCHECK/CHECK, QuickJS's dump infrastructure (`JS_DumpValue`, `JS_DumpGCObject`, `JS_DUMP_*`), gdb, targeted ASan. No printf probes. Score sanitizer runs on `ERROR:` with no tool name (LeakSanitizer writes its own prefix).
-- The engine is a clean QuickJS-ng delta at `engine/qjs` (tracked content, synced to upstream); the host/scheduler lives outside it in `engine/host`.
+- `engine/qjs` is this project's own JavaScript engine, grown from QuickJS-ng and tracked as ordinary content. It is restructured freely into what forced execution needs and is not kept syncable with upstream; the host/scheduler lives outside it in `engine/host`.
 - The shipped engine is the Memory64 WASM build in the extension, and its sandbox is part of the security boundary around untrusted page code; the native build is a development host over the same source. A vehicle stage runs the same fixtures on both and compares their answers and their work, so what ships is checked against what was measured.
 
 ## Browser half — follow the spec, build like a browser

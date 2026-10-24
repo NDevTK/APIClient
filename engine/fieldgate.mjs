@@ -437,8 +437,8 @@ function maskJS(src) {
   const subst = [];   // [interior start, closing-brace offset) for each `${ … }`
   let braceDepth = 0;
   let i = 0;
-  /* A `#!` line is not JavaScript and its `/usr/bin` is not a regular expression — reading it as one swallows
-     the file and this reported `engine/sync.mjs` as untokenizable for exactly that reason. */
+  /* A `#!` line is not JavaScript and its `/usr/bin` is not a regular expression; reading it as one swallows
+     the file. */
   if (src[0] === "#" && src[1] === "!") { while (i < n && src[i] !== "\n") i++; blank(code, 0, i); blank(struct, 0, i); }
   let prevSig = "", prevWord = "";
   const note = (ch) => { if (ch && !/\s/.test(ch)) prevSig = ch; };
