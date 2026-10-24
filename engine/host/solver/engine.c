@@ -11355,7 +11355,8 @@ static int engine_sched_slice(void) {
             /* The reclaim safepoint, this one region for a structural reason: across the step the engine holds no
                position in its own frontier, so a member removed by the allocator's refusal edge cannot be removed
                from under a walk. It is also where nearly every allocation of a run happens (the page's objects,
-               frames, deltas). Restored rather than cleared, because the step can reach this loop again through a
+               frames, deltas). It closes after the microtask checkpoint's tail below, whose writes are the stepped
+               flow's own. Restored rather than cleared, because the step can reach this loop again through a
                nested driver. */
             int prev_reclaim = engine_reclaim_set(1);
             /* The scheduler's pick is behind this line (solve_seed_candidates, flow_next_to_run, the context switch,
@@ -11422,7 +11423,6 @@ static int engine_sched_slice(void) {
                     "%ld entries) — a second caller of flow_step, a return before this record, or a step outside "
                     "engine_sched_slice",
                     step_unit_runs_total(), g_steps);
-            engine_reclaim_set(prev_reclaim);
             ENGINE_NO_STRAY(ctx, "post-step: the arm flow_step just ran", r);
             /* HTML §8.1.7.3's end of a microtask checkpoint. The flow has run a unit of work (a script, a
              * microtask, a task), and if it holds no microtask the queue has drained, when HTML runs the steps
@@ -11494,6 +11494,12 @@ static int engine_sched_slice(void) {
                 unhandled_rejection_notify(ctx);
             if (g_checkpoint_hook && r != FLOW_STEP_DONE && unit_ended)
                 g_checkpoint_hook(ctx);
+            /* The checkpoint's tail is the stepped flow's own work, HTML §8.1.7.3 "perform a microtask checkpoint"
+               step 4 and the steps after it: notify about rejected promises (§8.1.4.7) captures the realm's list
+               into this flow's delta and queues its task on this flow, so its allocations may sell the tail like
+               the step's. Nothing since flow_step holds a position in the frontier, and the sale never takes the
+               running flow. */
+            engine_reclaim_set(prev_reclaim);
             /* The charge, billed to the flow that ran: `flow_age_running` bills whoever the registry says is
                running, which is the flow this step advanced only while nothing since the switch-in changed it
                (asserted at the unit boundary above, before the register's first reader); otherwise a monopolizer
