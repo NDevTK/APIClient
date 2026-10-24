@@ -18007,6 +18007,11 @@ TF_UNIT void probes_clickhash(const char *js, Probe *tab, int *n) {
              "NOT REACHED: the click listener was never driven");
     fold_row(&sink, &sink_why, st >= S_SEEN, "NOT REACHED: the markup sink has no @S record over location.hash");
     fold_row(&poc, &poc_why, st == S_FIRED, "the markup sink's search over location.hash did not fire a PoC");
+    fold_row(&poc, &poc_why,
+             st == S_FIRED && s_field(js, "innerHTML", src,
+                                      "\"acts\":[{\"kind\":\"click\",\"target\":\"#chgo\",\"type\":\"click\"}]"),
+             "the PoC fired but its envelope states no click on #chgo: the fire was verified under an engine act "
+             "(the listener's drive), and loading the address alone does not run that listener in a browser");
     const Probe rows[] = {
         { "ch-click-driven", click, "/api/chclick", SESS_EXPLORE, click_why },
         { "ch-click-sink", sink, "getElementById('chout').innerHTML", SESS_EXPLORE, sink_why },
