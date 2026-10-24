@@ -217,7 +217,8 @@ export const ZONE = (() => {
   /* lib/document-record.js's writers are on this list for the reason the policy is: this host records every
      document it provisions, and a zone assembled without them would hand the chokepoint no record, which
      `_docOf` refuses on the first request rather than here at assembly. */
-  for (const n of ['safeFetchWiden', 'safeFetchEgressStated', 'safeFetchFiringRefusal', 'safeFetchCrossDocumentRefusal',
+  for (const n of ['safeFetchWiden', 'safeFetchPermit', 'safeFetchWidenable', 'safeFetchSignalUsable',
+                   'safeFetchEgressStated', 'safeFetchFiringRefusal', 'safeFetchCrossDocumentRefusal',
                    'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'docRecord', 'docRecordJoin',
                    'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque',
                    'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordWorldDocument', 'docRecordAskerRefusal',
@@ -457,6 +458,22 @@ async function main() {
       paintDir = d;
       continue;
     }
+    /* `--explore-signal <origin> <signal>=<value>`: one row of the table, the per-signal sentence the popup's
+       rows say, written through `safeFetchPermit`. Both halves are a person's words, so each is asked of the
+       chokepoint's own tests first and refused with its reason. */
+    if (process.argv[i] === '--explore-signal') {
+      const o = process.argv[++i], row = process.argv[++i];
+      const eq = row === undefined ? -1 : row.indexOf('=');
+      const origin = o === undefined ? null : URL.canParse(o) ? new URL(o).origin : o;
+      const why = origin === null || eq < 0 ? 'it takes an origin and one `signal=value`'
+        : ZONE.safeFetchWidenable(origin) ?? ZONE.safeFetchSignalUsable(row.slice(0, eq), row.slice(eq + 1));
+      if (why !== null) {
+        console.error(`[trusted] \`--explore-signal ${o ?? ''} ${row ?? ''}\` permits nothing: ${why}.`);
+        process.exit(2);
+      }
+      ZONE.safeFetchPermit(origin, row.slice(0, eq), row.slice(eq + 1), true);
+      continue;
+    }
     if (process.argv[i] !== '--explore') { positional.push(process.argv[i]); continue; }
     const v = process.argv[++i];
     if (v === undefined) {
@@ -487,7 +504,7 @@ async function main() {
 
   if (!target) {
     console.error('usage: node engine/trusted.mjs <url> [path-to-native-binary] ' +
-                  '[--explore <origin>]... [--paint <dir>]');
+                  '[--explore <origin>]... [--explore-signal <origin> <signal>=<value>]... [--paint <dir>]');
     process.exit(2);
   }
   if (!existsSync(bin)) {
