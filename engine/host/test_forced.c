@@ -16562,9 +16562,7 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
        as a ladder is exactly the error a ladder's discipline exists to prevent. They are the three facts the
        moment is a conjunction OF: each may rise without the others, none implies another, and `park-moment`
        is 1 only when all three stood at ONE ask. A row that does not imply its neighbour is a finding, so
-       these are not dressed as one. The fourth conjunct (`refuses == 0`) has no row of its own because it
-       already has one: a REFUSING ask is the arm `park-residue` excludes, so a park moment that fails only on
-       that conjunct is a `park-residue` of 0. */
+       these are not dressed as one. */
     ColdPreviewCensus pvc;
     int cold_park_asked, cold_park_residue, cold_park_moment;
     int cold_park_mom_deep, cold_park_mom_orphan, cold_park_mom_commit;
