@@ -1696,6 +1696,43 @@ static char *computed_text_align(lxb_dom_element_t *el, const char *name, char *
     return css_cv_strdup(start == rtl ? "right" : "left");
 }
 
+/* css-fonts-4 §2.2 "Font weight: the font-weight property": `Computed value: a number, see below`. `normal` is
+   "Same as 400" and `bold` "Same as 700"; a number stands; `bolder` and `lighter` are §2.2.1 "Relative Weights"'
+   chart over the inherited value `w`, the parent's computed weight (400, the initial, at the root). */
+static char *computed_font_weight(lxb_dom_element_t *el, char *spec)
+{
+    lxb_dom_element_t *parent;
+    const char *held;
+    double w = 400.0, out;
+    bool bolder = css_cv_is(spec, "bolder"), lighter = css_cv_is(spec, "lighter");
+    char *end = NULL;
+
+    if (css_cv_is(spec, "normal")) { free(spec); return css_length_serialize_number(400.0, ""); }
+    if (css_cv_is(spec, "bold")) { free(spec); return css_length_serialize_number(700.0, ""); }
+    if (!bolder && !lighter) {
+        if (strchr(spec, '(') != NULL)
+            DFAILF("`font-weight: %s`: css-values-4 §10 admits a math function for §2.2's <number [1,1000]>, "
+                   "and this computed value evaluates none; build it through core/css/css_math.h", spec);
+        out = strtod(spec, &end);
+        DCHECK(end != spec && *end == '\0', "a cascaded font-weight is neither a keyword nor a number, and the "
+                                            "property's grammar admits nothing else");
+        free(spec);
+        return css_length_serialize_number(out, "");
+    }
+    free(spec);
+    parent = css_parent_element(el);
+    if (parent != NULL) {
+        /* Inside the derivation of font-weight, whose fill derived the parent's first. */
+        held = css_computed_style_held(parent, CSS_PROPERTY_FONT_WEIGHT).text;
+        DCHECK(held != NULL, "the parent element holds no computed font-weight, which §2.2's Initial: line "
+                             "always gives it");
+        w = strtod(held, NULL);
+    }
+    if (bolder) out = w < 350.0 ? 400.0 : w < 550.0 ? 700.0 : w < 900.0 ? 900.0 : w;
+    else out = w < 100.0 ? w : w < 550.0 ? 100.0 : w < 750.0 ? 400.0 : 700.0;
+    return css_length_serialize_number(out, "");
+}
+
 /* ---- the computed value ----------------------------------------------------------------------------------- */
 
 /* Which properties are length-shaped, and why each is, is core/css/css_property_id.h's table. */
@@ -2688,6 +2725,8 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
     case CSS_PROPERTY_TEXT_ALIGN_ALL:
     case CSS_PROPERTY_TEXT_ALIGN_LAST:
         return computed_text_align(el, name, spec);
+    case CSS_PROPERTY_FONT_WEIGHT:
+        return computed_font_weight(el, spec);
     /* css-transforms-1 §3 "The transform Property" states `Computed value: as specified, but with lengths made
        absolute` — TWO CLAUSES, and `none` satisfies the second vacuously because it contains no lengths, so
        for that value the specified value IS the computed one and this is a derivation rather than a default.
