@@ -9,7 +9,8 @@
    because those were spent: a nonzero value is a CSS 2.2 §9.4.2 context that rested inside its fill.
    `_layoutClientExtentAsks` counts the reads of CSSOM VIEW §6's `clientWidth`/`clientHeight` that reached step
    3's padding edge and `_layoutClientExtentRests` the rests those reads took, a subset of `_layoutJobRests`, so
-   one read takes 1 + rests/asks activations on average. */
+   one read takes 1 + rests/asks activations on average. `_layoutClientRectsAsks` and `_layoutClientRectsRests`
+   count the same for §6's getClientRects() and getBoundingClientRect(). */
 METRIC(bf_asks,            "_layoutBfAsks",           LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(bf_served,          "_layoutBfServed",         LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(bf_deferred,        "_layoutBfDeferred",       LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
@@ -22,7 +23,10 @@ METRIC(line_items,         "_layoutLineItems",        LIFETIME, "item", AGENT, "
 METRIC(fill_rests,         "_layoutFillRests",        LIFETIME, "ask",  AGENT, "core/layout/line_box.c",   INT)
 METRIC(client_extent_asks,  "_layoutClientExtentAsks",  LIFETIME, "ask",  AGENT, "core/dom/element_view.c", INT)
 METRIC(client_extent_rests, "_layoutClientExtentRests", LIFETIME, "rest", AGENT, "core/dom/element_view.c", INT)
+METRIC(client_rects_asks,   "_layoutClientRectsAsks",   LIFETIME, "ask",  AGENT, "core/dom/element_view.c", INT)
+METRIC(client_rects_rests,  "_layoutClientRectsRests",  LIFETIME, "rest", AGENT, "core/dom/element_view.c", INT)
 IDENTITY_LE(bf_served,          bf_asks)
 IDENTITY_LE(bf_deferred,        bf_asks)
 IDENTITY_LE(served_across_rest, bf_served)
 IDENTITY_LE(client_extent_rests, job_rests)
+IDENTITY_LE(client_rects_rests, job_rests)

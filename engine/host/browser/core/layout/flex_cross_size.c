@@ -415,6 +415,48 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
     return sum;
 }
 
+bool flex_cross_size_content_based_ask(lxb_dom_element_t *container, CssPx *out)
+{
+    FlexLineMember *m;
+    BoxTreeChild c;
+    size_t n, i;
+    bool done = true, has;
+    CssPx h;
+
+    DCHECK(container != NULL && out != NULL, "a content-based cross size was asked with no container or no answer");
+    /* §9.2's flex base sizes, which step 7's lines and main sizes are built from. */
+    for (c = box_tree_first_child(container); done && box_tree_child_exists(c);
+         c = box_tree_next_sibling(container, c)) {
+        lxb_dom_node_t *node = box_tree_child_node(c);
+        lxb_dom_element_t *el;
+
+        if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        el = lxb_dom_interface_element(node);
+        /* §4.1 "Absolutely-Positioned Flex Children": such a child does not participate in flex layout. */
+        if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) ||
+            css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED))
+            continue;
+        done = intrinsic_inline_sizes_ask(el);
+    }
+    if (!done) return false;
+    n = flex_line_members(container, &m);
+    for (i = 0; done && i < n; i++) {
+        lxb_dom_element_t *item;
+
+        if (m[i].anonymous) continue;
+        item = lxb_dom_interface_element(m[i].first);
+        /* Step 7's block arm lays the item out as a block-level box, whose automatic height is §10.6.3's. */
+        if (used_value_height_behaves_as_auto(item)) done = block_flow_auto_height_ask(item, &h);
+        if (done && flex_baseline_participates(container, &m[i]))
+            done = block_flow_first_line_box_baseline_ask(item, &h, &has) &&
+                   block_flow_last_line_box_baseline_ask(item, &h, &has);
+    }
+    free(m);
+    if (!done) return false;
+    *out = flex_cross_size_content_based(container);
+    return true;
+}
+
 /* §9.4's step 9 over a multi-line container's line sizes: "If the flex container has a definite cross size,
    align-content is stretch, and the sum of the flex lines' cross sizes is less than the flex container's inner
    cross size, increase the cross size of each flex line by equal amounts such that the sum of their cross

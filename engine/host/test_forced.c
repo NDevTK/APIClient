@@ -13845,9 +13845,23 @@ TF_UNIT void probes_clientextent(const char *js, Probe *tab, int *n) {
     fold_row(&cextr_tt, &cextr_why, nrests >= 1,
              "CSSOM VIEW §6's `clientHeight` over a content height wider than one activation took no rest, so it "
              "ran to completion instead of yielding with its questions suspended");
+    /* §6's getBoundingClientRect() and getClientRects() answers, and the rest the first one takes. */
+    const char *rrests = strstr(js, "\"_layoutClientRectsRests\":");
+    long nrrests = rrests ? strtol(rrests + strlen("\"_layoutClientRectsRests\":"), NULL, 10) : -1;
+    const char *crect_why = NULL; int crect_tt = 1;
+    fold_row(&crect_tt, &crect_why, param_value_is(js, "/api/cext", "bh", "130"),
+             "CSSOM VIEW §6: getBoundingClientRect() is not the 130px border area of twelve 10px rows");
+    fold_row(&crect_tt, &crect_why, param_value_is(js, "/api/cext", "rl", "1"),
+             "CSSOM VIEW §6: an inline box on one line does not have one client rectangle");
+    fold_row(&crect_tt, &crect_why, rrests != NULL,
+             "the result document carries no `_layoutClientRectsRests` row from solver/metrics/layout.def");
+    fold_row(&crect_tt, &crect_why, nrrests >= 1,
+             "CSSOM VIEW §6's getBoundingClientRect() over a content height wider than one activation took no "
+             "rest, so it ran to completion instead of yielding with its questions suspended");
     const Probe rows[] = {
         { "client-extent-values", cext_tt, "/api/cext", SESS_EXPLORE, cext_why },
         { "client-extent-rests", cextr_tt, "/api/cext", SESS_EXPLORE, cextr_why },
+        { "client-rects-rests", crect_tt, "/api/cext", SESS_EXPLORE, crect_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

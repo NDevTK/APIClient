@@ -1428,13 +1428,49 @@ static size_t ev_client_rects_px(const EvTarget *t, CssPx (**out)[4])
     return 1;
 }
 
-static JSValue ev_client_rects(JSContext *ctx, const EvTarget *t)
+/* The layout §6's getClientRects() step 3 reads, asked under a step machine's resting drive: each fragment's
+   position and its two extents. False ("not yet") when a question was deferred, with it suspended on the
+   current job; true when every operand is answered, so `ev_client_rects_px` then runs over the answered memo.
+   It asks what that function derives and nothing else, kind by kind. */
+static bool ev_client_rects_ask(const EvTarget *t)
 {
-    CssPx (*r)[4] = NULL;
-    size_t n = ev_client_rects_px(t, &r), i;
-    JSValue rects;
+    lxb_dom_element_t *el = lxb_dom_interface_element(t->node);
+    ElementViewFragments kind;
+    FlowPoint o;
+    CssPx w, h;
 
-    (void)ctx;   /* every object below is minted in the ELEMENT's relevant realm, never the caller's */
+    if (!t->has_box || ev_has_svg_layout_box(t->node)) return true;
+    kind = element_view_fragment_kind(el);
+    if (kind == ELEMENT_VIEW_FRAGMENTS_LINE_BOXES) {
+        FlowRect *frags = NULL;
+        size_t n = 0;
+        bool done = flow_inline_fragment_rects_ask(el, &frags, &n);
+
+        free(frags);
+        return done;
+    }
+    if (kind == ELEMENT_VIEW_FRAGMENTS_TABLE) {
+        lxb_dom_element_t **frags = NULL;
+        size_t n = ev_table_fragments(el, &frags), i;
+        bool done = flow_table_box_origin_ask(el, &o);
+
+        /* The table box's extents are the element's, and each caption is a border area of its own. */
+        for (i = 0; done && i < n; i++)
+            done = (i == 0 || flow_border_box_origin_ask(frags[i], &o)) &&
+                   used_value_padding_edge_ask(frags[i], false, &w) && used_value_padding_edge_ask(frags[i], true, &h);
+        free(frags);
+        return done;
+    }
+    return flow_border_box_origin_ask(el, &o) && used_value_padding_edge_ask(el, false, &w) &&
+           used_value_padding_edge_ask(el, true, &h);
+}
+
+static JSValue ev_client_rects_mint(const EvTarget *t, CssPx (*r)[4], size_t n)
+{
+    JSValue rects;
+    size_t i;
+
+    /* every object below is minted in the ELEMENT's relevant realm, never the caller's */
     rects = JS_NewArray(t->rctx);
     CHECK(!JS_IsException(rects), "the client-rect list could not be allocated");
     for (i = 0; i < n; i++)
@@ -1442,17 +1478,22 @@ static JSValue ev_client_rects(JSContext *ctx, const EvTarget *t)
                              dom_rect_new_values(t->rctx, ev_client_px(t->rctx, r[i][0]),
                                                  ev_client_px(t->rctx, r[i][1]), ev_client_px(t->rctx, r[i][2]),
                                                  ev_client_px(t->rctx, r[i][3])));
-    free(r);
     return dom_rect_list_new(t->rctx, rects);
 }
 
 JSValue element_view_client_rects(lxb_dom_element_t *el)
 {
     EvTarget t;
+    CssPx (*r)[4] = NULL;
+    size_t n;
+    JSValue v;
 
     DCHECK(el != NULL, "§6's getClientRects() was invoked as an internal algorithm with no element");
     ev_target_of_element(el, &t);
-    return ev_client_rects(t.rctx, &t);
+    n = ev_client_rects_px(&t, &r);
+    v = ev_client_rects_mint(&t, r, n);
+    free(r);
+    return v;
 }
 
 /* One axis of the enclosing box (`o` 0 for x, 1 for y): its low edge and its extent. When one rectangle
@@ -1535,41 +1576,91 @@ void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4])
     free(r);
 }
 
-/* §6's get the bounding box, minted. §6's `[NewObject]` holds because the rectangle is minted on every call. */
-static JSValue ev_bounding_rect(JSContext *ctx, const EvTarget *t)
+/* §6's get the bounding box over step 1's `n` client rectangles, minted. §6's `[NewObject]` holds because the
+   rectangle is minted on every call. */
+static JSValue ev_bounding_rect_mint(const EvTarget *t, CssPx (*r)[4], size_t n)
 {
-    CssPx (*r)[4] = NULL;
     CssPx b[4];
-    size_t n = ev_client_rects_px(t, &r);   /* step 1 */
 
-    (void)ctx;
-    if (n == 0) {                            /* step 2 */
-        free(r);
-        return dom_rect_new(t->rctx, 0.0, 0.0, 0.0, 0.0);
-    }
+    if (n == 0) return dom_rect_new(t->rctx, 0.0, 0.0, 0.0, 0.0);   /* step 2 */
     ev_bounding_box_of((const CssPx (*)[4])r, n, b);
-    free(r);
     return dom_rect_new_values(t->rctx, ev_client_px(t->rctx, b[0]), ev_client_px(t->rctx, b[1]),
                                ev_client_px(t->rctx, b[2]), ev_client_px(t->rctx, b[3]));
 }
 
-static JSValue js_ev_client_rects(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    EvTarget t;
+/* §6's getClientRects() and getBoundingClientRect() as step machines, `clientWidth`'s shape: the layout step 3
+   reads is asked under a resting drive on the job the state owns, so a box whose layout is wide rests between
+   activations with its questions suspended. One activation is one unit, measured against the slice. The
+   rectangles are derived over the answered memo inside the activation and minted after it. */
+enum { EV_RECTS_LIST = 0, EV_RECTS_BOUNDING = 1 };
+#define EV_RECTS_STAGES(X) \
+    X(EV_RECTS_MEASURE, "CSSOM VIEW §6 \"Extensions to the Element Interface\" getClientRects() / " \
+                        "getBoundingClientRect() (step 3's border areas, one resting drive per activation)")
+enum { IDL_STEP_STAGE_BASE(EV_RECTS_STAGES) EV_RECTS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const EV_RECTS_STEPS[] = { EV_RECTS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    (void)argc; (void)argv; (void)magic;
-    ev_target(this_val, &t);
-    return ev_client_rects(ctx, &t);
+typedef struct {
+    LayoutJob *job;   /* owned, declared through layout_job_step_ops; NULL until the first activation */
+} EvRectsState;
+
+static void ev_rects_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    EvRectsState *s = st;
+
+    v->tree(ctx, (void **)&s->job, NULL, 0, &layout_job_step_ops);
 }
 
-static JSValue js_ev_bounding_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+static int js_ev_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
+    EvRectsState *s = st;
+    CssPx (*r)[4] = NULL;
+    size_t n = 0;
+    bool done = false;
+    LayoutJobDrive d;
     EvTarget t;
 
-    (void)argc; (void)argv; (void)magic;
-    ev_target(this_val, &t);
-    return ev_bounding_rect(ctx, &t);
+    (void)ctx; (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
+    STEP_DISPATCH(EV_RECTS_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(EV_RECTS_MEASURE);
+    ev_target(hdr->this_val, &t);
+    if (s->job == NULL) {
+        s->job = layout_job_new(LAYOUT_JOB_STEP);
+        METRIC_ADD(client_rects_asks, 1);
+    }
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+    layout_job_enter(s->job);
+    layout_job_drive_begin_resting(&d);
+    while (block_flow_drive_deferred(&d)) {
+        if (ev_client_rects_ask(&t)) {
+            n = ev_client_rects_px(&t, &r);
+            done = true;
+            break;
+        }
+        DCHECK(layout_job_drive_spent(&d) || layout_job_drive_pending(&d),
+               "CSSOM VIEW §6's client rectangles answered \"not yet\" with no question suspended and no "
+               "allowance spent, so the next activation would ask the same thing over the same state for ever");
+    }
+    layout_job_drive_end(&d);
+    layout_job_leave(s->job);
+    rest_unit_end();
+    if (!done) {
+        layout_job_rested(s->job);
+        METRIC_ADD(client_rects_rests, 1);
+        return JS_STEP_YIELD;
+    }
+    *presult = idl_step_magic(hdr) == EV_RECTS_BOUNDING ? ev_bounding_rect_mint(&t, r, n)
+                                                       : ev_client_rects_mint(&t, r, n);
+    free(r);
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl EV_RECTS_STEP = {
+    js_ev_rects_step, sizeof(EvRectsState), ev_rects_visit, NULL,
+    "CSSOM VIEW §6 \"Extensions to the Element Interface\" getClientRects() / getBoundingClientRect()",
+    EV_RECTS_STEPS
+};
 
 /* ---- the members, the declaration and the per-realm install ---------------------------------------------- */
 
@@ -1721,9 +1812,9 @@ void element_view_init(JSContext *ctx)
     idl_this_iface(element_is, "Element");
     g_id_set_scroll_left = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false, js_ev_set, EV_SCROLL_LEFT);
     idl_this_iface(element_is, "Element");
-    g_id_client_rects    = idl_method_id(ctx, NULL, 0, js_ev_client_rects, 0);
+    g_id_client_rects    = idl_method_id_step(ctx, NULL, 0, NULL, 0, &EV_RECTS_STEP, EV_RECTS_LIST);
     idl_this_iface(element_is, "Element");
-    g_id_bounding_rect   = idl_method_id(ctx, NULL, 0, js_ev_bounding_rect, 0);
+    g_id_bounding_rect   = idl_method_id_step(ctx, NULL, 0, NULL, 0, &EV_RECTS_STEP, EV_RECTS_BOUNDING);
     idl_this_iface(element_is, "Element");
     g_id_scroll          = ev_declare_scroll(ctx, EV_SCROLL_ABSOLUTE);
     g_id_scroll_by       = ev_declare_scroll(ctx, EV_SCROLL_RELATIVE);

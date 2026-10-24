@@ -76,6 +76,8 @@ FlowPoint flow_padding_box_origin(lxb_dom_element_t *el);
    has the element's border and padding, starts at the wrapper's content edge and sits below the captions
    §17.4.1 puts above it. `table` must generate a table wrapper box (asserted). */
 FlowPoint flow_table_box_origin(lxb_dom_element_t *table);
+/* The same corner asked without a drive of its own, as `flow_border_box_origin_ask` is. */
+bool flow_table_box_origin_ask(lxb_dom_element_t *table, FlowPoint *out);
 
 /* CSS 2.1 §10.3.7's and §10.6.4's static position: the distance from the leading edge of absolutely positioned
    `el`'s containing block (§10.1's third or fourth case) to the leading margin edge of the hypothetical box, the

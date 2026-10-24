@@ -2386,6 +2386,7 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
            "Inline replaced elements, block-level replaced elements in normal flow, 'inline-block' replaced
            elements in normal flow and floating replaced elements" for a replaced box, §10.6.6 "Complicated
            cases"' redirection to §10.6.7 for a non-replaced `inline-block`, through core/layout/used_value.h). */
+        if (!lb_atomic_ask(el)) return false;
         below = lb_atomic_extent(el).below;
         drop = used_value_px(el, "margin-bottom");
         extent = used_value_border_edge_px(el, true);

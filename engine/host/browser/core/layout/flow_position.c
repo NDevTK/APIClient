@@ -162,14 +162,13 @@ typedef struct {
     TableUsedHeights   heights;
 } FpTableFrame;
 
-static bool fp_table_box_origin_ask(lxb_dom_element_t *table, FlowPoint *out);
 
 /* `el` is the box being placed, not the table: the refusals below name it. False ("not yet") when the table
    box's origin or a walk §17.5.3 reads was deferred; nothing is then held. */
 static bool fp_table_frame_build_ask(lxb_dom_element_t *el, FpTableFrame *out)
 {
     out->table = table_box_table_of(el);
-    if (!fp_table_box_origin_ask(out->table, &out->origin)) return false;
+    if (!flow_table_box_origin_ask(out->table, &out->origin)) return false;
     table_grid_build(out->table, &out->grid);
     table_widths(out->table, &out->grid, &out->widths);
     if (!table_heights_ask(out->table, &out->grid)) {
@@ -1018,7 +1017,7 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
 
 /* CSS 2 §8.1 "Box dimensions"' padding box origin: the border box origin moved inward by the leading border on
    each axis, derived from `flow_border_box_origin` so an unplaceable box crashes there first. */
-static bool fp_table_box_origin_ask(lxb_dom_element_t *table, FlowPoint *out)
+bool flow_table_box_origin_ask(lxb_dom_element_t *table, FlowPoint *out)
 {
     FlowPoint p;
     CssPx top;
@@ -1045,7 +1044,7 @@ FlowPoint flow_table_box_origin(lxb_dom_element_t *table)
     FlowPoint p;
 
     layout_job_drive_begin(&d);
-    while (!fp_table_box_origin_ask(table, &p)) (void)block_flow_drive_deferred(&d);
+    while (!flow_table_box_origin_ask(table, &p)) (void)block_flow_drive_deferred(&d);
     layout_job_drive_end(&d);
     return p;
 }

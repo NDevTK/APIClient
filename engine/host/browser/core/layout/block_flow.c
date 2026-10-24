@@ -2076,6 +2076,13 @@ static bool bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, BfBox *result
         } else if (pass != BF_BASELINE_NONE) {
             if (!flex_container_first_baseline_ask(el, &b.has_line_box, &b.baseline)) return false;
         }
+        /* The used height reads the container's content-based height when its own behaves as auto, which is
+           asked here so a resting drive can stop at it and the extent below is then served. */
+        {
+            CssPx h;
+
+            if (used_value_height_behaves_as_auto(el) && !block_flow_auto_height_ask(el, &h)) return false;
+        }
         b.border_h = used_value_border_edge_px(el, true);
         *result = b;
         return true;
@@ -2296,7 +2303,9 @@ bool block_flow_drive_deferred(LayoutJobDrive *d)
  * core/layout/intrinsic_size.c's pair are each readable in the OTHER physical direction — the
  * dimension-parameterised walks the writing-mode arm below names — because at that point there is no refusal
  * left, every arm answers, and `block_flow_auto_height` can call the two sections' components directly. */
-static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out)
+/* False is "not yet" (a question deferred); true with `*answered` false is the writing-mode refusal's release
+   arm, which falls through to §10.6.3's stack. */
+static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out, bool *answered)
 {
     char nbuf[160], wbuf[64];
 
@@ -2321,8 +2330,10 @@ static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out)
                "dimension-parameterised reading of that walk and the dispatch above becomes a call",
                box_subject(el, nbuf, sizeof nbuf),
                box_subject_computed(el, "writing-mode", wbuf, sizeof wbuf));
-        return false;
+        *answered = false;
+        return true;
     }
+    *answered = true;
 
     if (flex_container_main_axis(el) == FLEX_MAIN_AXIS_BLOCK) {
         /* THE `column` ARM, WHICH IS NOW A CALL AND WAS THE CRASH. §5.1 has just made this container's block
@@ -2350,8 +2361,7 @@ static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out)
            every operand is an item's own OUTER contribution inside the container's content box, so there is no
            edge to convert and css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' conversion
            stays with the caller that exposes a used value, exactly as it does for the `row` arm below. */
-        *out = flex_intrinsic_max_content_main_block_size(el);
-        return true;
+        return flex_intrinsic_max_content_main_block_size_ask(el, out);
     }
 
     /* THE `row` ARM, WHICH IS A CALL AND NOT AN ALGORITHM. §5.1 has just made this container's block axis its
@@ -2370,8 +2380,7 @@ static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out)
        line sits inside the container's content box with nothing between them, so there is no edge to convert
        and css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' conversion stays with the caller
        that exposes a used value, exactly as it does for CSS 2.1 §10.6.3's walk below. */
-    *out = flex_cross_size_content_based(el);
-    return true;
+    return flex_cross_size_content_based_ask(el, out);
 }
 
 bool block_flow_auto_height_ask(lxb_dom_element_t *el, CssPx *out)
@@ -2390,7 +2399,12 @@ bool block_flow_auto_height_ask(lxb_dom_element_t *el, CssPx *out)
        returns here, and so does the `column` arm's §9.9.1 "Flex Container Intrinsic Main Sizes" max-content
        main size. The VERTICAL WRITING MODES still crash by name and return FALSE, and their fall-through into
        §10.6.3's stack below is the release arm this walk already had for them. */
-    if (flex && bf_flex_auto_block_size(el, out)) return true;
+    if (flex) {
+        bool answered = false;
+
+        if (!bf_flex_auto_block_size(el, out, &answered)) return false;
+        if (answered) return true;
+    }
     /* css-grid-1 §5.2 "Sizing Grid Containers": "the grid container's auto block size is its max-content
        size", the sum of its row sizes (core/layout/grid_track.h), not §10.6.3's stack of block-level children. */
     if (grid) return grid_container_max_content_block_size_ask(el, out);

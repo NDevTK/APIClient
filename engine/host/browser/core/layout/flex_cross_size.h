@@ -44,6 +44,11 @@
    size", so `min-height: max-content` on a container with a declared `height` asks for this number with a
    definite cross size in hand, and is right to. */
 CssPx flex_cross_size_content_based(lxb_dom_element_t *container);
+/* The same size asked under a resting drive (core/layout/layout_job.h): each in-flow child's intrinsic inline
+   sizes (its flex base size), each element item's content-based height and the baselines of the items
+   step 8.1 collects are asked first, and the sum is then computed over the answered memo. False ("not yet")
+   with `*out` unwritten when one was deferred. */
+bool flex_cross_size_content_based_ask(lxb_dom_element_t *container, CssPx *out);
 
 /* css-flexbox-1 §9.4 "Cross Size Determination"' step 11: one flex item's used cross size, as a content-box
    extent in CSS pixels on `container`'s cross axis, for an item whose cross size property computes to `auto` or

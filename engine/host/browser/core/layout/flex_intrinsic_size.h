@@ -40,5 +40,9 @@ bool flex_intrinsic_inline_sizes_ask(lxb_dom_element_t *el);
    keyword on a height would ask for it, and the cascade refuses that keyword by name.
    No flex line is needed for either container kind: only a multi-line min-content size goes to §9.9.1.3. */
 CssPx flex_intrinsic_max_content_main_block_size(lxb_dom_element_t *el);
+/* The same size asked under a resting drive (core/layout/layout_job.h): each in-flow element child's automatic
+   block size, which its main-size contribution measures, is asked first, and the size is then computed over the
+   answered memo. False ("not yet") with `*out` unwritten when one was deferred. */
+bool flex_intrinsic_max_content_main_block_size_ask(lxb_dom_element_t *el, CssPx *out);
 
 #endif
