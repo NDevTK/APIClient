@@ -54,6 +54,7 @@
 #include "core/events/hash_change_event.h"
 #include "core/events/before_unload_event.h"
 #include "core/events/security_policy_violation_event.h"
+#include "core/frame/csp_violation.h"
 #include "core/events/storage_event.h"
 #include "core/events/cookie_change_event.h"
 #include "core/events/ui_event.h"
@@ -1073,6 +1074,7 @@ static void event_declare_subclasses(JSContext *ctx)
        all twelve of its attributes are strings and integers — so, unlike NavigateEvent's two, there is
        nothing here that has to wait for a per-realm install to read a class id. */
     security_policy_violation_event_init(ctx);
+    csp_violation_init(ctx);   /* CSP §5.5's task, which mints that event */
     /* COOKIE STORE API §5.1 "The CookieChangeEvent interface" — the event a COOKIE CHANGE fires at a
        Window's CookieStore. Declared here for the reason the rest of this list gives: its prototype chains to
        this realm's Event.prototype. It brands against no other component's class — its two members are
@@ -1115,6 +1117,7 @@ static void event_free_subclasses(JSRuntime *rt)
     mouse_event_free(rt);
     ui_event_free(rt);
     cookie_change_event_free(rt);
+    csp_violation_free(rt);
     security_policy_violation_event_free(rt);
     storage_event_free(rt);
     before_unload_event_free(rt);

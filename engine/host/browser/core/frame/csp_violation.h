@@ -104,5 +104,9 @@ void csp_report_violation_for_global(CspReporter r, const CspPolicy *policy, con
    the asks, each of which can queue a task. A caller that runs a CSP check for its answer alone asserts it
    does not move. */
 unsigned long csp_violation_reports(void);
+/* §5.5's queued task, declared once per agent beside the SecurityPolicyViolationEvent interface
+   (core/events/event.c's row) and released with it. */
+void csp_violation_init(JSContext *ctx);
+void csp_violation_free(JSRuntime *rt);
 
 #endif

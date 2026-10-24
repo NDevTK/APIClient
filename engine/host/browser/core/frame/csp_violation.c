@@ -36,6 +36,8 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/dom/document.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
@@ -265,17 +267,172 @@ static size_t csp_sample_bytes(const char *source, size_t source_len)
    STEPS 3.2 AND 3.3 collapse into one line here because this engine's global IS a Window and §5.5's own two
    steps are "if target is null, set target to violation's global object" and "if target is a Window, set
    target to target's associated Document". */
-static JSValue csp_violation_target(JSContext *ctx, const lxb_dom_element_t *element)
+static JSValue csp_violation_target(JSContext *ctx, JSValueConst element)
 {
     JSValueConst doc = document_object(ctx);
 
-    if (element) {
-        lxb_dom_node_t *n = lxb_dom_interface_node((lxb_dom_element_t *)element);
-
-        if (shadow_root_shadow_including_root(n) == node_of(doc))
-            return node_wrap(ctx, n);   /* OWNED */
-    }
+    if (JS_IsObject(element) && shadow_root_shadow_including_root(node_of(element)) == node_of(doc))
+        return JS_DupValue(ctx, element);   /* OWNED */
     return JS_DupValue(ctx, doc);
+}
+
+/* The violation's attributes, carried into the task as one Array in SecurityPolicyViolationEventFields's order
+   (an operation that becomes a work item takes its inputs with it): eight strings, `source_file` null when
+   absent, then the three integers. */
+enum { CSPF_DOCUMENT_URI, CSPF_REFERRER, CSPF_BLOCKED_URI, CSPF_DIRECTIVE, CSPF_POLICY, CSPF_SOURCE_FILE,
+       CSPF_SAMPLE, CSPF_DISPOSITION, CSPF_STATUS, CSPF_LINE, CSPF_COLUMN, CSPF_N };
+
+static JSValue csp_fields_record(JSContext *ctx, const SecurityPolicyViolationEventFields *f)
+{
+    JSValue rec = JS_NewArray(ctx);
+
+    CHECK(!JS_IsException(rec), "CSP §5.5: OOM carrying a violation's attributes into its task");
+    JS_SetPropertyUint32(ctx, rec, CSPF_DOCUMENT_URI, JS_NewString(ctx, f->document_uri));
+    JS_SetPropertyUint32(ctx, rec, CSPF_REFERRER, JS_NewString(ctx, f->referrer));
+    JS_SetPropertyUint32(ctx, rec, CSPF_BLOCKED_URI, JS_NewString(ctx, f->blocked_uri));
+    JS_SetPropertyUint32(ctx, rec, CSPF_DIRECTIVE, JS_NewString(ctx, f->effective_directive));
+    JS_SetPropertyUint32(ctx, rec, CSPF_POLICY, JS_NewString(ctx, f->original_policy));
+    JS_SetPropertyUint32(ctx, rec, CSPF_SOURCE_FILE,
+                         f->source_file ? JS_NewString(ctx, f->source_file) : JS_NULL);
+    JS_SetPropertyUint32(ctx, rec, CSPF_SAMPLE, JS_NewString(ctx, f->sample));
+    JS_SetPropertyUint32(ctx, rec, CSPF_DISPOSITION, JS_NewString(ctx, f->disposition));
+    JS_SetPropertyUint32(ctx, rec, CSPF_STATUS, JS_NewInt32(ctx, f->status_code));
+    JS_SetPropertyUint32(ctx, rec, CSPF_LINE, JS_NewUint32(ctx, f->line_number));
+    JS_SetPropertyUint32(ctx, rec, CSPF_COLUMN, JS_NewUint32(ctx, f->column_number));
+    return rec;
+}
+
+/* The record read back: `strs` receives the eight strings (JS_ToCString, freed by csp_fields_release). */
+static void csp_fields_read(JSContext *ctx, JSValueConst rec, SecurityPolicyViolationEventFields *f,
+                            const char **strs)
+{
+    static const int STR[] = { CSPF_DOCUMENT_URI, CSPF_REFERRER, CSPF_BLOCKED_URI, CSPF_DIRECTIVE, CSPF_POLICY,
+                               CSPF_SOURCE_FILE, CSPF_SAMPLE, CSPF_DISPOSITION };
+    uint32_t num[3];
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, rec, (uint32_t)STR[i]);
+
+        DCHECK(JS_IsString(v) || (STR[i] == CSPF_SOURCE_FILE && JS_IsNull(v)),
+               "a CSP violation's task carries an attribute record csp_fields_record did not write");
+        strs[i] = JS_IsNull(v) ? NULL : JS_ToCString(ctx, v);
+        CHECK(JS_IsNull(v) || strs[i] != NULL, "CSP §5.5: OOM reading a violation's attributes in its task");
+        JS_FreeValue(ctx, v);
+    }
+    for (i = 0; i < 3; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, rec, (uint32_t)(CSPF_STATUS + i));
+
+        DCHECK(JS_IsNumber(v), "a CSP violation's task carries a non-numeric status, line or column");
+        JS_ToUint32(ctx, &num[i], v);
+        JS_FreeValue(ctx, v);
+    }
+    f->document_uri = strs[0];
+    f->referrer = strs[1];
+    f->blocked_uri = strs[2];
+    f->effective_directive = strs[3];
+    f->original_policy = strs[4];
+    f->source_file = strs[5];
+    f->sample = strs[6];
+    f->disposition = strs[7];
+    f->status_code = (uint16_t)num[0];
+    f->line_number = num[1];
+    f->column_number = num[2];
+}
+
+static void csp_fields_release(JSContext *ctx, const char **strs)
+{
+    int i;
+
+    for (i = 0; i < 8; i++) if (strs[i]) JS_FreeCString(ctx, strs[i]);
+}
+
+/* ---- §5.5 step 3's task ------------------------------------------------------------------------------------
+   "Queue a task to run the following steps": the targeting (steps 3.1-3.2), the EventTarget test and the fire
+   (step 3.3), so the event is created, and its target chosen, after the task responsible for the violation has
+   finished with the DOM, as the step's note says. The dispatch is §2.9's, reached as a request so a listener
+   runs on a flow base. Arguments: the violation's element wrapper (or undefined) and csp_fields_record's Array. */
+#define CSP_TASK_STAGES(X) \
+    X(CSPT_FIRE, "CSP §5.5 Report a violation step 3 — the queued task's targeting and fire")
+enum { CSP_TASK_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const csp_task_steps[] = { CSP_TASK_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr   hdr;       /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t     fphase;    /* the dispatch's own phase, held across a suspension */
+    uint8_t     started;
+    JSValue     target;    /* steps 3.1-3.2's answer (owned) */
+    JSValue     ev;        /* the SecurityPolicyViolationEvent (owned) */
+    EventFireCb cb;
+} CspTask;
+
+static int g_csp_task_stepid = -1;
+
+static void csp_task_visit(JSContext *ctx, void *stp, JSStepVisit *v)
+{
+    CspTask *s = stp;
+    int k;
+
+    if (!s->started) return;   /* the block is zeroed until the first step places every owned field */
+    v->val(ctx, &s->target);
+    v->val(ctx, &s->ev);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
+}
+
+static int csp_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    CspTask *s = stp;
+    int r;
+
+    STEP_DISPATCH(CSP_TASK_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(CSPT_FIRE);
+        if (!s->started) {
+            SecurityPolicyViolationEventFields f;
+            const char *strs[8];
+            int k;
+
+            s->started = 1;
+            s->fphase = 0;
+            s->ev = JS_UNDEFINED;
+            STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+            s->target = csp_violation_target(ctx, step_arg(&s->hdr, 0));   /* steps 3.1-3.2 */
+            /* Step 3.3's own condition: a realm with no active document resolves to nothing that implements
+               EventTarget, and then nothing is fired. */
+            if (!JS_IsObject(s->target)) return JS_STEP_DONE;
+            csp_fields_read(ctx, step_arg(&s->hdr, 1), &f, strs);
+            s->ev = security_policy_violation_event_new_to_fire(ctx, &f);
+            csp_fields_release(ctx, strs);
+            /* An allocation failure inside the mint: no arm of §5.5 reports a failure to report. */
+            if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_DONE; }
+        }
+        r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), s->target, s->ev, JS_UNDEFINED, cb_result,
+                                  NULL, out_cb, out_argc);
+        if (r > 0) return r;   /* parked inside the dispatch: a listener is the page's code */
+        if (r < 0) return JS_STEP_ABRUPT;
+        return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef csp_task_def = {
+    sizeof(CspTask), csp_task_step, NULL, 0,
+    .visit = csp_task_visit,
+    .algorithm = "CSP §5.5 Report a violation — the task step 3 queues",
+    .steps = csp_task_steps
+};
+
+void csp_violation_init(JSContext *ctx)
+{
+    DCHECK(g_csp_task_stepid < 0, "csp_violation_init ran twice — §5.5's task is declared once per agent");
+    g_csp_task_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &csp_task_def);
+    agent_state_id("event", &g_csp_task_stepid,
+                   "CSP §5.5 \"Report a violation\" — the task its step 3 queues to target and fire");
+}
+
+void csp_violation_free(JSRuntime *rt)
+{
+    (void)rt;
+    DCHECK(g_csp_task_stepid >= 0, "§5.5's task was released in an agent that never declared it");
+    g_csp_task_stepid = -1;
 }
 
 static unsigned long g_csp_violation_reports;
@@ -292,22 +449,12 @@ static void csp_fire_violation(JSContext *ctx, const CspPolicy *policy, const ch
                                const char *sample, size_t sample_len, const lxb_dom_element_t *element)
 {
     SecurityPolicyViolationEventFields f;
-    JSValue target, ev;
+    JSValueConst argv[2];
+    JSValue fn, rec, el;
     char *document_uri, *blocked_uri, *original_policy, *sample_z;
 
-    g_csp_violation_reports++;   /* the ask, counted before step 4 decides whether anything is fired */
-
-    /* §5.5 STEP 4's OWN CONDITION, ASKED BEFORE ANYTHING IS COMPOSED — "if target implements EventTarget,
-       fire an event named securitypolicyviolation …". Steps 3.2 and 3.3 resolve a null target to the global's
-       associated Document, and a realm that has no active document resolves to nothing that implements
-       EventTarget. Asking here rather than after the mint is what stops a composed event having no owner.
-       IT IS NOT A DEFENSIVE `if`: it is the step, and deleting the thing it selects against would leave the
-       question still owed — §5.5 asks it of every violation, including the ones whose target IS a Document. */
-    target = csp_violation_target(ctx, element);
-    if (!JS_IsObject(target)) {
-        JS_FreeValue(ctx, target);
-        return;
-    }
+    g_csp_violation_reports++;   /* the ask, counted before the task decides whether anything is fired */
+    DCHECK(g_csp_task_stepid >= 0, "a CSP violation was reported before csp_violation_init declared §5.5's task");
     /* §2.4: "each violation has a url, which is its global object's url". */
     document_uri = csp_strip_serialized_url(document_url(ctx));
     blocked_uri = csp_violation_blocked_uri(kind, resource_url);
@@ -362,26 +509,22 @@ static void csp_fire_violation(JSContext *ctx, const CspPolicy *policy, const ch
     f.line_number = 0;
     f.column_number = 0;
 
-    ev = security_policy_violation_event_new_to_fire(ctx, &f);
+    rec = csp_fields_record(ctx, &f);
     free(document_uri);
     free(blocked_uri);
     free(original_policy);
     free(sample_z);
-    if (JS_IsException(ev)) {
-        /* An allocation failure inside the mint. The BLOCK has already happened and is the answer the page
-           gets; what is lost is its observable, and there is no arm of §5.5 that reports a violation about
-           failing to report a violation. */
-        JS_FreeValue(ctx, ev);
-        JS_FreeValue(ctx, target);
-        return;
-    }
-    /* §5.5's "QUEUE A TASK to run the following steps", whose own note says why it is queued: "to ensure that
-       the event targeting and dispatch happens after JavaScript completes execution of the task responsible
-       for a given violation (which might manipulate the DOM)". core/events/event_target.h names
-       `event_target_fire` as exactly that reach and `event_target_fire_run` as the synchronous one, and this
-       is the queued caller its contract is written for. `ev` is CONSUMED. */
-    event_target_fire(ctx, target, ev, JS_UNDEFINED, TASK_SOURCE_UNNAMED_BY_ITS_STANDARD);   /* §5.5 */
-    JS_FreeValue(ctx, target);
+    /* §5.5 steps 1-2 and step 3's "Queue a task": the element travels as its wrapper, and the task does the
+       rest (csp_task_step). The callee is minted in the violation's realm, the global the task targets. */
+    el = element ? node_wrap(ctx, lxb_dom_interface_node((lxb_dom_element_t *)element)) : JS_UNDEFINED;
+    fn = JS_NewCFunction2(ctx, NULL, "reportViolation", 2, JS_CFUNC_step, g_csp_task_stepid);
+    CHECK(!JS_IsException(fn), "CSP §5.5: the queued task's callee could not be allocated");
+    argv[0] = el;
+    argv[1] = rec;
+    JS_EnqueueCallTask(ctx, fn, 2, argv, TASK_SOURCE_UNNAMED_BY_ITS_STANDARD);   /* §5.5 step 3 */
+    JS_FreeValue(ctx, fn);
+    JS_FreeValue(ctx, rec);
+    JS_FreeValue(ctx, el);
 }
 
 void csp_report_violation_for_request(CspReporter r, const CspPolicy *policy, const char *destination,
