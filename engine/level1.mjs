@@ -1016,6 +1016,55 @@ async function mintDrive(minted, slices) {
          threw ? String(threw.message || threw) : { crashed: e._crashed, r });
   }
   console.log('[level1]   ABI answers      ' + resumed.length + ' @RESUMED readings, 4 referrer policies, 2 partials driven');
+
+  /* Owed host requests. A GetHostRequests line outside `id<TAB>asker<TAB>op` is driven through the real service
+     round, where it retires the instance with nothing declined or answered; the readers of a document.fetch
+     record and of a decline's answer are driven directly. */
+  for (const [label, text, names] of [['no tabs', 'garbage', 'id<TAB>asker<TAB>op'], ['id 0', '0\tgap-doc\tnoop', 'positive'],
+                                      ['an id that is not a number', 'x\tgap-doc\tnoop', 'positive'],
+                                      ['a valid line naming an op this zone does not answer (the control)', '7\tgap-doc\tother.op', null]]) {
+    let acted = 0;
+    const e = inst({ docId: 'gap-doc', joinedDocIds: [], _inflight: new Map(), residentBytes: 131072, _egress: { asked: 0 },
+                     records: new Map([['gap-doc', ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public')]]),
+                     r: { renderer: { getPending: async () => ({ requests: '' }), getHostNotices: async () => ({ notices: '' }),
+                                      getHostRequests: async () => ({ requests: text }), getLevel1Account: account,
+                                      hostDecline: async () => { acted++; return { matched: 1 }; },
+                                      hostAnswer: async () => { acted++; return {}; } } } });
+    let threw = null;
+    try { await ops.serviceFetch(e, false); } catch (x) { threw = x; }
+    const r = e._crashed ? refusedRun(e) : null;
+    must(threw === null && acted === 0 && (names === null ? !e._crashed && e.level1.paid === 5
+           : e._crashed === true && e.level1.paid === 3 && r.rows.length === 1 && r.rows[0].includes(names)),
+         'a GetHostRequests line with ' + label + ' ' + (names === null ? 'is left parked and the round recorded'
+                                                                        : 'retires the instance and nothing is answered'),
+         threw ? String(threw.message || threw) : { acted, crashed: e._crashed, r });
+  }
+  const docFetch = (o) => {
+    const f = ['derived', 'undriven', 'unpinned', 'iframe', '', 'gap-doc', 'https://b.test/x'];
+    for (const k of Object.keys(o)) f[k] = o[k];
+    return f.join('\t');
+  };
+  for (const [label, args, names] of [['the valid record', docFetch({}), null], ['a policy-less record', docFetch({ 4: '' }), null],
+                                      ['six fields', docFetch({}).split('\t').slice(1).join('\t'), 'fewer'],
+                                      ['provenance', docFetch({ 0: 'guessed' }), 'provenance'], ['drive mark', docFetch({ 1: 'x' }), 'drive mark'],
+                                      ['witness mark', docFetch({ 2: 'unstated' }), 'witness mark'],
+                                      ['destination', docFetch({ 3: 'script' }), 'destination'],
+                                      ['referrer policy', docFetch({ 4: 'always' }), 'referrer policy'],
+                                      ['initiator', docFetch({ 5: '' }), 'initiator'], ['address', docFetch({ 6: '' }), 'address']]) {
+    const got = ZONE.documentFetchOf(args);
+    must(names === null ? typeof got === 'object' && got.url === 'https://b.test/x' && got.initiator === 'gap-doc'
+                        : typeof got === 'string' && got.includes(names),
+         'a document.fetch record with ' + label + ' is ' + (names === null ? 'read field by field' : 'refused, naming it'), { got });
+  }
+  for (const matched of [1, 0, 2]) {
+    const e = inst({ r: { renderer: { hostDecline: async () => ({ matched }) } } });
+    await ZONE.engineDeclineRendezvous(e, 7, 'blocked-signal:x');
+    const r = e._crashed ? refusedRun(e) : null;
+    must(matched === 1 ? !e._crashed : e._crashed === true && r.rows.length === 1 && r.rows[0].includes('host request 7'),
+         'a decline answered as matching ' + matched + ' parked flow(s) is ' + (matched === 1 ? 'taken' : 'refused'),
+         { crashed: e._crashed, r });
+  }
+  console.log('[level1]   host requests    4 GetHostRequests lines, 10 document.fetch records, 3 decline answers driven');
 }
 
 /* engineFetchXhr's real path with a counting safeFetch: an invented xhr.send record retires the instance and

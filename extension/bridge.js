@@ -5242,20 +5242,11 @@ async function engineServiceHostRequests(eng) {
   // a guessed answer is not. Answering is what lets a navigation finish.
   const reqs = owedList("GetHostRequests", (await eng.r.renderer.getHostRequests()).requests);
   for (const line of reqs) {
-    /* `id<TAB>asker<TAB>op`, written by engine_host_requests from a counter it CHECKs against wrapping, the
-       asker naming the asking document; a record without that shape is asserted, since dropping it would leave
-       its flow parked with no symptom. */
-    const tab = line.indexOf("\t");
-    const atab = tab > 0 ? line.indexOf("\t", tab + 1) : -1;
-    DCHECK(tab > 0 && atab > tab + 1, "an owed host request is not `id<TAB>asker<TAB>op` — the id is what an " +
-                                      "answer is routed by, so a record without one names a call site this " +
-                                      "zone can never reach");
-    if (atab < 0) continue;   // release: an unanswerable record leaves its flow parked, which is visible
-    const id = +line.slice(0, tab), asker = line.slice(tab + 1, atab), op = line.slice(atab + 1);
-    /* The id is the whole routing table for an answer: engine_host_answer matches every flow's register on it
-       and the engine's counter starts at 1, so 0 or NaN would answer a call site that does not exist. */
-    DCHECK(Number.isInteger(id) && id > 0,
-           "an owed host request carries no usable id — an answer is routed by that number alone");
+    /* A retirement can land at any await of this loop, and a retired instance is asked nothing more. */
+    if (eng._crashed) return did;
+    const req = hostRequestOf(line);
+    if (typeof req === "string") { engineRefuse(eng, req); return did; }
+    const { id, asker, op } = req;
     /* The asking document's record, which the two arms this zone performs judge by. A request whose asker is no
        document of this instance is declined whatever its operation, by the rule the pending line's askers are
        held to; a declined rendezvous is not listed again. */
@@ -5334,40 +5325,69 @@ async function engineServiceHostRequests(eng) {
        the referrer policy is a Referrer Policy §3 policy or "" (core/frame/navigable.c's HTML §7.4.5 request after
        Fetch §4.1 Main fetch), and the initiator is HTML §7.4.2.2's sourceDocument by its engine name. Indexed
        rather than split on every tab, which would silently take the tail of a malformed record. */
-    const fetchArgs = op.slice("document.fetch\t".length);
-    const fetchTab = fetchArgs.indexOf("\t");
-    const drivenTab = fetchTab > 0 ? fetchArgs.indexOf("\t", fetchTab + 1) : -1;
-    const pinnedTab = drivenTab > 0 ? fetchArgs.indexOf("\t", drivenTab + 1) : -1;
-    const destTab = pinnedTab > 0 ? fetchArgs.indexOf("\t", pinnedTab + 1) : -1;
-    const policyTab = destTab > 0 ? fetchArgs.indexOf("\t", destTab + 1) : -1;
-    const initTab = policyTab > 0 ? fetchArgs.indexOf("\t", policyTab + 1) : -1;
-    DCHECK(fetchTab > 0 && drivenTab > fetchTab + 1 && pinnedTab > drivenTab + 1 && destTab > pinnedTab + 1 &&
-           policyTab > destTab && initTab > policyTab + 1 && initTab < fetchArgs.length - 1,
-           "a document.fetch request is not `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB>" +
-           "<destination><TAB><referrer policy><TAB><initiator><TAB><url>`: `" + op + "` — core/frame/navigable.c " +
-           "writes all eight fields on every path, the policy possibly empty, so this zone and that job no longer " +
-           "share a grammar, and the address read out of it would be a token");
-    const fetchRequest = { destination: fetchArgs.slice(pinnedTab + 1, destTab),
-                           referrerPolicy: fetchArgs.slice(destTab + 1, policyTab) };
+    const df = documentFetchOf(op.slice("document.fetch\t".length));
+    if (typeof df === "string") { engineRefuse(eng, df); return did; }
+    const fetchRequest = { destination: df.destination, referrerPolicy: df.referrerPolicy };
     /* Issued, not awaited, for the XHR seam's reason (a page states a document load with `location.href` or an
        `iframe src`, and its body may never end), keyed on the request id. The asking navigable stays parked on
        its load; every other flow keeps running. */
     did += engineIssue(eng, inflightKey([String(id)]),
       /* `rendezvous`: engineDeliverDocument routes `r.declined` to `hostDecline` against the id the engine is
          parked on, so the navigable keeps the `about:blank` HTML §7.3.1.3 created it holding. */
-      () => eng.fetchedDocument(fetchArgs.slice(initTab + 1), fetchArgs.slice(0, fetchTab),
-                                fetchArgs.slice(fetchTab + 1, drivenTab),
-                                fetchArgs.slice(drivenTab + 1, pinnedTab), /*refusalArm*/"rendezvous",
+      () => eng.fetchedDocument(df.url, df.provenance, df.driven, df.pinned, /*refusalArm*/"rendezvous",
                                 fetchRequest, docRecordOpaque(askerDoc), askerDoc),
       /* A same-origin child's load files its landed address under its create's facts, as a cross-origin one's
          does in the `navigable.create` arm. */
       (r) => {
-        childRequestAlias(fetchArgs.slice(policyTab + 1, initTab), fetchArgs.slice(initTab + 1), r.url);
+        childRequestAlias(df.initiator, df.url, r.url);
         return engineDeliverDocument(eng, id, r);
       });
     continue;
   }
   return did;
+}
+/* One owed host request, `id<TAB>asker<TAB>op`, written by engine_host_requests from a counter that starts at 1
+   and is CHECKed against wrapping; the id is the whole routing table for an answer (engine_host_answer matches
+   every flow's register on it). The line is the instance's statement: answers {id, asker, op}, or the reason it
+   is refused, which retires the instance rather than leaving its flow parked with no symptom. */
+function hostRequestOf(line) {
+  const tab = line.indexOf("\t");
+  const atab = tab > 0 ? line.indexOf("\t", tab + 1) : -1;
+  if (!(tab > 0 && atab > tab + 1))
+    return "content.mojom.Renderer.GetHostRequests answered `" + line + "`, which is not `id<TAB>asker<TAB>op`";
+  const id = +line.slice(0, tab);
+  if (!Number.isInteger(id) || id <= 0)
+    return "content.mojom.Renderer.GetHostRequests answered `" + line + "`, whose id is not a positive integer";
+  return { id, asker: line.slice(tab + 1, atab), op: line.slice(atab + 1) };
+}
+/* A document.fetch request's fields after the verb: `<provenance><TAB><driven><TAB><pinned><TAB><destination>
+   <TAB><referrer policy><TAB><initiator><TAB><url>`, which core/frame/navigable.c writes on every path, the policy
+   possibly empty. It is split at the first six tabs so the address is the remainder: a URL cannot contain a tab
+   (URL Standard §4.4 URL parsing strips them), the first three tokens are solver/engine.h's words, the
+   destination is a Fetch §2.2.5 navigation destination, the policy a Referrer Policy §3 policy or "" (HTML §7.4.5's
+   request after Fetch §4.1 Main fetch), and the initiator HTML §7.4.2.2's sourceDocument by its engine name.
+   Answers the fields, or the reason the record is refused. */
+function documentFetchOf(args) {
+  const f = [];
+  let at = 0;
+  for (let k = 0; k < 6; k++) {
+    const t = args.indexOf("\t", at);
+    if (t < 0) return "a document.fetch request carries fewer than seven fields: `" + args + "`";
+    f.push(args.slice(at, t));
+    at = t + 1;
+  }
+  f.push(args.slice(at));
+  const [provenance, driven, pinned, destination, referrerPolicy, initiator, url] = f;
+  const why = (provenance !== PROVENANCE_OBSERVED && provenance !== PROVENANCE_DERIVED && provenance !== PROVENANCE_FORCED)
+      ? "provenance `" + provenance + "`"
+    : (driven !== DRIVEN_YES && driven !== DRIVEN_NO) ? "drive mark `" + driven + "`"
+    : (pinned !== PINNED_YES && pinned !== PINNED_NO) ? "witness mark `" + pinned + "`"
+    : NAVIGATION_DESTINATIONS.indexOf(destination) < 0 ? "destination `" + destination + "`"
+    : _REFERRER_POLICIES.indexOf(referrerPolicy) < 0 ? "referrer policy `" + referrerPolicy + "`"
+    : initiator === "" ? "empty initiator"
+    : url === "" ? "empty address" : null;
+  if (why !== null) return "a document.fetch request carries the " + why + " this zone does not speak: `" + args + "`";
+  return { provenance, driven, pinned, destination, referrerPolicy, initiator, url };
 }
 /* The document load's delivery, named so the answer is handed over against the id it was fetched under. */
 async function engineDeliverDocument(eng, id, r) {
@@ -5397,14 +5417,13 @@ async function engineDeliverDocument(eng, id, r) {
                      r.bytes);
 }
 /* A refusal of a synchronous request (a document load or an XHR fetch), recorded on the rendezvous it names.
-   A refusal matching no parked flow is asserted: this zone issued the request against an id the engine had
-   just published, so a miss means `GetHostRequests` and this answer have drifted. */
+   This zone issued the request against an id the engine had just published, so an answer matching no parked
+   flow is the engine's statement that `GetHostRequests` and this answer have drifted, and refuses it. */
 async function engineDeclineRendezvous(eng, id, reason) {
   const matched = await eng.r.renderer.hostDecline({ request: id, reason });
-  DCHECK(matched && matched.matched === 1,
-         "the engine was parked on no flow for a request this zone had just been asked for — the id came off " +
-         "`GetHostRequests` and is answered here against the same id, so a miss is this zone and the engine " +
-         "no longer agreeing about which rendezvous is outstanding");
+  if ((!matched || matched.matched !== 1) && !eng._crashed)
+    engineRefuse(eng, "the engine answered a decline of host request " + id + " as matching " +
+                      JSON.stringify(matched && matched.matched) + " parked flow(s), not one");
 }
 /* The two channels for a synchronous answer. The document load and the XHR fetch carry a fetched body as bytes;
    every other answer (a number, a document name) has `bytes === null`. Completion 0 is ECMA-262 §6.2.4's
