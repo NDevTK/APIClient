@@ -5965,8 +5965,8 @@ static long g_gate_asks, g_gate_arm[GATE_ARMS];
  * long as it is owed. Next diff builds: the drive and the reply's arrival as two orders, as security-cors's
  * deadline race does, since the reply's arrival is unknown. How its absence would show: `orphanGate.reaction`
  * climbing with `_orphansAsked` flat on a page that holds one request open.
- * Named residual. Not covered: a resource, XHR or module reply counts as able to run page code, because whether
- * its object has a listener is not inspected. Next diff builds: the listener test on the delivery's target. How
+ * Named residual. Not covered: a resource, XHR, module or async rendezvous reply counts as able to run page
+ * code, because whether its object has a listener is not inspected. Next diff builds: the listener test on the delivery's target. How
  * its absence would show: `orphanGate.uninspected` nonzero on a run whose drives stay at zero. */
 static int engine_outstanding_runs_page_code(JSContext *ctx, Flow *f, int seq_awaits) {
     int arm = GATE_NONE, n, i;
@@ -5980,8 +5980,8 @@ static int engine_outstanding_runs_page_code(JSContext *ctx, Flow *f, int seq_aw
         int kind = (int)pending_get_int(e, PEND_KIND);
 
         if (pending_entry_owed(e)) {
-            DCHECK(kind != FLOW_PENDING_HOSTREQ,
-                   "the orphan gate met an unanswered synchronous request — such a flow is blocked and the ladder "
+            DCHECK(kind != FLOW_PENDING_HOSTREQ || pending_get_int(e, PEND_ASYNC),
+                   "the orphan gate met an unanswered blocking rendezvous — such a flow is blocked and the ladder "
                    "returns above both orphan rungs");
             if (kind == FLOW_PENDING_SCRIPT || kind == FLOW_PENDING_DOCSCRIPT) {
                 arm = GATE_PROGRAM;
