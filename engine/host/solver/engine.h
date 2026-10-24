@@ -447,7 +447,7 @@ int engine_reclaim_at_rest(void);
 /* RAM pressure, the scheduler's policy for when the cold tail relocates: at rest between two steps, while the
    instance's live bytes (engine_c_alloc_live) stand above `share` permille of its known limit, the lowest-value
    flow is sold to the cold tier. The limit is the wasm build's maximum linear memory or the native process's
-   RLIMIT_AS, read when the session begins; with neither the census says `ramLimitSource` `{"source":"none"}` and only the
+   RLIMIT_AS, read when the session begins; with neither the census says `ramLimitSource` `{"none":1}` and only the
    refusal edge sells. The margin below the wall is room for the allocations that do not ask the edge, and for
    those made where the safepoint is closed. ENGINE_RAM_SHARE_DEFAULT is the share until a host states one, 1 to
    1000; a person states it to the native host as engine/trusted.mjs's `--ram-share <permille>`.

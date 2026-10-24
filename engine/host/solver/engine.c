@@ -1084,7 +1084,7 @@ static long g_reclaim_asks, g_reclaim_unarmed, g_reclaim_floor;
    none known, so pressure sells nothing), and the sales it made, a subset of `g_flows_sold`. */
 static unsigned g_ram_share = ENGINE_RAM_SHARE_DEFAULT;
 static uint64_t g_ram_limit;
-static const char *g_ram_limit_source = "{\"source\":\"none\"}";
+static const char *g_ram_limit_source = "{\"none\":1}";
 static long g_pressure_sold;
 
 int engine_take_paged_owed(void) {
@@ -10813,12 +10813,12 @@ void engine_set_ram_share(unsigned permille) {
 static void engine_ram_limit_read(void) {
 #if defined(__EMSCRIPTEN__)
     g_ram_limit = (uint64_t)emscripten_get_heap_max();
-    g_ram_limit_source = "{\"source\":\"wasm-heap-max\"}";
+    g_ram_limit_source = "{\"wasm-heap-max\":1}";
 #else
     struct rlimit rl;
     CHECK(getrlimit(RLIMIT_AS, &rl) == 0, "the native host could not read its address-space limit");
     g_ram_limit = rl.rlim_cur == RLIM_INFINITY ? 0 : (uint64_t)rl.rlim_cur;
-    g_ram_limit_source = g_ram_limit ? "{\"source\":\"rlimit-as\"}" : "{\"source\":\"none\"}";
+    g_ram_limit_source = g_ram_limit ? "{\"rlimit-as\":1}" : "{\"none\":1}";
 #endif
 }
 

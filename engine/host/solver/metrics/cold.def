@@ -196,7 +196,7 @@ METRIC(paged_asks, "pagedAsks", LIFETIME, "ask", PROCESS, "solver/engine.c", INT
 METRIC(paged_unarmed, "pagedUnarmed", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
 METRIC(paged_floor, "pagedFloor", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
 /* …and the sales RAM pressure made at rest before any refusal (solver/engine.h's engine_set_ram_share), with the
-   limit, where it came from, and the share that decided them. `ramLimitSource`'s `source` "none" is a process with no known
+   limit, where it came from, and the share that decided them. `ramLimitSource` is a one-arm histogram naming the source (a census row is a count or counts), and its "none" arm is a process with no known
    limit, where pressure sells nothing and `ramLimitKiB` reads 0. */
 METRIC(pressure_sold, "pressureSold", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 METRIC(ram_limit_kib, "ramLimitKiB", CONSTANT, "KiB", AGENT, "solver/engine.c", INT)
