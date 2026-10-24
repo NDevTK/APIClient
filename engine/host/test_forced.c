@@ -1149,6 +1149,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/weakchain.h"
 #include "fixture/gcchurn.h"
 #include "fixture/forkkey.h"
+#include "fixture/qnamefork.h"
 #include "fixture/importchain.h"
 #include "fixture/borrowedkey.h"
 #include "fixture/replyrole.h"
@@ -1646,6 +1647,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "weakchain", HTML_WEAKCHAIN },
     { "gcchurn", HTML_GCCHURN },
     { "forkkey", HTML_FORKKEY },
+    { "qnamefork", HTML_QNAMEFORK },
     { "importchain", HTML_IMPORTCHAIN },
     { "borrowedkey", HTML_BORROWEDKEY },
     { "replyrole", HTML_REPLYROLE },
@@ -14432,6 +14434,32 @@ TF_UNIT void probes_forkkey(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `qnamefork` document (fixture/qnamefork.h). */
+TF_UNIT void probes_qnamefork(const char *js, Probe *tab, int *n) {
+    /* createElementNS over an unknown qualified name reaches each of §1.4's three completions. */
+    const char *qn_why = NULL; int qn_tt = 1;
+    fold_row(&qn_tt, &qn_why, !!strstr(js, "\"/api/qname\""),
+             "NOT REACHED: there is no /api/qname record at all, so createElementNS did not complete over the "
+             "unknown name");
+    fold_row(&qn_tt, &qn_why, param_value_is(js, "/api/qname", "arm", "element"),
+             "the arm in which the name is valid did not create an element");
+    fold_row(&qn_tt, &qn_why, param_value_is(js, "/api/qname", "arm", "InvalidCharacterError"),
+             "the arm in which the name fails §1.4's productions did not throw InvalidCharacterError");
+    fold_row(&qn_tt, &qn_why, param_value_is(js, "/api/qname", "arm", "NamespaceError"),
+             "the arm in which the name fails §1.4's namespace steps did not throw NamespaceError");
+    /* createElement over the same name reaches step 1's two completions. */
+    const char *ln_why = NULL; int ln_tt = 1;
+    fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/lname", "arm", "element"),
+             "the arm in which the local name is valid did not create an element");
+    fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/lname", "arm", "InvalidCharacterError"),
+             "the arm in which the local name is not valid did not throw InvalidCharacterError");
+    const Probe rows[] = {
+        { "unknown-qualified-name-forks", qn_tt, "/api/qname", SESS_EXPLORE, qn_why },
+        { "unknown-local-name-forks", ln_tt, "/api/lname", SESS_EXPLORE, ln_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `importchain` document (fixture/importchain.h). */
 TF_UNIT void probes_importchain(const char *js, Probe *tab, int *n) {
     /* A 20000-module import chain loads, links and evaluates, and the first module reads the last one's depth
@@ -20058,6 +20086,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_weakchain(js, probes, &np);
     probes_gcchurn(js, probes, &np);
     probes_forkkey(js, probes, &np);
+    probes_qnamefork(js, probes, &np);
     probes_importchain(js, probes, &np);
     probes_borrowedkey(js, probes, &np);
     probes_replyrole(js, probes, &np);

@@ -804,6 +804,19 @@ static JSValue js_doc_create_fragment(JSContext *ctx, JSValueConst this_val, int
  * localName in ASCII lowercase") is the same question, since `lxb_tag_append_lower` folds every name it interns;
  * both are asked once, of the record. The answer comes from `d`, §4.5's "this": `foreignDoc.createElement("p")` is
  * `foreignDoc`'s question. */
+/* DOM §4.5 createElement step 1's predicate over a string value: whether it is a valid element local name. */
+static bool doc_string_is_valid_local_name(JSContext *ctx, JSValueConst v)
+{
+    size_t len = 0;
+    const char *b = JS_ToCStringLen(ctx, &len, v);
+    bool ok;
+
+    CHECK(b != NULL, "createElement could not read the bytes of a string it was handed");
+    ok = dom_valid_element_local_name(b, len);
+    JS_FreeCString(ctx, b);
+    return ok;
+}
+
 static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     (void)magic;
@@ -821,15 +834,17 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
        real and XSS-relevant pattern (the tag decides whether the node executes), so the answer is an unknown derived
        from the source rather than a node of a guessed name, about which every later query and sink would be wrong. */
     if (concolic_is(argv[0])) {
-        /* The creation runs on the tag this source concretely is: an example propagates only because the engine
+        /* The arm in which the name is valid (js_doc_create_element_step forked step 1's two completions first).
+           The creation runs on the tag this source concretely is: an example propagates only because the engine
            performs the real operation on the concrete, so this re-enters with the example and the element it builds
-           becomes the derived value's example. With no example the answer is unknown, a non-answer, not a guess. */
+           becomes the derived value's example. An example that is not a valid name does not belong to this arm, and
+           with none the answer is unknown, a non-answer, not a guess. */
         JSValue ex = concolic_example(ctx, argv[0]), real = JS_UNDEFINED;
-        if (JS_IsString(ex)) {
+        if (JS_IsString(ex) && doc_string_is_valid_local_name(ctx, ex)) {
             JSValueConst a2[1];
             a2[0] = ex;
             real = js_doc_create_element(ctx, this_val, 1, a2, magic);
-            if (JS_IsException(real)) { JS_FreeValue(ctx, JS_GetException(ctx)); real = JS_UNDEFINED; }
+            CHECK(!JS_IsException(real), "createElement refused a local name step 1 accepted");
         }
         JS_FreeValue(ctx, ex);
         return concolic_builtin_hook(ctx, argv[0], "createElement", real);
@@ -899,6 +914,8 @@ static JSValue js_doc_create_element(JSContext *ctx, JSValueConst this_val, int 
                      "threw), which is HTML §8.1.4.6 report an exception")
 enum { IDL_STEP_STAGE_BASE(DCE_STAGES) DCE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const DCE_STEPS[] = { DCE_STAGES(JS_STEP_STAGE_LABEL) NULL };
+/* The question §4.5 step 1 asks of an unknown local name; completion 0 is the valid name, 1 InvalidCharacterError. */
+#define DCE_NAME_OP "DOM §4.5 createElement step 1 (localName is a valid element local name)"
 
 /* DOM §4.5's "flatten element creation options", given `options` and the document the creation is for. It answers
  * two things ("Return registry and is"), one algorithm because step 3.2.1 makes naming both an `is` and a
@@ -1058,11 +1075,27 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
            any element is created. */
         registry = flatten_creation_options(ctx, hdr->this_val, argc > 1 ? argv[1] : JS_UNDEFINED, &is);
         if (JS_IsException(registry)) return -1;      /* `is` is JS_NULL on that exit and owns nothing */
-        /* §4.9 step 3 needs a name to look a definition up by, and a concolic tag has none; the creation is the
-           one below, over the source's example. */
-        if (argc < 1 || concolic_is(argv[0])) {
+        /* §4.9 step 3 needs a name to look a definition up by, and a concolic tag has none. §4.5 step 1 ("If
+           localName is not a valid element local name, then throw an InvalidCharacterError") has two feasible
+           completions over an unknown name, and the element arm is the creation below, over the source's
+           example. The state is complete at the fork (every field set above), and a re-entry re-runs this stage
+           to here with nothing done twice: the options were converted before the body ran. */
+        if (concolic_is(argv[0])) {
+            JSValue ex = concolic_example(ctx, argv[0]);
+            int real = JS_IsString(ex) ? !doc_string_is_valid_local_name(ctx, ex) : JS_OUTCOME_REAL_UNSTATED;
+            int rc, arm = 0;
+
+            JS_FreeValue(ctx, ex);
             JS_FreeValue(ctx, registry);
             JS_FreeValue(ctx, is);
+            rc = step_fork_run(ctx, hdr, argv[0], DCE_NAME_OP, 2, real, &arm);
+            if (rc)
+                return rc;
+            DCHECKF(arm == 0 || arm == 1, "createElement's step 1 fork answered completion %d", arm);
+            if (arm == 1) {
+                JS_ThrowDOMException(ctx, "InvalidCharacterError", "not a valid element local name");
+                return -1;
+            }
             *presult = js_doc_create_element(ctx, hdr->this_val, argc, argv, 0);
             return JS_IsException(*presult) ? -1 : 0;
         }
@@ -1522,6 +1555,103 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
     r = element_wrap(ctx, el);
     return r;
 }
+
+/* DOM §4.5 createElementNS as the page calls it: a step machine, because its qualified name may be unknown
+ * external input and §1.4's validate-and-extract then has three feasible completions — an element,
+ * InvalidCharacterError and NamespaceError — which a plain C body could only collapse into one. Each is
+ * feasible for every namespace (`xmlns` fails step 10 or step 11 whichever namespace is given, and `` fails step
+ * 6), so the fork always declares three. The element arm is a value derived from the name, whose example is the
+ * element the example name creates when that name is valid. A known name runs the internal steps directly.
+ *
+ * Named residual. Not covered: an unknown namespace beside the name, §4.5.1 createDocument's qualified name, and
+ * the other name-taking entries (createAttributeNS, setAttributeNS, setAttribute, toggleAttribute,
+ * createAttribute, createProcessingInstruction), each a byte consumer of its name. Next diff builds: the same
+ * fork at each, asking dom_qname_outcome or the entry's own name predicate. Absence shows as: a @WHY naming
+ * ToString over unknown external input at one of those entries' conversions. */
+#define CEN_ALGORITHM "DOM §4.5 Interface Document createElementNS(namespace, qualifiedName)"
+#define CEN_OP "DOM §1.4 validate and extract a namespace and qualifiedName"
+#define CEN_STAGES(X) X(CEN_CREATE, CEN_ALGORITHM " (the internal createElementNS steps)")
+enum { IDL_STEP_STAGE_BASE(CEN_STAGES) CEN_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CEN_STEPS[] = { CEN_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct { int unused; } CenState;   /* the fork's request lives on the header; nothing is owned here */
+static void cen_visit(JSContext *ctx, void *state, JSStepVisit *v) { (void)ctx; (void)state; (void)v; }
+
+/* Which completion the example name reaches under the given namespace, for step_fork_run's `real`. */
+static int cen_real(JSContext *ctx, JSValueConst ns_v, JSValueConst name)
+{
+    JSValue ex = concolic_example(ctx, name);
+    const char *ns = NULL, *q, *why = NULL;
+    size_t ns_len = 0, q_len = 0;
+    DomQName qn;
+    int real = JS_OUTCOME_REAL_UNSTATED;
+
+    if (JS_IsString(ex)) {
+        if (!JS_IsNull(ns_v) && !JS_IsUndefined(ns_v)) ns = JS_ToCStringLen(ctx, &ns_len, ns_v);
+        q = JS_ToCStringLen(ctx, &q_len, ex);
+        CHECK(q != NULL && (ns != NULL || JS_IsNull(ns_v) || JS_IsUndefined(ns_v)),
+              "createElementNS could not read the bytes of a string it was handed");
+        real = (int)dom_qname_outcome(ns, ns_len, q, q_len, DOM_NAME_ELEMENT, &qn, &why);
+        JS_FreeCString(ctx, q);
+        if (ns) JS_FreeCString(ctx, ns);
+    }
+    JS_FreeValue(ctx, ex);
+    return real;
+}
+
+static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                        int magic);
+
+static int js_doc_create_element_ns_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc,
+                                         JSValueConst *argv, JSValue cb_result, JSValue *presult,
+                                         JSValue **out_cb, int *out_argc)
+{
+    JSValue r;
+
+    (void)state; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == CEN_CREATE, "createElementNS resumed into a stage its declaration does not have");
+    DCHECK(argc == 2, "createElementNS reached its body with an argument count its declaration does not produce");
+    if (concolic_is(argv[1])) {
+        int rc, arm = 0;
+        JSValue ex, made = JS_UNDEFINED;
+
+        DCHECK(!concolic_is(argv[0]),
+               "createElementNS was handed an unknown namespace beside an unknown qualified name — the "
+               "completion then depends on both, so build the fork over the pair (concolic_new_rel) here");
+        rc = step_fork_run(ctx, hdr, argv[1], CEN_OP, DOM_QNAME_OUTCOMES, cen_real(ctx, argv[0], argv[1]), &arm);
+        if (rc)
+            return rc;
+        DCHECKF(arm >= 0 && arm < DOM_QNAME_OUTCOMES, "createElementNS's fork answered completion %d", arm);
+        if (arm != DOM_QNAME_VALID) {
+            JS_ThrowDOMException(ctx, dom_qname_outcome_exception((DomQNameOutcome)arm),
+                                 "the qualified name is not one validate and extract accepts");
+            return JS_STEP_ABRUPT;
+        }
+        ex = concolic_example(ctx, argv[1]);
+        if (JS_IsString(ex) && cen_real(ctx, argv[0], argv[1]) == DOM_QNAME_VALID) {
+            JSValueConst a2[2];
+
+            a2[0] = argv[0];
+            a2[1] = ex;
+            made = js_doc_create_element_ns(ctx, hdr->this_val, 2, a2, 0);
+            CHECK(!JS_IsException(made), "createElementNS refused a qualified name validate and extract accepted");
+        }
+        JS_FreeValue(ctx, ex);
+        *presult = concolic_builtin_hook(ctx, argv[1], "createElementNS", made);
+        return JS_STEP_DONE;
+    }
+    r = js_doc_create_element_ns(ctx, hdr->this_val, argc, argv, 0);
+    if (JS_IsException(r))
+        return JS_STEP_ABRUPT;
+    *presult = r;
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl CEN_DECL = {
+    js_doc_create_element_ns_step, sizeof(CenState), cen_visit, NULL, CEN_ALGORITHM, CEN_STEPS, 0, NULL
+};
 
 /* §4.5's "internal createElementNS steps", named as the spec names them because §4.5.1's createDocument step 3 calls
    them "given document" (the new document, not the one whose implementation was asked); one implementation of
@@ -3064,7 +3194,7 @@ static void document_declare_members(JSContext *ctx)
        test would run the page's `toString` first. */
     g_id_by_element_name = idl_method_id(ctx, IDL_1STR, 1, js_doc_by_element_name, 0);
     idl_this_iface(document_is, "Document");
-    g_id_create_element_ns = idl_method_id(ctx, IDL_NSSTR_STR, 2, js_doc_create_element_ns, 0);
+    g_id_create_element_ns = idl_method_id_step(ctx, IDL_NSSTR_STR, 2, NULL, 0, &CEN_DECL, 0);
     {
         /* §4.5: `(Node root, optional unsigned long whatToShow = 0xFFFFFFFF, optional NodeFilter? filter = null)`,
            twice. */

@@ -54,11 +54,27 @@ typedef struct {
     const char *local;  size_t local_len;
 } DomQName;
 
-/* DOM §1.4 "validate and extract a namespace and qualifiedName", the TWELVE steps exactly. Returns false with
-   the DOMException the step names ALREADY THROWN — InvalidCharacterError for a name the productions reject,
-   NamespaceError for a (prefix, namespace) pairing the standard forbids. A caller that only wants to know
-   whether it may proceed reads the bool; the exception is the page's answer either way. */
+/* The three completions of "validate and extract", numbered with the ordinary one first, which is the order a
+   fork over an unknown qualified name asks them in (quickjs-step.h's step_fork_run). Appended, never inserted:
+   a parked flow's recorded arms are keyed by these numbers. */
+typedef enum {
+    DOM_QNAME_VALID = 0,
+    DOM_QNAME_INVALID_CHARACTER = 1,   /* the DOMException InvalidCharacterError */
+    DOM_QNAME_NAMESPACE = 2,           /* the DOMException NamespaceError */
+    DOM_QNAME_OUTCOMES
+} DomQNameOutcome;
+
+/* DOM §1.4 "validate and extract a namespace and qualifiedName", the TWELVE steps exactly, as a completion:
+   DOM_QNAME_VALID with `out` filled, or the exception's kind with `*why` the step's message. Throws nothing. */
+DomQNameOutcome dom_qname_outcome(const char *ns, size_t ns_len, const char *qname, size_t qname_len,
+                                  DomNameKind kind, DomQName *out, const char **why);
+
+/* The same steps with the DOMException the step names ALREADY THROWN on a false return — InvalidCharacterError
+   for a name the productions reject, NamespaceError for a (prefix, namespace) pairing the standard forbids. */
 bool dom_validate_and_extract(JSContext *ctx, const char *ns, size_t ns_len,
                               const char *qname, size_t qname_len, DomNameKind kind, DomQName *out);
+
+/* The DOMException name of a failing completion. */
+const char *dom_qname_outcome_exception(DomQNameOutcome outcome);
 
 #endif

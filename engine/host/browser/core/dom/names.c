@@ -80,8 +80,8 @@ static bool str_is(const char *s, size_t len, const char *lit)
     return s && len == strlen(lit) && memcmp(s, lit, len) == 0;
 }
 
-bool dom_validate_and_extract(JSContext *ctx, const char *ns, size_t ns_len,
-                              const char *qname, size_t qname_len, DomNameKind kind, DomQName *out)
+DomQNameOutcome dom_qname_outcome(const char *ns, size_t ns_len, const char *qname, size_t qname_len,
+                                  DomNameKind kind, DomQName *out, const char **why)
 {
     const char *colon;
 
@@ -95,9 +95,8 @@ bool dom_validate_and_extract(JSContext *ctx, const char *ns, size_t ns_len,
         out->prefix = qname; out->prefix_len = (size_t)(colon - qname);   /* step 4.1 */
         out->local = colon + 1; out->local_len = qname_len - out->prefix_len - 1;   /* step 4.2 */
         if (!dom_valid_namespace_prefix(out->prefix, out->prefix_len)) {   /* step 4.3 */
-            JS_ThrowDOMException(ctx, "InvalidCharacterError",
-                                 "the namespace prefix is not a valid namespace prefix");
-            return false;
+            *why = "the namespace prefix is not a valid namespace prefix";
+            return DOM_QNAME_INVALID_CHARACTER;
         }
     }
     /* step 5: the assertion the spec states, which holds because step 4.3 is the only way a prefix is set. */
@@ -108,30 +107,55 @@ bool dom_validate_and_extract(JSContext *ctx, const char *ns, size_t ns_len,
        parameter of the algorithm itself in the live text, not a caller's convention. */
     if (!(kind == DOM_NAME_ATTRIBUTE ? dom_valid_attribute_local_name(out->local, out->local_len)
                                      : dom_valid_element_local_name(out->local, out->local_len))) {
-        JS_ThrowDOMException(ctx, "InvalidCharacterError",
-                             kind == DOM_NAME_ATTRIBUTE ? "not a valid attribute local name"
-                                                        : "not a valid element local name");
-        return false;
+        *why = kind == DOM_NAME_ATTRIBUTE ? "not a valid attribute local name"
+                                          : "not a valid element local name";
+        return DOM_QNAME_INVALID_CHARACTER;
     }
     if (out->prefix && !ns) {                                     /* step 8 */
-        JS_ThrowDOMException(ctx, "NamespaceError", "a prefixed name needs a namespace");
-        return false;
+        *why = "a prefixed name needs a namespace";
+        return DOM_QNAME_NAMESPACE;
     }
     if (str_is(out->prefix, out->prefix_len, "xml") && !str_is(ns, ns_len, XML_NS_XML_NAMESPACE)) {   /* step 9 */
-        JS_ThrowDOMException(ctx, "NamespaceError", "the \"xml\" prefix belongs to the XML namespace");
-        return false;
+        *why = "the \"xml\" prefix belongs to the XML namespace";
+        return DOM_QNAME_NAMESPACE;
     }
     /* step 10: EITHER the whole qualified name or the prefix being "xmlns" binds it to the XMLNS namespace —
        `xmlns` with no prefix at all is the one that matters, and reading only the prefix misses it. */
     if ((str_is(qname, qname_len, "xmlns") || str_is(out->prefix, out->prefix_len, "xmlns"))
         && !str_is(ns, ns_len, XML_NS_XMLNS_NAMESPACE)) {
-        JS_ThrowDOMException(ctx, "NamespaceError", "the \"xmlns\" name belongs to the XMLNS namespace");
-        return false;
+        *why = "the \"xmlns\" name belongs to the XMLNS namespace";
+        return DOM_QNAME_NAMESPACE;
     }
     if (str_is(ns, ns_len, XML_NS_XMLNS_NAMESPACE)   /* step 11 — step 10's converse */
         && !(str_is(qname, qname_len, "xmlns") || str_is(out->prefix, out->prefix_len, "xmlns"))) {
-        JS_ThrowDOMException(ctx, "NamespaceError", "the XMLNS namespace only holds \"xmlns\" names");
-        return false;
+        *why = "the XMLNS namespace only holds \"xmlns\" names";
+        return DOM_QNAME_NAMESPACE;
     }
-    return true;                                                  /* step 12 */
+    return DOM_QNAME_VALID;                                       /* step 12 */
+}
+
+bool dom_validate_and_extract(JSContext *ctx, const char *ns, size_t ns_len,
+                              const char *qname, size_t qname_len, DomNameKind kind, DomQName *out)
+{
+    const char *why = NULL;
+    DomQNameOutcome o = dom_qname_outcome(ns, ns_len, qname, qname_len, kind, out, &why);
+
+    if (o == DOM_QNAME_VALID)
+        return true;
+    DCHECK(why != NULL, "a failing validate-and-extract completion carried no message");
+    JS_ThrowDOMException(ctx, dom_qname_outcome_exception(o), "%s", why);
+    return false;
+}
+
+const char *dom_qname_outcome_exception(DomQNameOutcome outcome)
+{
+    switch (outcome) {
+    case DOM_QNAME_INVALID_CHARACTER: return "InvalidCharacterError";
+    case DOM_QNAME_NAMESPACE:         return "NamespaceError";
+    case DOM_QNAME_VALID:
+    case DOM_QNAME_OUTCOMES:
+        break;
+    }
+    DFAILF("validate-and-extract completion %d names no exception", (int)outcome);
+    return NULL;
 }
