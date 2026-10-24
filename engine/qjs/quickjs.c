@@ -28264,37 +28264,20 @@ static JSValue js_call_c_function(JSContext *ctx, JSValueConst func_obj,
     return ret_val;
 }
 
+/* A bound function's §10.4.1.1 [[Call]] ( thisArg, argList ) and §10.4.1.2 [[Construct]] ( argList, newTarget )
+   are rewrites the interpreter performs at its call and construct sites (tramp_bound_target): the ultimate
+   target is dispatched on the running chain, and a call-root flow (JS_FlowNewCall) reaches the same sites. This
+   class hook is reached only by C calling the bound function, which would run the target's body in a C
+   activation with no flow base to park in, so it is refused rather than driven. */
 static JSValue js_call_bound_function(JSContext *ctx, JSValueConst func_obj,
                                       JSValueConst this_obj,
                                       int argc, JSValueConst *argv, int flags)
 {
-    JSObject *p;
-    JSBoundFunction *bf;
-    JSValueConst *arg_buf, new_target;
-    int arg_count, i;
-
-    p = JS_VALUE_GET_OBJ(func_obj);
-    bf = p->u.bound_function;
-    arg_count = bf->argc + argc;
-    if (js_check_stack_overflow(ctx->rt, sizeof(JSValue) * arg_count))
-        return JS_ThrowStackOverflow(ctx);
-    arg_buf = alloca(sizeof(JSValue) * arg_count);
-    for(i = 0; i < bf->argc; i++) {
-        arg_buf[i] = bf->argv[i];
-    }
-    for(i = 0; i < argc; i++) {
-        arg_buf[bf->argc + i] = argv[i];
-    }
-    if (flags & JS_CALL_FLAG_CONSTRUCTOR) {
-        new_target = this_obj;
-        if (js_same_value(ctx, func_obj, new_target))
-            new_target = bf->func_obj;
-        return JS_CallConstructor2(ctx, bf->func_obj, new_target,
-                                   arg_count, arg_buf);
-    } else {
-        return JS_Call(ctx, bf->func_obj, bf->this_val,
-                       arg_count, arg_buf);
-    }
+    (void)func_obj; (void)this_obj; (void)argc; (void)argv; (void)flags;
+    DFAIL("a bound function was called from C through its class hook: its target would run with no flow base. "
+          "Route that C caller onto a CALL or CONSTRUCT request on the chain, or a call-root flow "
+          "(JS_FlowNewCall), whose dispatch unwraps the bound function at the interpreter's call site");
+    return JS_ThrowTypeError(ctx, "a bound function cannot be called from a C activation");
 }
 
 /* argument of OP_special_object */

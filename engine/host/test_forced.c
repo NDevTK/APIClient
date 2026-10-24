@@ -1107,6 +1107,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/weakchain.h"
 #include "fixture/importchain.h"
 #include "fixture/borrowedkey.h"
+#include "fixture/boundpark.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1558,6 +1559,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "weakchain", HTML_WEAKCHAIN },
     { "importchain", HTML_IMPORTCHAIN },
     { "borrowedkey", HTML_BORROWEDKEY },
+    { "boundpark", HTML_BOUNDPARK },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -14019,6 +14021,31 @@ TF_UNIT void probes_deepnest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `boundpark` document (fixture/boundpark.h). */
+TF_UNIT void probes_boundpark(const char *js, Probe *tab, int *n) {
+    /* One bound body through four callback routes; each failure arm reports its route, the declined send's
+       error and the bound `this`. */
+    static const char *const routes[] = { "/api/boundpark/timer", "/api/boundpark/event", "/api/boundpark/then",
+                                          "/api/boundpark/map" };
+    const char *bp_why = NULL; int bp_tt = 1;
+    for (size_t i = 0; i < COUNTOF(routes); i++) {
+        char q[64];
+        snprintf(q, sizeof q, "\"%s\"", routes[i]);
+        fold_row(&bp_tt, &bp_why, !!strstr(js, q),
+                 "NOT REACHED: a callback route has no /api/boundpark record, so its bound body never reported");
+        fold_row(&bp_tt, &bp_why, param_value_is(js, routes[i], "e", "NetworkError"),
+                 "XHR §3.5.6 The send() method: a bound callback's declined synchronous send did not throw a "
+                 "NetworkError");
+        fold_row(&bp_tt, &bp_why, param_value_is(js, routes[i], "t", "bound"),
+                 "ECMAScript §10.4.1.1 [[Call]] ( thisArg, argList ): a bound callback ran with a `this` other "
+                 "than its bound one");
+    }
+    const Probe rows[] = {
+        { "bound-callback-park", bp_tt, "/api/boundpark/timer", SESS_EXPLORE, bp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -17762,6 +17789,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_weakchain(js, probes, &np);
     probes_importchain(js, probes, &np);
     probes_borrowedkey(js, probes, &np);
+    probes_boundpark(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_deepnest(js, probes, &np);
     probes_svgelement(js, probes, &np);
