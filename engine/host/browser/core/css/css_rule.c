@@ -18,6 +18,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator solver/reclaim.c gives the refusal edge */
+
 #include "check.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
@@ -2442,6 +2444,9 @@ int css_rule_delete_index_run(JSContext *ctx, JSStepHdr *hdr, IdlIndexChain *c,
 
 /* ---- CSSOM §6.4's SERIALIZE A CSS RULE ----------------------------------------------------------------------------
 */
+/* The serialization's growing text. It grows through lexbor_realloc, the C allocator plus the RAM floor's refusal
+   edge (solver/reclaim.h), so a refusal inside a flow step sells the frontier's tail before the CHECK below is the
+   answer; the bytes are freed with free(). The capacity is published only after the allocation returns. */
 typedef struct { char *s; size_t len, cap; } RBuf;
 
 static void rbuf_add_n(RBuf *b, const char *s, size_t n)
@@ -2451,7 +2456,7 @@ static void rbuf_add_n(RBuf *b, const char *s, size_t n)
         char *grown;
 
         while (cap < b->len + n + 1) cap *= 2;
-        grown = realloc(b->s, cap);
+        grown = lexbor_realloc(b->s, cap);
         CHECK(grown != NULL, "cssom: OOM serializing a CSS rule");
         b->s = grown;
         b->cap = cap;

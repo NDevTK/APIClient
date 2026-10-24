@@ -12222,7 +12222,6 @@ int engine_census_emit(void)
     /* The sample ordinal, static for the cadence's reason: an ordinal that restarted while the cadence it numbers
        did not would give two samples of one process one number. */
     static long seq = 0;
-    static size_t need;   /* the previous census's measured footprint (json_buf_grown_take) */
 
     /* The precondition that makes every line below legal: each composer walks state the session owns (the
        frontier, the pager's tables, the runtime behind `g_sess_ctx`), so a census outside a live session is about
@@ -12240,10 +12239,6 @@ int engine_census_emit(void)
        it rather than by arrival order. On its own statement, since an increment is a side effect a DCHECK
        condition may not have. */
     seq += 1;
-    /* The census's composers walk the frontier, so their allocations cannot sell a flow: room for what the last
-       census needed is bought at rest first, and this one's footprint is measured for the next. */
-    engine_headroom_at_rest(need);
-    (void)json_buf_grown_take();
 
     /* The censuses, each printed from the one composer that also puts it on the result document (solver/result.c's
        `result_swap_json`/`result_cold_json`/`result_heap_json`/`result_wfq_json`, solver/decide.c's
@@ -12254,13 +12249,28 @@ int engine_census_emit(void)
        running flow's cursor, the switched-in candidate's sink and payload): `deepest` and `completed` answer the
        cursor's question about the document, and the @S array carries every candidate's sink and payload. */
     {
-        char *swap = result_swap_json(), *cold = result_cold_json();
-        char *heap = result_heap_json(g_sess_ctx), *wfq = result_wfq_json(), *forks = decide_fork_json();
+        char *swap, *cold, *heap, *wfq, *forks;
+        int sold;
 
-        CHECK(swap && cold && heap && wfq && forks,
-              "a census could not be composed — these five lines are the whole of what this host says "
-              "about the frontier it is draining, and a run that continues without one reports its "
-              "cost, its heap and its order as an absence that reads exactly like a zero");
+        /* The RAM floor's refusal loop, as for the result document (main.c's result_json_at_rest): the composers
+           walk the frontier with the safepoint closed, so an allocation they are refused cannot sell a flow and
+           answers an absent census instead (composef's NULL, JSON_BUF_AT_REST). The whole census is then dropped,
+           one flow is sold at rest, and it is composed again, until it fits or nothing is left to sell. */
+        for (;;) {
+            swap = result_swap_json();
+            cold = result_cold_json();
+            heap = result_heap_json(g_sess_ctx);
+            wfq = result_wfq_json();
+            forks = decide_fork_json();
+            if (swap && cold && heap && wfq && forks) break;
+            free(swap); free(cold); free(heap); free(wfq); free(forks);
+            sold = engine_reclaim_at_rest();
+            CHECK(sold,
+                  "a census could not be composed and the frontier has nothing left to sell — these five lines "
+                  "are the whole of what this host says about the frontier it is draining, and a run that "
+                  "continues without one reports its cost, its heap and its order as an absence that reads "
+                  "exactly like a zero");
+        }
         /* One print per marker, because a marker is what a reader matches on: build.mjs greps
          * `^@COLD (\{.*\})$` and `^@WFQ (\{.*\})$`, and one format string carrying five would bury four markers
          * mid-emission. The marker stays a literal at the head of its own format string, which is why the ordinal
@@ -12306,7 +12316,6 @@ int engine_census_emit(void)
         printf("@FORKAT %s\n", forks);
         free(swap); free(cold); free(heap); free(wfq); free(forks);
     }
-    need = json_buf_grown_take();
     fflush(stdout);
     /* The sample happened, said after the flush, because a caller writes more of its own stream on this answer,
        and a `1` before these lines were on the wire would order the host's output by whichever printf ran first. */

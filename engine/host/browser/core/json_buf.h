@@ -20,8 +20,19 @@
 #include <stddef.h>
 
 /* A growing byte buffer. Zero-initialise one (`JsonBuf b = { 0 };`) and release it with json_buf_free, or take
-   its bytes with json_buf_take. */
-typedef struct { char *b; size_t n, cap; } JsonBuf;
+   its bytes with json_buf_take. Its bytes come from lexbor's allocator, which is the C allocator plus the RAM
+   floor's refusal edge (solver/reclaim.h), so they are freed with free(). */
+typedef struct {
+    char *b;
+    size_t n, cap;
+    int at_rest;   /* a refusal makes the composition absent instead of fatal (JSON_BUF_AT_REST) */
+    int lost;      /* the allocator refused this buffer; every write is a no-op and json_buf_take answers NULL */
+} JsonBuf;
+
+/* A buffer composed between steps, where the safepoint is closed and a refusal cannot sell a flow: a refusal
+   releases it and json_buf_take answers NULL, which the composer passes on as an absent composition and the
+   caller answers by selling at rest and composing again (engine_census_emit, main.c's result_json_at_rest). */
+#define JSON_BUF_AT_REST { .at_rest = 1 }
 
 /* A FIELD NAME, written as `"name":`.
  *
@@ -55,7 +66,8 @@ void  json_buf_raw(JsonBuf *b, const char *s);
    endpoint surface's headers, keyed by header name — is not a contract a reader could audit and never was.
    Writing it through the value entry is what keeps it visibly a different construct from a field name. */
 void  json_buf_str(JsonBuf *b, const char *s);
-/* The bytes, NUL-terminated, transferred to the caller (who frees them). The buffer is empty afterwards. */
+/* The bytes, NUL-terminated, transferred to the caller (who frees them). The buffer is empty afterwards. NULL
+   only for a JSON_BUF_AT_REST buffer the allocator refused. */
 char *json_buf_take(JsonBuf *b);
 void  json_buf_free(JsonBuf *b);
 /* An output block of `n` bytes for a composer that writes its bytes itself, counted in json_buf_grown_take's

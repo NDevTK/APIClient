@@ -508,7 +508,7 @@ static char *errs_json_array(ErrsArray which) {
 char *result_wfq_json(void) {
     WfqCensus w;
     NetReachCensus nr;
-    JsonBuf b = { 0 };
+    JsonBuf b = JSON_BUF_AT_REST;   /* composed between steps: a refusal makes this census absent */
 
     flow_wfq_census(&w);
     /* The four arming buckets in one read, since they are a partition (solver/flow.h). After the census,
@@ -1014,7 +1014,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
 
 char *result_cold_json(void) {
     ColdCensus c;
-    JsonBuf b = { 0 };
+    JsonBuf b = JSON_BUF_AT_REST;   /* composed between steps: a refusal makes this census absent */
     /* The step-unit histograms, each composed into its own buffer and spliced as one `%s`. Their width
        STEP_UNITS_JSON_MAX is derived from solver/step_unit.h's list, so an arm added there widens them all.
        `hist` is the members standing in each arm now; `runs` the steps this instance ran in each arm — neither

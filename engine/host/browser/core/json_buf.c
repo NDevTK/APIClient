@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator solver/reclaim.c gives the refusal edge */
+
 #include "check.h"
 #include "core/json_buf.h"
 
@@ -11,14 +13,33 @@
    buffer's bytes stay counted while its caller holds them. The ask is counted, granted or not. */
 static size_t g_json_grown;
 
-static void json_buf_ensure(JsonBuf *b, size_t extra)
+/* Room for `extra` more bytes and the NUL. The growth asks lexbor_realloc, which solver/reclaim.c points at the
+   refusal edge, so a refusal inside a flow step sells the frontier's tail and retries; the capacity is published
+   only after the allocation returns, so a sale run inside it sees the buffer that exists. A refusal that stands
+   is fatal for an ordinary buffer and, for a JSON_BUF_AT_REST one, releases the bytes and marks the buffer lost.
+   Returns whether the room is there. */
+static int json_buf_ensure(JsonBuf *b, size_t extra)
 {
-    if (b->n + extra + 1 <= b->cap) return;
-    while (b->n + extra + 1 > b->cap) b->cap = b->cap ? b->cap * 2 : 256;
-    g_json_grown += b->cap;
-    b->b = realloc(b->b, b->cap);
-    CHECK(b->b != NULL, "json_buf: OOM growing a JSON buffer — a dropped record is a report that lies by "
-                        "omission");
+    size_t cap = b->cap;
+    char *grown;
+
+    if (b->lost) return 0;
+    if (b->n + extra + 1 <= cap) return 1;
+    while (b->n + extra + 1 > cap) cap = cap ? cap * 2 : 256;
+    g_json_grown += cap;
+    grown = lexbor_realloc(b->b, cap);
+    if (!grown) {
+        CHECK(b->at_rest, "json_buf: OOM growing a JSON buffer — a dropped record is a report that lies by "
+                          "omission");
+        free(b->b);   /* realloc leaves the old block in place when it refuses */
+        b->b = NULL;
+        b->n = b->cap = 0;
+        b->lost = 1;
+        return 0;
+    }
+    b->b = grown;
+    b->cap = cap;
+    return 1;
 }
 
 char *json_buf_block(size_t n)
@@ -26,7 +47,7 @@ char *json_buf_block(size_t n)
     DCHECK(n > 0, "json_buf: an output block of no bytes was asked — every composer's block holds at least its "
                   "closing NUL");
     g_json_grown += n;
-    return malloc(n);
+    return lexbor_malloc(n);
 }
 
 size_t json_buf_grown_take(void)
@@ -39,7 +60,7 @@ size_t json_buf_grown_take(void)
 void json_buf_raw(JsonBuf *b, const char *s)
 {
     size_t l = strlen(s);
-    json_buf_ensure(b, l);
+    if (!json_buf_ensure(b, l)) return;
     memcpy(b->b + b->n, s, l);
     b->n += l;
 }
@@ -67,27 +88,38 @@ void json_buf_key_(JsonBuf *b, const char *quoted_name_colon)
 
 void json_buf_str(JsonBuf *b, const char *s)
 {
-    json_buf_ensure(b, 1);
+    if (!json_buf_ensure(b, 1)) return;
     b->b[b->n++] = '"';
     for (; *s; s++) {
         unsigned char c = (unsigned char)*s;
-        if (c == '"' || c == '\\') { json_buf_ensure(b, 2); b->b[b->n++] = '\\'; b->b[b->n++] = (char)c; }
+        if (c == '"' || c == '\\') {
+            if (!json_buf_ensure(b, 2)) return;
+            b->b[b->n++] = '\\';
+            b->b[b->n++] = (char)c;
+        }
         else if (c == '\n') json_buf_raw(b, "\\n");
         else if (c == '\r') json_buf_raw(b, "\\r");
         else if (c == '\t') json_buf_raw(b, "\\t");
         else if (c < 0x20) { char t[8]; snprintf(t, sizeof t, "\\u%04x", c); json_buf_raw(b, t); }
-        else { json_buf_ensure(b, 1); b->b[b->n++] = (char)c; }
+        else {
+            if (!json_buf_ensure(b, 1)) return;
+            b->b[b->n++] = (char)c;
+        }
     }
-    json_buf_ensure(b, 1);
+    if (!json_buf_ensure(b, 1)) return;
     b->b[b->n++] = '"';
 }
 
 char *json_buf_take(JsonBuf *b)
 {
     char *out = b->b;
+    if (b->lost) return NULL;   /* a JSON_BUF_AT_REST buffer the allocator refused: its composition is absent */
     if (!out) {
-        out = malloc(1);
-        CHECK(out != NULL, "json_buf: OOM taking an empty JSON buffer");
+        out = lexbor_malloc(1);
+        if (!out) {
+            CHECK(b->at_rest, "json_buf: OOM taking an empty JSON buffer");
+            return NULL;
+        }
         out[0] = 0;
     } else {
         out[b->n] = 0;
