@@ -81,7 +81,7 @@ static inline void list_del(struct list_head *el)
     el->next = NULL; /* fail safe */
 }
 
-static inline int list_empty(struct list_head *el)
+static inline int list_empty(const struct list_head *el)
 {
     return el->next == el;
 }

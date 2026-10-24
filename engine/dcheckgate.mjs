@@ -1,22 +1,23 @@
 #!/usr/bin/env node
 /* A DCHECK condition that writes. check.h compiles a DCHECK's condition, and a DCHECKF's condition and format
    arguments, to `sizeof` in a release build, so whatever they do happens only in a dev build, and a read made
-   inside one leaves release without its value. This audit reads every C source under engine/host (engine/qjs
-   excluded, whose headers it reads only for declarations) and reports each DCHECK, DCHECKF, DCHECK_* or
+   inside one leaves release without its value. This audit reads every C source under engine/host, engine/qjs
+   and engine/lexbor (all three are this project's own code) and reports each DCHECK, DCHECKF, DCHECK_* or
    DCHECKF_* whose condition or arguments hold an assignment, an increment or decrement, or an address handed
    to a parameter its callee may write through, unless the variable is the assert's own scratch. A finding is
-   fixed by making the call a statement and asserting its result. Usage: node engine/dcheckgate.mjs [root].
+   fixed by making the call a statement and asserting its result. Usage: node engine/dcheckgate.mjs [root…].
    Exit 0 with no finding, 1 with findings. */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
-const ROOT = process.argv[2] || join(import.meta.dirname, "host");
+const ROOTS = process.argv.length > 2 ? process.argv.slice(2)
+                                      : ["host", "qjs", "lexbor"].map((d) => join(import.meta.dirname, d));
 
 function sources(dir, out) {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
     if (statSync(p).isDirectory()) {
-      if (name === "qjs" || name === "out" || name === "node_modules") continue;
+      if (name === "test262" || name === "out" || name === "node_modules") continue;
       sources(p, out);
     } else if (/\.(c|h)$/.test(name)) {
       out.push(p);
@@ -62,7 +63,7 @@ function args(text, open) {
   return null;
 }
 
-/* Every function's parameter list, by name, from the definitions and prototypes under ROOT: `params[name]` is
+/* Every function's parameter list, by name, from the definitions and prototypes under ROOTS: `params[name]` is
    the list of parameter declarations as written. A name declared twice keeps its first list. */
 const params = new Map();
 const DECL = /(?:^|[;}\n])\s*(?:static\s+|inline\s+|extern\s+)*[A-Za-z_][\w\s\*]*?\b([A-Za-z_]\w*)\s*\(([^;{}()]*)\)\s*[;{]/g;
@@ -139,9 +140,8 @@ function functionRest(text, at, depth) {
   return rest;
 }
 let findings = 0, sites = 0;
-const FILES = sources(ROOT, []);
-const QJS = join(ROOT, "..", "qjs");
-const DECLARED = FILES.concat(readdirSync(QJS).filter((n) => n.endsWith(".h")).map((n) => join(QJS, n)));
+const FILES = ROOTS.flatMap((root) => sources(root, []));
+const DECLARED = FILES;
 for (const file of DECLARED) {
   const text = blank(readFileSync(file, "utf8"));
   let m;
@@ -171,5 +171,6 @@ for (const file of FILES) {
     findings++;
   }
 }
-console.log(`[dcheckgate] ${findings} finding(s) over ${sites} DCHECK site(s) under ${relative(process.cwd(), ROOT)}`);
+console.log(`[dcheckgate] ${findings} finding(s) over ${sites} DCHECK site(s) in ${FILES.length} file(s) under ` +
+            ROOTS.map((r) => relative(process.cwd(), r)).join(", "));
 process.exit(findings === 0 ? 0 : 1);
