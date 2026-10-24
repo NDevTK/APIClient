@@ -6804,9 +6804,8 @@ const wasmNode = () => emsdkNode(EMSDK);
 function requireEmcc() {
   if (existsSync(EMCC)) return EMCC;
   console.error("[build] emcc not found at " + EMCC + "\n" +
-                "[build] provision it with:\n" +
-                "  git clone --depth 1 https://github.com/emscripten-core/emsdk.git " + EMSDK + "\n" +
-                "  " + join(EMSDK, "emsdk") + " install latest && " + join(EMSDK, "emsdk") + " activate latest");
+                "[build] provision it with engine/provision.sh, which installs the pinned emsdk (and every other " +
+                "toolchain this tree needs) and is what the environment's setup script runs");
   process.exit(1);
 }
 mkdirSync(OUT, { recursive: true });
