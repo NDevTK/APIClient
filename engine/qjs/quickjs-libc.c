@@ -4093,7 +4093,9 @@ static void worker_func(void *opaque)
         exit(1);
     }
 
-    JS_SetCanBlock(rt, true);
+    /* HTML §8.1.2.2: a dedicated worker agent is created given canBlock true, and it is this runtime's only
+       agent. */
+    JS_SetRealmAgent(ctx, JS_NewAgentRecord(rt, true));
 
     js_std_add_helpers(ctx, -1, NULL);
 

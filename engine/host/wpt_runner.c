@@ -2578,7 +2578,7 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
        window. They come from the one list components declare themselves into. §7.4 decided the child's top-level
        creation URL; using `url` here would make an about:blank iframe of an http page a secure context. */
     /* §3.3.7 step 1: a child navigable is a Window; §8.1.3.5 step 1.2.1: a Window has no owner set. */
-    realm_install_intrinsics(ctx, top_level_url, "Window", false);
+    realm_install_intrinsics(ctx, platform_window_agent(), top_level_url, "Window", false);
     wpt_realm_install(ctx, dom, url, origin, kind, policy, permissions_policy, sandbox_flags, doc_id,
                       nav_proxy, about_base_url, is_iframe_srcdoc);
     /* The child's scripts run in its realm, and they are not run here. A realm is built from inside a navigation's load

@@ -231,7 +231,8 @@ static JSContext *engine_realm_new(JSRuntime *rt, const char *top_level_url)
     CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install in a realm");
     /* §3.3.7 [Exposed] step 1's realm side: every realm this host builds is a navigable's, whose global is a
        Window. */
-    realm_install_intrinsics(ctx, top_level_url, "Window", false);   /* §8.1.3.5 step 1.2.1: a Window has no owner set */
+    realm_install_intrinsics(ctx, platform_window_agent(), top_level_url, "Window",
+                             false);   /* §8.1.3.5 step 1.2.1: a Window has no owner set */
     return ctx;
 }
 

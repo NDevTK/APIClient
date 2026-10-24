@@ -627,6 +627,9 @@ start:
     js_std_set_worker_new_context_func(JS_NewCustomContext);
     js_std_init_handlers(rt);
     ctx = JS_NewCustomContext(rt);
+    /* The command line's own agent, which does not block (a worker's is created in quickjs-libc.c). */
+    if (ctx)
+        JS_SetRealmAgent(ctx, JS_NewAgentRecord(rt, false));
     if (!ctx) {
         fprintf(stderr, "qjs: cannot allocate JS context\n");
         exit(2);

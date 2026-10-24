@@ -1200,9 +1200,14 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
 };
 static const int PLATFORM_WITNESS_N = (int)(sizeof PLATFORM_WITNESS / sizeof PLATFORM_WITNESS[0]);
 
-/* The agent is one runtime and the list runs once in it. Each component's `_init` asserts it did not run twice;
-   this asserts it of the list, so the report names the list rather than the first component. */
+/* The list runs once in a runtime, whatever number of agents the runtime hosts. Each component's `_init` asserts
+   it did not run twice; this asserts it of the list, so the report names the list rather than the first
+   component. */
 static JSRuntime *g_declared_in;
+/* The similar-origin window agent platform_agent_init created, which every Window realm of this instance
+   belongs to (HTML §8.1.2.2 obtain a similar-origin window agent: one per group and site). NULL in a runtime a
+   worker agent's entry brought up. The record is the runtime's. */
+static JSAgentRecord *g_window_agent;
 
 /* Whether a name is a row: the one answer to a question the witness table (a component per global) and
    core/agent_state.h's registry (a component per declared slot, and a sub-component naming the row that releases
@@ -1380,23 +1385,21 @@ static void agent_prologue(JSContext *ctx, const char *origin)
     DCHECK(origin != NULL && *origin,
            "an agent was brought up with no PRINCIPAL — §9.5's named bus is keyed by it and §7.2.1 decides "
            "remoteness by it, so an agent without one cannot answer either question");
-    /* At most one agent has declared this platform. The agent half of this list is declared into file-scope
-       statics (core/agent_state.h holds their addresses), so it is held once per process; a second live agent
-       would overwrite g_declared_in, and the first agent's release column would run against the second's runtime.
+    /* The platform is declared once per runtime. Its agent half is registration every agent of the runtime
+       shares (class ids, step definitions, atoms, realm-slot indexes, private keys), so a second agent of this
+       instance is a second Agent Record and a realm in this runtime, never a second declaration. ECMA-262 §9.6
+       Agents defines an agent by its execution contexts and its Agent Record, not by a heap.
        Named residual.
        Not covered: HTML §10.2.4 "Processing model"'s run a worker, step 4, obtains a worker agent that runs
-       concurrently with its owner (its onComplete steps entangle two live ports), so core/agent_state.h's
-       pre-init discipline, which restores slots after a release, cannot serve it.
-       Next diff builds: agent-state slots reached through the declaring runtime rather than a file-scope static,
-       so two live agents hold two sets; core/agent_state.h's declarations are the census of what is per process.
-       How its absence shows: a host that brings up a second agent while the first is live fires here, at the
-       declaration, rather than in an unrelated component's release or `_init` latch. */
+       beside its owner; a runtime here hosts only the agent its entry brought up, so no Worker is constructed.
+       Next diff builds: the agent facts still held per runtime moved behind the realm's agent, the event loop's
+       queues first, then the principal; then a worker realm with its own record in its owner's runtime, in the
+       owner's cluster (§8.1.2.2 step 3).
+       How its absence shows: `typeof Worker` reads "undefined" in a Window realm. */
     DCHECK(g_declared_in == NULL,
-           "a second agent tried to declare the platform while one is already live. The agent half of this "
-           "list lives in file-scope statics, so it is held once per PROCESS — this browser can host one "
-           "agent at a time, and the second declaration would overwrite the runtime the FIRST agent's release "
-           "column is going to be run against. Key the slots core/agent_state.h declares on their declaring "
-           "runtime before bringing up a second agent");
+           "the platform was declared twice in one process while the first declaration is live. It is declared "
+           "once per runtime, and a further agent of this instance is a JSAgentRecord and a realm in that "
+           "runtime (core/realm.h's realm_install_intrinsics), never a second platform entry");
     platform_check_table();
     g_declared_in = JS_GetRuntime(ctx);
     /* The principal becomes a record before any component is declared. It is not a row, since it installs
@@ -1426,21 +1429,24 @@ static void agent_declare_column(JSContext *ctx, const PlatformAgent *agent)
     platform_check_agent_state(g_declared_in, minted_before, declared_before);
 }
 
-/* §8.1.2.1 "Integration with the JavaScript agent formalism"'s create an agent, step 3's [[CanBlock]], which
-   §8.1.2.2 hands it: "Only shared and dedicated worker agents allow the use of JavaScript Atomics APIs to
-   potentially block." An agent is a JSRuntime here, so quickjs's per-runtime entry carries it, and `Atomics.wait`
-   throws a TypeError where it is false. JS_NewRuntime's calloc leaves it false, which a worker agent must not
-   answer, so each entry states it with its cluster allocation, since §8.1.2.2 is what calls create an agent.
-   Step 4's event loop is the `event_loop` row, declared once per agent; running it is HTML §10.2.4 "Processing
-   model"'s onComplete step 15. [[Signifier]]'s only stated reader is §8.1.2.1's realm-to-agent mapping, which
-   this engine answers through the JSRuntime. */
-static void agent_create_can_block(bool can_block)
+/* HTML §8.1.2.1 "Integration with the JavaScript agent formalism"'s create an agent, given canBlock, which
+   §8.1.2.2 hands it: an ECMA-262 §9.6 Agent Record in this runtime, whose address is its [[Signifier]]. The
+   first realm names it through realm_install_intrinsics, which asserts the pairing with its global's kind.
+   Step 4's event loop is the `event_loop` row, still declared once per runtime. */
+static JSAgentRecord *agent_create(bool can_block)
 {
     DCHECK(g_declared_in != NULL,
-           "§8.1.2.1's create-an-agent stated its [[CanBlock]] before this agent had declared the platform — "
-           "the bit belongs to the JSRuntime this agent IS, and agent_prologue is what records which runtime "
-           "that is");
-    JS_SetCanBlock(g_declared_in, can_block);
+           "§8.1.2.1's create-an-agent ran before the platform was declared in this runtime, and the Agent "
+           "Record belongs to the runtime agent_prologue records");
+    return JS_NewAgentRecord(g_declared_in, can_block);
+}
+
+JSAgentRecord *platform_window_agent(void)
+{
+    DCHECK(g_window_agent != NULL,
+           "a Window realm asked for this instance's similar-origin window agent in a runtime whose entry "
+           "brought up no window agent (platform_agent_init)");
+    return g_window_agent;
 }
 
 void platform_agent_init(JSContext *ctx, const char *origin, const char *top_level_url, bool requests_oac,
@@ -1466,7 +1472,7 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
     /* §8.1.2.1's create an agent, given false: a similar-origin window agent is not one of the types that "allow
        the use of JavaScript Atomics APIs to potentially block", so `Atomics.wait` on this agent throws a
        TypeError. */
-    agent_create_can_block(false);
+    g_window_agent = agent_create(false);
     /* The browsing context group, before the cluster, because §8.1.2.2's obtain a similar-origin window agent takes
        it as an argument beside the origin and requestsOAC, and its step 3 reads the group's cross-origin isolation
        mode. §7.3.2.3's group is the other half of the `(browsing context group, origin)` key SECURITY.md makes
@@ -1485,7 +1491,7 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
        [Global] kind would also take a browsing context group, a `requestsOAC` and a top-level creation URL a
        worker has not got. `false` is §8.1.3.5 step 1.2.1's operand, read from a WorkerGlobalScope's §10.2.1.1
        owner set, which a Window has not got; core/realm.c asserts a non-worker realm states exactly this. */
-    realm_install_intrinsics(ctx, agent->top_level_url, "Window", false);
+    realm_install_intrinsics(ctx, g_window_agent, agent->top_level_url, "Window", false);
 }
 
 /* The worker agent's entry. HTML §8.1.2.1 "Integration with the JavaScript agent formalism" types an agent by its
@@ -1525,13 +1531,13 @@ void platform_worker_agent_init(JSContext *ctx, const char *origin, const char *
        obtain a worklet agent and obtain a service worker agent. A service worker's global is a worker global, so
        the [Global] kind does not decide it, and it is a parameter. */
     agent_cluster_obtain_worker_agent(is_top_level);
-    agent_create_can_block(can_block);
+    JSAgentRecord *record = agent_create(can_block);
     agent_declare_column(ctx, agent);
     /* The agent's first realm is its only one, through the same call the window entry ends in. The arguments are
        §10.2.6.2's and §8.1.3.5's, and realm_install_intrinsics asserts the pair: NULL for the top-level creation
        URL, and the owner's secure-context answer, which §8.1.3.5 "Secure contexts" step 1.2.1 reads from this
        global's §10.2.1.1 owner set, a fact about the creating agent the caller states. */
-    realm_install_intrinsics(ctx, NULL, global_interface, owner_is_secure_context);
+    realm_install_intrinsics(ctx, record, NULL, global_interface, owner_is_secure_context);
 }
 
 void platform_agent_free(void)
@@ -1569,6 +1575,7 @@ void platform_agent_free(void)
        has an answer: the next reader of a stale handle is a second agent's `_init`, which reads it as a latch. */
     agent_state_check_released();
     agent_state_reset();
+    g_window_agent = NULL;   /* the record itself is the runtime's, freed by JS_FreeRuntime */
     g_declared_in = NULL;
 }
 

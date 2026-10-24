@@ -523,13 +523,15 @@ void realm_assert_interface_objects_asked(JSContext *ctx)
 }
 #endif
 
-void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url,
+void realm_install_intrinsics(JSContext *ctx, JSAgentRecord *agent, const char *top_level_creation_url,
                               const char *global_interface, bool owner_is_secure_context)
 {
     unsigned names;
     int i;
 
     DCHECK(ctx != NULL, "the per-realm intrinsics were installed into no realm");
+    /* The realm names its agent before any intrinsic runs, since a member body reads the surrounding agent. */
+    JS_SetRealmAgent(ctx, agent);
     /* AND THE HOST HAS SAID WHETHER IT EXPLORES, BEFORE ANY OF THEM RUN. An intrinsic below may mint a member
        through solver/concolic.h's source seam — navigator.c mints its whole environment record there, once,
        for this realm's LIFETIME — and that seam's answer is the whole of whether the value forks control flow.
@@ -557,6 +559,12 @@ void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url
        worker global scope's url, top-level creation URL to null" — and the half about this tree stopped being
        true, so the assert forbade the one realm kind it had correctly described. */
     names = idl_global_names_of(global_interface);
+    /* HTML §8.1.2.1: "Only shared and dedicated worker agents allow the use of JavaScript Atomics APIs to
+       potentially block", and each of those agents contains its one global. */
+    DCHECK(JS_AgentCanBlock(agent) ==
+               ((names & (IDL_GLOBAL_DEDICATEDWORKER | IDL_GLOBAL_SHAREDWORKER)) != 0),
+           "a realm's agent states a [[CanBlock]] its global's kind does not have: HTML §8.1.2.1 lets only a "
+           "dedicated or shared worker agent block, so the host gave this realm another kind's agent");
     if (idl_global_names_are_worklet(names))
         DFAILF("a realm was built stating it implements `%s`, a Web IDL §3.3.8 [Global] WORKLET interface — "
                "HTML §8.1.3.5 Secure contexts step 1.3 (\"If global is a WorkletGlobalScope, then return "

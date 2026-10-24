@@ -609,7 +609,10 @@ struct JSRuntime {
     /* used to allocate, free and clone SharedArrayBuffers */
     JSSharedArrayBufferFunctions sab_funcs;
 
-    bool can_block; /* true if Atomics.wait can block */
+    /* The ECMA-262 §9.6 Agent Records of the agents this runtime hosts (JSAgentRecord.link), owned here and
+       freed with the runtime. The runtime is the executing thread every one of them shares. */
+    struct list_head agent_list;
+    int agent_count;
     uint32_t dump_flags : 24;
 
     /* Shape hash table */
@@ -845,10 +848,18 @@ enum {
    silently does not add up. Raise it; there is nothing to re-derive. */
 #define JS_CTX_REF_SITES_MAX 24
 
+/* ECMA-262 §9.6 Agents' Agent Record: the fields this engine reads. HTML §8.1.2.1's create an agent makes one,
+   and a realm names it once, at creation (realm.[[AgentSignifier]]); its address is the signifier. */
+struct JSAgentRecord {
+    struct list_head link;   /* JSRuntime.agent_list */
+    bool can_block;          /* [[CanBlock]] */
+};
+
 struct JSContext {
     JSGCObjectHeader header; /* must come first */
     JSRuntime *rt;
     struct list_head link;
+    JSAgentRecord *agent;    /* realm.[[AgentSignifier]]: set once by JS_SetRealmAgent, owned by rt */
 
     uint16_t binary_object_count;
     uint32_t binary_object_size : 31;
@@ -3747,6 +3758,7 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     rt->malloc_gc_threshold = 256 * 1024;
 
     init_list_head(&rt->context_list);
+    init_list_head(&rt->agent_list);
     init_list_head(&rt->gc_obj_list);
     init_list_head(&rt->gc_zero_ref_count_list);
     init_list_head(&rt->gc_ctx_sweep_list);
@@ -3896,9 +3908,36 @@ void JS_SetInterruptHandler(JSRuntime *rt, JSInterruptHandler *cb, void *opaque)
     rt->interrupt_opaque = opaque;
 }
 
-void JS_SetCanBlock(JSRuntime *rt, bool can_block)
+JSAgentRecord *JS_NewAgentRecord(JSRuntime *rt, bool can_block)
 {
-    rt->can_block = can_block;
+    JSAgentRecord *agent = js_mallocz_rt(rt, sizeof(*agent));
+
+    CHECK(agent != NULL, "an agent's Agent Record could not be allocated");
+    agent->can_block = can_block;
+    list_add_tail(&agent->link, &rt->agent_list);
+    rt->agent_count++;
+    return agent;
+}
+
+void JS_SetRealmAgent(JSContext *ctx, JSAgentRecord *agent)
+{
+    DCHECK(agent != NULL, "a realm was given no agent: HTML §8.1.2.1 maps every realm to the agent it was created in");
+    DCHECK(ctx->agent == NULL,
+           "a realm was given a second agent: realm.[[AgentSignifier]] is set once, when the realm is created");
+    ctx->agent = agent;
+}
+
+JSAgentRecord *JS_GetRealmAgent(JSContext *ctx)
+{
+    DCHECK(ctx->agent != NULL,
+           "a realm's agent was read before the host named it: every JS_NewContext is followed by "
+           "JS_SetRealmAgent before the realm runs code");
+    return ctx->agent;
+}
+
+bool JS_AgentCanBlock(const JSAgentRecord *agent)
+{
+    return agent->can_block;
 }
 
 void JS_SetSharedArrayBufferFunctions(JSRuntime *rt,
@@ -4733,6 +4772,11 @@ void JS_FreeRuntime(JSRuntime *rt)
        table never took — so the only thing owed is the array. */
     js_free_rt(rt, rt->orphan_script_takes);
     js_free_rt(rt, rt->class_array);
+    list_for_each_safe(el, el1, &rt->agent_list) {
+        JSAgentRecord *agent = list_entry(el, JSAgentRecord, link);
+        list_del(&agent->link);
+        js_free_rt(rt, agent);
+    }
 
     /* THE ATOMS NOBODY RELEASED, ON THE SAME TERMS AS THE OBJECTS ABOVE — AND UNCONDITIONALLY, WHICH IS THE
        WHOLE OF THIS CHANGE. This walk used to be behind `#ifdef ENABLE_DUMPS` AND `check_dump_flag(rt,
@@ -119824,6 +119868,8 @@ static JSValue js_shadow_realm_ctor_body(JSContext *ctx, JSValueConst obj, int a
         JS_FreeValue(ctx, obj);
         return JS_ThrowOutOfMemory(ctx);
     }
+    /* CreateRealm makes the realm in the surrounding agent. */
+    JS_SetRealmAgent(realm, JS_GetRealmAgent(ctx));
     sd = js_malloc(ctx, sizeof(*sd));
     if (!sd) {
         JS_FreeContext(realm);
@@ -127064,8 +127110,18 @@ static JSValue js_atomics_wait(JSContext *ctx,
         timeout = 0;
     else
         timeout = (int64_t)d;
-    if (!ctx->rt->can_block)
+    /* ECMA-262 §25.4.3.14 DoWait ( mode, ta, index, value, timeout ) step 12: §9.6.2 AgentCanSuspend ( ) reads
+       the surrounding agent's [[CanBlock]], and the realm of a function the page reaches synchronously is of
+       that agent. */
+    if (!JS_AgentCanBlock(JS_GetRealmAgent(ctx)))
         return JS_ThrowTypeError(ctx, "cannot block in this thread");
+    /* §9.6 lets agents share an executing thread only while none of them can block, and every agent of a
+       runtime shares its one thread, so the condition-variable wait below is right only for a runtime's sole
+       agent. */
+    DCHECKF(ctx->rt->agent_count == 1,
+            "Atomics.wait blocked the executing thread that %d agents share: a blocking wait in an agent that "
+            "shares its runtime must park the flow on the waiter list until a notify or the timeout resumes it",
+            ctx->rt->agent_count);
 
     CHECK(idx < p->u.array.count,
           "an Atomics wait reached its storage out of bounds - see js_atomics_get_buf");

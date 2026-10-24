@@ -647,7 +647,8 @@ static void agent_start(void *arg)
     }
     JS_SetContextOpaque(ctx, agent);
     JS_SetRuntimeInfo(rt, "agent");
-    JS_SetCanBlock(rt, true);
+    /* $262.agent.start's agent runs on its own thread, so it is this runtime's only agent, and it can block. */
+    JS_SetRealmAgent(ctx, JS_NewAgentRecord(rt, true));
 
     add_helpers(ctx);
     /* THE AGENT'S SCRIPT IS TEST CODE and runs on the flow machinery like every other program. It ran through
@@ -955,6 +956,8 @@ static JSValue js_createRealm(JSContext *ctx, JSValueConst this_val,
     ctx1 = JS_NewContext(JS_GetRuntime(ctx));
     if (!ctx1)
         return JS_ThrowOutOfMemory(ctx);
+    /* $262.createRealm: a new realm in the surrounding agent. */
+    JS_SetRealmAgent(ctx1, JS_GetRealmAgent(ctx));
     ret = add_helpers1(ctx1);
     /* ctx1 has a refcount so it stays alive */
     JS_FreeContext(ctx1);
@@ -1995,7 +1998,8 @@ int run_test_buf(ThreadLocalStorage *tls, const char *filename, char *harness,
     }
     JS_SetRuntimeInfo(rt, filename);
 
-    JS_SetCanBlock(rt, can_block);
+    /* The test's agent; CanBlockIsFalse or --no-can-block is its [[CanBlock]]. */
+    JS_SetRealmAgent(ctx, JS_NewAgentRecord(rt, can_block));
 
     /* loader for ES6 modules */
     JS_SetModuleLoaderFunc2(rt, NULL, js_module_loader_test, NULL, (void *) filename);
@@ -2264,7 +2268,8 @@ int run_test262_harness_test(ThreadLocalStorage *tls, const char *filename,
     }
     JS_SetRuntimeInfo(rt, filename);
 
-    JS_SetCanBlock(rt, can_block);
+    /* The test's agent; CanBlockIsFalse or --no-can-block is its [[CanBlock]]. */
+    JS_SetRealmAgent(ctx, JS_NewAgentRecord(rt, can_block));
 
     /* loader for ES6 modules */
     JS_SetModuleLoaderFunc2(rt, NULL, js_module_loader_test, NULL, (void *) filename);

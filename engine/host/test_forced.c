@@ -6095,7 +6095,7 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
        §7.4 decided this child's top-level creation URL and handed it over — using `url` would make an
        about:blank iframe of an http page a secure context. */
     /* §3.3.7 step 1: a child navigable is a Window; §8.1.3.5 step 1.2.1: a Window has no owner set. */
-    realm_install_intrinsics(ctx, top_level_url, "Window", false);
+    realm_install_intrinsics(ctx, platform_window_agent(), top_level_url, "Window", false);
     tf_realm_install(ctx, dom, url, origin, kind, policy, permissions_policy, sandbox_flags, doc_id,
                      nav_proxy, about_base_url, is_iframe_srcdoc);
     return ctx;
@@ -6934,7 +6934,8 @@ TF_UNIT void exposure_selftest(JSContext *ctx, const char *top_level_url)
        WINDOW realm's construction has a SECOND end — core/platform.c's per-document column, which this realm
        never reaches. realm_assert_interface_objects_asked here would therefore fire on every interface object
        that column places, which is the same population the table's Window `false` rows are about. */
-    realm_install_intrinsics(win, top_level_url, "Window", false);   /* §8.1.3.5 step 1.2.1: no owner set */
+    realm_install_intrinsics(win, platform_window_agent(), top_level_url, "Window",
+                             false);   /* §8.1.3.5 step 1.2.1: no owner set */
     /* AND IT HAS THE SURFACE THE AGENT'S OWN WINDOW REALM HAS, ASKED OF THE ONE FACT THAT COULD MAKE THEM
        DIFFER. Web IDL §3.3.13 [SecureContext]'s members are installed or absent by HTML §8.1.3.5's answer, so
        a Window realm built here at an address whose answer differs from the caller's would carry a DIFFERENT
@@ -6962,8 +6963,12 @@ TF_UNIT void exposure_selftest(JSContext *ctx, const char *top_level_url)
        creation URL to null", so a fixture handing this call the OWNER's address — which is what stood here —
        builds an environment no host can correctly build and measures §8.1.3.5 out of its step 2, the step the
        standard never lets a WorkerGlobalScope reach. */
-    realm_install_intrinsics(worker, NULL, "DedicatedWorkerGlobalScope", owner_secure);
-    realm_install_intrinsics(worker_insecure, NULL, "DedicatedWorkerGlobalScope", !owner_secure);
+    /* Each is a dedicated worker agent of its own (HTML §8.1.2.1: one DedicatedWorkerGlobalScope per agent),
+       created given canBlock true as §8.1.2.2's obtain-a-dedicated-worker-agent does. */
+    realm_install_intrinsics(worker, JS_NewAgentRecord(JS_GetRuntime(ctx), true), NULL,
+                             "DedicatedWorkerGlobalScope", owner_secure);
+    realm_install_intrinsics(worker_insecure, JS_NewAgentRecord(JS_GetRuntime(ctx), true), NULL,
+                             "DedicatedWorkerGlobalScope", !owner_secure);
     /* AND THESE TWO REALMS ARE FINISHED, WHICH USED TO BE A STATEMENT ONLY THIS FIXTURE COULD MAKE. Two calls
        to core/realm.h's owed half — every interface object a realm owes is one some component asked Web IDL
        §3.8 for — stood here, on the argument that it may be asked only where no further placement will happen
@@ -31033,8 +31038,8 @@ TF_UNIT void second_agent_selftest(const char *origin)
            a DedicatedWorkerGlobalScope, whose arm is FALSE. The pair is not a spec-expressible agent. The code
            is correct for what it does — it asks whether a second agent can be DECLARED at all, which is this
            function's whole subject — and narrower than §10.2.4 step 4, whose agent has an owner.
-         WHAT THE NEXT DIFF BUILDS: the concurrent arm core/platform.c's declaration refuses by name, after
-           which this fixture brings its worker agent up while the first agent is LIVE and passes FALSE — and
+         WHAT THE NEXT DIFF BUILDS: the worker realm core/platform.c's residual names, an Agent Record and a
+           realm in the first agent's LIVE runtime, after which this fixture passes FALSE and
            core/frame/agent_cluster.c's isTopLevel=FALSE arm stops being a crash and joins the owner's cluster.
          HOW ITS ABSENCE WOULD SHOW: a reader asks which §8.1.2.2 arm a DedicatedWorkerGlobalScope agent of this
            build takes and finds the answer is the one no dedicated worker takes, with no live owner anywhere in

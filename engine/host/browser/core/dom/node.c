@@ -5802,13 +5802,9 @@ void node_init(JSContext *ctx)
        rewritten rather than deleted because the grep is what a reader re-runs, and `one per host` reads as
        refuted the moment they do: the two runtimes are SEQUENTIAL, the fixture freeing the first before it
        brings the second up, so what is true is that no host holds two AT ONCE and the per-host count is not.
-       WHAT IS STILL UNEXERCISED IS THE CONCURRENT CASE, AND IT IS THE ONE THE NUMBERS ABOVE ARE ABOUT: this
-       list's doubling is a fact about two agents' registrations coexisting, and core/platform.c refuses a
-       second live agent BY NAME at its own declaration, so agent two's append is reachable only after that
-       refusal is lifted. A sequential second agent runs the undo; a concurrent one is what would run the
-       table over. HTML §10.2.4 "Processing model" step 4 is the
-       arrival — obtaining a dedicated or shared worker agent is a SECOND agent INSIDE this instance, and
-       core/workers/worker_global_scope.c already names this header as the mechanism written for it.
+       A concurrent agent never appends here: HTML §10.2.4 "Processing model" step 4's worker agent is an Agent
+       Record and a realm in its owner's runtime (core/platform.c), so it shares these registrations rather
+       than declaring them again, and only a sequential second runtime runs the undo.
        ALL OF THEM OR NONE: core/dom/selection.c records what a short count buys — a release that is the
        inverse of five of seventeen slots leaves the other twelve with no check at all, wearing the same number
        a component holding nothing would produce. */

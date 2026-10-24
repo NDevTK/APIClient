@@ -95,8 +95,8 @@ static const IdlArgType IDL_NSSTR_STR[2] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRI
 #include "core/dom/selection.h"        /* Selection API §2's per-document selection, §4.1's getSelection */
 #include "core/dom/node_interface.h"   /* the one place a Document is made; see that header */
 
-/* The document's own state, held on the document, not the file. An agent is a JSRuntime and a document a JSContext
- * in it: HTML puts every same-origin document of one browsing-context group in one similar-origin window agent (one
+/* The document's own state, held on the document, not the file. A similar-origin window agent's documents are
+ * JSContexts of one runtime: HTML puts every same-origin document of one browsing-context group in one similar-origin window agent (one
  * heap) and gives each its own global, and the corpus relies on the shared heap
  * (`iframe.contentDocument.body.appendChild(subframe)` moves a node this document created into the other one, with
  * the same wrapper). What the whole agent shares (class ids, prototypes, interface objects, and the origin, since

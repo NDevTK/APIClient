@@ -68,8 +68,8 @@
  * the run engine/citegen.mjs compares, and the half after it would then reach the corpus as a fragment with
  * no opening mark.)
  * THE CONCLUSION SURVIVES THE PREMISE, WHICH IS WHY THIS IS A CORRECTION AND NOT A REVERSAL. What may cross is
- * still serialized TEXT carrying its TYPE and never a live JSValue — because an AGENT is a JSRuntime in this
- * engine, and a JSValue crosses a runtime no better than it crosses an instance. What changes is WHO
+ * still serialized and never a live reference: the worker agent is an Agent Record and a realm in its owner's
+ * runtime (core/platform.c), and StructuredSerialize is the only door between two agents' objects. What changes is WHO
  * PROVISIONS THE PEER, and the old premise would have sent the next diff to build a cross-instance transport
  * (a mojom hop, offscreen routing, a second WASM instance) for a peer that never leaves this one.
  * NOTHING HERE CROSSES ANYTHING TODAY. This file builds
@@ -773,11 +773,10 @@ void worker_global_scope_free(JSRuntime *rt)
  *     landed with no drive at all is the write-with-no-reader CLAUDE.md
  *     §A-FIELD-A-CONSUMER-DEFAULTS names, and is what this ordering exists to refuse.
  *     THE ORDER, EACH MEMBER WITH THE CALL THAT WILL CONSUME IT:
- *       1. (i) THE AGENT's CONCURRENT arm — core/agent_state.h and core/platform.c, whose own declaration
- *          refuses a second live agent BY NAME under a residual stating exactly this next diff. FIRST because
- *          every later member runs IN that agent and because its consumer exists TODAY: the fixture's second
- *          agent is sequential only because the concurrent arm aborts, so the landing's drive is that agent
- *          brought up while the first is live. NOT THIS DIRECTORY'S.
+ *       1. (i) THE AGENT beside its owner — an Agent Record and a realm in the owner's runtime, after the
+ *          agent facts core/platform.c's residual names move behind the realm's agent. FIRST because every
+ *          later member runs IN that agent; its drive is the fixture's worker agent brought up while the
+ *          first is live. NOT THIS DIRECTORY'S.
  *       2. (ii) THE ENVIRONMENT SETTINGS OBJECT's fields that do not read the worker's url, and (iii) THE
  *          SCRIPT FETCH — ONE LANDING, because §10.2.6.2's remaining fields read the url (iii)'s response step
  *          sets, so neither half is coherent alone. Consumer: the one chokepoint, which exists.
@@ -801,45 +800,15 @@ void worker_global_scope_free(JSRuntime *rt)
  *             outside settings and is shared", whose own second sentence is "Run the rest of these steps in
  *             that agent". IT IS A SECOND AGENT INSIDE THIS INSTANCE and not a peer instance — see the banner
  *             at the top of this file for §8.1.2.2's arm that decides it, and for the one origin (`data:`)
- *             that does cross. What crosses is still serialized TEXT carrying its type and never a live
- *             JSValue, because an agent is a JSRuntime here.
- *             THE HOPS, NAMED RATHER THAN GUESSED, because a scope list is a claim about a call path: an
- *             agent is per JSRuntime (core/platform.h states the split — platform_agent_init once per
- *             JSRuntime, platform_document_install once per JSContext — and core/platform.c's own note says a
- *             WorkerGlobalScope agent is a second entry beside that one, with its own install column); the
- *             HOST creates the runtime, and `git grep -n JS_NewRuntime engine/host` names every host that
- *             holds one; solver/flow.c's flow_registry_init takes a document name and no runtime, so a second
- *             agent of ONE instance shares the frontier that call
- *             created and must not re-run it — which is the state test_forced.c's own main describes when it
- *             refuses to root two INSTANCES in one process, and reading that refusal as forbidding a second
- *             AGENT would forbid §10.2.4 step 4 itself; core/realm.c needs nothing new, since its worker arm
- *             already takes NULL for the top-level creation URL; and core/agent_state.h's pre-init discipline
- *             is the mechanism written FOR a second agent.
+ *             that does cross.
+ *             IT IS AN AGENT RECORD AND A REALM IN THE OWNER'S RUNTIME, not a second runtime: ECMA-262 §9.6
+ *             Agents defines an agent by its execution contexts and its Agent Record, and a dedicated worker
+ *             joins its owner's cluster, the boundary memory may be shared across. So the worker's heap writes
+ *             land in the creating flow's COW delta, its tasks are flows on the one frontier, and what crosses
+ *             between the two agents is StructuredSerialize output, never a live reference. The platform is
+ *             declared once per runtime (core/platform.c's residual states this route), so the agent facts
+ *             still held per runtime move behind the realm's agent first, one per diff.
  *             THIS COMPONENT IS NOT ON THAT LIST, which is why (i) cannot land from this directory.
- *             AND (i) IS HALF DISCHARGED, WHICH THIS ENTRY DENIED IN THREE PLACES AND IS THE CORRECTION WORTH
- *             MORE THAN THE ENTRY. It read that the grep answers `three, one per host`, that `no host in this
- *             tree has ever held two at once`, and that the pre-init discipline is a mechanism `no second agent
- *             has ever exercised`. A SECOND AGENT HAS BEEN BROUGHT UP: a fixture declares the platform in a
- *             second JSRuntime, builds a DedicatedWorkerGlobalScope realm in it through the one call, reads
- *             §10.2.1.1's `self` off that realm's WorkerGlobalScope.prototype, and releases both — and the
- *             pre-init discipline is what that agent's declare column reads, so it HAS been exercised, and its
- *             first exercise found a leaked browsing-context-group Array the host teardown had not given back.
- *             THE CONCLUSION SURVIVES AND ITS ARGUMENT DOES NOT, WHICH IS WHY THE CLAUSES ARE REWRITTEN RATHER
- *             THAN DELETED: those runtimes are SEQUENTIAL — the fixture frees the first before it brings the
- *             second up — so `never two AT ONCE` is exactly right and `one per host` is not, and a reader who
- *             runs the grep finds the premise refuted and may discard the true conclusion with it. The count
- *             was TRUE WHEN WRITTEN and went stale when the second agent landed, which is ordinary drift and
- *             prescribes nothing about the method; it is the COUNT that is dropped for a command, because a
- *             count beside a population a lane keeps adding to is a number nobody re-derives.
- *             SO WHAT (i) STILL OWES IS THE CONCURRENT ARM AND NOT AN AGENT, and it is LOCATED rather than
- *             described: §10.2.4 step 4's agent runs WHILE its owner does, because the same algorithm's
- *             onComplete list entangles a port pair whose two ends are both live — so it is not the sequential
- *             successor core/agent_state.h's pre-init discipline is for, and core/platform.c refuses it BY NAME
- *             at its own declaration under a three-clause residual whose next-diff clause is the whole of the
- *             work: agent-state slots reached through the runtime that declared them rather than through a
- *             file-scope static, so that two live agents hold two sets. That residual's own census is derived
- *             — core/agent_state.h's declarations are what is keyed per process today — so the population is
- *             enumerable without anybody maintaining a list of it.
  *       (ii)  THE ENVIRONMENT SETTINGS OBJECT — step 7, "Set up a worker environment settings object with
  *             realm execution context, outside settings, and unsafeWorkerCreationTime, and let inside
  *             settings be the result", which is §10.2.6.2 "Script settings for workers". TWO OF ITS FIELDS
@@ -1055,8 +1024,8 @@ void worker_global_scope_free(JSRuntime *rt)
  *           is `undefined` where a browser answers the string the `Worker` constructor was given.
  *       (c) `postMessage` HAS NO PEER, AND NOTHING IN THIS DIFF PROVISIONS ONE. §10.2.1.2 defines it as the
  *           port's own postMessage, and the other end of that port is in the OWNER's AGENT. What crosses is
- *           serialized TEXT carrying its type and never a live JSValue — an agent is a JSRuntime here, and a
- *           JSValue crosses one no better than it crosses an instance. THE SENTENCE THAT STOOD HERE SAID THE
+ *           StructuredSerialize output and never a live reference, though both agents share one runtime's
+ *           heap (core/platform.c). THE SENTENCE THAT STOOD HERE SAID THE
  *           OTHER END WAS IN THE OWNER'S INSTANCE and told the next diff to provision a SECOND INSTANCE; that
  *           is the same conflation the banner at the top of this file now corrects out of HTML §8.1.2.2, and
  *           it is recorded rather than deleted because a next-diff clause is read once, by someone who has

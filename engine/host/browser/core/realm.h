@@ -52,7 +52,9 @@ void realm_declare_intrinsic(RealmIntrinsic install);
  * step 1.2 answers for a WorkerGlobalScope and RETURNS before step 2 ever reads the URL. Pass NULL for a
  * worker realm and the value §8.1.3.5 step 1.2.1 reads instead; pass the URL and `false` for a Window one.
  * Each combination is asserted, so the pair a host cannot state wrongly is the only pair that passes. */
-void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url,
+/* `agent` is the realm's agent (HTML §8.1.2.1, realm.[[AgentSignifier]]), owned by the runtime: the record
+ * its own entry created for an agent's first realm, and that agent's record for every later realm of it. */
+void realm_install_intrinsics(JSContext *ctx, JSAgentRecord *agent, const char *top_level_creation_url,
                               const char *global_interface, bool owner_is_secure_context);
 
 /* WEB IDL §3.3.8 [Global]: is this realm's global object a WorkerGlobalScope, or a WorkletGlobalScope — HTML

@@ -3458,8 +3458,14 @@ JS_EXTERN const char *JS_ParkedFlowsUnforkable(JSContext *ctx);
 /* The same walk asking JSTrampStepDef.script_forbidden: why the page's code must not run on this flow now. */
 JS_EXTERN const char *JS_FlowScriptForbidden(JSContext *ctx, JSValue *flow);
 JS_EXTERN const char *JS_ParkedFlowsScriptForbidden(JSContext *ctx);
-/* if can_block is true, Atomics.wait() can be used */
-JS_EXTERN void JS_SetCanBlock(JSRuntime *rt, bool can_block);
+/* ECMA-262 §9.6 Agents' Agent Record. JS_NewAgentRecord is HTML §8.1.2.1's create an agent, given canBlock; the
+   record is owned by `rt` and freed with it. A realm names its agent once, before it runs code
+   (realm.[[AgentSignifier]]), and the surrounding agent of a step is the current realm's. */
+typedef struct JSAgentRecord JSAgentRecord;
+JS_EXTERN JSAgentRecord *JS_NewAgentRecord(JSRuntime *rt, bool can_block);
+JS_EXTERN void JS_SetRealmAgent(JSContext *ctx, JSAgentRecord *agent);
+JS_EXTERN JSAgentRecord *JS_GetRealmAgent(JSContext *ctx);
+JS_EXTERN bool JS_AgentCanBlock(const JSAgentRecord *agent);
 /* The system time zone's offset for Date's local time (ECMAScript §21.4.1.25 LocalTime): minutes of UTC minus
    local time at `time_ms` ms from the epoch, as Date.prototype.getTimezoneOffset answers. Process-wide, and
    required before any script reads local time. */

@@ -95,32 +95,30 @@ void agent_cluster_obtain_worker_agent(bool is_top_level)
 
        STEP 4 IS NOT THIS FILE'S AND IS NOT MISSING FROM IT: §8.1.2.1 "Integration with the JavaScript agent
        formalism"'s create-an-agent states [[CanBlock]] and gives the agent its own event loop, and both of
-       those are per-AGENT rather than per-cluster — an agent is a JSRuntime in this engine, so core/platform.c
-       states the first through quickjs's own per-runtime entry and the `event_loop` row on its declaration
-       column is the second. Step 5 is the same statement as step 2's allocation here, because this instance
+       those are per-AGENT rather than per-cluster — core/platform.c states the first in the agent's quickjs
+       Agent Record and the `event_loop` row on its declaration column is the second. Step 5 is the same statement as step 2's allocation here, because this instance
        holds one cluster and the agent being added is the one being brought up. */
     DCHECK(!g_agent_obtained,
            "a worker/worklet agent's cluster was obtained twice in one instance — §8.1.2.2 allocates one per "
            "agent, and this file holds the ONE cluster this instance is. A second agent of this instance runs "
-           "this after the first has been released, or it is the concurrent arm core/platform.c refuses");
+           "this only after the first has been released; one beside a live owner joins the owner's cluster");
     if (!is_top_level)
         /* THE FALSE ARM NEEDS A LIVE OWNER AGENT AND NOTHING IN THIS BUILD CAN HAVE ONE. Its first step is an
            ASSERTION rather than a computation — "Assert: outside settings is not null" — so a caller reaching
            it without an owner has violated §8.1.2.2's own precondition, and its second and third steps read
-           that owner's realm's agent and the cluster containing it. core/platform.c's declaration refuses a
-           second agent while a first is live, by name, under a residual that states what the next diff builds;
-           until that arm exists there is no owner for this one to read, and the two absences are ONE absence.
+           that owner's realm's agent and the cluster containing it. A worker beside a live owner is a realm
+           with its own Agent Record in the owner's runtime (core/platform.c's residual), and until that is
+           built there is no owner for this arm to read, and the two absences are ONE absence.
            IT IS A DFAIL AND NOT A REFUSAL YIELDING A NEW CLUSTER, because a new cluster is the OTHER arm's
            answer: handing it back here would put a dedicated worker in a cluster of its own, which is a
            SharedArrayBuffer boundary §8.1.2.2's own note draws the other way ("A Window object and a dedicated
            worker that it created" are listed as within the same agent cluster), and it would do so silently. */
         DFAIL("§8.1.2.2's obtain-a-worker/worklet-agent was asked for its isTopLevel=FALSE arm — the cluster "
               "containing the OWNER agent, which a DEDICATED worker and a WORKLET take. That arm reads `outside "
-              "settings`'s realm's agent, so it needs an owner agent that is LIVE, and core/platform.c's "
-              "declaration refuses a second agent while a first is live: `a second agent tried to declare the "
-              "platform while one is already live`. Build the concurrent arm that residual names — agent-state "
-              "slots reached through the runtime that declared them — and then this arm joins the owner's "
-              "cluster instead of being asked for one of its own");
+              "settings`'s realm's agent, so it needs an owner agent that is LIVE, and this runtime hosts only "
+              "the agent its entry brought up. Build the worker realm core/platform.c's residual names — its "
+              "own Agent Record in the owner's runtime — and this arm joins the owner's cluster instead of "
+              "being asked for one of its own");
     /* Step 2, whose second half takes no input: "Set agentCluster's is origin-keyed to true." */
     g_is_origin_keyed = true;
     g_agent_obtained = true;

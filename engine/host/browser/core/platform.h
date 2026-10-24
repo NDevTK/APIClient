@@ -32,9 +32,9 @@
  * THE AGENT HALF USED TO SAY `once per JSRuntime` AND THAT WAS AN INTENTION READ AS A MECHANISM — corrected
  * rather than deleted, because it is the more useful sentence and a reader will re-derive it. Nothing in this
  * layer is keyed on a runtime: a component declares into FILE-SCOPE STATICS, so the agent half is held once
- * per PROCESS, and the two readings are indistinguishable while there has only ever been one JSRuntime. The
- * difference is the whole of what a second LIVE agent costs, so it is stated where the split is stated —
- * core/platform.c's declaration guard is where the narrower claim is asserted, and it names what to build.
+ * per PROCESS, and the two readings are indistinguishable while there has only ever been one JSRuntime. A
+ * second live agent therefore shares the runtime and its declarations: it is an Agent Record and a realm, and
+ * core/platform.c's declaration guard asserts that the list runs once.
  *
  * WHAT IS *NOT* HERE IS THE HOST'S EDGES, and that boundary is the whole reason this file can be one list.
  * A component is WHAT THE PLATFORM IS; an edge is WHO ANSWERS — the network provider (fetch_set_provider),
@@ -120,6 +120,10 @@
  * (core/frame/window_proxy.h). */
 void platform_agent_init(JSContext *ctx, const char *origin, const char *top_level_url, bool requests_oac,
                          OpenerPolicyValue opener_policy);
+/* The similar-origin window agent's Agent Record that platform_agent_init created, which a host passes to
+ * core/realm.h's realm_install_intrinsics for every later Window realm of this instance (HTML §8.1.2.2: one such
+ * agent per browsing context group and site, and an instance is one origin of one group). Owned by the runtime. */
+JSAgentRecord *platform_window_agent(void);
 
 /* THE AGENT HALF FOR AN AGENT THAT IS NOT A WINDOW'S — HTML §8.1.2.2 "Integration with the JavaScript agent
  * cluster formalism"'s obtain-a-worker/worklet-agent, which is the OTHER of that section's two cluster

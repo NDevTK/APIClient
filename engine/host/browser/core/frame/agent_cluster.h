@@ -90,8 +90,8 @@ void agent_cluster_obtain_window_agent(const Origin *origin, bool requests_oac);
  * TRUE reads "Set agentCluster to a new agent cluster" then "Set agentCluster's is origin-keyed to true" — two
  * steps over nothing outside this call, so it is computable here. FALSE reads "Assert: outside settings is not
  * null", "Let ownerAgent be outside settings's realm's agent", "Set agentCluster to the agent cluster which
- * contains ownerAgent" — so it needs a LIVE OWNER AGENT, which is exactly what core/platform.c's declaration
- * refuses by name under the residual that states the concurrent arm. A `canBlock` argument is absent for the
+ * contains ownerAgent" — so it needs a LIVE OWNER AGENT beside this one, the worker realm in its owner's runtime
+ * that core/platform.c's residual names. A `canBlock` argument is absent for the
  * same reason the FALSE arm's `outside settings` is: §8.1.2.2 hands canBlock to §8.1.2.1's create-an-agent and
  * never to the cluster, so it is stated where that algorithm's other members are (core/platform.c) and a
  * parameter here would be a fact this function does not read.
