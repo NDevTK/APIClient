@@ -13900,13 +13900,6 @@ int JS_SetLength(JSContext *ctx, JSValueConst obj, int64_t len) {
 
 /* return true, false or (-1) in case of exception */
 
-// like Function.prototype.call but monkey patch-proof
-static JSValue js_call_function(JSContext *ctx, JSValueConst this_val,
-                                int argc, JSValueConst *argv)
-{
-    return JS_Call(ctx, argv[1], argv[0], argc-2, argv+2);
-}
-
 /* DELETED: js_getOwnPropertyKeys. proposal-joint-iteration Iterator.zipKeyed step 4.a is
    `? iterables.[[OwnPropertyKeys]]()` and the self-hosted body reached it through this helper's
    JS_GetOwnPropertyNames2 — the `ownKeys` trap, plus 10.5.11's invariant, from C. It asked for strings AND
@@ -33735,10 +33728,6 @@ static void js_for_in_visit(JSContext *ctx, void *st, JSStepVisit *v);
 static int js_json_parse_vstep(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
 static JSValue js_json_parse_vfini(JSContext *ctx, void *st, bool take_result);
 static void js_json_reviver_visit(JSContext *ctx, void *st, JSStepVisit *v);
-/* js_call_function — the builtins' monkey-patch-proof Function.prototype.call (Iterator.zip/zipKeyed use it to invoke
-   an input iterator's .next). It holds NO continuation, so like f.call it is RESOLVED at the operator site and the
-   ultimate target dispatched on this chain; JS_Call'ing it from C would drive a generator .next off the tramp. */
-static JSValue js_call_function(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSProxyData *get_proxy_method(JSContext *ctx, JSValue *pmethod, JSValueConst obj, JSAtom name);
 /* DELETED: js_tramp_proxy_construct, the operator site's copy of 10.5.13. It read the `construct` trap with
    JS_GetProperty from C, which is the page's [[Get]] on the handler. Proxy [[Construct]] is a step machine
@@ -33748,14 +33737,6 @@ static JSProxyData *get_proxy_method(JSContext *ctx, JSValue *pmethod, JSValueCo
    proxied handler reached js_proxy_get's DFAIL and an accessor handler ran off the tramp. Proxy [[Call]] is
    a step machine now (js_proxy_call_def), reached through the one step entry, and its trapless arm is a CALL
    request the driver re-dispatches, which is what the walk was for. */
-static inline bool tramp_is_call_function(JSValueConst method) {
-    JSObject *mp;
-    if (JS_VALUE_GET_TAG(method) != JS_TAG_OBJECT) return false;
-    mp = JS_VALUE_GET_OBJ(method);
-    return mp->class_id == JS_CLASS_C_FUNCTION
-        && mp->u.cfunc.cproto == JS_CFUNC_generic
-        && mp->u.cfunc.c_function.generic == js_call_function;
-}
 /* Function.prototype.call reached at a CALL OPERATOR, where the operands ALREADY hold [f, .call, thisArg, args]
    — one reslice away from the method-call shape. Resolving it here is not a second implementation of .call (the
    C body is gone; the semantics live in the step machine): it is the ON-STACK operand shape's resolution, and it
@@ -36152,9 +36133,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    function has no bytecode body of its own, so every call shape reaches that one point. Asking it
                    here instead is what left `o.m()` (a bound method) driving its target to completion while
                    `m()` parked — the OP_call_method chain never grew the copy. */
-                if (tramp_is_call_function(call_argv[-1]) && call_argc >= 2) {   /* builtins' call(thisArg,f,...) -> dispatch f here */
-                    tramp_is_tail = (opcode == OP_tail_call); goto do_forward_callfn;
-                }
                 tramp_first = -1; tramp_is_tail = (opcode == OP_tail_call);
                 goto do_consumer_dispatch;
             }
@@ -37405,24 +37383,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 arg_allocated_size = narg_alloc;
                 local_buf = nlb; sp = nstack_buf; pc = nb->byte_code_buf;
                 goto restart;
-            }
-
-        do_forward_callfn:
-            /* js_call_function(thisArg, f, ...args) called as a plain function: operands are
-               [js_call_function, thisArg, f, a0..]. Reshape IN PLACE to the method-call shape [thisArg, f, a0..] —
-               one slot narrower — then dispatch f exactly like f.call would. */
-            {
-                JSValue *A = (JSValue *)call_argv;   /* A[-1]=js_call_function, A[0]=thisArg, A[1]=f, A[2..]=args */
-                int n = call_argc - 2;
-                JS_FreeValue(ctx, A[-1]);
-                A[-1] = A[0];                        /* thisArg */
-                A[0]  = A[1];                        /* f */
-                if (n > 0) memmove(&A[1], &A[2], n * sizeof(JSValue));
-                sp--;
-                call_argv = A + 1;                   /* call_argv[-2]=thisArg, [-1]=f, [0..]=args */
-                call_argc = n;
-                tramp_first = -2;
-                goto do_forward_dispatch;
             }
 
         do_forward_call:
