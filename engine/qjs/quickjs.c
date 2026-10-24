@@ -28715,7 +28715,8 @@ static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
      POD       a plain value of `type`, copied;
      OUTER     the requester link, `void *name` and its kind `uint8_t name##_kind`, at most one per record;
      DESC_OUT  a JSDescFacts * naming the requester's own record, which tramp_cont_relink_outer re-aims;
-     FACTS     a JSDescFacts held by value, whose three values are owned.
+     FACTS     a JSDescFacts held by value, whose three values are owned;
+     BORROW    a JSValueConst another owner keeps alive across the record's life, copied and never released.
    A role a walk does not expand is a compile error at the walk, which is the point. */
 #define CONT_REC_MEMBER_OWN_VAL(t, n)   JSValue n;
 #define CONT_REC_MEMBER_OWN_ATOM(t, n)  JSAtom n;
@@ -28723,6 +28724,7 @@ static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
 #define CONT_REC_MEMBER_OUTER(t, n)     void *n; uint8_t n##_kind;
 #define CONT_REC_MEMBER_DESC_OUT(t, n)  JSDescFacts *n;
 #define CONT_REC_MEMBER_FACTS(t, n)     JSDescFacts n;
+#define CONT_REC_MEMBER_BORROW(t, n)    JSValueConst n;
 #define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
 #define CONT_REC_FREE_OWN_VAL(n)        JS_FreeValue(ctx, r->n);
 #define CONT_REC_FREE_OWN_ATOM(n)       JS_FreeAtom(ctx, r->n);
@@ -28730,6 +28732,7 @@ static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
 #define CONT_REC_FREE_OUTER(n)
 #define CONT_REC_FREE_DESC_OUT(n)
 #define CONT_REC_FREE_FACTS(n)          js_desc_facts_free(ctx, &r->n);
+#define CONT_REC_FREE_BORROW(n)
 #define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(n)
 #define CONT_REC_DUP_OWN_VAL(n)         c->n = js_dup(r->n);
 #define CONT_REC_DUP_OWN_ATOM(n)        c->n = JS_DupAtom(ctx, r->n);
@@ -28737,6 +28740,7 @@ static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
 #define CONT_REC_DUP_OUTER(n)
 #define CONT_REC_DUP_DESC_OUT(n)
 #define CONT_REC_DUP_FACTS(n)           js_desc_facts_dup(&c->n);
+#define CONT_REC_DUP_BORROW(n)
 #define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(n)
 #define CONT_REC_NOUTER_OWN_VAL         0
 #define CONT_REC_NOUTER_OWN_ATOM        0
@@ -28744,6 +28748,7 @@ static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
 #define CONT_REC_NOUTER_OUTER           1
 #define CONT_REC_NOUTER_DESC_OUT        0
 #define CONT_REC_NOUTER_FACTS           0
+#define CONT_REC_NOUTER_BORROW          0
 #define CONT_REC_NOUTER(role, t, n)     + CONT_REC_NOUTER_##role
 #define CONT_REC_OUTER_GET_OWN_VAL(n)
 #define CONT_REC_OUTER_GET_OWN_ATOM(n)
@@ -28751,6 +28756,7 @@ static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
 #define CONT_REC_OUTER_GET_OUTER(n)     *out_kind = r->n##_kind; return r->n;
 #define CONT_REC_OUTER_GET_DESC_OUT(n)
 #define CONT_REC_OUTER_GET_FACTS(n)
+#define CONT_REC_OUTER_GET_BORROW(n)
 #define CONT_REC_OUTER_GET(role, t, n)  CONT_REC_OUTER_GET_##role(n)
 #define CONT_REC_OUTER_SET_OWN_VAL(n)
 #define CONT_REC_OUTER_SET_OWN_ATOM(n)
@@ -28758,6 +28764,7 @@ static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
 #define CONT_REC_OUTER_SET_OUTER(n)     r->n = outer; r->n##_kind = outer_kind; return;
 #define CONT_REC_OUTER_SET_DESC_OUT(n)
 #define CONT_REC_OUTER_SET_FACTS(n)
+#define CONT_REC_OUTER_SET_BORROW(n)
 #define CONT_REC_OUTER_SET(role, t, n)  CONT_REC_OUTER_SET_##role(n)
 #define CONT_REC_DESC_OUT_OWN_VAL(n)
 #define CONT_REC_DESC_OUT_OWN_ATOM(n)
@@ -28765,6 +28772,7 @@ static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
 #define CONT_REC_DESC_OUT_OUTER(n)
 #define CONT_REC_DESC_OUT_DESC_OUT(n)   return &r->n;
 #define CONT_REC_DESC_OUT_FACTS(n)
+#define CONT_REC_DESC_OUT_BORROW(n)
 #define CONT_REC_DESC_OUT(role, t, n)   CONT_REC_DESC_OUT_##role(n)
 /* The struct `T` and its walks, prefixed `p`: p_free releases the record and what it owns (not its requester);
    p_clone copies it, taking a reference to everything it owns, with its links still naming the original's
@@ -30019,12 +30027,12 @@ static void js_from_ctor_abandon(JSContext *ctx, void *st)
 {
     js_construct_requester_abandon(ctx, st, CONT_FROM_CTOR);
 }
-typedef struct JSAcquireGet {
-    JSValueConst iterable;   /* BORROWED: it is the consumer's own call operand, which lives on the caller's stack
-                                for the consumer's whole lifetime — the same borrow the acquire already makes. */
-    void *consumer;
-    uint8_t consumer_kind;
-} JSAcquireGet;
+/* GetIterator step 3's @@iterator read, parked under a getter or a Proxy trap. `iterable` is the consumer's
+   own call operand, on the caller's stack for the consumer's whole life; `consumer` waits on the read. */
+#define JS_ACQUIRE_GET_FIELDS(F)                                                                               \
+    F(BORROW, JSValueConst, iterable)                                                                          \
+    F(OUTER, void *, consumer)
+CONT_RECORD_DEFINE(JSAcquireGet, js_acquire_get, JS_ACQUIRE_GET_FIELDS)
 #define CONT_CONSUME_GETITER 19 /* cont_state = JSConsumeGetIter: GetIterator step 4's Call(method, obj) when the
                                    @@iterator method is a NORMAL bytecode function. Its body runs on THIS chain, so a
                                    loop in a hand-written `[Symbol.iterator]()` preempts like any other function —
@@ -30849,40 +30857,26 @@ _Static_assert(CONT_ARRAY_LEN_FWD == CONT_ARRAY_LEN, "the forward alias used by 
                                   here or falls through to the enclosing scope. On a Proxy base it is the `has`
                                   trap, and the opcode ran it from C. The record carries the operands the
                                   opcode parsed, because a suspension resumes with none of its locals. */
-typedef struct JSWithHas {
-    JSAtom atom;         /* BORROWED from the bytecode's atom table, which outlives the frame */
-    int32_t diff;        /* the jump the FOUND path takes */
-    uint8_t op;          /* which OP_with_* this is */
-    uint8_t is_with;     /* 1 = a real `with`, so @@unscopables applies */
-    uint8_t phase;       /* WH_*: which answer the delivery is being re-entered with */
-    uint8_t owns_atom;   /* the OP_with_* atoms are the bytecode's; a REFERENCE's is made by ToPropertyKey */
-    uint8_t jumps;       /* the OP_with_* forms branch into the with-body once the access is placed */
-    int8_t base;         /* the base object's DEPTH in the operand stack, or 0 = the GLOBAL object */
-    int8_t vdepth;       /* the depth of the value a WRITE stores, or 0 = this opcode only reads */
-    JSValue arr;         /* @@unscopables' value, held across the read of its key (owned) */
-} JSWithHas;
+/* `atom` is the name the reference resolves (owned: a bytecode atom is duplicated when the record is made);
+   `diff` is the jump the found path takes; `op` the OP_with_* or reference opcode; `is_with` 1 for a real
+   `with`, where @@unscopables applies; `phase` a WH_*; `jumps` 1 for the forms that branch into the with-body;
+   `base` the base object's operand-stack depth, 0 for the global object; `vdepth` the depth of a WRITE's
+   value, 0 for a read; `arr` @@unscopables' value, held across the read of its key. Terminal: the reference
+   belongs to the opcode, whose operands are the frame's own stack. */
+#define JS_WITH_HAS_FIELDS(F)                                                                                  \
+    F(OWN_ATOM, JSAtom, atom)                                                                                  \
+    F(POD, int32_t, diff)                                                                                      \
+    F(POD, uint8_t, op)                                                                                        \
+    F(POD, uint8_t, is_with)                                                                                   \
+    F(POD, uint8_t, phase)                                                                                     \
+    F(POD, uint8_t, jumps)                                                                                     \
+    F(POD, int8_t, base)                                                                                       \
+    F(POD, int8_t, vdepth)                                                                                     \
+    F(OWN_VAL, JSValue, arr)
+CONT_RECORD_DEFINE(JSWithHas, js_with_has, JS_WITH_HAS_FIELDS)
 /* An object Environment Record's operations, in the order 9.1.1.2.x states them. FIVE of the page's operations
    live between HasBinding and the access itself, and every one is a trap on a Proxy base. */
 enum { WH_HAS = 0, WH_UNSCOP_ARR, WH_UNSCOP_KEY, WH_HAS2, WH_ACCESS };
-static void js_with_has_free(JSContext *ctx, JSWithHas *wh)
-{
-    JS_FreeValue(ctx, wh->arr);
-    if (wh->owns_atom) JS_FreeAtom(ctx, wh->atom);
-    js_free_rt(ctx->rt, wh);
-}
-/* The sibling's copy for a fork: it takes a reference to each field js_with_has_free releases. `base` and
-   `vdepth` are operand-stack depths, which the cloned frame's stack keeps. */
-static JSWithHas *js_with_has_clone(JSContext *ctx, const JSWithHas *wh)
-{
-    JSWithHas *n = js_malloc(ctx, sizeof(*n));
-
-    if (unlikely(!n))
-        return NULL;
-    *n = *wh;
-    n->arr = js_dup(wh->arr);
-    if (n->owns_atom) n->atom = JS_DupAtom(ctx, wh->atom);
-    return n;
-}
 
 #define CONT_KEYED_INV     59  /* gp_outer = JSKeyedInv: 10.5.7 step 9 / 10.5.10 steps 9-12, which read the
                                   TARGET's descriptor bits and its extensibility — internal methods both, so a
@@ -47392,7 +47386,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 wh = js_mallocz(ctx, sizeof(*wh));
                 if (unlikely(!wh)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                wh->atom = atom; wh->op = (uint8_t)opcode; wh->phase = WH_HAS; wh->arr = JS_UNDEFINED;
+                wh->atom = JS_DupAtom(ctx, atom); wh->op = (uint8_t)opcode; wh->phase = WH_HAS; wh->arr = JS_UNDEFINED;
                 gp_obj = ctx->global_obj; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
                 gp_outer = wh; gp_outer_kind = CONT_WITH_HAS;
@@ -47459,7 +47453,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    an edition that put __proto__ Property Names in Object Initializers at B.3.1; the maintained
                    one numbers Block-Level Function Declarations Web Legacy Compatibility Semantics B.3.2, so
                    the old digit now names a different feature rather than nothing.) */
-                wh->atom = atom; wh->op = OP_put_var; wh->phase = WH_HAS; wh->arr = JS_UNDEFINED;
+                wh->atom = JS_DupAtom(ctx, atom); wh->op = OP_put_var; wh->phase = WH_HAS; wh->arr = JS_UNDEFINED;
                 wh->vdepth = 1;
                 gp_obj = ctx->global_obj; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
@@ -47924,7 +47918,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 wh = js_mallocz(ctx, sizeof(*wh));
                 if (unlikely(!wh)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                wh->atom = atom; wh->op = (uint8_t)opcode; wh->phase = WH_HAS; wh->arr = JS_UNDEFINED;
+                wh->atom = JS_DupAtom(ctx, atom); wh->op = (uint8_t)opcode; wh->phase = WH_HAS; wh->arr = JS_UNDEFINED;
                 gp_obj = ctx->global_obj; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
                 gp_outer = wh; gp_outer_kind = CONT_WITH_HAS;
@@ -49579,7 +49573,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    opcode lives at the shared delivery, entered only through the answer. */
                 wh = js_mallocz(ctx, sizeof(*wh));
                 if (unlikely(!wh)) { JS_FreeAtom(ctx, atom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                wh->atom = atom; wh->owns_atom = 1; wh->op = (uint8_t)opcode; wh->base = 2;
+                wh->atom = atom; wh->op = (uint8_t)opcode; wh->base = 2;
                 wh->phase = WH_HAS2; wh->arr = JS_UNDEFINED;
                 gp_obj = sp[-2]; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
@@ -49825,7 +49819,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     sp[-3] = js_dup(ctx->global_obj);
                     wh = js_mallocz(ctx, sizeof(*wh));
                     if (unlikely(!wh)) { JS_FreeAtom(ctx, atom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                    wh->atom = atom; wh->owns_atom = 1; wh->op = (uint8_t)opcode; wh->base = 3;
+                    wh->atom = atom; wh->op = (uint8_t)opcode; wh->base = 3;
                     wh->phase = WH_ACCESS; wh->arr = JS_UNDEFINED; wh->vdepth = 1;
                     gp_obj = sp[-3]; gp_atom = atom; gp_op = GP_SET; gp_val = sp[-1];
                     gp_recv = JS_UNINITIALIZED; gp_no_throw = is_strict_mode(ctx) ? 0 : 1;
@@ -49836,7 +49830,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    HasProperty — the page's `has` trap on a Proxy base, which this ran from C. */
                 wh = js_mallocz(ctx, sizeof(*wh));
                 if (unlikely(!wh)) { JS_FreeAtom(ctx, atom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                wh->atom = atom; wh->owns_atom = 1; wh->op = (uint8_t)opcode; wh->base = 3;
+                wh->atom = atom; wh->op = (uint8_t)opcode; wh->base = 3;
                 wh->phase = WH_HAS2; wh->arr = JS_UNDEFINED; wh->vdepth = 1;
                 gp_obj = sp[-3]; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
@@ -50836,7 +50830,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        "the global object became a Proxy: DeleteBinding's own-property step would skip its traps");
                 wh = js_mallocz(ctx, sizeof(*wh));
                 if (unlikely(!wh)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                wh->atom = atom; wh->op = (uint8_t)opcode; wh->phase = WH_HAS; wh->arr = JS_UNDEFINED;
+                wh->atom = JS_DupAtom(ctx, atom); wh->op = (uint8_t)opcode; wh->phase = WH_HAS; wh->arr = JS_UNDEFINED;
                 gp_obj = ctx->global_obj; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
                 gp_outer = wh; gp_outer_kind = CONT_WITH_HAS;
@@ -53770,7 +53764,9 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_PROXY_INV, JSProxyInv, js_proxy_inv, LINK)                                                          \
     X(CONT_KEYED_INV, JSKeyedInv, js_keyed_inv, LINK)                                                          \
     X(CONT_ARRAY_LEN, JSArrayLen, js_array_len, LINK)                                                          \
-    X(CONT_ARRAY_LEN_YIELD, JSArrayLen, js_array_len, ANCHOR)
+    X(CONT_ARRAY_LEN_YIELD, JSArrayLen, js_array_len, ANCHOR)                                                  \
+    X(CONT_ACQUIRE_GET, JSAcquireGet, js_acquire_get, LINK)                                                    \
+    X(CONT_WITH_HAS, JSWithHas, js_with_has, LINK)
 #define CONT_REC_CASE_OUTER_GET(k, T, p, role)  case k: return p##_outer_get((T *)st, out_kind);
 #define CONT_REC_CASE_OUTER_SET(k, T, p, role)  case k: p##_outer_set((T *)st, outer, outer_kind); return;
 #define CONT_REC_IF_DESC_OUT(k, T, p, role)     if (kind == k) return p##_desc_out((T *)st);
@@ -53882,15 +53878,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_OWNKEYS_CHK:
         *out_kind = ((struct JSOwnKeysChk *)st)->outer_kind;
         return ((struct JSOwnKeysChk *)st)->outer;
-    case CONT_WITH_HAS:
-        /* TERMINAL, like CONT_OP_KEYED: the reference it resolves belongs to the OP_with_* opcode, whose operands
-           are on the frame's own stack, which the frame clone carries. The record has no requester field. */
-        return NULL;
-    case CONT_ACQUIRE_GET:
-        /* GetIterator step 3's @@iterator read, parked under a getter or a Proxy trap: the consumer whose
-           acquisition it is waits on it */
-        *out_kind = ((JSAcquireGet *)st)->consumer_kind;
-        return ((JSAcquireGet *)st)->consumer;
     case CONT_SETMAP_CTOR: case CONT_TA_TARGET: {
         /* a construct sequence: whoever asked for the construct, which its consume machine records */
         JSIterConsume *cs = ctor_seq_consume(st, kind);
@@ -53960,13 +53947,11 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         JSIterConsume *cs = ctor_seq_consume(st, kind);
         cs->outer = outer; cs->outer_kind = outer_kind; return;
     }
-    case CONT_ACQUIRE_GET:
-        ((JSAcquireGet *)st)->consumer = outer; ((JSAcquireGet *)st)->consumer_kind = outer_kind; return;
     /* Terminal: cont_outer_get answers no link for these, so there is nothing to write back. */
     case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: case CONT_PROMISE_ALL:
     case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
     case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP: case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET:
-    case CONT_AFS_CONT: case CONT_WITH_HAS: case CONT_NONE:
+    case CONT_AFS_CONT: case CONT_NONE:
         break;
     /* No arm yet, as in cont_outer_get. */
     case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
@@ -54044,10 +54029,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         ITERCONS_ROLE_AGREES(st, kind);
         return js_iter_consume_clone(ctx, (const JSIterConsume *)st);
     }
-    case CONT_WITH_HAS:
-        /* a `with` reference whose HasBinding or @@unscopables read is a Proxy trap or a getter: the keyed
-           operation is the frame's continuation and this record is the link under it. */
-        return js_with_has_clone(ctx, (const JSWithHas *)st);
     case CONT_OWNKEYS_CHK:
         return js_ownkeys_chk_clone(ctx, (const struct JSOwnKeysChk *)st);
     case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
@@ -54067,13 +54048,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         /* an ordinary construct under its new.target's `prototype` read — a getter or a Proxy `get` trap
            branching on unknown input. clone_deep_flow moves a borrowed argument window afterwards. */
         return js_ctor_proto_clone(ctx, (const JSCtorProto *)st);
-    case CONT_ACQUIRE_GET: {
-        /* the record is its consumer link (bound by the walk) and a borrow of the consumer's own operand, which
-           the sibling's cloned operand stack holds too */
-        JSAcquireGet *na = js_mallocz(ctx, sizeof(*na));
-        if (na) *na = *(const JSAcquireGet *)st;
-        return na;
-    }
     /* No arm here. A kind that is only ever a frame's own cont_state (CONT_ARG_LIST_YIELD's anchor, say) is
        cloned by clone_deep_flow's arm for it; any other has not yet been asked to copy a link. */
     case CONT_ARG_LIST_YIELD: case CONT_NONE: case CONT_AGEN_CREATE: case CONT_CONSTRUCT: case CONT_SETTER:
@@ -55236,15 +55210,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
         js_free_rt(rt, st);
         return;
     }
-    case CONT_ACQUIRE_GET: {
-        /* the acquisition can never finish, so the consumer waiting on it goes with it */
-        JSAcquireGet *ag = st;
-        void *co = ag->consumer;
-        uint8_t ck = ag->consumer_kind;
-        js_free_rt(rt, ag);
-        next->st = co; next->kind = ck;
-        return;
-    }
     case CONT_SETMAP_CTOR:
         /* the sequence and its consume machine, whose end releases the construct's requester exactly once */
         js_setmap_ctor_free(ctx, (JSSetMapCtor *)st);
@@ -55300,11 +55265,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
         next->st = ao; next->kind = ak;
         return;
     }
-    case CONT_WITH_HAS:
-        /* TERMINAL for cont_outer_get's reason: the reference belongs to the opcode, whose frame is freed by its
-           own arm. */
-        js_with_has_free(ctx, (JSWithHas *)st);
-        return;
     case CONT_CTOR_PROTO: {
         /* A construct parked on its new.target's `prototype` read (10.1.13 step 2), released with nobody to
            answer to. js_ctor_proto_free releases what the record owns (super_ref, the args_owned block and its
