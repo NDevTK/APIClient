@@ -156,6 +156,16 @@ static const char HTML_CSS[] =
     "var cv = [pcv('pcvc', '--pfull'), pcv('pcvc', '--pinh'), pcv('pcvbad', '--pinh'), pcv('pcvo', '--pinh'),"
     " pcv('pcvo', '--plast'), pcv('pcvo', '--pmiss'), pcv('pcvo', '--pnone')].join('|');"
     "fetch('/api/csspropCv?v=' + (cv === '0%|5px|5px|3px|2px||' ? 'CSSCVOK' : 'CSSCVBAD:' + cv));</script>"
+    /* css-fonts-4 §2.7's system-font arm, against what Chrome 155 answers (measured, headless Linux): every
+       one of the six computes to `16px Arial`, weight 400; the longhands stay pending, so `style.fontFamily`
+       reads "" and the block serializes `font: menu;`; a later `font-weight` still wins its own longhand. */
+    "<script>var sf = document.createElement('div'); sf.style.font = 'menu'; document.body.appendChild(sf);"
+    "var sfb = document.createElement('div'); sfb.style.cssText = 'font: message-box; font-weight: bold';"
+    " document.body.appendChild(sfb);"
+    "var sfc = getComputedStyle(sf), sv = [sfc.fontFamily, sfc.fontSize, sfc.fontWeight, sfc.fontStyle,"
+    " sf.style.fontFamily, sf.style.cssText, getComputedStyle(sfb).fontWeight].join('|');"
+    "fetch('/api/csssysfont?v=' + (sv === 'Arial|16px|400|normal||font: menu;|700' ? 'CSSSYSOK' : 'CSSSYSBAD:' + sv));"
+    "</script>"
     TF_CANVAS_INK
     "</body></html>";
 

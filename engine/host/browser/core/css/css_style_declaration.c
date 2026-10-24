@@ -103,6 +103,7 @@
 #include "core/css/css_cascade_pass.h"   /* the cascade's per-element answers, held by a layout job */
 #include "core/css/css_cascaded_style.h"   /* css-cascade-5 §4.2's values, one resolution per element */
 #include "core/css/css_computed_style.h"   /* the hold every ask is made inside */
+#include "core/css/css_font_shorthand.h"   /* css-fonts-4 §2.7: a system font leaves `font` pending */
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_font_family.h"
@@ -838,6 +839,16 @@ static bool cssd_block_is_descriptor_body(CssomBlockContext context)
     return context == CSSOM_BLOCK_FONT_FACE;
 }
 
+/* Whether shorthand `name` = `value` leaves its longhands a pending value, resolved at computed-value time:
+   a value with an arbitrary substitution function (css-values-5 "Substitution in Shorthand Properties"), or a
+   `font` system font. css-fonts-4 §2.7 sets a system font's sub-properties all at once from the platform;
+   Chrome 155 keeps them pending (each longhand reads "" through CSSOM and the block serializes `font: menu`),
+   and this engine matches it so the specified values a page reads are the same. */
+static bool cssd_shorthand_pending(const char *name, const char *value)
+{
+    return css_var_references(value) || (strcmp(name, "font") == 0 && css_font_shorthand_is_system_font(value));
+}
+
 /* THE LONGHAND DECLARATIONS ONE DECLARATION PRODUCES, collected into the block. A declaration sets a longhand
    either by BEING it or by being a SHORTHAND of it, and CSS Syntax drops an INVALID declaration whole — so a
    shorthand whose value fails one component's grammar sets none of them, rather than the ones before it. */
@@ -896,7 +907,7 @@ static void cssd_decls_collect_declaration(CssDecls *d, const char *name, const 
        IT IS THE SAME SCAN core/css/css_var.h PERFORMS — the one `cssd_undef_is_declaration` admitted this
        declaration on — so the two cannot come to disagree about what a function token is and leave a
        shorthand admitted at the gate and expanded here with a `var(` still in it. */
-    if (value != NULL && css_var_references(value)) {
+    if (value != NULL && cssd_shorthand_pending(name, value)) {
         for (i = 0; i < n; i++) cssd_decls_collect(d, lh[i], css_pending_make(name, value), important);
         return;
     }
@@ -3858,7 +3869,7 @@ static void cssd_decls_set_property(CssDecls *d, const char *name, const char *v
        appropriate values yet. `el.style.margin = "var(--g) 0"` and `<div style="margin: var(--g) 0">` are one
        declaration written two ways, so a branch at one of them alone would make the same bytes set four
        longhands through one door and none through the other. */
-    if (css_var_references(parsed)) {
+    if (cssd_shorthand_pending(name, parsed)) {
         for (i = 0; i < n; i++) {
             cssd_decls_set(d, lh[i], css_pending_make(name, parsed), important);
             cssd_set_names_add(set, lh[i]);

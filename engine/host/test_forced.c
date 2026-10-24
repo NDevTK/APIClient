@@ -16279,6 +16279,13 @@ TF_UNIT void probes_css(const char *js, Probe *tab, int *n) {
     fold_row(&csspropCv_tt, &csspropCv_why, param_value_is(js, "/api/csspropCv", "v", "CSSCVOK"),
              "CSS Properties and Values API 1 §2.1's registration did not decide the custom properties' computed "
              "values as the page compared them (the record carries CSSCVBAD: with the values that answered)");
+    const char *csssys_why = NULL;
+    int csssys_tt = 1;
+    fold_row(&csssys_tt, &csssys_why, !!strstr(js, "\"/api/csssysfont\""),
+             "NOT REACHED: there is no /api/csssysfont record at all, so this run did not answer the statement");
+    fold_row(&csssys_tt, &csssys_why, param_value_is(js, "/api/csssysfont", "v", "CSSSYSOK"),
+             "css-fonts-4 §2.7's system fonts did not answer what Chrome 155 answers (the record carries "
+             "CSSSYSBAD: with the values that answered)");
     /* CSS COMPATIBILITY STANDARD §3.1's ALIAS, as the two tokens the page's own comparisons emitted — see the
        `<style id=kfsheet>` block in HTML above for what each one covers and why they are two. A red row here
        is a document that BOOTED, which is itself the first thing this fixture is about: the at-rule these
@@ -16298,6 +16305,7 @@ TF_UNIT void probes_css(const char *js, Probe *tab, int *n) {
         { "cssprop", cssprop_tt, "/api/cssprop?", SESS_EXPLORE, cssprop_why },
         { "cssprop-text", csspropText_tt, "/api/csspropText", SESS_EXPLORE, csspropText_why },
         { "cssprop-computed", csspropCv_tt, "/api/csspropCv", SESS_EXPLORE, csspropCv_why },
+        { "css-system-font", csssys_tt, "/api/csssysfont", SESS_EXPLORE, csssys_why },
         { "css-webkit-keyframes", csswkkf_tt, "/api/csswkkf?", SESS_EXPLORE },
         { "css-webkit-keyframes-text", csswkkfText_tt, "/api/csswkkfText", SESS_EXPLORE },
         { "css-nesting-selectortext", cssnestsel_tt, "/api/cssnestsel", SESS_EXPLORE },

@@ -126,6 +126,25 @@ static const char *const FONT_SYSTEM_FAMILY[] = {
     "caption", "icon", "menu", "message-box", "small-caption", "status-bar",
 };
 
+/* §2.7's system fonts as this user agent models them: the values "the operating system's available user
+   preferences" give each sub-property §2.7 says a system font sets. They are a modelled environment, as the
+   viewport is, and the model is Chrome 155 (chrome-for-testing 155.0.8059.84, headless, Linux), whose
+   getComputedStyle answers `16px Arial`, weight 400, style normal, for every one of the six. A sub-property not
+   listed takes its initial value. In FONT_SYSTEM_FAMILY's order. */
+static const struct {
+    const char *family, *size, *weight, *style;
+} FONT_SYSTEM_RECORD[] = {
+    { "Arial", "16px", "normal", "normal" },   /* caption */
+    { "Arial", "16px", "normal", "normal" },   /* icon */
+    { "Arial", "16px", "normal", "normal" },   /* menu */
+    { "Arial", "16px", "normal", "normal" },   /* message-box */
+    { "Arial", "16px", "normal", "normal" },   /* small-caption */
+    { "Arial", "16px", "normal", "normal" },   /* status-bar */
+};
+_Static_assert(sizeof FONT_SYSTEM_RECORD / sizeof FONT_SYSTEM_RECORD[0] == FONT_N(FONT_SYSTEM_FAMILY),
+               "every system font has one modelled record");
+
+
 /* css-values-4 §7.1 "Angle Units: the `<angle>` type and deg, grad, rad, turn units" states the four
    `<angle>` units. `oblique`'s argument is the only place §2.7's grammar
    admits one, and telling an angle from a length is what stops `font: oblique 12px serif` reading the size as
@@ -286,6 +305,24 @@ static int font_words(const char *v, FontWord *w, int max)
     return n;
 }
 
+/* The FONT_SYSTEM_FAMILY row `value` names, or -1. */
+static int font_system_row(const char *value)
+{
+    FontWord w[2];
+    unsigned i;
+
+    if (font_words(value, w, 2) != 1) return -1;
+    for (i = 0; i < FONT_N(FONT_SYSTEM_FAMILY); i++)
+        if (font_word_is(w[0].s, w[0].n, FONT_SYSTEM_FAMILY[i])) return (int)i;
+    return -1;
+}
+
+bool css_font_shorthand_is_system_font(const char *value)
+{
+    DCHECK(value != NULL, "a `font` value was asked whether it names a system font through NULL");
+    return font_system_row(value) >= 0;
+}
+
 /* WHICH SLOT OF §2.7's OPTIONAL PREFIX this component fills, or -1 when it fills none — which is what ends the
  * prefix and begins `<'font-size'>`.
  *
@@ -400,19 +437,18 @@ static bool font_parse(const char *value, char **out)
     if (n < 1) return false;
     /* §2.1.3's `<system-font-family-name>` arm. §2.7: "System fonts can only be set as a whole; that is, the
        font family, size, weight, style, etc. are all set at the same time", out of "the operating system's
-       available user preferences". */
-    if (n == 1 && font_keyword(FONT_SYSTEM_FAMILY, FONT_N(FONT_SYSTEM_FAMILY), w[0].s, w[0].n))
-        DFAIL("a `font` declaration named one of css-fonts-4 §2.1.3's SIX SYSTEM FONTS (`caption`, `icon`, "
-              "`menu`, `message-box`, `small-caption`, `status-bar`). §2.7 makes that the shorthand's second "
-              "whole arm and defines every sub-property's value by the OPERATING SYSTEM's user preferences — "
-              "a family, a size, a weight and a style this engine has no record of, which is why the answer "
-              "cannot be the initial values (§2.7 says only that properties the OS does not expose take those, "
-              "and the ones it always exposes are exactly the ones a page reads). This is NOT css-values "
-              "§Headless's missing device: a system font record is a set of UA-MODELLED values in the same "
-              "sense core/frame/viewport.h models the viewport, so BUILD one — six rows of "
-              "{family, size, weight, style} picked by the same test viewport.h applies, each row a PICKED "
-              "environment fact because `getComputedStyle(el).fontSize` after `font: menu` is a question with "
-              "more than one answer and a bundle sizing a control against the platform reads it");
+       available user preferences", which FONT_SYSTEM_RECORD models. */
+    if (n == 1 && (k = font_system_row(value)) >= 0) {
+        out[FONT_SLOT_STYLE] = font_strdup(FONT_SYSTEM_RECORD[k].style);
+        out[FONT_SLOT_VARIANT] = font_strdup("normal");
+        out[FONT_SLOT_WEIGHT] = font_strdup(FONT_SYSTEM_RECORD[k].weight);
+        out[FONT_SLOT_STRETCH] = font_strdup("normal");
+        out[FONT_SLOT_SIZE] = font_strdup(FONT_SYSTEM_RECORD[k].size);
+        out[FONT_SLOT_LH] = font_strdup("normal");
+        out[FONT_SLOT_FAMILY] = css_font_family_value(FONT_SYSTEM_RECORD[k].family);
+        DCHECK(out[FONT_SLOT_FAMILY] != NULL, "a modelled system font's family is not a <'font-family'>");
+        return true;
+    }
     for (k = 0; k <= FONT_SLOT_STRETCH; k++) { raw[k].s = NULL; raw[k].n = 0; }
     while (i < n && (slot = font_prefix_slot(w, n, i, filled, &consumed)) >= 0) {
         DCHECK(!filled[slot], "§2.7's `||` filled one prefix term twice — each term is admitted at most once "

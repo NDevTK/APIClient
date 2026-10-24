@@ -60,6 +60,10 @@ extern const char *const CSS_FONT_SHORTHAND_LONGHANDS[CSS_FONT_SHORTHAND_N];
    rather than the ones parsed before the failure. */
 char *css_font_shorthand_component(const char *value, const char *longhand);
 
+/* Whether `value` is one of css-fonts-4 §2.1.3's six system font keywords alone, which §2.7 makes the
+   shorthand's whole-value arm. */
+bool css_font_shorthand_is_system_font(const char *value);
+
 /* CSSOM §6.7.2's SERIALIZE A CSS VALUE over the list — the value a hypothetical `font` declaration would carry
    given `values[i]` as the serialized value of CSS_FONT_SHORTHAND_LONGHANDS[i]. Every entry must be non-NULL.
    NULL is §6.7.2's "the shorthand cannot exactly represent the values of all the properties in list", and for
