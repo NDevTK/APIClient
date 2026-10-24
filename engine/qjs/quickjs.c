@@ -28707,73 +28707,82 @@ static int js_proxy_setproto_invariant(JSContext *ctx, JSValueConst target, JSVa
                                   and dropped every C, bound or proxied trap back to a C drive. */
 static void js_desc_facts_dup(JSDescFacts *f);
 static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
+static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *tab, uint32_t len);
 /* A CONTINUATION RECORD'S DECLARATION. A record a parked chain can hold lists its fields once, each as
    F(role, type, name), and its struct, its release, its copy and its requester link are all expanded from that
    one list (CONT_RECORD_DEFINE), so no walk can name a field another walk misses. The roles:
      OWN_VAL   an owned JSValue: the copy takes a reference, the release drops one;
      OWN_ATOM  an owned JSAtom, likewise;
      POD       a plain value of `type`, copied;
+     BORROW    a JSValueConst another owner keeps alive across the record's life, copied and never released;
      OUTER     the requester link, `void *name` and its kind `uint8_t name##_kind`, at most one per record;
      DESC_OUT  a JSDescFacts * naming the requester's own record, which tramp_cont_relink_outer re-aims;
      FACTS     a JSDescFacts held by value, whose three values are owned;
-     BORROW    a JSValueConst another owner keeps alive across the record's life, copied and never released.
-   A role a walk does not expand is a compile error at the walk, which is the point. */
-#define CONT_REC_MEMBER_OWN_VAL(t, n)   JSValue n;
-#define CONT_REC_MEMBER_OWN_ATOM(t, n)  JSAtom n;
-#define CONT_REC_MEMBER_POD(t, n)       t n;
-#define CONT_REC_MEMBER_OUTER(t, n)     void *n; uint8_t n##_kind;
-#define CONT_REC_MEMBER_DESC_OUT(t, n)  JSDescFacts *n;
-#define CONT_REC_MEMBER_FACTS(t, n)     JSDescFacts n;
-#define CONT_REC_MEMBER_BORROW(t, n)    JSValueConst n;
+     PROPS     an owned own-key table, whose length is the field named in `type`.
+   Each role defines one macro per walk; a role a walk does not define is a compile error at that walk. */
+#define CONT_REC_MEMBER_OWN_VAL(t, n) JSValue n;
+#define CONT_REC_MEMBER_OWN_ATOM(t, n) JSAtom n;
+#define CONT_REC_MEMBER_POD(t, n) t n;
+#define CONT_REC_MEMBER_BORROW(t, n) JSValueConst n;
+#define CONT_REC_MEMBER_OUTER(t, n) void *n; uint8_t n##_kind;
+#define CONT_REC_MEMBER_DESC_OUT(t, n) JSDescFacts *n;
+#define CONT_REC_MEMBER_FACTS(t, n) JSDescFacts n;
+#define CONT_REC_MEMBER_PROPS(t, n) JSPropertyEnum *n;
+#define CONT_REC_FREE_OWN_VAL(t, n) JS_FreeValue(ctx, r->n);
+#define CONT_REC_FREE_OWN_ATOM(t, n) JS_FreeAtom(ctx, r->n);
+#define CONT_REC_FREE_POD(t, n)
+#define CONT_REC_FREE_BORROW(t, n)
+#define CONT_REC_FREE_OUTER(t, n)
+#define CONT_REC_FREE_DESC_OUT(t, n)
+#define CONT_REC_FREE_FACTS(t, n) js_desc_facts_free(ctx, &r->n);
+#define CONT_REC_FREE_PROPS(t, n) if (r->n) js_free_prop_enum(ctx, r->n, r->t);
+#define CONT_REC_DUP_OWN_VAL(t, n) c->n = js_dup(r->n);
+#define CONT_REC_DUP_OWN_ATOM(t, n) c->n = JS_DupAtom(ctx, r->n);
+#define CONT_REC_DUP_POD(t, n)
+#define CONT_REC_DUP_BORROW(t, n)
+#define CONT_REC_DUP_OUTER(t, n)
+#define CONT_REC_DUP_DESC_OUT(t, n)
+#define CONT_REC_DUP_FACTS(t, n) js_desc_facts_dup(&c->n);
+#define CONT_REC_DUP_PROPS(t, n) if (r->n) { c->n = js_prop_enum_dup(ctx, r->n, r->t); CHECK(c->n != NULL, "OOM copying a parked record's own-key table"); }
+#define CONT_REC_NOUTER_OWN_VAL(t, n) 0
+#define CONT_REC_NOUTER_OWN_ATOM(t, n) 0
+#define CONT_REC_NOUTER_POD(t, n) 0
+#define CONT_REC_NOUTER_BORROW(t, n) 0
+#define CONT_REC_NOUTER_OUTER(t, n) 1
+#define CONT_REC_NOUTER_DESC_OUT(t, n) 0
+#define CONT_REC_NOUTER_FACTS(t, n) 0
+#define CONT_REC_NOUTER_PROPS(t, n) 0
+#define CONT_REC_OUTER_GET_OWN_VAL(t, n)
+#define CONT_REC_OUTER_GET_OWN_ATOM(t, n)
+#define CONT_REC_OUTER_GET_POD(t, n)
+#define CONT_REC_OUTER_GET_BORROW(t, n)
+#define CONT_REC_OUTER_GET_OUTER(t, n) *out_kind = r->n##_kind; return r->n;
+#define CONT_REC_OUTER_GET_DESC_OUT(t, n)
+#define CONT_REC_OUTER_GET_FACTS(t, n)
+#define CONT_REC_OUTER_GET_PROPS(t, n)
+#define CONT_REC_OUTER_SET_OWN_VAL(t, n)
+#define CONT_REC_OUTER_SET_OWN_ATOM(t, n)
+#define CONT_REC_OUTER_SET_POD(t, n)
+#define CONT_REC_OUTER_SET_BORROW(t, n)
+#define CONT_REC_OUTER_SET_OUTER(t, n) r->n = outer; r->n##_kind = outer_kind; return;
+#define CONT_REC_OUTER_SET_DESC_OUT(t, n)
+#define CONT_REC_OUTER_SET_FACTS(t, n)
+#define CONT_REC_OUTER_SET_PROPS(t, n)
+#define CONT_REC_DESC_OUT_OWN_VAL(t, n)
+#define CONT_REC_DESC_OUT_OWN_ATOM(t, n)
+#define CONT_REC_DESC_OUT_POD(t, n)
+#define CONT_REC_DESC_OUT_BORROW(t, n)
+#define CONT_REC_DESC_OUT_OUTER(t, n)
+#define CONT_REC_DESC_OUT_DESC_OUT(t, n) return &r->n;
+#define CONT_REC_DESC_OUT_FACTS(t, n)
+#define CONT_REC_DESC_OUT_PROPS(t, n)
 #define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
-#define CONT_REC_FREE_OWN_VAL(n)        JS_FreeValue(ctx, r->n);
-#define CONT_REC_FREE_OWN_ATOM(n)       JS_FreeAtom(ctx, r->n);
-#define CONT_REC_FREE_POD(n)
-#define CONT_REC_FREE_OUTER(n)
-#define CONT_REC_FREE_DESC_OUT(n)
-#define CONT_REC_FREE_FACTS(n)          js_desc_facts_free(ctx, &r->n);
-#define CONT_REC_FREE_BORROW(n)
-#define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(n)
-#define CONT_REC_DUP_OWN_VAL(n)         c->n = js_dup(r->n);
-#define CONT_REC_DUP_OWN_ATOM(n)        c->n = JS_DupAtom(ctx, r->n);
-#define CONT_REC_DUP_POD(n)
-#define CONT_REC_DUP_OUTER(n)
-#define CONT_REC_DUP_DESC_OUT(n)
-#define CONT_REC_DUP_FACTS(n)           js_desc_facts_dup(&c->n);
-#define CONT_REC_DUP_BORROW(n)
-#define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(n)
-#define CONT_REC_NOUTER_OWN_VAL         0
-#define CONT_REC_NOUTER_OWN_ATOM        0
-#define CONT_REC_NOUTER_POD             0
-#define CONT_REC_NOUTER_OUTER           1
-#define CONT_REC_NOUTER_DESC_OUT        0
-#define CONT_REC_NOUTER_FACTS           0
-#define CONT_REC_NOUTER_BORROW          0
-#define CONT_REC_NOUTER(role, t, n)     + CONT_REC_NOUTER_##role
-#define CONT_REC_OUTER_GET_OWN_VAL(n)
-#define CONT_REC_OUTER_GET_OWN_ATOM(n)
-#define CONT_REC_OUTER_GET_POD(n)
-#define CONT_REC_OUTER_GET_OUTER(n)     *out_kind = r->n##_kind; return r->n;
-#define CONT_REC_OUTER_GET_DESC_OUT(n)
-#define CONT_REC_OUTER_GET_FACTS(n)
-#define CONT_REC_OUTER_GET_BORROW(n)
-#define CONT_REC_OUTER_GET(role, t, n)  CONT_REC_OUTER_GET_##role(n)
-#define CONT_REC_OUTER_SET_OWN_VAL(n)
-#define CONT_REC_OUTER_SET_OWN_ATOM(n)
-#define CONT_REC_OUTER_SET_POD(n)
-#define CONT_REC_OUTER_SET_OUTER(n)     r->n = outer; r->n##_kind = outer_kind; return;
-#define CONT_REC_OUTER_SET_DESC_OUT(n)
-#define CONT_REC_OUTER_SET_FACTS(n)
-#define CONT_REC_OUTER_SET_BORROW(n)
-#define CONT_REC_OUTER_SET(role, t, n)  CONT_REC_OUTER_SET_##role(n)
-#define CONT_REC_DESC_OUT_OWN_VAL(n)
-#define CONT_REC_DESC_OUT_OWN_ATOM(n)
-#define CONT_REC_DESC_OUT_POD(n)
-#define CONT_REC_DESC_OUT_OUTER(n)
-#define CONT_REC_DESC_OUT_DESC_OUT(n)   return &r->n;
-#define CONT_REC_DESC_OUT_FACTS(n)
-#define CONT_REC_DESC_OUT_BORROW(n)
-#define CONT_REC_DESC_OUT(role, t, n)   CONT_REC_DESC_OUT_##role(n)
+#define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(t, n)
+#define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(t, n)
+#define CONT_REC_NOUTER(role, t, n)     + CONT_REC_NOUTER_##role(t, n)
+#define CONT_REC_OUTER_GET(role, t, n)  CONT_REC_OUTER_GET_##role(t, n)
+#define CONT_REC_OUTER_SET(role, t, n)  CONT_REC_OUTER_SET_##role(t, n)
+#define CONT_REC_DESC_OUT(role, t, n)   CONT_REC_DESC_OUT_##role(t, n)
 /* The struct `T` and its walks, prefixed `p`: p_free releases the record and what it owns (not its requester);
    p_clone copies it, taking a reference to everything it owns, with its links still naming the original's
    (tramp_cont_relink_outer re-binds them); p_outer_get/p_outer_set read and write the requester link (NULL and
@@ -32714,23 +32723,26 @@ static void js_set_recv_free(JSContext *ctx, JSSetRecv *sr)
    GP_OWNKEYS, and the GP_GETOWNPROP `want_flags` answer built for exactly this — a per-key loop that wants
    attribute bits, not descriptor objects. The CHECKS are unchanged and stay in one place; only how the facts
    are obtained differs between this and the C hook. */
-typedef struct JSOwnKeysChk {
-    JSValue obj;          /* the proxy (owned) */
-    JSValue target;       /* its [[Target]] (owned) */
-    JSValue trap_res;     /* the array the trap returned (owned) */
-    JSValue tkeys;        /* the target's own-key array, once step 15 has produced it (owned) */
-    void *outer;          /* what is waiting on the OPERATION */
-    uint8_t outer_kind;
-    uint8_t phase;        /* OKC_* */
-    JSPropertyEnum *tab;  /* the trap's keys, validated (owned) */
-    uint32_t len;
-    JSPropertyEnum *tab2; /* the target's own keys (owned) */
-    uint32_t len2;
-    uint32_t i;           /* whichever loop is running */
-    int64_t rlen;         /* CreateListFromArrayLike's length */
-    int is_extensible;
-    JSDescFacts facts;    /* the target key's own descriptor, answered into here (owned) */
-} JSOwnKeysChk;
+/* `obj` is the proxy, `target` its [[Target]], `trap_res` the array the trap returned and `tkeys` the target's
+   own-key array once step 15 has produced it. `phase` is an OKC_*. `tab` (`len` keys) is the trap's keys,
+   validated, and `tab2` (`len2`) the target's own keys; `i` is whichever loop is running, `rlen`
+   CreateListFromArrayLike's length, and `facts` the target key's own descriptor, answered into here. */
+#define JS_OWNKEYS_CHK_FIELDS(F)                                                                               \
+    F(OWN_VAL, JSValue, obj)                                                                                   \
+    F(OWN_VAL, JSValue, target)                                                                                \
+    F(OWN_VAL, JSValue, trap_res)                                                                              \
+    F(OWN_VAL, JSValue, tkeys)                                                                                 \
+    F(OUTER, void *, outer)                                                                                    \
+    F(POD, uint8_t, phase)                                                                                     \
+    F(PROPS, len, tab)                                                                                         \
+    F(POD, uint32_t, len)                                                                                      \
+    F(PROPS, len2, tab2)                                                                                       \
+    F(POD, uint32_t, len2)                                                                                     \
+    F(POD, uint32_t, i)                                                                                        \
+    F(POD, int64_t, rlen)                                                                                      \
+    F(POD, int, is_extensible)                                                                                 \
+    F(FACTS, JSDescFacts, facts)
+CONT_RECORD_DEFINE(JSOwnKeysChk, js_ownkeys_chk, JS_OWNKEYS_CHK_FIELDS)
 enum { OKC_LEN = 0, OKC_LEN_GOT, OKC_ELEM, OKC_ELEM_GOT,
        OKC_EXT, OKC_EXT_GOT, OKC_TKEYS, OKC_TKEYS_GOT, OKC_TDESC, OKC_TDESC_GOT };
 
@@ -32794,17 +32806,6 @@ enum { KI_DESC = 0, KI_DESC_GOT, KI_EXT, KI_EXT_GOT };
 
 
 
-static void js_ownkeys_chk_free(JSContext *ctx, struct JSOwnKeysChk *ok)
-{
-    js_desc_facts_free(ctx, &ok->facts);
-    if (ok->tab) js_free_prop_enum(ctx, ok->tab, ok->len);
-    if (ok->tab2) js_free_prop_enum(ctx, ok->tab2, ok->len2);
-    JS_FreeValue(ctx, ok->obj);
-    JS_FreeValue(ctx, ok->target);
-    JS_FreeValue(ctx, ok->trap_res);
-    JS_FreeValue(ctx, ok->tkeys);
-    js_free_rt(ctx->rt, ok);
-}
 
 /* The forked sibling's copies of the three proxy-invariant records. Each takes a reference to every field its
    free above releases, so the two flows own disjoint records. `outer` still names the original's requester and
@@ -32828,32 +32829,6 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
         n[i].is_enumerable = tab[i].is_enumerable;
         n[i].atom = JS_DupAtom(ctx, tab[i].atom);
     }
-    return n;
-}
-static struct JSOwnKeysChk *js_ownkeys_chk_clone(JSContext *ctx, const struct JSOwnKeysChk *ok)
-{
-    struct JSOwnKeysChk *n = js_malloc(ctx, sizeof(*n));
-    JSPropertyEnum *tab = NULL, *tab2 = NULL;
-
-    if (unlikely(!n))
-        return NULL;
-    if (ok->tab && !(tab = js_prop_enum_dup(ctx, ok->tab, ok->len))) {
-        js_free(ctx, n);
-        return NULL;
-    }
-    if (ok->tab2 && !(tab2 = js_prop_enum_dup(ctx, ok->tab2, ok->len2))) {
-        js_free_prop_enum(ctx, tab, ok->len);
-        js_free(ctx, n);
-        return NULL;
-    }
-    *n = *ok;
-    n->tab = tab;
-    n->tab2 = tab2;
-    js_desc_facts_dup(&n->facts);
-    n->obj = js_dup(ok->obj);
-    n->target = js_dup(ok->target);
-    n->trap_res = js_dup(ok->trap_res);
-    n->tkeys = js_dup(ok->tkeys);
     return n;
 }
 
@@ -53766,7 +53741,8 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_ARRAY_LEN, JSArrayLen, js_array_len, LINK)                                                          \
     X(CONT_ARRAY_LEN_YIELD, JSArrayLen, js_array_len, ANCHOR)                                                  \
     X(CONT_ACQUIRE_GET, JSAcquireGet, js_acquire_get, LINK)                                                    \
-    X(CONT_WITH_HAS, JSWithHas, js_with_has, LINK)
+    X(CONT_WITH_HAS, JSWithHas, js_with_has, LINK)                                                             \
+    X(CONT_OWNKEYS_CHK, JSOwnKeysChk, js_ownkeys_chk, LINK)
 #define CONT_REC_CASE_OUTER_GET(k, T, p, role)  case k: return p##_outer_get((T *)st, out_kind);
 #define CONT_REC_CASE_OUTER_SET(k, T, p, role)  case k: p##_outer_set((T *)st, outer, outer_kind); return;
 #define CONT_REC_IF_DESC_OUT(k, T, p, role)     if (kind == k) return p##_desc_out((T *)st);
@@ -53875,9 +53851,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
                "deep-fork of an async-from-sync wrapper whose in-flight call has a REQUESTER under it — give "
                "that link its arm in cont_outer_get/cont_outer_set so the sibling's copy names its own");
         return NULL;
-    case CONT_OWNKEYS_CHK:
-        *out_kind = ((struct JSOwnKeysChk *)st)->outer_kind;
-        return ((struct JSOwnKeysChk *)st)->outer;
     case CONT_SETMAP_CTOR: case CONT_TA_TARGET: {
         /* a construct sequence: whoever asked for the construct, which its consume machine records */
         JSIterConsume *cs = ctor_seq_consume(st, kind);
@@ -53941,8 +53914,6 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         ((struct JSIterConsume *)st)->outer = outer; ((struct JSIterConsume *)st)->outer_kind = outer_kind; return;
     case CONT_ASYNC_SETTLE: case CONT_ASYNC_AWAIT:
         ((JSAsyncSettle *)st)->cont = outer; ((JSAsyncSettle *)st)->cont_kind = outer_kind; return;
-    case CONT_OWNKEYS_CHK:
-        ((struct JSOwnKeysChk *)st)->outer = outer; ((struct JSOwnKeysChk *)st)->outer_kind = outer_kind; return;
     case CONT_SETMAP_CTOR: case CONT_TA_TARGET: {
         JSIterConsume *cs = ctor_seq_consume(st, kind);
         cs->outer = outer; cs->outer_kind = outer_kind; return;
@@ -54029,8 +54000,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         ITERCONS_ROLE_AGREES(st, kind);
         return js_iter_consume_clone(ctx, (const JSIterConsume *)st);
     }
-    case CONT_OWNKEYS_CHK:
-        return js_ownkeys_chk_clone(ctx, (const struct JSOwnKeysChk *)st);
     case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
     case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP:
         /* A combinator under a request it issued — a getter or a Proxy trap answering one of its reads, or the
@@ -55276,16 +55245,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
         uint8_t ck = cp->outer_kind;
         js_ctor_proto_free(ctx, cp);
         next->st = co; next->kind = ck;
-        return;
-    }
-    case CONT_OWNKEYS_CHK: {
-        /* a proxy invariant check released with nobody to answer to, and whatever asked for the operation goes
-           with it, as in the CONT_GETPROP arm. The link is read BEFORE the free. */
-        struct JSOwnKeysChk *okc = st;
-        void *oo = okc->outer;
-        uint8_t ok2 = okc->outer_kind;
-        js_ownkeys_chk_free(ctx, okc);
-        next->st = oo; next->kind = ok2;
         return;
     }
     case CONT_NONE:
