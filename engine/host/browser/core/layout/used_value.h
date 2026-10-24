@@ -342,8 +342,14 @@ CssPx used_value_rel_offset_px(lxb_dom_element_t *el, bool vertical);
    It is not the used value where §3.5.2 applies: when the inset-modified containing block goes below zero
    "the weaker inset in the affected axis is reduced (possibly becoming negative) to bring that size up to
    zero". A sticky box is not a caller for a percentage: "For sticky positioned boxes, the inset is instead
-   relative to the relevant scrollport's size", and this reads §10.1's containing block. */
+   relative to the relevant scrollport's size", and this reads §10.1's containing block. The caller has asked
+   `used_value_inset_behaves_as_auto` first, which is asserted. */
 CssPx used_value_inset_length_px(lxb_dom_element_t *el, CssLength len, bool vertical);
+
+/* Whether the declared inset `len` on `el`'s `vertical` axis behaves as `auto`: the keyword, or, on a relatively
+   positioned box, a percentage or math function on the block axis whose containing block's height is
+   indefinite (`used_value_containing_block_height` false). */
+bool used_value_inset_behaves_as_auto(lxb_dom_element_t *el, CssLength len, bool vertical);
 
 /* css-position-3 §2.1 "Containing Blocks of Positioned Boxes"' open list of properties, as one fact with two
    readers. §2.1's Notes name what can make a box establish an absolute or fixed positioning containing block

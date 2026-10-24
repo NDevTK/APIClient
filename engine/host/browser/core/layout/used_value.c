@@ -644,6 +644,18 @@ static TableBoxKind uv_table_box_kind(lxb_dom_element_t *el)
     return table_box_kind(css_computed_display(el));
 }
 
+/* CSS 2.1 §10.3.7's and §10.6.4's population, an absolutely positioned box. A table is one through its §17.4
+   wrapper, which takes the table element's `position` ("the computed values of properties 'position', 'float',
+   'margin-*', 'top', 'right', 'bottom', and 'left' on the table element are used on the table wrapper box"); its
+   size stays §17.5's (`UV_BOX_TABLE`), and the solve takes that size as given. */
+static bool uv_abs_positioned(lxb_dom_element_t *el, UvBox box)
+{
+    if (box == UV_BOX_ABS) return true;
+    if (box != UV_BOX_TABLE || !table_box_kind_generates_table_box(uv_table_box_kind(el))) return false;
+    return css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) ||
+           css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED);
+}
+
 /* CSS 2.1 §17.5 Visual layout of table contents' USED WIDTH OF ONE CELL, which the section states as a fact
    about the GRID rather than about the cell — "Each cell is thus a rectangular box, one or more grid cells
    wide and high" — so the number is the used width of the columns that rectangle covers and §17.5.2's own
@@ -1541,7 +1553,7 @@ UsedValueAbsCb used_value_abs_containing_block(lxb_dom_element_t *el, lxb_dom_el
     DCHECK(el != NULL && element != NULL,
            "§10.1's rectangle for an absolutely positioned box was asked for with no element or nowhere to "
            "report the ancestor");
-    DCHECKF(uv_box_kind(el) == UV_BOX_ABS,
+    DCHECKF(uv_abs_positioned(el, uv_box_kind(el)),
            "%s: §10.1's THIRD and FOURTH cases are stated over a box whose computed `position` is `fixed` or "
            "`absolute`, and this box is neither — every other box's containing block is a CONTENT edge and "
            "`used_value_containing_block` is the view that names it",
@@ -2025,6 +2037,18 @@ bool used_value_height_behaves_as_auto(lxb_dom_element_t *el)
  * instead of as a `position` read: the tag is what this function has in hand, a read of the subject's
  * `position` beside it would be a second statement of the same fact, and the two would then be free to
  * disagree about which boxes §10.7's second conjunct excuses. */
+/* An absolutely positioned box whose `height` is `auto` and whose `top` and `bottom` are both set: §10.6.4's
+   rule 5 solves its height from its containing block's, which "can always be resolved", so the size is the
+   "stretch-fit" kind css-sizing-3 §4.1 "Auto Box Sizes" calls definite ("a <percentage> or other formula ...
+   that is resolved solely against definite sizes"). WPT css/css-position/position-relative-016.html's case 4
+   resolves a child's percentage against it, and its cases 13 and 14 (`top` alone, or `min-height` alone) do
+   not. */
+static bool uv_abs_height_from_insets(lxb_dom_element_t *el)
+{
+    return uv_box_kind(el) == UV_BOX_ABS && uv_len_is_auto(css_computed_length(el, "height")) &&
+           !uv_len_is_auto(css_computed_length(el, "top")) && !uv_len_is_auto(css_computed_length(el, "bottom"));
+}
+
 bool used_value_containing_block_height(lxb_dom_element_t *el, CssPx *out)
 {
     UvCb cb = uv_cb(el);
@@ -2081,7 +2105,7 @@ bool used_value_containing_block_height(lxb_dom_element_t *el, CssPx *out)
        own example is a `50%` height that is definite "because it's a percentage resolved against a definite
        length". The arm that used to crash here asked for §10.5 as a COMPUTED-value rule, which css-sizing-3
        §3.2.1 withdrew; the predicate is that withdrawal. */
-    if (used_value_height_behaves_as_auto(cb.element)) return false;
+    if (used_value_height_behaves_as_auto(cb.element) && !uv_abs_height_from_insets(cb.element)) return false;
     *out = uv_content_size(cb.element, true, uv_surround(cb.element, true));
     return true;
 }
@@ -3501,7 +3525,7 @@ bool used_value_abs_static_position_read(lxb_dom_element_t *el, bool vertical, b
     CssLength lb, la;
     char nbuf[160];
 
-    DCHECKF(el != NULL && uv_box_kind(el) == UV_BOX_ABS,
+    DCHECKF(el != NULL && uv_abs_positioned(el, uv_box_kind(el)),
             "%s: CSS 2.1 §10.3.7's and §10.6.4's static position is read only by an absolutely positioned "
             "box's solve", box_subject(el, nbuf, sizeof nbuf));
     lb = css_computed_length(el, vertical ? "top" : "left");
@@ -3516,7 +3540,7 @@ bool used_value_abs_cb_content_height_read(lxb_dom_element_t *el, lxb_dom_elemen
     UvBox box;
     char nbuf[160];
 
-    DCHECKF(el != NULL && ancestor != NULL && uv_box_kind(el) == UV_BOX_ABS,
+    DCHECKF(el != NULL && ancestor != NULL && uv_abs_positioned(el, uv_box_kind(el)),
             "%s: CSS 2.1 §10.6.4's containing-block height is read only by an absolutely positioned box's solve",
             box_subject(el, nbuf, sizeof nbuf));
     cb = uv_cb(el);
@@ -3536,9 +3560,11 @@ bool used_value_abs_auto_height_read(lxb_dom_element_t *el)
 {
     char nbuf[160];
 
-    DCHECKF(el != NULL && uv_box_kind(el) == UV_BOX_ABS,
+    DCHECKF(el != NULL && uv_abs_positioned(el, uv_box_kind(el)),
             "%s: CSS 2.1 §10.6.4's content-based height is read only by an absolutely positioned box's solve",
             box_subject(el, nbuf, sizeof nbuf));
+    /* A table's height is CSS 2.1 §17.5.3's, which reads no §10.6.3 walk of its own. */
+    if (uv_box_kind(el) == UV_BOX_TABLE) return false;
     return uv_abs_reads_auto_height(el, css_computed_length(el, "height"));
 }
 
@@ -3571,10 +3597,21 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
     CssPx free_space, content;
     UvAbs r;
 
-    DCHECK(uv_box_kind(el) == UV_BOX_ABS,
+    DCHECK(uv_abs_positioned(el, uv_box_kind(el)),
            "CSS 2.1 §10.3.7 and §10.6.4 are stated over an ABSOLUTELY POSITIONED box and this one is not — "
            "`uv_box_kind` is the classification every §10 rule in this file is dispatched on, so a box "
            "arriving here with another kind has had its section decided twice");
+    if (uv_box_kind(el) == UV_BOX_TABLE) {
+        lxb_dom_element_t **caps = NULL;
+        size_t ncaps = table_box_captions(el, &caps);
+        char nbuf[160];
+
+        free(caps);
+        if (ncaps > 0)
+            DFAILF("%s is an absolutely positioned table with a caption, whose §17.4 wrapper is as wide as the "
+                   "wider of the table box and its captions and as tall as all of them. BUILD that wrapper's "
+                   "extent as the size this solve takes", box_subject(el, nbuf, sizeof nbuf));
+    }
     if (vertical) {
         /* WRITTEN THROUGH A SEPARATE VARIABLE so that the release arm of the assert below is a ZERO-height
            containing block and not the WIDTH one, which is what `cb`'s initialiser holds and which is a
@@ -4403,7 +4440,7 @@ static void uv_abs_margins(lxb_dom_element_t *el, bool vertical, CssPx *before, 
     CssLength mb = css_computed_length(el, vertical ? "margin-top" : "margin-left");
     CssLength ma = css_computed_length(el, vertical ? "margin-bottom" : "margin-right");
 
-    DCHECK(uv_box_kind(el) == UV_BOX_ABS,
+    DCHECK(uv_abs_positioned(el, uv_box_kind(el)),
            "CSS 2.1 §10.3.7 and §10.6.4 are stated over an ABSOLUTELY POSITIONED box and this one is not — "
            "`uv_box_kind` is the classification every §10 rule in this file is dispatched on, so a box "
            "arriving here with another kind has had its section decided twice");
@@ -4412,7 +4449,7 @@ static void uv_abs_margins(lxb_dom_element_t *el, bool vertical, CssPx *before, 
         return;
     }
     {
-        UvAbs abs = uv_abs_solve(el, uv_sized(el, UV_BOX_ABS, vertical).len, vertical);
+        UvAbs abs = uv_abs_solve(el, uv_sized(el, uv_box_kind(el), vertical).len, vertical);
 
         *before = abs.m_before;
         *after = abs.m_after;
@@ -4495,7 +4532,7 @@ static CssPx uv_px_ask(lxb_dom_element_t *el, const char *name)
            horizontal arm below gives: §10.4 and §10.7 re-run "the rules above" with a limit substituted, and
            the margins §10.3.7 and §10.6.4 SOLVE are the ones that final pass produced. That is what
            centres a `margin: auto` box against its `max-width` rather than against its declared `width`. */
-        if (box == UV_BOX_ABS) {
+        if (uv_abs_positioned(el, box)) {
             CssPx m_before, m_after;
 
             uv_abs_margins(el, vertical, &m_before, &m_after);
@@ -4579,7 +4616,7 @@ CssPx used_value_abs_offset_px(lxb_dom_element_t *el, bool vertical)
 
     DCHECK(el != NULL, "§10.3.7's used offset was asked for with no element");
     box = uv_box_kind(el);
-    DCHECKF(box == UV_BOX_ABS,
+    DCHECKF(uv_abs_positioned(el, box),
            "%s: CSS 2.1 §10.3.7 and §10.6.4 are the only sections that SOLVE an offset, and they are stated "
            "over an absolutely positioned box. A relatively positioned box's `left` is CSS 2.1 §9.4.3's PAIR "
            "and a statically positioned one's does not apply at all — core/css/css_computed_value.c's CSSOM "
@@ -4596,7 +4633,7 @@ CssPx used_value_abs_offset_trailing_px(lxb_dom_element_t *el, bool vertical)
 
     DCHECK(el != NULL, "§10.3.7's used trailing offset was asked for with no element");
     box = uv_box_kind(el);
-    DCHECKF(box == UV_BOX_ABS,
+    DCHECKF(uv_abs_positioned(el, box),
            "%s: CSS 2.1 §10.3.7 and §10.6.4 are the only sections that SOLVE an offset, and they are stated "
            "over an absolutely positioned box. A relatively positioned box's `right` is CSS 2.1 §9.4.3's PAIR "
            "and a statically positioned one's does not apply at all — core/css/css_computed_value.c's CSSOM "
@@ -4634,31 +4671,36 @@ CssPx used_value_inset_length_px(lxb_dom_element_t *el, CssLength len, bool vert
     /* §9.3.2's `Percentages:` line, which differs by AXIS and not by member: `left` and `right` "refer to
        width of containing block", `top` and `bottom` "refer to height of containing block". */
     if (!vertical) return css_length_resolve_pct(len, used_value_containing_block_width(el));
-    if (!used_value_containing_block_height(el, &basis)) {
-        DFAILF("%s: CSS 2.2 §9.3.2 makes a percentage `top`/`bottom` refer to \"height of containing block\" "
-              "and §10.1's chain has no height here — `used_value_containing_block_height` answered FALSE, "
-              "which core/layout/used_value.h states is the POSITIVE fact that the basis is indefinite and "
-              "not a missing number. NO STANDARD IN THIS CORPUS STATES A RULE FOR IT, AND THAT WAS CHECKED "
-              "RATHER THAN ASSUMED: §10.5 turns an indefinite basis into `auto` for `height` and §10.7 turns "
-              "it into `0`/`none` for the limits, each in its own sentence, and §9.3.2 and §9.4.3 write "
-              "neither; css-position-3 §3.1 \"Box Insets: the top, right, bottom, left, inset-block-start, "
-              "inset-inline-start, inset-block-end, and inset-inline-end properties\" was FETCHED for this "
-              "message and states only \"refer to size of containing block; see prose\" with prose that adds "
-              "no indefinite arm. So the answer every user agent gives — treat it as zero — is a CONVERGENCE "
-              "and not a sentence anybody wrote, which is why this crashes rather than resolving. BUILD it by "
-              "finding the sentence in a LATER level or in a CSSWG resolution and citing THAT; do not copy "
-              "the release arm below, which is a defined answer chosen because an undefined one is worse",
-              box_subject(el, nbuf, sizeof nbuf));
-        /* THE RELEASE ARM, STATED RATHER THAN FALLEN INTO — `DFAILF` is `APICLIENT_FMT_UNUSED` at
-           `-DAPICLIENT_DEV=0` and neither aborts nor returns, so a function that crashed here and then read
-           `basis` would read an UNINITIALIZED one in every shipped build. §Offensive-programming requires a
-           release arm to be designed with the algorithm: this one is the convergent answer, and it leaves the
-           box at its NORMAL-FLOW position, which is a state the rest of this engine already composes
-           correctly — core/layout/flow_position.c's re-derivation asks this same entry, so the two agree on
-           zero and no record comes apart. */
-        return css_px(0.0);
-    }
+    if (!used_value_containing_block_height(el, &basis))
+        DFAILF("%s: a percentage `top`/`bottom` was resolved against a containing block whose height is "
+               "indefinite, where `used_value_inset_behaves_as_auto` answers that the inset behaves as auto. The "
+               "caller resolved it without asking", box_subject(el, nbuf, sizeof nbuf));
     return css_length_resolve_pct(len, basis);
+}
+
+/* css-position-3 §3.1's `<percentage>` arm states no case for an indefinite basis. The behaviour is WPT's:
+   css/css-position/position-relative-015.html asserts that a relatively positioned box's `top: 50%` leaves it
+   unshifted under an auto-height containing block, an unresolvable percentage height, a `fit-content`,
+   `min-content` or `max-content` height and an unresolvable `calc()`, and shifts it under every definite one (a
+   length, a resolvable percentage, a stretched grid item, an abspos box with both insets), and
+   position-relative-016.html the same over out-of-flow containing blocks. That is the inset behaving as `auto`
+   where css-sizing-3 §5.1 "Percentage Sizing" would make a percentage size behave as auto, which is
+   `used_value_containing_block_height`'s question. A math function is answered with it whatever it holds, as
+   the `calc()` case asserts.
+   NAMED RESIDUAL. Not covered: the rule cites tests, not a sentence of css-position-3. Next: the sentence, once
+   css-position-3 states an indefinite-basis arm for `<percentage>`, cited here in place of the tests. How its
+   absence shows: a later css-position-3 text resolving such an inset against something other than auto. */
+bool used_value_inset_behaves_as_auto(lxb_dom_element_t *el, CssLength len, bool vertical)
+{
+    CssPx unused;
+
+    DCHECK(el != NULL, "an inset's auto question was asked of no element");
+    if (uv_len_is_auto(len)) return true;
+    if (!vertical || (len.kind != CSS_LENGTH_PERCENTAGE && len.kind != CSS_LENGTH_CALCULATED)) return false;
+    /* The tests are over relatively positioned boxes; an absolutely positioned box's containing block always
+       has a height, and a sticky box's percentage is the scrollport's, not the containing block's. */
+    if (!css_computed_keyword_is(el, "position", CSS_KEYWORD_RELATIVE)) return false;
+    return !used_value_containing_block_height(el, &unused);
 }
 
 /* CSS 2.2 §9.4.3's used translation — see used_value.h. */
@@ -4686,8 +4728,8 @@ CssPx used_value_rel_offset_px(lxb_dom_element_t *el, bool vertical)
        one cascade walk per member instead of two. */
     lead  = css_computed_length(el, LEADING[vertical ? 1 : 0]);
     trail = css_computed_length(el, TRAILING[vertical ? 1 : 0]);
-    lead_auto  = uv_len_is_auto(lead);
-    trail_auto = uv_len_is_auto(trail);
+    lead_auto  = used_value_inset_behaves_as_auto(el, lead, vertical);
+    trail_auto = used_value_inset_behaves_as_auto(el, trail, vertical);
 
     /* "If both 'left' and 'right' are 'auto' (their initial values), the used values are '0' (i.e., the boxes
        stay in their original position)." — and its vertical twin, "If both are 'auto', their used values are

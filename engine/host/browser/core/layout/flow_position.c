@@ -18,6 +18,7 @@
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_position.h"
 #include "core/layout/grid_track.h"
+#include "core/layout/intrinsic_size.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/layout_job.h"
 #include "core/layout/line_box.h"
@@ -766,6 +767,18 @@ static bool fp_abs_origin_ask(lxb_dom_element_t *el, FlowPoint *out)
         if (vertical) break;
     }
     if (used_value_abs_auto_height_read(el) && !block_flow_auto_height_ask(el, &unused)) return false;
+    /* An absolutely positioned table is sized by CSS 2.1 §17.5.2 and §17.5.3, whose walks (each cell's
+       intrinsic widths and content height) are asked before the solve reads the size. */
+    if (table_box_kind_generates_table_box(table_box_kind(css_computed_display(el)))) {
+        TableGrid grid;
+        bool ready;
+
+        if (!intrinsic_inline_sizes_ask(el)) return false;
+        table_grid_build(el, &grid);
+        ready = table_heights_ask(el, &grid);
+        table_grid_release(&grid);
+        if (!ready) return false;
+    }
     if (used_value_abs_cb_content_height_read(el, &anc) && !block_flow_auto_height_ask(anc, &unused))
         return false;
     if (!fp_abs_cb_leading_ask(el, false, false, &x0) || !fp_abs_cb_leading_ask(el, true, false, &y0))

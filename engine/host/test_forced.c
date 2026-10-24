@@ -1099,6 +1099,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/deepnest.h"
 #include "fixture/contain.h"
 #include "fixture/gridsizing.h"
+#include "fixture/insetpct.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1556,6 +1557,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "deepnest", HTML_DEEPNEST },
     { "contain", HTML_CONTAIN },
     { "gridsizing", HTML_GRIDSIZING },
+    { "insetpct", HTML_INSETPCT },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -14359,6 +14361,56 @@ TF_UNIT void probes_gridsizing(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `insetpct` document (fixture/insetpct.h). */
+TF_UNIT void probes_insetpct(const char *js, Probe *tab, int *n) {
+    const char *ip_why = NULL; int ip_tt = 1;
+
+    fold_row(&ip_tt, &ip_why, !!strstr(js, "\"/api/insetpct\""),
+             "NOT REACHED: there is no /api/insetpct record at all, so the document aborted before its fetch");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t1", "100"),
+             "WPT position-relative-015 case 1: `top: 50%` under a 200px containing block does not shift the box "
+             "100px");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t2", "0"),
+             "WPT position-relative-015 case 2: `top: 50%` under an auto-height containing block shifts the box");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t3", "50"),
+             "WPT position-relative-015 case 3: `top: 50%` under a resolvable 50% height does not shift the box "
+             "50px");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t4", "100"),
+             "WPT position-relative-015 case 4: `top: 50%` under an abspos box with both insets does not shift "
+             "the box 100px");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t11", "0"),
+             "WPT position-relative-015 case 11: `top: 50%` under an unresolvable percentage height shifts the box");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t16", "100"),
+             "WPT position-relative-015 case 16: `top: 50%` under a `calc()` length height does not shift the box "
+             "100px");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t18", "0"),
+             "WPT position-relative-015 case 18: `top: 50%` under an unresolvable `calc()` height shifts the box");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t21", "40"),
+             "css-position-3 §3.1: `bottom: 50%` under an auto-height containing block shifts the box");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t2cs", "0px"),
+             "CSSOM §9: the unshifted box's resolved `top` is not the used `0px` layout placed it with");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t1cs", "100px"),
+             "CSSOM §9: a definite containing block's `top: 50%` does not resolve to `100px`");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "jtx", "0"),
+             "CSS 2.1 §10.3.7: the absolutely positioned table is not at `left: 0`");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "jty", "0"),
+             "CSS 2.1 §10.6.4: the absolutely positioned table is not at `top: 0`");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "jtd", "0"),
+             "CSSOM VIEW §7: the cell's offsetTop from its table is not 0");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "jtl", "0"),
+             "CSSOM VIEW §7: the cell's offsetLeft from its table is not 0");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "j2r", "3"),
+             "CSS 2.1 §10.3.7: the table placed by `right: 3px` is not 3px from its containing block's right edge");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "j2w", "30"),
+             "CSS 2.1 §17.5.2: the absolutely positioned table's width is not its declared 30px");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "j2y", "28"),
+             "CSS 2.1 §10.6.4: the table placed by `bottom: 2px` is not at 28px");
+    const Probe rows[] = {
+        { "percentage-inset-and-abspos-table", ip_tt, "/api/insetpct", SESS_EXPLORE, ip_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `boundpark` document (fixture/boundpark.h). */
 TF_UNIT void probes_boundpark(const char *js, Probe *tab, int *n) {
     /* One bound body through four callback routes; each failure arm reports its route, the declined send's
@@ -18277,6 +18329,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_deepnest(js, probes, &np);
     probes_contain(js, probes, &np);
     probes_gridsizing(js, probes, &np);
+    probes_insetpct(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
