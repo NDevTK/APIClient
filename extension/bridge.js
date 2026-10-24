@@ -5134,6 +5134,8 @@ async function hostNotice(eng, line) {
       return;
     }
     const _navOpener = docRecordNavigableIdentity(f[P.opener]) === null ? "N" : f[P.opener];
+    /* The peer holds a WindowProxy for its opener, a document of this instance, as for a create's opener. */
+    if (_navOpener !== "N") eng.referenced = 1;
     const _navDoc = childDocRecord(_navFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
     /* A navigation to an address in the navigating instance's own agent is one it performs itself, so a notice
        sending it to a peer is the engine's statement and nothing is loaded. */

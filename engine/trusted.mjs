@@ -1595,14 +1595,34 @@ async function main() {
         return;
       }
       const navOpener = ZONE.docRecordNavigableIdentity(f[P.opener]) === null ? null : allowed.opener;
+      /* The peer holds a WindowProxy for its opener, a document of this instance, as for a create's opener. */
+      if (navOpener !== null) e.referenced = 1;
       const loaded = await navigate(f[P.address], e.docUrl, `navigable.navigate ${f[P.document]}`,
                                     f[P.provenance], f[P.driven], f[P.pinned], navFrom.issuerDoc);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       const doc = childDoc(navFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
-      await provision({ docId: f[P.document], url: loaded.url, origin: principalOf(doc, loaded.url),
-                        headers: loaded.headers, bytes: loaded.bytes,
-                        facts: withOpener(topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)),
-                                          navOpener === null ? 'N' : f[P.opener]), doc,
+      const navOrigin = principalOf(doc, loaded.url);
+      const navFacts = withOpener(topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)),
+                                  navOpener === null ? 'N' : f[P.opener]);
+      /* A cluster of this group at that origin already runs (another timeline's navigation of the same
+         navigable, or another navigable's), so the incoming Document joins it, as a create's child does. */
+      const navHolder = clusterOf(e.group, navOrigin);
+      if (navHolder) {
+        if (navHolder === e || navHolder.referenced !== 1)
+          throw new Error(`navigable.navigate ${f[P.document]} would join instance [${navHolder.tag}], which ` +
+                          `${navHolder === e ? 'is the navigating instance — a response in its own cluster ' +
+                          'never leaves its heap' : 'holds no peer reference'}`);
+        navHolder.docs.push(f[P.document]);
+        recordDocument(f[P.document], createdDoc(doc, loaded.url, navFrom.issuerDoc));
+        recordOpener(f[P.document], f[P.document], navOpener);
+        navHolder.ready.push(['join', loaded.url, f[P.document], b64(fieldLines(loaded.headers)),
+                              b64(loaded.bytes), ...navFacts, ZONE.docRecordArrival(doc)].join('\t'));
+        retryHeld();
+        flush();
+        return;
+      }
+      await provision({ docId: f[P.document], url: loaded.url, origin: navOrigin,
+                        headers: loaded.headers, bytes: loaded.bytes, facts: navFacts, doc,
                         creator: navFrom.issuerDoc, group: e.group, referenced: 1, opener: navOpener });
       return;
     }

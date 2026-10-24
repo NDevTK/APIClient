@@ -543,6 +543,9 @@ static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char 
         char *opener_id = remote_object_encode(ctx, window_proxy_is(opener) ? opener : JS_NULL);
 
         CHECK(opener_id != NULL, "navigable: OOM naming a navigated navigable's §7.2.2.4 opener for the zone");
+        /* The peer will hold a WindowProxy for an opener this agent hosts, so this document may not run its
+           timelines out before the peer reads or posts to it (the create arm's rule for the same link). */
+        if (window_proxy_is(opener) && !window_proxy_is_remote(opener)) engine_set_referenced(1);
         JS_FreeValue(ctx, opener);
         const char *const fields[NAVIGABLE_PROVISION_N] = {
             [NAVIGABLE_PROVISION_DOCUMENT] = world_doc_name(incoming),
