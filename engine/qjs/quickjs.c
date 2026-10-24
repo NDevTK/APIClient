@@ -32436,26 +32436,16 @@ enum { GD_TARGET = 0, GD_TARGET_GOT, GD_EXT, GD_EXT_GOT, GD_WALK };
    (Reflect.set), while Set(O, P, V, true) turns a false into 7.3.4's TypeError. The C tail only had the first
    half — 3.e's JS_DefineProperty was called with no throw flag, so a `defineProperty` trap REFUSING a write that
    `super.x = v` performed in strict code reported success. */
-typedef struct JSSetRecv {
-    JSValue recv;        /* the Receiver (owned) */
-    JSValue val;         /* V (owned) */
-    JSAtom atom;         /* P (owned) */
-    void *outer;         /* what is waiting on the [[Set]], not on either of these two operations */
-    uint8_t outer_kind;
-    uint8_t phase;       /* SR_* */
-    uint8_t no_throw;    /* 1 = the bare internal method's boolean; 0 = Set(O,P,V,true) */
-    JSDescFacts facts;   /* step 3.b's answer, as the attribute bits 3.c tests (owned) */
-} JSSetRecv;
+#define JS_SET_RECV_FIELDS(F)                                                                                  \
+    F(OWN_VAL, JSValue, recv)         /* the Receiver */                                                       \
+    F(OWN_VAL, JSValue, val)          /* V */                                                                  \
+    F(OWN_ATOM, JSAtom, atom)         /* P */                                                                  \
+    F(OUTER, void *, outer)           /* what waits on the [[Set]], not on either of its two operations */    \
+    F(POD, uint8_t, phase)            /* SR_* */                                                               \
+    F(POD, uint8_t, no_throw)         /* 1 = the bare internal method's boolean; 0 = Set(O, P, V, true) */     \
+    F(FACTS, JSDescFacts, facts)      /* step 3.b's answer, as the attribute bits 3.c tests */
+CONT_RECORD_DEFINE(JSSetRecv, js_set_recv, JS_SET_RECV_FIELDS)
 enum { SR_GOPD = 0, SR_GOPD_GOT, SR_DEFINE_GOT };
-
-static void js_set_recv_free(JSContext *ctx, JSSetRecv *sr)
-{
-    js_desc_facts_free(ctx, &sr->facts);
-    JS_FreeValue(ctx, sr->recv);
-    JS_FreeValue(ctx, sr->val);
-    JS_FreeAtom(ctx, sr->atom);
-    js_free_rt(ctx->rt, sr);
-}
 
 /* ---- 10.5.11 [[OwnPropertyKeys]]'s invariant, as a phased machine ----
 
@@ -53410,7 +53400,8 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_ASYNC_FROM_SYNC, JSAsyncFromSync, js_async_from_sync, LINK)                                         \
     X(CONT_AFS_GET, JSAsyncFromSync, js_async_from_sync, LINK)                                                 \
     X(CONT_AFS_CONT, JSAsyncFromSync, js_async_from_sync, LINK)                                                \
-    X(CONT_GOPD_DESC, JSGopdDesc, js_gopd_desc, LINK)                                          \
+    X(CONT_GOPD_DESC, JSGopdDesc, js_gopd_desc, LINK)                                                          \
+    X(CONT_SET_RECV, JSSetRecv, js_set_recv, LINK)                                          \
     X(CONT_ARG_LIST, JSArgList, js_arg_list, LINK)                                                             \
     X(CONT_ARG_LIST_YIELD, JSArgList, js_arg_list, ANCHOR)
 #define CONT_REC_AGREES_AT(k, T, p, r)                                                                         \
@@ -53467,7 +53458,7 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
-    case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
+    case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS:
     case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
@@ -53507,7 +53498,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
-    case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
+    case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS:
     case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
@@ -53544,7 +53535,7 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     case CONT_ITER_HELPER_GET: case CONT_ITER_CALL_GET:
     case CONT_ITER_CALL_GET_NOARG: case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET:
     case CONT_FOROF_ENUMREC_WRAP: case CONT_ITER_FROM_NEXT_GET:
-    case CONT_FOR_IN_HAS: case CONT_SET_RECV: case CONT_DEFINE_CLASS:
+    case CONT_FOR_IN_HAS: case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE:
     case CONT_AGEN_DEFER:
     CONT_RECORD_KINDS(CONT_REC_CASE_ANCHOR)
@@ -54619,7 +54610,7 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
     case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
-    case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
+    case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS:
     case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
