@@ -1101,10 +1101,9 @@ static void cow_gd_unref(JSContext *ctx, const CowEntry *e, void *gd) {
    already passed `cow_hooks_off() || !g_current`, so its zero means "not reached UNDER A RUNNING FLOW"; these
    are raised before any gate this file owns, so their zero means "not reached". Spelling them `asks` would
    claim a denominator they do not have.
-   WHAT THE GAP MEANS IS PER SUB-KIND AND THE TWO DO NOT MERGE, because the two producers have different
-   gates: the generator producer is handed its delta by the fork assembly and its only early return is the
-   dedup-REPLACE of a re-fork inside one flow, so `gen calls - gen made` is re-forks; the async producer is a
-   hook and its only early return is the no-delta decline, so `async calls - async made` is declines. */
+   The gap means something different per sub-kind: the generator producer is handed its delta (by the fork
+   assembly or the resume hook) and returns early only to dedup-REPLACE a second clone of one generator in one
+   flow, so its gap is replacements; the async producer returns early only at the no-delta decline. */
 static long g_coro_gen_calls, g_coro_gen_made, g_coro_async_calls, g_coro_async_made;
 
 /* THE ONE CONSTRUCTOR OF A COROUTINE-STATE ENTRY — cow_state_entry_set's twin and written for its reason: the
@@ -1212,6 +1211,24 @@ void cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_dat
     cow_gd_ref(e, cur_data);
     JS_SetObjAsyncData(closure, cur_data);
     cow_capture_end();
+}
+
+/* JSTimeTravelHooks.gen_isolate — the resume-time twin of the fork assembly's generator swap. The engine has
+   cloned the record because another flow may still name it; this installs the clone for the running flow and
+   records the toggle, so the record every other arm finds stays as it was. The pointer is set before the entry
+   is recorded because a dedup-REPLACE releases the clone the object names now. */
+void cow_capture_gen_isolate(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd) {
+    CowDelta *d = g_current;
+
+    DCHECK(JS_GetObjGenData(genobj) == base_gd,
+           "a generator resume asked to isolate a state record its generator object does not name");
+    if (!d) {
+        /* No flow owns the swap, so there is no sibling to isolate from: decline and release the clone. */
+        JS_GenDataUnref(ctx, cur_gd);
+        return;
+    }
+    JS_SetObjGenData(genobj, cur_gd);
+    cow_delta_add_gendata(ctx, d, genobj, base_gd, cur_gd);
 }
 
 void cow_capture_module_eval(JSContext *ctx, void *mod) {
@@ -1665,7 +1682,8 @@ void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, voi
        only for as long as its one caller keeps the reclaim disarmed across the assembly, which is a fact about
        engine.c and not about this line. */
     cow_capture_begin();
-    cow_room_for_one(d, "cow: OOM growing delta (gendata) — a lost generator swap corrupts per-flow state");
+    if (cow_room_for_one(d, "cow: OOM growing delta (gendata) — a lost generator swap corrupts per-flow state"))
+        cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, genobj);
@@ -2240,7 +2258,8 @@ void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork, uint64_t (*time
         .map_add = cow_capture_map_add, .map_mutate = cow_capture_map_mutate,
         .async_state = cow_capture_async_state, .module_eval = cow_capture_module_eval,
         .obj_state = cow_capture_obj_state, .iter_state = cow_capture_iter_state,
-        .async_fork = cow_capture_async_fork, .body_mark = cow_capture_body_mark };
+        .async_fork = cow_capture_async_fork, .gen_isolate = cow_capture_gen_isolate,
+        .body_mark = cow_capture_body_mark };
     DCHECK(gen_fork != NULL,
            "the time-travel hooks were installed with no generator-fork handler — a concolic branch inside a "
            "generator body would fork a sibling that shares the parent's execution state");

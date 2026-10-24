@@ -1903,6 +1903,10 @@ typedef struct JSGeneratorData {
        COW deltas (JS_GenDataRef/Unref), freed at 0. The generator OBJECT is shared across a fork; only its
        u.generator_data POINTER is swapped per-flow (a COW gendata entry), so each arm advances its own state. */
     int cow_ref;
+    /* The fork generation this record was minted in (g_flow_gen). A record minted at or before the running
+       flow's last fork may be installed in another flow too, so a resume clones it first
+       (js_generator_resume_isolate); one minted after is this flow's alone. */
+    uint32_t mint_gen;
     JSAsyncFunctionState func_state;
 } JSGeneratorData;
 
@@ -34166,6 +34170,10 @@ static int js_async_function_post_prepare(JSContext *ctx, JSAsyncFunctionData *s
    per-flow COW isolation of shared async state, defined beside the rest of the async machinery and needed here
    by do_async_resume_tramp. NULL only on an allocation failure (with the throw already pending). */
 static JSAsyncFunctionData *js_async_resume_isolate(JSContext *ctx, JSValueConst func_obj);
+/* Which suspended generator state THIS flow resumes — the generator twin, needed by do_generator_tramp. NULL only
+   on an allocation failure (with the throw already pending). */
+static struct JSGeneratorData *js_generator_resume_isolate(JSContext *ctx, JSValueConst genobj,
+                                                           struct JSGeneratorData *s);
 /* Await's remaining steps once its resolve call has run: create the continuation's resolving functions and
    PerformPromiseThen on the capability. Consumes `p->await_promise` and the reference `p->st` holds. */
 static int js_async_function_await_finish(JSContext *ctx, JSAsyncPost *p);
@@ -45065,6 +45073,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JS_ThrowTypeError(ctx, "cannot invoke a running generator");
                     goto exception;
                 }
+                /* Every arm below a suspended state writes the state, so this flow takes its own copy first. A
+                   completed generator is only read. */
+                if (gs->state != JS_GENERATOR_STATE_COMPLETED) {
+                    gs = js_generator_resume_isolate(ctx, gthis, gs);
+                    if (unlikely(!gs)) goto exception;
+                    gsf = &gs->func_state.frame;
+                }
                 if (gs->state == JS_GENERATOR_STATE_SUSPENDED_START) {
                     if (gmagic == GEN_MAGIC_NEXT) { gs->func_state.throw_flag = false; }        /* run from start */
                     else { free_generator_stack_rt(rt, gs); run_body = false; do_throw = (gmagic == GEN_MAGIC_THROW); }
@@ -45957,6 +45972,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     js_create_requester_abandon(ctx, gcall_cont, gcall_cont_kind)
                 if (unlikely(!s)) { GEN_CREATE_FAIL_FREE_CONT(); JS_ThrowOutOfMemory(ctx); goto exception; }
                 s->state = JS_GENERATOR_STATE_SUSPENDED_START;
+                s->mint_gen = g_flow_gen;
                 {   /* async_func_init DUPS func + this + args, so the apply vector is dead the instant it returns —
                        release it here, on the failure path too. Releasing it only after the frame alloc succeeded
                        leaked the whole argument list on every throwing/OOM create. */
@@ -53493,6 +53509,34 @@ static int clone_susp_frame(JSContext *ctx, JSAsyncFunctionState *cs, JSAsyncFun
     return 0;
 }
 
+/* Clone a generator's state record: its state, the generation it is minted in, and its frame's [0, live) values
+   through clone_susp_frame. `cow_ref` is 1 for a clone a COW delta owns and 0 for one its frame owns until a
+   generator object adopts it. The caller sets cur_sp. NULL on OOM, with nothing left allocated. */
+static JSGeneratorData *js_generator_data_clone(JSContext *ctx, JSGeneratorData *g0, ptrdiff_t live, int cow_ref)
+{
+    JSGeneratorData *g1 = js_mallocz(ctx, sizeof(*g1));
+
+    if (!g1) return NULL;
+    g1->state = g0->state;
+    g1->cow_ref = cow_ref;
+    g1->mint_gen = g_flow_gen;
+    /* Its frame is owned by a delta's counted reference or by the frame that holds it, never by the shared
+       generator object, which owns the original: a cell rooting the object would keep the wrong record alive
+       while the slot it aliases lives in this one. So a cell minted here roots nothing. See
+       JSStackFrame.cur_gc_obj. */
+    DCHECK(g1->func_state.frame.cur_gc_obj == NULL,
+           "a generator-data clone named a collectable owner — its frame belongs to a COW delta's counted "
+           "reference or to its frame, and any object named here is one that does not hold this frame");
+    if (clone_susp_frame(ctx, &g1->func_state, &g0->func_state, live) < 0) {
+        js_free(ctx, g1);
+        return NULL;
+    }
+    g1->func_state.argc = g0->func_state.argc;
+    g1->func_state.throw_flag = g0->func_state.throw_flag;
+    g1->func_state.tramp_top = NULL;
+    return g1;
+}
+
 /* A TrampFrame's LIVE frame: an async/generator body keeps its state in func_state.frame (NOT the embedded sf) —
    the same frame-source rule the deep-resume path uses. */
 static JSStackFrame *tramp_live_sf(TrampFrame *t) {
@@ -54611,26 +54655,10 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                     "generator state into it", (int)otf->cont_kind, gen_forof ? "for-of" : "direct .next()",
                     (int)JS_VALUE_GET_OBJ(genobj)->class_id);
             JSStackFrame *gof = &g0->func_state.frame;
-            JSGeneratorData *g1 = js_mallocz(ctx, sizeof(*g1));
-            if (!g1) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-            g1->state = g0->state;
             /* the sibling delta's gendata entry owns a drive's clone (creation ref transfers there); a create's is
                its frame's, as the original is, and becomes its object's original state (cow_ref 0) */
-            g1->cow_ref = gen_creating ? 0 : 1;
-            /* AND ITS FRAME IS OWNED BY THAT DELTA, WHICH NO COLLECTION CAN FREE — so this clone's frame names
-               no collectable owner and a cell minted in it roots nothing (js_mallocz already wrote the NULL;
-               this says it is the answer rather than an omission). The generator OBJECT is shared and is NOT
-               the owner here: it owns the ORIGINAL gen_data, and a cell rooting it would keep the wrong state
-               alive while the slot it aliases lives in this one. See JSStackFrame.cur_gc_obj. */
-            DCHECK(g1->func_state.frame.cur_gc_obj == NULL,
-                   "a per-flow generator-data clone named a collectable owner — its frame belongs to the COW "
-                   "delta's counted reference, and any object named here is one that does not hold this frame");
-            if (clone_susp_frame(ctx, &g1->func_state, &g0->func_state, live_end - gof->arg_buf) < 0) {
-                js_free(ctx, g1); js_free(ctx, oa); js_free(ctx, ca); return NULL;
-            }
-            g1->func_state.argc = g0->func_state.argc;
-            g1->func_state.throw_flag = g0->func_state.throw_flag;
-            g1->func_state.tramp_top = NULL;
+            JSGeneratorData *g1 = js_generator_data_clone(ctx, g0, live_end - gof->arg_buf, gen_creating ? 0 : 1);
+            if (!g1) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
             g1->func_state.frame.cur_sp = (i == 0) ? g1->func_state.frame.arg_buf + (osf->cur_sp - gof->arg_buf) : NULL;
             ct->gen_data = g1;
             /* direct .next(): the clone holds its OWN ref to the generator (settle frees it). for-of: no held ref
@@ -55792,6 +55820,41 @@ void JS_GenDataUnref(JSContext *ctx, void *gd) {
     if (--s->cow_ref == 0) { free_generator_stack_rt(ctx->rt, s); js_free_rt(ctx->rt, s); }
 }
 
+/* ECMAScript §27.8.3.3 GeneratorResume and §27.8.3.4 GeneratorResumeAbrupt write the generator's
+   [[GeneratorState]] and its execution context, which is flow state: a generator suspended across a fork is
+   resumed by each arm, and an arm resuming the record another arm still names advances that arm's generator
+   too. A record minted at or before this flow's last fork is cloned and the host installs the clone on
+   `genobj` for this flow (JSTimeTravelHooks.gen_isolate), so every write lands in a record no other flow
+   names. Returns the record this resume runs; NULL on OOM with the throw pending. */
+static JSGeneratorData *js_generator_resume_isolate(JSContext *ctx, JSValueConst genobj, JSGeneratorData *s)
+{
+    JSStackFrame *sf = &s->func_state.frame;
+    JSGeneratorData *c;
+    ptrdiff_t live;
+
+    DCHECK(JS_VALUE_GET_OBJ(genobj)->u.generator_data == s,
+           "a generator resume was handed a state record its generator object does not name");
+    DCHECK(s->state == JS_GENERATOR_STATE_SUSPENDED_START || s->state == JS_GENERATOR_STATE_SUSPENDED_YIELD ||
+           s->state == JS_GENERATOR_STATE_SUSPENDED_YIELD_STAR,
+           "only a suspended generator is resumed — a running one throws and a completed one is only read");
+    if (!g_time_travel.gen_isolate || s->mint_gen > g_flow_fork_gen)
+        return s;
+    DCHECK(sf->cur_sp != NULL && s->func_state.tramp_top == NULL,
+           "a suspended generator whose frame has no live point or still has a call chain — a yield suspends "
+           "at the body's own frame");
+    live = sf->cur_sp - sf->arg_buf;
+    c = js_generator_data_clone(ctx, s, live, 1);
+    if (unlikely(!c)) {
+        JS_ThrowOutOfMemory(ctx);
+        return NULL;
+    }
+    c->func_state.frame.cur_sp = c->func_state.frame.arg_buf + live;
+    /* The host installs `c` and owns it, or declines when no flow owns the swap and releases it; the object
+       is the authority on which record this resume runs either way. */
+    g_time_travel.gen_isolate(ctx, genobj, s, c);
+    return JS_VALUE_GET_OBJ(genobj)->u.generator_data;
+}
+
 static void free_generator_stack(JSContext *ctx, JSGeneratorData *s)
 {
     free_generator_stack_rt(ctx->rt, s);
@@ -55842,6 +55905,7 @@ static JSValue js_call_generator_function(JSContext *ctx, JSValueConst func_obj,
     if (!s)
         return JS_EXCEPTION;
     s->state = JS_GENERATOR_STATE_SUSPENDED_START;
+    s->mint_gen = g_flow_gen;
     if (async_func_init(ctx, &s->func_state, func_obj, this_obj, argc, argv)) {
         s->state = JS_GENERATOR_STATE_COMPLETED;
         goto fail;

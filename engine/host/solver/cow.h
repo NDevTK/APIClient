@@ -398,12 +398,15 @@ void      cow_engine_write_end(void);
    engine cloned it because resuming CONSUMES it; this makes the clone what this flow's resolve/reject closure
    names, leaving the original as the baseline every other arm still finds. */
 void      cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_data, void *cur_data);
+/* JSTimeTravelHooks.gen_isolate: installs `cur_gd` on `genobj` and records the swap on the running flow's delta
+   through cow_delta_add_gendata; with no running flow, releases `cur_gd` and leaves `genobj` on `base_gd`. */
+void      cow_capture_gen_isolate(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd);
 
 /* Record a per-flow GENERATOR-STATE swap into delta `d` (JSTimeTravelHooks.gen_fork): the shared generator
-   object `genobj` must resolve to `cur_gd` (a per-flow clone `d` OWNS) while `d` runs and to `base_gd` (its
-   object-owned original) otherwise. Applied/unapplied like any other slot on context-switch. Dedup-REPLACES an
-   existing gendata entry for `genobj` (a re-fork of the same generator inside this flow), keeping the original
-   base. `d` takes ownership of one ref on `cur_gd` (freed via JS_GenDataUnref on delta free/replace). */
+   object `genobj` must resolve to `cur_gd` (a per-flow clone `d` OWNS) while `d` runs and to `base_gd` (the
+   record it named before) otherwise. Applied/unapplied like any other slot on context-switch. Dedup-REPLACES an
+   existing gendata entry for `genobj` (a re-fork or a resume of the same generator inside this flow), keeping
+   the entry's base. `d` takes ownership of one ref on `cur_gd` (freed via JS_GenDataUnref on delta free/replace). */
 void      cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, void *base_gd, void *cur_gd);
 
 /* Context-switch AWAY from `d`: save each HEAD slot's current (flow) value and restore what the chain below it

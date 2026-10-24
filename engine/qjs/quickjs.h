@@ -2208,6 +2208,11 @@ typedef struct JSTimeTravelHooks {
        `closure` for the duration of this flow and records the swap on its delta, exactly as gen_fork does for a
        generator's execution state. The delta OWNS cur_data (JS_AsyncDataRef/Unref). */
     void (*async_fork)(JSContext *ctx, JSValueConst closure, void *base_data, void *cur_data);
+    /* Before a flow RESUMES a suspended generator whose state record may be installed in another flow too.
+       `base_gd` is the record `genobj` names now, `cur_gd` a clone (cow_ref 1); the host installs the clone on
+       `genobj` for the duration of this flow and records the swap on its delta, which OWNS cur_gd
+       (JS_GenDataRef/Unref), or declines when no flow owns the swap and releases it. */
+    void (*gen_isolate)(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd);
     /* Before a flow changes a shared ARRAY BUFFER's STORAGE STATE — any of its BYTES, or the EXTENT those bytes
        live in (`resize`/`grow`, `transfer`, a detach). `abuf` is the ArrayBuffer/SharedArrayBuffer OBJECT —
        never a view and never a raw pointer — because the buffer is what OWNS the storage and is the only name
