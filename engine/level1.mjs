@@ -96,7 +96,7 @@ const ZONE = (() => {
   /* `_globalStoreReady` is offscreen-brain.js's read of the cumulative store, which this realm does not load;
      it never settles here, so bridge.js's start-up kick never drives the live pool under these rows. */
   const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, MessageChannel,
-                    AbortController, swRpc,
+                    AbortController, AbortSignal, swRpc,
                     _globalStoreReady: new Promise(() => {}) };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
@@ -977,6 +977,33 @@ async function mintDrive(minted, slices) {
          'an xhr.send record with ' + label + ' is ' + (names === null ? 'accepted' : 'refused, naming the field'), { why });
   }
   console.log('[level1]   request records  ' + lines.length + ' GetPending lines and ' + records.length + ' xhr.send records driven');
+}
+
+/* engineFetchXhr's real path with a counting safeFetch: an invented xhr.send record retires the instance and
+   reaches no fetch, and the valid record (the control) reaches it once. */
+{
+  const realSafeFetch = ZONE.safeFetch;
+  let sent = 0;
+  ZONE.safeFetch = async () => { sent++; return { status: 200, statusText: '', headers: {}, body: runInContext('new Uint8Array(0)', ZONE),
+                                                  computedType: '', refusal: null, urlList: ['https://a.test/api'] }; };
+  const valid = { url: '/api', method: 'GET', credentials: 'same-origin', mode: 'cors', referrerPolicy: '',
+                  referrer: 'https://a.test/', useCorsPreflight: false, provenance: 'derived', pinned: 'unpinned',
+                  driven: 'undriven', headers: [] };
+  for (const [label, rec, refused] of [['the valid record', JSON.stringify(valid), false],
+                                       ['mode no-cors', JSON.stringify(Object.assign({}, valid, { mode: 'no-cors' })), true],
+                                       ['text that is not JSON', '{"url":', true]]) {
+    const before = sent;
+    const e = { state: 'hot', msg: { sourceUrl: 'https://a.test/' }, origin: 'https://a.test', docId: 'xhr-doc', lines: [] };
+    let a, threw = null;
+    try { a = await ZONE.engineFetchXhr(e, rec, ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public'),
+                                        new AbortController().signal); } catch (x) { threw = x; }
+    const fired = sent - before;
+    must(threw === null && (refused ? fired === 0 && e._crashed === true && typeof a.declined === 'string'
+                                    : fired === 1 && !e._crashed && a.meta && a.meta.status === 200),
+         'engineFetchXhr with ' + label + ' ' + (refused ? 'retires the instance and sends nothing' : 'sends once (the control)'),
+         threw ? String(threw.message || threw) : { fired, crashed: e._crashed, a });
+  }
+  ZONE.safeFetch = realSafeFetch;
 }
 
 console.log('[level1] ── verdict ──');

@@ -3628,110 +3628,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* The routing table is the pool. `docId` (which document this instance holds) and `origin` (the value
      stamped on everything it sends) are read only by the notice router below: SECURITY.md makes this zone
      the one that knows which instance holds which document and the one that may state a sender's origin. */
-  // The XMLHttpRequest fetch (XHR §3.5.6 The send() method) through the same chokepoint. `rec` is the
-  // engine's JSON request record (method, url, headers, body); the answer is the reply shape fetch_reply_new
-  // builds, and a null body is the network error §3.5.6's handle errors turns into an `error` event.
-  const fetchedXhr = async (rec, doc, signal) => {
-    DCHECK(signal instanceof AbortSignal,
-           "an XMLHttpRequest send reached the fetch relay with no abort signal — engineIssue owns one per send, " +
-           "and a `fetch.cancel` notice naming its rendezvous ends the send through it");
-    /* The request record is the engine's, crossing as JSON so it carries its types, and so input: a record
-       xhrRecordRefusal refuses retires the instance and is never sent. The method arrives normalized (Fetch
-       §2.2.1 Methods; XHR §3.5.1 The open() method runs "normalize a method"), so GET, HEAD included, is
-       exactly what this zone can perform; another is refused below, never downgraded, because safeFetch is GET
-       only (SECURITY.md) and a POST answered with a GET's reply is a response the server never gave. */
-    let q;
-    try { q = JSON.parse(rec); } catch (_) { q = undefined; }
-    const _xhrRefusal = xhrRecordRefusal(q, rec);
-    if (_xhrRefusal !== null) {
-      if (!eng._crashed) engineRefuse(eng, _xhrRefusal);
-      return { declined: _xhrRefusal };
-    }
-    /* The refusal is the chokepoint's grade (`safeFetchMethodRefusal`), shared with `fetched` and
-       engine/trusted.mjs. It is a decline: no browser refuses a POST, so the rendezvous is declined and the
-       engine forks a waiting arm and a failure arm, as for a refused document load. */
-    const _xhrMethodRefusal = self.safeFetchMethodRefusal(q.method);
-    if (_xhrMethodRefusal) return { declined: q.method + " " + q.url + " — " + _xhrMethodRefusal.reason };
-    try {
-      const abs = new URL(q.url, msg.sourceUrl).href;
-      /* The credentials mode (XHR §3.5.6 The send() method: `include` if cross-origin credentials is true,
-         otherwise `same-origin`) is relayed as `opts.credentials`, a statement about the request that
-         safe-fetch.js composes with `credentialed` and so can refuse and never grant. Fetch §4.10 CORS check
-         reads it: an `include` reply passes only with the exact origin and `Access-Control-Allow-Credentials:
-         true`. The mode is §3.5.6's own `cors`; safe-fetch.js's `_modeOf` CHECKs the word. The origin is the
-         instance's, from this zone's record (see `fetched`). */
-      CHECK(typeof eng.origin === "string",
-            "an XMLHttpRequest is about to be judged with no origin on the instance that made it — the zone " +
-            "assigns every instance its cluster origin at creation");
-      /* @security-finding: `headers` come from the untrusted bundle and are read by the chokepoint. That is
-         within the model for an uncredentialed GET to a public host (the browser strips forbidden header names),
-         and must be re-decided the day this path is credentialed. Only what the chokepoint reads is passed. */
-      /* An XMLHttpRequest's destination is the empty string (Fetch §2.2.5 Requests), stated so its CORB class
-         is not decided by silence. */
-      /* What the request is evidence of (`derived` or `forced`, never `observed`, since no parser inserted an
-         XHR) and its witness mark, both composed at the record by `xhr_request_op`. `credentials` is relayed
-         and `credentialed: false` is stated as a literal, since the egress surface grades the `cookies` row
-         `certain` and the door asserts every caller states one. The witness mark is read with `in`, never
-         `||`: an absent key is an older build (this JS ships before the engine is rebuilt), and the default a
-         `||` would supply, `unpinned`, is the word safe-fetch.js's value arm fires on, so an absent key is
-         answered `unstated`, a word the engine never spells. */
-      const _xhrPinned = "pinned" in q ? q.pinned : "unstated";
-      /* `doc` is the instance's record, for the reason `fetched` gives. */
-      /* `actor: "page"`: every XHR is made by running the page's code, the same population as the `fetch()`
-         relay. With a real witness mark, an XHR whose path pinned nothing fires at an origin the person
-         permitted for that row, and one whose path pinned a witness is refused, as such a `fetch()` is. */
-      /* The drive mark is relayed off the record (`xhr_request_op` writes it beside the grade); the chokepoint
-         CHECKs that a `page` request states one. */
-      const r = await self.safeFetch(abs, { pageOrigin: eng.origin, destination: "",
-                                            mode: q.mode, provenance: q.provenance, pinned: _xhrPinned,
-                                            driven: q.driven,
-                                            doc, actor: "page",
-                                            credentialed: false, useCorsPreflight: q.useCorsPreflight,
-                                            credentials: q.credentials, headers: q.headers, signal,
-                                            identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, "engine:" + eng.docId, abs,
-                                                                          q.credentials, q.mode,
-                                                                          q.referrerPolicy, q.referrer) });
-      DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
-             r.headers && typeof r.headers === "object",
-             "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +
-             "built from it and the page reads status, statusText and every header off that, and §2.2.4's " +
-             "body source is a BYTE SEQUENCE");
-      /* The status message is asserted for `fetched`'s reason: "" is a legitimate HTTP/2 answer and the
-         refusal arms carry their reason there. */
-      DCHECK(typeof r.statusText === "string",
-             "safeFetch answered an XHR with no statusText — XMLHttpRequest §3.6.3 `The statusText getter`'s `statusText` getter is " +
-             "read straight off it, and the chokepoint writes one on every path including the refusals whose " +
-             "reason it is");
-      /* The bytes cross beside the record, for `fetched`'s reason: XHR §3.6.6 Response body decodes the received
-         bytes with the final encoding, and `responseType = "arraybuffer"` needs the server's own bytes. */
-      /* A decline goes to `hostDecline` (see the delivery in the host-request loop). A network refusal is
-         XHR §3.5.6 "The send() method"'s network error: an answer with no body, so xhr_take_reply leaves the
-         response a network error and the page's XHR runs its error steps. A status-0 record with an empty
-         body would instead be a response, and fire `load`. */
-      if (r.refusal) {
-        CHECK(r.refusal.kind === "network" || r.refusal.kind === "decline",
-              "safeFetch graded an XHR's refusal `" + r.refusal.kind + "`, which is neither word it states");
-        if (r.refusal.kind === "decline") return { declined: "GET " + abs + " — " + r.refusal.reason };
-        return { meta: { status: 0, statusText: r.statusText, headers: [] }, bytes: null };
-      }
-      /* The type the chokepoint computed, relayed as `fetched` does: this zone is the only one that may answer
-         it (safeFetch saw the body and ran the sniff), and solver/reply_decode.c reads `computedType` rather than
-         re-deriving a type. "" is MIME Sniffing §5.1's undefined supplied type, a positive answer. */
-      DCHECK(typeof r.computedType === "string",
-             "safeFetch answered an XHR with no computed content type — solver/reply_decode.c reads this " +
-             "field instead of re-deriving a type from the raw header, so an absent stamp is a producer " +
-             "that failed and never a resource whose type is unknown");
-      return { meta: { status: r.status, statusText: r.statusText, headers: Object.entries(r.headers),
-                       computedType: r.computedType },
-               bytes: r.body };
-    } catch (e) {
-      /* A thrown fetch is the network error that becomes the page's `error` event (XHR §3.5.6 handle errors);
-         an invariant abort is rethrown. No `body` key in the record: `bytes: null` states there are none, and a
-         second spelling is what `fetch_reply_set_body` DCHECKs against. */
-      RETHROW_FATAL(e);
-      return { meta: { status: 0, statusText: "", headers: [] }, bytes: null };
-    }
-  };
+  /* The XMLHttpRequest fetch, engineFetchXhr over this instance. */
+  const fetchedXhr = (rec, doc, signal) => engineFetchXhr(eng, rec, doc, signal);
   /* The principal is browser-stated, never parsed off the address: a page that sandboxes its own iframe gives
      that document an opaque origin while its address looks ordinary. _dispatchDocument hands over
      `_senderOrigin(sender)` (from MessageSender) as `msg.origin`, and hostNotice stamps it on every message the
@@ -4127,6 +4025,111 @@ function xhrRecordRefusal(q, raw) {
   if (q.driven !== DRIVEN_YES && q.driven !== DRIVEN_NO)
     return f + " states the drive mark " + JSON.stringify(q.driven) + ", neither driven nor undriven";
   return null;
+}
+/* The XMLHttpRequest fetch (XHR §3.5.6 The send() method) of instance `eng` through the chokepoint. `rec` is
+   the engine's JSON request record (method, url, headers, body); the answer is the reply shape fetch_reply_new
+   builds, and a null body is the network error §3.5.6's handle errors turns into an `error` event. It is a
+   function of the instance, not a closure of engineRoot, so the refusal of a record is driven in a realm. */
+async function engineFetchXhr(eng, rec, doc, signal) {
+  DCHECK(signal instanceof AbortSignal,
+         "an XMLHttpRequest send reached the fetch relay with no abort signal — engineIssue owns one per send, " +
+         "and a `fetch.cancel` notice naming its rendezvous ends the send through it");
+  /* The request record is the engine's, crossing as JSON so it carries its types, and so input: a record
+     xhrRecordRefusal refuses retires the instance and is never sent. The method arrives normalized (Fetch
+     §2.2.1 Methods; XHR §3.5.1 The open() method runs "normalize a method"), so GET, HEAD included, is
+     exactly what this zone can perform; another is refused below, never downgraded, because safeFetch is GET
+     only (SECURITY.md) and a POST answered with a GET's reply is a response the server never gave. */
+  let q;
+  try { q = JSON.parse(rec); } catch (_) { q = undefined; }
+  const _xhrRefusal = xhrRecordRefusal(q, rec);
+  if (_xhrRefusal !== null) {
+    if (!eng._crashed) engineRefuse(eng, _xhrRefusal);
+    return { declined: _xhrRefusal };
+  }
+  /* The refusal is the chokepoint's grade (`safeFetchMethodRefusal`), shared with `fetched` and
+     engine/trusted.mjs. It is a decline: no browser refuses a POST, so the rendezvous is declined and the
+     engine forks a waiting arm and a failure arm, as for a refused document load. */
+  const _xhrMethodRefusal = self.safeFetchMethodRefusal(q.method);
+  if (_xhrMethodRefusal) return { declined: q.method + " " + q.url + " — " + _xhrMethodRefusal.reason };
+  try {
+    const abs = new URL(q.url, eng.msg.sourceUrl).href;
+    /* The credentials mode (XHR §3.5.6 The send() method: `include` if cross-origin credentials is true,
+       otherwise `same-origin`) is relayed as `opts.credentials`, a statement about the request that
+       safe-fetch.js composes with `credentialed` and so can refuse and never grant. Fetch §4.10 CORS check
+       reads it: an `include` reply passes only with the exact origin and `Access-Control-Allow-Credentials:
+       true`. The mode is §3.5.6's own `cors`; safe-fetch.js's `_modeOf` CHECKs the word. The origin is the
+       instance's, from this zone's record (see `fetched`). */
+    CHECK(typeof eng.origin === "string",
+          "an XMLHttpRequest is about to be judged with no origin on the instance that made it — the zone " +
+          "assigns every instance its cluster origin at creation");
+    /* @security-finding: `headers` come from the untrusted bundle and are read by the chokepoint. That is
+       within the model for an uncredentialed GET to a public host (the browser strips forbidden header names),
+       and must be re-decided the day this path is credentialed. Only what the chokepoint reads is passed. */
+    /* An XMLHttpRequest's destination is the empty string (Fetch §2.2.5 Requests), stated so its CORB class
+       is not decided by silence. */
+    /* What the request is evidence of (`derived` or `forced`, never `observed`, since no parser inserted an
+       XHR) and its witness mark, both composed at the record by `xhr_request_op`. `credentials` is relayed
+       and `credentialed: false` is stated as a literal, since the egress surface grades the `cookies` row
+       `certain` and the door asserts every caller states one. The witness mark is read with `in`, never
+       `||`: an absent key is an older build (this JS ships before the engine is rebuilt), and the default a
+       `||` would supply, `unpinned`, is the word safe-fetch.js's value arm fires on, so an absent key is
+       answered `unstated`, a word the engine never spells. */
+    const _xhrPinned = "pinned" in q ? q.pinned : "unstated";
+    /* `doc` is the instance's record, for the reason `fetched` gives. */
+    /* `actor: "page"`: every XHR is made by running the page's code, the same population as the `fetch()`
+       relay. With a real witness mark, an XHR whose path pinned nothing fires at an origin the person
+       permitted for that row, and one whose path pinned a witness is refused, as such a `fetch()` is. */
+    /* The drive mark is relayed off the record (`xhr_request_op` writes it beside the grade); the chokepoint
+       CHECKs that a `page` request states one. */
+    const r = await self.safeFetch(abs, { pageOrigin: eng.origin, destination: "",
+                                          mode: q.mode, provenance: q.provenance, pinned: _xhrPinned,
+                                          driven: q.driven,
+                                          doc, actor: "page",
+                                          credentialed: false, useCorsPreflight: q.useCorsPreflight,
+                                          credentials: q.credentials, headers: q.headers, signal,
+                                          identity: await pageRequestIdentity(stampOrigin(eng.origin), eng.msg.sourceUrl, "engine:" + eng.docId, abs,
+                                                                        q.credentials, q.mode,
+                                                                        q.referrerPolicy, q.referrer) });
+    DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
+           r.headers && typeof r.headers === "object",
+           "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +
+           "built from it and the page reads status, statusText and every header off that, and §2.2.4's " +
+           "body source is a BYTE SEQUENCE");
+    /* The status message is asserted for `fetched`'s reason: "" is a legitimate HTTP/2 answer and the
+       refusal arms carry their reason there. */
+    DCHECK(typeof r.statusText === "string",
+           "safeFetch answered an XHR with no statusText — XMLHttpRequest §3.6.3 `The statusText getter`'s `statusText` getter is " +
+           "read straight off it, and the chokepoint writes one on every path including the refusals whose " +
+           "reason it is");
+    /* The bytes cross beside the record, for `fetched`'s reason: XHR §3.6.6 Response body decodes the received
+       bytes with the final encoding, and `responseType = "arraybuffer"` needs the server's own bytes. */
+    /* A decline goes to `hostDecline` (see the delivery in the host-request loop). A network refusal is
+       XHR §3.5.6 "The send() method"'s network error: an answer with no body, so xhr_take_reply leaves the
+       response a network error and the page's XHR runs its error steps. A status-0 record with an empty
+       body would instead be a response, and fire `load`. */
+    if (r.refusal) {
+      CHECK(r.refusal.kind === "network" || r.refusal.kind === "decline",
+            "safeFetch graded an XHR's refusal `" + r.refusal.kind + "`, which is neither word it states");
+      if (r.refusal.kind === "decline") return { declined: "GET " + abs + " — " + r.refusal.reason };
+      return { meta: { status: 0, statusText: r.statusText, headers: [] }, bytes: null };
+    }
+    /* The type the chokepoint computed, relayed as `fetched` does: this zone is the only one that may answer
+       it (safeFetch saw the body and ran the sniff), and solver/reply_decode.c reads `computedType` rather than
+       re-deriving a type. "" is MIME Sniffing §5.1's undefined supplied type, a positive answer. */
+    DCHECK(typeof r.computedType === "string",
+           "safeFetch answered an XHR with no computed content type — solver/reply_decode.c reads this " +
+           "field instead of re-deriving a type from the raw header, so an absent stamp is a producer " +
+           "that failed and never a resource whose type is unknown");
+    return { meta: { status: r.status, statusText: r.statusText, headers: Object.entries(r.headers),
+                     computedType: r.computedType },
+             bytes: r.body };
+  } catch (e) {
+    /* A thrown fetch is the network error that becomes the page's `error` event (XHR §3.5.6 handle errors);
+       an invariant abort is rethrown. No `body` key in the record: `bytes: null` states there are none, and a
+       second spelling is what `fetch_reply_set_body` DCHECKs against. */
+    RETHROW_FATAL(e);
+    return { meta: { status: 0, statusText: "", headers: [] }, bytes: null };
+  }
 }
 /* One pending line, split in one place, mirroring the engine's `engine_pending_split` so the grammar cannot
    drift across hosts. The TAB delimiter is unambiguous: URL Standard §4.4 URL parsing strips every ASCII tab
