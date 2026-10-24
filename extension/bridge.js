@@ -3060,6 +3060,30 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, inherited,
    unrepresentable (a node inserted across them, a closure neither can call). The second arrival finds the
    record and joins it. The record carries only what is known without asking the instance: `residentBytes`
    and `level1` are absent until engineRecordFacts states them, and readers check `state` first. */
+/* Every document name this zone provisioned into an instance this session (a reservation's root, a joined
+   document), with the browsing-context group it was provisioned in and, once its instance left the pool, how.
+   It answers whether a name an engine states was ever a document here: a name it does not hold for the
+   engine's group is the engine's invention, and one it holds as ended is this zone's own lifecycle. Cleared
+   with the pool. */
+/* `ended` is "finalizing" from the pool's splice until engineFinalize answers, then "finalized" for a run that
+   ended normally or "crashed" for one that aborted or was refused; a failed boot is "crashed" too. */
+const _provisioned = new Map();   // name -> { groupId, ended: null | "finalizing" | "finalized" | "crashed" }
+function provisionedEnd(eng, how) {
+  for (const n of [eng.docId, ...eng.joinedDocIds]) {
+    const r = _provisioned.get(n);
+    if (r !== undefined) r.ended = how;
+  }
+}
+/* What a document name an engine states as a peer's is, when no instance in the pool holds it: null when this
+   zone provisioned it in `groupId` and it has since ended (the caller reads how), or the reason the name is
+   the engine's statement of a document that never existed in that group. A provisioned name no instance holds
+   has always ended, since the pool is spliced only where `ended` is written. */
+function provisionedRefusal(name, groupId) {
+  const r = _provisioned.get(name);
+  if (r === undefined) return "names the document `" + name + "`, which this zone never provisioned";
+  if (r.groupId !== groupId) return "names the document `" + name + "`, which this zone provisioned in another browsing-context group";
+  return null;
+}
 function engineReserve(cluster, docId, msg, referenced) {
   /* `_readyP` is null here and filled by engineCreate on the next line; a placeholder promise would settle at
      a different moment from the provisioning. The wait arm asserts it is present. */
@@ -3113,6 +3137,7 @@ function engineReserve(cluster, docId, msg, referenced) {
                    distinct addresses (an @S candidate re-fire asks again). */
                 _egress: { asked: 0, declined: Object.create(null) } };
   _pool.push(eng);
+  _provisioned.set(docId, { groupId: msg.groupId, ended: null });
   _reserveStats.made++;
   const n = _bootingCount();
   if (n > _reserveStats.peakBooting) _reserveStats.peakBooting = n;
@@ -3127,6 +3152,7 @@ function engineBootFailed(eng, e) {
          "slot it holds is this function's to release, so something else removing it means two owners for one " +
          "record and the surviving one will free a frame twice");
   if (i >= 0) _pool.splice(i, 1);
+  provisionedEnd(eng, "crashed");
   zoneReclaimHeldCookies(eng.groupId);
   eng.state = "failed";
   childRequestsClose(eng);
@@ -3822,6 +3848,7 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
   /* The name enters the routing table only once the engine holds it; a delivery in between is refused by the
      post branch's assert rather than routed to an agent that has never heard the name. */
   eng.joinedDocIds.push(docName);
+  _provisioned.set(docName, { groupId: eng.groupId, ended: null });
   /* The joined document's record, written once. */
   CHECK(!eng.records.has(docName) && eng.records.size > 0,
         "a joined document's record was written twice, or into an instance whose root has none");
@@ -5097,9 +5124,19 @@ async function hostNotice(eng, line) {
   }
   if (f[0] === "windowproxy.post") {
     const target = hostHolderOf(f[1]);
-    DCHECK(target !== null, "a message was posted to a document no instance in this pool holds — the create " +
-                            "notice naming it was dropped, or that instance was finalized while a peer still " +
-                            "held a WindowProxy for it");
+    /* As a cross-agent operation's target: never provisioned in this group is the engine's statement, and
+       provisioned and ended is this zone's lifecycle. */
+    if (target === null) {
+      const _never = provisionedRefusal(f[1], eng.groupId);
+      if (_never !== null) { engineRefuseNotice(eng, line, _never); return; }
+      /* A crashed or finalizing target receives nothing, as a cross-agent operation's does. */
+      const _ended = _provisioned.get(f[1]).ended;
+      DCHECK(_ended !== null && _ended !== "finalized",
+             "a message was posted to `" + f[1] + "`, which this zone provisioned in this group and records as `" +
+             _ended + "` with no instance holding it — either the pool lost a live document or finalized one as " +
+             "complete while a peer still held a WindowProxy for it");
+      return;
+    }
     /* A target mid-boot is still the target, and the delivery waits for it: the reservation carries the name
        from the start, so routing now would post into `null` and refusing would drop a delivery the page already
        holds a WindowProxy for. */
@@ -5284,15 +5321,29 @@ async function engineServiceHostRequests(eng) {
       const _opShape = noticeName(_opf[1], "target document") || noticeMarks(_opf[3], "marks");
       if (_opShape !== null) { engineRefuse(eng, "the engine's host request `" + op.slice(0, 300) + "` " + _opShape); return did; }
       const holder = hostHolderOf(_opf[1]);
-      /* A missing instance, not a slow answer: the create notice was dropped, or the holder was finalized while
-         a peer still referenced it. Left alone the flow parks invisibly, so it is asserted. */
-      DCHECK(holder !== null, "a cross-agent operation named a document no instance in this pool holds — the " +
-                              "create notice for it was dropped, or that instance was finalized while a peer " +
-                              "still held a WindowProxy or a lent object of it");
-      if (!holder) continue;
-      DCHECK(holder !== eng, "a cross-agent operation was routed back to the instance whose flow asked it — an " +
-                             "operation on this agent's own object is performed in this heap and never leaves, " +
-                             "so this zone and the engine have answered one identity question two ways");
+      /* No holder has two readings, told apart by this zone's record: a name never provisioned in this group is
+         the engine's invention, and one provisioned and since ended while a peer still referenced it is this
+         zone's lifecycle. */
+      if (!holder) {
+        const _never = provisionedRefusal(_opf[1], eng.groupId);
+        if (_never !== null) { engineRefuse(eng, "the engine's host request `" + op.slice(0, 300) + "` " + _never); return did; }
+        /* A peer that crashed, or is being finalized, answers nothing, and the asking flow stays parked, listed
+           as an unanswered request. One that finished normally while referenced is this zone's bug: an instance
+           whose document is referenced may not finish (`referenced`). */
+        const _ended = _provisioned.get(_opf[1]).ended;
+        DCHECK(_ended !== null && _ended !== "finalized",
+               "a cross-agent operation named `" + _opf[1] + "`, which this zone provisioned in this group and " +
+               "records as `" + _ended + "` with no instance holding it — either the pool lost a live document " +
+               "or finalized one as complete while a peer still held a WindowProxy or a lent object of it");
+        continue;
+      }
+      /* This zone routes an operation only to the instance holding its target, so a target in the asking
+         instance is the engine's statement: an operation on its own agent's object is performed in its heap. */
+      if (holder === eng) {
+        engineRefuse(eng, "the engine's host request `" + op.slice(0, 300) + "` routes a cross-agent operation to " +
+                          "a document of its own instance");
+        return did;
+      }
       /* The one firing rule, as a fetch is judged (safeFetchCrossDocumentRefusal), under the asking document's
          record; the record's fourth field is the asking timeline's marks (engine_record_head). A refusal is a
          declined rendezvous, which the asker forks into a waiting arm and a failure arm. */
@@ -6609,8 +6660,10 @@ const _hostOps = {
                           JSON.stringify(_owedAtDone.slice(0, 3)) + ")");
     }
     const i = _pool.indexOf(eng); if (i >= 0) _pool.splice(i, 1);
+    provisionedEnd(eng, "finalizing");
     zoneReclaimHeldCookies(eng.groupId);
     const result = await engineFinalize(eng);
+    provisionedEnd(eng, eng._crashed ? "crashed" : "finalized");
     childRequestsClose(eng);
     /* A crashed run does not write the cross-session frontier: its recipes would claim flows resumable from a
        heap that aborted and its counters a finished run, and with no `_park` the write would delete the residue
@@ -6907,6 +6960,7 @@ async function hostClear() {
   _seedCensus.declared = _seedCensus.landedOnDeclared = _seedCensus.landedOnMember = _seedCensus.loaded = 0;
   _seedLandings.clear();
   const dropped = _pool.splice(0);
+  _provisioned.clear();
   /* Pairs held for clusters of a session the person asked to forget go with it. */
   _heldCookies.clear();
   for (const job of waiting) job.reject(new Error("cleared"));

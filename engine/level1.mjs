@@ -1133,6 +1133,47 @@ async function mintDrive(minted, slices) {
          'a retired instance\'s notice is not acted on', { inflight: [...e._inflight.keys()], lines: e.lines });
   }
   console.log('[level1]   host notices     ' + notices.length + ' records, ' + (driven.length + 1) + ' notices through hostNotice driven');
+
+  /* A peer target no instance holds, split by the zone's record of what it provisioned: a name never provisioned
+     in the asker's group (or provisioned in another group) and a target in the asker's own instance are the
+     engine's statements and retire it; a target provisioned here whose instance crashed (the control) leaves
+     the request parked and retires nothing. Driven through the real service round and hostNotice. */
+  const provisioned = runInContext('_provisioned', ZONE);
+  const peerCases = [['a name never provisioned', 'ghost-doc', null, true],
+                     ['a name provisioned in another group', 'other-doc', { groupId: 'g-other', ended: 'crashed' }, true],
+                     ['its own instance\'s document', 'own-doc', 'own', true],
+                     ['a peer provisioned here that crashed (the control)', 'dead-doc', { groupId: 'g1', ended: 'crashed' }, false]];
+  for (const [label, target, rec, refused] of peerCases) {
+    for (const via of ['host request', 'post']) {
+      let acted = 0;
+      const e = inst({ docId: 'gap-doc', joinedDocIds: rec === 'own' ? [target] : [], groupId: 'g1', _inflight: new Map(),
+                       _remoteAsked: new Set(), residentBytes: 131072, _egress: { asked: 0 },
+                       records: new Map([['gap-doc', ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public')]]),
+                       r: { renderer: { getPending: async () => ({ requests: '' }), getHostNotices: async () => ({ notices: '' }),
+                                        getHostRequests: async () => ({ requests: '7\tgap-doc\twindowproxy.length\t' + target +
+                                                                                  '\tx\tderived,undriven,unpinned' }),
+                                        getLevel1Account: account, hostDecline: async () => { acted++; return { matched: 1 }; },
+                                        route: async () => { acted++; return {}; } } } });
+      if (rec !== null && rec !== 'own') provisioned.set(target, rec);
+      pool.push(e);
+      let threw = null;
+      try {
+        if (via === 'host request') await ops.serviceFetch(e, false);
+        else await ZONE.hostNotice(e, 'windowproxy.post\t' + target + '\tgap-doc:1:2\tderived,undriven,unpinned\tx\ty');
+      } catch (x) { threw = x; }
+      pool.splice(pool.indexOf(e), 1);
+      provisioned.delete(target);
+      const r = e._crashed ? refusedRun(e) : null;
+      /* A post to its own instance's document is routed like any other, so that row is the host request's only. */
+      const want = via === 'post' && rec === 'own' ? null : refused;
+      if (want === null) continue;
+      must(threw === null && acted === 0 && (want ? e._crashed === true && r.rows.length === 1 && r.rows[0].includes(target)
+                                                  : !e._crashed),
+           'a ' + via + ' naming ' + label + (want ? ' retires the instance' : ' is left parked and retires nothing'),
+           threw ? String(threw.message || threw) : { acted, crashed: e._crashed, r });
+    }
+  }
+  console.log('[level1]   peer targets     ' + peerCases.length + ' targets through the service round and hostNotice driven');
 }
 
 /* engineFetchXhr's real path with a counting safeFetch: an invented xhr.send record retires the instance and
