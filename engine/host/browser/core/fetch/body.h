@@ -145,6 +145,8 @@ int  body_state_copy(JSContext *ctx, BodyState *dst, const BodyState *src);
    spelling of the same thing — after a clone the ORIGINAL's `body` is a different object from the one it was,
    the old one is locked, and a page teeing a response's body depends on exactly that. It also means a body
    whose source IS a page's stream can be cloned at all, which a byte copy could not do: there are no bytes.
+   An unknown body whose stream has not been built yet is cloned by holding its one `unknown` on both sides,
+   which is what the tee of two on-demand streams over that value would deliver.
  *
  * A TEE IS A CALL of code the page can reach, so this is a REQUEST: it returns JS_STEP_CALL (which the calling
  * machine returns), 0 once both sides are set, or -1 with a throw live. `cb`/`cb_cap` are the caller's

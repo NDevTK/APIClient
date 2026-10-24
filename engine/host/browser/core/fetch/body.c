@@ -500,15 +500,17 @@ int body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Body
             const char *cb_bytes = NULL;
             size_t cb_len = 0;
             if (body_state_content(src, &cb_bytes, &cb_len) == BODY_SHAPE) {
-                /* §5.2's string arm over UNKNOWN EXTERNAL INPUT has no bytes to enqueue, and enqueuing its
-                   DISPLAY SHAPE would hand the page a stream whose chunk is a string it never wrote. */
-                DFAIL("§2.2.4 Bodies' clone-a-body was asked to tee the stream of a body that is UNKNOWN "
-                      "EXTERNAL INPUT. Build §5.3 Body mixin's readers over core/fetch/body.h's `unknown` "
-                      "first — a stream whose one chunk IS that value — and this tee then has an operand");
+                /* An unknown body's stream is one built on demand over `unknown` (body.h), and no stream has
+                   been built yet, so the tee's two branches are two such streams over the one value: each
+                   side holds it, both read as the same unknown with the same provenance, and the clone gets
+                   its own latch. Enqueuing the DISPLAY SHAPE instead would hand the page a chunk it never
+                   wrote. */
                 JS_FreeValue(ctx, in);
-                JS_ThrowTypeError(ctx, "this engine cannot yet clone a body whose bytes are unknown external "
-                                       "input");
-                return -1;
+                if (body_state_set_unknown(ctx, dst, src->unknown) < 0)
+                    return -1;
+                dst->used = 0;
+                dst->source_null = src->source_null;
+                return 0;
             }
             src->stream = readable_stream_from_bytes(ctx, cb_bytes ? cb_bytes : "", cb_len);
             if (JS_IsException(src->stream)) {
