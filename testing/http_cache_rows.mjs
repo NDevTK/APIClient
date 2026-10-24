@@ -7,7 +7,7 @@
 //   node testing/http_cache_rows.mjs
 "use strict";
 import { createServer } from 'node:http';
-import { ZONE } from '../engine/trusted.mjs';
+import { ZONE, trustedZone } from '../engine/trusted.mjs';
 import { NAVIGABLE_NOTICE } from '../engine/noticegen.mjs';
 
 const hits = new Map();
@@ -22,7 +22,8 @@ const server = createServer((req, res) => {
   const inm = req.headers['if-none-match'] || null, ims = req.headers['if-modified-since'] || null;
   conditions.set(path, (conditions.get(path) || []).concat([[inm, ims]]));
   const head = { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' };
-  if (path === '/fresh' || path === '/inval' || path === '/part' || path === '/pf') head['Cache-Control'] = 'max-age=600';
+  if (path === '/fresh' || path === '/inval' || path === '/part' || path === '/pf' ||
+      path === '/kept' || path === '/opq') head['Cache-Control'] = 'max-age=600';
   if (req.method === 'OPTIONS') head['Access-Control-Allow-Headers'] = 'X-Probe';
   if (path === '/nostore') head['Cache-Control'] = 'no-store, max-age=600';
   if (path === '/vary') { head['Cache-Control'] = 'max-age=600'; head.Vary = 'X-Probe'; }
@@ -52,14 +53,15 @@ const PERSON = { origin: 'test:person' };
 ZONE.senderIsExtensionDocument = (s) => s === PERSON;
 
 /* A page request as engine/trusted.mjs's workFetch states it, from a document at `page`. */
-async function pageGet(page, url, headers) {
+/* `docKey` names the document; an opaque one (a `data:` page) is given the loopback space its creator had. */
+async function pageGet(page, url, headers, zone = ZONE, docKey = 'engine:' + new URL(page).origin) {
   const origin = new URL(page).origin;
-  const r = await ZONE.safeFetch(url, {
+  const space = origin === 'null' ? 'loopback' : zone.safeFetchDocumentAddressSpace(page, null);
+  const r = await zone.safeFetch(url, {
     pageOrigin: origin, destination: '', mode: 'cors', provenance: 'observed', pinned: 'unpinned',
     driven: 'undriven', actor: 'page', credentialed: false, credentials: 'same-origin', useCorsPreflight: false,
-    headers, doc: ZONE.docRecord('observed', 'undriven', 'unpinned', NAVIGABLE_NOTICE.sandbox.none,
-                                 ZONE.safeFetchDocumentAddressSpace(page, null)),
-    identity: await ZONE.pageRequestIdentity(origin, page, 'engine:' + origin, url, 'same-origin', 'cors',
+    headers, doc: zone.docRecord('observed', 'undriven', 'unpinned', NAVIGABLE_NOTICE.sandbox.none, space),
+    identity: await zone.pageRequestIdentity(origin, page, docKey, url, 'same-origin', 'cors',
                                              'strict-origin-when-cross-origin', page) });
   if (r.refusal) throw new Error(`${url} was refused: ${r.refusal.reason}`);
   /* A store completes when the clone of the body has been read, a task after the reply is returned. */
@@ -102,12 +104,32 @@ const ROWS = [
       await pageGet(PAGE_A, `${A}/inval`);
       return [['GET /inval before the POST', before, 1], ['POST /inval', count('POST', '/inval'), 1],
               ['GET /inval', count('GET', '/inval'), 2]]; } },
+  { label: 'two opaque top-level documents are two partitions, and each hits its own entry', run: async () => {
+      const page = 'data:text/html,<p>opaque';
+      await pageGet(page, `${A}/opq`, undefined, ZONE, 'engine:opaque-1');
+      await pageGet(page, `${A}/opq`, undefined, ZONE, 'engine:opaque-1');
+      await pageGet(page, `${A}/opq`, undefined, ZONE, 'engine:opaque-2');
+      return [['GET /opq', count('GET', '/opq'), 2]]; } },
   { label: 'two partitions do not share an entry', run: async () => {
       await pageGet(PAGE_A, `${A}/part`);
       await pageGet(PAGE_B, `${A}/part`);
       await pageGet(PAGE_A, `${A}/part`);
       await pageGet(PAGE_B, `${A}/part`);
       return [['GET /part', count('GET', '/part'), 2]]; } },
+  { label: 'a second session restored from what the first wrote back answers a fresh entry with no send',
+    run: async () => {
+      await pageGet(PAGE_A, `${A}/kept`);
+      const kept = ZONE.httpCacheTakeDirty();
+      /* A host's store: the second zone states a restore, restores every record, then settles it. */
+      const next = trustedZone();
+      next.safeFetchEgressStated({});
+      let restored;
+      next.httpCacheStated(new Promise((done) => { restored = done; }), null);
+      for (const rec of kept) if (rec.entries.length > 0) next.httpCacheRestore(rec);
+      restored();
+      const two = await pageGet(PAGE_A, `${A}/kept`, undefined, next);
+      return [['records written back', kept.some((r) => r.target === `${A}/kept`), true],
+              ['GET /kept', count('GET', '/kept'), 1], ['stored body', /#1 /.test(two.text), true]]; } },
   { label: 'a fresh hit that needs a CORS preflight sends the preflight and not the request', run: async () => {
       const one = await pageGet(PAGE_B, `${A}/pf`, [['X-Probe', 'a']]);
       const two = await pageGet(PAGE_B, `${A}/pf`, [['X-Probe', 'a']]);
@@ -142,7 +164,7 @@ try {
   server.close();
 }
 /* Every row's first send reached the server, or nothing above is a reading. */
-const first = ['/stale', '/fresh', '/nostore', '/vary', '/inval', '/part', '/pf', '/etag', '/lm', '/changed']
+const first = ['/stale', '/fresh', '/nostore', '/vary', '/inval', '/part', '/pf', '/etag', '/lm', '/changed', '/kept', '/opq']
   .every((p) => count('GET', p) >= 1);
 if (!first) { console.log('  CONTROL FAILED: a row\'s first send never reached the server'); process.exit(2); }
 console.log(bad === 0 ? '  every row answered as Fetch §4.6 predicts' : `  ${bad} ROW(S) DISAGREED`);

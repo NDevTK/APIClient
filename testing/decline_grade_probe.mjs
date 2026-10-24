@@ -53,6 +53,8 @@ function zone(edge, table) {
   sandbox.self = sandbox; sandbox.globalThis = sandbox;
   createContext(sandbox);
   loadZone(sandbox);
+  /* This probe keeps no store between runs, so the HTTP cache restores nothing. */
+  sandbox.httpCacheStated(null, null);
   for (const n of ['safeFetch', 'safeFetchEgressStated'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js installed no \`${n}\` — this probe reads the chokepoint's ` +

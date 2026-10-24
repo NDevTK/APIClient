@@ -19,7 +19,7 @@ import { loadZone } from './zone.mjs';
    not the routing, so each is counted and any other rejection kills the run (level1.mjs's rule). */
 let restoresRefused = 0;
 process.on('unhandledRejection', (e) => {
-  if (e && e.apiclientFatal && /IndexedDB preference read failed \(indexedDB is not defined\)/.test(e.message)) {
+  if (e && e.apiclientFatal && /IndexedDB (preference|http cache) read failed \(indexedDB is not defined\)/.test(e.message)) {
     restoresRefused++;
     return;
   }

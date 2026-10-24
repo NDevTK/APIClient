@@ -182,7 +182,7 @@ function speakAsHost(sandbox) {
    `URL`, `TextDecoder`, `TextEncoder` and the `fetch` speakAsHost wraps come from this realm — which is also
    why nothing below may `instanceof` a value that came back out of it: a Uint8Array minted in that realm is
    not this realm's Uint8Array, and `ArrayBuffer.isView` is the cross-realm question. */
-export const ZONE = (() => {
+export function trustedZone() {
   /* `Response` is what lib/http-cache.js answers a hit with, as the wire's own fetch answers a send. */
   const sandbox = { console, URL, TextDecoder, TextEncoder, Response };
   sandbox.self = sandbox;
@@ -230,7 +230,10 @@ export const ZONE = (() => {
                       'same table, and a zone that obtained the chokepoint without them would fire every ' +
                       'grade while `--explore` authorized nothing');
   return sandbox;
-})();
+}
+/* This process keeps no store between sessions, so its HTTP cache restores nothing and writes nothing back. */
+export const ZONE = trustedZone();
+ZONE.httpCacheStated(null, null);
 /* The record of a document a person named at `url`: the seed and the root it becomes. Nothing created it, so
    its policy container is a new one with its response's IP address space (Local Network Access §3.5). */
 const observedDoc = (url) => ZONE.docRecord('observed', 'undriven', 'unpinned', NAVIGABLE_NOTICE.sandbox.none,

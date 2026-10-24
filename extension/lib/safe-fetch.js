@@ -2126,12 +2126,15 @@ async function safeFetch(url, opts) {
        tainting is `basic`. */
     var _cookies = credentialed && (!_identity || _identity.credentials === "include" || _tainting === "basic");
     /* Fetch §4.6 "HTTP-network-or-cache fetch", asked before the firing decision: a hit sends nothing, so it
-       is no act to judge. The partition is the identity's (lib/http-cache.js's httpCacheFor), and the Vary
-       fields are the header list and the speak-as set this send would carry, composed only for a URL the
-       cache holds, so a request it cannot answer reads no cookie before its firing decision. A request that
-       needs a CORS preflight sends it even on a fresh hit, since §4.4 runs §4.8 before §4.6, so its hit is
-       judged as a send and answered in place of the wire once the preflight passes (`_answered`). */
-    var _cache = httpCacheFor(_identity ? _identity.partitionKey : null);
+       is no act to judge. The partition is the identity's (lib/http-cache.js's httpCachePartitionOf), read
+       once what earlier sessions stored is restored (httpCacheStated). The Vary fields are the header list
+       and the speak-as set this send would carry, composed only for a URL the cache holds, so a request it
+       cannot answer reads no cookie before its firing decision. A request that needs a CORS preflight sends
+       it even on a fresh hit, since §4.4 runs §4.8 before §4.6, so its hit is judged as a send and answered
+       in place of the wire once the preflight passes (`_answered`). */
+    var _restoring = httpCacheRestoring();
+    if (_restoring) await _restoring;
+    var _partition = httpCachePartitionOf(_identity), _cache = httpCacheFor(_partition);
     var _cacheFields = null, _cacheMode = "no-store", _stored = null, _sent;
     if (_cache !== null) {
       _cacheFields = httpCacheRequestFields(_headerList, {});
@@ -2143,10 +2146,11 @@ async function safeFetch(url, opts) {
     /* A hit, or a 304 to its validation, is a reply read from the entry, so an entry of another partition would
        hand this document the answer to another cookie jar's request. */
     CHECK(_stored === null ||
-          (_stored.entry.partition.topLevelSite === _identity.partitionKey.topLevelSite &&
-           _stored.entry.partition.hasCrossSiteAncestor === _identity.partitionKey.hasCrossSiteAncestor),
+          (_stored.entry.partition.topLevelSite === _partition.topLevelSite &&
+           _stored.entry.partition.hasCrossSiteAncestor === _partition.hasCrossSiteAncestor &&
+           _stored.entry.partition.opaque === _partition.opaque),
           "the HTTP cache chose for " + _current.href + " in the partition " +
-          JSON.stringify(_identity && _identity.partitionKey) + " an entry stored for " +
+          JSON.stringify(_partition) + " an entry stored for " +
           JSON.stringify(_stored && _stored.entry.partition) + " — Fetch §2.8 gives each network partition key " +
           "its own cache");
     var _answered = _stored !== null && _stored.fresh;
@@ -2212,7 +2216,7 @@ async function safeFetch(url, opts) {
       if (_cache !== null && !_answered) {
         /* A 304 to a validation is answered from the freshened entry (§4.6: "Set response to storedResponse");
            the 304 itself has a null body (Fetch §2.2.3 "Statuses"), so nothing is left unread. */
-        var _validated = httpCacheForwarded(_cache, _cacheMode, _identity.partitionKey, _current.href, _method,
+        var _validated = httpCacheForwarded(_cache, _cacheMode, _current.href, _method,
                                             httpCacheRequestFields(init.headers, _sent.requestHeaders), _sent.resp,
                                             _requestTime, Date.now(), _stored);
         if (_validated !== null) _sent.resp = _validated;
@@ -2552,8 +2556,11 @@ async function safeFetchOperator(url, opts) {
     /* The person's send is in the "no-store" cache mode: it reads its answer from the server and stores
        nothing. It still invalidates (httpCacheInvalidate), since an unsafe method the server accepted changes
        what the partition's stored responses describe. Its header list is sent as typed, so §4.6's no-store
-       fields are not appended to it. */
-    var cache = httpCacheFor(identity.partitionKey);
+       fields are not appended to it. A restore still in flight would bring back what this invalidates, so it
+       is waited for first. */
+    var restoring = httpCacheRestoring();
+    if (restoring) await restoring;
+    var cache = httpCacheFor(httpCachePartitionOf(identity));
     if (cache !== null) httpCacheInvalidate(cache, method, current.href, resp.status);
     var redirect = await _redirectOf(resp);
     if (redirect === null) break;

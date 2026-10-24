@@ -6,35 +6,108 @@
 // Freshness is HTTP's clock (RFC 9110 §5.6.7 "Date/Time Formats"), read by the caller and passed in as
 // milliseconds; it is not the scheduler's work currency and ranks nothing.
 //
-// Named residual. Not covered: cross-session persistence; the cache lives in memory for one zone session.
-// Next diff: IndexedDB beside the frontier. Its absence shows as a repeat fetch of a still-fresh reply at the
-// first send after a restart.
+// The cache outlives a session where its host keeps a store: the host states it once (httpCacheStated),
+// restores each record before the first selection (httpCacheRestore), and writes back what changed
+// (httpCacheTakeDirty) — bridge.js into IndexedDB beside the frontier; a process host keeps nothing.
 
 /* Each partition's cache by its key's serialization, as {partition, entries}: `entries` maps a target URI
    (no fragment) to its stored responses, oldest first. */
 var _httpCaches = new Map();
 
-/* Fetch §2.8 "HTTP cache partitions" for a request whose partition key is `partitionKey`
-   (lib/request-identity.js's {topLevelSite, hasCrossSiteAncestor}), or null for a request with no client,
-   whose key §2.7 makes null; §4.6 then sets the cache mode to "no-store".
-   Named residual. Not covered: an opaque top-level site, whose `topLevelSite` is null for every opaque
-   origin, so one value would name many partitions. Next diff: key it on the zone's minted opaque-origin
-   token. Its absence shows as a repeat fetch of a fresh reply from a sandboxed top-level document. */
-function httpCacheFor(partitionKey) {
-  if (partitionKey === null || partitionKey === undefined) return null;
-  DCHECK(typeof partitionKey === "object" && typeof partitionKey.hasCrossSiteAncestor === "boolean" &&
-         (partitionKey.topLevelSite === null || typeof partitionKey.topLevelSite === "string"),
+/* Fetch §2.7 "Network partition keys" for a request speaking as `identity` (lib/request-identity.js's
+   identityFor answer), as {topLevelSite, hasCrossSiteAncestor, opaque}, or null for a request with no client,
+   whose key §2.7 makes null; §4.6 then sets the cache mode to "no-store". An opaque top-level origin is its
+   own site (HTML §7.1.1.1 "Sites"), and `topLevelSite` is null for every one of them, so such a partition is
+   told apart by the document it is: `opaque` is that document's key, and null for a tuple site. */
+function httpCachePartitionOf(identity) {
+  if (identity === null || identity === undefined) return null;
+  var key = identity.partitionKey;
+  DCHECK(!!key && typeof key === "object" && typeof key.hasCrossSiteAncestor === "boolean" &&
+         (key.topLevelSite === null || typeof key.topLevelSite === "string"),
          "a request's partition key is not identityFor's {topLevelSite, hasCrossSiteAncestor}");
-  if (partitionKey.topLevelSite === null) return null;
-  var name = JSON.stringify([partitionKey.topLevelSite, partitionKey.hasCrossSiteAncestor]);
+  DCHECK(key.topLevelSite !== null || (!!identity.client && typeof identity.client.docKey === "string"),
+         "a request with an opaque top-level site speaks as no document, so its partition has no name");
+  return { topLevelSite: key.topLevelSite, hasCrossSiteAncestor: key.hasCrossSiteAncestor,
+           opaque: key.topLevelSite === null ? identity.client.docKey : null };
+}
+/* Fetch §2.8 "HTTP cache partitions": the cache of `partition` (httpCachePartitionOf's), or null for none. */
+function httpCacheFor(partition) {
+  CHECK(_httpCacheStating !== undefined,
+        "the HTTP cache was asked for a partition before its host stated whether it keeps a store — a host " +
+        "that persists the cache would otherwise answer this session's first requests without it");
+  return partition === null ? null : _httpCacheNamed(partition);
+}
+function _httpCacheNamed(partition) {
+  var opaque = partition.opaque === undefined ? null : partition.opaque;
+  var name = JSON.stringify([partition.topLevelSite, partition.hasCrossSiteAncestor, opaque]);
   var cache = _httpCaches.get(name);
   if (cache === undefined) {
-    cache = { partition: { topLevelSite: partitionKey.topLevelSite,
-                           hasCrossSiteAncestor: partitionKey.hasCrossSiteAncestor },
+    cache = { name: name, partition: { topLevelSite: partition.topLevelSite,
+                                       hasCrossSiteAncestor: partition.hasCrossSiteAncestor, opaque: opaque },
               entries: new Map() };
     _httpCaches.set(name, cache);
   }
   return cache;
+}
+
+/* What the host keeps between sessions. `_httpCacheStating` is undefined until the host states it, then the
+   restore's promise until it settles, then null. `_httpCacheDirty` holds the [partition name, target URI]
+   pairs whose stored responses changed since the host last took them, and `_httpCacheOnDirty` is the host's
+   notice that one did. */
+var _httpCacheStating = undefined, _httpCacheDirty = new Map(), _httpCacheOnDirty = null;
+/* The host's one statement: `restoring` is a promise that settles once it has restored every record, or null
+   for a host that keeps no store; `onDirty` is called (with no arguments) when a record changes, or null. */
+function httpCacheStated(restoring, onDirty) {
+  CHECK(_httpCacheStating === undefined, "the HTTP cache's host stated its store twice");
+  CHECK((restoring === null || typeof restoring.then === "function") &&
+        (onDirty === null || typeof onDirty === "function"),
+        "the HTTP cache's host stated a store that is neither a restore promise nor null");
+  _httpCacheOnDirty = onDirty;
+  _httpCacheStating = restoring === null ? null : restoring.then(function () { _httpCacheStating = null; });
+}
+/* The restore a selection waits for, or null once there is none. */
+function httpCacheRestoring() { return _httpCacheStating; }
+/* An opaque partition is one document's, whose key names no document of a later session, so it is not kept. */
+function _httpCacheMarkDirty(cache, target) {
+  if (cache.partition.opaque !== null) return;
+  _httpCacheDirty.set(JSON.stringify([cache.name, target]), { cache: cache, target: target });
+  if (_httpCacheOnDirty !== null) _httpCacheOnDirty();
+}
+/* Every changed target URI's record, {key, partition, target, entries}, where `entries` is the whole stored
+   list (empty once invalidated) in httpCacheRestore's shape; taking them clears the set. */
+function httpCacheTakeDirty() {
+  var out = [];
+  _httpCacheDirty.forEach(function (d, key) {
+    out.push({ key: key, partition: d.cache.partition, target: d.target,
+               entries: (d.cache.entries.get(d.target) || []).map(function (e) {
+                 return { method: e.method, fields: Array.from(e.fields), status: e.status,
+                          statusText: e.statusText, headers: e.headers, body: e.body, requestTime: e.requestTime,
+                          responseTime: e.responseTime, dateValue: e.dateValue };
+               }) });
+  });
+  _httpCacheDirty.clear();
+  return out;
+}
+/* Every stored response of every partition, gone, as the host's clear deletes all its data; what was dirty
+   is dropped with it, since a write-back would re-store what the person deleted. */
+function httpCacheClear() {
+  _httpCaches.clear();
+  _httpCacheDirty.clear();
+}
+/* One record a host kept, back into its partition, before any selection reads it. */
+function httpCacheRestore(rec) {
+  CHECK(_httpCacheStating !== undefined && _httpCacheStating !== null,
+        "a cache record was restored outside its host's restore — after it, a selection may already have " +
+        "answered without it");
+  DCHECK(typeof rec.target === "string" && Array.isArray(rec.entries) && rec.entries.length > 0 &&
+         rec.entries.every(function (e) { return ArrayBuffer.isView(e.body) && Array.isArray(e.fields); }),
+         "a kept cache record is not httpCacheTakeDirty's {partition, target, entries} with each body's bytes");
+  var cache = _httpCacheNamed(rec.partition);
+  cache.entries.set(rec.target, rec.entries.map(function (e) {
+    return { partition: cache.partition, method: e.method, fields: new Map(e.fields), status: e.status,
+             statusText: e.statusText, headers: e.headers, body: e.body, requestTime: e.requestTime,
+             responseTime: e.responseTime, dateValue: e.dateValue };
+  }));
 }
 
 /* The request's header fields as RFC 9111 §4.1 compares them: lowercased names, multiple lines combined with
@@ -261,8 +334,9 @@ var _HTTP_SAFE_METHODS = ["GET", "HEAD", "OPTIONS", "TRACE"];
    Responses"' target URI, in this partition. The step reads only the method and the status, so a request in
    the "no-store" mode invalidates too. */
 function httpCacheInvalidate(cache, method, url, status) {
-  if (_HTTP_SAFE_METHODS.indexOf(method) < 0 && status >= 200 && status <= 399)
-    cache.entries.delete(_httpCacheTarget(url));
+  var target = _httpCacheTarget(url);
+  if (_HTTP_SAFE_METHODS.indexOf(method) < 0 && status >= 200 && status <= 399 && cache.entries.delete(target))
+    _httpCacheMarkDirty(cache, target);
 }
 /* A response's header fields as this cache stores them: lowercased, with no Set-Cookie, since a reply's
    cookies are stored once, at the send that received it, and a hit is not a send. */
@@ -317,12 +391,12 @@ function _httpCacheFreshen(set, h, requestTime, responseTime) {
    `resp` is the wire's Response, still unread; a storable one is cloned and stored once its whole body has
    arrived, and a body that fails or is aborted first is incomplete and is not stored (§3.3 "Storing
    Incomplete Responses"). `fields` is the request's (httpCacheRequestFields) as it was sent. */
-function httpCacheForwarded(cache, mode, partitionKey, url, method, fields, resp, requestTime, responseTime,
-                            validating) {
+function httpCacheForwarded(cache, mode, url, method, fields, resp, requestTime, responseTime, validating) {
   httpCacheInvalidate(cache, method, url, resp.status);
   if (validating !== null && resp.status === 304) {
-    _httpCacheFreshen(_httpCacheCandidates(cache, url, fields), _httpCacheStoredHeaders(resp), requestTime,
-                      responseTime);
+    if (_httpCacheFreshen(_httpCacheCandidates(cache, url, fields), _httpCacheStoredHeaders(resp), requestTime,
+                          responseTime) > 0)
+      _httpCacheMarkDirty(cache, _httpCacheTarget(url));
     return httpCacheResponse({ entry: validating.entry,
                                age: _httpCacheCurrentAge(validating.entry, responseTime) });
   }
@@ -330,9 +404,7 @@ function httpCacheForwarded(cache, mode, partitionKey, url, method, fields, resp
   var headers = _httpCacheStoredHeaders(resp);
   if (!httpCacheStorable(method, resp.status, headers, fields)) return null;
   var date = _httpDate(headers.date, responseTime);
-  var entry = { partition: { topLevelSite: partitionKey.topLevelSite,
-                             hasCrossSiteAncestor: partitionKey.hasCrossSiteAncestor },
-                method: method, fields: fields, status: resp.status, statusText: resp.statusText,
+  var entry = { partition: cache.partition, method: method, fields: fields, status: resp.status, statusText: resp.statusText,
                 headers: headers, body: null, requestTime: requestTime, responseTime: responseTime,
                 dateValue: isNaN(date) ? responseTime : date };
   resp.clone().arrayBuffer().then(function (buf) {
@@ -342,12 +414,18 @@ function httpCacheForwarded(cache, mode, partitionKey, url, method, fields, resp
     var kept = (cache.entries.get(target) || []).filter(function (old) { return !_httpCacheVaryMatches(old, fields); });
     kept.push(entry);
     cache.entries.set(target, kept);
+    _httpCacheMarkDirty(cache, target);
   }, function (e) { RETHROW_FATAL(e); });
   return null;
 }
 
 if (typeof self !== "undefined") {
   self.httpCacheFor = httpCacheFor;
+  self.httpCacheStated = httpCacheStated;
+  self.httpCacheRestoring = httpCacheRestoring;
+  self.httpCacheTakeDirty = httpCacheTakeDirty;
+  self.httpCacheRestore = httpCacheRestore;
+  self.httpCacheClear = httpCacheClear;
   self.httpCacheRequestFields = httpCacheRequestFields;
   self.httpCacheMode = httpCacheMode;
   self.httpCacheModeHeaders = httpCacheModeHeaders;

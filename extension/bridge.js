@@ -827,7 +827,7 @@ function clusterKeyOf(msg) {
    carries its recipes forward and restarts unserved. */
 function idbOpen() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open("apiclient-frontier", 7);
+    const r = indexedDB.open("apiclient-frontier", 8);
     r.onupgradeneeded = (ev) => {
       const db = r.result;
       if (ev.oldVersion < 2) {   // v1's entry grammar cannot state its document's response; it is not resumable
@@ -837,6 +837,8 @@ function idbOpen() {
       if (ev.oldVersion < 3 && !db.objectStoreNames.contains("prefs")) db.createObjectStore("prefs");
       if (ev.oldVersion < 4 && !db.objectStoreNames.contains("novelty")) db.createObjectStore("novelty");
       if (ev.oldVersion < 5 && !db.objectStoreNames.contains("bodies")) db.createObjectStore("bodies");
+      // v8 adds `httpcache`, the HTTP cache's records (httpCacheWrite); its bodies are `bodies`'.
+      if (ev.oldVersion < 8 && !db.objectStoreNames.contains("httpcache")) db.createObjectStore("httpcache");
       if (ev.oldVersion >= 2 && ev.oldVersion < 7) {
         const c = r.transaction.objectStore("frontier").openCursor();
         c.onsuccess = () => {
@@ -992,6 +994,93 @@ DCHECK(typeof self.safeFetchEgressStating === "function",
        "feeds it, and without the registration every request would race the restore and be refused with a " +
        "row of the person's own control they never ticked");
 self.safeFetchEgressStating(egressPolicyReady());
+/* ─── The HTTP cache's store (lib/http-cache.js holds the cache) ───────────────────────────────────────
+   `httpcache` holds one record per partition and target URI, {key, partition, target, entries}, each entry
+   naming its body by digest in `bodies` (lib/body-store.js), so a reply a frontier entry also holds is stored
+   once. Restored before the first selection (the chokepoint awaits it), and written back "relaxed" a moment
+   after a change: a lost write costs one refetch. `_httpCacheDisk` maps each stored record's key to its
+   bodies' digests and bytes, which residency counts against the share. */
+const _httpCacheDisk = new Map();
+function httpCacheDiskRow(stored) {
+  return new Map(stored.entries.map((e) => [e.body, e.bodyBytes]));
+}
+async function httpCacheReadStore() {
+  try {
+    const db = await idbOpen();
+    const recs = await new Promise((res, rej) => {
+      const tx = db.transaction(["httpcache", "bodies"]);
+      const out = [];
+      tx.oncomplete = () => res(out);
+      tx.onabort = () => rej(tx.error);
+      const all = tx.objectStore("httpcache").getAll();
+      all.onsuccess = () => {
+        for (const rec of all.result) {
+          const entries = rec.entries.map((e) => Object.assign({}, e));
+          out.push({ rec, entries });
+          for (const e of entries) {
+            const g = tx.objectStore("bodies").get(e.body);
+            g.onsuccess = () => {
+              DCHECK(g.result !== undefined, "a stored HTTP cache entry names a body the store does not hold — " +
+                     "the record and its reference are written in one transaction, so the two have parted");
+              e.body = g.result === undefined ? null : g.result.value;
+            };
+          }
+        }
+      };
+    });
+    for (const { rec, entries } of recs) {
+      /* The release arm under the DCHECK above: a record missing a body answers nothing and is deleted. */
+      if (entries.some((e) => e.body === null)) {
+        await httpCacheWrite({ key: rec.key, partition: null, target: null, entries: [] });
+        continue;
+      }
+      _httpCacheDisk.set(rec.key, httpCacheDiskRow(rec));
+      httpCacheRestore({ partition: rec.partition, target: rec.target, entries });
+    }
+  } catch (e) { RETHROW_FATAL(e); frontierFail("http cache read", e); }
+}
+/* One changed record (httpCacheTakeDirty's) into the store: its bodies referenced by digest, the old record's
+   unreferenced, in one transaction. A distinct digest counts once per record, so a record naming one body
+   twice holds one reference; an empty record is deleted. */
+async function httpCacheWrite(rec) {
+  const stored = { key: rec.key, partition: rec.partition, target: rec.target, entries: [] };
+  const values = new Map();
+  for (const e of rec.entries) {
+    const digest = await bodyDigest(e.body);
+    values.set(digest, e.body);
+    stored.entries.push(Object.assign({}, e, { body: digest, bodyBytes: bodyBytes(e.body) }));
+  }
+  await idbWriteStores(["httpcache", "bodies"], "relaxed", (st) => {
+    const g = st.httpcache.get(rec.key);
+    g.onsuccess = () => {
+      const old = new Set(g.result ? g.result.entries.map((e) => e.body) : []);
+      for (const d of old) if (!values.has(d)) bodyUnref(st.bodies, d);
+      for (const [d, v] of values) if (!old.has(d)) bodyRef(st.bodies, d, v);
+      if (stored.entries.length > 0) st.httpcache.put(stored, rec.key); else st.httpcache.delete(rec.key);
+    };
+  });
+  if (stored.entries.length > 0) _httpCacheDisk.set(rec.key, httpCacheDiskRow(stored));
+  else _httpCacheDisk.delete(rec.key);
+}
+let _httpCacheSaveTimer = null;
+function httpCachePersistSoon() {
+  if (_httpCacheSaveTimer !== null) return;
+  _httpCacheSaveTimer = setTimeout(async () => {
+    _httpCacheSaveTimer = null;
+    try {
+      for (const rec of httpCacheTakeDirty()) await httpCacheWrite(rec);
+      await frontierResidency();
+    } catch (e) { RETHROW_FATAL(e); frontierFail("http cache write", e); }
+  }, 2000);
+}
+/* Every stored record off the disk (the in-memory cache keeps answering this session), for residency. */
+async function httpCacheShed() {
+  for (const [key, row] of [..._httpCacheDisk]) {
+    DCHECK(row.size > 0, "a stored HTTP cache record names no body — an empty record is deleted, not kept");
+    await httpCacheWrite({ key, partition: null, target: null, entries: [] });
+  }
+}
+self.httpCacheStated(httpCacheReadStore(), httpCachePersistSoon);
 /* This extension's own third-party-cookie setting (lib/request-identity.js), kept in the `prefs` store beside
    the egress table and restored once at load; a send that needs it before the restore lands awaits it. Only
    the AST_THIRD_PARTY_COOKIES arm below changes it, and only for the popup. */
@@ -1238,10 +1327,24 @@ async function frontierResidency() {
     if (!names.has(row.doc)) total += row.docBytes;
     names.set(row.doc, (names.has(row.doc) ? names.get(row.doc) : 0) + 1);
   }
+  /* The HTTP cache's stored bodies no frontier entry names. They rank below every frontier entry, since a
+     refetch re-derives each one, so over the share they are shed first, all together. */
+  const cacheDocs = new Map();
+  for (const row of _httpCacheDisk.values())
+    for (const [d, b] of row) if (!names.has(d)) cacheDocs.set(d, b);
+  let cacheBytes = 0;
+  for (const b of cacheDocs.values()) cacheBytes += b;
+  total += cacheBytes;
   _frontierStats.docBytes = total;
   _frontierStats.docBytesNamed = named;
   _frontierStats.overShare = 0;
   if (total <= share) return;
+  if (_httpCacheDisk.size > 0) {
+    await httpCacheShed();
+    total -= cacheBytes;
+    _frontierStats.docBytes = total;
+    if (total <= share) return;
+  }
   /* Highest in the one order first, so the share is spent on what it values most. */
   const tree = level1Tree(_pool, _frontierIndex);
   const k = new Map(rows.map((row) => [row, level1Key(tree, row.sourceUrl, row, true, LEVEL1_DOOR.cold)]));
@@ -6785,6 +6888,11 @@ async function frontierClear() {
     await idbWrite("frontier", "default", (s) => s.clear());
     await idbWrite("bodies", "default", (s) => s.clear());
     _frontierIndex.clear();   // the ranking view is the store's projection: a cleared store ranks nothing
+    /* And every reply the HTTP cache stored, which would otherwise go on answering sends the person cleared;
+       its records' bodies went with `bodies`. */
+    httpCacheClear();
+    _httpCacheDisk.clear();
+    await idbWrite("httpcache", "default", (s) => s.clear());
     /* And the product's known identities, which name what every cleared session found. */
     noveltyClear();
     await idbWrite("novelty", "default", (s) => s.clear());

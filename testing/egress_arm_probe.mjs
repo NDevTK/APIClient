@@ -56,6 +56,8 @@ function zone() {
   sandbox.globalThis = sandbox;
   createContext(sandbox);
   loadZone(sandbox);
+  /* This probe keeps no store between runs, so the HTTP cache restores nothing. */
+  sandbox.httpCacheStated(null, null);
   for (const n of ['safeFetchEgressStated', 'safeFetchFiringRefusal', 'safeFetchSignalVector',
                    'safeFetchDefaultArms', 'safeFetchCrossDocumentRefusal'])
     if (typeof sandbox[n] !== 'function')

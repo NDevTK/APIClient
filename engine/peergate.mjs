@@ -235,6 +235,8 @@ function loadChokepoint(peerOrigin) {
   sandbox.globalThis = sandbox;
   createContext(sandbox);
   loadZone(sandbox);
+  /* This gate keeps no store between runs, so the HTTP cache restores nothing. */
+  sandbox.httpCacheStated(null, null);
   if (typeof sandbox.safeFetch !== 'function')
     throw new Error('extension/lib/safe-fetch.js installed no `safeFetch` — this gate asks that file whether ' +
                     'the two loopback authorities may reach each other, and a load that installs nothing ' +

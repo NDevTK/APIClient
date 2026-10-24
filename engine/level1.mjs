@@ -64,11 +64,11 @@ const ENGINE = dirname(fileURLToPath(import.meta.url));
    `module` IS WHAT OPENS THE DOOR. In `ast-worker.html` there is no `module`, so the export block at the foot
    of `bridge.js` does not run and this zone adds nothing to what ships. */
 /* This realm has no IndexedDB, so the zone's load-time restores (the egress table, the third-party-cookie
-   setting) reject through frontierFail's DFAIL on the first turn of the event loop. They are not the Level-1
-   order; each is counted and named, and any other rejection still kills the run. */
+   setting, the HTTP cache) reject through frontierFail's DFAIL on the first turn of the event loop. They are
+   not the Level-1 order; each is counted and named, and any other rejection still kills the run. */
 let restoresRefused = 0;
 process.on('unhandledRejection', (e) => {
-  if (e && e.apiclientFatal && /IndexedDB preference read failed \(indexedDB is not defined\)/.test(e.message)) {
+  if (e && e.apiclientFatal && /IndexedDB (preference|http cache) read failed \(indexedDB is not defined\)/.test(e.message)) {
     restoresRefused++;
     return;
   }
