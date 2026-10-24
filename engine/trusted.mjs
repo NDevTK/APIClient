@@ -1629,9 +1629,11 @@ async function main() {
                         'provenance, its drive mark, its witness mark and its issuing document ' +
                         '(core/frame/navigable.c), and the load below is decided from the last four');
       if (holderOf(f[P.document])) return;
+      /* Every refusal below goes through refuseCreate: the navigating instance already holds a remote navigable
+         over this name, so a read of it is declined with the reason rather than held. */
       const navFrom = issuedRecords(e, f[P.issuer], f[P.document]);
       if (navFrom.refusal) {
-        e.ready.push(decline(`navigable.navigate ${f[P.document]} — ${askerRefusal(e, navFrom.refusal)}`));
+        refuseCreate(e, f[P.document], `navigable.navigate ${f[P.document]} — ${askerRefusal(e, navFrom.refusal)}`);
         return;
       }
       /* §7.2.2.4's opener survives the navigation, and the peer gets it only as this zone recorded it at the
@@ -1639,14 +1641,14 @@ async function main() {
       const allowed = ZONE.docRecordOpenerOf(f[P.document], openerLookup(e));
       const navOpenerRefusal = allowed.refusal || ZONE.docRecordOpenerClaim(f[P.opener], allowed.opener);
       if (navOpenerRefusal) {
-        e.ready.push(decline(`navigable.navigate ${f[P.document]} — ${askerRefusal(e, navOpenerRefusal)}`));
+        refuseCreate(e, f[P.document], `navigable.navigate ${f[P.document]} — ${askerRefusal(e, navOpenerRefusal)}`);
         return;
       }
       const navOpener = ZONE.docRecordNavigableIdentity(f[P.opener]) === null ? null : allowed.opener;
       /* The peer holds a WindowProxy for its opener, a document of this instance, as for a create's opener. */
       if (navOpener !== null) e.referenced = 1;
       const loaded = await provisionLoad(e, f, `navigable.navigate ${f[P.document]}`, navFrom.issuerDoc);
-      if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
+      if (loaded.declined) { refuseCreate(e, f[P.document], loaded.declined); return; }
       const doc = childDoc(navFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
       const navOrigin = principalOf(doc, loaded.url);
       const navFacts = withOpener(topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)),
@@ -1656,9 +1658,9 @@ async function main() {
       const navHolder = clusterOf(e.group, navOrigin);
       if (navHolder === e) {
         /* The server chose this origin, so it is refused rather than asserted. */
-        e.ready.push(decline(`navigable.navigate ${f[P.document]} at ${loaded.url} — ` + 'a cross-origin request whose response the server redirected back to this instance\'s own origin — ' +
+        refuseCreate(e, f[P.document], `navigable.navigate ${f[P.document]} at ${loaded.url} — ` + 'a cross-origin request whose response the server redirected back to this instance\'s own origin — ' +
                      'its document belongs to the navigable here, which handed the load to a peer, and that ' +
-                     'return is not built (core/frame/navigable.c names it)'));
+                     'return is not built (core/frame/navigable.c names it)');
         return;
       }
       if (navHolder) {
