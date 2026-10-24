@@ -57699,22 +57699,25 @@ enum { PGM_FRESH = 0, PGM_IN_SRCELEM, PGM_IN_FNCTOR };
    tokenizer and its frame stack, and by-value is the only arrangement with no second allocation to lose. */
 typedef struct {
     int count;
+    int size;                       /* the capacity of `entries` (js_resize_array's) */
     uint32_t hash_size;
     struct JSONParseRecordEntry *entries;
     uint32_t *hash_table;
 } JSONParseRecordObject;
 
 typedef struct JSONParseRecord {
-    /* ROOT ONLY. The tree is built once and never written again, so two flows forked during the reviver walk
-       SHARE it — which is what keeps each frame's borrowed fpr/vpr valid in both arms, where a copy would leave
-       the sibling's naming the original's nodes. Children are inline in their parent's allocation and have no
-       count of their own. */
+    /* ROOT ONLY. Once the parse has built the tree nothing writes it, so two flows forked during the reviver
+       walk SHARE it — which is what keeps each frame's borrowed fpr/vpr valid in both arms, where a copy would
+       leave the sibling's naming the original's nodes. A flow forked while the parse is still appending gets
+       its own copy (json_parse_record_tree_clone). Children are inline in their parent's allocation and have
+       no count of their own. */
     int ref_count;
     JSValue value;
     union {
         JSONParseRecordObject obj;
         struct {
             int count;
+            int size;               /* the capacity of `elements` (js_resize_array's) */
             struct JSONParseRecord *elements;
         } array;
         struct {
@@ -57738,7 +57741,6 @@ typedef struct JSONParseRecordEntry {
 typedef struct JSONFrame {
     JSValue container;      /* the object or array being built (owned) */
     JSONParseRecord *pr;    /* its parse record, or NULL when there is no reviver */
-    int pr_size;            /* json_parse_record_add / js_resize_array's capacity cursor */
     uint32_t idx;           /* ARRAY: the next element index */
     JSAtom prop_name;       /* OBJECT: the key whose value is being parsed (owned), else JS_ATOM_NULL */
     uint8_t is_array;
@@ -92441,9 +92443,7 @@ static const JSTrampStepDef js_array_toSorted_def = { sizeof(JSArraySort), js_ar
                                                     .steps = js_array_toSorted_steps };
 /* Declared where the machine is; the definition names it here. */
 static const char *const js_json_parse_steps[];
-static const char *js_json_parse_unforkable(const void *state);
 static const JSTrampStepDef js_json_parse_def    = { sizeof(JSJsonReviver), js_json_parse_vstep, js_json_parse_vfini, 0, .visit = js_json_reviver_visit,
-                       .unforkable = js_json_parse_unforkable,
                        .algorithm = "25.5.2 JSON.parse ( text [ , reviver ] )",
                        .steps = js_json_parse_steps };
 static const char *const js_for_in_steps[];
@@ -108276,6 +108276,7 @@ static void json_parse_record_init_obj(JSContext *ctx, JSONParseRecord *pr, JSVa
 {
     pr->value = js_dup(val);
     pr->u.obj.count = 0;
+    pr->u.obj.size = 0;
     pr->u.obj.entries = NULL;
     pr->u.obj.hash_table = NULL;
     pr->u.obj.hash_size = 0;
@@ -108285,6 +108286,7 @@ static void json_parse_record_init_array(JSContext *ctx, JSONParseRecord *pr, JS
 {
     pr->value = js_dup(val);
     pr->u.array.count = 0;
+    pr->u.array.size = 0;
     pr->u.array.elements = NULL;
 }
 
@@ -108320,7 +108322,7 @@ static int json_parse_record_resize_hash(JSContext *ctx, JSONParseRecordObject *
     return 0;
 }
 
-static JSONParseRecord *json_parse_record_add(JSContext *ctx, JSONParseRecord *pr, JSAtom key, int *psize)
+static JSONParseRecord *json_parse_record_add(JSContext *ctx, JSONParseRecord *pr, JSAtom key)
 {
     JSONParseRecordObject *po = &pr->u.obj;
     JSONParseRecordEntry *e;
@@ -108328,7 +108330,7 @@ static JSONParseRecord *json_parse_record_add(JSContext *ctx, JSONParseRecord *p
     uint32_t h;
 
     if (js_resize_array(ctx, (void **)&po->entries, sizeof(po->entries[0]),
-                        psize, po->count + 1)) {
+                        &po->size, po->count + 1)) {
         return NULL;
     }
     /* switch to hash table when going over size threshold */
@@ -108493,7 +108495,6 @@ static int json_parse_step(JSParseState *s, JSONParse *p)
         top = &st[sp++];                                                                \
         top->container = (container_);                                                  \
         top->pr = pr_cur;                                                               \
-        top->pr_size = 0;                                                               \
         top->idx = 0;                                                                   \
         top->prop_name = JS_ATOM_NULL;                                                  \
         top->is_array = (is_array_);                                                    \
@@ -108675,7 +108676,7 @@ static int json_parse_step(JSParseState *s, JSONParse *p)
     if (top->pr) {
         if (js_resize_array(ctx, (void **)&top->pr->u.array.elements,
                             sizeof(top->pr->u.array.elements[0]),
-                            &top->pr_size, top->pr->u.array.count + 1))
+                            &top->pr->u.array.size, top->pr->u.array.count + 1))
             goto fail;
         pr1 = &top->pr->u.array.elements[top->pr->u.array.count++];
         pr1->value = JS_UNDEFINED;
@@ -108704,7 +108705,7 @@ static int json_parse_step(JSParseState *s, JSONParse *p)
     if (json_next_token(s))
         goto fail;
     if (top->pr) {
-        pr1 = json_parse_record_add(ctx, top->pr, top->prop_name, &top->pr_size);
+        pr1 = json_parse_record_add(ctx, top->pr, top->prop_name);
         if (!pr1)
             goto fail;
     } else {
@@ -108869,7 +108870,7 @@ static int js_json_parse_begin(JSContext *ctx, JSJsonReviver *s)
 {
     JSValueConst reviver = step_arg(&s->hdr, 1);
     JSONParseRecord *pr1 = NULL;
-    int size = 0, i;
+    int i;
 
     if (JS_IsFunction(ctx, reviver)) {
         s->reviver = reviver;
@@ -108880,7 +108881,7 @@ static int js_json_parse_begin(JSContext *ctx, JSJsonReviver *s)
         s->root = JS_NewObject(ctx);
         if (JS_IsException(s->root)) return -1;
         json_parse_record_init_obj(ctx, s->pr, s->root);
-        pr1 = json_parse_record_add(ctx, s->pr, JS_ATOM_empty_string, &size);
+        pr1 = json_parse_record_add(ctx, s->pr, JS_ATOM_empty_string);
         if (!pr1) return -1;
     } else {
         s->early = 1;   /* no reviver: once the parse is done there is no JS re-entry at all */
@@ -109595,21 +109596,104 @@ static void js_json_token_visit(JSContext *ctx, JSToken *t, JSStepVisit *v)
         break;
     }
 }
-/* WHY A PARSE BUILDING A REVIVER'S RECORD TREE MAY NOT BE FORKED. The tree is declared `shared`, which is right
-   once it is built and nothing writes it, but the parse is still appending to it: two arms would each add their
-   remaining members to one tree, and a resize moves the arrays the other arm's frames point into.
-   Named residual. Not covered: a fork while JSON.parse with a callable reviver is still parsing. Next diff: the
-   tree is declared through `tree` with the frames' records and `pr_cur` as cursors, and each record carries its
-   own capacity (the frames' `pr_size` today). Its absence shows as this reason's abort at a fork that does not
-   wait for the parse to end. */
-static const char *js_json_parse_unforkable(const void *state)
+/* A cursor into the record tree being copied: the original record it names, and the slot to re-aim. */
+typedef struct JSONRecordCursor {
+    const JSONParseRecord *from;
+    void **slot;
+} JSONRecordCursor;
+static int json_record_cursor_cmp(const void *a, const void *b)
 {
-    const JSJsonReviver *s = state;
-    return s->parsing && s->pr != NULL
-        ? "JSON.parse with a reviver is still parsing, and its record tree is being built in place — a fork "
-          "would leave two arms appending to one tree"
-        : NULL;
+    uintptr_t x = (uintptr_t)((const JSONRecordCursor *)a)->from, y = (uintptr_t)((const JSONRecordCursor *)b)->from;
+    return x < y ? -1 : x > y;
 }
+/* JSStepTreeOps.clone for a reviver's record tree the parse is still appending to: a deep copy, each array
+   at its record's own capacity so the parse goes on appending in place, and every cursor re-aimed at the
+   copy of the record it named. The walk is an explicit stack, since the tree is as deep as the JSON. */
+static void *json_parse_record_tree_clone(JSContext *ctx, void *root, void **cursors[], int ncursors)
+{
+    typedef struct { const JSONParseRecord *src; JSONParseRecord *dst; } Pair;
+    JSONRecordCursor *map = NULL;
+    Pair *st = NULL;
+    int sp = 0, st_size = 0, i, named = 0, hit = 0;
+    JSONParseRecord *out = js_malloc(ctx, sizeof(*out));
+
+    CHECK(out != NULL, "JSON.parse: OOM copying a reviver's parse-record tree for a fork");
+    if (ncursors > 0) {
+        map = js_malloc(ctx, sizeof(*map) * (size_t)ncursors);
+        CHECK(map != NULL, "JSON.parse: OOM mapping the cursors into a reviver's parse-record tree");
+        for (i = 0; i < ncursors; i++) {
+            map[i].from = *cursors[i];
+            map[i].slot = cursors[i];
+            named += map[i].from != NULL;
+        }
+        qsort(map, (size_t)ncursors, sizeof(*map), json_record_cursor_cmp);
+    }
+    CHECK(!js_resize_array(ctx, (void **)&st, sizeof(*st), &st_size, 1),
+          "JSON.parse: OOM walking a reviver's parse-record tree for a fork");
+    st[sp].src = root; st[sp].dst = out; sp++;
+    while (sp > 0) {
+        const JSONParseRecord *a = st[--sp].src;
+        JSONParseRecord *b = st[sp].dst;
+        int lo = 0, hi = ncursors, n;
+
+        *b = *a;
+        b->value = js_dup(a->value);
+        /* Every cursor naming `a`: the map is sorted, so they are one run found by a lower bound. */
+        while (lo < hi) {
+            int mid = (lo + hi) / 2;
+            if ((uintptr_t)map[mid].from < (uintptr_t)a) lo = mid + 1; else hi = mid;
+        }
+        for (; lo < ncursors && map[lo].from == a; lo++, hit++)
+            *map[lo].slot = b;
+        if (!JS_IsObject(a->value))
+            continue;
+        if (js_is_array(ctx, a->value)) {
+            n = a->u.array.count;
+            b->u.array.elements = NULL;
+            if (a->u.array.size > 0) {
+                b->u.array.elements = js_malloc(ctx, sizeof(*a->u.array.elements) * (size_t)a->u.array.size);
+                CHECK(b->u.array.elements != NULL, "JSON.parse: OOM copying a parse record's elements");
+            }
+            CHECK(!js_resize_array(ctx, (void **)&st, sizeof(*st), &st_size, sp + n),
+                  "JSON.parse: OOM walking a reviver's parse-record tree for a fork");
+            for (i = 0; i < n; i++) {
+                st[sp].src = &a->u.array.elements[i]; st[sp].dst = &b->u.array.elements[i]; sp++;
+            }
+        } else {
+            const JSONParseRecordObject *po = &a->u.obj;
+            JSONParseRecordObject *qo = &b->u.obj;
+            n = po->count;
+            qo->entries = NULL;
+            qo->hash_table = NULL;
+            if (po->size > 0) {
+                qo->entries = js_malloc(ctx, sizeof(*po->entries) * (size_t)po->size);
+                CHECK(qo->entries != NULL, "JSON.parse: OOM copying a parse record's members");
+            }
+            if (po->hash_size > 0) {
+                qo->hash_table = js_malloc(ctx, sizeof(*po->hash_table) * po->hash_size);
+                CHECK(qo->hash_table != NULL, "JSON.parse: OOM copying a parse record's member hash");
+                memcpy(qo->hash_table, po->hash_table, sizeof(*po->hash_table) * po->hash_size);
+            }
+            CHECK(!js_resize_array(ctx, (void **)&st, sizeof(*st), &st_size, sp + n),
+                  "JSON.parse: OOM walking a reviver's parse-record tree for a fork");
+            for (i = 0; i < n; i++) {
+                qo->entries[i].atom = JS_DupAtom(ctx, po->entries[i].atom);
+                qo->entries[i].hash_next = po->entries[i].hash_next;
+                st[sp].src = &po->entries[i].parse_record; st[sp].dst = &qo->entries[i].parse_record; sp++;
+            }
+        }
+    }
+    js_free(ctx, st);
+    js_free(ctx, map);
+    DCHECKF(hit == named, "a fork copied a reviver's parse-record tree and %d of its %d cursors named no record "
+            "in it — every frame's record, `pr_cur` and `pr_root` stand inside the tree the parse is building",
+            named - hit, named);
+    out->ref_count = 1;
+    return out;
+}
+static const JSStepTreeOps json_parse_record_tree_ops = {
+    json_parse_record_tree_clone, json_destroy_parse_record
+};
 /* WHAT THIS MACHINE OWNS (JSTrampStepDef.visit). The reviver is the page's code called once per node, so a
    concolic branch inside it forks the walk and each arm revives its own subtree from there — its own frame
    stack, its own holders, its own result. The parse record is SHARED by reference for the reason stated at its
@@ -109617,6 +109701,29 @@ static const char *js_json_parse_unforkable(const void *state)
 static void js_json_reviver_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSJsonReviver *s = st;
+    /* A reviver's record tree the parse is still appending to is the machine's own (`tree`), not shared: its
+       cursors are each open frame's record, `pr_cur` and `pr_root`. A frame's record is read into `recs` before
+       the frame stack is visited and written back after, the order in which every consumer finds both the
+       tree and the stack it visits live. */
+    bool building = s->parsing && s->pr != NULL;
+    JSONParseRecord *recs_inline[16], **recs = recs_inline;
+    void **cur_inline[18], ***cur = cur_inline;
+    int i, nf = building ? s->jp.sp : 0;
+
+    DCHECK(!building || (s->pr->ref_count == 1 && s->sp == 0),
+           "a reviver's record tree is shared, or its walk has begun, while the parse is still building it — "
+           "the tree is shared only once the parse is done, and the walk starts there");
+    if (nf > 16) {
+        recs = js_malloc(ctx, sizeof(*recs) * (size_t)nf);
+        cur = js_malloc(ctx, sizeof(*cur) * (size_t)(nf + 2));
+        CHECK(recs != NULL && cur != NULL, "JSON.parse: OOM naming a deep parse's records for its declaration");
+    }
+    if (building) {
+        for (i = 0; i < nf; i++) { recs[i] = s->jp.st[i].pr; cur[i] = (void **)&recs[i]; }
+        cur[nf] = (void **)&s->jp.pr_cur;
+        cur[nf + 1] = (void **)&s->jp.pr_root;
+        v->tree(ctx, (void **)&s->pr, cur, nf + 2, &json_parse_record_tree_ops);
+    }
     /* A parse the flow is parked inside (`parsing`): its frame stack, the value flowing into the frame below,
        and the current token. Every completed value is a rest point, so a fork can land between any two of
        them, and an undeclared frame stack was one allocation two arms freed. */
@@ -109625,9 +109732,13 @@ static void js_json_reviver_visit(JSContext *ctx, void *st, JSStepVisit *v)
         v->val(ctx, &s->jp.val);
         js_json_token_visit(ctx, &s->jps.token, v);
     }
+    if (building && s->jp.st != NULL)
+        for (i = 0; i < nf; i++) s->jp.st[i].pr = recs[i];
+    if (recs != recs_inline) { js_free(ctx, recs); js_free(ctx, cur); }
     v->val(ctx, &s->text_val);
     v->array(ctx, (void **)&s->stack, sizeof(JRFrame), s->sp, s->cap, js_jrframe_visit);
-    v->shared(ctx, (void **)&s->pr, s->pr ? &s->pr->ref_count : NULL, json_destroy_parse_record);
+    if (!building)
+        v->shared(ctx, (void **)&s->pr, s->pr ? &s->pr->ref_count : NULL, json_destroy_parse_record);
     v->val(ctx, &s->root);
     v->val(ctx, &s->result);
     v->val(ctx, &s->text_str);
