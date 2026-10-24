@@ -611,8 +611,8 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
     /* A destroyed navigable is never materialized. §7.5.10 step 7 nulled its active document, so a NULL realm here
        means "there is no document", not "not yet", and only this tells the two apart in one field. Otherwise the
        next read through the proxy would build a fresh Document for a navigable whose browsing context is null.
-       §7.2.1's cross-origin list is what a page may still read on a destroyed navigable, and proxy_forward_window
-       answers all of it from this record without a realm, so a caller that reaches here asked for an active
+       §7.2.1's cross-origin list is what a page may still read on a destroyed navigable, and proxy_target_window
+       sends every read of one to this record's surface without a realm, so a caller that reaches here asked for an active
        document. */
     DCHECK(!p->destroyed,
            "the ACTIVE DOCUMENT of a navigable §7.5.10 destroyed was asked for — that navigable has none "
@@ -2380,14 +2380,10 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
  * `frame.contentWindow.onunload = f` runs the other document's handler setter and stores its handler map on the
  * other document's Window, which is what makes the handler fire, since that Window is what the event path walks.
  * A forward of the value would pass a round-trip test and leave the listener on a stand-in nothing dispatches to.
- *
- * §7.2.3's own surface is not forwarded: `self`, `top`, `parent`, `frames`, `window` and `globalThis` are the
- * navigable's own state (see the member surface below), which this agent holds whether or not it holds the
- * active document, so `otherW.parent` is answered by the reading realm's member. */
-/* The carve-out is asked of the prototype, which is that surface. A list written out here would be a second copy
- * of window_proxy_install_proto's, and a name it fell behind (`postMessage` is window_message.c's; `focus` and
- * `blur` are focus_install_window_members') would be handed to the other document's Window while this object's
- * own member answered nothing. */
+ * §7.2.3's own surface names are no exception: W owns each of them (window_proxy_assert_surface_owned), so
+ * `otherW.self` is W's member and a page's `delete self` or `self = 5` on its own global is what `window.self`
+ * then reads. The surface answers only where no W is held: a cross-origin W (§7.2.3.5 steps 4-6) and a closed
+ * or destroyed navigable (proxy_target_window). */
 /* §7.2.3.1's [[GetPrototypeOf]] (proxy_get_prototype) is the whole of the chain. Reflection asks it
  * (`Object.getPrototypeOf(otherW)`, `otherW.__proto__`, 7.3.21 OrdinaryHasInstance's walk behind `instanceof`,
  * 20.1.3.3's `isPrototypeOf`), and so do quickjs's ordinary lookup walks (js_walk_proto), so a same-origin read of
@@ -2454,15 +2450,6 @@ static JSValueConst proxy_target_window(JSContext *ctx, JSValueConst obj, ProxyD
     return p->window;
 }
 
-/* The same W for a keyed operation, and JS_UNINITIALIZED also for a name §7.2.3's own surface answers, which is
-   this object's own and not performed on W. */
-static JSValueConst proxy_forward_window(JSContext *ctx, JSValueConst obj, ProxyData *p, JSAtom prop)
-{
-    if (!proxy_same_origin(p)) return JS_UNINITIALIZED;
-    if (proxy_surface_desc(ctx, NULL, prop)) return JS_UNINITIALIZED;
-    return proxy_target_window(ctx, obj, p);
-}
-
 /* Where a forwarded write lands, for the COW delta (see JSClassExoticMethods.forwarded_object). The delta must
    name the Window the define below writes, never this stand-in: an entry naming the proxy restores its baseline
    onto the proxy as a real own property, which then shadows the Window for every flow. */
@@ -2478,7 +2465,8 @@ static JSValueConst proxy_forwarded_object(JSContext *ctx, JSValueConst obj, JSA
     ProxyData *p = proxy_of(obj);
 
     DCHECK(p != NULL, "a WindowProxy class hook ran on an object carrying no navigable record");
-    return proxy_forward_window(ctx, obj, p, prop);
+    (void)prop;
+    return proxy_target_window(ctx, obj, p);
 }
 
 /* HTML §7.2.3.1 [[GetPrototypeOf]] ( ): "Let W be the value of the [[Window]] internal slot of this. If
@@ -2548,18 +2536,17 @@ static int proxy_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSVal
         return JS_RefuseOrThrowTypeError(ctx, flags,
                                          "cannot define an indexed property on a WindowProxy");
     }
-    w = proxy_forward_window(ctx, obj, p, prop);
-    /* §7.2.3's own surface is this object's, so a define of one of those names is the ordinary define on this
-       object with the exotic step suppressed, the re-entry win_define_own makes, since an exotic hook replaces
-       the ordinary path rather than preceding it. */
+    w = proxy_target_window(ctx, obj, p);
+    /* A closed or destroyed navigable holds no W here, so the define is the ordinary define on this object with
+       the exotic step suppressed, the re-entry win_define_own makes, since an exotic hook replaces the ordinary
+       path rather than preceding it. */
     if (JS_IsUninitialized(w))
         return JS_DefineProperty(ctx, obj, prop, val, getter, setter, flags | JS_PROP_NO_EXOTIC);
     return JS_DefineProperty(ctx, w, prop, val, getter, setter, flags);   /* step 2.2 */
 }
 
 /* HTML §7.2.3.9 [[Delete]], the same three arms. Reached only after the ordinary own-property scan found nothing,
-   which on this object is always, unless a page has replaced one of §7.2.3's own surface names through the define
-   above. */
+   which on this object is always, unless a page defined a property on a closed navigable's proxy (above). */
 static int proxy_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
     ProxyData *p = proxy_of(obj);
@@ -2573,22 +2560,17 @@ static int proxy_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
         return -1;
     }
     if (proxy_atom_index(ctx, prop, &idx)) return 0;                    /* step 2.1 */
-    w = proxy_forward_window(ctx, obj, p, prop);
+    w = proxy_target_window(ctx, obj, p);
     if (JS_IsUninitialized(w)) {
-        /* A destroyed navigable and a name HTML §7.2.3's own surface does not answer: there is no active document to
-           perform §7.2.3.9 step 2.2 on and nothing here to remove, so `true` is truthful. */
+        /* A closed or destroyed navigable, for which this engine holds no W: a name the surface does not answer has
+           nothing here to remove, so `true` is truthful. */
         if (!proxy_surface_desc(ctx, NULL, prop)) return 1;
-        /* §7.2.3's own surface is an own property (see proxy_surface_desc), so `true` here would leave
-           [[GetOwnProperty]] reporting a configurable own property [[Delete]] claimed to remove, and the surface
-           object is shared by every proxy in the realm, so no per-proxy entry can be taken out. What closes it is
-           what closes §7.2.3.6's local define: route the operation to W (which owns each of these names;
-           window_proxy_assert_surface_owned asserts it) and let W's descriptor be what §7.2.3.5 step 3 answers,
-           which needs the reading realm's Window/WindowProxy identity mapping applied to the forwarded value. */
-        DFAIL("`delete` of one of §7.2.3's own surface names on a WindowProxy. The surface answers the name as "
-              "an OWN, configurable property and is shared by every proxy in the realm, so nothing here can "
-              "remove it and reporting success would leave [[Delete]] and [[GetOwnProperty]] disagreeing. "
-              "Build §7.2.3.9 step 2.2's forward: perform the delete on W, and give §7.2.3.5 step 3 the "
-              "identity mapping that lets W's own descriptor answer these names in the READING realm");
+        /* Named residual: §7.2.3.9 step 2.2 deletes from W, which §7.2.3 keeps after the navigable closes. Not
+           covered: a surface name on a closed navigable, whose shared surface cannot drop it for one proxy. The
+           next diff keeps W on a closed navigable's record (proxy_target_window). Its absence shows as this DFAIL. */
+        DFAIL("`delete` of one of §7.2.3's own surface names on a CLOSED WindowProxy — the surface is shared by "
+              "every proxy in the realm, so nothing here can remove it for this one; keep W for a closed "
+              "navigable so §7.2.3.9 step 2.2 deletes from it");
         return 1;
     }
     return JS_DeleteProperty(ctx, w, prop, 0);                          /* step 2.2 */
@@ -2619,20 +2601,13 @@ static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCons
     if (proxy_atom_index(ctx, prop, &idx))
         return proxy_indexed_get_own(ctx, desc, p, idx);
 
-    /* Step 3: `OrdinaryGetOwnProperty(W, P)`, performed on the other document's Window. */
-    w = proxy_forward_window(ctx, obj, p, prop);
+    /* Step 3: `OrdinaryGetOwnProperty(W, P)`, performed on the other document's Window, every name included. */
+    w = proxy_target_window(ctx, obj, p);
     if (!JS_IsUninitialized(w))
         return JS_GetOwnPropertyNoUserCode(ctx, desc, w, prop);
-    /* Same origin and not forwarded means §7.2.3's own surface answers the name (or the navigable is destroyed,
-       whose readable members are answered out of this record). It is this object's own property: §7.2.3 has no
-       interface object, so §7.2.3.5 answers each of these names and §7.2.3.10 lists each, and a prototype-walk
-       answer would make `Object.getOwnPropertyDescriptor(popup, "opener")` undefined while `popup.opener` is the
-       opener.
-       Named residual: §7.2.3.5 step 3 answers these names from W, and W's own properties are page state (`delete
-       self` in the page's global code reaches W, not this object). Not covered: such a change, after which this
-       answer and §7.2.3.10's list, which is W's, disagree. The next diff is proxy_delete's: forward these names
-       to W with the reading realm's identity mapping. Its absence shows as a page that deleted a member of its
-       own global still reading it through `window`. */
+    /* Same origin and no W: a closed or destroyed navigable, whose readable members are answered out of this
+       record's surface as own properties (a prototype-walk answer would make `getOwnPropertyDescriptor(popup,
+       "opener")` undefined while `popup.opener` is the opener). */
     if (proxy_same_origin(p)) return proxy_surface_desc(ctx, desc, prop);
 
     /* Steps 4-6, which only a cross-origin W reaches, with the permit side of the filter checked in the same pass
