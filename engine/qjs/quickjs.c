@@ -31936,7 +31936,7 @@ typedef struct JSPromiseAll {
 enum { KEY_PH_START = 0, KEY_PH_OWNKEYS_SENT, KEY_PH_WALK, KEY_PH_DESC_SENT, KEY_PH_GET_SENT };
 static int js_promise_all_step(JSContext *ctx, struct JSPromiseAll *s, JSValue res);
 #if APICLIENT_DEV
-static int64_t js_promise_all_values_hole(JSContext *ctx, const struct JSPromiseAll *s);
+static int64_t js_promise_all_values_hole(JSContext *ctx, JSValueConst values, uint32_t n);
 #endif
 static int js_promise_all_attach_args(JSContext *ctx, struct JSPromiseAll *s, int index,
                                       JSValue *out_re, JSValue *out_rj);
@@ -43717,7 +43717,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         s->att_index = s->reattach_i;
                         s->attaching = 1;
                         s->reattach_i++;
-                        if (s->reattach_i >= s->reattach_pending) { s->reattach_pending = 0; s->reattach_i = 0; }
                         st = 5;
                         goto promise_all_dispatch;
                     }
@@ -53726,7 +53725,9 @@ static JSPromiseAll *js_promise_all_clone(JSContext *ctx, const JSPromiseAll *os
         js_free(ctx, ns);
         return NULL;
     }
+    /* the sibling re-attaches every counted element from the first, whatever the source's own cursor had reached */
     ns->reattach_pending = os->index;
+    ns->reattach_i = 0;
     return ns;
 }
 
@@ -118127,6 +118128,20 @@ static int promise_resolve_elem_prep(JSContext *ctx, int magic, JSValueConst *fu
     is_zero = remainingElementsCount_add(ctx, resolve_element_env, -1);
     if (is_zero < 0) return -1;
     if (is_zero) {
+#if APICLIENT_DEV
+        /* Every counted element has settled, and each wrote its own slot, so the list has no hole below its
+           length. A hole is an index the walk skipped. */
+        {
+            uint32_t vn = 0;
+            int lr = js_get_length32(ctx, &vn, values);
+            int64_t hole;
+            DCHECK(lr == 0, "a Promise combinator's own values list has no readable length");
+            hole = js_promise_all_values_hole(ctx, values, vn);
+            DCHECKF(hole < 0,
+                    "a Promise combinator settles from its last element with slot %lld of [0, %u) never written — "
+                    "the walk counted an index no element was attached at", (long long)hole, vn);
+        }
+#endif
         if (resolve_type == PROMISE_MAGIC_any) {
             JSValue error = js_aggregate_error_constructor(ctx, values);
             if (JS_IsException(error)) return -1;
@@ -118393,10 +118408,16 @@ static int js_promise_all_step(JSContext *ctx, JSPromiseAll *s, JSValue res)
         return 5;   /* ATTACH: read `then`, then invoke it */
     }
     if (s->attaching) {
-        /* the attach's `then` returned (its result is discarded): that element is done. */
+        /* the attach's `then` returned (its result is discarded): that element is done. A re-attach is of an
+           element the walk already counted, below `index`, so only the attach at `index` advances the walk; the
+           cursor decides on re-entry whether another re-attach follows. */
         JS_FreeValue(ctx, res);
         s->attaching = 0;
-        if (s->reattach_i > 0) return 6;   /* the fork re-attach cursor has more elements */
+        if (s->att_index < s->index) return 6;
+        DCHECKF(s->att_index == s->index,
+                "Promise combinator %p completed an attach for element %d past its walk position %d — the walk "
+                "attaches the element it just resolved, so a later index is an element no step produced",
+                (void *)s, s->att_index, s->index);
         s->index++;
         return 1;   /* drive the next .next() */
     }
@@ -118531,9 +118552,10 @@ source_done:
             }
 #if APICLIENT_DEV
             /* Step 8's values list holds one element per element the walk counted: each of [0, index) was settled
-               into this aggregate. A hole is an element lost to another aggregate. */
+               into this aggregate. A hole is a skipped index or an element lost to another aggregate. */
             {
-                int64_t hole = s->magic == PROMISE_MAGIC_any ? -1 : js_promise_all_values_hole(ctx, s);
+                int64_t hole = s->magic == PROMISE_MAGIC_any ? -1
+                             : js_promise_all_values_hole(ctx, s->values, (uint32_t)s->index);
                 DCHECKF(hole < 0,
                         "Promise combinator %p settles with slot %lld of [0, %d) never written by its own resolve "
                         "element (re-attach pending %d, cursor %d, attaching %d at %d) — the element was attached "
@@ -118550,18 +118572,18 @@ source_done:
 }
 
 #if APICLIENT_DEV
-/* The first slot of [0, index) that an `all`/`allSettled` aggregate's `values` does not hold, or -1. The array is
-   built empty and a slot is defined only by this aggregate's own resolve element, so a missing one is an element
-   this walk counted and never attached here (a forked sibling's element left on its parent's aggregate). Reads
-   the aggregate's own array, which no page code can reach before the finalize. */
-static int64_t js_promise_all_values_hole(JSContext *ctx, const JSPromiseAll *s)
+/* The first slot of [0, n) that a combinator's `values` list does not hold, or -1. The list is built empty and a
+   slot is defined only by this aggregate's own element closures, so a missing one is an index the walk counted
+   and attached nothing at, or an element attached to another aggregate. Reads the aggregate's own array, which
+   no page code can reach before the settle. */
+static int64_t js_promise_all_values_hole(JSContext *ctx, JSValueConst values, uint32_t n)
 {
     JSObject *p;
     int64_t i;
 
-    if (!JS_IsObject(s->values)) return 0;
-    p = JS_VALUE_GET_OBJ(s->values);
-    for (i = 0; i < s->index; i++)
+    if (!JS_IsObject(values)) return 0;
+    p = JS_VALUE_GET_OBJ(values);
+    for (i = 0; i < n; i++)
         if (JS_GetOwnPropertyInternal(ctx, NULL, p, __JS_AtomFromUInt32((uint32_t)i)) <= 0)
             return i;
     return -1;
