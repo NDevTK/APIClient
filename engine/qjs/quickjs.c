@@ -28699,16 +28699,22 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_OUTER_GET(role, t, n)  CONT_REC_OUTER_GET_##role(t, n)
 #define CONT_REC_OUTER_SET(role, t, n)  CONT_REC_OUTER_SET_##role(t, n)
 #define CONT_REC_DESC_OUT(role, t, n)   CONT_REC_DESC_OUT_##role(t, n)
-/* The struct `T` and its walks, prefixed `p`: p_free releases the record and what it owns (not its requester);
+/* The struct `T` and its walks, prefixed `p`: p_release drops what the record owns (never its requester, whose
+   disposal is each caller's: an unwind abandons it, a destroyed flow releases it) and p_free that plus the
+   record;
    p_clone copies it, taking a reference to everything it owns, with its links still naming the original's
    (tramp_cont_relink_outer re-binds them); p_outer_get/p_outer_set read and write the requester link (NULL and
    nothing for a record with none); p_desc_out answers its descriptor-answer slot, or NULL. */
 #define CONT_RECORD_DEFINE(T, p, FIELDS)                                                                       \
     typedef struct T { FIELDS(CONT_REC_MEMBER) } T;                                                           \
     _Static_assert(0 FIELDS(CONT_REC_NOUTER) <= 1, #T " declares more than one requester link");             \
-    static void p##_free(JSContext *ctx, T *r)                                                                \
+    static inline void p##_release(JSContext *ctx, T *r)                                                      \
     {                                                                                                          \
         FIELDS(CONT_REC_FREE)                                                                                  \
+    }                                                                                                          \
+    static void p##_free(JSContext *ctx, T *r)                                                                \
+    {                                                                                                          \
+        p##_release(ctx, r);                                                                                   \
         js_free_rt(ctx->rt, r);                                                                                \
     }                                                                                                          \
     static T *p##_clone(JSContext *ctx, const T *r)                                                           \
@@ -29315,46 +29321,18 @@ typedef struct JSAgenSettle {
     uint8_t after_drive;            /* 0 = finish the drive, 1 = ask the pump again */
     struct JSAsyncGeneratorData *agen;   /* the machine the pump is driving; BORROWED, kept alive by `hold` */
 } JSAgenSettle;
-/* The async call's own outcome, deferred across whatever its completion still owes — the settle CALL, or Await's
-   machine. `post` went with the split it belonged to: the machine performs its own attach, so the settled label
-   has nothing left to finish. */
-typedef struct JSAsyncSettle {
-    JSValue promise;      /* the async function's own promise (owned): the CALL's result is discarded, this is not */
-    void *cont; uint8_t cont_kind;   /* the machine that asked for the async call, if one did */
-    int cfirst, cargc, forof;        /* its operand shape and for-of offset */
-    uint8_t is_tail;
-} JSAsyncSettle;
-/* EVERYTHING THIS RECORD OWNS, IN ONE PLACE — the list js_async_settle_clone mirrors. A function rather than
-   two lines at each exit because there are three that RELEASE it (a callback frame that threw, Await's
-   plumbing failing, and a flow destroyed under it) and a field added to the struct would otherwise have to be
-   remembered at every one. The settled label is NOT a caller and must not become one: it hands the promise ON,
-   so the reference leaves the record rather than being freed.
-   THE REQUESTER IS DELIBERATELY NOT HERE, and that is the one thing to read before adding it: its disposal
-   differs by caller — the interpreter's unwind ABANDONS it, because there is still a program to finish, and a
-   destroyed flow RELEASES it, because there is not — so a helper that chose either would make the other
-   unspellable. */
-static void js_async_settle_end(JSContext *ctx, JSAsyncSettle *ass)
-{
-    JS_FreeValue(ctx, ass->promise);
-}
-/* THE SAME LIST IN THE OTHER DIRECTION. Field-by-field rather than a struct copy, for js_array_len_clone's
-   reason: a field added to the struct and not to this list reads back as what js_mallocz wrote, instead of
-   silently handing the sibling a second name for the original's reference.
-   `cont`/`cont_kind` are left naming the ORIGINAL's requester and are overwritten with the sibling's own by
-   tramp_cont_relink_outer a moment later — the discipline every link-bearing clone in this file follows with
-   its `outer`. */
-static JSAsyncSettle *js_async_settle_clone(JSContext *ctx, const JSAsyncSettle *s)
-{
-    JSAsyncSettle *n = js_mallocz(ctx, sizeof(*n));
-
-    if (unlikely(!n))
-        return NULL;
-    n->promise = js_dup(s->promise);
-    n->cont = s->cont; n->cont_kind = s->cont_kind;
-    n->cfirst = s->cfirst; n->cargc = s->cargc; n->forof = s->forof;
-    n->is_tail = s->is_tail;
-    return n;
-}
+/* The async call's own outcome, deferred across whatever its completion still owes: the settle CALL, or Await's
+   machine. `promise` is the async function's own promise (the call's result is discarded, this is not), and
+   the settled label hands it on rather than releasing it. `cont` is the machine that asked for the async call,
+   if one did; `cfirst`, `cargc`, `forof` and `is_tail` are its operand shape. */
+#define JS_ASYNC_SETTLE_FIELDS(F)                                                                              \
+    F(OWN_VAL, JSValue, promise)                                                                               \
+    F(OUTER, void *, cont)                                                                                     \
+    F(POD, int, cfirst)                                                                                        \
+    F(POD, int, cargc)                                                                                         \
+    F(POD, int, forof)                                                                                         \
+    F(POD, uint8_t, is_tail)
+CONT_RECORD_DEFINE(JSAsyncSettle, js_async_settle, JS_ASYNC_SETTLE_FIELDS)
 #define CONT_PROMISE_CAP   38  /* cont_state = JSPromiseCap: NewPromiseCapability's Construct(C, «executor»). The
                                   SUBCLASS CONSTRUCTOR is user code and js_new_promise_capability ran it with
                                   JS_CallConstructor from C, so `Promise.try.call(Sub, fn)` had that constructor's
@@ -38697,7 +38675,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JSAsyncSettle *ass0 = souter0;
                         h->outer = NULL; h->outer_kind = CONT_NONE;
                         tramp_step_abrupt_free(ctx, stt);
-                        js_async_settle_end(ctx, ass0);
+                        js_async_settle_release(ctx, ass0);
                         if (ass0->cont_kind != CONT_NONE)
                             js_create_requester_abandon(ctx, ass0->cont, ass0->cont_kind);
                         js_free_rt(rt, ass0);
@@ -51687,7 +51665,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                can still be reached, so the requester is abandoned and the throw propagates — the same shape the
                Promise.try settle's throw has. */
             JSAsyncSettle *ass = xcs;
-            js_async_settle_end(ctx, ass);
+            js_async_settle_release(ctx, ass);
             if (ass->cont_kind != CONT_NONE) js_create_requester_abandon(ctx, ass->cont, ass->cont_kind);
             js_free_rt(rt, ass);
             xcs = NULL;
@@ -53693,7 +53671,9 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_ACQUIRE_GET, JSAcquireGet, js_acquire_get, LINK)                                                    \
     X(CONT_WITH_HAS, JSWithHas, js_with_has, LINK)                                                             \
     X(CONT_OWNKEYS_CHK, JSOwnKeysChk, js_ownkeys_chk, LINK)                                                    \
-    X(CONT_GETPROP, JSGetProp, js_getprop, LINK)
+    X(CONT_GETPROP, JSGetProp, js_getprop, LINK)                                                               \
+    X(CONT_ASYNC_SETTLE, JSAsyncSettle, js_async_settle, LINK)                                                 \
+    X(CONT_ASYNC_AWAIT, JSAsyncSettle, js_async_settle, LINK)
 #define CONT_REC_CASE_OUTER_GET(k, T, p, role)  case k: return p##_outer_get((T *)st, out_kind);
 #define CONT_REC_CASE_OUTER_SET(k, T, p, role)  case k: p##_outer_set((T *)st, outer, outer_kind); return;
 #define CONT_REC_IF_DESC_OUT(k, T, p, role)     if (kind == k) return p##_desc_out((T *)st);
@@ -53759,27 +53739,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
         ITERCONS_ROLE_AGREES(st, kind);
         *out_kind = ((struct JSIterConsume *)st)->outer_kind;
         return ((struct JSIterConsume *)st)->outer;
-    case CONT_ASYNC_SETTLE: case CONT_ASYNC_AWAIT:
-        /* BOTH ROLES OF ONE RECORD, for CONT_TOPRIM/CONT_TOPRIM_GET's reason and with one difference that has
-           to be stated rather than asserted: 40 is the async call's own outcome waiting under the capability's
-           RESOLVING FUNCTION, 74 is the same outcome waiting under §27.10.5.3 Await ( arg )'s machine, and
-           NOTHING IN THIS RECORD TELLS THEM APART — both preparations write an identical field set. What
-           differs is which MACHINE holds the link, which is a fact about that JSStepHdr and not about this
-           record, so there is no TOPRIM_ROLE_AGREES to write here: an assert whose two sides cannot disagree
-           is not a check.
-           THE LINK IS SPELLED `cont`, NOT `outer`, and what waits on it is exactly who the settled label
-           delivers the promise to. The spelling is why an `outer`-shaped reading of this record finds no
-           requester, and it is NOT why the kind was invisible: the free walk's published derivation looks for
-           `cont_kind|outer_kind = CONT_…` and finds BOTH of these, so its vocabulary was right all along.
-           WHAT NO TEXT SEARCH CAN ANSWER IS THE ROLE, which is the fact worth carrying. 40's only literal
-           assignment is to `tramp_cont_kind` at a call site, which reads as a FRAME role and nothing else —
-           and the step-machine request path writes the new machine's `outer_kind` from that same AMBIENT
-           variable, so the moment the callee turns out to be a step machine (a native resolving function is
-           one, and so is Await's) the identical kind is standing as a LINK with no assignment anywhere
-           saying so. Every kind a call site puts in `tramp_cont_kind` is therefore a candidate for this walk,
-           whatever its declaration says it is. */
-        *out_kind = ((JSAsyncSettle *)st)->cont_kind;
-        return ((JSAsyncSettle *)st)->cont;
     case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
     case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP:
         /* JSPromiseAll HAS no requester field: a combinator is reached from an opcode and settles a capability,
@@ -53854,8 +53813,6 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET:
         ITERCONS_ROLE_AGREES(st, kind);
         ((struct JSIterConsume *)st)->outer = outer; ((struct JSIterConsume *)st)->outer_kind = outer_kind; return;
-    case CONT_ASYNC_SETTLE: case CONT_ASYNC_AWAIT:
-        ((JSAsyncSettle *)st)->cont = outer; ((JSAsyncSettle *)st)->cont_kind = outer_kind; return;
     case CONT_SETMAP_CTOR: case CONT_TA_TARGET: {
         JSIterConsume *cs = ctor_seq_consume(st, kind);
         cs->outer = outer; cs->outer_kind = outer_kind; return;
@@ -53909,15 +53866,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         TOPRIM_ROLE_AGREES(st, kind);
         return js_toprim_clone(ctx, (const struct JSToPrim *)st);
     }
-    case CONT_ASYNC_SETTLE: case CONT_ASYNC_AWAIT:
-        /* AN ASYNC CALL'S OWN OUTCOME, waiting under whichever machine its completion still owes — the
-           capability's resolving function (40) or Await's (74). A NATIVE promise's resolving function IS a
-           step machine the moment its `Get(resolution,"then")` has to be a request, and Await is one always,
-           so this is what a fork inside `async function f(){ … await g() … }` lands on: it is the ordinary
-           shape of every bundle that awaits, not a subclass-only path.
-           BOTH KINDS, ONE CLONE, for the reason the arm above gives for 21/62: the record and its release are
-           identical and only the machine above it differs. */
-        return js_async_settle_clone(ctx, (const JSAsyncSettle *)st);
     case CONT_ARG_LIST:
         /* 7.3.19's sequence IN ITS LINK ROLE — under whichever read it is waiting on: its `length` Get, its
            ToPrimitive, or an element Get. Both of the page's operations it performs can fork, so this is
@@ -55136,21 +55084,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
         JS_FreeValue(ctx, cs->super_ref);
         js_free_rt(rt, cs);
         next->st = co; next->kind = ck;
-        return;
-    }
-    case CONT_ASYNC_SETTLE: case CONT_ASYNC_AWAIT: {
-        /* AN ASYNC CALL'S OUTCOME RELEASED WITH NOBODY TO ANSWER TO — a cold-tier tail dropped, a flow
-           destroyed under a throw. The promise can never be settled, so whoever asked for it can never be
-           answered either and goes with it, which is what every other arm here does with its requester. This
-           is the one place the requester is RELEASED rather than abandoned, and js_async_settle_end says why
-           the choice is the caller's. Both links read BEFORE the free, because the free is what makes the
-           record unreadable. */
-        JSAsyncSettle *ass = (JSAsyncSettle *)st;
-        void *ao = ass->cont;
-        uint8_t ak = ass->cont_kind;
-        js_async_settle_end(ctx, ass);
-        js_free_rt(rt, ass);
-        next->st = ao; next->kind = ak;
         return;
     }
     case CONT_CTOR_PROTO: {
