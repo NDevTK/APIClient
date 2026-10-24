@@ -481,6 +481,8 @@ void event_target_remove_listener(JSContext *ctx, JSValueConst target, const cha
    an event handler attribute (`upload.onprogress = f`) registers a listener too, and a component keeping its
    own count would answer no for exactly the way most pages write it. */
 bool event_target_has_any_listener(JSContext *ctx, JSValueConst target);
+/* The type under which `fn` is a live listener on `target`, or NULL; the first match in list order. malloc'd. */
+char *event_target_listener_type_of(JSContext *ctx, JSValueConst target, JSValueConst fn);
 
 /* DOM §2.7 Interface EventTarget's "ERASE ALL EVENT LISTENERS AND HANDLERS, given an EventTarget eventTarget" —
    both maps, in one call, because §8.1.8.1's handler lives in both of them. HTML §8.4.1 "Opening the input

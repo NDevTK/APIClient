@@ -1031,9 +1031,10 @@ int flow_credit_emit(double v) {
    executed prefix, so nothing on either drive's path could make them agree. */
 /* Append `hash` to `f`'s chain of drives (flow.h's `orphan_chain`). A member names a body, and one body is not
    driven twice in one chain: a take hands a body over once per timeline. */
-void flow_orphan_chain_push(Flow *f, uint64_t hash)
+void flow_orphan_chain_push(Flow *f, uint64_t hash, char *act)
 {
     uint64_t *grown;
+    char **acts;
     int i;
 
     DCHECK(hash != 0, "a drive was added to a chain with the locator that means 'not a drive'");
@@ -1044,6 +1045,10 @@ void flow_orphan_chain_push(Flow *f, uint64_t hash)
     grown = realloc(f->orphan_chain, (size_t)(f->orphan_chain_n + 1) * sizeof *grown);
     CHECK(grown, "engine: OOM extending a flow's chain of drives");
     f->orphan_chain = grown;
+    acts = realloc(f->orphan_acts, (size_t)(f->orphan_chain_n + 1) * sizeof *acts);
+    CHECK(acts, "engine: OOM extending a flow's chain of drives");
+    f->orphan_acts = acts;
+    f->orphan_acts[f->orphan_chain_n] = act;
     f->orphan_chain[f->orphan_chain_n++] = hash;
 }
 
@@ -1052,7 +1057,12 @@ void flow_orphan_chain_copy(Flow *dst, const Flow *src, int n)
 {
     DCHECK(dst->orphan_chain_n == 0 && n >= 0 && n <= src->orphan_chain_n,
            "an arm's chain of drives was copied over one it already had, or from past its parent's");
-    for (int i = 0; i < n; i++) flow_orphan_chain_push(dst, src->orphan_chain[i]);
+    for (int i = 0; i < n; i++) {
+        char *act = src->orphan_acts[i] ? strdup(src->orphan_acts[i]) : NULL;
+
+        CHECK(act || !src->orphan_acts[i], "engine: OOM copying a drive's act");
+        flow_orphan_chain_push(dst, src->orphan_chain[i], act);
+    }
 }
 
 void flow_set_orphan_seen(Flow *f, int64_t seen) {
@@ -5591,6 +5601,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
         /* The candidate it was verifying: both strings are this flow's copies, freed nowhere else for a removed flow
            (the teardown walks the flows still there). `cand_sink` is static text. */
         free(f->cand_src); free(f->cand_payload); free(f->cand_vfy);
+        for (int k = 0; k < f->orphan_chain_n; k++) free(f->orphan_acts[k]);
+        free(f->orphan_acts);
         free(f->orphan_chain);
         free(f->agents);
         JS_FreeValue(ctx, f->orphan_claim_fn);

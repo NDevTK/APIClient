@@ -209,6 +209,24 @@ const _PROBE_INJECTORS = {
     });
     return { armed: true, attackerOrigin: String(self.origin) };
   },
+  /* THE PoC's ACTS IN THE DELIVERED DOCUMENT, after the page's own load, in order: a click through HTMLElement's
+     click() (the activation a person's click runs) and any other user-interface event dispatched bubbling. The
+     acts are the engine's statement of what its fire was verified under; nothing here composes one. Each step
+     reports whether its locator resolved, because a target the page did not build is a divergence to read. */
+  pocPerformActs: async (acts) => {
+    if (document.readyState !== "complete")
+      await new Promise((r) => window.addEventListener("load", r, { once: true }));
+    const steps = [];
+    for (const a of acts) {
+      const t = a.target === "window" ? window : a.target === "document" ? document
+              : document.querySelector(a.target);
+      if (!t) { steps.push({ target: a.target, type: a.type, found: false }); continue; }
+      if (a.kind === "click" && typeof t.click === "function") t.click();
+      else t.dispatchEvent(new Event(a.type, { bubbles: true, cancelable: true }));
+      steps.push({ target: a.target, type: a.type, found: true });
+    }
+    return { steps: steps };
+  },
 };
 
 /* One cookie RFC 6265bis §5.7 kept, written to the person's default jar: {refused: null} once written (or, for
@@ -301,10 +319,19 @@ async function _swRpc(msg) {
       if (!fn) throw new Error("unknown scripting op: " + o.op);
       CHECK(o.allFrames === undefined, "scripting.exec was asked for allFrames — it injects the top frame only, "
                                        + "and the one caller arms the attacker document, which is that frame");
-      CHECK(_attackerTabs.has(o.tabId), "scripting.exec was asked to arm tab " + o.tabId + ", which is not a tab "
-                                        + "attackerPage.open opened and that is still open — the injector runs "
-                                        + "only in the attacker page this worker created");
-      const target = { tabId: o.tabId };
+      /* The acts run in the victim's DELIVERED document, which no attacker tab is: that one op runs only in a
+         tab an attacker tab opened (the browser's `openerTabId`, read here), pinned to the document id the
+         offscreen's delivery latch read from the browser, so it reaches that one document and no later
+         navigation of its tab. */
+      const acts = o.op === "pocPerformActs";
+      const opener = acts ? (await chrome.tabs.get(o.tabId)).openerTabId : null;
+      CHECK(acts ? typeof o.documentId === "string" && o.documentId.length > 0 && _attackerTabs.has(opener)
+                 : _attackerTabs.has(o.tabId),
+            acts ? "scripting.exec was asked to perform a PoC's acts in tab " + o.tabId + ", which no attacker tab "
+                   + "opened, or with no delivered document id to pin them to"
+                 : "scripting.exec was asked to arm tab " + o.tabId + ", which is not a tab attackerPage.open "
+                   + "opened and that is still open — the injector runs only in the attacker page this worker created");
+      const target = acts ? { tabId: o.tabId, documentIds: [o.documentId] } : { tabId: o.tabId };
       const results = await chrome.scripting.executeScript({ target, world: "MAIN", func: fn, args: o.args || [] });
       return (results || []).map((r) => ({ frameId: r && r.frameId, result: r ? r.result : undefined }));
     }

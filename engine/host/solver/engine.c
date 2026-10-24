@@ -1,5 +1,6 @@
 /* The dispatch loop — see engine.h. */
 #include "core/fetch/fetch.h"
+#include "core/events/listener_act.h"   /* the user act a driven listener is reached by, stated by a PoC */
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/heap.h>   /* emscripten_get_heap_max: the linear memory's ceiling, RAM pressure's limit */
 #else
@@ -6336,6 +6337,10 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
                "a resumed orphan drive built its call frame while another flow was switched in — the receiver and "
                "arguments would carry that flow's generation");
         hash = f->orphan_chain[f->orphan_claim_at];
+        DCHECK(f->orphan_acts[f->orphan_claim_at] == NULL,
+               "a resumed drive's member already states an act before its call was built — the rebuild records "
+               "none, and the act is read from the body handed over");
+        f->orphan_acts[f->orphan_claim_at] = listener_act_of(ctx, f->orphan_claim_fn);
         g_orphans_driven++;
         base = engine_orphan_call(ctx, f->orphan_claim_fn, f->orphan_argc, hash);
         flow_install_base(f, ctx, base);
@@ -6476,7 +6481,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     DCHECK(sib->orphan_chain_n == (f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0),
            "a seeded drive's chain does not begin with the drives its seeding flow has called — the assembly copies "
            "exactly those");
-    flow_orphan_chain_push(sib, hash);
+    flow_orphan_chain_push(sib, hash, listener_act_of(ctx, t.fn));
     sib->orphan_claim_at = sib->orphan_chain_n;
     /* And how much of this body the product had already explored, read at the seed: the drive's key is the
        body's locator (solver/novelty.h's NOVELTY_DRIVE), which is its script's content and its position there,

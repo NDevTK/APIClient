@@ -248,6 +248,11 @@ typedef struct Flow {
        the rebuild reads them back into it. 0 and NULL for a flow that is not a drive. */
     uint64_t *orphan_chain;
     int orphan_chain_n;
+    /* Beside each chain member, the user act that runs its body as a listener (core/events/listener_act.h's
+       envelope step, malloc'd), or NULL where no act a page user can perform calls it, or where a resumed drive
+       has not yet built that member's call. A fire verified under the chain states these acts; one verified
+       under a member with none is not a PoC. Parallel to `orphan_chain` and owned with it. */
+    char **orphan_acts;
     /* How many members of the chain have had their call built in this session: all of them for a seeded drive,
        none yet for a resumed one, whose claim waits for member `orphan_claim_at` and advances as each call is
        built. */
@@ -1580,7 +1585,7 @@ Flow *flow_running(void);
 /* A just-seeded drive's product count (flow.h's `orphan_seen`), re-keyed and raised as a rank change. */
 void  flow_set_orphan_seen(Flow *f, int64_t seen);
 /* A flow's chain of drives (`orphan_chain`): one more member, or an arm's copy of its parent's first `n`. */
-void  flow_orphan_chain_push(Flow *f, uint64_t hash);
+void  flow_orphan_chain_push(Flow *f, uint64_t hash, char *act);   /* takes `act` (may be NULL) */
 void  flow_orphan_chain_copy(Flow *dst, const Flow *src, int n);
 /* A new @H/@S from the running flow: raise reward, reset aging. Answers 1 when an account was paid and 0 on the
    dropped arm (no flow holds the thread). */

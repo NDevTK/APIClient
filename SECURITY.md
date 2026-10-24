@@ -702,6 +702,11 @@ payload's code ran in the delivered document, not that the sink produced the cal
   injector by name and passes only serializable arguments, so it cannot inject code of its own composing, nor
   name the address or the tab it runs in. The record is the worker's memory, so after an eviction an injection
   is refused rather than allowed. The person's click is the user activation `window.open` needs.
+- A PoC the engine verified under user acts (`acts`, solve.h) has them performed by the named injector
+  `pocPerformActs` in the delivered document after its load: `scripting.exec` `CHECK`s that the tab's
+  browser-stated `openerTabId` is an attacker tab and pins the injection to the document id the delivery latch
+  read, so it reaches the one document the attacker page opened at the delivered address. Its events are
+  dispatched by script and are untrusted (`isTrusted` false); the result says so.
 - The delivery is a real top-level navigation in the person's profile, with cookies, outside `safeFetch`. It is
   inside the model because of the address: scheme, host and path are the ones the person's browser already
   loaded, and the analyzer supplies only a fragment or query. The deny list's harm condition (credentialed and
@@ -811,7 +816,7 @@ Each residual states what is not covered, what would close it, and how its absen
 | Another document (other origin, other frame, second document of the target origin) calls `apiclientsink` with a marker it read | mitigated: `_recordProbeHit` records it `attributed: false` with its reason |
 | The delivered page calls `apiclientsink` itself | residual, irreducible by this mechanism |
 | A compromised renderer reaches `chrome.tabs.*` or `chrome.scripting` through the service worker | mitigated: the service worker serves only the extension origin and pins `__rpc` to `OFFSCREEN_HREF` by equality |
-| A hole in that `__rpc` gate arms the live-verify injector in one of the person's tabs | mitigated: `scripting.exec` injects only into a tab `attackerPage.open` opened at the worker's own `ATTACKER_PAGE_URL`, a `CHECK` on the worker's record |
+| A hole in that `__rpc` gate arms the live-verify injector in one of the person's tabs | mitigated: `scripting.exec` injects only into a tab `attackerPage.open` opened at the worker's own `ATTACKER_PAGE_URL`, or (`pocPerformActs`) into one document of a tab whose browser-stated opener is such a tab, a `CHECK` on the worker's record |
 | A sandboxed extension page impersonates a trusted extension document | mitigated: its origin is `"null"`, which fails every document→document check |
 | The bundle escapes the WASM sandbox into its host realm | out of model; the realm is `renderer.html` at a unique opaque origin with no `chrome.*`, no principal and no `connect-src`, reachable to the trusted zone only through validated `content.mojom.Renderer` records. See the residual on channels CSP does not govern |
 | A second instance is provisioned for an agent cluster that already has one | mitigated: `registerRenderer` refuses it with a `CHECK` in dev and release |

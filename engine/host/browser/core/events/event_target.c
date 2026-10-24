@@ -889,6 +889,49 @@ bool event_target_has_any_listener(JSContext *ctx, JSValueConst target)
     return any;
 }
 
+/* The type under which `fn` is registered on `target`: §2.7's event listener list searched for an entry whose
+   callback is `fn` and whose removed flag is unset. Reads the list's own records and runs no page code. */
+char *event_target_listener_type_of(JSContext *ctx, JSValueConst target, JSValueConst fn)
+{
+    JSValue map = listener_map(ctx, event_target_receiver(ctx, target), 0);
+    JSPropertyEnum *tab = NULL;
+    uint32_t n = 0, i, k, len;
+    char *type = NULL;
+
+    if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return NULL; }
+    if (JS_GetOwnPropertyNames(ctx, &tab, &n, map, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+        for (i = 0; i < n && !type; i++) {
+            JSValue arr = JS_GetProperty(ctx, map, tab[i].atom);
+
+            len = JS_IsArray(arr) ? arr_len(ctx, arr) : 0;
+            for (k = 0; k < len && !type; k++) {
+                JSValue rec = JS_GetPropertyUint32(ctx, arr, k);
+                JSValue cb = JS_GetPropertyStr(ctx, rec, "cb");
+                JSValue removed = JS_GetPropertyStr(ctx, rec, "removed");
+
+                DCHECK(JS_IsBool(removed), "a listener record's removed flag is not a boolean — listener_record "
+                                           "writes one on every record");
+                if (JS_IsStrictEqual(ctx, cb, fn) && !JS_VALUE_GET_BOOL(removed)) {
+                    const char *t = JS_AtomToCString(ctx, tab[i].atom);
+
+                    CHECK(t != NULL, "event listeners: OOM reading a listener type");
+                    type = strdup(t);
+                    CHECK(type != NULL, "event listeners: OOM copying a listener type");
+                    JS_FreeCString(ctx, t);
+                }
+                JS_FreeValue(ctx, removed);
+                JS_FreeValue(ctx, cb);
+                JS_FreeValue(ctx, rec);
+            }
+            JS_FreeValue(ctx, arr);
+        }
+        for (i = 0; i < n; i++) JS_FreeAtom(ctx, tab[i].atom);
+        js_free(ctx, tab);
+    }
+    JS_FreeValue(ctx, map);
+    return type;
+}
+
 /* DOM §2.7 Interface EventTarget's "ERASE ALL EVENT LISTENERS AND HANDLERS, given an EventTarget eventTarget":
  * "1. Remove all of eventTarget's event listeners. 2. Set eventTarget's event handler map's entries to null."
  * HTML §8.4.1 "Opening the input stream" is the caller — it erases the whole document tree's and the Window's,

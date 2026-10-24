@@ -887,6 +887,8 @@ function renderSecurityPanel() {
           || ("the engine reports this vector as `" + item.firesOn + "`, which this view has no sentence for")]),
       " · ", policyClause,
       " · " + _deliverySentence(item),
+      item.acts ? [" · ", domElement("strong", {}, ["needs the victim's interaction"]), ": " + _actsSentence(item.acts)]
+                : [],
       encClause.length ? [" · ", encClause] : [],
       // THE COST, because a reader deciding how much to trust a finding wants to know whether the tool found
       // it or stumbled on it. One candidate run is the first written-down vector firing; a larger number is a
@@ -935,6 +937,7 @@ function renderSecurityPanel() {
       if (item.principalDemand) probeObj.principalDemand = item.principalDemand;
       if (item.principalGates)  probeObj.principalGates = item.principalGates;
       if (item.principalPins)   probeObj.principalPins = item.principalPins;
+      if (item.acts)            probeObj.acts = item.acts;
       var probe = JSON.stringify(probeObj);
       var verifyBtn = domElement("button", { class: "verify-btn", "data-probe": probe, "data-key": key },
                                  ["Verify in real Chrome"]);
@@ -1452,6 +1455,26 @@ function _attackerSaid(ran) {
    (HTML §7.1.3 "Cross-origin opener policies"' initial value), so that clause does not fire and step 19 hands
    back the openee's WindowProxy. For the retired sandbox the second conjunct held at every COOP value, so the
    clause fired for every delivery once the manifest went to `same-origin`. */
+/* The acts a PoC was verified under (solve.c's `acts`, validated by bridge.js docSinkAct), as the reader's
+   steps after the delivery: the finding needs that interaction, which lowers its severity and not its truth. */
+function _actsSentence(acts) {
+  return acts.map(function (a) {
+    return (a.kind === "click" ? "click " : "a `" + a.type + "` event on ") + "`" + a.target + "`";
+  }).join(", then ");
+}
+/* What performing the PoC's acts in the delivered document reported (offscreen _performProbeActs), stated
+   beside a hit because the hit is evidence only for the run those acts made. Empty for a PoC with no acts. */
+function _actedSentence(snap) {
+  DCHECK("acts" in snap && "acted" in snap,
+         "EXPLOIT_PROBE_STATUS answered without `acts`/`acted` — startExploitProbe declares both on every session");
+  if (!snap.acts) return "";
+  if (!snap.acted || !snap.acted.steps)
+    return " The PoC's acts (" + _actsSentence(snap.acts) + ") were not reported performed ("
+      + (snap.acted ? snap.acted.state + (snap.acted.error ? ": " + snap.acted.error : "") : "not started") + ").";
+  return " Performed after the delivery: " + snap.acted.steps.map(function (st) {
+    return st.type + " on `" + st.target + "`" + (st.found ? "" : " (target not found)");
+  }).join(", then ") + " — " + snap.acted.residual + ".";
+}
 var _ATTACKER_HANDLE = new Map([
   ["window", "its window.open answered a WindowProxy"],
   ["null", "its window.open answered null \u2014 HTML \u00A77.2.2.1 \u201COpening and closing windows\u201D "
@@ -1634,6 +1657,7 @@ async function _pollVerify(resultEl, marker, blockers) {
         + "NOT proof the SINK produced the call: apiclientsink is installed in the page’s own world, so any "
         + "script in that document can call it. Cross-document fabrication is refused; the same-document case "
         + "is irreducible by this mechanism."
+        + _actedSentence(snap)
         + _hitFrame(fired.pageClaimed)
         + (refused.length ? " Also refused: " + refused.length + " call(s) with this marker from elsewhere ("
                             + _refusedReasons(refused) + ")." : "");

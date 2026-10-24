@@ -130,6 +130,10 @@ typedef struct {
        search that succeeded. A size, never a distance. extension/lib/popup-security.js reads it, with
        `replay_arms` and `replay_of`, and lib/store-record.js's currency predicate requires all three. */
     int reinject_len;
+    /* Fires of this search's breakout verified inside a drive of a function no act a page user can perform
+       calls (a chain member with no listener act): each proved the bytes execute and none is a PoC, because a
+       browser never makes that call. Emitted on the parked entry as `firedUnderNoAct`. */
+    int fired_no_act;
     /* The runway position as its two halves, emitted as `runwayWalked`/`runwayOf`, so a best of 3/8000 is not
        rounded to 0 as it is in `replay_pm`. Ratcheted on itself by cross-multiplication (observe_runway), in
        integers. `replay_of` is dec_total() at that sample, not `reinject_len`: for an arm forked off a
@@ -233,19 +237,56 @@ static const SinkClass *sink_class(int sink);
 static const char      *sink_name(int sink);
 static int              sink_class_of_name(const char *name);
 /* Declared here for the fire marker, which solve_init installs above the store's definition. */
-static void record_sink(int cls, const char *source, const char *poc);
+static void record_sink(int cls, const char *source, const char *poc, char *acts, int under_act);
+static Cand *search_of(const char *src, int sink);
 
 /* A fire-verified PoC. The sink is held as its class, because every fact the reproduction envelope states (CSP,
    Trusted Types, what makes the breakout run) is a column of the class row. */
-typedef struct { int cls; char *source; char *root; char *poc; } Finding;   /* verified PoCs only */
+/* `acts` is the envelope's `acts` array (record_sink), NULL for a fire verified under no engine drive, and
+   `under_act` says the fire was verified under one, so composition can assert the two agree. */
+typedef struct { int cls; char *source; char *root; char *poc; char *acts; int under_act; } Finding;   /* verified PoCs only */
 static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
 
 /* The fire marker X9. Only firing proves a PoC, so the finding is recorded the instant the marker runs and not
    at flow completion: a flow owes nobody completion, cold.c drops `cand_fired` on a park, and flow_remove frees
    a sold flow's substitution without passing solve_flow_end. A call outside a candidate flow is the page's own,
    since X9 is a global the bundle can reach, and proves nothing. */
+/* The acts a fire in `f` was verified under, as the envelope's `acts` array in chain order, or NULL when `f` is
+   no drive. `*no_act` is set where a called member of the chain has no act a page user can perform: a browser
+   never makes that call, so the fire proves the bytes execute and is not a PoC. Members a resumed drive has not
+   built a call for yet are not part of the path the fire ran on. malloc'd. */
+static char *fire_acts(const Flow *f, int *no_act)
+{
+    int called = f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n, k;
+    size_t n = 3, at = 1;
+    char *out;
+
+    *no_act = 0;
+    if (!f->orphan) return NULL;
+    DCHECK(called > 0, "a fire ran in a drive whose chain has no called member — the mark and the chain are "
+                       "written together at the seed and at the claim");
+    for (k = 0; k < called; k++) {
+        if (!f->orphan_acts[k]) { *no_act = 1; return NULL; }
+        n += strlen(f->orphan_acts[k]) + 1;
+    }
+    out = malloc(n);
+    CHECK(out, "solve: OOM spelling the acts a PoC was verified under");
+    out[0] = '[';
+    for (k = 0; k < called; k++) {
+        size_t l = strlen(f->orphan_acts[k]);
+        if (k) out[at++] = ',';
+        memcpy(out + at, f->orphan_acts[k], l);
+        at += l;
+    }
+    out[at++] = ']';
+    out[at] = 0;
+    return out;
+}
+
 static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     Flow *f = flow_running();
+    int no_act;
+    char *acts;
 
     (void)ctx; (void)t; (void)c; (void)v;
     if (!f || !f->cand_src) return JS_UNDEFINED;   /* the page's own call — no substitution, nothing proved */
@@ -253,7 +294,15 @@ static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
            "an @S candidate flow fired the marker holding a source but no payload or no sink class — a finding "
            "IS that triple, so a flow carrying half of it was assembled somewhere that does not go through the "
            "seeder or the cold tier's rebuild");
-    record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload);
+    acts = fire_acts(f, &no_act);
+    if (no_act) {
+        Cand *e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
+
+        CHECK(e != NULL, "an @S candidate fired for a search this session has no entry for");
+        e->fired_no_act++;
+        return JS_UNDEFINED;
+    }
+    record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload, acts, f->orphan);
     return JS_UNDEFINED;
 }
 
@@ -886,7 +935,7 @@ static void add_pending(const char *src, const char *root, int sink) {
            "what lets the release that clears this path go on being the closure");
 }
 
-static void record_sink(int cls, const char *source, const char *poc) {
+static void record_sink(int cls, const char *source, const char *poc, char *acts, int under_act) {
     /* A finding is a pending search that solved, so the two lists are one list in two states: the parked emit
        subtracts findings by (class, source), and a finding with no pending twin would report as both fired and
        parked. The twin also supplies the delivery root, because at the marker the value that carried the bytes
@@ -900,7 +949,10 @@ static void record_sink(int cls, const char *source, const char *poc) {
            "strongest thing this half of the tool emits, and without the root §S(d)'s reproduction envelope "
            "reports it as an exploit no navigation reaches");
     sink_class(cls);   /* the row exists before anything is stored against it */
-    for (int i = 0; i < g_sinks_n; i++) if (g_sinks[i].cls == cls && !strcmp(g_sinks[i].source, source)) return;
+    DCHECK(!under_act || acts != NULL, "a fire verified under an engine drive was stored with no act stated — "
+                                       "js_x9 refuses a drive with no user act before it records");
+    for (int i = 0; i < g_sinks_n; i++)
+        if (g_sinks[i].cls == cls && !strcmp(g_sinks[i].source, source)) { free(acts); return; }
     if (g_sinks_n >= g_sinks_cap) { g_sinks_cap = g_sinks_cap ? g_sinks_cap * 2 : 8; g_sinks = realloc(g_sinks, (size_t)g_sinks_cap * sizeof(Finding)); CHECK(g_sinks, "solve: OOM @S store"); }
     Finding *f = &g_sinks[g_sinks_n++];
     /* Born whole, for sink_search's reason: `g_sinks` is realloc'd and never zeroed. Every blank here is 0 or
@@ -910,6 +962,8 @@ static void record_sink(int cls, const char *source, const char *poc) {
         .source = strdup(source ? source : "?"),
         .poc = strdup(poc),
         .root = strdup(twin->root),
+        .acts = acts,
+        .under_act = under_act,
     };
     /* A half-stored finding is a corrupt one, not a lost one: `solved` strcmps the source, and solve_json_array
        writes the PoC and the root straight into the report. */
@@ -2180,6 +2234,14 @@ char *solve_json_array(JSContext *ctx) {
                bytes the browser would have eaten. */
             emit_delivery(&b, tw, g_sinks[i].root, cand_delivers(tw, dv, sizeof dv));
         }
+        /* The acts after the delivery they follow: a fire verified under an engine drive of a listener
+           reproduces only when a person performs the act that runs it, so the envelope states each in order. */
+        DCHECK((g_sinks[i].acts != NULL) == (g_sinks[i].under_act != 0),
+               "a fire-verified PoC's acts and whether it was verified under a drive disagree — the envelope would "
+               "claim a bare delivery fires, or state acts it was not verified under");
+        if (g_sinks[i].acts) {
+            json_buf_raw(&b, ","); json_buf_key(&b, "acts"); json_buf_raw(&b, g_sinks[i].acts);
+        }
         json_buf_raw(&b, "}");
     }
     for (int i = 0; i < g_pending_n; i++) {
@@ -2357,6 +2419,10 @@ char *solve_json_array(JSContext *ctx) {
             json_buf_raw(&b, ","); json_buf_key(&b, "senderDemand");
             emit_sender_pins(&b, &g_pending[i].snd);
         }
+        if (g_pending[i].fired_no_act) {
+            json_buf_raw(&b, ","); json_buf_key(&b, "firedUnderNoAct");
+            snprintf(t, sizeof t, "%d", g_pending[i].fired_no_act); json_buf_raw(&b, t);
+        }
         json_buf_raw(&b, "}");
     }
     json_buf_raw(&b, "]");
@@ -2391,6 +2457,6 @@ void solve_free(void) {
         free(g_pending[i].root);
     }
     free(g_pending); g_pending = NULL; g_pending_n = g_pending_cap = 0;
-    for (int i = 0; i < g_sinks_n; i++) { free(g_sinks[i].source); free(g_sinks[i].root); free(g_sinks[i].poc); }
+    for (int i = 0; i < g_sinks_n; i++) { free(g_sinks[i].source); free(g_sinks[i].root); free(g_sinks[i].poc); free(g_sinks[i].acts); }
     free(g_sinks); g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;
 }

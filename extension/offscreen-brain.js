@@ -1970,8 +1970,13 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
 function startExploitProbe(msg) {
   _pruneProbeSessions();
   const { waitMs, findingId, sinkName, poc, source, delivery, deliveryPrefix,
-          principalDemand, principalGates, principalPins } = msg || {};
+          principalDemand, principalGates, principalPins, acts } = msg || {};
   if (!poc) throw new Error("need the engine's poc (the fire-verified breakout input from the @S finding)");
+  DCHECK(acts === undefined || (Array.isArray(acts) && acts.length > 0 && acts.every(function (a) {
+           return a && (a.kind === "click" || a.kind === "dispatch") && typeof a.target === "string" &&
+                  typeof a.type === "string"; })),
+         "a probe carries acts that are not the engine's shape — bridge.js docSinkAct admitted the record, so "
+         + "this is the popup relaying something other than the finding's `acts`");
 
   // pageUrl: the page the finding was observed on (recorded in securityFindings). The caller may pass it;
   // else resolve from the finding. Never guessed.
@@ -2037,6 +2042,11 @@ function startExploitProbe(msg) {
        another address. */
     delivered: null,
     deliveredNearMiss: null,
+    /* The acts the engine verified the fire under, performed in order in the delivered document once it has
+       announced itself (_performProbeActs), and what performing them reported; both null for a PoC verified
+       under no act. */
+    acts: acts || null,
+    acted: null,
   };
   // ENGINE AGREEMENT: perform the delivery the ENGINE declared, carrying its EXACT poc (X9 -> apiclientsink).
   // The user runs it by clicking Run on the ATTACKER PAGE, a real registrable origin the trusted zone opens as
@@ -2253,6 +2263,26 @@ function _recordProbeDelivery(seedUrl, facts) {
       addressSource: browserStated ? "browser-stated" : "page-claimed",
       at: Date.now(),
     };
+    if (ses.acts) _performProbeActs(ses);
+  }
+}
+/* The PoC's acts, in the delivered document and nowhere else: the worker's `pocPerformActs` injector is pinned
+   to that document's id, which is the browser's statement of which document announced itself at the
+   delivered address. A dispatched event is untrusted (`isTrusted` false), so a page that checks it is not
+   reproduced by this run; that residual travels on the record rather than being read as a divergence. */
+async function _performProbeActs(ses) {
+  const d = ses.delivered;
+  ses.acted = { state: "running", steps: null, error: null,
+                residual: "each act is dispatched by script, so its event is untrusted (isTrusted false)" };
+  try {
+    const results = await swRpc("scripting.exec", { op: "pocPerformActs", tabId: d.tabId,
+                                                    documentId: d.documentId, args: [ses.acts] });
+    const top = (results || []).find(function (r) { return r && r.frameId === 0; });
+    ses.acted.steps = top && top.result ? top.result.steps : null;
+    ses.acted.state = ses.acted.steps ? "performed" : "no-result";
+  } catch (err) {
+    ses.acted.state = "refused";
+    ses.acted.error = String((err && err.message) || err);
   }
 }
 function _recordProbeHit(msg, facts) {

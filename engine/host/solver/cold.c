@@ -2286,7 +2286,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
             last_flow->orphan_hash = 0;
             last_flow->orphan_want = 1;
             last_flow->orphan_claim_at = 0;
-            flow_orphan_chain_push(last_flow, hash);
+            flow_orphan_chain_push(last_flow, hash, NULL);   /* the act is read when the member's call is built */
             g_resumed.orphans++;
         } else if (kind == 'v') {
             /* A WITNESS VERIFICATION COMES BACK AS ITS SUBSTITUTION, ITS KEY AND ITS PATH — park_rec_vfy's

@@ -148,8 +148,9 @@ function docEndpoints(rows) {
    (unexamined) or one of three verdicts, with `principalGates` only beside `forgeable` (and on every one) and
    `principalPins` exactly beside `unforgeable`; `poc` is absent on a parked search and a non-empty string on a
    fire-verified one, and `senderDemand` (the senders a parked search waits on, in the principalPins row
-   grammar) only on a parked one. These are what the live-verify layer (offscreen-brain.js) performs a delivery
-   from. */
+   grammar) only on a parked one. `acts` (the user acts a fire was verified under, after the delivery) only on
+   a fire-verified entry, and `firedUnderNoAct` (fires verified under a drive no user act performs) only on a
+   parked one. These are what the live-verify layer (offscreen-brain.js) performs a delivery from. */
 const SINK_DELIVERIES = Object.freeze(["address", "plant", "referring-address", "user-file", "cross-document-message"]);
 const SINK_DEMANDS = Object.freeze(["none", "forgeable", "unforgeable"]);
 function docSinkGate(g, f) {
@@ -164,6 +165,14 @@ function docSinkPin(p, f) {
   return docIsRecord(p) && docIsName(p.principal) && typeof p.equals === "string" && docIsName(p.kind) &&
          typeof p.loose === "boolean" && (!("subject" in p) || typeof p.subject === "string")
     ? null : f + " is not {principal, equals, kind, loose[, subject]}";
+}
+/* One act of solve.c's `acts`: a click is stated as `click` of type `click`, any other user-interface event as
+   `dispatch`, on a locator a page script resolves (core/events/listener_act.h). */
+const SINK_ACT_KINDS = Object.freeze(["click", "dispatch"]);
+function docSinkAct(a, f) {
+  return docIsRecord(a) && SINK_ACT_KINDS.indexOf(a.kind) >= 0 && docIsName(a.target) && docIsName(a.type) &&
+         (a.kind === "click") === (a.type === "click")
+    ? null : f + " is not {kind: click|dispatch, target, type} with a click exactly where the type is click";
 }
 function docSink(e, f) {
   if (!docIsRecord(e)) return f + " is not an object";
@@ -187,6 +196,14 @@ function docSink(e, f) {
     why = (Array.isArray(e.principalPins) && e.principalPins.length > 0 ? null : f + ".principalPins is not a non-empty array") ||
           docEach(e.principalPins, f + ".principalPins", docSinkPin);
   if (why === null && "poc" in e && !docIsName(e.poc)) why = f + ".poc is not a non-empty string";
+  if (why === null && "acts" in e)
+    why = ("poc" in e ? null : f + " states acts on a parked search, which only a fire-verified entry carries") ||
+          (Array.isArray(e.acts) && e.acts.length > 0 ? null : f + ".acts is not a non-empty array") ||
+          docEach(e.acts, f + ".acts", docSinkAct);
+  if (why === null && "firedUnderNoAct" in e)
+    why = "poc" in e ? f + " states firedUnderNoAct on a fire-verified entry, which only a parked search carries"
+          : (Number.isInteger(e.firedUnderNoAct) && e.firedUnderNoAct > 0 ? null
+             : f + ".firedUnderNoAct is not a positive integer");
   if (why === null && "senderDemand" in e)
     why = ("poc" in e ? f + " states a senderDemand on a fire-verified entry, which only a parked search carries" : null) ||
           (Array.isArray(e.senderDemand) && e.senderDemand.length > 0 ? null : f + ".senderDemand is not a non-empty array") ||

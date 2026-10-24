@@ -846,6 +846,8 @@ async function handlePopupMessage(msg, sender, sendResponse) {
         deliveredNearMiss: ses.deliveredNearMiss,
         pocJs: ses.pocJs,
         ran: ses.ran,
+        acts: ses.acts,
+        acted: ses.acted,
         startedAt: ses.createdAt,
       });
       return;
