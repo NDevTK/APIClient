@@ -31849,6 +31849,7 @@ enum { AFS_DELIVER_CALL = 0, AFS_DELIVER_CLOSE, AFS_DELIVER_ITERNEXT, AFS_DELIVE
            "the caller's through TAKE_CALL_SHAPE, an owned-list call declares (0, 0), and the opcode "     \
            "entries declare (0, 0) because their operand is written in place, never popped")
 static JSValue js_promise_resolve_native(JSContext *ctx, JSValueConst ctor, int argc, JSValueConst *argv, int magic);
+static JSValue js_promise_settle_native(JSContext *ctx, JSValueConst fn, JSValueConst *pvalue);
 static __exception int perform_promise_then(JSContext *ctx, JSValueConst promise, JSValueConst *resolve_reject, JSValueConst *cap_resolving_funcs);
 static JSValue js_async_from_sync_iterator_unwrap_func_create(JSContext *ctx, bool done);
 static JSValue js_new_afs_cont(JSContext *ctx, JSValueConst sync_iter, JSValueConst resolve,
@@ -36596,7 +36597,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pexec_finish_state = NULL;
                 if (unlikely(JS_IsException(ret_val))) {
                     JSValue err = JS_GetException(ctx), rr;
-                    rr = JS_Call(ctx, ps->resolving_funcs[1], JS_UNDEFINED, 1, vc(&err));
+                    rr = js_promise_settle_native(ctx, ps->resolving_funcs[1], vc(&err));
                     JS_FreeValue(ctx, err);
                     if (unlikely(JS_IsException(rr))) {   /* step 10 is a ? call: a throwing reject DOES propagate */
                         JS_FreeValue(ctx, ps->resolving_funcs[0]); JS_FreeValue(ctx, ps->resolving_funcs[1]);
@@ -43900,7 +43901,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 int cfirst = s->orig_cfirst, cargc = s->orig_cargc; uint8_t itail = s->orig_is_tail, deliver = s->deliver;
                 void *couter = s->call_outer; uint8_t cok = s->call_outer_kind;
                 JSValue *cargv;
-                rr2 = JS_Call(ctx, s->resolving_funcs[1], JS_UNDEFINED, 1, vc(&err));
+                rr2 = js_promise_settle_native(ctx, s->resolving_funcs[1], vc(&err));
                 JS_FreeValue(ctx, err); JS_FreeValue(ctx, rr2);
                 r = js_dup(s->promise);
                 js_async_from_sync_free(ctx, s);
@@ -51150,7 +51151,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         JSImportCap *ic = ctx->pending_import_cap;
         JSValue exc = JS_GetException(ctx), rr;
         ctx->pending_import_cap = NULL;
-        rr = JS_Call(ctx, ic->funcs[1], JS_UNDEFINED, 1, vc(&exc));
+        rr = js_promise_settle_native(ctx, ic->funcs[1], vc(&exc));
         JS_FreeValue(ctx, exc);
         JS_FreeValue(ctx, rr);
         JS_FreeValue(ctx, sp[-1]);
@@ -51491,7 +51492,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             JSValue r = ps->promise;
             int cfirst = ps->orig_cfirst, cargc = ps->orig_cargc;
             JSValue *cargv;
-            rr = JS_Call(ctx, ps->resolving_funcs[1], JS_UNDEFINED, 1, vc(&err));
+            rr = js_promise_settle_native(ctx, ps->resolving_funcs[1], vc(&err));
             JS_FreeValue(ctx, err);
             JS_FreeValue(ctx, ps->resolving_funcs[0]);
             JS_FreeValue(ctx, ps->resolving_funcs[1]);
@@ -56590,8 +56591,7 @@ static JSValue js_async_generator_enqueue(JSContext *ctx, JSAsyncGeneratorData *
         JSValue err, res2;
         JS_ThrowTypeError(ctx, "not an AsyncGenerator object");
         err = JS_GetException(ctx);
-        res2 = JS_Call(ctx, resolving_funcs[1], JS_UNDEFINED,
-                       1, vc(&err));
+        res2 = js_promise_settle_native(ctx, resolving_funcs[1], vc(&err));
         JS_FreeValue(ctx, err);
         JS_FreeValue(ctx, res2);
         JS_FreeValue(ctx, resolving_funcs[0]);
@@ -70219,7 +70219,7 @@ static JSValue js_module_source_rejected(JSContext *ctx, JSValueConst this_val,
                                          int argc, JSValueConst *argv, int magic,
                                          JSValueConst *func_data)
 {
-    JSValue ret = JS_Call(ctx, func_data[1], JS_UNDEFINED, 1, argv);
+    JSValue ret = js_promise_settle_native(ctx, func_data[1], argv);
     JS_FreeValue(ctx, ret);
     return JS_UNDEFINED;
 }
@@ -70430,7 +70430,7 @@ static void js_module_loading_settle_one(JSContext *ctx, JSValueConst state)
         js_gls_mark_loaded(ctx, state);
         res = JS_GetPropertyStr(ctx, state, "resolve");
         DCHECK(JS_IsFunction(ctx, res), "a module load's capability resolve is not a function");
-        ret = JS_Call(ctx, res, JS_UNDEFINED, 1, vc(&arg));
+        ret = js_promise_settle_native(ctx, res, vc(&arg));
         JS_FreeValue(ctx, ret);
         JS_FreeValue(ctx, res);
     }
@@ -70461,7 +70461,7 @@ static void js_module_loading_fail(JSContext *ctx, JSValueConst state)
     err = JS_GetException(ctx);
     rej = JS_GetPropertyStr(ctx, state, "reject");
     DCHECK(JS_IsFunction(ctx, rej), "a module load's capability reject is not a function");
-    ret = JS_Call(ctx, rej, JS_UNDEFINED, 1, vc(&err));
+    ret = js_promise_settle_native(ctx, rej, vc(&err));
     JS_FreeValue(ctx, ret);
     JS_FreeValue(ctx, err);
     JS_FreeValue(ctx, rej);
@@ -70958,7 +70958,7 @@ static JSValue js_dynamic_import_job(JSContext *ctx,
     return JS_UNDEFINED;
  exception:
     err = JS_GetException(ctx);
-    ret = JS_Call(ctx, resolving_funcs[1], JS_UNDEFINED, 1, vc(&err));
+    ret = js_promise_settle_native(ctx, resolving_funcs[1], vc(&err));
     JS_FreeValue(ctx, ret); /* XXX: what to do if exception ? */
     JS_FreeValue(ctx, err);
     JS_FreeCString(ctx, basename);
@@ -70998,7 +70998,7 @@ typedef struct JSImportOpts {
    completes normally with the promise, which is the whole point of IfAbruptRejectPromise. */
 static int js_import_opts_reject(JSContext *ctx, JSImportOpts *s, JSValue err)
 {
-    JSValue rr = JS_Call(ctx, s->funcs[1], JS_UNDEFINED, 1, vc(&err));
+    JSValue rr = js_promise_settle_native(ctx, s->funcs[1], vc(&err));
     JS_FreeValue(ctx, err);
     JS_FreeValue(ctx, rr);
     return 0;
@@ -71198,7 +71198,7 @@ static void js_set_module_evaluated(JSContext *ctx, JSModuleDef *m)
         JSValue ret_val;
         DCHECK(m->cycle_root == m, "m->cycle_root == m");
         JSValueConst value = JS_UNDEFINED;
-        ret_val = JS_Call(ctx, m->resolving_funcs[0], JS_UNDEFINED, 1, &value);
+        ret_val = js_promise_settle_native(ctx, m->resolving_funcs[0], &value);
         JS_FreeValue(ctx, ret_val);
     }
 }
@@ -71355,8 +71355,7 @@ static JSValue js_async_module_execution_rejected(JSContext *ctx, JSValueConst t
         if (!JS_IsUndefined(m->promise)) {
             JSValue ret_val;
             DCHECK(m->cycle_root == m, "m->cycle_root == m");
-            ret_val = JS_Call(ctx, m->resolving_funcs[1], JS_UNDEFINED,
-                              1, &error);
+            ret_val = js_promise_settle_native(ctx, m->resolving_funcs[1], &error);
             JS_FreeValue(ctx, ret_val);
         }
 
@@ -71744,7 +71743,7 @@ static void js_module_eval_abrupt(JSContext *ctx, JSModuleEvalOp *op, JSValue re
     op->depth = 0;
     DCHECK(m->status == JS_MODULE_STATUS_EVALUATED, "m->status == JS_MODULE_STATUS_EVALUATED");
     DCHECK(m->eval_has_exception, "m->eval_has_exception");
-    ret_val = JS_Call(ctx, m->resolving_funcs[1], JS_UNDEFINED, 1, vc(&m->eval_exception));
+    ret_val = js_promise_settle_native(ctx, m->resolving_funcs[1], vc(&m->eval_exception));
     JS_FreeValue(ctx, ret_val);
 }
 
@@ -71761,7 +71760,7 @@ static void js_module_eval_normal(JSContext *ctx, JSModuleEvalOp *op)
         JSValue ret_val;
 
         DCHECK(m->status == JS_MODULE_STATUS_EVALUATED, "m->status == JS_MODULE_STATUS_EVALUATED");
-        ret_val = JS_Call(ctx, m->resolving_funcs[0], JS_UNDEFINED, 1, &value);
+        ret_val = js_promise_settle_native(ctx, m->resolving_funcs[0], &value);
         JS_FreeValue(ctx, ret_val);
     }
     DCHECK(op->stack_top == NULL, "16.2.1.6.1.3 Evaluate ( ): `stack` is not empty after its walk returned");
@@ -99320,7 +99319,7 @@ static int js_iter_dispose_step(JSContext *ctx, void *st, JSValue cb_result, JSV
            for a settle that could never come. The capability is the NATIVE one (step 2 is `!`), so its reject
            runs no page code and is called from here rather than issued as a request. */
         JSValue err = JS_GetException(ctx), rr;
-        rr = JS_Call(ctx, s->cap_funcs[1], JS_UNDEFINED, 1, vc(&err));
+        rr = js_promise_settle_native(ctx, s->cap_funcs[1], vc(&err));
         JS_FreeValue(ctx, err);
         if (JS_IsException(rr)) return -1;
         JS_FreeValue(ctx, rr);
@@ -116974,6 +116973,20 @@ static JSValue js_promise_resolve_function_call(JSContext *ctx,
     return JS_UNDEFINED;
 }
 
+/* A capability this engine created with %Promise% settled through its own resolving function `fn`: the prefix of
+   §27.5.1.3 that runs no page code, which is the function's C body above, entered directly rather than through
+   a generic call. *pvalue is a rejection reason or a non-Object resolution; an Object resolution is that body's
+   own DFAIL. Returns what the body returns. */
+static JSValue js_promise_settle_native(JSContext *ctx, JSValueConst fn, JSValueConst *pvalue)
+{
+    DCHECK(JS_VALUE_GET_TAG(fn) == JS_TAG_OBJECT &&
+           (JS_VALUE_GET_OBJ(fn)->class_id == JS_CLASS_PROMISE_RESOLVE_FUNCTION ||
+            JS_VALUE_GET_OBJ(fn)->class_id == JS_CLASS_PROMISE_REJECT_FUNCTION),
+           "a capability settled as the engine's own holds a resolving function the engine did not make — a "
+           "subclass's capability is page code and is settled by a request on a flow");
+    return js_promise_resolve_function_call(ctx, fn, JS_UNDEFINED, 1, pvalue, 0);
+}
+
 static void js_promise_finalizer(JSRuntime *rt, JSValueConst val)
 {
     JSPromiseData *s = JS_GetOpaque(val, JS_CLASS_PROMISE);
@@ -117217,7 +117230,7 @@ static JSValue js_promise_resolve_native(JSContext *ctx, JSValueConst ctor,
     }
     result_promise = js_new_promise_capability(ctx, resolving_funcs, ctor);
     if (JS_IsException(result_promise)) return result_promise;
-    ret = JS_Call(ctx, resolving_funcs[is_reject], JS_UNDEFINED, 1, argv);
+    ret = js_promise_settle_native(ctx, resolving_funcs[is_reject], argv);
     JS_FreeValue(ctx, resolving_funcs[0]);
     JS_FreeValue(ctx, resolving_funcs[1]);
     if (JS_IsException(ret)) { JS_FreeValue(ctx, result_promise); return ret; }
@@ -126931,7 +126944,7 @@ int JS_AtomicsExpireAsync(JSRuntime *rt)
         DCHECK(w->result == JS_ATOM_ok || w->result == JS_ATOM_timed_out,
                "an async waiter reached settlement without a spec result");
         arg = JS_AtomToString(w->ctx, w->result);
-        r = JS_Call(w->ctx, w->resolving_funcs[0], JS_UNDEFINED, 1, vc(&arg));
+        r = js_promise_settle_native(w->ctx, w->resolving_funcs[0], vc(&arg));
         JS_FreeValue(w->ctx, arg);
         JS_FreeValue(w->ctx, r);
         JS_FreeValueRT(rt, w->resolving_funcs[0]);
