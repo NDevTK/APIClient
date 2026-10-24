@@ -28616,12 +28616,11 @@ static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f)
 static void js_desc_facts_dup(JSDescFacts *f);
 static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
 static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *tab, uint32_t len);
-/* A continuation record's declaration. A record a parked chain can hold lists its fields once, each as
-   F(role, type, name), and its struct, release, copy and requester link are all expanded from that one list
-   (CONT_RECORD_DEFINE), so no walk can name a field another walk misses. The roles:
+/* A continuation record lists its fields once, as F(role, type, name); CONT_RECORD_DEFINE expands its struct,
+   release, copy and requester link from that list, so no walk can name a field another walk misses. Roles:
      OWN_VAL, OWN_ATOM  an owned JSValue (p_init makes it undefined) or JSAtom: copy takes, release drops one;
      POD, BORROW  a plain value of `type`, or a JSValueConst another owner keeps alive: copied, never released;
-     OUTER     the requester link, `void *name` and its kind `uint8_t name##_kind`, at most one per record;
+     OUTER     the requester link `void *name` with its kind `uint8_t name##_kind`, at most one per record;
      OWN_SUB   a declared record of prefix `type` owned whole, carrying the requester link its release releases;
      DESC_OUT, FACTS, PROPS  the requester's JSDescFacts * (relinked), one held by value, an own-key table;
      OWN_ARRAY, BORROW_ARRAY  a JSValue array of `type` slots, every one owned, or each kept alive elsewhere;
@@ -28629,7 +28628,8 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
      OWN_VEC, OWN_LIST  `name##_cap` heap slots whose first `type` (a field) are owned, or exactly `type`;
      VIEW      a JSValueConst * that may point into a list, `type` = (list, its count), declared after the list;
      KIND_FLAG a uint8_t that is nonzero exactly when the record stands under kind `type`, asserted by each walk;
-     KIND_IMPLIES, CLONE_HOOK  no member: `type` = (kind, predicate on r) each walk asserts, or a copy's last step.
+     KIND_IMPLIES, CLONE_HOOK  no member: (kind, predicate on r) each walk asserts, or a copy's last step;
+     VISITED   an embedded struct, `type` = (its type, its visit function), freed and taken by the step visitors.
    Each role defines one macro per walk; a role a walk does not define is a compile error at that walk. */
 #define CONT_REC_MEMBER_OWN_VAL(t, n) JSValue n;
 #define CONT_REC_MEMBER_OWN_ATOM(t, n) JSAtom n;
@@ -28853,6 +28853,16 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_AGREES_FRESH_ARRAY(t, n)
 #define CONT_REC_INIT_FRESH_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) r->n[i_] = JS_UNDEFINED;
 #define CONT_REC_FREE_NEXT_FRESH_ARRAY(t, n)
+#define CONT_REC_MEMBER_VISITED(t, n) CONT_REC_UNPAREN2_A t n;
+#define CONT_REC_FREE_VISITED(t, n) CONT_REC_UNPAREN2_B t(ctx, &r->n, (JSStepVisit *)&js_step_visit_free);
+#define CONT_REC_DUP_VISITED(t, n) CONT_REC_UNPAREN2_B t(ctx, &c->n, (JSStepVisit *)&js_step_visit_dup);
+#define CONT_REC_NOUTER_VISITED(t, n) 0
+#define CONT_REC_OUTER_GET_VISITED(t, n)
+#define CONT_REC_OUTER_SET_VISITED(t, n)
+#define CONT_REC_DESC_OUT_VISITED(t, n)
+#define CONT_REC_AGREES_VISITED(t, n)
+#define CONT_REC_INIT_VISITED(t, n)
+#define CONT_REC_FREE_NEXT_VISITED(t, n)
 #define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
 #define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(t, n)
 #define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(t, n)
@@ -32389,21 +32399,23 @@ static void js_desc_cursor_free(JSContext *ctx, JSDescCursor *c)
 
 static int find_prop_key(const JSPropertyEnum *tab, int n, JSAtom atom);
 
-typedef struct JSGopdDesc {
-    JSValue obj;         /* the proxy the [[GetOwnProperty]] is on (owned) */
-    JSValue target;      /* its [[Target]] — the receiver of steps 10 and 12 (owned) */
-    JSValue trap_res;    /* the trap's result, held across those two requests (owned) */
-    JSAtom atom;         /* its key (owned) */
-    void *outer;         /* what is waiting on the OPERATION, not on these reads */
-    uint8_t outer_kind;
-    JSDescFacts *desc_out;  /* the OPERATION's answer shape, so a nested target answers as ITS requester asked */
-    uint8_t phase;       /* GD_* */
-    JSDescFacts facts;   /* step 10's answer -- the target's own descriptor, and the ONLY record of it. The
-                            attribute bits were also copied out into a second pair of fields for the invariant
-                            to read; the value comparison needs the record anyway, so the copy is gone. (owned) */
-    int extensible;      /* step 12's answer, read only where 11.c is actually reached */
-    JSDescCursor cur;    /* the walk itself, resumable between any two of its twelve operations */
-} JSGopdDesc;
+/* `obj` is the proxy the [[GetOwnProperty]] is on and `target` its [[Target]], the receiver of steps 10 and 12;
+   `trap_res` the trap's result, held across those two requests; `atom` the key. `outer` waits on the operation,
+   not on these reads, and `desc_out` is the operation's answer shape, so a nested target answers as its
+   requester asked. `facts` is step 10's answer, the target's own descriptor; `extensible` step 12's, read only
+   where 11.c is reached; `cur` the ToPropertyDescriptor walk, resumable between any two of its operations. */
+#define JS_GOPD_DESC_FIELDS(F)                                                                                 \
+    F(OWN_VAL, JSValue, obj)                                                                                   \
+    F(OWN_VAL, JSValue, target)                                                                                \
+    F(OWN_VAL, JSValue, trap_res)                                                                              \
+    F(OWN_ATOM, JSAtom, atom)                                                                                  \
+    F(OUTER, void *, outer)                                                                                    \
+    F(DESC_OUT, JSDescFacts *, desc_out)                                                                       \
+    F(POD, uint8_t, phase)            /* GD_* */                                                               \
+    F(FACTS, JSDescFacts, facts)                                                                               \
+    F(POD, int, extensible)                                                                                    \
+    F(VISITED, (JSDescCursor, js_desc_cursor_visit), cur)
+CONT_RECORD_DEFINE(JSGopdDesc, js_gopd_desc, JS_GOPD_DESC_FIELDS)
 /* 10.5.5's own steps, in the order it states them. Steps 10 and 12 are INTERNAL METHODS on the TARGET, so when
    the target is itself a Proxy they are its traps — js_proxy_gopd_pre ran both from C, which is why a
    proxy-of-a-proxy with a looping trap had no flow base. GD_TARGET asks for the target's descriptor as
@@ -32411,17 +32423,6 @@ typedef struct JSGopdDesc {
    to take apart again is twelve reads to recover what was never lost. GD_EXT is skipped where 11.a or 11.b
    already decided, which is a step the spec does not reach and therefore a trap that must not run. */
 enum { GD_TARGET = 0, GD_TARGET_GOT, GD_EXT, GD_EXT_GOT, GD_WALK };
-
-static void js_gopd_desc_free(JSContext *ctx, JSGopdDesc *gd)
-{
-    js_desc_facts_free(ctx, &gd->facts);
-    js_desc_cursor_free(ctx, &gd->cur);
-    JS_FreeValue(ctx, gd->obj);
-    JS_FreeValue(ctx, gd->target);
-    JS_FreeValue(ctx, gd->trap_res);
-    JS_FreeAtom(ctx, gd->atom);
-    js_free_rt(ctx->rt, gd);
-}
 
 /* ---- 10.1.9.2 OrdinarySetWithOwnDescriptor step 3, as a phased machine ----
 
@@ -53408,7 +53409,8 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_PROMISE_ALL_RECAP, JSPromiseAll, js_promise_all, LINK)                                              \
     X(CONT_ASYNC_FROM_SYNC, JSAsyncFromSync, js_async_from_sync, LINK)                                         \
     X(CONT_AFS_GET, JSAsyncFromSync, js_async_from_sync, LINK)                                                 \
-    X(CONT_AFS_CONT, JSAsyncFromSync, js_async_from_sync, LINK)                                          \
+    X(CONT_AFS_CONT, JSAsyncFromSync, js_async_from_sync, LINK)                                                \
+    X(CONT_GOPD_DESC, JSGopdDesc, js_gopd_desc, LINK)                                          \
     X(CONT_ARG_LIST, JSArgList, js_arg_list, LINK)                                                             \
     X(CONT_ARG_LIST_YIELD, JSArgList, js_arg_list, ANCHOR)
 #define CONT_REC_AGREES_AT(k, T, p, r)                                                                         \
@@ -53465,7 +53467,7 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
-    case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
+    case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
     case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
@@ -53505,7 +53507,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
-    case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
+    case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
     case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
@@ -53542,7 +53544,7 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     case CONT_ITER_HELPER_GET: case CONT_ITER_CALL_GET:
     case CONT_ITER_CALL_GET_NOARG: case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET:
     case CONT_FOROF_ENUMREC_WRAP: case CONT_ITER_FROM_NEXT_GET:
-    case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV: case CONT_DEFINE_CLASS:
+    case CONT_FOR_IN_HAS: case CONT_SET_RECV: case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE:
     case CONT_AGEN_DEFER:
     CONT_RECORD_KINDS(CONT_REC_CASE_ANCHOR)
@@ -53568,7 +53570,6 @@ CONT_KIND_SWITCH_CHECKED_END
 static JSDescFacts **cont_desc_out_slot(void *st, uint8_t kind)
 {
     CONT_RECORD_KINDS(CONT_REC_IF_DESC_OUT)
-    if (kind == CONT_GOPD_DESC) return &((JSGopdDesc *)st)->desc_out;
     return NULL;
 }
 /* The bytes of a requester a descriptor answer can live in: the kinds that issue GP_GETOWNPROP for a record (a
@@ -53579,7 +53580,6 @@ static size_t cont_requester_size(const void *st, uint8_t kind)
     case CONT_STEP: case CONT_STEP_YIELD: return ((const JSStepHdr *)st)->def->size;
     case CONT_KEYED_INV: return sizeof(JSKeyedInv);
     case CONT_OWNKEYS_CHK: return sizeof(struct JSOwnKeysChk);
-    case CONT_GOPD_DESC: return sizeof(JSGopdDesc);
     default: return 0;
     }
 }
@@ -54619,7 +54619,7 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
     case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
-    case CONT_ITER_FROM_NEXT_GET: case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
+    case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS: case CONT_SET_RECV:
     case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
