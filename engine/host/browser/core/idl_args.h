@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_iter.h"
@@ -398,6 +399,9 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        `keys_probe`), which asks it once for every consumer; declaring FORKS here would ask it twice. */
     case IDL_RECORD_USVSTRING_STRING_OR_SEQUENCE:
     case IDL_INTERFACE:
+    /* Rewritten to IDL_INTERFACE by §3.2.20's null rule before an argument asks, so it takes that row's answer;
+       at a dictionary member UNASKED and CROSSES both place the value unconverted. */
+    case IDL_INTERFACE_NULLABLE:
     /* §3.2.26's brand tests: an unknown has none of the internal slots they test, so it is the TypeError any
        other object is. A buffer whose bytes are unknown is a real buffer with spans and passes the test; its
        consumer reads the runs with JS_BufferSourceUnknowns. */
@@ -446,9 +450,63 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        `sw`/`sh`, the other takes the page's buffer. */
     case IDL_ULONG_OR_IMAGE_DATA_ARRAY:
         return IDL_CONCOLIC_FORKS;
-    default:   /* a default arm doing work over an enumeration this codebase owns; the next diff lists each row */
+    /* The string, numeric and nullable-primitive conversions coerce, so opacity must survive them. */
+    case IDL_DOMSTRING:
+    case IDL_BYTESTRING:
+    case IDL_USVSTRING:
+    case IDL_DOMSTRING_NULLABLE:
+    case IDL_USVSTRING_NULLABLE:
+    case IDL_LONG:
+    case IDL_UNSIGNED_LONG:
+    case IDL_UNSIGNED_LONG_ENFORCE:
+    case IDL_LONG_ENFORCE:
+    case IDL_UNSIGNED_SHORT:
+    case IDL_LONG_LONG:
+    case IDL_UNSIGNED_LONG_LONG:
+    case IDL_UNSIGNED_LONG_LONG_ENFORCE:
+    case IDL_LONG_LONG_CLAMP:
+    case IDL_UNRESTRICTED_DOUBLE:
+    case IDL_DOUBLE:
+    case IDL_FLOAT:
+    case IDL_DOUBLE_NULLABLE:
+    case IDL_LONG_LONG_NULLABLE:
+    /* §3.2.18 over `E?`: one world more than IDL_ENUM's fork, the residual stated at the enum rows. */
+    case IDL_ENUM_NULLABLE:
+    /* §3.2.21's sequences walk the value's iterator, each step a request yielding another unknown, and the
+       member reads the walk performs belong to the body that asks them. */
+    case IDL_SEQUENCE_DOMSTRING:
+    case IDL_SEQUENCE_ENUM:
+    case IDL_SEQUENCE_DOUBLE:
+    case IDL_SEQUENCE_UNSIGNED_LONG:
+    case IDL_SEQUENCE_USVSTRING:
+    case IDL_SEQUENCE_INTERFACE:
+    case IDL_SEQUENCE_INTERFACE_NULLABLE:
+    case IDL_SEQUENCE_OBJECT:
+    case IDL_SEQUENCE_DICT:
+    case IDL_SEQUENCE_STRING_OR_DICT:
+    case IDL_SEQUENCE_BLOBPART:
+    /* Unions whose arms all place the value itself or convert it to a string or number: the body decides,
+       as the arm block's comment in idl_args.c states. */
+    case IDL_DOMSTRING_OR_SEQUENCE:
+    case IDL_DOMSTRING_OR_SEQUENCE_NULLABLE:
+    case IDL_DOUBLE_OR_SEQUENCE:
+    case IDL_UNSIGNED_LONG_OR_SEQUENCE:
+    case IDL_STRING_UNLESS_CALLABLE:
+    case IDL_STRING_UNLESS_IFACE:
+    case IDL_DOUBLE_UNLESS_IFACE:
+    case IDL_STRING_UNLESS_OBJECT:
+    case IDL_STRING_OR_BUFFERSOURCE:
+    case IDL_BODYINIT_NULLABLE:
+    case IDL_FORMVALUE_NULLABLE:
+    /* Any callable or any object is accepted, and an unknown is both, so it is placed as itself. */
+    case IDL_CALLBACK:
+    case IDL_CALLBACK_INTERFACE_NULLABLE:
+    case IDL_OBJECT_NULLABLE:
         return IDL_CONCOLIC_CROSSES;
     }
+    DFAIL("a declared IDL type has no row in idl_concolic_rule — decide what its conversion does with "
+          "unknown external input and list it");
+    return IDL_CONCOLIC_CROSSES;
 }
 
 /* Which declared types need §3.2.15's `I` stated — "If V implements I, then return …; throw a TypeError".
