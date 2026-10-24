@@ -18,11 +18,14 @@
 typedef enum { LJ_COMPUTING = 1, LJ_SUSPENDED } LjState;
 
 /* `opened` is whether the body has run: an entry pushed deferred has not, and the drive's first run of it
-   lays out its box. `staged` is whether `cur` holds the walk the body stopped at. */
+   lays out its box. `staged` is whether `cur` holds the walk the body stopped at. `ctx` is the grid row
+   context the question was asked in, which its body runs in wherever a drive computes it; `outer` is the
+   context the job returns to when the body answers or suspends. */
 typedef struct {
     LayoutQuestion q;
     LjState        state;
     bool           opened, staged;
+    unsigned       ctx, outer;
     LayoutBfCursor cur;
 } LjEntry;
 
@@ -34,10 +37,24 @@ typedef struct {
     const lxb_dom_element_t *el;
     LayoutQuestionKind       kind;
     unsigned                 code;
+    unsigned                 ctx;
     uint64_t                 gen;
     uint64_t                 rest;
     LayoutBfAnswer          *a;
 } LjSlot;
+
+/* One grid row context: `container`'s rows are being sized, inside context `parent` (0 for none). A grid
+   area's block size is what its rows' sizing computes and is definite once they are sized (css-grid-1 §11
+   "Grid Layout Algorithm"), so an answer that read one differs between the two: the memo keys on the context,
+   and each context owns its placement, line box and intrinsic size records. The cascade is the same in every
+   context and stays the job's. Held by pointer, so a record handed out survives the table's growth. */
+typedef struct {
+    unsigned                 parent;
+    const lxb_dom_element_t *container;
+    FlowPlacementRecord      placement;
+    LineBoxRecord            line_boxes;
+    IntrinsicSizeRecord      intrinsic;
+} LjContext;
 
 /* Answers per chunk of the job's answer storage. Chunks never move, so a slot's pointer survives the table's
    growth; they are reused from the start when the memo is emptied. */
@@ -65,6 +82,9 @@ struct LayoutJob {
     int         drive_line;
     bool      driven;
     LayoutJobDriver driver;
+    LjContext **ctxs;    /* the grid row contexts entered since the memo was last emptied, owned */
+    size_t      nctx, ctx_cap;
+    unsigned    ctx;     /* the current one, an index into `ctxs` plus one; 0 is none */
     FlowPlacementRecord placement;   /* core/layout/flow_placement.h's three facts, for this job */
     CssCascadeRecord    cascade;     /* core/css/css_cascade_pass.h's cascaded values, for this job */
     LineBoxRecord       line_boxes;  /* core/layout/line_box.h's fills, for this job */
@@ -86,19 +106,21 @@ static LayoutJob *lj_current(void)
 
 /* ---- the memo ------------------------------------------------------------------------------------------- */
 
-static size_t lj_hash(const lxb_dom_element_t *el, LayoutQuestionKind kind, unsigned code, size_t cap)
+static size_t lj_hash(const lxb_dom_element_t *el, LayoutQuestionKind kind, unsigned code, unsigned ctx,
+                      size_t cap)
 {
     uint64_t h = (uint64_t)(uintptr_t)el * 0x9E3779B97F4A7C15ull ^
-                 ((uint64_t)code << 8 | (uint64_t)kind) * 0xC2B2AE3D27D4EB4Full;
+                 ((uint64_t)ctx << 40 | (uint64_t)code << 8 | (uint64_t)kind) * 0xC2B2AE3D27D4EB4Full;
 
     return (size_t)(h ^ (h >> 29)) & (cap - 1);
 }
 
-static LjSlot *lj_probe(LjSlot *tab, size_t cap, uint64_t gen, LayoutQuestion q)
+static LjSlot *lj_probe(LjSlot *tab, size_t cap, uint64_t gen, LayoutQuestion q, unsigned ctx)
 {
-    size_t i = lj_hash(q.element, q.kind, q.code, cap);
+    size_t i = lj_hash(q.element, q.kind, q.code, ctx, cap);
 
-    while (tab[i].gen == gen && (tab[i].el != q.element || tab[i].kind != q.kind || tab[i].code != q.code))
+    while (tab[i].gen == gen &&
+           (tab[i].el != q.element || tab[i].kind != q.kind || tab[i].code != q.code || tab[i].ctx != ctx))
         i = (i + 1) & (cap - 1);
     return &tab[i];
 }
@@ -118,19 +140,35 @@ static void lj_memo_grow(LayoutJob *job)
     for (i = 0; i < job->memo_cap; i++) {
         if (job->memo[i].gen != job->gen) continue;
         *lj_probe(tab, cap, job->gen, layout_question(job->memo[i].kind, (lxb_dom_element_t *)job->memo[i].el,
-                                                      NULL, job->memo[i].code)) = job->memo[i];
+                                                      NULL, job->memo[i].code), job->memo[i].ctx) = job->memo[i];
     }
     free(job->memo);
     job->memo = tab;
     job->memo_cap = cap;
 }
 
-/* Emptying is a generation step, so a job reused across activations pays nothing per slot. */
+/* Releases every context's records, and forgets the contexts when `forget`. */
+static void lj_contexts_release(LayoutJob *job, bool forget)
+{
+    size_t i;
+
+    for (i = 0; i < job->nctx; i++) {
+        flow_placement_record_release(&job->ctxs[i]->placement);
+        line_box_record_release(&job->ctxs[i]->line_boxes);
+        intrinsic_size_record_release(&job->ctxs[i]->intrinsic);
+        if (forget) free(job->ctxs[i]);
+    }
+    if (forget) job->nctx = 0;
+}
+
+/* Emptying is a generation step, so a job reused across activations pays nothing per slot. The contexts are
+   forgotten only when none is current and no entry names one; otherwise their records are emptied. */
 static void lj_memo_shed(LayoutJob *job)
 {
     job->gen++;
     job->memo_used = 0;
     job->answer_used = 0;
+    lj_contexts_release(job, job->ctx == 0 && job->n == 0);
     flow_placement_record_release(&job->placement);
     css_cascade_record_release(&job->cascade);
     line_box_record_release(&job->line_boxes);
@@ -184,6 +222,7 @@ static size_t lj_push(LayoutJob *job, LayoutQuestion q, LjState state)
     job->stack[job->n].state = state;
     job->stack[job->n].opened = state == LJ_COMPUTING;
     job->stack[job->n].staged = false;
+    job->stack[job->n].ctx = job->stack[job->n].outer = job->ctx;
     return job->n++;
 }
 
@@ -224,6 +263,9 @@ void layout_job_free(LayoutJob *job)
             "frees its job only after leaving it, and leaving asserts neither", job->n, job->drives);
     DCHECK(g_alive > 0, "a layout job was freed with no driven job alive");
     g_alive--;
+    DCHECKF(job->ctx == 0, "a layout job was freed inside grid row context %u", job->ctx);
+    lj_contexts_release(job, true);
+    free(job->ctxs);
     flow_placement_record_release(&job->placement);
     css_cascade_record_release(&job->cascade);
     line_box_record_release(&job->line_boxes);
@@ -253,6 +295,8 @@ void layout_job_leave(LayoutJob *job)
             "a layout job was left with a computing question on its stack of %zu or %u drives open; a rest "
             "point taken now would carry live C-stack state, where only suspended questions may cross one",
             job->n, job->drives);
+    DCHECKF(job->ctx == 0, "a layout job was left inside grid row context %u; a row sizing ends in the frame "
+            "that began it", job->ctx);
     g_entered = NULL;
 }
 
@@ -299,10 +343,24 @@ size_t layout_job_alive(void)
     return g_alive;
 }
 
+/* The job whose records are held now, or NULL; and the current grid row context of a job, or NULL. */
+static LayoutJob *lj_held(void)
+{
+    if (g_entered != NULL) return g_entered;
+    return g_sync.drives != 0 ? &g_sync : NULL;
+}
+
+static LjContext *lj_context(const LayoutJob *job)
+{
+    return job->ctx != 0 ? job->ctxs[job->ctx - 1] : NULL;
+}
+
 FlowPlacementRecord *layout_job_placement(void)
 {
-    if (g_entered != NULL) return &g_entered->placement;
-    return g_sync.drives != 0 ? &g_sync.placement : NULL;
+    LayoutJob *job = lj_held();
+
+    if (job == NULL) return NULL;
+    return lj_context(job) != NULL ? &lj_context(job)->placement : &job->placement;
 }
 
 CssCascadeRecord *layout_job_cascade(void)
@@ -313,14 +371,69 @@ CssCascadeRecord *layout_job_cascade(void)
 
 LineBoxRecord *layout_job_line_boxes(void)
 {
-    if (g_entered != NULL) return &g_entered->line_boxes;
-    return g_sync.drives != 0 ? &g_sync.line_boxes : NULL;
+    LayoutJob *job = lj_held();
+
+    if (job == NULL) return NULL;
+    return lj_context(job) != NULL ? &lj_context(job)->line_boxes : &job->line_boxes;
 }
 
 IntrinsicSizeRecord *layout_job_intrinsic_sizes(void)
 {
-    if (g_entered != NULL) return &g_entered->intrinsic;
-    return g_sync.drives != 0 ? &g_sync.intrinsic : NULL;
+    LayoutJob *job = lj_held();
+
+    if (job == NULL) return NULL;
+    return lj_context(job) != NULL ? &lj_context(job)->intrinsic : &job->intrinsic;
+}
+
+/* ---- grid row contexts ---------------------------------------------------------------------------------- */
+
+unsigned layout_job_grid_rows_enter(const lxb_dom_element_t *container)
+{
+    LayoutJob *job = lj_current();
+    unsigned outer = job->ctx;
+    size_t i;
+
+    DCHECK(container != NULL, "a grid row context was entered for no container");
+    for (i = 0; i < job->nctx; i++)
+        if (job->ctxs[i]->parent == outer && job->ctxs[i]->container == container) break;
+    if (i == job->nctx) {
+        if (job->nctx == job->ctx_cap) {
+            size_t cap = job->ctx_cap != 0 ? job->ctx_cap * 2 : 8;
+            LjContext **v = realloc(job->ctxs, cap * sizeof *v);
+
+            CHECK(v != NULL, "a layout job's grid row contexts could not grow");
+            job->ctxs = v;
+            job->ctx_cap = cap;
+        }
+        job->ctxs[i] = calloc(1, sizeof **job->ctxs);
+        CHECK(job->ctxs[i] != NULL, "a layout job's grid row context could not be allocated");
+        job->ctxs[i]->parent = outer;
+        job->ctxs[i]->container = container;
+        job->nctx++;
+    }
+    job->ctx = (unsigned)i + 1;
+    return outer;
+}
+
+void layout_job_grid_rows_leave(const lxb_dom_element_t *container, unsigned outer)
+{
+    LayoutJob *job = lj_current();
+    const LjContext *c = lj_context(job);
+
+    DCHECKF(c != NULL && c->container == container && c->parent == outer,
+            "a grid row context was left that is not the current one (current %u, leaving the one entered from "
+            "%u); row sizings nest, so they end in reverse order", job->ctx, outer);
+    job->ctx = outer;
+}
+
+bool layout_job_grid_rows_sizing(const lxb_dom_element_t *container)
+{
+    const LayoutJob *job = lj_current();
+    unsigned c;
+
+    for (c = job->ctx; c != 0; c = job->ctxs[c - 1]->parent)
+        if (job->ctxs[c - 1]->container == container) return true;
+    return false;
 }
 
 /* ---- the drive ------------------------------------------------------------------------------------------ */
@@ -462,6 +575,8 @@ bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at)
     DCHECK(!layout_job_drive_spent(d),
            "a resting drive was continued after it spent its boxes; its driver rests instead");
     e->state = LJ_COMPUTING;
+    e->outer = job->ctx;
+    job->ctx = e->ctx;
     job->nest++;
     /* A resumed body continues a box already counted; a deferred contribution lays out its box now. A stack
        counts its steps rather than itself. */
@@ -506,7 +621,7 @@ LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at)
            "callers are either a contribution body or a drive, so a drive is always beneath it");
     METRIC_ADD(bf_asks, 1);
     if (job->memo_cap != 0) {
-        s = lj_probe(job->memo, job->memo_cap, job->gen, q);
+        s = lj_probe(job->memo, job->memo_cap, job->gen, q, job->ctx);
         if (s->gen == job->gen) {
             METRIC_ADD(bf_served, 1);
             if (s->rest < job->rests) METRIC_ADD(served_across_rest, 1);
@@ -549,14 +664,17 @@ void layout_job_bf_answer(size_t at, const LayoutBfAnswer *answer)
     DCHECK(!e->staged,
            "a contribution body answered with a staged walk it never resumed; the body's run took a path to "
            "its answer that does not pass through the walk it stopped in");
+    DCHECKF(job->ctx == e->ctx, "a CSS 2.1 §9.4.1 body answered in grid row context %u, asked in %u; a row "
+            "sizing its body began ends before the body answers", job->ctx, e->ctx);
     if (job->memo_used * 2 >= job->memo_cap) lj_memo_grow(job);
-    s = lj_probe(job->memo, job->memo_cap, job->gen, e->q);
+    s = lj_probe(job->memo, job->memo_cap, job->gen, e->q, e->ctx);
     DCHECK(s->gen != job->gen,
            "a CSS 2.1 §9.4.1 contribution was computed while the memo already held it — the ask consults the "
            "memo before it pushes, so a second body for one question is a probe that missed its own key");
     s->el = e->q.element;
     s->kind = e->q.kind;
     s->code = e->q.code;
+    s->ctx = e->ctx;
     s->gen = job->gen;
     s->rest = job->rests;
     s->a = lj_answer_alloc(job);
@@ -564,6 +682,7 @@ void layout_job_bf_answer(size_t at, const LayoutBfAnswer *answer)
     job->memo_used++;
     job->n--;
     job->nest--;
+    job->ctx = e->outer;
 }
 
 void layout_job_suspend(size_t at)
@@ -582,8 +701,11 @@ void layout_job_suspend(size_t at)
     DCHECK(at + 1 < job->n || job->stack[at].staged,
            "a body returned \"not yet\" with no deferred question above it and no walk staged; only a walk "
            "stopped by a spent quota suspends with nothing above it, and it stages first");
+    DCHECKF(job->ctx == job->stack[at].ctx, "a CSS 2.1 §9.4.1 body suspended in grid row context %u, asked in "
+            "%u; a row sizing its body began ends before the body returns", job->ctx, job->stack[at].ctx);
     job->stack[at].state = LJ_SUSPENDED;
     job->nest--;
+    job->ctx = job->stack[at].outer;
     DCHECK(job->stack[at].q.kind != LAYOUT_Q_BF_WALK || job->stack[at].staged,
            "a §9.4.1 stack returned \"not yet\" without staging its walk; every return of \"not yet\" in "
            "block_flow.c's bf_layout stages, so its next run continues rather than restarts");
@@ -666,7 +788,7 @@ unsigned layout_question_repeat(LayoutQuestion q)
     if (q.element == NULL) return 0;
     for (i = job->n; i > 0; i--) {
         up++;
-        if (layout_question_same(job->stack[i - 1].q, q)) return up;
+        if (job->stack[i - 1].ctx == job->ctx && layout_question_same(job->stack[i - 1].q, q)) return up;
     }
     return 0;
 }

@@ -61,6 +61,22 @@ static const char HTML_GRIDITEM[] =
     "grid-template-columns:100px 150px\"><div id=tam style=\"grid-area:main;height:20px\"></div>"
     "<div style=\"grid-area:head;height:10px\"></div><div id=tan style=\"grid-area:nope;height:5px\"></div>"
     "</div>"
+    /* Percentage heights on items in rows being sized (css-sizing-3 §5.2.1 "Intrinsic Contributions of
+       Percentage-Sized Boxes"). Each contribution treats a percentage `height` or `max-height` as its initial
+       value and resolves a percentage `min-height` against zero, and the layout after track sizing resolves
+       each against its sized grid area (css-grid-1 §11). `p1a`'s `auto` row is its 30px of content, so it is
+       15px tall, and its `height: 50%` child, an `auto` height in the contribution, is 7.5px at 30px down;
+       the container is 30px plus the 40px row. `p2a` sizes its `auto` row to 20px and is 10px, leaving the
+       `1fr` row 180px. In `p3`'s 20px first row the `min-height: 200%` item is 40px and the `max-height: 50%`
+       one 10px. Chrome 155 gives these numbers. */
+    "<div id=p1 style=\"display:grid;width:200px;grid-template-rows:auto 40px\"><div id=p1a style=\"height:50%\">"
+    "<div style=\"height:30px\"></div><div id=p1c style=\"height:50%\"></div></div><div id=p1b>x</div></div>"
+    "<div id=p2 style=\"display:grid;width:200px;height:200px;grid-template-rows:auto 1fr\">"
+    "<div id=p2a style=\"height:50%\"><div style=\"height:20px\"></div></div><div id=p2b></div></div>"
+    "<div id=p3 style=\"display:grid;width:200px;grid-template-columns:100px 100px\">"
+    "<div id=p3a style=\"min-height:200%\"><div style=\"height:20px\"></div></div>"
+    "<div id=p3b style=\"max-height:50%\"><div style=\"height:20px\"></div></div>"
+    "<div id=p3c style=\"height:5px\"></div></div>"
     "<script>var g2 = document.getElementById('g2');"
     "function R(id) { return document.getElementById(id).getBoundingClientRect(); }"
     "fetch('/api/gridiw?w=' + getComputedStyle(document.getElementById('gi')).width"
@@ -77,7 +93,12 @@ static const char HTML_GRIDITEM[] =
     " + '&s4x=' + (R('s4c').left - R('s4').left) + '&s4y=' + (R('s4c').top - R('s4').top)"
     " + '&tax=' + (R('tam').left - R('ta').left) + '&tay=' + (R('tam').top - R('ta').top)"
     " + '&taw=' + R('tam').width + '&tnx=' + (R('tan').left - R('ta').left)"
-    " + '&tny=' + (R('tan').top - R('ta').top));"
+    " + '&tny=' + (R('tan').top - R('ta').top)"
+    " + '&p1ah=' + R('p1a').height + '&p1cy=' + (R('p1c').top - R('p1').top) + '&p1ch=' + R('p1c').height"
+    " + '&p1by=' + (R('p1b').top - R('p1').top) + '&p1h=' + R('p1').height"
+    " + '&p2ah=' + R('p2a').height + '&p2by=' + (R('p2b').top - R('p2').top) + '&p2bh=' + R('p2b').height"
+    " + '&p3ah=' + R('p3a').height + '&p3bh=' + R('p3b').height + '&p3cy=' + (R('p3c').top - R('p3').top)"
+    " + '&p3h=' + R('p3').height);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

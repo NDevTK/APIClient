@@ -13707,6 +13707,34 @@ TF_UNIT void probes_griditem(const char *js, Probe *tab, int *n) {
              "css-grid-1 §8.3: an area the template lacks does not name the lines past the explicit grid");
     fold_row(&grida_tt, &grida_why, param_value_is(js, "/api/gridiw", "tny", "30"),
              "css-grid-1 §8.3: an area the template lacks does not name the rows past the explicit grid");
+    /* Percentage heights on items in rows being sized: css-sizing-3 §5.2.1's contribution, then css-grid-1 §11's
+       layout against the sized area (fixture/griditem.h's `p1` to `p3`). */
+    const char *gridp_why = NULL; int gridp_tt = 1;
+    fold_row(&gridp_tt, &gridp_why, param_value_is(js, "/api/gridiw", "p1ah", "15"),
+             "css-grid-1 §11: the `height: 50%` item is not half its 30px row");
+    fold_row(&gridp_tt, &gridp_why, param_value_is(js, "/api/gridiw", "p1cy", "30"),
+             "css-sizing-3 §5.2.1: the item's `height: 50%` child is not below its 30px sibling");
+    fold_row(&gridp_tt, &gridp_why, param_value_is(js, "/api/gridiw", "p1ch", "7.5"),
+             "css-grid-1 §11: the `height: 50%` child is not half its 15px parent");
+    fold_row(&gridp_tt, &gridp_why, param_value_is(js, "/api/gridiw", "p1by", "30"),
+             "css-sizing-3 §5.2.1: the `auto` row is not the 30px its percentage item's content contributes");
+    fold_row(&gridp_tt, &gridp_why, param_value_is(js, "/api/gridiw", "p1h", "70"),
+             "css-grid-1 §5.2: the container is not its 30px and 40px rows");
+    fold_row(&gridp_tt, &gridp_why, param_value_is(js, "/api/gridiw", "p2ah", "10"),
+             "css-grid-1 §11: the `height: 50%` item is not half its 20px row");
+    fold_row(&gridp_tt, &gridp_why, param_value_is(js, "/api/gridiw", "p2by", "20"),
+             "css-sizing-3 §5.2.1: the `auto` row is not its percentage item's 20px of content");
+    fold_row(&gridp_tt, &gridp_why, param_value_is(js, "/api/gridiw", "p2bh", "180"),
+             "css-grid-1 §11.7: the `1fr` row is not the 180px left");
+    fold_row(&gridp_tt, &gridp_why, param_value_is(js, "/api/gridiw", "p3ah", "40"),
+             "css-grid-1 §11: the `min-height: 200%` item is not twice its 20px row");
+    fold_row(&gridp_tt, &gridp_why, param_value_is(js, "/api/gridiw", "p3bh", "10"),
+             "css-grid-1 §11: the `max-height: 50%` item is not clamped to half its 20px row");
+    fold_row(&gridp_tt, &gridp_why, param_value_is(js, "/api/gridiw", "p3cy", "20"),
+             "css-sizing-3 §5.2.1: the first row is not the 20px its items' content contributes, with the "
+             "percentage minimum resolved against zero and the percentage maximum as `none`");
+    fold_row(&gridp_tt, &gridp_why, param_value_is(js, "/api/gridiw", "p3h", "25"),
+             "css-grid-1 §5.2: the container is not its 20px and 5px rows");
     const Probe rows[] = {
         { "grid-item-auto-width", gridiw_tt, "/api/gridiw", SESS_EXPLORE, gridiw_why },
         { "grid-rows-sized", gridrow_tt, "/api/gridiw", SESS_EXPLORE, gridrow_why },
@@ -13714,6 +13742,7 @@ TF_UNIT void probes_griditem(const char *js, Probe *tab, int *n) {
         { "inline-grid-baseline", gridb_tt, "/api/gridiw", SESS_EXPLORE, gridb_why },
         { "grid-spanning-items", grids_tt, "/api/gridiw", SESS_EXPLORE, grids_why },
         { "grid-template-areas", grida_tt, "/api/gridiw", SESS_EXPLORE, grida_why },
+        { "grid-percentage-rows", gridp_tt, "/api/gridiw", SESS_EXPLORE, gridp_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

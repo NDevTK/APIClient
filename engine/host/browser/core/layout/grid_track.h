@@ -58,7 +58,9 @@ typedef struct {
 /* One run of §11.3 over one axis of `container`. `placement` is §8.5's area for every item. `target` is the
    item whose tracks are wanted, or NULL; `target_index` its item number once `found`. `tracks` holds the
    explicit tracks then the implicit ones, `contribs` the items that span a track with an intrinsic or flexible
-   sizing function. All three are owned and released by `grid_axis_sizing_end`. */
+   sizing function. All three are owned and released by `grid_axis_sizing_end`. A row run holds the layout
+   job's grid row context for `container` (core/layout/layout_job.h) from begin to end; `outer_ctx` is the
+   context it restores. */
 typedef struct {
     lxb_dom_element_t   *container, *target;
     bool                 vertical;
@@ -73,6 +75,7 @@ typedef struct {
     size_t               ncontribs, contribs_cap;
     CssPx                avail;
     CssPx                gap;   /* the used gutter between two adjacent tracks (css-grid-1 §10.1) */
+    unsigned             outer_ctx;
 } GridAxisSizing;
 
 /* Begin §11.3 over `container`'s columns (`vertical` false) or rows. `container` must generate a grid

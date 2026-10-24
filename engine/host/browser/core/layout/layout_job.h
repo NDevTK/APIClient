@@ -129,6 +129,18 @@ LineBoxRecord *layout_job_line_boxes(void);
 /* The same for css-sizing-3 §5.1's intrinsic size record (core/layout/intrinsic_size.h). */
 IntrinsicSizeRecord *layout_job_intrinsic_sizes(void);
 
+/* Grid row contexts. While `container`'s rows are being sized (core/layout/grid_track.h), its items' grid
+   areas have no block size yet: css-grid-1 §11 "Grid Layout Algorithm" makes an area definite for the layout
+   that follows track sizing, and css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes"
+   resolves a percentage cyclic through it specially in the item's contribution. A question asked inside the
+   context carries it: its answer is memoized under it, and its body runs in it wherever a drive computes it,
+   with the placement, line box and intrinsic size records that context owns. `enter` makes the current job's
+   context `container`'s, inside the current one, and returns the current one, which `leave` restores; they
+   pair in one frame. `sizing` answers whether `container`'s rows are being sized in the current context. */
+unsigned layout_job_grid_rows_enter(const lxb_dom_element_t *container);
+void layout_job_grid_rows_leave(const lxb_dom_element_t *container, unsigned outer);
+bool layout_job_grid_rows_sizing(const lxb_dom_element_t *container);
+
 /* ---- the drive ------------------------------------------------------------------------------------------ */
 
 /* A drive is a frame that cannot propagate "not yet" to its caller, so it computes every question deferred

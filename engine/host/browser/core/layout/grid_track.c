@@ -119,8 +119,10 @@ static CssPx gt_minimum_contribution(lxb_dom_element_t *item, IntrinsicInlineSiz
    whose min-content and max-content block sizes are both its automatic block size (css-sizing-3 §5.1
    "Intrinsic Sizes"), measured at its used column width, and §6.6's content size suggestion is that same
    size, so the minimum contribution equals them. A percentage among the item's block-axis sizes is cyclic
-   here (css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes") and refused by name. False
-   is "not yet". */
+   here, and css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes" treats a preferred or
+   maximum one as its initial value and resolves a minimum one against zero: the row context this runs in
+   gives the item's grid area no block size, so used_value.c's percentage arms answer both. A `calc()`
+   minimum mixing a length is refused by name. False is "not yet". */
 static bool gt_row_contribution_ask(lxb_dom_element_t *item, CssPx *out)
 {
     static const char *const SIZES[] = { "height", "min-height", "max-height" };
@@ -131,10 +133,10 @@ static bool gt_row_contribution_ask(lxb_dom_element_t *item, CssPx *out)
     for (i = 0; i < sizeof SIZES / sizeof SIZES[0]; i++) {
         CssLength l = css_computed_length(item, SIZES[i]);
 
-        if (l.kind == CSS_LENGTH_PERCENTAGE || l.kind == CSS_LENGTH_CALCULATED)
-            DFAILF("%s is a grid item with a percentage `%s`, which css-sizing-3 §5.2.1 makes cyclic in its row's "
-                   "contribution. BUILD that section's substitution in the row sizing",
-                   box_subject(item, buf, sizeof buf), SIZES[i]);
+        if (l.kind == CSS_LENGTH_CALCULATED && strcmp(SIZES[i], "min-height") == 0)
+            DFAILF("%s is a grid item with a `calc()` `min-height`, which css-sizing-3 §5.2.1 resolves against "
+                   "zero in its row's contribution. BUILD that resolution for a math function",
+                   box_subject(item, buf, sizeof buf));
         if (l.kind == CSS_LENGTH_KEYWORD && l.keyword != CSS_KEYWORD_AUTO && l.keyword != CSS_KEYWORD_NONE)
             DFAILF("%s is a grid item with an intrinsic `%s` keyword, whose row contribution is not built. BUILD "
                    "css-sizing-3 §3.2's keyword in the row sizing",
@@ -286,6 +288,7 @@ void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, lxb
     }
     g->gap = gt_used_gap(g);
     gt_tracks_init(g);
+    if (vertical) g->outer_ctx = layout_job_grid_rows_enter(container);
 }
 
 /* One item's contributions on the axis. Columns: §11.5's minimum contribution (under a min-/max-content
@@ -311,7 +314,12 @@ static bool gt_auto_minimum_applies(const GridAxisSizing *g, size_t start, size_
 static bool gt_contributions_ask(const GridAxisSizing *g, lxb_dom_element_t *item, GridContribution *out)
 {
     IntrinsicInlineSizes c;
+    char buf[160], cbuf[160];
 
+    DCHECKF(!g->vertical || layout_job_grid_rows_sizing(g->container),
+            "%s's row contribution was asked outside %s's grid row context, so a percentage cyclic through its "
+            "grid area would resolve against the rows being sized",
+            box_subject(item, buf, sizeof buf), box_subject(g->container, cbuf, sizeof cbuf));
     if (g->vertical) {
         if (!gt_row_contribution_ask(item, &out->minimum)) return false;
         out->min_content = out->max_content = out->minimum;
@@ -772,6 +780,7 @@ bool grid_axis_sizing_done(const GridAxisSizing *g)
 void grid_axis_sizing_end(GridAxisSizing *g)
 {
     DCHECK(g != NULL, "css-grid-1 §11.3's tracks were released with no state");
+    if (g->vertical) layout_job_grid_rows_leave(g->container, g->outer_ctx);
     free(g->tracks);
     g->tracks = NULL;
     g->ntracks = g->capacity = 0;
@@ -857,8 +866,14 @@ CssPx grid_item_area_block_size(lxb_dom_element_t *container, lxb_dom_element_t 
 {
     GridAxisSizing g;
     CssPx h;
+    char buf[160], cbuf[160];
 
     DCHECK(item != NULL, "a grid area's block size was asked for no item");
+    DCHECKF(!layout_job_grid_rows_sizing(container),
+            "%s's grid area block size was asked while %s's rows are being sized, which is the size those rows "
+            "compute; css-sizing-3 §5.2.1 makes a percentage cyclic through it behave as auto there, which "
+            "used_value.c's grid area arms answer before asking",
+            box_subject(item, buf, sizeof buf), box_subject(container, cbuf, sizeof cbuf));
     gt_run_drive(&g, container, item, true);
     h = gt_target_extent(&g);
     grid_axis_sizing_end(&g);

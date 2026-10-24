@@ -2004,8 +2004,10 @@ bool used_value_height_behaves_as_auto(lxb_dom_element_t *el)
     cb = uv_cb(el);
     if (cb.box == UV_CB_INITIAL) return false;
     /* css-grid-1 §11 "Grid Layout Algorithm": "Each grid area's width and height are considered definite for
-       this purpose." */
-    if (cb.box == UV_CB_GRID_AREA) return false;
+       this purpose", the layout after track sizing. While the container's rows are being sized the area's
+       height is what they compute, and css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized
+       Boxes" has a percentage cyclic through it "behave as auto". */
+    if (cb.box == UV_CB_GRID_AREA) return layout_job_grid_rows_sizing(cb.element);
     /* §17.4's WRAPPER ANSWERS TRUE OUTRIGHT AND THE RECURSION STOPS AT IT, which is the section's own
        parenthesis rather than an assumption about tables: `height` is a non-inheritable property §17.4 does
        NOT list as the wrapper's, so "the initial values are used instead" — and the initial value of `height`
@@ -2057,8 +2059,13 @@ bool used_value_containing_block_height(lxb_dom_element_t *el, CssPx *out)
     /* §10.1's first case: the INITIAL containing block, whose height is the viewport's and is therefore as
        explicitly specified as a height gets — the one containing block that is definite without a layout. */
     if (cb.box == UV_CB_INITIAL) { *out = uv_icb(el, true); return true; }
-    /* css-grid-1 §3.3's grid area, whose height is its row's (core/layout/grid_track.h) and definite. */
-    if (cb.box == UV_CB_GRID_AREA) { *out = grid_item_area_block_size(cb.element, el); return true; }
+    /* css-grid-1 §3.3's grid area, whose height is its rows' (core/layout/grid_track.h): definite once they are
+       sized, and no basis while they are, as the predicate above states. */
+    if (cb.box == UV_CB_GRID_AREA) {
+        if (layout_job_grid_rows_sizing(cb.element)) return false;
+        *out = grid_item_area_block_size(cb.element, el);
+        return true;
+    }
     /* §17.4's WRAPPER IS NEVER EXPLICITLY SPECIFIED, so the sentence's antecedent holds for it without a
        height being computed at all: §17.4 Tables in the visual formatting model uses `height` on the TABLE
        BOX and gives the wrapper the initial value instead, which is `auto`. The predicate above states the
@@ -2162,17 +2169,20 @@ static CssPx uv_grid_item_automatic_min(lxb_dom_element_t *el, lxb_dom_element_t
     /* §6.6's second condition: "it spans at least one track in that axis whose min track sizing function is
        auto"; otherwise "the automatic minimum size is zero, as usual". */
     if (!grid_item_track_min_is_auto(grid, el, vertical)) return css_px(0.0);
+    bool pct = w.kind == CSS_LENGTH_PERCENTAGE || w.kind == CSS_LENGTH_CALCULATED;
+
+    /* css-grid-1 §6.6: "If the item's preferred size in the relevant axis is definite, then the specified size
+       suggestion is that size. It is otherwise undefined." A percentage height has no basis while the area's
+       rows are being sized (core/layout/layout_job.h's grid row context), so the content size suggestion
+       answers there, as for `auto`. */
+    if (pct && !vertical) basis = used_value_containing_block_width(el);
+    if (pct && vertical) pct = used_value_containing_block_height(el, &basis);
     if (w.kind == CSS_LENGTH_ABSOLUTE) {
         m = w.px;
-    } else if (w.kind == CSS_LENGTH_PERCENTAGE || w.kind == CSS_LENGTH_CALCULATED) {
-        bool definite = true;
-
-        if (!vertical) basis = used_value_containing_block_width(el);
-        else definite = used_value_containing_block_height(el, &basis);
-        DCHECK(definite, "a grid area's height came back indefinite");
+    } else if (pct) {
         m = css_px_max(css_length_resolve_pct(w, basis), css_px(0.0));
     } else {
-        if (w.keyword != CSS_KEYWORD_AUTO)
+        if (w.kind == CSS_LENGTH_KEYWORD && w.keyword != CSS_KEYWORD_AUTO)
             DFAILF("%s is a grid item with an intrinsic `%s` keyword, whose css-grid-1 §6.6 specified size "
                    "suggestion is not built. BUILD css-sizing-3 §3.2's keyword as a definite preferred size",
                    box_subject(el, buf, sizeof buf), vertical ? "height" : "width");
