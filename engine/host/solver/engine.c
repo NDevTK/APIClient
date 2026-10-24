@@ -5197,7 +5197,8 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        a decision vector than its parent, so it carries the drives its parent has called (their chain, the body
        running now in `fn` and its name) and the cold tier writes them for it. */
     sib->orphan_want = 0;
-    sib->orphan_argc = 0;
+    /* The arm drives the same body, so a re-drive from it builds the same call shape. */
+    sib->orphan_argc = parent->orphan ? parent->orphan_argc : 0;
     /* The wait does not travel. A parked drive is one flow, so its claim is held by one: the claimant, whose
        replay builds each call where its work runs out. An arm the replay forks before a call is built is an arm
        of the drives already called (none, before the first), so it carries only those; were it to inherit the
@@ -6205,7 +6206,14 @@ static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64
  * It runs in the timeline of the flow that will drive it: the receiver and arguments are objects stamped with the
  * running flow's generation, private to it for the session, so minting them under another flow would put this
  * flow's writes outside every delta. The unknowns are named by the body's locator (see g_orphans_driven). */
-static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, uint64_t hash) {
+/* The position engine_orphan_call names chain member `k`'s unknowns by: `k` where an earlier member is the same
+   body (a listener driven again), and 0 for a body's first call, whose names predate re-drives. */
+static int orphan_chain_position(const Flow *f, int k) {
+    for (int j = 0; j < k; j++) if (f->orphan_chain[j] == f->orphan_chain[k]) return k;
+    return 0;
+}
+
+static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, uint64_t hash, int pos) {
     JSValue *args = NULL, self, *base;
     char id[64];
     int k;
@@ -6237,15 +6245,20 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
             "holds a value for a parameter it holds it as a DEFAULT INITIALIZER, and that arm is already run " \
             "by the fork over the page's own `=== undefined` gate; attaching an example here deletes it", (nm))
 
+    /* A body driven again is another call with other arguments (a listener's next event), so a member past
+       the chain's first occurrence of the body names its unknowns by its chain position: one name per call, and
+       a pin taken over the first event never answers for the second. */
     for (k = 0; k < argc; k++) {
-        snprintf(id, sizeof id, "{orphan%016llx.arg%d}", (unsigned long long)hash, k);
+        if (pos > 0) snprintf(id, sizeof id, "{orphan%016llx#%d.arg%d}", (unsigned long long)hash, pos, k);
+        else snprintf(id, sizeof id, "{orphan%016llx.arg%d}", (unsigned long long)hash, k);
         /* This engine's own instrument: the argument stood in no byte anywhere, so an address composed from it is
            runtime-only but nothing was learned from it; the provenance says so, as the assert says it of the
            example. */
         args[k] = concolic_new(ctx, id, id, CONCOLIC_WHOSE_INSTRUMENT, JS_UNDEFINED);
         ORPHAN_BINDS_OPEN(args[k], id);
     }
-    snprintf(id, sizeof id, "{orphan%016llx.this}", (unsigned long long)hash);
+    if (pos > 0) snprintf(id, sizeof id, "{orphan%016llx#%d.this}", (unsigned long long)hash, pos);
+    else snprintf(id, sizeof id, "{orphan%016llx.this}", (unsigned long long)hash);
     /* The receiver is the same fact. */
     self = concolic_new(ctx, id, id, CONCOLIC_WHOSE_INSTRUMENT, JS_UNDEFINED);
     ORPHAN_BINDS_OPEN(self, id);
@@ -6290,7 +6303,8 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
 }
 
 /* The three things an orphan step can do, all progress and all distinct: seed a fresh drive of a body nothing
-   called, hand a body back to the drives a park recorded for it, or build the call of a drive that has one.
+   called (or a listener's next event, engine_orphan_redrive), hand a body back to the drives a park recorded for
+   it, or build the call of a drive that has one.
    0 is "nothing to take", which lets the caller finish. */
 #define ORPHAN_STEP_SEEDED   1
 #define ORPHAN_STEP_ROUTED   2
@@ -6342,7 +6356,8 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
                "none, and the act is read from the body handed over");
         f->orphan_acts[f->orphan_claim_at] = listener_act_of(ctx, f->orphan_claim_fn);
         g_orphans_driven++;
-        base = engine_orphan_call(ctx, f->orphan_claim_fn, f->orphan_argc, hash);
+        base = engine_orphan_call(ctx, f->orphan_claim_fn, f->orphan_argc, hash,
+                                  orphan_chain_position(f, f->orphan_claim_at));
         flow_install_base(f, ctx, base);
         /* The body handed over is now the one running: it moves into `fn` under its own name, and the claim moves
            to the next member, which the walks may route as soon as it exists. */
@@ -6364,6 +6379,48 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
  * engine_orphan_resume). Its gate is the minting half: the line below adds a member to the frontier
  * (engine_sibling_assemble over decide_fork_same_path), and a non-forking session must gain none from inside itself,
  * which the fork seam asserts for every other door. */
+/* A LISTENER RUNS ONCE PER EVENT, so a drive whose body is a listener (its member states an act) is followed by
+   another drive of the same body in the world it left: the next event, with arguments of its own
+   (engine_orphan_call's position names). A take cannot do it, because a body is taken once per session. It is
+   seeded once per flow, when the drive has run out of work and the take found no new body, so a sequence grows
+   one event at a time as the frontier serves its tip, and a tip that emits nothing new sinks in the order. */
+static int engine_orphan_redrive(JSContext *ctx, Flow *f) {
+    int called = f->orphan_chain_n;
+    uint64_t hash = f->orphan_hash;
+    JSValue *base;
+    Flow *sib;
+    char *act;
+
+    if (!f->orphan || f->orphan_want || f->redrive_seeded || called == 0 || !f->orphan_acts[called - 1])
+        return 0;
+    DCHECK(JS_IsFunction(ctx, f->fn) && hash == f->orphan_chain[called - 1],
+           "a drive with a called listener member holds no function, or names another body — `fn` and the hash "
+           "are written with the member's call");
+    f->redrive_seeded = 1;
+    g_orphans_driven++;
+    base = engine_orphan_call(ctx, f->fn, f->orphan_argc, hash, called);
+    sib = engine_sibling_assemble(ctx, f, base,
+                                  decide_fork_same_path("(a listener the page never fired was driven again — no "
+                                                        "predicate was asked)"),
+                                  concolic_pins_suspend(), flow_path_marks(f));
+    DCHECK(sib->orphan && sib->orphan_chain_n == called,
+           "a re-drive's assembly did not carry the drives its flow has called — the next event follows them");
+    JS_FreeValue(ctx, sib->fn);
+    sib->fn = JS_DupValue(ctx, f->fn);
+    sib->orphan_hash = hash;
+    act = strdup(f->orphan_acts[called - 1]);
+    CHECK(act != NULL, "engine: OOM copying a listener's act");
+    flow_orphan_chain_push(sib, hash, act, 1);
+    sib->orphan_claim_at = sib->orphan_chain_n;
+    {
+        char loc[17];
+        const char *fields[1] = { loc };
+        snprintf(loc, sizeof loc, "%016llx", (unsigned long long)hash);
+        flow_set_orphan_seen(sib, (int64_t)novelty_drive_note(novelty_id(NOVELTY_DRIVE, fields, 1), sib->visits));
+    }
+    return ORPHAN_STEP_SEEDED;
+}
+
 static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     OrphanTake t = { JS_UNDEFINED, 0, 0 };
     uint32_t gen = JS_OrphanGen(JS_GetRuntime(ctx));
@@ -6382,7 +6439,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     g_orphan_asks++;
     if (g_orphan_gen_valid && gen == g_orphan_gen_seen && world_eq(f->world, g_orphan_gen_world)) {
         g_orphan_asks_memo++;
-        return 0;
+        return engine_orphan_redrive(ctx, f);
     }
     /* Named residual. An empty walk is not "this bundle ships no uncalled code": the take can hand over only a
        body with a live function object of its own (JS_OrphanTakeOne walks rt->gc_obj_list's JS_GC_OBJ_TYPE_JS_OBJECT
@@ -6416,7 +6473,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
         g_orphan_gen_seen = gen; g_orphan_gen_world = f->world; g_orphan_gen_valid = 1;
         g_orphan_asks_empty++;
         DCHECK(JS_IsUndefined(t.fn), "an orphan take that reported nothing still left a function on the record");
-        return 0;
+        return engine_orphan_redrive(ctx, f);
     }
     /* The take's own row, raised here rather than at either exit below: the two exits (route, seed) are already
        named by solver/step_unit.h, and the partition needs the take they share as a summand of the ask. */
@@ -6458,7 +6515,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     }
 
     g_orphans_driven++;
-    base = engine_orphan_call(ctx, t.fn, t.argc, hash);
+    base = engine_orphan_call(ctx, t.fn, t.argc, hash, 0);
     /* The other side of the gate at this function's top, asserted where the member is minted, since a take, a
        hash and a route separate the two. */
     DCHECK(g_sess_forking,
@@ -6478,10 +6535,11 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
        by a flow that is itself driving is called in the state that drive left, so it is named after the drives
        the seeding flow has called: the assembly copied those, and this one is appended in seeding order. */
     sib->orphan_hash = hash;
+    sib->orphan_argc = t.argc;
     DCHECK(sib->orphan_chain_n == (f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0),
            "a seeded drive's chain does not begin with the drives its seeding flow has called — the assembly copies "
            "exactly those");
-    flow_orphan_chain_push(sib, hash, listener_act_of(ctx, t.fn));
+    flow_orphan_chain_push(sib, hash, listener_act_of(ctx, t.fn), 0);
     sib->orphan_claim_at = sib->orphan_chain_n;
     /* And how much of this body the product had already explored, read at the seed: the drive's key is the
        body's locator (solver/novelty.h's NOVELTY_DRIVE), which is its script's content and its position there,

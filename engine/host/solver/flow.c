@@ -1029,14 +1029,14 @@ int flow_credit_emit(double v) {
    executed prefix, so nothing on either drive's path could make them agree. */
 /* Append `hash` to `f`'s chain of drives (flow.h's `orphan_chain`). A member names a body, and one body is not
    driven twice in one chain: a take hands a body over once per timeline. */
-void flow_orphan_chain_push(Flow *f, uint64_t hash, char *act)
+void flow_orphan_chain_push(Flow *f, uint64_t hash, char *act, int repeat)
 {
     uint64_t *grown;
     char **acts;
     int i;
 
     DCHECK(hash != 0, "a drive was added to a chain with the locator that means 'not a drive'");
-    for (i = 0; i < f->orphan_chain_n; i++)
+    for (i = 0; i < f->orphan_chain_n && !repeat; i++)
         DCHECK(f->orphan_chain[i] != hash,
                "a body was added to a chain of drives that already holds it — a take hands a body over once per "
                "timeline, so the second member names a drive this flow cannot have been seeded with");
@@ -1059,7 +1059,7 @@ void flow_orphan_chain_copy(Flow *dst, const Flow *src, int n)
         char *act = src->orphan_acts[i] ? strdup(src->orphan_acts[i]) : NULL;
 
         CHECK(act || !src->orphan_acts[i], "engine: OOM copying a drive's act");
-        flow_orphan_chain_push(dst, src->orphan_chain[i], act);
+        flow_orphan_chain_push(dst, src->orphan_chain[i], act, 1);
     }
 }
 

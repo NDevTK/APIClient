@@ -305,9 +305,12 @@ typedef struct Flow {
        receiver and arguments are concolic objects owned by the minting flow. */
     int orphan_want;
     /* The callee's declared formal parameter count, handed over by the take beside the function. Live state, not
-       part of the recipe, since it is a fact about the body this session compiled. Meaningful only while
-       `orphan_want` is set and `fn` is a function. */
+       part of the recipe, since it is a fact about the body this session compiled. Meaningful while `orphan_want`
+       is set (the call still to build) and on a drive whose `fn` is that body (a re-drive's call). */
     int orphan_argc;
+    /* Has this drive seeded the drive of its listener again (engine.c's engine_orphan_redrive)? Once per flow:
+       the re-drive is the next event in this flow's world, and an arm forked later carries its own. */
+    int redrive_seeded;
 
     /* Has this flow's recipe been written to the park document? A per-flow fact because a partial self-park
        writes and releases the lowest-value tail while the engine keeps running. flow_release reads it (a
@@ -1608,7 +1611,9 @@ Flow *flow_running(void);
 /* A just-seeded drive's product count (flow.h's `orphan_seen`), re-keyed and raised as a rank change. */
 void  flow_set_orphan_seen(Flow *f, int64_t seen);
 /* A flow's chain of drives (`orphan_chain`): one more member, or an arm's copy of its parent's first `n`. */
-void  flow_orphan_chain_push(Flow *f, uint64_t hash, char *act);   /* takes `act` (may be NULL) */
+/* Takes `act` (may be NULL). `repeat` admits a body the chain already holds: a listener driven again is the next
+   event, where a take hands a body over once per timeline. */
+void  flow_orphan_chain_push(Flow *f, uint64_t hash, char *act, int repeat);
 void  flow_orphan_chain_copy(Flow *dst, const Flow *src, int n);
 /* A new @H/@S from the running flow: raise reward, reset aging. Answers 1 when an account was paid and 0 on the
    dropped arm (no flow holds the thread). */
