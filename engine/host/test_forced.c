@@ -27375,9 +27375,8 @@ TF_UNIT void box_paint_inline_box_selftest(JSContext *ctx, lxb_html_document_t *
  * followed, before its own close tag, by a block-level one, and read what comes back. AT THE REVISION THIS
  * LANDED that scan returned twenty spans and every one of them is PROSE — a `.c` or `.h` comment arguing about
  * this very shape, a spec index's stored example, a minified bundle's `i<p.length` read as markup — with
- * exactly TWO exceptions, neither of them a document under any instrument: `test-forms.html`'s
- * `<label>…<div>`, which `git grep test-forms` shows nothing in this tree loads, and `engine/specindex`'s copy
- * of an HTML §13.2 parse example. The NEAREST thing any fixture drives is an `inline-block` parent, which
+ * exactly ONE exception, which is no document under any instrument: `engine/specindex`'s copy of an HTML
+ * §13.2 parse example. The NEAREST thing any fixture drives is an `inline-block` parent, which
  * css-display-3 §2.7 "Automatic Box Type Transformations" makes ATOMIC and which §9.2.1.1 therefore never
  * breaks — core/layout/block_flow.c's own walk says so in its own words, that an `inline-block` holding a
  * `div` "breaks no ancestor and this walk must not enter it". So the whole of the walk below was reasoned and

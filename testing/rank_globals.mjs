@@ -95,12 +95,12 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
    a production application's many chunks are ONE artifact whose author is one author, so counting its chunks
    separately would let one app outvote every independent library. */
 const LIBRARIES = [
-    { group: "jquery-3.7.1", kind: "library (minified)", files: ["jquery-3.7.1.min.js"] },
-    { group: "axios", kind: "library (minified)", files: ["axios.min.js"] },
-    { group: "superagent", kind: "library (minified)", files: ["superagent.min.js"] },
-    { group: "ky", kind: "library (minified)", files: ["ky.min.js"] },
-    { group: "redaxios", kind: "library (minified)", files: ["redaxios.min.js"] },
-    { group: "unfetch", kind: "library (minified)", files: ["unfetch.min.js"] },
+    { group: "jquery-3.7.1", kind: "library (minified)", files: ["testing/corpus/libraries/jquery-3.7.1.min.js"] },
+    { group: "axios", kind: "library (minified)", files: ["testing/corpus/libraries/axios.min.js"] },
+    { group: "superagent", kind: "library (minified)", files: ["testing/corpus/libraries/superagent.min.js"] },
+    { group: "ky", kind: "library (minified)", files: ["testing/corpus/libraries/ky.min.js"] },
+    { group: "redaxios", kind: "library (minified)", files: ["testing/corpus/libraries/redaxios.min.js"] },
+    { group: "unfetch", kind: "library (minified)", files: ["testing/corpus/libraries/unfetch.min.js"] },
 ];
 
 /* `git ls-files --error-unmatch` is the membership test, asking the REVISION rather than the disk, so a file a
