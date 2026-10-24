@@ -271,6 +271,12 @@ JSValue element_view_client_rects(lxb_dom_element_t *el);
  * The FOUR NUMBERS are the same derivation `getBoundingClientRect` reports: one client-rect list in this
  * vocabulary and one reduction of it (element_view.c). `el` must be an element. */
 void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4]);
+/* Named residual. Not covered: these two entries and their callers (§9's Range members, paint,
+   scrollIntoView, Intersection Observer) lay out to completion in a drive of their own, so none rests where
+   the page's own `getBoundingClientRect` does. Next diff builds: an ask form of the client-rect list, which
+   element_view.c's `ev_client_rects_ask` already is, asked by each caller's step machine before it reads.
+   Absence shows as: layout_job.c's nested-drive DFAIL with one of those callers on the stack, or a
+   REST_UNIT_LAYOUT_DESCENDANTS unit over the quantum inside one of them. */
 
 /* The smallest rectangle enclosing all `n` > 0 rectangles of `r` (each x, y, width, height), into `out` in the
    same order. Each rectangle's edges are Geometry Interfaces §3's derived ones, the minimum and maximum of its
