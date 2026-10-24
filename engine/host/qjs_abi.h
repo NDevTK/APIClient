@@ -158,7 +158,7 @@ QJS_EXPORT void qjs_novelty_learn(const char *text);
    census row and would have taken the argument down with it. WIRED is verified: core/platform.c installs
    rendering_init on its unconditional agent table, that entry registers `engine_set_rendering_hook`, and
    solver/engine.c asks the hook under a comment naming exactly that list. What the sentence got wrong is
-   `as a rung of every flow's own step` — the rung sits INSIDE `if (!f->frame)`, so only a member with no
+   `as a rung of every flow's own step` — the rung sits INSIDE `if (!flow_frame(f))`, so only a member with no
    live frame ever descends to it, and engine.c's own note on that ladder says the whole of it is
    unreachable for the population its live/framed census names. A relayed native drive read
    `renderingOpportunityAsks 6` against `renderingOpportunities 0`; that row is UNSCORED IN BOTH DIRECTIONS

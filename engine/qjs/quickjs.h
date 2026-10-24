@@ -3470,6 +3470,12 @@ typedef struct JSAgentRecord JSAgentRecord;
 JS_EXTERN JSAgentRecord *JS_NewAgentRecord(JSRuntime *rt, bool can_block);
 JS_EXTERN void JS_SetRealmAgent(JSContext *ctx, JSAgentRecord *agent);
 JS_EXTERN JSAgentRecord *JS_GetRealmAgent(JSContext *ctx);
+/* The realm after `prev` in `rt`, in creation order (NULL starts the walk, and ends it). A realm being torn
+   down is no longer listed. Borrowed. */
+JS_EXTERN JSContext *JS_NextRealm(JSRuntime *rt, JSContext *prev);
+/* The realm of ECMA-262 §9.4.1 GetActiveScriptOrModule ( )'s answer: the realm of the topmost execution
+   context running a script or module's code, or NULL when no such context is on the stack. Borrowed. */
+JS_EXTERN JSContext *JS_GetActiveScriptRealm(JSContext *ctx);
 JS_EXTERN bool JS_AgentCanBlock(const JSAgentRecord *agent);
 /* The system time zone's offset for Date's local time (ECMAScript §21.4.1.25 LocalTime): minutes of UTC minus
    local time at `time_ms` ms from the epoch, as Date.prototype.getTimezoneOffset answers. Process-wide, and

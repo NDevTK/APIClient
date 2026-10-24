@@ -57,6 +57,11 @@ void realm_declare_intrinsic(RealmIntrinsic install);
 void realm_install_intrinsics(JSContext *ctx, JSAgentRecord *agent, const char *top_level_creation_url,
                               const char *global_interface, bool owner_is_secure_context);
 
+/* HTML §8.1.3.2's environment settings objects whose responsible event loop is `ctx`'s: the realm after `prev`
+ * (NULL starts the walk) that shares `ctx`'s agent and was built through realm_install_intrinsics, or NULL.
+ * Borrowed. */
+JSContext *realm_next_environment(JSContext *ctx, JSContext *prev);
+
 /* WEB IDL §3.3.8 [Global]: is this realm's global object a WorkerGlobalScope, or a WorkletGlobalScope — HTML
  * §8.1.3.5 "Secure contexts" step 1.2's and step 1.3's conditions, over the mask above. core/idl_args.h owns
  * the reading of the mask and states why it answers an interface question; these two exist so the ONE reader

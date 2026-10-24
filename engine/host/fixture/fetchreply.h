@@ -219,7 +219,7 @@ static const char HTML_FETCHREPLY[] =
     "var _spr; var _sp = new Promise(function(r){ _spr = r; }); _sp.then(function(v){ fetch('/api/shared?v=' + v); }); _spr(state.beta ? 'shBETA' : 'shSTABLE');"   /* PROBE: _sp created BEFORE the state.beta snapshot fork -> shared; settled per-flow. If promise state is NOT per-flow COW, only ONE value survives (contamination) */
     "</script>"
     /* THE FRAME CONTROL: a SHORT program of its own that asks for a reply and ends in the step that starts it.
-       `flow_deliver_one_reply` is gated on `f->frame` twice (the `if (!f->frame)` around the task ladder, and
+       `flow_deliver_one_reply` is gated on `flow_frame(f)` twice (the `if (!flow_frame(f))` around the task ladder, and
        `flow_stack_empty`, which returns 0 for a framed flow), and a frame is released only when its program
        runs to completion — so a reply asked for inside a long program waits for the rest of it. This row and
        the reply-consuming rows above are one experiment: this one at 1 with them at 0 says the gate is the

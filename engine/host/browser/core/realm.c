@@ -736,6 +736,28 @@ bool realm_owner_is_secure_context(JSContext *ctx)
     return r;
 }
 
+JSContext *realm_next_environment(JSContext *ctx, JSContext *prev)
+{
+    JSAgentRecord *agent = JS_GetRealmAgent(ctx);
+    JSContext *r = prev;
+
+    DCHECK(g_global_names_slot != JS_INVALID_CLASS_ID,
+           "the environments of an agent were walked before any realm was built in it");
+    while ((r = JS_NextRealm(JS_GetRuntime(ctx), r)) != NULL) {
+        JSValue names;
+        bool built;
+
+        if (JS_GetRealmAgent(r) != agent) continue;
+        /* The global names are the first field realm_install_intrinsics writes, so a realm holding them has an
+           environment; a ShadowRealm the page made in this agent has none. */
+        names = JS_GetClassProto(r, g_global_names_slot);
+        built = !JS_IsNull(names);
+        JS_FreeValue(r, names);
+        if (built) return r;
+    }
+    return NULL;
+}
+
 unsigned realm_global_names(JSContext *ctx)
 {
     JSValue v;

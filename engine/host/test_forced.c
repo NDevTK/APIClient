@@ -14597,6 +14597,26 @@ TF_UNIT void probes_srcdoc(const char *js, Probe *tab, int *n) {
     fold_row(&sdmint_tt, &sdmint_why, param_value_is(js, "/api/sdmint", "v", "own"),
              "/api/sdmint's `v` is not `own`: the frame the boot flow created answered with the Window of a frame "
              "the baseline created, or its document is not its initial about:blank — one name, two creations");
+    /* HTML §8.1.6.4: a rejection's and a handling's global is the running script's settings object's, whatever
+       realm the builtin that rejected or handled belongs to. */
+    const char *sdrej_why = NULL;
+    int sdrej_tt = 1;
+    fold_row(&sdrej_tt, &sdrej_why, param_undriven_count(js, "https://x.test/api/sdrej", "v", "child") > 0,
+             "there is no undriven /api/sdrej?v=child record: the frame's own rejection was not notified at the "
+             "frame's global. Read /api/sdrun first: if the frame ran, its list is not the one its realm names");
+    fold_row(&sdrej_tt, &sdrej_why, param_undriven_count(js, "https://x.test/api/sdrej", "v", "rh3") > 0,
+             "there is no undriven /api/sdrej?v=rh3 record: a promise the frame notified and its own script later "
+             "handled fired no `rejectionhandled` at the frame. Read `child` first: if that is absent, nothing "
+             "reached the frame's outstanding weak set");
+    fold_row(&sdrej_tt, &sdrej_why, param_undriven_count(js, "https://x.test/api/sdrej", "v", "rh2") == 0,
+             "an undriven /api/sdrej?v=rh2 record: the parent's script handled the frame's notified promise through "
+             "the frame's own `catch` and the frame's weak set was asked. §8.1.6.4 asks the running script's "
+             "global, the parent's, so the tracker took the realm of the builtin rather than the active script's");
+    /* An orphan drive of the parent's listener reaches its fetch with no event behind it, so only an undriven
+       parent record is a notification. */
+    fold_row(&sdrej_tt, &sdrej_why, param_undriven_count(js, "/api/sdrej", "v", NULL) == 0,
+             "the parent was notified of the frame's rejection (an undriven /api/sdrej?v=parent): the list was "
+             "chosen by the realm of the builtin that rejected rather than by the running script's");
     const Probe rows[] = {
         /* §4.8.5's srcdoc documents. `srcdoc-fallback-base` is KEYED ON THE FETCH'S OWN ARGUMENT and not on
            the address it produces, because the address is what the ENGINE composes out of the frame's
@@ -14609,6 +14629,7 @@ TF_UNIT void probes_srcdoc(const char *js, Probe *tab, int *n) {
         { "srcdoc-otherwise-sync", sdsync_tt, "/api/sdsync", SESS_EXPLORE, sdsync_why },
         { "srcdoc-otherwise-timer", sdother_tt, "/api/sdotherwise", SESS_EXPLORE, sdother_why },
         { "srcdoc-script-child-own", sdmint_tt, "/api/sdmint", SESS_EXPLORE, sdmint_why },
+        { "rejection-global-is-running-script", sdrej_tt, "https://x.test/api/sdrej", SESS_EXPLORE, sdrej_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

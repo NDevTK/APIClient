@@ -394,7 +394,7 @@ METRIC(unit_parked, "unitParked", LIFETIME, "step", PROCESS, "solver/engine.c", 
 METRIC(unit_checkpoint_owed, "unitCheckpointOwed", LIFETIME, "step", PROCESS, "solver/engine.c", INT)
 /* …and how many steps descended flow_step's work ladder: every arm of it (deliveries, checkpoint,
    reply, sequence, task, lifecycle, orphan rungs, clock sources, resting arms) sits inside one
-   `if (!f->frame)`. A lifetime count of passes through that block, so not comparable with
+   `if (!flow_frame(f))`. A lifetime count of passes through that block, so not comparable with
    `steps` (the loop body iterates) but with `_orphansAsked`, raised on the same basis, the
    containment asserted in the engine. 0 puts the cause upstream of the ladder; large, with
    `_orphansAsked == 0`, says an arm above the orphan rung took every descent (`stepUnitRuns`).
@@ -429,7 +429,7 @@ METRIC(clock_deadline_arrival_race_asked_life, "clockDeadlineArrivalRaceAskedLif
 /* `outOfPrograms` separates a member inside its last program from one past the last row, which
    a cursor value cannot: only the latter reaches engine.c's orphan arm. Its three parts also
    name members never dispatched or suspended in a live frame (the ladder sits below
-   `if (!f->frame)`). solver/cold.h owns the ladder's list; do not enumerate its rungs here. */
+   `if (!flow_frame(f))`). solver/cold.h owns the ladder's list; do not enumerate its rungs here. */
 METRIC(out_of_programs, "outOfPrograms", GAUGE, "member", AGENT, "solver/cold.c", INT)
 METRIC(out_of_programs_unrun, "outOfProgramsUnrun", GAUGE, "member", AGENT, "solver/cold.c", INT)
 METRIC(out_of_programs_framed, "outOfProgramsFramed", GAUGE, "member", AGENT, "solver/cold.c", INT)

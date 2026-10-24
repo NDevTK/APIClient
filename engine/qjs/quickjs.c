@@ -3942,6 +3942,14 @@ JSAgentRecord *JS_GetRealmAgent(JSContext *ctx)
     return ctx->agent;
 }
 
+JSContext *JS_NextRealm(JSRuntime *rt, JSContext *prev)
+{
+    struct list_head *el = prev ? prev->link.next : rt->context_list.next;
+
+    DCHECK(prev == NULL || prev->rt == rt, "a realm walk was continued from a realm of another runtime");
+    return el == &rt->context_list ? NULL : list_entry(el, JSContext, link);
+}
+
 bool JS_AgentCanBlock(const JSAgentRecord *agent)
 {
     return agent->can_block;
@@ -69537,6 +69545,24 @@ JSAtom JS_GetScriptOrModuleName(JSContext *ctx, int n_stack_levels)
         return JS_ATOM_NULL;
     b = p->u.func.function_bytecode;
     return JS_DupAtom(ctx, b->filename);
+}
+
+JSContext *JS_GetActiveScriptRealm(JSContext *ctx)
+{
+    JSStackFrame *sf;
+
+    /* A built-in's execution context has a null ScriptOrModule, so the walk passes over every frame that is not
+       running bytecode; a bytecode function's realm is the realm of the script that defined it. */
+    for (sf = ctx->rt->current_stack_frame; sf; sf = sf->prev_frame) {
+        JSObject *p;
+
+        if (JS_VALUE_GET_TAG(sf->cur_func) != JS_TAG_OBJECT)
+            continue;
+        p = JS_VALUE_GET_OBJ(sf->cur_func);
+        if (js_class_has_bytecode(p->class_id))
+            return p->u.func.function_bytecode->realm;
+    }
+    return NULL;
 }
 
 JSAtom JS_GetModuleName(JSContext *ctx, JSModuleDef *m)

@@ -89,13 +89,14 @@
 #include "core/events/event_target.h"
 #include "core/html/unhandled_rejection.h"
 
-/* §8.1.4.7's list, as a baseline heap object so it time-travels with the flow that filled it. Each live entry
-   is a two-element array [promise, reason]; a handled entry becomes undefined in place, because the identity
-   of a slot is what the handled edge finds it by and compacting would move the ones behind it. */
-static JSValue g_list;
+/* §8.1.3.3: "A global object has an about-to-be-notified rejected promises list", so the list is a per-realm
+   value, a heap Array that time-travels with the flow that fills it. Each live entry is a two-element array
+   [promise, reason]; a handled entry becomes undefined in place, because the identity of a slot is what the
+   handled edge finds it by and compacting would move the ones behind it. */
+static JSClassID g_list_slot = JS_INVALID_CLASS_ID;
 static int     g_ready;
 /* §8.1.3.3's OTHER container — "a global object has an outstanding rejected promises WEAK SET" — and the word
-   weak is the whole of why this one is not a second `g_list`. Its members are exactly the promises this global
+   weak is the whole of why this one is not a second list. Its members are exactly the promises this global
    already REPORTED (§8.1.4.7 step 4.1.4 appends only what survived the `unhandledrejection` fire still
    unhandled), and a
    page that rejects in a loop produces one member per iteration; a strong list of them would keep every
@@ -146,8 +147,7 @@ static JSValue g_pre_key = JS_UNDEFINED;
    stood here as though it were §8.1.4.7's; neither section contains it, and a promise answers no such
    question — the global is the running script's settings object's, fixed at the reject.) Every child
    document's unhandled rejection fired at the ROOT window, which is the same defect a shared
-   EventTarget.prototype has one link up. A rejection RECORDS the driver of the realm it rejected in, so the
-   job carries its realm with it rather than the notify pass guessing one. */
+   EventTarget.prototype has one link up. Each global's list is notified on that global's own driver. */
 /* THE SLOT AND THE STEP ID ARE SEPARATE DECLARATIONS BECAUSE THEY ARE SEPARATE QUANTITIES: a per-realm
    value slot is a CLASS ID (core/realm.h's declare entry), and a step id is not. They shared one
    `static int`, which is the erasure that let one C type stand for both. */
@@ -165,9 +165,9 @@ static void  (*g_report)(JSContext *ctx, JSValueConst reason, RejectionReportEdg
 void unhandled_rejection_set_report_hook(void (*fn)(JSContext *ctx, JSValueConst reason,
                                                     RejectionReportEdge edge)) { g_report = fn; }
 
-static uint32_t list_len(JSContext *ctx)
+static uint32_t list_len(JSContext *ctx, JSValueConst list)
 {
-    JSValue v = JS_GetPropertyStr(ctx, g_list, "length");
+    JSValue v = JS_GetPropertyStr(ctx, list, "length");
     uint32_t n = 0;
     JS_ToUint32(ctx, &n, v);
     JS_FreeValue(ctx, v);
@@ -219,14 +219,22 @@ static void outstanding_remove(JSContext *ctx, JSValueConst promise)
                   "and the write are naming different keys");
 }
 
-static void rejection_tracker(JSContext *ctx, JSValueConst promise, JSValueConst reason,
+static void rejection_tracker(JSContext *current, JSValueConst promise, JSValueConst reason,
                               bool is_handled, void *opaque)
 {
     uint32_t n, i;
+    JSValue list;
+    JSContext *ctx;
 
     (void)opaque;
     DCHECK(g_ready, "the rejection tracker fired after its list was freed");
-    n = list_len(ctx);
+    /* §8.1.6.4 steps 2-4: the settings object is the running script's, else the current one (the realm quickjs
+       hands this hook), and global is its global object. Both edges answer by this rule, so the handled edge
+       looks only in the list of the global whose script handles the promise. */
+    ctx = JS_GetActiveScriptRealm(current);
+    if (!ctx) ctx = current;
+    list = realm_value_get(ctx, g_list_slot);
+    n = list_len(ctx, list);
     if (!is_handled) {
         /* "add promise to the about-to-be-notified rejected promises list" */
         JSValue e = JS_NewArray(ctx);
@@ -234,25 +242,24 @@ static void rejection_tracker(JSContext *ctx, JSValueConst promise, JSValueConst
                                   "the page reported and this engine never saw");
         JS_SetPropertyUint32(ctx, e, 0, JS_DupValue(ctx, promise));
         JS_SetPropertyUint32(ctx, e, 1, JS_DupValue(ctx, reason));
-        /* THE REJECTING REALM'S driver — quickjs hands this hook the ctx of the realm the promise belongs to,
-           which is the one place that fact is known. */
-        JS_SetPropertyUint32(ctx, e, 2, realm_value_get(ctx, g_notify_slot));
-        JS_SetPropertyUint32(ctx, g_list, n, e);
+        JS_SetPropertyUint32(ctx, list, n, e);
+        JS_FreeValue(ctx, list);
         return;
     }
     /* §8.1.6.4 step 7.1: "If global's about-to-be-notified rejected promises list contains promise, then remove
        promise from that list and RETURN" — a handler attached after the rejection but before the checkpoint,
        which is ordinary code, not an error, and which is never reported and never announced. */
     for (i = 0; i < n; i++) {
-        JSValue e = JS_GetPropertyUint32(ctx, g_list, i), p;
+        JSValue e = JS_GetPropertyUint32(ctx, list, i), p;
         bool same;
         if (!JS_IsObject(e)) { JS_FreeValue(ctx, e); continue; }
         p = JS_GetPropertyUint32(ctx, e, 0);
         same = JS_VALUE_GET_PTR(p) == JS_VALUE_GET_PTR(promise);
         JS_FreeValue(ctx, p);
         JS_FreeValue(ctx, e);
-        if (same) { JS_SetPropertyUint32(ctx, g_list, i, JS_UNDEFINED); return; }
+        if (same) { JS_SetPropertyUint32(ctx, list, i, JS_UNDEFINED); JS_FreeValue(ctx, list); return; }
     }
+    JS_FreeValue(ctx, list);
     /* §8.1.6.4 steps 7.2-7.4. The promise is not awaiting notification, so the only remaining question is
        whether it was already NOTIFIED — i.e. whether this global's outstanding rejected promises weak set holds
        it — and if so the page is owed the retraction event.
@@ -547,57 +554,72 @@ static const JSTrampStepDef js_reject_handled_def = {
     .steps = REJECT_HANDLED_STEPS
 };
 
+/* HTML §8.1.4.7 notify about rejected promises, given one global: queue a task per live entry of `realm`'s
+   list on its own driver, then empty the list. Returns how many it queued. */
+static int notify_global(JSContext *realm)
+{
+    JSValue list = realm_value_get(realm, g_list_slot), notify = realm_value_get(realm, g_notify_slot);
+    uint32_t n = list_len(realm, list), i;
+    int queued = 0;
+
+    DCHECK(JS_IsFunction(realm, notify), "a realm's rejection-notification driver is not a function");
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(realm, list, i);
+        JSValueConst argv[2];
+        JSValue promise, reason;
+
+        if (!JS_IsObject(e)) { JS_FreeValue(realm, e); continue; }
+        promise = JS_GetPropertyUint32(realm, e, 0);
+        reason = JS_GetPropertyUint32(realm, e, 1);
+        argv[0] = promise; argv[1] = reason;
+        /* §8.1.4.7 step 4: "queue a global task on the DOM manipulation task source given global to run the
+           following step". A task and not a microtask: a handler's own promise reaction runs before the next
+           notification's task, as the one-task-then-checkpoint shape gives. */
+        JS_EnqueueCallTask(realm, notify, 2, argv, TASK_SOURCE_DOM_MANIPULATION);
+        JS_FreeValue(realm, promise);
+        JS_FreeValue(realm, reason);
+        JS_FreeValue(realm, e);
+        queued++;
+    }
+    /* Cleared here, not when the fires complete: the list is "about to be notified about", and these now are. */
+    JS_SetPropertyStr(realm, list, "length", JS_NewInt32(realm, 0));
+    JS_FreeValue(realm, notify);
+    JS_FreeValue(realm, list);
+    return queued;
+}
+
 int unhandled_rejection_notify(JSContext *ctx)
 {
-    uint32_t n, i;
+    JSContext *realm = NULL;
     int queued = 0;
 
     DCHECK(g_ready, "an unhandled-rejection checkpoint ran before the tracker was installed");
-    n = list_len(ctx);
-    for (i = 0; i < n; i++) {
-        JSValue e = JS_GetPropertyUint32(ctx, g_list, i);
-        JSValueConst argv[2];
-        JSValue promise, reason, notify;
-
-        if (!JS_IsObject(e)) { JS_FreeValue(ctx, e); continue; }
-        promise = JS_GetPropertyUint32(ctx, e, 0);
-        reason = JS_GetPropertyUint32(ctx, e, 1);
-        notify = JS_GetPropertyUint32(ctx, e, 2);   /* the REJECTING realm's driver, recorded with the entry */
-        DCHECK(JS_IsFunction(ctx, notify), "a recorded rejection lost the driver of the realm it rejected in");
-        argv[0] = promise; argv[1] = reason;
-        /* §8.1.4.7 step 4: "QUEUE A GLOBAL TASK ON THE DOM MANIPULATION TASK SOURCE given global to run the
-           following step". It was a microtask, which is a different position in HTML §8.1.7's event loop and
-           not a smaller one — a microtask runs inside the enqueuing flow's own checkpoint, so a
-           `unhandledrejection` handler's own promise reaction was queued BEHIND the remaining notifications
-           instead of running before the next one, which is what the spec's one-task-then-checkpoint shape
-           gives. */
-        JS_EnqueueCallTask(ctx, notify, 2, argv, TASK_SOURCE_DOM_MANIPULATION);
-        JS_FreeValue(ctx, notify);
-        JS_FreeValue(ctx, promise);
-        JS_FreeValue(ctx, reason);
-        JS_FreeValue(ctx, e);
-        queued++;
-    }
-    /* CLEARED HERE, not when the fires complete: the list is "about to be notified about", and these now are. */
-    JS_SetPropertyStr(ctx, g_list, "length", JS_NewInt32(ctx, 0));
+    /* HTML §8.1.7.3's microtask checkpoint: "For each environment settings object settingsObject whose
+       responsible event loop is this event loop, notify about rejected promises given settingsObject's global
+       object". */
+    while ((realm = realm_next_environment(ctx, realm)) != NULL)
+        queued += notify_global(realm);
     return queued;
 }
 
 int unhandled_rejection_pending(JSContext *ctx)
 {
-    uint32_t n, i;
+    JSContext *realm = NULL;
     int live = 0;
 
     DCHECK(g_ready, "the rejected-promise list was counted before the tracker was installed");
-    n = list_len(ctx);
-    /* THE SAME LIVE-ENTRY TEST `notify` USES, and it is the whole content of this function: a slot the handled
-       edge emptied is `undefined` IN PLACE (the identity of a slot is what that edge finds it by, so the list
-       is never compacted), and counting those would report a rejection somebody already caught. One predicate,
-       two readers, so a caller asserting "nothing is owed" and the loop that owes it cannot drift. */
-    for (i = 0; i < n; i++) {
-        JSValue e = JS_GetPropertyUint32(ctx, g_list, i);
-        if (JS_IsObject(e)) live++;
-        JS_FreeValue(ctx, e);
+    /* The live-entry test notify_global uses: a slot the handled edge emptied is undefined in place, and counting
+       it would report a rejection somebody already caught. */
+    while ((realm = realm_next_environment(ctx, realm)) != NULL) {
+        JSValue list = realm_value_get(realm, g_list_slot);
+        uint32_t n = list_len(realm, list), i;
+
+        for (i = 0; i < n; i++) {
+            JSValue e = JS_GetPropertyUint32(realm, list, i);
+            if (JS_IsObject(e)) live++;
+            JS_FreeValue(realm, e);
+        }
+        JS_FreeValue(realm, list);
     }
     return live;
 }
@@ -605,10 +627,7 @@ int unhandled_rejection_pending(JSContext *ctx)
 void unhandled_rejection_init(JSContext *ctx)
 {
     DCHECK(!g_ready, "unhandled_rejection_init ran twice — one instance is one document");
-    /* Built at init so it belongs to the pre-boot BASELINE: a write during a flow is captured by the heap COW.
-       A list allocated lazily inside a flow would be that flow's private object and no sibling would see it. */
-    g_list = JS_NewArray(ctx);
-    CHECK(!JS_IsException(g_list), "the rejected-promise list could not be allocated");
+    g_list_slot = realm_value_declare(ctx, "§8.1.3.3 about-to-be-notified rejected promises list");
     g_pre_key = JS_NewSymbol(ctx, "promiseRejectionSlots", false);
     CHECK(!JS_IsException(g_pre_key), "the PromiseRejectionEvent slot key allocation failed");
     /* §8.1.3.3's weak set has no allocation of its own — see g_out_key. This is the whole of it. */
@@ -633,7 +652,8 @@ void unhandled_rejection_init(JSContext *ctx)
     g_id_pre_ctor = idl_method_id_dict(ctx, PRE_CTOR_ARGS, 2, PRE_INIT,
                                        (int)(sizeof(PRE_INIT) / sizeof(PRE_INIT[0])), js_pre_ctor, 0);
     agent_state_flag("unhandled_rejection", &g_ready, "the declaration latch");
-    agent_state_value("unhandled_rejection", &g_list, "§8.1.3.3's about-to-be-notified rejected promises list");
+    agent_state_realm_slot("unhandled_rejection", &g_list_slot,
+                           "§8.1.3.3's per-global about-to-be-notified rejected promises list slot");
     agent_state_value("unhandled_rejection", &g_pre_key, "PromiseRejectionEvent's internal-slot key");
     agent_state_value("unhandled_rejection", &g_out_key,
                       "§8.1.3.3's outstanding rejected promises weak set — its marker key IS the set");
@@ -682,6 +702,12 @@ void unhandled_rejection_install_realm(JSContext *ctx)
     idl_interface_tag(ctx, proto, "PromiseRejectionEvent");
     idl_install_accessor(ctx, proto, "promise", js_pre_get, 0, -1);
     idl_install_accessor(ctx, proto, "reason", js_pre_get, 1, -1);
+    {
+        /* §8.1.3.3: this global's about-to-be-notified rejected promises list, built with the realm. */
+        JSValue list = JS_NewArray(ctx);
+        CHECK(!JS_IsException(list), "the rejected-promise list could not be allocated");
+        realm_value_set(ctx, g_list_slot, list);
+    }
     {
         JSValue fn = JS_NewCFunction2(ctx, NULL, "notifyRejected", 2, JS_CFUNC_step, g_notify_stepid);
         CHECK(!JS_IsException(fn), "the rejection-notification driver could not be allocated");
@@ -742,12 +768,12 @@ void unhandled_rejection_free(JSRuntime *rt)
        fire the callback into a list this call is about to release. */
     JS_SetHostPromiseRejectionTracker(rt, NULL, NULL);
     g_ready = 0;
-    JS_FreeValueRT(rt, g_list);   /* the prototypes are the REALMS' — each is released with its context */
-    JS_FreeValueRT(rt, g_pre_key);
+    JS_FreeValueRT(rt, g_pre_key);   /* the lists and prototypes are the realms', released with their contexts */
     /* THE WEAK SET NEEDS NOTHING RELEASED BUT ITS KEY, which is the property that made it weak: every member is
        a marker on a promise, so the members go when the promises do and there is no container to walk. */
     JS_FreeValueRT(rt, g_out_key);
-    g_list = g_pre_key = g_out_key = JS_UNDEFINED;   /* the per-realm drivers are released with their contexts */
+    g_pre_key = g_out_key = JS_UNDEFINED;   /* the per-realm drivers are released with their contexts */
+    g_list_slot = JS_INVALID_CLASS_ID;
     /* THE TWO REGISTRATIONS, GIVEN BACK. They name a realm slot and a step machine in a runtime that is going
        away — but they are also what the init above would find set, and this file's own paragraph about the
        early-return is the argument for why leaving them is not harmless. */

@@ -10,6 +10,7 @@
 static const char HTML_SRCDOC[] =
     "<!doctype html><html>"
     "<body>"
+    "<script>function sdHandle(p) { p.catch(function(){}); }</script>"
     /* ---- HTML §4.8.5 "The `iframe` element"'s SRCDOC DOCUMENTS — the class whose §2.4.3 arm the asserts in
        core/dom/document.c are about (step 1's "Assert: document's about base URL is non-null." and the pairing
        checked at the record's birth); without a srcdoc document no run can reach them.
@@ -33,6 +34,20 @@ static const char HTML_SRCDOC[] =
     "fetch('https://x.test/api/sdclone?v=' + (sdc !== document ? 'cloned' : 'wrong'));"
     "var sdp = new DOMParser().parseFromString('<p id=sdpp>x</p>', 'text/html');"
     "fetch('https://x.test/api/sdparse?v=' + (sdp.getElementById('sdpp') ? 'built' : 'wrong'));"
+    /* /api/sdrej: HTML §8.1.6.4's global is the running script's settings object's. `sdREJ` is this frame's
+       own rejection, notified here (`child`) and never at the parent (`parent`). `sdQ2` and `sdQ3` are notified
+       here and handled a task later: `sdQ3` by this frame's script, so `rejectionhandled` fires here (`rh3`);
+       `sdQ2` by the parent's sdHandle through this frame's own `catch`, so the parent's weak set is asked and
+       nothing fires (`rh2` absent). Every listener cancels, so nothing reports. */
+    "addEventListener('unhandledrejection', function(e){ if (e.reason === 'sdREJ') { e.preventDefault();"
+    " fetch('https://x.test/api/sdrej?v=child'); }"
+    " if (e.reason === 'sdQ2' || e.reason === 'sdQ3') { e.preventDefault(); var p = e.promise;"
+    " setTimeout(function(){ if (e.reason === 'sdQ2') parent.sdHandle(p); else p.catch(function(){}); }, 0); } });"
+    "addEventListener('rejectionhandled', function(e){ if (e.reason === 'sdQ2' || e.reason === 'sdQ3')"
+    " fetch('https://x.test/api/sdrej?v=' + (e.reason === 'sdQ2' ? 'rh2' : 'rh3')); });"
+    "parent.Promise.reject('sdREJ');"
+    "Promise.reject('sdQ2');"
+    "Promise.reject('sdQ3');"
     "</script>\"></iframe>"
     /* AND THE SECOND FRAME IS THE OTHER DIRECTION: `<iframe src="about:srcdoc">` takes §4.8.5's `Otherwise`
        arm, while §7.4.2.2 "Beginning navigation" still gives it an about base URL ("Set documentState's about
@@ -49,6 +64,8 @@ static const char HTML_SRCDOC[] =
        before any branch of the parent's own, so it is the boot flow's first creation; `own` says it got a
        navigable of its own and not one of the baseline's. */
     "<script>"
+    "addEventListener('unhandledrejection', function(e){ if (e.reason === 'sdREJ') { e.preventDefault();"
+    " fetch('/api/sdrej?v=parent'); } });"
     "var sdo = document.getElementById('sdo');"
     "var sdm = document.createElement('iframe'); document.body.appendChild(sdm);"
     "fetch('/api/sdmint?v=' + ((sdm.contentWindow !== document.getElementById('sdf').contentWindow"
