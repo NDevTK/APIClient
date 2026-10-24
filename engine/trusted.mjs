@@ -1916,10 +1916,17 @@ async function main() {
      redirects stderr, and stdout is still the one document. */
   async function onLine(e, line) {
     if (line.startsWith('@RESULT ')) {
-      e.result = line.slice('@RESULT '.length);
+      const text = line.slice('@RESULT '.length);
+      let doc;
+      try { doc = JSON.parse(text); } catch (err) {
+        throw new Error(`instance [${e.tag}] wrote a complete @RESULT line of ${Buffer.byteLength(text)} byte(s) ` +
+                        `that is not JSON (${err.message}) — the engine composes it with result_json, so this ` +
+                        'is a defect in that writer, not a record this zone may read');
+      }
+      e.result = text;
       e.results += 1;
       /* Its identities join the product under the origin this zone provisioned the cluster at. */
-      for (const x of ZONE.noveltyAbsorb(e.origin, JSON.parse(e.result)._novelty, e.noveltyCounted).refused)
+      for (const x of ZONE.noveltyAbsorb(e.origin, doc._novelty, e.noveltyCounted).refused)
         console.error(`[trusted] [${e.tag}] a novelty line was refused (${x.reason}): ${x.line}`);
       console.error(`[trusted] [${e.tag}] @RESULT#${e.results} ${line}`);
       return;
@@ -2215,19 +2222,32 @@ async function main() {
     }
   }
 
+  /* A RECORD IS A LINE AND IS COMPLETE ONLY AT ITS NEWLINE, whatever its size: the engine's `@RESULT` grows with
+     the finding set and reached 10.8 MB on a real page. The partial line is held as chunks and only each new
+     chunk is searched, so a line costs its own length rather than its length squared. Bytes after the last
+     newline when the channel ends are a record the engine never finished (a child killed mid-write) and are
+     refused by name, never handed to a reader as though they were one. */
   async function drive(e) {
-    let buf = '';
+    let pending = [];
 
     for await (const chunk of e.child.stdout) {
-      buf += chunk;
-      let nl;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl);
-        buf = buf.slice(nl + 1);
+      let from = 0, nl;
+      while ((nl = chunk.indexOf('\n', from)) >= 0) {
+        pending.push(chunk.slice(from, nl));
+        const line = pending.join('');
+        pending = [];
+        from = nl + 1;
         await onLine(e, line);
       }
+      if (from < chunk.length) pending.push(chunk.slice(from));
     }
-    if (buf) await onLine(e, buf);
+    if (pending.length) {
+      const tail = pending.join('');
+      console.error(`[trusted] [${e.tag}] the channel ended inside a record: ${Buffer.byteLength(tail)} byte(s) ` +
+                    `after the last newline, beginning \`${tail.slice(0, 40)}\`, which the engine never finished ` +
+                    'writing. It is refused rather than read; the instance\'s last complete @RESULT, if any, ' +
+                    'stands.');
+    }
     e.live = false;
     ({ code: e.exit, signal: e.signal } = await e.closed);
     /* HOW THIS INSTANCE ENDED, IN ONE PHRASE, so every reader below states the same fact the same way. */
