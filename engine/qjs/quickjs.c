@@ -28705,6 +28705,8 @@ static int js_proxy_setproto_invariant(JSContext *ctx, JSValueConst target, JSVa
                                   invariant on its result — is the one entry's, which is the point: the operator had
                                   its OWN copy of the proxy algorithm (js_tramp_proxy_has) that read the trap from C
                                   and dropped every C, bound or proxied trap back to a C drive. */
+static void js_desc_facts_dup(JSDescFacts *f);
+static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
 /* A CONTINUATION RECORD'S DECLARATION. A record a parked chain can hold lists its fields once, each as
    F(role, type, name), and its struct, its release, its copy and its requester link are all expanded from that
    one list (CONT_RECORD_DEFINE), so no walk can name a field another walk misses. The roles:
@@ -28712,49 +28714,57 @@ static int js_proxy_setproto_invariant(JSContext *ctx, JSValueConst target, JSVa
      OWN_ATOM  an owned JSAtom, likewise;
      POD       a plain value of `type`, copied;
      OUTER     the requester link, `void *name` and its kind `uint8_t name##_kind`, at most one per record;
-     DESC_OUT  a JSDescFacts * naming the requester's own record, which tramp_cont_relink_outer re-aims.
+     DESC_OUT  a JSDescFacts * naming the requester's own record, which tramp_cont_relink_outer re-aims;
+     FACTS     a JSDescFacts held by value, whose three values are owned.
    A role a walk does not expand is a compile error at the walk, which is the point. */
 #define CONT_REC_MEMBER_OWN_VAL(t, n)   JSValue n;
 #define CONT_REC_MEMBER_OWN_ATOM(t, n)  JSAtom n;
 #define CONT_REC_MEMBER_POD(t, n)       t n;
 #define CONT_REC_MEMBER_OUTER(t, n)     void *n; uint8_t n##_kind;
 #define CONT_REC_MEMBER_DESC_OUT(t, n)  JSDescFacts *n;
+#define CONT_REC_MEMBER_FACTS(t, n)     JSDescFacts n;
 #define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
 #define CONT_REC_FREE_OWN_VAL(n)        JS_FreeValue(ctx, r->n);
 #define CONT_REC_FREE_OWN_ATOM(n)       JS_FreeAtom(ctx, r->n);
 #define CONT_REC_FREE_POD(n)
 #define CONT_REC_FREE_OUTER(n)
 #define CONT_REC_FREE_DESC_OUT(n)
+#define CONT_REC_FREE_FACTS(n)          js_desc_facts_free(ctx, &r->n);
 #define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(n)
 #define CONT_REC_DUP_OWN_VAL(n)         c->n = js_dup(r->n);
 #define CONT_REC_DUP_OWN_ATOM(n)        c->n = JS_DupAtom(ctx, r->n);
 #define CONT_REC_DUP_POD(n)
 #define CONT_REC_DUP_OUTER(n)
 #define CONT_REC_DUP_DESC_OUT(n)
+#define CONT_REC_DUP_FACTS(n)           js_desc_facts_dup(&c->n);
 #define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(n)
 #define CONT_REC_NOUTER_OWN_VAL         0
 #define CONT_REC_NOUTER_OWN_ATOM        0
 #define CONT_REC_NOUTER_POD             0
 #define CONT_REC_NOUTER_OUTER           1
 #define CONT_REC_NOUTER_DESC_OUT        0
+#define CONT_REC_NOUTER_FACTS           0
 #define CONT_REC_NOUTER(role, t, n)     + CONT_REC_NOUTER_##role
 #define CONT_REC_OUTER_GET_OWN_VAL(n)
 #define CONT_REC_OUTER_GET_OWN_ATOM(n)
 #define CONT_REC_OUTER_GET_POD(n)
 #define CONT_REC_OUTER_GET_OUTER(n)     *out_kind = r->n##_kind; return r->n;
 #define CONT_REC_OUTER_GET_DESC_OUT(n)
+#define CONT_REC_OUTER_GET_FACTS(n)
 #define CONT_REC_OUTER_GET(role, t, n)  CONT_REC_OUTER_GET_##role(n)
 #define CONT_REC_OUTER_SET_OWN_VAL(n)
 #define CONT_REC_OUTER_SET_OWN_ATOM(n)
 #define CONT_REC_OUTER_SET_POD(n)
 #define CONT_REC_OUTER_SET_OUTER(n)     r->n = outer; r->n##_kind = outer_kind; return;
 #define CONT_REC_OUTER_SET_DESC_OUT(n)
+#define CONT_REC_OUTER_SET_FACTS(n)
 #define CONT_REC_OUTER_SET(role, t, n)  CONT_REC_OUTER_SET_##role(n)
 #define CONT_REC_DESC_OUT_OWN_VAL(n)
 #define CONT_REC_DESC_OUT_OWN_ATOM(n)
 #define CONT_REC_DESC_OUT_POD(n)
 #define CONT_REC_DESC_OUT_OUTER(n)
 #define CONT_REC_DESC_OUT_DESC_OUT(n)   return &r->n;
+#define CONT_REC_DESC_OUT_FACTS(n)
 #define CONT_REC_DESC_OUT(role, t, n)   CONT_REC_DESC_OUT_##role(n)
 /* The struct `T` and its walks, prefixed `p`: p_free releases the record and what it owns (not its requester);
    p_clone copies it, taking a reference to everything it owns, with its links still naming the original's
@@ -28968,41 +28978,33 @@ static void js_ctor_proto_free(JSContext *ctx, JSCtorProto *cp);
                                   it twice). What the sequence produces is the VALIDATED uint32, and the write is
                                   then re-issued with that in place of V — which is exactly step 6, so the
                                   re-run's own conversions are of a number and invoke nothing. */
-typedef struct JSArrayLen {
-    JSValue obj;         /* the Array or TypedArray being written (owned) */
-    JSValue val;         /* V — coerced TWICE by the `length` write, so it is held rather than replaced (owned) */
-    JSValue recv;        /* the resolved Receiver, or UNINITIALIZED for "the object itself" (owned). 10.4.2.4's
-                            `length` write has no receiver gate, which is why the carrier did without one; a
-                            TypedArray element write does — 10.4.5.5 step 1 applies TypedArraySetElement only
-                            when SameValue(O, Receiver), so the receiver decides whether V is coerced at all. */
-    JSAtom atom;         /* the key — `length`, or the TypedArray's canonical numeric index (owned) */
-    void *outer;         /* what is waiting on the WRITE */
-    uint8_t outer_kind;
-    uint8_t op;          /* GP_SET or GP_DEFINE: which operation is re-issued */
-    uint8_t no_throw;    /* the operation's own bare/throwing form */
-    uint8_t phase;       /* AL_* */
-    uint32_t len;        /* step 3's answer, held across step 4's coercion */
-    JSValue coerced;     /* step 6's value as the re-issued request's operand (a number: nothing to own) */
-    /* GP_DEFINE's remaining operands, so the re-issue carries the same descriptor with only [[Value]] replaced */
-    JSValue getter, setter;
-    int dflags;
-    /* §10.4.2.4 OVER UNKNOWN EXTERNAL INPUT — the outcome fork's own state, the shape JSStepHdr carries for
-       step_fork_run and for the same reasons. This carrier is NOT a JSStepHdr (it is a keyed operation parked
-       across a coercion, walked by the keyed chain), so it cannot call that function; what it can do is ask the
-       SAME hook with the SAME two-phase discipline, which is what these four fields are.
-       THE QUESTION ITSELF IS NOT STORED, only the CONTENT HASH of the one last asked. It is composed at every
-       site from (phase, probe) — the chain's own cursor — so the check below is a CHECK: storing the bytes and
-       re-hashing those would compare a copy against itself and could never mismatch, which is the shape a
-       vacuous assert takes. Recomposed, a resume that lands in a different phase or at a different position
-       than the ask crashes instead of filing one world's answer under another's question — and nothing else
-       catches it, because fork_arm is a real, in-range arm either way. (JSStepHdr keeps a `const char *`
-       instead because there the asking machine and the driver that reads it are different code and the string
-       is a handed-over operand; here they are the same block and there is nothing to hand over.) */
-    uint32_t fork_ask_key;
-    uint32_t fork_probe;   /* step 6's per-position cursor: WHICH length is being asked about */
-    int      fork_arm;
-    uint8_t  fork_phase;   /* AL_FORK_ASK / AL_FORK_ANSWERED — ASK in the sibling's snapshot, on purpose */
-} JSArrayLen;
+/* `obj` is the Array or TypedArray written and `val` the V that §10.4.2.4 coerces twice, so it is held.
+   `recv` is the resolved Receiver, UNINITIALIZED for the object itself: §10.4.5.5 step 1 applies
+   TypedArraySetElement only when SameValue(O, Receiver). `atom` is `length` or the canonical numeric index.
+   `op` (GP_SET / GP_DEFINE) is re-issued with `coerced`, step 6's number (nothing to own), in place of V;
+   `getter`, `setter` and `dflags` carry GP_DEFINE's descriptor. `len` is step 3's answer across step 4.
+   The fork fields are the outcome fork's state over unknown input, JSStepHdr's discipline: `fork_ask_key` is
+   the content hash of the question last asked, recomposed at each site from (phase, `fork_probe`) so a resume
+   in another phase or position crashes; `fork_phase` is AL_FORK_ASK in the sibling's snapshot, on purpose. */
+#define JS_ARRAY_LEN_FIELDS(F)                                                                                 \
+    F(OWN_VAL, JSValue, obj)                                                                                   \
+    F(OWN_VAL, JSValue, val)                                                                                   \
+    F(OWN_VAL, JSValue, recv)                                                                                  \
+    F(OWN_ATOM, JSAtom, atom)                                                                                  \
+    F(OUTER, void *, outer)                                                                                    \
+    F(POD, uint8_t, op)                                                                                        \
+    F(POD, uint8_t, no_throw)                                                                                  \
+    F(POD, uint8_t, phase)                                                                                     \
+    F(POD, uint32_t, len)                                                                                      \
+    F(POD, JSValue, coerced)                                                                                   \
+    F(OWN_VAL, JSValue, getter)                                                                                \
+    F(OWN_VAL, JSValue, setter)                                                                                \
+    F(POD, int, dflags)                                                                                        \
+    F(POD, uint32_t, fork_ask_key)                                                                             \
+    F(POD, uint32_t, fork_probe)                                                                               \
+    F(POD, int, fork_arm)                                                                                      \
+    F(POD, uint8_t, fork_phase)
+CONT_RECORD_DEFINE(JSArrayLen, js_array_len, JS_ARRAY_LEN_FIELDS)
 
 /* AL_UINT32/AL_NUMBER/AL_COMPARE are 10.4.2.4's two coercions of V and their comparison. AL_TA_PRIM/AL_TA_WRITE
    are 10.4.5.18 TypedArraySetElement ( obj, index, value ) steps 1-2's SINGLE coercion — a different algorithm
@@ -30595,49 +30597,6 @@ static JSCtorProto *js_ctor_proto_clone(JSContext *ctx, const JSCtorProto *cp)
     return n;
 }
 
-static void js_array_len_free(JSContext *ctx, JSArrayLen *al)
-{
-    JS_FreeValue(ctx, al->obj);
-    JS_FreeValue(ctx, al->val);
-    JS_FreeValue(ctx, al->recv);
-    JS_FreeValue(ctx, al->getter);
-    JS_FreeValue(ctx, al->setter);
-    JS_FreeAtom(ctx, al->atom);
-    js_free_rt(ctx->rt, al);
-}
-
-/* §10.4.2.4 ArraySetLength PARKED AT ITS OWN OUTCOME FORK, copied for the sibling. THE FIELD LIST IS
-   js_array_len_free's, READ TOGETHER WITH IT: this takes a second reference to exactly what that releases one
-   of, so a field owned by one and not dup'd by the other is the drift the pair exists to make impossible —
-   which is why `coerced` is copied and NOT dup'd, because the free does not release it either (it is step 6's
-   operand, a number, and owns nothing).
-   The fork bookkeeping is copied VERBATIM, fork_phase included. That is AL_FORK_ASK at every clone this
-   function is reached from, because the snapshot is taken AT the ask — asserted at the one caller rather than
-   here, where the copy has no way to know which moment it is. */
-static JSArrayLen *js_array_len_clone(JSContext *ctx, const JSArrayLen *al)
-{
-    JSArrayLen *n = js_mallocz(ctx, sizeof(*n));
-
-    if (unlikely(!n))
-        return NULL;
-    n->obj = js_dup(al->obj);
-    n->val = js_dup(al->val);
-    n->recv = js_dup(al->recv);
-    n->getter = js_dup(al->getter);
-    n->setter = js_dup(al->setter);
-    n->atom = JS_DupAtom(ctx, al->atom);
-    n->coerced = al->coerced;
-    n->dflags = al->dflags;
-    n->op = al->op; n->no_throw = al->no_throw; n->phase = al->phase;
-    n->len = al->len;
-    /* the ORIGINAL's link, which tramp_cont_relink_outer overwrites with the sibling's own a moment later. */
-    n->outer = al->outer; n->outer_kind = al->outer_kind;
-    n->fork_ask_key = al->fork_ask_key;
-    n->fork_probe = al->fork_probe;
-    n->fork_arm = al->fork_arm;
-    n->fork_phase = al->fork_phase;
-    return n;
-}
 
 /* The same question the interpreter's write site asks, in the form the KEYED ENTRY can ask it: the entry has
    resolved the key to an atom already, so the canonical-numeric-index test is a property of that atom and needs
@@ -32792,18 +32751,20 @@ enum { OKC_LEN = 0, OKC_LEN_GOT, OKC_ELEM, OKC_ELEM_GOT,
    the phases, the requests and the teardown are identical. It also keeps the SKIPS honest: 10.5.2 step 8 returns
    on a false trap result before IsExtensible is reached, and 10.5.1/2 consult [[GetPrototypeOf]] only on a
    non-extensible target. Asking anyway would run a trap for a step the spec never takes. */
-typedef struct JSProxyInv {
-    JSValue obj;         /* the proxy (owned) */
-    JSValue target;      /* its [[Target]] (owned) */
-    JSValue res;         /* GETPROTO: the trap's value. The others: nothing — `tres` holds their boolean. (owned) */
-    JSValue proto_arg;   /* SETPROTO's operand, for step 12's SameValue (owned) */
-    void *outer;
-    uint8_t outer_kind;
-    uint8_t op;          /* GP_GETPROTO / GP_ISEXT / GP_PREVEXT / GP_SETPROTO */
-    uint8_t phase;       /* PI_* */
-    int tres;            /* the trap's BOOLEAN, for the three that have one */
-    int extensible;
-} JSProxyInv;
+/* `obj` is the proxy and `target` its [[Target]]; `res` is GETPROTO's trap value (`tres` holds the others'
+   boolean) and `proto_arg` SETPROTO's operand for step 12's SameValue. `op` is GP_GETPROTO / GP_ISEXT /
+   GP_PREVEXT / GP_SETPROTO and `phase` a PI_*. */
+#define JS_PROXY_INV_FIELDS(F)                                                                                 \
+    F(OWN_VAL, JSValue, obj)                                                                                   \
+    F(OWN_VAL, JSValue, target)                                                                                \
+    F(OWN_VAL, JSValue, res)                                                                                   \
+    F(OWN_VAL, JSValue, proto_arg)                                                                             \
+    F(OUTER, void *, outer)                                                                                    \
+    F(POD, uint8_t, op)                                                                                        \
+    F(POD, uint8_t, phase)                                                                                     \
+    F(POD, int, tres)                                                                                          \
+    F(POD, int, extensible)
+CONT_RECORD_DEFINE(JSProxyInv, js_proxy_inv, JS_PROXY_INV_FIELDS)
 enum { PI_EXT = 0, PI_EXT_GOT, PI_PROTO, PI_PROTO_GOT };
 
 /* ---- the KEYED invariants that need only the target's ATTRIBUTE BITS ----
@@ -32817,42 +32778,27 @@ enum { PI_EXT = 0, PI_EXT_GOT, PI_PROTO, PI_PROTO_GOT };
    a Proxy target that is the proxy's own flag rather than its answer, so step 9.b.iii never fired. Asking for
    the internal method fixes that by construction, which is the second time this exact deviation has turned up
    (10.5.5 step 11.c was the first). */
-typedef struct JSKeyedInv {
-    JSValue target;      /* the proxy's [[Target]] (owned) */
-    JSAtom atom;         /* the key (owned) */
-    void *outer;
-    uint8_t outer_kind;
-    uint8_t op;          /* GP_HAS / GP_DELETE — which answer and which message, not which algorithm */
-    uint8_t phase;       /* KI_* */
-    uint8_t no_throw;    /* GP_DELETE: yield the boolean rather than DeletePropertyOrThrow's TypeError */
-    JSDescFacts facts;   /* the target's own descriptor, answered into here (owned) */
-    /* the operands the FIELD-comparing three check against: GET's trap result, SET's written value, and
-       DEFINE's whole incoming descriptor. They ride here because the check runs after a request that can
-       suspend, so nothing about the operation may live in an interpreter local. */
-    JSValue operand, in_getter, in_setter;
-    int in_flags;
-} JSKeyedInv;
+/* `target` is the proxy's [[Target]] and `atom` the key; `op` (GP_HAS / GP_DELETE / the field-comparing
+   three) picks the answer and the message, `phase` is a KI_*, and `no_throw` makes GP_DELETE yield its boolean.
+   `facts` is the target's own descriptor, answered into here. `operand`, `in_getter`, `in_setter` and
+   `in_flags` are what the field-comparing checks compare against (GET's trap result, SET's value, DEFINE's
+   descriptor): the check runs after a request that can suspend, so they cannot live in interpreter locals. */
+#define JS_KEYED_INV_FIELDS(F)                                                                                 \
+    F(OWN_VAL, JSValue, target)                                                                                \
+    F(OWN_ATOM, JSAtom, atom)                                                                                  \
+    F(OUTER, void *, outer)                                                                                    \
+    F(POD, uint8_t, op)                                                                                        \
+    F(POD, uint8_t, phase)                                                                                     \
+    F(POD, uint8_t, no_throw)                                                                                  \
+    F(FACTS, JSDescFacts, facts)                                                                               \
+    F(OWN_VAL, JSValue, operand)                                                                               \
+    F(OWN_VAL, JSValue, in_getter)                                                                             \
+    F(OWN_VAL, JSValue, in_setter)                                                                             \
+    F(POD, int, in_flags)
+CONT_RECORD_DEFINE(JSKeyedInv, js_keyed_inv, JS_KEYED_INV_FIELDS)
 enum { KI_DESC = 0, KI_DESC_GOT, KI_EXT, KI_EXT_GOT };
 
-static void js_keyed_inv_free(JSContext *ctx, struct JSKeyedInv *ki)
-{
-    js_desc_facts_free(ctx, &ki->facts);
-    JS_FreeValue(ctx, ki->operand);
-    JS_FreeValue(ctx, ki->in_getter);
-    JS_FreeValue(ctx, ki->in_setter);
-    JS_FreeValue(ctx, ki->target);
-    JS_FreeAtom(ctx, ki->atom);
-    js_free_rt(ctx->rt, ki);
-}
 
-static void js_proxy_inv_free(JSContext *ctx, struct JSProxyInv *pv)
-{
-    JS_FreeValue(ctx, pv->obj);
-    JS_FreeValue(ctx, pv->target);
-    JS_FreeValue(ctx, pv->res);
-    JS_FreeValue(ctx, pv->proto_arg);
-    js_free_rt(ctx->rt, pv);
-}
 
 static void js_ownkeys_chk_free(JSContext *ctx, struct JSOwnKeysChk *ok)
 {
@@ -32888,34 +32834,6 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
         n[i].is_enumerable = tab[i].is_enumerable;
         n[i].atom = JS_DupAtom(ctx, tab[i].atom);
     }
-    return n;
-}
-static struct JSKeyedInv *js_keyed_inv_clone(JSContext *ctx, const struct JSKeyedInv *ki)
-{
-    struct JSKeyedInv *n = js_malloc(ctx, sizeof(*n));
-
-    if (unlikely(!n))
-        return NULL;
-    *n = *ki;
-    js_desc_facts_dup(&n->facts);
-    n->operand = js_dup(ki->operand);
-    n->in_getter = js_dup(ki->in_getter);
-    n->in_setter = js_dup(ki->in_setter);
-    n->target = js_dup(ki->target);
-    n->atom = JS_DupAtom(ctx, ki->atom);
-    return n;
-}
-static struct JSProxyInv *js_proxy_inv_clone(JSContext *ctx, const struct JSProxyInv *pv)
-{
-    struct JSProxyInv *n = js_malloc(ctx, sizeof(*n));
-
-    if (unlikely(!n))
-        return NULL;
-    *n = *pv;
-    n->obj = js_dup(pv->obj);
-    n->target = js_dup(pv->target);
-    n->res = js_dup(pv->res);
-    n->proto_arg = js_dup(pv->proto_arg);
     return n;
 }
 static struct JSOwnKeysChk *js_ownkeys_chk_clone(JSContext *ctx, const struct JSOwnKeysChk *ok)
@@ -53848,7 +53766,11 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_GETPROP_YIELD, JSTrapGet, js_trapget, ANCHOR)                                                       \
     X(CONT_TRAP_GET, JSTrapGet, js_trapget, LINK)                                                              \
     X(CONT_OP_KEYED, JSOpKeyed, js_op_keyed, LINK)                                                             \
-    X(CONT_FOROF_UNPACK, JSForOfUnpack, js_forof_unpack, LINK)
+    X(CONT_FOROF_UNPACK, JSForOfUnpack, js_forof_unpack, LINK)                                                 \
+    X(CONT_PROXY_INV, JSProxyInv, js_proxy_inv, LINK)                                                          \
+    X(CONT_KEYED_INV, JSKeyedInv, js_keyed_inv, LINK)                                                          \
+    X(CONT_ARRAY_LEN, JSArrayLen, js_array_len, LINK)                                                          \
+    X(CONT_ARRAY_LEN_YIELD, JSArrayLen, js_array_len, ANCHOR)
 #define CONT_REC_CASE_OUTER_GET(k, T, p, role)  case k: return p##_outer_get((T *)st, out_kind);
 #define CONT_REC_CASE_OUTER_SET(k, T, p, role)  case k: p##_outer_set((T *)st, outer, outer_kind); return;
 #define CONT_REC_IF_DESC_OUT(k, T, p, role)     if (kind == k) return p##_desc_out((T *)st);
@@ -53885,11 +53807,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
            request built) but the link does not, which is why both cases stand here. */
         *out_kind = ((JSGetProp *)st)->outer_kind;
         return ((JSGetProp *)st)->outer;
-    case CONT_ARRAY_LEN: case CONT_ARRAY_LEN_YIELD:
-        /* §10.4.2.4's carrier in EITHER role — a link under a coercion sequence, or a frame's own cont_state
-           parked at the outcome fork. What waits on it is what asked for the WRITE. */
-        *out_kind = ((JSArrayLen *)st)->outer_kind;
-        return ((JSArrayLen *)st)->outer;
     case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD:
         /* 7.3.19 IS TERMINAL FOR THE SAME REASON, and the record says so by having no `outer` field at all: the
            finished List is handed to do_apply_tramp / do_construct_dispatch, which place their result on the
@@ -53965,12 +53882,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_OWNKEYS_CHK:
         *out_kind = ((struct JSOwnKeysChk *)st)->outer_kind;
         return ((struct JSOwnKeysChk *)st)->outer;
-    case CONT_PROXY_INV:
-        *out_kind = ((struct JSProxyInv *)st)->outer_kind;
-        return ((struct JSProxyInv *)st)->outer;
-    case CONT_KEYED_INV:
-        *out_kind = ((struct JSKeyedInv *)st)->outer_kind;
-        return ((struct JSKeyedInv *)st)->outer;
     case CONT_WITH_HAS:
         /* TERMINAL, like CONT_OP_KEYED: the reference it resolves belongs to the OP_with_* opcode, whose operands
            are on the frame's own stack, which the frame clone carries. The record has no requester field. */
@@ -54029,8 +53940,6 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_SET)
     case CONT_GETPROP:
         ((JSGetProp *)st)->outer = outer; ((JSGetProp *)st)->outer_kind = outer_kind; return;
-    case CONT_ARRAY_LEN: case CONT_ARRAY_LEN_YIELD:
-        ((JSArrayLen *)st)->outer = outer; ((JSArrayLen *)st)->outer_kind = outer_kind; return;
     case CONT_TOPRIM: case CONT_TOPRIM_GET:
         TOPRIM_ROLE_AGREES(st, kind);
         ((struct JSToPrim *)st)->outer = outer; ((struct JSToPrim *)st)->outer_kind = outer_kind; return;
@@ -54047,10 +53956,6 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         ((JSAsyncSettle *)st)->cont = outer; ((JSAsyncSettle *)st)->cont_kind = outer_kind; return;
     case CONT_OWNKEYS_CHK:
         ((struct JSOwnKeysChk *)st)->outer = outer; ((struct JSOwnKeysChk *)st)->outer_kind = outer_kind; return;
-    case CONT_PROXY_INV:
-        ((struct JSProxyInv *)st)->outer = outer; ((struct JSProxyInv *)st)->outer_kind = outer_kind; return;
-    case CONT_KEYED_INV:
-        ((struct JSKeyedInv *)st)->outer = outer; ((struct JSKeyedInv *)st)->outer_kind = outer_kind; return;
     case CONT_SETMAP_CTOR: case CONT_TA_TARGET: {
         JSIterConsume *cs = ctor_seq_consume(st, kind);
         cs->outer = outer; cs->outer_kind = outer_kind; return;
@@ -54115,8 +54020,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
            BOTH KINDS, ONE CLONE, for the reason the arm above gives for 21/62: the record and its release are
            identical and only the machine above it differs. */
         return js_async_settle_clone(ctx, (const JSAsyncSettle *)st);
-    case CONT_ARRAY_LEN:
-        return js_array_len_clone(ctx, (const JSArrayLen *)st);
     case CONT_ARG_LIST:
         /* 7.3.19's sequence IN ITS LINK ROLE — under whichever read it is waiting on: its `length` Get, its
            ToPrimitive, or an element Get. Both of the page's operations it performs can fork, so this is
@@ -54145,10 +54048,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         /* a `with` reference whose HasBinding or @@unscopables read is a Proxy trap or a getter: the keyed
            operation is the frame's continuation and this record is the link under it. */
         return js_with_has_clone(ctx, (const JSWithHas *)st);
-    case CONT_PROXY_INV:
-        return js_proxy_inv_clone(ctx, (const struct JSProxyInv *)st);
-    case CONT_KEYED_INV:
-        return js_keyed_inv_clone(ctx, (const struct JSKeyedInv *)st);
     case CONT_OWNKEYS_CHK:
         return js_ownkeys_chk_clone(ctx, (const struct JSOwnKeysChk *)st);
     case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
@@ -54190,7 +54089,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV: case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE:
     case CONT_AGEN_DEFER:
-    case CONT_ARRAY_LEN_YIELD:
     CONT_RECORD_KINDS(CONT_REC_CASE_ANCHOR)
         break;
     }
@@ -55246,20 +55144,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
         next->st = go; next->kind = gk;
         return;
     }
-    case CONT_ARRAY_LEN: case CONT_ARRAY_LEN_YIELD: {
-        /* §10.4.2.4's carrier released with nobody to answer to — a cold-tier tail dropped, a flow destroyed
-           under a throw. The WRITE can never finish, so whatever asked for it can never be answered either and
-           goes with it, which is what every other arm in this walk does with its requester. Taken BEFORE the
-           free, because the free is what makes the record unreadable.
-           BOTH ROLES, because both are reachable here: the anchor is a frame's cont_state and the link is what
-           tramp_cont_relink_outer copied under one. */
-        JSArrayLen *al = st;
-        void *ao = al->outer;
-        uint8_t ak = al->outer_kind;
-        js_array_len_free(ctx, al);
-        next->st = ao; next->kind = ak;
-        return;
-    }
     case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: {
         /* 7.3.19's SEQUENCE, TERMINAL for cont_outer_get's reason — the finished List goes to a call, whose
            result is the operand stack's, so there is nothing above it to release and the walk stops here.
@@ -55442,22 +55326,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
         uint8_t ok2 = okc->outer_kind;
         js_ownkeys_chk_free(ctx, okc);
         next->st = oo; next->kind = ok2;
-        return;
-    }
-    case CONT_PROXY_INV: {
-        struct JSProxyInv *pv = st;
-        void *po = pv->outer;
-        uint8_t pk = pv->outer_kind;
-        js_proxy_inv_free(ctx, pv);
-        next->st = po; next->kind = pk;
-        return;
-    }
-    case CONT_KEYED_INV: {
-        struct JSKeyedInv *ki = st;
-        void *ko = ki->outer;
-        uint8_t kk = ki->outer_kind;
-        js_keyed_inv_free(ctx, ki);
-        next->st = ko; next->kind = kk;
         return;
     }
     case CONT_NONE:
