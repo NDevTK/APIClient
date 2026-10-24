@@ -49,7 +49,6 @@
 #include "core/rendering/visual_update.h"   /* a sheet write is a visible effect HTML §8.1.7.3 asks about */
 #include "solver/concolic.h"   /* §6.1 step 12 asserts what it cannot parse */
 #include "solver/cow.h"
-#include "core/timing/thread_work.h"   /* a sheet parsed from text, for the thread-work census */
 
 /* §6.1's state items, as far as anything reads them — see the header for why the other eight are not here. */
 typedef struct CssStyleSheetData {
@@ -573,14 +572,8 @@ void css_style_sheet_set_rules_from_text(JSContext *ctx, JSValueConst sheet, con
            "a CSS style sheet's rules were parsed into a list that is not empty — this is the operation "
            "§6.1.2's replaceSync is stated over and it SETS the rules, so a second call would append to the "
            "first instead of replacing it");
-    {
-        ThreadWorkSpan tw;
-
-        thread_work_begin(&tw);
-        css_rule_build_sheet(ctx, s->rules, sheet, text, len);
-        thread_work_end(&tw, THREAD_WORK_CSS_PARSE, len);
-        thread_work_charge(THREAD_WORK_CSS_PARSE, len);
-    }
+    /* The parse inside charges its bytes (css_style_declaration.c's cssd_stylesheet_parse). */
+    css_rule_build_sheet(ctx, s->rules, sheet, text, len);
 }
 
 /* §6.1.2's `cssRules`. Its steps 1-2 are an origin-clean check and then "return a read-only, LIVE CSSRuleList
