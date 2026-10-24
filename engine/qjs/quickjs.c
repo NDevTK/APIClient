@@ -331,6 +331,10 @@ typedef struct JSGCEdgeCensus {
     char text[296];             /* the verdict, composed for the abort that reads it */
 } JSGCEdgeCensus;
 
+/* The free path has one loop (free_zero_refcount), and a release reached from inside it only queues, so the
+   loop is on the C stack at most once whatever the input. */
+#define JS_FREE_DRAIN_DEPTH_MAX 1
+
 struct JSRuntime {
     /* HOST-REGISTERED STEP MACHINES. JS_CFUNC_STEP_DEF names its machine by an id; the built-in ids index a
        static table and a host component's id continues past STEPDEF_COUNT into this array. It is on the RUNTIME
@@ -487,21 +491,18 @@ struct JSRuntime {
        one that happened to be standing there. See JSGCEdgeCensus above for why a count is the only thing that
        tells the mark side and the holder side apart, and why it is here rather than in a static. */
     JSGCEdgeCensus gc_edge_census;
-    /* THE POST-COLLECTION SWEEP'S WORKLIST — see js_gc_sweep. It exists because a collection is a phase in
-       which some work is unsafe rather than a phase in which nothing may happen: a realm whose last reference
-       goes away INSIDE the collection releases its own references there (that half is phase-safe) and parks
+    /* THE RELEASE LOOP'S REALM WORKLIST — see free_zero_refcount. A realm whose last reference goes away inside
+       a collection or inside the loop releases its own references there (that half is phase-safe) and parks
        the rest of its teardown here. Held by JSGCObjectHeader.link, which is free to reuse because the header
        is out of gc_obj_list by the time it is on this list. */
     struct list_head gc_ctx_sweep_list;   /* JSContext.header.link — realms whose references are released */
     JSContextTeardownFunc *ctx_teardown;  /* see JS_SetContextTeardownHook */
     JSContextMarkFunc *ctx_mark;          /* see JS_SetContextMarkHook */
-    /* JS_FreeAtomStruct's worklist: symbols whose weak references are still to be reset, so a chain of weak
-       keys whose values are the next keys is released by one loop (`weak_reset_draining` names its owner). */
+    /* The drain's second worklist: symbols whose weak references are still to be reset (JS_FreeAtomStruct). */
     JSAtomStruct **weak_reset_q;
     int weak_reset_n, weak_reset_cap;
-    bool weak_reset_draining;
-    /* js_gc_sweep is running, so a sweep a nested cascade asks for is this one's next item. */
-    bool gc_sweeping;
+    /* How many drains are on the C stack (JS_FREE_DRAIN_DEPTH_MAX). */
+    uint8_t gc_drain_depth;
     JSGCPhaseEnum gc_phase : 8;
     size_t malloc_gc_threshold;
 #ifdef ENABLE_DUMPS // JS_DUMP_LEAKS
@@ -2821,7 +2822,7 @@ static JSValue JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
 static void js_free_module_def(JSContext *ctx, JSModuleDef *m);
 static void js_module_release_refs(JSContext *ctx, JSModuleDef *m);
 static void js_module_free_tables(JSContext *ctx, JSModuleDef *m);
-static void js_gc_sweep(JSRuntime *rt);
+static void free_zero_refcount(JSRuntime *rt);
 static void js_mark_module_def(JSRuntime *rt, JSModuleDef *m,
                                JS_MarkFunc *mark_func);
 static JSValue js_import_meta(JSContext *ctx);
@@ -4660,11 +4661,11 @@ void JS_FreeRuntime(JSRuntime *rt)
     /* A parked cleanup entry that never became a job still owns its callback, held value and context, so it is
        released here rather than reported as a leak by the walk below. */
     js_finrec_drain(rt, false);
-    /* No realm is waiting for the second half of its teardown: every collection ends in js_gc_sweep, so the
-       list is empty outside one, and this is outside one. */
+    /* No realm is waiting for the second half of its teardown: every collection and every release loop ends
+       with the worklist empty, and this is outside both. */
     DCHECK(list_empty(&rt->gc_ctx_sweep_list),
            "a realm was still waiting for the second half of its teardown when the runtime went — a collection "
-           "ended without reaching js_gc_sweep, so that realm's tables and its own memory were dropped");
+           "ended without reaching the release loop, so that realm's tables and its own memory were dropped");
 
     JS_RunGC(rt);
 
@@ -4909,7 +4910,7 @@ void JS_FreeRuntime(JSRuntime *rt)
     }
     js_free_rt(rt, rt->atom_array);
     js_free_rt(rt, rt->atom_hash);
-    DCHECK(rt->weak_reset_n == 0 && !rt->weak_reset_draining,
+    DCHECK(rt->weak_reset_n == 0,
            "the runtime is freed with symbols still queued for their weak references' reset");
     js_free_rt(rt, rt->weak_reset_q);
     js_free_rt(rt, rt->shape_hash);
@@ -5310,7 +5311,7 @@ static void JS_MarkContext(JSRuntime *rt, JSContext *ctx,
  * and its property atoms, which makes the shape release a reference release wearing a table's name.
  *
  * HALF TWO — the tables, which own no JSValue: the modules' atoms and arrays, the class-proto array, the parked
- * iterator array, and the realm's own memory. It runs from js_gc_sweep once the phase is over.
+ * iterator array, and the realm's own memory. It runs from the release loop, outside a collection.
  *
  * ONE LAST THING BELONGS TO NEITHER: the realm's two list memberships. Both are unlinked at the end of half
  * one, because a realm that has released its global is a realm no walk may still find — and because the sweep
@@ -5406,9 +5407,9 @@ static void js_context_free_tables(JSRuntime *rt, JSContext *ctx)
     DCHECK(ctx->refs_released,
            "a realm's tables were freed before its references were released — the two halves of a realm's "
            "teardown are ordered, and this one frees the memory the other one reads");
-    DCHECK(rt->gc_phase == JS_GC_PHASE_NONE,
+    DCHECK(rt->gc_phase != JS_GC_PHASE_REMOVE_CYCLES,
            "a realm's tables were freed INSIDE a collection — this half frees the realm's own memory, which "
-           "the collector's walk may still be holding; it belongs to js_gc_sweep");
+           "the collector's walk may still be holding; it belongs to the release loop (free_zero_refcount)");
     list_for_each_safe(el, el1, &ctx->loaded_modules)
         js_module_free_tables(ctx, list_entry(el, JSModuleDef, link));
     js_free_rt(rt, ctx->pending_close_iters);
@@ -6314,7 +6315,8 @@ static void JS_FreeAtomStruct(JSRuntime *rt, JSAtomStruct *p)
     rt->atom_free_index = i;
     if (unlikely(p->first_weak_ref)) {
         /* Resetting the weak references releases their values, and a value that is a symbol keying further
-           weak references comes back here: it is queued, and the first release drains the queue. */
+           weak references comes back here, so the reset is the drain's item and not a call: a chain of weak
+           keys is one loop. Its storage goes after the reset. */
         if (rt->weak_reset_n == rt->weak_reset_cap) {
             int cap = rt->weak_reset_cap ? rt->weak_reset_cap * 2 : 16;
             JSAtomStruct **q = js_realloc_rt(rt, rt->weak_reset_q, sizeof(*q) * (size_t)cap);
@@ -6323,15 +6325,8 @@ static void JS_FreeAtomStruct(JSRuntime *rt, JSAtomStruct *p)
             rt->weak_reset_cap = cap;
         }
         rt->weak_reset_q[rt->weak_reset_n++] = p;
-        if (rt->weak_reset_draining)
-            return;
-        rt->weak_reset_draining = true;
-        while (rt->weak_reset_n > 0) {
-            p = rt->weak_reset_q[--rt->weak_reset_n];
-            reset_weak_ref(rt, &p->first_weak_ref);
-            js_free_atom_struct_memory(rt, p);
-        }
-        rt->weak_reset_draining = false;
+        if (rt->gc_phase == JS_GC_PHASE_NONE)
+            free_zero_refcount(rt);
         return;
     }
     js_free_atom_struct_memory(rt, p);
@@ -10810,59 +10805,53 @@ static void free_gc_object(JSRuntime *rt, JSGCObjectHeader *gp)
     }
 }
 
-/* THE REFCOUNT CASCADE IS ALREADY FLAT — this is the worklist, and the phase is what keeps it the only one.
-   A dying object's properties are released while gc_phase is DECREF, so js_free_value_rt only APPENDS to
-   gc_zero_ref_count_list and this loop drains it; `for (;;) a = {next: a}` then dropped is one iteration per
-   link and no C frames at all. The DCHECK is that invariant stated where it is relied on, because the whole
-   argument rests on this function never being re-entered: engine/recgate.mjs still reports the cycle
-   (free_object -> free_property -> JS_FreeValueRT -> here -> free_gc_object -> free_object) since a static
-   walk cannot see a phase flag, and the assert is what makes that a MEASURED claim rather than a read one. */
+/* THE ONE RELEASE LOOP, over three worklists. A value released while it runs (gc_phase DECREF) only queues:
+   js_free_value_rt appends a dead GC object to gc_zero_ref_count_list, JS_FreeAtomStruct queues a symbol whose
+   weak references are to be reset, and JS_FreeContext parks a realm on gc_ctx_sweep_list. So a cascade of any
+   length (`for (;;) a = {next: a}` dropped, a chain of weak keys, realms freeing each other's tables) is one
+   iteration per item and no C frames. Dead objects go first, then weak resets, and a realm's tables only once
+   nothing dead remains that could read them. engine/recgate.mjs still reports the static cycle through here,
+   since a call graph cannot see the phase; the depth assert is what makes the bound measured. */
 static void free_zero_refcount(JSRuntime *rt)
 {
     struct list_head *el;
     JSGCObjectHeader *p;
 
+    rt->gc_drain_depth++;
+    DCHECKF(rt->gc_drain_depth <= JS_FREE_DRAIN_DEPTH_MAX,
+            "the release loop is %d deep on the C stack, past its bound of %d — a release reached the loop "
+            "while it was running, so the free path's depth is the input's again",
+            (int)rt->gc_drain_depth, JS_FREE_DRAIN_DEPTH_MAX);
     DCHECK(rt->gc_phase == JS_GC_PHASE_NONE,
-           "free_zero_refcount re-entered — the refcount cascade is a worklist, and a nested drain means "
-           "something released a value at a phase where the outer loop was supposed to own it");
+           "free_zero_refcount entered inside a collection or inside itself — every release made there queues "
+           "for the loop that is already running");
     rt->gc_phase = JS_GC_PHASE_DECREF;
     for(;;) {
         el = rt->gc_zero_ref_count_list.next;
-        if (el == &rt->gc_zero_ref_count_list)
-            break;
-        p = list_entry(el, JSGCObjectHeader, link);
-        DCHECK(JS_REF_COUNT(p) == 0, "JS_REF_COUNT(p) == 0");
-        free_gc_object(rt, p);
+        if (el != &rt->gc_zero_ref_count_list) {
+            p = list_entry(el, JSGCObjectHeader, link);
+            DCHECK(JS_REF_COUNT(p) == 0, "JS_REF_COUNT(p) == 0");
+            free_gc_object(rt, p);
+            continue;
+        }
+        if (rt->weak_reset_n > 0) {
+            JSAtomStruct *a = rt->weak_reset_q[--rt->weak_reset_n];
+            reset_weak_ref(rt, &a->first_weak_ref);
+            js_free_atom_struct_memory(rt, a);
+            continue;
+        }
+        el = rt->gc_ctx_sweep_list.next;
+        if (el != &rt->gc_ctx_sweep_list) {
+            /* A realm whose last reference went away inside a collection or inside this loop released its
+               references then (js_context_release_refs) and left its tables and its own memory for here. */
+            list_del(el);
+            js_context_free_tables(rt, list_entry(el, JSContext, header.link));
+            continue;
+        }
+        break;
     }
     rt->gc_phase = JS_GC_PHASE_NONE;
-    js_gc_sweep(rt);
-}
-
-/* THE POST-COLLECTION SWEEP — the one place work that a collection could not do gets done, and the COLLECTOR
-   runs it rather than a caller who remembered to. A realm whose last reference went away inside a collection
-   released its references there (js_context_release_refs, the phase-safe half) and left its tables and its own
-   memory for this, where freeing memory is ordinary again.
-   IT DRAINS BY POPPING THE HEAD: freeing a realm's tables releases atoms, and a cascade that follows can park
-   another realm here and ask for a sweep. That ask returns at once while a sweep is running (`gc_sweeping`),
-   and this loop takes the realm as its next item, so a chain of realms is one loop. */
-static void js_gc_sweep(JSRuntime *rt)
-{
-    DCHECK(rt->gc_phase == JS_GC_PHASE_NONE,
-           "the post-collection sweep ran INSIDE a collection — it is the half of a teardown that the phase "
-           "made impossible, so running it there is running the thing the split exists to prevent");
-    if (rt->gc_sweeping)
-        return;
-    rt->gc_sweeping = true;
-    for(;;) {
-        struct list_head *el = rt->gc_ctx_sweep_list.next;
-        JSContext *ctx;
-        if (el == &rt->gc_ctx_sweep_list)
-            break;
-        list_del(el);
-        ctx = list_entry(el, JSContext, header.link);
-        js_context_free_tables(rt, ctx);
-    }
-    rt->gc_sweeping = false;
+    rt->gc_drain_depth--;
 }
 
 /* called with the ref_count of 'v' reaches zero. */
@@ -11525,7 +11514,7 @@ static void gc_free_cycles(JSRuntime *rt)
     /* AFTER the zombie memory above, not before it: this sweep can run host code, host code can drop the last
        reference to something, and a cascade reaching free_zero_refcount while those zombies were still on the
        zero-ref list would free each of them a second time. */
-    js_gc_sweep(rt);
+    free_zero_refcount(rt);   /* the realms and weak resets the collection queued */
 }
 
 void JS_RunGC(JSRuntime *rt)
