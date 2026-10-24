@@ -42,7 +42,8 @@
 /* NAMED RESIDUAL, cycles that cross no question kind. Not covered: the layout call graph has recursion
  * cycles that pass through none of the three kinds (intrinsic sizes, line-box atomic extents, the
  * containing-block origin, margins with a size operand), and their frames still nest on the C stack within
- * one body, unbounded by REST_UNIT_LAYOUT_QUESTIONS. Next: a question kind at each cut of those cycles.
+ * one body, as do the synchronous entries whose drive a body reaches. Next: a question kind at each cut of
+ * those cycles.
  * How its absence shows: a deep document's C stack grows with its depth along a frame cycle that names no
  * `bf_box`, `uv_sized` or `used_value_px`. */
 
@@ -186,19 +187,15 @@ void layout_job_line_metrics_spend(size_t n);
 
 /* ---- LAYOUT_Q_BF_BOX ------------------------------------------------------------------------------------ */
 
-typedef enum {
-    LAYOUT_ASK_ANSWERED,   /* `*out` holds the memoized answer; nothing was pushed */
-    LAYOUT_ASK_OPENED,     /* pushed computing at `*at`: the caller runs the body and answers or suspends it */
-    LAYOUT_ASK_DEFERRED    /* pushed suspended at `*at`: the caller returns "not yet" */
-} LayoutAsk;
-
-/* Ask a BF_BOX or BF_WALK question. Asserts a drive is open: every ask has one beneath it on the C stack. The
-   question is deferred when the drive already hosts rest_unit_items(REST_UNIT_LAYOUT_QUESTIONS) computing
-   bodies, or when a resting drive is innermost and has spent its boxes. A BF_BOX open takes one box; a stack
-   counts its steps instead. A body opened under a drive nested inside a resting job runs to completion in the
-   activation, so the step machine owning the job could not rest there: that is a DFAIL naming the nested
-   drive's site, whose caller is to become an ask propagated to the resting drive. */
-LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at);
+/* Ask a BF_BOX or BF_WALK question. Asserts a drive is open: every ask has one beneath it on the C stack. True
+   with `*out` written when the memo holds the answer; otherwise the question is pushed suspended and the
+   caller returns "not yet". No body runs inside its asker's frame: the drive loop is the one caller of a body
+   (`layout_job_drive_next`), so the C stack a body uses does not grow with the depth of the box tree. A body
+   the drive takes takes one box (a stack counts its steps instead). A drive nested inside a resting job runs
+   to completion in the activation, so the step machine owning the job could not rest there: taking a body
+   there is a DFAIL naming the nested drive's site, whose caller is to become an ask propagated to the resting
+   drive. */
+bool layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out);
 
 /* The computing body at `at` completed: asserts it is the top, pops and memoizes it. */
 void layout_job_bf_answer(size_t at, const LayoutBfAnswer *answer);

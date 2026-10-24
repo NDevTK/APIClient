@@ -10,6 +10,7 @@
 #include <lexbor/html/html.h>   /* lxb_html_tree_node_is — the ELEMENT TYPE test CSS 2.1 §14.2 is stated over */
 
 #include "check.h"
+#include "core/css/css_computed_style.h"
 #include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
@@ -1383,7 +1384,16 @@ bool box_paint_stacking_context(JSContext *ctx, lxb_dom_element_t *context_el, D
        because Appendix E §E.1's tree order is the shadow-including one, and the stacking context because CSS
        2.1 §E.2 has no painting order for an element that forms none. Restating either here would be a second
        copy of one rule, reported at the caller instead of at the component that depends on it. */
-    ok = paint_order_walk(ctx, context_el, bp_visit, &st);
+    /* One computed style record for the whole walk, so every element's cascade and computed values are derived
+       once per paint rather than once per read, and an ancestor's inherited value is held when a descendant
+       reads it. */
+    {
+        CssComputedStyleHold hold;
+
+        css_computed_style_hold_begin(&hold);
+        ok = paint_order_walk(ctx, context_el, bp_visit, &st);
+        css_computed_style_hold_end(&hold);
+    }
 
     /* THE PARTS SUM TO THE TOTAL, AND THE TWO SIDES ARE WRITTEN AT DIFFERENT SITES, which is the whole of
        what makes this a check rather than a restatement. `offers` rises at the TOP of `bp_visit`, before the

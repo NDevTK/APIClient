@@ -25,11 +25,6 @@
    removing a child removes a subtree the document chose. */
 #define REST_UNIT_SUBTREE_REMOVALS_N   1u
 
-/* Layout question bodies above one drive before an ask is deferred. The floor is the deferral: a deferring
-   body stages its walk and is resumed, so a unit of one does that once per child. The ceiling is the C stack
-   one activation spends. 32 defers once per 32 levels and keeps an activation to 32 bodies. */
-#define REST_UNIT_LAYOUT_QUESTIONS_N   32u
-
 /* Boxes a resting drive lays out per rest point, 4. The floor is the cost of resting, which a body pays as one
    staged walk. The ceiling is bound (2), measured by the scrolling-area bracket the drive runs inside: a box's
    own work between its asks, with the fill of an inline formatting context it holds counted apart
@@ -53,6 +48,13 @@
    1.3 ms. */
 #define REST_UNIT_LAYOUT_LINE_METRICS_N   32u
 
+/* Engine work a resting drive spends per activation, a quarter of the quantum. The ceiling is bound (2) less one
+   body's work past the last pick, which the drive cannot interrupt, and the unit's work outside the drive (its
+   target's box tests and the reads that follow the last answer); a quarter leaves the other three quarters of
+   the slice for those, so the unit stays under the quantum the bracket asserts. The floor is the rest's cost, a
+   yield and a re-entry per activation. */
+#define REST_UNIT_LAYOUT_WORK_N   (ENGINE_QUANTUM_WORK / 4)
+
 /* Descendants folded into a scrolling area per rest point. The floor is the cost of asking, which one
    node's edge does not amortize; the ceiling is bound (2), asserted around each unit. A node whose
    derivation overruns the slice rests mid-node through its job's resting drive (core/layout/layout_job.h). */
@@ -66,12 +68,12 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_INPUT_BYTES:      n = REST_UNIT_INPUT_BYTES_N;      break;
     case REST_UNIT_XML_CONSTRUCTS:   n = REST_UNIT_XML_CONSTRUCTS_N;   break;
     case REST_UNIT_SUBTREE_REMOVALS: n = REST_UNIT_SUBTREE_REMOVALS_N; break;
-    case REST_UNIT_LAYOUT_QUESTIONS: n = REST_UNIT_LAYOUT_QUESTIONS_N; break;
     case REST_UNIT_LAYOUT_BOXES:     n = REST_UNIT_LAYOUT_BOXES_N;     break;
     case REST_UNIT_LAYOUT_FLOAT_SCAN: n = REST_UNIT_LAYOUT_FLOAT_SCAN_N; break;
     case REST_UNIT_LAYOUT_DESCENDANTS: n = REST_UNIT_LAYOUT_DESCENDANTS_N; break;
     case REST_UNIT_LAYOUT_LINE_ITEMS: n = REST_UNIT_LAYOUT_LINE_ITEMS_N; break;
     case REST_UNIT_LAYOUT_LINE_METRICS: n = REST_UNIT_LAYOUT_LINE_METRICS_N; break;
+    case REST_UNIT_LAYOUT_WORK: n = (size_t)REST_UNIT_LAYOUT_WORK_N; break;
     }
     /* No `default:` arm, so clang's -Wswitch (on by default) warns about a kind with no case here; such a
        kind, or an integer cast into the enum, leaves `n` at zero and fails the check below. */

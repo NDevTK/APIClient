@@ -1053,16 +1053,18 @@ static int js_ev_client_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     STEP_DISPATCH(EV_CLIENT_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
 
     STEP_ARM(EV_CLIENT_MEASURE);
-    ev_target(hdr->this_val, &t);
-    if (s->job == NULL && ev_client_extent_direct(ctx, &t, vertical, presult)) return JS_STEP_DONE;
-    el = lxb_dom_interface_element(t.node);
     if (s->job == NULL) {
+        ev_target(hdr->this_val, &t);
+        if (ev_client_extent_direct(ctx, &t, vertical, presult)) return JS_STEP_DONE;
         s->job = layout_job_new(LAYOUT_JOB_STEP);
         METRIC_ADD(client_extent_asks, 1);
     }
     /* One activation is one unit, measured against the slice like each of `scrollIntoView`'s. */
     rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
     layout_job_enter(s->job);
+    /* Read inside the job, so the box tests' cascade is held by the job's records across activations. */
+    ev_target(hdr->this_val, &t);
+    el = lxb_dom_interface_element(t.node);
     layout_job_drive_begin_resting(&d);
     while (block_flow_drive_deferred(&d)) {
         if (used_value_padding_edge_ask(el, vertical, &px)) {
@@ -1624,13 +1626,14 @@ static int js_ev_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     STEP_DISPATCH(EV_RECTS_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
 
     STEP_ARM(EV_RECTS_MEASURE);
-    ev_target(hdr->this_val, &t);
     if (s->job == NULL) {
         s->job = layout_job_new(LAYOUT_JOB_STEP);
         METRIC_ADD(client_rects_asks, 1);
     }
     rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
     layout_job_enter(s->job);
+    /* Read inside the job, so the box tests' cascade is held by the job's records across activations. */
+    ev_target(hdr->this_val, &t);
     layout_job_drive_begin_resting(&d);
     while (block_flow_drive_deferred(&d)) {
         if (ev_client_rects_ask(&t)) {

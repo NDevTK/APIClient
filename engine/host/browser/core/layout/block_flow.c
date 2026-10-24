@@ -2193,22 +2193,14 @@ static bool bf_question_run(LayoutQuestion q, size_t at, BfBox *out)
     return true;
 }
 
-/* Ask `q` of the job: served from the memo, deferred ("not yet", `*out` unwritten), or run here. */
+/* Ask `q` of the job: served from the memo, or deferred ("not yet", `*out` unwritten) for the drive to run. */
 static bool bf_question_ask(LayoutQuestion q, BfBox *out)
 {
     LayoutBfAnswer a;
-    size_t at = 0;
 
-    switch (layout_job_bf_ask(q, &a, &at)) {
-    case LAYOUT_ASK_ANSWERED:
-        *out = bf_box_unpack(&a);
-        return true;
-    case LAYOUT_ASK_DEFERRED:
-        return false;
-    case LAYOUT_ASK_OPENED:
-        break;
-    }
-    return bf_question_run(q, at, out);
+    if (!layout_job_bf_ask(q, &a)) return false;
+    *out = bf_box_unpack(&a);
+    return true;
 }
 
 /* §9.4.1's contribution of one box, asked through the layout job: the question is (element, pass) and the

@@ -13,6 +13,7 @@
 #include "core/layout/layout_job.h"
 #include "core/layout/layout_question.h"
 #include "core/timing/thread_work.h"
+#include "solver/engine.h"   /* the engine work count a resting drive's activation spends */
 #include "solver/metrics.h"
 #include "solver/rest_unit.h"
 
@@ -71,6 +72,7 @@ struct LayoutJob {
     size_t    scan;      /* elements a resting drive's float search may still examine in this activation */
     size_t    line_items;   /* items a resting drive's line box fills may still take in this activation */
     size_t    line_metrics; /* box metrics its line box walks may still derive in this activation */
+    int64_t   work_end;     /* the engine work count at which a resting drive's activation has spent its work */
     bool      resting;   /* a resting drive is open, as the job's outermost */
     LjSlot   *memo;
     LayoutBfAnswer **answers;   /* chunks of LJ_ANSWER_CHUNK answers, owned */
@@ -484,13 +486,15 @@ void layout_job_drive_begin_resting(LayoutJobDrive *d)
     job->scan = rest_unit_items(REST_UNIT_LAYOUT_FLOAT_SCAN);
     job->line_items = rest_unit_items(REST_UNIT_LAYOUT_LINE_ITEMS);
     job->line_metrics = rest_unit_items(REST_UNIT_LAYOUT_LINE_METRICS);
+    job->work_end = engine_work_retired() + (int64_t)rest_unit_items(REST_UNIT_LAYOUT_WORK);
     job->resting = true;
 }
 
-/* Whether one of the activation's four allowances is spent. */
+/* Whether one of the activation's five allowances is spent: four counts and its engine work. */
 static bool lj_allowance_spent(const LayoutJob *job)
 {
-    return job->quota == 0 || job->scan == 0 || job->line_items == 0 || job->line_metrics == 0;
+    return job->quota == 0 || job->scan == 0 || job->line_items == 0 || job->line_metrics == 0 ||
+           engine_work_retired() >= job->work_end;
 }
 
 bool layout_job_drive_pending(const LayoutJobDrive *d)
@@ -577,6 +581,15 @@ bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at)
             e->state == LJ_COMPUTING ? "computing" : "suspended", (int)e->q.kind);
     DCHECK(!layout_job_drive_spent(d),
            "a resting drive was continued after it spent its boxes; its driver rests instead");
+    if (job->resting && job->drives > 1) {
+        char ask[LAYOUT_QUESTION_ASK_CAP], chain[LAYOUT_QUESTION_CHAIN_CAP];
+        bool cut = false;
+
+        DFAILF("%s:%d opens a drive inside a resting layout job, and %s would run to completion under it, so the "
+               "step machine owning the job cannot rest there (open: %s). BUILD that caller as an ask that "
+               "answers \"not yet\" to the resting drive", job->drive_file, job->drive_line,
+               layout_question_ask(e->q, ask, sizeof ask), layout_question_chain(8, chain, sizeof chain, &cut));
+    }
     e->state = LJ_COMPUTING;
     e->outer = job->ctx;
     job->ctx = e->ctx;
@@ -611,7 +624,7 @@ void layout_job_drive_end(LayoutJobDrive *d)
 
 /* ---- LAYOUT_Q_BF_BOX ------------------------------------------------------------------------------------ */
 
-LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at)
+bool layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out)
 {
     LayoutJob *job = lj_current();
     LjSlot *s;
@@ -629,27 +642,12 @@ LayoutAsk layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out, size_t *at)
             METRIC_ADD(bf_served, 1);
             if (s->rest < job->rests) METRIC_ADD(served_across_rest, 1);
             *out = *s->a;
-            return LAYOUT_ASK_ANSWERED;
+            return true;
         }
     }
-    if (job->nest >= rest_unit_items(REST_UNIT_LAYOUT_QUESTIONS) || lj_quota_spent(job)) {
-        *at = lj_push(job, q, LJ_SUSPENDED);
-        METRIC_ADD(bf_deferred, 1);
-        return LAYOUT_ASK_DEFERRED;
-    }
-    if (job->resting && job->drives > 1) {
-        char ask[LAYOUT_QUESTION_ASK_CAP], chain[LAYOUT_QUESTION_CHAIN_CAP];
-        bool cut = false;
-
-        DFAILF("%s:%d opens a drive inside a resting layout job, and %s would run to completion under it, so the "
-               "step machine owning the job cannot rest there (open: %s). BUILD that caller as an ask that "
-               "answers \"not yet\" to the resting drive", job->drive_file, job->drive_line,
-               layout_question_ask(q, ask, sizeof ask), layout_question_chain(8, chain, sizeof chain, &cut));
-    }
-    *at = lj_push(job, q, LJ_COMPUTING);
-    job->nest++;
-    if (q.kind == LAYOUT_Q_BF_BOX) lj_quota_take(job);
-    return LAYOUT_ASK_OPENED;
+    (void)lj_push(job, q, LJ_SUSPENDED);
+    METRIC_ADD(bf_deferred, 1);
+    return false;
 }
 
 void layout_job_bf_answer(size_t at, const LayoutBfAnswer *answer)

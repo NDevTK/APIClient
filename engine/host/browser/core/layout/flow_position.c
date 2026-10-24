@@ -952,6 +952,54 @@ static bool fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_el
     return true;
 }
 
+/* The containing blocks above `el` whose origin the pass does not yet hold, along §10.1's second case, asked from
+   the topmost down, so each derivation finds its own containing block's origin held and the second case nests
+   no C frame per ancestor: a tree's depth is the document's choice. The chain stops at a box another placement
+   answers. Outside a pass nothing is held and nothing is asked. False ("not yet") when one was deferred. */
+/* Whether `el`'s origin is §10.1's second case: an in-flow, unfloated block-level box that no other placement
+   above answers, the arm whose operand is its containing block's origin. */
+static bool fp_takes_second_case(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(el);
+
+    return !css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) &&
+           !css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED) && !block_flow_is_floated(el) &&
+           !fp_is_on_a_line_box(el) && !css_computed_display_is(el, CSS_KEYWORD_TABLE_ROW) &&
+           !css_computed_display_is(el, CSS_KEYWORD_TABLE_CELL) &&
+           !css_computed_display_is(el, CSS_KEYWORD_TABLE_ROW_GROUP) &&
+           !css_computed_display_is(el, CSS_KEYWORD_TABLE_HEADER_GROUP) &&
+           !css_computed_display_is(el, CSS_KEYWORD_TABLE_FOOTER_GROUP) &&
+           !css_computed_display_is(el, CSS_KEYWORD_TABLE_CAPTION) && !fp_is_flex_item(el) && !fp_is_grid_item(el) &&
+           !fp_is_root(n);
+}
+
+static bool fp_origin_ancestors_first(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t **chain = NULL, *x, *cb;
+    const lxb_dom_element_t *held_cb;
+    size_t n = 0, cap = 0;
+    FlowPoint o;
+    bool done = true;
+
+    if (!flow_placement_is_held()) return true;
+    for (x = el; fp_takes_second_case(x) && (cb = used_value_containing_block(x)) != NULL &&
+                 !flow_placement_origin_peek(cb, &o, &held_cb);
+         x = cb) {
+        if (n == cap) {
+            size_t c = cap ? cap * 2 : 16;
+            lxb_dom_element_t **grown = realloc(chain, c * sizeof *grown);
+
+            CHECK(grown != NULL, "the containing blocks above a box whose origin is asked could not be listed");
+            chain = grown;
+            cap = c;
+        }
+        chain[n++] = cb;
+    }
+    while (done && n > 0) done = flow_border_box_origin_ask(chain[--n], &o);
+    free(chain);
+    return done;
+}
+
 /* CSS 2 §8.1 "Box dimensions"' border-box origin, asked of the pass first. The cost removed is a recursion:
    §10.1's second case climbs the containing-block chain per ask, quadratic in depth over a document; within a
    pass a climb stops at the first ancestor already derived (core/layout/flow_placement.h explains why
@@ -984,7 +1032,7 @@ bool flow_border_box_origin_ask(lxb_dom_element_t *el, FlowPoint *out)
         *out = p;
         return true;
     }
-    if (!fp_border_box_origin_compute(el, &cb, &p)) return false;
+    if (!fp_origin_ancestors_first(el) || !fp_border_box_origin_compute(el, &cb, &p)) return false;
     (void)flow_placement_origin_ask(el, &p, NULL);
     /* CSS 2.2 §9.4.3 "Relative positioning", applied once here because it shifts any placement: "Once a box has
        been laid out according to the normal flow or floated, it may be shifted relative to this position."

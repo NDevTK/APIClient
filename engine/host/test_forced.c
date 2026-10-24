@@ -1096,6 +1096,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/contentsflex.h"
 #include "fixture/inlineflex.h"
 #include "fixture/clientextent.h"
+#include "fixture/deepnest.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1546,6 +1547,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "contentsflex", HTML_CONTENTSFLEX },
     { "inlineflex", HTML_INLINEFLEX },
     { "clientextent", HTML_CLIENTEXTENT },
+    { "deepnest", HTML_DEEPNEST },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -13998,6 +14000,25 @@ TF_UNIT void probes_borrowedkey(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `deepnest` document (fixture/deepnest.h). */
+TF_UNIT void probes_deepnest(const char *js, Probe *tab, int *n) {
+    const char *dn_why = NULL; int dn_tt = 1;
+
+    fold_row(&dn_tt, &dn_why, !!strstr(js, "\"/api/deepnest\""),
+             "NOT REACHED: there is no /api/deepnest record at all, so the document aborted before its fetch — a C "
+             "frame per nesting level overflows the stack before the read answers");
+    fold_row(&dn_tt, &dn_why, param_value_is(js, "/api/deepnest", "t", "0"),
+             "CSS 2.1 §9.4.1: the innermost box under three thousand empty levels is not at the outermost's top");
+    fold_row(&dn_tt, &dn_why, param_value_is(js, "/api/deepnest", "h", "10"),
+             "CSS 2.1 §10.6.3: the outermost box is not the 10px of the one box with a height inside it");
+    fold_row(&dn_tt, &dn_why, param_value_is(js, "/api/deepnest", "l", "0"),
+             "CSS 2.1 §10.3.3: the innermost box is not at the outermost's left edge");
+    const Probe rows[] = {
+        { "deep-nesting-rects", dn_tt, "/api/deepnest", SESS_EXPLORE, dn_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -17742,6 +17763,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_importchain(js, probes, &np);
     probes_borrowedkey(js, probes, &np);
     probes_clientextent(js, probes, &np);
+    probes_deepnest(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);

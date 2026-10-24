@@ -53,11 +53,6 @@ typedef enum {
     /* One top-level child removed from the partial tree a failed XML parse left, which §7.5.3 permits a user
        agent to replace with an inline report. Cost: one subtree, whose size the document chooses. */
     REST_UNIT_SUBTREE_REMOVALS,
-    /* One layout question body open on the C stack above its job's drive (core/layout/layout_job.h). An ask
-       made while the drive already hosts this many bodies is deferred and computed on a fresh C stack. Cost:
-       one body, whose walk the document sizes. This number decides C stack per activation and how often a
-       body stages its walk; the rest point a resting drive offers is counted by REST_UNIT_LAYOUT_BOXES. */
-    REST_UNIT_LAYOUT_QUESTIONS,
     /* One box folded into a scrolling area, CSSOM View §2 "Terminology"'s extreme over "all of the element's
        descendants' boxes", walked by core/layout/scrolling_area.h's cursor: a descendant's margin edge, one
        inline formatting context, or one anonymous block box. core/dom/element_scrolling.c's scroll-into-view
@@ -87,7 +82,13 @@ typedef enum {
        atomic inline's split margin box. Counted apart from REST_UNIT_LAYOUT_LINE_ITEMS because one costs what a
        hundred of those do, and how many a line derives is the document's choice (a box per character).
        Cost: three font metric derivations or one memoized layout answer; bound (2) as above. */
-    REST_UNIT_LAYOUT_LINE_METRICS
+    REST_UNIT_LAYOUT_LINE_METRICS,
+    /* One unit of engine work (opcodes and host charges, core/timing/thread_work.h) a resting drive spends in
+       one activation, beside the four counts above: a body the drive takes, resumed or new, a cascade it
+       reads and a walk step all spend it, so an activation whose work is in no counted item still stops at
+       the drive's next pick. Cost: one unit, by definition; bound (2) is asserted by the
+       REST_UNIT_LAYOUT_DESCENDANTS bracket. */
+    REST_UNIT_LAYOUT_WORK
 } RestUnitKind;
 
 /* How many items of `kind` one rest point covers; at least 1 (asserted). It takes only the kind, which is
