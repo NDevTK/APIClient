@@ -603,7 +603,9 @@ struct JSRuntime {
     JSModuleCheckSupportedImportAttributes *module_check_attrs;
     JSModuleImportMetaFunc *module_import_meta_func;   /* JS_SetModuleImportMetaFunc's; NULL = none */
     void *module_loader_opaque;
-    /* timestamp for internal use in module evaluation */
+    /* ECMA-262 §9.6's [[ModuleAsyncEvaluationCount]], held per runtime though every agent of the runtime has its
+       own: the values only order modules of one agent's graphs, and one shared counter still gives each agent
+       unique increasing values. */
     int64_t module_async_evaluation_next_timestamp;
 
     /* used to allocate, free and clone SharedArrayBuffers */
@@ -112323,6 +112325,9 @@ static int js_symbol_for_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
         if (JS_IsException(str)) return -1;
     }
     DCHECK(JS_VALUE_GET_TAG(str) == JS_TAG_STRING, "ToString answered with something that is not a string");
+    /* §20.4.2.4 reads the surrounding agent's [[GlobalSymbolRegistry]], and the runtime's atom table is the one
+       registry its agents share: unobservable, because no Symbol crosses agents (HTML's StructuredSerializeInternal
+       throws a DataCloneError for one). */
     m->result = JS_NewSymbolInternal(ctx, JS_VALUE_GET_STRING(str), JS_ATOM_TYPE_GLOBAL_SYMBOL);
     return JS_IsException(m->result) ? (m->result = JS_UNDEFINED, -1) : 0;
 }
@@ -127751,6 +127756,12 @@ static JSValue js_weakref_ctor_body(JSContext *ctx, JSValueConst obj_,
     return obj;
 }
 
+/* ECMA-262 §26.1.3.2 WeakRef.prototype.deref ( ), returning §26.1.4.1 WeakRefDeref ( weakRef ).
+   Named residual. Not covered: WeakRefDeref step 2's §9.11 AddToKeptObjects ( value ), the constructor's step 4
+   one, and §9.10 ClearKeptObjects ( ) when the job's synchronous sequence completes, so a target answered here
+   is not kept alive for the rest of the job. Next diff builds: [[KeptAlive]] on the JSAgentRecord, appended in
+   both places and emptied when the job's flow completes. Absence shows as: a target dereferenced earlier in a
+   job can be collected before it ends, so a second deref in the same job answers undefined. */
 static JSValue js_weakref_deref(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     JSWeakRefData *wrd = JS_GetOpaque2(ctx, this_val, JS_CLASS_WEAK_REF);
