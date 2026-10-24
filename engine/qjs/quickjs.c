@@ -495,6 +495,13 @@ struct JSRuntime {
     struct list_head gc_ctx_sweep_list;   /* JSContext.header.link — realms whose references are released */
     JSContextTeardownFunc *ctx_teardown;  /* see JS_SetContextTeardownHook */
     JSContextMarkFunc *ctx_mark;          /* see JS_SetContextMarkHook */
+    /* JS_FreeAtomStruct's worklist: symbols whose weak references are still to be reset, so a chain of weak
+       keys whose values are the next keys is released by one loop (`weak_reset_draining` names its owner). */
+    JSAtomStruct **weak_reset_q;
+    int weak_reset_n, weak_reset_cap;
+    bool weak_reset_draining;
+    /* js_gc_sweep is running, so a sweep a nested cascade asks for is this one's next item. */
+    bool gc_sweeping;
     JSGCPhaseEnum gc_phase : 8;
     size_t malloc_gc_threshold;
 #ifdef ENABLE_DUMPS // JS_DUMP_LEAKS
@@ -4852,6 +4859,9 @@ void JS_FreeRuntime(JSRuntime *rt)
     }
     js_free_rt(rt, rt->atom_array);
     js_free_rt(rt, rt->atom_hash);
+    DCHECK(rt->weak_reset_n == 0 && !rt->weak_reset_draining,
+           "the runtime is freed with symbols still queued for their weak references' reset");
+    js_free_rt(rt, rt->weak_reset_q);
     js_free_rt(rt, rt->shape_hash);
 #ifdef ENABLE_DUMPS // JS_DUMP_LEAKS
     if (check_dump_flag(rt, JS_DUMP_LEAKS) && !list_empty(&rt->string_list)) {
@@ -6213,6 +6223,17 @@ static JSAtom __JS_FindAtom(JSRuntime *rt, const char *str, size_t len,
     return JS_ATOM_NULL;
 }
 
+/* The atom's own storage, once it is out of the hash table and its index is free. */
+static void js_free_atom_struct_memory(JSRuntime *rt, JSAtomStruct *p)
+{
+#ifdef ENABLE_DUMPS // JS_DUMP_LEAKS
+    list_del(&p->link);
+#endif
+    js_free_rt(rt, p);
+    rt->atom_count--;
+    DCHECK(rt->atom_count >= 0, "rt->atom_count >= 0");
+}
+
 static void JS_FreeAtomStruct(JSRuntime *rt, JSAtomStruct *p)
 {
     uint32_t i = p->hash_next;  /* atom_index */
@@ -6242,15 +6263,28 @@ static void JS_FreeAtomStruct(JSRuntime *rt, JSAtomStruct *p)
     rt->atom_array[i] = atom_set_free(rt->atom_free_index);
     rt->atom_free_index = i;
     if (unlikely(p->first_weak_ref)) {
-        reset_weak_ref(rt, &p->first_weak_ref);
+        /* Resetting the weak references releases their values, and a value that is a symbol keying further
+           weak references comes back here: it is queued, and the first release drains the queue. */
+        if (rt->weak_reset_n == rt->weak_reset_cap) {
+            int cap = rt->weak_reset_cap ? rt->weak_reset_cap * 2 : 16;
+            JSAtomStruct **q = js_realloc_rt(rt, rt->weak_reset_q, sizeof(*q) * (size_t)cap);
+            CHECK(q != NULL, "JS_FreeAtomStruct: OOM queueing a symbol whose weak references are to be reset");
+            rt->weak_reset_q = q;
+            rt->weak_reset_cap = cap;
+        }
+        rt->weak_reset_q[rt->weak_reset_n++] = p;
+        if (rt->weak_reset_draining)
+            return;
+        rt->weak_reset_draining = true;
+        while (rt->weak_reset_n > 0) {
+            p = rt->weak_reset_q[--rt->weak_reset_n];
+            reset_weak_ref(rt, &p->first_weak_ref);
+            js_free_atom_struct_memory(rt, p);
+        }
+        rt->weak_reset_draining = false;
+        return;
     }
-    /* free the string structure */
-#ifdef ENABLE_DUMPS // JS_DUMP_LEAKS
-    list_del(&p->link);
-#endif
-    js_free_rt(rt, p);
-    rt->atom_count--;
-    DCHECK(rt->atom_count >= 0, "rt->atom_count >= 0");
+    js_free_atom_struct_memory(rt, p);
 }
 
 static void __JS_FreeAtom(JSRuntime *rt, uint32_t i)
@@ -10753,14 +10787,17 @@ static void free_zero_refcount(JSRuntime *rt)
    runs it rather than a caller who remembered to. A realm whose last reference went away inside a collection
    released its references there (js_context_release_refs, the phase-safe half) and left its tables and its own
    memory for this, where freeing memory is ordinary again.
-   IT DRAINS BY POPPING THE HEAD, which is what makes it re-entrant: freeing a realm's tables releases atoms,
-   and a cascade that follows can end in another sweep. Every item is unlinked before it is used, so a nested
-   drain finds a list that never names an item twice. */
+   IT DRAINS BY POPPING THE HEAD: freeing a realm's tables releases atoms, and a cascade that follows can park
+   another realm here and ask for a sweep. That ask returns at once while a sweep is running (`gc_sweeping`),
+   and this loop takes the realm as its next item, so a chain of realms is one loop. */
 static void js_gc_sweep(JSRuntime *rt)
 {
     DCHECK(rt->gc_phase == JS_GC_PHASE_NONE,
            "the post-collection sweep ran INSIDE a collection — it is the half of a teardown that the phase "
            "made impossible, so running it there is running the thing the split exists to prevent");
+    if (rt->gc_sweeping)
+        return;
+    rt->gc_sweeping = true;
     for(;;) {
         struct list_head *el = rt->gc_ctx_sweep_list.next;
         JSContext *ctx;
@@ -10770,6 +10807,7 @@ static void js_gc_sweep(JSRuntime *rt)
         ctx = list_entry(el, JSContext, header.link);
         js_context_free_tables(rt, ctx);
     }
+    rt->gc_sweeping = false;
 }
 
 /* called with the ref_count of 'v' reaches zero. */

@@ -1103,6 +1103,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/windowthis.h"
 #include "fixture/intl.h"
 #include "fixture/contchain.h"
+#include "fixture/weakchain.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1542,6 +1543,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "windowthis", HTML_WINDOWTHIS },
     { "intl", HTML_INTL },
     { "contchain", HTML_CONTCHAIN },
+    { "weakchain", HTML_WEAKCHAIN },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -13885,6 +13887,21 @@ TF_UNIT void probes_contchain(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `weakchain` document (fixture/weakchain.h). */
+TF_UNIT void probes_weakchain(const char *js, Probe *tab, int *n) {
+    /* The release of a 300000-symbol weak-key chain completes and the program runs on to its fetch. */
+    const char *wc_why = NULL; int wc_tt = 1;
+    fold_row(&wc_tt, &wc_why, !!strstr(js, "\"/api/weakchain\""),
+             "NOT REACHED: there is no /api/weakchain record at all, so the program did not survive the release of "
+             "its weak-key chain");
+    fold_row(&wc_tt, &wc_why, param_value_is(js, "/api/weakchain", "d", "300000"),
+             "the chain was not the document's 300000 symbols long");
+    const Probe rows[] = {
+        { "weak-key-chain-release", wc_tt, "/api/weakchain", SESS_EXPLORE, wc_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -17604,6 +17621,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_contentsflex(js, probes, &np);
     probes_inlineflex(js, probes, &np);
     probes_contchain(js, probes, &np);
+    probes_weakchain(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
