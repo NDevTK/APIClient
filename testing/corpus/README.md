@@ -356,3 +356,51 @@ addresses a concolic request files under (`GET /api/{cfg.region}/x`, which parse
 at all and is the whole of the control corpus's surface). Report such a split as a floor,
 say whether you counted LINES (`grep -c`) or OCCURRENCES (`grep -o | wc -l`), and never
 sum it against a counter from the one-run block.
+
+## Known-vulnerability corpus
+
+`knownbugs.tsv` lists published client-side XSS advisories in real library versions, as positive controls
+for the @S half: a vulnerable version whose PoC the engine should construct and fire, and the first fixed
+version beside it, where the same page must not fire. A fixed variant with no fired PoC is reported as "not
+fired" and never as safe — an unsolved search is a parked search.
+
+One row is one advisory and one delivery route; pdf.js's CVE-2024-4367 has two rows because the generic
+viewer takes a document two ways. The columns:
+
+| column | what it states, and how it was established |
+|---|---|
+| `advisory`, `cve`, `advisory_url` | the GitHub Advisory Database record and its canonical page |
+| `read_from`, `fetched` | the record's own JSON file, fetched with curl on that date and read from the file; github.com itself answers 403 through this environment's proxy, and this file is the source the page renders |
+| `package`, `vulnerable`, `fixed` | the npm package, the version run as vulnerable, and the advisory's first fixed version |
+| `source` | the attacker source the harness reads, as the advisory's scenario has it |
+| `sink` | the sink class and the library code that reaches it |
+| `entry` | the address loaded, relative to the served directory; its query or fragment is the source's example value |
+| `harness` | the page of ours under `knownbug/`, served as `index.html`, or `-` where the library's own page is the subject |
+| `precondition` | what the page or the PoC must satisfy for the advisory to apply |
+| `assets_vulnerable`, `assets_fixed` | what is served beside the page: `<served path>=<spec>@sha256:<hex>` |
+
+Every advisory in the list was read in full; what each one says about the scenario is what its harness does,
+and nothing beyond it. Candidates that were dropped, and why: an AngularJS expression-sandbox escape has no
+record in the GitHub Advisory Database or OSV for npm `angular` (the AngularJS row is GHSA-5cp4-xmrw-59wf,
+the jqLite sibling of CVE-2020-11022, instead), and marked's `javascript:` link advisory is CVE-2016-10531.
+
+THE REPOSITORY CARRIES NONE OF THE LIBRARIES. An asset spec is fetched at run time by exact version and is
+refused unless its sha256 is the recorded one. `npm:<name>@<version>/<path>` is a member of the registry
+tarball; a trailing `/` makes it a directory, whose digest is the sha256 of its `sha256sum`-format manifest
+sorted by path. A plain `https:` spec is one file (jQuery 1.6.x on npm is a jsdom wrapper, so its release
+files come from code.jquery.com). `pdfjs-src:<tag>` is pdf.js's generic viewer as its unbuilt source tree at
+that release tag, in the development mode its own `gulp server` serves: `web/viewer.html` with its import map
+and every module, stylesheet and image reachable from it, read from raw.githubusercontent.com. The release
+zip that carries the built viewer is on github.com, which this proxy refuses, and the npm package carries
+only the library and the viewer components, so the tree is the viewer this environment can run; the
+vulnerable function (`FontFaceObject.getPathGenerator`'s `new Function`) is the same source either way.
+`node_modules/` and `build/dev-sandbox/` in that tree come from npm assets.
+
+THE pdf.js SEED. Both pdf.js rows carry `test/pdfs/pattern_text_embedded_font.pdf` from pdf.js's own test
+corpus at v4.1.392, recorded like a library: a benign PDF whose font is an embedded `/Type1` with a
+`/FontFile3` program, filled through a pattern, so a run over it parses the document, loads the font and
+reaches `getPathGenerator` with no mutation at all. It is the example value of the input, so forced
+execution runs the parse concretely and forks only where the structure is checked. The `file=` row serves it
+at `/seed.pdf` on the viewer's own origin, because the generic viewer refuses a `file=` whose origin differs
+from its own (`validateFileURL` in `web/app.js`, except for a viewer at `null` or mozilla.github.io). The
+drop row delivers bytes through a `drop` event's DataTransfer, so its PoC has to name the drop act.
