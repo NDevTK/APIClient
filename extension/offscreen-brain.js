@@ -1555,6 +1555,7 @@ function handleContentMessage(msg, sender) {
        and a document committed at an address — §LIVE-VERIFY's premise — and it costs no new message type, no
        content-script change and no request. */
     _recordProbeDelivery(msg.seedUrl, _facts);
+    bootSpanMark(documentId, "seed");
     /* NO PAGE-SOURCE RECORD IS WRITTEN HERE. Whether this document loads is not known yet — the navigation
        has not happened — and writing "delivered" at the arrival of a SUGGESTION would state a fact this zone
        invented. bridge.js writes it, both ways, the instant the load settles. */

@@ -3096,7 +3096,9 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, inherited,
      is synchronous up to the async body's first await. */
   eng._readyP = (async () => {
     try {
+      bootSpanMark(eng.docId, "provision");
       eng.r = await self.rendererLaunch(cluster);
+      bootSpanMark(eng.docId, "rendererReady");
       await engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, inherited, parentNavigable,
                        openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags);
       /* A Clear that landed mid-boot is honoured here: hostClear cannot destroy a renderer with a call
@@ -3382,6 +3384,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     engineRefuse(eng, why);
     throw engineBootRefusal(why);
   }
+  bootSpanMark(eng.docId, "init");
   /* The root document's load, which `Init` began: one work quantum per `Load`, each its own message, so this
      zone's event loop runs between two of them, and nothing else is sent to the instance until it answers 0. */
   for (;;) {
@@ -3393,6 +3396,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       throw engineBootRefusal(why);
     }
   }
+  bootSpanMark(eng.docId, "rootInstalled");
   /* Whether a peer holds a WindowProxy for this document, stated after `Init` and before `Begin`, the C entry's
      own bounds: there must be a document (`g_ctx`) and the frontier must not be seeded yet (`!g_begun`), since
      the flag decides whether the last timeline may finish. It is stated unconditionally, including 0, so the
@@ -3480,6 +3484,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      in a later step. */
   eng._residueEntry = _residue !== "" ? prior : null;
   await rend.renderer.begin({ recipes: _residue });
+  bootSpanMark(eng.docId, "begun");
   /* An open referrer policy entry's answer, read after Begin and before any step so it is the parse's
      (documentReferrerPolicy). A live seed's root keeps the browser's documentId as its name (engineCreate). */
   DCHECK(!msg || typeof msg.seedUrl !== "string" || String(msg.documentId) === eng.docId,
@@ -6507,6 +6512,7 @@ const _hostOps = {
     /* The identities other instances of this cluster emitted since this one was last handed its partition. */
     try { await noveltyHand(eng); }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "novelty", e); return 0; }
+    bootSpanMark(eng.docId, "firstStep");
     try { st = (await eng.r.renderer.step()).code; }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "step", e); return 0; }   // crashed instance: finalize it (loud) rather than keep stepping a dead engine
     /* Retired while the step was in flight: its answer is not read. */
@@ -7413,6 +7419,7 @@ self.astDispatch = async function astDispatch(msg) {
                                         /*actor*/"tool", /*driven*/"unstated", /*pinned*/"unstated",
                                         DOCUMENT_REQUEST_UNSTATED, seedSpeaker(msg),
                                         /* a document the person's browser loaded states no zone flags */ false);
+    bootSpanMark(String(msg.documentId), "loaded");
     const unavailable = seedUnavailable(loaded, originOf(msg.sourceUrl));
     /* The outcome is reported the instant the load settles, so a person opening the popup over an empty panel
        can tell "failed" from "nothing yet" while the analysis runs. */
@@ -7463,6 +7470,7 @@ self.astDispatch = async function astDispatch(msg) {
        a document no instance installed (cleared, failed boot) settles it here. */
     let result;
     await level1AskSites([msg.sourceUrl]);
+    bootSpanMark(String(msg.documentId), "queued");
     try { result = await new Promise((resolve, reject) => { _waiting.push({ html: loaded.bytes, msg, persist, resolve, reject }); _hostKick(); }); }
     finally { documentPolicySettle(String(msg.documentId), null); }
     return { success: true, result };   // fetchCallSites is already deduped by the engine

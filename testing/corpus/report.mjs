@@ -994,6 +994,9 @@ for (const p of passes) for (const r of p.rows) {
        presence (see its banner): `(field-absent)` is a probe that threw, `(relay-absent)` is bridge.js not
        loaded in the realm it ran in, `null` is no round completed, and an object is a round. */
     hround: r.hostRound,
+    /* Where the document's wall time went before its instance stepped (site.mjs's `bootSpan`), left as written:
+       `undefined` is a row predating the field, and the three stated absences are site.mjs's. */
+    boot: r.bootSpan,
     /* AND WHICH ARM OF `flow_step` TOOK THE STEP OF A MEMBER HOLDING A RUNNABLE TASK, which is the one
        reading the job-split rows above hand off and cannot give, and which was write-with-no-reader in THIS
        file. The four are LIFETIME counts off ONE `_wfq` object and `run-a-task` is `stepUnitRuns`' row off
@@ -2150,6 +2153,30 @@ if (spShown.length) {
                        : '  — more than one value, so it is not the constant this block was written about'));
   console.log('  the share is read WITHIN one row (loopUs/instanceUs); `deliverGuard` is a GAUGE and is never');
   console.log('  differenced across passes; the MODE is read off the door column above and not inferred here');
+}
+
+/* Before the span above opens: each boot phase's offset from the zone's first mark for the document, in the
+   order the row carries them, and where that first mark and the dwell fell after this driver began navigating.
+   An unreached phase prints `-`; a pass whose row states no span prints why, and an absence is never a zero. */
+const bootCell = (b) => {
+  if (b === undefined) return 'no-field';
+  if (b === null) return 'no-document-marked';
+  if (typeof b !== 'object') return String(b);
+  const sec = (ms) => (ms === null ? '-' : (ms / 1000).toFixed(1));
+  const phases = Object.keys(b).filter((k) => !['t0AfterGotoMs', 'dwellAfterGotoMs', 'docsMarked'].includes(k));
+  return 't0@+' + sec(b.t0AfterGotoMs) + 's ' + phases.map((k) => k + ' ' + sec(b[k])).join(' ') +
+         ' (dwell@+' + sec(b.dwellAfterGotoMs) + 's, ' + b.docsMarked + ' doc)';
+};
+/* A site none of whose passes states a span is listed once under its tokens rather than given a line. */
+const bootShown = table.filter((t) => t.measurements.some((m) => m.boot !== null && typeof m.boot === 'object'));
+const bootSilent = table.filter((t) => !bootShown.includes(t));
+if (table.length) {
+  console.log('');
+  console.log('BOOT SPAN BEFORE THE FIRST STEP (seconds from the zone\'s first mark; t0 and dwell from navigation start):');
+  const bIdW = Math.max('site'.length, ...bootShown.map((t) => t.id.length)) + 2;
+  for (const t of bootShown) console.log('  ' + pad(t.id, bIdW) + t.measurements.map((m) => bootCell(m.boot)).join(' | '));
+  if (bootSilent.length)
+    console.log('  no span stated: ' + bootSilent.map((t) => t.id + ' [' + t.measurements.map((m) => bootCell(m.boot)).join(',') + ']').join(' '));
 }
 
 /* WHICH TURNS SPENT THE SPAN THE BLOCK ABOVE MEASURES — the reading that block hands off and the one this

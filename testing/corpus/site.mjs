@@ -81,6 +81,9 @@ const PROBE = `(() => ({
   crashes: self._engineCrashOccurred || 0,
   docs: [...state.docs.values()].map(d => ({
     url: d.url || '',
+    /* The zone's boot marks for this document (extension/lib/boot-span.js): \`null\` is a document no phase
+       was marked for, and \`(relay-absent)\` is that file not loaded in this realm. */
+    bootSpan: !('bootSpanOf' in self) ? '(relay-absent)' : bootSpanOf(d.documentId),
     answered: !!(d._astRun || d._astError),
     run: d._astRun === undefined ? null : d._astRun,
     astError: d._astError ? String(d._astError).slice(0,300) : null,
@@ -560,6 +563,9 @@ const PROBE = `(() => ({
 
 const pg = await b.newPage();
 let nav = 'ok', finalUrl = url, status = 0;
+/* The system clock at the navigation's start and at the dwell's, read only to place the zone's boot marks
+   (`bootSpan`), which are taken on the same machine's system clock. */
+const gotoAt = Date.now();
 try {
   const r = await pg.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
   status = r ? r.status() : 0;
@@ -575,6 +581,7 @@ try {
    get in 40 seconds") but to REPORT the conditions beside the number, sampled at both ends of the dwell so
    a build that started mid-row is visible rather than averaged away. */
 const loadBefore = loadavg();
+const dwellAt = Date.now();
 await new Promise(r => setTimeout(r, DWELL));
 const loadAfter = loadavg();
 
@@ -1274,6 +1281,25 @@ const netAsk = () => {
     taken.add(k);
     out[k] = typeof c[k] === 'number' ? c[k] : EP_FACT_ABSENT;
   }
+  return out;
+};
+/* Where the document's wall time went before its instance stepped, which `wallSpan` cannot say: that span opens
+   at the first Step. The trusted zone marks each phase per document (extension/lib/boot-span.js); this takes
+   the origin's document the zone marked first and places its first mark against this driver's navigation start,
+   both on the system clock. Four states kept apart: `(field-absent)` is a probe that threw, `(relay-absent)` is
+   boot-span.js not loaded, `null` is no document of this origin marked, and an object holds each phase's offset
+   in milliseconds with `null` for a phase not reached. */
+const bootSpanRow = () => {
+  if ('probeError' in cur) return EP_FACT_ABSENT;
+  if (cur.docs.some(d => d.bootSpan === '(relay-absent)')) return '(relay-absent)';
+  const marked = mine.map(d => d.bootSpan).filter(b => b !== null);
+  if (!marked.length) return null;
+  const first = marked.reduce((a, b) => (b.t0EpochMs < a.t0EpochMs ? b : a));
+  const out = {};
+  for (const k of Object.keys(first)) if (k !== 't0EpochMs') out[k] = first[k];
+  out.t0AfterGotoMs = first.t0EpochMs - gotoAt;
+  out.dwellAfterGotoMs = dwellAt - gotoAt;
+  out.docsMarked = marked.length;
   return out;
 };
 const row = {
@@ -2381,6 +2407,7 @@ const row = {
                            `cands` that is ABSENT is a round that never asked the non-resident order, which is
                            not the same as `cands: 0`), and they are relayed WHOLE for exactly that reason. */
   hostRound: ('level1' in cur) ? cur.level1 : EP_FACT_ABSENT,
+  bootSpan: bootSpanRow(),
   /* THE DOOR × WITNESS JOIN, UNIONED OVER THIS ORIGIN'S DOCUMENTS — see the probe for why a per-row join is
      the one statement the four census histograms cannot make, and for the measurement that was read off their
      margins and needed it. The union is over `mine` for the reason every other column on this row is: a

@@ -815,7 +815,8 @@ async function mintDrive(minted, slices) {
   const ops = runInContext('_hostOps', ZONE);
   const pool = runInContext('_pool', ZONE);
   const account = async () => ({ account: '{"runnable":1,"paid":5,"pulls":4}', workingSetBytes: 65536 });
-  const inst = (o) => Object.assign({ state: 'hot', msg: { sourceUrl: 'https://a.test/' }, lines: [], origin: 'https://a.test',
+  const inst = (o) => Object.assign({ state: 'hot', docId: 'step-doc', msg: { sourceUrl: 'https://a.test/' }, lines: [],
+                                      origin: 'https://a.test',
                                       _novelty: { spelling: null, n: 0 }, _noveltyCounted: new Map(),
                                       level1: { runnable: true, paid: 3, pulls: 2, acct: { value: 3, pulls: 2, at: 1 } } }, o);
   const refusedRun = (e) => {

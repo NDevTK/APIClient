@@ -14,7 +14,7 @@ export const EXT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'exte
 export const ZONE_SCRIPTS = Object.freeze([
   'check.js', 'lib/site.js', 'lib/referrer-policy.js', 'lib/request-identity.js', 'lib/cookie-store.js',
   'speak-as-rule.js', 'lib/speak-as.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/http-cache.js',
-  'lib/safe-fetch.js', 'lib/novelty-set.js',
+  'lib/safe-fetch.js', 'lib/boot-span.js', 'lib/novelty-set.js',
 ]);
 
 const SHIPPED = [...readFileSync(join(EXT_DIR, 'ast-worker.html'), 'utf8')
