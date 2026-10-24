@@ -195,74 +195,24 @@ static char *body_span_example_text(JSContext *ctx, JSValueConst unknown)
     return r;
 }
 
-/* §10.4.5.18's SPAN RECORD, READ BACK OUT AT THE ONE MOMENT THE HOST STILL HOLDS THE PAGE'S VIEW. The body
-   about to be filled is a COPY of the block's bytes, and the fact that some of those bytes are an unknown's
-   example rather than a value the page determined lives on the BUFFER — so it has to be taken here or it is
-   gone, and the @H surface then publishes example bytes under a claim that the request sends exactly them.
-   IT GOES THROUGH THE ORDINARY ELEMENT READ AND NEVER A SECOND ACCESSOR. §10.4.5.17 TypedArrayGetElement's
-   site is the ONE point every typed-array element read converges on and is where the span answer is given, so
-   a walk through it cannot drift from the store's own recency and witness rules; a walk that reached the span
-   list directly would be a second copy of those rules with nothing keeping the two equal — and it would need
-   an engine export, which is a submodule landing this needs none of.
-   IT RUNS NO PAGE CODE AND CANNOT SUSPEND. Every index is in range on a brand-tested TypedArray, so the read
-   is answered by the fast element path and never reaches a prototype walk, a getter or a Proxy trap — which is
-   what makes it safe at a host edge with no flow to park.
-   THE WALK IS ONE ORDINARY ELEMENT READ PER ELEMENT AND HAS NO EARLY-OUT, which is a cost stated rather than
-   hidden: nothing public answers whether a buffer carries any span at all, so a body with none pays one fast
-   element read per element, once, at the extraction. What would remove it is an engine-side predicate over
-   the span count — a submodule landing, which this walk deliberately needs none of otherwise.
-   AND AN UNKNOWN *INDEX* REACHES FURTHER THAN A READER EXPECTS. §10.4.5.18's other arm records a span over the
-   byte range an unknown OFFSET could have been in, and the engine/host contract gives it no domain to narrow
-   with, so today that range is the WHOLE BUFFER — every element then answers unknown, they all spell one
-   shape, and this walk coalesces them into a single range covering the body. That is over-general in the
-   direction §Solver-half asks for and it has a visible price: one `buf[i] = 1` with an unknown `i` takes the
-   whole payload's bytes off the record, because a body whose fields are named carries no raw form. It
-   narrows on its own the day the engine can read an offset unknown's domain, with no line here changing.
-   ADJACENT ENTRIES SPELLING ONE SHAPE ARE ONE ENTRY, and that is a statement rather than a saving: a page
-   writing a string field byte by byte derives every byte from ONE operand through ONE operation, so
-   concolic_new_derived composes ONE shape for all of them, and one row naming the whole range is the true
-   report where N rows saying it separately are the same fact written N times. The EXAMPLE is dropped when a
-   run grows past one element, because the per-byte examples of a run are BYTES and a param value is a JSON
-   string that truncates at a NUL and must be UTF-8 — see the residual at solver/endpoint.c's body_params.
-
-   NAMED RESIDUAL — a body extracted from a bare ArrayBuffer or from a DataView.
-   WHAT IS NOT COVERED: §5.2 BodyInit unions' BufferSource arm reaches this engine by three spellings and only
-   a TypedArray view has an element read to ask. `fetch(u, {body: buf})` over the ArrayBuffer itself, and over
-   a DataView, extract the same bytes and record no span, so their unknown ranges are lost exactly as every
-   typed-array body's were.
-   WHAT THE NEXT DIFF BUILDS: a host-owned Uint8Array minted over the buffer for the walk — JS_NewTypedArray
-   (quickjs.h, grepped) takes the buffer as its argument list — with the span offsets shifted by the view's own
-   byte offset, since such a view spans the whole buffer while the body is a window into it. The view is never
-   handed to the page, so minting one observes nothing.
-   HOW ITS ABSENCE WOULD SHOW: two requests carrying byte-identical payloads composed by one serializer, one
-   sent as `w.finish()` and one as `w.finish().buffer`, reported with a full set of body fields and with none. */
-static void body_spans_capture(JSContext *ctx, BodyState *b, JSValueConst view)
+/* Which bytes of the body the page did not determine, read off the buffer source's span record at the one
+   moment the host still holds the page's object: one row per unknown run (JS_BufferSourceUnknowns, the
+   recency and witness rules the element read applies), so a codec image is one row over its range, and an
+   ArrayBuffer or DataView body is covered as a view is. An unknown-index write covers the whole buffer and so
+   reads as one row over the body. Adjacent rows spelling one shape are one row: a page writing a field byte
+   by byte derives every byte from one operand through one operation. A row keeps its example only for a
+   single byte, because a run's example is bytes and a param value is a JSON string that truncates at a NUL
+   and must be UTF-8 — see solver/endpoint.c's body_params. */
+static void body_spans_capture(JSContext *ctx, BodyState *b, JSValueConst src)
 {
-    size_t boff = 0, blen = 0, bpe = 0, count, i;
-    JSValue buf;
+    JSBufferUnknownPiece *u = NULL;
+    int n = JS_BufferSourceUnknowns(ctx, src, &u), i;
 
-    if (JS_GetTypedArrayType(view) < 0)
-        return;
-    buf = JS_GetTypedArrayBuffer(ctx, view, &boff, &blen, &bpe);
-    /* The caller has already extracted this view's window, which refuses an out-of-bounds view and a detached
-       buffer, so the two things this entry can throw for have both been answered. It is discharged rather than
-       asserted because it is one call away from the page's own reach. */
-    if (JS_IsException(buf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return; }
-    JS_FreeValue(ctx, buf);
-    DCHECK(bpe > 0, "a TypedArray reported an element width of zero — every TypedArray element type is at "
-                    "least one byte wide, so a zero here is a width that did not travel between the entry "
-                    "that reads it and this walk");
-    count = bpe ? blen / bpe : 0;
-    for (i = 0; i < count; i++) {
-        JSValue el = JS_GetPropertyUint32(ctx, view, (uint32_t)i);
-        const char *shape;
-        size_t off = i * bpe;
+    for (i = 0; i < n; i++) {
+        JSValue el = concolic_buffer_run(ctx, &u[i], (const uint8_t *)b->bytes);
+        const char *shape = concolic_shape_c(el);
+        size_t off = u[i].offset, len = u[i].length;
 
-        /* An in-range element of a brand-tested TypedArray is answered by the fast path, which throws for
-           nothing; the discharge is here because a returned exception must never be left pending. */
-        if (JS_IsException(el)) { JS_FreeValue(ctx, JS_GetException(ctx)); return; }
-        if (!concolic_is(el)) { JS_FreeValue(ctx, el); continue; }
-        shape = concolic_shape_c(el);
         /* ALWAYS FATAL for body_state_content's own reason one screen up: a live concolic is minted with its
            shape, and a fallback here would put the two characters an unnameable hole prints as onto the @H
            surface as the provenance of a byte range. */
@@ -270,7 +220,7 @@ static void body_spans_capture(JSContext *ctx, BodyState *b, JSValueConst view)
                              "the shape is the whole of what the span says about where those bytes came from");
         if (b->nspan > 0 && b->span[b->nspan - 1].off + b->span[b->nspan - 1].len == off &&
             !strcmp(b->span[b->nspan - 1].shape, shape)) {
-            b->span[b->nspan - 1].len += bpe;
+            b->span[b->nspan - 1].len += len;
             js_free(ctx, b->span[b->nspan - 1].example);
             b->span[b->nspan - 1].example = NULL;
         } else {
@@ -296,13 +246,14 @@ static void body_spans_capture(JSContext *ctx, BodyState *b, JSValueConst view)
             }
             s = &b->span[b->nspan++];
             s->off = off;
-            s->len = bpe;
+            s->len = len;
             s->shape = js_strdup(ctx, shape);
             CHECK(s->shape != NULL, "body: OOM copying the provenance of an unknown byte of a request body");
-            s->example = body_span_example_text(ctx, el);
+            s->example = len == 1 ? body_span_example_text(ctx, el) : NULL;
         }
         JS_FreeValue(ctx, el);
     }
+    JS_FreeBufferUnknowns(ctx, u, n);
     DCHECK(b->nspan == 0 || b->span[b->nspan - 1].off + b->span[b->nspan - 1].len <= b->len,
            "a request body's span record reaches past the bytes it describes — the walk above is over the "
            "same view the fill copied, so a span outside them means the two read different windows");
@@ -708,7 +659,9 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive
         size_t n = 0;
         const uint8_t *base = JS_GetArrayBuffer(ctx, &n, (JSValue)init);
         if (!base) return -1;
-        return body_state_set(ctx, b, (const char *)base, n);   /* §5.2: a BufferSource has no type */
+        r = body_state_set(ctx, b, (const char *)base, n);       /* §5.2: a BufferSource has no type */
+        if (r == 0) body_spans_capture(ctx, b, init);
+        return r;
     }
     if (readable_stream_is(init)) {
         /* §5.2's first arm: the body's stream IS this one. There are no bytes until it is read, and `.body`

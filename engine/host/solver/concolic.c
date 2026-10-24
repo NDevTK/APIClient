@@ -1,6 +1,7 @@
 /* The concolic value type (see concolic.h): a host component built on upstream QuickJS's public class API, so
    the qjs fork carries no value-type delta. */
 #include "solver/concolic.h"
+#include "quickjs-step.h"
 #include "solver/absent.h"
 #include "solver/flow.h"
 #include "solver/decide.h"    /* the one speller of a constraint key */
@@ -4502,6 +4503,96 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
     free(args);
     free(shape);
     return r;
+}
+
+/* See concolic.h. */
+JSValue concolic_new_derived_list(JSContext *ctx, const char *op, JSValueConst list, JSValue example)
+{
+    int64_t n = 0, i;
+    JSValue *ops, r;
+
+    CHECK(JS_GetLength(ctx, list, &n) == 0, "concolic: an operand list's length could not be read");
+    DCHECK(n >= 1 && n <= INT32_MAX, "a derivation's operand list is empty or longer than a call can carry");
+    ops = js_malloc(ctx, (size_t)n * sizeof *ops);
+    CHECK(ops != NULL, "concolic: OOM unpacking a derivation's operand list");
+    for (i = 0; i < n; i++)
+        ops[i] = JS_GetPropertyUint32(ctx, list, (uint32_t)i);
+    r = concolic_new_derived(ctx, op, (const JSValueConst *)ops, (int)n, example);
+    for (i = 0; i < n; i++)
+        JS_FreeValue(ctx, ops[i]);
+    js_free(ctx, ops);
+    return r;
+}
+
+/* See concolic.h. */
+JSValue concolic_buffer_run(JSContext *ctx, const JSBufferUnknownPiece *u, const uint8_t *window)
+{
+    JSValueConst ops[3];
+    JSValue r, ex = JS_UNDEFINED;
+    char op[96];
+
+    if (!u->codec)
+        return JS_DupValue(ctx, u->unknown);
+    ops[0] = u->unknown;
+    ops[1] = JS_NewInt64(ctx, u->image_pos);
+    ops[2] = JS_NewInt32(ctx, (int32_t)u->length);
+    if (u->length == 1)
+        ex = JS_NewInt32(ctx, window[u->offset]);
+    snprintf(op, sizeof op, "%s[]", u->codec);
+    r = concolic_new_derived(ctx, op, ops, 3, ex);
+    DCHECK(!JS_IsUninitialized(r), "a codec image's run named an operand that is not unknown — the engine "
+                                   "records an image only over an unknown");
+    return r;
+}
+
+/* One concrete run of a window, spelled for an identity: its length and FNV-1a 64 digest. */
+static JSValue buffer_concrete_run(JSContext *ctx, const uint8_t *p, size_t n)
+{
+    uint64_t h = 0xcbf29ce484222325ull;
+    char buf[64];
+    size_t i;
+
+    for (i = 0; i < n; i++) { h ^= p[i]; h *= 0x100000001b3ull; }
+    snprintf(buf, sizeof buf, "bytes(%zu):%016llx", n, (unsigned long long)h);
+    return JS_NewString(ctx, buf);
+}
+
+/* See concolic.h. */
+JSValue concolic_buffer_operands(JSContext *ctx, JSValueConst src, const uint8_t *window, size_t len,
+                                 bool always, bool *example)
+{
+    JSBufferUnknownPiece *u = NULL;
+    int n = JS_BufferSourceUnknowns(ctx, src, &u), i;
+    uint32_t k = 0;
+    size_t at = 0;
+    JSValue ops;
+
+    *example = true;
+    if (n == 0 && !always)
+        return JS_UNDEFINED;
+    ops = JS_NewArray(ctx);
+    CHECK(!JS_IsException(ops), "concolic: OOM listing a buffer source's operands");
+    for (i = 0; i <= n; i++) {
+        size_t end = i < n ? u[i].offset : len;
+
+        DCHECK(end >= at && end <= len, "a buffer source's unknown runs are out of order or outside the window "
+                                        "whose bytes the caller copied");
+        if (end > at)
+            CHECK(JS_SetPropertyUint32(ctx, ops, k++, buffer_concrete_run(ctx, window + at, end - at)) >= 0,
+                  "concolic: OOM listing a buffer source's operands");
+        if (i == n)
+            break;
+        CHECK(JS_SetPropertyUint32(ctx, ops, k++, concolic_buffer_run(ctx, &u[i], window)) >= 0,
+              "concolic: OOM listing a buffer source's operands");
+        if (!u[i].example)
+            *example = false;
+        at = (size_t)u[i].offset + u[i].length;
+    }
+    JS_FreeBufferUnknowns(ctx, u, n);
+    if (k == 0)
+        CHECK(JS_SetPropertyUint32(ctx, ops, k++, buffer_concrete_run(ctx, window, 0)) >= 0,
+              "concolic: OOM listing a buffer source's operands");
+    return ops;
 }
 
 JSValue concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op, JSValue example) {

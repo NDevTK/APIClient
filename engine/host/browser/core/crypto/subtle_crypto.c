@@ -267,7 +267,8 @@ typedef struct {
     SecureHash hash;       /* POD, and that is load-bearing — it rides forks, parks and resumes as bytes */
     uint32_t   off;        /* how much of `bytes` §6.x has already consumed */
     uint8_t    alg;        /* the SecureHashAlgorithm §18.4.4 step 5 selected */
-    uint8_t    unknown;    /* the message is unknown external input, so the digest is too */
+    uint8_t    has_example; /* every unknown run of the message holds its example */
+    JSValue    operands;   /* the message's unknown runs (sc_operand_bytes), or JS_UNDEFINED (owned) */
 } SdState;
 
 static void sd_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -281,6 +282,7 @@ static void sd_visit(JSContext *ctx, void *st, JSStepVisit *v)
         return;
     v->val(ctx, &s->name_v);
     v->val(ctx, &s->bytes);
+    v->val(ctx, &s->operands);
 }
 
 /* WEB IDL §3.2.26 Buffer source types' `get a copy of the bytes held by the buffer source`, whose two shapes
@@ -348,33 +350,53 @@ static JSValue sc_copy_buffer_source(JSContext *ctx, JSValueConst src)
     return copy;
 }
 
-/* §32.3.1's Digest over the concolic's own EXAMPLE, when it has one and it is a BufferSource. This is the
-   "run the real op on the concrete" half of a concolic: the domain stays unknown and the example is a real
-   digest of real bytes, never a value this file invented. */
-static JSValue sd_example_digest(JSContext *ctx, JSValueConst unknown_data, SecureHashAlgorithm alg)
+/* Append `label`, then `more` (consumed) — spread when it is an operand array — to the operand list `*ops`,
+   which is created on first use. */
+static void sc_ops_append(JSContext *ctx, JSValue *ops, const char *label, JSValue more, bool spread)
 {
-    JSValue ex = concolic_example(ctx, unknown_data);
-    JSValue copy, out = JS_UNDEFINED;
-    uint8_t digest[SECURE_HASH_MAX_DIGEST];
-    SecureHash h;
+    int64_t k = 0, n = 0, i;
+
+    if (JS_IsUndefined(*ops)) {
+        *ops = JS_NewArray(ctx);
+        CHECK(!JS_IsException(*ops), "OOM listing the unknown operands of a SubtleCrypto result");
+    }
+    CHECK(JS_GetLength(ctx, *ops, &k) == 0, "an operand list's length could not be read");
+    CHECK(JS_SetPropertyUint32(ctx, *ops, (uint32_t)k++, JS_NewString(ctx, label)) >= 0,
+          "OOM listing the unknown operands of a SubtleCrypto result");
+    if (!spread) {
+        CHECK(JS_SetPropertyUint32(ctx, *ops, (uint32_t)k, more) >= 0,
+              "OOM listing the unknown operands of a SubtleCrypto result");
+        return;
+    }
+    CHECK(JS_GetLength(ctx, more, &n) == 0, "an operand list's length could not be read");
+    for (i = 0; i < n; i++)
+        CHECK(JS_SetPropertyUint32(ctx, *ops, (uint32_t)k++, JS_GetPropertyUint32(ctx, more, (uint32_t)i)) >= 0,
+              "OOM listing the unknown operands of a SubtleCrypto result");
+    JS_FreeValue(ctx, more);
+}
+
+/* §3.2.26's copy of the bytes held by the brand-tested buffer source `v`, with the unknown runs among them
+   (concolic_buffer_operands) appended to `*ops` under `label`, and `*has_example` cleared where a run's bytes
+   are not its example. A known operand's bytes are not listed: the result's identity is over its unknowns.
+   THE NAME IS `sc_` BECAUSE THREE MACHINES ASK IT: sign and verify, encrypt and decrypt, and digest. */
+static JSValue sc_operand_bytes(JSContext *ctx, JSValueConst v, const char *label, JSValue *ops,
+                                bool *has_example)
+{
+    JSValue copy = sc_copy_buffer_source(ctx, v), runs;
     const uint8_t *p;
     uint32_t len = 0;
+    bool ex = true;
 
-    if (!JS_IsArrayBuffer(ex) && JS_GetTypedArrayType(ex) < 0 && !JS_IsDataView(ex)) {
-        JS_FreeValue(ctx, ex);
-        return JS_UNDEFINED;   /* no example, or one that holds no bytes: example-free, which is honest */
-    }
-    copy = sc_copy_buffer_source(ctx, ex);
-    JS_FreeValue(ctx, ex);
     if (JS_IsException(copy))
-        return JS_UNDEFINED;
+        return copy;
     p = JS_GetBufferBytes(copy, &len);
-    secure_hash_init(&h, alg);
-    secure_hash_update(&h, p ? p : (const uint8_t *)"", p ? len : 0);
-    secure_hash_finish(&h, digest, sizeof digest);
-    out = JS_NewArrayBufferCopy(ctx, digest, secure_hash_digest_size(alg));
-    JS_FreeValue(ctx, copy);
-    return out;
+    runs = concolic_buffer_operands(ctx, v, p ? p : (const uint8_t *)"", len, false, &ex);
+    if (!JS_IsUndefined(runs)) {
+        sc_ops_append(ctx, ops, label, runs, true);
+        if (!ex)
+            *has_example = false;
+    }
+    return copy;
 }
 
 static int sd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -392,10 +414,10 @@ static int sd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
        that would mint a second capability over the first and hand the page a promise nothing settles.
        EVERY SLOT IS SPELLED, because a zeroed step state's JSValue is the INTEGER 0 and not JS_UNDEFINED. */
     if (!s->p.started) {
-        s->name_v = s->bytes = JS_UNDEFINED;
+        s->name_v = s->bytes = s->operands = JS_UNDEFINED;
         s->off = 0;
         s->alg = (uint8_t)SECURE_HASH_SHA256;
-        s->unknown = 0;
+        s->has_example = 1;
         /* STEP 6's PROMISE, CREATED FIRST — see the file comment. */
         sc_promise_begin(ctx, &s->p);
         DCHECK(argc >= 2, "§14.3.5's digest ran with fewer than its two declared arguments — Web IDL §3.6 "
@@ -522,16 +544,16 @@ static int sd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     STEP_ARM(SD_COPY);
     JS_FreeValue(ctx, cb_result);
     cb_result = JS_UNDEFINED;
-    if (concolic_is(data)) {
-        /* THE MESSAGE IS UNKNOWN, SO THE DIGEST IS. There is nothing to copy and nothing to walk; SD_FINISH
-           resolves with the operation-named unknown instead. */
-        s->unknown = 1;
-        STEP_GOTO(hdr->stage, SD_FINISH, &hdr->get_phase, &hdr->str_phase, NULL);
-        return JS_STEP_YIELD;
+    /* STEP 4: "Let data be the result of getting a copy of the bytes held by the data parameter." Unknown
+       bytes among them make the digest an unknown derived from them, whose example is the digest of the
+       bytes the block holds. */
+    {
+        bool has_example = true;
+
+        s->bytes = sc_operand_bytes(ctx, data, "data", &s->operands, &has_example);
+        CHECK(!JS_IsException(s->bytes), "§14.3.5 step 4's copy of the message could not be allocated");
+        s->has_example = has_example ? 1u : 0u;
     }
-    /* STEP 4: "Let data be the result of getting a copy of the bytes held by the data parameter." */
-    s->bytes = sc_copy_buffer_source(ctx, data);
-    CHECK(!JS_IsException(s->bytes), "§14.3.5 step 4's copy of the message could not be allocated");
     secure_hash_init(&s->hash, (SecureHashAlgorithm)s->alg);
     s->off = 0;
     STEP_GOTO(hdr->stage, SD_BLOCK, &hdr->get_phase, &hdr->str_phase, NULL);
@@ -567,20 +589,23 @@ static int sd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         uint8_t digest[SECURE_HASH_MAX_DIGEST];
         JSValue result;
 
-        if (s->unknown) {
-            result = concolic_builtin_hook(ctx, data, "digest",
-                                           sd_example_digest(ctx, data, (SecureHashAlgorithm)s->alg));
-            DCHECK(!JS_IsUninitialized(result),
-                   "the message was recorded as unknown external input and the derivation declined it — the "
-                   "two are one fact read at two stages, and they have come apart");
-        } else {
-            /* STEP 9's digest, finished, and STEP 11's "creating an ArrayBuffer in realm, containing digest".
-               The realm is THIS one: a C member runs in the realm that defined it, which is the realm whose
-               prototype carries this member, which is §14.3.5 step 5's relevant realm of `this`. */
-            secure_hash_finish(&s->hash, digest, sizeof digest);
-            result = JS_NewArrayBufferCopy(ctx, digest,
-                                           secure_hash_digest_size((SecureHashAlgorithm)s->alg));
-            CHECK(!JS_IsException(result), "§14.3.5 step 11's ArrayBuffer could not be allocated");
+        /* STEP 9's digest, finished, and STEP 11's "creating an ArrayBuffer in realm, containing digest".
+           The realm is THIS one: a C member runs in the realm that defined it, which is the realm whose
+           prototype carries this member, which is §14.3.5 step 5's relevant realm of `this`. */
+        secure_hash_finish(&s->hash, digest, sizeof digest);
+        result = JS_NewArrayBufferCopy(ctx, digest, secure_hash_digest_size((SecureHashAlgorithm)s->alg));
+        CHECK(!JS_IsException(result), "§14.3.5 step 11's ArrayBuffer could not be allocated");
+        if (!JS_IsUndefined(s->operands)) {
+            char op[64];
+
+            snprintf(op, sizeof op, "digest(%s)", secure_hash_name((SecureHashAlgorithm)s->alg));
+            if (!s->has_example) {
+                JS_FreeValue(ctx, result);
+                result = JS_UNDEFINED;
+            }
+            result = concolic_new_derived_list(ctx, op, s->operands, result);
+            DCHECK(!JS_IsUninitialized(result), "the message was recorded as holding unknown bytes and the "
+                                                "derivation found none — one fact read at two stages");
         }
         /* STEP 10 and STEP 12: "Queue a global task on the crypto task source … to resolve promise with
            result." A JOB, not a call — see sc_resolve, which is that pair for every method of §14.3. */
@@ -672,37 +697,11 @@ typedef struct {
     uint64_t  key_off;     /* how much of [[handle]] Table 1 steps 1-3 have consumed */
     uint32_t  off;         /* how much of `bytes` Table 1 step 5 has consumed */
     uint8_t   alg;         /* the SecureHashAlgorithm §31.6.1 step 1's "hash attribute" identified */
-    uint8_t   unknown;     /* the message (or, for verify, the signature) is unknown external input */
-    uint8_t   unknown_arg; /* WHICH argument that was — the concolic the result is derived from */
-    uint8_t   has_example; /* EVERY unknown operand supplied a BufferSource example, so the result below is a
+    uint8_t   has_example; /* every unknown run of the operands holds its example, so the result below is a
                               real observation of them and can be carried as the derived unknown's example */
+    JSValue   operands;    /* the signature's and the message's unknown runs (sc_operand_bytes), or
+                              JS_UNDEFINED when every byte is known (owned) */
 } SvState;
-
-/* THE BYTES AN OPERAND CONTRIBUTES TO THE WALK. A known BufferSource contributes its own copy; an unknown one
-   contributes its EXAMPLE's copy when it has a BufferSource example, and the empty sequence otherwise.
-   THE NAME IS `sc_` AND NOT `sv_` BECAUSE THREE MACHINES ASK IT AND NOT ONE. It was written for sign's single
-   operand and verify's two; §14.3.1 and §14.3.2 ask it of `data` and of §29.3 AesGcmParams' two BufferSource
-   members, which is the same three-way brand §14.3.5's digest asks of its own. A helper named for one caller
-   is the shape that grows a second copy the day a second caller cannot see itself in the name. */
-static JSValue sc_operand_bytes(JSContext *ctx, JSValueConst v, bool *unknown, bool *has_example)
-{
-    JSValue ex, copy;
-
-    if (!concolic_is(v))
-        return sc_copy_buffer_source(ctx, v);
-    *unknown = true;
-    ex = concolic_example(ctx, v);
-    if (!JS_IsArrayBuffer(ex) && JS_GetTypedArrayType(ex) < 0 && !JS_IsDataView(ex)) {
-        /* No example, or one that holds no bytes: the walk runs over the empty sequence and the result is
-           reported EXAMPLE-FREE, which is honest. A placeholder would be a fabricated observation. */
-        JS_FreeValue(ctx, ex);
-        *has_example = false;
-        return JS_NewArrayBufferCopy(ctx, (const uint8_t *)"", 0);
-    }
-    copy = sc_copy_buffer_source(ctx, ex);
-    JS_FreeValue(ctx, ex);
-    return copy;
-}
 
 static void sv_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
@@ -715,6 +714,7 @@ static void sv_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->handle);
     v->val(ctx, &s->bytes);
     v->val(ctx, &s->sig);
+    v->val(ctx, &s->operands);
 }
 
 /* §14.3.3 step 9 / §14.3.4 step 10: "If the name member of normalizedAlgorithm is not equal to the name
@@ -757,12 +757,10 @@ static int sv_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     *presult = JS_UNDEFINED;
 
     if (!s->p.started) {
-        s->name_v = s->handle = s->bytes = s->sig = JS_UNDEFINED;
+        s->name_v = s->handle = s->bytes = s->sig = s->operands = JS_UNDEFINED;
         s->key_off = 0;
         s->off = 0;
         s->alg = (uint8_t)SECURE_HASH_SHA256;
-        s->unknown = 0;
-        s->unknown_arg = 0;
         s->has_example = 0;
         sc_promise_begin(ctx, &s->p);
         DCHECK(argc >= (verifying ? 4 : 3),
@@ -858,28 +856,19 @@ static int sv_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     JS_FreeValue(ctx, cb_result);
     cb_result = JS_UNDEFINED;
     {
-        bool unknown = false, has_example = true;
+        bool has_example = true;
         uint32_t handle_len = 0;
 
         /* §14.3.4 step 4 and §14.3.3 step 4 / §14.3.4 step 5: "getting a copy of the bytes held by the
            signature parameter" and "…by the data parameter", in the standard's own order, BEFORE the two
-           refusals below. Neither copy runs the page's code, so the order is not observable here — it is the
-           spec's order because there is no reason for it to be anything else.
-           AN UNKNOWN OPERAND MAKES THE WHOLE RESULT UNKNOWN, and the LAST such operand is the one the derived
-           unknown names as its source: for verify that is `data`, whose bytes are what an @S candidate would
-           inject at, and for sign there is only one. */
+           refusals below. Unknown bytes in either make the result an unknown derived from them. */
         if (verifying) {
-            if (concolic_is(sig))
-                s->unknown_arg = 2;
-            s->sig = sc_operand_bytes(ctx, sig, &unknown, &has_example);
+            s->sig = sc_operand_bytes(ctx, sig, "signature", &s->operands, &has_example);
             CHECK(!JS_IsException(s->sig), "§14.3.4 step 4's copy of the signature could not be allocated");
         }
-        if (concolic_is(data))
-            s->unknown_arg = (uint8_t)(verifying ? 3 : 2);
-        s->bytes = sc_operand_bytes(ctx, data, &unknown, &has_example);
+        s->bytes = sc_operand_bytes(ctx, data, "data", &s->operands, &has_example);
         CHECK(!JS_IsException(s->bytes), "the copy of the message could not be allocated");
-        s->unknown = unknown ? 1 : 0;
-        s->has_example = (unknown && has_example) ? 1 : 0;
+        s->has_example = (!JS_IsUndefined(s->operands) && has_example) ? 1 : 0;
 
         /* §14.3.3 step 9 / §14.3.4 step 10. */
         if (!sv_key_algorithm_is(ctx, key, "HMAC")) {
@@ -976,13 +965,12 @@ static int sv_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
             result = JS_NewArrayBufferCopy(ctx, mac, mac_len);
             CHECK(!JS_IsException(result), "§14.3.3 step 13's ArrayBuffer could not be allocated");
         }
-        if (s->unknown) {
-            JSValueConst src = argv[s->unknown_arg];
+        if (!JS_IsUndefined(s->operands)) {
             JSValue example = s->has_example ? result : JS_UNDEFINED;
 
             if (!s->has_example)
                 JS_FreeValue(ctx, result);
-            result = concolic_builtin_hook(ctx, src, verifying ? "verify" : "sign", example);
+            result = concolic_new_derived_list(ctx, verifying ? "verify" : "sign", s->operands, example);
             DCHECK(!JS_IsUninitialized(result),
                    "an argument was recorded as unknown external input and the derivation declined it — the "
                    "two are one fact read at two stages, and they have come apart");
@@ -1130,20 +1118,15 @@ typedef struct {
     JSValue   tag_v;       /* alg["tagLength"] as read, before its conversion (owned) */
     JSValue   bytes;       /* §14.3.1 step 4's copy of `data`, or the concolic's example's (owned) */
     JSValue   out;         /* §14.3.1 step 13's ArrayBuffer, filled block by block (owned) */
-    /* THE CONCOLIC THE RESULT NAMES AS ITS SOURCE, HELD RATHER THAN INDEXED. §14.3.3's machine keeps an index
-       into argv because every operand it can derive from IS an argument; here an unknown can arrive as a
-       MEMBER of the algorithm object, and argv[0] is then the object and not the unknown —
-       concolic_builtin_hook answers JS_UNINITIALIZED for a known operand, so an index would have named a value
-       the derivation declines. It is the LAST unknown in §3.2.17's read order for §14.3.4's reason: `data` is
-       the operand an @S candidate injects at, and it is read last. (owned) */
-    JSValue   src;
+    /* The unknown operands the result derives from, each after the name of the member or argument it came
+       from — an unknown can arrive as a member of the algorithm object as well as in `data` (owned). */
+    JSValue   operands;
     AesGcm    gcm;         /* POD, and that is load-bearing — it rides forks, parks and resumes as bytes */
     uint64_t  iv_off;      /* how much of `iv` §7.1 step 2 has absorbed */
     uint32_t  aad_off;     /* how much of `aad` §7.1 step 5 has absorbed */
     uint32_t  off;         /* how much of the text region §7.1 step 3 has enciphered */
     uint32_t  text_len;    /* §29.4.2 step 6's actualCiphertext length; for encrypt, all of `bytes` */
     uint16_t  tag_bits;    /* §7.1's `t`, in BITS — the unit §29.4.x states it in */
-    uint8_t   unknown;     /* an operand was unknown external input, so the result is */
     uint8_t   has_example; /* EVERY unknown operand supplied bytes, so the result is a real observation */
 } EnState;
 
@@ -1160,7 +1143,7 @@ static void en_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->tag_v);
     v->val(ctx, &s->bytes);
     v->val(ctx, &s->out);
-    v->val(ctx, &s->src);
+    v->val(ctx, &s->operands);
 }
 
 /* §18.4.4 step 10's BufferSource ARM, WHICH IS NOT THE ARGUMENT MACHINE'S AND SAYS SO HERE. §3.2.17's member
@@ -1222,9 +1205,7 @@ static int en_member_bytes(JSContext *ctx, EnState *s, JSValueConst v, const cha
                                  "supply", member);
             return -1;
         }
-        s->unknown = 1;
-        JS_FreeValue(ctx, s->src);
-        s->src = JS_DupValue(ctx, v);
+        sc_ops_append(ctx, &s->operands, member, JS_DupValue(ctx, v), false);
         *out = sc_copy_buffer_source(ctx, ex);
         JS_FreeValue(ctx, ex);
         CHECK(!JS_IsException(*out), "§18.4.4 step 10's copy of an unknown member's example could not be "
@@ -1255,8 +1236,14 @@ static int en_member_bytes(JSContext *ctx, EnState *s, JSValueConst v, const cha
                                "`%s`: the position carries no §3.3.1 [AllowResizable] extended attribute", member);
         return -1;
     }
-    *out = sc_copy_buffer_source(ctx, v);
-    CHECK(!JS_IsException(*out), "§18.4.4 step 10's copy of a BufferSource member could not be allocated");
+    {
+        bool has_example = true;
+
+        *out = sc_operand_bytes(ctx, v, member, &s->operands, &has_example);
+        CHECK(!JS_IsException(*out), "§18.4.4 step 10's copy of a BufferSource member could not be allocated");
+        if (!has_example)
+            s->has_example = 0;
+    }
     return 0;
 }
 
@@ -1290,14 +1277,13 @@ static int en_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     *presult = JS_UNDEFINED;
 
     if (!s->p.started) {
-        s->name_v = s->iv = s->aad = s->tag_v = s->bytes = s->out = s->src = JS_UNDEFINED;
+        s->name_v = s->iv = s->aad = s->tag_v = s->bytes = s->out = s->operands = JS_UNDEFINED;
         memset(&s->gcm, 0, sizeof s->gcm);
         s->iv_off = 0;
         s->aad_off = 0;
         s->off = 0;
         s->text_len = 0;
         s->tag_bits = 0;
-        s->unknown = 0;
         s->has_example = 1;
         sc_promise_begin(ctx, &s->p);
         DCHECK(argc >= 3,
@@ -1542,7 +1528,7 @@ static int en_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     JS_FreeValue(ctx, cb_result);
     cb_result = JS_UNDEFINED;
     {
-        bool unknown = false, has_example = true;
+        bool has_example = true;
         uint32_t data_len = 0, iv_len = 0, handle_len = 0;
         const uint8_t *kp;
         JSValue handle;
@@ -1553,13 +1539,8 @@ static int en_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
            standard numbers BEFORE the two refusals below. The copy runs none of the page's code, so the order
            is not observable here — it is the spec's order because there is no reason for it to be anything
            else. */
-        s->bytes = sc_operand_bytes(ctx, data, &unknown, &has_example);
+        s->bytes = sc_operand_bytes(ctx, data, "data", &s->operands, &has_example);
         CHECK(!JS_IsException(s->bytes), "§14.3.1 step 4's copy of `data` could not be allocated");
-        if (unknown) {
-            s->unknown = 1;
-            JS_FreeValue(ctx, s->src);
-            s->src = JS_DupValue(ctx, data);
-        }
         if (!has_example)
             s->has_example = 0;
         /* §14.3.1 step 9 / §14.3.2 step 9: "If the name member of normalizedAlgorithm is not equal to the name
@@ -1743,16 +1724,12 @@ static int en_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
            whose prototype carries this member, which is step 5's relevant realm of `this`. */
         result = s->out;
         s->out = JS_UNDEFINED;
-        if (s->unknown) {
+        if (!JS_IsUndefined(s->operands)) {
             JSValue example = s->has_example ? result : JS_UNDEFINED;
 
-            DCHECK(concolic_is(s->src),
-                   "the result was recorded as derived from unknown external input and the source held is not "
-                   "a concolic — concolic_builtin_hook declines a known operand, so the two halves of that one "
-                   "fact have come apart");
             if (!s->has_example)
                 JS_FreeValue(ctx, result);
-            result = concolic_builtin_hook(ctx, s->src, op, example);
+            result = concolic_new_derived_list(ctx, op, s->operands, example);
             DCHECK(!JS_IsUninitialized(result),
                    "an argument was recorded as unknown external input and the derivation declined it — the "
                    "two are one fact read at two stages, and they have come apart");

@@ -862,7 +862,8 @@ static int enc_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp,
     *pbuf = JS_UNDEFINED;
     DCHECK(JS_IsArrayBuffer(v) || JS_GetTypedArrayType(v) >= 0 || JS_IsDataView(v),
            "a BufferSource argument reached its body as neither an ArrayBuffer nor a view — the declaration "
-           "brand-tests the union, so nothing else can arrive here");
+           "brand-tests it, and idl_concolic_rule refuses unknown input at that test, so nothing else can "
+           "arrive here");
     /* WEB IDL §3.2.26 Buffer source types' `get a copy of the bytes held by the buffer source` STEP 7: "If
        IsDetachedBuffer(jsArrayBuffer) is true, then return the empty byte sequence." §7.2 Interface
        TextDecoder's decode(input, options) reaches this algorithm BY LINK — "If input is given, then push a
@@ -1038,6 +1039,10 @@ typedef struct {
     EncBuf   out;
     /* §7.2 step 2's `do not flush`. */
     uint8_t  stream;
+    /* The input's unknown runs as concolic_buffer_operands spells them, or JS_UNDEFINED for known input, and
+       whether the input's bytes are their examples. */
+    JSValue  unknown;
+    uint8_t  example;
 } JSDecodeState;
 
 /* WHAT A FORKED ARM MUST NOT SHARE. Both are plain storage the two arms each go on appending to: one arm's
@@ -1048,6 +1053,16 @@ static void js_decoder_decode_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
     v->buf(ctx, (void **)&s->in, s->in_n);
     v->buf(ctx, (void **)&s->out.b, s->out.cap);
+    v->val(ctx, &s->unknown);
+}
+
+/* Whether `d` holds nothing a previous `stream: true` call left: a reset copy of it is identical. */
+static bool decoder_is_fresh(const EncDecoder *d)
+{
+    EncDecoder f = *d;
+
+    decoder_reset(&f);
+    return memcmp(&f, d, sizeof f) == 0;
 }
 
 static int js_decoder_decode_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -1096,6 +1111,7 @@ static int js_decoder_decode_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
 
         /* Step 2: "Set this's do not flush to options["stream"]." */
         s->stream = idl_dict_bool(ctx, argv[1], "stream") ? 1u : 0u;
+        s->unknown = JS_UNDEFINED;
         /* Step 3: "If input is given, then push a copy of input to this's I/O queue." `input` is the one
            position here declared optional with NO default, so Web IDL §3.6 "Overload resolution algorithm"
            step 15.4.2's "missing" is reachable at it and `decode()` and `decode(undefined)` are the same call.
@@ -1112,6 +1128,27 @@ static int js_decoder_decode_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
                 }
                 memcpy(s->in, p, len);
                 s->in_n = len;
+            }
+            /* Unknown input bytes make the output an unknown derived from them, whose example is this decode
+               run over the bytes the block holds. The decoder states that would carry unknownness past this
+               call are not modelled and are named here; their release arm derives anyway, which keeps the
+               provenance and shares one identity across the states it does not tell apart. */
+            {
+                bool example = true;
+
+                s->unknown = concolic_buffer_operands(ctx, argv[0], p, len, false, &example);
+                s->example = example ? 1u : 0u;
+            }
+            if (!JS_IsUndefined(s->unknown)) {
+                if (s->stream)
+                    DFAIL("§7.2 decode(input, {stream: true}) over unknown bytes leaves this's decoder holding "
+                          "state derived from them — build a decoder state that carries unknown bytes");
+                if (!decoder_is_fresh(d))
+                    DFAIL("§7.2 decode(input) over unknown bytes follows a `stream: true` call whose held state "
+                          "is not part of the result's identity — build that state into it");
+                if (d->fatal)
+                    DFAIL("§7.2 decode(input) with fatal set can throw over unknown bytes, and a builtin that "
+                          "can throw forks its success and throw arms — build that fork here");
             }
             /* The borrowed view goes back HERE and not at the end: past this line the bytes this machine reads
                are its own copy, which is the whole of what step 3's "copy of" buys a body that rests. */
@@ -1190,6 +1227,19 @@ static int js_decoder_decode_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
     STEP_ARM(DECODE_SERIALIZE);
     DCHECK(d != NULL, "§7.2's decode reached its serialization on a receiver that is no longer a TextDecoder");
     *presult = dec_serialize(ctx, d, &s->out);
+    if (!JS_IsException(*presult) && !JS_IsUndefined(s->unknown)) {
+        char op[96];
+
+        snprintf(op, sizeof op, "TextDecoder(%s%s%s).decode", encoding_name_ascii_lowercased(d->enc),
+                 d->fatal ? ", fatal" : "", d->ignore_bom ? ", ignoreBOM" : "");
+        if (!s->example) {
+            JS_FreeValue(ctx, *presult);
+            *presult = JS_UNDEFINED;
+        }
+        *presult = concolic_new_derived_list(ctx, op, s->unknown, *presult);
+        DCHECK(!JS_IsUninitialized(*presult), "decode's input was recorded as holding unknown bytes and the "
+                                              "derivation found none — one fact read at two stages");
+    }
     /* A STEP BODY SAYS "I THREW" WITH ITS RETURN CODE AND NOT WITH ITS COMPLETION VALUE, which is the one place
        the conversion could not simply carry the plain body's convention over: a C function member returns
        JS_EXCEPTION AS its result and the caller reads the context, while a machine's completion is PLACED by
@@ -1546,35 +1596,33 @@ static JSValue js_encoder_encode(JSContext *ctx, JSValueConst this_val, int argc
            "default, so Web IDL §3.6 steps 15.4.1 and 16.1 fill it for every call and the machine hands this "
            "body exactly one argument — a different count means the declaration in encoding_init lost either "
            "its argument list or its idl_arg_default, and the reads below would be off the end");
-    /* AN UNKNOWN INPUT MAKES THIS AN OPERATOR, and §7.4's IDL is what says so: `[NewObject] Uint8Array
-       encode(optional USVString input = "")` — the page OBSERVES the result, so the answer is this operation's
-       own derived unknown and never a conversion. The Web IDL declaration passes unknown external input
-       through as itself, so the JS_ToCStringLen below would hand a concolic to a boundary that owes C real
-       bytes (quickjs.c's js_force_tostring names this line when it does).
-       THE OPERAND IS UNKNOWN BY CONSTRUCTION AT THE SITE THIS WAS MEASURED ON. `{orphan….arg0}` is an argument
-       to an orphan-driven function — §Attacker sources force-invokes a function the bundle shipped and never
-       called, so there is no caller to supply its parameters and there never will be. A site that cannot
-       accept one is a site orphan-driving can never reach, which is why the answer here cannot be a
-       placeholder string: that would de-taint the bytes and report a Uint8Array of a value nothing computed.
-       THE EXAMPLE IS THE REAL ENCODER RUN ON THE OPERAND'S OWN EXAMPLE, never a predicted one — §Solver-half's
-       rule that the example propagates because the engine RUNS the real op. An operand with no example yields
-       a derived unknown with none either, which is honest: this flow has no concrete bytes to show. */
+    /* An unknown input is encoded as its example, and the output is recorded as this codec's image of the
+       unknown (JS_NewUint8ArrayImage): every element the page reads is an unknown derived from it, and a bulk
+       consumer finds the run with JS_BufferSourceUnknowns. The example takes §3.2.12's USVString conversion
+       here because the declaration crossed the unknown unconverted.
+       NAMED RESIDUAL. Not covered: the output's length, which is the example's, where §7.4's result length
+       over unknown input is itself unknown. Next diff: a typed array whose length is a derived unknown.
+       Absence shows as a branch on an encoded length that never forks. */
     if (concolic_is(argv[0])) {
-        JSValue ex = concolic_example(ctx, argv[0]), real = JS_UNDEFINED;
-        DCHECK(!concolic_is(ex),
-               "a concolic's EXAMPLE is itself unknown — the example is the concrete member of the triple, and "
-               "a nested unknown would send the conversion below straight back to the ToString boundary this "
-               "arm exists to keep off");
-        if (JS_IsString(ex)) {
-            size_t elen = 0;
-            const char *p = JS_ToCStringLen(ctx, &elen, ex);
-            if (p) {
-                real = JS_NewUint8ArrayCopy(ctx, (const uint8_t *)p, elen);
-                JS_FreeCString(ctx, p);
-            }
+        JSValue ex = concolic_example_string(ctx, argv[0]);
+        const char *b;
+        size_t blen = 0;
+
+        if (JS_IsUndefined(ex)) {
+            DFAIL("§7.4 encode(input) was given unknown input with no example, so there are no bytes to record "
+                  "a codec image over — build a Uint8Array whose length and bytes are both unknown");
+            return JS_ThrowTypeError(ctx, "TextEncoder.encode: unknown input with no example has no bytes");
         }
+        ex = JS_ToScalarValueString(ctx, ex);
+        if (JS_IsException(ex))
+            return JS_EXCEPTION;
+        b = JS_ToCStringLen(ctx, &blen, ex);
         JS_FreeValue(ctx, ex);
-        return concolic_builtin_hook(ctx, argv[0], "TextEncoder.encode", real);
+        if (!b)
+            return JS_EXCEPTION;
+        r = JS_NewUint8ArrayImage(ctx, (const uint8_t *)b, blen, argv[0], "TextEncoder.encode");
+        JS_FreeCString(ctx, b);
+        return r;
     }
     /* The declaration already ran the USVString conversion, so lone surrogates are U+FFFD and this is the
        string's UTF-8 — which is exactly what §7.4's encode(input) steps say to answer with. The `s ? s : ""`
@@ -1604,32 +1652,6 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
     (void)magic;
     if (JS_GetOpaque(this_val, g_enc_class) == NULL && !JS_IsObject(this_val))
         return JS_ThrowTypeError(ctx, "not a TextEncoder");
-    /* AN UNKNOWN DESTINATION IS THE SAME MISSING CAPABILITY AS AN UNKNOWN SOURCE, ONE ARGUMENT ACROSS — and it
-       reaches this body rather than being refused because §3.2.26 is a BRAND TEST: idl_args.h's
-       IDL_CONCOLIC_CROSSES is why unknown external input crosses a declared type as itself, since answering
-       "that is not a Uint8Array" about a value nothing is known about is a control-flow decision over unknown
-       input. There is no identified buffer here to write into, so the pair returned below would report a write
-       into a destination this engine never resolved.
-       THE HALF OF THIS THAT SAID `THERE IS NOWHERE IN A Uint8Array TO PUT AN UNKNOWN BYTE` IS RETIRED AND IS
-       REWRITTEN RATHER THAN DELETED, because it is the intuitive belief and a reader who re-derives it will
-       re-introduce it. It was true of the data block and was never true of the OBJECT: the engine now keeps a
-       SPAN LIST beside the block on the live ArrayBuffer, so the block holds an EXAMPLE and the span beside it
-       is the fact. 10.4.5.18 TypedArraySetElement stores an unknown through it, and a writer reaches it by
-       writing NORMALLY — there is no entry to call and none exported, which is the whole design: the span is
-       recorded by the ordinary element store, so no caller has to know spans exist.
-       WHAT IS STILL MISSING HERE IS A DIFFERENT QUESTION FROM THE SOURCE ARM'S, and the store does not answer
-       it. That store needs a DESTINATION to write into; this arm has none, because the unknown IS the
-       destination. What it needs is an unknown that carries a REAL view as its EXAMPLE, so the write lands in
-       the example's buffer and the COW capture below records it — a fact about what a concolic carries and not
-       about what a buffer can hold. Its absence would show as a page reading real zeroes back out of a buffer
-       it believes holds the encoding of attacker-controlled input. */
-    DCHECK(!concolic_is(argv[1]),
-           "§7.4 encodeInto(source, destination) was given an unknown DESTINATION — §3.2.26 Buffer source "
-           "types brands a concrete view and unknown external input crosses a declared type as itself, so "
-           "there is no buffer here to write into. THE REMEDY THIS ONCE NAMED — concolic bytes in a typed "
-           "array's backing store — IS BUILT and is not what this arm needs: that store writes an unknown INTO "
-           "a destination, and here the unknown IS the destination. BUILD instead a concolic that carries a "
-           "REAL view as its example, so this write lands in the example's buffer");
     /* §7.4 DECLARES `[AllowShared] Uint8Array destination`, AND THE DECLARATION IS WHAT CONVERTS IT — Web IDL
        §3.2.26 Buffer source types step 2's brand against Uint8Array's own [[TypedArrayName]], then step 4's
        refusal of a buffer that is not fixed-length ([AllowShared] is what switches step 3's off). A body's own
@@ -1647,7 +1669,7 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
            "brands it and refuses a resizable buffer, so a value that is neither means this member was "
            "installed from a mint that never ran the declaration");
     /* AN UNKNOWN SOURCE IS A DIFFERENT QUESTION FROM encode()'s, AND THIS ENGINE CANNOT ANSWER IT YET. encode()
-       hands the page a NEW Uint8Array, so its unknown result is one derived value; §7.4's encodeInto WRITES
+       hands the page a NEW Uint8Array recorded as a codec image; §7.4's encodeInto WRITES
        INTO THE PAGE'S OWN BUFFER. Answering `read`/`written` while leaving the bytes untouched would report a
        write that did not happen: the page then reads real zeroes out of a buffer it believes holds the
        encoding of attacker-controlled input.

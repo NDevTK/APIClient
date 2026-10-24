@@ -927,6 +927,21 @@ JSValue     concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op
  * for a known operand: the caller already computed the answer and there is nothing to derive. */
 JSValue     concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst *operands, int n,
                                  JSValue example);
+/* concolic_new_derived over the elements of the array `list`, which is borrowed. */
+JSValue     concolic_new_derived_list(JSContext *ctx, const char *op, JSValueConst list, JSValue example);
+struct JSBufferUnknownPiece;
+/* The value one unknown run of a buffer source stands for (quickjs-step.h's JS_BufferSourceUnknowns): a codec
+   image's run is derived from (unknown, position, length) through `<codec>[]` — at length 1 the element read's
+   own derivation, with the byte for its example — and any other run is its span's unknown. `window` is the
+   source's window bytes. Owned. */
+JSValue     concolic_buffer_run(JSContext *ctx, const struct JSBufferUnknownPiece *u, const uint8_t *window);
+/* The operands a derivation over the bytes of the buffer source `src` is keyed on, as an array in byte order:
+   each unknown run's concolic_buffer_run value, and each concrete run as a string naming its length and
+   digest, so two windows differing in any byte compose two identities. JS_UNDEFINED when no byte is unknown,
+   unless `always`, which answers the concrete runs alone. `*example` says every unknown run's bytes in
+   `window` (the `len` bytes of src's window) are its example. Owned. */
+JSValue     concolic_buffer_operands(JSContext *ctx, JSValueConst src, const uint8_t *window, size_t len,
+                                     bool always, bool *example);
 /* THE BYTES A DOM MEMBER NEEDS FROM AN ARGUMENT THAT MAY BE UNKNOWN — a selector, an attribute name, a class
    token, an id. An unknown denotes its SHAPE (a real string, stable per source, the key_name rule); anything
    else converts normally. OWNED either way: free with JS_FreeCString. */

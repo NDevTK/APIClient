@@ -398,6 +398,12 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        `keys_probe`), which asks it once for every consumer; declaring FORKS here would ask it twice. */
     case IDL_RECORD_USVSTRING_STRING_OR_SEQUENCE:
     case IDL_INTERFACE:
+    /* §3.2.26's brand tests: an unknown has none of the internal slots they test, so it is the TypeError any
+       other object is. A buffer whose bytes are unknown is a real buffer with spans and passes the test; its
+       consumer reads the runs with JS_BufferSourceUnknowns. */
+    case IDL_BUFFERSOURCE:
+    case IDL_ARRAYBUFFERVIEW:
+    case IDL_TYPED_ARRAY:
         return IDL_CONCOLIC_UNASKED;
     /* `(AddEventListenerOptions or boolean)`: the dictionary arm makes DOM's flatten more options read `once`,
        `passive` and `signal`, the boolean arm leaves them at their defaults (a null `passive` is what makes a
@@ -440,7 +446,7 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        `sw`/`sh`, the other takes the page's buffer. */
     case IDL_ULONG_OR_IMAGE_DATA_ARRAY:
         return IDL_CONCOLIC_FORKS;
-    default:
+    default:   /* a default arm doing work over an enumeration this codebase owns; the next diff lists each row */
         return IDL_CONCOLIC_CROSSES;
     }
 }

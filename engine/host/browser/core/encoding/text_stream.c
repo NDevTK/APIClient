@@ -269,6 +269,16 @@ static JSValue tx_decode(JSContext *ctx, TextStreamData *t, JSValueConst chunk, 
             return JS_ThrowTypeError(ctx, "a TextDecoderStream chunk is not a BufferSource");
         if (encoding_buffer_source(ctx, chunk, &p, &len, &buf) < 0)
             return JS_EXCEPTION;
+        {
+            JSBufferUnknownPiece *u = NULL;
+            int n = JS_BufferSourceUnknowns(ctx, chunk, &u);
+
+            JS_FreeBufferUnknowns(ctx, u, n);
+            if (n)
+                DFAIL("§7.5's decode and enqueue a chunk was handed bytes that are unknown input, and the stream's "
+                      "decoder carries state across chunks — build a decoder state over unknown bytes, which "
+                      "§7.2 decode() with `stream: true` needs too");
+        }
     }
     r = enc_decoder_decode(ctx, t->dec, p, len, !flush);
     JS_FreeValue(ctx, buf);
