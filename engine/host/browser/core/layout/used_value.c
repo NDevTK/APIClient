@@ -17,6 +17,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
+#include "core/layout/containment.h"
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
@@ -1132,36 +1133,17 @@ typedef struct {
                                      no element's box */
 } UvCb;
 
-/* ---- css-position-3 §2.1 "Containing Blocks of Positioned Boxes" — WHAT ESTABLISHES §10.1's THIRD AND
-   FOURTH RECTANGLES, AND THE ONE OPERAND OF THAT QUESTION THIS ENGINE CANNOT READ --------------------------
-   CSS 2.1 §10.1's fourth case names ONE property — "the nearest ancestor with a 'position' of 'absolute',
-   'relative' or 'fixed'" — and css-position-3 supersedes that sentence in two directions at once. It states
-   the establishment as the COMPLEMENT OF ONE VALUE, which is what admits a keyword CSS 2.1 has no row for —
-   css-position-3 §2 "Choosing A Positioning Scheme: position property": "Values other than static make the
-   box a positioned box, and cause it to establish an absolute positioning containing block for its
-   descendants". And it widens the SET OF PROPERTIES past `position` altogether, as a list that ends in an
-   ellipsis — css-position-3 §2.1 "Containing Blocks of Positioned Boxes"' Note: "Properties that can cause a
-   box to establish an absolute positioning containing block include position, transform, will-change,
-   contain…".
-   THE ELLIPSIS IS WHY THIS IS A DETECTOR AND NOT A RULE. Of the properties §2.1 names, only `position` has a
-   computed value core/css/css_computed_value.h derives (`css_computed_models` carries a row for `transform`
-   and that row ABORTS for any specified value but `none`, which is the same absence wearing a different
-   file). So an ancestor DECLARING one of the others is an ancestor whose establishment status this walk
-   cannot decide — and the answer it would otherwise give is not a narrower one, it is the NEXT ancestor up,
-   whose padding edge is a real rectangle of the wrong box, off by however far apart the two sit. The detector
-   is read from the CASCADED value for the reason core/html/html_element_view.c states of its own: it is a
-   test for an input this component cannot read and never a value it uses, and its only outcome is the crash.
-   THIS IS NOT AN EXOTIC SHAPE AND MUST NOT BE COSTED AS ONE: a `transform` is what every composited,
-   animated or centred element in a modern bundle declares, and an absolutely positioned box's ancestor chain
-   in such a bundle runs through several of them. Derive the rate for a page rather than guessing at it —
-   `grep -c 'transform:' <its stylesheets>` against `grep -c 'position: *absolute'` — because a number
-   written here would be a fact about whichever corpus was mirrored on the day it was written.
-   THE LIST IS ONE FACT AND TWO QUESTIONS ARE ASKED OF IT. core/html/html_element_view.c asks whether a
-   declaration ANYWHERE ON A CHAIN makes a CSSOM VIEW §7 member unreadable; this file asks whether ONE
-   ancestor can be classified. Both are §2.1's Note, so the Note is spelled once — here, beside §10.1's four
-   cases — and exported, because a second copy is free to gain a property the first one did not and the
-   component that fell behind would go on answering. */
-static const char *const UV_POSITIONING_CB_PROPERTIES[] = { "transform", "will-change", "contain" };
+/* ---- css-position-3 §2.1 "Containing Blocks of Positioned Boxes": what establishes §10.1's third and fourth
+   rectangles, and the operands of that question this engine cannot read ---------------------------------
+   §2.1's Note lists them and ends in an ellipsis: "Properties that can cause a box to establish an absolute
+   positioning containing block include position, transform, will-change, contain…". `position` and `contain`
+   have computed values and `uv_establishes_abspos_cb` reads both. The rest are this list, read from the
+   CASCADED value as a detector whose only outcome is a crash: skipping such an ancestor would answer the next
+   one up, a real rectangle of the wrong box. `transform` is common in real bundles, so derive a page's rate
+   (`grep -c 'transform:'` against `grep -c 'position: *absolute'`) rather than assuming it is rare.
+   core/html/html_element_view.c asks the same list over a whole CSSOM VIEW §7 chain, so it is spelled once,
+   here, and exported. */
+static const char *const UV_POSITIONING_CB_PROPERTIES[] = { "transform", "will-change" };
 
 const char *const *used_value_positioning_cb_properties(size_t *n)
 {
@@ -1210,27 +1192,24 @@ static void uv_require_readable_positioning(lxb_dom_element_t *subject, lxb_dom_
     }
 }
 
-/* THE SAME DETECTOR OVER THE WHOLE ANCESTOR CHAIN, which is what §10.1's THIRD case needs and its fourth does
-   not. The fourth case STOPS at the first establishing ancestor, so an unreadable declaration above that one
-   cannot change its answer and is never asked about. The third case's answer is "no ancestor establishes
-   one", which is a claim about EVERY ancestor — so every one of them is checked before it may be made. */
-static void uv_require_readable_positioning_chain(lxb_dom_element_t *el)
-{
-    lxb_dom_node_t *a;
-
-    for (a = lxb_dom_interface_node(el)->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT;
-         a = a->parent)
-        uv_require_readable_positioning(el, lxb_dom_interface_element(a));
-}
-
 /* DOES THIS ANCESTOR ESTABLISH AN ABSOLUTE POSITIONING CONTAINING BLOCK? css-position-3 §2's own sentence is
-   the whole rule and it is written as the complement of `static` rather than as a disjunction over three
-   names, which is what makes `sticky` need no arm of its own — CSS 2.1 §10.1 predates that value and lists
-   the three it had. */
+   the whole rule for `position` and it is written as the complement of `static` rather than as a disjunction
+   over three names, which is what makes `sticky` need no arm of its own — CSS 2.1 §10.1 predates that value and
+   lists the three it had. css-contain-2 §3.3 "Layout Containment" and §3.5 "Paint Containment" each add "The
+   ... containment box establishes an absolute positioning containing block and a fixed positioning containing
+   block" (core/layout/containment.h). */
 static bool uv_establishes_abspos_cb(lxb_dom_element_t *subject, lxb_dom_element_t *anc)
 {
     uv_require_readable_positioning(subject, anc);
-    return !css_computed_keyword_is(anc, "position", CSS_KEYWORD_STATIC);
+    return !css_computed_keyword_is(anc, "position", CSS_KEYWORD_STATIC) || containment_layout(anc) ||
+           containment_paint(anc);
+}
+
+/* The FIXED list: §2.1's Note names "transform, will-change, contain…" and not `position`. */
+static bool uv_establishes_fixedpos_cb(lxb_dom_element_t *subject, lxb_dom_element_t *anc)
+{
+    uv_require_readable_positioning(subject, anc);
+    return containment_layout(anc) || containment_paint(anc);
 }
 
 /* §10.1's four cases, in the spec's own order, answering the BOX whose CONTENT EDGE is the rectangle. Each
@@ -1256,6 +1235,7 @@ static UvCb uv_cb(lxb_dom_element_t *el)
        them is inside its §17.4 wrapper, which is the block container. A box with no box (`contents`) keeps the
        flag; any other box clears it. */
     bool from_internal = table_box_kind_is_internal(uv_table_box_kind(el));
+    bool fixed;
     char nbuf[160], abuf[160];
 
     r.box = UV_CB_INITIAL;
@@ -1268,13 +1248,9 @@ static UvCb uv_cb(lxb_dom_element_t *el)
        the case of continuous media" full stop; css-position-3 §2.1 "Containing Blocks of Positioned Boxes"
        puts an ancestor search in front of that — "The containing block is established by the nearest ancestor
        box that establishes an fixed positioning containing block", and only "If no ancestor establishes one"
-       is it "the initial fixed containing block: in continuous media, the layout viewport". THE TWO AGREE
-       HERE FOR A REASON THAT IS DERIVED AND NOT ASSUMED: §2.1's Note for the FIXED case lists "transform,
-       will-change, contain…" and pointedly NOT `position`, so nothing an element can declare through a
-       property this engine models establishes one — and `uv_require_readable_positioning_chain` above has
-       already crashed if any of the three is declared anywhere above this box. With none declared, no
-       ancestor establishes a fixed positioning containing block and the initial one is the answer EXACTLY,
-       which is the same derivation core/html/html_element_view.h states for CSSOM VIEW §7's chain.
+       is it "the initial fixed containing block: in continuous media, the layout viewport". The search is the
+       fourth case's walk below over §2.1's FIXED list, which names "transform, will-change, contain…" and
+       pointedly NOT `position` (`uv_establishes_fixedpos_cb`), with the viewport as its fallback.
        IT IS ITS OWN TAG AND NOT `UV_CB_INITIAL`, AND THE VIEW THAT PLACES A BOX IS THE ONE THAT USES THE
        DISTINCTION — core/layout/flow_position.c's `fp_abs_cb_leading`, which answers the SCROLL POSITION for
        this tag and the canvas origin for the other, and then applies §10.3.7's own exception by answering the
@@ -1286,11 +1262,8 @@ static UvCb uv_cb(lxb_dom_element_t *el)
        the purposes of calculating the static position, the containing block of fixed positioned elements is
        the initial containing block instead of the viewport." Merging the two tags would make that exception
        unspellable and would place every fixed box by the scroll offset it is defined not to move with. */
-    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) {
-        uv_require_readable_positioning_chain(el);
-        r.box = UV_CB_VIEWPORT;
-        return r;
-    }
+    fixed = css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED);
+    if (fixed) r.box = UV_CB_VIEWPORT;
     /* §10.1's FOURTH case: "If the element has 'position: absolute', the containing block is established by
        the nearest ancestor with a 'position' of 'absolute', 'relative' or 'fixed'", and css-position-3 §2.1
        restates the same walk over the wider set `uv_establishes_abspos_cb` reads. "If there is no such
@@ -1304,7 +1277,7 @@ static UvCb uv_cb(lxb_dom_element_t *el)
        cannot establish a containing block whatever its `position` computes to and the walk steps over it;
        and `none` gives the element AND ITS DESCENDANTS none, which takes the SUBJECT's box with it and is
        therefore a question with no subject rather than a rectangle to find. */
-    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE)) {
+    if (fixed || css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE)) {
         for (a = n->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
             lxb_dom_element_t *anc = lxb_dom_interface_element(a);
             CssDisplay d = css_computed_display(anc);
@@ -1327,7 +1300,7 @@ static UvCb uv_cb(lxb_dom_element_t *el)
                       "above states in full",
                       box_subject(el, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf));
             if (contents) continue;
-            if (!uv_establishes_abspos_cb(el, anc)) continue;
+            if (!(fixed ? uv_establishes_fixedpos_cb(el, anc) : uv_establishes_abspos_cb(el, anc))) continue;
             if (inline_box)
                 DFAILF("%s, whose nearest positioned ancestor %s is an INLINE box: "
                       "§10.1's FOURTH case has a sub-case for exactly this and CSS 2.1 does not finish it — "

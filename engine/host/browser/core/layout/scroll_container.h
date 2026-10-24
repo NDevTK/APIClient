@@ -28,8 +28,9 @@ bool scroll_container_is(lxb_dom_element_t *el);
  * to be clipped to the element's padding edge", which Intersection Observer §2.2 uses for an explicit element
  * root's intersection rectangle and §3.2.7 for whether a container clips the walk's rectangle.
  *
- * It differs from `scroll_container_is` in one value: `clip` is non-scrollable but clips. The box
- * precondition, the `Applies to:` line and §3.1.4's used value are shared. This answers whether the clip is the
+ * It differs from `scroll_container_is` in one value, `clip`, which is non-scrollable but clips, and in
+ * css-contain-2 §3.5's paint containment, which clips whatever `overflow` says. The box precondition, the
+ * `Applies to:` line and §3.1.4's used value are shared. This answers whether the clip is the
  * padding box, never what it is (core/layout/flow_position.h's `flow_padding_box_origin` and
  * core/layout/used_value.h's `used_value_padding_edge_px`). */
 bool scroll_container_content_clip_is(lxb_dom_element_t *el);

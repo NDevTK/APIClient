@@ -1097,6 +1097,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/inlineflex.h"
 #include "fixture/clientextent.h"
 #include "fixture/deepnest.h"
+#include "fixture/contain.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1549,6 +1550,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "inlineflex", HTML_INLINEFLEX },
     { "clientextent", HTML_CLIENTEXTENT },
     { "deepnest", HTML_DEEPNEST },
+    { "contain", HTML_CONTAIN },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -14093,6 +14095,110 @@ TF_UNIT void probes_deepnest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `contain` document (fixture/contain.h). */
+TF_UNIT void probes_contain(const char *js, Probe *tab, int *n) {
+    const char *ct_op_why = NULL; int ct_op_tt = 1;
+    const char *ct_cb_why = NULL; int ct_cb_tt = 1;
+    const char *ct_size_why = NULL; int ct_size_tt = 1;
+    const char *ct_ifc_why = NULL; int ct_ifc_tt = 1;
+    const char *ct_cv_why = NULL; int ct_cv_tt = 1;
+    fold_row(&ct_op_tt, &ct_op_why, !!strstr(js, "\"/api/contain\""),
+             "NOT REACHED: there is no /api/contain record at all, so the document aborted before its fetch");
+    fold_row(&ct_cb_tt, &ct_cb_why, !!strstr(js, "\"/api/contain\""),
+             "NOT REACHED: there is no /api/contain record at all, so the document aborted before its fetch");
+    fold_row(&ct_size_tt, &ct_size_why, !!strstr(js, "\"/api/contain\""),
+             "NOT REACHED: there is no /api/contain record at all, so the document aborted before its fetch");
+    fold_row(&ct_ifc_tt, &ct_ifc_why, !!strstr(js, "\"/api/contain\""),
+             "NOT REACHED: there is no /api/contain record at all, so the document aborted before its fetch");
+    fold_row(&ct_cv_tt, &ct_cv_why, !!strstr(js, "\"/api/contain\""),
+             "NOT REACHED: there is no /api/contain record at all, so the document aborted before its fetch");
+    fold_row(&ct_op_tt, &ct_op_why, param_value_is(js, "/api/contain", "f1p", "cp"),
+             "CSSOM VIEW §7: a `fixed` box's offsetParent is not its paint containment ancestor, the containing "
+             "block for fixed-positioned descendants");
+    fold_row(&ct_op_tt, &ct_op_why, param_value_is(js, "/api/contain", "s1p", "rel"),
+             "CSSOM VIEW §7: a static box's offsetParent is not its nearest positioned ancestor");
+    fold_row(&ct_op_tt, &ct_op_why, param_value_is(js, "/api/contain", "s2p", "cl2"),
+             "CSSOM VIEW §7: a static box's offsetParent is not the layout containment ancestor css-contain-2 §3.3 "
+             "makes an absolute positioning containing block");
+    fold_row(&ct_op_tt, &ct_op_why, param_value_is(js, "/api/contain", "f3p", "null"),
+             "CSSOM VIEW §7: a `fixed` box with no ancestor establishing a fixed positioning containing block has "
+             "an offsetParent");
+    fold_row(&ct_cb_tt, &ct_cb_why, param_value_is(js, "/api/contain", "abx", "0"),
+             "css-contain-2 §3.3: the absolutely positioned box is not at its layout containment ancestor's padding "
+             "edge (x)");
+    fold_row(&ct_cb_tt, &ct_cb_why, param_value_is(js, "/api/contain", "aby", "0"),
+             "css-contain-2 §3.3: the absolutely positioned box is not at its layout containment ancestor's padding "
+             "edge (y)");
+    fold_row(&ct_cb_tt, &ct_cb_why, param_value_is(js, "/api/contain", "abw", "105"),
+             "css-contain-2 §3.3: `width: 50%` is not half of the layout containment box's 210px padding box");
+    fold_row(&ct_cb_tt, &ct_cb_why, param_value_is(js, "/api/contain", "fxx", "3"),
+             "css-contain-2 §3.5: the fixed box's `left` is not measured from its paint containment ancestor");
+    fold_row(&ct_cb_tt, &ct_cb_why, param_value_is(js, "/api/contain", "fxy", "4"),
+             "css-contain-2 §3.5: the fixed box's `top` is not measured from its paint containment ancestor");
+    fold_row(&ct_cb_tt, &ct_cb_why, param_value_is(js, "/api/contain", "fxw", "50"),
+             "css-contain-2 §3.5: the fixed box's `width: 50%` is not half its paint containment ancestor's 100px");
+    fold_row(&ct_cb_tt, &ct_cb_why, param_value_is(js, "/api/contain", "fxh", "20"),
+             "css-contain-2 §3.5: the fixed box's `height: 50%` is not half its paint containment ancestor's 40px");
+    fold_row(&ct_size_tt, &ct_size_why, param_value_is(js, "/api/contain", "csh", "0"),
+             "css-contain-2 §3.1: a size containment block's auto height is not that of an empty box");
+    fold_row(&ct_size_tt, &ct_size_why, param_value_is(js, "/api/contain", "csiw", "4"),
+             "css-contain-2 §3.1: a size containment `inline-block`'s shrink-to-fit width is not its 4px of padding");
+    fold_row(&ct_size_tt, &ct_size_why, param_value_is(js, "/api/contain", "csih", "4"),
+             "css-contain-2 §3.1: a size containment `inline-block`'s height is not its 4px of padding");
+    fold_row(&ct_size_tt, &ct_size_why, param_value_is(js, "/api/contain", "csaw", "0"),
+             "css-contain-2 §3.1: a size containment absolutely positioned box's shrink-to-fit width is not zero");
+    fold_row(&ct_size_tt, &ct_size_why, param_value_is(js, "/api/contain", "ccw", "0"),
+             "css-contain-2 §3.1: a size containment `canvas` does not have a natural width of 0");
+    fold_row(&ct_size_tt, &ct_size_why, param_value_is(js, "/api/contain", "cch", "0"),
+             "css-contain-2 §3.1: a size containment `canvas` does not have a natural height of 0");
+    fold_row(&ct_size_tt, &ct_size_why, param_value_is(js, "/api/contain", "cisw", "0"),
+             "css-contain-2 §3.2: an inline-size containment `inline-block`'s width is not zero");
+    fold_row(&ct_size_tt, &ct_size_why, param_value_is(js, "/api/contain", "cish", "20"),
+             "css-contain-2 §3.2: an inline-size containment `inline-block`'s height does not follow its content");
+    fold_row(&ct_size_tt, &ct_size_why, param_value_is(js, "/api/contain", "m1", "10"),
+             "CSS 2.1 §8.3.1: an empty size containment box's margins do not collapse through");
+    fold_row(&ct_size_tt, &ct_size_why, param_value_is(js, "/api/contain", "m2", "20"),
+             "CSS 2.1 §8.3.1: a size containment box holding content collapses its margins through");
+    fold_row(&ct_ifc_tt, &ct_ifc_why, param_value_is(js, "/api/contain", "bpc", "20"),
+             "css-contain-2 §3.5: a child's top margin escapes the paint containment box's independent formatting "
+             "context");
+    fold_row(&ct_ifc_tt, &ct_ifc_why, param_value_is(js, "/api/contain", "e2", "0"),
+             "css-contain-2 §3.3: the layout containment `inline-block` is not aligned like one with no baseline");
+    fold_row(&ct_ifc_tt, &ct_ifc_why, param_value_is(js, "/api/contain", "sw", "100"),
+             "css-contain-2 §3.5: the paint containment box's clipped overflow reaches its ancestor's scrollWidth");
+    fold_row(&ct_ifc_tt, &ct_ifc_why, param_value_is(js, "/api/contain", "sw2", "100"),
+             "css-contain-2 §3.3: the layout containment box's ink overflow reaches its ancestor's scrollWidth");
+    fold_row(&ct_ifc_tt, &ct_ifc_why, param_value_is(js, "/api/contain", "sw3", "300"),
+             "CSSOM VIEW §2: the uncontained control's overflow is not in its ancestor's scrollWidth");
+    fold_row(&ct_cv_tt, &ct_cv_why, param_value_is(js, "/api/contain", "k1", "strict"),
+             "CSSOM §6.7.2: `contain: strict` does not serialize as `strict`");
+    fold_row(&ct_cv_tt, &ct_cv_why, param_value_is(js, "/api/contain", "k2", "content"),
+             "CSSOM §6.7.2: `contain: content` does not serialize as `content`");
+    fold_row(&ct_cv_tt, &ct_cv_why, param_value_is(js, "/api/contain", "k3", "layout_paint"),
+             "css-contain-2 §2: `contain: paint layout` does not compute to `layout paint`");
+    fold_row(&ct_cv_tt, &ct_cv_why, param_value_is(js, "/api/contain", "k4", "strict"),
+             "CSSOM §6.7.2: `contain: size layout style paint` does not serialize as `strict`");
+    fold_row(&ct_cv_tt, &ct_cv_why, param_value_is(js, "/api/contain", "k5", "inline-size"),
+             "css-contain-2 §2: `contain: inline-size` does not compute to itself");
+    fold_row(&ct_cv_tt, &ct_cv_why, param_value_is(js, "/api/contain", "k6", "size_layout"),
+             "css-contain-2 §2: `contain: layout size` does not compute to `size layout`");
+    fold_row(&ct_cv_tt, &ct_cv_why, param_value_is(js, "/api/contain", "k7", "none"),
+             "css-contain-2 §2: `contain: size inline-size` was not dropped as outside the grammar");
+    fold_row(&ct_cv_tt, &ct_cv_why, param_value_is(js, "/api/contain", "k8", "style"),
+             "css-contain-2 §2: `contain: style` does not compute to itself");
+    fold_row(&ct_ifc_tt, &ct_ifc_why, !param_value_is(js, "/api/contain", "e3", "0"),
+             "CSS 2.2 §10.8.1: the uncontained control `inline-block` sits like an empty one, so the e2 row is "
+             "unarmed");
+    const Probe rows[] = {
+        { "contain-offset-parent", ct_op_tt, "/api/contain", SESS_EXPLORE, ct_op_why },
+        { "contain-positioning-cb", ct_cb_tt, "/api/contain", SESS_EXPLORE, ct_cb_why },
+        { "contain-size", ct_size_tt, "/api/contain", SESS_EXPLORE, ct_size_why },
+        { "contain-formatting-context", ct_ifc_tt, "/api/contain", SESS_EXPLORE, ct_ifc_why },
+        { "contain-computed-value", ct_cv_tt, "/api/contain", SESS_EXPLORE, ct_cv_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `boundpark` document (fixture/boundpark.h). */
 TF_UNIT void probes_boundpark(const char *js, Probe *tab, int *n) {
     /* One bound body through four callback routes; each failure arm reports its route, the declined send's
@@ -17864,6 +17970,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_boundpark(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_deepnest(js, probes, &np);
+    probes_contain(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);

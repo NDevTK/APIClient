@@ -13,6 +13,7 @@
 #include "core/dom/element_view.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/containment.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/layout_job.h"
 #include "core/layout/line_box.h"
@@ -436,18 +437,36 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                 return true;
             }
             if (w->stage == SA_STAGE_EDGE) w->stage = SA_STAGE_CONTEXT;
-            if (w->stage == SA_STAGE_CONTEXT) {
-                bool context = block_flow_establishes_inline_context(d);
+            /* css-overflow-3 §3.3 "Calculating the Scrollable Overflow Area" takes a descendant's own scrollable
+               overflow "clipped to their overflow clip edge if overflow is not visible or contain applies
+               paint" (core/layout/scroll_container.h's content clip, the padding edge), and css-contain-2 §3.3
+               "Layout Containment" says that where `overflow` is `visible` or `clip` "any overflow must be
+               treated as ink overflow". A layout or paint containment box also establishes both positioning
+               containing blocks, so every box inside it is clipped or ink by those two sentences, and below the
+               walk root it contributes its own margin edge, folded above, and nothing inside it.
+               NAMED RESIDUAL. Not covered: a box clipped by `overflow` alone is descended into whole, so what it
+               clips is counted. Next: that descent keeps only the boxes whose containing-block chain leaves the
+               clipping box (a positioned box whose containing block is further up escapes the clip). How its
+               absence shows: an ancestor's scrollWidth or scrollHeight above Chrome's where a descendant with
+               `overflow` other than `visible` holds content past its padding edge. */
+            if (n != root && (containment_layout(d) || containment_paint(d))) {
+                descend = false;
+            } else {
+                if (w->stage == SA_STAGE_CONTEXT) {
+                    bool context = block_flow_establishes_inline_context(d);
 
-                if (context && !sa_inline_context_extreme(d, w->vertical, w->ending_at_hi, &w->best)) return false;
-                w->stage = SA_STAGE_ANON;
-                w->anon = 0;
-                if (context) return true;
-            }
-            if (!sa_anon_block_box_fold(d, w->anon, w->vertical, w->ending_at_hi, &w->best, &last)) return false;
-            if (!last) {
-                w->anon++;
-                return true;
+                    if (context && !sa_inline_context_extreme(d, w->vertical, w->ending_at_hi, &w->best))
+                        return false;
+                    w->stage = SA_STAGE_ANON;
+                    w->anon = 0;
+                    if (context) return true;
+                }
+                if (!sa_anon_block_box_fold(d, w->anon, w->vertical, w->ending_at_hi, &w->best, &last))
+                    return false;
+                if (!last) {
+                    w->anon++;
+                    return true;
+                }
             }
         }
     } else if (n->type == LXB_DOM_NODE_TYPE_TEXT) {
@@ -645,7 +664,10 @@ lxb_dom_element_t *scrolling_area_principal_writing_mode_element(lxb_dom_node_t 
        element, which is already the FIRST `body` or `frameset` child of the root; the display half is
        core/dom/element_view.h's one predicate, which reads the computed `display` of the element and of its
        ancestors and is the same question §8's clause asks. */
-    if (body != NULL && element_view_has_box(body)) return lxb_dom_interface_element(body);
+    /* css-contain-2 §2 disables the body's propagation "to the initial containing block, the viewport, or the
+       canvas background" when containment is active on `html` or `body`. */
+    if (body != NULL && element_view_has_box(body) && !containment_disables_body_propagation(doc))
+        return lxb_dom_interface_element(body);
     return lxb_dom_interface_element(root);
 }
 

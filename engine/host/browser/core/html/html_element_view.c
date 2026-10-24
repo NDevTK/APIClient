@@ -21,6 +21,7 @@
 #include "core/html/html_element_view.h"
 #include "core/idl_args.h"
 #include "core/layout/block_flow.h"
+#include "core/layout/containment.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/used_value.h"
 
@@ -134,20 +135,13 @@ static bool hev_html_local_name_is(const lxb_dom_node_t *n, const char *name)
    it too now, to decide CSS 2.1 §10.1's third and fourth cases, so the Note is spelled ONCE beside §10.1's
    four cases and both components ask the same entry for it. A second copy here would be free to gain a
    property that one did not, after which this chain check would pass over an ancestor whose containing
-   block the layout could not read. The ONE difference the move makes to this file is that `contain` is now
-   on the list this loop walks as well as on `HEV_UNREADABLE_ALWAYS` above — §2.1's Note names it and the
-   Note is what the shared entry is — and the ALWAYS loop runs FIRST, so a declared `contain` still crashes
-   with the message written for it rather than with the positioning one. */
+   block the layout could not read. */
 
-/* AN OPERAND OF EVERY QUESTION §7 ASKS, INCLUDING THE TWO MEMBERS THAT READ NO ANCESTOR. `contain` is in §2.1's
-   list too and does NOT stop there, which is what keeps it here rather than above: css-contain-2 §3.1 "Size
-   Containment" makes it a fact about the box's OWN size rather than about anyone's containing block — "The
-   intrinsic sizes of the size containment box are determined as if the element had no content, following the
-   same logic as when sizing as if empty" — so an extent is a function of it directly. `zoom` is CSS Viewport §4
+/* AN OPERAND OF EVERY QUESTION §7 ASKS, INCLUDING THE TWO MEMBERS THAT READ NO ANCESTOR. `zoom` is CSS Viewport §4
    "The zoom property": every number §7 reports is an UNSCALED one, and "the unscaled value of a CSS length
    relative to an element is the scaled value divided by the element's effective zoom", whose product runs over
    the whole flat-tree chain. */
-static const char *const HEV_UNREADABLE_ALWAYS[] = { "contain", "zoom" };
+static const char *const HEV_UNREADABLE_ALWAYS[] = { "zoom" };
 
 /* WHICH OF THE TWO A CALLER IS ASKING. It is a fact about the MEMBER and never about the element: `offsetParent`
    IS the positioning walk, `offsetTop`/`offsetLeft` are DEFINED by subtracting from its result, and
@@ -235,12 +229,7 @@ static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n, HevCha
                 DFAILF("an element on this CSSOM VIEW §7 chain DECLARES `%s`, whose computed value "
                        "core/css/css_computed_value.h does not derive, and EVERY member of §7 is a function of "
                        "it — the two that walk no ancestor included, which is why this one is asked whatever "
-                       "the caller is asking. `contain`: css-contain-2 §3.1 \"Size Containment\" makes it a fact "
-                       "about the box's own size rather than about a containing block, \"The intrinsic sizes of "
-                       "the size containment box are determined as if the element had no content, following the "
-                       "same logic as when sizing as if empty\", so an EXTENT is derived from a value that was "
-                       "never computed; it is also in css-position-3 §2.1 \"Containing Blocks of Positioned "
-                       "Boxes\"' list, so it moves `offsetParent` as well. `zoom`: CSS Viewport §4 \"The zoom "
+                       "the caller is asking. `zoom`: CSS Viewport §4 \"The zoom "
                        "property\" states \"the effective zoom of an element is the product of its computed "
                        "value of zoom and all flat tree ancestors' computed values of zoom\" and \"the unscaled "
                        "value of a CSS length relative to an element is the scaled value divided by the "
@@ -292,7 +281,9 @@ static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n, HevCha
    there are any absolutely-positioned descendants)". css-position-3 §2.1 "Containing Blocks of Positioned
    Boxes"' own Note lists what can establish one — "Properties that can cause a box to establish an absolute
    positioning containing block include position, transform, will-change, contain …" — and the chain check above
-   has already crashed if any of the last three is declared, so what is left is `position`.
+   has already crashed if `transform` or `will-change` is declared, so what is left is `position` and
+   css-contain-2 §3.3 "Layout Containment" and §3.5 "Paint Containment", each of whose boxes "establishes an
+   absolute positioning containing block and a fixed positioning containing block" (core/layout/containment.h).
    WHICH OF ITS VALUES IS STATED BY css-position-3 §2 "Choosing A Positioning Scheme: position property", ONE
    SENTENCE AND NOT A DERIVATION OVER THREE NAMES: "Values other than static make the box a positioned box, and
    cause it to establish an absolute positioning containing block for its descendants". So this is written as
@@ -302,30 +293,47 @@ static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n, HevCha
    over, which is why the citation moved with them rather than only the marks coming off. */
 static bool hev_establishes_abspos_containing_block(lxb_dom_element_t *el)
 {
-    return !css_computed_keyword_is(el, "position", CSS_KEYWORD_STATIC);
+    return !css_computed_keyword_is(el, "position", CSS_KEYWORD_STATIC) || containment_layout(el) ||
+           containment_paint(el);
+}
+
+/* §7's "a containing block for fixed-positioned descendants": §2.1's FIXED list has no `position`, so of what
+   this engine reads only containment establishes one. */
+static bool hev_establishes_fixedpos_containing_block(lxb_dom_element_t *el)
+{
+    return containment_layout(el) || containment_paint(el);
+}
+
+/* The nearest flat-tree ancestor of `n` that establishes a fixed positioning containing block, or NULL. A
+   boxless ancestor establishes none (containment "has no effect" without a principal box). */
+static lxb_dom_element_t *hev_fixedpos_containing_block(const lxb_dom_node_t *n)
+{
+    lxb_dom_node_t *a;
+
+    for (a = n->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent)
+        if (hev_establishes_fixedpos_containing_block(lxb_dom_interface_element(a)))
+            return lxb_dom_interface_element(a);
+    return NULL;
 }
 
 /* §7's own first list, shared by `offsetParent` and (in the ED) `scrollParent`: the four conditions under which
-   the answer is null before any walking happens. The fourth is the one this engine can state exactly — no
-   element establishes a FIXED positioning containing block, because css-position-3 §2.1's list for that one is
-   `transform, will-change, contain …` with `position` absent from it, and the chain check has crashed if any of
-   those is declared. So a `position: fixed` element's offsetParent is null, full stop, and that is a derivation
-   rather than a case left unwritten. */
+   the answer is null before any walking happens. The fourth is "The element's computed value of the position
+   property is fixed and no ancestor establishes a fixed position containing block". */
 static bool hev_null_offset_parent(const HevTarget *t)
 {
     if (!t->has_box) return true;
     if (t->is_root)  return true;
     if (t->is_body)  return true;
-    return css_computed_keyword_is(lxb_dom_interface_element(t->node), "position", CSS_KEYWORD_FIXED);
+    return css_computed_keyword_is(lxb_dom_interface_element(t->node), "position", CSS_KEYWORD_FIXED) &&
+           hev_fixedpos_containing_block(t->node) == NULL;
 }
 
 /* §7's `offsetParent` ALGORITHM, in the spec's own step order. Returns the element or NULL.
-   THE ELEMENT IS NOT IN A FIXED POSITION CONTAINING BLOCK — every bullet below is qualified by that, and it is
-   the derivation `hev_null_offset_parent` states: nothing in this model establishes one. So step 2's first
-   bullet is unreachable, its second bullet's three conditions are the whole of the test, and its third
-   (different effective zoom) is unreachable too because every effective zoom in this model is 1 (CSS Viewport
-   §4). Neither is a remark: `hev_require_readable_chain` is where both are ASSERTED, and it is the one place
-   they can be, because each is a statement about the whole ancestor chain rather than about this element.
+   "The element is in a fixed position containing block" is read as: it is `position: fixed` and step 1 found
+   an ancestor establishing one, so its containing block is that ancestor's. Step 2's first bullet then returns
+   the nearest such ancestor, and its second bullet's three conditions decide every other element. The third
+   bullet (different effective zoom) is unreachable because every effective zoom in this model is 1 (CSS
+   Viewport §4); `hev_require_readable_chain` asserts that over the whole chain.
    THE WALK IS OVER ELEMENTS. §7 says "the parent of the element in the flat tree", and the flat tree contains
    the document root's element and no Document node, so running out of element parents IS its "if there is no
    more parent of ancestor, terminate this algorithm and return null". */
@@ -335,6 +343,9 @@ static lxb_dom_element_t *hev_offset_parent(const HevTarget *t)
 
     /* step 1 */
     if (hev_null_offset_parent(t)) return NULL;
+    /* step 2, the first bullet: no body or table bullet stands in front of it. */
+    if (css_computed_keyword_is(lxb_dom_interface_element(t->node), "position", CSS_KEYWORD_FIXED))
+        return hev_fixedpos_containing_block(t->node);
     /* step 2 */
     for (a = t->node->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
         lxb_dom_element_t *anc = lxb_dom_interface_element(a);
@@ -343,9 +354,8 @@ static lxb_dom_element_t *hev_offset_parent(const HevTarget *t)
                           hev_html_local_name_is(a, "table");
         bool matches;
 
-        /* Step 2's first substep — an ancestor that is closed-shadow-hidden and `position: fixed` with no
-           ancestor establishing a fixed position containing block — is the shadow half, which the chain check
-           has already crashed on, over the `position: fixed` half the derivation above settles. */
+        /* Step 2's first substep is over a closed-shadow-hidden ancestor, which the chain check has already
+           crashed on. */
         matches = hev_establishes_abspos_containing_block(anc) || is_body ||
                   (table_cell && css_computed_keyword_is(lxb_dom_interface_element(t->node), "position", CSS_KEYWORD_STATIC));
         if (!matches) continue;

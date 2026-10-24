@@ -125,6 +125,7 @@ typedef enum {
     X(TEXT_ALIGN_ALL,      "text-align-all",      LXB_CSS_PROPERTY_TEXT_ALIGN_ALL, TEXT, ALL, UNTYPED)            \
     X(TEXT_ALIGN_LAST,     "text-align-last",     LXB_CSS_PROPERTY_TEXT_ALIGN_LAST, TEXT, ALL, UNTYPED)            \
     X(TRANSFORM,           "transform",           LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
+    X(CONTAIN,             "contain",             LXB_CSS_PROPERTY__UNDEF,         TEXT, ALL, UNTYPED)            \
     X(FLEX_GROW,           "flex-grow",           LXB_CSS_PROPERTY_FLEX_GROW,      TEXT, NON_NEGATIVE, UNTYPED)   \
     X(FLEX_SHRINK,         "flex-shrink",         LXB_CSS_PROPERTY_FLEX_SHRINK,    TEXT, NON_NEGATIVE, UNTYPED)   \
     X(ORDER,               "order",               LXB_CSS_PROPERTY_ORDER,          TEXT, ALL, UNTYPED)            \

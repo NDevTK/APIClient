@@ -11,6 +11,7 @@
 #include "core/css/css_color.h"
 #include "core/css/css_computed_style.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_contain.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_display.h"
 #include "core/css/css_font_family.h"
@@ -2549,6 +2550,33 @@ static char *computed_font_family(lxb_dom_element_t *el, char *spec)
     return spec != NULL ? css_cv_strdup(spec) : NULL;
 }
 
+/* css-contain-2 §2 "Strong Containment: the contain property"'s `Computed value:` line, "the keyword none or
+   one or more of size, layout, style, paint", over core/css/css_contain.h's grammar. The declaration was
+   admitted by that grammar (core/css/css_shorthand.h's longhand hook), so a value outside it here came through
+   an arbitrary substitution function and is invalid at computed-value time: `unset`, which for this
+   non-inherited property is `none`. */
+static char *computed_contain(char *spec)
+{
+    unsigned bits = 0;
+    bool ok = css_contain_parse(spec, &bits);
+
+    free(spec);
+    return css_contain_serialize(ok ? bits : 0);
+}
+
+unsigned css_computed_contain(lxb_dom_element_t *el)
+{
+    char *v = css_computed_value(el, "contain");
+    bool ok;
+    unsigned bits = 0;
+
+    DCHECK(v != NULL, "css-contain-2 §2's computed `contain` came back as no value; its row derives one always");
+    ok = css_contain_parse(v, &bits);
+    DCHECKF(ok, "css-contain-2 §2's computed `contain` `%s` is not in the grammar its own derivation writes", v);
+    free(v);
+    return bits;
+}
+
 static char *computed_list_style_image(char *spec)
 {
     if (css_cv_is(spec, "none")) return spec;
@@ -2630,6 +2658,8 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        resolved value. */
     case CSS_PROPERTY_LIST_STYLE_IMAGE:
         return computed_list_style_image(spec);
+    case CSS_PROPERTY_CONTAIN:
+        return computed_contain(spec);
     case CSS_PROPERTY_FONT_FAMILY:
         return computed_font_family(el, spec);
     /* `float` (CSS2 §9.5.1) states "Computed value: as specified", and a keyword has no absolutization to do —

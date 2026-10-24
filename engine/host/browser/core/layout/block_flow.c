@@ -13,6 +13,7 @@
 #include "core/timing/thread_work.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/containment.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/flex_container_baseline.h"
 #include "core/layout/flex_cross_size.h"
@@ -170,6 +171,10 @@ static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)
 
     if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) return true;
     if (block_flow_is_floated(el)) return true;
+    /* css-contain-2 §3.3 "Layout Containment" and §3.5 "Paint Containment": "The ... containment box
+       establishes an independent formatting context", which for a block container is a block formatting
+       context (css-display-3 §2.2). */
+    if (containment_layout(el) || containment_paint(el)) return true;
     d = css_computed_display(el);
     bfc = css_display_spells(d, CSS_KEYWORD_INLINE_BLOCK) || css_display_spells(d, CSS_KEYWORD_FLOW_ROOT) ||
           css_display_spells(d, CSS_KEYWORD_TABLE_CELL) || css_display_spells(d, CSS_KEYWORD_TABLE_CAPTION) ||
@@ -2123,7 +2128,12 @@ static bool bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, BfBox *result
        walk's own content height; a resolved percentage is a declared length like any other and goes back
        through used_value.h, which is where §10.4/§10.7's clamp runs for it. */
     if (used_value_height_behaves_as_auto(el)) {
-        b.border_h = used_value_border_edge_from_content_px(el, b.content_h, true);
+        /* css-contain-2 §3.1: a size containment box's content height is that of an empty box, while the walk
+           above still lays its content out and decides collapse-through over it (Chrome 155 collapses an
+           empty size containment box's margins through and does not collapse one holding content). */
+        CssPx content = containment_size(el) ? css_px(0.0) : b.content_h;
+
+        b.border_h = used_value_border_edge_from_content_px(el, content, true);
     } else {
         b.border_h = used_value_border_edge_px(el, true);
     }
@@ -2226,7 +2236,9 @@ static bool bf_box(lxb_dom_element_t *el, BfBaseline pass, BfBox *out)
 }
 
 /* The stack of `el`'s own children for `pass`, asked through the layout job: run once per job whatever `el`'s
-   `height` says, and continued where it stopped. Every reader of a container's stack asks here. */
+   `height` says, and continued where it stopped. Every reader of a container's stack asks here.
+   A baseline pass's answer is `el`'s baseline as read from outside `el`, so css-contain-2 §3.3 "Layout
+   Containment"'s "the containment box is treated as having no baseline" is applied to it here. */
 static bool bf_walk(lxb_dom_element_t *el, BfBaseline pass, BfBox *out)
 {
     LayoutQuestion q;
@@ -2237,7 +2249,9 @@ static bool bf_walk(lxb_dom_element_t *el, BfBaseline pass, BfBox *out)
         "A container's stack asked, inside itself, for something only its finished stack answers: a child's "
         "position, its own content height or baseline, a run's start or its anonymous boxes. The asking rule "
         "reads its own output; fix it at the rule that re-enters, never by a limit.");
-    return bf_question_ask(q, out);
+    if (!bf_question_ask(q, out)) return false;
+    if (pass != BF_BASELINE_NONE && containment_layout(el)) out->has_line_box = false;
+    return true;
 }
 
 bool block_flow_drive_deferred(LayoutJobDrive *d)
@@ -2386,6 +2400,22 @@ bool block_flow_auto_height_ask(lxb_dom_element_t *el, CssPx *out)
     container = block_flow_display_is_block_container(d);
     flex = css_display_spells(d, CSS_KEYWORD_FLEX) || css_display_spells(d, CSS_KEYWORD_INLINE_FLEX);
     grid = css_display_spells(d, CSS_KEYWORD_GRID) || css_display_spells(d, CSS_KEYWORD_INLINE_GRID);
+    /* css-contain-2 §3.1 "Size Containment": "The intrinsic sizes of the size containment box are determined as
+       if the element had no content, following the same logic as when sizing as if empty". A block container
+       or a flex container with no content has a content height of zero. A grid container's explicit tracks
+       still size an empty grid (css-grid-1 §7.2), which is a track sizing this entry does not run. */
+    if (containment_size(el)) {
+        char nbuf[160];
+
+        if (grid)
+            DFAILF("%s is a grid container under css-contain-2 §3.1 \"Size Containment\", sized \"as if empty\". "
+                   "BUILD css-grid-1 §11's track sizing over no grid items, whose explicit tracks and gutters "
+                   "still have sizes", box_subject(el, nbuf, sizeof nbuf));
+        if (container || flex) {
+            *out = css_px(0.0);
+            return true;
+        }
+    }
     /* THE FLEX DISPATCH IS NOT AN `if` IN FRONT OF THIS WALK, IT IS A ROUTE THAT MAY ANSWER. A `row`
        container's auto height is css-flexbox-1 §9.6 "Cross-Axis Alignment"' content-based cross size and
        returns here, and so does the `column` arm's §9.9.1 "Flex Container Intrinsic Main Sizes" max-content

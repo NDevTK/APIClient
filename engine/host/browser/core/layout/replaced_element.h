@@ -41,6 +41,12 @@ typedef struct {
     double ratio;        /* the ratio between the width and height (§4.1), so width = height * ratio */
 } ReplacedElement;
 
+/* `el`'s classification and natural dimensions, the latter as css-contain-2 §3.1 "Size Containment" leaves them
+   ("a natural width and height of 0 and no natural aspect ratio" for a size containment box). */
 ReplacedElement replaced_element_of(lxb_dom_element_t *el);
+
+/* HTML §15.4's classification alone. core/layout/containment.c decides whether size containment applies from
+   it (a replaced inline box is atomic), so it reads no containment. */
+bool replaced_element_is(lxb_dom_element_t *el);
 
 #endif

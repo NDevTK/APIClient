@@ -4,6 +4,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_baseline.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/containment.h"
 #include "core/layout/grid_baseline.h"
 #include "core/layout/grid_placement.h"
 #include "core/layout/grid_track.h"
@@ -34,6 +35,14 @@ bool grid_container_first_baseline_ask(lxb_dom_element_t *container, bool *has, 
 
     DCHECK(container != NULL && has != NULL && out != NULL,
            "a grid container's baseline was asked for with no container or nowhere to put it");
+    /* css-contain-2 §3.3 "Layout Containment": "For the purpose of the vertical-align property, or any other
+       property whose effects need to relate the position of the layout containment box's baseline to
+       something other than its descendants, the containment box is treated as having no baseline." Every
+       caller of this entry is such a reader. */
+    if (containment_layout(container)) {
+        *has = false;
+        return true;
+    }
     grid_track_placement(container, &p);
     /* The first (block-start-most) non-empty row, and its first item in grid order: the traversal of the grid's
        cells, which with one item per cell is the smallest column. */

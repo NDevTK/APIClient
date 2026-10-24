@@ -10,6 +10,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/containment.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/flex_intrinsic_size.h"
@@ -1080,14 +1081,38 @@ static bool is_table_ask(lxb_dom_element_t *el)
     return true;
 }
 
+/* css-contain-2 §3.2 "Inline-Size Containment" (and §3.1, which implies it): "the inline-axis intrinsic sizes of
+   the principal box are determined as if the element had no content". A block container or a flex container
+   with no content has intrinsic inline sizes of zero; a replaced element's are its natural ones, which
+   core/layout/replaced_element.h already answers under containment. True with `*out` written where this
+   answers. */
+static bool is_contained_as_empty(lxb_dom_element_t *el, IntrinsicInlineSizes *out)
+{
+    CssDisplay d;
+    char nbuf[160];
+
+    if (!containment_inline_size(el) || replaced_element_of(el).replaced) return false;
+    d = css_computed_display(el);
+    if (css_display_spells(d, CSS_KEYWORD_GRID) || css_display_spells(d, CSS_KEYWORD_INLINE_GRID))
+        DFAILF("%s is a grid container under css-contain-2 §3.2 \"Inline-Size Containment\", sized \"as if the "
+               "element had no content\". BUILD css-grid-1 §11's track sizing over no grid items, whose explicit "
+               "tracks and gutters still have sizes", box_subject(el, nbuf, sizeof nbuf));
+    if (!block_flow_display_is_block_container(d) && !flex_item_display_is_flex_container(d)) return false;
+    out->min_content = css_px(0.0);
+    out->max_content = css_px(0.0);
+    return true;
+}
+
 bool intrinsic_inline_sizes_ask(lxb_dom_element_t *el)
 {
     CssDisplay d;
+    IntrinsicInlineSizes empty;
 
     DCHECK(el != NULL, "css-sizing-3 §5.1's intrinsic inline sizes were asked for with no element");
     /* The read's dispatch, in its order. A replaced element is sized by natural dimensions and measures no
        run; a box neither of §9.4's contexts nor a flex or table module lays out is refused by the read. */
     if (replaced_element_of(el).replaced) return true;
+    if (is_contained_as_empty(el, &empty)) return true;
     d = css_computed_display(el);
     if (flex_item_display_is_flex_container(d)) return flex_intrinsic_inline_sizes_ask(el);
     if (table_box_kind_generates_table_box(table_box_kind(d))) return is_table_ask(el);
@@ -1121,6 +1146,7 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
            reply lands, so a second `replaced_element_of` could answer about a different moment. */
         if (rep.replaced) return is_replaced_sizes(el, &rep);
     }
+    if (is_contained_as_empty(el, &out)) return out;
     /* §9.4.2's condition ("an inline formatting context is established by a block container box that contains
        no block-level boxes") applies only to block containers; other boxes are dispatched to their modules. */
     {

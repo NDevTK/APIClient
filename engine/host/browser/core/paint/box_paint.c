@@ -26,6 +26,7 @@
                                         the one replaced element that fetches its own */
 #include "core/layout/block_flow.h"  /* CSS 2.2 §9.2.1.1's TWO shapes of one inline formatting context */
 #include "core/layout/box_tree.h"   /* css-display-3 §2.5's spliced child sequence — the range this walk steps */
+#include "core/layout/containment.h"
 #include "core/layout/line_box.h"    /* line_box_glyphs — CSS 2.1 §E.2 step 7.2.1's "the text", placed */
 #include "core/layout/replaced_element.h" /* the `replaced` bit that separates item 4's THIRD arm from
                                             its second — an inline-block is atomic and is not replaced */
@@ -147,6 +148,11 @@ static lxb_dom_element_t *bp_canvas_background_element(JSContext *ctx, lxb_dom_e
                          "element. CSS 2.1 §E.2's step 1 is offered only FOR a root element, and CSS 2.1 "
                          "§E.2's steps 2 and 4 reach this through a box whose own document answered one");
     if (!lxb_html_tree_node_is(lxb_dom_interface_node(root), LXB_TAG_HTML)) return root;
+    /* css-contain-2 §2: containment active on `html` or `body` disables propagation from the body "to the
+       initial containing block, the viewport, or the canvas background". */
+    if (containment_disables_body_propagation(
+            lxb_dom_interface_node(lxb_dom_interface_node(root)->owner_document)))
+        return root;
     /* THE FIRST CONJUNCT. A false answer from the derivation is not a third state here: its own crash has
        already named the absence in a dev build, and a root whose used colour this engine cannot derive is one
        whose background it cannot paint either — so the rule that moves the background onto the canvas may as

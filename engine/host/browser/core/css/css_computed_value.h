@@ -126,6 +126,10 @@
    asked the other's question rather than answering it in a shape that cannot carry the answer. */
 char *css_computed_value(lxb_dom_element_t *el, const char *name);
 
+/* css-contain-2 §2's computed `contain` of `el` as core/css/css_contain.h's set of containment types: `strict`
+   and `content` are their expansions and `none` is the empty set. */
+unsigned css_computed_contain(lxb_dom_element_t *el);
+
 /* css-transforms-1 §3 "The transform Property"'s COMPUTED VALUE AS THE PARSED LIST — the THIRD shape this
    component answers, and it is an entry for the same reason `css_computed_line_height` and
    `css_computed_border_spacing` are: text cannot carry it. §3's `Computed value:` line is "as specified, but

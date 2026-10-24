@@ -12,6 +12,8 @@
 #include "core/dom/element.h"       /* §2.6.1's `unsigned long` model — §4.12.5's bitmap reads one */
 #include "core/html/html_form.h"
 #include "core/html/html_image.h"
+#include "core/layout/box_subject.h"
+#include "core/layout/containment.h"
 #include "core/layout/replaced_element.h"
 
 /* Not a replaced element: every field zeroed, per replaced_element.h's contract. */
@@ -224,7 +226,8 @@ static JSContext *rep_scripting_realm(lxb_dom_node_t *n)
     return document_active_realm_of(lxb_dom_interface_node(n->owner_document));
 }
 
-ReplacedElement replaced_element_of(lxb_dom_element_t *el)
+/* HTML §15.4's classification and css-images-3 §4.1's natural dimensions, before css-contain-2 §3.1. */
+static ReplacedElement rep_classify(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n;
     JSContext *dctx;
@@ -395,4 +398,34 @@ ReplacedElement replaced_element_of(lxb_dom_element_t *el)
               "`uv_icb` names in full — so the resolved value takes §9's computed-value arm before any "
               "rendering rule is asked");
     return rep_img(dctx, el);
+}
+
+bool replaced_element_is(lxb_dom_element_t *el)
+{
+    return rep_classify(el).replaced;
+}
+
+ReplacedElement replaced_element_of(lxb_dom_element_t *el)
+{
+    ReplacedElement r = rep_classify(el);
+    char nbuf[160];
+
+    if (!r.replaced) return r;
+    /* css-contain-2 §3.1 "Size Containment": "Replaced elements must be treated as having a natural width and
+       height of 0 and no natural aspect ratio." */
+    if (containment_size(el)) {
+        r.has_width = true;
+        r.has_height = true;
+        r.has_ratio = false;
+        r.width = css_px(0.0);
+        r.height = css_px(0.0);
+        r.ratio = 0.0;
+        return r;
+    }
+    if (containment_inline_size(el))
+        DFAILF("%s is a replaced element under css-contain-2 §3.2 \"Inline-Size Containment\", which applies size "
+               "containment \"to the inline-axis sizing\" and states no natural dimensions for a replaced "
+               "element. BUILD the inline-axis half of §3.1's replaced-element sentence, decided against Chrome",
+               box_subject(el, nbuf, sizeof nbuf));
+    return r;
 }

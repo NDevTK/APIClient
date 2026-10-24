@@ -7,6 +7,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_baseline.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/containment.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/flex_baseline.h"
 #include "core/layout/flex_container_baseline.h"
@@ -89,6 +90,14 @@ bool flex_container_first_baseline_ask(lxb_dom_element_t *container, bool *has, 
 
     DCHECK(container != NULL && has != NULL && out != NULL,
            "a flex container's baseline was asked for with no container or nowhere to put it");
+    /* css-contain-2 §3.3 "Layout Containment": "For the purpose of the vertical-align property, or any other
+       property whose effects need to relate the position of the layout containment box's baseline to
+       something other than its descendants, the containment box is treated as having no baseline." Every
+       caller of this entry is such a reader. */
+    if (containment_layout(container)) {
+        *has = false;
+        return true;
+    }
     if (flex_container_main_axis(container) != FLEX_MAIN_AXIS_INLINE) return fcb_cross_axis_ask(container, has, out);
     n = flex_line_members(container, &m);
     *has = n > 0;

@@ -10,6 +10,7 @@
 #include "core/css/css_background_shorthand.h"
 #include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_contain.h"
 #include "core/css/css_counter_style.h"
 #include "core/css/css_font_shorthand.h"
 #include "core/css/css_image.h"
@@ -1431,6 +1432,9 @@ bool css_shorthand_validates_longhand(const char *longhand)
     /* The keyword rows lexbor does not parse, and `border-spacing`, whose registry gap is the same. */
     if (sh_keyword_row(longhand, &set)) return true;
     if (strcmp(longhand, "border-spacing") == 0) return true;
+    /* css-contain-2 §2's `contain`, which lexbor's registry does not carry; core/css/css_contain.h owns its
+       grammar. */
+    if (strcmp(longhand, "contain") == 0) return true;
     /* SEVEN OF css-backgrounds-3 §2.10's EIGHT, for the same reason and with the same split: lexbor's registry
        carries `background-color` and none of the other seven, so §2.10's component owns their grammars and
        lexbor's parser owns the colour's. The question is FORWARDED rather than answered here, because the list
@@ -1488,6 +1492,11 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
         return kw ? css_sh_strdup(kw) : NULL;
     }
     if (strcmp(longhand, "border-spacing") == 0) return table_longhand_value(longhand, value);
+    if (strcmp(longhand, "contain") == 0) {
+        unsigned bits;
+
+        return css_contain_parse(value, &bits) ? css_contain_serialize(bits) : NULL;
+    }
     /* css-lists-3 §3.6's three, AFTER §7.3's keywords, because `list-style-type: inherit` is not a
        `<counter-style>` and a `<counter-style-name>` is an ident sequence that would admit it. */
     if (list_style_owns(longhand)) return list_style_longhand_value(longhand, value);
@@ -2905,6 +2914,8 @@ bool css_shorthand_complete_for(const char *longhand)
         "overflow-x", "overflow-y", "display", "float", "clear", "position", "box-sizing", "color",
         "white-space", "tab-size",
         "direction", "writing-mode", "transform", "visibility",
+        /* `contain` — css-contain-2 §2 declares it standalone and no shorthand sets it. */
+        "contain",
         /* `pointer-events` — NO shorthand in CSS sets it. css-ui-4 §6.2 "Exclusion from Hit-testing: the
            pointer-events property" declares it as a standalone property with its own `Value:` line
            (`auto | none`) and its own `Computed value:` line, and the module states no shorthand over it:

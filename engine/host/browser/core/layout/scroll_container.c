@@ -11,6 +11,7 @@
 #include "core/css/css_property_applies.h"
 #include "core/dom/document.h"
 #include "core/dom/element_view.h"
+#include "core/layout/containment.h"
 #include "core/layout/scroll_container.h"
 
 /* The computed keyword on one axis, classified once. The scroll-container and content-clip questions differ
@@ -83,6 +84,8 @@ bool scroll_container_propagates_overflow_to_viewport(lxb_dom_element_t *el)
     /* §3.1.4's second sentence: the root is an HTML-namespace `html` element whose computed `overflow` is
        `visible` in both axes, and this body element's "display value is also not none". */
     if (!element_view_has_box(n)) return false;
+    /* css-contain-2 §2: containment active on `html` or `body` disables the body's propagation. */
+    if (containment_disables_body_propagation(lxb_dom_interface_node(n->owner_document))) return false;
     rel = lxb_dom_interface_element(root);
     tag = lxb_dom_element_local_name(rel, &taglen);
     if (root->ns != LXB_NS_HTML || taglen != 4 || memcmp(tag, "html", 4) != 0) return false;
@@ -109,6 +112,11 @@ bool scroll_container_content_clip_is(lxb_dom_element_t *el)
     DCHECK(el != NULL, "CSSOM VIEW's content-clip question was asked with no element");
     /* A content clip is a box's; an element that generates none clips nothing. */
     if (!element_view_has_box(lxb_dom_interface_node(el))) return false;
+    /* css-contain-2 §3.5 "Paint Containment": "The contents of the element including any ink or scrollable
+       overflow must be clipped to the overflow clip edge of the paint containment box", which its Note states
+       as `visible` becoming `clip` at used-value time. It is a separate effect from §3.1.4's propagation, so it
+       is asked first and holds on the propagating element too. */
+    if (containment_paint(el)) return true;
     /* §3.1.4: the propagating element "must then have a used overflow value of visible", so it clips nothing
        and the viewport clips instead. `overflow-x: hidden` on `html` or `body` is common, and reading the
        computed value would report a clip on the root or body of those pages. */
