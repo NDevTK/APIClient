@@ -11,6 +11,7 @@
 #include "solver/world.h"
 #include "solver/metrics.h"
 #include "core/crypto/aes.h"
+#include "core/intl/intl_host.h"
 #include "core/crypto/aes_gcm.h"
 #include "core/crypto/hmac.h"
 #include "core/crypto/secure_hash.h"
@@ -1100,6 +1101,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/svgelement.h"
 #include "fixture/typefacet.h"
 #include "fixture/windowthis.h"
+#include "fixture/intl.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1537,6 +1539,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "svgelement", HTML_SVGELEMENT },
     { "typefacet", HTML_TYPEFACET },
     { "windowthis", HTML_WINDOWTHIS },
+    { "intl", HTML_INTL },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -13909,6 +13912,26 @@ TF_UNIT void probes_windowthis(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `intl` document. */
+TF_UNIT void probes_intl(const char *js, Probe *tab, int *n) {
+    static const struct { const char *p, *v, *why; } TZ[] = {
+        { "off", "0", "ECMAScript §21.4.1.25 LocalTime: getTimezoneOffset is not the pinned UTC zone's 0" },
+        { "h", "3", "ECMAScript §21.4.1.25 LocalTime: getHours is not the UTC hour of the time value" },
+        { "m", "4", "ECMAScript §21.4.1.25 LocalTime: getMinutes is not the UTC minute of the time value" },
+        { "set", "1704164400000", "ECMAScript §21.4.1.26 UTC ( t ): a local-time constructor is not UTC's time" },
+    };
+    const char *tz_why = NULL; int tz_tt = 1;
+    size_t i;
+    fold_row(&tz_tt, &tz_why, !!strstr(js, "\"/api/intltz\""),
+             "NOT REACHED: there is no /api/intltz record at all — the script threw before its fetch");
+    for (i = 0; i < sizeof TZ / sizeof TZ[0]; i++)
+        fold_row(&tz_tt, &tz_why, param_value_only(js, "/api/intltz", TZ[i].p, TZ[i].v), TZ[i].why);
+    const Probe rows[] = {
+        { "intl-local-time", tz_tt, "/api/intltz", SESS_EXPLORE, tz_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `contentsflex` document. */
 TF_UNIT void probes_contentsflex(const char *js, Probe *tab, int *n) {
     /* css-display-3 §2.5's `contents` splice makes `cf` an item of the flex container, and css-flexbox-1 §9.2
@@ -17486,6 +17509,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
+    probes_intl(js, probes, &np);
     probes_custommedia(js, probes, &np);
     probes_visualupdate(js, probes, &np);
     probes_windowclose(js, probes, &np);
@@ -31050,6 +31074,15 @@ int main(int argc, char **argv) {
     /* The exploring session's documents, one name per line, for a driver that runs each as its own process. */
     if (arg_has(argc, argv, "--list-docs")) {
         for (size_t di = 0; di < COUNTOF(TF_DOCS); di++) printf("%s\n", TF_DOCS[di].name);
+        return 0;
+    }
+    /* The Intl host's data versions, which engine/build.mjs stamps on this artifact. */
+    if (arg_has(argc, argv, "--intl-host")) {
+        IntlHostRequest req = { .op = INTL_OP_DATA_VERSION };
+        char *answer = intl_host_call(&req);
+
+        printf("%s\n", answer);
+        free(answer);
         return 0;
     }
     css_var_selftest();        /* css-variables-1 §3's substitution — no runtime, no tree, no realm */

@@ -3455,6 +3455,11 @@ JS_EXTERN const char *JS_FlowScriptForbidden(JSContext *ctx, JSValue *flow);
 JS_EXTERN const char *JS_ParkedFlowsScriptForbidden(JSContext *ctx);
 /* if can_block is true, Atomics.wait() can be used */
 JS_EXTERN void JS_SetCanBlock(JSRuntime *rt, bool can_block);
+/* The system time zone's offset for Date's local time (ECMAScript §21.4.1.25 LocalTime): minutes of UTC minus
+   local time at `time_ms` ms from the epoch, as Date.prototype.getTimezoneOffset answers. Process-wide, and
+   required before any script reads local time. */
+typedef int JSLocalTimeZoneOffsetFunc(int64_t time_ms);
+JS_EXTERN void JS_SetLocalTimeZoneOffsetFunc(JSLocalTimeZoneOffsetFunc *fn);
 /* set the [IsHTMLDDA] internal slot */
 JS_EXTERN void JS_SetIsHTMLDDA(JSContext *ctx, JSValueConst obj);
 

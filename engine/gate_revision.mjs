@@ -432,7 +432,13 @@ const stampPath = (artifact) => artifact + STAMP_SUFFIX;
    question a reader cannot ask wrongly; a defaulted one is the plausible datum §Offensive-programming names,
    arriving in the one record that exists to say which program a number belongs to. testing/artifact_stamp.js
    classifies the absence as a third state and takes the same arm for it as for `release`. */
-export function stampArtifact(artifact, cone, assertRegime) {
+/* `environment` is the artifact's answers to the questions ECMAScript leaves to the implementation: the system
+   time zone it pins and the Intl host whose data answers locales, as build.mjs's intlEnvironment reads them. */
+export function stampArtifact(artifact, cone, assertRegime, environment) {
+  if (!environment || typeof environment.systemTimeZone !== "string" || !environment.intlHost ||
+      typeof environment.intlHost.host !== "string")
+    throw new Error(`[rev] stampArtifact was asked to stamp ${artifact} with the environment ` +
+                    `${JSON.stringify(environment)}, which names no system time zone or no Intl host`);
   if (assertRegime !== "dev" && assertRegime !== "release")
     throw new Error(`[rev] stampArtifact was asked to stamp ${artifact} with the assertion regime ` +
                     `${JSON.stringify(assertRegime)}. It is check.h's own two words and nothing else: "dev" ` +
@@ -469,7 +475,7 @@ export function stampArtifact(artifact, cone, assertRegime) {
        removed rather than left holding a tree hash. A stamp written before this diff carries `qjsHead`, and
        readers treat its PRESENCE as dating the artifact to before the subtree merge rather than as a field to
        compare; nothing defaults it, because an absent field is a question that cannot be asked wrongly. */
-    { head: rev.head, branch: rev.branch, assertRegime,
+    { head: rev.head, branch: rev.branch, assertRegime, environment,
       dirty: rev.dirty, unasked: rev.unasked, cone, at: new Date().toISOString() }, null, 1));
   return rev;
 }

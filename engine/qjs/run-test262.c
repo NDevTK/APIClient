@@ -2430,6 +2430,17 @@ char *get_opt_arg(const char *option, char *arg)
     return arg;
 }
 
+/* The harness's system time zone for Date's local time: the operating system's TZ, which main sets to the zone
+   test262's Date tests assume. */
+static int run262_tz_offset(int64_t time_ms)
+{
+    time_t ti = (time_t)(time_ms / 1000);
+    struct tm tm;
+
+    localtime_r(&ti, &tm);
+    return (int)(-tm.tm_gmtoff / 60);
+}
+
 int main(int argc, char **argv)
 {
     ThreadLocalStorage tls_s, *tls = &tls_s;
@@ -2452,6 +2463,7 @@ int main(int argc, char **argv)
     /* Date tests assume California local time */
     setenv("TZ", "America/Los_Angeles", 1);
 #endif
+    JS_SetLocalTimeZoneOffsetFunc(run262_tz_offset);
 
     // minus one to not (over)commit the system completely
     nthreads = cpu_count() - 1;

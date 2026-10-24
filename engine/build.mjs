@@ -28,6 +28,7 @@ import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
 import { objStore, toolIdentity } from "./obj_store.mjs";
 import { cpuText } from "./gate_cpu.mjs";
 import { spawnBudgeted, BUDGET_NOT_INSTALLED } from "./child_run.mjs";
+import { NATIVE_HOST_LIBS } from "./native_libs.mjs";
 
 /* THE INSTANT A SOURCE-DERIVED FACT IS TAKEN AT, AND WHY IT IS THE REVISION'S AND NOT THE READER'S.
  *
@@ -8231,7 +8232,7 @@ async function nativeProgram(kind, dev) {
        host with a real sanitizer. Keeping the weaker check beside the stronger one would be a second gate
        whose only possible contribution is to disagree. */
     ...TO_COMPILE.map((src) => mustObj(compile.objs, src)),
-    LEXBOR_NATIVE, ...san.libs, "-o", bin, "-lm", "-lpthread",
+    LEXBOR_NATIVE, ...san.libs, "-o", bin, ...NATIVE_HOST_LIBS,
   ], { stdio: "inherit" });
   /* A STAGE RATHER THAN A `process.exit`, WHICH IS THE ONE THING THAT CHANGED IN MOVING THIS BODY HERE.
      An exit is a door in front of every stage behind it - this file's own recorded lesson, and the reason
@@ -8280,13 +8281,29 @@ async function nativeProgram(kind, dev) {
      binary this call exists to end — an absent record where a dirty one is the honest statement. A refusal
      becomes meaningful here the day this link writes its output to a staging path and renames it on success,
      and not before. */
-  const rev = stampArtifact(bin, STAMP_CONE, NATIVE_REGIME);
+  const rev = stampArtifact(bin, STAMP_CONE, NATIVE_REGIME, intlEnvironment(nativeIntlHost(bin)));
   /* THE REGIME IS IN THE LINE THAT NAMES THE BINARY, for the reason the wasm install line gives about itself: a
      green line from a program with its invariants compiled out is a SMALLER claim than one from a program with
      them armed, and two claims of different size may not share a spelling. */
   console.log("[build] OK -> " + bin + " (head " + rev.head + ", " + (coneReading(rev) || "clean cone") + ", "
               + NATIVE_REGIME + " asserts; both entries: the fixture, and `--abi` over the shipped qjs_* ABI)");
   return { bin, stage: { label: "native link (" + target + ")", verdict: "PASS", code: 0, kind: null } };
+}
+
+/* The environment pins an artifact answers ECMAScript's implementation-defined questions with, read from the one
+   header that states them (core/intl/intl_environment.h), beside the Intl host whose data answers the rest. */
+function intlEnvironment(intlHost) {
+  const header = readFileSync(join(HOST, "browser", "core", "intl", "intl_environment.h"), "utf8");
+  const zone = /^#define INTL_SYSTEM_TIME_ZONE "([^"]+)"$/m.exec(header);
+  if (!zone) throw new Error("[build] core/intl/intl_environment.h states no INTL_SYSTEM_TIME_ZONE");
+  return { systemTimeZone: zone[1], intlHost };
+}
+/* The native artifact's Intl host data, as the artifact itself states it. */
+function nativeIntlHost(bin) {
+  const r = spawnSync(bin, ["--intl-host"], { encoding: "utf8" });
+  if (r.status !== 0)
+    throw new Error("[build] " + bin + " --intl-host exited " + r.status + " (" + r.signal + "): " + r.stderr);
+  return JSON.parse(r.stdout).ok;
 }
 
 const NATIVE = process.argv.includes("native");
@@ -8747,7 +8764,9 @@ if (ABI_LINK.code === 0) {
      below, whose own comment states the consequence — so a stamp that named the run rather than the artifact
      would be false of one of them. It is derived from the flag list that compiled these objects, never from
      argv: see `regimeOf`. */
-  const rev = stampArtifact(stageArtifact, STAMP_CONE, WASM_REGIME);
+  /* The wasm's Intl data is the V8 of whichever frame instantiates it, which no build can name. */
+  const rev = stampArtifact(stageArtifact, STAMP_CONE, WASM_REGIME,
+                            intlEnvironment({ host: "v8 of the instantiating frame", icu: null, cldr: null, tz: null }));
   /* THE SAME READING THE NATIVE LINK PRINTS, through `coneReading` rather than restated here — see its own
      header for why one fact may not have two spellings when one of them is a DECISION. */
   const why = coneReading(rev);

@@ -23,6 +23,7 @@ import { tmpdir, cpus, loadavg } from "node:os";
 import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 import { lexborNativeArchive } from "./lexbor_source.mjs";
 import { childCpuSeconds, childCpuDelta, cpuText } from "./gate_cpu.mjs";
+import { NATIVE_HOST_LIBS } from "./native_libs.mjs";
 
 function walk(dir) {
   const out = [];
@@ -2438,7 +2439,7 @@ const cc = spawnSync("clang", ["-O1", "-Wno-unknown-warning-option", "-Wno-unuse
   "-DAPICLIENT_DEV=1", "-DENABLE_DUMPS",
   "-I" + join(ENGINE, "qjs"), "-I" + join(ENGINE, "host"), "-I" + join(ENGINE, "host", "browser"),
   "-I" + join(LEXBOR_SRC, "source"),
-  ...SRCS, LEXBOR_LIB, "-o", bin, "-lm", "-lpthread"], { encoding: "utf8" });
+  ...SRCS, LEXBOR_LIB, "-o", bin, ...NATIVE_HOST_LIBS], { encoding: "utf8" });
 if (cc.status !== 0) { console.error("[wpt] runner build FAILED\n" + (cc.stderr || "")); process.exit(1); }
 
 

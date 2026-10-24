@@ -8,6 +8,7 @@
 #include "core/canvas/image_data.h"
 #include "core/canvas/path_2d.h"
 #include "core/console/console.h"
+#include "core/intl/system_time_zone.h"
 #include "core/crypto/crypto.h"
 #include "core/css/css_keyword_value.h"
 #include "core/css/css_length.h"
@@ -170,6 +171,7 @@ typedef struct {
 /* ---- the agent half ------------------------------------------------------------------------------------- */
 
 static void d_console(JSContext *c, const PlatformAgent *a) { (void)a; console_init(c); }
+static void d_system_time_zone(JSContext *c, const PlatformAgent *a) { (void)a; system_time_zone_init(c); }
 static void d_css_namespace(JSContext *c, const PlatformAgent *a) { (void)a; css_namespace_init(c); }
 static void d_css_numeric_value(JSContext *c, const PlatformAgent *a) { (void)a; css_numeric_value_init(c); }
 static void d_css_keyword_value(JSContext *c, const PlatformAgent *a) { (void)a; css_keyword_value_init(c); }
@@ -614,6 +616,9 @@ static const PlatformComponent PLATFORM[] = {
        row: its install reads the event loop's virtual clock, built in the declare pass, which finishes before the
        first realm's intrinsics begin. */
     { "hr_time",             d_hr_time,             NULL,        r_hr_time },
+    /* ECMAScript §21.4.1.24 SystemTimeZoneIdentifier ( ): Date's local time is the pinned zone, answered by the
+       Intl host, before any realm runs script. It holds no agent state, so it releases nothing. */
+    { "system_time_zone",    d_system_time_zone,    NULL,        NULL },
     /* Console §1. §1.4's timer table reads HR-TIME §4's current high resolution time, so it follows `hr_time`;
        no other row touches the console namespace, and every later row may call it. The namespace goes on the
        global through a realm intrinsic, so a child navigable gets its own count map, group stack and timer table. */

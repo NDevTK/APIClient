@@ -1526,6 +1526,9 @@ char *result_cold_json(void) {
         METRIC_SET(tw_css_parse_spans, tw.spans[THREAD_WORK_CSS_PARSE]);
         METRIC_SET(tw_css_parse_bytes, (long long)tw.bytes[THREAD_WORK_CSS_PARSE]);
         METRIC_SET(tw_css_parse_us, tw.cpu_us[THREAD_WORK_CSS_PARSE]);
+        METRIC_SET(tw_intl_spans, tw.spans[THREAD_WORK_INTL]);
+        METRIC_SET(tw_intl_bytes, (long long)tw.bytes[THREAD_WORK_INTL]);
+        METRIC_SET(tw_intl_us, tw.cpu_us[THREAD_WORK_INTL]);
     }
     METRIC_SET_OBJECT(step_unit_overruns, over);
     METRIC_SET_OBJECT(step_unit_overrun_seamless_arms, seam);

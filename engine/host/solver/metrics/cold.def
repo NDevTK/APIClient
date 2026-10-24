@@ -308,6 +308,9 @@ METRIC(tw_html_parse_us, "twHtmlParseUs", LIFETIME, "us", PROCESS, "core/timing/
 METRIC(tw_css_parse_spans, "twCssParseSpans", LIFETIME, "span", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_css_parse_bytes, "twCssParseBytes", LIFETIME, "byte", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_css_parse_us, "twCssParseUs", LIFETIME, "us", PROCESS, "core/timing/thread_work.c", INT)
+METRIC(tw_intl_spans, "twIntlSpans", LIFETIME, "span", PROCESS, "core/timing/thread_work.c", INT)
+METRIC(tw_intl_bytes, "twIntlBytes", LIFETIME, "byte", PROCESS, "core/timing/thread_work.c", INT)
+METRIC(tw_intl_us, "twIntlUs", LIFETIME, "us", PROCESS, "core/timing/thread_work.c", INT)
 /* …and which arm each overrunning turn was in: `stepUnitRuns` restricted to `sliceOverruns`'
    turns. An arm whose two counts are equal is a step that cannot rest (solver/engine.h's
    `over_arms`). */

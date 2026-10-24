@@ -105356,57 +105356,21 @@ static const JSCFunctionListEntry js_math_obj[] = {
 
 /* Date */
 
-/* OS dependent. d = argv[0] is in ms from 1970. Return the difference
-   between UTC time and local time 'd' in minutes */
+/* ECMAScript §21.4.1.25 LocalTime ( tv )'s offset, in minutes of UTC minus local time at `time` ms from the
+   epoch: the system time zone of §21.4.1.24 SystemTimeZoneIdentifier ( ) is the embedder's to state, so the
+   embedder answers it, and Date never reads the operating system's zone. */
+static JSLocalTimeZoneOffsetFunc *g_local_tz_offset;
+
+void JS_SetLocalTimeZoneOffsetFunc(JSLocalTimeZoneOffsetFunc *fn)
+{
+    g_local_tz_offset = fn;
+}
+
 static int getTimezoneOffset(int64_t time) {
-#if defined(_WIN32)
-    DWORD r;
-    TIME_ZONE_INFORMATION t;
-    r = GetTimeZoneInformation(&t);
-    if (r == TIME_ZONE_ID_INVALID)
-        return 0;
-    if (r == TIME_ZONE_ID_DAYLIGHT)
-         return (int)(t.Bias + t.DaylightBias);
-    return (int)t.Bias;
-#else
-    time_t ti;
-    struct tm tm;
-
-    time /= 1000; /* convert to seconds */
-    if (sizeof(time_t) == 4) {
-        /* on 32-bit systems, we need to clamp the time value to the
-           range of `time_t`. This is better than truncating values to
-           32 bits and hopefully provides the same result as 64-bit
-           implementation of localtime_r.
-         */
-        if ((time_t)-1 < 0) {
-            if (time < INT32_MIN) {
-                time = INT32_MIN;
-            } else if (time > INT32_MAX) {
-                time = INT32_MAX;
-            }
-        } else {
-            if (time < 0) {
-                time = 0;
-            } else if (time > UINT32_MAX) {
-                time = UINT32_MAX;
-            }
-        }
-    }
-    ti = time;
-    localtime_r(&ti, &tm);
-#ifdef NO_TM_GMTOFF
-    struct tm gmt;
-    gmtime_r(&ti, &gmt);
-
-    /* disable DST adjustment on the local tm struct */
-    tm.tm_isdst = 0;
-
-    return (int)difftime(mktime(&gmt), mktime(&tm)) / 60;
-#else
-    return -tm.tm_gmtoff / 60;
-#endif /* NO_TM_GMTOFF */
-#endif
+    CHECK(g_local_tz_offset != NULL,
+          "Date asked for local time before the embedder stated the system time zone: install it with "
+          "JS_SetLocalTimeZoneOffsetFunc before any realm runs script");
+    return g_local_tz_offset(time);
 }
 
 /* RegExp */
