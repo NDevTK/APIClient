@@ -10749,10 +10749,10 @@ TF_UNIT void probes_isolation_operands_sort(const char *js, Probe *tab, int *n) 
                  "census's own bound beside this row; raise DECIDE_FORK_KEYS to resolve it");
         fold_row(&bootfork_tt, &bootfork_why, resident,
                  "the branch FORKED and its question was never SPELLED: `state.admin` is absent from the "
-                 "predicate table and present in the unnamed-site one, so decide_branch took its `else` arm, "
-                 "recorded no constraint and handed the sibling its arm one-shot. §Boot's gate is not "
-                 "concretized — but it claims no replay slot, so it re-forks at every reach and no resumed "
-                 "flow can re-ask it. That is an identity concolic.c could not spell for `state.admin`, "
+                 "predicate table and present in the unnamed-site one, so decide_branch took its `else` arm "
+                 "and recorded no constraint. §Boot's gate is not concretized — but with no constraint it "
+                 "re-forks at every reach and a resumed flow replays it only by its code-site slot. That is "
+                 "an identity concolic.c could not spell for `state.admin`, "
                  "which every other row of this family depends on");
         /* RESIDUAL. WHAT IS NOT COVERED: `BOUND` and the `~`/`{}` of the site needle are decide.c's and
            absent.c's literals RESTATED here, which is the second copy of a fact those files own — the same

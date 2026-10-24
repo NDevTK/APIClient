@@ -568,8 +568,8 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            substitute. A name lets concolic_branch_decided collapse a repeated question; N distinct named
            operands still owe N questions. */
         /* Named residual. Not covered: a page-minted `Symbol("x")`, arrays, and the exotic-state classes (Map,
-           Set, Promise), which have no site composer; a branch over one records no constraint, claims no replay
-           slot and re-forks every time. (`{}` and `Object.create(null)` are named.) Next diff: a site composer
+           Set, Promise), which have no site composer; a branch over one records no constraint and re-forks
+           every time. (`{}` and `Object.create(null)` are named.) Next diff: a site composer
            for `Symbol("x")`, an atom above JS_ATOM_END that costs no object a byte; arrays need a site and
            ordinal beside `u.array.count`, which widens every JSObject on a 32-bit build. How its absence shows:
            a rendered shape with `?` at an operand position and a `~` site row climbing while `replayHits` stays

@@ -4492,8 +4492,8 @@ static void node_byid_visit(JSContext *ctx, void *st, JSStepVisit *v)
  * and fork for ever. THIS WALK HAS NO RE-ASK. One predicate per node, and both arms end that node's question —
  * IS returns the element and IS NOT advances the cursor — so there is nothing to grant and nothing to loop.
  * What the solver does with an unspellable operand is then exactly what is wanted: decide.h states that such
- * an outcome walk "keeps BOTH arms, records no constraint and claims no replay slot", and decide.c files a SITE
- * row and hands the sibling its arm directly. Refusing here would take ONE arm and delete the other, which is
+ * an outcome walk "keeps BOTH arms and records no constraint", and decide.c files a SITE row and keys the
+ * replay slot by the walk's code site. Refusing here would take ONE arm and delete the other, which is
  * strictly worse than over-exploring, so the refusal is not owed and is not made.
  *
  * IT ASSERTS NOTHING ABOUT THE VALUE'S CONTENT. An `id` attribute's bytes are the PAGE'S, and §WHOSE-BYTES-

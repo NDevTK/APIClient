@@ -1033,17 +1033,18 @@ static int park_rows_equal(const Flow *a, const Flow *b)
     return eq;
 }
 
-/* A drive already written into this park that is the same drive as `f`: the same body on the same path, in the
-   same sending timelines and owing the same messages, which is everything its records say. Asked of the members
-   still in the registry, so a drive a partial park sold before this one is not compared. */
-static const Flow *park_same_drive_written(const Flow *f)
+/* A flow already written into this park whose records say what `f`'s will: the same drive chain (none for a
+   flow that drives nothing), on the same path, in the same sending timelines and owing the same messages. Asked
+   of the members still in the registry, so a flow a partial park sold before this one is not compared. */
+static const Flow *park_same_recipe_written(const Flow *f)
 {
     const Flow *g;
     int i;
 
     for (i = 0; (g = flow_at(i)) != NULL; i++)
-        if (g != f && g->paged && g->orphan && g->orphan_chain_n == f->orphan_chain_n &&
-            memcmp(g->orphan_chain, f->orphan_chain, (size_t)f->orphan_chain_n * sizeof *f->orphan_chain) == 0 &&
+        if (g != f && g->paged && g->orphan == f->orphan && g->orphan_chain_n == f->orphan_chain_n &&
+            (!f->orphan_chain_n ||
+             memcmp(g->orphan_chain, f->orphan_chain, (size_t)f->orphan_chain_n * sizeof *f->orphan_chain) == 0) &&
             park_kind_of(g) == PARK_KIND_FLOW && park_path_equal(g, f) && park_rows_equal(g, f))
             return g;
     return NULL;
@@ -1423,18 +1424,18 @@ void cold_park_flow(Flow *f)
         break;
     case PARK_KIND_FLOW:
 #if APICLIENT_DEV
-        /* A drive is its path and its body, so two records with both equal are one drive written twice: each
-           resumes as a claimant that re-runs the same path to the same call. */
-        if (f->orphan) {
-            const Flow *twin = park_same_drive_written(f);
-            char loc[17];
+        /* A record is a recipe, so two records with equal recipes are one flow written twice: each resumes and
+           re-runs the same path, a drive to the same call. */
+        {
+            const Flow *twin = park_same_recipe_written(f);
+            char loc[17] = "-";
 
-            park_orphan_hex(f->orphan_chain[f->orphan_chain_n - 1], loc);
+            if (f->orphan_chain_n) park_orphan_hex(f->orphan_chain[f->orphan_chain_n - 1], loc);
             DCHECKF(twin == NULL,
-                    "the park document already holds a chain of %d drive(s) ending in body o%s on this flow's path "
-                    "(chain %ld, cursor %d) with the same %d commitment(s) and %d undelivered message(s) — two "
-                    "records that say the same thing resume as two claimants of one drive. This one is waiting "
-                    "%d, driving %d; the one written first is waiting %d, driving %d",
+                    "the park document already holds a record of a chain of %d drive(s) ending in body o%s on this "
+                    "flow's path (chain %ld, cursor %d) with the same %d commitment(s) and %d undelivered "
+                    "message(s) — two records that say the same thing resume as two copies of one flow. This one "
+                    "is waiting %d, driving %d; the one written first is waiting %d, driving %d",
                     f->orphan_chain_n, loc, id, f->dec_blob ? decide_blob_cursor(f->dec_blob) : -1,
                     flow_world_commits(f),
                     flow_deliver_pending(f), f->orphan_want, !JS_IsUndefined(f->fn),

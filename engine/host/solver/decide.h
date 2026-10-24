@@ -224,10 +224,10 @@ int  decide_cursor(void);
    everything derived from it unspellable too. An INTRINSIC is not in that population: it is a singleton of its
    realm, so JS_IntrinsicName names it by the slot it occupies and a branch over it composes a real key. What
    is left here is the PAGE-CREATED object, which needs its creation site AND the creating flow's count of
-   prior creations there. Such a branch, and such an outcome walk, keeps BOTH arms, records no constraint and
-   claims no replay slot, and it had exactly ONE hand-written row for all of it. That is a row naming an
-   action with no object, in the one table whose whole job is to say WHERE, and it can be the largest thing
-   in the object.
+   prior creations there. Such a branch, and such an outcome walk, keeps BOTH arms and records no constraint;
+   its replay slot is keyed by its code site (decide.c's dec_site_hash). One hand-written row for all of it
+   would name an action with no object, in the one table whose whole job is to say WHERE, and it can be the
+   largest thing in the object.
    ITS KEY IS THE VALUE'S OWN DISPLAY SHAPE AND IT ANSWERS "WHERE", NEVER "WHAT". A shape is always present
    (the mint copies `{}` for a value handed none), it is composed from PROGRAM FACTS and carries no address —
    so it names the same thing on the flow that minted it, on the flow that resumes it from the cold tier and in
@@ -235,15 +235,8 @@ int  decide_cursor(void);
    renders `?` at exactly the operand whose identity went absent, so a row merges precisely what this engine
    cannot tell apart. It is NEVER a constraint key: filing a shape there would let one flow's `a[x]` decide
    another flow's `b[x]`, and concolic.c prices that in one line beside the field itself: "Absence costs
-   forks; a wrong identity costs the arm." So the reporting address exists and the replay slot stays absent, which is the honest pair rather
-   than a compromise between them.
-   AND "STAYS ABSENT" IS A CHECKED FACT AND NOT A DESCRIPTION, WHICH IT HAD TO BECOME BECAUSE IT WAS FALSE.
-   These two sentences said a branch in this population claims no replay slot; decide.c's fork recorded one
-   anyway, under the hash's REFUSAL value, and every such slot therefore agreed with every other — so the
-   replay over exactly this population was positional, a diverged resume consumed another branch's arm, and
-   the replay ledger below scored that as a HIT. The contract was right and the code was not, and the contract
-   is what stopped anyone looking. dec_append asserts it now: a slot may not carry the refusal, so a fork with
-   no spellable question records nothing and hands its sibling the arm as a one-shot on the blob instead.
+   forks; a wrong identity costs the arm." The replay slot is keyed by the branch's code site and this shape
+   together, which claims no predicate: it records which arm the schedule took at a code location.
    READING IT: these rows are floors on their own admitted table, with their own overflow row and their own
    bound, because Space-Saving's guarantee is about the table that did the evicting and one number over two
    tables would answer each table's question with the other's fact. A large site row is a statement about which
@@ -321,14 +314,11 @@ long  decide_fork_total(void);
  * every one of them published `resumed`/`resumedSegs`/`resumedFlows`/`resumedCands` IDENTICAL to a session that
  * replayed every arm. Those four say what the DOCUMENT HELD; these three say what the REPLAY DID WITH IT.
  *
- * SCOPE: every slot a replay consumes carries a question a later run can re-ask — decide.c's dec_append
- * refuses dec_key_hash's refusal value, and a branch with no spellable question records no slot at all — so
- * `hits` is a count over ONE population and the claim above holds of all of it. It used to hold of the spelled
- * slots only: an unspellable branch recorded a slot under the refusal, every such slot agreed with every
- * other, and a diverged replay consuming one was counted HERE as agreement while `left` reported nothing. A
- * reader quoting these three against a resume was quoting a number whose blind spot was the size of the
- * `_forkAt` census's SITE rows. That is what the scope sentence is for: it is the one property of this ledger
- * that cannot be checked off the emitted numbers.
+ * SCOPE: every slot a replay consumes carries a question a later run can re-ask — a predicate's hash, or for
+ * a branch with no spellable question its code site and subject shape (decide.c's dec_site_hash), and
+ * dec_append refuses a slot with neither. The one population a hit can miscount is decide.c's site-slot
+ * residual: one code site with one subject shape met in swapped order across occurrences agrees with itself.
+ * That is the one property of this ledger that cannot be checked off the emitted numbers.
  * KIND: all three are LIFETIME COUNTS over the SESSION, released with it (decide_free), monotone within one,
  * and therefore differenceable between two samples of ONE session — unlike the `stepUnits` GAUGE beside them
  * in the same census, which states who is standing in an arm at the instant it is taken.
