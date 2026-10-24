@@ -18335,6 +18335,19 @@ static int fixture_have_answers(void) {
  * folded row could not say which of those three a 0 was about. The last of them is the one a per-flow hand-back
  * would fail. The `dyn_token` half is named where its row is. */
 static int g_cold_moment, g_op_asked, g_post_routed;
+/* The host's consultations of fixture_want_park, counted, and the one the peer's question was asked at, so the
+   park's consultation can be asserted to come strictly after a slice has run since the ask. */
+static long g_park_consults, g_op_asked_at;
+
+/* The ask's half of the moment: every conjunct of fixture_cold_moment except a standing drive. The question is
+   asked at the first consultation this holds, so that the park, taken at a later consultation that also stands at
+   a drive, comes after a slice in which flow_perform could take the question up. */
+static int fixture_op_due(void) {
+    ColdPreview would;
+
+    cold_park_preview(&would);
+    return would.deepcands > 0 && would.commits > 0;
+}
 
 static int fixture_cold_moment(void) {
     ColdPreview would;
@@ -18375,7 +18388,7 @@ static int fixture_cold_moment(void) {
            so no fourth conjunct is owed. `commits > 0` stays: a commitment row is never removed and every fork
            inherits its parent's (flow_world_commit_fork), so it is monotone over the descendants of whatever was
            live when the post was routed. */
-        g_cold_moment = would.deepcands > 0 && would.orphans > 0 && would.commits > 0;
+        g_cold_moment = g_op_asked && would.deepcands > 0 && would.orphans > 0 && would.commits > 0;
     }
     return g_cold_moment;
 }
@@ -18606,32 +18619,26 @@ static int fixture_want_park(void) {
        a second read-only entry at all (fixture_cold_moment_met) — so `previewAsks` is a function of how often
        this host consults, and the payment's own paragraph quotes that figure as a MEASUREMENT. One call, and
        the assert below reads the flag the ask sets rather than asking the tier a second time. */
+    g_park_consults++;
+    /* The question first, at the first consultation the moment's other conjuncts hold; the moment itself, a
+       standing drive included, is latched only at a later one, and the park is taken there. A drive lives for as
+       little as one slice, so a moment latched here and parked one consultation later can stand at a drive the
+       park no longer meets. One preview per consultation either way. */
+    if (!g_op_asked) {
+        if (fixture_op_due()) {
+            fixture_ask_remote_op(g_probe_ctx);
+            g_op_asked_at = g_park_consults;
+        }
+        return 0;
+    }
     if (!fixture_cold_moment()) return 0;
-    /* AND THE PEER'S QUESTION AND THE PARK REQUEST ARE ONE ORDERED PAIR, SPELLED AS THIS FUNCTION'S OWN
-       CONTROL FLOW. They must happen in one order — the question ATTACHED, then a slice run so a member can
-       convert it to a program row, then the park requested — and until this diff that order was held by two
-       statics and two DCHECKs across two functions, either of which could be written first.
-       IT IS STRUCTURAL NOW AND THE ARGUMENT IS SHORT: `g_op_asked` is set by fixture_ask_remote_op and by
-       nothing else, and the ONE call site is the line below, which RETURNS. So `return 1` is reachable only
-       on a LATER consultation than the ask, a consultation is what a slice lies between, and there is no
-       spelling of this function that requests the park without a slice having run since the question was
-       attached. That is the state made impossible rather than merely asserted.
-       AND THE ASSERT THAT GUARDED IT IS DELETED WITH IT, WHICH IS THE POINT AND NOT A TIDY-UP. It read
-       `DCHECK(g_op_asked, …)` — the cold park is being requested and no cross-agent operation has been asked
-       of this frontier — and its condition is one this file can no longer construct, so it had become an
-       assert whose two sides cannot disagree: a NON-check wearing the syntax of a check, certifying an order
-       it no longer examines. Its reasoning is kept here because a reader who re-derives it will re-add it.
-       IT NAMED A MOMENT LATCHING AT THIS HOOK AS THE FAILURE, and that is exactly what happens now and is no
-       longer a failure. The paragraph above this function argued the conjunction can only be taken at a
-       PAYMENT, so a latch HERE would request the park in the SAME iteration and the payment that asked would
-       never run. The premise was a host with TWO consultation sites; the payment no longer consults, so this
-       is the only one and it latches here — and the latch does not request the park, it ASKS and returns 0.
-       The iteration the old argument feared is the iteration this function now spends opening the window.
-       THE FRONTIER IS THE SAME ONE THE ASK USED TO SEE, which is what keeps the three rungs reading 1: the
-       payment that used to latch and this hook are one consultation apart with NO step between them, so the
-       set of live timelines engine_perform attaches to is identical. The ask moved in the LOOP and not in
-       the FRONTIER. */
-    if (!g_op_asked) { fixture_ask_remote_op(g_probe_ctx); return 0; }
+    DCHECKF(g_park_consults > g_op_asked_at,
+            "the cold park is about to be requested at consultation %ld and the peer's question was asked at %ld — "
+            "park-remoteop reads a token a slice converted after the ask, so the park must come at a later "
+            "consultation than the ask", g_park_consults, g_op_asked_at);
+    /* The question attached, then at least one slice for a member to convert it to a program row, then the park:
+       `g_op_asked` is set only on the ask's consultation, which returns, so a park is requested only at a later
+       one, and the DCHECK above states it against the two counts. */
     return 1;
 }
 
