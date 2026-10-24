@@ -1111,6 +1111,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
+#include "fixture/flagflow.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1566,6 +1567,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
+    { "flagflow", HTML_FLAGFLOW },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -14257,6 +14259,79 @@ TF_UNIT void probes_boundpark(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The source identity of the first @S record at `sink` whose source contains `root`, copied as the result
+   document spells it (JSON-escaped) into `out`, or 0 when no such record exists. A derived source's identity
+   is composed by solver/concolic.c, so a row names its root and reads the composition off the run. */
+static int s_rooted_source(const char *js, const char *sink, const char *root, char *out, size_t cap) {
+    char pat[96];
+    const char *e, *q;
+    int k = snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"", sink);
+
+    CHECK(k > 0 && (size_t)k < sizeof pat, "an @S sink pattern did not fit its buffer");
+    for (e = strstr(js, pat); e; e = strstr(e + 1, pat)) {
+        const char *b = e + k;
+        for (q = b; *q && *q != '"'; q++)
+            if (*q == '\\' && q[1]) q++;
+        CHECK(*q == '"', "an @S record's source string is not terminated");
+        if ((size_t)(q - b) < cap && memmem(b, (size_t)(q - b), root, strlen(root))) {
+            memcpy(out, b, (size_t)(q - b));
+            out[q - b] = 0;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Whether the @S record at (`sink`, `src`) names `first` and, after it, `second`: the acts a reproduction must
+   perform in order, read by the handlers' own names because the record spells no step list of its own. */
+static int s_names_in_order(const char *js, const char *sink, const char *src, const char *first,
+                            const char *second) {
+    size_t span;
+    const char *e = s_record(js, sink, src, &span), *a;
+
+    if (!e) return 0;
+    a = memmem(e, span, first, strlen(first));
+    return a && memmem(a + strlen(first), span - (size_t)(a + strlen(first) - e), second, strlen(second));
+}
+
+/* The rows of the `flagflow` document (fixture/flagflow.h). */
+TF_UNIT void probes_flagflow(const char *js, Probe *tab, int *n) {
+    char src[192] = "";
+    int has_src = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, src, sizeof src);
+    int st = has_src ? s_stage(js, "innerHTML", src) : S_UNSEEN;
+    const char *fa_why = NULL; int fa_tt = 1;
+    fold_row(&fa_tt, &fa_why, !!strstr(js, "\"/api/ffa-armed\""),
+             "NOT REACHED: there is no /api/ffa-armed record, so handler A was never driven");
+    const char *fb_why = NULL; int fb_tt = 1;
+    fold_row(&fb_tt, &fb_why, !!strstr(js, "\"/api/ffb-armed\""),
+             "NOT REACHED: there is no /api/ffb-armed record, so handler B was never driven in a world where "
+             "handler A had already run");
+    const char *fu_why = NULL; int fu_tt = 1;
+    fold_row(&fu_tt, &fu_why, !!strstr(js, "\"/api/ffb-unarmed\""),
+             "NOT REACHED: there is no /api/ffb-unarmed record, so handler B was never driven in a world without "
+             "handler A");
+    const char *fs_why = NULL; int fs_tt = 1;
+    fold_row(&fs_tt, &fs_why, has_src,
+             "NOT REACHED: no innerHTML @S record carries a source rooted in location.hash, so the write in "
+             "handler B was never reached tainted");
+    const char *fp_why = NULL; int fp_tt = 1;
+    fold_row(&fp_tt, &fp_why, st == S_FIRED,
+             "the innerHTML <- location.hash search did not fire a PoC");
+    fold_row(&fp_tt, &fp_why, has_src && s_field(js, "innerHTML", src, "\"deliveryPrefix\":\"#\""),
+             "the PoC does not state its fragment delivery");
+    fold_row(&fp_tt, &fp_why, has_src && s_names_in_order(js, "innerHTML", src, "ffArmClick", "ffFireClick"),
+             "the PoC does not name the click on handler A followed by the click on handler B, so it cannot be "
+             "reproduced by delivering the fragment alone");
+    const Probe rows[] = {
+        { "ff-a-driven", fa_tt, "/api/ffa-armed", SESS_EXPLORE, fa_why },
+        { "ff-b-after-a", fb_tt, "/api/ffb-armed", SESS_EXPLORE, fb_why },
+        { "ff-b-without-a", fu_tt, "/api/ffb-unarmed", SESS_EXPLORE, fu_why },
+        { "ff-sink", fs_tt, "ffOut", SESS_EXPLORE, fs_why },
+        { "ff-poc", fp_tt, "ffFireClick", SESS_EXPLORE, fp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18064,6 +18139,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_importchain(js, probes, &np);
     probes_borrowedkey(js, probes, &np);
     probes_boundpark(js, probes, &np);
+    probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_deepnest(js, probes, &np);
     probes_contain(js, probes, &np);
