@@ -9173,6 +9173,11 @@ STAGES.push(onHost(runProgram("classic-script global scope audit", [join(ENGINE,
                        "two scripts that share one global scope bind one name, and the line names both. Rename " +
                        "one. Exit 2 means the audit's own control failed or a script could not be read, so " +
                        "nothing was judged."), STAGE_HOST.SOURCE));
+/* A DCHECK condition that writes what the code after it reads, which a release build does not evaluate. It
+   reads the sources only, so it is a source stage. */
+STAGES.push(onHost(runProgram("release-elided assert write audit", [join(ENGINE, "dcheckgate.mjs")],
+                       "the read inside the assert happens only in a dev build. Make the call a statement and " +
+                       "assert its result."), STAGE_HOST.SOURCE));
 /* Every recursive cycle in the native engine's direct-call graph, which is C-stack recursion a flow cannot park
    inside. It reads the binary this build linked, so it is a native stage. */
 if (NATIVE_BUILT.bin !== null)
