@@ -28613,41 +28613,153 @@ static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f)
 }
 
 
-typedef struct JSGetProp {
-    JSValue target;      /* the proxy's [[Target]], for the invariant (owned); UNDEFINED for an accessor */
-    JSAtom atom;         /* the key (owned) */
-    JSValue value;       /* GP_SET: the value written, which 10.5.9 step 11's invariant is a SameValue against
-                            (owned). GP_DEFINE: the descriptor's [[Value]]. UNDEFINED for the reads. */
-    JSValue getter, setter;  /* GP_DEFINE's remaining descriptor fields (owned), so the invariant that runs on the
-                                trap's result sees the SAME descriptor the trap was given. */
-    int dflags;              /* GP_DEFINE's JS_PROP_HAS_* / attribute bits, likewise. */
-    void *outer; uint8_t outer_kind;
-    uint8_t op;          /* GP_GET / GP_HAS / GP_SET — step codes 6, 7 and 8. They differ only in which trap runs,
-                            which invariant its result must satisfy and what the machine is handed back; everything
-                            else about the request, the dispatch, the delivery and the unwind is identical, which is
-                            why they are one continuation and not three. */
-    JSValue recv;        /* the RECEIVER of a [[Get]]/[[Set]] (owned), UNINITIALIZED when it is the object itself.
-                            It is a separate operand in the spec — `Reflect.get(t, k, r)` reads t's accessor with
-                            r as `this` and hands r to the trap — and hardcoding it to the object is why the two
-                            Reflect forms could not be expressed as requests at all. */
-    uint8_t no_throw;    /* 1 = yield the BOOLEAN a [[Set]]/[[Delete]] reports instead of throwing on false. The
-                            spec has both forms — Set(O,P,V,true)/DeletePropertyOrThrow for a builtin that must
-                            succeed, and the bare internal method for Reflect — and the request expresses which. */
-    JSDescFacts *desc_out;  /* GP_GETOWNPROP only: where the answer goes, when the requester wants the
-                            DESCRIPTOR RECORD rather than the descriptor OBJECT. The same operation, the same
-                            trap, the same invariant — only the answer's shape differs, which is why this is a
-                            modifier and not a second op, exactly as no_throw is.
-                            It is a RECORD and not a packed result for the reason the CAPABILITY request is
-                            three values: a proxy invariant wants the target's flags AND, depending on them, its
-                            [[Value]] or one of its accessors, and building a descriptor object for the consumer
-                            to take apart again is the engine unpacking a tuple it had just packed.
-                            NULL = answer with the OBJECT, which is what Object.getOwnPropertyDescriptor and the
-                            enumerability walks take. */
-    uint8_t nargs;
-    JSValue cb[6];       /* [this, fn, args…] — OWNED here, never on the caller's compiler-sized stack. The `set`
-                            trap call needs six slots and the frame that invoked the builtin has no obligation to
-                            have room for them; a step machine's cb_args solve this the same way. */
-} JSGetProp;
+static void js_desc_facts_dup(JSDescFacts *f);
+static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
+static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *tab, uint32_t len);
+/* A CONTINUATION RECORD'S DECLARATION. A record a parked chain can hold lists its fields once, each as
+   F(role, type, name), and its struct, its release, its copy and its requester link are all expanded from that
+   one list (CONT_RECORD_DEFINE), so no walk can name a field another walk misses. The roles:
+     OWN_VAL   an owned JSValue: the copy takes a reference, the release drops one;
+     OWN_ATOM  an owned JSAtom, likewise;
+     POD       a plain value of `type`, copied;
+     BORROW    a JSValueConst another owner keeps alive across the record's life, copied and never released;
+     OUTER     the requester link, `void *name` and its kind `uint8_t name##_kind`, at most one per record;
+     DESC_OUT  a JSDescFacts * naming the requester's own record, which tramp_cont_relink_outer re-aims;
+     FACTS     a JSDescFacts held by value, whose three values are owned;
+     PROPS     an owned own-key table, whose length is the field named in `type`;
+     OWN_ARRAY a JSValue array of `type` slots, every one owned (a slot nothing wrote is js_mallocz's 0).
+   Each role defines one macro per walk; a role a walk does not define is a compile error at that walk. */
+#define CONT_REC_MEMBER_OWN_VAL(t, n) JSValue n;
+#define CONT_REC_MEMBER_OWN_ATOM(t, n) JSAtom n;
+#define CONT_REC_MEMBER_POD(t, n) t n;
+#define CONT_REC_MEMBER_BORROW(t, n) JSValueConst n;
+#define CONT_REC_MEMBER_OUTER(t, n) void *n; uint8_t n##_kind;
+#define CONT_REC_MEMBER_DESC_OUT(t, n) JSDescFacts *n;
+#define CONT_REC_MEMBER_FACTS(t, n) JSDescFacts n;
+#define CONT_REC_MEMBER_PROPS(t, n) JSPropertyEnum *n;
+#define CONT_REC_MEMBER_OWN_ARRAY(t, n) JSValue n[t];
+#define CONT_REC_FREE_OWN_VAL(t, n) JS_FreeValue(ctx, r->n);
+#define CONT_REC_FREE_OWN_ATOM(t, n) JS_FreeAtom(ctx, r->n);
+#define CONT_REC_FREE_POD(t, n)
+#define CONT_REC_FREE_BORROW(t, n)
+#define CONT_REC_FREE_OUTER(t, n)
+#define CONT_REC_FREE_DESC_OUT(t, n)
+#define CONT_REC_FREE_FACTS(t, n) js_desc_facts_free(ctx, &r->n);
+#define CONT_REC_FREE_PROPS(t, n) if (r->n) js_free_prop_enum(ctx, r->n, r->t);
+#define CONT_REC_FREE_OWN_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) JS_FreeValue(ctx, r->n[i_]);
+#define CONT_REC_DUP_OWN_VAL(t, n) c->n = js_dup(r->n);
+#define CONT_REC_DUP_OWN_ATOM(t, n) c->n = JS_DupAtom(ctx, r->n);
+#define CONT_REC_DUP_POD(t, n)
+#define CONT_REC_DUP_BORROW(t, n)
+#define CONT_REC_DUP_OUTER(t, n)
+#define CONT_REC_DUP_DESC_OUT(t, n)
+#define CONT_REC_DUP_FACTS(t, n) js_desc_facts_dup(&c->n);
+#define CONT_REC_DUP_PROPS(t, n) if (r->n) { c->n = js_prop_enum_dup(ctx, r->n, r->t); CHECK(c->n != NULL, "OOM copying a parked record's own-key table"); }
+#define CONT_REC_DUP_OWN_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) c->n[i_] = js_dup(r->n[i_]);
+#define CONT_REC_NOUTER_OWN_VAL(t, n) 0
+#define CONT_REC_NOUTER_OWN_ATOM(t, n) 0
+#define CONT_REC_NOUTER_POD(t, n) 0
+#define CONT_REC_NOUTER_BORROW(t, n) 0
+#define CONT_REC_NOUTER_OUTER(t, n) 1
+#define CONT_REC_NOUTER_DESC_OUT(t, n) 0
+#define CONT_REC_NOUTER_FACTS(t, n) 0
+#define CONT_REC_NOUTER_PROPS(t, n) 0
+#define CONT_REC_NOUTER_OWN_ARRAY(t, n) 0
+#define CONT_REC_OUTER_GET_OWN_VAL(t, n)
+#define CONT_REC_OUTER_GET_OWN_ATOM(t, n)
+#define CONT_REC_OUTER_GET_POD(t, n)
+#define CONT_REC_OUTER_GET_BORROW(t, n)
+#define CONT_REC_OUTER_GET_OUTER(t, n) *out_kind = r->n##_kind; return r->n;
+#define CONT_REC_OUTER_GET_DESC_OUT(t, n)
+#define CONT_REC_OUTER_GET_FACTS(t, n)
+#define CONT_REC_OUTER_GET_PROPS(t, n)
+#define CONT_REC_OUTER_GET_OWN_ARRAY(t, n)
+#define CONT_REC_OUTER_SET_OWN_VAL(t, n)
+#define CONT_REC_OUTER_SET_OWN_ATOM(t, n)
+#define CONT_REC_OUTER_SET_POD(t, n)
+#define CONT_REC_OUTER_SET_BORROW(t, n)
+#define CONT_REC_OUTER_SET_OUTER(t, n) r->n = outer; r->n##_kind = outer_kind; return;
+#define CONT_REC_OUTER_SET_DESC_OUT(t, n)
+#define CONT_REC_OUTER_SET_FACTS(t, n)
+#define CONT_REC_OUTER_SET_PROPS(t, n)
+#define CONT_REC_OUTER_SET_OWN_ARRAY(t, n)
+#define CONT_REC_DESC_OUT_OWN_VAL(t, n)
+#define CONT_REC_DESC_OUT_OWN_ATOM(t, n)
+#define CONT_REC_DESC_OUT_POD(t, n)
+#define CONT_REC_DESC_OUT_BORROW(t, n)
+#define CONT_REC_DESC_OUT_OUTER(t, n)
+#define CONT_REC_DESC_OUT_DESC_OUT(t, n) return &r->n;
+#define CONT_REC_DESC_OUT_FACTS(t, n)
+#define CONT_REC_DESC_OUT_PROPS(t, n)
+#define CONT_REC_DESC_OUT_OWN_ARRAY(t, n)
+#define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
+#define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(t, n)
+#define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(t, n)
+#define CONT_REC_NOUTER(role, t, n)     + CONT_REC_NOUTER_##role(t, n)
+#define CONT_REC_OUTER_GET(role, t, n)  CONT_REC_OUTER_GET_##role(t, n)
+#define CONT_REC_OUTER_SET(role, t, n)  CONT_REC_OUTER_SET_##role(t, n)
+#define CONT_REC_DESC_OUT(role, t, n)   CONT_REC_DESC_OUT_##role(t, n)
+/* The struct `T` and its walks, prefixed `p`: p_free releases the record and what it owns (not its requester);
+   p_clone copies it, taking a reference to everything it owns, with its links still naming the original's
+   (tramp_cont_relink_outer re-binds them); p_outer_get/p_outer_set read and write the requester link (NULL and
+   nothing for a record with none); p_desc_out answers its descriptor-answer slot, or NULL. */
+#define CONT_RECORD_DEFINE(T, p, FIELDS)                                                                       \
+    typedef struct T { FIELDS(CONT_REC_MEMBER) } T;                                                           \
+    _Static_assert(0 FIELDS(CONT_REC_NOUTER) <= 1, #T " declares more than one requester link");             \
+    static void p##_free(JSContext *ctx, T *r)                                                                \
+    {                                                                                                          \
+        FIELDS(CONT_REC_FREE)                                                                                  \
+        js_free_rt(ctx->rt, r);                                                                                \
+    }                                                                                                          \
+    static T *p##_clone(JSContext *ctx, const T *r)                                                           \
+    {                                                                                                          \
+        T *c = js_malloc(ctx, sizeof(*c));                                                                     \
+        if (unlikely(!c))                                                                                      \
+            return NULL;                                                                                       \
+        *c = *r;                                                                                               \
+        FIELDS(CONT_REC_DUP)                                                                                   \
+        return c;                                                                                              \
+    }                                                                                                          \
+    static inline void *p##_outer_get(T *r, uint8_t *out_kind)                                                \
+    {                                                                                                          \
+        FIELDS(CONT_REC_OUTER_GET)                                                                             \
+        *out_kind = CONT_NONE;                                                                                 \
+        return NULL;                                                                                           \
+    }                                                                                                          \
+    static inline void p##_outer_set(T *r, void *outer, uint8_t outer_kind)                                   \
+    {                                                                                                          \
+        FIELDS(CONT_REC_OUTER_SET)                                                                             \
+        DCHECK(outer == NULL, #T " has no requester link and was handed one");                                 \
+    }                                                                                                          \
+    static inline JSDescFacts **p##_desc_out(T *r)                                                             \
+    {                                                                                                          \
+        FIELDS(CONT_REC_DESC_OUT)                                                                              \
+        return NULL;                                                                                           \
+    }
+
+/* A keyed property operation whose accessor or trap is running on the chain. `target` is the proxy's
+   [[Target]] for the invariant (UNDEFINED for an accessor) and `atom` the key. `value` is GP_SET's written
+   value (§10.5.9 step 11's SameValue) or GP_DEFINE's [[Value]]; `getter`, `setter` and `dflags` are the rest
+   of GP_DEFINE's descriptor, so the invariant sees the descriptor the trap was given. `op` is the GP_* code;
+   `recv` the [[Get]]/[[Set]] receiver, JS_UNINITIALIZED when it is the object itself; `no_throw` yields the
+   boolean a [[Set]]/[[Delete]] reports instead of throwing. `desc_out` is GP_GETOWNPROP's answer shape: the
+   requester's own record when it wants the descriptor record, NULL for the descriptor object. `cb` is the
+   invocation [this, fn, args…], `2 + nargs` slots written, owned here rather than on the caller's stack. */
+#define JS_GETPROP_FIELDS(F)                                                                                   \
+    F(OWN_VAL, JSValue, target)                                                                                \
+    F(OWN_ATOM, JSAtom, atom)                                                                                  \
+    F(OWN_VAL, JSValue, value)                                                                                 \
+    F(OWN_VAL, JSValue, getter)                                                                                \
+    F(OWN_VAL, JSValue, setter)                                                                                \
+    F(POD, int, dflags)                                                                                        \
+    F(OUTER, void *, outer)                                                                                    \
+    F(POD, uint8_t, op)                                                                                        \
+    F(OWN_VAL, JSValue, recv)                                                                                  \
+    F(POD, uint8_t, no_throw)                                                                                  \
+    F(DESC_OUT, JSDescFacts *, desc_out)                                                                       \
+    F(POD, uint8_t, nargs)                                                                                     \
+    F(OWN_ARRAY, 6, cb)
+CONT_RECORD_DEFINE(JSGetProp, js_getprop, JS_GETPROP_FIELDS)
 #define GP_GET 0
 #define GP_HAS 1
 #define GP_SET 2
@@ -28705,121 +28817,6 @@ static int js_proxy_setproto_invariant(JSContext *ctx, JSValueConst target, JSVa
                                   invariant on its result — is the one entry's, which is the point: the operator had
                                   its OWN copy of the proxy algorithm (js_tramp_proxy_has) that read the trap from C
                                   and dropped every C, bound or proxied trap back to a C drive. */
-static void js_desc_facts_dup(JSDescFacts *f);
-static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
-static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *tab, uint32_t len);
-/* A CONTINUATION RECORD'S DECLARATION. A record a parked chain can hold lists its fields once, each as
-   F(role, type, name), and its struct, its release, its copy and its requester link are all expanded from that
-   one list (CONT_RECORD_DEFINE), so no walk can name a field another walk misses. The roles:
-     OWN_VAL   an owned JSValue: the copy takes a reference, the release drops one;
-     OWN_ATOM  an owned JSAtom, likewise;
-     POD       a plain value of `type`, copied;
-     BORROW    a JSValueConst another owner keeps alive across the record's life, copied and never released;
-     OUTER     the requester link, `void *name` and its kind `uint8_t name##_kind`, at most one per record;
-     DESC_OUT  a JSDescFacts * naming the requester's own record, which tramp_cont_relink_outer re-aims;
-     FACTS     a JSDescFacts held by value, whose three values are owned;
-     PROPS     an owned own-key table, whose length is the field named in `type`.
-   Each role defines one macro per walk; a role a walk does not define is a compile error at that walk. */
-#define CONT_REC_MEMBER_OWN_VAL(t, n) JSValue n;
-#define CONT_REC_MEMBER_OWN_ATOM(t, n) JSAtom n;
-#define CONT_REC_MEMBER_POD(t, n) t n;
-#define CONT_REC_MEMBER_BORROW(t, n) JSValueConst n;
-#define CONT_REC_MEMBER_OUTER(t, n) void *n; uint8_t n##_kind;
-#define CONT_REC_MEMBER_DESC_OUT(t, n) JSDescFacts *n;
-#define CONT_REC_MEMBER_FACTS(t, n) JSDescFacts n;
-#define CONT_REC_MEMBER_PROPS(t, n) JSPropertyEnum *n;
-#define CONT_REC_FREE_OWN_VAL(t, n) JS_FreeValue(ctx, r->n);
-#define CONT_REC_FREE_OWN_ATOM(t, n) JS_FreeAtom(ctx, r->n);
-#define CONT_REC_FREE_POD(t, n)
-#define CONT_REC_FREE_BORROW(t, n)
-#define CONT_REC_FREE_OUTER(t, n)
-#define CONT_REC_FREE_DESC_OUT(t, n)
-#define CONT_REC_FREE_FACTS(t, n) js_desc_facts_free(ctx, &r->n);
-#define CONT_REC_FREE_PROPS(t, n) if (r->n) js_free_prop_enum(ctx, r->n, r->t);
-#define CONT_REC_DUP_OWN_VAL(t, n) c->n = js_dup(r->n);
-#define CONT_REC_DUP_OWN_ATOM(t, n) c->n = JS_DupAtom(ctx, r->n);
-#define CONT_REC_DUP_POD(t, n)
-#define CONT_REC_DUP_BORROW(t, n)
-#define CONT_REC_DUP_OUTER(t, n)
-#define CONT_REC_DUP_DESC_OUT(t, n)
-#define CONT_REC_DUP_FACTS(t, n) js_desc_facts_dup(&c->n);
-#define CONT_REC_DUP_PROPS(t, n) if (r->n) { c->n = js_prop_enum_dup(ctx, r->n, r->t); CHECK(c->n != NULL, "OOM copying a parked record's own-key table"); }
-#define CONT_REC_NOUTER_OWN_VAL(t, n) 0
-#define CONT_REC_NOUTER_OWN_ATOM(t, n) 0
-#define CONT_REC_NOUTER_POD(t, n) 0
-#define CONT_REC_NOUTER_BORROW(t, n) 0
-#define CONT_REC_NOUTER_OUTER(t, n) 1
-#define CONT_REC_NOUTER_DESC_OUT(t, n) 0
-#define CONT_REC_NOUTER_FACTS(t, n) 0
-#define CONT_REC_NOUTER_PROPS(t, n) 0
-#define CONT_REC_OUTER_GET_OWN_VAL(t, n)
-#define CONT_REC_OUTER_GET_OWN_ATOM(t, n)
-#define CONT_REC_OUTER_GET_POD(t, n)
-#define CONT_REC_OUTER_GET_BORROW(t, n)
-#define CONT_REC_OUTER_GET_OUTER(t, n) *out_kind = r->n##_kind; return r->n;
-#define CONT_REC_OUTER_GET_DESC_OUT(t, n)
-#define CONT_REC_OUTER_GET_FACTS(t, n)
-#define CONT_REC_OUTER_GET_PROPS(t, n)
-#define CONT_REC_OUTER_SET_OWN_VAL(t, n)
-#define CONT_REC_OUTER_SET_OWN_ATOM(t, n)
-#define CONT_REC_OUTER_SET_POD(t, n)
-#define CONT_REC_OUTER_SET_BORROW(t, n)
-#define CONT_REC_OUTER_SET_OUTER(t, n) r->n = outer; r->n##_kind = outer_kind; return;
-#define CONT_REC_OUTER_SET_DESC_OUT(t, n)
-#define CONT_REC_OUTER_SET_FACTS(t, n)
-#define CONT_REC_OUTER_SET_PROPS(t, n)
-#define CONT_REC_DESC_OUT_OWN_VAL(t, n)
-#define CONT_REC_DESC_OUT_OWN_ATOM(t, n)
-#define CONT_REC_DESC_OUT_POD(t, n)
-#define CONT_REC_DESC_OUT_BORROW(t, n)
-#define CONT_REC_DESC_OUT_OUTER(t, n)
-#define CONT_REC_DESC_OUT_DESC_OUT(t, n) return &r->n;
-#define CONT_REC_DESC_OUT_FACTS(t, n)
-#define CONT_REC_DESC_OUT_PROPS(t, n)
-#define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
-#define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(t, n)
-#define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(t, n)
-#define CONT_REC_NOUTER(role, t, n)     + CONT_REC_NOUTER_##role(t, n)
-#define CONT_REC_OUTER_GET(role, t, n)  CONT_REC_OUTER_GET_##role(t, n)
-#define CONT_REC_OUTER_SET(role, t, n)  CONT_REC_OUTER_SET_##role(t, n)
-#define CONT_REC_DESC_OUT(role, t, n)   CONT_REC_DESC_OUT_##role(t, n)
-/* The struct `T` and its walks, prefixed `p`: p_free releases the record and what it owns (not its requester);
-   p_clone copies it, taking a reference to everything it owns, with its links still naming the original's
-   (tramp_cont_relink_outer re-binds them); p_outer_get/p_outer_set read and write the requester link (NULL and
-   nothing for a record with none); p_desc_out answers its descriptor-answer slot, or NULL. */
-#define CONT_RECORD_DEFINE(T, p, FIELDS)                                                                       \
-    typedef struct T { FIELDS(CONT_REC_MEMBER) } T;                                                           \
-    _Static_assert(0 FIELDS(CONT_REC_NOUTER) <= 1, #T " declares more than one requester link");             \
-    static void p##_free(JSContext *ctx, T *r)                                                                \
-    {                                                                                                          \
-        FIELDS(CONT_REC_FREE)                                                                                  \
-        js_free_rt(ctx->rt, r);                                                                                \
-    }                                                                                                          \
-    static T *p##_clone(JSContext *ctx, const T *r)                                                           \
-    {                                                                                                          \
-        T *c = js_malloc(ctx, sizeof(*c));                                                                     \
-        if (unlikely(!c))                                                                                      \
-            return NULL;                                                                                       \
-        *c = *r;                                                                                               \
-        FIELDS(CONT_REC_DUP)                                                                                   \
-        return c;                                                                                              \
-    }                                                                                                          \
-    static inline void *p##_outer_get(T *r, uint8_t *out_kind)                                                \
-    {                                                                                                          \
-        FIELDS(CONT_REC_OUTER_GET)                                                                             \
-        *out_kind = CONT_NONE;                                                                                 \
-        return NULL;                                                                                           \
-    }                                                                                                          \
-    static inline void p##_outer_set(T *r, void *outer, uint8_t outer_kind)                                   \
-    {                                                                                                          \
-        FIELDS(CONT_REC_OUTER_SET)                                                                             \
-        DCHECK(outer == NULL, #T " has no requester link and was handed one");                                 \
-    }                                                                                                          \
-    static inline JSDescFacts **p##_desc_out(T *r)                                                             \
-    {                                                                                                          \
-        FIELDS(CONT_REC_DESC_OUT)                                                                              \
-        return NULL;                                                                                           \
-    }
 
 /* A keyed operation a BYTECODE OPERATOR asked for (`k in obj`, `delete o[k]`): its key, and how the answer
    lands on the operand stack. `op` is the opcode that asked, as `opcode` itself; js_mallocz leaves OP_invalid,
@@ -29182,55 +29179,8 @@ CONT_RECORD_DEFINE(JSTrapGet, js_trapget, JS_TRAPGET_FIELDS)
  * would hold two half-advanced copies of one cursor. */
 #define CONT_ARG_LIST_YIELD  79
 
-/* EVERY REFERENCE THIS RECORD OWNS, NAMED ONCE — the list js_getprop_free releases and the list
-   js_getprop_clone re-takes, written as ONE macro rather than as two walks that have to agree. A record that
-   can ride a PARKED chain is read by both (free_tramp_chain releases the first reference, clone_deep_flow takes
-   a second), and a field named in only one of them is the drift the pairing exists to stop — a reference the
-   fork shares is a double free, a reference the fork does not take is a use-after-free in whichever arm
-   finishes second. Two loops cannot go out of step with each other when there is one loop; a field added to the
-   struct and not to this macro is neither freed nor duped, which is the one failure left and the one place to
-   look for it.
-   `recv` is JS_UNINITIALIZED — the engine's own empty slot — when the receiver IS the object, which is a
-   statement the record makes about itself rather than a hole, so it is TESTED and never defaulted.
-   The cb tail is `2 + nargs` because that is what the request WROTE there ([this, fn, args…]); the slots past
-   it are the JS_UNDEFINED js_mallocz left, since no op writes an operand it does not count. */
-#define JS_GETPROP_OWNED(gp_, F)                                                            \
-    do {                                                                                    \
-        int gpi_;                                                                           \
-        F((gp_)->target); F((gp_)->value); F((gp_)->getter); F((gp_)->setter);               \
-        if (!JS_IsUninitialized((gp_)->recv)) F((gp_)->recv);                                \
-        for (gpi_ = 0; gpi_ < 2 + (gp_)->nargs; gpi_++) F((gp_)->cb[gpi_]);                  \
-    } while (0)
 
-static void js_getprop_free(JSContext *ctx, JSGetProp *gp)
-{
-#define GP_RELEASE(v) JS_FreeValue(ctx, v)
-    JS_GETPROP_OWNED(gp, GP_RELEASE);
-#undef GP_RELEASE
-    JS_FreeAtom(ctx, gp->atom);
-    js_free_rt(ctx->rt, gp);
-}
 
-/* THE OTHER DIRECTION OF THAT ONE LIST — the fork's copy, and it is a BYTE COPY plus a re-take rather than a
-   field-by-field rebuild for the reason tramp_step_state_clone is: the scalars, the answer shape and the link
-   then cannot be forgotten at all (there is no line to omit), and the only thing left to state is which
-   references the sibling must take its OWN, which is exactly what the macro above says once.
-   `outer` is left naming the ORIGINAL requester and is BOUND by tramp_cont_relink_outer a moment later — the
-   same contract every other cloned continuation is under. */
-static JSGetProp *js_getprop_clone(JSContext *ctx, const JSGetProp *gp)
-{
-    JSGetProp *n;
-
-    n = js_malloc(ctx, sizeof(*n));
-    if (unlikely(!n))
-        return NULL;
-    *n = *gp;
-#define GP_TAKE(v) ((void)js_dup(v))
-    JS_GETPROP_OWNED(n, GP_TAKE);
-#undef GP_TAKE
-    n->atom = JS_DupAtom(ctx, n->atom);
-    return n;
-}
 #define CONT_PROMISE_EXEC  14  /* cont_state = JSPromiseExec: `new Promise(executor)` (27.5.3.1). The executor is a
                                   CONTINUATION-HOLDING C entry — steps 3-8 create the promise and its resolving
                                   functions BEFORE the call, and steps 10-11 (reject-on-abrupt, then return the
@@ -53742,7 +53692,8 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_ARRAY_LEN_YIELD, JSArrayLen, js_array_len, ANCHOR)                                                  \
     X(CONT_ACQUIRE_GET, JSAcquireGet, js_acquire_get, LINK)                                                    \
     X(CONT_WITH_HAS, JSWithHas, js_with_has, LINK)                                                             \
-    X(CONT_OWNKEYS_CHK, JSOwnKeysChk, js_ownkeys_chk, LINK)
+    X(CONT_OWNKEYS_CHK, JSOwnKeysChk, js_ownkeys_chk, LINK)                                                    \
+    X(CONT_GETPROP, JSGetProp, js_getprop, LINK)
 #define CONT_REC_CASE_OUTER_GET(k, T, p, role)  case k: return p##_outer_get((T *)st, out_kind);
 #define CONT_REC_CASE_OUTER_SET(k, T, p, role)  case k: p##_outer_set((T *)st, outer, outer_kind); return;
 #define CONT_REC_IF_DESC_OUT(k, T, p, role)     if (kind == k) return p##_desc_out((T *)st);
@@ -53772,13 +53723,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
         *out_kind = ((JSStepHdr *)st)->outer_kind;
         return ((JSStepHdr *)st)->outer;
     CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_GET)
-    case CONT_GETPROP:
-        /* THE SAME OPERATION WITH ITS CALLEE ON THE CHAIN — the accessor or the trap is RUNNING rather than
-           parked, and the question is identical: what waits on the OPERATION is whoever asked for the
-           property. The record differs from the parked form's (it additionally carries the invocation the
-           request built) but the link does not, which is why both cases stand here. */
-        *out_kind = ((JSGetProp *)st)->outer_kind;
-        return ((JSGetProp *)st)->outer;
     case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD:
         /* 7.3.19 IS TERMINAL FOR THE SAME REASON, and the record says so by having no `outer` field at all: the
            finished List is handed to do_apply_tramp / do_construct_dispatch, which place their result on the
@@ -53898,8 +53842,6 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_STEP: case CONT_STEP_YIELD:
         ((JSStepHdr *)st)->outer = outer; ((JSStepHdr *)st)->outer_kind = outer_kind; return;
     CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_SET)
-    case CONT_GETPROP:
-        ((JSGetProp *)st)->outer = outer; ((JSGetProp *)st)->outer_kind = outer_kind; return;
     case CONT_TOPRIM: case CONT_TOPRIM_GET:
         TOPRIM_ROLE_AGREES(st, kind);
         ((struct JSToPrim *)st)->outer = outer; ((struct JSToPrim *)st)->outer_kind = outer_kind; return;
@@ -53985,12 +53927,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
            unknown-length chain's outcome fork, and clone_deep_flow's arm builds that one — reached here would
            mean one record cloned twice, which is exactly what the two kinds exist to keep apart. */
         return js_arg_list_clone(ctx, (const JSArgList *)st);
-    case CONT_GETPROP:
-        /* a keyed property OPERATION whose callee turned out to be a step machine — `new Proxy(t, {ownKeys:
-           Object.getOwnPropertyNames})` — so the machine is the frame's continuation and the operation is the
-           LINK under it. The same record is a frame's own cont_state when the callee is a bytecode accessor or
-           trap, which is why one clone serves both walks. */
-        return js_getprop_clone(ctx, (const JSGetProp *)st);
     CONT_RECORD_KINDS(CONT_REC_CASE_CLONE)
     case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET: {
         /* A CONSUMER UNDER THE KEYED OPERATION IT ISSUED — `[...src]`, `new Uint8Array(src)`, `new Map(src)`
@@ -54054,7 +53990,6 @@ CONT_KIND_SWITCH_CHECKED_END
    NULL for a kind that carries none. */
 static JSDescFacts **cont_desc_out_slot(void *st, uint8_t kind)
 {
-    if (kind == CONT_GETPROP) return &((JSGetProp *)st)->desc_out;
     CONT_RECORD_KINDS(CONT_REC_IF_DESC_OUT)
     if (kind == CONT_GOPD_DESC) return &((JSGopdDesc *)st)->desc_out;
     return NULL;
@@ -55071,22 +55006,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
     /* A declared record, released with nobody to answer to, and its requester after it: the operation can never
        finish, so whatever asked for it can never be answered either. */
     CONT_RECORD_KINDS(CONT_REC_CASE_FREE)
-    case CONT_GETPROP: {
-        /* A KEYED PROPERTY OPERATION WHOSE ACCESSOR OR TRAP WAS STILL RUNNING, released with nobody to answer
-           to — a cold-tier tail dropped, a flow destroyed under a throw. The operation can never finish, so
-           whatever asked for the property can never be answered either and goes with it, which is what every
-           other arm in this walk does with its requester. Taken BEFORE the free, because the free is what makes
-           the record unreadable.
-           THE OTHER DIRECTION OF js_getprop_clone, and it lands in the SAME diff for the reason this walk's own
-           DFAIL states: a kind present in only one of the two is a flow that can be forked and cannot be
-           evicted, paged or freed — which is precisely the shape a parked getter has. */
-        JSGetProp *gp = st;
-        void *go = gp->outer;
-        uint8_t gk = gp->outer_kind;
-        js_getprop_free(ctx, gp);
-        next->st = go; next->kind = gk;
-        return;
-    }
     case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: {
         /* 7.3.19's SEQUENCE, TERMINAL for cont_outer_get's reason — the finished List goes to a call, whose
            result is the operand stack's, so there is nothing above it to release and the walk stops here.
