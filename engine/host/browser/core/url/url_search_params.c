@@ -37,8 +37,10 @@ typedef UrlEncodedList UspList;
 #define usp_name_cmp     url_encoded_name_cmp
 #define usp_strdup       url_encoded_strdup
 
-/* The class opaque. `owner` is the URL wrapper this belongs to, or JS_UNDEFINED — see the file comment. */
-typedef struct { UspList list; JSValue owner; } UspObj;
+/* The class opaque. `owner` is the URL wrapper this belongs to, or JS_UNDEFINED — see the file comment.
+   `unknown` is the unknown string the constructor parsed, or JS_UNDEFINED: when set, `list` is the parse of its
+   example (empty where it has none) and every read answers a derivation over it (usp_derive). */
+typedef struct { UspList list; JSValue owner; JSValue unknown; int unknown_example; } UspObj;
 
 static JSClassID g_usp_class;
 static JSRuntime *g_usp_rt;
@@ -60,7 +62,7 @@ static void usp_finalizer(JSRuntime *rt, JSValue val)
     UspObj *u = JS_GetAnyOpaque(val, &id);
 
     (void)id;
-    if (u) { usp_list_free(&u->list); JS_FreeValueRT(rt, u->owner); js_free_rt(rt, u); }
+    if (u) { usp_list_free(&u->list); JS_FreeValueRT(rt, u->owner); JS_FreeValueRT(rt, u->unknown); js_free_rt(rt, u); }
 }
 
 static void usp_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
@@ -70,7 +72,7 @@ static void usp_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 
     (void)id;
     /* The URL holds this object and this object holds the URL — a real cycle, which is what gc_mark is for. */
-    if (u) JS_MarkValue(rt, u->owner, mark_func);
+    if (u) { JS_MarkValue(rt, u->owner, mark_func); JS_MarkValue(rt, u->unknown, mark_func); }
 }
 
 const UrlEncodedList *usp_list_of(JSValueConst v)
@@ -122,6 +124,7 @@ JSValue usp_new(JSContext *ctx, JSValueConst owner, const char *query, size_t qu
     u = js_mallocz(ctx, sizeof(*u));
     if (!u) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
     u->owner = JS_DupValue(ctx, owner);
+    u->unknown = JS_UNDEFINED;
     if (query) usp_parse(&u->list, query, query_len);
     JS_SetOpaque(obj, u);
     return obj;
@@ -168,6 +171,29 @@ static int g_usp_id[USP_MEMBER_N];
     "the value-carrying §6.2 list (form_data.c's entry list is the worked example); §5.1's byte list " \
     "stays bytes"
 
+/* A read of a list parsed from an unknown string, answered as the unknown that read derives — named by the
+   operation, the string and the read's own arguments — with the read over the example's parse as its example
+   where the string had one. The answer `r` is consumed. */
+static JSValue usp_derive(JSContext *ctx, UspObj *u, const char *op, JSValue r, int argc, JSValueConst *argv)
+{
+    JSValueConst ops[3];
+    int n = 1, i;
+    JSValue d;
+
+    ops[0] = u->unknown;
+    for (i = 0; i < argc && n < 3; i++) if (!JS_IsUndefined(argv[i])) ops[n++] = argv[i];
+    if (!u->unknown_example) { JS_FreeValue(ctx, r); r = JS_UNDEFINED; }
+    d = concolic_new_derived(ctx, op, ops, n, r);
+    DCHECK(!JS_IsUninitialized(d), "a URLSearchParams list parsed from an unknown derived no unknown read");
+    return d;
+}
+
+#define USP_UNKNOWN_WHY(what)                                                                        \
+    "a URLSearchParams parsed from unknown input was " what " — its list is the parse of the input's " \
+    "example, so this operation would answer about the example as if it were the input. Build the "  \
+    "list's mutations and walks over the unknown (each read already derives from it); the release "  \
+    "arm operates on the example's parse"
+
 static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     UspObj *u = usp_of(ctx, this_val);
@@ -178,6 +204,9 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
     int i, w;
 
     if (!u) return JS_EXCEPTION;
+    if (!JS_IsUndefined(u->unknown))
+        DCHECK(magic == USP_GET || magic == USP_GETALL || magic == USP_HAS || magic == USP_TOSTRING,
+               USP_UNKNOWN_WHY("modified"));
     if (magic == USP_SORT) {
         /* §6.2 sort(): by the NAMES' code units, and STABLE — the relative order of equal names is preserved,
            which is why this is an insertion sort and not qsort. */
@@ -198,7 +227,7 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
         char *s = usp_serialize(&u->list, NULL);
         r = JS_NewString(ctx, s);
         free(s);
-        return r;
+        return JS_IsUndefined(u->unknown) ? r : usp_derive(ctx, u, "URLSearchParams.toString", r, 0, NULL);
     }
 
     /* §6.2's members take USVStrings, and an UNKNOWN one has no bytes to be. The Web IDL declaration passes
@@ -319,6 +348,9 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
     }
     JS_FreeCString(ctx, name);
     if (value) JS_FreeCString(ctx, value);
+    if (!JS_IsUndefined(u->unknown) && !JS_IsException(r))
+        r = usp_derive(ctx, u, magic == USP_GET ? "URLSearchParams.get" : magic == USP_GETALL
+                                   ? "URLSearchParams.getAll" : "URLSearchParams.has", r, argc, argv);
     return r;
 #undef USP_NAME_IS
 #undef USP_VALUE_IS
@@ -329,6 +361,8 @@ static JSValue js_usp_get_size(JSContext *ctx, JSValueConst this_val, int magic)
     UspObj *u = usp_of(ctx, this_val);
     (void)magic;
     if (!u) return JS_EXCEPTION;
+    if (!JS_IsUndefined(u->unknown))
+        return usp_derive(ctx, u, "URLSearchParams.size", JS_NewInt32(ctx, u->list.n), 0, NULL);
     return JS_NewInt32(ctx, u->list.n);
 }
 
@@ -338,6 +372,7 @@ static int usp_pair_count(JSContext *ctx, JSValueConst target)
 {
     UspObj *u = JS_GetOpaque(target, g_usp_class);
     (void)ctx;
+    DCHECK(!u || JS_IsUndefined(u->unknown), USP_UNKNOWN_WHY("iterated"));
     return u ? u->list.n : -1;
 }
 
@@ -395,6 +430,8 @@ typedef struct {
     JSValue      item[2];
     int          nitem;
     UspList      list;
+    JSValue      unknown;        /* an unknown string init, handed to the object (UspObj's `unknown`) */
+    int          unknown_example;
 } JSUspCtorState;
 
 /* EVERY REQUEST THIS MACHINE CAN HAVE IN FLIGHT, LISTED ONCE. STEP_GOTO takes that list at every transition and
@@ -418,6 +455,7 @@ static void js_usp_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     record_cursor_visit(ctx, &s->rec, v);
     v->val(ctx, &s->item[0]);
     v->val(ctx, &s->item[1]);
+    v->val(ctx, &s->unknown);
 }
 
 /* THE PARAMETER LIST ALONE — a malloc'd array of malloc'd name/value pairs, which is not a reference and which
@@ -512,6 +550,34 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            is stripped, which is what makes `new URLSearchParams(u.search)` round-trip. */
         /* §6.2: `optional init = ""`, so an ABSENT init is the empty string and not the string "undefined". */
         if (JS_IsUndefined(init)) {
+            UC_GOTO(hdr, s, UC_DONE);
+            return JS_STEP_YIELD;
+        }
+        s->unknown = JS_UNDEFINED;
+        /* §3.2.25 OVER UNKNOWN INPUT: the union's arm is a runtime type test on the value, which an unknown
+           answers only through its stated type set. A String in every world takes the USVString arm; the list
+           is the parse of its example and every read derives from the unknown (usp_derive). */
+        if (concolic_is(init)) {
+            JSValue ex;
+            size_t n = 0;
+            const char *q;
+
+            if (!concolic_type_is_string(init))
+                DFAIL("URL §6.2's init union was handed unknown input whose type set is not String, so which of "
+                      "its three arms runs is a runtime type test over unknown input — build that fork; the "
+                      "release arm takes the USVString arm");
+            s->unknown = JS_DupValue(ctx, init);
+            ex = concolic_example_string(ctx, init);
+            s->unknown_example = !JS_IsUndefined(ex);
+            if (s->unknown_example) {
+                ex = JS_ToScalarValueString(ctx, ex);
+                if (JS_IsException(ex)) return -1;
+                q = JS_ToCStringLen(ctx, &n, ex);
+                JS_FreeValue(ctx, ex);
+                if (!q) return -1;
+                usp_parse(&s->list, q[0] == '?' ? q + 1 : q, q[0] == '?' ? n - 1 : n);
+                JS_FreeCString(ctx, q);
+            }
             UC_GOTO(hdr, s, UC_DONE);
             return JS_STEP_YIELD;
         }
@@ -643,6 +709,9 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         UspObj *u = JS_GetOpaque(*presult, g_usp_class);
         u->list = s->list;
         memset(&s->list, 0, sizeof s->list);   /* the object owns it now */
+        u->unknown = s->unknown;
+        u->unknown_example = s->unknown_example;
+        s->unknown = JS_UNDEFINED;
     }
     return 0;
 }

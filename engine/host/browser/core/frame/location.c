@@ -436,11 +436,14 @@ static JSValue js_loc_get(JSContext *ctx, JSValueConst this_val, int magic)
        MINTED PER READ, never once at the install: a candidate run substitutes a source with a breakout at MINT
        time, so a source minted once could never receive one and its sink would be detected and never
        fire-verified. */
+    /* Both getters return a USVString (§7.2.4), so each mint is a String in every world. */
     case LOC_SEARCH:
         v = concolic_source_wrap(ctx, LOCATION_SEARCH_SHAPE, LOCATION_SEARCH_SRC, loc_component(ctx, &rec, true));
+        concolic_state_string(v);
         break;
     case LOC_HASH:
         v = concolic_source_wrap(ctx, LOCATION_HASH_SHAPE, LOCATION_HASH_SRC, loc_component(ctx, &rec, false));
+        concolic_state_string(v);
         break;
     default:
         DFAIL("a Location member was read with a magic no member of this file declares — the magic IS the "

@@ -3658,6 +3658,10 @@ int concolic_example_present(JSValueConst v) {
 }
 
 /* See concolic.h. The answer is a string or absent, so no caller can read a held `undefined` as absence. */
+void concolic_state_string(JSValueConst v) { concolic_type_state(v, CTY_STRING); }
+
+int concolic_type_is_string(JSValueConst v) { return concolic_is(v) && cty_of_operand(v) == CTY_STRING; }
+
 JSValue concolic_example_string(JSContext *ctx, JSValueConst v) {
     JSValue ex, s;
 

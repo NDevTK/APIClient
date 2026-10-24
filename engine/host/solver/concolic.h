@@ -225,6 +225,13 @@ int         concolic_example_present(JSValueConst v);
    converts to — when it holds one whose ToString runs no page code (a primitive other than a Symbol), and
    JS_UNDEFINED otherwise. A new reference the caller frees. Asserts `v` is a concolic. */
 JSValue     concolic_example_string(JSContext *ctx, JSValueConst v);
+/* States that a freshly minted unknown is a String in every world — a mint whose algorithm returns a string
+   type, such as a Web IDL USVString getter. Once per value; a non-concolic `v` (a candidate re-fire's bytes) is
+   left alone. */
+void        concolic_state_string(JSValueConst v);
+/* Whether `v` is an unknown whose stated type set is exactly String, so a runtime type test over it (a
+   §3.2.25 union arm) has one answer in every world. Side-effect-free. */
+int         concolic_type_is_string(JSValueConst v);
 
 /* WHY THAT ANSWER IS NOT ENOUGH, AND WHAT THE READ BELOW IS FOR. `concolic_example` spends JS_UNDEFINED on
  * FOUR distinct facts, and its callers each wrote down their own account of which one they were acting on
