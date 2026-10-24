@@ -3939,6 +3939,8 @@ async function engineRequestPolicyVerdict(documentId, url) {
   if (!eng._crashed) engineRefuse(eng, why);
   return { verdict: "refused", directive: "", reason: why };
 }
+/* What engineRecordFacts answers for an instance it does not record because it was retired. */
+const ENGINE_RETIRED = "the instance was retired before this round's facts could be recorded";
 /* The Level-1 ranking's facts (the instance's account and its working set), recorded at the end of every round
    this zone has with an instance (seed, step, service), because an instance behind the frame boundary answers
    only by message and there is no value to read on the line that ranks. hostSchedule ranks, advances the
@@ -3946,9 +3948,14 @@ async function engineRequestPolicyVerdict(documentId, url) {
    numbers that cannot have moved. qjs_level1_account DCHECKs `g_begun`, which qjs_begin sets.
    The reply is the instance's statement and so input: one that fails level1AccountRefusal is refused through
    engineRefuse and nothing is recorded, so the instance keeps the facts its last accepted reply stated. Answers
-   the refusal, or null for an accepted reply. */
+   the refusal, ENGINE_RETIRED, or null for an accepted reply.
+   A crashed instance (refused or aborted) is never recorded, whichever op retired it and in whatever order its
+   answers arrive: it is not asked, and a retirement landing while the reply is in flight (a policy refusal
+   beside a step or service round) discards the reply. */
 async function engineRecordFacts(eng) {
+  if (eng._crashed) return ENGINE_RETIRED;
   const _rank = await eng.r.renderer.getLevel1Account();
+  if (eng._crashed) return ENGINE_RETIRED;
   let a;
   try { a = JSON.parse(_rank.account); } catch (_) { a = undefined; }
   const why = level1AccountRefusal(_rank.account, a, _rank.workingSetBytes, eng.level1);
@@ -5412,6 +5419,8 @@ function engineCrash(eng, stage, e) {
    (`step` and engineFinalize skip a crashed instance) and is finalized at its next step. */
 function engineRefuse(eng, why) {
   DCHECK(typeof why === "string" && why !== "", "an instance was refused with no stated reason");
+  DCHECK(!eng._crashed, "an instance was refused after it was retired — every refuser reads the crashed mark " +
+                        "after its last await, so a retired instance's answer is never read");
   eng._crashed = true;
   eng.lines.push('@E {"phase":"engine-crash","stage":"result-refused","err":' + JSON.stringify(why) + "}");
   crashBanner("result-refused", why);
@@ -6125,6 +6134,8 @@ const _hostOps = {
      eng.lines; this parses that snapshot, consumes the line (finalize asks for its own), and merges through
      onFrontierAdvance (globalStore, idempotent). */
   streamPartial: async (eng) => {
+    /* A retired instance is asked nothing more; a retirement can land at any await of the round. */
+    if (eng._crashed) return;
     const now = Date.now();
     if (!eng._lastPartial) { eng._lastPartial = now; return; }
     if (now - eng._lastPartial < PARTIAL_MS) return;
@@ -6137,7 +6148,7 @@ const _hostOps = {
     /* A Clear landed during the one await: the snapshot is of a page the person asked to forget, and hostClear
        has rejected its waiters (engineLiveDocumentIds would abort on them), so it is not merged. The frame is
        not taken here; the release step at the bottom of hostSchedule owns it. */
-    if (eng._dropped) return;
+    if (eng._dropped || eng._crashed) return;
     let idx = -1;
     for (let i = eng.lines.length - 1; i >= 0; i--) if (String(eng.lines[i]).startsWith("@RESULT ")) { idx = i; break; }
     /* qjs_emit_partial prints one result unconditionally; none here is this zone's capture failing. */
@@ -6184,6 +6195,8 @@ const _hostOps = {
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "novelty", e); return 0; }
     try { st = (await eng.r.renderer.step()).code; }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "step", e); return 0; }   // crashed instance: finalize it (loud) rather than keep stepping a dead engine
+    /* Retired while the step was in flight: its answer is not read. */
+    if (eng._crashed) return 0;
     /* The code is the instance's statement, one of ENGINE_STEP_DONE (0), ENGINE_STEP_YIELD (2) and
        ENGINE_STEP_STALLED (3). Any other is refused before anything is recorded from this step, so the instance
        keeps the facts of its last accepted round and is retired through DONE. */

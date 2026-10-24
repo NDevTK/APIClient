@@ -863,6 +863,67 @@ async function mintDrive(minted, slices) {
          threw ? String(threw.message || threw) : { a, again, asked, crashed: e._crashed, r });
   }
   console.log('[level1]   engine answers   8 step codes and ' + verdicts.length + ' request-policy verdicts driven');
+
+  /* A refusal from outside the round (the Send panel's policy question) landing while a round is in flight:
+     at the round's own call, or while the record's account reply is in flight. The rounds are the step, the
+     service round and the record that ends a join, an unload and a seed (engineRecordFacts, called as they
+     call it). A refused instance keeps its last accepted account and working set, its run carries the one
+     refusal, and an accepted verdict in the same interleaving records the round (the control). */
+  const deferred = () => { let resolve; const p = new Promise((r) => { resolve = r; }); return { p, resolve }; };
+  const rounds = { step: (e) => ops.step(e), 'service round': (e) => ops.serviceFetch(e, false),
+                   'join/unload/seed record': (e) => B.engineRecordFacts(e) };
+  const cases = [];
+  for (const round of Object.keys(rounds)) for (const at of ['round', 'record']) for (const v of ['denied\tx', 'allowed'])
+    cases.push([round, at, v]);
+  let gapRows = 0;
+  for (const [round, at, v] of cases) {
+    if (round === 'join/unload/seed record' && at === 'round' && v === 'allowed') continue;
+    const gate = deferred();
+    let asked = 0;
+    const later = (x) => (at === 'round' ? gate.p.then(() => x) : Promise.resolve(x));
+    const e = inst({ docId: 'gap-doc', joinedDocIds: [], _inflight: new Map(), residentBytes: 131072,
+                     r: { renderer: {
+                       step: () => later({ code: 2 }), getPending: async () => ({ requests: '' }),
+                       getHostNotices: async () => ({ notices: '' }), getHostRequests: () => later({ requests: '' }),
+                       getLevel1Account: () => { asked++; return at === 'record' ? gate.p.then(account) : account(); },
+                       checkRequestPolicy: async () => ({ verdict: v }) } } });
+    pool.push(e);
+    let out, askedAtRefusal = null, threw = null;
+    try {
+      let running;
+      if (round === 'join/unload/seed record' && at === 'round') {
+        await ZONE.engineRequestPolicyVerdict('gap-doc', 'https://a.test/api');
+        askedAtRefusal = asked;
+        running = rounds[round](e);
+      } else {
+        running = rounds[round](e);
+        await new Promise((r) => setImmediate(r));   // the round reaches its gate
+        await ZONE.engineRequestPolicyVerdict('gap-doc', 'https://a.test/api');
+        askedAtRefusal = asked;
+        gate.resolve();
+      }
+      out = await running;
+    } catch (x) { threw = x; }
+    pool.splice(pool.indexOf(e), 1);
+    const refused = v !== 'allowed';
+    const r = e._crashed ? refusedRun(e) : null;
+    const reachedGate = askedAtRefusal === (at === 'record' ? 1 : 0);
+    /* What each round answers: the step op its code, the service round nothing, the record its refusal or null. */
+    const answered = round === 'step' ? out === (refused ? 0 : 2)
+      : round === 'service round' ? out === undefined : refused ? typeof out === 'string' : out === null;
+    must(threw === null && reachedGate && answered && (refused
+           ? e._crashed === true && e.level1.paid === 3 && e.residentBytes === 131072 && r.run === 'crashed' &&
+             r.rows.length === 1 && r.rows[0].includes('denied')
+           : !e._crashed && e.level1.paid === 5),
+         'a ' + (refused ? 'refusal' : 'policy answer (the control)') + ' landing ' +
+           (at === 'round' ? 'at the ' + round + '\'s own call'
+                           : 'while the ' + round + '\'s account reply is in flight') + ' ' +
+           (refused ? 'leaves the instance\'s last accepted facts unrecorded over' : 'lets the round record'),
+         threw ? String(threw.message || threw)
+               : { round, at, out, askedAtRefusal, crashed: e._crashed, level1: e.level1, r });
+    gapRows++;
+  }
+  console.log('[level1]   retired rounds   ' + gapRows + ' interleavings of a policy refusal and a round driven');
 }
 
 console.log('[level1] ── verdict ──');
