@@ -420,11 +420,15 @@ enum { UR16_ENTER = 0,   /* 16.1 has not run for this document */
    Step 18, still asserted at the place the algorithm runs it. */
 static void step_18(JSContext *docctx)
 {
-    realm_awaits(docctx, "ViewTransition",
-                "update the rendering step 18 PERFORMS PENDING TRANSITION OPERATIONS (CSS VIEW TRANSITIONS "
-                "§7.2): setup view transition calls the author's ViewTransitionUpdateCallback and settles "
-                "ready/updateCallbackDone/finished — this build now has ViewTransition, so step 18 must be "
-                "written");
+    /* Asked of the realm's interface census rather than a global name, which a page can define itself. */
+    JSValue vt = realm_interface_prototype_object(docctx, "ViewTransition");
+    bool built = !JS_IsUndefined(vt);
+
+    JS_FreeValue(docctx, vt);
+    DCHECK(!built,
+           "update the rendering step 18 performs pending transition operations (CSS View Transitions §7.2): "
+           "setup view transition calls the author's ViewTransitionUpdateCallback and settles "
+           "ready/updateCallbackDone/finished. This realm has built ViewTransition, so step 18 must be written");
 }
 
 /* STEP 19 IS WRITTEN — it is UR_INTERSECT, below, and its assertion is GONE rather than relaxed. It named

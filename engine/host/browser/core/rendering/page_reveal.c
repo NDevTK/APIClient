@@ -199,22 +199,20 @@ JSValue page_reveal_begin(JSContext *ctx)
     rec = pr_record(ctx);
     JS_SetProperty(ctx, rec, g_atom_revealed, JS_TRUE);   /* step 2 */
     JS_FreeValue(ctx, rec);
-    /* STEP 3: doc's ACTIVE VIEW TRANSITION. A document has one only if something started one, and every way to
-       start one — `document.startViewTransition`, a cross-document transition's @view-transition rule — is
-       part of CSS View Transitions, which this engine does not have. So the value is null, COMPUTED from the
-       absence rather than assumed: the assert below fires the moment the interface exists, at the step that
-       must then read a real transition. */
+    /* Step 3: doc's active view transition. Only CSS View Transitions starts one (`startViewTransition`, a
+       cross-document @view-transition rule), and this engine has not built it, so the value is null. Whether
+       it is built is asked of this realm's Web IDL §3.7.3 census, which only the engine writes: a page may
+       define a global named `ViewTransition` itself, and that is input, not the interface. */
     {
-        JSValue g = JS_GetGlobalObject(ctx), vt = JS_GetPropertyStr(ctx, g, "ViewTransition");
-        bool present = !JS_IsUndefined(vt);
+        JSValue vt = realm_interface_prototype_object(ctx, "ViewTransition");
+        bool built = !JS_IsUndefined(vt);
 
         JS_FreeValue(ctx, vt);
-        JS_FreeValue(ctx, g);
-        DCHECK(!present,
-               "§7.4.6.3 step 3 reads doc's ACTIVE VIEW TRANSITION and this build now has ViewTransition — the "
-               "reveal is still handing PageRevealEvent a null, and step 5 (activate the view transition) is "
-               "not written at all. Build CSS View Transitions' document state here and in update-the-"
-               "rendering step 18");
+        DCHECK(!built,
+               "§7.4.6.3 step 3 reads doc's active view transition and this realm has built the ViewTransition "
+               "interface: the reveal still hands PageRevealEvent a null and step 5 (activate the view "
+               "transition) is not written. Build CSS View Transitions' document state here and in "
+               "update-the-rendering step 18");
     }
     /* STEP 4: fire an event named `pagereveal` at doc's relevant global object, using PageRevealEvent. It does
        not bubble and is not cancelable — nothing in the algorithm reads a canceled flag. */
