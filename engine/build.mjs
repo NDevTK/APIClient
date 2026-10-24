@@ -367,7 +367,8 @@ const coldFields = sourceFact(() => censusDefRowSet(["cold"],
   ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "stepUnitOverrunSeamlessArms",
    "stepUnitOverrunAskArms", "stepUnitOverrunGapArms",
    "outOfProgramsAtTheLadderUnits", "programCursors",
-   "programsAhead", "epDoors", "epReach", "epAddressClass", "epRazorClass", "epWitnessClass"],
+   "programsAhead", "epDoors", "epReach", "epAddressClass", "epRazorClass", "epWitnessClass",
+   "ramLimitSource"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer's declaration rather than from a list beside it"));
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
@@ -4186,6 +4187,19 @@ function censusReading(out) {
      stage. A TypeError there is not this file refusing a broken census; it is the reader falling over on the
      one input its own contract says to expect, and it names neither the marker nor the stage. */
   if (c) {
+    /* RAM pressure's limit is a named state (solver/engine.h's engine_set_ram_share): one of the three sources,
+       and "none" exactly when there is no limit for the share to be of. Its sales are engine_reclaim_tail sales,
+       so they never exceed `sold`; a release build compiles out the engine's own assert of that. */
+    for (const x of [c.a, c.b]) {
+      const src = x.ramLimitSource.source;
+      if (!["wasm-heap-max", "rlimit-as", "none"].includes(src) ||
+          (src === "none") !== (x.ramLimitKiB === 0) || x.pressureSold > x.sold)
+        throw new Error("[build] the @COLD census reports RAM pressure's limit as " +
+                        `${JSON.stringify(src)} ` +
+                        `at ${x.ramLimitKiB} KiB with ${x.pressureSold} pressure sale(s) of ${x.sold} — the source ` +
+                        `is wasm-heap-max, rlimit-as or none, none exactly when the limit is 0, and every ` +
+                        `pressure sale is one of the sales`);
+    }
     /* THE MEMBER-SIDE SUBSET CHAIN, CHECKED HERE FOR THE REASON THE @WFQ PAIRS ARE CHECKED IN THEIR OWN
        READER: solver/result.c asserts `can_deliver <= stack_empty <= flows` in a DCHECK that is compiled out
        of a release build, and this reader still runs on that build's bytes. The three rows are one walk of one

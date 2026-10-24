@@ -443,7 +443,20 @@ async function main() {
   ZONE.safeFetchEgressStated({});
   const positional = [];
   let paintDir = null;
+  let ramShare = null;
   for (let i = 2; i < process.argv.length; i++) {
+    /* `--ram-share <permille>`: RAM pressure's share of each instance's limit (solver/engine.h's
+       engine_set_ram_share), forwarded to every child as `--paint` is. Absent, the engine's default stands. */
+    if (process.argv[i] === '--ram-share') {
+      const v = process.argv[++i];
+      if (v === undefined || !/^[0-9]+$/.test(v) || +v < 1 || +v > 1000) {
+        console.error('[trusted] `--ram-share` takes RAM pressure\'s share of an instance\'s limit, a whole ' +
+                      'number of permille from 1 to 1000.');
+        process.exit(2);
+      }
+      ramShare = v;
+      continue;
+    }
     /* WHERE EACH INSTANCE WRITES AN IMAGE OF ITS OWN DOCUMENT. It is forwarded to every child rather than
        resolved per document HERE, because the thing that knows which document an instance holds is that
        instance: `test_forced.c`'s `--paint-dir` arm names the file after the document id this zone gave it,
@@ -796,8 +809,10 @@ async function main() {
                       'browsing context group' : `in group ${group}, whose ${origin} cluster already has one`} ` +
                       '— an instance IS its (group, origin) agent cluster, so a second one splits one heap in ' +
                       'two and a missing group would merge every group of that origin into one');
-    const child = spawn(bin, paintDir === null ? ['--abi'] : ['--abi', '--paint-dir', paintDir],
-                        { stdio: ['pipe', 'pipe', 'pipe'] });
+    const args = ['--abi'];
+    if (paintDir !== null) args.push('--paint-dir', paintDir);
+    if (ramShare !== null) args.push('--ram-share', ramShare);
+    const child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const e = {
       docId, docUrl: url, origin, child, group, referenced,
       /* Every document this instance holds: its root and each one joined into it (`join`). */

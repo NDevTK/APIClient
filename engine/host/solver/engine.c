@@ -1,6 +1,10 @@
 /* The dispatch loop — see engine.h. */
 #include "core/fetch/fetch.h"
-#include "core/json_buf.h"   /* json_buf_grown_take: a census's measured footprint, bought at rest */
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/heap.h>   /* emscripten_get_heap_max: the linear memory's ceiling, RAM pressure's limit */
+#else
+#include <sys/resource.h>      /* RLIMIT_AS: the native process's address-space ceiling, RAM pressure's limit */
+#endif
 #include "core/mime/mime_type.h"   /* §4.4 "Is a JavaScript MIME type": what makes a reply a program rather
                                        than a Response, asked at the fetch delivery below */
 #include "core/fetch/scheme_fetch.h"   /* Fetch §4.3 Scheme fetch: who answers a park's address — this agent
@@ -1076,6 +1080,12 @@ static long g_flows_sold_flows, g_flows_sold_cands;
    engine_frontier_census so an arm added later without a counter fires there. Instance totals like
    `g_flows_sold`, never per session: the question is whether the edge has ever fired. */
 static long g_reclaim_asks, g_reclaim_unarmed, g_reclaim_floor;
+/* RAM pressure's policy (engine.h's engine_set_ram_share): the share in permille, the limit it is a share of (0:
+   none known, so pressure sells nothing), and the sales it made, a subset of `g_flows_sold`. */
+static unsigned g_ram_share = ENGINE_RAM_SHARE_DEFAULT;
+static uint64_t g_ram_limit;
+static const char *g_ram_limit_source = "{\"source\":\"none\"}";
+static long g_pressure_sold;
 
 int engine_take_paged_owed(void) {
     /* The credit counts entries the host was shown and has not answered (engine_reclaim_tail), and this is its
@@ -10789,6 +10799,43 @@ int engine_reclaim_at_rest(void) {
     return sold;
 }
 
+void engine_set_ram_share(unsigned permille) {
+    DCHECKF(permille >= 1 && permille <= 1000,
+            "RAM pressure's share was set to %u permille — it is a share of the instance's limit, 1 to 1000",
+            permille);
+    g_ram_share = permille;
+}
+
+/* The ceiling an allocation meets, as this host states it, and its source for the census: the wasm build's maximum
+   linear memory, or the native process's soft RLIMIT_AS (test_forced.c's native_ceiling_arm sets it to the
+   vehicle's address space). A process with no address-space limit has none, where an allocation does not fail and
+   pressure has nothing to be a share of. */
+static void engine_ram_limit_read(void) {
+#if defined(__EMSCRIPTEN__)
+    g_ram_limit = (uint64_t)emscripten_get_heap_max();
+    g_ram_limit_source = "{\"source\":\"wasm-heap-max\"}";
+#else
+    struct rlimit rl;
+    CHECK(getrlimit(RLIMIT_AS, &rl) == 0, "the native host could not read its address-space limit");
+    g_ram_limit = rl.rlim_cur == RLIM_INFINITY ? 0 : (uint64_t)rl.rlim_cur;
+    g_ram_limit_source = g_ram_limit ? "{\"source\":\"rlimit-as\"}" : "{\"source\":\"none\"}";
+#endif
+}
+
+/* RAM pressure relocates the cold tail (engine.h): sell at rest while the live bytes stand above the share of the
+   limit, so the frontier gives memory back before an allocation that does not ask the refusal edge meets the wall.
+   It ends at the share or at the frontier's floor (engine_reclaim_at_rest's 0), never at a count. */
+static void engine_relocate_under_pressure(void) {
+    uint64_t line;
+
+    if (g_ram_limit == 0) return;
+    line = g_ram_limit / 1000 * g_ram_share;
+    while ((uint64_t)engine_c_alloc_live() > line) {
+        if (!engine_reclaim_at_rest()) return;
+        g_pressure_sold++;
+    }
+}
+
 /* See engine.h. The probe is a plain allocation, freed at once: what it proves is that the address space holds
    `bytes` now, which is what the composition after it spends. */
 void engine_headroom_at_rest(size_t bytes) {
@@ -11020,6 +11067,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        the cold tier and answers "retry". Every allocator, not only the runtime's (solver/reclaim.h): most of this
        engine's memory is the HTML parser's, so most refusals are Lexbor's. */
     reclaim_install(JS_GetRuntime(ctx), engine_reclaim_tail, NULL);
+    engine_ram_limit_read();
 }
 
 void engine_host_baseline(void) {
@@ -12080,6 +12128,9 @@ int engine_sched_step(void) {
        cooperative clause. Raised before the body because it counts slices entered, the population both spans are
        over. */
     g_slices++;
+    /* The host's time, with no flow stepping and no frontier walk open: where RAM pressure sells, as
+       engine_reclaim_at_rest requires. */
+    engine_relocate_under_pressure();
     quantum_begin();
     /* The slice's budget is counted from here: its work on the instance's counter, and the dispatch countdown
        that decides where the budget is asked, both of which a session resumed from the cold tier also starts
@@ -12237,6 +12288,10 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->paged_asks         = g_reclaim_asks;
     out->paged_unarmed      = g_reclaim_unarmed;
     out->paged_floor        = g_reclaim_floor;
+    out->pressure_sold      = g_pressure_sold;
+    out->ram_limit_kib      = (long)(g_ram_limit / 1024);
+    out->ram_limit_source   = g_ram_limit_source;
+    out->ram_share          = (long)g_ram_share;
     /* The payment pair is an inequality, asserted where both halves are read together: `answered` counts the asks
        this session settled, `asked` the ids it minted, and only their order says the two describe one population.
        A fire names a mint or a credit, not a lifetime: all four host counters carry across a session boundary
@@ -12322,6 +12377,9 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "the census's reclaim rows do not partition the allocator's asks (%ld unarmed + %ld at the floor + %ld "
             "sold against %ld) — engine_reclaim_tail has three exits that each count themselves",
             out->paged_unarmed, out->paged_floor, out->sold, out->paged_asks);
+    DCHECKF(out->pressure_sold <= out->sold,
+            "RAM pressure counts %ld sales against %ld flows sold — every pressure sale is an engine_reclaim_tail "
+            "sale, counted there first", out->pressure_sold, out->sold);
     DCHECKF(out->host_answered <= out->host_asked,
             "the census counts more host answers (%ld) than host asks (%ld) — an id was minted outside mint_req, or "
             "a request was credited as settled twice (a second peer timeline's answer belongs in hostAnswersExtra, "

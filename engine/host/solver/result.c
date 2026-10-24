@@ -1453,6 +1453,10 @@ char *result_cold_json(void) {
     METRIC_SET(paged_asks, e.paged_asks);
     METRIC_SET(paged_unarmed, e.paged_unarmed);
     METRIC_SET(paged_floor, e.paged_floor);
+    METRIC_SET(pressure_sold, e.pressure_sold);
+    METRIC_SET(ram_limit_kib, e.ram_limit_kib);
+    METRIC_SET_OBJECT(ram_limit_source, e.ram_limit_source);
+    METRIC_SET(ram_share, e.ram_share);
     METRIC_SET(preview_asks, pv.asks);
     METRIC_SET(preview_asks_empty, pv.asks_empty);
     METRIC_SET(preview_asks_writable, pv.asks_writable);

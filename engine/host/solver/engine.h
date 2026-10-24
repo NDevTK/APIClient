@@ -444,6 +444,18 @@ void engine_request_park(void);
    closed. The caller holds no position in the frontier. Returns 1 if a flow was sold, so the caller retries, and 0
    at the floor or with no session, where its own CHECK is the answer. */
 int engine_reclaim_at_rest(void);
+/* RAM pressure, the scheduler's policy for when the cold tail relocates: at rest between two steps, while the
+   instance's live bytes (engine_c_alloc_live) stand above `share` permille of its known limit, the lowest-value
+   flow is sold to the cold tier. The limit is the wasm build's maximum linear memory or the native process's
+   RLIMIT_AS, read when the session begins; with neither the census says `ramLimitSource` `{"source":"none"}` and only the
+   refusal edge sells. The margin below the wall is room for the allocations that do not ask the edge, and for
+   those made where the safepoint is closed. ENGINE_RAM_SHARE_DEFAULT is the share until a host states one, 1 to
+   1000; a person states it to the native host as engine/trusted.mjs's `--ram-share <permille>`.
+   Named residual. Not covered: the extension's instances have no setting. Next diff builds: a qjs_set_ram_share
+   export the offscreen zone calls from its stored settings. Absence shows as: every extension census reading
+   `ramShare` 850. */
+#define ENGINE_RAM_SHARE_DEFAULT 850
+void engine_set_ram_share(unsigned permille);
 /* Before a composition between steps, whose allocations cannot sell a flow: sell at rest (engine_reclaim_at_rest)
    until `bytes`, the composition's footprint measured the last time it ran, can be allocated, or nothing is left
    to sell. The caller holds no position in the frontier. */
@@ -1120,6 +1132,11 @@ typedef struct {
     long sold;              /* flows this instance paged out: `sold_flows + sold_cands`, asserted; see
                                g_flows_sold */
     long sold_flows;        /* …the exploration flows among them */
+    long pressure_sold;     /* …those sold by RAM pressure at rest (engine_set_ram_share), `<= sold`, asserted */
+    long ram_limit_kib;     /* the limit that pressure is a share of, 0 when there is none */
+    const char *ram_limit_source; /* where it came from, as `{"source":…}`: "wasm-heap-max", "rlimit-as"
+                                     or "none" */
+    long ram_share;         /* the share, in permille */
     long sold_cands;        /* …and the candidate members. A paged candidate comes back without its ladder
                                (solver/flow.h's `cand_surv` and `cand_rung` do not cross the tier), so paging
                                one costs the search the distance it had measured */

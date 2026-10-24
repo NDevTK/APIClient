@@ -30679,6 +30679,19 @@ TF_UNIT int abi_main(int argc, char **argv)
        already have taken that decision. */
     qjs_set_referenced(referenced);
     qjs_set_arrival(arrival_f);
+    /* RAM pressure's share (solver/engine.h's engine_set_ram_share), stated by the party that spawned this
+       process, as `--paint-dir` is; without it the engine's default stands. */
+    {
+        const char *share = arg_val(argc, argv, "--ram-share");
+        if (share) {
+            char *end;
+            unsigned long v = strtoul(share, &end, 10);
+            CHECK(*share && !*end && v >= 1 && v <= 1000,
+                  "--ram-share is RAM pressure's share of the instance's limit, a whole number of permille from 1 "
+                  "to 1000");
+            engine_set_ram_share((unsigned)v);
+        }
+    }
 
     /* NO RESIDUE, STATED. `qjs_begin`'s argument is the parked frontier a previous session left, and the empty
        string is the positive statement that this session continues none. A cross-session resume is a field on
