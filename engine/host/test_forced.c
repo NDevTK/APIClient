@@ -11339,6 +11339,17 @@ TF_UNIT void probes_isolation_operands_sort(const char *js, Probe *tab, int *n) 
              "the deep async-COW RE-ATTACH of a retained pre-fork element wrapper onto the sibling aggregate, "
              "which is the index>0 case and not paffork's base case",
              "p0-pf2A", "p0-pf2P");
+    /* …and nothing beside those two worlds: every arm's Promise.all has both elements, so a value outside them
+       (`p0-undefined`) is a sibling aggregate that settled without the element its own generator yielded. */
+    const char *paf2whole_why = NULL;
+    int paf2whole_tt = 1;
+    fold_row(&paf2whole_tt, &paf2whole_why,
+             param_value_count(js, "/api/paf2fork", "v") > 0 &&
+             param_value_count_of(js, "/api/paf2fork", "v", "p0-pf2A") +
+             param_value_count_of(js, "/api/paf2fork", "v", "p0-pf2P") == param_value_count(js, "/api/paf2fork", "v"),
+             "a /api/paf2fork value is neither `p0-pf2A` nor `p0-pf2P` (or there is none): an arm's Promise.all "
+             "settled without one of the two elements its generator yields, so a forked sibling aggregate lost an "
+             "element to its parent's");
     /* reduce ACCUMULATOR fork (CONT_ARRAY_REDUCE): the reducer branches on opaque state mid-fold ⇒
        clone_deep_flow cloned the JSArrayReduce state so each arm threaded its OWN accumulator across both
        elements (never a shared/contaminated acc). */
@@ -11821,6 +11832,7 @@ TF_UNIT void probes_isolation_operands_sort(const char *js, Probe *tab, int *n) 
         { "afsfork", afsfork_tt, "/api/afsfork", SESS_EXPLORE, afsfork_why },
         { "paffork", paffork_tt, "/api/paffork?", SESS_EXPLORE, paffork_why },
         { "paf2fork", paf2fork_tt, "/api/paf2fork", SESS_EXPLORE, paf2fork_why },
+        { "paf2fork-whole", paf2whole_tt, "/api/paf2fork", SESS_EXPLORE, paf2whole_why },
         { "redfork", redfork_tt, "/api/redfork", SESS_EXPLORE, redfork_why },
         { "rerepfork", rerepfork_tt, "/api/rerepfork", SESS_EXPLORE, rerepfork_why },
         { "toprimfork", toprimfork_tt, "/api/toprimfork", SESS_EXPLORE, toprimfork_why },

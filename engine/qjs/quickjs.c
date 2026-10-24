@@ -31931,6 +31931,9 @@ typedef struct JSPromiseAll {
    answer the next entry is consuming, which is what makes the walk resumable at any point in it. */
 enum { KEY_PH_START = 0, KEY_PH_OWNKEYS_SENT, KEY_PH_WALK, KEY_PH_DESC_SENT, KEY_PH_GET_SENT };
 static int js_promise_all_step(JSContext *ctx, struct JSPromiseAll *s, JSValue res);
+#if APICLIENT_DEV
+static int64_t js_promise_all_values_hole(JSContext *ctx, const struct JSPromiseAll *s);
+#endif
 static int js_promise_all_attach_args(JSContext *ctx, struct JSPromiseAll *s, int index,
                                       JSValue *out_re, JSValue *out_rj);
 static void js_promise_all_end(JSContext *ctx, struct JSPromiseAll *s);
@@ -118456,12 +118459,44 @@ source_done:
             } else {
                 s->fin_arg = js_dup(s->values); s->fin_is_reject = 0;
             }
+#if APICLIENT_DEV
+            /* Step 8's values list holds one element per element the walk counted: each of [0, index) was settled
+               into this aggregate. A hole is an element lost to another aggregate. */
+            {
+                int64_t hole = s->magic == PROMISE_MAGIC_any ? -1 : js_promise_all_values_hole(ctx, s);
+                DCHECKF(hole < 0,
+                        "Promise combinator %p settles with slot %lld of [0, %d) never written by its own resolve "
+                        "element (re-attach pending %d, cursor %d, attaching %d at %d) — the element was attached "
+                        "to another aggregate, so a forked sibling settles without it",
+                        (void *)s, (long long)hole, s->index, s->reattach_pending, s->reattach_i, s->attaching,
+                        s->att_index);
+            }
+#endif
             s->finalizing = 1;
             return 2;   /* FINALIZE: drive resolving_funcs[fin_is_reject](fin_arg) on the tramp, then DONE */
         }
         return 0;   /* count not zero: another element still pending — DONE for this drive */
     }
 }
+
+#if APICLIENT_DEV
+/* The first slot of [0, index) that an `all`/`allSettled` aggregate's `values` does not hold, or -1. The array is
+   built empty and a slot is defined only by this aggregate's own resolve element, so a missing one is an element
+   this walk counted and never attached here (a forked sibling's element left on its parent's aggregate). Reads
+   the aggregate's own array, which no page code can reach before the finalize. */
+static int64_t js_promise_all_values_hole(JSContext *ctx, const JSPromiseAll *s)
+{
+    JSObject *p;
+    int64_t i;
+
+    if (!JS_IsObject(s->values)) return 0;
+    p = JS_VALUE_GET_OBJ(s->values);
+    for (i = 0; i < s->index; i++)
+        if (JS_GetOwnPropertyInternal(ctx, NULL, p, __JS_AtomFromUInt32((uint32_t)i)) <= 0)
+            return i;
+    return -1;
+}
+#endif
 
 /* Free a for-await async-from-sync state's owned fields (promise dup'd out by the caller before this). */
 static void js_async_from_sync_end(JSContext *ctx, JSAsyncFromSync *s)
