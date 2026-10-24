@@ -121987,14 +121987,14 @@ static JSValue js_ab_ctor_fini(JSContext *ctx, void *st, bool take_result)
 /* Whether any byte of [lo, lo + n) inside the IMAGE span `s` still holds the byte the codec wrote there. */
 static bool js_ab_image_live(const JSArrayBuffer *abuf, const JSArrayBufferSpan *s, uint32_t lo, uint32_t n)
 {
-    const JSString *img = JS_VALUE_GET_STRING(s->image);
+    JSString *img = JS_VALUE_GET_STRING(s->image);
     uint32_t b = lo > s->offset ? lo : s->offset;
     uint64_t end = (uint64_t)lo + n, send = (uint64_t)s->offset + s->extent;
 
     if (send < end) end = send;
     if ((int64_t)end > abuf->byte_length) end = (uint64_t)abuf->byte_length;
     for (; b < end; b++)
-        if (abuf->data[b] == img->u.str8[b - s->offset])
+        if (abuf->data[b] == str8(img)[b - s->offset])
             return true;
     return false;
 }
@@ -123297,6 +123297,8 @@ bool JS_IsDetachedBufferSource(JSValueConst obj)
     return js_buffer_source_buffer(obj)->detached != 0;
 }
 
+static size_t js_buffer_view_byte_length(JSObject *p);
+
 /* The most recent span still describing byte `b`, or NULL — the recency and witness rules js_ab_span_get
    applies, asked per byte. */
 static const JSArrayBufferSpan *js_ab_span_owner(const JSArrayBuffer *abuf, uint32_t b)
@@ -123311,7 +123313,7 @@ static const JSArrayBufferSpan *js_ab_span_owner(const JSArrayBuffer *abuf, uint
         if (s->kind == JS_AB_SPAN_ANY)
             return s;
         if (s->kind == JS_AB_SPAN_IMAGE) {
-            if (abuf->data[b] == JS_VALUE_GET_STRING(s->image)->u.str8[b - s->offset])
+            if (abuf->data[b] == str8(JS_VALUE_GET_STRING(s->image))[b - s->offset])
                 return s;
             continue;
         }
