@@ -10288,6 +10288,9 @@ static JSValue js_new_c_function_data(JSContext *ctx, JSCFunctionData *func,
     s->func = func;
     s->length = length;
     s->data_len = data_len;
+    DCHECK(magic >= 0 && magic <= UINT16_MAX,
+           "a C-function-data closure was minted with a magic its record cannot hold: JSCFunctionDataRecord "
+           "stores it as uint16_t, so a negative or wide value reaches the body as a different number");
     s->magic = magic;
     s->step_def = step_def;
     s->realm = JS_DupContext(ctx);
@@ -10453,6 +10456,8 @@ JSValue JS_NewCClosure(JSContext *ctx, JSCClosure *func, const char *name,
     }
     s->func = func;
     s->length = length;
+    DCHECK(magic >= 0 && magic <= UINT16_MAX,
+           "a C closure was minted with a magic its record cannot hold: JSCClosureRecord stores it as uint16_t");
     s->magic = magic;
     s->opaque = opaque;
     s->opaque_finalize = opaque_finalize;

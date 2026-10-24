@@ -9359,11 +9359,11 @@ void idl_replaceable_targets_free(void)
     g_rtarget_n = g_rtarget_cap = 0;
 }
 
-/* THE SETTER'S `magic` IS §3.7.6's `target`, AND −1 IS THE §3.8 ARM. A NEGATIVE index is the [Global] arm
-   rather than an absence, which is why it is spelled as a sentinel this file mints and never as a default a
-   caller could reach by forgetting: idl_define_replaceable states one or the other at every call, and a
-   value outside both ranges aborts below rather than silently meaning Window. */
-#define IDL_REPLACEABLE_TARGET_IS_REALM_GLOBAL (-1)
+/* THE SETTER'S `magic` IS §3.7.6's `target`: 0 is the §3.8 [Global] arm and n is table entry n - 1. The
+   encoding is non-negative because a C-function-data closure stores its magic as uint16_t. 0 is a sentinel
+   this file mints, never a default a caller reaches by forgetting: idl_define_replaceable states one arm or
+   the other at every call, and a value outside both aborts below rather than silently meaning Window. */
+#define IDL_REPLACEABLE_TARGET_IS_REALM_GLOBAL 0
 
 static JSValue idl_replaceable_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                    int magic, JSValue *data)
@@ -9373,9 +9373,9 @@ static JSValue idl_replaceable_set(JSContext *ctx, JSValueConst this_val, int ar
     int r;
 
     (void)argc;
-    DCHECK(magic >= IDL_REPLACEABLE_TARGET_IS_REALM_GLOBAL && magic < g_rtarget_n,
+    DCHECK(magic >= IDL_REPLACEABLE_TARGET_IS_REALM_GLOBAL && magic <= g_rtarget_n,
            "a Web IDL §3.7.6 [Replaceable] setter ran with a `target` no declaration in this agent's table "
-           "matches — the index is minted by idl_replaceable_target_declare and −1 is the §3.8 arm, so a "
+           "matches — entry n is minted as n + 1 by idl_define_replaceable and 0 is the §3.8 arm, so a "
            "value outside both is one this engine computed and then lost");
     /* §3.7.6 steps 1-2: "Let V be undefined. If any arguments were passed, then set V to the value of the
        first argument passed." A ZERO-ARGUMENT CALL IS SPEC-LEGAL — `desc.set.call(null)` writes it — and
@@ -9386,8 +9386,8 @@ static JSValue idl_replaceable_set(JSContext *ctx, JSValueConst this_val, int ar
     name = JS_ToCString(ctx, data[0]);   /* the function's own data: a string this file put there */
     if (!name) return JS_EXCEPTION;
     js = idl_attribute_this(ctx, this_val, name, WP_SEC_SETTER,   /* §3.7.6 steps 4.5.1-4.5.4 */
-                            magic < 0 ? NULL : g_rtarget[magic].is,
-                            magic < 0 ? NULL : g_rtarget[magic].iface);
+                            magic == IDL_REPLACEABLE_TARGET_IS_REALM_GLOBAL ? NULL : g_rtarget[magic - 1].is,
+                            magic == IDL_REPLACEABLE_TARGET_IS_REALM_GLOBAL ? NULL : g_rtarget[magic - 1].iface);
     if (JS_IsException(js)) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
     r = idl_replace_with_value(ctx, js, name, argv[0]);
     JS_FreeValue(ctx, js);
@@ -9577,7 +9577,7 @@ static void idl_define_replaceable(JSContext *ctx, JSValueConst target, const ch
         IDL_CHECK_GLOBAL_TARGET(ctx, target, name, "[Replaceable]");
     } else {
         IDL_CHECK_PROTO_TARGET(ctx, target, name, iface);
-        tgt = idl_replaceable_target_declare(this_is, iface);
+        tgt = idl_replaceable_target_declare(this_is, iface) + 1;
     }
     DCHECK(a != JS_ATOM_NULL, "a replaceable attribute name could not be interned");
     /* THE DATA IS THE IDENTIFIER AND THE NAME IS §3.7.6'S — the one place in this file where the distinction
