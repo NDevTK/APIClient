@@ -26,11 +26,11 @@ static const char HTML_NAVIGATION[] =
     /* §7.4: a child navigable. `open()` hands back a WindowProxy for a document in ANOTHER instance AT ITS OWN
        CALL SITE — the child's name is minted here, so there is nothing to ask and nothing to suspend for. */
     "var _w = open(); fetch('/api/navopen?v=' + (_w ? 'proxy' : 'null'));"
-    /* §7.2.5.1's SAME-ORIGIN CHECK. A popup at ANOTHER origin exposes the fixed cross-origin list and nothing
-       else: `closed` answers, `name` is a SecurityError. Both halves are the assertion — a filter that threw
-       for everything would pass a test that only checked the throw. */
+    /* HTML §7.2.2.1 step 15 navigates the popup after the window open steps return, so the line after `open()`
+       reads its initial about:blank, which is SAME origin: `name` is the empty string and `closed` is false.
+       The cross-origin filter on the navigated document is peergate's (`offlist`). */
     "var _x = open('https://other.test/p'), _sop = '';"
-    "try { _x.name; _sop += 'LEAKED'; } catch (e) { _sop += e.name; }"
+    "try { _sop += 'name=' + _x.name; } catch (e) { _sop += e.name; }"
     "fetch('/api/sop?v=' + _sop + ':' + (_x.closed === false ? 'closedok' : 'wrong'));"
     /* §7.2.5.1 ACROSS INSTANCES: the child's document lives in another instance, so this read SUSPENDS the
        flow, the peer answers, and the flow resumes with the value AT THE CALL SITE — `false`, not undefined. */

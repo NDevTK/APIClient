@@ -1201,11 +1201,11 @@ static const char *HTML_MIN =
     /* §7.4: a child navigable. `open()` hands back a WindowProxy for a document in ANOTHER instance AT ITS OWN
        CALL SITE — the child's name is minted here, so there is nothing to ask and nothing to suspend for. */
     "var _w = open(); fetch('/api/navopen?v=' + (_w ? 'proxy' : 'null'));"
-    /* §7.2.5.1's SAME-ORIGIN CHECK. A popup at ANOTHER origin exposes the fixed cross-origin list and nothing
-       else: `closed` answers, `name` is a SecurityError. Both halves are the assertion — a filter that threw
-       for everything would pass a test that only checked the throw. */
+    /* HTML §7.2.2.1 step 15 navigates the popup after the window open steps return, so the line after `open()`
+       reads its initial about:blank, which is SAME origin: `name` is the empty string and `closed` is false.
+       The cross-origin filter on the navigated document is peergate's (`offlist`). */
     "var _x = open('https://other.test/p'), _sop = '';"
-    "try { _x.name; _sop += 'LEAKED'; } catch (e) { _sop += e.name; }"
+    "try { _sop += 'name=' + _x.name; } catch (e) { _sop += e.name; }"
     "fetch('/api/sop?v=' + _sop + ':' + (_x.closed === false ? 'closedok' : 'wrong'));"
     "</script>"
     TF_CANVAS_INK
@@ -13216,23 +13216,17 @@ TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
              !tf_seen_line("https://x.test/api/blankpin", PENDING_PINNED_NO, NULL),
              "the about:blank child's request on the pinning arm was shown `unpinned`, so the egress default would "
              "fire a value the fork chose as the page's own request");
-    /* §7.2.5.1: a cross-origin proxy answers `closed` and refuses `name`. */
-    /* THE NEGATIVE STAYS WHOLE-DOCUMENT AND THE POSITIVES DO NOT, which is this file's own discriminator: a
-       superstring or a neighbouring record can only make `!strstr` fail EARLY, never pass, so `LEAKED`
-       anywhere really is the finding it claims to be — while `SecurityError:closedok` asked unscoped was
-       satisfied by any record carrying those bytes and said nothing about THIS proxy. */
+    /* §7.2.2.1 step 15: the popup holds its initial about:blank on the line after `open()`. Asked of this
+       record's `v`, not of the whole document, so a neighbouring record's bytes say nothing about THIS proxy. */
     const char *sop_why = NULL;
  int sop_tt = 1;
     fold_row(&sop_tt, &sop_why, !!strstr(js, "\"/api/sop\""),
              "NOT REACHED: there is no /api/sop record at all, so the cross-origin read statement never ran. "
              "That is the SCHEDULE");
-    fold_row(&sop_tt, &sop_why, param_value_is(js, "/api/sop", "v", "SecurityError:closedok"),
-             "§7.2.1 the cross-origin WindowProxy did not answer BOTH halves: /api/sop's `v` is not "
-             "`SecurityError:closedok`, so either `name` did not throw a SecurityError or `closed` did not "
-             "answer false — a filter that threw for everything passes a test that only checks the throw");
-    fold_row(&sop_tt, &sop_why, !strstr(js, "LEAKED"),
-             "§7.2.1 a cross-origin `name` was READ: `LEAKED` is in the document. Deliberately asked of the "
-             "WHOLE document rather than of this record — a leak anywhere is the finding");
+    fold_row(&sop_tt, &sop_why, param_value_is(js, "/api/sop", "v", "name=:closedok"),
+             "§7.2.2.1 step 15 navigates the new traversable after `open()` returns, so on the next line it holds "
+             "its initial about:blank, SAME origin: /api/sop's `v` is not `name=:closedok`, so either `name` threw "
+             "(the destination answered before its navigation) or `closed` did not answer false");
     /* A cross-document read suspended and resumed with the peer's answer. */
     const char *xdocread_why = NULL;
  int xdocread_tt = 1;
