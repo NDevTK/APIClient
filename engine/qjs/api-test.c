@@ -1006,21 +1006,11 @@ static void immutable_array_buffer(void)
     JS_FreeRuntime(rt);
 }
 
-static void *sab_test_alloc(void *opaque, size_t size)
-{
-    return malloc(size);
-}
-
-static void sab_test_free(void *opaque, void *ptr)
-{
-    free(ptr);
-}
-
 static void shared_array_buffer_growth(void)
 {
     JSRuntime *rt = new_runtime();
     JSContext *ctx = JS_NewContext(rt);
-    JSValue ret, exception;
+    JSValue ret;
 
     ret = eval(ctx, "new SharedArrayBuffer(16)");
     assert(!JS_IsException(ret));
@@ -1035,35 +1025,16 @@ static void shared_array_buffer_growth(void)
     assert(JS_VALUE_GET_BOOL(ret));
     JS_FreeValue(ctx, ret);
 
-    ret = eval(ctx, "new SharedArrayBuffer(16, { maxByteLength: 16384 })");
-    assert(JS_IsException(ret));
-    assert(JS_HasException(ctx));
-    exception = JS_GetException(ctx);
-    assert(JS_IsError(exception));
-    JS_FreeValue(ctx, exception);
-
-    JS_FreeContext(ctx);
-    JS_FreeRuntime(rt);
-
-    JSSharedArrayBufferFunctions funcs = {
-        .sab_alloc = sab_test_alloc,
-        .sab_free = sab_test_free,
-        .sab_dup = NULL,
-        .sab_opaque = NULL,
-    };
-
-    rt = new_runtime();
-    JS_SetSharedArrayBufferFunctions(rt, &funcs);
-    ctx = JS_NewContext(rt);
     ret = eval(ctx,
-               "const sab = new SharedArrayBuffer(16, { maxByteLength: 16384 });"
-               "const u8 = new Uint8Array(sab);"
-               "sab.grow(16384);"
+               "const sab2 = new SharedArrayBuffer(16, { maxByteLength: 16384 });"
+               "const u8 = new Uint8Array(sab2);"
+               "sab2.grow(16384);"
                "u8[1024] === 0 && u8.byteLength === 16384");
     assert(!JS_IsException(ret));
     assert(JS_IsBool(ret));
     assert(JS_VALUE_GET_BOOL(ret));
     JS_FreeValue(ctx, ret);
+
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
 }

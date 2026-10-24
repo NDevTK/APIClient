@@ -965,6 +965,12 @@ JS_EXTERN JSValueConst JS_StepClosureDataOf(JSContext *ctx, JSValueConst fn, int
  * is the ONE site both ways in converge on. It then takes the parked operand off the header, keeping its source
  * and example. A pre-check ALONE is not a narrower version of this — it is a hole with a crash in it. */
 #define JS_STEP_UNKNOWN 24
+/* "MY AGENT WAITS." ECMA-262 §25.4.3.11 SuspendThisAgent: the driver parks the flow unconditionally and the host
+   takes the Waiter Record (JS_TakeSuspension), resuming the flow once it reads it woken (JS_SuspensionWoken). The
+   machine is re-entered at the same stage with JS_UNDEFINED and suspends again if it is still waiting. */
+#define JS_STEP_SUSPEND 25
+/* A host machine's suspension on `rec` (JS_NewSuspension): returns JS_STEP_SUSPEND, which the machine returns. */
+JS_EXTERN int step_suspend_run(JSContext *ctx, JSStepHdr *h, JSValueConst rec);
 
 /* The machine's own arguments, borrowed. Out-of-range reads undefined, which is what the IDL's optional
    arguments mean at this level. */

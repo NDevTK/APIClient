@@ -38,6 +38,7 @@
 #else
 #include <dirent.h>
 #include <unistd.h>
+#include <math.h>
 #include <sys/stat.h>
 #endif
 
@@ -50,19 +51,132 @@
 
 #define CMD_NAME "run-test262"
 
-/* Atomics.waitAsync's TIMEOUT IS A HOST JOB — 25.4.3.14 registers the waiter and hands the timeout to the
-   embedder, which is why the engine only settles and never sleeps inside the pump. THIS is the embedder's
-   event loop, so the waiting is here.
-   `may_wait` is the difference between the two places this is called from. On EVERY iteration the loop settles
-   what has come due without waiting: atomicsHelper.js implements $262.agent.setTimeout by chaining promise
-   reactions, so a test with a pending timer never empties the job queue, and a deadline that is only checked
-   when the queue drains is a deadline that never fires. Only when the pump reports empty does the loop have
-   nothing better to do than wait for the next one. */
-static bool host_pump_atomics_async(JSRuntime *rt, bool may_wait)
+/* THE HOST'S HALF OF ECMA-262 §9.5.4 HostEnqueueGenericJob AND §9.5.6 HostEnqueueTimeoutJob, per runtime and so
+   per thread (each thread runs one runtime at a time). A generic job is a job of its realm's agent's queue; a
+   timeout job waits on this list until its due time on this host's clock and is then queued the same way. */
+typedef struct Run262Timeout {
+    struct list_head link;
+    double due_ms;
+    JSContext *realm;
+    JSValue job;
+} Run262Timeout;
+static _Thread_local struct list_head *t_timeouts;
+/* This host's monotonic clock for the test and its agents, as the browser host's event loop keeps its own: a
+   base plus the engine work retired since, at event_loop.h's calibration. The base jumps to the earliest
+   deadline only once nothing in the runtime can step (run262_advance_clock). */
+#define RUN262_WORK_PER_MS 100000.0
+static _Thread_local double t_base_ms;
+static _Thread_local uint64_t t_work;
+
+static void run262_work(JSContext *ctx, uint64_t units)
 {
-    if (JS_AtomicsExpireAsync(rt) > 0)
-        return true;
-    return may_wait && JS_AtomicsAsyncWaitForWork(rt);
+    (void)ctx;
+    t_work += units;
+}
+
+static double run262_now(void)
+{
+    return t_base_ms + (double)t_work / RUN262_WORK_PER_MS;
+}
+
+static double run262_host_now(JSContext *realm, void *opaque)
+{
+    (void)realm; (void)opaque;
+    return run262_now();
+}
+/* The ids this runtime's JS_RegisterStepDef gave $262.agent.broadcast and $262.agent.sleep. */
+static _Thread_local int t_broadcast_stepid, t_sleep_stepid;
+static const JSTrampStepDef run262_broadcast_def, run262_sleep_def;
+static int run262_job_hook(JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv, bool is_task,
+                           JSTaskSource source, JSTaskHandle handle);
+
+/* The wall clock, for the slow-test report only; the agents' clock is run262_now. */
+static int64_t get_clock_ms(void)
+{
+#ifdef _WIN32
+    return GetTickCount64();
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (ts.tv_nsec / 1000000);
+#endif
+}
+void fatal(int, const char *, ...) __attribute__((__format__(__printf__, 2, 3)));
+
+
+/* A job of the realm's agent's queue, run as a call-root flow (the job hook routes an agent's realm to that
+   agent's queue). */
+static void run262_enqueue_generic(JSContext *realm, JSValueConst job, void *opaque)
+{
+    (void)opaque;
+    JS_EnqueueCallJob(realm, job, 0, NULL);
+}
+
+static void run262_enqueue_timeout(JSContext *realm, JSValueConst job, double ms, void *opaque)
+{
+    Run262Timeout *t = malloc(sizeof(*t));
+    (void)opaque;
+    if (!t || !t_timeouts)
+        fatal(1, "HostEnqueueTimeoutJob: no timeout list for this runtime");
+    if (!(ms >= 0 && isfinite(ms)))
+        fatal(1, "HostEnqueueTimeoutJob: a duration of %g ms is not a non-negative finite number", ms);
+    t->due_ms = run262_now() + ms;
+    t->realm = realm;
+    t->job = JS_DupValue(realm, job);
+    list_add_tail(&t->link, t_timeouts);
+}
+
+static void run262_host_install(JSRuntime *rt)
+{
+    static const JSHostJobHooks hooks = { .enqueue_generic = run262_enqueue_generic,
+                                          .enqueue_timeout = run262_enqueue_timeout, .now = run262_host_now };
+    t_timeouts = malloc(sizeof(*t_timeouts));
+    if (!t_timeouts)
+        fatal(1, "no memory for the timeout list");
+    init_list_head(t_timeouts);
+    t_base_ms = 0;
+    t_work = 0;
+    JS_SetHostJobHooks(rt, &hooks);
+    JS_SetJobEnqueueHook(run262_job_hook);
+    t_broadcast_stepid = JS_RegisterStepDef(rt, &run262_broadcast_def);
+    t_sleep_stepid = JS_RegisterStepDef(rt, &run262_sleep_def);
+}
+
+/* Timeouts still pending when the test ends are dropped with the runtime. */
+static void run262_host_free(JSRuntime *rt)
+{
+    struct list_head *el, *el1;
+    list_for_each_safe(el, el1, t_timeouts) {
+        Run262Timeout *t = list_entry(el, Run262Timeout, link);
+        list_del(&t->link);
+        JS_FreeValueRT(rt, t->job);
+        free(t);
+    }
+    free(t_timeouts);
+    t_timeouts = NULL;
+    JS_SetJobEnqueueHook(NULL);
+}
+
+/* Queue every timeout job that is due, earliest first, as a job of its realm's agent. Answers whether one was. */
+static bool run262_timeouts_run(void)
+{
+    bool queued = false;
+
+    for (;;) {
+        struct list_head *el;
+        Run262Timeout *t = NULL;
+        list_for_each(el, t_timeouts) {
+            Run262Timeout *c = list_entry(el, Run262Timeout, link);
+            if (!t || c->due_ms < t->due_ms) t = c;
+        }
+        if (!t || t->due_ms > run262_now())
+            return queued;
+        list_del(&t->link);
+        run262_enqueue_generic(t->realm, t->job, NULL);
+        JS_FreeValue(t->realm, t->job);
+        free(t);
+        queued = true;
+    }
 }
 
 // not quite correct because in theory someone could compile quickjs.c
@@ -74,11 +188,8 @@ static bool host_pump_atomics_async(JSRuntime *rt, bool may_wait)
 #endif
 
 typedef struct {
-    js_mutex_t agent_mutex;
-    js_cond_t agent_cond;
     /* list of Test262Agent.link */
     struct list_head agent_list;
-    js_mutex_t report_mutex;
     /* list of AgentReport.link */
     struct list_head report_list;
     int async_done;
@@ -594,26 +705,37 @@ static long cpu_count(void)
 
 static void init_thread_local_storage(ThreadLocalStorage *p)
 {
-    js_mutex_init(&p->agent_mutex);
-    js_cond_init(&p->agent_cond);
     init_list_head(&p->agent_list);
-    js_mutex_init(&p->report_mutex);
     init_list_head(&p->report_list);
     p->async_done = 0;
     p->async_fail[0] = '\0';
 }
 
+/* $262.agent's agents run in the test's own runtime, each an Agent Record and a realm of it (ECMA-262 §9.6 Agents
+   defines an agent by its execution contexts and its Agent Record), so they share the test's Shared Data Blocks.
+   This host is their scheduler: at every rest point of the test (a park of its flow, a job of its queue) each
+   agent takes one step of its own (a parked continuation, its running flow, one of its jobs, or the start of
+   its broadcast callback) under its own set of parked continuations. An agent suspended in Atomics.wait or
+   $262.agent.sleep takes no step until its suspension is woken or its timeout time is reached on this host's
+   clock, which moves with the work retired and jumps to the earliest deadline only when nothing can step. */
+typedef struct Run262Job {
+    struct list_head link;
+    JSJobFunc *fn;
+    int argc;
+    JSValue *argv;
+} Run262Job;
+
 typedef struct {
     struct list_head link;
-    js_thread_t tid;
-    char *script;
+    JSContext *realm;
+    JSValue *flow;            /* the agent's script, then each broadcast callback, while it runs */
+    void *parked;             /* its parked continuations while another agent runs */
+    JSValue suspended_on;     /* the suspension record its last step parked on, or JS_UNDEFINED */
+    struct list_head jobs;    /* its job queue (Run262Job.link), which this host owns */
     JSValue broadcast_func;
     bool broadcast_pending;
-    JSValue broadcast_sab; /* in the main context */
-    uint8_t *broadcast_sab_buf;
-    size_t broadcast_sab_size;
+    JSValue broadcast_sab;    /* the broadcast SharedArrayBuffer, viewed in this agent's realm */
     int32_t broadcast_val;
-    ThreadLocalStorage *tls;
 } Test262Agent;
 
 typedef struct {
@@ -624,219 +746,290 @@ typedef struct {
 static JSValue add_helpers1(JSContext *ctx);
 static void add_helpers(JSContext *ctx);
 
-static void agent_start(void *arg)
+/* The test's suspension record for a $262.agent.broadcast waiting on agents to start their callbacks. */
+static _Thread_local JSValue t_broadcast_wait = JS_UNDEFINED;
+static _Thread_local JSContext *t_main_ctx;
+
+static Test262Agent *agent_of_realm(ThreadLocalStorage *tls, JSContext *ctx)
 {
-    ThreadLocalStorage *tls;
-    Test262Agent *agent;
-    JSRuntime *rt;
-    JSContext *ctx;
-    JSValue ret_val;
-    int ret;
+    struct list_head *el;
+    JSAgentRecord *rec = JS_GetRealmAgent(ctx);
 
-    agent = arg;
-    tls = agent->tls; // shares thread-local storage with parent thread
-    rt = JS_NewRuntime();
-    if (rt == NULL) {
-        fatal(1, "JS_NewRuntime failure");
+    list_for_each(el, &tls->agent_list) {
+        Test262Agent *a = list_entry(el, Test262Agent, link);
+        if (JS_GetRealmAgent(a->realm) == rec)
+            return a;
     }
-    JS_SetRuntimeOpaque(rt, tls);
-    ctx = JS_NewContext(rt);
-    if (ctx == NULL) {
-        JS_FreeRuntime(rt);
-        fatal(1, "JS_NewContext failure");
-    }
-    JS_SetContextOpaque(ctx, agent);
-    JS_SetRuntimeInfo(rt, "agent");
-    /* $262.agent.start's agent runs on its own thread, so it is this runtime's only agent, and it can block. */
-    JS_SetRealmAgent(ctx, JS_NewAgentRecord(rt, true));
-
-    add_helpers(ctx);
-    /* THE AGENT'S SCRIPT IS TEST CODE and runs on the flow machinery like every other program. It ran through
-       plain JS_Eval, so an agent body executed in a C activation with no flow base — a loop in it drove to
-       completion, and its top level reached JS_EvalFunctionInternal's C call into the interpreter, which is the
-       last thing holding JS_CallFree on the interpreter's own cycle.
-       The hooks are NOT armed here: agent_start is only ever reached from $262.agent.start inside a running
-       test, so the main thread has already armed them, and JSFlowControlHooks is one global. */
-    ret_val = fork_preempt_run_program(ctx, agent->script, strlen(agent->script),
-                                       "<evalScript>", JS_EVAL_TYPE_GLOBAL);
-    free(agent->script);
-    agent->script = NULL;
-    if (JS_IsException(ret_val))
-        js_std_dump_error(ctx);
-    JS_FreeValue(ctx, ret_val);
-
-    for(;;) {
-        JSContext *ctx1;
-        /* THE PUMP, and this is the THIRD one — the two that drive the main thread already drain the parked
-           slot before any job and say why. This one did not, and the line above is why that matters: the
-           agent's script runs on the flow machinery, so a loop in it PARKS. A parked agent flow with nothing
-           to resume it either sits while queued jobs run ahead of it — reordering observable microtasks, which
-           the resume razor forbids — or is never resumed at all and the agent silently stops mid-script.
-           Three pumps with two of them transparent is the same class of gap as one call spelling behaving
-           differently from another: the property has to hold wherever a flow can park, not where we happened
-           to look.
-           AND THE COMPLETION IS TAKEN, exactly as the job below it is: a parked continuation is the LATE half
-           of a job, so an uncaught throw out of one is reported the way an uncaught throw out of a job is.
-           Leaving it in the per-runtime slot is what let it reach the next evaluation. */
-        for (;;) {
-            JSValue pcv;
-            if (!JS_ResumeParkedFlow(JS_GetRuntime(ctx), &pcv))
-                break;
-            if (JS_IsException(pcv))
-                js_std_dump_error(ctx);
-            JS_FreeValue(ctx, pcv);
-        }
-        host_pump_atomics_async(JS_GetRuntime(ctx), false);
-        ret = JS_ExecutePendingJob(JS_GetRuntime(ctx), &ctx1);
-        if (ret < 0) {
-            js_std_dump_error(ctx);
-            break;
-        } else if (ret == 0) {
-            if (host_pump_atomics_async(JS_GetRuntime(ctx), true))
-                continue;
-            if (JS_IsUndefined(agent->broadcast_func)) {
-                break;
-            } else {
-                JSValue args[2];
-
-                js_mutex_lock(&tls->agent_mutex);
-                while (!agent->broadcast_pending) {
-                    js_cond_wait(&tls->agent_cond, &tls->agent_mutex);
-                }
-
-                agent->broadcast_pending = false;
-                js_cond_signal(&tls->agent_cond);
-
-                js_mutex_unlock(&tls->agent_mutex);
-
-                args[0] = JS_NewArrayBuffer(ctx, agent->broadcast_sab_buf,
-                                            agent->broadcast_sab_size,
-                                            NULL, NULL, true);
-                args[1] = JS_NewInt32(ctx, agent->broadcast_val);
-                ret_val = JS_Call(ctx, agent->broadcast_func, JS_UNDEFINED,
-                                  2, (JSValueConst *)args);
-                JS_FreeValue(ctx, args[0]);
-                JS_FreeValue(ctx, args[1]);
-                if (JS_IsException(ret_val))
-                    js_std_dump_error(ctx);
-                JS_FreeValue(ctx, ret_val);
-                JS_FreeValue(ctx, agent->broadcast_func);
-                agent->broadcast_func = JS_UNDEFINED;
-            }
-        }
-    }
-    JS_FreeValue(ctx, agent->broadcast_func);
-
-    JS_FreeContext(ctx);
-    JS_FreeRuntime(rt);
+    return NULL;
 }
 
-static JSValue js_agent_start(JSContext *ctx, JSValueConst this_val,
-                              int argc, JSValueConst *argv)
+/* The job enqueue hook: an agent's job is queued on that agent, the test's on the runtime's own queue. */
+static int run262_job_hook(JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv, bool is_task,
+                           JSTaskSource source, JSTaskHandle handle)
+{
+    ThreadLocalStorage *tls = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
+    Test262Agent *a;
+    Run262Job *j;
+    int i;
+
+    (void)is_task; (void)source; (void)handle;
+    if (!tls || !(a = agent_of_realm(tls, ctx)))
+        return 0;
+    j = malloc(sizeof(*j));
+    if (!j || !(j->argv = malloc(sizeof(JSValue) * (size_t)(argc > 0 ? argc : 1))))
+        fatal(1, "no memory for an agent's job");
+    j->fn = fn;
+    j->argc = argc;
+    for (i = 0; i < argc; i++)
+        j->argv[i] = JS_DupValue(ctx, argv[i]);
+    list_add_tail(&j->link, &a->jobs);
+    return 1;
+}
+
+static void run262_job_free(JSRuntime *rt, Run262Job *j)
+{
+    int i;
+    for (i = 0; i < j->argc; i++)
+        JS_FreeValueRT(rt, j->argv[i]);
+    free(j->argv);
+    free(j);
+}
+
+static bool any_broadcast_pending(ThreadLocalStorage *tls)
+{
+    struct list_head *el;
+    list_for_each(el, &tls->agent_list) {
+        if (list_entry(el, Test262Agent, link)->broadcast_pending)
+            return true;
+    }
+    return false;
+}
+
+/* One step of one agent, under its own parked set. Answers whether it stepped. */
+static bool run262_agent_turn(ThreadLocalStorage *tls, Test262Agent *a)
+{
+    JSContext *ctx = a->realm;
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    void *outer;
+    bool stepped = true;
+
+    if (!JS_IsUndefined(a->suspended_on)) {
+        if (!JS_SuspensionWoken(ctx, a->suspended_on)) {
+            if (JS_SuspensionTimeoutTime(ctx, a->suspended_on) > run262_now())
+                return false;
+            JS_TimeOutSuspension(ctx, a->suspended_on);
+        }
+        JS_FreeValue(ctx, a->suspended_on);
+        a->suspended_on = JS_UNDEFINED;
+    }
+    outer = JS_TakeParkedFlows(rt);
+    JS_PutParkedFlows(rt, a->parked);
+    a->parked = NULL;
+    if (JS_HasParkedFlow(rt)) {
+        JSValue pcv;
+        JS_ResumeParkedFlow(rt, &pcv);
+        if (JS_IsException(pcv))
+            js_std_dump_error(ctx);
+        JS_FreeValue(ctx, pcv);
+    } else if (a->flow) {
+        JSValue res = JS_UNDEFINED;
+        if (JS_FlowResume(ctx, a->flow, &res) == 0) {
+            if (JS_IsException(res))
+                js_std_dump_error(ctx);
+            JS_FreeValue(ctx, res);
+            JS_FlowFree(ctx, a->flow);
+            a->flow = NULL;
+        }
+    } else if (!list_empty(&a->jobs)) {
+        Run262Job *j = list_entry(a->jobs.next, Run262Job, link);
+        JSValue r;
+        list_del(&j->link);
+        r = j->fn(ctx, j->argc, (JSValueConst *)j->argv);
+        if (JS_IsException(r))
+            js_std_dump_error(ctx);
+        JS_FreeValue(ctx, r);
+        run262_job_free(rt, j);
+    } else if (a->broadcast_pending && !JS_IsUndefined(a->broadcast_func)) {
+        JSValue args[2] = { a->broadcast_sab, JS_NewInt32(ctx, a->broadcast_val) };
+        a->flow = JS_FlowNewCall(ctx, a->broadcast_func, JS_UNDEFINED, 2, (JSValueConst *)args, false);
+        if (!a->flow)
+            js_std_dump_error(ctx);
+        JS_FreeValue(ctx, a->broadcast_func);
+        a->broadcast_func = JS_UNDEFINED;
+        a->broadcast_pending = false;
+        if (!any_broadcast_pending(tls) && !JS_IsUndefined(t_broadcast_wait)) {
+            JS_WakeSuspension(t_main_ctx, t_broadcast_wait);
+            JS_FreeValue(t_main_ctx, t_broadcast_wait);
+            t_broadcast_wait = JS_UNDEFINED;
+        }
+    } else {
+        stepped = false;
+    }
+    a->suspended_on = JS_TakeSuspension(rt);
+    a->parked = JS_TakeParkedFlows(rt);
+    JS_PutParkedFlows(rt, outer);
+    return stepped;
+}
+
+/* One step of every agent; answers whether any stepped. */
+static bool run262_agents_round(ThreadLocalStorage *tls)
+{
+    struct list_head *el;
+    bool stepped = false;
+
+    list_for_each(el, &tls->agent_list) {
+        if (run262_agent_turn(tls, list_entry(el, Test262Agent, link)))
+            stepped = true;
+    }
+    return stepped;
+}
+
+/* The earliest time anything in the runtime waits for: a timeout job, a suspended agent, or the test's own
+   suspension `w` (JS_UNDEFINED for none). */
+static double run262_next_deadline(ThreadLocalStorage *tls, JSContext *ctx, JSValueConst w)
+{
+    struct list_head *el;
+    double d = INFINITY;
+
+    list_for_each(el, t_timeouts)
+        d = fmin(d, list_entry(el, Run262Timeout, link)->due_ms);
+    list_for_each(el, &tls->agent_list) {
+        Test262Agent *a = list_entry(el, Test262Agent, link);
+        if (!JS_IsUndefined(a->suspended_on) && !JS_SuspensionWoken(a->realm, a->suspended_on))
+            d = fmin(d, JS_SuspensionTimeoutTime(a->realm, a->suspended_on));
+    }
+    if (!JS_IsUndefined(w))
+        d = fmin(d, JS_SuspensionTimeoutTime(ctx, w));
+    return d;
+}
+
+/* Nothing in the runtime can step, so the clock's base jumps to the earliest deadline. Answers whether there
+   was one. */
+static bool run262_advance_clock(ThreadLocalStorage *tls, JSContext *ctx, JSValueConst w)
+{
+    double d = run262_next_deadline(tls, ctx, w);
+
+    if (!isfinite(d))
+        return false;
+    if (run262_now() < d) {
+        t_base_ms = d - (double)t_work / RUN262_WORK_PER_MS;
+        while (run262_now() < d)   /* the sum may round below d */
+            t_base_ms = nextafter(t_base_ms, INFINITY);
+    }
+    return true;
+}
+
+/* After the test's own flow parks: every agent steps once, and if the test suspended, agents step, timeouts are
+   queued and the clock advances until it is woken or its own timeout time is reached. */
+static void run262_await_suspension(JSContext *ctx)
+{
+    ThreadLocalStorage *tls = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
+    JSValue w = JS_TakeSuspension(JS_GetRuntime(ctx));
+
+    run262_agents_round(tls);
+    if (JS_IsUndefined(w))
+        return;
+    while (!JS_SuspensionWoken(ctx, w)) {
+        bool stepped;
+        if (JS_SuspensionTimeoutTime(ctx, w) <= run262_now()) {
+            JS_TimeOutSuspension(ctx, w);
+            break;
+        }
+        stepped = run262_agents_round(tls);
+        stepped = run262_timeouts_run() || stepped;
+        if (!stepped && !run262_advance_clock(tls, ctx, w))
+            fatal(1, "the test suspended with no agent able to step and nothing timed to wake it");
+    }
+    JS_FreeValue(ctx, w);
+}
+
+/* The job pump's question before it ends, asked with the test's queue empty: whether an agent stepped, a timeout
+   job was queued, or the clock advanced to something that will. */
+static bool run262_agents_idle_step(ThreadLocalStorage *tls)
+{
+    if (run262_agents_round(tls) || run262_timeouts_run())
+        return true;
+    return run262_advance_clock(tls, NULL, JS_UNDEFINED);
+}
+
+static JSValue js_agent_start(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     ThreadLocalStorage *tls = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
     const char *script;
+    size_t len;
     Test262Agent *agent;
+    JSContext *realm;
 
     if (JS_GetContextOpaque(ctx) != NULL)
         return JS_ThrowTypeError(ctx, "cannot be called inside an agent");
-
-    script = JS_ToCString(ctx, argv[0]);
+    script = JS_ToCStringLen(ctx, &len, argv[0]);
     if (!script)
         return JS_EXCEPTION;
-    agent = malloc(sizeof(*agent));
-    memset(agent, 0, sizeof(*agent));
+    realm = JS_NewContext(JS_GetRuntime(ctx));
+    if (!realm) {
+        JS_FreeCString(ctx, script);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    /* HTML §8.1.2.2's obtain a dedicated worker agent creates it given canBlock true */
+    JS_SetRealmAgent(realm, JS_NewAgentRecord(JS_GetRuntime(ctx), true));
+    agent = calloc(1, sizeof(*agent));
+    if (!agent)
+        fatal(1, "no memory for an agent");
+    agent->realm = realm;
+    agent->suspended_on = JS_UNDEFINED;
     agent->broadcast_func = JS_UNDEFINED;
     agent->broadcast_sab = JS_UNDEFINED;
-    agent->script = strdup(script);
-    agent->tls = tls;
+    init_list_head(&agent->jobs);
+    JS_SetContextOpaque(realm, agent);
+    add_helpers(realm);
+    agent->flow = JS_FlowNew(realm, script, len, "<agent>", JS_EVAL_TYPE_GLOBAL);
     JS_FreeCString(ctx, script);
+    if (!agent->flow)
+        js_std_dump_error(realm);
     list_add_tail(&agent->link, &tls->agent_list);
-    js_thread_create(&agent->tid, agent_start, agent, /*flags*/0);
+    t_main_ctx = ctx;
     return JS_UNDEFINED;
 }
 
 static void js_agent_free(JSContext *ctx)
 {
     ThreadLocalStorage *tls = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
-    struct list_head *el, *el1;
-    Test262Agent *agent;
-
-    list_for_each_safe(el, el1, &tls->agent_list) {
-        agent = list_entry(el, Test262Agent, link);
-        js_thread_join(agent->tid);
-        JS_FreeValue(ctx, agent->broadcast_sab);
-        list_del(&agent->link);
-        free(agent);
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    while (!list_empty(&tls->agent_list)) {
+        Test262Agent *a = list_entry(tls->agent_list.next, Test262Agent, link);
+        list_del(&a->link);
+        if (a->flow)
+            JS_FlowFree(a->realm, a->flow);
+        JS_FreeParkedFlows(a->parked);
+        while (!list_empty(&a->jobs)) {
+            Run262Job *j = list_entry(a->jobs.next, Run262Job, link);
+            list_del(&j->link);
+            run262_job_free(rt, j);
+        }
+        JS_FreeValue(a->realm, a->suspended_on);
+        JS_FreeValue(a->realm, a->broadcast_func);
+        JS_FreeValue(a->realm, a->broadcast_sab);
+        JS_FreeContext(a->realm);
+        free(a);
+    }
+    JS_FreeValue(ctx, t_broadcast_wait);
+    t_broadcast_wait = JS_UNDEFINED;
+    while (!list_empty(&tls->report_list)) {
+        AgentReport *rep = list_entry(tls->report_list.next, AgentReport, link);
+        list_del(&rep->link);
+        free(rep->str);
+        free(rep);
     }
 }
 
-static JSValue js_agent_leaving(JSContext *ctx, JSValueConst this_val,
-                                int argc, JSValueConst *argv)
+static JSValue js_agent_leaving(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
-    Test262Agent *agent = JS_GetContextOpaque(ctx);
-    if (!agent)
+    if (!JS_GetContextOpaque(ctx))
         return JS_ThrowTypeError(ctx, "must be called inside an agent");
-    /* nothing to do */
     return JS_UNDEFINED;
 }
 
-static bool is_broadcast_pending(ThreadLocalStorage *tls)
-{
-    struct list_head *el;
-    Test262Agent *agent;
-    list_for_each(el, &tls->agent_list) {
-        agent = list_entry(el, Test262Agent, link);
-        if (agent->broadcast_pending)
-            return true;
-    }
-    return false;
-}
-
-static JSValue js_agent_broadcast(JSContext *ctx, JSValueConst this_val,
-                                  int argc, JSValueConst *argv)
-{
-    ThreadLocalStorage *tls = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
-    JSValueConst sab = argv[0];
-    struct list_head *el;
-    Test262Agent *agent;
-    uint8_t *buf;
-    size_t buf_size;
-    int32_t val;
-
-    if (JS_GetContextOpaque(ctx) != NULL)
-        return JS_ThrowTypeError(ctx, "cannot be called inside an agent");
-
-    buf = JS_GetArrayBuffer(ctx, &buf_size, sab);
-    if (!buf)
-        return JS_EXCEPTION;
-    if (JS_ToInt32(ctx, &val, argv[1]))
-        return JS_EXCEPTION;
-
-    /* broadcast the values and wait until all agents have started
-       calling their callbacks */
-    js_mutex_lock(&tls->agent_mutex);
-    list_for_each(el, &tls->agent_list) {
-        agent = list_entry(el, Test262Agent, link);
-        agent->broadcast_pending = true;
-        /* the shared array buffer is used by the thread, so increment
-           its refcount */
-        agent->broadcast_sab = JS_DupValue(ctx, sab);
-        agent->broadcast_sab_buf = buf;
-        agent->broadcast_sab_size = buf_size;
-        agent->broadcast_val = val;
-    }
-    js_cond_broadcast(&tls->agent_cond);
-
-    while (is_broadcast_pending(tls)) {
-        js_cond_wait(&tls->agent_cond, &tls->agent_mutex);
-    }
-    js_mutex_unlock(&tls->agent_mutex);
-    return JS_UNDEFINED;
-}
-
-static JSValue js_agent_receiveBroadcast(JSContext *ctx, JSValueConst this_val,
-                                         int argc, JSValueConst *argv)
+static JSValue js_agent_receiveBroadcast(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     Test262Agent *agent = JS_GetContextOpaque(ctx);
     if (!agent)
@@ -848,64 +1041,137 @@ static JSValue js_agent_receiveBroadcast(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-static JSValue js_agent_sleep(JSContext *ctx, JSValueConst this_val,
-                              int argc, JSValueConst *argv)
+/* $262.agent.broadcast and $262.agent.sleep suspend the calling flow, so each is a step machine: broadcast until
+   every agent has started its callback, sleep until its timeout on this host's clock. */
+typedef struct {
+    JSStepHdr hdr;        /* MUST be first */
+    JSValue rec;          /* the suspension record (owned) */
+    JSValue result;       /* DONE (owned) */
+} Run262Wait;
+
+enum { R262_BEGIN, R262_SUSPENDED };
+static const char *const run262_broadcast_steps[] = {
+    "$262.agent.broadcast: hand each agent the SharedArrayBuffer and the value",
+    "$262.agent.broadcast: suspended until every agent has started its callback", NULL };
+static const char *const run262_sleep_steps[] = {
+    "$262.agent.sleep: suspend until the duration has passed on this host's clock",
+    "$262.agent.sleep: suspended until its timeout time", NULL };
+
+static int run262_wait_resume(JSContext *ctx, Run262Wait *s)
 {
+    if (!JS_SuspensionWoken(ctx, s->rec))
+        return step_suspend_run(ctx, &s->hdr, s->rec);
+    s->result = JS_UNDEFINED;
+    return 0;
+}
+
+static int run262_broadcast_step(JSContext *ctx, void *st, JSValue cb, JSValue **out_cb, int *out_argc)
+{
+    Run262Wait *s = st;
+    ThreadLocalStorage *tls = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
+    struct list_head *el;
+    int32_t val;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb);
+    if (s->hdr.stage == R262_SUSPENDED)
+        return run262_wait_resume(ctx, s);
+    s->rec = JS_UNDEFINED;
+    s->result = JS_UNDEFINED;
+    if (JS_GetContextOpaque(ctx) != NULL) {
+        JS_ThrowTypeError(ctx, "cannot be called inside an agent");
+        return -1;
+    }
+    /* the harness passes a SharedArrayBuffer and a number or nothing (ToInt32 makes that 0), so no coercion runs
+       the test's code */
+    if (!(JS_IsNumber(step_arg(&s->hdr, 1)) || JS_IsUndefined(step_arg(&s->hdr, 1)))
+        || JS_ToInt32(ctx, &val, step_arg(&s->hdr, 1))) {
+        JS_ThrowTypeError(ctx, "$262.agent.broadcast expects a SharedArrayBuffer and a number");
+        return -1;
+    }
+    list_for_each(el, &tls->agent_list) {
+        Test262Agent *a = list_entry(el, Test262Agent, link);
+        JS_FreeValue(a->realm, a->broadcast_sab);
+        a->broadcast_sab = JS_NewSharedArrayBufferView(a->realm, step_arg(&s->hdr, 0));
+        if (JS_IsException(a->broadcast_sab))
+            return -1;
+        a->broadcast_val = val;
+        a->broadcast_pending = true;
+    }
+    if (!any_broadcast_pending(tls))
+        return 0;
+    s->rec = JS_NewSuspension(ctx, INFINITY);
+    JS_FreeValue(ctx, t_broadcast_wait);
+    t_broadcast_wait = JS_DupValue(ctx, s->rec);
+    t_main_ctx = ctx;
+    s->hdr.stage = R262_SUSPENDED;
+    return step_suspend_run(ctx, &s->hdr, s->rec);
+}
+
+static int run262_sleep_step(JSContext *ctx, void *st, JSValue cb, JSValue **out_cb, int *out_argc)
+{
+    Run262Wait *s = st;
     uint32_t duration;
-    if (JS_ToUint32(ctx, &duration, argv[0]))
-        return JS_EXCEPTION;
-#ifdef _WIN32
-    Sleep(duration);
-#else
-    usleep(duration * 1000);
-#endif
-    return JS_UNDEFINED;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb);
+    if (s->hdr.stage == R262_SUSPENDED)
+        return run262_wait_resume(ctx, s);
+    s->rec = JS_UNDEFINED;
+    s->result = JS_UNDEFINED;
+    if (!JS_IsNumber(step_arg(&s->hdr, 0)) || JS_ToUint32(ctx, &duration, step_arg(&s->hdr, 0))) {
+        JS_ThrowTypeError(ctx, "$262.agent.sleep expects a number of milliseconds");
+        return -1;
+    }
+    s->rec = JS_NewSuspension(ctx, run262_now() + duration);
+    s->hdr.stage = R262_SUSPENDED;
+    return step_suspend_run(ctx, &s->hdr, s->rec);
 }
 
-static int64_t get_clock_ms(void)
+static void run262_wait_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-#ifdef _WIN32
-    return GetTickCount64();
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + (ts.tv_nsec / 1000000);
-#endif
+    Run262Wait *s = st;
+    v->val(ctx, &s->rec);
+    v->val(ctx, &s->result);
 }
 
-static JSValue js_agent_monotonicNow(JSContext *ctx, JSValueConst this_val,
-                                     int argc, JSValueConst *argv)
+static JSValue run262_wait_fini(JSContext *ctx, void *st, bool take_result)
 {
-    return JS_NewInt64(ctx, get_clock_ms());
+    Run262Wait *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+    if (take_result) s->result = JS_UNDEFINED;
+    return r;
 }
 
-static JSValue js_agent_getReport(JSContext *ctx, JSValueConst this_val,
-                                  int argc, JSValueConst *argv)
+static const JSTrampStepDef run262_broadcast_def = {
+    sizeof(Run262Wait), run262_broadcast_step, run262_wait_fini, 0, .visit = run262_wait_visit,
+    .algorithm = "test262 INTERPRETING.md $262.agent.broadcast", .steps = run262_broadcast_steps };
+static const JSTrampStepDef run262_sleep_def = {
+    sizeof(Run262Wait), run262_sleep_step, run262_wait_fini, 0, .visit = run262_wait_visit,
+    .algorithm = "test262 INTERPRETING.md $262.agent.sleep", .steps = run262_sleep_steps };
+
+static JSValue js_agent_monotonicNow(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    return JS_NewFloat64(ctx, run262_now());
+}
+
+static JSValue js_agent_getReport(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     ThreadLocalStorage *tls = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
     AgentReport *rep;
     JSValue ret;
 
-    js_mutex_lock(&tls->report_mutex);
-    if (list_empty(&tls->report_list)) {
-        rep = NULL;
-    } else {
-        rep = list_entry(tls->report_list.next, AgentReport, link);
-        list_del(&rep->link);
-    }
-    js_mutex_unlock(&tls->report_mutex);
-    if (rep) {
-        ret = JS_NewString(ctx, rep->str);
-        free(rep->str);
-        free(rep);
-    } else {
-        ret = JS_NULL;
-    }
+    if (list_empty(&tls->report_list))
+        return JS_NULL;
+    rep = list_entry(tls->report_list.next, AgentReport, link);
+    list_del(&rep->link);
+    ret = JS_NewString(ctx, rep->str);
+    free(rep->str);
+    free(rep);
     return ret;
 }
 
-static JSValue js_agent_report(JSContext *ctx, JSValueConst this_val,
-                               int argc, JSValueConst *argv)
+static JSValue js_agent_report(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     ThreadLocalStorage *tls = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
     const char *str;
@@ -915,12 +1181,11 @@ static JSValue js_agent_report(JSContext *ctx, JSValueConst this_val,
     if (!str)
         return JS_EXCEPTION;
     rep = malloc(sizeof(*rep));
+    if (!rep)
+        fatal(1, "no memory for an agent report");
     rep->str = strdup(str);
     JS_FreeCString(ctx, str);
-
-    js_mutex_lock(&tls->report_mutex);
     list_add_tail(&rep->link, &tls->report_list);
-    js_mutex_unlock(&tls->report_mutex);
     return JS_UNDEFINED;
 }
 
@@ -928,22 +1193,24 @@ static const JSCFunctionListEntry js_agent_funcs[] = {
     /* only in main */
     JS_CFUNC_DEF("start", 1, js_agent_start ),
     JS_CFUNC_DEF("getReport", 0, js_agent_getReport ),
-    JS_CFUNC_DEF("broadcast", 2, js_agent_broadcast ),
     /* only in agent */
     JS_CFUNC_DEF("report", 1, js_agent_report ),
     JS_CFUNC_DEF("leaving", 0, js_agent_leaving ),
     JS_CFUNC_DEF("receiveBroadcast", 1, js_agent_receiveBroadcast ),
     /* in both */
-    JS_CFUNC_DEF("sleep", 1, js_agent_sleep ),
     JS_CFUNC_DEF("monotonicNow", 0, js_agent_monotonicNow ),
 };
 
 static JSValue js_new_agent(JSContext *ctx)
 {
-    JSValue agent;
-    agent = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, agent, js_agent_funcs,
-                               countof(js_agent_funcs));
+    JSValue agent = JS_NewObject(ctx);
+
+    JS_SetPropertyFunctionList(ctx, agent, js_agent_funcs, countof(js_agent_funcs));
+    /* the two that suspend the calling flow are step machines this runtime registered */
+    JS_SetPropertyStr(ctx, agent, "broadcast",
+                      JS_NewCFunction2(ctx, NULL, "broadcast", 2, JS_CFUNC_step, t_broadcast_stepid));
+    JS_SetPropertyStr(ctx, agent, "sleep",
+                      JS_NewCFunction2(ctx, NULL, "sleep", 1, JS_CFUNC_step, t_sleep_stepid));
     return agent;
 }
 
@@ -977,6 +1244,21 @@ static JSValue js_gc(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* The host's timer on this host's clock, which atomicsHelper.js prefers to its Date.now spin: a callback after
+   `delay` milliseconds, as a job of the calling realm's agent. */
+static JSValue js_setTimeout_262(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    double delay = 0;
+
+    if (!JS_IsFunction(ctx, argv[0]))
+        return JS_ThrowTypeError(ctx, "setTimeout expects a function");
+    if (!(JS_IsNumber(argv[1]) || JS_IsUndefined(argv[1])) || JS_ToFloat64(ctx, &delay, argv[1])
+        || isinf(delay))
+        return JS_ThrowTypeError(ctx, "setTimeout expects a finite number of milliseconds");
+    run262_enqueue_timeout(ctx, argv[0], isnan(delay) || delay < 0 ? 0 : delay, NULL);
+    return JS_UNDEFINED;
+}
+
 static JSValue add_helpers1(JSContext *ctx)
 {
     JSValue global_obj;
@@ -988,6 +1270,8 @@ static JSValue add_helpers1(JSContext *ctx)
                       JS_NewCFunction(ctx, js_print_262, "print", 1));
     JS_SetPropertyStr(ctx, global_obj, "gc",
                       JS_NewCFunction(ctx, js_gc, "gc", 0));
+    JS_SetPropertyStr(ctx, global_obj, "setTimeout",
+                      JS_NewCFunction(ctx, js_setTimeout_262, "setTimeout", 2));
 
     is_html_dda = JS_NewCFunction(ctx, js_IsHTMLDDA, "IsHTMLDDA", 0);
     JS_SetIsHTMLDDA(ctx, is_html_dda);
@@ -1462,7 +1746,8 @@ static int fork_preempt_always(int kind) {
 /* JSFlowControlHooks is {branch, fork, preempt} — THREE fields. A fourth initializer silently left `preempt` NULL,
    so the forced back-edge preemption never armed and the engagement metric read a vacuous 0/0. Designated
    initializers so the field can never drift again. */
-static const JSFlowControlHooks fork_hooks_ON  = { .branch = NULL, .fork = NULL, .preempt = fork_preempt_always };
+static const JSFlowControlHooks fork_hooks_ON  = { .branch = NULL, .fork = NULL, .preempt = fork_preempt_always,
+                                                   .work = run262_work };
 static const JSFlowControlHooks fork_hooks_OFF = { .branch = NULL, .fork = NULL, .preempt = NULL };
 
 /* The feature must stay ON for the WHOLE test, including the JOB DRAIN. A promise reaction, a post-await
@@ -1483,7 +1768,8 @@ static JSValue fork_preempt_run_program(JSContext *ctx, const char *buf, size_t 
     JSValue *flow = JS_FlowNew(ctx, buf, buf_len, filename, eval_flags);   /* STRICTNESS and the real script NAME */
     JSValue res = JS_UNDEFINED;
     if (!flow) return JS_EXCEPTION;   /* compile error: exception already pending */
-    while (JS_FlowResume(ctx, flow, &res)) { }   /* park + rebuild the whole frame chain on every back-edge */
+    while (JS_FlowResume(ctx, flow, &res))   /* park + rebuild the whole frame chain on every back-edge */
+        run262_await_suspension(ctx);
     JS_FlowFree(ctx, flow);
     return res;   /* the program's COMPLETION VALUE — what an eval API evaluates to (JS_EXCEPTION on a throw) */
 }
@@ -1578,6 +1864,7 @@ static int eval_buf(JSContext *ctx, const char *buf, size_t buf_len,
                     JSValue pcv;
                     if (!JS_ResumeParkedFlow(JS_GetRuntime(ctx), &pcv))
                         break;
+                    run262_await_suspension(ctx);
                     if (JS_IsException(pcv)) {
                         JSValue e = JS_GetException(ctx);
                         if (JS_IsUninitialized(parked_exc)) parked_exc = e;
@@ -1590,13 +1877,14 @@ static int eval_buf(JSContext *ctx, const char *buf, size_t buf_len,
                     break;
                 }
             }
-            host_pump_atomics_async(JS_GetRuntime(ctx), false);
+            run262_timeouts_run();
+            run262_agents_round(tls);
             ret = JS_ExecutePendingJob(JS_GetRuntime(ctx), &ctx1);
             if (ret < 0) {
                 res_val = JS_EXCEPTION;
                 break;
             } else if (ret == 0) {
-                if (host_pump_atomics_async(JS_GetRuntime(ctx), true))
+                if (run262_agents_idle_step(tls))
                     continue;
                 if (is_async) {
                     /* test if the test called $DONE() once */
@@ -1990,6 +2278,7 @@ int run_test_buf(ThreadLocalStorage *tls, const char *filename, char *harness,
     }
     JS_SetDumpFlags(rt, JS_DUMP_LEAKS);
     JS_SetRuntimeOpaque(rt, tls);
+    run262_host_install(rt);
     js_std_init_handlers(rt);
     ctx = JS_NewCustomContext(rt);
     if (ctx == NULL) {
@@ -2049,6 +2338,7 @@ int run_test_buf(ThreadLocalStorage *tls, const char *filename, char *harness,
         update_stats(rt, filename);
     }
     js_agent_free(ctx);
+    run262_host_free(rt);
     JS_FreeContext(ctx);
     js_std_free_handlers(rt);
     JS_FreeRuntime(rt);
@@ -2261,6 +2551,7 @@ int run_test262_harness_test(ThreadLocalStorage *tls, const char *filename,
     }
     JS_SetDumpFlags(rt, JS_DUMP_LEAKS);
     JS_SetRuntimeOpaque(rt, tls);
+    run262_host_install(rt);
     ctx = JS_NewContext(rt);
     if (ctx == NULL) {
         JS_FreeRuntime(rt);
@@ -2313,19 +2604,21 @@ int run_test262_harness_test(ThreadLocalStorage *tls, const char *filename,
                 JSValue pcv;
                 if (!JS_ResumeParkedFlow(JS_GetRuntime(ctx), &pcv))
                     break;
+                run262_await_suspension(ctx);
                 if (JS_IsException(pcv)) {
                     js_std_dump_error(ctx);
                     ret_code = 1;
                 }
                 JS_FreeValue(ctx, pcv);
             }
-            host_pump_atomics_async(JS_GetRuntime(ctx), false);
+            run262_timeouts_run();
+            run262_agents_round(tls);
             ret = JS_ExecutePendingJob(JS_GetRuntime(ctx), &ctx1);
             if (ret < 0) {
                 js_std_dump_error(ctx1);
                 ret_code = 1;
             } else if (ret == 0) {
-                if (host_pump_atomics_async(JS_GetRuntime(ctx), true))
+                if (run262_agents_idle_step(tls))
                     continue;
                 break;
             }
@@ -2347,6 +2640,7 @@ int run_test262_harness_test(ThreadLocalStorage *tls, const char *filename,
     fork_preempt_hooks_off();
     free(buf);
     js_agent_free(ctx);
+    run262_host_free(rt);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
     return ret_code;

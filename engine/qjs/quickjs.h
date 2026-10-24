@@ -1743,13 +1743,10 @@ JS_EXTERN JSValue JS_NewUint8Array(JSContext *ctx, uint8_t *buf, size_t len,
 /* returns -1 if not a typed array otherwise return a JSTypedArrayEnum value */
 JS_EXTERN int JS_GetTypedArrayType(JSValueConst obj);
 JS_EXTERN JSValue JS_NewUint8ArrayCopy(JSContext *ctx, const uint8_t *buf, size_t len);
-typedef struct {
-    void *(*sab_alloc)(void *opaque, size_t size);
-    void (*sab_free)(void *opaque, void *ptr);
-    void (*sab_dup)(void *opaque, void *ptr);
-    void *sab_opaque;
-} JSSharedArrayBufferFunctions;
-JS_EXTERN void JS_SetSharedArrayBufferFunctions(JSRuntime *rt, const JSSharedArrayBufferFunctions *sf);
+/* A new SharedArrayBuffer in `ctx`'s realm over the Shared Data Block `sab` views, as HTML §2.7.4
+   StructuredDeserialize builds one in its target realm; both must be of one runtime, which one agent cluster's
+   agents are. */
+JS_EXTERN JSValue JS_NewSharedArrayBufferView(JSContext *ctx, JSValueConst sab);
 
 typedef enum JSPromiseStateEnum {
     // argument to JS_PromiseState() was not in fact a promise
@@ -1798,15 +1795,30 @@ JS_EXTERN int JS_CallAsFlow(JSContext *ctx, JSValueConst func, JSValueConst valu
    promise; either handler may be JS_UNDEFINED. */
 JS_EXTERN JSValue JS_PerformPromiseThen(JSContext *ctx, JSValueConst promise, JSValueConst on_fulfilled,
                                         JSValueConst on_rejected);
-/* Atomics.waitAsync timeouts are the HOST's to wait for — 25.4.3.14 enqueues a host timeout job. Ask how long
-   until the earliest deadline (-1 = none), wait for it wherever the host already waits, then settle what is
-   due. The engine never blocks on this itself. */
-/* Atomics.waitAsync's timeout is a HOST job (25.4.3.14). JS_AtomicsExpireAsync settles every waiter this
-   runtime owns that is due — notified or past its deadline — and reports how many; call it from the event loop
-   alongside the job pump. JS_AtomicsAsyncWaitForWork blocks until there is one, returning false when the
-   runtime owns no outstanding waiter and the loop may treat its queue as drained. */
-JS_EXTERN int JS_AtomicsExpireAsync(JSRuntime *rt);
-JS_EXTERN bool JS_AtomicsAsyncWaitForWork(JSRuntime *rt);
+/* ECMA-262 §9.5.4 HostEnqueueGenericJob ( job, realm ) and §9.5.6 HostEnqueueTimeoutJob ( timeoutJob, realm,
+   milliseconds ): the host queues `job`, a function to call with no arguments, in `realm`'s agent, the second
+   after at least `milliseconds` of the host's time. Required before any Atomics.wait or waitAsync waits.
+   `now` is the host's current time in milliseconds, which a blocking waiter's [[TimeoutTime]] is on; a host
+   none of whose agents can block leaves it NULL. */
+typedef struct JSHostJobHooks {
+    void (*enqueue_generic)(JSContext *realm, JSValueConst job, void *opaque);
+    void (*enqueue_timeout)(JSContext *realm, JSValueConst job, double milliseconds, void *opaque);
+    double (*now)(JSContext *realm, void *opaque);
+    void *opaque;
+} JSHostJobHooks;
+JS_EXTERN void JS_SetHostJobHooks(JSRuntime *rt, const JSHostJobHooks *hooks);
+/* After JS_FlowResume or JS_ResumeParkedFlow parks a flow: the suspension record its agent suspended on (an
+   Atomics.wait's Waiter Record, §25.4.3.11 SuspendThisAgent, or a host machine's own), or JS_UNDEFINED when the
+   park was not a suspension. Owned. The host resumes that flow only once JS_SuspensionWoken answers true;
+   resuming it earlier suspends it again. Once its clock reaches JS_SuspensionTimeoutTime (+Infinity for none)
+   the host wakes it with JS_TimeOutSuspension. A host machine suspends on a record from JS_NewSuspension
+   (quickjs-step.h's step_suspend_run) and wakes it otherwise with JS_WakeSuspension. */
+JS_EXTERN JSValue JS_TakeSuspension(JSRuntime *rt);
+JS_EXTERN bool JS_SuspensionWoken(JSContext *ctx, JSValueConst rec);
+JS_EXTERN double JS_SuspensionTimeoutTime(JSContext *ctx, JSValueConst rec);
+JS_EXTERN void JS_TimeOutSuspension(JSContext *ctx, JSValueConst rec);
+JS_EXTERN JSValue JS_NewSuspension(JSContext *ctx, double timeout_time);
+JS_EXTERN void JS_WakeSuspension(JSContext *ctx, JSValueConst rec);
 JS_EXTERN JSPromiseStateEnum JS_PromiseState(JSContext *ctx,
                                              JSValueConst promise);
 JS_EXTERN JSValue JS_PromiseResult(JSContext *ctx, JSValueConst promise);
@@ -3649,11 +3661,6 @@ JS_EXTERN bool JS_IsJobPending(JSRuntime *rt);
 JS_EXTERN JSContext *JS_GetPendingJobContext(JSRuntime *rt);
 JS_EXTERN int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx);
 
-/* Structure to retrieve (de)serialized SharedArrayBuffer objects. */
-typedef struct JSSABTab {
-    uint8_t **tab;
-    size_t len;
-} JSSABTab;
 
 /* HTML §2.7.7's `memory`, SEEDED WITH THE TRANSFER LIST — the one fact a serializer cannot derive from the
  * graph it is walking, because it is a fact about the CALL and not about the value.
@@ -3747,24 +3754,20 @@ typedef struct JSSerializableReadHook {
 /* Object Writer/Reader (currently only used to handle precompiled code) */
 #define JS_WRITE_OBJ_BYTECODE  (1 << 0) /* allow function/module */
 #define JS_WRITE_OBJ_BSWAP     (0)      /* byte swapped output (obsolete, handled transparently) */
-#define JS_WRITE_OBJ_SAB       (1 << 2) /* allow SharedArrayBuffer */
 #define JS_WRITE_OBJ_REFERENCE (1 << 3) /* allow object references to encode arbitrary object graph */
 #define JS_WRITE_OBJ_STRIP_SOURCE  (1 << 4) /* do not write source code information */
 #define JS_WRITE_OBJ_STRIP_DEBUG   (1 << 5) /* do not write debug information */
 JS_EXTERN uint8_t *JS_WriteObject(JSContext *ctx, size_t *psize, JSValueConst obj, int flags);
-JS_EXTERN uint8_t *JS_WriteObject2(JSContext *ctx, size_t *psize, JSValueConst obj,
-                                   int flags, JSSABTab *psab_tab);
 /* ... and with §2.7.7's seeded `memory`. NULL is an unseeded one, which is every write that is not a
    StructuredSerializeWithTransfer. */
 JS_EXTERN uint8_t *JS_WriteObject3(JSContext *ctx, size_t *psize, JSValueConst obj,
-                                   int flags, JSSABTab *psab_tab,
-                                   const JSTransferWriteHook *transfer);
+                                   int flags, const JSTransferWriteHook *transfer);
 /* ... and with HTML §2.7.1's serializable seam beside it. NULL is a write with no seam, which refuses every
    platform object exactly as step 20 does. The two maps are separate parameters because they answer two
    questions: one is about the CALL (which objects did the caller name in its transfer list), the other about
    the INTERFACE (which platform objects does the host serialize at all). */
 JS_EXTERN uint8_t *JS_WriteObject4(JSContext *ctx, size_t *psize, JSValueConst obj,
-                                   int flags, JSSABTab *psab_tab,
+                                   int flags,
                                    const JSTransferWriteHook *transfer,
                                    const JSSerializableWriteHook *serializable);
 
@@ -3773,22 +3776,15 @@ JS_EXTERN uint8_t *JS_WriteObject4(JSContext *ctx, size_t *psize, JSValueConst o
    producer; loading adversarial bytecode can lead to memory corruption. */
 #define JS_READ_OBJ_BYTECODE  (1 << 0) /* allow function/module */
 #define JS_READ_OBJ_ROM_DATA  (0)      /* avoid duplicating 'buf' data (obsolete, broken by ICs) */
-/* WARNING: serialized SharedArrayBuffers carry a literal host pointer in
-   the blob; only enable JS_READ_OBJ_SAB on input produced by a trusted
-   writer in the same process (e.g. another Worker on the same runtime). */
-#define JS_READ_OBJ_SAB       (1 << 2) /* allow SharedArrayBuffer */
 #define JS_READ_OBJ_REFERENCE (1 << 3) /* allow object references */
 JS_EXTERN JSValue JS_ReadObject(JSContext *ctx, const uint8_t *buf, size_t buf_len, int flags);
-JS_EXTERN JSValue JS_ReadObject2(JSContext *ctx, const uint8_t *buf, size_t buf_len,
-                                 int flags, JSSABTab *psab_tab);
 /* ... and with §2.7.8's `memory`, the [[TransferredValues]] its transfer-receiving steps have already built. */
 JS_EXTERN JSValue JS_ReadObject3(JSContext *ctx, const uint8_t *buf, size_t buf_len,
-                                 int flags, JSSABTab *psab_tab,
-                                 const JSTransferReadHook *transfer);
+                                 int flags, const JSTransferReadHook *transfer);
 /* ... and with HTML §2.7.1's serializable seam. A stream naming a serialized platform object is refused
    outright by a read given none: the tag has no meaning a reader may invent. */
 JS_EXTERN JSValue JS_ReadObject4(JSContext *ctx, const uint8_t *buf, size_t buf_len,
-                                 int flags, JSSABTab *psab_tab,
+                                 int flags,
                                  const JSTransferReadHook *transfer,
                                  const JSSerializableReadHook *serializable);
 /* Instantiate and evaluate a bytecode function. Only used when reading a script or module with JS_ReadObject().

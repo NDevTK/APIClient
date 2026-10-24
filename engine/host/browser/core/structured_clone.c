@@ -302,7 +302,7 @@ static int sc_serialize(JSContext *ctx, JSValueConst v, StructuredData *out, SCW
        whole of §2.7.10's structuredClone(), and the whole of what a same-agent port delivery needs.
        JS_WRITE_OBJ_REFERENCE is `memory`: a value reached twice comes back as the SAME object on the other
        side, and a cycle terminates instead of recursing. Without it `const a = {}; a.self = a` is a hang. */
-    out->buf = JS_WriteObject4(ctx, &out->len, v, JS_WRITE_OBJ_REFERENCE, NULL, &hook, &serializable);
+    out->buf = JS_WriteObject4(ctx, &out->len, v, JS_WRITE_OBJ_REFERENCE, &hook, &serializable);
     if (!out->buf) {
         /* THE ENGINE'S REFUSAL IS THE STANDARD'S, RE-REPORTED. The writer throws its own error for a value it
            cannot encode — a function (§2.7.3 step 21), a Proxy (step 23), a Promise (step 22), a Symbol
@@ -349,7 +349,7 @@ static JSValue sc_deserialize(JSContext *ctx, const StructuredData *in, const JS
     serializable.create = sc_create_instance;
     serializable.deserialize = sc_deserialization_steps;
     serializable.opaque = NULL;
-    out = JS_ReadObject4(ctx, in->buf, in->len, JS_READ_OBJ_REFERENCE, NULL, transfer, &serializable);
+    out = JS_ReadObject4(ctx, in->buf, in->len, JS_READ_OBJ_REFERENCE, transfer, &serializable);
     if (JS_IsException(out)) {
         /* A GRAPH THE WRITER PRODUCED AND THE READER REFUSED is not a page error — it is these two halves
            disagreeing, which is a should-never-happen and is worth a crash rather than a DOMException that

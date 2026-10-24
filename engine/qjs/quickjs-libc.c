@@ -151,9 +151,6 @@ typedef struct {
     struct list_head link;
     uint8_t *data;
     size_t data_len;
-    /* list of SharedArrayBuffers, necessary to free the message */
-    uint8_t **sab_tab;
-    size_t sab_tab_len;
 } JSWorkerMessage;
 
 typedef struct JSWaker {
@@ -2695,8 +2692,7 @@ static int handle_posted_message(JSRuntime *rt, JSContext *ctx,
 
         js_mutex_unlock(&ps->mutex);
 
-        data_obj = JS_ReadObject(ctx, msg->data, msg->data_len,
-                                 JS_READ_OBJ_SAB | JS_READ_OBJ_REFERENCE);
+        data_obj = JS_ReadObject(ctx, msg->data, msg->data_len, JS_READ_OBJ_REFERENCE);
 
         js_free_message(msg);
 
@@ -3928,47 +3924,12 @@ typedef struct {
     JSWorkerMessagePipe *recv_pipe, *send_pipe;
 } WorkerFuncArgs;
 
-typedef struct {
-    int ref_count;
-    uint64_t buf[];
-} JSSABHeader;
-
 static JSRuntime *(*js_worker_new_runtime_func)(void);
 static JSContext *(*js_worker_new_context_func)(JSRuntime *rt);
 
 static int atomic_add_int(int *ptr, int v)
 {
     return atomic_fetch_add((_Atomic uint32_t*)ptr, v) + v;
-}
-
-/* shared array buffer allocator */
-static void *js_sab_alloc(void *opaque, size_t size)
-{
-    JSSABHeader *sab;
-    sab = malloc(sizeof(JSSABHeader) + size);
-    if (!sab)
-        return NULL;
-    sab->ref_count = 1;
-    return sab->buf;
-}
-
-static void js_sab_free(void *opaque, void *ptr)
-{
-    JSSABHeader *sab;
-    int ref_count;
-    sab = (JSSABHeader *)((uint8_t *)ptr - sizeof(JSSABHeader));
-    ref_count = atomic_add_int(&sab->ref_count, -1);
-    assert(ref_count >= 0);
-    if (ref_count == 0) {
-        free(sab);
-    }
-}
-
-static void js_sab_dup(void *opaque, void *ptr)
-{
-    JSSABHeader *sab;
-    sab = (JSSABHeader *)((uint8_t *)ptr - sizeof(JSSABHeader));
-    atomic_add_int(&sab->ref_count, 1);
 }
 
 static JSWorkerMessagePipe *js_new_message_pipe(void)
@@ -3996,12 +3957,6 @@ static JSWorkerMessagePipe *js_dup_message_pipe(JSWorkerMessagePipe *ps)
 
 static void js_free_message(JSWorkerMessage *msg)
 {
-    size_t i;
-    /* free the SAB */
-    for(i = 0; i < msg->sab_tab_len; i++) {
-        js_sab_free(NULL, msg->sab_tab[i]);
-    }
-    free(msg->sab_tab);
     free(msg->data);
     free(msg);
 }
@@ -4232,17 +4187,16 @@ static JSValue js_worker_postMessage(JSContext *ctx, JSValueConst this_val,
     JSThreadState *ts = js_get_thread_state(rt);
     JSWorkerData *worker = JS_GetOpaque2(ctx, this_val, ts->worker_class_id);
     JSWorkerMessagePipe *ps;
-    size_t data_len, i;
+    size_t data_len;
     uint8_t *data;
     JSWorkerMessage *msg;
-    JSSABTab sab_tab;
 
     if (!worker)
         return JS_EXCEPTION;
 
-    data = JS_WriteObject2(ctx, &data_len, argv[0],
-                           JS_WRITE_OBJ_SAB | JS_WRITE_OBJ_REFERENCE,
-                           &sab_tab);
+    /* A worker here is another runtime on another thread, and a SharedArrayBuffer's block is its runtime's, so
+       the message carries none: the writer refuses one. */
+    data = JS_WriteObject3(ctx, &data_len, argv[0], JS_WRITE_OBJ_REFERENCE, NULL);
     if (!data)
         return JS_EXCEPTION;
 
@@ -4250,7 +4204,6 @@ static JSValue js_worker_postMessage(JSContext *ctx, JSValueConst this_val,
     if (!msg)
         goto fail;
     msg->data = NULL;
-    msg->sab_tab = NULL;
 
     /* must reallocate because the allocator may be different */
     msg->data = malloc(data_len);
@@ -4259,21 +4212,7 @@ static JSValue js_worker_postMessage(JSContext *ctx, JSValueConst this_val,
     memcpy(msg->data, data, data_len);
     msg->data_len = data_len;
 
-    if (sab_tab.len > 0) {
-        msg->sab_tab = malloc(sizeof(msg->sab_tab[0]) * sab_tab.len);
-        if (!msg->sab_tab)
-            goto fail;
-        memcpy(msg->sab_tab, sab_tab.tab, sizeof(msg->sab_tab[0]) * sab_tab.len);
-    }
-    msg->sab_tab_len = sab_tab.len;
-
     js_free(ctx, data);
-    js_free(ctx, sab_tab.tab);
-
-    /* increment the SAB reference counts */
-    for(i = 0; i < msg->sab_tab_len; i++) {
-        js_sab_dup(NULL, msg->sab_tab[i]);
-    }
 
     ps = worker->send_pipe;
     js_mutex_lock(&ps->mutex);
@@ -4286,11 +4225,9 @@ static JSValue js_worker_postMessage(JSContext *ctx, JSValueConst this_val,
  fail:
     if (msg) {
         free(msg->data);
-        free(msg->sab_tab);
         free(msg);
     }
     js_free(ctx, data);
-    js_free(ctx, sab_tab.tab);
     return JS_EXCEPTION;
 
 }
@@ -4655,18 +4592,6 @@ void js_std_init_handlers(JSRuntime *rt)
 
     js_set_thread_state(rt, ts);
     JS_AddRuntimeFinalizer(rt, js_std_finalize, ts);
-
-#ifdef USE_WORKER
-    /* set the SharedArrayBuffer memory handlers */
-    {
-        JSSharedArrayBufferFunctions sf;
-        memset(&sf, 0, sizeof(sf));
-        sf.sab_alloc = js_sab_alloc;
-        sf.sab_free = js_sab_free;
-        sf.sab_dup = js_sab_dup;
-        JS_SetSharedArrayBufferFunctions(rt, &sf);
-    }
-#endif
 }
 
 static void free_rp(JSRuntime *rt, JSRejectedPromiseEntry *rp)
@@ -4977,7 +4902,6 @@ static JSValue js_bjson_read(JSContext *ctx, JSValueConst this_val,
         return JS_EXCEPTION;
     if (JS_ToInt32(ctx, &flags, argv[3]))
         return JS_EXCEPTION;
-    flags &= ~JS_READ_OBJ_SAB;
     buf = JS_GetArrayBuffer(ctx, &size, argv[0]);
     if (!buf)
         return JS_EXCEPTION;
@@ -4997,7 +4921,6 @@ static JSValue js_bjson_write(JSContext *ctx, JSValueConst this_val,
 
     if (JS_ToInt32(ctx, &flags, argv[1]))
         return JS_EXCEPTION;
-    flags &= ~JS_WRITE_OBJ_SAB;
     buf = JS_WriteObject(ctx, &len, argv[0], flags);
     if (!buf)
         return JS_EXCEPTION;

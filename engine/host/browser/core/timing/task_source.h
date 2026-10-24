@@ -152,7 +152,11 @@ typedef enum {
        §8.1.7.4's generic five because the standard names it: what a source decides is the order its tasks take
        against the page's OTHER tasks, and putting these on a generic one would order this feature against
        unrelated ones by this file's decision instead of by anybody's standard. */
-    TASK_SOURCE_WEB_LOCKS
+    TASK_SOURCE_WEB_LOCKS,
+    /* HTML §8.1.6.6.3 HostEnqueueGenericJob(job, realm): "Queue a global task on the JavaScript engine task
+       source given global to perform job()". §8.1.6.6.5 HostEnqueueTimeoutJob(job, realm, milliseconds) queues
+       the same after a timeout. */
+    TASK_SOURCE_JAVASCRIPT_ENGINE
 } TaskSource;
 
 /* IS §8.1.7.1's ORDERING RULE ABOUT THIS WORK ITEM? Only a task has a source, so only a task can have one in
@@ -211,6 +215,7 @@ static inline const char *task_source_name(TaskSource s)
     case TASK_SOURCE_INTERSECTION_OBSERVER:    return "intersection-observer";
     case TASK_SOURCE_PERMISSIONS:              return "permissions";
     case TASK_SOURCE_WEB_LOCKS:                return "web-locks";
+    case TASK_SOURCE_JAVASCRIPT_ENGINE:        return "javascript-engine";
     }
     return "unknown";
 }

@@ -15,7 +15,7 @@ adversarial input. Loading untrusted bytecode (e.g. via `JS_ReadObject` with
 crashes, memory corruption, or sandbox escapes resulting from malformed or
 malicious bytecode are not considered security vulnerabilities. Only load
 bytecode you produced yourself or obtained from a trusted source. See the
-documentation for `JS_READ_OBJ_BYTECODE` and `JS_READ_OBJ_SAB` for details.
+documentation for `JS_READ_OBJ_BYTECODE` for details.
 
 ## Rules for Private Reports
 

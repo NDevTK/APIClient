@@ -548,6 +548,11 @@ struct JSRuntime {
     uintptr_t stack_limit; /* lower stack limit */
 
     JSValue current_exception;
+    /* The Waiter Record the last JS_STEP_SUSPEND parked its flow on, until the host takes it
+       (JS_TakeSuspension); JS_UNDEFINED otherwise. */
+    JSValue suspended_on;
+    /* §9.5.4 HostEnqueueGenericJob and §9.5.6 HostEnqueueTimeoutJob, as the host installed them. */
+    JSHostJobHooks host_jobs;
     /* true if inside an out of memory error, to avoid recursing */
     /* true if inside build_backtrace, to avoid recursing */
     bool in_build_stack_trace;
@@ -643,13 +648,9 @@ struct JSRuntime {
        unique increasing values. */
     int64_t module_async_evaluation_next_timestamp;
 
-    /* used to allocate, free and clone SharedArrayBuffers */
-    JSSharedArrayBufferFunctions sab_funcs;
-
     /* The ECMA-262 §9.6 Agent Records of the agents this runtime hosts (JSAgentRecord.link), owned here and
        freed with the runtime. The runtime is the executing thread every one of them shares. */
     struct list_head agent_list;
-    int agent_count;
     uint32_t dump_flags : 24;
 
     /* Shape hash table */
@@ -1787,12 +1788,26 @@ typedef struct JSArrayBuffer {
     struct list_head array_list;
     void *opaque;
     JSFreeArrayBufferDataFunc *free_func;
+    /* A SharedArrayBuffer's reference to its block's WaiterList store (JSSharedBlock), owned and marked by this
+       object; JS_UNDEFINED for an ArrayBuffer. */
+    JSValue waiter_lists;
     /* see JSArrayBufferSpan. Empty for every buffer no unknown was ever stored into, which is nearly all of
        them, so the read's cost is one load of a count that is zero. */
     JSArrayBufferSpan *span;
     int n_span;
     int span_size;
 } JSArrayBuffer;
+
+/* ECMA-262 §6.2.9 Data Blocks' Shared Data Block, owned by the SharedArrayBuffer objects that view it, all of one
+   runtime: the agents that share memory are agents of one cluster, hosted in one runtime. `waiter_lists` is the
+   cluster's store of WaiterList Records for this block (§25.4.2 WaiterList Records: "indexed by (block, i)"), an
+   object from byte index to that index's Array of Waiter Records. Every viewing object holds a reference to it,
+   so the block's pointer is borrowed. Both are heap values, so they time-travel with the flow that writes them. */
+typedef struct JSSharedBlock {
+    int ref_count;
+    JSObject *waiter_lists;
+    uint64_t data[];
+} JSSharedBlock;
 
 typedef struct JSTypedArray {
     struct list_head link; /* link to arraybuffer */
@@ -2469,6 +2484,7 @@ static void js_for_in_iterator_mark(JSRuntime *rt, JSValueConst val,
 static void js_regexp_finalizer(JSRuntime *rt, JSValueConst val);
 static void js_regexp_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func);
 static void js_array_buffer_finalizer(JSRuntime *rt, JSValueConst val);
+static void js_shared_array_buffer_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func);
 static void js_typed_array_finalizer(JSRuntime *rt, JSValueConst val);
 static void js_typed_array_mark(JSRuntime *rt, JSValueConst val,
                                 JS_MarkFunc *mark_func);
@@ -2835,6 +2851,7 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
                                             JSFreeArrayBufferDataFunc *free_func,
                                             void *opaque, bool alloc_flag);
 static void js_array_buffer_free(JSRuntime *rt, void *opaque, void *ptr);
+static void js_shared_block_release(JSRuntime *rt, void *opaque, void *ptr);
 static JSArrayBuffer *js_get_array_buffer(JSContext *ctx, JSValueConst obj);
 static bool array_buffer_is_resizable(const JSArrayBuffer *abuf);
 static JSValue js_typed_array_constructor(JSContext *ctx,
@@ -3706,7 +3723,7 @@ static JSClassShortDef const js_std_class_def[] = {
     { JS_ATOM_ForInIterator, js_for_in_iterator_finalizer, js_for_in_iterator_mark },      /* JS_CLASS_FOR_IN_ITERATOR */
     { JS_ATOM_RegExp, js_regexp_finalizer, js_regexp_mark },                     /* JS_CLASS_REGEXP */
     { JS_ATOM_ArrayBuffer, js_array_buffer_finalizer, NULL },                   /* JS_CLASS_ARRAY_BUFFER */
-    { JS_ATOM_SharedArrayBuffer, js_array_buffer_finalizer, NULL },             /* JS_CLASS_SHARED_ARRAY_BUFFER */
+    { JS_ATOM_SharedArrayBuffer, js_array_buffer_finalizer, js_shared_array_buffer_mark }, /* JS_CLASS_SHARED_ARRAY_BUFFER */
     { JS_ATOM_Uint8ClampedArray, js_typed_array_finalizer, js_typed_array_mark }, /* JS_CLASS_UINT8C_ARRAY */
     { JS_ATOM_Int8Array, js_typed_array_finalizer, js_typed_array_mark },       /* JS_CLASS_INT8_ARRAY */
     { JS_ATOM_Uint8Array, js_typed_array_finalizer, js_typed_array_mark },      /* JS_CLASS_UINT8_ARRAY */
@@ -3862,6 +3879,7 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     JS_UpdateStackTop(rt);
 
     rt->current_exception = JS_UNINITIALIZED;
+    rt->suspended_on = JS_UNDEFINED;
 
     return rt;
  fail:
@@ -3973,7 +3991,6 @@ JSAgentRecord *JS_NewAgentRecord(JSRuntime *rt, bool can_block)
     CHECK(agent != NULL, "an agent's Agent Record could not be allocated");
     agent->can_block = can_block;
     list_add_tail(&agent->link, &rt->agent_list);
-    rt->agent_count++;
     return agent;
 }
 
@@ -3993,6 +4010,21 @@ JSAgentRecord *JS_GetRealmAgent(JSContext *ctx)
     return ctx->agent;
 }
 
+void JS_SetHostJobHooks(JSRuntime *rt, const JSHostJobHooks *hooks)
+{
+    DCHECK(hooks->enqueue_generic != NULL && hooks->enqueue_timeout != NULL,
+           "a host installed §9.5's job hooks without both HostEnqueueGenericJob and HostEnqueueTimeoutJob");
+    rt->host_jobs = *hooks;
+}
+
+JSValue JS_TakeSuspension(JSRuntime *rt)
+{
+    JSValue v = rt->suspended_on;
+
+    rt->suspended_on = JS_UNDEFINED;
+    return v;
+}
+
 JSContext *JS_NextRealm(JSRuntime *rt, JSContext *prev)
 {
     struct list_head *el = prev ? prev->link.next : rt->context_list.next;
@@ -4004,12 +4036,6 @@ JSContext *JS_NextRealm(JSRuntime *rt, JSContext *prev)
 bool JS_AgentCanBlock(const JSAgentRecord *agent)
 {
     return agent->can_block;
-}
-
-void JS_SetSharedArrayBufferFunctions(JSRuntime *rt,
-                                      const JSSharedArrayBufferFunctions *sf)
-{
-    rt->sab_funcs = *sf;
 }
 
 /* return 0 if OK, < 0 if exception */
@@ -4432,9 +4458,6 @@ JSContext *JS_GetPendingJobContext(JSRuntime *rt)
 
 /* return < 0 if exception, 0 if no job pending, 1 if a job was
    executed successfully. the context of the job is stored in '*pctx' */
-#ifdef CONFIG_ATOMICS
-static void js_atomics_free_async_waiters(JSRuntime *rt);
-#endif
 
 int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx)
 {
@@ -4667,14 +4690,8 @@ void JS_FreeRuntime(JSRuntime *rt)
     int i;
 
     rt->in_free = true;
-#ifdef CONFIG_ATOMICS
-    /* AN UNSETTLED waitAsync AT TEARDOWN OWNS ITS RESOLVING PAIR. The async waiter list is a plain global, not a
-       GC root, so refcounting is the only thing keeping those functions alive — and a promise nobody notified
-       still holds them when the runtime goes. Dropping the list here is what makes the object walk below
-       truthful; without it every un-notified waitAsync is reported as a leak, which is exactly what the
-       gc_obj_list DCHECK said the first time these tests ran. */
-    js_atomics_free_async_waiters(rt);
-#endif
+    DCHECK(JS_IsUndefined(rt->suspended_on),
+           "JS_FreeRuntime with a suspension the host never took (JS_TakeSuspension)");
     /* A PARKED FLOW AT TEARDOWN IS A DROPPED FLOW. The queue is not a GC root: each member holds a raw callback
        plus a reference the park took (the suspended async activation, or the async generator whose body is
        mid-run), and tearing the runtime down without resuming it leaks that whole graph silently — the
@@ -30176,7 +30193,7 @@ static void step_request_check(JSContext *ctx, const JSStepHdr *h, int st, bool 
        yield, a fork or an unknown completion) is something the driver performs on its behalf and may run the
        page's code, and a step function never re-enters the driver, so a frame above a machine standing in
        such a state exists only if this check passed over a request it made there. */
-    if (st > 0 && st != JS_STEP_YIELD && st != JS_STEP_FORK && st != JS_STEP_UNKNOWN &&
+    if (st > 0 && st != JS_STEP_YIELD && st != JS_STEP_FORK && st != JS_STEP_UNKNOWN && st != JS_STEP_SUSPEND &&
         h->def->script_forbidden != NULL) {
         const char *forbidden = h->def->script_forbidden(h);
 
@@ -39089,6 +39106,15 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     tramp_cap_ctor = cb[0];
                     tramp_cap_outer = stt; tramp_cap_kind = CONT_STEP;
                     goto do_promise_cap_tramp;
+                }
+                if (st == JS_STEP_SUSPEND) {
+                    /* SUSPEND: the machine's agent waits on an event another agent or the host causes, so the
+                       flow parks whatever the preempt policy says, and is re-entered when the host resumes it. */
+                    if (gen_state == NULL || gen_state != g_flow_base_gen)
+                        DFAIL("a step machine suspended its agent outside its flow base — only a flow can wait, so "
+                              "route that caller onto the tramp chain as a flow");
+                    ret_val = JS_UNDEFINED;
+                    goto do_step_park;
                 }
                 if (st == 22) {
                     /* YIELD: "I have more work; re-enter me." It ASKS NOTHING, and that is the point: the offer
@@ -78482,7 +78508,6 @@ typedef enum BCTagEnum {
     BC_TAG_MODULE,
     BC_TAG_TYPED_ARRAY,
     BC_TAG_ARRAY_BUFFER,
-    BC_TAG_SHARED_ARRAY_BUFFER,
     BC_TAG_REGEXP,
     BC_TAG_DATE,
     BC_TAG_OBJECT_VALUE,
@@ -78524,7 +78549,7 @@ typedef enum BCTagEnum {
    name being the atom for "*", which is a legal ModuleExportName, so the flag has to be written.
    Serialized byte code from an older build would be read as the new format and mis-execute, so the version
    byte is what refuses it. */
-#define BC_VERSION 32
+#define BC_VERSION 33
 /* DELETED: the OP_COUNT and JS_ATOM_END asserts. They guarded ONE thing — the builtin-*.h bytecode COMPILED INTO
    this file, which named opcodes and atoms by index and so silently resolved the wrong one when either table
    shifted (Iterator.zip read `done` off the atom next to it, thousands of tests from the cause). Every one of
@@ -78556,7 +78581,6 @@ typedef struct BCWriterState {
     JSContext *ctx;
     DynBuf dbuf;
     bool allow_bytecode;
-    bool allow_sab;
     bool allow_reference;
     bool allow_source;
     bool allow_debug;
@@ -78566,9 +78590,6 @@ typedef struct BCWriterState {
     JSAtom *idx_to_atom;
     int idx_to_atom_count;
     int idx_to_atom_size;
-    uint8_t **sab_tab;
-    int sab_tab_len;
-    int sab_tab_size;
     /* list of referenced objects (used if allow_reference = true) */
     JSObjectList object_list;
     /* HTML §2.7.7's seeded `memory`, or NULL for a write that is not a StructuredSerializeWithTransfer. It is
@@ -78596,12 +78617,7 @@ typedef struct BCWriterState {
    at the success tail and at the fail tail, neither of them near the struct — so a field ADDED to the struct
    had to be added to two lists nobody reading the struct would see. `w_stack` is what this fork added when
    the writer stopped being a nine-function recursion, and it was named by neither, so every write lost its
-   work stack. The two lists also DISAGREED with each other about `sab_tab`: the success tail freed it when
-   the caller did not take it and the fail tail freed it never, having just told the caller there was nothing
-   to take.
-   `psab_tab` NON-NULL HANDS THE SAB TABLE OVER and the caller frees it; NULL means this function owns it. A
-   FAILING WRITE PASSES NULL by that rule and not as a convenience: it answers NULL, so the table it built is
-   its own to release.
+   work stack.
    THE ASSERT THAT WOULD MAKE THIS TRUE BY CONSTRUCTION IS NOT AVAILABLE, AND NOT FOR WANT OF LOOKING — the
    canonical spelling in this file is a malloc-count conservation DCHECK across a scope (JS_OrphanTakeOne has
    one), and over a WRITE it would be a page-held abort switch: the driver fetches children one at a time
@@ -78609,7 +78625,7 @@ typedef struct BCWriterState {
    anything it likes and keep it. A count over JS_WriteObject4 would fire on a page storing an object.
    RETIREMENT: this record goes when BCWriterState's owned fields are released by construction rather than by
    a list somebody keeps in step — at which point the two-list shape can no longer be re-derived. */
-static void bcw_state_end(BCWriterState *s, JSSABTab *psab_tab)
+static void bcw_state_end(BCWriterState *s)
 {
     JSContext *ctx = s->ctx;
 
@@ -78626,12 +78642,6 @@ static void bcw_state_end(BCWriterState *s, JSSABTab *psab_tab)
     js_free(ctx, s->atom_to_idx);
     js_free(ctx, s->idx_to_atom);
     js_free(ctx, s->w_stack);
-    if (psab_tab) {
-        psab_tab->tab = s->sab_tab;
-        psab_tab->len = s->sab_tab_len;
-    } else {
-        js_free(ctx, s->sab_tab);
-    }
     s->atom_to_idx = NULL;
     s->atom_to_idx_size = 0;
     s->idx_to_atom = NULL;
@@ -78639,9 +78649,6 @@ static void bcw_state_end(BCWriterState *s, JSSABTab *psab_tab)
     s->idx_to_atom_size = 0;
     s->w_stack = NULL;
     s->w_size = 0;
-    s->sab_tab = NULL;
-    s->sab_tab_len = 0;
-    s->sab_tab_size = 0;
 }
 
 #ifdef ENABLE_DUMPS // JS_DUMP_READ_OBJECT
@@ -78662,7 +78669,6 @@ static const char * const bc_tag_str[] = {
     "module",
     "TypedArray",
     "ArrayBuffer",
-    "SharedArrayBuffer",
     "RegExp",
     "Date",
     "ObjectValue",
@@ -79303,23 +79309,6 @@ static int JS_WriteArrayBuffer(BCWriterState *s, JSValueConst obj)
     return 0;
 }
 
-static int JS_WriteSharedArrayBuffer(BCWriterState *s, JSValueConst obj)
-{
-    JSObject *p = JS_VALUE_GET_OBJ(obj);
-    JSArrayBuffer *abuf = p->u.array_buffer;
-    DCHECK(!abuf->detached, "!abuf->detached"); /* SharedArrayBuffer are never detached */
-    bc_put_u8(s, BC_TAG_SHARED_ARRAY_BUFFER);
-    bc_put_leb128(s, abuf->byte_length);
-    bc_put_leb128(s, abuf->max_byte_length);
-    bc_put_u64(s, (uintptr_t)abuf->data);
-    if (js_resize_array(s->ctx, (void **)&s->sab_tab, sizeof(s->sab_tab[0]),
-                        &s->sab_tab_size, s->sab_tab_len + 1))
-        return -1;
-    /* keep the SAB pointer so that the user can clone it or free it */
-    s->sab_tab[s->sab_tab_len++] = abuf->data;
-    return 0;
-}
-
 static int JS_WriteRegExp(BCWriterState *s, JSRegExp regexp)
 {
     JSString *bc = regexp.bytecode;
@@ -79450,11 +79439,10 @@ static int bcw_step_value(BCWriterState *s, JSValueConst obj)
             case JS_CLASS_ARRAY_BUFFER:
                 ret = JS_WriteArrayBuffer(s, obj);
                 break;
+            /* A SharedArrayBuffer's block is its runtime's (JSSharedBlock), so a byte stream cannot carry one;
+               another agent of the runtime views it through JS_NewSharedArrayBufferView. */
             case JS_CLASS_SHARED_ARRAY_BUFFER:
-                if (!s->allow_sab)
-                    goto invalid_tag;
-                ret = JS_WriteSharedArrayBuffer(s, obj);
-                break;
+                goto invalid_tag;
             case JS_CLASS_REGEXP:
                 bc_put_u8(s, BC_TAG_REGEXP);
                 ret = JS_WriteRegExp(s, p->u.regexp);
@@ -79802,7 +79790,7 @@ static int JS_WriteObjectAtoms(BCWriterState *s)
 }
 
 uint8_t *JS_WriteObject4(JSContext *ctx, size_t *psize, JSValueConst obj,
-                         int flags, JSSABTab *psab_tab,
+                         int flags,
                          const JSTransferWriteHook *transfer,
                          const JSSerializableWriteHook *serializable)
 {
@@ -79822,7 +79810,6 @@ uint8_t *JS_WriteObject4(JSContext *ctx, size_t *psize, JSValueConst obj,
     s->transfer = transfer;
     s->serializable = serializable;
     s->allow_bytecode = ((flags & JS_WRITE_OBJ_BYTECODE) != 0);
-    s->allow_sab = ((flags & JS_WRITE_OBJ_SAB) != 0);
     s->allow_reference = ((flags & JS_WRITE_OBJ_REFERENCE) != 0);
     s->allow_source = ((flags & JS_WRITE_OBJ_STRIP_SOURCE) == 0);
     s->allow_debug = ((flags & JS_WRITE_OBJ_STRIP_DEBUG) == 0);
@@ -79838,10 +79825,10 @@ uint8_t *JS_WriteObject4(JSContext *ctx, size_t *psize, JSValueConst obj,
         goto fail;
     if (JS_WriteObjectAtoms(s))
         goto fail;
-    /* THE DBUF IS THE ONE THING THIS FUNCTION HANDS OUT BESIDE THE SAB TABLE — it is the caller's from here,
+    /* THE DBUF IS THE ONE THING THIS FUNCTION HANDS OUT — it is the caller's from here,
        released with js_free, which is what structured_clone.c's structured_data_free does. Everything else
        the writer allocated goes back above. */
-    bcw_state_end(s, psab_tab);
+    bcw_state_end(s);
     *psize = s->dbuf.size;
     // don't include version and checksum fields in checksum
     d = &s->dbuf;
@@ -79849,35 +79836,22 @@ uint8_t *JS_WriteObject4(JSContext *ctx, size_t *psize, JSValueConst obj,
     put_u32(&d->buf[1], h);
     return d->buf;
  fail:
-    /* NULL, NOT `psab_tab`: A FAILING WRITE HANDS ITS CALLER NOTHING — it answers NULL and zeroes the caller's
-       table below — so the SAB table it built is its own to release rather than the caller's. */
-    bcw_state_end(s, NULL);
+    bcw_state_end(s);
     dbuf_free(&s->dbuf);
     *psize = 0;
-    if (psab_tab) {
-        psab_tab->tab = NULL;
-        psab_tab->len = 0;
-    }
     return NULL;
 }
 
 uint8_t *JS_WriteObject3(JSContext *ctx, size_t *psize, JSValueConst obj,
-                         int flags, JSSABTab *psab_tab,
-                         const JSTransferWriteHook *transfer)
+                         int flags, const JSTransferWriteHook *transfer)
 {
-    return JS_WriteObject4(ctx, psize, obj, flags, psab_tab, transfer, NULL);
-}
-
-uint8_t *JS_WriteObject2(JSContext *ctx, size_t *psize, JSValueConst obj,
-                         int flags, JSSABTab *psab_tab)
-{
-    return JS_WriteObject3(ctx, psize, obj, flags, psab_tab, NULL);
+    return JS_WriteObject4(ctx, psize, obj, flags, transfer, NULL);
 }
 
 uint8_t *JS_WriteObject(JSContext *ctx, size_t *psize, JSValueConst obj,
                         int flags)
 {
-    return JS_WriteObject2(ctx, psize, obj, flags, NULL);
+    return JS_WriteObject3(ctx, psize, obj, flags, NULL);
 }
 
 /* One half-built value. `obj` is the container being filled; `i`/`len` is where the fill has got to. */
@@ -79903,7 +79877,6 @@ typedef struct BCReaderState {
     uint32_t idx_to_atom_count;
     JSAtom *idx_to_atom;
     int error_state;
-    bool allow_sab;
     bool allow_bytecode;
     bool allow_reference;
     /* object references */
@@ -79917,10 +79890,6 @@ typedef struct BCReaderState {
     /* HTML §2.7.1's serializable seam — what creates an instance of a named interface in THIS realm and runs
        its deserialization steps — or NULL for a read that has none, which refuses the tag outright. */
     const JSSerializableReadHook *serializable;
-    /* SAB references */
-    uint8_t **sab_tab;
-    int sab_tab_len;
-    int sab_tab_size;
     /* used for JS_DUMP_READ_OBJECT */
     const uint8_t *ptr_last;
     int level;
@@ -80793,49 +80762,6 @@ static JSValue JS_ReadArrayBuffer(BCReaderState *s)
     return JS_EXCEPTION;
 }
 
-static JSValue JS_ReadSharedArrayBuffer(BCReaderState *s)
-{
-    JSContext *ctx = s->ctx;
-    uint32_t byte_length, max_byte_length;
-    uint64_t max_byte_length_u64, *pmax_byte_length = NULL;
-    uint8_t *data_ptr;
-    JSValue obj;
-    uint64_t u64;
-
-    if (bc_get_leb128(s, &byte_length))
-        return JS_EXCEPTION;
-    if (bc_get_leb128(s, &max_byte_length))
-        return JS_EXCEPTION;
-    if (max_byte_length < byte_length)
-        return JS_ThrowTypeError(ctx, "invalid array buffer");
-    if (max_byte_length != UINT32_MAX) {
-        max_byte_length_u64 = max_byte_length;
-        pmax_byte_length = &max_byte_length_u64;
-    }
-    if (bc_get_u64(s, &u64))
-        return JS_EXCEPTION;
-    data_ptr = (uint8_t *)(uintptr_t)u64;
-    if (js_resize_array(s->ctx, (void **)&s->sab_tab, sizeof(s->sab_tab[0]),
-                        &s->sab_tab_size, s->sab_tab_len + 1))
-        return JS_EXCEPTION;
-    /* keep the SAB pointer so that the user can clone it or free it */
-    s->sab_tab[s->sab_tab_len++] = data_ptr;
-    /* the SharedArrayBuffer is cloned */
-    obj = js_array_buffer_constructor3(ctx,
-                                       byte_length, pmax_byte_length,
-                                       JS_CLASS_SHARED_ARRAY_BUFFER,
-                                       data_ptr,
-                                       NULL, NULL, false);
-    if (JS_IsException(obj))
-        goto fail;
-    if (BC_add_object_ref(s, obj))
-        goto fail;
-    return obj;
- fail:
-    JS_FreeValue(ctx, obj);
-    return JS_EXCEPTION;
-}
-
 static JSValue JS_ReadRegExp(BCReaderState *s)
 {
     JSContext *ctx = s->ctx;
@@ -81041,11 +80967,6 @@ static JSValue bcr_read_one(BCReaderState *s)
         break;
     case BC_TAG_ARRAY_BUFFER:
         obj = JS_ReadArrayBuffer(s);
-        break;
-    case BC_TAG_SHARED_ARRAY_BUFFER:
-        if (!s->allow_sab || !ctx->rt->sab_funcs.sab_dup)
-            goto invalid_tag;
-        obj = JS_ReadSharedArrayBuffer(s);
         break;
     case BC_TAG_REGEXP:
         obj = JS_ReadRegExp(s);
@@ -81492,7 +81413,7 @@ static void bc_reader_free(BCReaderState *s)
 }
 
 JSValue JS_ReadObject4(JSContext *ctx, const uint8_t *buf, size_t buf_len,
-                       int flags, JSSABTab *psab_tab,
+                       int flags,
                        const JSTransferReadHook *transfer,
                        const JSSerializableReadHook *serializable)
 {
@@ -81517,7 +81438,6 @@ JSValue JS_ReadObject4(JSContext *ctx, const uint8_t *buf, size_t buf_len,
     s->buf_end = buf + buf_len;
     s->ptr = buf;
     s->allow_bytecode = ((flags & JS_READ_OBJ_BYTECODE) != 0);
-    s->allow_sab = ((flags & JS_READ_OBJ_SAB) != 0);
     s->allow_reference = ((flags & JS_READ_OBJ_REFERENCE) != 0);
     if (s->allow_bytecode)
         s->first_atom = JS_ATOM_END;
@@ -81528,33 +81448,20 @@ JSValue JS_ReadObject4(JSContext *ctx, const uint8_t *buf, size_t buf_len,
     } else {
         obj = JS_ReadObjectRec(s);
     }
-    if (psab_tab) {
-        psab_tab->tab = s->sab_tab;
-        psab_tab->len = s->sab_tab_len;
-    } else {
-        js_free(ctx, s->sab_tab);
-    }
     bc_reader_free(s);
     return obj;
 }
 
 JSValue JS_ReadObject3(JSContext *ctx, const uint8_t *buf, size_t buf_len,
-                       int flags, JSSABTab *psab_tab,
-                       const JSTransferReadHook *transfer)
+                       int flags, const JSTransferReadHook *transfer)
 {
-    return JS_ReadObject4(ctx, buf, buf_len, flags, psab_tab, transfer, NULL);
-}
-
-JSValue JS_ReadObject2(JSContext *ctx, const uint8_t *buf, size_t buf_len,
-                       int flags, JSSABTab *psab_tab)
-{
-    return JS_ReadObject3(ctx, buf, buf_len, flags, psab_tab, NULL);
+    return JS_ReadObject4(ctx, buf, buf_len, flags, transfer, NULL);
 }
 
 JSValue JS_ReadObject(JSContext *ctx, const uint8_t *buf, size_t buf_len,
                       int flags)
 {
-    return JS_ReadObject2(ctx, buf, buf_len, flags, NULL);
+    return JS_ReadObject3(ctx, buf, buf_len, flags, NULL);
 }
 
 /*******************************************************************/
@@ -92620,6 +92527,7 @@ typedef struct JSAtomics {
     uint32_t length;      /* TypedArrayLength, read BEFORE the index was coerced */
     int i;                /* the coercion cursor */
     JSValue cb[1];        /* the TOPRIMITIVE request buffer */
+    JSValue wait_rec;     /* Atomics.wait's Waiter Record while its agent is suspended on it (owned) */
 } JSAtomics;
 
 /* the captured half of a Date setter: everything read at step 2, held across the argument coercions. */
@@ -93225,7 +93133,12 @@ typedef enum AtomicsOpEnum {
 static JSValue js_atomics_op(JSContext *ctx, JSValueConst this_obj, int argc, JSValueConst *argv, int op);
 static JSValue js_atomics_store(JSContext *ctx, JSValueConst this_obj, int argc, JSValueConst *argv);
 static JSValue js_atomics_isLockFree(JSContext *ctx, JSValueConst this_obj, int argc, JSValueConst *argv);
-static JSValue js_atomics_wait(JSContext *ctx, JSValueConst this_obj, int argc, JSValueConst *argv);
+static int js_atomics_dowait(JSContext *ctx, JSValueConst *argv, bool sync, JSValue *pdone, JSValue *plist,
+                             JSValue *prec, JSValue *ppromise);
+static JSValue js_waiter_get(JSContext *ctx, JSValueConst rec, int field);
+/* §25.4.1 Waiter Record's fields, in the order js_atomics_dowait writes them; see there. WR_WOKEN and WR_LIST are
+   the suspension's: woken from SuspendThisAgent, and the WaiterList a blocking waiter's timeout removes it from. */
+enum { WR_RESOLVE, WR_PROMISE, WR_TIMEOUT_TIME, WR_RESULT, WR_WOKEN, WR_LIST, WR_FIELDS };
 static JSValue js_atomics_wait_async(JSContext *ctx, JSValueConst this_obj, int argc, JSValueConst *argv);
 static JSValue js_atomics_notify(JSContext *ctx, JSValueConst this_obj, int argc, JSValueConst *argv);
 static int js_atomics_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
@@ -93271,7 +93184,8 @@ static const JSTrampStepDef js_atomics_store_def = ATOMICS_DEF(0x6, 3, 0, 1, gen
 static const JSTrampStepDef js_atomics_load_def  = ATOMICS_DEF(0x2, 2, 0, 0, generic_magic, js_atomics_op, ATOMICS_OP_LOAD);
 /* wait and notify are the WAITABLE forms — Int32Array or BigInt64Array only, and wait additionally requires a
    SharedArrayBuffer. Both read rather than write. */
-static const JSTrampStepDef js_atomics_wait_def  = ATOMICS_DEF(0xE, 4, 2, 0, generic, js_atomics_wait, 0);
+/* Atomics.wait's body is the machine's own ATOM_SUSPENDED stage (js_atomics_step), since it suspends. */
+static const JSTrampStepDef js_atomics_wait_def  = ATOMICS_DEF(0xE, 4, 2, 0, generic, NULL, 0);
 /* 25.4.3.14 waitAsync coerces the same three arguments as wait and validates the same way — waitable=2, so a
    non-shared buffer is rejected for BOTH modes. DoWait's shared check is not sync-only; what IS sync-only is
    step 9's AgentCanSuspend, which is why waitAsync's body has no can_block test. Declaring it is what keeps its
@@ -121991,13 +121905,6 @@ static JSValue js_array_buffer_init(JSContext *ctx, JSValue obj,
         JS_ThrowRangeError(ctx, "invalid max array buffer length");
         goto fail;
     }
-    if (alloc_flag && class_id == JS_CLASS_SHARED_ARRAY_BUFFER && max_len &&
-        *max_len > len && !rt->sab_funcs.sab_alloc) {
-        JS_ThrowTypeError(ctx,
-                          "growable SharedArrayBuffer requires "
-                          "SAB allocator hooks");
-        goto fail;
-    }
     abuf = js_malloc(ctx, sizeof(*abuf));
     if (!abuf)
         goto fail;
@@ -122008,30 +121915,40 @@ static JSValue js_array_buffer_init(JSContext *ctx, JSValue obj,
     abuf->span = NULL;
     abuf->n_span = 0;
     abuf->span_size = 0;
+    abuf->waiter_lists = JS_UNDEFINED;
     abuf->byte_length = len;
     abuf->max_byte_length = max_len ? *max_len : -1;
-    if (alloc_flag) {
-        if (class_id == JS_CLASS_SHARED_ARRAY_BUFFER &&
-            rt->sab_funcs.sab_alloc) {
-            // TOOD(bnoordhuis) resizing backing memory for SABs atomically
-            // is hard so we cheat and allocate |maxByteLength| bytes upfront
-            sab_alloc_len = max_len ? *max_len : len;
-            abuf->data = rt->sab_funcs.sab_alloc(rt->sab_funcs.sab_opaque,
-                                                 max_int(sab_alloc_len, 1));
-            if (!abuf->data)
-                goto fail;
-            memset(abuf->data, 0, sab_alloc_len);
-        } else {
-            /* the allocation must be done after the object creation */
-            abuf->data = js_mallocz(ctx, max_int(len, 1));
-            if (!abuf->data)
-                goto fail;
+    if (class_id == JS_CLASS_SHARED_ARRAY_BUFFER) {
+        JSSharedBlock *block;
+        JSValue lists;
+
+        /* A block is allocated only here, by §25.2.2.1 AllocateSharedArrayBuffer, and viewed again only through
+           JS_NewSharedArrayBufferView: never over memory an embedder supplies. */
+        CHECK(alloc_flag, "a SharedArrayBuffer was built over embedder memory: a Shared Data Block belongs to "
+                          "its runtime, and another agent views it through JS_NewSharedArrayBufferView");
+        /* §25.2.5.3 grow moves no storage, so the block holds maxByteLength from the start. */
+        sab_alloc_len = max_len ? *max_len : len;
+        lists = JS_NewObjectProto(ctx, JS_NULL);
+        if (JS_IsException(lists))
+            goto fail;
+        block = js_malloc(ctx, sizeof(*block) + max_int(sab_alloc_len, 1));
+        if (!block) {
+            JS_FreeValue(ctx, lists);
+            goto fail;
         }
+        block->ref_count = 1;
+        block->waiter_lists = JS_VALUE_GET_OBJ(lists);
+        memset(block->data, 0, sab_alloc_len);
+        abuf->data = (uint8_t *)block->data;
+        abuf->waiter_lists = lists;
+        opaque = block;
+        free_func = js_shared_block_release;
+    } else if (alloc_flag) {
+        /* the allocation must be done after the object creation */
+        abuf->data = js_mallocz(ctx, max_int(len, 1));
+        if (!abuf->data)
+            goto fail;
     } else {
-        if (class_id == JS_CLASS_SHARED_ARRAY_BUFFER &&
-            rt->sab_funcs.sab_dup) {
-            rt->sab_funcs.sab_dup(rt->sab_funcs.sab_opaque, buf);
-        }
         if (buf) {
             abuf->data = buf;
         } else {
@@ -122060,6 +121977,47 @@ static JSValue js_array_buffer_init(JSContext *ctx, JSValue obj,
 static void js_array_buffer_free(JSRuntime *rt, void *opaque, void *ptr)
 {
     js_free_rt(rt, ptr);
+}
+
+/* A viewing SharedArrayBuffer is gone: the block goes with its last one. */
+static void js_shared_block_release(JSRuntime *rt, void *opaque, void *ptr)
+{
+    JSSharedBlock *block = opaque;
+
+    DCHECK(block != NULL && (uint8_t *)block->data == ptr && block->ref_count > 0,
+           "a SharedArrayBuffer released a block it does not view");
+    if (--block->ref_count == 0)
+        js_free_rt(rt, block);
+}
+
+JSValue JS_NewSharedArrayBufferView(JSContext *ctx, JSValueConst sab)
+{
+    JSObject *p;
+    JSArrayBuffer *abuf, *view;
+    JSSharedBlock *block;
+    JSValue obj;
+
+    CHECK(JS_GetClassID(sab) == JS_CLASS_SHARED_ARRAY_BUFFER, "a SharedArrayBuffer view was asked of a non-SAB");
+    p = JS_VALUE_GET_OBJ(sab);
+    abuf = p->u.array_buffer;
+    block = abuf->opaque;
+    DCHECK(block != NULL && abuf->free_func == js_shared_block_release,
+           "a SharedArrayBuffer whose storage is not a Shared Data Block");
+    obj = js_create_from_intrinsic(ctx, JS_CLASS_SHARED_ARRAY_BUFFER);
+    if (JS_IsException(obj))
+        return obj;
+    view = js_malloc(ctx, sizeof(*view));
+    if (!view) {
+        JS_FreeValue(ctx, obj);
+        return JS_EXCEPTION;
+    }
+    *view = *abuf;
+    view->span = NULL; view->n_span = 0; view->span_size = 0;
+    init_list_head(&view->array_list);
+    view->waiter_lists = js_dup(abuf->waiter_lists);
+    block->ref_count++;
+    JS_SetOpaqueInternal(obj, view);
+    return obj;
 }
 
 /* the engine's OWN allocations: an intrinsic-prototype buffer, so there is no new.target and no read to suspend
@@ -122560,14 +122518,20 @@ static void js_array_buffer_finalizer(JSRuntime *rt, JSValueConst val)
                 p1->u.array.u.ptr = NULL;
             }
         }
-        if (abuf->shared && rt->sab_funcs.sab_free) {
-            rt->sab_funcs.sab_free(rt->sab_funcs.sab_opaque, abuf->data);
-        } else {
-            if (abuf->free_func)
-                abuf->free_func(rt, abuf->opaque, abuf->data);
-        }
+        if (abuf->free_func)
+            abuf->free_func(rt, abuf->opaque, abuf->data);
+        JS_FreeValueRT(rt, abuf->waiter_lists);
         js_free_rt(rt, abuf);
     }
+}
+
+/* The reference to the block's WaiterList store this view holds. */
+static void js_shared_array_buffer_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    JSArrayBuffer *abuf = JS_VALUE_GET_OBJ(val)->u.array_buffer;
+
+    if (abuf)
+        JS_MarkValue(rt, abuf->waiter_lists, mark_func);
 }
 
 static JSValue js_array_buffer_isView(JSContext *ctx,
@@ -122997,11 +122961,8 @@ void JS_BufferStateRestore(JSContext *ctx, JSValueConst obj, void *blob)
            block — the page's own byte write does it one byte at a time and this would do it in one memcpy,
            which is the same defect with a worse symptom. It fires only where the engine is already corrupting
            and it names what to build. */
-        DCHECK(st->byte_length <= abuf->byte_length || rt->sab_funcs.sab_alloc != NULL,
-               "a GROWABLE SharedArrayBuffer's block is only its INITIAL length: js_array_buffer_constructor3 "
-               "commits maxByteLength upfront only through sab_alloc, while §25.2.5.3 grow sets byte_length "
-               "with no reallocation — so make the non-sab arm commit maxByteLength as the sab arm does, or "
-               "give the runtime sab_funcs");
+        DCHECK(abuf->free_func == js_shared_block_release,
+               "a SharedArrayBuffer's storage is not a Shared Data Block, which holds maxByteLength from the start");
         memcpy(abuf->data, st->data, st->byte_length);
         abuf->byte_length = st->byte_length;
     } else if (st->detached) {
@@ -123212,7 +123173,8 @@ static JSValue js_array_buffer_resize(JSContext *ctx, JSValueConst this_val,
     if (!array_buffer_is_resizable(abuf))
         return JS_ThrowTypeError(ctx, "array buffer is not resizable");
     // TODO(bnoordhuis) support externally managed RABs
-    if (abuf->free_func != js_array_buffer_free)
+    /* a Shared Data Block is never an embedder's (js_array_buffer_init refuses one) */
+    if (!abuf->shared && abuf->free_func != js_array_buffer_free)
         return JS_ThrowTypeError(ctx, "external array buffer is not resizable");
     if (len < 0 || len > abuf->max_byte_length) {
     bad_length:
@@ -126479,9 +126441,21 @@ static int js_atomics_access(JSContext *ctx, JSAtomics *s)
                      "lives on the state") \
     X(ATOM_COERCE,   "25.4.3.2 steps 2-4 (accessIndex is ToIndex(requestIndex), tested against the captured " \
                      "length) and the operation's own ToNumber/ToBigInt on each declared value argument - and " \
-                     "then the operation's body, over the primitives this stage put in place")
+                     "then the operation's body, over the primitives this stage put in place") \
+    X(ATOM_SUSPENDED, "25.4.3.11 SuspendThisAgent ( waiterList, waiterRecord ) - Atomics.wait's agent is " \
+                      "suspended until NotifyWaiter wakes it or its timeout job does")
 enum { ATOMICS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_atomics_steps[] = { ATOMICS_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* A machine suspends its agent on `rec` (§25.4.3.11 SuspendThisAgent): the driver parks the flow, and the host
+   takes `rec` to know when to resume it. Returns the code the machine returns. */
+static int step_suspend_on(JSContext *ctx, JSValueConst rec)
+{
+    DCHECK(JS_IsUndefined(ctx->rt->suspended_on),
+           "a flow suspended while the host still held an earlier suspension it never took (JS_TakeSuspension)");
+    ctx->rt->suspended_on = js_dup(rec);
+    return JS_STEP_SUSPEND;
+}
 
 static int js_atomics_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
@@ -126491,10 +126465,23 @@ static int js_atomics_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     int nargs = ATOMICS_NARGS(arg);
     int i;
 
+    if (s->hdr.stage == ATOM_SUSPENDED) {
+        JS_FreeValue(ctx, cb_result);
+        /* Woken by NotifyWaiter, or by the host at [[TimeoutTime]] (JS_TimeOutSuspension), which removed the
+           record and set "timed-out" — the draft's DoWait returns [[Result]] after SuspendThisAgent without
+           stating a timeout's own, so the timeout takes §25.4.3.15's steps, which test262's timeouts read. */
+        if (!JS_SuspensionWoken(ctx, s->wait_rec))
+            return step_suspend_on(ctx, s->wait_rec);
+        s->result = js_waiter_get(ctx, s->wait_rec, WR_RESULT);
+        JS_FreeValue(ctx, s->wait_rec);
+        s->wait_rec = JS_UNDEFINED;
+        return 0;
+    }
     if (s->hdr.stage == ATOM_VALIDATE) {
         JSObject *p;
         JS_FreeValue(ctx, cb_result);
         s->result = JS_UNDEFINED;
+        s->wait_rec = JS_UNDEFINED;
         /* steps 25.4.3.1 and 25.4.3.2 step 1, both BEFORE the first coercion */
         p = js_atomics_validate(ctx, step_arg(&s->hdr, 0), ATOMICS_WAITABLE(arg), ATOMICS_ISWRITE(arg));
         if (!p)
@@ -126533,6 +126520,20 @@ static int js_atomics_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         if (i == 1 && js_atomics_access(ctx, s) < 0)
             return -1;
     }
+    if (s->hdr.def == &js_atomics_wait_def) {
+        /* §25.4.15 Atomics.wait: DoWait ( sync, … ), whose suspension is this machine's next stage. */
+        JSValue done, list, promise;
+        if (js_atomics_dowait(ctx, (JSValueConst *)s->argp, true, &done, &list, &s->wait_rec, &promise) < 0)
+            return -1;
+        JS_FreeValue(ctx, list);
+        DCHECK(JS_IsUndefined(promise), "a blocking DoWait made a promise capability");
+        if (!JS_IsUndefined(done)) {
+            s->result = done;
+            return 0;
+        }
+        s->hdr.stage = ATOM_SUSPENDED;
+        return step_suspend_on(ctx, s->wait_rec);
+    }
     DCHECK(s->hdr.def->body.generic != NULL, "an Atomics definition with no body");
     if (s->hdr.def->body_proto == JS_CFUNC_generic_magic) {
         s->result = s->hdr.def->body.generic_magic(ctx, s->hdr.this_val, s->hdr.argc,
@@ -126551,6 +126552,7 @@ static void js_atomics_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSAtomics *s = st;
     v->val(ctx, &s->result);
+    v->val(ctx, &s->wait_rec);
     v->array(ctx, (void **)&s->argp, sizeof(JSValue), s->nargp, s->nargp, js_step_visit_value_elem);
 }
 
@@ -126783,62 +126785,359 @@ static JSValue js_atomics_isLockFree(JSContext *ctx,
     return js_bool(ret);
 }
 
-typedef struct JSAtomicsWaiter {
-    struct list_head link;
-    bool linked;
-    js_cond_t cond;
-    int32_t *ptr;
-} JSAtomicsWaiter;
+/* ECMA-262 §25.4.1 Waiter Record, as a heap Array held by its WaiterList so it time-travels with the flow that
+   added it: [[PromiseCapability]] as its resolve function (null for blocking) and its promise, [[TimeoutTime]],
+   [[Result]], and whether a blocking waiter's agent has been woken (§25.4.3.12 NotifyWaiter's first arm). Its
+   [[AgentSignifier]] is the agent of the resolve function's realm, or, for a blocking waiter, the agent suspended
+   on the record. */
 
-/* 25.4.3.14 Atomics.waitAsync's waiter. The synchronous Atomics.wait parks the whole THREAD on a condition
-   variable, which is the one thing this engine cannot do to a flow; waitAsync is the shape that fits, because
-   its answer is a PROMISE and the flow carries on. So the async waiter holds a resolving pair instead of a
-   cond, and Atomics.notify claims it with "ok" exactly where it signals a sync waiter.
-   The resolving functions are DUP'd and held by this list, which is what keeps them alive: the list is not
-   reachable from the GC roots, so refcounting is the only thing that owns them, and they are released either
-   when the owning agent settles them or when the runtime tears the list down.
-
-   CLAIM AND SETTLE ARE DIFFERENT THREADS, which is the spec's own structure and not an optimisation: 25.4.3.15
-   does not resolve the promise where it notifies, it performs EnqueueResolveInAgentJob — the job runs in the
-   WAITING agent. Atomics.notify can be executing on any agent's thread, and the resolving pair belongs to
-   w->ctx's runtime, so calling it from the notifier would be a cross-runtime JS_Call on a heap another thread
-   owns. Notify therefore only sets `result` and flips `claimed` under the atomics mutex; the owning agent's
-   pump (JS_AtomicsExpireAsync) is the only place a resolving function is ever invoked or freed. */
-typedef struct JSAtomicsAsyncWaiter {
-    struct list_head link;
-    bool linked;
-    bool claimed;          /* a notify or an expiry has decided this waiter; `result` says which */
-    JSAtom result;         /* JS_ATOM_ok or JS_ATOM_timed_out; meaningful only once claimed */
-    void *ptr;
-    JSContext *ctx;
-    int64_t deadline;      /* monotonic ms; INT64_MAX = no timeout, so it waits for a notify forever */
-    JSValue resolving_funcs[2];
-} JSAtomicsAsyncWaiter;
-
-static struct list_head js_atomics_async_waiter_list =
-    LIST_HEAD_INIT(js_atomics_async_waiter_list);
-/* broadcast whenever a waiter becomes settle-able, so an agent parked in JS_AtomicsAsyncWaitForWork on a
-   notify-only waiter wakes on the notifying agent's thread rather than on a clock it does not have */
-static js_cond_t js_atomics_async_cond;
-
-static js_once_t js_atomics_once = JS_ONCE_INIT;
-static js_mutex_t js_atomics_mutex;
-static struct list_head js_atomics_waiter_list =
-    LIST_HEAD_INIT(js_atomics_waiter_list);
-
-static void js__atomics_init(void) {
-    js_mutex_init(&js_atomics_mutex);
-    js_cond_init(&js_atomics_async_cond);
+static JSValue js_waiter_get(JSContext *ctx, JSValueConst rec, int field)
+{
+    return JS_GetPropertyUint32(ctx, rec, (uint32_t)field);
 }
 
-/* THE LOCK MUST COVER EVERY PATH THAT TOUCHES THE LISTS, and the async list is reached by RUNTIME-scoped entry
-   points (teardown, the host's deadline query) that can run for a runtime which never created a context — so
-   tying the mutex's construction to JS_AddIntrinsicAtomics, as upstream does, leaves those paths locking an
-   uninitialised mutex. Acquire through this and the once is discharged wherever the first toucher happens to be. */
-static void js_atomics_lock(void)
+static void js_waiter_set(JSContext *ctx, JSValueConst rec, int field, JSValue v)
 {
-    js_once(&js_atomics_once, js__atomics_init);
-    js_mutex_lock(&js_atomics_mutex);
+    CHECK(JS_SetPropertyUint32(ctx, rec, (uint32_t)field, v) >= 0, "a Waiter Record could not be written");
+}
+
+/* §25.4.3.5 GetWaiterList ( block, i ): the Array of Waiter Records the block's store holds for byte index `i`,
+   created on first use. Owned. */
+static JSValue js_get_waiter_list(JSContext *ctx, JSArrayBuffer *abuf, uint32_t i)
+{
+    JSValue list;
+
+    DCHECK(abuf->shared && JS_IsObject(abuf->waiter_lists), "a WaiterList was asked of a block that has none");
+    list = JS_GetPropertyUint32(ctx, abuf->waiter_lists, i);
+    if (JS_IsUndefined(list)) {
+        list = JS_NewArray(ctx);
+        CHECK(!JS_IsException(list), "a WaiterList could not be allocated");
+        CHECK(JS_SetPropertyUint32(ctx, abuf->waiter_lists, i, js_dup(list)) >= 0,
+              "a WaiterList could not be stored on its block");
+    }
+    return list;
+}
+
+static uint32_t js_waiter_list_length(JSContext *ctx, JSValueConst list)
+{
+    int64_t len = 0;
+
+    CHECK(js_get_length64(ctx, &len, list) == 0, "a WaiterList's length could not be read");
+    return (uint32_t)len;
+}
+
+/* §25.4.3.9 RemoveWaiter ( waiterList, waiterRecord ), answering whether the list contained it. */
+static bool js_remove_waiter(JSContext *ctx, JSValueConst list, JSValueConst rec)
+{
+    uint32_t n = js_waiter_list_length(ctx, list), i, j;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, list, i);
+        bool same = JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(rec);
+        JS_FreeValue(ctx, e);
+        if (same) {
+            for (j = i + 1; j < n; j++)
+                CHECK(JS_SetPropertyUint32(ctx, list, j - 1, JS_GetPropertyUint32(ctx, list, j)) >= 0,
+                      "a WaiterList could not be compacted");
+            CHECK(JS_SetPropertyStr(ctx, list, "length", js_uint32(n - 1)) >= 0,
+                  "a WaiterList could not be shortened");
+            return true;
+        }
+    }
+    return false;
+}
+
+/* EnqueueResolveInAgentJob's job: settle the promise with the result, in the waiting agent. */
+static JSValue js_atomics_resolve_job(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      int magic, JSValueConst *data)
+{
+    (void)this_val; (void)argc; (void)argv; (void)magic;
+    fulfill_or_reject_promise(ctx, data[0], data[1], false);
+    return JS_UNDEFINED;
+}
+
+/* §25.4.3.12 NotifyWaiter ( waiterList, waiterRecord ). */
+static void js_notify_waiter(JSContext *ctx, JSValueConst rec)
+{
+    JSValue resolve = js_waiter_get(ctx, rec, WR_RESOLVE), promise, result;
+    JSContext *target;
+
+    if (JS_IsNull(resolve)) {
+        /* "Wake the agent whose signifier is waiterRecord.[[AgentSignifier]] from suspension": the host resumes
+           the flow suspended on this record once it reads it woken (JS_SuspensionWoken). */
+        js_waiter_set(ctx, rec, WR_WOKEN, JS_TRUE);
+        return;
+    }
+    promise = js_waiter_get(ctx, rec, WR_PROMISE);
+    result = js_waiter_get(ctx, rec, WR_RESULT);
+    target = JS_GetFunctionRealm(ctx, resolve);
+    CHECK(target != NULL, "a waitAsync capability's resolve function has no realm");
+    if (JS_GetRealmAgent(ctx) == JS_GetRealmAgent(target)) {
+        fulfill_or_reject_promise(ctx, promise, result, false);
+    } else {
+        /* §25.4.3.13 EnqueueResolveInAgentJob: HostEnqueueGenericJob in the resolve function's realm. */
+        JSValueConst d[2] = { promise, result };
+        JSValue job = JS_NewCFunctionData(target, js_atomics_resolve_job, 0, 0, 2, d);
+        CHECK(!JS_IsException(job), "an EnqueueResolveInAgentJob job could not be allocated");
+        CHECK(ctx->rt->host_jobs.enqueue_generic != NULL,
+              "§9.5.4 HostEnqueueGenericJob was asked of a host that installed no job hooks (JS_SetHostJobHooks)");
+        ctx->rt->host_jobs.enqueue_generic(target, job, ctx->rt->host_jobs.opaque);
+        JS_FreeValue(ctx, job);
+    }
+    JS_FreeValue(ctx, result);
+    JS_FreeValue(ctx, promise);
+    JS_FreeValue(ctx, resolve);
+}
+
+/* §25.4.3.15 EnqueueAtomicsWaitAsyncTimeoutJob's timeoutJob, over [waiterList, waiterRecord]. */
+static JSValue js_atomics_timeout_job(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      int magic, JSValueConst *data)
+{
+    (void)this_val; (void)argc; (void)argv; (void)magic;
+    if (js_remove_waiter(ctx, data[0], data[1])) {
+        js_waiter_set(ctx, data[1], WR_RESULT, JS_AtomToString(ctx, JS_ATOM_timed_out));
+        js_notify_waiter(ctx, data[1]);
+    }
+    return JS_UNDEFINED;
+}
+
+/* §25.4.3.15 EnqueueAtomicsWaitAsyncTimeoutJob ( waiterList, waiterRecord ): HostEnqueueTimeoutJob in the current
+   realm, after `ms`, which is [[TimeoutTime]] - now over the `now` DoWait read in the same step. */
+static void js_enqueue_wait_timeout_job(JSContext *ctx, JSValueConst list, JSValueConst rec, double ms)
+{
+    JSValueConst d[2] = { list, rec };
+    JSValue job = JS_NewCFunctionData(ctx, js_atomics_timeout_job, 0, 0, 2, d);
+
+    CHECK(!JS_IsException(job), "an Atomics wait timeout job could not be allocated");
+    CHECK(ctx->rt->host_jobs.enqueue_timeout != NULL,
+          "§9.5.6 HostEnqueueTimeoutJob was asked of a host that installed no job hooks (JS_SetHostJobHooks)");
+    ctx->rt->host_jobs.enqueue_timeout(ctx, job, ms, ctx->rt->host_jobs.opaque);
+    JS_FreeValue(ctx, job);
+}
+
+/* §25.4.3.14 DoWait's steps from GetWaiterList on, both modes, over arguments the machine already made primitive.
+   Answers the not-equal or immediate-timeout result in *pdone, or the new Waiter Record and its list. */
+static int js_atomics_dowait(JSContext *ctx, JSValueConst *argv, bool sync, JSValue *pdone, JSValue *plist,
+                             JSValue *prec, JSValue *ppromise)
+{
+    JSArrayBuffer *abuf;
+    JSObject *p;
+    uint64_t idx;
+    int64_t v;
+    int32_t v32;
+    double d, timeout, timeout_time;
+    int size_log2;
+    bool differ;
+    void *ptr;
+    JSValue list, rec, resolving[2], promise = JS_UNDEFINED;
+
+    *pdone = *plist = *prec = *ppromise = JS_UNDEFINED;
+    p = js_atomics_get_buf(ctx, argv[0], argv[1], &abuf, &idx, 2);
+    if (!p)
+        return -1;
+    size_log2 = typed_array_size_log2(p->class_id);
+    if (size_log2 == 3) {
+        if (JS_ToBigInt64(ctx, &v, argv[2]))
+            return -1;
+    } else {
+        if (JS_ToInt32(ctx, &v32, argv[2]))
+            return -1;
+        v = v32;
+    }
+    if (JS_ToFloat64(ctx, &d, argv[3]))
+        return -1;
+    timeout = isnan(d) ? INFINITY : d < 0 ? 0 : d;
+    if (sync && !JS_AgentCanBlock(JS_GetRealmAgent(ctx))) {
+        JS_ThrowTypeError(ctx, "cannot block in this thread");
+        return -1;
+    }
+    CHECK(!sync || ctx->rt->host_jobs.now != NULL,
+          "an agent that can block waited in a runtime whose host installed no clock (JSHostJobHooks.now), so its "
+          "[[TimeoutTime]] has no time to be read on");
+    CHECK(idx < p->u.array.count, "an Atomics wait reached its storage out of bounds - see js_atomics_get_buf");
+    ptr = p->u.array.u.uint8_ptr + ((uintptr_t)idx << size_log2);
+    list = js_get_waiter_list(ctx, abuf, p->u.typed_array->offset + ((uint32_t)idx << size_log2));
+    differ = size_log2 == 3 ? *(int64_t *)ptr != v : *(int32_t *)ptr != v;
+    if (differ || (!sync && timeout == 0)) {
+        JS_FreeValue(ctx, list);
+        *pdone = JS_AtomToString(ctx, differ ? JS_ATOM_not_equal : JS_ATOM_timed_out);
+        return 0;
+    }
+    /* "Let now be the time value (UTC) identifying the current time": the host's. Only a blocking waiter's is
+       kept, since the host wakes it at that time; a waitAsync's is only ever read back as `timeout`. */
+    timeout_time = sync ? ctx->rt->host_jobs.now(ctx, ctx->rt->host_jobs.opaque) + timeout : INFINITY;
+    rec = JS_NewArray(ctx);
+    CHECK(!JS_IsException(rec), "a Waiter Record could not be allocated");
+    if (sync) {
+        js_waiter_set(ctx, rec, WR_RESOLVE, JS_NULL);   /* blocking */
+        js_waiter_set(ctx, rec, WR_PROMISE, JS_UNDEFINED);
+    } else {
+        promise = JS_NewPromiseCapability(ctx, resolving);
+        if (JS_IsException(promise)) {
+            JS_FreeValue(ctx, rec);
+            JS_FreeValue(ctx, list);
+            return -1;
+        }
+        js_waiter_set(ctx, rec, WR_RESOLVE, resolving[0]);
+        JS_FreeValue(ctx, resolving[1]);
+        js_waiter_set(ctx, rec, WR_PROMISE, js_dup(promise));
+    }
+    js_waiter_set(ctx, rec, WR_TIMEOUT_TIME, js_float64(timeout_time));
+    js_waiter_set(ctx, rec, WR_RESULT, JS_AtomToString(ctx, JS_ATOM_ok));
+    js_waiter_set(ctx, rec, WR_WOKEN, JS_FALSE);
+    js_waiter_set(ctx, rec, WR_LIST, sync ? js_dup(list) : JS_UNDEFINED);
+    /* §25.4.3.8 AddWaiter */
+    CHECK(JS_SetPropertyUint32(ctx, list, js_waiter_list_length(ctx, list), js_dup(rec)) >= 0,
+          "a Waiter Record could not be added to its WaiterList");
+    if (!sync && isfinite(timeout))
+        js_enqueue_wait_timeout_job(ctx, list, rec, timeout);
+    *plist = list;
+    *prec = rec;
+    *ppromise = promise;
+    return 0;
+}
+
+/* §25.4.16 Atomics.waitAsync ( ta, index, value, timeout ): DoWait ( async, … ), over primitive arguments. */
+static JSValue js_atomics_wait_async(JSContext *ctx, JSValueConst this_obj, int argc, JSValueConst *argv)
+{
+    JSValue done, list, rec, promise, res;
+
+    (void)this_obj; (void)argc;
+    if (js_atomics_dowait(ctx, argv, false, &done, &list, &rec, &promise) < 0)
+        return JS_EXCEPTION;
+    JS_FreeValue(ctx, list);
+    JS_FreeValue(ctx, rec);
+    res = JS_NewObject(ctx);
+    if (JS_IsException(res)) {
+        JS_FreeValue(ctx, done);
+        JS_FreeValue(ctx, promise);
+        return JS_EXCEPTION;
+    }
+    if (JS_DefinePropertyValue(ctx, res, JS_ATOM_async, js_bool(JS_IsUndefined(done)), JS_PROP_C_W_E) < 0 ||
+        JS_DefinePropertyValue(ctx, res, JS_ATOM_value, JS_IsUndefined(done) ? promise : done,
+                               JS_PROP_C_W_E) < 0) {
+        JS_FreeValue(ctx, res);
+        return JS_EXCEPTION;
+    }
+    return res;
+}
+
+/* §25.4.10 Atomics.notify ( ta, index, count ), from step 5 on: the machine made the arguments primitive and
+   validated the access against the length it captured first. */
+static JSValue js_atomics_notify(JSContext *ctx, JSValueConst this_obj, int argc, JSValueConst *argv)
+{
+    int size_log2;
+    int32_t count, n, i;
+    uint64_t idx;
+    JSObject *p;
+    JSArrayBuffer *abuf;
+    JSValue list;
+    uint32_t len;
+
+    (void)this_obj; (void)argc;
+    p = JS_VALUE_GET_OBJ(argv[0]);
+    abuf = p->u.typed_array->buffer->u.array_buffer;
+    size_log2 = typed_array_size_log2(p->class_id);
+    if (JS_ToIndex(ctx, &idx, argv[1]))   /* already primitive: invokes nothing */
+        return JS_EXCEPTION;
+    /* step 3: the count, whose coercion the machine has already made primitive */
+    if (JS_IsUndefined(argv[2])) {
+        count = INT32_MAX;
+    } else {
+        if (JS_ToInt32Clamp(ctx, &count, argv[2], 0, INT32_MAX, 0))
+            return JS_EXCEPTION;
+    }
+    /* step 5: a non-shared buffer notifies nobody and returns +0, before anything looks at the memory */
+    if (!abuf->shared)
+        return js_int32(0);
+    list = js_get_waiter_list(ctx, abuf, p->u.typed_array->offset + ((uint32_t)idx << size_log2));
+    /* §25.4.3.10 RemoveWaiters ( waiterList, count ), then NotifyWaiter for each, in list order */
+    len = js_waiter_list_length(ctx, list);
+    n = (uint32_t)count < len ? count : (int32_t)len;
+    {
+        JSValue removed = JS_NewArray(ctx);
+        CHECK(!JS_IsException(removed), "the removed Waiter Records could not be held");
+        for (i = 0; i < n; i++)
+            CHECK(JS_SetPropertyUint32(ctx, removed, (uint32_t)i, JS_GetPropertyUint32(ctx, list, (uint32_t)i)) >= 0,
+                  "a removed Waiter Record could not be held");
+        for (i = n; i < (int32_t)len; i++)
+            CHECK(JS_SetPropertyUint32(ctx, list, (uint32_t)(i - n), JS_GetPropertyUint32(ctx, list, (uint32_t)i)) >= 0,
+                  "a WaiterList could not be compacted");
+        CHECK(JS_SetPropertyStr(ctx, list, "length", js_uint32(len - (uint32_t)n)) >= 0,
+              "a WaiterList could not be shortened");
+        for (i = 0; i < n; i++) {
+            JSValue rec = JS_GetPropertyUint32(ctx, removed, (uint32_t)i);
+            js_notify_waiter(ctx, rec);
+            JS_FreeValue(ctx, rec);
+        }
+        JS_FreeValue(ctx, removed);
+    }
+    JS_FreeValue(ctx, list);
+    return js_int32(n);
+}
+
+bool JS_SuspensionWoken(JSContext *ctx, JSValueConst rec)
+{
+    JSValue w = js_waiter_get(ctx, rec, WR_WOKEN);
+    bool woken = JS_ToBool(ctx, w);
+
+    DCHECK(JS_VALUE_GET_TAG(w) == JS_TAG_BOOL, "a suspension names no suspension record");
+    JS_FreeValue(ctx, w);
+    return woken;
+}
+
+JSValue JS_NewSuspension(JSContext *ctx, double timeout_time)
+{
+    JSValue rec = JS_NewArray(ctx);
+
+    CHECK(!JS_IsException(rec), "a suspension record could not be allocated");
+    DCHECK(!isnan(timeout_time), "a suspension's timeout time is NaN");
+    js_waiter_set(ctx, rec, WR_TIMEOUT_TIME, js_float64(timeout_time));
+    js_waiter_set(ctx, rec, WR_WOKEN, JS_FALSE);
+    js_waiter_set(ctx, rec, WR_LIST, JS_UNDEFINED);
+    return rec;
+}
+
+void JS_WakeSuspension(JSContext *ctx, JSValueConst rec)
+{
+    JSValue list = js_waiter_get(ctx, rec, WR_LIST);
+
+    DCHECK(JS_IsUndefined(list), "a host woke a blocking Waiter Record; only NotifyWaiter or its timeout wakes one");
+    JS_FreeValue(ctx, list);
+    js_waiter_set(ctx, rec, WR_WOKEN, JS_TRUE);
+}
+
+double JS_SuspensionTimeoutTime(JSContext *ctx, JSValueConst rec)
+{
+    JSValue t = js_waiter_get(ctx, rec, WR_TIMEOUT_TIME);
+    double d;
+
+    DCHECK(JS_IsNumber(t), "a suspension record carries no timeout time");
+    JS_ToFloat64(ctx, &d, t);   /* a number: invokes nothing */
+    return d;
+}
+
+/* §25.4.3.11 SuspendThisAgent's wake "due to a timeout". A blocking waiter takes §25.4.3.15's timeoutJob steps:
+   it is still in its list, since a NotifyWaiter that removed it also woke it. */
+void JS_TimeOutSuspension(JSContext *ctx, JSValueConst rec)
+{
+    JSValue list = js_waiter_get(ctx, rec, WR_LIST);
+
+    DCHECK(!JS_SuspensionWoken(ctx, rec), "a suspension was timed out after it was woken");
+    if (!JS_IsUndefined(list)) {
+        bool listed = js_remove_waiter(ctx, list, rec);
+        DCHECK(listed, "a blocking waiter neither woken nor in its WaiterList");
+        (void)listed;
+        js_waiter_set(ctx, rec, WR_RESULT, JS_AtomToString(ctx, JS_ATOM_timed_out));
+    }
+    js_waiter_set(ctx, rec, WR_WOKEN, JS_TRUE);
+    JS_FreeValue(ctx, list);
+}
+
+int step_suspend_run(JSContext *ctx, JSStepHdr *h, JSValueConst rec)
+{
+    (void)h;
+    return step_suspend_on(ctx, rec);
 }
 
 // no-op: Atomics.pause() is not allowed to block or yield to another
@@ -126867,403 +127166,6 @@ static JSValue js_atomics_pause(JSContext *ctx, JSValueConst this_obj,
     return JS_UNDEFINED;
 }
 
-static JSValue js_atomics_wait(JSContext *ctx,
-                               JSValueConst this_obj,
-                               int argc, JSValueConst *argv)
-{
-    int64_t v;
-    int32_t v32;
-    void *ptr;
-    int64_t timeout;
-    uint64_t idx;
-    JSObject *p;
-    JSAtomicsWaiter waiter_s, *waiter;
-    int ret, size_log2, res;
-    double d;
-
-    p = js_atomics_get_buf(ctx, argv[0], argv[1], NULL, &idx, 2);
-    if (!p)
-        return JS_EXCEPTION;
-    size_log2 = typed_array_size_log2(p->class_id);
-    if (size_log2 == 3) {
-        if (JS_ToBigInt64(ctx, &v, argv[2]))
-            return JS_EXCEPTION;
-    } else {
-        if (JS_ToInt32(ctx, &v32, argv[2]))
-            return JS_EXCEPTION;
-        v = v32;
-    }
-    if (JS_ToFloat64(ctx, &d, argv[3]))
-        return JS_EXCEPTION;
-    if (isnan(d) || d >= 0x1p63)
-        timeout = INT64_MAX;
-    else if (d < 0)
-        timeout = 0;
-    else
-        timeout = (int64_t)d;
-    /* ECMA-262 §25.4.3.14 DoWait ( mode, ta, index, value, timeout ) step 12: §9.6.2 AgentCanSuspend ( ) reads
-       the surrounding agent's [[CanBlock]], and the realm of a function the page reaches synchronously is of
-       that agent. */
-    if (!JS_AgentCanBlock(JS_GetRealmAgent(ctx)))
-        return JS_ThrowTypeError(ctx, "cannot block in this thread");
-    /* §9.6 lets agents share an executing thread only while none of them can block, and every agent of a
-       runtime shares its one thread, so the condition-variable wait below is right only for a runtime's sole
-       agent. */
-    DCHECKF(ctx->rt->agent_count == 1,
-            "Atomics.wait blocked the executing thread that %d agents share: a blocking wait in an agent that "
-            "shares its runtime must park the flow on the waiter list until a notify or the timeout resumes it",
-            ctx->rt->agent_count);
-
-    CHECK(idx < p->u.array.count,
-          "an Atomics wait reached its storage out of bounds - see js_atomics_get_buf");
-
-    ptr = p->u.array.u.uint8_ptr + ((uintptr_t)idx << size_log2);
-
-    /* XXX: inefficient if large number of waiters, should hash on
-       'ptr' value */
-    js_atomics_lock();
-    if (size_log2 == 3) {
-        res = *(int64_t *)ptr != v;
-    } else {
-        res = *(int32_t *)ptr != v;
-    }
-    if (res) {
-        js_mutex_unlock(&js_atomics_mutex);
-        return JS_AtomToString(ctx, JS_ATOM_not_equal);
-    }
-
-    waiter = &waiter_s;
-    waiter->ptr = ptr;
-    js_cond_init(&waiter->cond);
-    waiter->linked = true;
-    list_add_tail(&waiter->link, &js_atomics_waiter_list);
-
-    if (timeout == INT64_MAX) {
-        js_cond_wait(&waiter->cond, &js_atomics_mutex);
-        ret = 0;
-    } else {
-        ret = js_cond_timedwait(&waiter->cond, &js_atomics_mutex, timeout * 1e6 /* to ns */);
-    }
-    if (waiter->linked)
-        list_del(&waiter->link);
-    js_mutex_unlock(&js_atomics_mutex);
-    js_cond_destroy(&waiter->cond);
-    if (ret == -1) {
-        return JS_AtomToString(ctx, JS_ATOM_timed_out);
-    } else {
-        return JS_AtomToString(ctx, JS_ATOM_ok);
-    }
-}
-
-/* Drop every async waiter belonging to `rt`, releasing the resolving pair it owns. Called from JS_FreeRuntime;
-   a waiter whose promise nobody settled would otherwise keep those functions alive past the runtime. */
-static void js_atomics_free_async_waiters(JSRuntime *rt)
-{
-    struct list_head *el, *el1;
-    JSAtomicsAsyncWaiter *w;
-
-    js_atomics_lock();
-    list_for_each_safe(el, el1, &js_atomics_async_waiter_list) {
-        w = list_entry(el, JSAtomicsAsyncWaiter, link);
-        if (w->ctx->rt != rt)
-            continue;
-        list_del(&w->link);
-        w->linked = false;
-        JS_FreeValueRT(rt, w->resolving_funcs[0]);
-        JS_FreeValueRT(rt, w->resolving_funcs[1]);
-        js_free_rt(rt, w);
-    }
-    js_mutex_unlock(&js_atomics_mutex);
-}
-
-/* THE TIMEOUT IS THE HOST'S, which is what 25.4.3.14 says: the waiter is registered and the timeout becomes a
-   host-enqueued job. So the embedder gets exactly two entry points — SETTLE what is due, and WAIT until
-   something is. Neither one is the job pump: an earlier version of this put a sleep inside
-   JS_ExecutePendingJob, which is the one thing this engine may not do, because the pump is the flow
-   scheduler's and a pump that blocks is an unparkable area by construction. The pump reports "no jobs"
-   truthfully and the embedder decides what it is waiting for, next to whatever else its event loop waits on.
-
-   Block until this runtime has an async waiter to settle, and report whether it does. A waiter with a deadline
-   is a clock the loop can sleep to; a waiter WITHOUT one can be settled only by another agent's notify, which
-   is an event, so it is waited for on a condition variable that notify broadcasts — the async mirror of the
-   per-waiter cond the synchronous Atomics.wait parks its whole thread on. Returns false when this runtime owns
-   no outstanding waiter, which is the only truthful "the queue really is drained". */
-bool JS_AtomicsAsyncWaitForWork(JSRuntime *rt)
-{
-    struct list_head *el;
-    JSAtomicsAsyncWaiter *w;
-
-    js_atomics_lock();
-    for (;;) {
-        int64_t soonest = INT64_MAX, now = (int64_t)(js__hrtime_ns() / 1000000);
-        int outstanding = 0;
-
-        list_for_each(el, &js_atomics_async_waiter_list) {
-            w = list_entry(el, JSAtomicsAsyncWaiter, link);
-            if (w->ctx->rt != rt)
-                continue;
-            outstanding++;
-            if (w->claimed || w->deadline <= now) {
-                js_mutex_unlock(&js_atomics_mutex);
-                return true;             /* due now — the caller settles it */
-            }
-            if (w->deadline < soonest)
-                soonest = w->deadline;
-        }
-        if (outstanding == 0) {
-            js_mutex_unlock(&js_atomics_mutex);
-            return false;
-        }
-        if (soonest == INT64_MAX)
-            js_cond_wait(&js_atomics_async_cond, &js_atomics_mutex);
-        else
-            js_cond_timedwait(&js_atomics_async_cond, &js_atomics_mutex,
-                              (soonest - now) * 1000000 /* ms to ns */);
-    }
-}
-
-/* SETTLE the waiters this runtime owns that are due — claimed by a notify, or past their deadline — and report
-   how many. This is EnqueueResolveInAgentJob's landing site: it runs on the owning agent's thread, so it is the
-   only place a resolving function may be called or freed.
-   The due set is unlinked onto a private list UNDER the lock and settled after releasing it. Settling calls back
-   into JS (a .then reaction can waitAsync again), so holding the lock across it would deadlock; and walking the
-   shared list with the lock dropped mid-iteration would follow a cursor another agent's notify may have freed. */
-int JS_AtomicsExpireAsync(JSRuntime *rt)
-{
-    struct list_head *el, *el1, due;
-    JSAtomicsAsyncWaiter *w;
-    int64_t now = (int64_t)(js__hrtime_ns() / 1000000);
-    int n = 0;
-
-    init_list_head(&due);
-    js_atomics_lock();
-    list_for_each_safe(el, el1, &js_atomics_async_waiter_list) {
-        w = list_entry(el, JSAtomicsAsyncWaiter, link);
-        if (w->ctx->rt != rt)
-            continue;
-        if (!w->claimed) {
-            if (now < w->deadline)
-                continue;
-            w->claimed = true;
-            w->result = JS_ATOM_timed_out;
-        }
-        list_del(&w->link);
-        w->linked = false;
-        list_add_tail(&w->link, &due);
-    }
-    js_mutex_unlock(&js_atomics_mutex);
-
-    list_for_each_safe(el, el1, &due) {
-        JSValue arg, r;
-        w = list_entry(el, JSAtomicsAsyncWaiter, link);
-        list_del(&w->link);
-        DCHECK(w->result == JS_ATOM_ok || w->result == JS_ATOM_timed_out,
-               "an async waiter reached settlement without a spec result");
-        arg = JS_AtomToString(w->ctx, w->result);
-        r = js_promise_settle_native(w->ctx, w->resolving_funcs[0], vc(&arg));
-        JS_FreeValue(w->ctx, arg);
-        JS_FreeValue(w->ctx, r);
-        JS_FreeValueRT(rt, w->resolving_funcs[0]);
-        JS_FreeValueRT(rt, w->resolving_funcs[1]);
-        js_free_rt(rt, w);
-        n++;
-    }
-    return n;
-}
-
-/* 25.4.3.14 Atomics.waitAsync — DoWait with mode=async. The differences from the sync twin are all in the
-   spec, not in convenience: a NON-shared buffer is allowed (step 3 only rejects it for sync), AgentCanSuspend
-   is not consulted (step 9 is sync-only), and the answer is an object { async, value } rather than a string.
-   Steps 15-17: an unequal value answers not-equal WITHOUT waiting, a zero timeout answers timed-out without
-   waiting, and only a real wait produces the promise. */
-static JSValue js_atomics_wait_async(JSContext *ctx, JSValueConst this_obj,
-                                     int argc, JSValueConst *argv)
-{
-    JSAtomicsAsyncWaiter *waiter;
-    JSValue res, promise, resolving_funcs[2];
-    int64_t v, timeout;
-    int32_t v32;
-    void *ptr;
-    uint64_t idx;
-    JSObject *p;
-    int size_log2, cmp;
-    double d;
-
-    /* is_waitable = 2, the same validation as the sync twin: an Int32Array or BigInt64Array over a
-       SharedArrayBuffer. The machine already ran it before any coercion; this reaches the buffer. */
-    p = js_atomics_get_buf(ctx, argv[0], argv[1], NULL, &idx, 2);
-    if (!p)
-        return JS_EXCEPTION;
-    size_log2 = typed_array_size_log2(p->class_id);
-    if (size_log2 == 3) {
-        if (JS_ToBigInt64(ctx, &v, argv[2]))
-            return JS_EXCEPTION;
-    } else {
-        if (JS_ToInt32(ctx, &v32, argv[2]))
-            return JS_EXCEPTION;
-        v = v32;
-    }
-    if (JS_ToFloat64(ctx, &d, argv[3]))
-        return JS_EXCEPTION;
-    if (isnan(d) || d >= 0x1p63)
-        timeout = INT64_MAX;
-    else if (d < 0)
-        timeout = 0;
-    else
-        timeout = (int64_t)d;
-
-    CHECK(idx < p->u.array.count,
-          "Atomics.waitAsync reached its storage out of bounds - see js_atomics_get_buf");
-
-    res = JS_NewObject(ctx);
-    if (JS_IsException(res))
-        return JS_EXCEPTION;
-
-    ptr = p->u.array.u.uint8_ptr + ((uintptr_t)idx << size_log2);
-    js_atomics_lock();
-    if (size_log2 == 3)
-        cmp = *(int64_t *)ptr != v;
-    else
-        cmp = *(int32_t *)ptr != v;
-    js_mutex_unlock(&js_atomics_mutex);
-
-    if (cmp) {
-        if (JS_DefinePropertyValue(ctx, res, JS_ATOM_async, js_bool(false), JS_PROP_C_W_E) < 0 ||
-            JS_DefinePropertyValue(ctx, res, JS_ATOM_value,
-                                   JS_AtomToString(ctx, JS_ATOM_not_equal), JS_PROP_C_W_E) < 0)
-            goto fail;
-        return res;
-    }
-    if (timeout == 0) {
-        if (JS_DefinePropertyValue(ctx, res, JS_ATOM_async, js_bool(false), JS_PROP_C_W_E) < 0 ||
-            JS_DefinePropertyValue(ctx, res, JS_ATOM_value,
-                                   JS_AtomToString(ctx, JS_ATOM_timed_out), JS_PROP_C_W_E) < 0)
-            goto fail;
-        return res;
-    }
-
-    promise = JS_NewPromiseCapability(ctx, resolving_funcs);
-    if (JS_IsException(promise))
-        goto fail;
-    waiter = js_malloc(ctx, sizeof(*waiter));
-    if (!waiter) {
-        JS_FreeValue(ctx, promise);
-        JS_FreeValue(ctx, resolving_funcs[0]);
-        JS_FreeValue(ctx, resolving_funcs[1]);
-        goto fail;
-    }
-    waiter->ptr = ptr;
-    waiter->ctx = ctx;
-    waiter->linked = true;
-    waiter->claimed = false;
-    waiter->result = JS_ATOM_NULL;
-    waiter->deadline = (timeout == INT64_MAX) ? INT64_MAX
-                                              : (int64_t)(js__hrtime_ns() / 1000000) + timeout;
-    waiter->resolving_funcs[0] = resolving_funcs[0];
-    waiter->resolving_funcs[1] = resolving_funcs[1];
-    js_atomics_lock();
-    list_add_tail(&waiter->link, &js_atomics_async_waiter_list);
-    js_mutex_unlock(&js_atomics_mutex);
-
-    if (JS_DefinePropertyValue(ctx, res, JS_ATOM_async, js_bool(true), JS_PROP_C_W_E) < 0 ||
-        JS_DefinePropertyValue(ctx, res, JS_ATOM_value, promise, JS_PROP_C_W_E) < 0)
-        goto fail;
-    return res;
- fail:
-    JS_FreeValue(ctx, res);
-    return JS_EXCEPTION;
-}
-
-/* CLAIM up to `count` async waiters parked on `ptr` with "ok" and report how many. Called from Atomics.notify
-   at the same point it signals the sync waiters, because 25.4.3.15 counts both kinds and RemoveWaiters takes
-   them in one pass. It claims only — see the JSAtomicsAsyncWaiter comment: the resolving pair belongs to the
-   waiting agent and is invoked by that agent's JS_AtomicsExpireAsync, never here. Must hold the atomics mutex:
-   `ptr` is shared memory and the waiter may belong to another thread's runtime. */
-static int js_atomics_notify_async(void *ptr, int count)
-{
-    struct list_head *el;
-    JSAtomicsAsyncWaiter *w;
-    int n = 0;
-
-    list_for_each(el, &js_atomics_async_waiter_list) {
-        if (n >= count)
-            break;
-        w = list_entry(el, JSAtomicsAsyncWaiter, link);
-        if (w->ptr != ptr || w->claimed)
-            continue;
-        w->claimed = true;
-        w->result = JS_ATOM_ok;
-        n++;
-    }
-    if (n > 0)
-        js_cond_broadcast(&js_atomics_async_cond);
-    return n;
-}
-
-static JSValue js_atomics_notify(JSContext *ctx,
-                                 JSValueConst this_obj,
-                                 int argc, JSValueConst *argv)
-{
-    struct list_head *el, *el1, waiter_list;
-    int size_log2;
-    int32_t count, n;
-    void *ptr;
-    uint64_t idx;
-    JSObject *p;
-    JSArrayBuffer *abuf;
-    JSAtomicsWaiter *waiter;
-
-    /* 25.4.15 steps 1-2 are the MACHINE's — validation and ValidateAtomicAccess, both against the length read
-       before the index was coerced. Re-running them here re-measured a buffer the index's own valueOf may have
-       detached or resized, which 25.4.15 never does: it has no revalidation step at all. */
-    p = JS_VALUE_GET_OBJ(argv[0]);
-    abuf = p->u.typed_array->buffer->u.array_buffer;
-    size_log2 = typed_array_size_log2(p->class_id);
-    if (JS_ToIndex(ctx, &idx, argv[1]))   /* already primitive: invokes nothing */
-        return JS_EXCEPTION;
-
-    /* step 3: the count, whose coercion the machine has already made primitive */
-    if (JS_IsUndefined(argv[2])) {
-        count = INT32_MAX;
-    } else {
-        if (JS_ToInt32Clamp(ctx, &count, argv[2], 0, INT32_MAX, 0))
-            return JS_EXCEPTION;
-    }
-
-    /* step 5: a NON-SHARED buffer notifies nobody and returns +0 — before anything looks at the memory, which
-       is what makes it right for a buffer the index's valueOf detached or resized to zero. */
-    if (!abuf->shared)
-        return js_int32(0);
-
-    n = 0;
-    if (abuf->shared && count > 0) {
-        ptr = p->u.array.u.uint8_ptr + ((uintptr_t)idx << size_log2);
-
-        js_atomics_lock();
-        init_list_head(&waiter_list);
-        list_for_each_safe(el, el1, &js_atomics_waiter_list) {
-            waiter = list_entry(el, JSAtomicsWaiter, link);
-            if (waiter->ptr == ptr) {
-                list_del(&waiter->link);
-                waiter->linked = false;
-                list_add_tail(&waiter->link, &waiter_list);
-                n++;
-                if (n >= count)
-                    break;
-            }
-        }
-        list_for_each(el, &waiter_list) {
-            waiter = list_entry(el, JSAtomicsWaiter, link);
-            js_cond_signal(&waiter->cond);
-        }
-        /* 25.4.3.15 counts the async waiters too — they are the same waiter list to the spec, removed in the
-           same critical section so a concurrent notify cannot hand the same waiter to both calls. */
-        n += js_atomics_notify_async(ptr, count - n);
-        js_mutex_unlock(&js_atomics_mutex);
-    }
-    return js_int32(n);
-}
-
 static const JSCFunctionListEntry js_atomics_funcs[] = {
     JS_CFUNC_STEP_DEF("add", 3, STEPDEF_ATOMICS_ADD ),
     JS_CFUNC_STEP_DEF("and", 3, STEPDEF_ATOMICS_AND ),
@@ -127289,8 +127191,6 @@ static const JSCFunctionListEntry js_atomics_obj[] = {
 /* TODO(saghul) make this public and not dependent on typed arrays? */
 static int JS_AddIntrinsicAtomics(JSContext *ctx)
 {
-    js_once(&js_atomics_once, js__atomics_init);
-
     /* add Atomics as autoinit object */
     return JS_SetPropertyFunctionList(ctx, ctx->global_obj, js_atomics_obj, countof(js_atomics_obj));
 }

@@ -2450,6 +2450,35 @@ static JSValue js_queue_microtask(JSContext *ctx, JSValueConst this_val, int arg
    initialization steps are one algorithm reached three ways; the two CLEARERS share one declaration under no
    magic at all, because §8.7 gives them literally one set of steps and there is nothing for a magic to tell
    apart. */
+/* HTML §8.1.6.6.3 HostEnqueueGenericJob(job, realm): "Queue a global task on the JavaScript engine task source
+   given global to perform job()". */
+static void timer_host_generic_job(JSContext *realm, JSValueConst job, void *opaque)
+{
+    (void)opaque;
+    JS_EnqueueCallTask(realm, job, 0, NULL, TASK_SOURCE_JAVASCRIPT_ENGINE);
+}
+
+/* HTML §8.1.6.6.5's timeoutStep, the steps run after the timeout: queue the job as HostEnqueueGenericJob does. */
+static JSValue timer_timeout_step(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic,
+                                  JSValueConst *data)
+{
+    (void)this_val; (void)argc; (void)argv; (void)magic;
+    JS_EnqueueCallTask(ctx, data[0], 0, NULL, TASK_SOURCE_JAVASCRIPT_ENGINE);
+    return JS_UNDEFINED;
+}
+
+/* HTML §8.1.6.6.5 HostEnqueueTimeoutJob(job, realm, milliseconds): "run steps after a timeout" in realm's global,
+   whose timeoutStep queues job on the JavaScript engine task source. */
+static void timer_host_timeout_job(JSContext *realm, JSValueConst job, double milliseconds, void *opaque)
+{
+    JSValue step = JS_NewCFunctionData(realm, timer_timeout_step, 0, 0, 1, &job);
+
+    (void)opaque;
+    CHECK(!JS_IsException(step), "timer: a HostEnqueueTimeoutJob step could not be allocated");
+    timer_after(realm, milliseconds, step);
+    JS_FreeValue(realm, step);
+}
+
 void timer_init(JSContext *ctx)
 {
     static const IdlArgType SET_TIMER[2] = { IDL_STRING_UNLESS_CALLABLE, IDL_LONG };
@@ -2510,6 +2539,13 @@ void timer_init(JSContext *ctx)
     engine_set_timer_due_hook(timer_due_stamp);
     engine_set_timer_race_hook(timer_race_arrival);
     engine_set_timer_active_hook(timer_active_count);
+    /* ECMA-262 §9.5's two job hooks Atomics answers through, which HTML §8.1.6.6 defines over this event loop's
+       task queues and this component's run steps after a timeout. No clock: a window agent cannot block. */
+    {
+        static const JSHostJobHooks hooks = { .enqueue_generic = timer_host_generic_job,
+                                              .enqueue_timeout = timer_host_timeout_job };
+        JS_SetHostJobHooks(JS_GetRuntime(ctx), &hooks);
+    }
     agent_state_flag("timer", &g_ready, "the declaration latch");
     agent_state_atom("timer", &g_atom_map, "§8.7 Timers's map key on a global's timer record");
     agent_state_atom("timer", &g_atom_next, "§8.7 Timers's next-handle key on that record");

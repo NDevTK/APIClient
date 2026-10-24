@@ -2740,6 +2740,18 @@ const PolicyContainer *engine_document_policy(uint32_t doc)
     return document_policy(doc_realm(doc));
 }
 
+/* A park that was a suspension (ECMA-262 §25.4.3.11 SuspendThisAgent, JS_TakeSuspension). Only an agent that can
+   block suspends, and a flow here runs its window agent alone, which cannot. */
+static void engine_refuse_suspension(JSContext *ctx)
+{
+    JSValue susp = JS_TakeSuspension(JS_GetRuntime(ctx));
+
+    DCHECK(JS_IsUndefined(susp),
+           "an agent of this flow suspended in Atomics.wait: its base is resumed only once JS_SuspensionWoken answers, "
+           "which is the agent selection flow_select_agent's residual names, built with the flow's second agent");
+    JS_FreeValue(ctx, susp);
+}
+
 /* Install `base`, a preemptible base built over `realm`, as the selected agent's execution context stack. A
    realm runs on the stack of its own agent (HTML §8.1.2.1, realm.[[AgentSignifier]]). */
 static void flow_install_base(Flow *f, JSContext *realm, JSValue *base)
@@ -8644,6 +8656,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
         {
             JSValue pcv = JS_UNDEFINED;
             if (JS_ResumeParkedFlow(JS_GetRuntime(ctx), &pcv)) {
+                engine_refuse_suspension(ctx);
                 if (JS_IsException(pcv)) {
                     JSValue e = JS_GetException(ctx);
                     result_page_error_value(ctx, e);
@@ -9680,6 +9693,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    "the frame a step just compiled reports itself as a call root — JS_FlowNew builds a program base");
             g_step_unit = started_here ? STEP_UNIT_START_PROGRAM : STEP_UNIT_RESUME_PROGRAM;
             int r = JS_FlowResume(ctx, (JSValue *)flow_frame(f), &cv);
+            engine_refuse_suspension(ctx);
             /* HTML §6.10.1 Close requests' step 9, taken where a task's completion value is in hand: "Alternative
                processing: Otherwise, there was nothing watching for a close request. The user agent may instead
                interpret this interaction as some other action, instead of interpreting it as a close request."
