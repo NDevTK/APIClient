@@ -619,6 +619,17 @@ async function main() {
      a transient condition, measured before the thing it is about has happened. What IS a failure is a record
      still held when every instance has ended, and that is reported at the bottom where it is decidable. */
   const held = [];
+  /* THE DOCUMENTS THIS ZONE REFUSED TO MAKE, by name, with the refusal. A refused `navigable.create` leaves the
+     creator holding a WindowProxy for a document no instance will hold this session (a command line is a
+     sentence for one run, so the refusal is final), and an operation or post naming it is declined with that
+     reason rather than held: held, it parks its asker on a question no instance can be asked, and the stall
+     reads as this zone refusing in silence (test_forced.c's abi_stalled). */
+  const unmade = new Map();
+  const refuseCreate = (e, name, reason) => {
+    unmade.set(name, reason);
+    e.ready.push(decline(reason));
+    retryHeld();
+  };
   const retryHeld = () => { for (let i = held.length - 1; i >= 0; i--) if (held[i].go()) held.splice(i, 1); };
 
   /* EVERY CROSS-AGENT OPERATION IN FLIGHT, BY THE TOKEN THIS ZONE MINTED. The token is the ZONE's rendezvous
@@ -1344,6 +1355,12 @@ async function main() {
     const token = `${e.tag}#${id}`;
     const go = () => {
       const h = holderOf(target);
+      if (!h && unmade.has(target)) {
+        e.ready.push(declineAnswer(id, `\`${op.slice(0, 120)}\` names ${target}, a document this zone never ` +
+                                       `made: ${unmade.get(target)}`));
+        flush();
+        return true;
+      }
       if (!h) return false;
       /* The one firing rule, as a fetch is judged (safeFetchCrossDocumentRefusal), under the asking document's
          record; the record's fourth field is the asking timeline's marks (engine_record_head). A refusal is a
@@ -1414,7 +1431,7 @@ async function main() {
         (ZONE.docRecordNameParent(f[C.child]) !== f[C.creator]
           ? ZONE.docRecordAskerRefusal('child', 'not-minted', f[C.child]) : null);
       if (createRefusal) {
-        e.ready.push(decline(`navigable.create ${f[C.child]} — ${askerRefusal(e, createRefusal)}`));
+        refuseCreate(e, f[C.child], `navigable.create ${f[C.child]} — ${askerRefusal(e, createRefusal)}`);
         return;
       }
       createdAddress.set(f[C.child], f[C.address]);
@@ -1424,9 +1441,9 @@ async function main() {
       const doc = f[C.parent] === 'u' ? ZONE.docRecordAuxiliary(creatorDoc, own)
                                       : ZONE.docRecordJoin(creatorDoc, own);
       if (doc === null) {
-        e.ready.push(decline(`navigable.create ${f[C.child]} — the creating document's sandbox sets HTML ` +
-                             '§7.1.5\'s sandboxed auxiliary navigation browsing context flag, so §7.3.1.7 ' +
-                             'creates no auxiliary navigable'));
+        refuseCreate(e, f[C.child], `navigable.create ${f[C.child]} — the creating document's sandbox sets ` +
+                     'HTML §7.1.5\'s sandboxed auxiliary navigation browsing context flag, so §7.3.1.7 ' +
+                     'creates no auxiliary navigable');
         return;
       }
       const inCreatorGroup = f[C.group] === 'creator';
@@ -1437,7 +1454,7 @@ async function main() {
          page's `fetch()`, and every other grade waits on `--explore`. */
       const loaded = await navigate(f[C.address], e.docUrl, `navigable.create ${f[C.child]}`, f[C.provenance],
                                     f[C.driven], f[C.pinned], creatorDoc);
-      if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
+      if (loaded.declined) { refuseCreate(e, f[C.child], loaded.declined); return; }
       /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED, derived here and never read off the
          notice even though the notice carries one: SECURITY.md draws the line at this exact record — a NAME
          may be minted by the untrusted side because it is only a name, while the ORIGIN is what every
@@ -1614,6 +1631,11 @@ async function main() {
       if (f.length < 6) throw new Error(`a windowproxy.post notice was short of its fields: ${record}`);
       const go = () => {
         const t = holderOf(f[1]);
+        if (!t && unmade.has(f[1])) {
+          e.ready.push(decline(`windowproxy.post -> ${f[1]} names a document this zone never made: ` +
+                               unmade.get(f[1])));
+          return true;
+        }
         if (!t) return false;
         /* The one firing rule, as a fetch is judged (safeFetchCrossDocumentRefusal), under the sending
            document's record: the head of the record's world names it (docRecordWorldDocument), and a name that
