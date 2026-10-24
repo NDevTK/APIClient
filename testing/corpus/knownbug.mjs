@@ -1,21 +1,17 @@
 // The known-vulnerability driver: every row of knownbugs.tsv, run through the native engine in its vulnerable
-// and its first fixed version, scored on what the engine's own result document says it reached, searched and
-// fired.
+// and its first fixed version, scored on what the engine's own result says it reached, searched and fired.
 //
 //   node testing/corpus/knownbug.mjs pin [case...]                  fetch every asset and print its digest
 //   node testing/corpus/knownbug.mjs stage <case> <variant>         fetch, verify and stage one page; print dir
 //   node testing/corpus/knownbug.mjs run --bin <qjs-native-none> [--budget <s>] [--jobs <n>] [case[:variant]...]
 //
-// Run with NODE_USE_ENV_PROXY=1 wherever the network is behind a proxy. The repository carries none of the
-// libraries: each asset is fetched by exact version at run time and refused unless its sha256 is the one the
-// case list records. Everything fetched or staged lives under engine/.work/knownbug/, which is ignored.
-//
-// `stage` writes a variant's files for two origins (the page's site and the attacker's) and `served.json`, the
-// data another host needs to serve the same case: each file's path, sha256 and response headers, resolved from
-// knownbug/headers.tsv. `run` serves that manifest from two loopback ports and drives the page with the
-// engine/trusted.mjs that sits beside the binary (so the zone and the engine are one frozen revision). The run ends when the
-// zone exits or at the wall-clock backstop, which is not a bound on the engine: it is this driver handing the
-// machine back, and the row says which of the two ended it.
+// Use NODE_USE_ENV_PROXY=1 behind a proxy. No library is in the repository: each asset is fetched by exact
+// version and refused unless its sha256 matches the case list; all of it lives under engine/.work/knownbug/.
+// `stage` writes a variant's files for two origins plus `served.json` (each file's path, sha256 and headers from
+// knownbug/headers.tsv), the data another host needs to serve the case. `run` serves that manifest on two
+// loopback ports and drives the page with the engine/trusted.mjs beside the binary, so zone and engine are one
+// revision. A run ends when the zone exits or at the wall-clock backstop, which hands the machine back and is
+// not a bound on the engine; the row says which ended it.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer as createHttpServer } from 'node:http';
