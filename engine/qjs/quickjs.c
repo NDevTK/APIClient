@@ -57787,7 +57787,8 @@ typedef struct JSJsonReviver {
     JSStepHdr hdr;                  /* MUST be first — enforced by STEP_STATE_HDR_FIRST below */
     uint8_t early;                  /* 1 = NO reviver: no JS re-entry, so result was produced in init */
     JSValueConst reviver;           /* borrowed from the caller stack */
-    const char *text;               /* JSON source (owned CString; freed at end) */
+    const char *text;               /* JSON source, borrowed from `text_val`; the tokenizer points into it */
+    JSValue text_val;               /* the String `text` is the bytes of: the C string's own reference (owned) */
     JSValue root;                   /* {"" : parsed} holder (owned) */
     JSONParseRecord *pr;            /* root parse record (owned; json_free_parse_record at end) */
     /* THE PARSE ITSELF, by value. `JSON.parse` on a megabyte of nesting is real work, and it is the machine's
@@ -92440,7 +92441,9 @@ static const JSTrampStepDef js_array_toSorted_def = { sizeof(JSArraySort), js_ar
                                                     .steps = js_array_toSorted_steps };
 /* Declared where the machine is; the definition names it here. */
 static const char *const js_json_parse_steps[];
+static const char *js_json_parse_unforkable(const void *state);
 static const JSTrampStepDef js_json_parse_def    = { sizeof(JSJsonReviver), js_json_parse_vstep, js_json_parse_vfini, 0, .visit = js_json_reviver_visit,
+                       .unforkable = js_json_parse_unforkable,
                        .algorithm = "25.5.2 JSON.parse ( text [ , reviver ] )",
                        .steps = js_json_parse_steps };
 static const char *const js_for_in_steps[];
@@ -108867,8 +108870,8 @@ static JSONParseRecord *jr_child_pr(JSContext *ctx, JSONParseRecord *holder_pr, 
    deleted, so there is one walk, not two.
 
    §25.5.2 steps 2-3: START the parse. The tokenizer (jps) and the frame stack (jp) live ON THE MACHINE from here
-   until js_json_parse_finish or js_json_parse_abandon, which is the whole point: every completed value in
-   between is a place the flow can park with its position in the text intact. */
+   until js_json_parse_finish or the teardown (js_json_reviver_visit), which is the whole point: every
+   completed value in between is a place the flow can park with its position in the text intact. */
 
 /* PUT THE TOKENIZER AND THE FRAME STACK ON THE MACHINE, over `text_str`, with `pr_root` the reviver's record or
    NULL when nothing is collecting one. Both parses this machine can run go through it — §25.5.2 step 2's parse
@@ -108885,6 +108888,10 @@ static int js_json_parse_state_start(JSContext *ctx, JSJsonReviver *s, JSONParse
     s->text = JS_ToCStringLen(ctx, &len, s->text_str);
     if (!s->text)
         return -1;
+    /* A C string is the bytes of a String it holds a reference to (js_free_cstring), so the machine owns that
+       reference as a value: a deep-fork clone takes a second one, where a shared C string was freed by each arm
+       while the other's tokenizer still pointed into it. */
+    s->text_val = JS_MKPTR(JS_TAG_STRING, (JSString *)s->text - 1);
     js_parse_init(ctx, &s->jps, s->text, len, "<input>", 1);
     s->jp.resume = JPR_START;
     s->jp.pr_root = pr_root;
@@ -108946,24 +108953,7 @@ static int js_json_parse_finish(JSContext *ctx, JSJsonReviver *s)
     return 0;
 }
 
-/* The machine is torn down with a parse still in flight — the flow parked at a completed value and was then
-   discarded. This is the same release json_parse_step's own fail path performs, MINUS the parse records: those
-   hang off the reviver's root record, which the ownership declaration releases. Nothing here can fail. */
-static void js_json_parse_abandon(JSContext *ctx, JSJsonReviver *s)
-{
-    JSONParse *p = &s->jp;
-    JS_FreeValue(ctx, p->val);
-    p->val = JS_NULL;
-    while (p->sp > 0) {
-        JSONFrame *top = &p->st[--p->sp];
-        JS_FreeValue(ctx, top->container);
-        JS_FreeAtom(ctx, top->prop_name);
-    }
-    js_free(ctx, p->st);
-    p->st = NULL;
-    free_token(&s->jps, &s->jps.token);
-    s->parsing = 0;
-}
+
 
 /* The reviver walk's phase ceiling — 0..6, where 5 and 6 are the parked proxy-trap requests. Named so the
    DFS invariant below cannot fall behind the phases the walk actually uses. */
@@ -109096,8 +109086,8 @@ static int json_probe_take_syntax_error(JSContext *ctx)
 }
 
 /* THE PROBE IS OVER: release everything it built and leave the machine owning NOTHING.
- * It is not js_json_parse_abandon, which releases a parse the flow was PARKED inside; this releases one that
- * RAN TO ITS ANSWER, so its frame stack is already gone (json_parse_step frees it on both its terminating
+ * It is not the teardown of a parse the flow was PARKED inside (js_json_reviver_visit's release); this releases
+ * one that RAN TO ITS ANSWER, so its frame stack is already gone (json_parse_step frees it on both its terminating
  * returns) and what is left is the completed value, the token and the source text. Emptying the machine is the
  * point rather than a tidy-up: the ask one stage below snapshots the SIBLING, and its DCHECK says in as many
  * words that the snapshot has to be taken before the machine owns anything. */
@@ -109110,7 +109100,9 @@ static void json_probe_end(JSContext *ctx, JSJsonReviver *s)
     s->jp.val = JS_NULL;
     free_token(&s->jps, &s->jps.token);
     s->parsing = 0;
-    if (s->text) { JS_FreeCString(ctx, s->text); s->text = NULL; }
+    s->text = NULL;
+    JS_FreeValue(ctx, s->text_val);
+    s->text_val = JS_UNDEFINED;
     JS_FreeValue(ctx, s->text_str);
     s->text_str = JS_UNDEFINED;
 }
@@ -109134,7 +109126,8 @@ static int js_json_parse_vstep(JSContext *ctx, void *st, JSValue cb_result, JSVa
             cb_result = JS_UNDEFINED;
             s->root = JS_UNDEFINED; s->result = JS_UNDEFINED; s->text_str = JS_UNDEFINED;
             s->unknown = JS_UNDEFINED;
-            s->early = 0; s->text = NULL; s->pr = NULL; s->stack = NULL; s->sp = 0; s->cap = 0;
+            s->early = 0; s->text = NULL; s->text_val = JS_UNDEFINED;
+            s->pr = NULL; s->stack = NULL; s->sp = 0; s->cap = 0;
             s->parsing = 0;
             s->probe_real = JS_OUTCOME_REAL_UNSTATED;
             s->probe_phase = PROBE_PH_DONE;   /* …unless the branch below finds an example to run */
@@ -109383,12 +109376,9 @@ static JSValue js_json_parse_vfini(JSContext *ctx, void *st, bool take_result)
     JSValue unknown = s->unknown;
     JSValue r;
     s->unknown = JS_UNDEFINED;
-    if (s->parsing)
-        js_json_parse_abandon(ctx, s);
-    /* The C string is not a reference and no declaration names it; `text_str`, the frame stack and its `sp`
-       live frames, and `result` all are, and every one of them is left intact for the discharge — an
-       exception or a fork arriving from inside one of the walk's requests is released through that list. */
-    if (s->text) { JS_FreeCString(ctx, s->text); s->text = NULL; }
+    /* `text_val`, `text_str`, a parse still in flight, the walk's frame stack and `result` are all declared
+       (js_json_reviver_visit), and every one of them is left intact for the discharge — an exception or a fork
+       arriving from inside one of the walk's requests is released through that list. */
     r = take_result ? s->result : JS_UNDEFINED;
     if (take_result) s->result = JS_UNDEFINED;
     if (!JS_IsUndefined(unknown)) {
@@ -109620,13 +109610,58 @@ static void json_destroy_parse_record(JSContext *ctx, void *p)
     js_free(ctx, p);
 }
 
+/* A parse frame owns the container it builds and the key whose value is being parsed; its record is borrowed
+   from the shared tree. */
+static void js_json_frame_visit(JSContext *ctx, void *elem, JSStepVisit *v)
+{
+    JSONFrame *f = elem;
+    v->val(ctx, &f->container);
+    v->atom(ctx, &f->prop_name);
+}
+/* The tokenizer's current token owns what free_token releases, by the token's kind. */
+static void js_json_token_visit(JSContext *ctx, JSToken *t, JSStepVisit *v)
+{
+    switch (t->val) {
+    case TOK_NUMBER: v->val(ctx, &t->u.num.val); break;
+    case TOK_STRING: case TOK_TEMPLATE: v->val(ctx, &t->u.str.str); break;
+    case TOK_REGEXP: v->val(ctx, &t->u.regexp.body); v->val(ctx, &t->u.regexp.flags); break;
+    case TOK_IDENT: case TOK_PRIVATE_NAME: v->atom(ctx, &t->u.ident.atom); break;
+    default:
+        if (t->val >= TOK_FIRST_KEYWORD && t->val <= TOK_LAST_KEYWORD) v->atom(ctx, &t->u.ident.atom);
+        break;
+    }
+}
+/* WHY A PARSE BUILDING A REVIVER'S RECORD TREE MAY NOT BE FORKED. The tree is declared `shared`, which is right
+   once it is built and nothing writes it, but the parse is still appending to it: two arms would each add their
+   remaining members to one tree, and a resize moves the arrays the other arm's frames point into.
+   Named residual. Not covered: a fork while JSON.parse with a callable reviver is still parsing. Next diff: the
+   tree is declared through `tree` with the frames' records and `pr_cur` as cursors, and each record carries its
+   own capacity (the frames' `pr_size` today). Its absence shows as this reason's abort at a fork that does not
+   wait for the parse to end. */
+static const char *js_json_parse_unforkable(const void *state)
+{
+    const JSJsonReviver *s = state;
+    return s->parsing && s->pr != NULL
+        ? "JSON.parse with a reviver is still parsing, and its record tree is being built in place — a fork "
+          "would leave two arms appending to one tree"
+        : NULL;
+}
 /* WHAT THIS MACHINE OWNS (JSTrampStepDef.visit). The reviver is the page's code called once per node, so a
    concolic branch inside it forks the walk and each arm revives its own subtree from there — its own frame
    stack, its own holders, its own result. The parse record is SHARED by reference for the reason stated at its
-   refcount, and `text` is a C string the machine holds for the whole walk. */
+   refcount, and `text` is the bytes of `text_val`, of which each arm holds its own reference. */
 static void js_json_reviver_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSJsonReviver *s = st;
+    /* A parse the flow is parked inside (`parsing`): its frame stack, the value flowing into the frame below,
+       and the current token. Every completed value is a rest point, so a fork can land between any two of
+       them, and an undeclared frame stack was one allocation two arms freed. */
+    if (s->parsing) {
+        v->array(ctx, (void **)&s->jp.st, sizeof(JSONFrame), s->jp.sp, s->jp.st_size, js_json_frame_visit);
+        v->val(ctx, &s->jp.val);
+        js_json_token_visit(ctx, &s->jps.token, v);
+    }
+    v->val(ctx, &s->text_val);
     v->array(ctx, (void **)&s->stack, sizeof(JRFrame), s->sp, s->cap, js_jrframe_visit);
     v->shared(ctx, (void **)&s->pr, s->pr ? &s->pr->ref_count : NULL, json_destroy_parse_record);
     v->val(ctx, &s->root);
