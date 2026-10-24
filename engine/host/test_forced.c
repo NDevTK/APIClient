@@ -5059,6 +5059,18 @@ static void tf_job_push_int(JSContext *ctx, Flow *f, int n, int task)
     JS_FreeValue(ctx, v);
 }
 
+/* A Flow with one agent, `ctx`'s, and its queue unminted: the shape flow_add gives every real flow. */
+static void tf_flow_one_agent(JSContext *ctx, Flow *f, FlowAgent *fa)
+{
+    memset(f, 0, sizeof *f);
+    memset(fa, 0, sizeof *fa);
+    fa->agent = JS_GetRealmAgent(ctx);
+    fa->jobs = JS_UNDEFINED;
+    f->agents = fa;
+    f->n_agents = 1;
+    f->cur_agent = 0;
+}
+
 static void tf_job_run_all(JSContext *ctx, Flow *f)
 {
     while (flow_job_pending(f)) {
@@ -5234,17 +5246,23 @@ TF_UNIT void concat_keyed_selftest(JSContext *ctx)
     JS_SetFlowControlHooks(&TF_DIFF_NONE);
 }
 
-TF_UNIT void flow_job_selftest(JSContext *ctx)
+TF_UNIT void flow_job_selftest(JSContext *fixture_ctx)
 {
     Flow a, b;
+    FlowAgent aa, ba;
     JSValue e, r;
     int dropped;
+    /* A realm of its own agent to enqueue from: a job goes to its realm's agent's queue, and the fixture's realm
+       has no agent until its intrinsics are installed, after these selftests. */
+    JSContext *ctx = JS_NewContext(JS_GetRuntime(fixture_ctx));
 
+    CHECK(ctx != NULL, "the job selftest's realm could not be built");
+    JS_SetRealmAgent(ctx, JS_NewAgentRecord(JS_GetRuntime(fixture_ctx), false));
     /* THE QUEUE'S OWN CONTEXT, which flow_add names for every real flow (solver/flow.c) and which this
        fixture must name for itself because it builds no flow — the readers hold a Flow and nothing else. */
-    pending_set_ctx(ctx);
-    memset(&a, 0, sizeof a); a.jobs = JS_UNDEFINED;
-    memset(&b, 0, sizeof b); b.jobs = JS_UNDEFINED;
+    pending_set_ctx(fixture_ctx);
+    tf_flow_one_agent(ctx, &a, &aa);
+    tf_flow_one_agent(ctx, &b, &ba);
     CHECK(flow_job_pending(&a) == 0 && !flow_job_microtask(&a) && flow_job_external(&a) == 0,
           "an untouched flow's queue must answer empty from its JS_UNDEFINED without ever minting an Array");
 
@@ -5260,7 +5278,7 @@ TF_UNIT void flow_job_selftest(JSContext *ctx)
                                   "when it does not");
 
     /* THE FORK, TAKEN WITH THE PARENT'S QUEUE FULL. Both arms must see their own copy of all four. */
-    b.jobs = flow_job_fork(ctx, &a);
+    flow_job_fork(ctx, &b, &a);
     CHECK(flow_job_pending(&b) == 4, "an arm forked over a full queue must inherit every job — dropping one is "
                                      "the work item the WFQ may never drop, and it surfaces only as a reaction "
                                      "that never ran");
@@ -5327,15 +5345,16 @@ TF_UNIT void flow_job_selftest(JSContext *ctx)
        names its own copy, so a removal made in one timeline must leave the other's task queued. */
     {
         Flow c;
+        FlowAgent ca;
         JSTaskHandle h_keep = tf_handle_new(), h_go = tf_handle_new();
         JSValue v20 = JS_NewInt32(ctx, 20), v21 = JS_NewInt32(ctx, 21);
 
-        memset(&c, 0, sizeof c); c.jobs = JS_UNDEFINED;
+        tf_flow_one_agent(ctx, &c, &ca);
         flow_job_push(ctx, &a, tf_job_note, 1, (JSValueConst *)&v20, 1, h_keep);
         flow_job_push(ctx, &a, tf_job_note, 1, (JSValueConst *)&v21, 1, h_go);
         JS_FreeValue(ctx, v20);
         JS_FreeValue(ctx, v21);
-        c.jobs = flow_job_fork(ctx, &a);
+        flow_job_fork(ctx, &c, &a);
         CHECK(flow_job_remove(&a, h_go) == 1 && flow_job_pending(&a) == 1,
               "a queued task named by its handle was not taken off the queue — a toggle task tracker then "
               "cannot coalesce two transitions into one event, and the second `toggle` fires carrying a state "
@@ -5352,7 +5371,7 @@ TF_UNIT void flow_job_selftest(JSContext *ctx)
         tf_job_run_all(ctx, &a);
         CHECK(g_tf_job_n == 1 && g_tf_job_seen[0] == 20,
               "the removal took the wrong record off the queue — the handle names one job and only one");
-        JS_FreeValue(ctx, c.jobs); c.jobs = JS_UNDEFINED;
+        JS_FreeValue(ctx, ca.jobs); ca.jobs = JS_UNDEFINED;
     }
 
     /* AN ARGUMENT LIST LONGER THAN THE VECTOR flow_job_run KEEPS ON THE STACK — `setTimeout(f, a, b, …)`
@@ -5407,8 +5426,48 @@ TF_UNIT void flow_job_selftest(JSContext *ctx)
     JS_FreeValue(ctx, a.deliver_q); a.deliver_q = JS_UNDEFINED;
 
     tf_job_run_all(ctx, &a);
-    JS_FreeValue(ctx, a.jobs); a.jobs = JS_UNDEFINED;
-    JS_FreeValue(ctx, b.jobs); b.jobs = JS_UNDEFINED;
+
+    /* EACH AGENT'S QUEUE IS ITS OWN (HTML §8.1.7.1 Definitions: "Each agent has an associated event loop"). A
+       second agent's realm queues onto that agent's queue: the selected agent's reads do not see it, the flow's
+       census does, and a destroyed realm's tasks are looked for only on its own agent's queue. */
+    {
+        JSContext *wctx = JS_NewContext(JS_GetRuntime(ctx));
+        FlowAgent two[2];
+
+        CHECK(wctx != NULL, "the second agent's realm could not be built");
+        JS_SetRealmAgent(wctx, JS_NewAgentRecord(JS_GetRuntime(ctx), true));
+        two[0] = aa;
+        two[1] = (FlowAgent){ .agent = JS_GetRealmAgent(wctx), .frame = NULL, .jobs = JS_UNDEFINED };
+        a.agents = two;
+        a.n_agents = 2;
+        tf_job_push_int(ctx, &a, 30, 1);
+        tf_job_push_int(wctx, &a, 31, 1);
+        tf_job_push_int(wctx, &a, 32, 0);
+        CHECK(flow_job_pending(&a) == 1 && !flow_job_microtask(&a) && flow_jobs_held(&a) == 3,
+              "a second agent's job landed on the selected agent's queue, or the flow's census lost it");
+        a.cur_agent = 1;
+        CHECK(flow_job_pending(&a) == 2 && flow_job_microtask(&a),
+              "the second agent's queue, once selected, does not hold exactly the two jobs its realm queued");
+        g_tf_job_n = 0;
+        tf_job_run_all(wctx, &a);
+        CHECK(g_tf_job_n == 2 && g_tf_job_seen[0] == 32 && g_tf_job_seen[1] == 31 && flow_jobs_held(&a) == 1,
+              "draining the second agent ran a job of the first, or broke its own checkpoint order");
+        tf_job_push_int(wctx, &a, 33, 1);
+        CHECK(flow_job_drop_realm(ctx, &a, wctx) == 1 && flow_jobs_held(&a) == 1,
+              "destroying the second agent's realm dropped a job of the first agent's queue");
+        a.cur_agent = 0;
+        g_tf_job_n = 0;
+        tf_job_run_all(ctx, &a);
+        CHECK(g_tf_job_n == 1 && g_tf_job_seen[0] == 30, "the first agent's job did not survive the second's");
+        aa = two[0];
+        JS_FreeValue(ctx, two[1].jobs);
+        a.agents = &aa;
+        a.n_agents = 1;
+        JS_FreeContext(wctx);
+    }
+    JS_FreeValue(ctx, aa.jobs); aa.jobs = JS_UNDEFINED;
+    JS_FreeValue(ctx, ba.jobs); ba.jobs = JS_UNDEFINED;
+    JS_FreeContext(ctx);
 }
 
 

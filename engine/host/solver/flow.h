@@ -110,6 +110,19 @@ typedef struct FlowIxTreap {
 typedef struct FlowAgent {
     JSAgentRecord *agent;
     void *frame;
+    /* This agent's queued microtasks and tasks (HTML §8.1.7.1 Definitions: "Each agent has an associated event
+       loop"), run under the flow's live COW so a reaction runs in the timeline that enqueued it. A job goes to its
+       enqueuing realm's agent's queue and runs when that agent is selected. A microtask runs at the checkpoint
+       HTML §8.1.4.4 "Calling scripts" owes once the program that queued it has left the stack; a task runs on any
+       step that does not start a program of the sequence (flow_step's `else if (flow_job_pending(f) > 0)` arm),
+       §8.1.7.3 "Processing model" step 2's one task per iteration. One array keeps both in arrival order and
+       flow_job_take applies the checkpoint rule (flow_checkpoint_due is the microtask arm).
+       Not covered: §8.1.7.1 "Definitions" puts each task source in one queue, but the timer source is in both of
+       a flow's carriers (a Function handler here via JS_EnqueueCallTask, a string handler in `dyn` via
+       core/timing/timer.c), so the order between them partitions by carrier; engine.c's arm states the rest.
+       A JS Array of immutable job records, so the leak walk sees the values, it parks and forks, and a fork shares
+       entries at one refcount each. JS_UNDEFINED until the first enqueue. */
+    JSValue jobs;
 } FlowAgent;
 
 typedef struct Flow {
@@ -533,20 +546,6 @@ typedef struct Flow {
                               forked sibling references the parent's O(N) DOM delta in O(1). NULL until a fork. */
     void *dec_blob;        /* suspended decision state while paused (decide_suspend) */
     void *pin_blob;        /* suspended pin state while paused (concolic_pins_suspend) */
-    /* This flow's own queued microtasks and tasks, run under its live COW so a reaction runs in the timeline that
-       enqueued it. A microtask runs at the checkpoint HTML §8.1.4.4 "Calling scripts" owes once the program that
-       queued it has left the stack, which is before the flow's next program. A task runs on any step that does
-       not start a program of the sequence (flow_step's `else if (flow_job_pending(f) > 0)` arm, bound to
-       `seq_compiles`), so a flow parked on an external script row runs this queue: §8.1.7.3 "Processing model"
-       step 2's one task per iteration. One array keeps both in arrival order and flow_job_take applies the
-       checkpoint rule (flow_checkpoint_due is the microtask arm).
-       Not covered: §8.1.7.1 "Definitions" puts each task source in one queue, but the timer source is in both
-       of a flow's carriers (a Function handler here via JS_EnqueueCallTask, a string handler in `dyn` via
-       core/timing/timer.c), so the order between them partitions by carrier; engine.c's arm states the rest.
-       A JS Array of immutable job records, so the leak walk sees the values, it parks and forks, and a fork
-       shares entries at one refcount each. JS_UNDEFINED until the first enqueue, which keeps flow_job_pending a
-       tag test at every suspend point. */
-    JSValue jobs;
     /* This flow's own live fetches and the synchronous requests it is blocked on, resolved when its scripts and
        microtasks stall. A JS Array of plain records (solver/pending.h), because it must park to the cold tier,
        resume byte-identically and fork per flow. JS_UNDEFINED for a flow that never parked on anything. */
@@ -779,14 +778,18 @@ long    flow_world_commit_rows_written(void);
  * flow, and a routed delivery or engine_unload_document's fan-out pushes onto a queue that is not the running
  * flow's, so a captured delta would restore a dropped job or remove a pushed one at a switch. */
 int  flow_job_pending(const Flow *f);
+/* Every agent's queued jobs together: what the flow still owes, which a park writes and a removal must find zero.
+   flow_job_pending and the readers below it answer for the selected agent's queue, the one a step drains. */
+int  flow_jobs_held(const Flow *f);
 /* Does it still hold a microtask? The checkpoint ends when it does not; a queued task is the next turn of the
    event loop, not part of this checkpoint. */
 int  flow_job_microtask(const Flow *f);
 /* How many of each kind. Both halves are returned, because deriving one by subtracting the other from
    flow_job_pending would make the partition identity unfalsifiable. See the census's `jobs_ready_task`. */
 void flow_job_kinds(const Flow *f, int *task_out, int *micro_out);
-/* Append, with `argv` dup'd into the record. `task` picks which of HTML §8.1.7 "Event loops"' two queues.
-   `handle` is the runtime's name for the callback, so the host that took the job can find it again. */
+/* Append to the queue of `ctx`'s agent, which must be one of the flow's, with `argv` dup'd into the record. `task`
+   picks which of HTML §8.1.7 "Event loops"' two queues. `handle` is the runtime's name for the callback, so the
+   host that took the job can find it again. */
 void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task,
                    JSTaskHandle handle);
 /* The same for a task that arrived at `seq` (non-zero, already issued by flow_work_seq_next): it is placed
@@ -818,8 +821,9 @@ int  flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm);
    running, or have gone with its document. Asked of one flow because after a fork each arm holds its own queued
    copy of one handle, and each arm's tracker names the copy in its own timeline. */
 int  flow_job_remove(Flow *f, JSTaskHandle handle);
-/* The arm's own queue: a new Array naming the parent's records, which are shared because none ever changes. */
-JSValue flow_job_fork(JSContext *ctx, const Flow *parent);
+/* The arm's own queues, one per agent: each a new Array naming the parent's records, which are shared because none
+   ever changes. The arm's agent list is the parent's, its queues not yet minted. */
+void flow_job_fork(JSContext *ctx, Flow *sib, const Flow *parent);
 /* How much of this flow's queue a replay would not re-cause. Read by the park, which may neither write it down
    nor silently drop it. */
 int  flow_job_external(const Flow *f);

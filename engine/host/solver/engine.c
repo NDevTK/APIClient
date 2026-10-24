@@ -3185,7 +3185,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
        this engine (N admitting timelines give N invocations); it compares against `g_routed_delivered`. */
     {
         /* Read on its own line and voided below, because the DCHECK that reads it vanishes in release. */
-        int jobs0 = flow_job_pending(f);
+        int jobs0 = flow_jobs_held(f);
         flow_job_external_begin(entry);
         if (!strcmp(dup, "windowproxy.post"))
             window_message_route(rctx, record, tail, world_doc_name(w.doc), origin);
@@ -3193,7 +3193,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
             DFAIL("a record was routed with an op no component receives — the sending half emits it, so the "
                   "receiving half is the unbuilt one; build it rather than dropping the delivery");
         flow_job_external_end();
-        DCHECK(flow_job_pending(f) == jobs0 + 1,
+        DCHECK(flow_jobs_held(f) == jobs0 + 1,
                "a routed delivery did not become exactly one task on the receiving timeline's queue — HTML §9.3.3 "
                "\"Posting messages\" step 8 queues one global task on the posted message task source");
         (void)jobs0;
@@ -5321,7 +5321,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        promise's settlement are per-flow state the COW delta captures. A job queued before the branch (a `.then`,
        a custom-element reaction, a listener task) is a work item both timelines owe; dropping it would show as a
        rejection reported unhandled in the arm whose `.catch` never arrived. */
-    sib->jobs = flow_job_fork(ctx, parent);
+    flow_job_fork(ctx, sib, parent);
     /* The array is per flow because the host walks every flow's register from outside any delta and each arm
        removes an entry when it delivers; the records are shared because a record never changes after its push
        except for the answer, which both arms wait on and observe. */
@@ -9201,7 +9201,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    on it here means one of them returned first, and the job would be dropped with the flow silently:
                    a dropped reaction looks exactly like a page that registered no handler. Asserted at the one
                    place "finished" is decided. */
-                DCHECK(flow_job_pending(f) == 0, "a flow finished holding queued jobs — a promise reaction, a timer "
+                DCHECK(flow_jobs_held(f) == 0, "a flow finished holding queued jobs — a promise reaction, a timer "
                                      "callback or a delivered message would be dropped with it");
                 /* A flow of a referenced document may not finish at all (engine.h's engine_set_referenced). Having
                    nothing left to run is not being done while a peer can still ask this timeline something: it
@@ -10448,7 +10448,7 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
        The release below frees both because an evicted flow legitimately holds them (the cold tier's recipe
        re-enqueues the reactions and re-issues the requests as it replays), so the assertion stands here, where
        "finished" is claimed. */
-    DCHECK(flow_job_pending(f) == 0, "a finishing flow still held queued jobs — its promise reactions and timer callbacks "
+    DCHECK(flow_jobs_held(f) == 0, "a finishing flow still held queued jobs — its promise reactions and timer callbacks "
                          "are being dropped, and the release below is what would hide that");
     DCHECK(pending_count(f->pending) == 0,
            "a finishing flow still held pending host replies — a flow awaiting one is parked, not finished, "
@@ -12079,10 +12079,10 @@ static int engine_sched_slice(void) {
        reached. The replay its recipe drives re-causes it (cold.h), and cold_park_flow refuses the one kind a replay
        does not re-cause (flow_job_external). So each holder must have had its recipe written. */
     for (int i = 0; i < flow_count(); i++)
-        DCHECKF(flow_job_pending(flow_at(i)) == 0 || flow_at(i)->paged,
+        DCHECKF(flow_jobs_held(flow_at(i)) == 0 || flow_at(i)->paged,
                 "the session closed while member %d of %d, resting at `%s`, holds %d queued job(s) and has no "
                 "recipe — the park above writes every member, so its queue would die with the session unwritten",
-                i, flow_count(), step_unit_name(flow_at(i)->step_unit), flow_job_pending(flow_at(i)));
+                i, flow_count(), step_unit_name(flow_at(i)->step_unit), flow_jobs_held(flow_at(i)));
     /* And the claim is asserted where it is made: a resting member is deprioritized and paged, resumable across
        sessions, never terminated, so at the instant the session stops existing every standing member must have
        its recipe written; otherwise its timeline ends with the process while `live` counted it and the result

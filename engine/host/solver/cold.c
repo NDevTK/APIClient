@@ -182,7 +182,7 @@ void cold_census(ColdCensus *out)
         out->dom_head_entries += f->dom_n;
         out->dom_head_bytes += dom_cow_head_bytes(f->dom_cap);
 
-        out->job_count += flow_job_pending(f);
+        out->job_count += flow_jobs_held(f);
         /* THE REGISTER'S LENGTH AND ITS BYTES — a FOOTPRINT row of this memory walk, not a debt, which is what
            this comment used to call it. `pending_count` is the array's length whatever state its entries are
            in, and the overwhelming majority of them on a document that fetches are entries the host has
