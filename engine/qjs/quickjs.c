@@ -28512,24 +28512,6 @@ static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f)
     js_desc_facts_init(f);
 }
 
-/* THE ANSWER SHAPE IS THE ONE OPERAND A FORK CANNOT COPY, and the refusal is written ONCE because it is one
-   fact about a JSDescFacts and not a separate fact about each record that carries a keyed operation across a
-   suspension. It points INTO the requester's own state (a machine's `&s->facts`), and the walk that relinks
-   `outer` gives the sibling a DIFFERENT requester at a different address — so carrying the pointer over would
-   aim the sibling's answer at the parent's record, and allocating a new one would aim it at a record nobody
-   reads. Neither is expressible from a record that merely CARRIES the operation, because the offset of a field
-   inside a requester is the requester's fact. What closes it is a relink the answer shape travels on, the way
-   `outer` does; until then the fork aborts here rather than answering with something that is not the answer —
-   and it aborts in ONE place, so building that relink deletes one refusal rather than leaving a second behind
-   to fire on the case it was not thought about. */
-static void js_desc_out_fork_refuse(const JSDescFacts *desc_out)
-{
-    if (desc_out != NULL)
-        DFAIL("a keyed property operation carrying a DESCRIPTOR-RECORD answer shape was forked — desc_out "
-              "points inside the requester's own state, and the sibling's requester is a different allocation, "
-              "so the copy would write this arm's answer into the other arm's record. Give the answer shape a "
-              "relink of its own (cont_outer_set's pair, one field further in) before this fork is allowed");
-}
 
 typedef struct JSGetProp {
     JSValue target;      /* the proxy's [[Target]], for the invariant (owned); UNDEFINED for an accessor */
@@ -28974,13 +28956,12 @@ static void js_trapget_free(JSContext *ctx, JSTrapGet *tg)
    clone_deep_flow takes a second), and a field present in only one of them is the drift that pairing exists
    to stop: `dflags` and `desc_out` were each missed once on the way IN to this record, and a missed dup here
    is the same mistake with two flows sharing one operand instead of one flow losing it.
-   `desc_out` IS THE ONE FIELD THIS CANNOT COPY, and js_desc_out_fork_refuse says so for every record that
-   carries one. */
+   `desc_out` is copied naming the ORIGINAL requester's record, like `outer`, and tramp_cont_relink_outer re-aims
+   both at the sibling's requester. */
 static JSTrapGet *js_trapget_clone(JSContext *ctx, const JSTrapGet *tg)
 {
     JSTrapGet *n;
 
-    js_desc_out_fork_refuse(tg->desc_out);
     n = js_mallocz(ctx, sizeof(*n));
     if (unlikely(!n))
         return NULL;
@@ -29090,7 +29071,6 @@ static JSGetProp *js_getprop_clone(JSContext *ctx, const JSGetProp *gp)
 {
     JSGetProp *n;
 
-    js_desc_out_fork_refuse(gp->desc_out);
     n = js_malloc(ctx, sizeof(*n));
     if (unlikely(!n))
         return NULL;
@@ -32766,7 +32746,8 @@ static void js_ownkeys_chk_free(JSContext *ctx, struct JSOwnKeysChk *ok)
 /* The forked sibling's copies of the three proxy-invariant records. Each takes a reference to every field its
    free above releases, so the two flows own disjoint records. `outer` still names the original's requester and
    is rebound by tramp_cont_relink_outer. `facts` is an answer a keyed read writes through its desc_out, and a
-   read with desc_out set refuses the fork (js_desc_out_fork_refuse), so the copied facts are settled ones. */
+   read still in flight has its desc_out re-aimed at this copy by the same relink, so each arm's answer lands
+   in its own record. */
 static void js_desc_facts_dup(JSDescFacts *f)
 {
     f->value = js_dup(f->value);
@@ -54026,16 +54007,45 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
 }
 CONT_KIND_SWITCH_CHECKED_END
 
+/* The DESCRIPTOR-RECORD answer shape a keyed operation carries (JSGetProp/JSTrapGet/JSGopdDesc `desc_out`), or
+   NULL for a kind that carries none. */
+static JSDescFacts **cont_desc_out_slot(void *st, uint8_t kind)
+{
+    if (kind == CONT_GETPROP) return &((JSGetProp *)st)->desc_out;
+    if (kind == CONT_GETPROP_YIELD) return &((JSTrapGet *)st)->desc_out;
+    if (kind == CONT_GOPD_DESC) return &((JSGopdDesc *)st)->desc_out;
+    return NULL;
+}
+/* The bytes of a requester a descriptor answer can live in: the kinds that issue GP_GETOWNPROP for a record (a
+   step machine's state, JSKeyedInv, JSOwnKeysChk and JSGopdDesc), and 0 for any other. */
+static size_t cont_requester_size(const void *st, uint8_t kind)
+{
+    switch (kind) {
+    case CONT_STEP: case CONT_STEP_YIELD: return ((const JSStepHdr *)st)->def->size;
+    case CONT_KEYED_INV: return sizeof(JSKeyedInv);
+    case CONT_OWNKEYS_CHK: return sizeof(struct JSOwnKeysChk);
+    case CONT_GOPD_DESC: return sizeof(JSGopdDesc);
+    default: return 0;
+    }
+}
+
 /* Walk OUTWARD from a freshly cloned record whose `outer` still names the original flow's chain, cloning each
    link and binding it. Returns 0, or -1 on OOM with the partial chain left for the fork's own abort path (the
-   same discipline every other allocation in clone_deep_flow follows). */
+   same discipline every other allocation in clone_deep_flow follows).
+   A keyed operation's descriptor answer points INSIDE its requester (the requester's own `facts`), so it
+   travels with the link: the requester's clone is a copy of the same record, and the answer is re-aimed at the
+   same offset in it, which is the sibling's own record. */
 static int tramp_cont_relink_outer(JSContext *ctx, void *clone, uint8_t kind)
 {
     while (clone) {
         uint8_t ok;
         void *o = cont_outer_get(clone, kind, &ok);
         void *n;
+        JSDescFacts **dslot = cont_desc_out_slot(clone, kind);
         if (!o) {
+            DCHECK(dslot == NULL || *dslot == NULL,
+                   "a keyed operation carrying a descriptor-record answer has no requester — the record it "
+                   "answers into is the requester's own, so with none the answer names no one's record");
             /* A kind with NO record — CONT_FOROF_NEXT's enum_rec offset is the whole of what its delivery
                needs — is carried unchanged: there is nothing to copy and the field the sibling reads is
                `outer_forof`, which the byte copy already brought. */
@@ -54045,6 +54055,15 @@ static int tramp_cont_relink_outer(JSContext *ctx, void *clone, uint8_t kind)
         if (!n)
             return -1;
         cont_outer_set(clone, kind, n, ok);
+        if (dslot != NULL && *dslot != NULL) {
+            ptrdiff_t off = (const char *)*dslot - (const char *)o;
+            DCHECKF(off >= 0 && (size_t)off + sizeof(JSDescFacts) <= cont_requester_size(o, ok),
+                    "a keyed operation's descriptor answer (%td bytes into its requester of kind %d, %zu bytes) "
+                    "does not lie inside that requester — every GP_GETOWNPROP that wants the record names the "
+                    "requester's own `facts`, and the relink re-aims it at the same offset in the sibling's copy",
+                    off, (int)ok, cont_requester_size(o, ok));
+            *dslot = (JSDescFacts *)((char *)n + off);
+        }
         clone = n; kind = ok;
     }
     return 0;
