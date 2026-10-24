@@ -31752,65 +31752,39 @@ typedef struct JSAsyncFromSyncIteratorData {   /* JS_CLASS_ASYNC_FROM_SYNC_ITERA
 } JSAsyncFromSyncIteratorData;
 /* `for await (x of syncGen)`: the async-from-sync iterator's .next() wraps a sync .next() in a promise. When the
    sync iterator is a generator, drive its .next() on the tramp and do the promise-wrap at the settle. */
-typedef struct JSAsyncFromSync {
-    JSValue promise;             /* the wrapper's result promise, delivered to the for-await OP_await (owned) */
-    JSValue resolving_funcs[2];  /* its [resolve, reject] (owned) */
-    JSValue sync_iter;           /* the sync generator being driven (owned) */
-    int orig_cfirst, orig_cargc; /* the ORIGINAL OP_call_method operand shape (pop at finish) */
-    uint8_t orig_is_tail;
-    uint8_t deliver;             /* AFS_* — WHERE the settle puts the wrapper's promise. The three entry opcodes
-                                    differ only in that, so the drive and the settle are shared and this selects
-                                    the tail. */
-    uint8_t close_on_rejection;  /* 27.1.5.4 AsyncFromSyncIteratorContinuation's closeOnRejection argument: true for .next/.throw, false for
-                                    .return (which has already closed the sync iterator). */
-    JSValue drive_next;          /* the sync record's nextMethod (owned, taken at construction): the wrapper it was
-                                    read from can be released before the drive returns. */
-    /* 27.1.5.4 steps 2-5: IteratorComplete then IteratorValue on the sync .next()'s RESULT. Both read the result
-       object, which a hand-written sync iterator can make an accessor or a Proxy — page code, and the deliver
-       read them with JS_GetProperty from C. They are requests now, one phase each, and the
-       result parks here across them. */
-    JSValue res_obj;             /* the sync iterator result being unpacked (owned) */
-    uint8_t res_ph;              /* 0 = none, 1 = the `done` read is in flight, 2 = the `value` read is,
-                                    3 = 27.1.5.2.2/.2.3's GetMethod of the sync iterator's own return/throw is */
-    uint8_t res_done;            /* what the `done` read produced, held across the `value` read */
-    void *call_outer;            /* AFS_DELIVER_CALL: the machine or sequence WAITING for this call's result — the
-                                    wrapper's method is an ordinary callee at do_generic_callee, so whoever made
-                                    that call may have declared a continuation, and 7.4.9's generic close does
-                                    (CONT_ITER_CLOSE_CALL). Dropping it pushed the promise as a bare operand and
-                                    freed the caller's operands against the wrong shape. NULL otherwise. */
-    uint8_t call_outer_kind;     /* CONT_* of `call_outer`, CONT_NONE when there is none */
-    uint8_t iter_magic;          /* GEN_MAGIC_NEXT / _RETURN / _THROW: WHICH of the wrapper's three operations is
-                                    running. A C local until the GetMethod below became a request — and a
-                                    suspension erases C locals, so the phase that resumes has to read it here.
-                                    It was recoverable by inverting close_on_rejection, which is a coincidence of
-                                    that flag's definition and not a contract; re-deriving state instead of
-                                    carrying it is the mistake tp_op_byte's stale-pointer segfault taught. */
-    uint8_t close_then_typeerror; /* 27.1.5.2.3 %AsyncFromSyncIteratorPrototype%.throw step 8: `.throw()` on a sync iterator with no `throw` closes it
-                                     under a NORMAL completion (so the close's OWN throw is what rejects — step
-                                     7d is an IfAbruptRejectPromise) and only then rejects with a fresh TypeError.
-                                     Raising the TypeError first and closing abruptly instead discarded the
-                                     `return` getter's error, which is exactly what throw-undefined-poisoned-return
-                                     measures. */
-    JSValue drive_arg;           /* the ONE argument the operation forwards (owned), or UNINITIALIZED for the
-                                    forms that pass none — `for await`'s IteratorNext(record), yield*'s
-                                    `return()` delegation, 7.4.9's close, and `w.next()` written with no argument.
-                                    Taken at construction because where it LIVES differs per entry (an operand
-                                    slot, an owned invocation list a bound/spread call is about to release) while
-                                    what it MEANS does not; three sites read it and they must not each re-derive
-                                    it from a stack shape they cannot see. */
-    JSValue pending_error;       /* set (owned) only while step 6's IteratorClose is running on the chain: the
-                                    abrupt step-5 completion that step 4 makes the result no matter what the
-                                    close does. UNINITIALIZED otherwise. */
-} JSAsyncFromSync;
-/* EVERY owned JSValue of that state, exactly once, in TWO lists — because the two consumers differ on exactly
-   one thing. js_async_from_sync_end frees both; the deep-fork clone dups only REST and mints a FRESH capability,
-   since each arm delivers its own wrapper promise to its own OP_await. Written here, beside the fields, so a new
-   one cannot be freed in the teardown and forgotten in the clone: that omission co-owned `drive_next`, `res_obj`
-   and `drive_arg` across two flows and underflowed their refcounts — the same bug one declared field list exists to
-   end, in a second costume. `res_obj`/`drive_arg`/`pending_error` are UNDEFINED or UNINITIALIZED when their
-   phase is not in flight, and both operations are no-ops on those. */
-#define AFS_OWNED_CAP(F)  F(promise) F(resolving_funcs[0]) F(resolving_funcs[1])
-#define AFS_OWNED_REST(F) F(sync_iter) F(drive_next) F(res_obj) F(drive_arg) F(pending_error)
+/* `promise` and `resolving_funcs` are the wrapper's result capability, delivered to the for-await OP_await; a
+   copy takes neither, because each arm delivers its own (js_async_from_sync_clone_fresh mints it). `deliver`
+   (AFS_*) selects where the settle puts the promise; `close_on_rejection` is 27.1.5.4
+   AsyncFromSyncIteratorContinuation's argument; `iter_magic` names which of next/return/throw runs, carried
+   because a suspension erases C locals. `res_obj`, `res_ph` and `res_done` are steps 2-5's IteratorComplete
+   and IteratorValue on the sync result, page code on an accessor or a Proxy. `call_outer` is the machine
+   waiting for an AFS_DELIVER_CALL result: the requester of the in-flight call, not of the record, so the
+   walks carry no link for it. `drive_arg` is the one forwarded argument (UNINITIALIZED for none), and
+   `pending_error` step 6's abrupt completion while IteratorClose runs on the chain. */
+struct JSAsyncFromSync;
+static void js_async_from_sync_clone_fresh(JSContext *ctx, const struct JSAsyncFromSync *os,
+                                           struct JSAsyncFromSync *ns);
+#define JS_ASYNC_FROM_SYNC_FIELDS(F)                                                                           \
+    F(FRESH, JSValue, promise)                                                                                 \
+    F(FRESH_ARRAY, 2, resolving_funcs)                                                                         \
+    F(OWN_VAL, JSValue, sync_iter)                                                                             \
+    F(POD, int, orig_cfirst)          /* the original OP_call_method operand shape, popped at the finish */    \
+    F(POD, int, orig_cargc)                                                                                    \
+    F(POD, uint8_t, orig_is_tail)                                                                              \
+    F(POD, uint8_t, deliver)                                                                                   \
+    F(POD, uint8_t, close_on_rejection)                                                                        \
+    F(OWN_VAL, JSValue, drive_next)   /* the sync record's nextMethod, taken at construction */                \
+    F(OWN_VAL, JSValue, res_obj)                                                                               \
+    F(POD, uint8_t, res_ph)           /* 0 none, 1 `done`, 2 `value`, 3 GetMethod of the sync return/throw */  \
+    F(POD, uint8_t, res_done)                                                                                  \
+    F(POD, void *, call_outer)                                                                                 \
+    F(POD, uint8_t, call_outer_kind)                                                                           \
+    F(POD, uint8_t, iter_magic)       /* GEN_MAGIC_NEXT / _RETURN / _THROW */                                  \
+    F(POD, uint8_t, close_then_typeerror) /* 27.1.5.2.3 step 8: close normally, then reject with TypeError */  \
+    F(OWN_VAL, JSValue, drive_arg)                                                                             \
+    F(OWN_VAL, JSValue, pending_error)                                                                         \
+    F(CLONE_HOOK, js_async_from_sync_clone_fresh, fresh)
+CONT_RECORD_DEFINE(JSAsyncFromSync, js_async_from_sync, JS_ASYNC_FROM_SYNC_FIELDS)
 /* CALL: OP_call_method on wrapper.next(v) — pop the call operands, push the promise.
    CLOSE: OP_iterator_close — the promise is never awaited: discard it and pop the iterator operand (sp[-1]).
    ITERNEXT: OP_iterator_next (`for await` / yield* delegation) — the promise REPLACES the argument at sp[-1];
@@ -31845,7 +31819,6 @@ static JSValue js_async_from_sync_iterator_unwrap_func_create(JSContext *ctx, bo
 static JSValue js_new_afs_cont(JSContext *ctx, JSValueConst sync_iter, JSValueConst resolve,
                                JSValueConst reject, int done, int close_on_rejection);
 static const JSTrampStepDef js_afs_cont_def;
-static void js_async_from_sync_end(JSContext *ctx, struct JSAsyncFromSync *s);
 static JSValue js_async_from_sync_iterator_next(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
 static __exception int remainingElementsCount_add(JSContext *ctx, JSValueConst resolve_element_env, int addend);
 /* 23.1.3.30.1 SortIndexedProperties ( obj, length, sortCompare, holes ) step 4 — "Sort items using an
@@ -43589,7 +43562,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    on every path that never reaches the drive — .return()/.throw() and OP_iterator_close all
                    settle through their own arms, and a leaked ref to a C function pins its realm, which is the
                    whole 370-object graph of `yield* syncGen` + `.return()`. One owner, freed by
-                   js_async_from_sync_end on every exit. */
+                   js_async_from_sync_free on every exit. */
                 s->drive_next = js_dup(ws->next_method);
                 s->res_obj = JS_UNDEFINED;   /* js_mallocz zeroes it, and a zero JSValue is not UNDEFINED */
                 s->drive_arg = js_dup(afs_arg);   /* owned BEFORE the invocation list below is released */
@@ -43827,7 +43800,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 r = js_dup(s->promise);
                 cfirst = s->orig_cfirst; cargc = s->orig_cargc; itail = s->orig_is_tail; deliver = s->deliver;
                 couter = s->call_outer; cok = s->call_outer_kind;
-                js_async_from_sync_end(ctx, s); js_free_rt(rt, s);
+                js_async_from_sync_free(ctx, s);
                 if (cok != CONT_NONE) goto do_afs_call_outer;
                 AFS_SETTLE_SHAPE_AGREES(sp, stack_buf, cfirst, cargc);
                 cargv = sp - cargc;
@@ -43905,7 +43878,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 rr2 = JS_Call(ctx, s->resolving_funcs[1], JS_UNDEFINED, 1, vc(&err));
                 JS_FreeValue(ctx, err); JS_FreeValue(ctx, rr2);
                 r = js_dup(s->promise);
-                js_async_from_sync_end(ctx, s); js_free_rt(rt, s);
+                js_async_from_sync_free(ctx, s);
                 if (cok != CONT_NONE) {
                     /* the REJECTED promise is still the call's result — the wrapper never throws to its caller. */
                     call_first_r = cfirst; call_pop = cargc;
@@ -53353,35 +53326,17 @@ static void js_promise_all_clone_fresh(JSContext *ctx, const JSPromiseAll *os, J
     ns->reattach_i = 0;
 }
 
-/* A sibling's own async-from-sync wrapper call, for every walk that forks one: the generator-drive frame arm (10)
-   and the requester walk, which reaches the record under the reads 27.1.5.4 AsyncFromSyncIteratorContinuation
-   issues — IteratorComplete / IteratorValue on the sync result (43) and step 6's `constructor` read (73). The
-   sync iterator stays a shared object, isolated per flow by the COW delta; every other owned field is taken
-   again. The capability is FRESH: each operation runs to its own completion before its promise reaches the
-   caller's await, so a fork inside it means neither arm has handed its promise over, and each delivers its own.
-   NULL on OOM, with nothing left allocated. */
-static JSAsyncFromSync *js_async_from_sync_clone(JSContext *ctx, const JSAsyncFromSync *os)
+/* The last step of an async-from-sync wrapper call's copy (its CLONE_HOOK): a fresh capability. Each operation
+   runs to its own completion before its promise reaches the caller's await, so a fork inside it means neither
+   arm has handed its promise over, and each delivers its own. */
+static void js_async_from_sync_clone_fresh(JSContext *ctx, const JSAsyncFromSync *os, JSAsyncFromSync *ns)
 {
-    JSAsyncFromSync *ns = js_mallocz(ctx, sizeof(*ns));
-
-    if (!ns) return NULL;
     DCHECK(os->call_outer == NULL,
-           "a for-await wrapper call was forked while a machine WAITS on its result — the sibling's call_outer "
-           "would still name the ORIGINAL waiter, so the two arms would deliver into one continuation; clone the "
-           "waiting link too");
-    *ns = *os;   /* every owned field as borrowed until the two lists below take them */
-    #define AFS_DUP_ONE(f) ns->f = js_dup(os->f);
-    AFS_OWNED_REST(AFS_DUP_ONE)
-    #undef AFS_DUP_ONE
+           "a for-await wrapper call was forked while a machine waits on its result: the sibling's call_outer "
+           "would still name the original waiter, so the two arms would deliver into one continuation; carry "
+           "that link as the record's OUTER so every walk binds it");
     ns->promise = JS_NewPromiseCapability(ctx, ns->resolving_funcs);
-    if (JS_IsException(ns->promise)) {
-        ns->promise = JS_UNDEFINED;
-        ns->resolving_funcs[0] = ns->resolving_funcs[1] = JS_UNDEFINED;
-        js_async_from_sync_end(ctx, ns);
-        js_free(ctx, ns);
-        return NULL;
-    }
-    return ns;
+    CHECK(!JS_IsException(ns->promise), "OOM minting a forked async-from-sync call's own capability");
 }
 
 /* The join-chain search, declared here because clone_deep_flow re-derives each cloned join's cached
@@ -53450,7 +53405,10 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_PROMISE_ALL_GET, JSPromiseAll, js_promise_all, LINK)                                                \
     X(CONT_PROMISE_ALL_THEN, JSPromiseAll, js_promise_all, LINK)                                               \
     X(CONT_PROMISE_ALL_RESOLVE, JSPromiseAll, js_promise_all, LINK)                                            \
-    X(CONT_PROMISE_ALL_RECAP, JSPromiseAll, js_promise_all, LINK)                                          \
+    X(CONT_PROMISE_ALL_RECAP, JSPromiseAll, js_promise_all, LINK)                                              \
+    X(CONT_ASYNC_FROM_SYNC, JSAsyncFromSync, js_async_from_sync, LINK)                                         \
+    X(CONT_AFS_GET, JSAsyncFromSync, js_async_from_sync, LINK)                                                 \
+    X(CONT_AFS_CONT, JSAsyncFromSync, js_async_from_sync, LINK)                                          \
     X(CONT_ARG_LIST, JSArgList, js_arg_list, LINK)                                                             \
     X(CONT_ARG_LIST_YIELD, JSArgList, js_arg_list, ANCHOR)
 #define CONT_REC_AGREES_AT(k, T, p, r)                                                                         \
@@ -53495,14 +53453,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
         *out_kind = ((JSStepHdr *)st)->outer_kind;
         return ((JSStepHdr *)st)->outer;
     CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_GET)
-    case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET: case CONT_AFS_CONT:
-        /* `call_outer` is the requester of an IN-FLIGHT CALL, not of the record, and the wrapper is reached
-           from a for-await opcode. A fork standing on one has a link this walk has never carried. The same
-           record under the reads its continuation issues (43, 73) answers the same. */
-        DCHECK(((struct JSAsyncFromSync *)st)->call_outer == NULL,
-               "deep-fork of an async-from-sync wrapper whose in-flight call has a REQUESTER under it — give "
-               "that link its arm in cont_outer_get/cont_outer_set so the sibling's copy names its own");
-        return NULL;
     case CONT_NONE:
         /* answered above */
         break;
@@ -53544,9 +53494,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_STEP: case CONT_STEP_YIELD:
         ((JSStepHdr *)st)->outer = outer; ((JSStepHdr *)st)->outer_kind = outer_kind; return;
     CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_SET)
-    /* Terminal: cont_outer_get answers no link for these, so there is nothing to write back. */
-    case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET:
-    case CONT_AFS_CONT: case CONT_NONE:
+    case CONT_NONE:
         break;
     /* No arm yet, as in cont_outer_get. */
     case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
@@ -53582,10 +53530,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     case CONT_STEP: case CONT_STEP_YIELD:
         return tramp_step_state_clone(ctx, st);
     CONT_RECORD_KINDS(CONT_REC_CASE_CLONE)
-    case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET: case CONT_AFS_CONT:
-        /* a for-await wrapper call under a read its continuation issued — a getter or a Proxy trap on the sync
-           result, or on the value's `constructor` — branching on unknown input */
-        return js_async_from_sync_clone(ctx, (const JSAsyncFromSync *)st);
     /* No arm here. A kind that is only ever a frame's own cont_state (CONT_ARG_LIST_YIELD's anchor, say) is
        cloned by clone_deep_flow's arm for it; any other has not yet been asked to copy a link. */
     case CONT_NONE: case CONT_AGEN_CREATE: case CONT_SETTER:
@@ -54662,13 +54606,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
     /* A declared record, released with nobody to answer to, and its requester after it: the operation can never
        finish, so whatever asked for it can never be answered either. */
     CONT_RECORD_KINDS(CONT_REC_CASE_FREE)
-    case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET: case CONT_AFS_CONT: {
-        /* every role of one JSAsyncFromSync: the wrapper call's own state (10), or the requester of a read its
-           continuation issued (43, 73). */
-        js_async_from_sync_end(ctx, (struct JSAsyncFromSync *)st);
-        js_free_rt(rt, st);
-        return;
-    }
     case CONT_NONE:
         /* answered above */
         break;
@@ -117769,14 +117706,6 @@ static int64_t js_promise_all_values_hole(JSContext *ctx, JSValueConst values, u
 #endif
 
 /* Free a for-await async-from-sync state's owned fields (promise dup'd out by the caller before this). */
-static void js_async_from_sync_end(JSContext *ctx, JSAsyncFromSync *s)
-{
-    #define AFS_FREE_ONE(f) JS_FreeValue(ctx, s->f);
-    AFS_OWNED_CAP(AFS_FREE_ONE)
-    AFS_OWNED_REST(AFS_FREE_ONE)
-    #undef AFS_FREE_ONE
-}
-
 /* Free a Promise.all(gen) state's owned fields (result_promise moved out by the caller before this on the happy path). */
 static void js_promise_all_end(JSContext *ctx, JSPromiseAll *s)
 {
