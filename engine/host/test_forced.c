@@ -1105,6 +1105,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/contchain.h"
 #include "fixture/weakchain.h"
 #include "fixture/importchain.h"
+#include "fixture/borrowedkey.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1551,6 +1552,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "contchain", HTML_CONTCHAIN },
     { "weakchain", HTML_WEAKCHAIN },
     { "importchain", HTML_IMPORTCHAIN },
+    { "borrowedkey", HTML_BORROWEDKEY },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -13965,6 +13967,21 @@ TF_UNIT void probes_importchain(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `borrowedkey` document (fixture/borrowedkey.h). */
+TF_UNIT void probes_borrowedkey(const char *js, Probe *tab, int *n) {
+    /* An object spread copies a property whose value is its own key's string, under a borrowed key. */
+    const char *bk_why = NULL; int bk_tt = 1;
+    fold_row(&bk_tt, &bk_why, !!strstr(js, "\"/api/borrowedkey\""),
+             "NOT REACHED: there is no /api/borrowedkey record at all, so the spread did not complete");
+    fold_row(&bk_tt, &bk_why, param_value_is(js, "/api/borrowedkey", "v", "shared"),
+             "ECMAScript §7.3.25 CopyDataProperties ( target, source, excludedItems ): the copy's `shared` "
+             "property does not hold the source's value");
+    const Probe rows[] = {
+        { "borrowed-key-value", bk_tt, "/api/borrowedkey", SESS_EXPLORE, bk_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -17707,6 +17724,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_contchain(js, probes, &np);
     probes_weakchain(js, probes, &np);
     probes_importchain(js, probes, &np);
+    probes_borrowedkey(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);

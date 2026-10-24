@@ -5917,11 +5917,9 @@ static int JS_InitAtoms(JSRuntime *rt)
  * call graph and goes wrong the way every hand-kept list here goes wrong. An atom's refcount word can be
  * raised through exactly two kinds of door: the ATOM API (JS_DupAtom, JS_DupAtomRT, the intern that finds a
  * name already in the table, and __JS_FreeAtom on the way back down), and a JSValue DUP of the atom's own
- * JSString — the two share one ref_count word, JSAtomStruct BEING JSString. Every atom-API door credits here;
- * the value door is not instrumented (js_dup is the hottest function in the engine) and is what the define's
- * own residue term measures BY SUBTRACTION, which is why that term is reported as "not through the atom API"
- * rather than named as a value store: a subtraction is entitled to say which door was NOT used and not which
- * one was.
+ * JSString — the two share one ref_count word, JSAtomStruct BEING JSString. Every atom-API door credits here.
+ * The value door is credited where a data property's value is stored or replaced (KEY_OWNER_VALUE, at
+ * JS_CreateProperty and JS_DefineProperty's data arm), not in js_dup, the hottest function in the engine.
  *
  * AN OWNER TAG NAMES THE SITE WITHOUT NAMING IT AT THE DOOR. The door cannot see its caller, so the three
  * shape-level owners a define can reach — add_shape_property's dup of the key it is installing, js_clone_shape's
@@ -5945,6 +5943,7 @@ typedef enum {
     KEY_OWNER_SHAPE_CLONE,  /* js_clone_shape's dup of every key it copies */
     KEY_OWNER_SHAPE_FREE,   /* js_free_shape0's release of every key it drops (a DEBIT) */
     KEY_OWNER_CAPTURE,      /* the time-travel capture hook, measured as a window */
+    KEY_OWNER_VALUE,        /* a data property's value that IS the key's own JSString, stored (+) or replaced (-) */
     KEY_OWNER_COUNT
 } JSKeyLedgerOwner;
 
@@ -5954,6 +5953,7 @@ static const char *const js_key_ledger_owner_name[KEY_OWNER_COUNT] = {
     "js_clone_shape",
     "js_free_shape0",
     "the time-travel capture",
+    "a property value store",
 };
 
 static _Thread_local JSAtom g_key_ledger_atom = JS_ATOM_NULL;
@@ -5967,6 +5967,17 @@ static inline void js_key_ledger_atom_api(JSAtom v, int n)
         g_key_ledger_by[g_key_ledger_owner] += n;
 }
 
+/* The value door: `v` stored into (n = 1) or dropped from (n = -1) a data property's slot is a reference on the
+   armed key's own word when `v` is that key's JSString. */
+static inline void js_key_ledger_value(JSContext *ctx, JSValueConst v, int n)
+{
+    if (unlikely(g_key_ledger_atom != JS_ATOM_NULL) && !g_key_ledger_in_capture &&
+        JS_VALUE_GET_TAG(v) == JS_TAG_STRING &&
+        JS_VALUE_GET_STRING(v) == ctx->rt->atom_array[g_key_ledger_atom])
+        g_key_ledger_by[KEY_OWNER_VALUE] += n;
+}
+#define JS_KEY_LEDGER_VALUE(ctx, v, n) js_key_ledger_value((ctx), (v), (n))
+
 /* Declares a variable, so one push per block. Expands to nothing in release — the enum does not exist there. */
 #define JS_KEY_LEDGER_OWNER_PUSH(who)                                   \
     JSKeyLedgerOwner key_ledger_outer_owner_ = g_key_ledger_owner;      \
@@ -5975,6 +5986,7 @@ static inline void js_key_ledger_atom_api(JSAtom v, int n)
 #else
 #define JS_KEY_LEDGER_OWNER_PUSH(who) ((void)0)
 #define JS_KEY_LEDGER_OWNER_POP()     ((void)0)
+#define JS_KEY_LEDGER_VALUE(ctx, v, n) ((void)0)
 #endif
 
 JSAtom JS_DupAtomRT(JSRuntime *rt, JSAtom v)
@@ -17709,6 +17721,7 @@ static int JS_CreateProperty(JSContext *ctx, JSObject *p,
     } else {
         if (flags & JS_PROP_HAS_VALUE) {
             pr->u.value = js_dup(val);
+            JS_KEY_LEDGER_VALUE(ctx, val, 1);
         } else {
             pr->u.value = JS_UNDEFINED;
         }
@@ -17989,8 +18002,10 @@ int JS_DefineProperty(JSContext *ctx, JSValueConst this_obj,
                     return res;
                 } else {
                     if (flags & JS_PROP_HAS_VALUE) {
+                        JS_KEY_LEDGER_VALUE(ctx, pr->u.value, -1);
                         JS_FreeValue(ctx, pr->u.value);
                         pr->u.value = js_dup(val);
+                        JS_KEY_LEDGER_VALUE(ctx, val, 1);
                     }
                     if (flags & JS_PROP_HAS_WRITABLE) {
                         if (js_update_property_flags(ctx, p, &prs,
@@ -18148,10 +18163,10 @@ int JS_DefinePropertyValue(JSContext *ctx, JSValueConst this_obj,
  * THE ASSERT IS THE LEDGER, and it is here rather than at those sites so the next key-holding builtin inherits
  * it. A define takes AT MOST the one reference the new shape property owns — and none at all when the key is
  * already in the shape or a hashed shape that already names it is reused — PLUS whatever the TIME-TRAVEL
- * CAPTURE took, which is the term this ledger was missing and which is not a caller's reference at all.
+ * CAPTURE took, PLUS the value slot's reference when the value is the key's own string (KEY_OWNER_VALUE).
  * [[DefineOwnProperty]] on a SHARED object records the slot in the running flow's delta, and the delta's entry
  * NAMES that slot by its atom and owns a reference on it (g_key_ledger_atom carries the whole argument). So
- * the admitted rise is `1 + what the capture took`, measured rather than assumed: an armed window over that
+ * the admitted rise is `1 + capture + value`, each measured rather than assumed: an armed window over that
  * one atom, credited only where the hook actually runs. Anything above that came from the CALLER and is a
  * reference the runtime will never get back. The value is freed AFTER the reading, which is why this does not
  * simply wrap JS_DefinePropertyValue: releasing it can drop the last object that interned this same name, and
@@ -18173,7 +18188,7 @@ int JS_DefinePropertyValue(JSContext *ctx, JSValueConst this_obj,
  * took, so the remedy is to name which owner inside the define kept a reference.
  *
  * @ATOMOWNER THE ABORT NAMES THE OWNER THAT TOOK THE EXCESS, WHICH IS WHAT A TOTAL CANNOT DO. The budget is
- * unchanged — `the new shape property` + `what the capture took` — and what is added beside it is a PARTITION
+ * `the new shape property` + `what the capture took` + `the value slot's take`, and beside it is a PARTITION
  * of the measured rise over the doors an atom's refcount word can be raised through, censused at the act
  * rather than read off the end. See the block beside JS_DupAtomRT for why it is over DOORS and not over a
  * list of owners. The message prints every term, so the reader is handed the answer rather than a magnitude:
@@ -18181,22 +18196,8 @@ int JS_DefinePropertyValue(JSContext *ctx, JSValueConst this_obj,
  * `js_clone_shape` means this key was ALREADY in the shape, which makes it a redefine rather than an add and
  * moves the whole diagnosis; an untagged atom-API take names a site nobody has tagged yet.
  *
- * AND THE RESIDUE IS REPORTED AS A DOOR NOT TAKEN RATHER THAN AS AN OWNER, because it is a SUBTRACTION and a
- * subtraction is entitled to say which door was not used and never which one was. `rest` is what the rise
- * exceeds the partition by, and the only other owner of this word is a JSValue holding the atom's OWN
- * JSString — JSAtomStruct IS JSString, so `js_dup` of such a value raises the very number this ledger reads.
- * That is not a hypothesis the reader has to form: the message states, as a measured fact of this call,
- * whether `val` IS that string, so a `rest` of +1 beside `val is the key's own string` is the value store
- * named, and a nonzero `rest` beside `val is NOT` is an owner nothing here has enumerated.
- *
- * RESIDUAL — THE VALUE DOOR IS MEASURED BY SUBTRACTION AND NOT AT THE ACT. Not covered: a take through a
- * `js_dup` of this atom's JSString by any route other than the `val` this call was handed — a second value in
- * the same define, or a slot written by a re-entrant arm — is inside `rest` with nothing to distinguish it
- * from the value store. The next diff credits the value door AT THE ACT, at JS_CreateProperty's
- * `pr->u.value = js_dup(val)` and JS_DefineProperty's data arm, under a KEY_OWNER_VALUE tag, which also makes
- * a redefine's dup-and-free net out to zero instead of cancelling invisibly inside the subtraction. Its
- * absence shows as an abort whose `rest` is nonzero while `val` is NOT the key's own string: the partition
- * then says only that the reference did not pass the atom API, which does not name a site. */
+ * `rest` is what the rise exceeds the partition by: a reference through no instrumented door, which is a
+ * JSValue dup of the key's own string somewhere other than a data property's value slot. */
 static int js_define_prop_borrowed_key_at(JSContext *ctx, JSValueConst this_obj,
                                           JSAtom prop, JSValue val, int flags,
                                           const char *file, int line)
@@ -18230,11 +18231,11 @@ static int js_define_prop_borrowed_key_at(JSContext *ctx, JSValueConst this_obj,
     for (i = 0; i < KEY_OWNER_COUNT; i++)
         tagged += g_key_ledger_by[i];
     rest = (rc1 - rc0) - tagged;
-    if (ret >= 0 && rc1 > rc0 + 1 + g_key_ledger_by[KEY_OWNER_CAPTURE]) {
+    if (ret >= 0 && rc1 > rc0 + 1 + g_key_ledger_by[KEY_OWNER_CAPTURE] + g_key_ledger_by[KEY_OWNER_VALUE]) {
         /* @ATOMOWNER THE BUDGET IS ADDED TO RATHER THAN CARVED OUT OF, so no message that fitted before this
            partition fits differently now. The worst case is arithmetic and is stated so the next person to
-           lengthen this text can re-derive it: 780 bytes of format literal (the em dash is three of them),
-           less 2 per specifier, plus a 63-byte atom name, 96 bytes of owner names, six signed counts and two
+           lengthen this text can re-derive it: 809 bytes of format literal (the em dash is three of them),
+           less 2 per specifier, plus a 63-byte atom name, 118 bytes of owner names, seven signed counts and two
            more numbers, plus __FILE__ — which is NOT `quickjs.c` but whatever absolute path the build handed
            the compiler, and under a frozen snapshot that is a lane-and-revision directory. At 1024 that
            overflowed by ~100 bytes and snprintf would have TRUNCATED IN SILENCE, taking the tail — which is
@@ -18243,10 +18244,11 @@ static int js_define_prop_borrowed_key_at(JSContext *ctx, JSValueConst this_obj,
         char abuf[ATOM_GET_STR_BUF_SIZE], why[2048];
         snprintf(why, sizeof(why),
                  "a define under a BORROWED key raised its atom's refcount by more than the one reference the "
-                 "new property owns and the one the time-travel capture took: key `%s` (id %d) went %d -> %d "
-                 "across the define, from %s:%d. WHO TOOK IT: %s %+d, %s %+d, %s %+d, %s %+d, %s %+d, and "
-                 "%+d that did NOT pass the atom API at all — the only other owner of this word is a JSValue "
-                 "holding the atom's own JSString, and `val` %s that string. Read this function's own comment "
+                 "new property owns, the one the time-travel capture took and the one a value slot holding the "
+                 "key's own string took: key `%s` (id %d) went %d -> %d across the define, from %s:%d. WHO TOOK "
+                 "IT: %s %+d, %s %+d, %s %+d, %s %+d, %s %+d, %s %+d, and %+d through no instrumented door (a "
+                 "JSValue dup of the key's own string outside a value slot; `val` %s that string). Read this "
+                 "function's own comment "
                  "before hunting a caller, because a JS_DupAtom in the argument list is already inside the %d "
                  "and cannot be what fired this. The excess is leaked for the lifetime of the runtime and "
                  "would otherwise surface only as an `[atomleak]` line at JS_FreeRuntime, with the run already "
@@ -18257,6 +18259,7 @@ static int js_define_prop_borrowed_key_at(JSContext *ctx, JSValueConst this_obj,
                  js_key_ledger_owner_name[KEY_OWNER_SHAPE_FREE], g_key_ledger_by[KEY_OWNER_SHAPE_FREE],
                  js_key_ledger_owner_name[KEY_OWNER_CAPTURE], g_key_ledger_by[KEY_OWNER_CAPTURE],
                  js_key_ledger_owner_name[KEY_OWNER_ATOM_API], g_key_ledger_by[KEY_OWNER_ATOM_API],
+                 js_key_ledger_owner_name[KEY_OWNER_VALUE], g_key_ledger_by[KEY_OWNER_VALUE],
                  rest, val_is_key ? "IS" : "is NOT", rc0);
         DFAIL(why);
     }
