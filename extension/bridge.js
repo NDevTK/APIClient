@@ -4575,8 +4575,114 @@ const PINNED_NO = "unpinned";
    `windowproxy.post <target> <world> <marks> <targetOrigin> <base64>` — routed verbatim to the instance holding
    <target>, with this engine's origin stamped on it: the untrusted engine may not state its own origin, since
    a forgeable event.origin defeats every origin check in every bundle. */
+/* The shapes a notice's fields take, one checker per shape, each answering null or what breaks it. */
+const noticeName = (v, name) => (typeof v === "string" && v !== "" ? null : "carries no " + name);
+const noticeWord = (v, words, name) =>
+  (words.indexOf(v) >= 0 ? null : "states the " + name + " `" + v + "`, none of " + words.join(", "));
+const noticeUrl = (v, name) => (typeof v === "string" && URL.canParse(v) ? null : "states the " + name + " `" + v +
+                                                                                 "`, which is not a URL");
+/* engine_record_head's marks word, `<provenance>,<drive mark>,<witness mark>`, which safe-fetch.js's
+   cross-document rule reads. */
+function noticeMarks(m, name) {
+  const p = String(m).split(",");
+  return p.length === 3 && (p[0] === PROVENANCE_DERIVED || p[0] === PROVENANCE_FORCED) &&
+         (p[1] === DRIVEN_YES || p[1] === DRIVEN_NO) && (p[2] === PINNED_YES || p[2] === PINNED_NO)
+    ? null : "states the " + name + " `" + m + "`, which is not engine_record_head's marks word";
+}
+/* A world vector, whose head is `<doc>:<session>:<serial>` (solver/world.c's world_serialize), as
+   docRecordWorldDocument reads it. */
+function noticeWorld(w, name) {
+  const head = String(w).split(",")[0], serial = head.lastIndexOf(":");
+  const session = serial > 0 ? head.lastIndexOf(":", serial - 1) : -1;
+  return session > 0 && /^[0-9]+$/.test(head.slice(session + 1, serial)) && /^[0-9]+$/.test(head.slice(serial + 1))
+    ? null : "states the " + name + " `" + w + "`, which does not begin `<doc>:<session>:<serial>`";
+}
+/* HTML §7.1.5's creation sandboxing flag set as the create notice spells it: core/frame/sandboxing.h's flag
+   names comma-joined once each, or the table's word for the empty set. */
+function noticeSandbox(v) {
+  const V = NAVIGABLE_NOTICE.sandbox;
+  if (v === V.none) return null;
+  const names = String(v).split(",");
+  return v !== "" && names.every((n, i) => V.flags.indexOf(n) >= 0 && names.indexOf(n) === i)
+    ? null : "states the sandboxing flag set `" + v + "`, which is not HTML §7.1.5's flags once each nor `" + V.none + "`";
+}
+/* A document's marks as lib/document-record.js mints them: an observed document is one a person named, which no
+   drive navigated to and no pin addressed. */
+function noticeArrival(provenance, driven, pinned) {
+  return noticeWord(provenance, [PROVENANCE_OBSERVED, PROVENANCE_DERIVED, PROVENANCE_FORCED], "provenance") ||
+         noticeWord(driven, [DRIVEN_YES, DRIVEN_NO], "drive mark") ||
+         noticeWord(pinned, [PINNED_YES, PINNED_NO], "witness mark") ||
+         (provenance === PROVENANCE_OBSERVED && (driven !== DRIVEN_NO || pinned !== PINNED_NO)
+           ? "states an observed document with a drive or witness mark" : null);
+}
+/* Every field each notice's arm reads, by the op's table (lib/navigable-notice.js, which noticegen.mjs writes from
+   navigable_notice.h) or its documented record; null for an op hostNotice does not act on, which its own DFAIL
+   names. A notice is the instance's statement, so hostNotice refuses the instance with the reason. */
+function noticeRefusal(f) {
+  const R = NAVIGABLE_NOTICE.request, C = NAVIGABLE_NOTICE.create, P = NAVIGABLE_NOTICE.provision;
+  const parts = (n, exact) => ((exact ? f.length === n : f.length >= n) ? null
+    : "has " + f.length + " field(s) where its record has " + (exact ? "" : "at least ") + n);
+  const tokenOf = (name) => {
+    try { navigableNoticeField(C, f, name); return null; }
+    catch (_) { return "carries a `" + name + "` field that is not base64"; }
+  };
+  switch (f[0]) {
+    case "navigable.request":
+      return parts(R.parts, true) || noticeName(f[R.creator], "creator") || noticeName(f[R.child], "child") ||
+             noticeWord(f[R.destination], NAVIGATION_DESTINATIONS, "destination") ||
+             noticeWord(f[R.referrerPolicy], _REFERRER_POLICIES, "referrer policy") || noticeUrl(f[R.address], "address");
+    case "navigable.create":
+      return parts(C.parts, true) || noticeName(f[C.child], "child") || noticeName(f[C.creator], "creator") ||
+             noticeUrl(f[C.address], "address") || noticeName(f[C.topLevelUrl], "top-level creation URL") ||
+             noticeWord(f[C.group], ["creator", "new"], "group") ||
+             noticeArrival(f[C.provenance], f[C.driven], f[C.pinned]) || noticeSandbox(f[C.sandboxFlags]) ||
+             noticeName(f[C.ancestorOrigins], "HTML §3.1.3 ancestor origins statement") ||
+             noticeName(f[C.containerPolicy], "HTML §7.3.1.3 container statement") ||
+             noticeName(f[C.parent], "HTML §7.3.1.3 parent navigable") ||
+             noticeName(f[C.opener], "HTML §7.2.2.4 opener navigable") ||
+             noticeName(f[C.cspSelfOrigin], "CSP self-origin") ||
+             noticeName(f[C.coep], "embedder policy value") ||
+             noticeName(f[C.coepReportOnly], "report-only embedder policy value") ||
+             noticeWord(f[C.referrerPolicy], _REFERRER_POLICIES, "referrer policy") ||
+             tokenOf("policy") || tokenOf("policyReportOnly");
+    case "navigable.swap": case "navigable.navigate":
+      return parts(P.parts, false) || noticeName(f[P.document], "document") || noticeName(f[P.address], "address") ||
+             noticeArrival(f[P.provenance], f[P.driven], f[P.pinned]) || noticeName(f[P.issuer], "issuer");
+    case ROUTE_SEED_NOTICE:
+      /* `observed` is unreachable for a declaration: HTML §7.4.4 is reached only by running the page's code. */
+      return parts(6, true) || noticeUrl(f[1], "address") ||
+             noticeWord(f[2], [PROVENANCE_DERIVED, PROVENANCE_FORCED], "provenance") ||
+             noticeWord(f[3], [DRIVEN_YES, DRIVEN_NO], "drive mark") ||
+             noticeWord(f[4], [PINNED_YES, PINNED_NO], "witness mark") || noticeName(f[5], "declaring document");
+    case "windowproxy.post":
+      return parts(6, false) || noticeName(f[1], "target document") || noticeWorld(f[2], "world") ||
+             noticeMarks(f[3], "marks");
+    case "remoteop.answer":
+      /* The completion is the remainder and may contain a tab; this zone relays it unread. */
+      return parts(5, false) || noticeName(f[1], "rendezvous token") || noticeName(f[2], "timeline") ||
+             noticeName(f[3], "marks");
+    case "fetch.cancel":
+      return (f.length === 2 ? /^[1-9][0-9]*$/.test(f[1])
+                             : f.length === 6 && f[1] !== "" && f[2] !== "" && f[4] !== "" && f[5] !== "")
+        ? null : "names neither a rendezvous id nor the five-field pair";
+    case "world.gone": case "world.parked":
+      return parts(2, false) || noticeName(f[1], "world");
+    case "remoteop.exhausted": case "remoteop.retracted":
+      return parts(2, false) || noticeName(f[1], "rendezvous token");
+    default:
+      return null;
+  }
+}
+/* Refuses the instance whose notice `line` breaks its record, unless the instance is already retired. */
+function engineRefuseNotice(eng, line, why) {
+  if (!eng._crashed) engineRefuse(eng, "the engine's notice `" + line.slice(0, 300) + "` " + why);
+}
 async function hostNotice(eng, line) {
+  /* A retired instance is asked nothing more, and its owed notices are not acted on. */
+  if (eng._crashed) return;
   const f = line.split("\t");
+  const _shape = noticeRefusal(f);
+  if (_shape !== null) { engineRefuseNotice(eng, line, _shape); return; }
   /* Field indices from lib/navigable-notice.js, which engine/noticegen.mjs writes from the engine's
      navigable_notice.h, so no index here is written by hand. */
   const C = NAVIGABLE_NOTICE.create, P = NAVIGABLE_NOTICE.provision;
@@ -4584,8 +4690,6 @@ async function hostNotice(eng, line) {
      which a sub-frame seed of that address speaks with (seedChildRequest). */
   if (f[0] === "navigable.request") {
     const R = NAVIGABLE_NOTICE.request;
-    DCHECK(f.length === R.parts && f[R.creator] !== "" && URL.canParse(f[R.address]),
-           "a navigable.request notice does not match lib/navigable-notice.js's request table: " + line);
     childRequestRecord(f[R.creator], new URL(f[R.address]).href,
                        { destination: f[R.destination], referrerPolicy: f[R.referrerPolicy] });
     childNameRecord(f[R.creator], new URL(f[R.address]).href, f[R.child]);
@@ -4595,14 +4699,6 @@ async function hostNotice(eng, line) {
     return;
   }
   if (f[0] === "navigable.create") {
-    /* The count is the table's, so it moves with the record; the three token checks catch a record and a
-       table that have parted. */
-    DCHECK(f.length === C.parts && (f[C.group] === "creator" || f[C.group] === "new") &&
-           (f[C.driven] === DRIVEN_YES || f[C.driven] === DRIVEN_NO) &&
-           (f[C.pinned] === "pinned" || f[C.pinned] === "unpinned"),
-           "a navigable.create notice does not match lib/navigable-notice.js's table — navigable.c composes it "
-           + "from navigable_notice.h, and noticegen.mjs writes the table from the same header, so the "
-           + "extension's copy is stale or the engine is from another revision");
     /* Already provisioned: every timeline whose history created the document announces it under one name
        (solver/world.c's world_mint_doc), and the instance that holds it serves them all — unless this create is
        at another address, which is two documents claiming one name. */
@@ -4742,43 +4838,11 @@ async function hostNotice(eng, line) {
        computes it. Members are joined by COMMA because §7.1.5's flag names contain spaces. Relayed verbatim;
        the receiving engine crashes on a word outside that section. */
     const creationSandboxFlags = docRecordSandbox(_childDoc);
+    /* The set is this zone's (the child's record), never empty: `none` is the empty set, and an empty one would
+       provision a cross-origin `<iframe sandbox>` as unsandboxed. */
     DCHECK(typeof creationSandboxFlags === "string" && creationSandboxFlags !== "",
-           "a navigable.create notice carried no HTML §7.1.5 CREATION SANDBOXING FLAG SET — navigable.c " +
-           "writes that section's own flag names on every record, and its word for the empty set where there " +
-           "are none, because both are facts and neither is an empty field. Without it this child would be " +
-           "provisioned with the EMPTY set, which is the positive claim that nothing about it is sandboxed: a " +
-           "cross-origin `<iframe sandbox>` would run its scripts, submit its forms and relax its " +
-           "`document.domain`, none of which its embedder's markup permits");
-    DCHECK(typeof ancestorOrigins === "string" && ancestorOrigins !== "",
-           "a navigable.create notice carried no HTML §3.1.3 ANCESTOR ORIGINS statement — navigable.c writes " +
-           "the composed list on every record, and `none` where the Document has no container document at " +
-           "all, because both are facts and neither is an empty field. Without it this child would be " +
-           "provisioned with §3.1.3's EMPTY list, which is the positive claim that it is at the TOP of its " +
-           "own tree: `location.ancestorOrigins` would answer `[]` for a cross-origin frame, and nothing " +
-           "anywhere would disagree — the member exists precisely to report a tree the page cannot otherwise " +
-           "see");
-    DCHECK(typeof containerPolicy === "string" && containerPolicy !== "",
-           "a navigable.create notice carried no HTML §7.3.1.3 CONTAINER statement — navigable.c writes " +
-           "Permissions Policy §9.5's answer on every record, and `null` where the navigable has no container " +
-           "at all, because both are facts and neither is an empty field. Without it this child would be " +
-           "provisioned to take §9.7 step 1 (\"if container is null, return `Enabled`\") for a frame that HAS " +
-           "an embedder, and would hold every supported feature that embedder was never asked about");
-    DCHECK(typeof parentNavigable === "string" && parentNavigable !== "",
-           "a navigable.create notice carried no HTML §7.3.1.3 PARENT NAVIGABLE — navigable.c writes the " +
-           "identity on every record because a navigable either has a parent or is a top-level traversable, " +
-           "and it spells the second `u`; an empty field is an engine that stopped writing it, and this child " +
-           "would be provisioned as a top-level page inside the only instance that holds it, with `parent`, " +
-           "`top` and §7.1.4.2's embedder policy check all answering about a document that does not exist");
-    DCHECK(embedderPolicyWhole(inherited.embedder),
-           "a navigable.create notice carried no §7.1.4 EMBEDDER POLICY — navigable.c writes all four of its " +
-           "items on every record because HTML §7.1.7's clone moves a container WHOLE, so a missing one is an " +
-           "engine that stopped writing the field and a child created claiming `unsafe-none` for a creator " +
-           "that opted into cross-origin isolation, with no header on the child's own response to say so");
-    DCHECK(typeof inherited.selfOrigin === "string" && inherited.selfOrigin !== "",
-           "a navigable.create notice carried no CSP self-origin — navigable.c writes the creator's on every " +
-           "record because HTML §7.1.7 clones the container whole and CSP §2.2 makes its list a struct of " +
-           "policies AND an origin, so an empty one is an engine that stopped writing the field and a child " +
-           "whose inherited `'self'` would resolve against its own address");
+           "a child's record states no HTML §7.1.5 creation sandboxing flag set — docRecordSandbox serializes " +
+           "every record's set, `none` for the empty one");
     /* The top-level creation URL (HTML §8.1.3.1 Environments) is the creator's decision (its own for a nested
        navigable, the navigable's address for an auxiliary one), carried because the new instance cannot see
        what embeds it; HTML §8.1.3.5 Secure contexts reads it. */
@@ -4845,17 +4909,9 @@ async function hostNotice(eng, line) {
      Absence shows as a swapped-to document whose content or headers differ from the response that decided
      the swap when the server answers the two requests differently. */
   if (f[0] === "navigable.swap") {
-    DCHECK(f.length >= P.parts && !!f[P.document] && !!f[P.address] && !!f[P.provenance] && !!f[P.driven] &&
-           !!f[P.pinned] && !!f[P.issuer],
-           "a navigable.swap notice was short of its fields — the engine writes the new document's name, the " +
-           "address it is loading, the origin it computed and what the navigation that caused the swap is " +
-           "EVIDENCE OF; a record missing either of the first two names a Document this zone cannot provision " +
-           "while the navigable it replaces is already closed, and one missing the last leaves the load below " +
-           "with nothing to be decided from");
-    DCHECK(!hostHolderOf(f[P.document]),
-           "§7.1.3.2's swap named a document this pool already holds — the name is minted fresh for each swap " +
-           "(solver/world.h), so a collision is one instance provisioned for two Documents, which is one heap " +
-           "answering for two");
+    /* The name is minted fresh for each swap (solver/world.h), so one this pool holds would provision one heap
+       for two Documents. */
+    if (hostHolderOf(f[P.document])) { engineRefuseNotice(eng, line, "names a document this pool already holds"); return; }
     /* The re-fetch is made under the same decision as the navigation's own load, since the provenance on this
        record is the load job's (core/frame/browsing_context_group.c takes it from there); a swap cannot fetch
        an address this zone declined at `document.fetch`. */
@@ -4922,14 +4978,8 @@ async function hostNotice(eng, line) {
      container and no ancestor list, and its own address is its top-level creation URL. Referenced, since the
      emitting engine's proxy names it. This zone loads the bytes, for the swap arm's reason. */
   if (f[0] === "navigable.navigate") {
-    DCHECK(f.length >= P.parts && !!f[P.document] && !!f[P.address] && !!f[P.provenance] && !!f[P.driven] &&
-           !!f[P.pinned] && !!f[P.issuer],
-           "a navigable.navigate notice was short of its fields — the engine writes the new document's name, " +
-           "the address, the origin it computed, the navigation's provenance, its drive mark, its witness " +
-           "mark and its issuing document, and the load below is decided from the last four");
-    DCHECK(!hostHolderOf(f[P.document]),
-           "a top-level navigation into a peer named a document this pool already holds — the name is minted " +
-           "fresh by the navigating engine, so a collision is one instance provisioned for two Documents");
+    /* The name is minted fresh by the navigating engine, as a swap's is. */
+    if (hostHolderOf(f[P.document])) { engineRefuseNotice(eng, line, "names a document this pool already holds"); return; }
     /* The records, as for a swap. */
     const _navFrom = issuedRecords(eng, f[P.issuer], f[P.document]);
     if (_navFrom.refusal) {
@@ -4982,19 +5032,6 @@ async function hostNotice(eng, line) {
      a declaration is). This branch spends no network: a declared route is a work item whose fetch is a cost the
      Level-1 order carries, so it records and `admit` loads (see `_seeds`). */
   if (f[0] === ROUTE_SEED_NOTICE) {
-    DCHECK(f.length === 6 && !!f[1] && !!f[2] && (f[3] === DRIVEN_YES || f[3] === DRIVEN_NO) &&
-           (f[4] === "pinned" || f[4] === "unpinned") && !!f[5],
-           "a route declaration was short of its fields — the engine writes the ADDRESS, the PROVENANCE, " +
-           "the DRIVE MARK, the WITNESS MARK and the declaring document, " +
-           "and a record missing either is a writer this zone no longer shares a grammar with: an absent " +
-           "address is a page nothing can load, and an absent provenance is the one field the decision to " +
-           "load it at all is made from");
-    /* Enumerated, not defaulted. `observed` is unreachable for a declaration (HTML §7.4.4 is reached only by
-       running the page's code), so a record carrying it is a field read at the wrong offset. */
-    DCHECK(f[2] === PROVENANCE_DERIVED || f[2] === PROVENANCE_FORCED,
-           "a route declaration carries the provenance `" + f[2] + "`, which is neither `derived` nor " +
-           "`forced` — those are the only two a declaration can have, so this is either the field split at " +
-           "the wrong tab or an engine speaking a vocabulary this zone does not");
     /* A route of this document, established from the two addresses: HTML §7.2.5 The History interface's
        can-have-its-URL-rewritten already refuses a cross-origin rewrite in the engine, and this zone checks the
        same thing from its own facts. The comparison decides no principal (the load reads under `eng.origin`).
@@ -5059,7 +5096,6 @@ async function hostNotice(eng, line) {
     return;
   }
   if (f[0] === "windowproxy.post") {
-    DCHECK(f.length >= 6, "a windowproxy.post notice was short of its fields");
     const target = hostHolderOf(f[1]);
     DCHECK(target !== null, "a message was posted to a document no instance in this pool holds — the create " +
                             "notice naming it was dropped, or that instance was finalized while a peer still " +
@@ -5104,30 +5140,20 @@ async function hostNotice(eng, line) {
      Relayed verbatim and unread: the completion is in remote_object.c's grammar, where an object crosses as a
      name in the answering agent's namespace, which only an engine can interpret. */
   if (f[0] === "remoteop.answer") {
-    DCHECK(f.length >= 5, "a remoteop.answer notice was short of its fields — the engine writes the rendezvous " +
-                          "token, the TIMELINE that computed the answer, its marks and the completion record, " +
-                          "and a notice missing any of them names no call site or no timeline");
     const to = _remoteOps.get(f[1]);
-    /* A token this zone did not mint names no asker, leaving the asking flow parked on an answer nothing can
-       deliver. */
-    DCHECK(to !== undefined, "a peer answered a cross-agent operation under a rendezvous token this zone never " +
-                             "minted — the token is echoed verbatim by the instance that performed it, so the " +
-                             "flow that asked is parked on an answer nothing can deliver");
+    /* The token is echoed verbatim by the instance that performed the operation, so one this zone never minted
+       names no asker. */
+    if (to === undefined) { engineRefuseNotice(eng, line, "answers a rendezvous token this zone never minted"); return; }
     /* The world is the third field (world_serialize's grammar, separators ':' and ','), the marks the fourth,
        the completion the remainder (it may contain a tab). This zone reads none of them but must know where
-       each ends. */
+       each ends; noticeRefusal has checked the first two are present. */
     const _t2 = line.indexOf("\t", line.indexOf("\t") + 1);
-    const _t3 = _t2 < 0 ? -1 : line.indexOf("\t", _t2 + 1);
-    const _t4 = _t3 < 0 ? -1 : line.indexOf("\t", _t3 + 1);
-    DCHECK(_t3 > _t2 + 1 && _t4 > _t3 + 1,
-           "a remoteop.answer notice carried no marks or no completion record after its timeline — an empty " +
-           "answer is not `undefined`, it is a relay that lost the peer's completion, and the engine's own " +
-           "decoder says so at the other end");
+    const _t3 = line.indexOf("\t", _t2 + 1);
+    const _t4 = line.indexOf("\t", _t3 + 1);
     /* Every completion is relayed: a peer's document state is its flows, so one question has one true answer per
        timeline, and the asking flow forks an arm over each. Keeping one per token would answer a page from
        whichever timeline the interleaving left. The engine refuses a repeat of one timeline at its delivery
        entry. */
-    if (!to || _t4 < 0) return;
     await to.asker.r.renderer.hostAnswerRemote({ request: to.req, world: line.slice(_t2 + 1, _t3),
                                                  marks: line.slice(_t3 + 1, _t4),
                                                  completion: line.slice(_t4 + 1) });
@@ -5143,16 +5169,10 @@ async function hostNotice(eng, line) {
   /* `fetch.cancel <identity>` — no flow is owed this request any more; the identity is a park's five-field pair
      or a rendezvous id (inflightKey). */
   if (f[0] === "fetch.cancel") {
-    DCHECK(f.length === 2 ? /^[1-9][0-9]*$/.test(f[1])
-                          : f.length === 6 && f[1] !== "" && f[2] !== "" && f[4] !== "" && f[5] !== "",
-           "a fetch.cancel notice names neither a rendezvous id nor the five-field pair: " + line);
     engineCancel(eng, f.slice(1));
     return;
   }
   if (f[0] === "world.gone") {
-    DCHECK(f.length >= 2 && !!f[1],
-           "a world.gone notice carried no world name — world_parse answers out of whatever the receiving " +
-           "instance last parsed, so an empty one releases a segment belonging to a live peer's timeline");
     for (const peer of _pool) {
       if (peer === eng) continue;
       if (peer.state !== "hot" && peer.state !== "fetching") continue;
@@ -5164,12 +5184,11 @@ async function hostNotice(eng, line) {
      it go by answering or refusing, so no answer follows. The asker retires the standby its family keeps for
      later timelines' answers, and the token is spent. */
   if (f[0] === "remoteop.exhausted") {
-    DCHECK(f.length >= 2 && !!f[1], "a remoteop.exhausted notice carried no rendezvous token");
     const done = _remoteOps.get(f[1]);
-    DCHECK(done !== undefined,
-           "an engine exhausted a cross-agent operation under a rendezvous token this zone never minted, or one " +
-           "already spent — the asking family's standby would wait for an answer nothing will send");
-    if (!done) return;
+    if (done === undefined) {
+      engineRefuseNotice(eng, line, "exhausts a rendezvous token this zone never minted or has already spent");
+      return;
+    }
     _remoteOps.delete(f[1]);
     done.asker._remoteAsked.delete(done.req);
     await done.asker.r.renderer.hostAnswersExhausted({ request: done.req });
@@ -5184,18 +5203,9 @@ async function hostNotice(eng, line) {
      Nothing is stored: a token is this session's in-memory name and never enters a residue; across a restart
      the asker's own recipe re-issues the request under a new id. */
   if (f[0] === "remoteop.retracted") {
-    DCHECK(f.length >= 2 && !!f[1],
-           "a remoteop.retracted notice carried no rendezvous token — the token is the only thing that names " +
-           "which asking flow's question is being handed back, so an empty one leaves that flow suspended " +
-           "forever with this zone still suppressing the re-ask");
     const back = _remoteOps.get(f[1]);
-    /* An unknown token means the engine minted a name of its own, and the flow this was meant to release is not
-       the one released. */
-    DCHECK(back !== undefined,
-           "an engine handed back a cross-agent operation under a rendezvous token this zone never minted — " +
-           "the token is echoed verbatim by the instance that was asked, so the asking flow this was meant to " +
-           "un-suppress is still suppressed and stays parked");
-    if (!back) return;
+    /* An unknown token is a name the engine minted itself, so no asking flow is released by it. */
+    if (back === undefined) { engineRefuseNotice(eng, line, "retracts a rendezvous token this zone never minted"); return; }
     back.asker._remoteAsked.delete(back.req);
     _remoteOps.delete(f[1]);
     return;
@@ -5208,9 +5218,6 @@ async function hostNotice(eng, line) {
      frontier entry is keyed by address|identity|bundle, so this is a reverse map or a store of its own), surviving a
      browser restart as the residue does, drained into the resuming instance's `worldGone` after `begin`. */
   if (f[0] === "world.parked") {
-    DCHECK(f.length >= 2 && !!f[1],
-           "a world.parked notice carried no world vector — the vector is what the resuming instance hands " +
-           "back to world_segment, so an empty one names a peer timeline nothing can rebuild or release");
     DFAIL("an engine parked while carrying a PEER's world segment across the cold tier (`" + f[1] + "`), and " +
           "this zone holds no death queue for a cold document. Every `world.gone` announced while this " +
           "document is parked is broadcast to the LIVE pool alone and lost, so the instance that resumes it " +
@@ -5236,6 +5243,7 @@ async function engineServiceHostRequests(eng) {
     await hostNotice(eng, line);
     did++;
   }
+  if (eng._crashed) return did;
   // Only ops this zone can answer are answered: `document.fetch` is a network fetch through the safeFetch
   // chokepoint, and a cross-agent operation is asked of the peer. Every other op stays unanswered: the asking
   // flow stays parked with its snapshot intact and qjs_host_requests keeps reporting it, which is visible where
@@ -5272,7 +5280,10 @@ async function engineServiceHostRequests(eng) {
       /* An unanswered request is re-reported every step (engine_host_requests does not dedupe), so asking on
          every sighting would perform the peer's operation once per step. */
       if (eng._remoteAsked.has(id)) continue;
-      const holder = hostHolderOf(op.split("\t")[1]);
+      const _opf = op.split("\t");
+      const _opShape = noticeName(_opf[1], "target document") || noticeMarks(_opf[3], "marks");
+      if (_opShape !== null) { engineRefuse(eng, "the engine's host request `" + op.slice(0, 300) + "` " + _opShape); return did; }
+      const holder = hostHolderOf(_opf[1]);
       /* A missing instance, not a slow answer: the create notice was dropped, or the holder was finalized while
          a peer still referenced it. Left alone the flow parks invisibly, so it is asserted. */
       DCHECK(holder !== null, "a cross-agent operation named a document no instance in this pool holds — the " +
@@ -5285,7 +5296,7 @@ async function engineServiceHostRequests(eng) {
       /* The one firing rule, as a fetch is judged (safeFetchCrossDocumentRefusal), under the asking document's
          record; the record's fourth field is the asking timeline's marks (engine_record_head). A refusal is a
          declined rendezvous, which the asker forks into a waiting arm and a failure arm. */
-      const _opRefusal = self.safeFetchCrossDocumentRefusal({ targetOrigin: holder.origin, marks: op.split("\t")[3],
+      const _opRefusal = self.safeFetchCrossDocumentRefusal({ targetOrigin: holder.origin, marks: _opf[3],
                                                               doc: askerDoc });
       if (_opRefusal) {
         await engineDeclineRendezvous(eng, id, "blocked-signal:" + _opRefusal);

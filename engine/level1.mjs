@@ -96,7 +96,7 @@ const ZONE = (() => {
   /* `_globalStoreReady` is offscreen-brain.js's read of the cumulative store, which this realm does not load;
      it never settles here, so bridge.js's start-up kick never drives the live pool under these rows. */
   const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, MessageChannel,
-                    AbortController, AbortSignal, swRpc,
+                    AbortController, AbortSignal, atob, swRpc,
                     _globalStoreReady: new Promise(() => {}) };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
@@ -1065,6 +1065,74 @@ async function mintDrive(minted, slices) {
          { crashed: e._crashed, r });
   }
   console.log('[level1]   host requests    4 GetHostRequests lines, 10 document.fetch records, 3 decline answers driven');
+
+  /* Host notices. Every op's record is read by noticeRefusal: a valid one of each op is accepted, and invented
+     ones are refused naming what breaks them. hostNotice itself is driven where an arm needs nothing beyond the
+     notice: a malformed record and an unminted rendezvous token retire the instance, a valid fetch.cancel (the
+     control) acts and retires nothing, and a retired instance's notice is not acted on. */
+  const NN = ZONE.NAVIGABLE_NOTICE;
+  const tableRecord = (T, vals, o) => {
+    const f = new Array(T.parts).fill('');
+    f[0] = vals.op;
+    for (const k of Object.keys(vals)) if (k !== 'op') f[T[k]] = vals[k];
+    for (const k of Object.keys(o || {})) f[T[k]] = o[k];
+    return f;
+  };
+  const create = (o) => tableRecord(NN.create, {
+    op: 'navigable.create', child: 'gap-doc.1-0123456789abcdef', creator: 'gap-doc', address: 'https://b.test/f',
+    origin: 'https://b.test', topLevelUrl: 'https://a.test/', cspSelfOrigin: 'https://a.test', coep: 'unsafe-none',
+    coepEndpoint: '', coepReportOnly: 'unsafe-none', coepReportOnlyEndpoint: '', referrerPolicy: '', parent: 'p.x.',
+    containerPolicy: 'null', ancestorOrigins: 'https://a.test', sandboxFlags: 'none', provenance: 'derived',
+    group: 'creator', driven: 'undriven', pinned: 'unpinned', opener: 'N', policy: '', policyReportOnly: '' }, o);
+  const provision = (op, o) => tableRecord(NN.provision, { op, document: 'gap-doc.2-0123456789abcdef',
+    address: 'https://b.test/n', origin: 'https://b.test', provenance: 'derived', driven: 'undriven',
+    pinned: 'unpinned', issuer: 'gap-doc' }, o);
+  const request = (o) => tableRecord(NN.request, { op: 'navigable.request', creator: 'gap-doc',
+    child: 'gap-doc.1-0123456789abcdef', destination: 'iframe', referrerPolicy: '', address: 'https://b.test/f' }, o);
+  const notices = [
+    ['navigable.request', request(), null], ['request destination', request({ destination: 'script' }), 'destination'],
+    ['navigable.create', create(), null], ['create sandbox set', create({ sandboxFlags: 'sandboxed nothing flag' }), 'sandboxing'],
+    ['create repeated flag', create({ sandboxFlags: 'sandboxed forms browsing context flag,sandboxed forms browsing context flag' }), 'sandboxing'],
+    ['create observed with a mark', create({ provenance: 'observed', driven: 'driven' }), 'observed'],
+    ['create group', create({ group: 'other' }), 'group'], ['create parent', create({ parent: '' }), 'parent'],
+    ['create base64 policy', create({ policy: '%%%' }), 'base64'], ['create one field short', create().slice(0, -1), 'field'],
+    ['navigable.swap', provision('navigable.swap'), null], ['swap witness mark', provision('navigable.swap', { pinned: 'x' }), 'witness'],
+    ['navigable.navigate', provision('navigable.navigate'), null],
+    ['navigate issuer', provision('navigable.navigate', { issuer: '' }), 'issuer'],
+    ['document.seed', ['document.seed', 'https://a.test/r', 'derived', 'undriven', 'unpinned', 'gap-doc'], null],
+    ['seed observed', ['document.seed', 'https://a.test/r', 'observed', 'undriven', 'unpinned', 'gap-doc'], 'provenance'],
+    ['windowproxy.post', ['windowproxy.post', 'b-doc', 'gap-doc:1:2', 'derived,undriven,unpinned', 'x', 'y'], null],
+    ['post world', ['windowproxy.post', 'b-doc', 'gap-doc', 'derived,undriven,unpinned', 'x', 'y'], 'world'],
+    ['post marks', ['windowproxy.post', 'b-doc', 'gap-doc:1:2', 'observed,undriven,unpinned', 'x', 'y'], 'marks'],
+    ['remoteop.answer', ['remoteop.answer', 'op1', 'w', 'm', 'c\twith a tab'], null],
+    ['answer timeline', ['remoteop.answer', 'op1', '', 'm', 'c'], 'timeline'],
+    ['fetch.cancel', ['fetch.cancel', '7'], null], ['cancel id', ['fetch.cancel', '07'], 'rendezvous'],
+    ['world.gone', ['world.gone', 'w'], null], ['gone world', ['world.gone', ''], 'world'],
+    ['remoteop.exhausted', ['remoteop.exhausted', 'op1'], null], ['retracted token', ['remoteop.retracted'], 'field']];
+  for (const [label, f, names] of notices) {
+    const got = ZONE.noticeRefusal(f);
+    must(names === null ? got === null : typeof got === 'string' && got.includes(names),
+         'a ' + label + ' notice is ' + (names === null ? 'accepted' : 'refused, naming what breaks it'), { got });
+  }
+  const driven = [['a malformed create', create({ group: 'other' }).join('\t'), true],
+                  ['an unminted rendezvous token', 'remoteop.retracted\top-never-minted', true],
+                  ['a valid fetch.cancel (the control)', 'fetch.cancel\t7', false]];
+  for (const [label, line, refused] of driven) {
+    const e = inst({ _inflight: new Map() });
+    let threw = null;
+    try { await ZONE.hostNotice(e, line); } catch (x) { threw = x; }
+    const r = e._crashed ? refusedRun(e) : null;
+    must(threw === null && (refused ? e._crashed === true && r.rows.length === 1 && r.rows[0].includes('notice') : !e._crashed),
+         'hostNotice with ' + label + (refused ? ' retires the instance' : ' acts and retires nothing'),
+         threw ? String(threw.message || threw) : { crashed: e._crashed, r });
+  }
+  {
+    const e = inst({ _crashed: true, _inflight: new Map([['req\n7', { cancelled: false, controller: new AbortController() }]]) });
+    await ZONE.hostNotice(e, 'fetch.cancel\t7');
+    must(e._inflight.has('req\n7') && e.lines.length === 0,
+         'a retired instance\'s notice is not acted on', { inflight: [...e._inflight.keys()], lines: e.lines });
+  }
+  console.log('[level1]   host notices     ' + notices.length + ' records, ' + (driven.length + 1) + ' notices through hostNotice driven');
 }
 
 /* engineFetchXhr's real path with a counting safeFetch: an invented xhr.send record retires the instance and
