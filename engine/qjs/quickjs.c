@@ -28620,9 +28620,9 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
    F(role, type, name), and its struct, release, copy and requester link are all expanded from that one list
    (CONT_RECORD_DEFINE), so no walk can name a field another walk misses. The roles:
      OWN_VAL, OWN_ATOM  an owned JSValue (p_init makes it undefined) or JSAtom: copy takes, release drops one;
-     POD       a plain value of `type`, copied;
-     BORROW    a JSValueConst another owner keeps alive across the record's life, copied and never released;
+     POD, BORROW  a plain value of `type`, or a JSValueConst another owner keeps alive: copied, never released;
      OUTER     the requester link, `void *name` and its kind `uint8_t name##_kind`, at most one per record;
+     OWN_SUB   a declared record of prefix `type` owned whole, carrying the requester link its release releases;
      DESC_OUT  a JSDescFacts * naming the requester's own record, which tramp_cont_relink_outer re-aims;
      FACTS, PROPS  a JSDescFacts held by value (its three values owned), or an own-key table of `type` entries;
      OWN_ARRAY, BORROW_ARRAY  a JSValue array of `type` slots, every one owned, or each kept alive elsewhere;
@@ -28800,6 +28800,39 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_DESC_OUT_CLONE_HOOK(t, n)
 #define CONT_REC_AGREES_CLONE_HOOK(t, n)
 #define CONT_REC_INIT_CLONE_HOOK(t, n)
+#define CONT_REC_FREE_NEXT_OUTER(t, n) *out_kind = r->n##_kind; return r->n;
+#define CONT_REC_FREE_NEXT_OWN_VAL(t, n)
+#define CONT_REC_FREE_NEXT_OWN_ATOM(t, n)
+#define CONT_REC_FREE_NEXT_POD(t, n)
+#define CONT_REC_FREE_NEXT_BORROW(t, n)
+#define CONT_REC_FREE_NEXT_DESC_OUT(t, n)
+#define CONT_REC_FREE_NEXT_FACTS(t, n)
+#define CONT_REC_FREE_NEXT_PROPS(t, n)
+#define CONT_REC_FREE_NEXT_OWN_ARRAY(t, n)
+#define CONT_REC_FREE_NEXT_BORROW_ARRAY(t, n)
+#define CONT_REC_FREE_NEXT_OWN_VEC(t, n)
+#define CONT_REC_FREE_NEXT_OWN_LIST(t, n)
+#define CONT_REC_FREE_NEXT_VIEW(t, n)
+#define CONT_REC_FREE_NEXT_KIND_FLAG(t, n)
+#define CONT_REC_FREE_NEXT_KIND_IMPLIES(t, n)
+#define CONT_REC_FREE_NEXT_CLONE_HOOK(t, n)
+#define CONT_REC_MEMBER_OWN_SUB(t, n) void *n;
+#define CONT_REC_FREE_OWN_SUB(t, n) if (r->n) { t##_end(ctx, r->n); js_free_rt(ctx->rt, r->n); }
+#define CONT_REC_DUP_OWN_SUB(t, n)                                                                         \
+    DCHECK(r->n != NULL, "a record copied after the sub-record it owns was handed over: nothing waits on it"); \
+    c->n = t##_clone(ctx, r->n);                                                                              \
+    CHECK(c->n != NULL, "OOM copying a parked record's owned sub-record for a fork");
+#define CONT_REC_NOUTER_OWN_SUB(t, n) 1
+#define CONT_REC_OUTER_GET_OWN_SUB(t, n)                                                                   \
+    DCHECK(r->n != NULL, "a record's requester was asked for after the sub-record carrying it was handed over"); \
+    return t##_outer_get(r->n, out_kind);
+#define CONT_REC_OUTER_SET_OWN_SUB(t, n)                                                                   \
+    DCHECK(r->n != NULL, "a record's requester was re-aimed after the sub-record carrying it was handed over"); \
+    t##_outer_set(r->n, outer, outer_kind); return;
+#define CONT_REC_DESC_OUT_OWN_SUB(t, n)
+#define CONT_REC_AGREES_OWN_SUB(t, n)
+#define CONT_REC_INIT_OWN_SUB(t, n)
+#define CONT_REC_FREE_NEXT_OWN_SUB(t, n)
 #define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
 #define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(t, n)
 #define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(t, n)
@@ -28809,13 +28842,15 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_DESC_OUT(role, t, n)   CONT_REC_DESC_OUT_##role(t, n)
 #define CONT_REC_AGREES(role, t, n)     CONT_REC_AGREES_##role(t, n)
 #define CONT_REC_INIT(role, t, n)       CONT_REC_INIT_##role(t, n)
+#define CONT_REC_FREE_NEXT(role, t, n)  CONT_REC_FREE_NEXT_##role(t, n)
 /* The struct `T` and its walks, prefixed `p`: p_release drops what the record owns (never its requester, whose
    disposal is each caller's: an unwind abandons it, a destroyed flow releases it) and p_free that plus the
    record;
    p_clone copies it, taking a reference to everything it owns, with its links still naming the original's
    (tramp_cont_relink_outer re-binds them); p_outer_get/p_outer_set read and write the requester link (NULL and
    nothing for a record with none); p_desc_out answers its descriptor-answer slot, or NULL; p_kind_agrees answers
-   whether `kind` is the one its KIND_FLAG and KIND_IMPLIES fields state; p_init readies a zeroed record. */
+   whether `kind` is the one its KIND_FLAG and KIND_IMPLIES fields state; p_init readies a zeroed record;
+   p_free_next is the link the free walk releases after the record, which an OWN_SUB's release already did. */
 #define CONT_RECORD_DEFINE(T, p, FIELDS)                                                                       \
     typedef struct T { FIELDS(CONT_REC_MEMBER) } T;                                                           \
     _Static_assert(0 FIELDS(CONT_REC_NOUTER) <= 1, #T " declares more than one requester link");             \
@@ -28851,6 +28886,12 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
     static inline JSDescFacts **p##_desc_out(T *r)                                                             \
     {                                                                                                          \
         FIELDS(CONT_REC_DESC_OUT)                                                                              \
+        return NULL;                                                                                           \
+    }                                                                                                          \
+    static inline void *p##_free_next(T *r, uint8_t *out_kind)                                                \
+    {                                                                                                          \
+        FIELDS(CONT_REC_FREE_NEXT)                                                                             \
+        *out_kind = CONT_NONE;                                                                                 \
         return NULL;                                                                                           \
     }                                                                                                          \
     static inline void p##_init(T *r)                                                                         \
@@ -29038,16 +29079,25 @@ static void js_arg_list_free(JSContext *ctx, JSArgList *al);
                                   `Get(map, "add"/"set")`, which a subclass can make an accessor or put on a
                                   Proxy. Both ran from C. Two reads is why this is a sequence with a PHASE rather
                                   than another copy of CONT_TA_TARGET: the second read has no analogue there. */
-typedef struct JSSetMapCtor {
-    void *consume;          /* the JSIterConsume the instance belongs to; OWNED until the acquire adopts it */
-    JSValue ntgt;           /* new_target (owned): 10.1.13 step 3's realm fallback inspects it, invoking nothing */
-    JSValue getiter;        /* the probed @@iterator (owned), restored into tramp_iter_getiter on delivery */
-    JSValueConst iterable;  /* borrowed: the caller's own operand, which outlives the suspension */
-    int magic;              /* 0 = Map, MAGIC_SET = Set — the class id and the adder's name both follow from it */
-    uint8_t phase;          /* SMC_PROTO / SMC_ADDER */
-} JSSetMapCtor;
+/* `consume` is the JSIterConsume the instance belongs to, owned until the acquire adopts it; its `outer` is what
+   waits on the whole sequence. `ntgt` is new_target, which 10.1.13 step 3's realm fallback inspects, invoking
+   nothing; `getiter` the probed @@iterator, restored into tramp_iter_getiter on delivery; `iterable` the
+   caller's own operand, borrowed. `magic` is 0 for Map or MAGIC_SET (the class id and the adder's name follow
+   from it), `phase` SMC_PROTO or SMC_ADDER. */
+struct JSIterConsume;
+static void js_iter_consume_end(JSContext *ctx, struct JSIterConsume *s);
+static struct JSIterConsume *js_iter_consume_clone(JSContext *ctx, const struct JSIterConsume *r);
+static inline void *js_iter_consume_outer_get(struct JSIterConsume *r, uint8_t *out_kind);
+static inline void js_iter_consume_outer_set(struct JSIterConsume *r, void *outer, uint8_t outer_kind);
+#define JS_SETMAP_CTOR_FIELDS(F)                                                                               \
+    F(OWN_SUB, js_iter_consume, consume)                                                                       \
+    F(OWN_VAL, JSValue, ntgt)                                                                                  \
+    F(OWN_VAL, JSValue, getiter)                                                                               \
+    F(BORROW, JSValueConst, iterable)                                                                          \
+    F(POD, int, magic)                                                                                         \
+    F(POD, uint8_t, phase)
+CONT_RECORD_DEFINE(JSSetMapCtor, js_setmap_ctor, JS_SETMAP_CTOR_FIELDS)
 enum { SMC_PROTO = 0, SMC_ADDER };
-static void js_setmap_ctor_free(JSContext *ctx, JSSetMapCtor *sc);
 static int js_map_state_init(JSContext *ctx, JSValueConst obj, int magic);
 
 #define CONT_TA_TARGET     66  /* gp_outer = JSTATarget: 23.2.5.1 step 6.a.i's AllocateTypedArray, whose
@@ -29057,14 +29107,14 @@ static int js_map_state_init(JSContext *ctx, JSValueConst obj, int magic);
                                   CONSUME machine and the read happens BEFORE the source is touched (which is what
                                   step 6.a.i states), so what parks is the consume SETUP: the machine exists, its
                                   ta_target does not yet, and the acquire cannot start until it does. */
-typedef struct JSTATarget {
-    void *consume;          /* the JSIterConsume the object belongs to; OWNED until the object lands on it */
-    JSValue ntgt;           /* new_target (owned): 10.1.13 step 3's realm fallback inspects it, invoking nothing */
-    JSValue getiter;        /* the probed @@iterator (owned), restored into tramp_iter_getiter on delivery */
-    JSValueConst iterable;  /* borrowed: the caller's own operand, which outlives the suspension */
-    int class_id;
-} JSTATarget;
-static void js_ta_target_free(JSContext *ctx, JSTATarget *tt);
+/* The same fields as JSSetMapCtor's, with `class_id` the TypedArray class to allocate. */
+#define JS_TA_TARGET_FIELDS(F)                                                                                 \
+    F(OWN_SUB, js_iter_consume, consume)                                                                       \
+    F(OWN_VAL, JSValue, ntgt)                                                                                  \
+    F(OWN_VAL, JSValue, getiter)                                                                               \
+    F(BORROW, JSValueConst, iterable)                                                                          \
+    F(POD, int, class_id)
+CONT_RECORD_DEFINE(JSTATarget, js_ta_target, JS_TA_TARGET_FIELDS)
 
 #define CONT_CTOR_PROTO    65  /* gp_outer = JSCtorProto: 10.2.2 [[Construct]] step 5's
                                   OrdinaryCreateFromConstructor(newTarget, "%Object.prototype%"), whose step 2 is
@@ -30446,22 +30496,6 @@ static JSValue *arg_list_fast_build(JSContext *ctx, JSValueConst src, uint32_t l
     if (unlikely(!tab)) { JS_ThrowOutOfMemory(ctx); return NULL; }
     for (k = 0; k < len; k++) tab[k] = js_dup(p->u.array.u.values[k]);
     return tab;
-}
-
-static void js_setmap_ctor_free(JSContext *ctx, JSSetMapCtor *sc)
-{
-    if (sc->consume) { js_iter_consume_end(ctx, sc->consume); js_free_rt(ctx->rt, sc->consume); }
-    JS_FreeValue(ctx, sc->ntgt);
-    JS_FreeValue(ctx, sc->getiter);
-    js_free_rt(ctx->rt, sc);
-}
-
-static void js_ta_target_free(JSContext *ctx, JSTATarget *tt)
-{
-    if (tt->consume) { js_iter_consume_end(ctx, tt->consume); js_free_rt(ctx->rt, tt->consume); }
-    JS_FreeValue(ctx, tt->ntgt);
-    JS_FreeValue(ctx, tt->getiter);
-    js_free_rt(ctx->rt, tt);
 }
 
 /* The same question the interpreter's write site asks, in the form the KEYED ENTRY can ask it: the entry has
@@ -53409,45 +53443,6 @@ static JSAsyncFromSync *js_async_from_sync_clone(JSContext *ctx, const JSAsyncFr
     return ns;
 }
 
-/* The construct sequences `new Set(it)` / `new Map(it)` (67) and `new Int8Array(it)` (66) run the page's reads
-   before the consume starts, and own the consume machine until it does. The consume's `outer` is the one link of
-   the pair: what waits on the sequence is whoever asked for the construct. */
-static JSIterConsume *ctor_seq_consume(void *st, uint8_t kind)
-{
-    JSIterConsume *cs = kind == CONT_SETMAP_CTOR ? ((JSSetMapCtor *)st)->consume : ((JSTATarget *)st)->consume;
-
-    DCHECK(kind == CONT_SETMAP_CTOR || kind == CONT_TA_TARGET, "a construct sequence was asked of another kind");
-    DCHECK(cs != NULL, "a construct sequence is waiting on a read with its consume machine already handed to the "
-                       "acquire — the hand-over frees the sequence in the same step, so nothing can wait on it");
-    return cs;
-}
-/* A sibling's own construct sequence: its own consume machine (js_iter_consume_clone, whose `outer` the
-   requester walk then binds), its own references to new.target and the probed @@iterator, and the same borrowed
-   iterable, which the sibling's cloned operand stack holds as well. NULL on OOM, with nothing left allocated. */
-static void *js_ctor_seq_clone(JSContext *ctx, const void *os, uint8_t kind)
-{
-    JSIterConsume *cs = js_iter_consume_clone(ctx, ctor_seq_consume((void *)os, kind));
-
-    if (!cs) return NULL;
-    if (kind == CONT_SETMAP_CTOR) {
-        JSSetMapCtor *ns = js_mallocz(ctx, sizeof(*ns));
-        if (!ns) { js_iter_consume_end(ctx, cs); js_free(ctx, cs); return NULL; }
-        *ns = *(const JSSetMapCtor *)os;
-        ns->consume = cs;
-        ns->ntgt = js_dup(ns->ntgt);
-        ns->getiter = js_dup(ns->getiter);
-        return ns;
-    } else {
-        JSTATarget *nt = js_mallocz(ctx, sizeof(*nt));
-        if (!nt) { js_iter_consume_end(ctx, cs); js_free(ctx, cs); return NULL; }
-        *nt = *(const JSTATarget *)os;
-        nt->consume = cs;
-        nt->ntgt = js_dup(nt->ntgt);
-        nt->getiter = js_dup(nt->getiter);
-        return nt;
-    }
-}
-
 /* The join-chain search, declared here because clone_deep_flow re-derives each cloned join's cached
    enclosing-join pointer with it. */
 struct JSArrayJoin;
@@ -53507,6 +53502,8 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_TOPRIM_GET, JSToPrim, js_toprim, UNWOUND)                                                           \
     X(CONT_ITER_CONSUME, JSIterConsume, js_iter_consume, UNWOUND)                                              \
     X(CONT_CONSUME_NEXT_GET, JSIterConsume, js_iter_consume, UNWOUND)                                          \
+    X(CONT_SETMAP_CTOR, JSSetMapCtor, js_setmap_ctor, LINK)                                                    \
+    X(CONT_TA_TARGET, JSTATarget, js_ta_target, LINK)                                          \
     X(CONT_ARG_LIST, JSArgList, js_arg_list, LINK)                                                             \
     X(CONT_ARG_LIST_YIELD, JSArgList, js_arg_list, ANCHOR)
 #define CONT_REC_AGREES_AT(k, T, p, r)                                                                         \
@@ -53535,7 +53532,7 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
         uint8_t ok_;                                                                                           \
         void *o_;                                                                                              \
         CONT_REC_AGREES_AT(k, T, p, r_);                                                                       \
-        o_ = p##_outer_get(r_, &ok_);                                                                          \
+        o_ = p##_free_next(r_, &ok_);                                                                          \
         p##_free(ctx, r_);                                                                                     \
         next->st = o_; next->kind = ok_;                                                                       \
         return;                                                                                                \
@@ -53566,12 +53563,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
                "deep-fork of an async-from-sync wrapper whose in-flight call has a REQUESTER under it — give "
                "that link its arm in cont_outer_get/cont_outer_set so the sibling's copy names its own");
         return NULL;
-    case CONT_SETMAP_CTOR: case CONT_TA_TARGET: {
-        /* a construct sequence: whoever asked for the construct, which its consume machine records */
-        JSIterConsume *cs = ctor_seq_consume(st, kind);
-        *out_kind = cs->outer_kind;
-        return cs->outer;
-    }
     case CONT_NONE:
         /* answered above */
         break;
@@ -53613,10 +53604,6 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_STEP: case CONT_STEP_YIELD:
         ((JSStepHdr *)st)->outer = outer; ((JSStepHdr *)st)->outer_kind = outer_kind; return;
     CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_SET)
-    case CONT_SETMAP_CTOR: case CONT_TA_TARGET: {
-        JSIterConsume *cs = ctor_seq_consume(st, kind);
-        cs->outer = outer; cs->outer_kind = outer_kind; return;
-    }
     /* Terminal: cont_outer_get answers no link for these, so there is nothing to write back. */
     case CONT_PROMISE_ALL:
     case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
@@ -53666,10 +53653,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         /* a for-await wrapper call under a read its continuation issued — a getter or a Proxy trap on the sync
            result, or on the value's `constructor` — branching on unknown input */
         return js_async_from_sync_clone(ctx, (const JSAsyncFromSync *)st);
-    case CONT_SETMAP_CTOR: case CONT_TA_TARGET:
-        /* a construct sequence under one of its reads — a new.target `prototype` getter or Proxy trap, or a
-           subclass's `add`/`set` accessor — branching on unknown input */
-        return js_ctor_seq_clone(ctx, st, kind);
     /* No arm here. A kind that is only ever a frame's own cont_state (CONT_ARG_LIST_YIELD's anchor, say) is
        cloned by clone_deep_flow's arm for it; any other has not yet been asked to copy a link. */
     case CONT_NONE: case CONT_AGEN_CREATE: case CONT_SETTER:
@@ -54754,13 +54737,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
         js_free_rt(rt, st);
         return;
     }
-    case CONT_SETMAP_CTOR:
-        /* the sequence and its consume machine, whose end releases the construct's requester exactly once */
-        js_setmap_ctor_free(ctx, (JSSetMapCtor *)st);
-        return;
-    case CONT_TA_TARGET:
-        js_ta_target_free(ctx, (JSTATarget *)st);
-        return;
     case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET: case CONT_AFS_CONT: {
         /* every role of one JSAsyncFromSync: the wrapper call's own state (10), or the requester of a read its
            continuation issued (43, 73). */
