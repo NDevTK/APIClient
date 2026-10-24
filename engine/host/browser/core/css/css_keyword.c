@@ -40,6 +40,58 @@ const char *css_keyword_name(CssKeyword k)
     return CSS_KEYWORD_NAMES[k];
 }
 
+/* The sets another set's grammar is composed of, each its own function so a composed set reads them rather
+   than asking css_keyword_set_has again. Their productions are cited at their rows below. */
+static bool kw_size(CssKeyword k)
+{
+    return k == CSS_KEYWORD_AUTO || k == CSS_KEYWORD_STRETCH || k == CSS_KEYWORD_MIN_CONTENT ||
+           k == CSS_KEYWORD_MAX_CONTENT || k == CSS_KEYWORD_FIT_CONTENT;
+}
+
+static bool kw_absolute_size(CssKeyword k)
+{
+    return k == CSS_KEYWORD_XX_SMALL || k == CSS_KEYWORD_X_SMALL || k == CSS_KEYWORD_SMALL ||
+           k == CSS_KEYWORD_MEDIUM || k == CSS_KEYWORD_LARGE || k == CSS_KEYWORD_X_LARGE ||
+           k == CSS_KEYWORD_XX_LARGE || k == CSS_KEYWORD_XXX_LARGE;
+}
+
+static bool kw_display_outside(CssKeyword k)
+{
+    return k == CSS_KEYWORD_BLOCK || k == CSS_KEYWORD_INLINE || k == CSS_KEYWORD_RUN_IN;
+}
+
+static bool kw_display_inside(CssKeyword k)
+{
+    return k == CSS_KEYWORD_FLOW || k == CSS_KEYWORD_FLOW_ROOT || k == CSS_KEYWORD_TABLE ||
+           k == CSS_KEYWORD_FLEX || k == CSS_KEYWORD_GRID || k == CSS_KEYWORD_RUBY;
+}
+
+static bool kw_display_internal(CssKeyword k)
+{
+    return k == CSS_KEYWORD_TABLE_ROW_GROUP || k == CSS_KEYWORD_TABLE_HEADER_GROUP ||
+           k == CSS_KEYWORD_TABLE_FOOTER_GROUP || k == CSS_KEYWORD_TABLE_ROW || k == CSS_KEYWORD_TABLE_CELL ||
+           k == CSS_KEYWORD_TABLE_COLUMN_GROUP || k == CSS_KEYWORD_TABLE_COLUMN ||
+           k == CSS_KEYWORD_TABLE_CAPTION || k == CSS_KEYWORD_RUBY_BASE || k == CSS_KEYWORD_RUBY_TEXT ||
+           k == CSS_KEYWORD_RUBY_BASE_CONTAINER || k == CSS_KEYWORD_RUBY_TEXT_CONTAINER;
+}
+
+static bool kw_display_box(CssKeyword k)
+{
+    return k == CSS_KEYWORD_CONTENTS || k == CSS_KEYWORD_NONE;
+}
+
+static bool kw_display_legacy(CssKeyword k)
+{
+    return k == CSS_KEYWORD_INLINE_BLOCK || k == CSS_KEYWORD_INLINE_TABLE || k == CSS_KEYWORD_INLINE_FLEX ||
+           k == CSS_KEYWORD_INLINE_GRID;
+}
+
+static bool kw_content_position(CssKeyword k)
+{
+    return k == CSS_KEYWORD_CENTER || k == CSS_KEYWORD_START || k == CSS_KEYWORD_END ||
+           k == CSS_KEYWORD_FLEX_START || k == CSS_KEYWORD_FLEX_END;
+}
+
 /* Each set is the keyword arm of the `Computed value:` line of the properties core/css/css_property_id.h
    gives it, read off the `Value:` line beside it. */
 bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
@@ -64,8 +116,7 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
        min-content, max-content, and fit-content values" defines `<box-size> = <length-percentage [0,∞]> | stretch |
        min-content | max-content | fit-content`. */
     case CSS_KEYWORDS_SIZE:
-        return k == CSS_KEYWORD_AUTO || k == CSS_KEYWORD_STRETCH || k == CSS_KEYWORD_MIN_CONTENT ||
-               k == CSS_KEYWORD_MAX_CONTENT || k == CSS_KEYWORD_FIT_CONTENT;
+        return kw_size(k);
     /* css-sizing-3 §3.1.3 "Maximum Size Properties…": `none | <box-size>`. */
     case CSS_KEYWORDS_MAX_SIZE:
         return k == CSS_KEYWORD_NONE || k == CSS_KEYWORD_STRETCH || k == CSS_KEYWORD_MIN_CONTENT ||
@@ -77,7 +128,7 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
                k == CSS_KEYWORD_CENTER || k == CSS_KEYWORD_BOTTOM;
     /* css-flexbox-1 §7.2.3 "The flex-basis property": `content | <'width'>`. */
     case CSS_KEYWORDS_FLEX_BASIS:
-        return k == CSS_KEYWORD_CONTENT || css_keyword_set_has(CSS_KEYWORDS_SIZE, k);
+        return k == CSS_KEYWORD_CONTENT || kw_size(k);
     /* css-position-3 §2 "Choosing A Positioning Scheme: position property": `static | relative | absolute |
        sticky | fixed`. */
     case CSS_KEYWORDS_POSITION:
@@ -100,14 +151,12 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
     /* css-fonts-4 §2.5 "Font size: the font-size property": `<absolute-size> | <relative-size> |
        <length-percentage [0,∞]> | math`, where `<relative-size>` is `[ larger | smaller ]`. */
     case CSS_KEYWORDS_FONT_SIZE:
-        return css_keyword_set_has(CSS_KEYWORDS_ABSOLUTE_SIZE, k) || k == CSS_KEYWORD_LARGER ||
+        return kw_absolute_size(k) || k == CSS_KEYWORD_LARGER ||
                k == CSS_KEYWORD_SMALLER || k == CSS_KEYWORD_MATH;
     /* css-fonts-4 §2.5's `<absolute-size>`: `[ xx-small | x-small | small | medium | large | x-large |
        xx-large | xxx-large ]`. */
     case CSS_KEYWORDS_ABSOLUTE_SIZE:
-        return k == CSS_KEYWORD_XX_SMALL || k == CSS_KEYWORD_X_SMALL || k == CSS_KEYWORD_SMALL ||
-               k == CSS_KEYWORD_MEDIUM || k == CSS_KEYWORD_LARGE || k == CSS_KEYWORD_X_LARGE ||
-               k == CSS_KEYWORD_XX_LARGE || k == CSS_KEYWORD_XXX_LARGE;
+        return kw_absolute_size(k);
     /* css-display-3 §2 "Box Layout Modes: the display property"'s productions. `<display-outside> = block |
        inline | run-in`; `<display-inside> = flow | flow-root | table | flex | grid | ruby`; `<display-internal>
        = table-row-group | table-header-group | table-footer-group | table-row | table-cell | table-column-group
@@ -115,26 +164,20 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
        `<display-box> = contents | none`; `<display-legacy> = inline-block | inline-table | inline-flex |
        inline-grid`. */
     case CSS_KEYWORDS_DISPLAY_OUTSIDE:
-        return k == CSS_KEYWORD_BLOCK || k == CSS_KEYWORD_INLINE || k == CSS_KEYWORD_RUN_IN;
+        return kw_display_outside(k);
     case CSS_KEYWORDS_DISPLAY_INSIDE:
-        return k == CSS_KEYWORD_FLOW || k == CSS_KEYWORD_FLOW_ROOT || k == CSS_KEYWORD_TABLE ||
-               k == CSS_KEYWORD_FLEX || k == CSS_KEYWORD_GRID || k == CSS_KEYWORD_RUBY;
+        return kw_display_inside(k);
     case CSS_KEYWORDS_DISPLAY_INTERNAL:
-        return k == CSS_KEYWORD_TABLE_ROW_GROUP || k == CSS_KEYWORD_TABLE_HEADER_GROUP ||
-               k == CSS_KEYWORD_TABLE_FOOTER_GROUP || k == CSS_KEYWORD_TABLE_ROW || k == CSS_KEYWORD_TABLE_CELL ||
-               k == CSS_KEYWORD_TABLE_COLUMN_GROUP || k == CSS_KEYWORD_TABLE_COLUMN ||
-               k == CSS_KEYWORD_TABLE_CAPTION || k == CSS_KEYWORD_RUBY_BASE || k == CSS_KEYWORD_RUBY_TEXT ||
-               k == CSS_KEYWORD_RUBY_BASE_CONTAINER || k == CSS_KEYWORD_RUBY_TEXT_CONTAINER;
+        return kw_display_internal(k);
     case CSS_KEYWORDS_DISPLAY_BOX:
-        return k == CSS_KEYWORD_CONTENTS || k == CSS_KEYWORD_NONE;
+        return kw_display_box(k);
     case CSS_KEYWORDS_DISPLAY_LEGACY:
-        return k == CSS_KEYWORD_INLINE_BLOCK || k == CSS_KEYWORD_INLINE_TABLE || k == CSS_KEYWORD_INLINE_FLEX ||
-               k == CSS_KEYWORD_INLINE_GRID;
+        return kw_display_legacy(k);
     case CSS_KEYWORDS_DISPLAY:
-        return k == CSS_KEYWORD_LIST_ITEM || css_keyword_set_has(CSS_KEYWORDS_DISPLAY_OUTSIDE, k) ||
-               css_keyword_set_has(CSS_KEYWORDS_DISPLAY_INSIDE, k) ||
-               css_keyword_set_has(CSS_KEYWORDS_DISPLAY_INTERNAL, k) ||
-               css_keyword_set_has(CSS_KEYWORDS_DISPLAY_BOX, k) || css_keyword_set_has(CSS_KEYWORDS_DISPLAY_LEGACY, k);
+        return k == CSS_KEYWORD_LIST_ITEM || kw_display_outside(k) ||
+               kw_display_inside(k) ||
+               kw_display_internal(k) ||
+               kw_display_box(k) || kw_display_legacy(k);
     /* css-flexbox-1 §5.1 "Flex Flow Direction: the flex-direction property": `row | row-reverse | column |
        column-reverse`. */
     case CSS_KEYWORDS_FLEX_DIRECTION:
@@ -202,11 +245,10 @@ bool css_keyword_set_has(CssKeywordSet set, CssKeyword k)
        flex-start | flex-end` and `<content-position> = center | start | end | flex-start | flex-end`. They are
        productions, no row's set; core/css/css_align.c composes them into the six properties' grammars. */
     case CSS_KEYWORDS_SELF_POSITION:
-        return css_keyword_set_has(CSS_KEYWORDS_CONTENT_POSITION, k) || k == CSS_KEYWORD_SELF_START ||
+        return kw_content_position(k) || k == CSS_KEYWORD_SELF_START ||
                k == CSS_KEYWORD_SELF_END;
     case CSS_KEYWORDS_CONTENT_POSITION:
-        return k == CSS_KEYWORD_CENTER || k == CSS_KEYWORD_START || k == CSS_KEYWORD_END ||
-               k == CSS_KEYWORD_FLEX_START || k == CSS_KEYWORD_FLEX_END;
+        return kw_content_position(k);
     /* css-align-3 §4.3 "Distributed Alignment: the stretch, space-between, space-around, and space-evenly
        keywords": `<content-distribution> = space-between | space-around | space-evenly | stretch`. */
     case CSS_KEYWORDS_CONTENT_DISTRIBUTION:

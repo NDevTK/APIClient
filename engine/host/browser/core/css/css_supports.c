@@ -17,15 +17,12 @@
 /* ONE CONDITION BEING READ. `base`/`len` are the span the offsets below index — every token lexbor hands back
    names its own span inside the buffer it was given, which is how a nested `( … )`'s contents are taken as raw
    source and handed to a fresh reader rather than re-serialized from tokens.
-   THE RECURSION IS OVER A SPAN AND NOT OVER ONE CURSOR, and that is what makes §6's `<supports-in-parens>`
-   implementable at all: its three arms are TRIED IN ORDER over the same text — `( <supports-condition> )`
-   first, then `( <declaration> )`, then `<general-enclosed>` — which a forward-only tokenizer cannot back up
-   over. A span can be read three times; a cursor can be read once.
-   THE RECURSION IS THE AUTHOR'S OWN BRACKET NESTING, which is the same statement css_style_declaration.c makes
-   about its rule walk and core/css/media_query.c's `parse_in_parens`/`parse_condition` pair makes about the
-   grammar this one is a copy of. That component backtracks by COPYING its lexer struct, which is cheaper and
-   is not available here: lexbor's tokenizer is not a value, so the alternatives are tried over a span instead
-   and each level opens one. */
+   A nested condition is read over a span and not over one cursor, and that is what makes §6's
+   `<supports-in-parens>` implementable at all: its three arms are tried in order over the same text —
+   `( <supports-condition> )` first, then `( <declaration> )`, then `<general-enclosed>` — which a forward-only
+   tokenizer cannot back up over. A span can be read three times; a cursor can be read once. core/css/
+   media_query.c backtracks by copying its lexer struct instead, which is not available here: lexbor's
+   tokenizer is not a value, so each nesting level opens one over its span. */
 typedef struct {
     lxb_css_syntax_tokenizer_t *tkz;
     const char                 *base;
@@ -170,94 +167,152 @@ static bool sup_block(Sup *p, size_t *pbegin, size_t *pend)
     }
 }
 
-/* §6's `<supports-in-parens>`, at the cursor. `*matches` is its boolean; false is "this is not one", which
-   makes the enclosing `<supports-condition>` fail. */
-static bool sup_in_parens(Sup *p, bool *matches);
 static bool css_supports_declaration(const char *decl, size_t len);
 
-/* §6's `<supports-condition>` over a WHOLE span — the entry, and the recursion's own step for a nested
-   `( <supports-condition> )`. */
-static bool sup_condition(const char *text, size_t len, bool *matches)
+/* One `<supports-condition>` being read over its span (`p`), as a frame of the walk in sup_condition. */
+typedef enum {
+    SUP_BEGIN,   /* the span is not open yet */
+    SUP_WANT,    /* a `<supports-in-parens>` is next */
+    SUP_CHILD,   /* the frame above reads the `( … )` at [b, e) as a `<supports-condition>` */
+    SUP_GOT      /* `term` is the `<supports-in-parens>` just read */
+} SupState;
+
+typedef struct {
+    Sup      p;
+    SupState state;
+    bool     neg;    /* the `not <supports-in-parens>` alternative: one term, negated, then the end */
+    bool     first;  /* no term has been read yet */
+    int      op;     /* 0 = no operator yet, 'a' = this chain is `and`, 'o' = `or` */
+    bool     acc, term;
+    size_t   b, e;
+} SupFrame;
+
+typedef enum { SUP_STEP_NEST, SUP_STEP_MATCHED, SUP_STEP_REFUSED } SupStep;
+
+/* Runs frame `f` forward until it ends (MATCHED, with its boolean in `acc`, or REFUSED: not this production)
+   or until its next `<supports-in-parens>` is a `( … )` whose contents are first tried as a
+   `<supports-condition>` (NEST, the span at [b, e) of `f->p`). */
+static SupStep sup_frame_step(SupFrame *f, const char *text, size_t len)
 {
-    Sup p = { NULL, NULL, 0 };
     lxb_css_syntax_token_t *t;
-    bool acc = false, term = false;
-    int op = 0;   /* 0 = no operator yet, 'a' = this chain is `and`, 'o' = `or` */
-
-    if (!sup_open(&p, text, len)) return false;
-    t = sup_peek_ws(&p);
-    if (!t) goto fail;
-    /* `not <supports-in-parens>` — the whole of the first alternative, which admits NO trailing `and`/`or`
-       (§6's three alternatives are alternatives, and mixing takes a layer of parentheses). */
-    if (t->type == LXB_CSS_SYNTAX_TOKEN_IDENT && sup_name_is(t, "not")) {
-        sup_take(&p);
-        if (!sup_in_parens(&p, &term)) goto fail;
-        acc = !term;
-        t = sup_peek_ws(&p);
-        if (!t || t->type != LXB_CSS_SYNTAX_TOKEN__EOF) goto fail;
-        sup_close(&p);
-        *matches = acc;
-        return true;
-    }
-    if (!sup_in_parens(&p, &acc)) goto fail;
-    for (;;) {
-        t = sup_peek_ws(&p);
-        if (!t) goto fail;
-        if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF) break;
-        if (t->type != LXB_CSS_SYNTAX_TOKEN_IDENT) goto fail;
-        if (sup_name_is(t, "and")) {
-            if (op == 'o') goto fail;   /* §6: `and` and `or` may not be mixed without parentheses */
-            op = 'a';
-        } else if (sup_name_is(t, "or")) {
-            if (op == 'a') goto fail;
-            op = 'o';
-        } else {
-            goto fail;
-        }
-        sup_take(&p);
-        /* EVERY TERM IS PARSED, AND THEREFORE EVERY TERM IS EVALUATED. Short-circuiting an `or` whose first
-           term is true would skip the PARSE of the rest, and the rest is what decides whether the rule exists
-           at all — `(display:block) or (!!!)` is invalid and its contents are dropped, however true the first
-           term was. The evaluation rides along because the parse has to happen anyway. */
-        if (!sup_in_parens(&p, &term)) goto fail;
-        acc = (op == 'a') ? (acc && term) : (acc || term);
-    }
-    sup_close(&p);
-    *matches = acc;
-    return true;
-
-fail:
-    sup_close(&p);
-    return false;
-}
-
-static bool sup_in_parens(Sup *p, bool *matches)
-{
-    lxb_css_syntax_token_t *t = sup_peek_ws(p);
     size_t b = 0, e = 0;
 
-    if (!t) return false;
-    /* A FUNCTION TOKEN CAN ONLY BE `<general-enclosed>` HERE. §6's other two arms both begin with a `(`, and
-       `supports(` inside a `@supports` prelude is not one of them — it is the forward-compatibility production,
-       whose result §6's table states as FALSE. The block is still consumed and still has to be balanced: an
-       unclosed one makes the whole rule invalid. */
-    if (t->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION) {
-        if (!sup_block(p, &b, &e)) return false;
-        *matches = false;
-        return true;
+    for (;;) {
+        switch (f->state) {
+        case SUP_BEGIN:
+            if (!sup_open(&f->p, text, len)) return SUP_STEP_REFUSED;
+            t = sup_peek_ws(&f->p);
+            if (!t) return SUP_STEP_REFUSED;
+            /* `not <supports-in-parens>` — the whole of the first alternative, which admits no trailing
+               `and`/`or` (§6's three alternatives are alternatives, and mixing takes a layer of parentheses). */
+            if (t->type == LXB_CSS_SYNTAX_TOKEN_IDENT && sup_name_is(t, "not")) {
+                sup_take(&f->p);
+                f->neg = true;
+            }
+            f->state = SUP_WANT;
+            break;
+        case SUP_WANT:
+            t = sup_peek_ws(&f->p);
+            if (!t) return SUP_STEP_REFUSED;
+            /* A function token can only be `<general-enclosed>` here. §6's other two arms both begin with a
+               `(`, and `supports(` inside a `@supports` prelude is not one of them — it is the
+               forward-compatibility production, whose result §6's table states as false. The block is still
+               consumed and still has to be balanced: an unclosed one makes the whole rule invalid. */
+            if (t->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION) {
+                if (!sup_block(&f->p, &b, &e)) return SUP_STEP_REFUSED;
+                f->term = false;
+                f->state = SUP_GOT;
+                break;
+            }
+            if (t->type != LXB_CSS_SYNTAX_TOKEN_L_PARENTHESIS) return SUP_STEP_REFUSED;
+            if (!sup_block(&f->p, &f->b, &f->e)) return SUP_STEP_REFUSED;
+            f->state = SUP_CHILD;
+            return SUP_STEP_NEST;
+        case SUP_CHILD:
+            DFAIL("a `<supports-condition>` frame was stepped while the frame above it still reads its "
+                  "parenthesized term; sup_condition steps only the top frame");
+            return SUP_STEP_REFUSED;
+        case SUP_GOT:
+            if (f->neg) {
+                f->acc = !f->term;
+                t = sup_peek_ws(&f->p);
+                return t && t->type == LXB_CSS_SYNTAX_TOKEN__EOF ? SUP_STEP_MATCHED : SUP_STEP_REFUSED;
+            }
+            /* Every term is parsed, and therefore every term is evaluated. Short-circuiting an `or` whose first
+               term is true would skip the parse of the rest, and the rest is what decides whether the rule
+               exists at all — `(display:block) or (!!!)` is invalid and its contents are dropped, however true
+               the first term was. */
+            f->acc = f->first ? f->term : (f->op == 'a' ? (f->acc && f->term) : (f->acc || f->term));
+            f->first = false;
+            t = sup_peek_ws(&f->p);
+            if (!t) return SUP_STEP_REFUSED;
+            if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF) return SUP_STEP_MATCHED;
+            if (t->type != LXB_CSS_SYNTAX_TOKEN_IDENT) return SUP_STEP_REFUSED;
+            if (sup_name_is(t, "and")) {
+                if (f->op == 'o') return SUP_STEP_REFUSED;   /* §6: `and` and `or` may not be mixed */
+                f->op = 'a';
+            } else if (sup_name_is(t, "or")) {
+                if (f->op == 'a') return SUP_STEP_REFUSED;
+                f->op = 'o';
+            } else {
+                return SUP_STEP_REFUSED;
+            }
+            sup_take(&f->p);
+            f->state = SUP_WANT;
+            break;
+        }
     }
-    if (t->type != LXB_CSS_SYNTAX_TOKEN_L_PARENTHESIS) return false;
-    if (!sup_block(p, &b, &e)) return false;
-    /* §6'S THREE ARMS, IN THE GRAMMAR'S OWN ORDER, over the one span the block just delimited.
-       There is no ambiguity to resolve between the first two and the order is what proves it: a
-       `<supports-condition>` begins with `not` or with a `(`, and a `<declaration>` begins with an IDENT, so
-       `(display: flex)` cannot match the first arm and `((a:b) or (c:d))` cannot match the second. */
-    if (sup_condition(p->base + b, e - b, matches)) return true;
-    /* `<supports-feature>` = `<supports-decl>` = `( <declaration> )`, §6.1's definition of support applied to
-       what is inside. A span that is not one declaration answers false here, which is the same answer
-       `<general-enclosed>` carries — so the two arms need not be told apart to be answered. */
-    *matches = css_supports_declaration(p->base + b, e - b);
-    return true;
+}
+
+/* §6's `<supports-condition>` over a whole span. The author's bracket nesting is walked on a heap stack of
+   frames, one per `( … )` being tried as a `<supports-condition>`, so its depth costs no C stack. A frame that
+   ends hands its parent the term §6's `<supports-in-parens>` reads in the grammar's own order: the nested
+   condition's boolean when it matched, and otherwise `<supports-feature>` = `( <declaration> )`, §6.1's
+   definition of support over the same span. A span that is not one declaration answers false there, which is
+   the answer `<general-enclosed>` carries, so those two arms need not be told apart. */
+static bool sup_condition(const char *text, size_t len, bool *matches)
+{
+    SupFrame *v = NULL, *f;
+    size_t n = 0, cap = 0;
+    const char *at = text;
+    size_t at_len = len;
+    SupStep r;
+    bool push = true, ok, value;
+
+    for (;;) {
+        if (push) {
+            if (n == cap) {
+                cap = cap ? 2 * cap : 8;
+                v = realloc(v, cap * sizeof *v);
+                CHECK(v != NULL, "cssom: OOM growing the `<supports-condition>` walk");
+            }
+            memset(&v[n], 0, sizeof v[n]);
+            v[n].state = SUP_BEGIN;
+            v[n].first = true;
+            n++;
+        }
+        f = &v[n - 1];
+        r = sup_frame_step(f, at, at_len);
+        push = r == SUP_STEP_NEST;
+        if (push) {
+            at = f->p.base + f->b;
+            at_len = f->e - f->b;
+            continue;
+        }
+        ok = r == SUP_STEP_MATCHED;
+        value = f->acc;
+        sup_close(&f->p);
+        n--;
+        if (n == 0) break;
+        f = &v[n - 1];
+        DCHECK(f->state == SUP_CHILD,
+               "a nested `<supports-condition>` ended into a frame that was not reading a parenthesized term");
+        f->term = ok ? value : css_supports_declaration(f->p.base + f->b, f->e - f->b);
+        f->state = SUP_GOT;
+    }
+    free(v);
+    if (ok) *matches = value;
+    return ok;
 }
 
 bool css_supports_condition(const char *text, size_t len, bool *matches)

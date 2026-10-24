@@ -1589,30 +1589,37 @@ static int tf_doc_beside(const char *key, const char *other) {
    explores on every page that carries a policy. What §3.8 pins is WHICH attributes are sinks at all: get that
    set too wide and every setAttribute on a policy-carrying page throws, too narrow and the solver reports
    `script.src = attackerUrl` as reachable on a document where the assignment dies. */
-/* css-variables-1 §3 "Using Cascading Variables: the var() notation" — THE SYNTAX HALF, over a resolver that
- * is a three-row table and no element at all. That is the whole reason the component was split: the questions
- * below are about strings, nesting and ident boundaries, and every one of them is answerable before a runtime
- * exists. What this fixture CANNOT reach is the policy half — the cycle STACK, §7.2's inheritance of a custom
- * property and the `unset` a failed substitution becomes — because each of those needs a tree; they are
- * exercised by a document, and `CSS_VAR_CYCLE` below stands in only for what the syntax does with that answer.
+/* css-variables-1 §3 "Using Cascading Variables: the var() notation" — the substitution, over a lookup that is
+ * a table of custom properties and no element at all. The questions below are about strings, nesting, ident
+ * boundaries and cycles, and every one of them is answerable before a runtime exists. What this fixture cannot
+ * reach is the policy half — §7.2's inheritance of a custom property and the `unset` a failed substitution
+ * becomes — because each of those needs a tree; they are exercised by a document.
  */
-static CssVarResolution tf_var_resolve(void *ud, const char *name, size_t name_n, char **out)
+static char *tf_var_lookup(void *ud, const char *name, size_t name_n)
 {
+    /* Every other name is css-variables-1 §2.2's guaranteed-invalid value, which is what an undeclared custom
+       property is. */
+    static const char *const TABLE[][2] = {
+        { "set", "rgb(1, 2, 3)" },     { "loop", "var(--loop)" },   { "self", "var(--self, 1)" },
+        { "one", "var(--two)" },       { "two", "var(--one)" },     { "via", "var(--set)" },
+        { "bad", "var(--unset)" },
+    };
+    size_t i;
+    char *v;
+
     (void)ud;
-    /* `--set` is declared and holds `rgb(1, 2, 3)`; `--loop` reports a cycle; everything else is
-       css-variables-1 §2.2's guaranteed-invalid value, which is what an undeclared custom property is. */
-    if (name_n == 3 && strncmp(name, "set", 3) == 0) {
-        *out = strdup("rgb(1, 2, 3)");
-        CHECK(*out != NULL, "OOM in the var() fixture's resolver");
-        return CSS_VAR_RESOLVED;
-    }
-    if (name_n == 4 && strncmp(name, "loop", 4) == 0) return CSS_VAR_CYCLE;
-    return CSS_VAR_GUARANTEED_INVALID;
+    for (i = 0; i < COUNTOF(TABLE); i++)
+        if (strlen(TABLE[i][0]) == name_n && strncmp(name, TABLE[i][0], name_n) == 0) {
+            v = strdup(TABLE[i][1]);
+            CHECK(v != NULL, "OOM in the var() fixture's lookup");
+            return v;
+        }
+    return NULL;
 }
 
 static void tf_var_is(const char *in, const char *want)
 {
-    char *got = css_var_substitute(in, tf_var_resolve, NULL);
+    char *got = css_var_substitute(in, tf_var_lookup, NULL);
 
     if (want == NULL) {
         CHECKF(got == NULL,
@@ -1648,17 +1655,26 @@ TF_UNIT void css_var_selftest(void)
     tf_var_is("var(--set, red)", "rgb(1, 2, 3)");
     /* §2.2: guaranteed-invalid with nothing to fall back to is where the DECLARATION dies. */
     tf_var_is("var(--unset)", NULL);
-    /* …and a cycle dies the same way and does NOT reach the fallback, which is why the resolver has three
-       answers rather than two. */
-    tf_var_is("var(--loop, red)", NULL);
+    /* A custom property's own var()s are substituted too, and one that does not substitute is guaranteed-invalid,
+       so the var() naming it takes its fallback. */
+    tf_var_is("var(--via)", "rgb(1, 2, 3)");
+    tf_var_is("var(--bad, red)", "red");
+    tf_var_is("var(--bad)", NULL);
+    /* A property in a cycle computes to the guaranteed-invalid value: its own fallback is not used, and the
+       var() that named it takes its own. */
+    tf_var_is("var(--loop)", NULL);
+    tf_var_is("var(--loop, red)", "red");
+    tf_var_is("var(--self, 2)", "2");
+    tf_var_is("var(--one, red)", "red");
 
     /* SUBSTITUTION IS INTO A VALUE AND NOT OVER ONE, so the text around it survives and a var() inside a
        function is spliced where it stood. */
     tf_var_is("1px solid var(--set)", "1px solid rgb(1, 2, 3)");
     tf_var_is("rgb(var(--unset, 1), 2, 3)", "rgb(1, 2, 3)");
     tf_var_is("var(--set) var(--set)", "rgb(1, 2, 3) rgb(1, 2, 3)");
-    /* A value may legitimately name one property twice; only the POLICY half's chain calls a repeat a cycle,
-       and it must not — which is why that half keeps a STACK and not a seen-set. */
+    /* A value may legitimately name one property twice, and the cycle chain must not call the repeat a cycle —
+       which is why it is a stack and not a seen-set. */
+    tf_var_is("var(--via) var(--via)", "rgb(1, 2, 3) rgb(1, 2, 3)");
 
     /* The fallback is `<declaration-value>`, so it carries its own commas and its own var()s. */
     tf_var_is("var(--unset, a, b)", "a, b");
@@ -22242,6 +22258,33 @@ TF_UNIT void css_math_selftest(void)
               "and §10.1's `Parentheses and nesting additional calc() functions are equivalent` makes the "
               "parenthesised spelling the same value, which is the half a separate paren production would get "
               "wrong");
+    }
+    /* §10.8: nesting up to the supported depth (at least 32) is valid, and one level more "must be treated as
+       if it were invalid". The levels alternate functions and parentheses, which §10.1 counts alike. */
+    {
+        CssMathResolver res;
+        CssMathValue v;
+        char text[8 * CSS_MATH_NESTING_SUPPORTED + 32];
+        int depth, k;
+        size_t n;
+
+        CHECK(CSS_MATH_NESTING_SUPPORTED >= 32, "§10.8 requires at least 32 levels of nesting");
+        res.length_px = css_math_fixture_length;
+        res.ctx = NULL;
+        res.realm = (JSContext *)(void *)&css_math_fixture_realm_token;
+        for (depth = CSS_MATH_NESTING_SUPPORTED; depth <= CSS_MATH_NESTING_SUPPORTED + 1; depth++) {
+            n = 0;
+            for (k = 0; k < depth; k++) {
+                const char *open = k % 2 ? "(" : "calc(";
+
+                memcpy(text + n, open, strlen(open));
+                n += strlen(open);
+            }
+            text[n++] = '1';
+            for (k = 0; k < depth; k++) text[n++] = ')';
+            CHECK(css_math_eval(text, n, &res, CSS_MATH_PROD_NUMBER, &v) == (depth <= CSS_MATH_NESTING_SUPPORTED),
+                  "§10.8: a calculation nested to the supported depth must be valid, and one level deeper invalid");
+        }
     }
 }
 

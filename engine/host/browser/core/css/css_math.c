@@ -20,13 +20,6 @@
 #define MTH_E  2.7182818284590452354
 #define MTH_PI 3.1415926535897932
 
-/* §10.8's own limit, in that section's own words: "UAs must support calculations of at least 32 <calc-value>
-   terms and at least 32 levels of nesting (parentheses and/or functions) ... If a calculation contains more
-   than the supported number of terms, arguments, or nesting it must be treated as if it were invalid." This is
-   a GRAMMAR rule the spec states and not a cap on work — a calculation past it is INVALID CSS, which is what a
-   real user agent answers too, and the number below is this user agent's supported maximum, chosen far above
-   §10.8's floor of 32 and low enough that the recursive descent below cannot exhaust the C stack. */
-#define MTH_NESTING_MAX 256
 
 /* ---- CSS Typed OM 1 §4.3.2 "Numeric Value Typing" — the type algebra §10.9 links to by name -------------- */
 
@@ -473,8 +466,6 @@ typedef struct {
     bool                        ws_before;
 } Mth;
 
-static bool mth_sum(Mth *m, MthVal *out);
-
 static lxb_css_syntax_token_t *mth_peek(Mth *m) { return lxb_css_syntax_token(m->tkz); }
 
 /* Consume one NON-WHITESPACE token, which clears the flag above because whitespace no longer precedes the
@@ -612,17 +603,30 @@ static CssPx mth_canonical(const Mth *m, CssMathBase base, double n, const char 
     return css_px(0.0);
 }
 
-/* §10.8's `<calc-value>` — "<number> | <dimension> | <percentage> | <calc-keyword> | ( <calc-sum> )" — plus
-   §10.10's "If leaf is a math function, replace leaf with the internal representation of that math function". */
-static bool mth_function(Mth *m, MthVal *out);
+/* §10.8's supported nesting (CSS_MATH_NESTING_SUPPORTED), applied where either of §10.1's equivalent nestings,
+   a parenthesis or a math function, enters a level. False is "treated as if it were invalid": a grammar rule
+   the spec states, not a cap on work. */
+static bool mth_nest_enter(Mth *m)
+{
+    if (m->depth >= CSS_MATH_NESTING_SUPPORTED) return false;
+    m->depth++;
+    return true;
+}
 
-static bool mth_value(Mth *m, MthVal *out)
+/* §10.8's `<calc-value>` — "<number> | <dimension> | <percentage> | <calc-keyword> | ( <calc-sum> )" — at the
+   cursor, for its leaves. A `(` or a math function opens a nesting level instead, which mth_function's walk
+   owns: §10.1's "Parentheses and nesting additional calc() functions are equivalent" is why one production
+   serves both, and §10.10's "If leaf is a math function, replace leaf with the internal representation of that
+   math function" is the function's own frame there. */
+typedef enum { MTH_LEAF_VALUE, MTH_LEAF_REFUSED, MTH_LEAF_PAREN, MTH_LEAF_FUNCTION } MthLeaf;
+
+static MthLeaf mth_leaf(Mth *m, MthVal *out)
 {
     lxb_css_syntax_token_t *t;
 
     mth_skip_ws(m);
     t = mth_peek(m);
-    if (t == NULL) return false;
+    if (t == NULL) return MTH_LEAF_REFUSED;
     switch (t->type) {
     case LXB_CSS_SYNTAX_TOKEN_NUMBER:
         /* §10.9: "<number> / <integer>: the type is «[ ]» (empty map)". Its own note is why a bare `0` is not a
@@ -630,7 +634,7 @@ static bool mth_value(Mth *m, MthVal *out)
            zero" <length>s aren't supported in math functions. That is, width: calc(0 + 5px); is invalid". */
         *out = mth_val(css_math_type_number(), lxb_css_syntax_token_number(t)->num);
         mth_take(m);
-        return true;
+        return MTH_LEAF_VALUE;
     case LXB_CSS_SYNTAX_TOKEN_PERCENTAGE: {
         /* §10.9's `<percentage>` terminal rule, under §10.9.1's calculation context. The number is NOT resolved
            — §10.11: "Where percentages are not resolved at computed-value time, they are not resolved in math
@@ -648,7 +652,7 @@ static bool mth_value(Mth *m, MthVal *out)
         out->pct = lxb_css_syntax_token_number(t)->num;
         out->pct_term = true;
         mth_take(m);
-        return true;
+        return MTH_LEAF_VALUE;
     }
     case LXB_CSS_SYNTAX_TOKEN_DIMENSION: {
         const lxb_css_syntax_token_string_t *u = lxb_css_syntax_token_dimension_string(t);
@@ -657,7 +661,7 @@ static bool mth_value(Mth *m, MthVal *out)
 
         /* The unit span points into the tokenizer's own buffer and is read BEFORE the token is consumed —
            lexbor keeps a token's cooked string only until the next one is requested. */
-        if (!css_math_unit_base((const char *)u->data, u->length, &base)) return false;
+        if (!css_math_unit_base((const char *)u->data, u->length, &base)) return MTH_LEAF_REFUSED;
         *out = mth_val(css_math_type_of(base), 0.0);
         /* §10.9's TYPE is answered for every family; only the VALUE splits. css-grid-2 §7.2.4's `fr` has no
            number outside css-grid-2 §12's track sizing, so it is marked unresolved and carried — the type
@@ -668,7 +672,7 @@ static bool mth_value(Mth *m, MthVal *out)
             else out->num = mth_canonical(m, base, n, (const char *)u->data, u->length);
         }
         mth_take(m);
-        return true;
+        return MTH_LEAF_VALUE;
     }
     case LXB_CSS_SYNTAX_TOKEN_IDENT: {
         /* §10.7's numeric keywords. §10.7.1: "Both of these keywords are <number>s, and resolve at parse time";
@@ -683,28 +687,17 @@ static bool mth_value(Mth *m, MthVal *out)
         else if (mth_name_is(k, n, "infinity"))  v = INFINITY;
         else if (mth_name_is(k, n, "-infinity")) v = -INFINITY;
         else if (mth_name_is(k, n, "nan"))       v = NAN;
-        else return false;
+        else return MTH_LEAF_REFUSED;
         *out = mth_val(css_math_type_number(), v);
         mth_take(m);
-        return true;
+        return MTH_LEAF_VALUE;
     }
     case LXB_CSS_SYNTAX_TOKEN_L_PARENTHESIS:
-        /* §10.1: "Parentheses and nesting additional calc() functions are equivalent" — which is why one
-           production serves both and neither needs its own type rule. */
-        if (m->depth >= MTH_NESTING_MAX) return false;
-        m->depth++;
-        mth_take(m);
-        if (!mth_sum(m, out)) { m->depth--; return false; }
-        mth_skip_ws(m);
-        t = mth_peek(m);
-        if (t == NULL || t->type != LXB_CSS_SYNTAX_TOKEN_R_PARENTHESIS) { m->depth--; return false; }
-        mth_take(m);
-        m->depth--;
-        return true;
+        return MTH_LEAF_PAREN;
     case LXB_CSS_SYNTAX_TOKEN_FUNCTION:
-        return mth_function(m, out);
+        return MTH_LEAF_FUNCTION;
     default:
-        return false;
+        return MTH_LEAF_REFUSED;
     }
 }
 
@@ -808,63 +801,6 @@ static void mth_divide(const MthVal *a, const MthVal *b, MthVal *out)
         inv.pct_term = false;
     }
     mth_multiply(a, &inv, out);
-}
-
-/* §10.8's `<calc-product> = <calc-value> [ [ '*' | / ] <calc-value> ]*`. */
-static bool mth_product(Mth *m, MthVal *out)
-{
-    MthVal lhs;
-
-    if (!mth_value(m, &lhs)) return false;
-    for (;;) {
-        lxb_css_syntax_token_t *t;
-        MthVal rhs, res;
-        bool div;
-
-        mth_skip_ws(m);
-        t = mth_peek(m);
-        if (mth_is_delim(t, '*')) div = false;
-        else if (mth_is_delim(t, '/')) div = true;
-        else break;
-        mth_take(m);
-        if (!mth_value(m, &rhs)) return false;
-        if (div) mth_divide(&lhs, &rhs, &res);
-        else mth_multiply(&lhs, &rhs, &res);
-        lhs = res;
-    }
-    *out = lhs;
-    return true;
-}
-
-/* §10.8's `<calc-sum> = <calc-product> [ [ '+' | '-' ] <calc-product> ]*`, with that section's whitespace rule:
-   "whitespace is required on both sides of the + and - operators". */
-static bool mth_sum(Mth *m, MthVal *out)
-{
-    MthVal lhs;
-
-    if (!mth_product(m, &lhs)) return false;
-    for (;;) {
-        lxb_css_syntax_token_t *t;
-        MthVal rhs, neg, res;
-        bool ws_before, minus;
-
-        ws_before = mth_skip_ws(m);
-        t = mth_peek(m);
-        if (mth_is_delim(t, '+')) minus = false;
-        else if (mth_is_delim(t, '-')) minus = true;
-        else break;
-        /* §10.8's whitespace rule, over the state BEFORE the operator is consumed and the state after — the
-           `mth_take` between them is what clears the flag, so the two reads are of two different positions and
-           both are the positions the rule names. */
-        mth_take(m);
-        if (!ws_before || !mth_skip_ws(m)) return false;
-        if (!mth_product(m, &rhs)) return false;
-        if (minus) { neg = mth_negate(&rhs); rhs = neg; }
-        mth_add(&lhs, &rhs, &res);
-        lhs = res;
-    }
-    *out = lhs;
-    return true;
 }
 
 /* ---- §10.2 to §10.6's functions ------------------------------------------------------------------------- */
@@ -1008,18 +944,91 @@ static double mth_log_value(double a, double b, bool have_b)
 
 /* ---- the twenty-one functions' argument shapes and §10.9's type table ------------------------------------ */
 
-/* Consume one comma-separated argument of a math function. `*last` reports that the closing `)` followed
-   instead of a comma; a caller that wanted more arguments then refuses. */
-static bool mth_argument(Mth *m, MthVal *out, bool *last)
-{
-    lxb_css_syntax_token_t *t;
+/* The argument list §10.8 gives each function, as mth_function's walk reads it. */
+typedef enum {
+    MTH_SHAPE_ONE,          /* calc() and the functions of one calculation */
+    MTH_SHAPE_TWO,          /* mod(), rem() and atan2() */
+    MTH_SHAPE_ONE_OR_TWO,   /* pow() and log(); pow()'s second calculation is required, which its arm checks */
+    MTH_SHAPE_LIST,         /* min(), max() and hypot(): `<calc-sum>#` */
+    MTH_SHAPE_CLAMP,        /* clamp( [ <calc-sum> | none ], <calc-sum>, [ <calc-sum> | none ] ) */
+    MTH_SHAPE_ROUND         /* round( <rounding-strategy>?, <calc-sum>, <calc-sum>? ) */
+} MthShape;
 
-    if (!mth_sum(m, out)) return false;
-    mth_skip_ws(m);
-    t = mth_peek(m);
-    if (t == NULL) return false;
-    if (t->type == LXB_CSS_SYNTAX_TOKEN_COMMA)          { mth_take(m); *last = false; return true; }
-    if (t->type == LXB_CSS_SYNTAX_TOKEN_R_PARENTHESIS)  { mth_take(m); *last = true;  return true; }
+/* One math function being read: its name, its shape, and one calculation per argument position read so far
+   (`arg`, OWNED). A clamp() `none` holds a placeholder and is marked in `none`. */
+typedef struct {
+    char        name[16];
+    size_t      nlen;
+    MthShape    shape;
+    MthVal     *arg;
+    unsigned    n, cap;
+    bool        none[3];
+    MthRounding how;
+} MthFn;
+
+/* `name`'s shape, false for a name that is none of §10.8's twenty-one. */
+static bool mth_shape_of(const char *name, size_t nlen, MthShape *out)
+{
+    static const struct { const char *name; MthShape shape; } SHAPES[] = {
+        { "calc", MTH_SHAPE_ONE },        { "min", MTH_SHAPE_LIST },    { "max", MTH_SHAPE_LIST },
+        { "clamp", MTH_SHAPE_CLAMP },     { "round", MTH_SHAPE_ROUND }, { "mod", MTH_SHAPE_TWO },
+        { "rem", MTH_SHAPE_TWO },         { "sin", MTH_SHAPE_ONE },     { "cos", MTH_SHAPE_ONE },
+        { "tan", MTH_SHAPE_ONE },         { "asin", MTH_SHAPE_ONE },    { "acos", MTH_SHAPE_ONE },
+        { "atan", MTH_SHAPE_ONE },        { "atan2", MTH_SHAPE_TWO },   { "pow", MTH_SHAPE_ONE_OR_TWO },
+        { "sqrt", MTH_SHAPE_ONE },        { "hypot", MTH_SHAPE_LIST },  { "log", MTH_SHAPE_ONE_OR_TWO },
+        { "exp", MTH_SHAPE_ONE },         { "abs", MTH_SHAPE_ONE },     { "sign", MTH_SHAPE_ONE },
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof SHAPES / sizeof SHAPES[0]; i++)
+        if (mth_name_is(name, nlen, SHAPES[i].name)) {
+            *out = SHAPES[i].shape;
+            return true;
+        }
+    DCHECK(!css_math_is_function(name, nlen),
+           "one of css-values-4 §10.8's twenty-one functional notations has no argument shape. "
+           "`css_math_is_function`'s table and this one are one list read twice, so a name in the first and not "
+           "the second is a function that types as valid and evaluates as nothing");
+    return false;
+}
+
+/* Records `v` as argument position `f->n`. */
+static void mth_fn_push(MthFn *f, MthVal v)
+{
+    if (f->n == f->cap) {
+        MthVal *grown;
+
+        f->cap = f->cap ? 2 * f->cap : 4;
+        grown = realloc(f->arg, f->cap * sizeof *grown);
+        CHECK(grown != NULL, "css_math: OOM keeping a math function's operands");
+        f->arg = grown;
+    }
+    f->arg[f->n++] = v;
+}
+
+/* After the argument just recorded, whose list ended with `)` when `last`: whether another follows (`*more`).
+   False refuses the list as §10.8's grammar for `f`'s shape does. */
+static bool mth_fn_next(const MthFn *f, bool last, bool *more)
+{
+    switch (f->shape) {
+    case MTH_SHAPE_ONE:
+        *more = false;
+        return last;
+    case MTH_SHAPE_TWO:
+        *more = f->n < 2;
+        return last == (f->n == 2);
+    case MTH_SHAPE_ONE_OR_TWO:
+    case MTH_SHAPE_ROUND:
+        *more = f->n < 2 && !last;
+        return f->n < 2 || last;
+    case MTH_SHAPE_LIST:
+        *more = !last;
+        return true;
+    case MTH_SHAPE_CLAMP:
+        *more = f->n < 3;
+        return last == (f->n == 3);
+    }
+    DFAIL("a math function's argument shape is none of the six mth_shape_of assigns");
     return false;
 }
 
@@ -1038,21 +1047,17 @@ static CssPx mth_variadic_result(int kind, const CssPx *args, int n, bool saw_na
 /* §10.2's min()/max() and §10.5's hypot(), which share one shape: "one or more comma-separated calculations",
    a type that is "the result of adding the types of its comma-separated calculations", and a fold over the
    values. `kind` is 0 for min, 1 for max, 2 for hypot. */
-static bool mth_variadic(Mth *m, int kind, MthVal *out)
+static void mth_variadic(Mth *m, int kind, const MthVal *argv, unsigned argc, MthVal *out)
 {
     MthVal acc = mth_val(css_math_type_number(), 0.0);
     unsigned n = 0;
-    bool last = false, saw_nan = false, saw_inf = false, any_pct = false;
+    bool saw_nan = false, saw_inf = false, any_pct = false;
     double fold = 0.0;
     CssPx best = css_px(0.0), *args = NULL;
 
-    for (;;) {
-        MthVal a;
+    while (n < argc) {
+        const MthVal a = argv[n];
 
-        if (!mth_argument(m, &a, &last)) {
-            free(args);
-            return false;
-        }
         if (n == 0) {
             acc = a;
         } else {
@@ -1079,13 +1084,12 @@ static bool mth_variadic(Mth *m, int kind, MthVal *out)
             else best = kind == 0 ? css_px_min(best, a.num) : css_px_max(best, a.num);
         }
         n++;
-        if (last) break;
     }
-    DCHECK(n > 0, "a variadic math function returned with no arguments read — §10.8 gives min(), max() and "
-                  "hypot() a `<calc-sum>#` argument, whose `#` multiplier has no zero-length arm, and the loop "
-                  "above cannot leave without having read one");
+    DCHECK(n > 0, "a variadic math function was folded with no arguments read — §10.8 gives min(), max() and "
+                  "hypot() a `<calc-sum>#` argument, whose `#` multiplier has no zero-length arm, and the walk "
+                  "cannot close one without having read one");
     *out = acc;
-    if (m->res == NULL) return true;
+    if (m->res == NULL) return;
     /* §10.10.1: a percentage "will usually block simplification of the node, since it needs to be resolved
        against another value using information not currently available ... This includes operations such as
        "min", since percentages might resolve against a negative basis, and thus end up with an opposite
@@ -1096,54 +1100,24 @@ static bool mth_variadic(Mth *m, int kind, MthVal *out)
     if (any_pct) {
         free(args);
         if (n > 1 || kind == 2) mth_block(out, MTH_UNRESOLVED_TREE);
-        return true;
+        return;
     }
     out->pct = 0.0;
     out->pct_term = false;
     out->num = mth_variadic_result(kind, args, (int)n, saw_nan, saw_inf, fold, best);
     free(args);
-    return true;
 }
 
 /* §10.2's clamp(MIN, VAL, MAX), whose min/max arms may each be the keyword `none`: §10.8 gives it
    `clamp( [ <calc-sum> | none ], <calc-sum>, [ <calc-sum> | none ] )`. */
-static bool mth_clamp(Mth *m, MthVal *out)
+static void mth_clamp(Mth *m, const MthVal *arg, const bool *none, MthVal *out)
 {
-    MthVal arg[3];
-    bool present[3] = { true, true, true };
-    bool last = false;
+    bool present[3];
     unsigned i;
     CssMathType ty = css_math_type_number();
     bool have_ty = false;
 
-    for (i = 0; i < 3; i++) arg[i] = mth_val(css_math_type_number(), 0.0);
-
-    for (i = 0; i < 3; i++) {
-        lxb_css_syntax_token_t *t;
-
-        mth_skip_ws(m);
-        t = mth_peek(m);
-        if (t == NULL) return false;
-        if ((i == 0 || i == 2) && t->type == LXB_CSS_SYNTAX_TOKEN_IDENT &&
-            mth_name_is((const char *)lxb_css_syntax_token_ident(t)->data,
-                        lxb_css_syntax_token_ident(t)->length, "none")) {
-            mth_take(m);
-            present[i] = false;
-            mth_skip_ws(m);
-            t = mth_peek(m);
-            if (t == NULL) return false;
-            if (i < 2) {
-                if (t->type != LXB_CSS_SYNTAX_TOKEN_COMMA) return false;
-                mth_take(m);
-            } else {
-                if (t->type != LXB_CSS_SYNTAX_TOKEN_R_PARENTHESIS) return false;
-                mth_take(m);
-            }
-            continue;
-        }
-        if (!mth_argument(m, &arg[i], &last)) return false;
-        if (last != (i == 2)) return false;
-    }
+    for (i = 0; i < 3; i++) present[i] = !none[i];
     /* §10.9: clamp()'s type is "the result of adding the types of its comma-separated calculations". `none` is
        a keyword and not a calculation, so it contributes none. */
     for (i = 0; i < 3; i++) {
@@ -1152,19 +1126,19 @@ static bool mth_clamp(Mth *m, MthVal *out)
         ty = mth_types_added(&ty, &arg[i].type);
     }
     DCHECK(have_ty, "clamp()'s central calculation is absent — §10.8's grammar makes only the FIRST and THIRD "
-                    "arms admit `none`, and the loop above refuses the keyword in the second position, so a "
+                    "arms admit `none`, and mth_fn_before_arg refuses the keyword in the second position, so a "
                     "clamp with no calculation at all could not have parsed");
     *out = arg[1];
     out->type = ty;
     out->blocked = mth_worse(arg[1].blocked, mth_worse(present[0] ? arg[0].blocked : MTH_RESOLVED,
                                                        present[2] ? arg[2].blocked : MTH_RESOLVED));
-    if (m->res == NULL) return true;
+    if (m->res == NULL) return;
     /* §10.2: "clamp(MIN, VAL, MAX) ... represents exactly the same value as max(MIN, min(VAL, MAX))", so the
        minimum wins over the maximum when the two are in the wrong order — which §10.2 states as a rule and not
        as a consequence ("clamp(100px, ..., 50px) will resolve to 100px, exceeding its stated 'max' value"). */
     if (arg[1].pct_term || (present[0] && arg[0].pct_term) || (present[2] && arg[2].pct_term)) {
         if (present[0] || present[2]) mth_block(out, MTH_UNRESOLVED_TREE);
-        return true;
+        return;
     }
     {
         bool nan = mth_is_nan(&arg[1]);
@@ -1186,37 +1160,16 @@ static bool mth_clamp(Mth *m, MthVal *out)
         out->pct = 0.0;
         out->pct_term = false;
     }
-    return true;
 }
 
 /* §10.3's round(<rounding-strategy>?, A, B?). */
-static bool mth_round(Mth *m, MthVal *out)
+static bool mth_round(Mth *m, MthRounding how, const MthVal *argv, unsigned argc, MthVal *out)
 {
-    MthRounding how = MTH_ROUND_NEAREST;
-    MthVal a = mth_val(css_math_type_number(), 0.0);
-    MthVal b = mth_val(css_math_type_number(), 0.0);
-    bool have_b = false, last = false;
-    lxb_css_syntax_token_t *t;
+    MthVal a = argv[0];
+    MthVal b = argc == 2 ? argv[1] : mth_val(css_math_type_number(), 0.0);
+    bool have_b = argc == 2;
     CssMathType ty;
 
-    mth_skip_ws(m);
-    t = mth_peek(m);
-    if (t == NULL) return false;
-    if (t->type == LXB_CSS_SYNTAX_TOKEN_IDENT &&
-        mth_rounding_of((const char *)lxb_css_syntax_token_ident(t)->data,
-                        lxb_css_syntax_token_ident(t)->length, &how)) {
-        mth_take(m);
-        mth_skip_ws(m);
-        t = mth_peek(m);
-        if (t == NULL || t->type != LXB_CSS_SYNTAX_TOKEN_COMMA) return false;
-        mth_take(m);
-    }
-    if (!mth_argument(m, &a, &last)) return false;
-    if (!last) {
-        if (!mth_argument(m, &b, &last)) return false;
-        if (!last) return false;
-        have_b = true;
-    }
     /* §10.3: "If <rounding-strategy> is line-width, the type of A must match <length>." */
     if (how == MTH_ROUND_LINE_WIDTH && !mth_only(&a.type, CSS_MATH_LENGTH)) return false;
     /* §10.3: "If the type of A matches <number>, then B may be omitted, and defaults to 1. If
@@ -1261,68 +1214,39 @@ static bool mth_round(Mth *m, MthVal *out)
     return true;
 }
 
-/* Read exactly `want` comma-separated arguments and the closing `)`. */
-static bool mth_fixed_args(Mth *m, unsigned want, MthVal *arg)
-{
-    unsigned i;
-
-    for (i = 0; i < want; i++) {
-        bool last = false;
-
-        if (!mth_argument(m, &arg[i], &last)) return false;
-        if (last != (i + 1 == want)) return false;
-    }
-    return true;
-}
-
 /* §10.10: "The internal representation is an operator node with the same name as the function, whose children
    are the result of parsing a calculation from each of the function's arguments." Dispatch on the name, with
    §10.9's own type table as the return type of each. */
-static bool mth_function(Mth *m, MthVal *out)
+static bool mth_function_value(Mth *m, const MthFn *fn, MthVal *out)
 {
-    lxb_css_syntax_token_t *t = mth_peek(m);
-    const lxb_css_syntax_token_string_t *s;
-    char name[16];
-    size_t nlen;
-    MthVal arg[2];
+    const char *name = fn->name;
+    size_t nlen = fn->nlen;
+    const MthVal *arg = fn->arg;
     bool ok = false;
-
-    arg[0] = mth_val(css_math_type_number(), 0.0);
-    arg[1] = mth_val(css_math_type_number(), 0.0);
-    DCHECK(t != NULL && t->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION,
-           "the math-function production was entered with the cursor off a FUNCTION token — §10.8's grammar "
-           "reaches a function only through `<calc-value>`'s own switch, which has just tested for one");
-    s = lxb_css_syntax_token_function(t);
-    if (s->length >= sizeof name) return false;   /* longer than any of §10.8's twenty-one names */
-    /* The name is copied BEFORE the token is consumed: lexbor keeps a token's cooked string only until the
-       next token is requested, and every arm below requests one. */
-    nlen = s->length;
-    memcpy(name, s->data, nlen);
-    if (m->depth >= MTH_NESTING_MAX) return false;
-    m->depth++;
-    mth_take(m);
 
     if (mth_name_is(name, nlen, "calc")) {
         /* §10.9: calc()'s type is "the type of its contained calculation". */
-        bool last = false;
-
-        ok = mth_argument(m, out, &last) && last;
+        *out = arg[0];
+        ok = true;
     } else if (mth_name_is(name, nlen, "min")) {
-        ok = mth_variadic(m, 0, out);
+        mth_variadic(m, 0, arg, fn->n, out);
+        ok = true;
     } else if (mth_name_is(name, nlen, "max")) {
-        ok = mth_variadic(m, 1, out);
+        mth_variadic(m, 1, arg, fn->n, out);
+        ok = true;
     } else if (mth_name_is(name, nlen, "hypot")) {
-        ok = mth_variadic(m, 2, out);
+        mth_variadic(m, 2, arg, fn->n, out);
+        ok = true;
     } else if (mth_name_is(name, nlen, "clamp")) {
-        ok = mth_clamp(m, out);
+        mth_clamp(m, arg, fn->none, out);
+        ok = true;
     } else if (mth_name_is(name, nlen, "round")) {
-        ok = mth_round(m, out);
+        ok = mth_round(m, fn->how, arg, fn->n, out);
     } else if (mth_name_is(name, nlen, "mod") || mth_name_is(name, nlen, "rem")) {
         /* §10.3: "The argument calculations can resolve to any <number>, <dimension>, or <percentage>, but must
            have the same type ... the result will have the same type as the arguments." */
         CssMathType ty;
 
-        if (!mth_fixed_args(m, 2, arg)) goto done;
         ty = mth_types_added(&arg[0].type, &arg[1].type);
         *out = arg[0];
         out->type = ty;
@@ -1345,7 +1269,6 @@ static bool mth_function(Mth *m, MthVal *out)
         bool is_angle;
         CssMathType ty = css_math_type_number();
 
-        if (!mth_fixed_args(m, 1, arg)) goto done;
         is_angle = mth_only(&arg[0].type, CSS_MATH_ANGLE);
         if (!is_angle && !mth_no_entries(&arg[0].type)) goto done;
         mth_make_consistent_total(&ty, &arg[0].type);
@@ -1375,7 +1298,6 @@ static bool mth_function(Mth *m, MthVal *out)
            <angle>". §10.9 gives all three the type «["angle" → 1]». */
         CssMathType ty = css_math_type_of(CSS_MATH_ANGLE);
 
-        if (!mth_fixed_args(m, 1, arg)) goto done;
         if (!mth_no_entries(&arg[0].type)) goto done;
         mth_make_consistent_total(&ty, &arg[0].type);
         *out = arg[0];
@@ -1400,7 +1322,6 @@ static bool mth_function(Mth *m, MthVal *out)
            calculation's type". §10.4.1's whole table of unusual argument combinations is C's own `atan2`. */
         CssMathType sum, ty = css_math_type_of(CSS_MATH_ANGLE);
 
-        if (!mth_fixed_args(m, 2, arg)) goto done;
         sum = mth_types_added(&arg[0].type, &arg[1].type);
         mth_make_consistent_total(&ty, &sum);
         *out = arg[0];
@@ -1421,13 +1342,8 @@ static bool mth_function(Mth *m, MthVal *out)
            a `<number>` "with the return type made consistent with the input calculation's type". */
         CssMathType ty = css_math_type_number();
         bool is_pow = mth_name_is(name, nlen, "pow");
-        bool last = false, have_b = false;
+        bool have_b = fn->n == 2;
 
-        if (!mth_argument(m, &arg[0], &last)) goto done;
-        if (!last) {
-            if (!mth_argument(m, &arg[1], &last) || !last) goto done;
-            have_b = true;
-        }
         if (is_pow && !have_b) goto done;              /* §10.8: `<pow()> = pow( <calc-sum>, <calc-sum> )` */
         if (!mth_no_entries(&arg[0].type)) goto done;
         if (have_b && !mth_no_entries(&arg[1].type)) goto done;
@@ -1457,7 +1373,6 @@ static bool mth_function(Mth *m, MthVal *out)
            — are IEEE-754's own and are C's `sqrt` and `exp` unchanged. */
         CssMathType ty = css_math_type_number();
 
-        if (!mth_fixed_args(m, 1, arg)) goto done;
         if (!mth_no_entries(&arg[0].type)) goto done;
         mth_make_consistent_total(&ty, &arg[0].type);
         *out = arg[0];
@@ -1473,7 +1388,6 @@ static bool mth_function(Mth *m, MthVal *out)
     } else if (mth_name_is(name, nlen, "abs")) {
         /* §10.6: abs(A) "returns the absolute value of A, as the same type as the input", which §10.9 states
            again as "The type of its contained calculation". */
-        if (!mth_fixed_args(m, 1, arg)) goto done;
         *out = arg[0];
         if (m->res != NULL) {
             /* §10.6's own note: "an expression like 10% might be positive or negative once it's resolved,
@@ -1487,7 +1401,6 @@ static bool mth_function(Mth *m, MthVal *out)
            0⁻ if ... 0⁻. The return type is a <number>, made consistent with the input calculation's type." */
         CssMathType ty = css_math_type_number();
 
-        if (!mth_fixed_args(m, 1, arg)) goto done;
         mth_make_consistent_total(&ty, &arg[0].type);
         *out = arg[0];
         out->type = ty;
@@ -1502,16 +1415,253 @@ static bool mth_function(Mth *m, MthVal *out)
         }
         ok = true;
     } else {
-        DCHECK(!css_math_is_function(name, nlen),
-               "one of css-values-4 §10.8's twenty-one functional notations reached the dispatch above and no "
-               "arm claimed it. `css_math_is_function`'s table and this dispatch are ONE list read twice, so a "
-               "name in the first and not the second is a function that types as valid and evaluates as "
-               "nothing — the shape §Architecture calls a plausible datum");
+        DFAIL("a math function whose argument shape mth_shape_of answered reached the dispatch above and no "
+              "arm claimed it; the two read one list of §10.8's twenty-one names");
     }
 
 done:
-    m->depth--;
     return ok;
+}
+
+/* ---- the walk over §10.8's nesting ---------------------------------------------------------------------- */
+
+/* One nesting level the walk is in: a math function being read (`is_fn`), or a `<calc-sum>` — the inside of a
+   `( … )` (`paren`) or an argument of the function frame below it — with the sum so far and the
+   `<calc-product>` being read into it. */
+typedef struct {
+    bool   is_fn;
+    bool   paren, have_sum, minus, have_prod, div;
+    MthVal sum, prod;
+    MthFn  fn;
+} MthFrame;
+
+typedef struct {
+    MthFrame *v;
+    size_t    n, cap;
+} MthWalk;
+
+static MthFrame *mth_walk_push(MthWalk *w)
+{
+    MthFrame *f;
+
+    if (w->n == w->cap) {
+        MthFrame *grown;
+
+        w->cap = w->cap ? 2 * w->cap : 8;
+        grown = realloc(w->v, w->cap * sizeof *grown);
+        CHECK(grown != NULL, "css_math: OOM growing a math function's nesting");
+        w->v = grown;
+    }
+    f = &w->v[w->n++];
+    memset(f, 0, sizeof *f);
+    return f;
+}
+
+static void mth_walk_free(MthWalk *w)
+{
+    size_t i;
+
+    for (i = 0; i < w->n; i++)
+        if (w->v[i].is_fn) free(w->v[i].fn.arg);
+    free(w->v);
+}
+
+/* Opens the math function whose FUNCTION token is at the cursor into `f`. False refuses it: a name that is
+   none of §10.8's, or a nesting level past §10.8's supported depth. */
+static bool mth_fn_open(Mth *m, MthFn *f)
+{
+    lxb_css_syntax_token_t *t = mth_peek(m);
+    const lxb_css_syntax_token_string_t *s;
+
+    DCHECK(t != NULL && t->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION,
+           "a math function was opened with the cursor off a FUNCTION token — §10.8's grammar reaches a function "
+           "only through `<calc-value>`'s leaf, which has just answered one");
+    s = lxb_css_syntax_token_function(t);
+    if (s->length >= sizeof f->name) return false;   /* longer than any of §10.8's twenty-one names */
+    /* The name is copied before the token is consumed: lexbor keeps a token's cooked string only until the
+       next token is requested. */
+    f->nlen = s->length;
+    memcpy(f->name, s->data, f->nlen);
+    if (!mth_nest_enter(m)) return false;
+    mth_take(m);
+    f->how = MTH_ROUND_NEAREST;
+    return mth_shape_of(f->name, f->nlen, &f->shape);
+}
+
+typedef enum { MTH_ARG_READ, MTH_ARG_FILLED, MTH_ARG_DONE, MTH_ARG_REFUSED } MthArgStep;
+
+/* What precedes argument position `f->n`. clamp()'s `none` is the whole argument and its separator (FILLED,
+   or DONE when it was the last); round()'s `<rounding-strategy>` precedes its first. READ: a `<calc-sum>` is
+   next. */
+static MthArgStep mth_fn_before_arg(Mth *m, MthFn *f)
+{
+    lxb_css_syntax_token_t *t;
+    unsigned i = f->n;
+
+    if (f->shape != MTH_SHAPE_CLAMP && !(f->shape == MTH_SHAPE_ROUND && i == 0)) return MTH_ARG_READ;
+    mth_skip_ws(m);
+    t = mth_peek(m);
+    if (t == NULL) return MTH_ARG_REFUSED;
+    if (f->shape == MTH_SHAPE_ROUND) {
+        /* §10.3's default: "If <rounding-strategy> is omitted, it defaults to nearest." */
+        if (t->type == LXB_CSS_SYNTAX_TOKEN_IDENT &&
+            mth_rounding_of((const char *)lxb_css_syntax_token_ident(t)->data,
+                            lxb_css_syntax_token_ident(t)->length, &f->how)) {
+            mth_take(m);
+            mth_skip_ws(m);
+            t = mth_peek(m);
+            if (t == NULL || t->type != LXB_CSS_SYNTAX_TOKEN_COMMA) return MTH_ARG_REFUSED;
+            mth_take(m);
+        }
+        return MTH_ARG_READ;
+    }
+    if ((i == 0 || i == 2) && t->type == LXB_CSS_SYNTAX_TOKEN_IDENT &&
+        mth_name_is((const char *)lxb_css_syntax_token_ident(t)->data, lxb_css_syntax_token_ident(t)->length,
+                    "none")) {
+        mth_take(m);
+        f->none[i] = true;
+        mth_fn_push(f, mth_val(css_math_type_number(), 0.0));
+        mth_skip_ws(m);
+        t = mth_peek(m);
+        if (t == NULL) return MTH_ARG_REFUSED;
+        if (t->type != (i < 2 ? LXB_CSS_SYNTAX_TOKEN_COMMA : LXB_CSS_SYNTAX_TOKEN_R_PARENTHESIS))
+            return MTH_ARG_REFUSED;
+        mth_take(m);
+        return i < 2 ? MTH_ARG_FILLED : MTH_ARG_DONE;
+    }
+    return MTH_ARG_READ;
+}
+
+/* The math function at the cursor, simplified as §10.10.1 reduces it. Its nesting — §10.1's parentheses and
+   nested functions, which §10.8 bounds only by the depth a UA supports — is walked on a heap stack of frames,
+   so it costs no C stack. Every refusal refuses the whole function: the grammar has no alternative to back up
+   to. */
+static bool mth_function(Mth *m, MthVal *out)
+{
+    MthWalk w = { NULL, 0, 0 };
+    MthFrame *f;
+    MthVal v = mth_val(css_math_type_number(), 0.0), rhs, res;
+    lxb_css_syntax_token_t *t;
+    bool last, more, ws_before, ok;
+    enum { MTH_OPEN, MTH_ARG, MTH_VALUE, MTH_GOT_VALUE, MTH_GOT_PAREN, MTH_GOT_ARG, MTH_CLOSE } step = MTH_OPEN;
+
+    for (;;) {
+        switch (step) {
+        case MTH_OPEN:
+            f = mth_walk_push(&w);
+            f->is_fn = true;
+            if (!mth_fn_open(m, &f->fn)) goto refused;
+            step = MTH_ARG;
+            break;
+        case MTH_ARG:
+            switch (mth_fn_before_arg(m, &w.v[w.n - 1].fn)) {
+            case MTH_ARG_READ:   mth_walk_push(&w); step = MTH_VALUE; break;
+            case MTH_ARG_FILLED: break;
+            case MTH_ARG_DONE:   step = MTH_CLOSE; break;
+            case MTH_ARG_REFUSED: goto refused;
+            }
+            break;
+        case MTH_VALUE:
+            switch (mth_leaf(m, &v)) {
+            case MTH_LEAF_VALUE:    step = MTH_GOT_VALUE; break;
+            case MTH_LEAF_FUNCTION: step = MTH_OPEN; break;
+            case MTH_LEAF_REFUSED:  goto refused;
+            case MTH_LEAF_PAREN:
+                if (!mth_nest_enter(m)) goto refused;
+                mth_take(m);
+                mth_walk_push(&w)->paren = true;
+                break;
+            }
+            break;
+        case MTH_GOT_VALUE:
+            f = &w.v[w.n - 1];
+            DCHECK(!f->is_fn, "a `<calc-value>` was handed to a function frame rather than to the sum it is in");
+            /* §10.8's `<calc-product> = <calc-value> [ [ '*' | / ] <calc-value> ]*`. */
+            if (!f->have_prod) {
+                f->prod = v;
+                f->have_prod = true;
+            } else {
+                if (f->div) mth_divide(&f->prod, &v, &res);
+                else mth_multiply(&f->prod, &v, &res);
+                f->prod = res;
+            }
+            mth_skip_ws(m);
+            t = mth_peek(m);
+            if (mth_is_delim(t, '*') || mth_is_delim(t, '/')) {
+                f->div = mth_is_delim(t, '/');
+                mth_take(m);
+                step = MTH_VALUE;
+                break;
+            }
+            /* §10.8's `<calc-sum> = <calc-product> [ [ '+' | '-' ] <calc-product> ]*`. */
+            if (!f->have_sum) {
+                f->sum = f->prod;
+                f->have_sum = true;
+            } else {
+                rhs = f->minus ? mth_negate(&f->prod) : f->prod;
+                mth_add(&f->sum, &rhs, &res);
+                f->sum = res;
+            }
+            f->have_prod = false;
+            ws_before = mth_skip_ws(m);
+            t = mth_peek(m);
+            if (mth_is_delim(t, '+') || mth_is_delim(t, '-')) {
+                f->minus = mth_is_delim(t, '-');
+                /* §10.8's whitespace rule — "whitespace is required on both sides of the + and - operators" —
+                   over the state before the operator is consumed and the state after: the `mth_take` between
+                   them is what clears the flag, so the two reads are of the two positions the rule names. */
+                mth_take(m);
+                if (!ws_before || !mth_skip_ws(m)) goto refused;
+                step = MTH_VALUE;
+                break;
+            }
+            v = f->sum;
+            step = f->paren ? MTH_GOT_PAREN : MTH_GOT_ARG;
+            w.n--;
+            break;
+        case MTH_GOT_PAREN:
+            mth_skip_ws(m);
+            t = mth_peek(m);
+            if (t == NULL || t->type != LXB_CSS_SYNTAX_TOKEN_R_PARENTHESIS) goto refused;
+            mth_take(m);
+            m->depth--;
+            step = MTH_GOT_VALUE;
+            break;
+        case MTH_GOT_ARG:
+            /* One comma-separated argument ends at a comma, or at the closing `)` (`last`). */
+            mth_skip_ws(m);
+            t = mth_peek(m);
+            if (t == NULL) goto refused;
+            if (t->type == LXB_CSS_SYNTAX_TOKEN_COMMA) last = false;
+            else if (t->type == LXB_CSS_SYNTAX_TOKEN_R_PARENTHESIS) last = true;
+            else goto refused;
+            mth_take(m);
+            f = &w.v[w.n - 1];
+            DCHECK(f->is_fn, "a math function's argument ended into a frame that is not its function");
+            mth_fn_push(&f->fn, v);
+            if (!mth_fn_next(&f->fn, last, &more)) goto refused;
+            step = more ? MTH_ARG : MTH_CLOSE;
+            break;
+        case MTH_CLOSE:
+            f = &w.v[w.n - 1];
+            ok = mth_function_value(m, &f->fn, &v);
+            free(f->fn.arg);
+            w.n--;
+            m->depth--;
+            if (!ok) goto refused;
+            if (w.n == 0) {
+                free(w.v);
+                *out = v;
+                return true;
+            }
+            step = MTH_GOT_VALUE;
+            break;
+        }
+    }
+
+refused:
+    mth_walk_free(&w);
+    return false;
 }
 
 /* HOW MUCH OF §10 IS PART OF THE ANSWER, which is §10's own division into sections and not a convenience:

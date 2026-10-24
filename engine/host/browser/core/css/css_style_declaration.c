@@ -1869,21 +1869,44 @@ static char *cssd_prelude_span(const char *text, size_t len, size_t begin, size_
     return out;
 }
 
-/* One rule list, walked in document order, each rule reported and then its OWN nested list walked with the
-   handle the callback just returned. The recursion is over the PARSE TREE and its depth is the nesting depth of
-   the stylesheet's own braces, which the tokenizer has already bounded by consuming them. */
+/* A rule list being walked: the next rule to report, and the handle its rules are reported under. */
+typedef struct {
+    lxb_css_rule_t *r;
+    void           *parent;
+} CssdEmitFrame;
+
+/* The stylesheet's rules, walked in document order, each rule reported and then its own nested list walked
+   with the handle the callback just returned. The nesting is the stylesheet's own braces, which a page
+   chooses, so it is walked on a heap stack of lists and costs no C stack. `*pn` counts the top-level rules
+   reported. */
 static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_list_t *list,
-                            CssomRuleFn cb, void *ud, void *parent, unsigned *pn)
+                            CssomRuleFn cb, void *ud, unsigned *pn)
 {
+    CssdEmitFrame *v, *f;
+    size_t n = 1, cap = 8;
     lxb_css_rule_t *r;
 
-    for (r = list->first; r; r = r->next) {
+    v = malloc(cap * sizeof *v);
+    CHECK(v != NULL, "cssom: OOM walking a stylesheet's rules");
+    v[0].r = list->first;
+    v[0].parent = NULL;
+    while (n > 0) {
         CssomRule out = { NULL, "", false, NULL, false };
         const lxb_css_rule_list_t *kids = NULL;
         CssBuf sel = { 0 };
         char *block = NULL, *prelude = NULL, *at_name = NULL;
-        void *handle;
+        void *handle, *parent;
+        bool top;
 
+        f = &v[n - 1];
+        r = f->r;
+        if (r == NULL) {
+            n--;
+            continue;
+        }
+        f->r = r->next;
+        parent = f->parent;
+        top = n == 1;
         switch (r->type) {
         case LXB_CSS_RULE_STYLE: {
             lxb_css_rule_style_t *st = lxb_css_rule_style(r);
@@ -1976,14 +1999,27 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
                   "whose prelude and body split differently");
             continue;
         }
-        if (pn) (*pn)++;
+        if (top) (*pn)++;
         handle = cb(ud, parent, &out);
-        if (kids) cssd_emit_rules(text, len, kids, cb, ud, handle, NULL);
         free(prelude);
         free(block);
         free(at_name);
         css_buf_free(&sel);
+        if (kids) {
+            if (n == cap) {
+                CssdEmitFrame *grown;
+
+                cap *= 2;
+                grown = realloc(v, cap * sizeof *grown);
+                CHECK(grown != NULL, "cssom: OOM walking a stylesheet's nested rules");
+                v = grown;
+            }
+            v[n].r = kids->first;
+            v[n].parent = handle;
+            n++;
+        }
     }
+    free(v);
 }
 
 unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *ud)
@@ -2005,7 +2041,7 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
     lxb_css_parser_memory_set(g_parser, NULL);
     cssd_selectors_intact();
     if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST)
-        cssd_emit_rules(text, len, lxb_css_rule_list(sst->root), cb, ud, NULL, &n);
+        cssd_emit_rules(text, len, lxb_css_rule_list(sst->root), cb, ud, &n);
     /* THE ARENA IS THE ONE OWNER and it is freed outright, for the reason the author cascade's is: creating a
        stylesheet REF-INCREMENTS the memory it is handed, so `lxb_css_stylesheet_destroy(sst, true)` only
        decrements it back and frees nothing. Every rule, selector and string above lives in here, which is

@@ -3,16 +3,16 @@
  * "The value of a custom property can be substituted into the value of another property with the var()
  * function." This file finds those functions in a declaration value and splices the substitution in. It knows
  * nothing about elements, the cascade, inheritance or which custom properties exist: every NAME it meets is
- * handed back to a resolver the caller supplies, so the question "what is `--x` here" is answered by the
- * component that owns the tree and this one is exercisable with one fixture and no DOM.
+ * handed to a lookup the caller supplies, so the question "what is `--x` here" is answered by the component
+ * that owns the tree and this one is exercisable with one fixture and no DOM.
  *
  * WHY THE SPLIT IS HERE AND NOT SOMEWHERE ELSE. Substitution is two problems that fail differently. The
  * SYNTAX problem is where a `var(` starts and ends — which is a question about strings, nesting and ident
  * boundaries, and gets `content: "var(--x)"` and `calc(var(--w) * 2)` wrong in ways a fixture can catch. The
- * POLICY problem is what a name resolves to, which needs the element, §7.2's inheritance and the cycle rule,
- * and is wrong in ways only a tree can show. One file answering both would be a component no fixture can
- * exercise, and core/css/css_computed_value.c is where the policy half lives because that is where the
- * cascaded value and the parent chain already are.
+ * POLICY problem is what a name resolves to, which needs the element and §7.2's inheritance (the cycle rule is
+ * the substitution's own chain, so it is here), and is wrong in ways only a tree can show. One file answering
+ * both would be a component no fixture can exercise, and core/css/css_computed_value.c is where the policy
+ * half lives because that is where the cascaded value and the parent chain already are.
  *
  * THE FAILURE ARM IS THE WHOLE POINT AND IT IS NOT A FALLBACK TO THE PARENT. css-variables-1 §2.2
  * "Guaranteed-Invalid Values": "The initial value of a custom property is a guaranteed-invalid value", and
@@ -39,22 +39,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* What a resolver can answer about one `<custom-property-name>`. Three states and not two, because
-   css-values-5 makes a CYCLE behave differently from an unset property: an unset one is §2.2's
-   guaranteed-invalid value and "the fallback, if any, is used instead", while a var() in one of its
-   `cyclic substitution contexts` is invalid at computed-value time outright. Folding them would make
-   `--a: var(--b); --b: var(--a)` answer with `--a`'s fallback, which is a value no browser produces. */
-typedef enum {
-    CSS_VAR_RESOLVED = 0,        /* `*out` holds the property's substituted value, OWNED and freed by this file */
-    CSS_VAR_GUARANTEED_INVALID,  /* §2.2's value — the var()'s fallback is used if it states one */
-    CSS_VAR_CYCLE                /* the whole declaration is invalid at computed-value time; no fallback */
-} CssVarResolution;
-
-/* Answer `name` (WITHOUT its leading `--`, `name_n` bytes, NOT NUL-terminated) for the caller's element.
-   A resolver that answers CSS_VAR_RESOLVED must leave `*out` owned and non-NULL; the other two leave it
-   untouched. The resolver is what performs the RECURSION — a custom property's own value may reference
-   another — so that the cycle stack lives with the policy rather than being a parameter of the syntax. */
-typedef CssVarResolution (*CssVarResolve)(void *ud, const char *name, size_t name_n, char **out);
+/* `name`'s value (WITHOUT its leading `--`, `name_n` bytes, NOT NUL-terminated) for the caller's element, as the
+   custom property's own text with its `var()`s unsubstituted, OWNED; or NULL for §2.2's guaranteed-invalid
+   value, whose var()'s fallback is used if it states one. */
+typedef char *(*CssVarLookup)(void *ud, const char *name, size_t name_n);
 
 /* Does `value` contain a `var(` function token at all? Asked before the work, because the overwhelming
    majority of declarations contain none and this answer is what keeps substitution off that path. It is the
@@ -62,11 +50,14 @@ typedef CssVarResolution (*CssVarResolve)(void *ud, const char *name, size_t nam
    a `var(` inside a string is not one, and neither is the `(` of an ident that merely ends in `var`. */
 bool css_var_references(const char *value);
 
-/* §3's substitution over the whole of `value`, however deeply the functions nest. Returns OWNED text, or NULL
-   when the value is INVALID AT COMPUTED-VALUE TIME — which is a resolver's CSS_VAR_CYCLE, or a `var()` whose
-   property is guaranteed-invalid and which states no fallback, or a `var()` whose first argument is not a
+/* §3's substitution over the whole of `value`, however deeply the functions and the custom properties they
+   name nest. A custom property's own value is substituted by the same walk. A var() naming a property already
+   being substituted is a cycle: the property value holding it is invalid, with no fallback of its own, and
+   the var() that named that property takes its fallback as for §2.2's value. Returns
+   OWNED text, or NULL when the value is INVALID AT COMPUTED-VALUE TIME — a `var()` whose property is
+   guaranteed-invalid and which states no usable fallback, or whose first argument is not a
    `<custom-property-name>` at all. A value carrying no `var(` is returned as a copy, so every caller frees
    exactly one thing on every path. */
-char *css_var_substitute(const char *value, CssVarResolve resolve, void *ud);
+char *css_var_substitute(const char *value, CssVarLookup lookup, void *ud);
 
 #endif

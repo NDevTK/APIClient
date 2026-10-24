@@ -4473,17 +4473,72 @@ static void cascade_emit_mark(CascadeEmit *e, const CssLayerNode *layer)
    selector in the sheet the matcher parses. */
 typedef struct { const char *sel; size_t len; } CascadeNest;
 
-static bool cascade_emit(JSContext *ctx, JSValueConst list, CascadeEmit *e, CssLayerNode *cur,
-                         const CascadeNest *nest);
+/* One rule list the walk is in: the list (owned) and the next index; the emitter its rules write into, which is
+   `scratch` when the frame owns one; the layer they sit in; and what their `&` resolves to, which is `own` (its
+   selector owned) when the frame's rule is a style rule and an ancestor frame's otherwise. Frames are allocated
+   one by one, so `e` and `nest` stay valid while the frames below them live. */
+typedef struct CascadeFrame CascadeFrame;
+struct CascadeFrame {
+    CascadeFrame      *up;
+    JSValue            kids;
+    uint32_t           n, i;
+    CascadeEmit       *e;
+    CascadeEmit        scratch;
+    bool               owns_scratch;
+    CssLayerNode      *cur;
+    const CascadeNest *nest;
+    CascadeNest        own;
+};
+
+/* A frame over `kids` (taken), writing into `e` or, for `scratch`, into a scratch emitter that shares only `e`'s
+   layer order. `own_sel` (taken, `own_len` bytes) is the style rule whose nested rules these are; NULL keeps
+   `nest`. */
+static CascadeFrame *cascade_frame_new(JSContext *ctx, JSValue kids, CascadeEmit *e, bool scratch,
+                                       CssLayerNode *cur, const CascadeNest *nest, char *own_sel, size_t own_len)
+{
+    CascadeFrame *f = calloc(1, sizeof *f);
+
+    CHECK(f != NULL, "cssom: OOM walking a sheet's rules for the author cascade");
+    f->kids = kids;
+    f->n = array_len(ctx, kids);
+    f->owns_scratch = scratch;
+    if (scratch) {
+        f->scratch.order = e->order;
+        f->e = &f->scratch;
+    } else {
+        f->e = e;
+    }
+    f->cur = cur;
+    f->own.sel = own_sel;
+    f->own.len = own_len;
+    f->nest = own_sel ? &f->own : nest;
+    DCHECK(!f->nest || (f->nest->sel != NULL && f->nest->len > 0),
+           "the author cascade descended into a nested rule list with an EMPTY parent selector to resolve `&` "
+           "against. CSS Nesting 1 §4's nesting selector is \"the elements matched by the parent rule\", and the "
+           "style arm below emits nothing at all for a rule whose selector list it could not read");
+    return f;
+}
+
+static void cascade_frame_free(JSContext *ctx, CascadeFrame *f)
+{
+    JS_FreeValue(ctx, f->kids);
+    if (f->owns_scratch) {
+        free(f->scratch.out.s);
+        free(f->scratch.layer);
+    }
+    free((char *)f->own.sel);
+    free(f);
+}
 
 /* One rule's contribution to the text the selector matcher re-parses, and to CSS Cascade 5 §6.4.3's layer
    order. A STYLE rule contributes itself, in the layer it is nested in, FOLLOWED BY ITS OWN NESTED RULES;
    a CONDITIONAL GROUP rule contributes its children when its condition holds and nothing when it does not, which
    is what `@media` MEANS and is the whole reason the cascade cannot simply read a sheet's top level. `cur` is the
    cascade layer this rule sits in — CSS Cascade 5 §6.4.3's implicit outer layer at a sheet's top level, and the layer
-   a `@layer` block declares inside it. `nest` is what a nested rule's `&` resolves to; see above. */
+   a `@layer` block declares inside it. `nest` is what a nested rule's `&` resolves to; see above. A rule whose
+   children are walked next hands back their frame in `*descend`. */
 static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, CssLayerNode *cur,
-                             const CascadeNest *nest)
+                             const CascadeNest *nest, CascadeFrame **descend)
 {
     CssRuleData *r = rule_of(rule);
     size_t sl = 0, bl = 0;
@@ -4496,8 +4551,6 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
     if (r->type == RULE_TYPE_MEDIA) {
         MediaQuerySet *set = media_list_query_set(ctx, r->media);
         bool applies = media_query_matches_now(ctx, set);
-        JSValue kids;
-        bool ok;
 
         media_query_free(set);
         /* CSS Cascade 5 §6.4.3 "Layer Ordering": "Layers that are defined inside of a conditional group rule
@@ -4507,10 +4560,8 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
            arm is the element-sensitive conditional, which `@container` below is and which is why that rule cannot
            reach this shape however much its IDL resembles this one's. */
         if (!applies) return true;
-        kids = rule_child_rules(ctx, rule);
-        ok = cascade_emit(ctx, kids, e, cur, nest);
-        JS_FreeValue(ctx, kids);
-        return ok;
+        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, false, cur, nest, NULL, 0);
+        return true;
     }
     /* CSS Conditional 3 §6's `@supports`, the OTHER conditional group rule, and CSS Conditional 3 §2's sentence covers
        both identically: "when the condition is true, CSS processors must apply the rules inside the group rule as
@@ -4519,14 +4570,9 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        query is global to the document, so a false condition means the children, layers included, are simply not
        walked. It is not the element-sensitive conditional that sentence's second arm is about. */
     if (r->type == RULE_TYPE_SUPPORTS) {
-        JSValue kids;
-        bool ok;
-
         if (!rule_supports_matches(ctx, r)) return true;
-        kids = rule_child_rules(ctx, rule);
-        ok = cascade_emit(ctx, kids, e, cur, nest);
-        JS_FreeValue(ctx, kids);
-        return ok;
+        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, false, cur, nest, NULL, 0);
+        return true;
     }
     /* CSS Conditional 5 §5.4 "Container Queries: the @container rule"'s `@container` IS THE ELEMENT-SENSITIVE
        CONDITIONAL, and that is what makes it a different problem from the two arms above rather than a third copy
@@ -4587,14 +4633,8 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
            CSS Conditional 5 §7's `cq*` units and states the same grep, so the diff that retires one retires both
            and neither may be drained alone. */
     if (r->type == RULE_TYPE_CONTAINER) {
-        CascadeEmit scratch = { { NULL, 0, 0 }, NULL, 0, 0, e->order };
-        JSValue kids = rule_child_rules(ctx, rule);
-        bool ok = cascade_emit(ctx, kids, &scratch, cur, nest);
-
-        JS_FreeValue(ctx, kids);
-        free(scratch.out.s);
-        free(scratch.layer);
-        return ok;
+        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, true, cur, nest, NULL, 0);
+        return true;
     }
     /* AN `@namespace` IS EMITTED, and it is the one non-style rule that must be: it declares a prefix the
        SELECTORS below are written against, so a sheet whose `@namespace svg url(...)` were dropped would hand
@@ -4712,8 +4752,6 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         CssLayerNode *node;
         char **names;
         unsigned n;
-        JSValue kids;
-        bool ok;
 
         if (!rule_layer_names(ctx, r, &names, &n)) return false;
         DCHECK(n <= 1, "a CSS Cascade 5 §8.1 layer block rule declares more than one `<layer-name>` — "
@@ -4721,10 +4759,8 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
                        "grammar is `<layer-name>?`, and its creator refuses a prelude carrying a list");
         node = css_layer_order_declare(e->order, cur, n ? names[0] : NULL);
         serialized_free(names, n);
-        kids = rule_child_rules(ctx, rule);
-        ok = cascade_emit(ctx, kids, e, node, nest);
-        JS_FreeValue(ctx, kids);
-        return ok;
+        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, false, node, nest, NULL, 0);
+        return true;
     }
     /* A CSS Transitions 2 §3.3 `@starting-style` CONTRIBUTES NO STYLE RULE TO THE STYLE THIS WALK BUILDS, which
        is the AFTER-CHANGE STYLE. CSS Transitions 2 §3.3 says so outright — "Style rules in @starting-style do not
@@ -4757,14 +4793,8 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        deleted, while that band takes no declaration from any sheet. RETIREMENT: this note goes when that band has
        a producer. */
     if (r->type == RULE_TYPE_STARTING_STYLE) {
-        CascadeEmit scratch = { { NULL, 0, 0 }, NULL, 0, 0, e->order };
-        JSValue kids = rule_child_rules(ctx, rule);
-        bool ok = cascade_emit(ctx, kids, &scratch, cur, nest);
-
-        JS_FreeValue(ctx, kids);
-        free(scratch.out.s);
-        free(scratch.layer);
-        return ok;
+        *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, true, cur, nest, NULL, 0);
+        return true;
     }
     DCHECK(r->type == RULE_TYPE_STYLE, "the author cascade met a rule type it has no arm for");
     sel = rule_text_copy(ctx, r->selector_text, &sl);
@@ -4814,38 +4844,39 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        and nested group rules are considered to come after their parent rule." So the parent's declarations go in first
        and the children follow in document order, and CSS Cascade 5 §6.1's Order of Appearance — which the emission's
        own position IS — comes out right for `article { color: blue; & { color: red } }`. They resolve against THIS
-       rule's emitted selector, and the recursion is the rule tree's own depth: CSS Nesting places no limit on it and
-       neither does this walk. */
+       rule's emitted selector, at the rule tree's own depth: CSS Nesting places no limit on it and neither does
+       this walk, whose frames are on the heap. */
     if (array_len(ctx, r->child_rules) == 0) { free(sel); return true; }
-    {
-        JSValue kids = rule_child_rules(ctx, rule);
-        CascadeNest inner = { sel, sl };
-        bool ok = cascade_emit(ctx, kids, e, cur, &inner);
-
-        JS_FreeValue(ctx, kids);
-        free(sel);
-        return ok;
-    }
+    *descend = cascade_frame_new(ctx, rule_child_rules(ctx, rule), e, false, cur, nest, sel, sl);
+    return true;
 }
 
-static bool cascade_emit(JSContext *ctx, JSValueConst list, CascadeEmit *e, CssLayerNode *cur,
-                         const CascadeNest *nest)
+/* The rules of `list` and of every rule list under them, in document order, into `e`. A false from any rule
+   abandons the whole sheet, as the style arm's missing-selector case says. */
+static bool cascade_emit(JSContext *ctx, JSValueConst list, CascadeEmit *e, CssLayerNode *cur)
 {
-    uint32_t n = array_len(ctx, list), i;
+    CascadeFrame *top = cascade_frame_new(ctx, JS_DupValue(ctx, list), e, false, cur, NULL, NULL, 0), *f;
+    bool ok = true;
 
-    DCHECK(!nest || (nest->sel != NULL && nest->len > 0),
-           "the author cascade descended into a nested rule list with an EMPTY parent selector to resolve `&` "
-           "against. CSS Nesting 1 §4's nesting selector is \"the elements matched by the parent rule\", and the "
-           "style arm "
-           "above emits nothing at all for a rule whose selector list it could not read");
-    for (i = 0; i < n; i++) {
-        JSValue rule = JS_GetPropertyUint32(ctx, list, i);
-        bool ok = cascade_emit_one(ctx, rule, e, cur, nest);
+    while (top != NULL) {
+        if (ok && top->i < top->n) {
+            JSValue rule = JS_GetPropertyUint32(ctx, top->kids, top->i++);
+            CascadeFrame *descend = NULL;
 
-        JS_FreeValue(ctx, rule);
-        if (!ok) return false;
+            ok = cascade_emit_one(ctx, rule, top->e, top->cur, top->nest, &descend);
+            JS_FreeValue(ctx, rule);
+            DCHECK(ok || descend == NULL, "a rule both failed and asked the author cascade to walk its children");
+            if (descend != NULL) {
+                descend->up = top;
+                top = descend;
+            }
+            continue;
+        }
+        f = top;
+        top = f->up;
+        cascade_frame_free(ctx, f);
     }
-    return true;
+    return ok;
 }
 
 void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s)
@@ -4871,7 +4902,7 @@ bool css_rule_cascade_sheet(JSContext *ctx, JSValueConst list, CssLayerOrder *or
            "criterion sorts by — a walk with nowhere to put them would answer every layer's rules as if they "
            "were unlayered, which inverts the cascade for the whole sheet");
     e.order = order;
-    if (!cascade_emit(ctx, list, &e, css_layer_order_root(order), NULL)) {
+    if (!cascade_emit(ctx, list, &e, css_layer_order_root(order))) {
         free(e.out.s);
         free(e.layer);
         return false;

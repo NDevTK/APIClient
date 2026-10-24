@@ -92,6 +92,11 @@ typedef enum {
 /* §4.3.2: "The percent hint is either null or a base type." NULL is a POSITIVE statement and not an absence —
    it says the calculation carries no percentage that has been re-expressed as another type — which is why the
    matching rules below test it rather than defaulting past it. */
+/* css-values-4 §10.8 "Syntax": "UAs must support calculations of ... at least 32 levels of nesting (parentheses
+   and/or functions)", and one nested deeper "must be treated as if it were invalid". The levels this user agent
+   supports, counting the outermost function as one. */
+#define CSS_MATH_NESTING_SUPPORTED 256
+
 #define CSS_MATH_HINT_NULL (-1)
 
 /* §4.3.2's FAILURE, WHICH IS A VALUE OF THIS RECORD AND NOT AN ABSENCE OF ONE — "The types can't be added.

@@ -106,11 +106,10 @@ static const CssKeyword CSS_OVERFLOW_APPLIES[] = {
 };
 static const char *const CSS_OVERFLOW_PROPERTIES[] = { "overflow-x", "overflow-y" };
 
+static bool css_property_applies_physical(lxb_dom_element_t *el, const char *name);
+
 bool css_property_applies(lxb_dom_element_t *el, const char *name)
 {
-    CssDisplay display;
-    bool is_size, is_margin, is_padding, is_overflow, applies;
-
     DCHECK(el != NULL && name != NULL,
            "an Applies-to line was asked for with no element or no property name");
     /* A FLOW-RELATIVE LONGHAND IS ANSWERED BY ITS PHYSICAL PARTNER'S LINE, WHICH IS WHAT css-logical-1 WRITES
@@ -138,13 +137,21 @@ bool css_property_applies(lxb_dom_element_t *el, const char *name)
                    "the property is in no group, so a grouped property with no partner is that contract "
                    "broken rather than a property this line has to answer for");
             DCHECK(css_logical_group_of(physical, &partner_logic) != CSS_LOGICAL_GROUP_NONE && partner_logic,
-                   "css-logical-1 §4's pairing answered a partner whose own MAPPING LOGIC is not physical, "
-                   "which would make this tail call recurse. The pairing is an INVOLUTION over one group with "
-                   "one member of each logic — css_logical_init asserts it — so the partner of a "
-                   "flow-relative longhand is the physical one and asking it terminates");
-            return css_property_applies(el, physical);
+                   "css-logical-1 §4's pairing answered a partner whose own MAPPING LOGIC is not physical. The "
+                   "pairing is an INVOLUTION over one group with one member of each logic — css_logical_init "
+                   "asserts it — so the partner of a flow-relative longhand is the physical one");
+            return css_property_applies_physical(el, physical);
         }
     }
+    return css_property_applies_physical(el, name);
+}
+
+/* The `Applies to:` line of a property that is not flow-relative. */
+static bool css_property_applies_physical(lxb_dom_element_t *el, const char *name)
+{
+    CssDisplay display;
+    bool is_size, is_margin, is_padding, is_overflow, applies;
+
     /* §9.3.2: "Applies to: positioned elements". The whole line, and it names no display type, so it is
        answered before `display` is read. */
     if (css_pa_in(CSS_INSET_PROPERTIES, CSS_PA_N(CSS_INSET_PROPERTIES), name)) {

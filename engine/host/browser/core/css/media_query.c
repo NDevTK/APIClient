@@ -100,14 +100,86 @@ struct MediaQuerySet {
     int      n;
 };
 
+/* Frees `c` and every condition under it. The order is immaterial, so the tree is drained through a worklist
+   and its nesting costs no C stack. */
 static void cond_free(MqCond *c)
 {
+    MqCond **work = NULL, **grown;
+    size_t n = 0, cap = 0;
     int i;
 
     if (!c) return;
-    for (i = 0; i < c->nkids; i++) cond_free(c->kids[i]);
-    free(c->kids);
-    free(c);
+    for (;;) {
+        if (n + (size_t)c->nkids > cap) {
+            cap = 2 * (n + (size_t)c->nkids) + 8;
+            grown = realloc(work, cap * sizeof *work);
+            CHECK(grown != NULL, "media queries: OOM freeing a media condition");
+            work = grown;
+        }
+        for (i = 0; i < c->nkids; i++) work[n++] = c->kids[i];
+        free(c->kids);
+        free(c);
+        if (n == 0) break;
+        c = work[--n];
+    }
+    free(work);
+}
+
+/* A depth-first walk over a condition tree on a heap stack, so the author's nesting costs no C stack. `next`
+   is the next child to visit and `acc` the running fold over the children visited. */
+typedef struct {
+    const MqCond *c;
+    int           next;
+    unsigned      acc;
+} MqWalkFrame;
+
+typedef struct {
+    MqWalkFrame *v;
+    size_t       n, cap;
+} MqWalk;
+
+static void mq_walk_push(MqWalk *w, const MqCond *c)
+{
+    DCHECK(c->op == MQC_FEATURE ? c->nkids == 0 : (c->op == MQC_NOT ? c->nkids == 1 : c->nkids >= 2),
+           "a media condition's operand count does not fit its operator: the parser builds `not` over one, "
+           "`and`/`or` over two or more, and a feature over none");
+    if (w->n == w->cap) {
+        MqWalkFrame *grown;
+
+        w->cap = w->cap ? 2 * w->cap : 16;
+        grown = realloc(w->v, w->cap * sizeof *grown);
+        CHECK(grown != NULL, "media queries: OOM walking a media condition");
+        w->v = grown;
+    }
+    w->v[w->n].c = c;
+    w->v[w->n].next = 0;
+    w->v[w->n].acc = 0;
+    w->n++;
+}
+
+/* `root` folded bottom up: `leaf` answers a feature, and `join` folds child `i`'s answer into its parent's
+   running `acc`, which is 0 before the first child. */
+static unsigned cond_fold(const MqCond *root, unsigned (*leaf)(const MqCond *, const void *),
+                          unsigned (*join)(const MqCond *, int, unsigned, unsigned), const void *ctx)
+{
+    MqWalk w = { NULL, 0, 0 };
+    MqWalkFrame *f;
+    unsigned v;
+
+    mq_walk_push(&w, root);
+    for (;;) {
+        f = &w.v[w.n - 1];
+        if (f->next < f->c->nkids) {
+            mq_walk_push(&w, f->c->kids[f->next++]);
+            continue;
+        }
+        v = f->c->op == MQC_FEATURE ? leaf(f->c, ctx) : f->acc;
+        if (--w.n == 0) break;
+        f = &w.v[w.n - 1];
+        f->acc = join(f->c, f->next - 1, f->acc, v);
+    }
+    free(w.v);
+    return v;
 }
 
 void media_query_free(MediaQuerySet *set)
@@ -645,6 +717,22 @@ static bool parse_enclosed(MqLex *L, MqFeature *f)
     return true;
 }
 
+/* One `<media-condition>` being parsed, as a frame of parse_condition's walk. */
+typedef enum {
+    MQP_BEGIN,    /* nothing read yet */
+    MQP_WANT,     /* a `<media-in-parens>` is next */
+    MQP_INNER,    /* the frame above parses this one's `( <media-condition> )` */
+    MQP_GOT,      /* `term` is the `<media-in-parens>` just read */
+    MQP_REFUSE    /* a `<media-in-parens>` did not parse */
+} MqParseState;
+
+typedef struct {
+    MqParseState state;
+    bool         allow_or, neg, is_and;
+    MqCond      *combined, *term;
+    MqLex        save;    /* the lexer at the `(` of the `<media-in-parens>` being read */
+} MqParseFrame;
+
 /* `<media-in-parens> = ( <media-condition> ) | <media-feature> | <general-enclosed>`
 
    RESIDUAL — A FEATURE BRANCH REFUSED OVER ITS VALUE LANDS ON `<general-enclosed>`, WHERE MQ4 §3.2 SENDS
@@ -665,69 +753,150 @@ static bool parse_enclosed(MqLex *L, MqFeature *f)
    HOW ITS ABSENCE WOULD SHOW: a `<media-condition>` one of whose `or` branches is true applying its rules
    to a document a browser leaves unstyled, for a prelude naming a value its feature’s own table omits.
    RETIREMENT: this record goes when a refused feature branch carries WHY it was refused. */
-static bool parse_in_parens(MqLex *L, MqCond **out)
+/* The `<media-in-parens>` whose `(` is at `f->save`, once its first branch has been tried: `inner_ok` and
+   `inner` are the `( <media-condition> )` the frame above parsed (`inner` is owned here). The lexer is restored
+   for each later branch, in the grammar's order. False is "none of the three". */
+static bool parse_in_parens_rest(MqLex *L, MqParseFrame *f, bool inner_ok, MqCond *inner)
 {
-    MqLex save = *L;
-    MqCond *inner = NULL;
-    MqFeature f;
+    MqFeature feat;
 
-    if (L->kind != TK_LPAREN) return false;
-    mq_scan(L);
-    if (parse_condition(L, true, &inner) && L->kind == TK_RPAREN) {
+    if (inner_ok && L->kind == TK_RPAREN) {
         mq_scan(L);
         inner->parenthesized = true;
-        *out = inner;
+        f->term = inner;
         return true;
     }
     cond_free(inner);
-    *L = save;
+    *L = f->save;
     mq_scan(L);
-    if (parse_feature_body(L, &f) && L->kind == TK_RPAREN) {
+    if (parse_feature_body(L, &feat) && L->kind == TK_RPAREN) {
         mq_scan(L);
-        *out = cond_new(MQC_FEATURE);
-        (*out)->feat = f;
+        f->term = cond_new(MQC_FEATURE);
+        f->term->feat = feat;
         return true;
     }
-    *L = save;
-    if (!parse_enclosed(L, &f)) return false;
-    *out = cond_new(MQC_FEATURE);
-    (*out)->feat = f;
+    *L = f->save;
+    if (!parse_enclosed(L, &feat)) return false;
+    f->term = cond_new(MQC_FEATURE);
+    f->term->feat = feat;
     return true;
 }
 
+typedef enum { MQP_STEP_NEST, MQP_STEP_DONE, MQP_STEP_REFUSED } MqParseStep;
+
 /* `<media-condition>` (§3), with `allow_or` false expressing `<media-condition-without-or>` — the production a
    media query's `<media-type> and …` tail uses, because `screen and (a) or (b)` is ambiguous and the grammar
-   forbids it rather than picking a precedence. */
+   forbids it rather than picking a precedence. Runs frame `f` until it ends (DONE, its condition in
+   `combined`; REFUSED, having freed what it built) or until its next `<media-in-parens>` opens with `(`, whose
+   `<media-condition>` branch is tried first (NEST). */
+static MqParseStep parse_condition_step(MqLex *L, MqParseFrame *f)
+{
+    for (;;) {
+        switch (f->state) {
+        case MQP_BEGIN:
+            if (tk_is_ident(L, "not")) {
+                mq_scan(L);
+                f->neg = true;
+            }
+            f->state = MQP_WANT;
+            break;
+        case MQP_WANT:
+            if (L->kind != TK_LPAREN) {
+                f->state = MQP_REFUSE;
+                break;
+            }
+            f->save = *L;
+            mq_scan(L);
+            f->state = MQP_INNER;
+            return MQP_STEP_NEST;
+        case MQP_INNER:
+            DFAIL("a `<media-condition>` frame was stepped while the frame above it still parses its "
+                  "parenthesized term; parse_condition steps only the top frame");
+            f->state = MQP_REFUSE;
+            break;
+        case MQP_REFUSE:
+            cond_free(f->combined);
+            f->combined = NULL;
+            return MQP_STEP_REFUSED;
+        case MQP_GOT:
+            if (f->neg) {
+                f->combined = cond_new(MQC_NOT);
+                cond_add(f->combined, f->term);
+                return MQP_STEP_DONE;
+            }
+            if (f->combined == NULL) {
+                if (!tk_is_ident(L, "and") && !tk_is_ident(L, "or")) {
+                    f->combined = f->term;
+                    return MQP_STEP_DONE;
+                }
+                f->is_and = tk_is_ident(L, "and");
+                if (!f->is_and && !f->allow_or) {
+                    cond_free(f->term);
+                    return MQP_STEP_REFUSED;
+                }
+                f->combined = cond_new(f->is_and ? MQC_AND : MQC_OR);
+            }
+            cond_add(f->combined, f->term);
+            f->term = NULL;
+            if (tk_is_ident(L, f->is_and ? "and" : "or")) {
+                mq_scan(L);
+                f->state = MQP_WANT;
+                break;
+            }
+            /* §3: `and` and `or` may not be mixed at one level without parentheses. */
+            if (tk_is_ident(L, "and") || tk_is_ident(L, "or")) {
+                f->state = MQP_REFUSE;
+                break;
+            }
+            return MQP_STEP_DONE;
+        }
+    }
+}
+
+/* §3's `<media-condition>` at the cursor. The author's parenthesis nesting is walked on a heap stack of
+   frames, one per `( <media-condition> )` being tried, so its depth costs no C stack. On false `*out` is
+   untouched and nothing is left allocated. */
 static bool parse_condition(MqLex *L, bool allow_or, MqCond **out)
 {
-    MqCond *first = NULL, *combined;
-    bool is_and;
+    MqParseFrame *v = NULL, *f;
+    size_t n = 0, cap = 0;
+    bool push = true, or_ok = allow_or, ok;
+    MqParseStep r;
+    MqCond *node;
 
-    if (tk_is_ident(L, "not")) {
-        mq_scan(L);
-        if (!parse_in_parens(L, &first)) return false;
-        combined = cond_new(MQC_NOT);
-        cond_add(combined, first);
-        *out = combined;
-        return true;
-    }
-    if (!parse_in_parens(L, &first)) return false;
-    if (!tk_is_ident(L, "and") && !tk_is_ident(L, "or")) { *out = first; return true; }
-    is_and = tk_is_ident(L, "and");
-    if (!is_and && !allow_or) { cond_free(first); return false; }
-    combined = cond_new(is_and ? MQC_AND : MQC_OR);
-    cond_add(combined, first);
-    while (tk_is_ident(L, is_and ? "and" : "or")) {
-        MqCond *next = NULL;
+    for (;;) {
+        if (push) {
+            if (n == cap) {
+                MqParseFrame *grown;
 
-        mq_scan(L);
-        if (!parse_in_parens(L, &next)) { cond_free(combined); return false; }
-        cond_add(combined, next);
+                cap = cap ? 2 * cap : 8;
+                grown = realloc(v, cap * sizeof *grown);
+                CHECK(grown != NULL, "media queries: OOM growing the media-condition parse");
+                v = grown;
+            }
+            memset(&v[n], 0, sizeof v[n]);
+            v[n].state = MQP_BEGIN;
+            v[n].allow_or = or_ok;
+            n++;
+        }
+        f = &v[n - 1];
+        r = parse_condition_step(L, f);
+        push = r == MQP_STEP_NEST;
+        if (push) {
+            or_ok = true;   /* `( <media-condition> )` is the full production, `or` included */
+            continue;
+        }
+        ok = r == MQP_STEP_DONE;
+        node = ok ? f->combined : NULL;
+        if (--n == 0) break;
+        f = &v[n - 1];
+        DCHECK(f->state == MQP_INNER,
+               "a nested `<media-condition>` ended into a frame that was not parsing a parenthesized term");
+        f->state = parse_in_parens_rest(L, f, ok, node) ? MQP_GOT : MQP_REFUSE;
     }
-    /* §3: `and` and `or` may not be MIXED at one level without parentheses. */
-    if (tk_is_ident(L, "and") || tk_is_ident(L, "or")) { cond_free(combined); return false; }
-    *out = combined;
-    return true;
+    free(v);
+    if (ok) *out = node;
+    return ok;
 }
 
 /* Is this ident usable as a `<media-type>`? §3 excludes the keywords the grammar around it needs. */
@@ -894,23 +1063,36 @@ static void out_feature(MqOut *o, const MqFeature *f)
     out_put(o, ")");
 }
 
-static void out_cond(MqOut *o, const MqCond *c)
+/* What a condition writes before its children: its parenthesis, and a feature's whole text or `not `. */
+static void out_cond_open(MqOut *o, const MqCond *c)
 {
-    int i;
-
     if (c->parenthesized) out_put(o, "(");
-    switch (c->op) {
-    case MQC_FEATURE: out_feature(o, &c->feat); break;
-    case MQC_NOT:     out_put(o, "not "); out_cond(o, c->kids[0]); break;
-    case MQC_AND:
-    case MQC_OR:
-        for (i = 0; i < c->nkids; i++) {
-            if (i) out_put(o, c->op == MQC_AND ? " and " : " or ");
-            out_cond(o, c->kids[i]);
+    if (c->op == MQC_FEATURE) out_feature(o, &c->feat);
+    else if (c->op == MQC_NOT) out_put(o, "not ");
+}
+
+static void out_cond(MqOut *o, const MqCond *root)
+{
+    MqWalk w = { NULL, 0, 0 };
+    MqWalkFrame *f;
+    const MqCond *k;
+
+    mq_walk_push(&w, root);
+    out_cond_open(o, root);
+    while (w.n) {
+        f = &w.v[w.n - 1];
+        if (f->next < f->c->nkids) {
+            k = f->c->kids[f->next];
+            if (f->next && f->c->op != MQC_NOT) out_put(o, f->c->op == MQC_AND ? " and " : " or ");
+            f->next++;
+            out_cond_open(o, k);
+            mq_walk_push(&w, k);
+            continue;
         }
-        break;
+        if (f->c->parenthesized) out_put(o, ")");
+        w.n--;
     }
-    if (c->parenthesized) out_put(o, ")");
+    free(w.v);
 }
 
 /* CSSOM §4.2's SERIALIZE A MEDIA QUERY, for ONE query.
@@ -1334,24 +1516,26 @@ static int eval_feature(const MqFeature *f, const MqEnv *e)
     return MQ_TRUE;
 }
 
+static unsigned eval_leaf(const MqCond *c, const void *e)
+{
+    return (unsigned)eval_feature(&c->feat, e);
+}
+
+static unsigned eval_join(const MqCond *c, int i, unsigned acc, unsigned kid)
+{
+    switch (c->op) {
+    case MQC_NOT: return (unsigned)mq_not((int)kid);
+    case MQC_AND: return (unsigned)mq_and(i ? (int)acc : MQ_TRUE, (int)kid);
+    case MQC_OR:  return (unsigned)mq_or(i ? (int)acc : MQ_FALSE, (int)kid);
+    case MQC_FEATURE: break;
+    }
+    DFAIL("a media feature was folded as the parent of another condition in evaluation");
+    return MQ_FALSE;
+}
+
 static int eval_cond(const MqCond *c, const MqEnv *e)
 {
-    int r, i;
-
-    switch (c->op) {
-    case MQC_FEATURE: return eval_feature(&c->feat, e);
-    case MQC_NOT: return mq_not(eval_cond(c->kids[0], e));
-    case MQC_AND:
-        r = MQ_TRUE;
-        for (i = 0; i < c->nkids; i++) r = mq_and(r, eval_cond(c->kids[i], e));
-        return r;
-    case MQC_OR:
-        r = MQ_FALSE;
-        for (i = 0; i < c->nkids; i++) r = mq_or(r, eval_cond(c->kids[i], e));
-        return r;
-    }
-    DFAIL("a media condition with no operator reached evaluation");
-    return MQ_FALSE;
+    return (int)cond_fold(c, eval_leaf, eval_join, e);
 }
 
 /* MQ4 §2.3 "Media Types": this user agent's media type. It renders a document for a screen — every geometric answer it gives is
@@ -1413,26 +1597,27 @@ static unsigned mq_range_not(unsigned a)
     return r;
 }
 
+static unsigned range_leaf(const MqCond *c, const void *ctx)
+{
+    (void)ctx;
+    return c->feat.unknown ? 1u << MQ_UNKNOWN : (1u << MQ_FALSE) | (1u << MQ_TRUE);
+}
+
+static unsigned range_join(const MqCond *c, int i, unsigned acc, unsigned kid)
+{
+    switch (c->op) {
+    case MQC_NOT: return mq_range_not(kid);
+    case MQC_AND:
+    case MQC_OR:  return i ? mq_range_lift(c->op == MQC_AND ? mq_and : mq_or, acc, kid) : kid;
+    case MQC_FEATURE: break;
+    }
+    DFAIL("a media feature was folded as the parent of another condition in the environment-range walk");
+    return 0;
+}
+
 static unsigned cond_range(const MqCond *c)
 {
-    unsigned r;
-    int i;
-
-    switch (c->op) {
-    case MQC_FEATURE:
-        return c->feat.unknown ? 1u << MQ_UNKNOWN : (1u << MQ_FALSE) | (1u << MQ_TRUE);
-    case MQC_NOT:
-        return mq_range_not(cond_range(c->kids[0]));
-    case MQC_AND:
-    case MQC_OR:
-        DCHECK(c->nkids >= 2, "an `and`/`or` media condition was built with fewer than two operands");
-        r = cond_range(c->kids[0]);
-        for (i = 1; i < c->nkids; i++)
-            r = mq_range_lift(c->op == MQC_AND ? mq_and : mq_or, r, cond_range(c->kids[i]));
-        return r;
-    }
-    DFAIL("a media condition with no operator reached the environment-range walk");
-    return 0;
+    return cond_fold(c, range_leaf, range_join, NULL);
 }
 
 /* `query_matches`'s answer over every environment: 1 when it matches in all of them, 0 when in none, -1 when

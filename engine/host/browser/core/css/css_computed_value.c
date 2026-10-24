@@ -204,21 +204,15 @@ static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
 
 /* ---- css-variables-1 §3's SUBSTITUTION, the policy half ------------------------------------------------- */
 
-/* THE NAMES CURRENTLY BEING SUBSTITUTED, which is css-values-5's `cyclic substitution contexts` reduced to the
-   one question this engine can ask: is the property we are about to resolve already on the chain that asked
-   for it. It is a STACK and not a seen-set — a value may legitimately reference one custom property twice
-   (`margin: var(--gap) var(--gap)`), and a set would call the second reference a cycle. */
-typedef struct {
-    lxb_dom_element_t *el;
-    char  **names;
-    size_t  n, cap;
-} CssVarChain;
-
-static CssVarResolution css_cv_var_resolve(void *ud, const char *name, size_t name_n, char **out)
+/* The lookup css_var_substitute asks of `ud`, the element: `--name`'s value there, unsubstituted.
+   §7's defaulting over the custom property is where its inheritance happens: core/css/css_defaulting.h
+   answers INHERITED for the whole `--*` family, so this one call walks to whichever ancestor declared it. A
+   NULL is css-variables-1 §2.2's guaranteed-invalid value — "The initial value of a custom property is a
+   guaranteed-invalid value" — and css_style_declaration.h already answers NULL for a property with no initial
+   value anywhere, which is exactly a custom property nobody set. */
+static char *css_cv_var_lookup(void *ud, const char *name, size_t name_n)
 {
-    CssVarChain *chain = ud;
-    char *full, *raw, *sub;
-    size_t k;
+    char *full, *raw;
 
     full = malloc(name_n + 3);
     CHECK(full != NULL, "css-variables-1 §3: OOM naming the custom property a `var()` references");
@@ -226,41 +220,9 @@ static CssVarResolution css_cv_var_resolve(void *ud, const char *name, size_t na
     full[1] = '-';
     memcpy(full + 2, name, name_n);
     full[name_n + 2] = '\0';
-
-    for (k = 0; k < chain->n; k++)
-        if (strcmp(chain->names[k], full) == 0) { free(full); return CSS_VAR_CYCLE; }
-
-    /* §7's DEFAULTING over the custom property, which is where its INHERITANCE happens: core/css/
-       css_defaulting.h answers INHERITED for the whole `--*` family, so this one call walks to whichever
-       ancestor declared it. A NULL is css-variables-1 §2.2's guaranteed-invalid value — "The initial value of
-       a custom property is a guaranteed-invalid value" — and css_style_declaration.h already answers NULL for
-       a property with no initial value anywhere, which is exactly a custom property nobody set. */
-    raw = css_cv_specified(chain->el, full);
-    if (raw == NULL) { free(full); return CSS_VAR_GUARANTEED_INVALID; }
-    if (!css_var_references(raw)) { free(full); *out = raw; return CSS_VAR_RESOLVED; }
-
-    if (chain->n == chain->cap) {
-        size_t want = chain->cap ? chain->cap * 2 : 8;
-
-        chain->names = realloc(chain->names, want * sizeof *chain->names);
-        CHECK(chain->names != NULL, "css-variables-1 §3: OOM recording the substitution chain — without it a "
-                                    "cyclic reference recurses instead of being answered");
-        chain->cap = want;
-    }
-    chain->names[chain->n++] = full;           /* the chain owns `full` from here */
-    sub = css_var_substitute(raw, css_cv_var_resolve, chain);
-    free(raw);
-    free(chain->names[--chain->n]);
-
-    /* A CUSTOM PROPERTY WHOSE OWN VALUE DID NOT SUBSTITUTE IS GUARANTEED-INVALID, NOT A CYCLE — so the var()
-       that asked for it may still use ITS fallback, which is what a browser does for `--a: var(--missing);
-       color: var(--a, red)`. The DIRECT cycle is already answered above, before any recursion, so the two
-       states only meet here and collapsing them at this point changes no observable: a cycle reported from
-       one level down leaves every var() on the chain without a value, and each of those either has a fallback
-       the standard says to use or makes the declaration invalid at computed-value time anyway. */
-    if (sub == NULL) return CSS_VAR_GUARANTEED_INVALID;
-    *out = sub;
-    return CSS_VAR_RESOLVED;
+    raw = css_cv_specified(ud, full);
+    free(full);
+    return raw;
 }
 
 /* THE ONE PLACE THIS FILE READS A CASCADED VALUE, so §3's substitution is a step of the pipeline rather than a
@@ -272,9 +234,9 @@ static CssVarResolution css_cv_var_resolve(void *ud, const char *name, size_t na
  *
  * A CUSTOM PROPERTY'S OWN VALUE IS RETURNED UNSUBSTITUTED, and that is the load-bearing asymmetry rather than
  * an omission. §3 substitutes a custom property into ANOTHER property's value; the referenced property's own
- * `var()`s are resolved by the resolver above, one chain-frame deeper, because only there is the cycle stack
- * in hand. Substituting here as well would run the same text twice and would do it with no chain, so
- * `--a: var(--a)` would recurse instead of answering.
+ * `var()`s are substituted by css_var_substitute's walk, one frame deeper, because only there is the cycle
+ * stack in hand. Substituting here as well would run the same text twice and would do it with no chain, so
+ * `--a: var(--a)` would never be answered as a cycle.
  *
  * A FAILED SUBSTITUTION ANSWERS `unset`, WHICH IS THE WHOLE FAILURE ARM AND IS NOT A FALL BACK TO THE PARENT.
  * css-variables-1 §2.2 "Guaranteed-Invalid Values" makes such a property "invalid at computed-value time",
@@ -291,20 +253,7 @@ static CssVarResolution css_cv_var_resolve(void *ud, const char *name, size_t na
    cascaded value it came out of. */
 static char *css_cv_substitute_for(lxb_dom_element_t *el, const char *text)
 {
-    CssVarChain chain;
-    char *sub;
-
-    chain.el = el;
-    chain.names = NULL;
-    chain.n = 0;
-    chain.cap = 0;
-    sub = css_var_substitute(text, css_cv_var_resolve, &chain);
-    DCHECK(chain.n == 0,
-           "css-variables-1 §3's substitution returned with names still on its chain — every push is paired "
-           "with a pop at the same frame, so a survivor is a resolver arm that returned without unwinding and "
-           "the next declaration on this element would be told it is in a cycle");
-    free(chain.names);
-    return sub;
+    return css_var_substitute(text, css_cv_var_lookup, el);
 }
 
 static char *css_cv_cascaded(lxb_dom_element_t *el, const char *name)
@@ -1186,7 +1135,6 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
 {
     CssCvFontCtx *f = p;
     lxb_dom_node_t *root;
-    CssLength len;
 
     DCHECK(f != NULL && f->el != NULL,
            "css-values-4 §6.1.1's font-metric callback was invoked with no element — the pair is handed to "
@@ -3115,6 +3063,8 @@ static bool resolved_display_generates_a_box(lxb_dom_element_t *el)
    THE CASCADE IS OVER LONGHANDS, so a shorthand that fell past this would reach cssom_cascaded_value, which
    asserts against exactly that: no layer declares a shorthand, and the answer would be the property's initial
    value with nothing to say the longhands that DID set it were never looked at. */
+static JSValue css_resolved_longhand_held(JSContext *ctx, lxb_dom_element_t *el, const char *name);
+
 static JSValue css_resolved_shorthand(JSContext *ctx, lxb_dom_element_t *el, const char *name,
                                       const char *const *lh, unsigned n)
 {
@@ -3128,7 +3078,9 @@ static JSValue css_resolved_shorthand(JSContext *ctx, lxb_dom_element_t *el, con
     CHECK(n <= CSS_SHORTHAND_MAX_LONGHANDS,
           "cssom: a shorthand's longhand list outgrew the array §9's resolved value sized from it");
     for (i = 0; i < n && all; i++) {
-        parts[i] = css_resolved_value(ctx, el, lh[i]);
+        DCHECK(!css_shorthand_is_shorthand(lh[i]),
+               "a shorthand's longhand list names another shorthand; §6.6.1's step maps a shorthand to longhands");
+        parts[i] = css_resolved_longhand_held(ctx, el, lh[i]);
         if (JS_IsException(parts[i])) { all = false; break; }
         held = i + 1;
         /* A RESOLVED VALUE THAT IS NOT A PLAIN STRING carries a DOMAIN — a used value derived from the viewport
@@ -3336,7 +3288,6 @@ static JSValue css_resolved_value_held(JSContext *ctx, lxb_dom_element_t *el, co
 {
     const char *const *lh;
     unsigned nlh;
-    JSValue out;
 
     DCHECK(ctx != NULL, "a resolved value was asked for with no realm to answer it in — the string is created "
                         "there, and a used value derived from the viewport mints its domain in the element's "
@@ -3344,6 +3295,14 @@ static JSValue css_resolved_value_held(JSContext *ctx, lxb_dom_element_t *el, co
     DCHECK(el != NULL && name != NULL, "a resolved value was asked for with no element or no property name");
     lh = css_shorthand_longhands(name, &nlh);
     if (lh) return css_resolved_shorthand(ctx, el, name, lh, nlh);
+    return css_resolved_longhand_held(ctx, el, name);
+}
+
+/* §9's resolved value of a longhand, inside the caller's hold. */
+static JSValue css_resolved_longhand_held(JSContext *ctx, lxb_dom_element_t *el, const char *name)
+{
+    JSValue out;
+
     switch (css_resolved_kind(name)) {
     case CSS_RESOLVED_COMPUTED:
         break;

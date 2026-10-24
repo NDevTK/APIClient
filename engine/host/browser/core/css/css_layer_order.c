@@ -32,17 +32,23 @@ CssLayerOrder *css_layer_order_create(void)
     return o;
 }
 
+/* Frees every node under `n`. Each node's children are spliced in ahead of its later siblings before it is
+   freed, so the walk needs no stack and a deep layer name costs no C stack. */
 static void layer_node_free_children(CssLayerNode *n)
 {
     CssLayerNode *c = n->first, *next;
 
     while (c) {
+        if (c->first) {
+            c->last->next = c->next;
+            c->next = c->first;
+        }
         next = c->next;
-        layer_node_free_children(c);
         free(c->name);
         free(c);
         c = next;
     }
+    n->first = n->last = NULL;
 }
 
 void css_layer_order_free(CssLayerOrder *o)
@@ -126,14 +132,41 @@ CssLayerNode *css_layer_order_declare(CssLayerOrder *o, CssLayerNode *parent, co
    nesting are similarly added to an implicit sub-layer AFTER the explicitly nested layers" — so a node's
    children are numbered first, in declaration order, and the node's own implicit sub-layer takes the next
    index. The root is therefore numbered last, which is §6.4.3's "unlayered rules are sorted later than any
-   layered rules within the same parent layer". */
-static unsigned layer_seal_walk(CssLayerNode *n, unsigned next)
+   layered rules within the same parent layer". The tree's depth is a page's, so the walk is on a heap stack of
+   (node, next child to number); it returns how many nodes it numbered. */
+static unsigned layer_seal_walk(CssLayerNode *root)
 {
-    CssLayerNode *c;
+    struct LayerSealFrame { CssLayerNode *n, *c; } *v, *grown;
+    size_t depth = 1, cap = 16;
+    unsigned next = 0;
 
-    for (c = n->first; c; c = c->next) next = layer_seal_walk(c, next);
-    n->index = next;
-    return next + 1;
+    v = malloc(cap * sizeof *v);
+    CHECK(v != NULL, "cssom: OOM numbering CSS Cascade §6.4.3's layer order");
+    v[0].n = root;
+    v[0].c = root->first;
+    while (depth > 0) {
+        struct LayerSealFrame *top = &v[depth - 1];
+
+        if (top->c) {
+            CssLayerNode *c = top->c;
+
+            top->c = c->next;
+            if (depth == cap) {
+                cap *= 2;
+                grown = realloc(v, cap * sizeof *grown);
+                CHECK(grown != NULL, "cssom: OOM numbering CSS Cascade §6.4.3's layer order");
+                v = grown;
+            }
+            v[depth].n = c;
+            v[depth].c = c->first;
+            depth++;
+            continue;
+        }
+        top->n->index = next++;
+        depth--;
+    }
+    free(v);
+    return next;
 }
 
 void css_layer_order_seal(CssLayerOrder *o)
@@ -142,7 +175,7 @@ void css_layer_order_seal(CssLayerOrder *o)
     DCHECK(!o->sealed, "§6.4.3's layer order was sealed twice — the second numbering would be identical, which "
                        "is why this is an invariant and not a no-op: a caller sealing again is a caller that "
                        "has lost track of which phase it is in");
-    o->n = layer_seal_walk(&o->root, 0);
+    o->n = layer_seal_walk(&o->root);
     o->sealed = true;
     DCHECK(o->root.index == o->n - 1,
            "§6.4.3's IMPLICIT OUTER LAYER is not last in the layer order. It holds every unlayered rule, and "
