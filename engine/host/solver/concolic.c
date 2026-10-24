@@ -2117,6 +2117,13 @@ typedef struct { const char *component; char *src; char *encode; char prefix; So
         SourceDelivery;
 static SourceDelivery *g_srcs;
 static int g_srcs_n, g_srcs_cap;
+/* The precondition rows (concolic.h): a second array beside the delivery rows rather than a column of them,
+   because every delivery reader (the encode set, the prefix, the carrier, concolic_deliver) matches a row by
+   source and would otherwise read a precondition as a mechanism. Same claimant and give-back as g_srcs. */
+typedef struct { const char *component; char *src; SourcePreconditionKind kind; } SourcePrecondition;
+static SourcePrecondition *g_pres;
+static int g_pres_n, g_pres_cap;
+
 
 /* The joint domain's separator (concolic.h says what reaches it, why the identity is the set and not an
    expression over it, and why narrowing the joint narrows no member). It is part of the identity, so a member
@@ -2286,6 +2293,7 @@ static const char *deliver_token(SourceDeliverKind k)
     case SRC_DELIVER_USER_FILE:         return "user-file";
     case SRC_DELIVER_CROSS_DOCUMENT_MESSAGE: return "cross-document-message";
     case SRC_DELIVER_USER_INPUT:        return "user-input";
+    case SRC_DELIVER_NAVIGABLE_NAME:    return "navigable-name";
     }
     DFAIL("a source declared a delivery mechanism with no report token — the token is what the reproduction "
           "envelope states and what the delivery layer switches on, so the mechanism would cross as nothing");
@@ -2362,6 +2370,14 @@ void concolic_undeclare_sources(const char *component)
            walk's order must not depend on which unrelated component released first. */
         memmove(&g_srcs[i], &g_srcs[i + 1], (size_t)(g_srcs_n - i - 1) * sizeof *g_srcs);
         g_srcs_n--;
+    }
+    /* …and its precondition rows, the same claim in the second array. */
+    i = 0;
+    while (i < g_pres_n) {
+        if (strcmp(g_pres[i].component, component) != 0) { i++; continue; }
+        free(g_pres[i].src);
+        memmove(&g_pres[i], &g_pres[i + 1], (size_t)(g_pres_n - i - 1) * sizeof *g_pres);
+        g_pres_n--;
     }
 }
 
@@ -2479,6 +2495,89 @@ int concolic_source_delivery(const char *root, const char **kind, char *prefix)
     return 1;
 }
 
+const char *concolic_source_plant_from(const char *root)
+{
+    int row = root_declared_row(root);
+
+    DCHECK(row >= 0, "what a plant requires was asked of a root that declares no delivery — the caller asks "
+                     "concolic_source_delivery first, which answers that root");
+    if (row < 0) return NULL;
+    switch (g_srcs[row].deliver) {
+    case SRC_DELIVER_PLANT: return "sibling-subdomain";
+    case SRC_DELIVER_ADDRESS: case SRC_DELIVER_REFERRING_ADDRESS: case SRC_DELIVER_USER_FILE:
+    case SRC_DELIVER_CROSS_DOCUMENT_MESSAGE: case SRC_DELIVER_NAVIGABLE_NAME: case SRC_DELIVER_USER_INPUT:
+        return NULL;
+    }
+    DFAIL("a source declared a delivery mechanism that does not say whether it is a plant");
+    return NULL;
+}
+
+static const char *precondition_token(SourcePreconditionKind k)
+{
+    switch (k) {
+    case SRC_PRE_SAME_ORIGIN_STORE: return "same-origin";
+    case SRC_PRE_APPLICATION_STATE: return "application-state";
+    }
+    DFAIL("a source declared a precondition with no report token");
+    return NULL;
+}
+
+void concolic_declare_source_precondition(const char *component, const char *src, SourcePreconditionKind kind)
+{
+    int i;
+
+    CHECK(src != NULL, "a precondition source was declared with no identity");
+    DCHECK(component != NULL && *component, "a precondition source was declared by no component — the row is a "
+                                            "claim its claimant gives back at its own release");
+    for (i = 0; i < g_srcs_n; i++)
+        DCHECKF(strcmp(g_srcs[i].src, src) != 0, "`%s` was declared a precondition source and %s already "
+                "declared it an attacker source — a source either has a browser delivery or names what must "
+                "already hold, never both", src, g_srcs[i].component);
+    for (i = 0; i < g_pres_n; i++)
+        DCHECKF(strcmp(g_pres[i].src, src) != 0, "the precondition source `%s` was declared twice (by %s first) "
+                "— a claimant with dynamic rows asks concolic_source_precondition_declared_by first", src,
+                g_pres[i].component);
+    if (g_pres_n == g_pres_cap) {
+        int c = g_pres_cap ? g_pres_cap * 2 : 8;
+        SourcePrecondition *a = reclaim_realloc(g_pres, (size_t)c * sizeof *a);
+        CHECK(a != NULL, "concolic: OOM declaring a precondition source");
+        g_pres = a; g_pres_cap = c;
+    }
+    g_pres[g_pres_n].component = component;
+    g_pres[g_pres_n].src = strdup(src);
+    g_pres[g_pres_n].kind = kind;
+    CHECK(g_pres[g_pres_n].src != NULL, "concolic: OOM declaring a precondition source");
+    g_pres_n++;
+}
+
+int concolic_source_precondition_declared_by(const char *component, const char *src)
+{
+    int i;
+
+    DCHECK(component != NULL && *component && src != NULL,
+           "the precondition registry was asked whether a component owns a row, with no component or no source");
+    for (i = 0; i < g_pres_n; i++)
+        if (!strcmp(g_pres[i].src, src)) {
+            DCHECK(strcmp(g_pres[i].component, component) == 0,
+                   "a component asked whether it owns a precondition source a DIFFERENT component declared");
+            return 1;
+        }
+    return 0;
+}
+
+const char *concolic_source_precondition(const char *root)
+{
+    const char *p;
+    size_t n;
+    int i, j;
+
+    for (i = 0; root_member(root, i, &p, &n); i++)
+        for (j = 0; j < g_pres_n; j++)
+            if (!strncmp(g_pres[j].src, p, n) && g_pres[j].src[n] == '\0')
+                return precondition_token(g_pres[j].kind);
+    return NULL;
+}
+
 const char *concolic_source_encodes(const char *root)
 {
     int row = root_declared_row(root);
@@ -2523,6 +2622,7 @@ static CarrierKind root_carrier(const char *root)
     case SRC_DELIVER_CROSS_DOCUMENT_MESSAGE: return CARRIER_VERBATIM;   /* HTML §9.3.3 steps 7/8.4 */
     case SRC_DELIVER_USER_INPUT:             return CARRIER_VERBATIM;   /* input_value.c sanitizes at the edit */
     case SRC_DELIVER_PLANT:                  return CARRIER_CONSTRAINED;/* RFC 6265 §4.1.1's cookie-octet */
+    case SRC_DELIVER_NAVIGABLE_NAME:         return CARRIER_VERBATIM;   /* HTML §7.2.2.1: the name as written */
     }
     DFAIL("a source declared a delivery mechanism that does not say what it does to an UNDECLARED byte — the "
           "declared set is only the part that distinguishes one component from its siblings, so every "
@@ -6048,6 +6148,10 @@ void concolic_free(void)
     int i;
 
     source_overlay_withdraw();
+    /* absent.c is this component's own: its published-namespace paths name records of a document that is gone,
+       and its precondition rows are claims in the registry below, so it is released before that registry's
+       emptiness is asserted. */
+    absent_free();
 #if APICLIENT_DEV
     if (g_srcs_n != 0)
         DFAILF("%s did not give back the attacker SOURCE `%s` before the solver's agent state was released. "
@@ -6060,6 +6164,15 @@ void concolic_free(void)
     free(g_srcs);
     g_srcs = NULL;
     g_srcs_n = g_srcs_cap = 0;
+#if APICLIENT_DEV
+    if (g_pres_n != 0)
+        DFAILF("%s did not give back the precondition SOURCE `%s` before the solver's agent state was released "
+               "— its claimant releases it at its own concolic_undeclare_sources", g_pres[0].component,
+               g_pres[0].src);
+#endif
+    free(g_pres);
+    g_pres = NULL;
+    g_pres_n = g_pres_cap = 0;
     /* The installed @S substitution is this component's own copy: concolic_set_candidate strdups it from the
        running flow at every switch, so the last flow leaves a pair that flow_registry_free (which frees the
        flow's strings) cannot reach. Freed, not asserted null, since nothing orders the last switch against
@@ -6080,9 +6193,6 @@ void concolic_free(void)
     }
     free(g_keynames);      g_keynames = NULL;      g_keynames_n = g_keynames_cap = 0;
     free(g_keynames_hash); g_keynames_hash = NULL; g_keynames_hash_cap = 0;
-    /* The published-namespace paths, for the same reason: a path names a record of a document that is gone,
-       and the addresses it is keyed by are about to be reused. */
-    absent_free();
     /* The contradicted-example latch, agent state like the two above: left set, it would make the next agent
        probe a chain in which nothing has been contradicted. A cost, not a wrong answer. */
     g_ex_contra_any = 0;

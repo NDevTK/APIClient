@@ -1683,7 +1683,7 @@ function _principalGateSentence(principalGates) {
 }
 
 function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, pageUrl, marker,
-                           principalDemand, principalGates, principalPins) {
+                           principalDemand, principalGates, principalPins, precondition) {
   DCHECK(typeof poc === "string" && poc.length > 0,
          "an @S live-verify was started with no engine poc — solve_json_array emits `poc` on every fire-verified "
          + "entry and only on those, so a probe without one is being built for a PARKED search (sink=" + sinkName + ")");
@@ -1705,13 +1705,28 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
     out.why = "no page url recorded for this finding — a live delivery navigates the page the sink was observed on";
     return out;
   }
+  if (precondition) {
+    // solve.h's `precondition`: a root no attacker writes from outside the victim's own state. The sink is
+    // reached and the breakout fired in the model, but there is no attacker delivery to perform.
+    out.why = "the engine labels source `" + (source || "?") + "` with the precondition `" + precondition
+            + "` — the sink is reached, but no attacker delivers these bytes, so this layer performs nothing.";
+    return out;
+  }
+  // A fire-verified entry carries a delivery or a precondition (the result door, docSink, refuses neither).
+  DCHECK(!!delivery, "a live-verify reached buildLiveDelivery with neither a delivery nor a precondition for "
+                     + "source `" + (source || "?") + "` — record_sink asserts one on every fired PoC");
   if (!delivery) {
-    // The engine declared no delivery for this source — which is itself the statement, not a missing field:
-    // server-injected page state is written by the attacker directly and no component carries or transforms
-    // it, so there is nothing for this layer to perform. Never guess a vector here.
-    out.why = "the engine declares no browser delivery for source `" + (source || "?") + "` — nothing carries or "
-            + "transforms these bytes on the way into the page, so there is no navigation this layer can perform. "
-            + "The sink and its breakout are still fire-verified.";
+    out.why = "the engine states neither a delivery nor a precondition for source `" + (source || "?") + "`.";
+    return out;
+  }
+  if (delivery === "navigable-name") {
+    // HTML §7.2.2.1: the attacker's page opens the victim under the payload as its name.
+    // Named residual: the delivery is named, not performed. Not covered: opening the victim from the attacker
+    // page with the payload as the window name. The next diff performs it as window.open(pageUrl, payload)
+    // from that page. Its absence shows as every navigable-name finding reporting this sentence and no hit.
+    out.delivery = "the attacker names the victim's window with the payload, then navigates it to the page";
+    out.why = "this source is the WINDOW NAME: the attacker's page sets it by opening or embedding the victim "
+            + "under that name, and this layer does not perform that yet.";
     return out;
   }
   if (delivery === "address") {
@@ -1975,7 +1990,7 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
 }
 function startExploitProbe(msg) {
   _pruneProbeSessions();
-  const { waitMs, findingId, sinkName, poc, source, delivery, deliveryPrefix,
+  const { waitMs, findingId, sinkName, poc, source, delivery, deliveryPrefix, precondition,
           principalDemand, principalGates, principalPins, acts } = msg || {};
   if (!poc) throw new Error("need the engine's poc (the fire-verified breakout input from the @S finding)");
   DCHECK(acts === undefined || (Array.isArray(acts) && acts.length > 0 && acts.every(function (a) {
@@ -2063,7 +2078,7 @@ function startExploitProbe(msg) {
   // PROBE_HIT lands on this marker and _recordProbeHit decides whether the reporting document is the one the
   // payload was delivered to.
   var _poc = buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, session.pageUrl, marker,
-                               principalDemand, principalGates, principalPins);
+                               principalDemand, principalGates, principalPins, precondition);
   DCHECK(!!_poc && typeof _poc === "object" && typeof _poc.payload === "string",
          "buildLiveDelivery answered with no record — it returns {pocJs, payload, context, source} on every "
          + "arm including the ones it cannot perform, so an absent one is that function having grown a path "

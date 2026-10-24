@@ -1026,6 +1026,27 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
            "the search behind a fire-verified @S PoC never learned how its bytes arrive — the finding is the "
            "strongest thing this half of the tool emits, and without the root §S(d)'s reproduction envelope "
            "reports it as an exploit no navigation reaches");
+    /* Every source a fired PoC rides is either an attacker source with a browser delivery or a precondition
+       the report labels; the emission states which (emit_delivery).
+       Named residual: only the delivery root is asked. Not covered: a source the replayed path pinned without
+       the payload riding it (a gate on location.hash before a write fed from local storage), and a stored value
+       the application itself wrote from a declared source in an earlier flow (visit with #x, its setItem stores
+       it, a later load reads it). The next diff records the sources a candidate's path pinned and links a read
+       of a stored key to the write whose value carried a declared root, emitting the ordered steps. Its absence
+       shows as a finding labelled with a precondition on a page whose own code writes that key from its
+       address. */
+    {
+        const char *kind = NULL;
+        char prefix = 0;
+        int delivered = concolic_source_delivery(twin->root, &kind, &prefix);
+
+        DCHECKF(delivered || concolic_source_precondition(twin->root) != NULL,
+                "a fire-verified @S PoC rides `%s`, which no component declared either as an attacker source "
+                "with a browser delivery (concolic_declare_source) or as a precondition "
+                "(concolic_declare_source_precondition) — the PoC cannot say how an attacker puts these bytes "
+                "there. Declare the source where it is minted", twin->root);
+        (void)delivered;
+    }
     sink_class(cls);   /* the row exists before anything is stored against it */
     DCHECK(!under_act || acts != NULL, "a fire verified under an engine drive was stored with no act stated — "
                                        "js_x9 refuses a drive with no user act before it records");
@@ -2153,9 +2174,9 @@ static void emit_sender_pins(JsonBuf *b, const SenderPins *sp) {
 /* The source's declared browser delivery, written the same way into both entry shapes: `sourceEncodes` is what a
    breakout had to survive and `sourceDelivers` what a run measured, while `delivery` and `deliveryPrefix` are
    what a reproduction must perform. Asked with the root, not the injection identity, because the registry
-   matches only declared sources. An undeclared source writes nothing, and that silence is a fact
-   (server-injected page state is written by the attacker directly); a missing root is not that fact, which is
-   why it is asserted. The search comes too, for what its path demanded of an attacker's principal. */
+   matches only declared sources. A root with neither a delivery nor a precondition writes neither; a fired PoC
+   always has one (record_sink asserts it), so that silence is a parked search over a source no component
+   declares. A missing root is not that fact, which is why it is asserted. The search comes too, for what its path demanded of an attacker's principal. */
 static void emit_delivery(JsonBuf *b, const Cand *e, const char *root, const char *delivers) {
     const char *enc, *kind = NULL;
     char prefix = 0;
@@ -2179,11 +2200,23 @@ static void emit_delivery(JsonBuf *b, const Cand *e, const char *root, const cha
         json_buf_raw(b, ","); json_buf_key(b, "sourceDelivers"); json_buf_str(b, delivers);
     }
     if (concolic_source_delivery(root, &kind, &prefix) && kind) {
+        const char *from = concolic_source_plant_from(root);
+
         json_buf_raw(b, ","); json_buf_key(b, "delivery"); json_buf_str(b, kind);
         if (prefix) {
             char p[2] = { prefix, 0 };
             json_buf_raw(b, ","); json_buf_key(b, "deliveryPrefix"); json_buf_str(b, p);
         }
+        /* What a plant requires of the attacker: the delivery is two-stage and its first stage is not open to
+           every origin. */
+        if (from) { json_buf_raw(b, ","); json_buf_key(b, "plantFrom"); json_buf_str(b, from); }
+    }
+    /* A member of the root that no attacker writes from outside the victim's own state: the finding is a sink
+       reached under this precondition, not an attacker PoC, and the report labels it so. */
+    {
+        const char *pre = concolic_source_precondition(root);
+
+        if (pre) { json_buf_raw(b, ","); json_buf_key(b, "precondition"); json_buf_str(b, pre); }
     }
     /* What the replayed path demanded of an attacker's principal. `delivery` says how an attacker puts bytes in
        this source; this says whose identity they must hold while doing it. For a cross-document message the post

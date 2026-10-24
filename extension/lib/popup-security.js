@@ -36,6 +36,8 @@ var _DELIVERY = {
   "referring-address": function ()  { return "the payload rides the address the victim ARRIVES FROM — the attacker's URL, not the victim's"; },
   "user-file":         function ()  { return "the user must hand the document an attacker-supplied file — no navigation delivers it"; },
   "user-input":        function ()  { return "the user must type the attacker's text into the field the typing act names — no navigation delivers it"; },
+  // HTML §7.2.2.1: the name belongs to the navigable, so the document that opens or embeds the victim sets it.
+  "navigable-name":    function ()  { return "the attacker names the victim's window (window.open(url, name), an iframe name, or window.name and then a navigation) — the name is the payload"; },
   // HTML §9.3.3 "Posting messages". No navigation and no plant: the attacker holds a SECOND DOCUMENT open
   // beside the victim — the victim in an iframe on the attacker's page, or opened as a popup — and posts to it
   // while it runs. The bytes are not transformed on the way in (§9.3.3 step 7's StructuredSerializeWithTransfer
@@ -49,7 +51,18 @@ var _DELIVERY = {
 // a PRESENT one this view has no sentence for is drift, and drift asserts — then still says WHICH token it
 // could not render, because a release build strips the assert and a thrown TypeError here would empty the
 // whole panel, which reads as "nothing is here".
+// What a root no attacker writes from outside the victim's own state requires, as solve.h's `precondition`.
+var _PRECONDITION = {
+  "same-origin":       "the value sits in one of the origin's own stores, which only that origin's script writes — the sink is reached, but no attacker delivers it",
+  "application-state": "the value is state the server injects, which only the application's own write path changes — the sink is reached, but no attacker delivers it directly",
+};
 function _deliverySentence(item) {
+  if (item.precondition) {
+    DCHECK(!!_PRECONDITION[item.precondition],
+      "an @S record reached the popup with a precondition this view has no sentence for ("
+      + JSON.stringify(item.precondition) + ") — the token vocabulary is solve.h's");
+    return _PRECONDITION[item.precondition] || ("the engine labels this sink with the precondition `" + item.precondition + "`");
+  }
   if (!item.delivery)
     return "the engine declares no browser delivery for this source — nothing carries or transforms these bytes "
          + "on the way in, so there is no navigation that reproduces it";
@@ -60,7 +73,8 @@ function _deliverySentence(item) {
     + "come from solve_json_array (source=" + item.source + ")");
   if (!_DELIVERY[item.delivery])
     return "the engine declares the delivery `" + item.delivery + "`, which this view has no sentence for";
-  return _DELIVERY[item.delivery](item.deliveryPrefix);
+  return _DELIVERY[item.delivery](item.deliveryPrefix)
+       + (item.plantFrom === "sibling-subdomain" ? " (the attacker must control a sibling subdomain of the victim's site)" : "");
 }
 
 // §@S(a): A FIRING BREAKOUT IN THE MODEL IS NOT YET A WORKING EXPLOIT — it has to run under the page's ACTUAL
@@ -921,6 +935,7 @@ function renderSecurityPanel() {
                        sourceUrl: entry.sourceUrl, pageUrl: entry.pageUrl, findingId: key };
       if (item.delivery)       probeObj.delivery = item.delivery;
       if (item.deliveryPrefix) probeObj.deliveryPrefix = item.deliveryPrefix;
+      if (item.precondition)   probeObj.precondition = item.precondition;
       if (item.cspBlocks)      probeObj.cspBlocks = item.cspBlocks;
       if (item.trustedTypes)   probeObj.trustedTypes = item.trustedTypes;
       /* AND WHOSE IDENTITY THE DELIVERY NEEDS — the OTHER half of the engine's delivery declaration, and a
@@ -960,7 +975,11 @@ function renderSecurityPanel() {
 
     // POLICY-RELATIVE severity, over BOTH policy facts the engine emits — see _policyBlockers for why reading
     // only `cspBlocks` here was the same live defect as reading a name the engine never wrote.
-    var sevBadge = blockers.length
+    var sevBadge = item.precondition
+      ? domElement("span", { class: "badge badge-medium",
+                             title: "fired in the model, but " + _deliverySentence(item) },
+                   ["PRECONDITION · " + item.precondition])
+      : blockers.length
       ? domElement("span", { class: "badge badge-medium",
                              title: "broke out and fired in the model, but the page's own policy (" +
                                     _blockerNames(blockers) + ") kills THIS vector on real Chrome — the sink is " +
@@ -969,7 +988,8 @@ function renderSecurityPanel() {
       : domElement("span", { class: "badge badge-high" }, ["HIGH"]);
     cards.push(domElement("div", { class: "card", "data-finding-key": key }, [
       domElement("div", { class: "card-label" }, [
-        domElement("span", { class: "badge badge-xss" }, ["XSS PoC"]), " ", sevBadge, " ", item.sink,
+        domElement("span", { class: "badge badge-xss" }, [item.precondition ? "Sink reached" : "XSS PoC"]), " ",
+        sevBadge, " ", item.sink,
       ]),
       srcRow, pocRow, envRow,
       domElement("div", { class: "card-meta" }, srcLink),

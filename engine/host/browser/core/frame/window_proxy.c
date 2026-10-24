@@ -3821,6 +3821,9 @@ void window_proxy_init(JSContext *ctx)
     agent_state_ptr(WP_COMPONENT, &g_strings, "every origin and name string a proxy of this agent recorded");
     agent_state_ptr(WP_COMPONENT, &g_remote_navs, "the one WindowProxy per REMOTE document of this agent");
     agent_state_ptr(WP_COMPONENT, &g_live_navs, "every live WindowProxy of this agent, scanned on its per-flow doc");
+    /* §7.2.2.1's name is an attacker source where it is minted unknown (window_proxy_name_value): another
+       document names this navigable and then navigates it here. */
+    concolic_declare_source(WP_COMPONENT, "window.name", "", 0, SRC_DELIVER_NAVIGABLE_NAME);
     realm_declare_intrinsic(window_proxy_install_proto);
 }
 
@@ -3853,6 +3856,7 @@ void window_proxy_free(JSRuntime *rt)
            "§7.2.3's surface was released against a RUNTIME other than the one it was declared in — its class "
            "and its six pool entries are registrations in that runtime, and giving them back against another "
            "frees atoms of a heap this component never interned into");
+    concolic_undeclare_sources(WP_COMPONENT);
     while (e) { OwnedStr *n = e->next; free(e->s); free(e); e = n; }
     g_strings = NULL;
     /* §7.2.1.3.1 CrossOriginProperties ( O )'s and §7.2.1.3.2 CrossOriginPropertyFallback ( P )'s names,

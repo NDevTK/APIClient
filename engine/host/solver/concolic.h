@@ -569,7 +569,7 @@ int         concolic_candidate_delivered(void);
    hypothetical: the offscreen matched `/\{(hash|search|pm|reply)\}/` against a display shape the engine has
    never emitted, so live verify could not build a PoC for any finding this engine produces, and the taxonomy
    it invented had a `pm` entry for a source no component declares.
-   FIVE MECHANISMS, not one row per source: what differs between two sources carried in the victim's own
+   ONE ROW PER MECHANISM, not one row per source: what differs between two sources carried in the victim's own
    address is only the component `prefix` already names. */
 /* The two address mechanisms are named as the PAIR they are — whose address carries the payload — because that
    is the whole difference between them and because `navigation` is already a word the FIRING vocabulary uses
@@ -598,6 +598,10 @@ typedef enum {
        typed text at the edit (core/html/input_value.c), which is where §4.10.5.1.2's "User agents must not
        allow users to insert U+000A LINE FEED (LF) or U+000D CARRIAGE RETURN (CR) characters" is applied. */
     SRC_DELIVER_USER_INPUT,
+    /* The attacker names the victim's navigable: HTML §7.2.2.1's name is the navigable's target name, set by
+       the document that opens it (`open(url, name)`), by an embedder's iframe `name`, or by a page that assigns
+       `window.name` and then navigates that navigable to the victim. The string is carried as written. */
+    SRC_DELIVER_NAVIGABLE_NAME,
 } SourceDeliverKind;
 /* AND EVERY ROW NAMES ITS CLAIMANT — the declare, the give-back and the ask-first below are one mechanism
    around that one field. A declaration here is core/platform.h's FOURTH paragraph exactly: the STORAGE is this component's array and
@@ -670,6 +674,27 @@ void        concolic_undeclare_sources(const char *component);
    question for it, because that reads the whole registry and answers "yes" for a row another component
    declared. Aborts if the source is declared by somebody else: one source is owned by one component. */
 int         concolic_source_declared_by(const char *component, const char *src);
+/* A SOURCE NO ATTACKER WRITES FROM OUTSIDE THE VICTIM'S OWN STATE, declared by the component that mints it so
+   a finding rooted there is labelled with what must already hold rather than reported as an attacker PoC.
+   The same claimant contract as a delivery row (given back by concolic_undeclare_sources); one source is
+   either an attacker source or a precondition, never both. */
+typedef enum {
+    /* "same-origin": a value in one of the origin's own stores (Storage, IndexedDB), which only script of that
+       origin writes — they are per origin, shared with no subdomain, and partitioned in a third-party context. */
+    SRC_PRE_SAME_ORIGIN_STORE = 0,
+    /* "application-state": a member of the state a server injects into the page for a visitor, which only the
+       application's own write path changes. */
+    SRC_PRE_APPLICATION_STATE,
+} SourcePreconditionKind;
+void        concolic_declare_source_precondition(const char *component, const char *src,
+                                                 SourcePreconditionKind kind);
+int         concolic_source_precondition_declared_by(const char *component, const char *src);
+/* The precondition token of the first precondition member of `root`, or NULL when no member declares one. */
+const char *concolic_source_precondition(const char *root);
+/* What a `plant` delivery requires of the attacker, as a report token: "sibling-subdomain" for a cookie (a host
+   of the victim's registrable domain sets it with RFC 6265bis's Domain attribute). NULL for every mechanism that
+   is not a plant. The root must declare a delivery (concolic_source_delivery answers that first). */
+const char *concolic_source_plant_from(const char *root);
 /* THE DECLARED DELIVERY as a report states it: the mechanism's TOKEN and the address component the payload
    rides (0 for every mechanism that is not an address). Returns 0 when this source declared none — which is a
    FACT, not a default: server-injected page state (`window.__FLAGS`) is written by the attacker directly and
