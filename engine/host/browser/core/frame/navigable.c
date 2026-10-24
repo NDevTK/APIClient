@@ -1924,6 +1924,22 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         DCHECK(JS_IsArray(cookiesv),
                "§7.4 step 14's response answer carries no `setCookies` list — the trusted zone states one on every "
                "answer, and a missing one would leave this flow's jar without the cookies its response set");
+        /* THE REGISTER IS TAKEN AS SOON AS EVERY FIELD ABOVE IS READ. The response is this navigation's, not
+           the outgoing document's, and §7.5.11's abort of that document (nav_navigate_to_peer) cancels the
+           document's own fetches, among which a register still held here would be counted. §7.4 step 14's
+           response is the host's own, so a throw completion is a host that answered a network request with
+           something other than the network's answer. */
+        {
+            int completion = ENGINE_COMPLETION_NORMAL;
+            JSValue taken = engine_host_take(ctx, s->req, &completion);
+
+            DCHECK(completion == ENGINE_COMPLETION_NORMAL,
+                   "a document load's fetch was answered with a THROW completion — this request is answered by "
+                   "the trusted zone out of the network, and there is no program of a peer's for it to have "
+                   "thrown in");
+            JS_FreeValue(ctx, taken);
+            s->req = 0;
+        }
         /* Fetch §2.2.2's `get`, which JOINS repeated headers with ", " — CSP §2.2's own serialization of a
            policy LIST, which policy_container.c splits apart again. The zone that used to extract this read
            one map entry and could not express two `Content-Security-Policy` headers at all. */
@@ -2438,18 +2454,6 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     JS_FreeValue(ctx, cookiesv);
     JS_FreeValue(ctx, bodyv);
     JS_FreeValue(ctx, urlv);
-    if (s->req) {
-        /* §7.4 step 14's response is the HOST'S OWN — it fetched the bytes; it did not run a peer's program —
-           so a throw completion here is a host that answered a network request with something other than the
-           network's answer, not a document that threw. */
-        int completion = ENGINE_COMPLETION_NORMAL;
-        JSValue taken = engine_host_take(ctx, s->req, &completion);
-        DCHECK(completion == ENGINE_COMPLETION_NORMAL,
-               "a document load's fetch was answered with a THROW completion — this request is answered by the "
-               "trusted zone out of the network, and there is no program of a peer's for it to have thrown in");
-        JS_FreeValue(ctx, taken);
-        s->req = 0;
-    }
     /* THE TWO ADDRESSES THIS FRAME OWNS — the one the navigation asked for and the one the response came from.
        `resp_url` is NULL for a destination that made no request, which is the same fact `fetches` states and
        the reason `dest_url` borrows rather than owns: one of these two is what it points at, and a free of the
