@@ -420,3 +420,21 @@ THE THREE pdf.js ROWS ARE THREE DELIVERIES, AND ONLY ONE IS EXPECTED TO FIRE TOD
 `expected` states what a correct engine does with the vulnerable variant; the fixed variant is expected not to
 fire in every row. An asset whose served path starts `attacker:` is served from the attacker origin, a
 second loopback port, and `{attacker}` in `entry` is that origin.
+
+`knownbug.mjs` is the driver. `pin` fetches every asset and prints its digest beside the recorded one;
+`stage <case> <variant>` writes one variant's files for its two origins and `served.json`, which lists every
+file with its sha256 and the response headers `knownbug/headers.tsv` resolves for it — the CORS header on
+the attacker origin among them — so a host other than this driver can serve the same case from the same data.
+`run` serves that manifest from two loopback ports and drives the page with the `engine/trusted.mjs` that
+sits beside the binary, so the zone and the engine are one frozen revision:
+
+    NODE_USE_ENV_PROXY=1 node testing/corpus/knownbug.mjs run --bin <snapshot>/engine/host/out/qjs-native-none \
+        [--budget <seconds>] [--jobs <n>] [case[:variant]...]
+
+A run ends when the zone exits or at the wall-clock backstop, and the row says which (`ended`). Each
+case-variant prints one JSON row, appended to `engine/.work/knownbug/results.jsonl`, and the run ends with a
+table. The four columns are read from the root instance's last `@RESULT` document: `reached` is
+`_sinkReached > 0`, `tainted` is `_sinkTainted > 0`, `candidate` is `_candidates > 0` or a search that tried
+a payload, and the verdict is FIRED when `securitySinks` holds an entry with a `poc` and no `search` field —
+the engine's fire-verified PoC. A row with no `@RESULT` at all reports `no-result`, never a zero. The first
+`@WHY`/`@E` record the engine wrote is the row's `abort`, and the whole transcript is the row's `log`.

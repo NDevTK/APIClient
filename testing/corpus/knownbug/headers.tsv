@@ -1,0 +1,18 @@
+# Response headers for every file a known-vulnerability case serves, as data: knownbug.mjs resolves them per
+# staged file into the variant's served.json and its servers send exactly those, so another host (the
+# extension, at its own origin) can serve the same cases from the same data.
+# A row is case, origin (page | attacker), path pattern (`*`, `*.ext` or an exact served path), header, value.
+# `*` matches any case or origin. Rows apply in order, and a later row for the same header replaces an earlier.
+case	origin	path	header	value
+*	*	*	content-type	application/octet-stream
+*	*	*.html	content-type	text/html; charset=utf-8
+*	*	*.js	content-type	text/javascript; charset=utf-8
+*	*	*.mjs	content-type	text/javascript; charset=utf-8
+*	*	*.css	content-type	text/css; charset=utf-8
+*	*	*.json	content-type	application/json
+*	*	*.ftl	content-type	text/plain; charset=utf-8
+*	*	*.svg	content-type	image/svg+xml
+*	*	*.png	content-type	image/png
+*	*	*.gif	content-type	image/gif
+*	*	*.pdf	content-type	application/pdf
+*	attacker	*	access-control-allow-origin	*
