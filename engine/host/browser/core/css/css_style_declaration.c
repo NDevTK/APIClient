@@ -120,6 +120,7 @@
 #include "core/css/css_background_shorthand.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_var.h"   /* css-variables-1 §3's var(), for the parse-time rule below */
+#include "core/timing/thread_work.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
@@ -1390,6 +1391,20 @@ static void cssd_sheet_parse_free(void)
     g_sheet_parse_n = 0;
 }
 
+/* A style sheet parse over `g_parser`, which the caller has given its arena: CSS parse work, counted and
+   charged by its bytes as css_style_sheet.c's rule build is. */
+static bool cssd_stylesheet_parse(lxb_css_stylesheet_t *sst, const char *text, size_t len)
+{
+    ThreadWorkSpan tw;
+    bool ok;
+
+    thread_work_begin(&tw);
+    ok = lxb_css_stylesheet_parse(sst, g_parser, (const lxb_char_t *)text, len) == LXB_STATUS_OK;
+    thread_work_end(&tw, THREAD_WORK_CSS_PARSE, len);
+    thread_work_charge(THREAD_WORK_CSS_PARSE, len);
+    return ok;
+}
+
 /* THE PARSE OF `text`, WHICH IS EITHER THE ONE SLOT `si` ALREADY HOLDS OF THESE EXACT BYTES OR A FRESH ONE
    THAT REPLACES IT. NULL when the text did not parse, which is the same answer and the same cost the
    uncached path gave. The returned stylesheet is BORROWED and is valid until this slot is next replaced —
@@ -1443,8 +1458,7 @@ static lxb_css_stylesheet_t *cssd_sheet_parsed(uint32_t si, const char *text, si
        take it back, exactly as `cssd_parse_block` does. What differs is only who owns it when the parse
        returns. */
     lxb_css_parser_memory_set(g_parser, mem);
-    if (sst && lxb_css_stylesheet_parse(sst, g_parser, (const lxb_char_t *)text, len) != LXB_STATUS_OK)
-        sst = NULL;
+    if (sst && !cssd_stylesheet_parse(sst, text, len)) sst = NULL;
     lxb_css_parser_memory_set(g_parser, NULL);
     cssd_selectors_intact();
     if (sst == NULL) {
@@ -1478,6 +1492,10 @@ static CssMatchResult *cssd_match_result_build(lxb_dom_element_t *el, const CssA
     lxb_dom_node_t *self = lxb_dom_interface_node(el);
     CssMatchResult *m = css_match_result_create(el, sheets);
     uint32_t k, seq = 0;
+    uint64_t tested = 0;
+    ThreadWorkSpan tw;
+
+    thread_work_begin(&tw);
 
     for (k = 0; k < css_author_sheets_count(sheets); k++) {
         const CssAuthorSheet *sheet = css_author_sheets_at(sheets, k);
@@ -1515,6 +1533,7 @@ static CssMatchResult *cssd_match_result_build(lxb_dom_element_t *el, const CssA
                        "back as a different kind of rule than the one the author cascade emitted there, so "
                        "every rule after it would be cascaded in a neighbour's layer");
                 if (r->type != LXB_CSS_RULE_STYLE || !st->selector || !st->declarations) continue;
+                tested++;
                 /* No `decided` and no `out_undet`: this is a plain C loop with no rest point, so it cannot
                    keep an arm, and selector_match_node aborts naming the declaration to build
                    (JS_CFUNC_STEP_DEF over this walk) if a match would fork. */
@@ -1540,6 +1559,10 @@ static CssMatchResult *cssd_match_result_build(lxb_dom_element_t *el, const CssA
         seq += view->n;
     }
     css_match_result_finish(m, seq);
+    /* Charged by the match's input, the element and the rules it tested; a sheet re-parsed for it charges its
+       bytes inside. */
+    thread_work_end(&tw, THREAD_WORK_SELECTOR_MATCH, tested);
+    thread_work_charge(THREAD_WORK_SELECTOR_MATCH, tested + THREAD_WORK_SELECTOR_TESTS_PER_ELEMENT);
     return m;
 }
 
@@ -1978,8 +2001,7 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
     }
     sst = lxb_css_stylesheet_create(mem);
     lxb_css_parser_memory_set(g_parser, mem);
-    if (sst && lxb_css_stylesheet_parse(sst, g_parser, (const lxb_char_t *)text, len) != LXB_STATUS_OK)
-        sst = NULL;
+    if (sst && !cssd_stylesheet_parse(sst, text, len)) sst = NULL;
     lxb_css_parser_memory_set(g_parser, NULL);
     cssd_selectors_intact();
     if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST)

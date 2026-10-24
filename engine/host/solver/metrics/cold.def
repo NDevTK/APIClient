@@ -311,6 +311,16 @@ METRIC(tw_css_parse_us, "twCssParseUs", LIFETIME, "us", PROCESS, "core/timing/th
 METRIC(tw_intl_spans, "twIntlSpans", LIFETIME, "span", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_intl_bytes, "twIntlBytes", LIFETIME, "byte", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_intl_us, "twIntlUs", LIFETIME, "us", PROCESS, "core/timing/thread_work.c", INT)
+/* …layout's two kinds and the author origin's selector match: a box's spans count its body's own CPU, the
+   line items have no span of their own (their CPU is inside the box spans they run in), and each kind's
+   charged input is what its rate priced. */
+METRIC(tw_layout_box_spans, "twLayoutBoxSpans", LIFETIME, "span", PROCESS, "core/timing/thread_work.c", INT)
+METRIC(tw_layout_box_bytes, "twLayoutBoxAnswered", LIFETIME, "question", PROCESS, "core/timing/thread_work.c", INT)
+METRIC(tw_layout_box_us, "twLayoutBoxUs", LIFETIME, "us", PROCESS, "core/timing/thread_work.c", INT)
+METRIC(tw_layout_line_input, "twLayoutLineInput", LIFETIME, "item", PROCESS, "core/timing/thread_work.c", INT)
+METRIC(tw_selector_match_spans, "twSelectorMatchSpans", LIFETIME, "span", PROCESS, "core/timing/thread_work.c", INT)
+METRIC(tw_selector_match_bytes, "twSelectorMatchTests", LIFETIME, "rule", PROCESS, "core/timing/thread_work.c", INT)
+METRIC(tw_selector_match_us, "twSelectorMatchUs", LIFETIME, "us", PROCESS, "core/timing/thread_work.c", INT)
 /* …and which arm each overrunning turn was in: `stepUnitRuns` restricted to `sliceOverruns`'
    turns. An arm whose two counts are equal is a step that cannot rest (solver/engine.h's
    `over_arms`). */

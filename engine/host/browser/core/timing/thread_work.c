@@ -1,4 +1,6 @@
 /* Work the thread does outside the interpreter's dispatch. See thread_work.h. */
+#include <stdlib.h>
+
 #include "check.h"
 #include "quickjs.h"
 #include "core/timing/event_loop.h"
@@ -11,25 +13,42 @@ static uint64_t g_bytes[THREAD_WORK_N];
 static int64_t  g_cpu_us[THREAD_WORK_N];
 static uint64_t g_discarded;
 static uint64_t g_charged;
-static int      g_depth;
+static uint64_t g_charged_input[THREAD_WORK_N];
+/* The open spans' inner time: `g_inner[d]` is the thread CPU the spans nested directly inside the open span at
+   depth `d` took, which that span subtracts from its own. */
+static int64_t *g_inner;
+static int      g_depth, g_inner_cap;
 
 void thread_work_begin(ThreadWorkSpan *s)
 {
     DCHECK(g_depth >= 0, "a thread-work span ended that never began");
-    s->outer = (g_depth++ == 0);
-    s->t0 = s->outer ? quantum_thread_us() : 0;
+    if (g_depth == g_inner_cap) {
+        int cap = g_inner_cap ? 2 * g_inner_cap : 64;
+        int64_t *grown = realloc(g_inner, (size_t)cap * sizeof *grown);
+
+        CHECK(grown != NULL, "thread_work: OOM growing the span stack");
+        g_inner = grown;
+        g_inner_cap = cap;
+    }
+    s->depth = g_depth;
+    g_inner[g_depth++] = 0;
+    s->t0 = quantum_thread_us();
 }
 
 void thread_work_end(ThreadWorkSpan *s, ThreadWorkKind kind, uint64_t bytes)
 {
+    int64_t took;
+
     DCHECK(kind < THREAD_WORK_N, "a thread-work span ended under a kind this census has no row for");
     DCHECK(g_depth > 0, "a thread-work span ended with none open");
+    DCHECKF(s->depth == g_depth - 1, "a thread-work span begun at depth %d ended at depth %d, so an inner span is "
+            "still open", s->depth, g_depth - 1);
+    took = quantum_thread_us() - s->t0;
     g_depth--;
-    if (!s->outer) return;
-    DCHECK(g_depth == 0, "the outermost thread-work span ended while an inner one was still open");
+    if (g_depth > 0) g_inner[g_depth - 1] += took;
     g_spans[kind]++;
     g_bytes[kind] += bytes;
-    g_cpu_us[kind] += quantum_thread_us() - s->t0;
+    g_cpu_us[kind] += took - g_inner[g_depth];
 }
 
 void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
@@ -41,6 +60,9 @@ void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
         [THREAD_WORK_CONSTRAINT] = THREAD_WORK_UNITS_PER_KIB_CONSTRAINT,
         [THREAD_WORK_ORPHAN_WALK] = THREAD_WORK_UNITS_PER_KI_ORPHAN_ENTRIES,
         [THREAD_WORK_INTL] = THREAD_WORK_UNITS_PER_KIB_INTL,
+        [THREAD_WORK_LAYOUT_BOX] = THREAD_WORK_UNITS_PER_KI_LAYOUT_BOXES,
+        [THREAD_WORK_LAYOUT_LINE] = THREAD_WORK_UNITS_PER_KI_LINE_ITEMS,
+        [THREAD_WORK_SELECTOR_MATCH] = THREAD_WORK_UNITS_PER_KI_SELECTOR_TESTS,
     };
     uint64_t units;
 
@@ -51,6 +73,7 @@ void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
        down would make every constraint probe under 171 bytes free, and a lookup is one probe per frozen segment. */
     units = (bytes * PER_KIB[kind] + 1023) / 1024;
     g_charged += units;
+    g_charged_input[kind] += bytes;
     if (units != 0) JS_FlowRetireWork(units);
 }
 
@@ -69,5 +92,6 @@ void thread_work_census(ThreadWorkCensus *out)
         out->spans[k] = g_spans[k];
         out->bytes[k] = g_bytes[k];
         out->cpu_us[k] = g_cpu_us[k];
+        out->charged_input[k] = g_charged_input[k];
     }
 }

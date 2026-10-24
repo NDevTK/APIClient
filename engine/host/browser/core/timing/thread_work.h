@@ -15,12 +15,10 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_THREAD_WORK_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_THREAD_WORK_H
 
-/* Named residual. Not covered: host work that is neither a parse, a decode nor a constraint probe charges
-   nothing, which today is layout (every REST_UNIT_LAYOUT_* kind, LINE_METRICS included, so rest_unit.c's bound
-   (2) reads zero for them), a fork's snapshot and C builtins over their input (JSON, codecs, sorts without a
-   callback), so the slice and the aging do not see it. Next diff builds: a kind per such component, charged by
-   its input at a rate read off this census, as the four below are. Absence shows as: a step whose `stepUs` is
-   large against its `stepWork` beside the census's per-opcode price. */
+/* Named residual. Not covered: a fork's snapshot and C builtins over their input (JSON, codecs, sorts without a
+   callback) charge nothing, so the slice and the aging do not see them. Next diff builds: a kind per such
+   component, charged by its input at a rate read off this census, as the kinds below are. Absence shows as: a
+   step whose `stepUs` is large against its `stepWork` beside the census's per-opcode price. */
 #define THREAD_WORK_UNITS_PER_BYTE_SCRIPT 1   /* 0.209 us per byte over 0.222 us per opcode */
 #define THREAD_WORK_UNITS_PER_KIB_DECODE 41
 #define THREAD_WORK_UNITS_PER_KIB_HTML 78
@@ -37,6 +35,23 @@
    questions took 20,314 us over 380,000 bytes at load ~16 (scratchpad si-tzsite, 1d05ecec, dev), against 0.13 us
    a unit of stepUs over stepWork in the same census, so 415 units per KiB. */
 #define THREAD_WORK_UNITS_PER_KIB_INTL 415
+/* Layout, per 1024 items of each kind's input: a CSS 2.1 §9.4.1 question answered (core/layout/layout_job.h's
+   BF_BOX and BF_WALK memo entries), a line box item taken (a character collected with its advance measured, so
+   a glyph run is priced by its characters, a css-sizing-3 §2.1 walk position or a §9.4.2 fill position, with a
+   box's §10.8.1 metrics counted as REST_UNIT_LAYOUT_LINE_METRICS' hundred items), and a style rule's selector
+   tested against an element by the author origin's match, an element itself counting as
+   THREAD_WORK_SELECTOR_TESTS_PER_ELEMENT tests. A relative least-squares fit of each kind's own span CPU over
+   its inputs on five fixture documents (dev) gave 47.6 us a question with 0.259 us an item, and 0.885 us an
+   element with 0.161 us a test, each document within a factor of 1.7 of the fit; over 0.222 us an opcode
+   that is 214, 1.17, 4.0 and 0.72 units. A line item is one unit, which a charge of one item rounds to at any
+   rate up to 1024. */
+#define THREAD_WORK_UNITS_PER_KI_LAYOUT_BOXES (214 * 1024)
+#define THREAD_WORK_UNITS_PER_KI_LINE_ITEMS 1024
+#define THREAD_WORK_UNITS_PER_KI_SELECTOR_TESTS 740
+#define THREAD_WORK_SELECTOR_TESTS_PER_ELEMENT 6
+/* What one box metric derivation is in line items (solver/rest_unit.h's LINE_METRICS: "one costs what a
+   hundred of those do"). */
+#define THREAD_WORK_LINE_ITEMS_PER_METRIC 100
 
 #include <stddef.h>
 #include <stdint.h>
@@ -49,18 +64,22 @@ typedef enum {
     THREAD_WORK_CONSTRAINT,     /* a path-constraint key hashed for a probe (solver/concolic.c's cons_hash) */
     THREAD_WORK_ORPHAN_WALK,    /* heap entries an orphan take visited (solver/engine.c's engine_orphan_seed) */
     THREAD_WORK_INTL,           /* an Intl host question's bytes (core/intl/intl_host.h) */
+    THREAD_WORK_LAYOUT_BOX,     /* a §9.4.1 question body run, charged per question answered (layout_job.c) */
+    THREAD_WORK_LAYOUT_LINE,    /* a line box fill or intrinsic run's items taken (layout_job.c's spends) */
+    THREAD_WORK_SELECTOR_MATCH, /* style rules tested by one element's author match (css_style_declaration.c) */
     THREAD_WORK_N
 } ThreadWorkKind;
 
-/* One span, on the caller's stack. Spans nest (a decode inside an HTML load); only the outermost is counted, so
-   no thread time is counted twice. */
+/* One span, on the caller's stack. Spans nest (a decode inside an HTML load, a box inside its container's
+   body); each counts its own time less its inner spans', so no thread time is counted twice and a kind's CPU is
+   the work of its own input. */
 typedef struct {
     int64_t t0;
-    int outer;
+    int depth;
 } ThreadWorkSpan;
 
 void thread_work_begin(ThreadWorkSpan *s);
-/* Ends the span begun with `s`, counting `bytes` and its CPU under `kind` when it is the outermost. */
+/* Ends the span begun with `s`, counting `bytes` and its own CPU under `kind`. Spans end in reverse order. */
 void thread_work_end(ThreadWorkSpan *s, ThreadWorkKind kind, uint64_t bytes);
 
 /* Charge `bytes` of `kind` (heap entries for THREAD_WORK_ORPHAN_WALK) to the running flow's clock at the kind's
@@ -81,6 +100,7 @@ typedef struct {
     long spans[THREAD_WORK_N];
     uint64_t bytes[THREAD_WORK_N];
     int64_t cpu_us[THREAD_WORK_N];
+    uint64_t charged_input[THREAD_WORK_N];   /* the input thread_work_charge priced, per kind */
 } ThreadWorkCensus;
 void thread_work_census(ThreadWorkCensus *out);
 

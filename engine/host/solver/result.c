@@ -1529,6 +1529,13 @@ char *result_cold_json(void) {
         METRIC_SET(tw_intl_spans, tw.spans[THREAD_WORK_INTL]);
         METRIC_SET(tw_intl_bytes, (long long)tw.bytes[THREAD_WORK_INTL]);
         METRIC_SET(tw_intl_us, tw.cpu_us[THREAD_WORK_INTL]);
+        METRIC_SET(tw_layout_box_spans, tw.spans[THREAD_WORK_LAYOUT_BOX]);
+        METRIC_SET(tw_layout_box_bytes, (long long)tw.bytes[THREAD_WORK_LAYOUT_BOX]);
+        METRIC_SET(tw_layout_box_us, tw.cpu_us[THREAD_WORK_LAYOUT_BOX]);
+        METRIC_SET(tw_layout_line_input, (long long)tw.charged_input[THREAD_WORK_LAYOUT_LINE]);
+        METRIC_SET(tw_selector_match_spans, tw.spans[THREAD_WORK_SELECTOR_MATCH]);
+        METRIC_SET(tw_selector_match_bytes, (long long)tw.bytes[THREAD_WORK_SELECTOR_MATCH]);
+        METRIC_SET(tw_selector_match_us, tw.cpu_us[THREAD_WORK_SELECTOR_MATCH]);
     }
     METRIC_SET_OBJECT(step_unit_overruns, over);
     METRIC_SET_OBJECT(step_unit_overrun_seamless_arms, seam);

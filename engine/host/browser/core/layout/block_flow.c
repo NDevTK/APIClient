@@ -10,6 +10,7 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
+#include "core/timing/thread_work.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
@@ -2157,13 +2158,16 @@ static BfBox bf_box_unpack(const LayoutBfAnswer *a)
 }
 
 /* A question's body: a contribution's (`bf_box_compute`) or a stack's (`bf_layout`, at its own entry). On
-   "not yet" the job suspends it; otherwise the answer is memoized. */
+   "not yet" the job suspends it; otherwise the answer is memoized. The body is a thread-work span, counted as
+   one question when it answers. */
 static bool bf_question_run(LayoutQuestion q, size_t at, BfBox *out)
 {
     BfBaseline pass = (BfBaseline)(q.code - 1u);
     LayoutBfAnswer a;
+    ThreadWorkSpan tw;
     bool done;
 
+    thread_work_begin(&tw);
     if (q.kind == LAYOUT_Q_BF_WALK) {
         done = bf_layout(q.element, pass, at, out);
         if (done && pass == BF_BASELINE_NONE) flow_placement_anon_close(q.element);
@@ -2172,9 +2176,11 @@ static bool bf_question_run(LayoutQuestion q, size_t at, BfBox *out)
         done = bf_box_compute(q.element, pass, out);
     }
     if (!done) {
+        thread_work_end(&tw, THREAD_WORK_LAYOUT_BOX, 0);
         layout_job_suspend(at);
         return false;
     }
+    thread_work_end(&tw, THREAD_WORK_LAYOUT_BOX, 1);
     bf_box_pack(out, &a);
     layout_job_bf_answer(at, &a);
     return true;
