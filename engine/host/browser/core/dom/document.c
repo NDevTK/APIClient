@@ -3809,12 +3809,15 @@ bool document_fully_active(JSContext *ctx)
     for (;;) {
         JSValue parent;
         if (window_proxy_closed(ctx, cur)) { ok = false; break; }
-        parent = window_proxy_parent(ctx, cur);
-        /* §7.3.3's base case is a top-level traversable, whose §7.2.2.4 `parent` is itself, so the walk ends when the
-           answer stops moving, or at something that is not a navigable's proxy (a cross-instance parent, answered by
-           its own instance). */
-        if (!window_proxy_is(parent) ||
-            JS_VALUE_GET_PTR(parent) == JS_VALUE_GET_PTR(cur)) {
+        /* The navigable tree, not §7.2.2.4's `parent` getter: the container document is the parent navigable's
+           active document, and the getter answers through that document's realm, which this question must never
+           materialize. JS_UNDEFINED is §7.3.3's base case, a top-level traversable.
+           Named residual: a parent held by another instance (a peer's navigable, whose container document is
+           the peer's) ends the walk as if this navigable were top-level. The next diff asks that instance
+           whether its document is fully active, a cross-instance read and so a suspend point. Its absence shows
+           as a frame rooted in a peer answering fully active after the peer's own ancestor was detached. */
+        parent = window_proxy_parent_navigable(ctx, cur);
+        if (!window_proxy_is(parent) || window_proxy_is_remote(parent)) {
             JS_FreeValue(ctx, parent);
             break;
         }
