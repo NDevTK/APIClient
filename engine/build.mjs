@@ -5490,6 +5490,15 @@ async function runChildren(jobs) {
     }
   };
   await Promise.all(Array.from({ length: Math.min(jobs.length, cpus().length) }, one));
+  /* A job the memory cgroup killed beside its siblings has no verdict yet, so it runs again with none. */
+  for (let i = 0; i < jobs.length; i++) {
+    if (out[i].code !== 7) continue;
+    const { label, prog, args, hint } = jobs[i];
+    const logs = runLogs(label + " (alone)");
+    console.log(`[build] ${label} — killed by the memory cgroup beside other runs; running it alone, live at ${logs.log}`);
+    const t = Object.assign(spawnBudgeted(budgetedSpec(logs.slug, prog, args, logs.log)), { alone: true });
+    out[i] = finishChild(label, t, logs, hint);
+  }
   return out;
 }
 /* THE FIXTURE AS ITS DOCUMENTS, EACH ITS OWN PROCESS — test_forced.c lists them (`--list-docs`) and a run
@@ -6246,6 +6255,18 @@ function runOutcome(label, t, hint) {
      nothing reached. `standingText` carries the measured number now (`probeWork`), so this is one call and not
      a sentence anybody has to compose. */
   const standWith = (v) => v + (stand ? " — " + standingText(stand) : "");
+  /* A SIGKILL FROM THE CGROUP'S OUT-OF-MEMORY KILLER, told apart from any other SIGKILL by the kernel's own
+     counter rising across the run (engine/child_run.mjs). The cgroup is the session's, shared with every other
+     process in it, so a kill reads what the box held and decides nothing about the revision, even for a run
+     this build started with no sibling. runChildren runs such a job once more on its own. */
+  if (!("oomKills" in t))
+    throw new Error(`[build] ${label}: the run outcome carries no oomKills field — engine/child_run.mjs writes ` +
+                    `it on every spawn, so this outcome came from somewhere else`);
+  if (t.signal === "SIGKILL" && !aborted && t.oomKills > 0)
+    return bad(standWith(`KILLED BY THE MEMORY CGROUP (oom_kill +${t.oomKills} while it ran` +
+                         (t.alone ? ", with no sibling run of this build" : "") + ")"), 7, STAGE_KIND.NOT_ASKED,
+               `was killed by the session's shared memory cgroup; that is the box's load, not a verdict on ` +
+               `this revision, and it is re-asked when the box has the memory`);
   if (t.signal) {
     return bad(standWith("CRASHED on " + t.signal + (aborted ? " — " + causeName(aborted) : "")), 3,
                STAGE_KIND.DEFECT,

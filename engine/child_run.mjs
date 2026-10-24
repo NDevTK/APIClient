@@ -9,7 +9,7 @@
  * and each child keeps a reaper of its own. */
 
 import { spawnSync } from "node:child_process";
-import { openSync, closeSync } from "node:fs";
+import { openSync, closeSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { childCpuSeconds, childCpuDelta } from "./gate_cpu.mjs";
 
@@ -23,8 +23,31 @@ export const CPU_BUDGET_SH =
   'p="$3"; shift 3; exec "$p" "$@"';
 export const BUDGET_NOT_INSTALLED = "@BUDGET-NOT-INSTALLED";
 
+/* The kernel's count of processes its out-of-memory killer took inside this process's memory cgroup (v2
+   `memory.events`, v1 `memory.oom_control`), or null when no cgroup file can be read. A SIGKILL is the OOM
+   killer's or anybody's, and the rise of this counter across a run is what tells the two apart. Null is an
+   absence: the counter was not readable, which says nothing about whether a kill happened. */
+export function cgroupOomKills() {
+  let rel = null;
+  try {
+    for (const line of readFileSync("/proc/self/cgroup", "utf8").split("\n")) {
+      const [, ctrl, path] = line.split(":");
+      if (ctrl === "memory" || (ctrl === "" && rel === null)) rel = path;
+    }
+  } catch { return null; }
+  if (rel === null) return null;
+  for (const f of [`/sys/fs/cgroup${rel}/memory.events`, `/sys/fs/cgroup/memory${rel}/memory.oom_control`]) {
+    let text;
+    try { text = readFileSync(f, "utf8"); } catch { continue; }
+    const m = /^oom_kill (\d+)$/m.exec(text);
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+
 /* Runs `prog args` under the two CPU limits and the wall-clock backstop, output to `log`. Returns the fields
-   build.mjs's `runOutcome` reads: status, signal, error (its `code` only), cpuSeconds, wallSeconds. */
+   build.mjs's `runOutcome` reads: status, signal, error (its `code` only), cpuSeconds, wallSeconds, and
+   oomKills, the cgroup's OOM-kill count's rise across the run (null when the counter is unreadable). */
 export function spawnBudgeted({ slug, prog, args, log, hardS, softS, deadlockMs }) {
   for (const [k, v] of Object.entries({ slug, prog, log }))
     if (typeof v !== "string" || !v) throw new Error(`[child_run] spec field \`${k}\` is ${JSON.stringify(v)}`);
@@ -32,6 +55,7 @@ export function spawnBudgeted({ slug, prog, args, log, hardS, softS, deadlockMs 
     if (!(Number.isInteger(v) && v > 0)) throw new Error(`[child_run] spec field \`${k}\` is ${JSON.stringify(v)}`);
   if (!Array.isArray(args)) throw new Error(`[child_run] spec field \`args\` is ${JSON.stringify(args)}`);
   const fd = openSync(log, "w");
+  const oomBefore = cgroupOomKills();
   const cpuBefore = childCpuSeconds();
   const wallBefore = Date.now();
   let t;
@@ -42,8 +66,10 @@ export function spawnBudgeted({ slug, prog, args, log, hardS, softS, deadlockMs 
   }
   finally { closeSync(fd); }
   const cpuAfter = childCpuSeconds();
+  const oomAfter = cgroupOomKills();
   return { status: t.status, signal: t.signal, error: t.error ? { code: t.error.code, message: t.error.message } : null,
-           cpuSeconds: childCpuDelta(cpuBefore, cpuAfter), wallSeconds: (Date.now() - wallBefore) / 1000 };
+           cpuSeconds: childCpuDelta(cpuBefore, cpuAfter), wallSeconds: (Date.now() - wallBefore) / 1000,
+           oomKills: oomBefore === null || oomAfter === null ? null : oomAfter - oomBefore };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
