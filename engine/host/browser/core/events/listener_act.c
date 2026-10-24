@@ -16,6 +16,9 @@
 #include "core/dom/shadow_root.h"
 #include "core/events/event_target.h"
 #include "core/events/listener_act.h"
+#include "core/frame/opener_policy.h"
+#include "core/frame/window_proxy.h"
+#include "solver/world.h"
 
 /* The user-interface event types a page user causes by acting on a node. A click is stated as itself, because a
    live verifier performs it through HTMLElement's click(); every other listed type is dispatched. */
@@ -177,18 +180,29 @@ char *listener_act_of(JSContext *ctx, JSValueConst fn)
     if (JS_IsObject(win) && (type = event_target_listener_type_of(ctx, win, fn))) {
         char *act = act_type_ok(type) ? act_json(ctx, fn, type, "window") : NULL;
 
-        /* §9.3.3's `message` on the Window is caused by another document's postMessage, so it is an act too;
-           its data and origin are the event argument's, which the PoC composition does not solve yet, and
-           solve.c refuses a fire verified under one (`firedUnderUnsolvedAct`). */
+        /* §9.3.3's `message` on the Window is caused by another document's postMessage, so it is an act when
+           an attacker document holds this window: as its opener, unless the document's Cross-Origin-Opener-
+           Policy severs a cross-origin opener (every value but `unsafe-none`, HTML §7.1.3), or as its parent.
+           Its data and origin are the event argument's, which the PoC composition does not solve yet, so solve.c
+           refuses a fire verified under one (`firedUnderUnsolvedAct`) and states the act on the parked search.
+           NAMED RESIDUAL. Not covered: the frame route — X-Frame-Options and CSP frame-ancestors are not read
+           here, so a page COOP cuts from its opener is stated with no route even where it may be framed. Next
+           diff: read both from the navigation response and state `frame` where they allow a cross-origin
+           parent. Absence shows as: a COOP page that allows framing stating `"route":"none"`. */
         if (!act && !strcmp(type, "message")) {
             char *name = handler_name(ctx, fn);
-            size_t n = (name ? strlen(name) : 0) + 96;
+            JSValue proxy = window_proxy_of_document(ctx, world_local_doc());
+            OpenerPolicyValue coop = window_proxy_opener_policy(proxy);
+            const char *route = coop == OPENER_POLICY_UNSAFE_NONE ? "\"route\":\"opener\""
+                                : "\"route\":\"none\",\"routeRefused\":\"opener: Cross-Origin-Opener-Policy\"";
+            size_t n = (name ? strlen(name) : 0) + strlen(route) + 96;
 
             act = malloc(n);
             CHECK(act, "listener act: OOM spelling an act");
-            snprintf(act, n, "{\"kind\":\"message\",\"target\":\"window\",\"type\":\"message\"%s%s%s}",
-                     name ? ",\"handler\":\"" : "", name ? name : "", name ? "\"" : "");
+            snprintf(act, n, "{\"kind\":\"message\",\"target\":\"window\",\"type\":\"message\",%s%s%s%s}",
+                     route, name ? ",\"handler\":\"" : "", name ? name : "", name ? "\"" : "");
             free(name);
+            JS_FreeValue(ctx, proxy);
         }
         free(type);
         return act;

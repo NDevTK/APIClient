@@ -43,6 +43,7 @@
 #include "core/loader/import_map.h"   /* HTML §8.1.4.2's resolve a module integrity metadata */
 #include "core/loader/document_scripts.h"   /* §4.12.1.1's schedule, for engine_run's caller that states none */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
+#include "core/events/message_event.h"   /* the event an attacker post hands a driven `message` listener */
 #include "core/frame/remote_op.h"        /* the receiving half of a cross-agent operation: what performs it */
 #include "core/frame/remote_object.h"    /* …and the grammar its completion crosses back in */
 #include "core/frame/navigable.h"   /* HTML §7.3.1 Navigables: tree order over this agent's navigables */
@@ -6213,7 +6214,31 @@ static int orphan_chain_position(const Flow *f, int k) {
     return 0;
 }
 
-static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, uint64_t hash, int pos) {
+/* The event an attacker document's postMessage hands a driven Window `message` listener (§9.3.3 step 8.4):
+   a MessageEvent whose data and origin are the delivery's attacker sources, named after the drive's chain
+   position so each event is its own delivery, with no lastEventId, no source and no ports. Owned. */
+static JSValue engine_attacker_message_event(JSContext *ctx, uint64_t hash, int pos) {
+    char record[64], dsrc[64], osrc[64], dshape[68], oshape[68];
+    JSValue data, origin, ports, ev;
+
+    snprintf(record, sizeof record, "attacker-post:%016llx#%d", (unsigned long long)hash, pos);
+    window_message_delivery_sources(record, dsrc, osrc, sizeof dsrc);
+    snprintf(dshape, sizeof dshape, "{%s}", dsrc);
+    snprintf(oshape, sizeof oshape, "{%s}", osrc);
+    data = concolic_new(ctx, dshape, dsrc, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
+    origin = concolic_new(ctx, oshape, osrc, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
+    ports = JS_NewArray(ctx);
+    CHECK(!JS_IsException(ports), "engine: OOM building an attacker message's ports");
+    ev = message_event_new(ctx, "message", data, origin, JS_NewString(ctx, ""), JS_NULL, ports);
+    JS_FreeValue(ctx, data);
+    JS_FreeValue(ctx, origin);
+    JS_FreeValue(ctx, ports);
+    CHECK(!JS_IsException(ev), "engine: OOM building an attacker message's event");
+    return ev;
+}
+
+static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, uint64_t hash, int pos,
+                                   const char *act) {
     JSValue *args = NULL, self, *base;
     char id[64];
     int k;
@@ -6248,7 +6273,14 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
     /* A body driven again is another call with other arguments (a listener's next event), so a member past
        the chain's first occurrence of the body names its unknowns by its chain position: one name per call, and
        a pin taken over the first event never answers for the second. */
-    for (k = 0; k < argc; k++) {
+    /* A driven Window `message` listener is handed the event an attacker post delivers, so its data and origin
+       are that delivery's attacker sources and not this engine's instrument. */
+    k = 0;
+    if (act && strstr(act, "\"kind\":\"message\"") && argc > 0) {
+        args[0] = engine_attacker_message_event(ctx, hash, pos);
+        for (k = 1; k < argc; k++) args[k] = JS_UNDEFINED;
+    }
+    for (; k < argc; k++) {
         if (pos > 0) snprintf(id, sizeof id, "{orphan%016llx#%d.arg%d}", (unsigned long long)hash, pos, k);
         else snprintf(id, sizeof id, "{orphan%016llx.arg%d}", (unsigned long long)hash, k);
         /* This engine's own instrument: the argument stood in no byte anywhere, so an address composed from it is
@@ -6357,7 +6389,7 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
         f->orphan_acts[f->orphan_claim_at] = listener_act_of(ctx, f->orphan_claim_fn);
         g_orphans_driven++;
         base = engine_orphan_call(ctx, f->orphan_claim_fn, f->orphan_argc, hash,
-                                  orphan_chain_position(f, f->orphan_claim_at));
+                                  orphan_chain_position(f, f->orphan_claim_at), f->orphan_acts[f->orphan_claim_at]);
         flow_install_base(f, ctx, base);
         /* The body handed over is now the one running: it moves into `fn` under its own name, and the claim moves
            to the next member, which the walks may route as soon as it exists. */
@@ -6398,7 +6430,7 @@ static int engine_orphan_redrive(JSContext *ctx, Flow *f) {
            "are written with the member's call");
     f->redrive_seeded = 1;
     g_orphans_driven++;
-    base = engine_orphan_call(ctx, f->fn, f->orphan_argc, hash, called);
+    base = engine_orphan_call(ctx, f->fn, f->orphan_argc, hash, called, f->orphan_acts[called - 1]);
     sib = engine_sibling_assemble(ctx, f, base,
                                   decide_fork_same_path("(a listener the page never fired was driven again — no "
                                                         "predicate was asked)"),
@@ -6423,6 +6455,7 @@ static int engine_orphan_redrive(JSContext *ctx, Flow *f) {
 
 static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     OrphanTake t = { JS_UNDEFINED, 0, 0 };
+    char *act;
     uint32_t gen = JS_OrphanGen(JS_GetRuntime(ctx));
     uint64_t hash;
     JSValue *base;
@@ -6515,7 +6548,8 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     }
 
     g_orphans_driven++;
-    base = engine_orphan_call(ctx, t.fn, t.argc, hash, 0);
+    act = listener_act_of(ctx, t.fn);
+    base = engine_orphan_call(ctx, t.fn, t.argc, hash, 0, act);
     /* The other side of the gate at this function's top, asserted where the member is minted, since a take, a
        hash and a route separate the two. */
     DCHECK(g_sess_forking,
@@ -6539,7 +6573,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     DCHECK(sib->orphan_chain_n == (f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0),
            "a seeded drive's chain does not begin with the drives its seeding flow has called — the assembly copies "
            "exactly those");
-    flow_orphan_chain_push(sib, hash, listener_act_of(ctx, t.fn), 0);
+    flow_orphan_chain_push(sib, hash, act, 0);
     sib->orphan_claim_at = sib->orphan_chain_n;
     /* And how much of this body the product had already explored, read at the seed: the drive's key is the
        body's locator (solver/novelty.h's NOVELTY_DRIVE), which is its script's content and its position there,

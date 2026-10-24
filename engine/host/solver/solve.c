@@ -138,6 +138,9 @@ typedef struct {
        origin are the event argument's. Each proved the bytes execute; none states how a sender reproduces it.
        Emitted as `firedUnderUnsolvedAct`. */
     int fired_unsolved_act;
+    /* The acts the first such fire was verified under (fire_acts' array), so the parked entry states the route
+       and handler a reproduction would need; malloc'd, NULL until one fires. */
+    char *refused_acts;
     /* The runway position as its two halves, emitted as `runwayWalked`/`runwayOf`, so a best of 3/8000 is not
        rounded to 0 as it is in `replay_pm`. Ratcheted on itself by cross-multiplication (observe_runway), in
        integers. `replay_of` is dec_total() at that sample, not `reinject_len`: for an arm forked off a
@@ -272,7 +275,7 @@ static char *fire_acts(const Flow *f, int *no_act, int *unsolved)
                        "written together at the seed and at the claim");
     for (k = 0; k < called; k++) {
         if (!f->orphan_acts[k]) { *no_act = 1; return NULL; }
-        if (strstr(f->orphan_acts[k], "\"kind\":\"message\"")) { *unsolved = 1; return NULL; }
+        if (strstr(f->orphan_acts[k], "\"kind\":\"message\"")) *unsolved = 1;
         n += strlen(f->orphan_acts[k]) + 1;
     }
     out = malloc(n);
@@ -307,6 +310,8 @@ static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
         CHECK(e != NULL, "an @S candidate fired for a search this session has no entry for");
         if (no_act) e->fired_no_act++;
         else e->fired_unsolved_act++;
+        if (!e->refused_acts) e->refused_acts = acts;
+        else free(acts);
         return JS_UNDEFINED;
     }
     record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload, acts, f->orphan);
@@ -2433,6 +2438,9 @@ char *solve_json_array(JSContext *ctx) {
         if (g_pending[i].fired_unsolved_act) {
             json_buf_raw(&b, ","); json_buf_key(&b, "firedUnderUnsolvedAct");
             snprintf(t, sizeof t, "%d", g_pending[i].fired_unsolved_act); json_buf_raw(&b, t);
+            DCHECK(g_pending[i].refused_acts != NULL, "a search counts a fire under an unsolved act and holds "
+                                                      "none of its acts — js_x9 keeps the first");
+            json_buf_raw(&b, ","); json_buf_key(&b, "refusedFireActs"); json_buf_raw(&b, g_pending[i].refused_acts);
         }
         json_buf_raw(&b, "}");
     }
@@ -2455,6 +2463,7 @@ void solve_free(void) {
         free(g_pending[i].wit);
         /* The segment reference an unsolved search still holds; the frozen chain goes with its last reference. */
         if (g_pending[i].reinject) decide_blob_free(g_pending[i].reinject);
+        free(g_pending[i].refused_acts);
         /* The principal demands: this file owns each name and row array, and the rows' strings are concolic.c's
            (gate_pred_free routes to concolic_pred_release). */
         for (int c = 0; c < g_pending[i].npg; c++) {

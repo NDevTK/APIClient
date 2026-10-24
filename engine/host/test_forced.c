@@ -1139,6 +1139,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
+#include "fixture/msgchaincoop.h"
 #include "fixture/flagflow.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
@@ -1610,6 +1611,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
+    { "msgchaincoop", HTML_MSGCHAINCOOP, OPENER_POLICY_SAME_ORIGIN },
     { "flagflow", HTML_FLAGFLOW },
 };
 
@@ -18667,8 +18669,8 @@ TF_UNIT void probes_msgchain(const char *js, Probe *tab, int *n) {
     int st = s_stage_prefix(js, "innerHTML", "message.data", src, sizeof src);
     int st2 = s_stage_prefix(js, "innerHTML", "{message.data", src2, sizeof src2);
     const char *listen_why = NULL, *init_why = NULL, *cfg_why = NULL, *go_why = NULL, *sink_why = NULL;
-    const char *poc_why = NULL;
-    int listen = 1, init = 1, cfg = 1, go = 1, sink = 1, poc = 1;
+    const char *poc_why = NULL, *route_why = NULL;
+    int listen = 1, init = 1, cfg = 1, go = 1, sink = 1, poc = 1, route = 1;
 
     if (st2 > st) { st = st2; snprintf(src, sizeof src, "%s", src2); }
     fold_row(&listen, &listen_why, param_value_is(js, "/api/mcgate", "v", "mcLISTEN"),
@@ -18686,6 +18688,9 @@ TF_UNIT void probes_msgchain(const char *js, Probe *tab, int *n) {
              "NOT REACHED: the markup sink has no @S record over message data");
     fold_row(&poc, &poc_why, st == S_FIRED,
              "the markup sink's search over message data did not fire a PoC");
+    fold_row(&route, &route_why, st >= S_SEEN && (s_field(js, "innerHTML", src, "\"route\":\"opener\"")),
+             "the message act the search's fire ran under states no opener route — this page is served with no "
+             "Cross-Origin-Opener-Policy, so an attacker that opened it holds its window");
     const Probe rows[] = {
         { "mc-listener-gated", listen, "/api/mcgate", SESS_EXPLORE, listen_why },
         { "mc-msg-init", init, "/api/mcstep", SESS_EXPLORE, init_why, .gate = "mc-listener-gated" },
@@ -18693,6 +18698,31 @@ TF_UNIT void probes_msgchain(const char *js, Probe *tab, int *n) {
         { "mc-msg-sequence", go, "/api/mcstep", SESS_EXPLORE, go_why, .gate = "mc-msg-cfg" },
         { "mc-msg-sink", sink, "mcEl.innerHTML", SESS_EXPLORE, sink_why },
         { "mc-msg-poc", poc, "mcEl.innerHTML", SESS_EXPLORE, poc_why, .gate = "mc-msg-sink" },
+        { "mc-route-opener", route, "mcEl.innerHTML", SESS_EXPLORE, route_why, .gate = "mc-msg-sink" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `msgchaincoop` document: msgchain served with COOP same-origin, so no opener route. */
+TF_UNIT void probes_msgchaincoop(const char *js, Probe *tab, int *n) {
+    char src[192], src2[192];
+    int st = s_stage_prefix(js, "innerHTML", "message.data", src, sizeof src);
+    int st2 = s_stage_prefix(js, "innerHTML", "{message.data", src2, sizeof src2);
+    const char *go_why = NULL, *sink_why = NULL, *noopener_why = NULL;
+    int go = 1, sink = 1, noopener = 1;
+
+    if (st2 > st) { st = st2; snprintf(src, sizeof src, "%s", src2); }
+    fold_row(&go, &go_why, param_value_is(js, "/api/mccstep", "v", "mccGO"),
+             "NOT REACHED: no flow delivered `go` after its own `init` and `cfg`");
+    fold_row(&sink, &sink_why, st >= S_SEEN, "NOT REACHED: the markup sink has no @S record over message data");
+    fold_row(&noopener, &noopener_why, st >= S_SEEN && !s_field(js, "innerHTML", src, "\"route\":\"opener\"") &&
+                                       s_field(js, "innerHTML", src, "\"routeRefused\":\"opener: "),
+             "the page is served with Cross-Origin-Opener-Policy same-origin, which severs a cross-origin opener, "
+             "and the search's record either states an opener route or does not state the opener route refused");
+    const Probe rows[] = {
+        { "mcc-msg-sequence", go, "/api/mccstep", SESS_EXPLORE, go_why },
+        { "mcc-msg-sink", sink, "mccEl.innerHTML", SESS_EXPLORE, sink_why },
+        { "mcc-no-opener-route", noopener, "mccEl.innerHTML", SESS_EXPLORE, noopener_why, .gate = "mcc-msg-sink" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -18810,6 +18840,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_forms(js, probes, &np);
     probes_decoder(js, probes, &np);
     probes_msgchain(js, probes, &np);
+    probes_msgchaincoop(js, probes, &np);
     probes_clickhash(js, probes, &np);
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
        the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
