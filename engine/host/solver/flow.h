@@ -613,7 +613,7 @@ void  flow_registry_free(JSContext *ctx);
    shared chain. Dups `fn`. Returns the stored Flow* (stable until removed). Never fails: OOM aborts via CHECK.
    flow_add seeds the flow with this agent's root document's programs as rows of its own queue
    (flow_set_seed_hook). flow_add_unseeded is for a creator whose flow must not start there: the fork, which
-   inherits its parent's rows, and a joined document's boot flow, seeded with that document's programs.
+   inherits its parent's rows.
    flow_seed is flow_add's second half, for a creator that states who the flow is (an @S candidate, a witness
    verification, a cold-rebuilt member) before its seed parks requests graded by flow_path_driven. Asserts that
    no member is switched in. */
@@ -860,8 +860,7 @@ typedef struct {
        `val_arrived`). */
     long val_zero;
     /* Members whose account has `earned == 0`: standing on the coordinate it arrived at, having produced nothing
-       since. This is every from-baseline door (the @S candidate session, a joined document's boot flow, a
-       cold-resumed recipe). With `val_unplaced` at zero, a large count at the reward floor is accounts served
+       since. This is every from-baseline door (the @S candidate session and a cold-resumed recipe). With `val_unplaced` at zero, a large count at the reward floor is accounts served
        and out-earned (the bandit working); with `val_unplaced` large it is the placement relation failing.
        `self_emit` asks the same question of one member rather than its account. */
     long val_arrived;

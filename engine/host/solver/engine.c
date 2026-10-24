@@ -2248,8 +2248,7 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
                    FLOW_COMMIT_ARM_NONE is today a root world, a flow created from the baseline for which the
                    delivery-time fork declined to mint; it is not spelled as one because a later mechanism may
                    reach "no flow on the other side" another way. Roots are minted by every
-                   `flow_add*(…, WORLD_NONE)`: this file's boot flow, a joined document's boot flow (same forest),
-                   solve.c's @S candidate session, and each member a cold resume rebuilds; read which minted the
+                   `flow_add*(…, WORLD_NONE)`: this file's boot flow, solve.c's @S candidate session, and each member a cold resume rebuilds; read which minted the
                    pair before repairing one. A rebuilt member cannot be minted as a child of its parked world
                    (world_mint_child asserts `parent.session == g_session`; world_vec_relate answers independent
                    across sessions on purpose); see solver/cold.c's park_flow_add. */
@@ -2265,7 +2264,7 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
                            "row states no mechanism minted a flow on the other side of its branch, so no timeline of "
                            "this document will receive the record. The only producer of such a row is the "
                            "delivery-time fork declining a root sending world; find which root mint (a boot flow, a "
-                           "joined document's boot flow, an @S candidate session, a cold-resume rebuild) made the "
+                           "@S candidate session, a cold-resume rebuild) made the "
                            "pair");
                     verdict = STEP_UNIT_ROUTED_NOT_MINE;
                 }
@@ -6452,7 +6451,7 @@ static long g_prog_queued_cand;
    Named residual. Not covered: the element reads this park makes (script_csp_meta's nonce slot and `integrity`, and
    Fetch §4.3's `blob:` lookup) are answered under whichever DOM delta is applied when the row is created, which for
    an @S candidate flow (created at the pick with the outgoing flow still switched in) is not the new flow's own.
-   engine_join_document's boot flow is created at baseline (qjs_join asks engine_host_baseline first). The policy
+   engine_join_document's rows are created at baseline (qjs_join asks engine_host_baseline first). The policy
    half is unaffected: a policy container is written once at creation and not COW-captured. Next diff builds:
    creation at baseline for the candidate site, as the session's seeding and cold_resume have. Absence shows as: a page that writes
    `s.integrity` or `s.nonce` onto a markup `<script src>` and reaches a detected sink, where the candidate's
@@ -6517,7 +6516,7 @@ static void engine_pending_docscript(Flow *f, int at, int parser_inserted) {
    parameter because only the caller knows it:
    - `doc`, whose program it is (the realm it compiles in), since a flow runs programs of several documents;
    - `f`, the owner: a program the page caused belongs to the flow that ran the code, a joined document's own
-     scripts to the boot flow minted for it;
+     scripts to every flow standing when it joined;
    - `pos` (engine.h's DynPos), because the slot a caused program takes is a step of the causing operation;
    - `stype` (which of §8.1.4.4's two algorithms evaluates it; SCRIPT_TYPE_CLASSIC is §8.1.4.4's answer for every
      row that is not an element's) and `url` (the address its bytes came from; NULL for an inline row, whose base
@@ -6749,8 +6748,8 @@ static void engine_queue(uint32_t doc, const char *body, size_t body_n, DynKind 
     engine_queue_el(doc, body, body_n, kind, stype, url, src, pos, NULL, /*parser_inserted*/0);
 }
 
-/* A document's script inventory seeded as the rows of one flow's sequence: the root document's seeding
-   (flow_set_seed_hook) and a joined document's boot flow are the same operation on two documents. HTML
+/* A document's script inventory appended as rows of one flow's sequence: the root document's seeding
+   (flow_set_seed_hook) and a joined document's arrival in each flow are the same operation on two documents. HTML
    §4.12.1.1's order is the sequence's order: a row whose source text is here is a program queued in place, one
    still owed its bytes is a DYN_SCRIPT_SRC row in place holding its address and stopping the flow there. `urls`
    are §4.12.1.1's encoding-parsed addresses, resolved once per element by the caller, whose document they belong
@@ -6762,14 +6761,12 @@ static void engine_queue(uint32_t doc, const char *body, size_t body_n, DynKind 
    §4.12.1.1's as-soon-as-possible set is parked on rather than given a row: the set has no order and §13.2.7
    waits for it only before the load event, so its program joins the flow whenever its reply is delivered. */
 static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, int n) {
-    int i, queued = 0;
+    int i, queued = 0, base;
 
     DCHECK(f != NULL, "a document's scripts were seeded onto no flow");
     DCHECK(n == 0 || rows != NULL,
            "a document was seeded with a script count and no table to read it from");
-    DCHECK(f->dyn_n == 0 && f->script_i == 0,
-           "a document's scripts were seeded onto a flow that already holds programs or has moved past its first — a "
-           "flow is seeded once, at creation");
+    base = f->dyn_n;
     for (i = 0; i < n; i++) {
         DCHECK(script_type_is_sequenced(rows[i].type),
                "a script table holds a row of a type no sequence holds — §4.12.1.1's null type and a set of "
@@ -6785,9 +6782,10 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
         /* The position a row is queued at is the position it is addressed at: `queued` counts the rows this
            seed has given a slot, in §4.12.1.1's order, and the cursor indexes the same table. Asserted per
            row. */
-        DCHECK(f->dyn_n == queued, "a document's scripts left the seed out of document order — the row about "
-                                   "to be queued is not the one the sequence is at, so the flow's cursor would "
-                                   "reach this element at some other element's position");
+        DCHECK(f->dyn_n == base + queued,
+               "a document's scripts left the seed out of document order — the row about to be queued is not the "
+               "one the sequence is at, so the flow's cursor would reach this element at some other element's "
+               "position");
         if (rows[i].refused) {
             /* The task is queued by the row's step, in this flow's own world, at the place the parser would
                have prepared the element. */
@@ -6919,9 +6917,10 @@ void engine_set_arrival(EngineArrival a) {
 static void engine_seed_root_flow(Flow *f) {
     DCHECK(g_sess_live, "a flow was seeded with the root document's programs outside a live session — the table "
                         "exists only while a session is open");
-    DCHECKF(f != flow_running() && f->dyn_n == 0,
+    DCHECKF(f != flow_running() && f->dyn_n == 0 && f->script_i == 0,
             "a document's arrival marks were written onto the running flow or onto one already holding %d program "
-            "row(s) — the seed parks those rows' requests off these bits", f->dyn_n);
+            "row(s) — the seed parks those rows' requests off these bits, and a flow is seeded once, at creation",
+            f->dyn_n);
     flow_take_peer_marks(f, arrival_marks(g_arrival));
     engine_seed_scripts(f, g_sess_doc, g_root_scripts, g_root_n);
 }
@@ -10894,18 +10893,6 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     reclaim_install(JS_GetRuntime(ctx), engine_reclaim_tail, NULL);
 }
 
-/* A second document of this agent, appended to the running frontier (engine.h).
- *
- * One flow, not a session: a new document appends its flows to the one continuous frontier and starts no
- * scheduler, run, attention or counter. engine_sched_begin is the root document's seeding and asserts an empty
- * frontier because a boot flow and a parked residue are alternatives for one document; this is a different
- * document, so it adds to whatever is there.
- *
- * The flow is added unseeded, which makes it this document's boot rather than a second boot of the root's: a
- * flow's cursor indexes one table, its own rows, and flow_add seeds that table with the root document's programs.
- * This member takes none of them, so everything queued below is its whole program order, at cursor 0. The order
- * is the document's, and engine_seed_scripts lays it down from the same rows the root's seed reads, schedule and
- * refusals included. */
 void engine_host_baseline(void) {
     DCHECK(g_sess_live, "the baseline was asked for outside a live session");
     DCHECK(cow_current() == NULL && JS_FlowGen() == 0,
@@ -10921,12 +10908,25 @@ void engine_host_baseline(void) {
     g_slice_delta = NULL;
 }
 
+/* A second document of this agent, appended to every timeline on the running frontier (engine.h).
+ *
+ * The agent has one event loop (HTML §8.1.7.1 "Definitions"), so a flow is a timeline of every document the
+ * agent holds, and a Document the browser hands it arrives in all of them. A boot flow of its own would be a
+ * second root world in this instance's forest, where world_vec_relate reads two roots as the two arms of one
+ * branch: a peer that took an answer from one timeline would refuse every post and answer from the other, and
+ * neither timeline would ever hold both documents' writes.
+ * Named residual. Not covered: two orders the agent's event loop allows. A flow's sequence has one cursor, so
+ * these rows run after the flow's remaining rows of other documents, and a parser-blocking script of one
+ * document holds another's; and a timeline minted from the baseline after this call (an @S candidate session,
+ * witness_verify's run) is seeded with the root's rows only. Next diff builds: a cursor per document in the flow's
+ * sequence, and the session's list of joins replayed onto every from-baseline timeline. Absence shows as: a
+ * joined document's script running only once an earlier document's pending script has arrived, and a candidate
+ * session in an agent holding a joined document never reaching a sink in that document's code. */
 void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **srcs,
                           const ScriptType *types, const ScriptSchedule *sched, lxb_dom_element_t **els,
                           int n, EngineArrival arrival) {
-    Flow *f;
     RootScript *rows;
-    int i, rown = 0;
+    int i, rown = 0, flows = flow_count();
 
     arrival_check(arrival, "a joined document's arrival");
     DCHECK(g_sess_live, "a document was joined to an instance with no live session");
@@ -10941,11 +10941,12 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
            "a document was joined with a script inventory missing one of its five columns (bodies, srcs, types, "
            "sched, els)");
 
-    /* The joined document's boot flow: an empty decision vector over this agent's baseline, minted with a root
-       world of its own because it stands on no other flow's decisions. Every timeline this document has is a fork
-       of it, as every timeline of the root is a fork of engine_sched_begin's flow. */
-    f = flow_add_unseeded(g_sess_ctx, JS_UNDEFINED, WORLD_NONE);
-    flow_take_peer_marks(f, arrival_marks(arrival));
+    /* A referenced instance keeps its last timeline resting rather than finishing (engine_set_referenced), and
+       the zone joins only into an instance a peer references, so an empty frontier is a join with no timeline to
+       arrive in. */
+    DCHECK(flows > 0,
+           "a document was joined to an agent with no timeline on its frontier — the trusted zone joins only into "
+           "an instance a peer references, whose last timeline rests instead of finishing");
     /* The same table shape as the root document's seed, built here because §4.12.1.1's encoding-parse belongs to
        this document: §8.1.3.2 "Environment settings objects"' API base URL is the joined document's, so
        `<script src=app.js>` in a document at `/app/child.html` is `/app/app.js`. `cctx`, the joined document's
@@ -10962,8 +10963,8 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
         DCHECK(bodies[i] != NULL || srcs[i] != NULL,
                "a joined document's script inventory holds an entry with neither source text nor an address — "
                "§4.12.1.1's \"if url is failure … fire an event named error at el, and return\" means such an "
-               "element runs no script and takes no position, so a row that is nothing is one this document's "
-               "boot flow would park on and never fill");
+               "element runs no script and takes no position, so a row that is nothing is one every flow "
+               "would park on and never fill");
         /* And the element, borrowed from the tree the host handed over: §4.12.1.1's "execute the script element"
            switches on el, and a joined document's `currentScript` is as observable as the root's. */
         DCHECK(els[i] != NULL,
@@ -10988,7 +10989,7 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
         }
         /* The copy is made once, here, and every timeline of this document references it: the row's body is the
            shared program text (solver/dyn_body.h), so this document's bundle is in the instance once however many
-           arms its boot flow forks. The length is the `strlen` for the root document's reason: an inline
+           flows hold it and however many arms they fork. The length is the `strlen` for the root document's reason: an inline
            `<script>`'s text off a parsed tree, in which HTML §13.2.5.4 "Script data state" has turned a U+0000
            into U+FFFD (engine_sched_begin). */
         if (bodies[i]) {
@@ -10998,11 +10999,20 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
         }
         rown++;
     }
-    engine_seed_scripts(f, doc, rows, rown);
-    /* The table is this call's, not the flow's: engine_queue_into copies the address into the flow's own row and
+    /* Each flow takes the navigation's marks, as a timeline holding a peer's answer takes the asker's, and is
+       askable again: a resting timeline now has rows to run. engine_seed_scripts lays the document's rows after
+       the flow's own, in the document's order. */
+    for (i = 0; i < flows; i++) {
+        Flow *f = flow_at(i);
+
+        flow_take_peer_marks(f, arrival_marks(arrival));
+        engine_seed_scripts(f, doc, rows, rown);
+        flow_clear_host_owed(f);
+    }
+    /* The table is this call's, not the flows': engine_queue_into copies the address into each flow's own row and
        takes a reference on the body, so both are given back here, each body surviving as long as some flow holds
        the row that names it. The root document's table outlives its call because it seeds a flow every time one
-       is created; this one seeds exactly one. */
+       is created; this one is laid onto the flows standing now. */
     for (i = 0; i < rown; i++) {
         free(rows[i].url);
         if (rows[i].body) dyn_body_unref(rows[i].body);

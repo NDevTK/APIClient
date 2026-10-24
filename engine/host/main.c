@@ -662,8 +662,8 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
  * key, untouched here, while `doc_id` names the document a peer routes on.
  * One instance per (browsing-context group, origin) is a CHECK: SECURITY.md makes the instance the principal, so a
  * foreign-origin document would be two principals behind one `pageOrigin`. It fails closed on an opaque origin on
- * either side (§7.1.1). The document is built at the baseline, as the root's is; its scripts are flows on the one
- * frontier (engine_join_document). A same-origin document nested through a cross-origin one is a child navigable
+ * either side (§7.1.1). The document is built at the baseline, as the root's is; its scripts are rows of every
+ * flow on the one frontier (engine_join_document). A same-origin document nested through a cross-origin one is a child navigable
  * whose parent, container and ancestors live in a peer, which is why those arguments are carried here too. */
 QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
@@ -707,8 +707,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            "a joined document's bytes carry no guard byte at their stated length — the ABI placement writes "
            "one past the sequence so that a length and a C read cannot disagree silently");
 
-    /* At the baseline, as the root document is built: the realm's time origin, its tree and its boot flow are the
-       agent's, not the held flow's whose delta a yield leaves applied. */
+    /* At the baseline, as the root document is built: the realm's time origin, its tree and its script rows are
+       the agent's, not the held flow's whose delta a yield leaves applied. */
     engine_host_baseline();
     /* The principal, before anything is built from the bytes: §7.1.1's same origin of the agent's record against
        this document's address, asked first because the parse into the agent's arenas, the realm and the flow

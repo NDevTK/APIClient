@@ -2054,7 +2054,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        grade is `forced` exactly when the path stood on a forced arm, so a drive that forced no arm is `derived` and driven, and its values are
        offered as the drive computed them. A door stated off a record is exempt: a reply chunk takes the request's
        facts, and a program load takes its park's, composed at pending_push off the parking flow, which need not
-       be the running one (a joined document's boot flow is seeded from inside its creator's). */
+       be the running one (a joined document's rows are laid onto every flow while none is switched in). */
     DCHECKF(driven == 0 || driven == 1, "an endpoint was recorded with the drive mark %d. method=%s", driven,
             method);
     {

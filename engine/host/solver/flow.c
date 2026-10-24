@@ -2033,10 +2033,9 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
  *
  * flow_fork_inherit states the rule for a fork ("a continuation of an active flow enters at that flow's virtual
  * time, never at the system's, or any flow can reset its own virtual clock by splitting"). It is a rule about
- * entering, and this covers the other three entries, each of which founds a family (what "from-baseline" means)
+ * entering, and this covers the other two entries, each of which founds a family (what "from-baseline" means)
  * whose account must be placed:
  *
- *   - engine_join_document's boot flow (engine.c): a Document the browser handed this agent mid-run,
  *   - solve.c's candidate session: one per @S search the run seeds, and
  *   - cold.c's park_flow_add: one per recipe the tier rebuilds.
  *

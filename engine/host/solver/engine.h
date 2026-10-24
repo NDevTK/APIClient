@@ -408,23 +408,23 @@ int engine_census_emit(void);
 void engine_sched_end(void);
 
 /* Join a second document of this agent (`qjs_join`): its scripts run on the frontier already running. An
- * instance is an origin-keyed agent cluster, and a host-handed document is built at the baseline before any of
- * its flows exist, unlike an HTML §7.3.1.3 "Child navigables" document, which is built inside its creating
- * flow and whose scripts that flow queues (core/frame/navigable.c). So this adds one flow, the joined
- * document's boot flow (an empty decision vector over the agent baseline, ranked, forkable and parkable like
- * the root's), and returns; nothing runs here, and no second session starts.
+ * instance is an origin-keyed agent cluster with one event loop, and a host-handed document is built at the
+ * baseline, unlike an HTML §7.3.1.3 "Child navigables" document, which is built inside its creating flow and
+ * whose scripts that flow queues (core/frame/navigable.c). A flow is a timeline of the whole agent, so the
+ * document's programs are appended to every flow on the frontier (asserted non-empty) and no flow is added;
+ * nothing runs here, and no second session starts.
  * `cctx` is that document's realm, where its programs compile, and is asserted to be the realm `doc` names.
  * Requires a live session and a document other than the session's (asserted).
  * `bodies`/`srcs`/`types`/`n` are the document's §4.12.1 inventory (core/loader/document_scripts.h) in
  * document order, copied, because the host read them once and nothing owns them past this call. `sched[i]` is
  * entry i's §4.12.1.1 schedule (required, asserted). `els[i]` is entry i's `script` element, borrowed, because
  * it names a node of the handed-over tree, which outlives the rows. `arrival` is how this document was reached
- * (engine_set_arrival), so its boot flow carries that navigation's marks. */
+ * (engine_set_arrival), so every flow takes that navigation's marks. */
 /* Puts the heap and the document back at the agent's baseline for a host act that builds there: the flow
  * the scheduler holds across a yield (engine_sched_slice returns without switching it out) is switched out,
  * and the next slice picks as a session's first one does. A host-handed document's realm, tree and time
  * origin are baseline facts; built over a held flow's applied delta they would read that flow's writes (its
- * event-loop clock among them) while the document's boot flow runs over the baseline. Requires a live session
+ * event-loop clock among them) while every flow layers its own delta over them. Requires a live session
  * and no flow running (the host's own time). */
 void engine_host_baseline(void);
 
