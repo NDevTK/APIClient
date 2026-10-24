@@ -561,8 +561,7 @@ void realm_install_intrinsics(JSContext *ctx, JSAgentRecord *agent, const char *
     names = idl_global_names_of(global_interface);
     /* HTML §8.1.2.1: "Only shared and dedicated worker agents allow the use of JavaScript Atomics APIs to
        potentially block", and each of those agents contains its one global. */
-    DCHECK(JS_AgentCanBlock(agent) ==
-               ((names & (IDL_GLOBAL_DEDICATEDWORKER | IDL_GLOBAL_SHAREDWORKER)) != 0),
+    DCHECK(JS_AgentCanBlock(agent) == idl_global_names_can_block(names),
            "a realm's agent states a [[CanBlock]] its global's kind does not have: HTML §8.1.2.1 lets only a "
            "dedicated or shared worker agent block, so the host gave this realm another kind's agent");
     if (idl_global_names_are_worklet(names))

@@ -1331,6 +1331,11 @@ bool idl_global_names_are_worklet(unsigned global_names);
  * where §3.8 excludes it. */
 bool idl_global_names_are_window(unsigned global_names);
 
+/* HTML §8.1.2.1: "Only shared and dedicated worker agents allow the use of JavaScript Atomics APIs to
+ * potentially block", read off the same mask: whether a realm with these global names belongs to an agent
+ * whose [[CanBlock]] is true. A service worker's global is a worker and cannot block. */
+bool idl_global_names_can_block(unsigned global_names);
+
 /* §3.7.6 Attributes' accessor function name: "get " or "set " prepended to the identifier. The installers do
  * this themselves; it is declared for the few members defined at a raw JS_DefinePropertyGetSet, so the prefix
  * is written in one place. `buf` is the caller's, at least IDL_ACCESSOR_NAME_MAX bytes, and the result is for

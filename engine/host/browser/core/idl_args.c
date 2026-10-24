@@ -8114,6 +8114,11 @@ bool idl_global_names_are_worker(unsigned global_names)
     return (global_names & IDL_GLOBAL_WORKER) != 0u;
 }
 
+bool idl_global_names_can_block(unsigned global_names)
+{
+    return (global_names & (IDL_GLOBAL_DEDICATEDWORKER | IDL_GLOBAL_SHAREDWORKER)) != 0u;
+}
+
 bool idl_global_names_are_worklet(unsigned global_names)
 {
     return (global_names & IDL_GLOBAL_WORKLET) != 0u;
