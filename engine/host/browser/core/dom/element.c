@@ -355,6 +355,21 @@ lxb_dom_element_t *element_create_ns(lxb_dom_document_t *doc, const char *ns, si
                        "create one and append it)")
 enum { IDL_STEP_STAGE_BASE(EL_SET_ATTR_STAGES) EL_SET_ATTR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const EL_SET_ATTR_STEPS[] = { EL_SET_ATTR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+/* The question step 1 asks of an unknown qualified name; completion 0 is the valid name, 1 InvalidCharacterError. */
+#define SETATTR_NAME_OP "DOM §4.9 setAttribute step 1 (qualifiedName is a valid attribute local name)"
+
+/* Which completion of a name predicate a string value reaches: 0 when `valid` accepts its bytes, else 1. */
+static int el_name_real(JSContext *ctx, JSValueConst v, bool (*valid)(const char *, size_t))
+{
+    size_t len = 0;
+    const char *b = JS_ToCStringLen(ctx, &len, v);
+    int real;
+
+    CHECK(b != NULL, "an attribute member could not read the bytes of a string it was handed");
+    real = valid(b, len) ? 0 : 1;
+    JS_FreeCString(ctx, b);
+    return real;
+}
 
 typedef struct {
     char   *name;        /* step 2's answer: the lowercased qualified name, held across step 3's suspension */
@@ -383,12 +398,34 @@ static int js_el_set_attribute(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
         /* THE NAME, WHICH CAN ALSO BE UNKNOWN. The VALUE has had a concolic path since the taint shadow was
            built; the name never did, so `setAttribute(someParameter, v)` crashed at the coercion while
            `setAttribute("href", someParameter)` worked. An unknown name denotes its shape, stable per source. */
-        const char *name = concolic_name_cstr(ctx, argc > 0 ? argv[0] : JS_UNDEFINED);
+        const char *name;
         size_t i;
+        bool known_valid = false;
 
+        if (!el || argc < 2) return JS_STEP_DONE;
+        /* Step 1 over an unknown name has two feasible completions, so it forks; the valid arm's name is the
+           unknown's shape, which the arm has already decided is valid. */
+        if (concolic_is(argv[0])) {
+            JSValue ex = concolic_example(ctx, argv[0]);
+            int real = JS_IsString(ex) ? el_name_real(ctx, ex, dom_valid_attribute_local_name)
+                                       : JS_OUTCOME_REAL_UNSTATED;
+            int rc, arm = 0;
+
+            JS_FreeValue(ctx, ex);
+            rc = step_fork_run(ctx, hdr, argv[0], SETATTR_NAME_OP, 2, real, &arm);
+            if (rc)
+                return rc;
+            DCHECKF(arm == 0 || arm == 1, "setAttribute's step 1 fork answered completion %d", arm);
+            if (arm == 1) {
+                JS_ThrowDOMException(ctx, "InvalidCharacterError",
+                                     "setAttribute was given a name that is not a valid attribute local name");
+                return JS_STEP_ABRUPT;
+            }
+            known_valid = true;
+        }
+        name = concolic_name_cstr(ctx, argv[0]);
         if (!name) return JS_STEP_ABRUPT;
-        if (!el || argc < 2) { JS_FreeCString(ctx, name); return JS_STEP_DONE; }
-        if (!dom_valid_attribute_local_name(name, strlen(name))) {          /* step 1 */
+        if (!known_valid && !dom_valid_attribute_local_name(name, strlen(name))) {          /* step 1 */
             JS_FreeCString(ctx, name);
             JS_ThrowDOMException(ctx, "InvalidCharacterError",
                                  "setAttribute was given a name that is not a valid attribute local name");
@@ -454,6 +491,8 @@ static const IdlStepDecl EL_SET_ATTR_STEP = {
                           "the verified value, prefix and namespace)")
 enum { IDL_STEP_STAGE_BASE(EL_SET_ATTR_NS_STAGES) EL_SET_ATTR_NS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const EL_SET_ATTR_NS_STEPS[] = { EL_SET_ATTR_NS_STAGES(JS_STEP_STAGE_LABEL) NULL };
+/* The question step 1 asks of an unknown qualified name; its completions are names.h's DomQNameOutcome. */
+#define SETATTRNS_NAME_OP "DOM §4.9 setAttributeNS step 1 (validate and extract with context attribute)"
 
 /* THE EXTRACTED NAME IS ONE BUFFER WITH THE COLON REPLACED BY A NUL, which is what "prefix and local name are
    the two halves of qualifiedName" means once they have to be C strings: `qname` is the prefix and
@@ -502,10 +541,46 @@ static int js_el_set_attribute_ns(JSContext *ctx, JSStepHdr *hdr, void *st, int 
         /* `DOMString? namespace`: the declaration made null of null AND undefined, and §1.4 step 1 makes null
            of the empty string too — so both reach validate-and-extract as the null namespace. */
         ns_arg = JS_IsNull(argv[0]) ? NULL : JS_ToCStringLen(ctx, &ns_arg_len, argv[0]);
-        qn = concolic_name_cstr(ctx, argv[1]);
-        if (!qn) { if (ns_arg) JS_FreeCString(ctx, ns_arg); return JS_STEP_ABRUPT; }
-        qn_len = strlen(qn);
-        ok = dom_validate_and_extract(ctx, ns_arg, ns_arg_len, qn, qn_len, DOM_NAME_ATTRIBUTE, &ex);   /* step 1 */
+        if (concolic_is(argv[1])) {
+            /* Step 1 over an unknown qualified name has §1.4's three completions, each feasible for every
+               namespace (document.c's createElementNS says why), so it forks. The valid arm's name is the
+               unknown's shape, standing as the whole local name with no prefix: the arm has decided the name is
+               valid, and an unknown's prefix is not a fact this run holds. */
+            JSValue exv = concolic_example(ctx, argv[1]);
+            int real = JS_OUTCOME_REAL_UNSTATED, rc, arm = 0;
+            const char *why = NULL;
+
+            if (JS_IsString(exv)) {
+                const char *eb = JS_ToCStringLen(ctx, &qn_len, exv);
+
+                CHECK(eb != NULL, "setAttributeNS could not read the bytes of a string it was handed");
+                real = (int)dom_qname_outcome(ns_arg, ns_arg_len, eb, qn_len, DOM_NAME_ATTRIBUTE, &ex, &why);
+                JS_FreeCString(ctx, eb);
+            }
+            JS_FreeValue(ctx, exv);
+            rc = step_fork_run(ctx, hdr, argv[1], SETATTRNS_NAME_OP, DOM_QNAME_OUTCOMES, real, &arm);
+            if (rc) { if (ns_arg) JS_FreeCString(ctx, ns_arg); return rc; }
+            DCHECKF(arm >= 0 && arm < DOM_QNAME_OUTCOMES, "setAttributeNS's fork answered completion %d", arm);
+            if (arm != DOM_QNAME_VALID) {
+                if (ns_arg) JS_FreeCString(ctx, ns_arg);
+                JS_ThrowDOMException(ctx, dom_qname_outcome_exception((DomQNameOutcome)arm),
+                                     "the qualified name is not one validate and extract accepts");
+                return JS_STEP_ABRUPT;
+            }
+            qn = concolic_name_cstr(ctx, argv[1]);
+            if (!qn) { if (ns_arg) JS_FreeCString(ctx, ns_arg); return JS_STEP_ABRUPT; }
+            qn_len = strlen(qn);
+            ex.ns = (ns_arg && ns_arg_len) ? ns_arg : NULL;
+            ex.ns_len = ex.ns ? ns_arg_len : 0;
+            ex.prefix = NULL; ex.prefix_len = 0;
+            ex.local = qn; ex.local_len = qn_len;
+            ok = true;
+        } else {
+            qn = concolic_name_cstr(ctx, argv[1]);
+            if (!qn) { if (ns_arg) JS_FreeCString(ctx, ns_arg); return JS_STEP_ABRUPT; }
+            qn_len = strlen(qn);
+            ok = dom_validate_and_extract(ctx, ns_arg, ns_arg_len, qn, qn_len, DOM_NAME_ATTRIBUTE, &ex);   /* step 1 */
+        }
         if (ok) {
             s->qname_len = qn_len;
             s->qname = js_malloc(ctx, qn_len + 1);

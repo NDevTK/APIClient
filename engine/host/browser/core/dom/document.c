@@ -1563,11 +1563,11 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
  * 6), so the fork always declares three. The element arm is a value derived from the name, whose example is the
  * element the example name creates when that name is valid. A known name runs the internal steps directly.
  *
- * Named residual. Not covered: an unknown namespace beside the name, §4.5.1 createDocument's qualified name, and
- * the other name-taking entries (createAttributeNS, setAttributeNS, setAttribute, toggleAttribute,
- * createAttribute, createProcessingInstruction), each a byte consumer of its name. Next diff builds: the same
- * fork at each, asking dom_qname_outcome or the entry's own name predicate. Absence shows as: a @WHY naming
- * ToString over unknown external input at one of those entries' conversions. */
+ * Named residual. Not covered: an unknown namespace beside the name, §4.5.1 createDocument's qualified name and
+ * createDocumentType's name, createAttribute, createAttributeNS and createProcessingInstruction, each a byte
+ * consumer of its name, and toggleAttribute, which validates the unknown's shape. Next diff builds: the same fork
+ * at each, asking dom_qname_outcome or the entry's own name predicate. Absence shows as: a @WHY naming ToString
+ * over unknown external input at one of those entries' conversions. */
 #define CEN_ALGORITHM "DOM §4.5 Interface Document createElementNS(namespace, qualifiedName)"
 #define CEN_OP "DOM §1.4 validate and extract a namespace and qualifiedName"
 #define CEN_STAGES(X) X(CEN_CREATE, CEN_ALGORITHM " (the internal createElementNS steps)")

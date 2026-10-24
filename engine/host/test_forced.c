@@ -14453,9 +14453,22 @@ TF_UNIT void probes_qnamefork(const char *js, Probe *tab, int *n) {
              "the arm in which the local name is valid did not create an element");
     fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/lname", "arm", "InvalidCharacterError"),
              "the arm in which the local name is not valid did not throw InvalidCharacterError");
+    /* setAttribute reaches §4.9 step 1's two completions and setAttributeNS §1.4's three. */
+    const char *an_why = NULL; int an_tt = 1;
+    fold_row(&an_tt, &an_why, param_value_is(js, "/api/aname", "arm", "set"),
+             "setAttribute's arm in which the name is valid did not set the attribute");
+    fold_row(&an_tt, &an_why, param_value_is(js, "/api/aname", "arm", "InvalidCharacterError"),
+             "setAttribute's arm in which the name is not valid did not throw InvalidCharacterError");
+    fold_row(&an_tt, &an_why, param_value_is(js, "/api/nsname", "arm", "set"),
+             "setAttributeNS's arm in which the name is valid did not set the attribute");
+    fold_row(&an_tt, &an_why, param_value_is(js, "/api/nsname", "arm", "InvalidCharacterError"),
+             "setAttributeNS's InvalidCharacterError arm was not reached");
+    fold_row(&an_tt, &an_why, param_value_is(js, "/api/nsname", "arm", "NamespaceError"),
+             "setAttributeNS's NamespaceError arm was not reached");
     const Probe rows[] = {
         { "unknown-qualified-name-forks", qn_tt, "/api/qname", SESS_EXPLORE, qn_why },
         { "unknown-local-name-forks", ln_tt, "/api/lname", SESS_EXPLORE, ln_why },
+        { "unknown-attribute-name-forks", an_tt, "/api/aname", SESS_EXPLORE, an_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

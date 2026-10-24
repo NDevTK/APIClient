@@ -1,7 +1,8 @@
 /* THE UNKNOWN QUALIFIED NAME DOCUMENT: createElementNS over a name that is unknown external input, the shape of an
    SVG factory driven with an unknown argument. DOM §1.4's validate-and-extract has three completions over such a
    name, so the page's try/catch reaches three fetches: the element, InvalidCharacterError and NamespaceError.
-   createElement over the same name has §4.5 step 1's two: the element and InvalidCharacterError.
+   createElement over the same name has §4.5 step 1's two: the element and InvalidCharacterError; setAttribute has
+   §4.9 step 1's two and setAttributeNS §1.4's three.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_QNAMEFORK_H
@@ -25,6 +26,19 @@ static const char HTML_QNAMEFORK[] =
     "  fetch('/api/lname?arm=element');"
     "} catch (e) {"
     "  fetch('/api/lname?arm=' + e.name);"
+    "}"
+    "var anEl = document.createElement('div');"
+    "try {"
+    "  anEl.setAttribute(qnName, 'v');"
+    "  fetch('/api/aname?arm=set');"
+    "} catch (e) {"
+    "  fetch('/api/aname?arm=' + e.name);"
+    "}"
+    "try {"
+    "  anEl.setAttributeNS(null, qnName, 'v');"
+    "  fetch('/api/nsname?arm=set');"
+    "} catch (e) {"
+    "  fetch('/api/nsname?arm=' + e.name);"
     "}"
     "</script>"
     TF_CANVAS_INK
