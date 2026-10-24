@@ -267,7 +267,8 @@ function docRecordOfAsker(name, lookup) {
 var _ASKER_REFUSALS = {
   "asker-elsewhere": 1, "asker-unprovisioned": 1, "creator-elsewhere": 1, "creator-unprovisioned": 1,
   "issuer-elsewhere": 1, "issuer-unprovisioned": 1, "navigable-elsewhere": 1, "navigable-unprovisioned": 1,
-  "child-not-minted": 1, "document-not-minted": 1, "child-readdressed": 1
+  "child-not-minted": 1, "document-not-minted": 1, "child-readdressed": 1,
+  "opener-elsewhere": 1, "opener-unprovisioned": 1, "opener-foreign": 1
 };
 function docRecordAskerRefusal(role, reason, name) {
   var key = role + "-" + reason;
@@ -277,9 +278,61 @@ function docRecordAskerRefusal(role, reason, name) {
   var why = reason === "elsewhere" ? "a document of another instance"
           : reason === "unprovisioned" ? "no document this zone provisioned, nor one minted from such a document"
           : reason === "readdressed" ? "already provisioned at another address"
+          : reason === "foreign" ? "not the navigable's creator, the only opener this zone's record allows"
           : "not minted from the document it must be";
   return { token: "blocked-asker:" + key, text: "blocked-asker:" + key + " (the " + role + " " + name + " is " +
            why + ")" };
+}
+
+/* The document and origin a navigable identity names (core/frame/remote_object.c's nav_encode: `W`, then each
+   field base64 and terminated by '.', the document's world name first and its origin second), or null for
+   remote_object.h's `N`. The token is the engine's claim; this reads it so the zone can compare it. */
+function docRecordNavigableIdentity(token) {
+  CHECK(typeof token === "string" && token !== "", "a navigable identity was read from no token");
+  if (token === "N") return null;
+  var parts = token.charAt(0) === "W" ? token.slice(1).split(".") : [];
+  CHECK(parts.length >= 3 && parts[parts.length - 1] === "",
+        "the navigable identity " + JSON.stringify(token) + " is not nav_encode's `W` and '.'-terminated fields");
+  var field = function (b) {
+    var bin = atob(b), bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  };
+  return { doc: field(parts[0]), origin: field(parts[1]) };
+}
+
+/* The opener this zone's record allows a navigation minting `minted` to carry: the record of the nearest
+   document on the walk up from the navigable's current document (minted's name parent), which is the
+   navigable's creation (`navigable.open`) or the instance root it was provisioned as. `lookup(name)` answers
+   that document's record ({ opener: {doc, origin} or null }) for the asking instance, `false` for another
+   instance's, `undefined` for none. Answers { opener, refusal }, the refusal docRecordOfAsker's reason. */
+function docRecordOpenerOf(minted, lookup) {
+  CHECK(typeof lookup === "function", "an opener record was asked with no lookup");
+  for (var n = docRecordNameParent(minted); n !== null; n = docRecordNameParent(n)) {
+    var r = lookup(n);
+    if (r === false) return { opener: null, refusal: "elsewhere" };
+    if (r !== undefined) {
+      CHECK(r.opener === null || (typeof r.opener.doc === "string" && typeof r.opener.origin === "string"),
+            "an opener record for " + n + " is neither null nor a document and its origin");
+      return { opener: r.opener, refusal: null };
+    }
+  }
+  return { opener: null, refusal: "unprovisioned" };
+}
+
+/* Whether the engine's opener claim `token` may stand against the `allowed` opener of this zone's record: `N`
+   always may (an engine may state less), and an identity only when it names that document at that origin.
+   Answers null or a docRecordAskerRefusal. What an engine states is bounded by its own instance, so the
+   peer's opener is never one the record does not name.
+   Named residual: the record names the opener's document at the creation, so an opener whose navigable has
+   navigated since is not covered. The next diff records the opener as a navigable and accepts a document of
+   the same instance minted from the recorded one. Its absence shows as `opener-foreign` on a navigation whose
+   opener page had navigated after opening it. */
+function docRecordOpenerClaim(token, allowed) {
+  var claim = docRecordNavigableIdentity(token);
+  if (claim === null) return null;
+  if (allowed !== null && claim.doc === allowed.doc && claim.origin === allowed.origin) return null;
+  return docRecordAskerRefusal("opener", "foreign", claim.doc);
 }
 
 /* engine.h's arrival word, the notice's flag set and the address space, parsed; the arrival word serialized. */
@@ -310,4 +363,7 @@ if (typeof self !== "undefined") {
   self.docRecordNameParent = docRecordNameParent;
   self.docRecordWorldDocument = docRecordWorldDocument;
   self.docRecordAskerRefusal = docRecordAskerRefusal;
+  self.docRecordNavigableIdentity = docRecordNavigableIdentity;
+  self.docRecordOpenerOf = docRecordOpenerOf;
+  self.docRecordOpenerClaim = docRecordOpenerClaim;
 }

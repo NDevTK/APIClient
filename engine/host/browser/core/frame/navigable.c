@@ -478,6 +478,31 @@ static bool child_in_this_agent(const Origin *child_origin)
     return origin_same(origin_agent(), child_origin);
 }
 
+/* `navigable.open <child> <creator> <opener>` for an auxiliary navigable this agent created (HTML §7.3.1.7 step
+   8). The opener is what the create just linked: null under `noopener` (§7.2.2.1's noreferrer included, and
+   §7.3.1.7 step 8.3.4's opener-policy severance, both of which set the features' noopener first). */
+static void navigable_announce_open(JSContext *ctx, uint32_t child, JSValueConst proxy)
+{
+    JSValue opener = window_proxy_opener_navigable(ctx, proxy);
+    char *opener_id = remote_object_encode(ctx, window_proxy_is(opener) ? opener : JS_NULL);
+    char *op;
+
+    CHECK(opener_id != NULL, "navigable: OOM naming an auxiliary navigable's §7.2.2.4 opener for the zone");
+    JS_FreeValue(ctx, opener);
+    {
+        const char *const fields[NAVIGABLE_OPEN_N] = {
+            [NAVIGABLE_OPEN_CHILD] = world_doc_name(child),
+            [NAVIGABLE_OPEN_CREATOR] = world_doc_name(document_doc(ctx)),
+            [NAVIGABLE_OPEN_OPENER] = opener_id,
+        };
+
+        op = engine_notice_build("navigable.open", fields, NAVIGABLE_OPEN_N);
+    }
+    engine_host_notify(ctx, op);
+    free(op);
+    free(opener_id);
+}
+
 /* A TOP-LEVEL traversable's navigation whose response origin is another agent's, with §7.1.3.2 having kept the
    browsing context: the incoming Document is created in a peer instance of this browsing context group, and the
    navigable here becomes a remote one presenting it. The record is `navigable.navigate <new document> <url>
@@ -512,6 +537,13 @@ static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char 
        adopted: this agent does not host it (solver/world.h). */
     incoming = world_mint_doc(window_proxy_doc(proxy));
     {
+        /* §7.2.2.4's opener survives the navigation (only §7.1.3.2's swap severs it). This is the engine's
+           claim; the zone provisions the peer's opener from its own record of who created the navigable. */
+        JSValue opener = window_proxy_opener_navigable(ctx, proxy);
+        char *opener_id = remote_object_encode(ctx, window_proxy_is(opener) ? opener : JS_NULL);
+
+        CHECK(opener_id != NULL, "navigable: OOM naming a navigated navigable's §7.2.2.4 opener for the zone");
+        JS_FreeValue(ctx, opener);
         const char *const fields[NAVIGABLE_PROVISION_N] = {
             [NAVIGABLE_PROVISION_DOCUMENT] = world_doc_name(incoming),
             [NAVIGABLE_PROVISION_ADDRESS] = url,
@@ -520,9 +552,11 @@ static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char 
             [NAVIGABLE_PROVISION_DRIVEN] = driven,
             [NAVIGABLE_PROVISION_PINNED] = pinned,
             [NAVIGABLE_PROVISION_ISSUER] = issuer,
+            [NAVIGABLE_PROVISION_OPENER] = opener_id,
         };
 
         op = engine_notice_build("navigable.navigate", fields, NAVIGABLE_PROVISION_N);
+        free(opener_id);
     }
     engine_host_notify(ctx, op);
     free(op);
@@ -4111,6 +4145,9 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         /* §7.1's search reaches a CHILD down its parent's document tree; a top-level traversable is reachable
            from nothing, so the group holds it — see navigable_choose_name. */
         if (!is_child) navigable_group_add(ctx, proxy);
+        /* An auxiliary navigable this agent holds is announced, so the zone records who created it and can
+           bound the opener a later navigation of it into a peer claims (navigable_notice.h). */
+        if (!is_child) navigable_announce_open(ctx, child, proxy);
         /* §7.4 STEP 14: NAVIGATE THE NEW NAVIGABLE TO url — and navigating is what makes the document RUN. It
            is a JOB rather than a call, for the reason js_nav_load_step states, but it is ENQUEUED here and
            unconditionally: a navigable's own scripts are an observable that owes nothing to the creator, and a

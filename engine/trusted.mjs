@@ -140,7 +140,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { createContext } from 'node:vm';
-import { topLevelFactFields as topLevelFacts } from './top_level_facts.mjs';
+import { topLevelFactFields as topLevelFacts, TOP_LEVEL_FACT_NAMES } from './top_level_facts.mjs';
 import { NAVIGABLE_NOTICE, navigableNoticeField } from './noticegen.mjs';
 import { siteRegistrableDomains } from './psl.mjs';
 import { abortRecord } from './abort_record.mjs';
@@ -184,7 +184,7 @@ function speakAsHost(sandbox) {
    not this realm's Uint8Array, and `ArrayBuffer.isView` is the cross-realm question. */
 export function trustedZone() {
   /* `Response` is what lib/http-cache.js answers a hit with, as the wire's own fetch answers a send. */
-  const sandbox = { console, URL, TextDecoder, TextEncoder, Response };
+  const sandbox = { console, URL, TextDecoder, TextEncoder, Response, atob };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   createContext(sandbox);
@@ -222,6 +222,7 @@ export function trustedZone() {
                    'safeFetchWidenedOrigins', 'safeFetchMethodRefusal', 'docRecord', 'docRecordJoin',
                    'docRecordAuxiliary', 'docRecordArrival', 'docRecordSandbox', 'docRecordOpaque',
                    'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordWorldDocument', 'docRecordAskerRefusal',
+                   'docRecordNavigableIdentity', 'docRecordOpenerOf', 'docRecordOpenerClaim',
                    'docRecordAddressSpace', 'docRecordWithAddressSpace', 'safeFetchSchemeData',
                    'safeFetchDocumentAddressSpace', 'noveltyAbsorb', 'noveltyOwed'])
     if (typeof sandbox[n] !== 'function')
@@ -749,15 +750,35 @@ async function main() {
   /* The address each provisioned child was created at, by name: what a later create under that name is checked
      against. */
   const createdAddress = new Map();
+  /* HTML §7.2.2.4's opener each navigable may carry, by this zone's own record: written where the navigable's
+     creation reaches this zone (a provisioned or joined document, or `navigable.open` for one the engine holds)
+     as the creator or null, keyed by document name with the instance root it was recorded under. An engine's
+     opener claim is compared against it (docRecordOpenerClaim) and never provisioned beyond it. */
+  const openerRecords = new Map();
+  const recordOpener = (name, root, opener) => openerRecords.set(name, { root, opener });
+  const openerLookup = (e) => (n) => {
+    const r = openerRecords.get(n);
+    return r === undefined ? undefined : (e.docs.includes(r.root) ? r : false);
+  };
+  /* The native facts with §7.2.2.4's opener replaced by a claim this zone has allowed. */
+  const OPENER_FACT = TOP_LEVEL_FACT_NAMES.indexOf('openerNavigable');
+  if (OPENER_FACT < 0) throw new Error('content.mojom.Renderer.Init declares no `openerNavigable` fact');
+  const withOpener = (facts, token) => facts.map((v, i) => (i === OPENER_FACT ? token : v));
   /* The record of the document created at `url` from the navigable record `doc`: its policy container's IP
      address space is its response's, or `creator`'s (null for none) for a local-scheme one (Local Network
      Access §3.5), which bridge.js states on the analyze record. */
   const createdDoc = (doc, url, creator) =>
     ZONE.docRecordWithAddressSpace(doc, ZONE.safeFetchDocumentAddressSpace(url, creator));
-  async function provision({ docId, url, origin, headers, bytes, facts, referenced, doc, creator, group }) {
+  async function provision({ docId, url, origin, headers, bytes, facts, referenced, doc, creator, group, opener }) {
     /* The document's record, against which every request it asks is judged (askerRecord). Composed by the
        caller and recorded here, so an instance is never provisioned without one. */
     recordDocument(docId, createdDoc(doc, url, creator));
+    if (opener !== null && (typeof opener !== 'object' || typeof opener.doc !== 'string' ||
+                            typeof opener.origin !== 'string'))
+      throw new Error(`an instance was provisioned for ${url} without this zone's record of its §7.2.2.4 ` +
+                      'opener — null or the creating document and its origin — so a later navigation of it ' +
+                      'would have nothing to bound its engine\'s opener claim by');
+    recordOpener(docId, docId, opener);
     if (referenced !== 0 && referenced !== 1)
       throw new Error(`an instance was provisioned for ${url} without stating whether a peer holds a ` +
                       'reference into its document — the flag decides whether its timelines may finish, so ' +
@@ -1434,6 +1455,14 @@ async function main() {
         refuseCreate(e, f[C.child], `navigable.create ${f[C.child]} — ${askerRefusal(e, createRefusal)}`);
         return;
       }
+      /* The opener is the creator or null (§7.3.1.7 step 8.3.8 against 8.3.7), whatever the engine claims. */
+      const createOpener = f[C.parent] === 'u' ? { doc: f[C.creator], origin: e.origin } : null;
+      const openerRefusal = ZONE.docRecordOpenerClaim(f[C.opener], createOpener);
+      if (openerRefusal) {
+        refuseCreate(e, f[C.child], `navigable.create ${f[C.child]} — ${askerRefusal(e, openerRefusal)}`);
+        return;
+      }
+      const childOpener = ZONE.docRecordNavigableIdentity(f[C.opener]) === null ? null : createOpener;
       createdAddress.set(f[C.child], f[C.address]);
       const creatorDoc = created.doc;
       const own = ZONE.docRecord(f[C.provenance], f[C.driven], f[C.pinned], f[C.sandboxFlags],
@@ -1475,6 +1504,7 @@ async function main() {
                           'provisioned for a peer\'s navigable or created one'}`);
         holder.docs.push(f[C.child]);
         recordDocument(f[C.child], createdDoc(doc, loaded.url, creatorDoc));
+        recordOpener(f[C.child], f[C.child], childOpener);
         holder.ready.push(['join', loaded.url, f[C.child], b64(fieldLines(loaded.headers)), b64(loaded.bytes),
                            ...createFacts(f, doc), ZONE.docRecordArrival(doc)].join('\t'));
         retryHeld();
@@ -1490,7 +1520,7 @@ async function main() {
                         /* Under the creating document's record joined with the notice's words: taking the
                            notice's alone would let a child of a document this zone chose to open read as one
                            the person navigated to, or shed a mark the creator carries. */
-                        doc, creator: creatorDoc, referenced: 1 });
+                        doc, creator: creatorDoc, referenced: 1, opener: childOpener });
       return;
     }
     /* `navigable.swap <new document> <url> <origin> <provenance> <driven> <pinned> <issuer>` — HTML §7.1.3.2 "Browsing context group switches due to
@@ -1531,7 +1561,8 @@ async function main() {
       await provision({ docId: f[P.document], url: loaded.url, origin: principalOf(doc, loaded.url),
                         headers: loaded.headers, bytes: loaded.bytes,
                         facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
-                        creator: swapFrom.issuerDoc, group: newGroup(), referenced: 0 });
+                        creator: swapFrom.issuerDoc, group: newGroup(), referenced: 0,
+                        /* §7.3.2.3 creates the swapped-to context with a null opener. */ opener: null });
       return;
     }
     /* `navigable.navigate <new document> <url> <origin> <provenance> <driven> <pinned> <issuer>` — a TOP-LEVEL traversable navigated to a
@@ -1542,7 +1573,7 @@ async function main() {
        emitting instance's proxy names this document, so its timelines may not run out under a read. */
     if (f[0] === 'navigable.navigate') {
       if (f.length !== P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
-          !f[P.pinned] || !f[P.issuer])
+          !f[P.pinned] || !f[P.issuer] || !f[P.opener])
         throw new Error(`a navigable.navigate notice was short of its fields: ${record} — the engine writes the ` +
                         'new document\'s name, the address, the origin it computed, the navigation\'s ' +
                         'provenance, its drive mark, its witness mark and its issuing document ' +
@@ -1553,14 +1584,26 @@ async function main() {
         e.ready.push(decline(`navigable.navigate ${f[P.document]} — ${askerRefusal(e, navFrom.refusal)}`));
         return;
       }
+      /* §7.2.2.4's opener survives the navigation, and the peer gets it only as this zone recorded it at the
+         navigable's creation: the engine's claim may name that document or none. */
+      const allowed = ZONE.docRecordOpenerOf(f[P.document], openerLookup(e));
+      const navOpenerRefusal = allowed.refusal
+        ? ZONE.docRecordAskerRefusal('opener', allowed.refusal, ZONE.docRecordNameParent(f[P.document]))
+        : ZONE.docRecordOpenerClaim(f[P.opener], allowed.opener);
+      if (navOpenerRefusal) {
+        e.ready.push(decline(`navigable.navigate ${f[P.document]} — ${askerRefusal(e, navOpenerRefusal)}`));
+        return;
+      }
+      const navOpener = ZONE.docRecordNavigableIdentity(f[P.opener]) === null ? null : allowed.opener;
       const loaded = await navigate(f[P.address], e.docUrl, `navigable.navigate ${f[P.document]}`,
                                     f[P.provenance], f[P.driven], f[P.pinned], navFrom.issuerDoc);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       const doc = childDoc(navFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
       await provision({ docId: f[P.document], url: loaded.url, origin: principalOf(doc, loaded.url),
                         headers: loaded.headers, bytes: loaded.bytes,
-                        facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
-                        creator: navFrom.issuerDoc, group: e.group, referenced: 1 });
+                        facts: withOpener(topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)),
+                                          navOpener === null ? 'N' : f[P.opener]), doc,
+                        creator: navFrom.issuerDoc, group: e.group, referenced: 1, opener: navOpener });
       return;
     }
     /* `document.seed <address> <provenance> <driven> <pinned> <issuer>` — AN ADDRESS THE APPLICATION DECLARED IS A PAGE OF ITSELF, from
@@ -1622,7 +1665,7 @@ async function main() {
       await provision({ docId: `seed${++seedSerial}`, url: loaded.url, origin: principalOf(doc, loaded.url),
                         headers: loaded.headers, bytes: loaded.bytes,
                         facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
-                        creator: null, group: newGroup(), referenced: 0 });
+                        creator: null, group: newGroup(), referenced: 0, opener: null });
       return;
     }
     /* `windowproxy.post <target doc> <world> <marks> <target origin> <base64>` — §9.4.4 across instances, relayed
@@ -1727,6 +1770,28 @@ async function main() {
     /* `navigable.request`, navigable_notice.h's request table — a child navigable's request facts
        (core/frame/navigable.c), which extension/bridge.js speaks a sub-frame seed with. This host loads no seed
        and composes no Referer, so it reads the record for its grammar alone. */
+    /* `navigable.open <child> <creator> <opener>` — an auxiliary navigable the engine created and holds
+       (navigable_notice.h). Nothing is provisioned; this zone records the navigable's opener, the creator or
+       null, so a later navigation of it into a peer is bounded by this record rather than by the engine's word.
+       The creator must be a document of this instance and the child's name minted from it, as for a create. */
+    if (f[0] === 'navigable.open') {
+      const O = NAVIGABLE_NOTICE.open;
+      if (f.length !== O.parts || !f[O.child] || !f[O.creator] || !f[O.opener])
+        throw new Error(`a navigable.open notice does not match navigable_notice.h's open table: ${record}`);
+      const opened = askerRecord(e, [f[O.creator]], 'creator');
+      const allowedOpener = { doc: f[O.creator], origin: e.origin };
+      const openRefusal = opened.refusal ||
+        (ZONE.docRecordNameParent(f[O.child]) !== f[O.creator]
+          ? ZONE.docRecordAskerRefusal('child', 'not-minted', f[O.child])
+          : ZONE.docRecordOpenerClaim(f[O.opener], allowedOpener));
+      if (openRefusal) {
+        e.ready.push(decline(`navigable.open ${f[O.child]} — ${askerRefusal(e, openRefusal)}`));
+        return;
+      }
+      recordOpener(f[O.child], e.docId,
+                   ZONE.docRecordNavigableIdentity(f[O.opener]) === null ? null : allowedOpener);
+      return;
+    }
     if (f[0] === 'navigable.request') {
       const R = NAVIGABLE_NOTICE.request;
       if (f.length !== R.parts || !f[R.creator] || !f[R.destination] || !f[R.address])
@@ -2142,7 +2207,7 @@ async function main() {
                                  headers: seeded.meta.headers, bytes: seeded.bytes,
                                  facts: topLevelFacts(docUrl, ZONE.docRecordSandbox(rootDoc)),
                                  doc: rootDoc, creator: null, group: newGroup(),
-                                 referenced: 0 });
+                                 referenced: 0, opener: null });
 
   /* SHIFTED RATHER THAN `Promise.all`, because the list GROWS: a peer provisioned three rounds in appends its
      driver to this queue, and an `all` taken over the queue as it stood would return before that peer's

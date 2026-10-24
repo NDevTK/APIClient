@@ -72,7 +72,8 @@ function sandboxVocabulary() {
 function headerTable() {
   const h = readFileSync(HEADER, "utf8");
   return { create: parseList(h, "NAVIGABLE_CREATE_FIELDS"), provision: parseList(h, "NAVIGABLE_PROVISION_FIELDS"),
-           request: parseList(h, "NAVIGABLE_REQUEST_FIELDS"), sandbox: sandboxVocabulary() };
+           request: parseList(h, "NAVIGABLE_REQUEST_FIELDS"), open: parseList(h, "NAVIGABLE_OPEN_FIELDS"),
+           sandbox: sandboxVocabulary() };
 }
 
 /* A field's value: a `token` as written, a `base64` field's bytes (RFC 4648 §4, the engine's JS_Base64Encode)
@@ -106,13 +107,14 @@ function jsText(t) {
     "// Each field's index in a provisioning notice split on TAB (index 0 is the operation name), `parts`,\n" +
     "// the split length of a complete record, and `encoding`, each field's encoding. `create` is\n" +
     "// navigable.create; `provision` is navigable.swap and navigable.navigate; `request` is\n" +
-    "// navigable.request. `sandbox` is the create notice's sandboxing flag set vocabulary: HTML §7.1.5's flag\n" +
+    "// navigable.request; `open` is navigable.open. `sandbox` is the create notice's sandboxing flag set vocabulary: HTML §7.1.5's flag\n" +
     "// names in core/frame/sandboxing.h's order, and the word for the empty set. A `var`, so a vm context's\n" +
     "// global object carries it. navigableNoticeField reads a field by its encoding.\n" +
     "var NAVIGABLE_NOTICE = Object.freeze({\n" +
     `  create: ${obj(t.create)},\n` +
     `  provision: ${obj(t.provision)},\n` +
     `  request: ${obj(t.request)},\n` +
+    `  open: ${obj(t.open)},\n` +
     "  sandbox: Object.freeze({\n" +
     "    flags: Object.freeze([\n" + t.sandbox.flags.map((n) => `      ${JSON.stringify(n)},`).join("\n") +
     "\n    ]),\n" +

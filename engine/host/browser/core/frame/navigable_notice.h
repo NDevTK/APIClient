@@ -51,7 +51,16 @@
     X(PROVENANCE, provenance, TOKEN)           /* what the load is evidence of (PENDING_PROVENANCE_*) */         \
     X(DRIVEN, driven, TOKEN)                   /* the drive mark (PENDING_DRIVEN_*) */                           \
     X(PINNED, pinned, TOKEN)                   /* the witness mark (PENDING_PINNED_*) */                         \
-    X(ISSUER, issuer, TOKEN)                   /* HTML §7.4.2.2's sourceDocument, by its world name */
+    X(ISSUER, issuer, TOKEN)                   /* HTML §7.4.2.2's sourceDocument, by its world name */         \
+    X(OPENER, opener, TOKEN)                   /* the engine's claim of §7.2.2.4's opener (remote_object.h), or `N` */
+
+/* `navigable.open`: an auxiliary navigable this agent created and holds (HTML §7.3.1.7 step 8), so the zone has
+   its own record of who created it before any navigation of it reaches a peer. The opener is the engine's
+   claim, which the zone accepts only as `N` or as the creator. */
+#define NAVIGABLE_OPEN_FIELDS(X)                                                                           \
+    X(CHILD, child, TOKEN)                     /* the new navigable's document's world name */                   \
+    X(CREATOR, creator, TOKEN)                 /* the creating document's world name */                          \
+    X(OPENER, opener, TOKEN)                   /* the engine's claim of §7.2.2.4's opener (remote_object.h), or `N` */
 
 enum { NAVIGABLE_NOTICE_TOKEN, NAVIGABLE_NOTICE_BASE64 };
 
@@ -67,12 +76,15 @@ enum { NAVIGABLE_NOTICE_TOKEN, NAVIGABLE_NOTICE_BASE64 };
 #define NAVIGABLE_NOTICE_ENUM_CREATE(id, js, enc) NAVIGABLE_CREATE_##id,
 #define NAVIGABLE_NOTICE_ENUM_PROVISION(id, js, enc) NAVIGABLE_PROVISION_##id,
 #define NAVIGABLE_NOTICE_ENUM_REQUEST(id, js, enc) NAVIGABLE_REQUEST_##id,
+#define NAVIGABLE_NOTICE_ENUM_OPEN(id, js, enc) NAVIGABLE_OPEN_##id,
 enum { NAVIGABLE_CREATE_FIELDS(NAVIGABLE_NOTICE_ENUM_CREATE) NAVIGABLE_CREATE_N };
 enum { NAVIGABLE_PROVISION_FIELDS(NAVIGABLE_NOTICE_ENUM_PROVISION) NAVIGABLE_PROVISION_N };
 enum { NAVIGABLE_REQUEST_FIELDS(NAVIGABLE_NOTICE_ENUM_REQUEST) NAVIGABLE_REQUEST_N };
+enum { NAVIGABLE_OPEN_FIELDS(NAVIGABLE_NOTICE_ENUM_OPEN) NAVIGABLE_OPEN_N };
 #undef NAVIGABLE_NOTICE_ENUM_CREATE
 #undef NAVIGABLE_NOTICE_ENUM_PROVISION
 #undef NAVIGABLE_NOTICE_ENUM_REQUEST
+#undef NAVIGABLE_NOTICE_ENUM_OPEN
 
 /* A create field's encoding, NAVIGABLE_NOTICE_TOKEN or NAVIGABLE_NOTICE_BASE64; -1 for a position the table
    does not declare, which a caller asserts against. */

@@ -116,6 +116,8 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
         [NAVIGABLE_PROVISION_DRIVEN] = driven,
         [NAVIGABLE_PROVISION_PINNED] = pinned,
         [NAVIGABLE_PROVISION_ISSUER] = issuer,
+        /* §7.3.2.3 creates the new browsing context with a null opener: a swap severs it. */
+        [NAVIGABLE_PROVISION_OPENER] = "N",
     };
 
     DCHECK(issuer != NULL && *issuer, "§7.1.3.2's swap was reached with no sourceDocument — the load job carries "

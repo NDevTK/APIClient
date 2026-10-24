@@ -543,7 +543,13 @@ timeline replaying that history announces the same name and one instance serves 
 name at another address is two documents claiming one name, `blocked-asker:child-readdressed`. A provisioning notice is judged the same way by the document that issued
 it: a create by its creator, a `navigable.swap` or `navigable.navigate` by HTML §7.4.2.2's sourceDocument (whose record the
 new document's joins with that of the navigable's current document, the one its name is minted from), and a
-`document.seed` by the declaring document. An instance has no record of its own. A line that folds several
+`document.seed` by the declaring document. An instance has no record of its own. A navigable's HTML §7.2.2.4
+opener is judged by the same bound: on a `navigable.create` or `navigable.open` (an auxiliary navigable the
+engine holds) the engine's opener may name only the creating document at the instance's origin, or nothing,
+and the zone records the opener from that; a `navigable.navigate` hands its peer only the opener the record of
+the nearest document up its name allows (`docRecordOpenerOf`, `docRecordOpenerClaim`), and any other claim is
+refused as `blocked-asker:opener-foreign`, or `opener-elsewhere` / `opener-unprovisioned` when that walk meets
+another instance's document or none. A line that folds several
 parks is judged under the meet of their records (`docRecordMeet`), because one reply answers them all and the
 engine folds the line's own marks toward the most permissive member in the same way.
 

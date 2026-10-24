@@ -2,7 +2,7 @@
 // Each field's index in a provisioning notice split on TAB (index 0 is the operation name), `parts`,
 // the split length of a complete record, and `encoding`, each field's encoding. `create` is
 // navigable.create; `provision` is navigable.swap and navigable.navigate; `request` is
-// navigable.request. `sandbox` is the create notice's sandboxing flag set vocabulary: HTML §7.1.5's flag
+// navigable.request; `open` is navigable.open. `sandbox` is the create notice's sandboxing flag set vocabulary: HTML §7.1.5's flag
 // names in core/frame/sandboxing.h's order, and the word for the empty set. A `var`, so a vm context's
 // global object carries it. navigableNoticeField reads a field by its encoding.
 var NAVIGABLE_NOTICE = Object.freeze({
@@ -63,7 +63,8 @@ var NAVIGABLE_NOTICE = Object.freeze({
     driven: 5,
     pinned: 6,
     issuer: 7,
-    parts: 8,
+    opener: 8,
+    parts: 9,
     encoding: Object.freeze({
       document: "token",
       address: "token",
@@ -72,6 +73,7 @@ var NAVIGABLE_NOTICE = Object.freeze({
       driven: "token",
       pinned: "token",
       issuer: "token",
+      opener: "token",
     }),
   }),
   request: Object.freeze({
@@ -87,6 +89,17 @@ var NAVIGABLE_NOTICE = Object.freeze({
       destination: "token",
       referrerPolicy: "token",
       address: "token",
+    }),
+  }),
+  open: Object.freeze({
+    child: 1,
+    creator: 2,
+    opener: 3,
+    parts: 4,
+    encoding: Object.freeze({
+      child: "token",
+      creator: "token",
+      opener: "token",
     }),
   }),
   sandbox: Object.freeze({

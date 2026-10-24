@@ -781,6 +781,13 @@ async function drainNotices(e) {
       if (f.length !== R.parts || !f[R.creator] || !f[R.destination] || !f[R.address])
         fail(`a navigable.request notice does not match navigable_notice.h's request table: ${n}`);
     }
+    /* `navigable.open`, navigable_notice.h's open table — an auxiliary navigable the engine holds, which only a
+       zone that provisions its later navigations records; this driver checks the grammar. */
+    else if (f[0] === 'navigable.open') {
+      const O = NAVIGABLE_NOTICE.open;
+      if (f.length !== O.parts || !f[O.child] || !f[O.creator] || !f[O.opener])
+        fail(`a navigable.open notice does not match navigable_notice.h's open table: ${n}`);
+    }
     else throw new Error('a notice this host does not act on: ' + f[0]);
   }
 }
