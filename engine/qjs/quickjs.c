@@ -29006,78 +29006,115 @@ typedef struct JSOpClass {
                                   write through a TRAPLESS proxy, whose forward keeps the proxy as the Receiver.
                                   Same nesting as CONT_GOPD_DESC: a keyed OPERATION parked across the requests
                                   that finish it. */
-/* A KEYED OPERATION PARKED AT ITS OWN RE-ENTRY — the same record, before any trap read has happened. See
-   CONT_GETPROP_YIELD. The field list is not nearly the same as a trap read's, it IS a trap read's: both are
-   "the whole operation, held on the heap while something else runs", and the trap read only additionally
-   carries the method it went to fetch. Written as one record because a second one would be the same operand
-   list stated twice — and the operand list is exactly what `dflags` and `desc_out` above record having been
-   missed once each. */
-typedef struct JSTrapGet {
-    JSValue obj;         /* the proxy the operation is on (owned) */
-    JSValue val;         /* GP_SET / GP_DEFINE's operand (owned) */
-    JSValue recv;        /* the operation's receiver (owned), already resolved past "the object itself" */
-    /* THE TRAP, ONCE THE READ HAS PRODUCED IT (owned) — and JS_UNINITIALIZED, the engine's own empty slot,
-       until then. It used to be JS_UNDEFINED, which is a real trap answer (GetMethod maps null onto undefined
-       and 10.5.x reads that as "no trap"), so "has the read happened?" was a question this record could not
-       answer about itself. Nothing asked while the record existed only between a read's issue and its
-       delivery; a record that is also what a PARK holds is entered at do_getprop_tramp with the question
-       live, and answering it from the object's class instead would be reading a fact about the operand to
-       decide a fact about the request. */
-    JSValue method;
-    JSAtom atom;         /* the operation's key (owned); JS_ATOM_NULL for GP_OWNKEYS, which has none */
-    void *outer;         /* what is waiting on the OPERATION, not on this read */
-    JSValue getter, setter;  /* GP_DEFINE's remaining descriptor fields (owned) */
-    int dflags;              /* and its attribute bits. The trap READ parks the whole operation, so EVERY operand
-                                of it has to ride here — the shape did not, so a `defineProperty` reaching a proxy
-                                resumed with the CreateDataProperty default and silently made every attribute
-                                true. An operand added to the request is an obligation at each place the request
-                                is parked. */
-    uint8_t outer_kind;
-    uint8_t op;
-    JSDescFacts *desc_out;   /* the operation's ANSWER SHAPE. The trap read parks the whole operation, so every
-                                operand of it rides here — the same obligation `dflags` above records. */
-    uint8_t no_throw;
-} JSTrapGet;
+/* A CONTINUATION RECORD'S DECLARATION. A record a parked chain can hold lists its fields once, each as
+   F(role, type, name), and its struct, its release, its copy and its requester link are all expanded from that
+   one list (CONT_RECORD_DEFINE), so no walk can name a field another walk misses. The roles:
+     OWN_VAL   an owned JSValue: the copy takes a reference, the release drops one;
+     OWN_ATOM  an owned JSAtom, likewise;
+     POD       a plain value of `type`, copied;
+     OUTER     the requester link, `void *name` and its kind `uint8_t name##_kind`, at most one per record;
+     DESC_OUT  a JSDescFacts * naming the requester's own record, which tramp_cont_relink_outer re-aims.
+   A role a walk does not expand is a compile error at the walk, which is the point. */
+#define CONT_REC_MEMBER_OWN_VAL(t, n)   JSValue n;
+#define CONT_REC_MEMBER_OWN_ATOM(t, n)  JSAtom n;
+#define CONT_REC_MEMBER_POD(t, n)       t n;
+#define CONT_REC_MEMBER_OUTER(t, n)     void *n; uint8_t n##_kind;
+#define CONT_REC_MEMBER_DESC_OUT(t, n)  JSDescFacts *n;
+#define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
+#define CONT_REC_FREE_OWN_VAL(n)        JS_FreeValue(ctx, r->n);
+#define CONT_REC_FREE_OWN_ATOM(n)       JS_FreeAtom(ctx, r->n);
+#define CONT_REC_FREE_POD(n)
+#define CONT_REC_FREE_OUTER(n)
+#define CONT_REC_FREE_DESC_OUT(n)
+#define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(n)
+#define CONT_REC_DUP_OWN_VAL(n)         c->n = js_dup(r->n);
+#define CONT_REC_DUP_OWN_ATOM(n)        c->n = JS_DupAtom(ctx, r->n);
+#define CONT_REC_DUP_POD(n)
+#define CONT_REC_DUP_OUTER(n)
+#define CONT_REC_DUP_DESC_OUT(n)
+#define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(n)
+#define CONT_REC_NOUTER_OWN_VAL         0
+#define CONT_REC_NOUTER_OWN_ATOM        0
+#define CONT_REC_NOUTER_POD             0
+#define CONT_REC_NOUTER_OUTER           1
+#define CONT_REC_NOUTER_DESC_OUT        0
+#define CONT_REC_NOUTER(role, t, n)     + CONT_REC_NOUTER_##role
+#define CONT_REC_OUTER_GET_OWN_VAL(n)
+#define CONT_REC_OUTER_GET_OWN_ATOM(n)
+#define CONT_REC_OUTER_GET_POD(n)
+#define CONT_REC_OUTER_GET_OUTER(n)     *out_kind = r->n##_kind; return r->n;
+#define CONT_REC_OUTER_GET_DESC_OUT(n)
+#define CONT_REC_OUTER_GET(role, t, n)  CONT_REC_OUTER_GET_##role(n)
+#define CONT_REC_OUTER_SET_OWN_VAL(n)
+#define CONT_REC_OUTER_SET_OWN_ATOM(n)
+#define CONT_REC_OUTER_SET_POD(n)
+#define CONT_REC_OUTER_SET_OUTER(n)     r->n = outer; r->n##_kind = outer_kind; return;
+#define CONT_REC_OUTER_SET_DESC_OUT(n)
+#define CONT_REC_OUTER_SET(role, t, n)  CONT_REC_OUTER_SET_##role(n)
+#define CONT_REC_DESC_OUT_OWN_VAL(n)
+#define CONT_REC_DESC_OUT_OWN_ATOM(n)
+#define CONT_REC_DESC_OUT_POD(n)
+#define CONT_REC_DESC_OUT_OUTER(n)
+#define CONT_REC_DESC_OUT_DESC_OUT(n)   return &r->n;
+#define CONT_REC_DESC_OUT(role, t, n)   CONT_REC_DESC_OUT_##role(n)
+/* The struct `T` and its walks, prefixed `p`: p_free releases the record and what it owns (not its requester);
+   p_clone copies it, taking a reference to everything it owns, with its links still naming the original's
+   (tramp_cont_relink_outer re-binds them); p_outer_get/p_outer_set read and write the requester link (NULL and
+   nothing for a record with none); p_desc_out answers its descriptor-answer slot, or NULL. */
+#define CONT_RECORD_DEFINE(T, p, FIELDS)                                                                       \
+    typedef struct T { FIELDS(CONT_REC_MEMBER) } T;                                                           \
+    _Static_assert(0 FIELDS(CONT_REC_NOUTER) <= 1, #T " declares more than one requester link");             \
+    static void p##_free(JSContext *ctx, T *r)                                                                \
+    {                                                                                                          \
+        FIELDS(CONT_REC_FREE)                                                                                  \
+        js_free_rt(ctx->rt, r);                                                                                \
+    }                                                                                                          \
+    static T *p##_clone(JSContext *ctx, const T *r)                                                           \
+    {                                                                                                          \
+        T *c = js_malloc(ctx, sizeof(*c));                                                                     \
+        if (unlikely(!c))                                                                                      \
+            return NULL;                                                                                       \
+        *c = *r;                                                                                               \
+        FIELDS(CONT_REC_DUP)                                                                                   \
+        return c;                                                                                              \
+    }                                                                                                          \
+    static inline void *p##_outer_get(T *r, uint8_t *out_kind)                                                \
+    {                                                                                                          \
+        FIELDS(CONT_REC_OUTER_GET)                                                                             \
+        *out_kind = CONT_NONE;                                                                                 \
+        return NULL;                                                                                           \
+    }                                                                                                          \
+    static inline void p##_outer_set(T *r, void *outer, uint8_t outer_kind)                                   \
+    {                                                                                                          \
+        FIELDS(CONT_REC_OUTER_SET)                                                                             \
+        DCHECK(outer == NULL, #T " has no requester link and was handed one");                                 \
+    }                                                                                                          \
+    static inline JSDescFacts **p##_desc_out(T *r)                                                             \
+    {                                                                                                          \
+        FIELDS(CONT_REC_DESC_OUT)                                                                              \
+        return NULL;                                                                                           \
+    }
 
-static void js_trapget_free(JSContext *ctx, JSTrapGet *tg)
-{
-    JS_FreeValue(ctx, tg->getter);
-    JS_FreeValue(ctx, tg->setter);
-    JS_FreeValue(ctx, tg->obj);
-    JS_FreeValue(ctx, tg->val);
-    JS_FreeValue(ctx, tg->recv);
-    JS_FreeValue(ctx, tg->method);
-    JS_FreeAtom(ctx, tg->atom);
-    js_free_rt(ctx->rt, tg);
-}
-
-/* THE OTHER DIRECTION OF THE SAME OWNERSHIP LIST — the fork's copy, read against the release above. A record
-   that can ride a PARKED chain must be answerable by both walks (free_tramp_chain releases one reference,
-   clone_deep_flow takes a second), and a field present in only one of them is the drift that pairing exists
-   to stop: `dflags` and `desc_out` were each missed once on the way IN to this record, and a missed dup here
-   is the same mistake with two flows sharing one operand instead of one flow losing it.
-   `desc_out` is copied naming the ORIGINAL requester's record, like `outer`, and tramp_cont_relink_outer re-aims
-   both at the sibling's requester. */
-static JSTrapGet *js_trapget_clone(JSContext *ctx, const JSTrapGet *tg)
-{
-    JSTrapGet *n;
-
-    n = js_mallocz(ctx, sizeof(*n));
-    if (unlikely(!n))
-        return NULL;
-    n->obj = js_dup(tg->obj);
-    n->val = js_dup(tg->val);
-    n->recv = js_dup(tg->recv);
-    n->method = js_dup(tg->method);
-    n->getter = js_dup(tg->getter);
-    n->setter = js_dup(tg->setter);
-    n->atom = JS_DupAtom(ctx, tg->atom);
-    n->dflags = tg->dflags;
-    n->outer = tg->outer; n->outer_kind = tg->outer_kind;
-    n->op = tg->op; n->no_throw = tg->no_throw;
-    n->desc_out = tg->desc_out;
-    return n;
-}
+/* A KEYED PROPERTY OPERATION HELD ON THE HEAP while something else runs: parked at its own re-entry
+   (CONT_GETPROP_YIELD) or waiting on its Proxy handler's trap read (CONT_TRAP_GET). Every operand of the
+   operation rides here, because the park holds the whole operation. `method` is the trap once the read has
+   produced it, and JS_UNINITIALIZED until then (JS_UNDEFINED is a real trap answer: GetMethod maps null onto
+   undefined). `atom` is JS_ATOM_NULL for GP_OWNKEYS. `outer` is what waits on the operation, not on the read.
+   `getter`, `setter` and `dflags` are GP_DEFINE's descriptor; `desc_out` is the operation's answer shape. */
+#define JS_TRAPGET_FIELDS(F)                                                                                   \
+    F(OWN_VAL, JSValue, obj)                                                                                   \
+    F(OWN_VAL, JSValue, val)                                                                                   \
+    F(OWN_VAL, JSValue, recv)                                                                                  \
+    F(OWN_VAL, JSValue, method)                                                                                \
+    F(OWN_ATOM, JSAtom, atom)                                                                                  \
+    F(OUTER, void *, outer)                                                                                    \
+    F(OWN_VAL, JSValue, getter)                                                                                \
+    F(OWN_VAL, JSValue, setter)                                                                                \
+    F(POD, int, dflags)                                                                                        \
+    F(POD, uint8_t, op)                                                                                        \
+    F(DESC_OUT, JSDescFacts *, desc_out)                                                                       \
+    F(POD, uint8_t, no_throw)
+CONT_RECORD_DEFINE(JSTrapGet, js_trapget, JS_TRAPGET_FIELDS)
 
 /* A KEYED PROPERTY OPERATION PARKED AT ITS OWN RE-ENTRY — cont_state = JSTrapGet, in an ANCHOR frame, exactly
    as CONT_STEP_YIELD is a step machine parked at its own.
@@ -53822,6 +53859,32 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
    frame continuation clone_deep_flow has an arm for, plus every kind this walk can itself reach. A kind that
    is absent CRASHES rather than answering "none" — a record whose requester silently reads as absent is the
    original defect wearing a default. */
+/* EVERY KIND WHOSE RECORD IS DECLARED (CONT_RECORD_DEFINE), with its record, the prefix of its walks and its
+   role: LINK is a record that can wait under another on a chain, so the fork copies it as a link
+   (tramp_cont_clone_one); ANCHOR is only ever a frame's own cont_state, which clone_deep_flow's frame arm copies.
+   Each walk below expands this list for its cases, so a declared kind is in all of them or the build fails on a
+   missing or a duplicate case label. */
+#define CONT_RECORD_KINDS(X)                                                                                   \
+    X(CONT_GETPROP_YIELD, JSTrapGet, js_trapget, ANCHOR)                                                       \
+    X(CONT_TRAP_GET, JSTrapGet, js_trapget, LINK)
+#define CONT_REC_CASE_OUTER_GET(k, T, p, role)  case k: return p##_outer_get((T *)st, out_kind);
+#define CONT_REC_CASE_OUTER_SET(k, T, p, role)  case k: p##_outer_set((T *)st, outer, outer_kind); return;
+#define CONT_REC_IF_DESC_OUT(k, T, p, role)     if (kind == k) return p##_desc_out((T *)st);
+#define CONT_REC_CASE_CLONE_LINK(k, T, p)       case k: return p##_clone(ctx, (const T *)st);
+#define CONT_REC_CASE_CLONE_ANCHOR(k, T, p)
+#define CONT_REC_CASE_CLONE(k, T, p, role)      CONT_REC_CASE_CLONE_##role(k, T, p)
+#define CONT_REC_CASE_ANCHOR_LINK(k)
+#define CONT_REC_CASE_ANCHOR_ANCHOR(k)          case k:
+#define CONT_REC_CASE_ANCHOR(k, T, p, role)     CONT_REC_CASE_ANCHOR_##role(k)
+#define CONT_REC_CASE_FREE(k, T, p, role)                                                                      \
+    case k: {                                                                                                  \
+        T *r_ = st;                                                                                            \
+        uint8_t ok_;                                                                                           \
+        void *o_ = p##_outer_get(r_, &ok_);                                                                    \
+        p##_free(ctx, r_);                                                                                     \
+        next->st = o_; next->kind = ok_;                                                                       \
+        return;                                                                                                \
+    }
 CONT_KIND_SWITCH_CHECKED_BEGIN
 static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
 {
@@ -53832,12 +53895,7 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_STEP: case CONT_STEP_YIELD:
         *out_kind = ((JSStepHdr *)st)->outer_kind;
         return ((JSStepHdr *)st)->outer;
-    case CONT_GETPROP_YIELD: case CONT_TRAP_GET:
-        /* a keyed property OPERATION parked at its own re-entry, or waiting on the read of its Proxy handler's
-           trap: what waits on it is what asked for the property — a step machine, a coercion sequence, a
-           bytecode operator's own record, or the next handler level's operation. */
-        *out_kind = ((JSTrapGet *)st)->outer_kind;
-        return ((JSTrapGet *)st)->outer;
+    CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_GET)
     case CONT_GETPROP:
         /* THE SAME OPERATION WITH ITS CALLEE ON THE CHAIN — the accessor or the trap is RUNNING rather than
            parked, and the question is identical: what waits on the OPERATION is whoever asked for the
@@ -53997,8 +54055,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     switch ((enum ContKind)kind) {
     case CONT_STEP: case CONT_STEP_YIELD:
         ((JSStepHdr *)st)->outer = outer; ((JSStepHdr *)st)->outer_kind = outer_kind; return;
-    case CONT_GETPROP_YIELD: case CONT_TRAP_GET:
-        ((JSTrapGet *)st)->outer = outer; ((JSTrapGet *)st)->outer_kind = outer_kind; return;
+    CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_SET)
     case CONT_GETPROP:
         ((JSGetProp *)st)->outer = outer; ((JSGetProp *)st)->outer_kind = outer_kind; return;
     case CONT_ARRAY_LEN: case CONT_ARRAY_LEN_YIELD:
@@ -54118,10 +54175,7 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
            LINK under it. The same record is a frame's own cont_state when the callee is a bytecode accessor or
            trap, which is why one clone serves both walks. */
         return js_getprop_clone(ctx, (const JSGetProp *)st);
-    case CONT_TRAP_GET:
-        /* A Proxy operation waiting on the read of its handler's trap, which is a keyed operation on the handler
-           and, for a handler that is itself a Proxy, the next level's operation waiting on the next read. */
-        return js_trapget_clone(ctx, (const JSTrapGet *)st);
+    CONT_RECORD_KINDS(CONT_REC_CASE_CLONE)
     case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET: {
         /* A CONSUMER UNDER THE KEYED OPERATION IT ISSUED — `[...src]`, `new Uint8Array(src)`, `new Map(src)`
            whose iterator's `next` is a getter (51), or whose result's `done`/`value`, entry element or
@@ -54178,8 +54232,9 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     case CONT_FOROF_ENUMREC_WRAP: case CONT_ITER_FROM_NEXT_GET:
     case CONT_GOPD_DESC: case CONT_FOR_IN_HAS: case CONT_SET_RECV: case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE:
-    case CONT_AGEN_DEFER: case CONT_GETPROP_YIELD:
+    case CONT_AGEN_DEFER:
     case CONT_ARRAY_LEN_YIELD:
+    CONT_RECORD_KINDS(CONT_REC_CASE_ANCHOR)
         break;
     }
     {
@@ -54202,7 +54257,7 @@ CONT_KIND_SWITCH_CHECKED_END
 static JSDescFacts **cont_desc_out_slot(void *st, uint8_t kind)
 {
     if (kind == CONT_GETPROP) return &((JSGetProp *)st)->desc_out;
-    if (kind == CONT_GETPROP_YIELD || kind == CONT_TRAP_GET) return &((JSTrapGet *)st)->desc_out;
+    CONT_RECORD_KINDS(CONT_REC_IF_DESC_OUT)
     if (kind == CONT_GOPD_DESC) return &((JSGopdDesc *)st)->desc_out;
     return NULL;
 }
@@ -55215,20 +55270,9 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
         next->st = rest; next->kind = left;
         return;
     }
-    case CONT_GETPROP_YIELD: case CONT_TRAP_GET: {
-        /* A KEYED PROPERTY OPERATION PARKED AT ITS OWN RE-ENTRY, or waiting on its handler's trap read
-           (CONT_TRAP_GET, one record per level of a handler that is a Proxy), released with nobody to answer to — a
-           cold-tier tail dropped, a flow destroyed under a throw. The operation can never finish, so whatever
-           asked for the property can never be answered either and goes with it, which is what every other arm
-           in this walk does with its requester. Taken BEFORE the free, because the free is what makes the
-           record unreadable. */
-        JSTrapGet *tg = st;
-        void *co = tg->outer;
-        uint8_t ck = tg->outer_kind;
-        js_trapget_free(ctx, tg);
-        next->st = co; next->kind = ck;
-        return;
-    }
+    /* A declared record, released with nobody to answer to, and its requester after it: the operation can never
+       finish, so whatever asked for it can never be answered either. */
+    CONT_RECORD_KINDS(CONT_REC_CASE_FREE)
     case CONT_GETPROP: {
         /* A KEYED PROPERTY OPERATION WHOSE ACCESSOR OR TRAP WAS STILL RUNNING, released with nobody to answer
            to — a cold-tier tail dropped, a flow destroyed under a throw. The operation can never finish, so
