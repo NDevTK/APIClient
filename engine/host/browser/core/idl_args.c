@@ -7783,6 +7783,12 @@ static JSValue idl_mint_accessor(JSContext *ctx, const char *name, int stepid, i
    the first member-placing entry in this file stands above them. */
 static bool idl_global_member_refused(JSContext *ctx, JSValueConst target, const char *name,
                                       const char *at_file, int at_line);
+/* A member that passed the continue-step is installed: the dev-only census realm_awaits reads. */
+#if APICLIENT_DEV
+#define IDL_NOTE_MEMBER(ctx, target, name) realm_note_member_installed((ctx), (target), (name))
+#else
+#define IDL_NOTE_MEMBER(ctx, target, name) ((void)0)
+#endif
 /* And the ONE mint for an attribute whose getter is a plain C function — defined beside §3.7.6's receiver
    machinery below, because routing a global attribute's read through it is the whole of what it decides. */
 static JSValue idl_mint_plain_getter(JSContext *ctx, JSValueConst target, const char *name,
@@ -7988,6 +7994,7 @@ void idl_install_accessor_step_at(JSContext *ctx, JSValueConst target, const cha
     /* §3.7.6's CONTINUE-STEP — see idl_global_member_refused. Nothing is minted: the two step functions are
        built below, and a member this realm has no property for must cost neither. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
+    IDL_NOTE_MEMBER(ctx, target, name);
     a = JS_NewAtom(ctx, name);
 
     DCHECK(a != JS_ATOM_NULL, "an IDL accessor name could not be interned");
@@ -8650,6 +8657,7 @@ static void idl_define_accessor(JSContext *ctx, JSValueConst target, const char 
     /* §3.7.6's CONTINUE-STEP — see idl_global_member_refused. This is the entry the plain, [SecureContext],
        no-user-code and [LegacyUnforgeable] attribute forms all reach, so the four ask it once between them. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
+    IDL_NOTE_MEMBER(ctx, target, name);
     a = JS_NewAtom(ctx, name);
 
     DCHECK(a != JS_ATOM_NULL, "an IDL accessor name could not be interned");
@@ -8748,6 +8756,7 @@ void idl_install_accessor_lenient_setter_at(JSContext *ctx, JSValueConst target,
        places a member exactly as they do, and a form that skipped the question would be a door §3.3.7 step 1
        cannot see. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
+    IDL_NOTE_MEMBER(ctx, target, name);
     g = idl_mint_plain_getter(ctx, target, name, getter, getter_magic);
     st = JS_NewCFunction2(ctx, (JSCFunction *)idl_lenient_set,
                           idl_accessor_name(nb, sizeof nb, name, IDL_ACCESSOR_SET), 1,
@@ -9613,6 +9622,7 @@ void idl_install_replaceable_at(JSContext *ctx, JSValueConst target, const char 
        idl_define_replaceable because that entry CONSUMES a getter this line has not built yet, and the
        cheapest correct refusal is the one that never mints. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
+    IDL_NOTE_MEMBER(ctx, target, name);
     idl_define_replaceable(ctx, target, name, idl_mint_plain_getter(ctx, target, name, getter, getter_magic),
                            NULL, NULL);
 }
@@ -9635,6 +9645,7 @@ void idl_install_replaceable_on_at(JSContext *ctx, JSValueConst target, const ch
            "Web IDL §3.7.3's not-[Global] arm was taken with no receiver predicate — this entry exists to state "
            "§3.7.6 Attributes' `target`, and an install with nothing to state takes the §3.8 form instead");
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
+    IDL_NOTE_MEMBER(ctx, target, name);
     idl_define_replaceable(ctx, target, name, idl_mint_plain_getter(ctx, target, name, getter, getter_magic),
                            this_is, iface);
 }
@@ -9695,6 +9706,7 @@ void idl_install_replaceable_value_at(JSContext *ctx, JSValueConst target, const
        a refusal frees it — a caller that got it back would have two shapes to write instead of one, which is
        the same argument §3.8's own door makes about the interface object it declines to define. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) { JS_FreeValue(ctx, value); return; }
+    IDL_NOTE_MEMBER(ctx, target, name);
     idl_define_replaceable(ctx, target, name, idl_held_value_getter(ctx, name, value), NULL, NULL);
 }
 
@@ -9718,6 +9730,7 @@ void idl_install_value_attribute_at(JSContext *ctx, JSValueConst target, const c
 
     /* §3.7.6's CONTINUE-STEP — see idl_global_member_refused. `value` is CONSUMED, as above. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) { JS_FreeValue(ctx, value); return; }
+    IDL_NOTE_MEMBER(ctx, target, name);
     g = idl_held_value_getter(ctx, name, value);
     IDL_CHECK_GLOBAL_TARGET(ctx, target, name, "held-value readonly");
     a = JS_NewAtom(ctx, name);
@@ -10130,6 +10143,7 @@ void idl_install_method_at(JSContext *ctx, JSValueConst target, const char *name
     /* §3.7.7's CONTINUE-STEP — see idl_global_member_refused. The [SecureContext] operation form reaches it
        through here, so the two ask it once. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
+    IDL_NOTE_MEMBER(ctx, target, name);
     /* §3.7.7's `target`. The [SecureContext] form reaches this entry, so the two ask it once; the
        [LegacyUnforgeable] form below does NOT — it is the second operation entry, not a caller of this one. */
     IDL_RECEIVER_IS_TARGET(ctx, target, name, stepid, at_file, at_line);
@@ -10158,6 +10172,7 @@ void idl_install_method_unforgeable_at(JSContext *ctx, JSValueConst target, cons
     /* §3.7.7's CONTINUE-STEP — see idl_global_member_refused. §3.7.7 asks it of every operation it places,
        and [LegacyUnforgeable] changes the DESCRIPTOR rather than the question. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
+    IDL_NOTE_MEMBER(ctx, target, name);
     /* §3.7.7's `target`, asked here as well as at the entry above: §3.7.7 puts an unforgeable operation on the
        INSTANCE, which carries no §3.7.3 class string, so this call is normally skipped — and a component that
        reaches for this installer with a PROTOTYPE gets the same question every other operation gets. */
@@ -10200,6 +10215,7 @@ void idl_install_step_method_at(JSContext *ctx, JSValueConst target, const char 
        operation and owes the same step; what it lacks is a derived `length`, which is a different residual
        and is stated above. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
+    IDL_NOTE_MEMBER(ctx, target, name);
     JS_SetPropertyStr(ctx, (JSValue)target, name,
                       JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step, stepid));
 }

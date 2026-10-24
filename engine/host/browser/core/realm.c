@@ -366,6 +366,7 @@ void realm_assert_global_property_references(JSContext *ctx)
    DEV ONLY, with the walk. */
 static JSClassID g_proto_tagged_slot;      /* §3.7.3 — identifiers this realm built an interface prototype object for */
 static JSClassID g_reference_asked_slot;   /* §3.8   — identifiers some component asked this realm's global for */
+static JSClassID g_member_slot;            /* §3.7.6-§3.7.7 — `Iface.prototype.member` installed in this realm */
 
 /* The per-realm census object, created on first note. `create` false is a PEEK: a realm that never noted has
    no object, and the walk has to tell that apart from an empty one rather than mint one to read. */
@@ -452,6 +453,39 @@ void realm_note_property_reference_asked(JSContext *ctx, const char *id)
            "identifier and there is nothing else to record");
     realm_census_note(ctx, &g_reference_asked_slot,
                       "Web IDL §3.8 the identifiers asked of this realm's global", id, JS_UNDEFINED);
+}
+
+void realm_note_member_installed(JSContext *ctx, JSValueConst target, const char *member)
+{
+    JSPropertyDescriptor d;
+    const char *tag;
+    JSValue proto;
+    int r;
+
+    DCHECK(JS_IsObject(target) && member != NULL && *member, "a member install was noted with no target or name");
+    r = JS_GetOwnPropertyNoUserCode(ctx, &d, target, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG));
+    CHECK(r >= 0, "realm: reading an install target's class string threw");
+    if (r == 0) return;   /* not an interface prototype object: a global, an instance or a namespace */
+    tag = JS_IsString(d.value) ? JS_ToCString(ctx, d.value) : NULL;
+    JS_FreeValue(ctx, d.value);
+    JS_FreeValue(ctx, d.getter);
+    JS_FreeValue(ctx, d.setter);
+    if (tag == NULL) return;
+    proto = realm_interface_prototype_object(ctx, tag);
+    if (JS_IsObject(proto) && JS_VALUE_GET_PTR(proto) == JS_VALUE_GET_PTR(target)) {
+        size_t tn = strlen(tag), mn = strlen(member);
+        char *key = malloc(tn + sizeof ".prototype." + mn);
+
+        CHECK(key != NULL, "realm: OOM naming an installed member");
+        memcpy(key, tag, tn);
+        memcpy(key + tn, ".prototype.", sizeof ".prototype." - 1);
+        memcpy(key + tn + sizeof ".prototype." - 1, member, mn + 1);
+        realm_census_note(ctx, &g_member_slot, "Web IDL the members installed on this realm's interface "
+                          "prototype objects", key, JS_UNDEFINED);
+        free(key);
+    }
+    JS_FreeValue(ctx, proto);
+    JS_FreeCString(ctx, tag);
 }
 
 void realm_assert_interface_objects_asked(JSContext *ctx)
@@ -800,6 +834,7 @@ void realm_intrinsics_free(void)
        the realms' and went with them; what the agent holds is the slot id. */
     g_proto_tagged_slot = JS_INVALID_CLASS_ID;
     g_reference_asked_slot = JS_INVALID_CLASS_ID;
+    g_member_slot = JS_INVALID_CLASS_ID;
 #endif
 }
 
@@ -985,38 +1020,31 @@ JSValue realm_value_get_at(JSContext *ctx, JSClassID slot, const char *at_file, 
 
 void realm_awaits(JSContext *ctx, const char *path, const char *what)
 {
-    JSValue cur = JS_GetGlobalObject(ctx);
-    const char *p = path;
-    bool present = false;
+#if APICLIENT_DEV
+    const char *dot = strchr(path, '.');
+    bool present;
 
     DCHECK(path != NULL && *path, "a producer assertion named no producer");
-    for (;;) {
-        const char *dot = strchr(p, '.');
-        size_t n = dot ? (size_t)(dot - p) : strlen(p);
-        char name[64];
-        JSAtom atom;
-        int has;
+    if (dot == NULL) {
+        JSValue proto = realm_interface_prototype_object(ctx, path);
 
-        DCHECK(n > 0 && n < sizeof(name), "a producer assertion named a path this cannot read");
-        if (!JS_IsObject(cur)) break;            /* the path died on the way; the producer is absent */
-        memcpy(name, p, n);
-        name[n] = 0;
+        present = !JS_IsUndefined(proto);
+        JS_FreeValue(ctx, proto);
+    } else {
+        JSValue set = realm_census(ctx, &g_member_slot, NULL, false), v = JS_UNDEFINED;
 
-        atom = JS_NewAtomLen(ctx, name, n);
-        has = JS_HasProperty(ctx, cur, atom);
-        CHECK(has >= 0, "a producer probe threw — [[HasProperty]] over an engine global runs no page code and "
-                        "has nothing to throw with");
-        if (!has) { JS_FreeAtom(ctx, atom); break; }
-        if (!dot) { JS_FreeAtom(ctx, atom); present = true; break; }   /* the member exists: producer is built */
-
-        {
-            JSValue next = JS_GetProperty(ctx, cur, atom);
-            JS_FreeAtom(ctx, atom);
-            JS_FreeValue(ctx, cur);
-            cur = next;
-        }
-        p = dot + 1;
+        DCHECK(strncmp(dot, ".prototype.", sizeof ".prototype." - 1) == 0 &&
+                   strchr(dot + sizeof ".prototype." - 1, '.') == NULL,
+               "a producer assertion's path is neither an interface nor `Interface.prototype.member`");
+        if (JS_IsObject(set)) v = JS_GetPropertyStr(ctx, set, path);
+        present = !JS_IsUndefined(v);
+        JS_FreeValue(ctx, v);
+        JS_FreeValue(ctx, set);
     }
-    JS_FreeValue(ctx, cur);
     DCHECK(!present, what);
+#else
+    (void)ctx;
+    (void)path;
+    (void)what;
+#endif
 }

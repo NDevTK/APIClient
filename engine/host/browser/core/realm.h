@@ -256,6 +256,11 @@ JSValue realm_interface_prototype_object(JSContext *ctx, const char *iface);
    idl_install_interface_object_exposed, before §3.3.7 step 2. Recorded BEFORE either refusal, because a
    refusal is the standard answering and not a component failing to ask. */
 void realm_note_property_reference_asked(JSContext *ctx, const char *id);
+/* A §3.7.6/§3.7.7 member named `member` was installed on `target`. Recorded as `Interface.prototype.member` when
+   `target` is the interface prototype object this realm built for its class string; any other target (the
+   global, an instance, a namespace) records nothing. Called by core/idl_args' installers after their
+   continue-step. Relies on every component tagging its prototype before installing members (idl_interface_tag). */
+void realm_note_member_installed(JSContext *ctx, JSValueConst target, const char *member);
 /* The assertion over the two. ONLY where no further §3.8 placement will happen in this realm — see above.
    TWO CALLERS, AND ONLY ONE OF THEM IS A HOST: realm_install_intrinsics asks it on its WORKER arm, because that
    is where a WorkerGlobalScope realm's construction ends; core/platform.c asks it at the end of the
@@ -353,72 +358,22 @@ JSValue realm_value_get_at(JSContext *ctx, JSClassID slot, const char *at_file, 
    uses IDL_SITE and stamps itself truthfully. */
 #define REALM_VALUE_SITE_INTERNAL  "core/realm.c (an internal path with no caller site to carry)", -1
 
-/* A STEP OF A STANDARD WHOSE PRODUCER IS NOT IN THIS BUILD — the two-sided assertion, and the reason it is a
- * function rather than a comment at each site.
+/* A step of a standard whose producer is not in this build, asserted at the step. Many steps drain a work-set
+ * some other interface fills; where this engine has none of that interface the set is empty by construction.
+ * `path` names the producer and `what` names the standard, the step and its work, so the DCHECK fires at the
+ * step that must be written the moment the producer lands.
  *
- * A great many algorithm steps drain a work-set that some OTHER INTERFACE fills: update-the-rendering's step 23
- * drains the top layer `dialog.showModal()` fills, and a media element's steps drain the track lists a
- * `TextTrackList` would populate. Where this engine has none of that interface, the work-set is EMPTY BY
- * CONSTRUCTION and the step has nothing to do — but writing that down as a comment states it once and never
- * checks it again. This asserts it: `path` names the MEMBER whose arrival would give the step work, and the
- * moment somebody lands it, the DCHECK fires AT the step that must then be written, with `what` naming the
- * standard, the step number and the shape of the work.
+ * `path` is an interface identifier (`ResizeObserver`), answered by the Web IDL §3.7.3 census of interface
+ * prototype objects this realm built, or `Interface.prototype.member`, answered by the census of members the
+ * §3.7.6/§3.7.7 installers placed on that prototype (realm_note_member_installed). Both are written only by the
+ * engine, never read off the global, so a page defining a name of its own cannot fire this. Both are dev-only,
+ * as is the assert.
  *
- * ITS DOMAIN IS A MEMBER, AND THAT IS A LIMIT AND NOT A DETAIL. `path` is a [[HasProperty]] walk from a global,
- * so this can only ever answer "is this MEMBER INSTALLED" — and a great many producers are not members at all.
- * An INTERNAL ALGORITHM has no name on any global: CSSOM VIEW §3.1 "Scrolling"'s perform a scroll is what fills
- * §13.2's pending scroll events, and HTML §7.4.6.4 "Scrolling to a fragment" is what sets a Document's target
- * element, and neither is reachable from a global by any path. SIX SITES IN FIVE FILES ASKED FOR `scrollTo`
- * ANYWAY, as the nearest member-shaped name to those two, and the proxy was wrong in BOTH directions at once:
- * `Element.prototype.scrollTo` was installed in this build and could move nothing, so installing CSSOM VIEW
- * §4's three Window members would have fired all six on a capability that had not arrived — a probe REPORTING
- * A CAPABILITY AS PRESENT, which is worse than an absent probe because the next reader builds on it — while
- * building §7.4.6.4's three non-scrolling effects would have left every one of them silent. So the rule is
- * mechanical: **if the producer is not a member a page could name, this is the wrong instrument.** Ask the
- * component that owns the capability instead — core/dom/element_scrolling.h answers the first of those two and
- * core/dom/document.h the second — which is the same cure core/timing/hr_time.c records for
- * `crossOriginIsolated`, where the probe fired on the first coarsen of every run one turn after it was written.
- *
- * `path` is resolved from this realm's GLOBAL, dot by dot — `ResizeObserver`, `Document.prototype.activeElement`,
- * `HTMLDialogElement.prototype.showModal`. A dotted path rather than a bare name because the INTERFACE OBJECT and
- * the MEMBER are different questions: a bare `HTMLDialogElement` answers whether the interface is EXPOSED, which
- * Web IDL §3.7.3 puts on the global whole, while a step is owed work by a MEMBER, which §3.7.6/§3.7.7 declare on
- * the prototype and which arrives on its own schedule. That gap is why the dot is not decoration — and stating
- * it as a property of the two SECTIONS rather than as an example from this build is deliberate: this sentence
- * used to read "`HTMLDialogElement` exists in this build while `showModal` ... does not", which was true when it
- * was written, went false the day §4.11.4's methods landed, and then taught every reader of this paragraph with
- * an example that had gone the other way. An illustration drawn from what the tree HAS is a claim about the tree
- * in the one paragraph whose job is to teach somebody how to aim a probe.
- *
- * AND ITS DOMAIN BEING A MEMBER IS ALSO A LIMIT IN THE PRESENT DIRECTION, which is the harder half to see. The
- * paragraph above records the ABSENT direction — six sites naming `scrollTo` for producers that are internal
- * algorithms. This is the mirror: a step's operand can have SEVERAL writers, and a probe names ONE. HTML declares
- * a previously focused element on EVERY HTML element ("Each HTML element has a previously focused element which
- * is null or an element, and it is initially null"), and §6.12's show popover writes it just as §4.11.4's show a
- * modal dialog does — so a probe naming only the dialog member reports a REACHABLE step as unreachable for as
- * long as the other producer exists, and reports nothing when it lands. Before writing a path, ask what else
- * WRITES the operand, not what would naturally be said to produce it; where the answer is more than one member,
- * this is the wrong instrument for the same reason an internal algorithm is.
- *
- * A path names the INTERFACE OBJECT rather than an instance
- * (`Document.prototype.activeElement`, not `document.activeElement`) because that is where the member is
- * declared, and because resolving through an instance means traversing whatever accessors the instance carries.
- *
- * THE LAST SEGMENT IS ASKED WITH [[HasProperty]], NOT [[Get]], and that is the whole of the difference between a
- * probe and a call. Walking to the end with a property GET runs an ACCESSOR — the page's code in a C activation
- * with no flow base, which the engine aborts on by design — and `document.activeElement` became an accessor the
- * moment HTML §6.6's focus model landed, so a probe that only ever wanted a yes or no took the entire run down
- * with it. And a value is the wrong evidence anyway: a member whose getter legitimately answers `undefined`
- * reads as ABSENT, so the check would go on believing a step had nothing to do long after its producer existed.
- * INTERMEDIATE segments still need their value to be traversed, and every one on every path is an interface
- * object or a `prototype` — both plain data properties. Should an intermediate ever become an accessor, the
- * engine's own getter abort names the property it stopped on.
- *
- * IT LIVES HERE because "is this member installed in THIS realm" is a question about a realm, and because it was
- * about to be answered in two places at once: it was a static of core/rendering/rendering.c, written for the
- * twelve update-the-rendering steps whose standards are absent, and HTML §6.6.7's flush autofocus candidates has
- * two conditions of its own with the same shape. A second copy of a two-sided assertion is worse than a second
- * copy of ordinary code, because the copy that is not maintained goes on being SILENT. */
+ * Only a member or an interface a page could name is a producer here. An internal algorithm (CSSOM View's
+ * perform a scroll, HTML §7.4.6.4's target element) is asked of the component that owns it: core/dom/
+ * element_scrolling.h and core/dom/document.h. And a step's operand can have several writers (HTML's previously
+ * focused element is written by both §4.11.4 and §6.12); a probe naming one of them reports a reachable step as
+ * unreachable, so ask what writes the operand before choosing a path. */
 void realm_awaits(JSContext *ctx, const char *path, const char *what);
 
 #endif
