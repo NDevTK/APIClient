@@ -56899,8 +56899,10 @@ enum {
 #define CP_LS   0x2028
 #define CP_PS   0x2029
 
+/* A break entry. It lives in a parse descent frame or in the parse state, and is named by a handle
+   (PD_BE_NONE, PD_BE_PGM, PD_BE_FRAME) rather than an address, because the frame arena moves when it grows. */
 typedef struct BlockEnv {
-    struct BlockEnv *prev;
+    int prev;   /* the handle of the entry below this one, PD_BE_NONE at the bottom */
     JSAtom label_name; /* JS_ATOM_NULL if none */
     int label_break; /* -1 if none */
     int label_cont; /* -1 if none */
@@ -57113,7 +57115,7 @@ typedef struct JSFunctionDef {
     LabelSlot *label_slots;
     int label_size; /* allocated size for label_slots[] */
     int label_count;
-    BlockEnv *top_break; /* break/continue label stack */
+    int top_break; /* break/continue label stack: the handle of its top entry (BlockEnv), PD_BE_NONE when empty */
 
     /* constant pool (strings, functions, numbers) */
     JSValue *cpool;
@@ -57215,19 +57217,12 @@ typedef struct JSParseState {
        (steps 26-28), where a named function expression would have bound its own name in a scope of its own. */
     bool fn_ctor_toplevel;
     /* THE PARSE DESCENT'S FRAME STACK — see js_parse_descent. It belongs to the PARSE, not to a driver
-       activation: productions the driver does not own yet (js_parse_statement_or_decl and the statement cone)
-       sit between converted ones, so the driver is re-entered, and a per-activation array would put the
-       descent's working set back on the C stack. Measured: a 16-frame inline array cost more paren depth than
-       the recursion it replaced.
-       IT IS CHUNKED RATHER THAN A GROWING ARRAY, AND THAT IS A CORRECTNESS REQUIREMENT, NOT A TUNING CHOICE.
-       A frame's ADDRESS has to stay valid while deeper frames are pushed, because the statement productions
-       register the address of a frame-resident BlockEnv into JSFunctionDef.top_break and leave it on that list
-       for exactly as long as the loop BODY is being parsed — which is the span that pushes more frames. A
-       realloc'ing array would move the frame and dangle every entry already linked, surfacing as a
-       use-after-free in break/continue resolution rather than as a parse error. Chunks are allocated once and
-       never moved; only the array OF chunk pointers is ever reallocated. Released when the stack empties. */
-    struct JSParseFrame **pd_chunks;
-    int pd_sp, pd_nchunks;
+       activation. One flat arena of `pd_cap` frames, of which `pd_sp` are live; it grows by reallocation, so
+       a frame's address is not stable and everything that must name a frame across a push names its INDEX
+       (a break entry's handle, a FunctionDeclaration's out-parameter). Indices are also what a serialised
+       parse can carry. Released when the stack empties. */
+    struct JSParseFrame *pd_frames;
+    int pd_sp, pd_cap;
     /* THE DESCENT'S OUT-PARAMETER. Some productions return a value BESIDE their status — PropertyName yields
        the key's atom as well as its prop-type. The driver's (s, entry, level, flags, op) signature carries no
        out-pointer, and inventing a per-call side-channel is the shape of every bug this conversion has hit:
@@ -57268,13 +57263,9 @@ typedef struct JSParseState {
        ASKED and is no part of the answer, and no value of it makes any parse cover less ground — delete it
        and the budget is asked at every production, which can only hand the thread back SOONER. */
     int32_t pd_budget_ctr;
-    /* js_parse_program's CROSS-SUSPENSION STATE. `using_be` was a C local of that function, and it is the one
-       BlockEnv in this parser that did not live on the descent's non-moving frame stack (JSParseFrame.st_be /
-       st_be2): push_break_entry links its ADDRESS into JSFunctionDef.top_break and leaves it there for the
-       whole source-element loop, which is the span that suspends. A js_parse_program that returned would have
-       left fd->top_break naming a dead C frame — a use-after-free in break/continue resolution rather than a
-       parse error, which is the failure the pd_chunks banner describes one level down. It lives here for the
-       reason the frame stack does: the PARSE owns it, never an activation. */
+    /* js_parse_program's CROSS-SUSPENSION STATE: the one break entry that is not on a descent frame (handle
+       PD_BE_PGM). push_break_entry links it into JSFunctionDef.top_break for the whole source-element loop, a
+       span that suspends, so the PARSE owns it, never an activation. */
     BlockEnv pgm_using_be;
     bool pgm_has_using_be;
     /* …AND WHICH DESCENT A RE-ENTRY OF js_parse_program CONTINUES. 20.2.1.1.1's source takes a different one
@@ -60301,11 +60292,11 @@ static int add_star_export_entry(JSContext *ctx, JSModuleDef *m, int req_module_
 
 static JSFunctionDef *js_parse_function_class_fields_init(JSParseState *s);
 /* The descent driver reaches all of these, and every one of them is defined after it. */
-static void push_break_entry(JSFunctionDef *fd, BlockEnv *be,
+static void push_break_entry(JSParseState *s, JSFunctionDef *fd, int h,
                              JSAtom label_name,
                              int label_break, int label_cont,
                              int drop_count);
-static void pop_break_entry(JSFunctionDef *fd);
+static void pop_break_entry(JSParseState *s, JSFunctionDef *fd);
 static JSExportEntry *add_export_entry(JSParseState *s, JSModuleDef *m,
                                        JSAtom local_name, JSAtom export_name,
                                        JSExportTypeEnum export_type);
@@ -61346,10 +61337,9 @@ struct JSParseFrame {
     bool    has_proto;      /* ObjectLiteral: a __proto__ key has already been seen */
     /* PropertyName */
     int     prop_type, is_private;
-    /* Statement productions. The BlockEnv is here and not a C local for a REASON: push_break_entry links its
-       ADDRESS into JSFunctionDef.top_break and leaves it there for as long as the loop/switch BODY is being
-       parsed — which is exactly the span that pushes more descent frames. That is why the frame stack is
-       chunked: a realloc'ing array would move this and dangle the list. */
+    /* Statement productions. The BlockEnv is here and not a C local because push_break_entry links it into
+       JSFunctionDef.top_break for as long as the loop/switch BODY is being parsed, a span that suspends; it is
+       linked by handle (PD_BE_FRAME), never by address. */
     BlockEnv st_be;
     JSAtom  st_label_name;    /* owned: the statement's label, freed on every exit */
     int     st_lbl_a, st_lbl_b, st_lbl_c, st_lbl_d;   /* break/cont/body/test, case/break/1, catch/finally/end */
@@ -61359,16 +61349,15 @@ struct JSParseFrame {
     bool    st_is_async;
     bool    st_flag;          /* Block: a using-BlockEnv is pushed. IfClause: it opened its own scope. */
     /* for-in/of holds TWO break entries at once — the loop's own, and the using-scope's around the body —
-       so it needs a second BlockEnv slot; both rely on the frame's address being stable. */
+       so it needs a second BlockEnv slot (handle slot 1). */
     BlockEnv st_be2;
     bool    st_b1, st_b2, st_b3;
     /* NON-INTEGER descent arguments. The driver's (entry, level, flags, op) shape carries four ints, which
        covered every production until FunctionDeclaration: it takes nine parameters including a source POINTER
-       and a JSFunctionDef** OUT-parameter. Packing a pointer into an int slot is not portable and an
-       out-parameter has no slot at all, so they are seeded on the callee's frame by PD_CALL_P — the same
-       arrangement PD_CALL_AT already uses for a source position. */
+       and an out-parameter, the frame whose st_fd receives the new def. They are seeded on the callee's frame
+       by PD_CALL_P, the same arrangement PD_CALL_AT already uses for a source position. */
     const uint8_t *st_ptr;
-    JSFunctionDef **st_pfd;
+    int st_pfd;   /* the index of the frame whose st_fd receives the new def, -1 for none */
     /* The ENCLOSING function def. FunctionDeclaration captures s->cur_func on entry and then pushes a NEW one
        for the function being parsed, so the two diverge and the enclosing def cannot be re-derived from
        s->cur_func the way every other production re-derives it. It is frame state for the same reason a driver
@@ -61413,48 +61402,61 @@ struct JSParseFrame {
 typedef struct JSParseFrame JSParseFrame;
 
 
-/* Frames live in fixed CHUNKS so their addresses are stable for their whole lifetime — see the pd_chunks
-   comment on JSParseState for why that is a requirement and not an optimisation. A chunk, once allocated,
-   is kept until the stack drains, so a deep parse pays for its depth once. */
-#define PD_CHUNK_BITS 6
-#define PD_CHUNK      (1 << PD_CHUNK_BITS)
-#define PD_FRAME(i_)  (&s->pd_chunks[(i_) >> PD_CHUNK_BITS][(i_) & (PD_CHUNK - 1)])
+/* The frame arena: frame `i_` of the running parse. Its address is good until the next pd_reserve. */
+#define PD_FRAME(i_)  (&s->pd_frames[(i_)])
+/* The running production's own frame index, for a descent that must name it to its callee. */
+#define PD_SELF       (s->pd_sp - 1)
 
 static int pd_reserve(JSContext *ctx, JSParseState *s, int n)
 {
-    int want = (n + PD_CHUNK - 1) >> PD_CHUNK_BITS;
+    JSParseFrame *nf;
+    int cap;
 
-    while (s->pd_nchunks < want) {
-        JSParseFrame **nc, *chunk;
-        nc = js_realloc(ctx, s->pd_chunks, sizeof(*nc) * (s->pd_nchunks + 1));
-        if (!nc)
-            return -1;
-        s->pd_chunks = nc;
-        chunk = js_malloc(ctx, sizeof(*chunk) * PD_CHUNK);
-        if (!chunk)
-            return -1;
-        nc[s->pd_nchunks++] = chunk;
-    }
+    if (n <= s->pd_cap)
+        return 0;
+    cap = s->pd_cap ? s->pd_cap * 2 : 64;
+    while (cap < n)
+        cap *= 2;
+    nf = js_realloc(ctx, s->pd_frames, sizeof(*nf) * (size_t)cap);
+    if (!nf)
+        return -1;
+    s->pd_frames = nf;
+    s->pd_cap = cap;
     return 0;
 }
 
 static void pd_release(JSContext *ctx, JSParseState *s)
 {
-    int i;
     DCHECK(s->pd_sp == 0, "the descent stack was released with frames still live");
-    for (i = 0; i < s->pd_nchunks; i++)
-        js_free(ctx, s->pd_chunks[i]);
-    js_free(ctx, s->pd_chunks);
-    s->pd_chunks = NULL;
-    s->pd_nchunks = 0;
+    js_free(ctx, s->pd_frames);
+    s->pd_frames = NULL;
+    s->pd_cap = 0;
+}
+
+/* A break entry's handle: none, the program's `using` entry (JSParseState.pgm_using_be), or slot 0 (st_be) or
+   1 (st_be2) of a descent frame. 0 is none, so a zeroed JSFunctionDef starts with an empty break stack. */
+#define PD_BE_NONE            0
+#define PD_BE_PGM             1
+#define PD_BE_FRAME(i_, slot_) (2 + 2 * (i_) + (slot_))
+
+static BlockEnv *pd_be(JSParseState *s, int h)
+{
+    int i;
+
+    DCHECK(h != PD_BE_NONE, "a break entry was resolved from the empty handle");
+    if (h == PD_BE_PGM)
+        return &s->pgm_using_be;
+    i = (h - 2) >> 1;
+    DCHECK(i < s->pd_sp, "a break entry names a descent frame that is no longer live");
+    return ((h - 2) & 1) ? &PD_FRAME(i)->st_be2 : &PD_FRAME(i)->st_be;
 }
 
 /* THROW AWAY A PARSE THAT HANDED THE THREAD BACK AND IS NEVER GOING TO BE ASKED FOR THE REST OF IT — a flow
    dropped while its program was still compiling. It is the driver's own `unwind:` arm, which settles the atom
    of every frame it is abandoning and then releases the chunks, lifted to where a CARRIER can reach it: the
    driver's copy runs only on an OOM inside a live activation, and a carrier that is being torn down has no
-   activation to reach it through. The two are the same three lines over the same layout and neither is a
-   fallback for the other — they are one operation at two entries, the way pd_release already is.
+   activation to reach it through. The two are the same lines over the same arena and neither is a fallback
+   for the other — they are one operation at two entries, the way pd_release already is.
    THERE IS NO OUTER ACTIVATION TO SPARE, which is why this drains to 0 rather than to pd_base: the driver has
    exactly one activation (the DCHECK at its entry is what keeps that true), so every frame on this stack
    belongs to the parse being abandoned. */
@@ -61530,7 +61532,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
         f->st_line = 0; f->st_col = 0; f->st_idx = 0; f->st_is_async = false;    \
         f->st_flag = false;                                                      \
         f->st_b1 = false; f->st_b2 = false; f->st_b3 = false; \
-        f->st_ptr = NULL; f->st_pfd = NULL; f->st_fd = NULL;                     \
+        f->st_ptr = NULL; f->st_pfd = -1; f->st_fd = NULL;                       \
         f->raw_array = JS_UNDEFINED; f->template_object = JS_UNDEFINED;          \
         f->start_ptr = NULL; f->start_line = 0; f->start_col = 0;                \
         memset(&f->u, 0, sizeof(f->u));                                          \
@@ -61584,14 +61586,15 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     } while (0)
 
 /* A descent carrying the FunctionDeclaration argument set, which the four int slots cannot hold: a source
-   POINTER, a JSFunctionDef** out-parameter, the position of the function's first token, and the export flag.
+   POINTER, the out-parameter (a frame index, PD_SELF or -1), the position of the function's first token, and
+   the export flag.
    See JSParseFrame.st_ptr / st_pfd / st_line / st_col / st_mask. The remaining parameter of that production,
    func_name, is JS_ATOM_NULL at every call site, which PD_INIT already settles st_idx to — a caller needing a
    name seeds st_idx itself, and the DCHECK at fd2_entry is what stops one from forgetting. */
 #define PD_CALL_P(entry_, level_, flags_, op_, ptr_, pfd_, line_, col_, mask_, resume_) do { \
         int e_ = (entry_), lv_ = (level_), fl_ = (flags_), o_ = (op_);          \
         const uint8_t *p_ = (ptr_);                                             \
-        JSFunctionDef **pf_ = (pfd_);                                           \
+        int pf_ = (pfd_);                                                       \
         int ln_ = (line_), cl_ = (col_), mk_ = (mask_);                         \
         f->state = (resume_);                                                   \
         if (pd_reserve(ctx, s, s->pd_sp + 1))                                   \
@@ -61644,7 +61647,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
         s->pd_suspended = true;
         return 0;
     }
-    DCHECK(s->pd_sp > s->pd_base && s->pd_chunks != NULL,
+    DCHECK(s->pd_sp > s->pd_base && s->pd_frames != NULL,
            "the descent stack was released while an outer activation still held frames");
     f = PD_FRAME(s->pd_sp - 1);
     switch (f->state) {
@@ -62300,7 +62303,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     if (s->token.val == '(' &&
         js_parse_skip_parens_token(s, NULL, true) == TOK_ARROW) {
         PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_ARROW, f->flags, JS_FUNC_NORMAL,
-                  s->token.ptr, NULL, s->token.line_num, s->token.col_num,
+                  s->token.ptr, -1, s->token.line_num, s->token.col_num,
                   JS_PARSE_EXPORT_NONE, PDS_ASGN_ARROW1);
  asgn_arrow1_done:
         PD_RET(s->pd_ret);
@@ -62326,7 +62329,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             (s->token.val == TOK_IDENT && !s->token.u.ident.is_reserved &&
              peek_token(s, true) == TOK_ARROW)) {
             PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_ARROW, f->flags, JS_FUNC_ASYNC,
-                      source_ptr, NULL, source_line_num, source_col_num,
+                      source_ptr, -1, source_line_num, source_col_num,
                       JS_PARSE_EXPORT_NONE, PDS_ASGN_ARROW2);
  asgn_arrow2_done:
             PD_RET(s->pd_ret);
@@ -62337,7 +62340,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     } else if (s->token.val == TOK_IDENT &&
                peek_token(s, true) == TOK_ARROW) {
         PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_ARROW, f->flags, JS_FUNC_NORMAL,
-                  s->token.ptr, NULL, s->token.line_num, s->token.col_num,
+                  s->token.ptr, -1, s->token.line_num, s->token.col_num,
                   JS_PARSE_EXPORT_NONE, PDS_ASGN_ARROW3);
  asgn_arrow3_done:
         PD_RET(s->pd_ret);
@@ -62688,7 +62691,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
         goto pfx_after_switch;
     case TOK_FUNCTION:
         PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_EXPR, PF_IN_ACCEPTED, JS_FUNC_NORMAL,
-                  s->token.ptr, NULL, s->token.line_num, s->token.col_num,
+                  s->token.ptr, -1, s->token.line_num, s->token.col_num,
                   JS_PARSE_EXPORT_NONE, PDS_PFX_FUNC);
  pfx_func_done:
         if (s->pd_ret)
@@ -62758,7 +62761,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                     PD_RET(-1);
                 if (s->token.val == TOK_FUNCTION) {
                     PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_EXPR, PF_IN_ACCEPTED,
-                              JS_FUNC_ASYNC, source_ptr, NULL, source_line_num,
+                              JS_FUNC_ASYNC, source_ptr, -1, source_line_num,
                               source_col_num, JS_PARSE_EXPORT_NONE,
                               PDS_PFX_ASYNCFUNC);
  pfx_asyncfunc_done:
@@ -63490,7 +63493,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                     func_kind = JS_FUNC_ASYNC_GENERATOR;
             }
             PD_CALL_P(PDS_FDECL, func_type, PF_IN_ACCEPTED, func_kind,
-                      f->start_ptr, NULL, f->start_line, f->start_col,
+                      f->start_ptr, -1, f->start_line, f->start_col,
                       JS_PARSE_EXPORT_NONE, PDS_OBJ_METHOD);
  obj_method_done:
             if (s->pd_ret)
@@ -63934,12 +63937,12 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     /* XXX: support multiple labels on loop statements */
     f->atom = JS_ATOM_NULL;
     if (is_label(s)) {
-        BlockEnv *be;
+        int h;
 
         f->atom = JS_DupAtom(ctx, s->token.u.ident.atom);
 
-        for (be = s->cur_func->top_break; be; be = be->prev) {
-            if (be->label_name == f->atom) {
+        for (h = s->cur_func->top_break; h != PD_BE_NONE; h = pd_be(s, h)->prev) {
+            if (pd_be(s, h)->label_name == f->atom) {
                 js_parse_error(s, "duplicate label name");
                 goto sod_fail;
             }
@@ -63958,8 +63961,8 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             f->st_label_fd = s->cur_func;
 
             f->st_lbl_a = new_label(s);
-            push_break_entry(f->st_label_fd, &f->st_be, f->atom, f->st_lbl_a, -1, 0);
-            f->st_label_fd->top_break->is_regular_stmt = 1;
+            push_break_entry(s, f->st_label_fd, PD_BE_FRAME(PD_SELF, 0), f->atom, f->st_lbl_a, -1, 0);
+            f->st_be.is_regular_stmt = 1;
             if (!f->st_label_fd->is_strict_mode &&
                 (f->flags & DECL_MASK_FUNC_WITH_LABEL)) {
                 f->st_mask = DECL_MASK_FUNC | DECL_MASK_FUNC_WITH_LABEL;
@@ -63971,7 +63974,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             if (s->pd_ret)
                 goto sod_fail;
             emit_label(s, f->st_lbl_a);
-            pop_break_entry(f->st_label_fd);
+            pop_break_entry(s, f->st_label_fd);
             goto sod_done;
         }
     }
@@ -64123,7 +64126,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             f->st_lbl_a = new_label(s);
             f->st_lbl_b = new_label(s);
 
-            push_break_entry(s->cur_func, &f->st_be,
+            push_break_entry(s, s->cur_func, PD_BE_FRAME(PD_SELF, 0),
                              f->atom, f->st_lbl_b, f->st_lbl_a, 0);
 
             if (next_token(s))
@@ -64146,7 +64149,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
 
             emit_label(s, f->st_lbl_b);
 
-            pop_break_entry(s->cur_func);
+            pop_break_entry(s, s->cur_func);
         }
         break;
     case TOK_DO:
@@ -64156,7 +64159,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             f->st_lbl_b = new_label(s);
             f->st_lbl_c = new_label(s);
 
-            push_break_entry(s->cur_func, &f->st_be,
+            push_break_entry(s, s->cur_func, PD_BE_FRAME(PD_SELF, 0),
                              f->atom, f->st_lbl_b, f->st_lbl_a, 0);
 
             if (next_token(s))
@@ -64187,7 +64190,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
 
             emit_label(s, f->st_lbl_b);
 
-            pop_break_entry(s->cur_func);
+            pop_break_entry(s, s->cur_func);
         }
         break;
     case TOK_FOR:
@@ -64309,7 +64312,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             f->st_lbl_c = new_label(s);
             f->st_lbl_b = new_label(s);
 
-            push_break_entry(s->cur_func, &f->st_be,
+            push_break_entry(s, s->cur_func, PD_BE_FRAME(PD_SELF, 0),
                              f->atom, f->st_lbl_b, f->st_lbl_a, 0);
             if (s->cur_func->scopes[f->st_scope_b].has_using) {
                 f->st_be.has_using = true;
@@ -64388,7 +64391,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
 
             emit_label(s, f->st_lbl_b);
 
-            pop_break_entry(s->cur_func);
+            pop_break_entry(s, s->cur_func);
 
             if (s->cur_func->scopes[f->st_scope_b].has_using) {
                 int label_catch = s->cur_func->scopes[f->st_scope_b].using_label_catch;
@@ -64449,7 +64452,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
 
             push_scope(s);
             f->st_lbl_b = new_label(s);
-            push_break_entry(s->cur_func, &f->st_be,
+            push_break_entry(s, s->cur_func, PD_BE_FRAME(PD_SELF, 0),
                              f->atom, f->st_lbl_b, -1, 1);
 
             if (js_parse_expect(s, '{'))
@@ -64561,7 +64564,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             emit_label(s, f->st_lbl_b);
             emit_op(s, OP_drop); /* drop the switch expression */
 
-            pop_break_entry(s->cur_func);
+            pop_break_entry(s, s->cur_func);
             pop_scope(s);
         }
         break;
@@ -64578,7 +64581,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
 
             emit_goto(s, OP_catch, f->st_lbl_a);
 
-            push_break_entry(s->cur_func, &f->st_be,
+            push_break_entry(s, s->cur_func, PD_BE_FRAME(PD_SELF, 0),
                              JS_ATOM_NULL, -1, -1, 1);
             f->st_be.label_finally = f->st_lbl_c;
 
@@ -64587,7 +64590,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             if (s->pd_ret)
                 goto sod_fail;
 
-            pop_break_entry(s->cur_func);
+            pop_break_entry(s, s->cur_func);
 
             if (js_is_live_code(s)) {
                 /* drop the catch offset */
@@ -64651,7 +64654,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                 emit_goto(s, OP_catch, f->st_lbl_b);
 
                 push_scope(s);  /* catch block */
-                push_break_entry(s->cur_func, &f->st_be, JS_ATOM_NULL,
+                push_break_entry(s, s->cur_func, PD_BE_FRAME(PD_SELF, 0), JS_ATOM_NULL,
                                  -1, -1, 1);
                 f->st_be.label_finally = f->st_lbl_c;
 
@@ -64660,7 +64663,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                 if (s->pd_ret)
                     goto sod_fail;
 
-                pop_break_entry(s->cur_func);
+                pop_break_entry(s, s->cur_func);
                 pop_scope(s);  /* catch block */
                 pop_scope(s);  /* catch variable */
 
@@ -64698,7 +64701,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                 if (next_token(s))
                     goto sod_fail;
                 /* on the stack: ret_value gosub_ret_value */
-                push_break_entry(s->cur_func, &f->st_be, JS_ATOM_NULL,
+                push_break_entry(s, s->cur_func, PD_BE_FRAME(PD_SELF, 0), JS_ATOM_NULL,
                                  -1, -1, 2);
 
                 if (s->cur_func->eval_ret_idx >= 0) {
@@ -64726,7 +64729,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                     emit_op(s, OP_put_loc);
                     emit_u16(s, s->cur_func->eval_ret_idx);
                 }
-                pop_break_entry(s->cur_func);
+                pop_break_entry(s, s->cur_func);
             }
             emit_op(s, OP_ret);
             emit_label(s, f->st_lbl_d);
@@ -64841,7 +64844,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             }
         parse_func_var:
             PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_VAR, PF_IN_ACCEPTED,
-                      JS_FUNC_NORMAL, s->token.ptr, NULL, s->token.line_num,
+                      JS_FUNC_NORMAL, s->token.ptr, -1, s->token.line_num,
                       s->token.col_num, JS_PARSE_EXPORT_NONE, PDS_SOD_FUNCVAR);
  sod_funcvar_done:
             if (s->pd_ret)
@@ -64922,7 +64925,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
         PD_RET(-1);
     if (!f->st_flag && s->cur_func->scopes[f->st_scope_a].has_using) {
         f->st_flag = true;
-        push_break_entry(s->cur_func, &f->st_be, JS_ATOM_NULL, -1, -1, 1);
+        push_break_entry(s, s->cur_func, PD_BE_FRAME(PD_SELF, 0), JS_ATOM_NULL, -1, -1, 1);
         f->st_be.has_using = true;
         f->st_be.using_scope_level = f->st_scope_a;
     }
@@ -64932,7 +64935,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
         int label_catch = s->cur_func->scopes[f->st_scope_a].using_label_catch;
         int label_end = s->cur_func->scopes[f->st_scope_a].using_label_end;
 
-        pop_break_entry(s->cur_func);
+        pop_break_entry(s, s->cur_func);
 
         if (js_is_live_code(s)) {
             emit_op(s, OP_drop);  /* drop catch_offset */
@@ -64989,7 +64992,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
 
     /* local for_in f->scope starts here so individual elements
        can be closed in statement. */
-    push_break_entry(s->cur_func, &f->st_be,
+    push_break_entry(s, s->cur_func, PD_BE_FRAME(PD_SELF, 0),
                      f->flags, f->label1, f->st_lbl_c, 1);
     f->st_be.scope_level = f->st_scope_a;
 
@@ -65242,7 +65245,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
 
         if (f->comma) {
             emit_goto(s, OP_catch, s->cur_func->scopes[f->st_scope_b].using_label_catch);
-            push_break_entry(s->cur_func, &f->st_be2, JS_ATOM_NULL, -1, -1, 1);
+            push_break_entry(s, s->cur_func, PD_BE_FRAME(PD_SELF, 1), JS_ATOM_NULL, -1, -1, 1);
             f->st_be2.has_using = true;
             f->st_be2.using_scope_level = f->st_scope_b;
             f->need_length = 1;
@@ -65254,7 +65257,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             goto fio_fail;
 
         if (f->need_length) {
-            pop_break_entry(s->cur_func);
+            pop_break_entry(s, s->cur_func);
         }
 
         if (f->comma && js_is_live_code(s)) {
@@ -65367,7 +65370,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     }
     if (f->label2 != -1)
         emit_label(s, f->label2);
-    pop_break_entry(s->cur_func);
+    pop_break_entry(s, s->cur_func);
     pop_scope(s);
     goto fio_done;
  fio_done:
@@ -65710,7 +65713,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             goto de_fail;
         /* the block environment is only needed in generators in case
            'yield' triggers a 'return' */
-        push_break_entry(s->cur_func, &f->st_be,
+        push_break_entry(s, s->cur_func, PD_BE_FRAME(PD_SELF, 0),
                          JS_ATOM_NULL, -1, -1, 2);
         f->st_be.has_iterator = true;
         emit_op(s, OP_for_of_start);
@@ -65814,7 +65817,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
            if completed, enum_obj has been replaced by undefined */
         emit_source_loc_at(s, f->st_line, f->st_col);
         emit_op(s, OP_iterator_close);
-        pop_break_entry(s->cur_func);
+        pop_break_entry(s, s->cur_func);
         if (next_token(s))
             goto de_fail;
     } else {
@@ -65985,7 +65988,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                 /* the static block's own def is not wanted: it is reached through cf->fields_init_fd, and the
                    out-parameter was written into a local nothing read. */
                 PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_CLASS_STATIC_INIT,
-                          PF_IN_ACCEPTED, JS_FUNC_NORMAL, s->token.ptr, NULL,
+                          PF_IN_ACCEPTED, JS_FUNC_NORMAL, s->token.ptr, -1,
                           s->token.line_num, s->token.col_num,
                           JS_PARSE_EXPORT_NONE, PDS_CLS_SINIT);
  cls_sinit_done:
@@ -66077,7 +66080,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             }
 
             PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_GETTER + (f->prop_type - PROP_TYPE_GET), PF_IN_ACCEPTED,
-                      JS_FUNC_NORMAL, f->start_ptr, &f->st_fd, s->token.line_num,
+                      JS_FUNC_NORMAL, f->start_ptr, PD_SELF, s->token.line_num,
                       s->token.col_num, JS_PARSE_EXPORT_NONE, PDS_CLS_ACCESSOR);
  cls_accessor_done:
             if (s->pd_ret)
@@ -66238,7 +66241,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                 class_fields[f->st_b1].need_brand = true;
             }
             PD_CALL_P(PDS_FDECL, f->st_tok, PF_IN_ACCEPTED, func_kind,
-                      f->start_ptr, &f->st_fd, s->token.line_num, s->token.col_num,
+                      f->start_ptr, PD_SELF, s->token.line_num, s->token.col_num,
                       JS_PARSE_EXPORT_NONE, PDS_CLS_METHOD);
  cls_method_done:
             if (s->pd_ret)
@@ -66441,7 +66444,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
         (token_is_pseudo_keyword(s, JS_ATOM_async) &&
          peek_token(s, true) == TOK_FUNCTION)) {
         PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_STATEMENT, PF_IN_ACCEPTED,
-                  JS_FUNC_NORMAL, s->token.ptr, NULL, s->token.line_num,
+                  JS_FUNC_NORMAL, s->token.ptr, -1, s->token.line_num,
                   s->token.col_num, JS_PARSE_EXPORT_NONE, PDS_SE_FUNC);
  se_func_done:
         if (s->pd_ret)
@@ -66487,7 +66490,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                (token_is_pseudo_keyword(s, JS_ATOM_async) &&
                 peek_token(s, true) == TOK_FUNCTION)) {
         PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_STATEMENT, PF_IN_ACCEPTED,
-                  JS_FUNC_NORMAL, s->token.ptr, NULL, s->token.line_num,
+                  JS_FUNC_NORMAL, s->token.ptr, -1, s->token.line_num,
                   s->token.col_num, JS_PARSE_EXPORT_NAMED, PDS_EXP_FUNC);
  exp_func_done:
         PD_RET(s->pd_ret);
@@ -66618,7 +66621,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                    (token_is_pseudo_keyword(s, JS_ATOM_async) &&
                     peek_token(s, true) == TOK_FUNCTION)) {
             PD_CALL_P(PDS_FDECL, JS_PARSE_FUNC_STATEMENT, PF_IN_ACCEPTED,
-                      JS_FUNC_NORMAL, s->token.ptr, NULL, s->token.line_num,
+                      JS_FUNC_NORMAL, s->token.ptr, -1, s->token.line_num,
                       s->token.col_num, JS_PARSE_EXPORT_DEFAULT,
                       PDS_EXP_DEFFUNC);
  exp_deffunc_done:
@@ -66667,8 +66670,8 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     PD_RET(-1);
 
 /* ---- FunctionDeclaration / FunctionExpression / method / arrow. The last body in the parser, and the only
-   production needing arguments the four int slots cannot carry: a source POINTER, a JSFunctionDef**
-   out-parameter and the export flag, all seeded by PD_CALL_P.
+   production needing arguments the four int slots cannot carry: a source POINTER, the out-parameter (the
+   index of the frame whose st_fd receives the def) and the export flag, all seeded by PD_CALL_P.
 
    st_fd is the function def this production is BUILDING. It starts as the ENCLOSING def, because every name
    the header resolves (the Annex B var lookup of 10.2.11 FunctionDeclarationInstantiation step 32.a.i.2, the
@@ -66832,8 +66835,8 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
         s->fn_ctor_toplevel = false;
         f->st_fd->is_func_expr = false;
     }
-    if (f->st_pfd)
-        *f->st_pfd = f->st_fd;
+    if (f->st_pfd >= 0)
+        PD_FRAME(f->st_pfd)->st_fd = f->st_fd;
     s->cur_func = f->st_fd;
     f->st_fd->func_name = f->st_idx;
     /* XXX: test !f->st_fd->is_generator is always false */
@@ -67176,7 +67179,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             /* Check if a 'using' was encountered in the body scope */
             if (!f->st_bits && f->st_fd->scopes[f->st_fd->body_scope].has_using) {
                 f->st_bits = 1;
-                push_break_entry(f->st_fd, &f->st_be, JS_ATOM_NULL, -1, -1, 1);
+                push_break_entry(s, f->st_fd, PD_BE_FRAME(PD_SELF, 0), JS_ATOM_NULL, -1, -1, 1);
                 f->st_be.has_using = true;
                 f->st_be.using_scope_level = f->st_fd->body_scope;
             }
@@ -67197,7 +67200,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             int label_catch = f->st_fd->scopes[f->st_fd->body_scope].using_label_catch;
             int label_end = f->st_fd->scopes[f->st_fd->body_scope].using_label_end;
 
-            pop_break_entry(f->st_fd);
+            pop_break_entry(s, f->st_fd);
 
             if (js_is_live_code(s)) {
                 emit_op(s, OP_drop);  /* drop catch_offset */
@@ -67414,8 +67417,8 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
  fd2_fail:
     s->cur_func = f->st_fd->parent;
     js_free_function_def(ctx, f->st_fd);
-    if (f->st_pfd)
-        *f->st_pfd = NULL;
+    if (f->st_pfd >= 0)
+        PD_FRAME(f->st_pfd)->st_fd = NULL;
     PD_RET(-1);
 
  done:
@@ -67446,9 +67449,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
 #undef PD_CALL_AT
 #undef PD_CALL_P
 #undef PD_INIT
-#undef PD_FRAME
-#undef PD_CHUNK
-#undef PD_CHUNK_BITS
+#undef PD_SELF
 }
 
 /* DOES THE PARSE GIVE THE THREAD BACK AT THIS PRODUCTION BOUNDARY — the same question the interpreter's
@@ -67546,13 +67547,15 @@ static __exception int js_parse_descent(JSParseState *s, int entry, int level,
 }
 
 /* allowed parse_flags: PF_IN_ACCEPTED */
-static void push_break_entry(JSFunctionDef *fd, BlockEnv *be,
+static void push_break_entry(JSParseState *s, JSFunctionDef *fd, int h,
                              JSAtom label_name,
                              int label_break, int label_cont,
                              int drop_count)
 {
+    BlockEnv *be = pd_be(s, h);
+
     be->prev = fd->top_break;
-    fd->top_break = be;
+    fd->top_break = h;
     be->label_name = label_name;
     be->label_break = label_break;
     be->label_cont = label_cont;
@@ -67566,11 +67569,9 @@ static void push_break_entry(JSFunctionDef *fd, BlockEnv *be,
     be->using_scope_level = -1;
 }
 
-static void pop_break_entry(JSFunctionDef *fd)
+static void pop_break_entry(JSParseState *s, JSFunctionDef *fd)
 {
-    BlockEnv *be;
-    be = fd->top_break;
-    fd->top_break = be->prev;
+    fd->top_break = pd_be(s, fd->top_break)->prev;
 }
 
 /* 7.4.11 AsyncIteratorClose over a `for await` loop's enum_rec [iterator, next, catch_offset], consuming the
@@ -67609,11 +67610,11 @@ static void emit_async_iterator_close(JSParseState *s)
 static __exception int emit_break(JSParseState *s, JSAtom name, int is_cont)
 {
     BlockEnv *top;
-    int i, scope_level;
+    int h, i, scope_level;
 
     scope_level = s->cur_func->scope_level;
-    top = s->cur_func->top_break;
-    while (top != NULL) {
+    for (h = s->cur_func->top_break; h != PD_BE_NONE; h = top->prev) {
+        top = pd_be(s, h);
         close_scopes(s, scope_level, top->scope_level);
         scope_level = top->scope_level;
         if (is_cont &&
@@ -67652,7 +67653,6 @@ static __exception int emit_break(JSParseState *s, JSAtom name, int is_cont)
             emit_goto(s, OP_gosub, top->label_finally);
             emit_op(s, OP_drop);
         }
-        top = top->prev;
     }
     if (name == JS_ATOM_NULL) {
         if (is_cont)
@@ -67668,6 +67668,7 @@ static __exception int emit_break(JSParseState *s, JSAtom name, int is_cont)
 static void emit_return(JSParseState *s, bool hasval)
 {
     BlockEnv *top;
+    int h;
 
     if (s->cur_func->func_kind != JS_FUNC_NORMAL) {
         if (!hasval) {
@@ -67681,8 +67682,8 @@ static void emit_return(JSParseState *s, bool hasval)
         }
     }
 
-    top = s->cur_func->top_break;
-    while (top != NULL) {
+    for (h = s->cur_func->top_break; h != PD_BE_NONE; h = top->prev) {
+        top = pd_be(s, h);
         if (top->has_iterator || top->label_finally != -1 ||
             top->has_using) {
             if (!hasval) {
@@ -67735,7 +67736,6 @@ static void emit_return(JSParseState *s, bool hasval)
                 emit_goto(s, OP_gosub, top->label_finally);
             }
         }
-        top = top->prev;
     }
     if (s->cur_func->is_derived_class_constructor) {
         int label_return;
@@ -77764,7 +77764,7 @@ static __exception int js_parse_program(JSParseState *s, bool resuming)
         /* Check if a 'using' was encountered at the body scope level */
         if (!s->pgm_has_using_be && fd->scopes[fd->body_scope].has_using) {
             s->pgm_has_using_be = true;
-            push_break_entry(fd, &s->pgm_using_be, JS_ATOM_NULL, -1, -1, 1);
+            push_break_entry(s, fd, PD_BE_PGM, JS_ATOM_NULL, -1, -1, 1);
             s->pgm_using_be.has_using = true;
             s->pgm_using_be.using_scope_level = fd->body_scope;
         }
@@ -77777,7 +77777,7 @@ static __exception int js_parse_program(JSParseState *s, bool resuming)
         int label_catch = fd->scopes[fd->body_scope].using_label_catch;
         int label_end = fd->scopes[fd->body_scope].using_label_end;
 
-        pop_break_entry(fd);
+        pop_break_entry(s, fd);
 
         if (js_is_live_code(s)) {
             /* Normal path: drop catch_offset, dispose, then return */
