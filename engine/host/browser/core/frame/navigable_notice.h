@@ -52,7 +52,8 @@
     X(DRIVEN, driven, TOKEN)                   /* the drive mark (PENDING_DRIVEN_*) */                           \
     X(PINNED, pinned, TOKEN)                   /* the witness mark (PENDING_PINNED_*) */                         \
     X(ISSUER, issuer, TOKEN)                   /* HTML §7.4.2.2's sourceDocument, by its world name */         \
-    X(OPENER, opener, TOKEN)                   /* the engine's claim of §7.2.2.4's opener (remote_object.h), or `N` */
+    X(OPENER, opener, TOKEN)                   /* the engine's claim of §7.2.2.4's opener (remote_object.h), or `N` */ \
+    X(HELD, held, TOKEN)                       /* the zone's token for the response it holds for this load, or `-` */
 
 /* `navigable.open`: an auxiliary navigable this agent created and holds (HTML §7.3.1.7 step 8), so the zone has
    its own record of it before any navigation of it reaches a peer: who created it, under which record (the

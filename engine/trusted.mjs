@@ -599,6 +599,7 @@ async function main() {
      zone is where an address is ranked and legitimately fetched again, and it holds no set at all. */
   const seededRoutes = new Set();
   let seedSerial = 0;
+  let heldSerial = 0;
   /* A document's principal: HTML §7.3.2.1 "Creating browsing contexts"' determine the origin returns a new opaque
      origin when its record carries the sandboxed origin browsing context flag, and the URL's origin otherwise,
      which is itself a new opaque origin, serialized "null", for a data: URL (URL §4.7 "Origin"). Either opaque
@@ -824,6 +825,9 @@ async function main() {
       tag: `${docId}/s${++serial}`,
       say: (rec) => child.stdin.write(rec + '\n'),
       ready: [], answered: new Map(), sends: new Map(),
+      /* The responses this zone fetched for this instance's navigations and holds for a destination instance,
+         by the token its `peer` answer named; taken by the `navigable.navigate` that names it. */
+      held: new Map(),
       stalled: false, live: true, result: null, results: 0, quantum: null,
       /* How much of this cluster's partition of the product's known identities the child has been handed
          (extension/lib/novelty-set.js's noveltyOwed advances it). */
@@ -964,6 +968,20 @@ async function main() {
      performed before the issuing document existed. The chokepoint reads both, and the record is the floor.
      The document this produces is recorded under neither alone but under their join (childDoc), composed by
      the caller at `provision`. */
+  /* The response a provision record (`navigable.swap`, `navigable.navigate`) loads its document from: the one
+     this zone holds for the record's token, taken once and only by the instance it was fetched for and at the
+     address it was fetched at, or for `-` a load of the address under the record's own words. */
+  async function provisionLoad(e, f, what, fromDoc) {
+    const P = NAVIGABLE_NOTICE.provision;
+    if (f[P.held] === '-')
+      return navigate(f[P.address], e.docUrl, what, f[P.provenance], f[P.driven], f[P.pinned], fromDoc);
+    const h = e.held.get(f[P.held]);
+    if (!h || h.address !== f[P.address])
+      return { declined: `${what} — it names the held response \`${f[P.held]}\`, which this zone holds for ` +
+                         `no navigation of instance [${e.tag}] to ${f[P.address]}` };
+    e.held.delete(f[P.held]);
+    return h.loaded;
+  }
   async function navigate(url, fromDocUrl, what, provenance, driven, pinned, fromDoc) {
     const abs = new URL(url, fromDocUrl).href;
     /* Fetch §4.3 "Scheme fetch"'s "data" arm, as bridge.js's navigationLoad takes it: the bytes are in the URL
@@ -1560,7 +1578,7 @@ async function main() {
        `(browsing context group, origin)` and a swap changes the first half. */
     if (f[0] === 'navigable.swap') {
       if (f.length !== P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
-          !f[P.pinned] || !f[P.issuer])
+          !f[P.pinned] || !f[P.issuer] || !f[P.held])
         throw new Error(`a navigable.swap notice was short of its fields: ${record} — the provenance is what the ` +
                         'navigation that caused the swap is EVIDENCE OF, taken off that navigation\'s own ' +
                         'load job (core/frame/browsing_context_group.c), and the load below is decided from it');
@@ -1574,8 +1592,7 @@ async function main() {
       }
       /* AND IT IS THE SAME NAVIGATION'S WORD, which is what keeps a swap from being a door an address this
          zone declined at `document.fetch` could be fetched through one notice later. */
-      const loaded = await navigate(f[P.address], e.docUrl, `navigable.swap ${f[P.document]}`, f[P.provenance],
-                                    f[P.driven], f[P.pinned], swapFrom.issuerDoc);
+      const loaded = await provisionLoad(e, f, `navigable.swap ${f[P.document]}`, swapFrom.issuerDoc);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* NOT REFERENCED, WHICH IS THE ONE ARM WHERE "AN ENGINE NAMED IT" IS THE WRONG READING. §7.1.3.2 step
          10's note says the old browsing context "will not be used by the new Document that we are about to
@@ -1600,7 +1617,7 @@ async function main() {
        emitting instance's proxy names this document, so its timelines may not run out under a read. */
     if (f[0] === 'navigable.navigate') {
       if (f.length !== P.parts || !f[P.document] || !f[P.address] || !f[P.provenance] || !f[P.driven] ||
-          !f[P.pinned] || !f[P.issuer] || !f[P.opener])
+          !f[P.pinned] || !f[P.issuer] || !f[P.opener] || !f[P.held])
         throw new Error(`a navigable.navigate notice was short of its fields: ${record} — the engine writes the ` +
                         'new document\'s name, the address, the origin it computed, the navigation\'s ' +
                         'provenance, its drive mark, its witness mark and its issuing document ' +
@@ -1622,8 +1639,7 @@ async function main() {
       const navOpener = ZONE.docRecordNavigableIdentity(f[P.opener]) === null ? null : allowed.opener;
       /* The peer holds a WindowProxy for its opener, a document of this instance, as for a create's opener. */
       if (navOpener !== null) e.referenced = 1;
-      const loaded = await navigate(f[P.address], e.docUrl, `navigable.navigate ${f[P.document]}`,
-                                    f[P.provenance], f[P.driven], f[P.pinned], navFrom.issuerDoc);
+      const loaded = await provisionLoad(e, f, `navigable.navigate ${f[P.document]}`, navFrom.issuerDoc);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       const doc = childDoc(navFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
       const navOrigin = principalOf(doc, loaded.url);
@@ -2174,12 +2190,14 @@ async function main() {
           if (loaded.declined) { e.ready.push(declineAnswer(id, loaded.declined)); return; }
           /* A RESPONSE OF ANOTHER ORIGIN NEVER REACHES THE ASKING INSTANCE. Judged by this zone's own record of
              that instance's origin and the response URL it fetched: the asker learns only the destination's
-             origin (`peer`), and its `navigable.navigate` is what provisions the destination's instance, which
-             loads the document under its own record. A browser process commits a cross-site navigation to the
-             destination's renderer the same way; the initiator's never holds the bytes. */
+             origin and a token (`peer`, `held`), and the `navigable.navigate` naming that token provisions or
+             joins the destination's instance with this response, so the server is asked once. A browser
+             process commits a cross-site navigation to the destination's renderer the same way. */
           const destOrigin = new URL(loaded.url).origin;
           if (destOrigin !== e.origin) {
-            e.ready.push(['answer', String(id), b64(JSON.stringify({ peer: stampOrigin(destOrigin) })), '0',
+            const held = `h${++heldSerial}`;
+            e.held.set(held, { address: args.slice(i + 1), loaded });
+            e.ready.push(['answer', String(id), b64(JSON.stringify({ peer: stampOrigin(destOrigin), held })), '0',
                           b64(new Uint8Array(0))].join('\t'));
             return;
           }
@@ -2275,6 +2293,7 @@ async function main() {
                     'stands.');
     }
     e.live = false;
+    e.held.clear();
     ({ code: e.exit, signal: e.signal } = await e.closed);
     /* HOW THIS INSTANCE ENDED, IN ONE PHRASE, so every reader below states the same fact the same way. */
     e.ended = (e.signal ? `on ${e.signal}` : `with code ${e.exit}`) +

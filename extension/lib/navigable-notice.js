@@ -64,7 +64,8 @@ var NAVIGABLE_NOTICE = Object.freeze({
     pinned: 6,
     issuer: 7,
     opener: 8,
-    parts: 9,
+    held: 9,
+    parts: 10,
     encoding: Object.freeze({
       document: "token",
       address: "token",
@@ -74,6 +75,7 @@ var NAVIGABLE_NOTICE = Object.freeze({
       pinned: "token",
       issuer: "token",
       opener: "token",
+      held: "token",
     }),
   }),
   request: Object.freeze({

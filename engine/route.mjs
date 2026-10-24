@@ -541,10 +541,11 @@ async function service(e) {
            `<TAB><initiator><TAB><url>\`: ${op} — core/frame/navigable.c writes all eight fields on every ` +
            'path, the policy possibly empty');
     /* A response of another origin never reaches the asking instance: the asker is answered the destination's
-       origin alone (`peer`), as extension/bridge.js and engine/trusted.mjs answer it. */
+       origin (`peer`), as extension/bridge.js and engine/trusted.mjs answer it. This driver provisions no
+       navigated-to document, so it holds no response for one (`held` is `-`). */
     const fetchUrl = new URL(fetchArgs.slice(initTab + 1), e.docUrl);
     if (fetchUrl.origin !== e.origin) {
-      e.answer(id, { peer: fetchUrl.origin }, new Uint8Array(0));
+      e.answer(id, { peer: fetchUrl.origin, held: '-' }, new Uint8Array(0));
       continue;
     }
     e.answer(id, { url: fetchArgs.slice(initTab + 1), headers: "", setCookies: [] }, HTML_B);

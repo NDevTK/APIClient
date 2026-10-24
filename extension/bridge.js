@@ -3181,6 +3181,9 @@ function engineReserve(cluster, docId, msg, referenced) {
                    ({doc, origin} or null): written beside `records` from the opener this zone provisioned, and
                    by `navigable.open` for a navigable the engine holds (engineOpenerLookup). */
                 openers: new Map(),
+                /* The responses this zone fetched for this instance's navigations and holds for a destination
+                   instance, by the token its `peer` answer named (engineProvisionLoad takes them). */
+                held: new Map(),
                 groupId: msg.groupId, _resumed: null, referenced,
                 /* Whether engineRoot has opened this instance's jar to zoneRouteSetCookies. */
                 cookiesOpen: false,
@@ -5073,10 +5076,10 @@ async function hostNotice(eng, line) {
      zone's alone. The new context has a null creator, so no container or opener is inherited, and its
      top-level creation URL is its own address. This zone loads the bytes: an untrusted engine that supplied
      bytes and a principal could name any origin's document into existence.
-     Named residual: the address is fetched again instead of committing the response the navigation already
-     had. Next diff remembers this zone's own reply to that `document.fetch`, keyed by (instance, address).
-     Absence shows as a swapped-to document whose content or headers differ from the response that decided
-     the swap when the server answers the two requests differently. */
+     Named residual: a record stating `-` after the engine was answered the response (this swap, and a
+     navigation whose final sandboxing flags made a same-origin response opaque) fetches the address again.
+     Next diff has this zone decide §7.1.3.2's swap and the sandboxed origin at the `document.fetch` answer
+     and hold that response too. Absence shows as two server hits for one such navigation. */
   if (f[0] === "navigable.swap") {
     /* The name is minted fresh for each swap (solver/world.h), so one this pool holds would provision one heap
        for two Documents. */
@@ -5094,9 +5097,8 @@ async function hostNotice(eng, line) {
       return;
     }
     const _swapDoc = childDocRecord(_swapFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
-    const swapped = await eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned],
-                                              /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED,
-                                              docRecordOpaque(_swapDoc), _swapFrom.issuerDoc);
+    const swapped = await engineProvisionLoad(eng, line, f, P, _swapDoc, _swapFrom.issuerDoc);
+    if (swapped === null) return;
     DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
            "the swapped-to document load answered neither bytes nor the null that means it did not load");
     DCHECK(swapped.headers && typeof swapped.headers === "object",
@@ -5145,7 +5147,9 @@ async function hostNotice(eng, line) {
      when one runs and is provisioned one otherwise, as a cross-origin child is. It is a top-level document, so
      it has no creator container (the empty CSP pair and HTML §7.1.4's new embedder policy), no parent, no
      container and no ancestor list, and its own address is its top-level creation URL. Referenced, since the
-     emitting engine's proxy names it. This zone loads the bytes, for the swap arm's reason. */
+     emitting engine's proxy names it. This zone supplies the bytes, for the swap arm's reason: the response it
+     holds from the `document.fetch` it answered `peer`, or a load of a cross-origin request the engine never
+     asked for (engineProvisionLoad). */
   if (f[0] === "navigable.navigate") {
     /* The name is minted fresh by the navigating engine, as a swap's is. */
     if (hostHolderOf(f[P.document])) { engineRefuseNotice(eng, line, "names a document this pool already holds"); return; }
@@ -5168,15 +5172,15 @@ async function hostNotice(eng, line) {
     /* The peer holds a WindowProxy for its opener, a document of this instance, as for a create's opener. */
     if (_navOpener !== "N") eng.referenced = 1;
     const _navDoc = childDocRecord(_navFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
-    /* A navigation to an address in the navigating instance's own agent is one it performs itself, so a notice
-       sending it to a peer is the engine's statement and nothing is loaded. */
-    if (principalOf(_navDoc, originOf(f[P.address])) === eng.origin) {
+    /* A load this zone performs (`-`) is of the address the engine stated, so an address in the navigating
+       instance's own agent is one it performs itself and nothing is loaded. A held response is this zone's own
+       record of a load whose response it judged to be another origin's. */
+    if (f[P.held] === "-" && principalOf(_navDoc, originOf(f[P.address])) === eng.origin) {
       engineRefuseNotice(eng, line, "navigates to a peer at an address in its own agent cluster");
       return;
     }
-    const navd = await eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned],
-                                           /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED,
-                                           docRecordOpaque(_navDoc), _navFrom.issuerDoc);
+    const navd = await engineProvisionLoad(eng, line, f, P, _navDoc, _navFrom.issuerDoc);
+    if (navd === null) return;
     DCHECK(navd && (navd.bytes === null || navd.bytes instanceof Uint8Array) &&
            navd.headers && typeof navd.headers === "object" && typeof navd.url === "string" && navd.url !== "",
            "the navigated-to document load answered without bytes-or-null, a header list and a response URL — " +
@@ -5567,7 +5571,7 @@ async function engineServiceHostRequests(eng) {
          does in the `navigable.create` arm. */
       (r) => {
         childRequestAlias(df.initiator, df.url, r.url);
-        return engineDeliverDocument(eng, id, r);
+        return engineDeliverDocument(eng, id, r, df.url);
       });
     continue;
   }
@@ -5617,7 +5621,8 @@ function documentFetchOf(args) {
   return { provenance, driven, pinned, destination, referrerPolicy, initiator, url };
 }
 /* The document load's delivery, named so the answer is handed over against the id it was fetched under. */
-async function engineDeliverDocument(eng, id, r) {
+let _nextHeld = 0;
+async function engineDeliverDocument(eng, id, r, address) {
   // JSON, so the answer carries its type (a null body is a load that did not load, "null" is a document); the
   // body crosses as bytes beside it (HostAnswer's `array<uint8>?`), since a Document is parsed from bytes.
   /* The answer of HTML §7.4.5 Populating a session history entry: the response's URL, its header list as HTTP
@@ -5648,11 +5653,30 @@ async function engineDeliverDocument(eng, id, r) {
      §4.7 HTTP-network fetch). */
   if (originOf(r.url) !== eng.origin) {
     await zoneRouteSetCookies(eng.groupId, r.setCookies);
-    return engineAnswer(eng, id, { peer: stampOrigin(originOf(r.url)) }, null);
+    const held = "h" + (++_nextHeld);
+    eng.held.set(held, { address, loaded: { ...r, setCookies: [] } });
+    return engineAnswer(eng, id, { peer: stampOrigin(originOf(r.url)), held }, null);
   }
   const _ownCookies = await zoneAnswerSetCookies(eng, r.setCookies);
   await engineAnswer(eng, id, { url: r.url, headers: responseFieldLines(r.headers), setCookies: _ownCookies },
                      r.bytes);
+}
+/* The response a provision record (`navigable.swap`, `navigable.navigate`) loads its document from: the one
+   this zone holds for the record's token, taken once and only by the instance it was fetched for and at the
+   address it was fetched at (its Set-Cookie pairs were routed when it was held), or for `-` a load of the
+   address under the record's own words. Null is a refusal, logged and counted by name. */
+async function engineProvisionLoad(eng, line, f, P, docRecord, issuerDoc) {
+  if (f[P.held] === "-")
+    return eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned], /*refusalArm*/"none",
+                               DOCUMENT_REQUEST_UNSTATED, docRecordOpaque(docRecord), issuerDoc);
+  const h = eng.held.get(f[P.held]);
+  if (!h || h.address !== f[P.address]) {
+    engineRefuseNotice(eng, line, "names the held response `" + f[P.held] + "`, which this zone holds for no " +
+                       "navigation of this instance to " + f[P.address]);
+    return null;
+  }
+  eng.held.delete(f[P.held]);
+  return h.loaded;
 }
 /* A refusal of a synchronous request (a document load or an XHR fetch), recorded on the rendezvous it names.
    This zone issued the request against an id the engine had just published, so an answer matching no parked
@@ -5690,6 +5714,7 @@ async function engineFinalize(eng) {
      a call into a removed frame. The engine's engine_host_answer already treats a request whose flow is gone as
      unanswered by anyone. */
   for (const [token, to] of _remoteOps) if (to.asker === eng) _remoteOps.delete(token);
+  eng.held.clear();
   /* Outstanding requests go the same way: the flows parked on them went with the instance, and their addresses
      are in the residue just written, so a resumed recipe re-issues them against current sources. The promises
      still settle into records nothing reads. */

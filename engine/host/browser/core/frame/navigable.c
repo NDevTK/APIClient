@@ -522,7 +522,7 @@ static void navigable_announce_open(JSContext *ctx, uint32_t child, JSValueConst
    zone derives those rather than being sent them. */
 static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
                                  SandboxFlags final_sandbox_flags, const char *provenance, const char *driven,
-                                 const char *pinned, const char *issuer)
+                                 const char *pinned, const char *issuer, const char *held)
 {
     uint32_t incoming;
     char *op;
@@ -537,6 +537,9 @@ static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char 
            "a navigation was sent to a peer with no witness mark — the zone's navigation default reads it");
     DCHECK(issuer != NULL && *issuer,
            "a navigation was sent to a peer with no sourceDocument — the zone judges it by that document's record");
+    DCHECK(held != NULL && *held && !strchr(held, '\t'),
+           "a navigation was sent to a peer with no held-response token — the zone's `peer` answer names one, "
+           "and a load that asked the zone nothing states `-`");
     DCHECK(final_sandbox_flags == 0,
            "a top-level navigation into a peer carries a non-empty final sandboxing flag set, and the "
            "`navigable.navigate` record carries no flag set — add the set to the record and hand it to the peer's "
@@ -564,6 +567,7 @@ static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char 
             [NAVIGABLE_PROVISION_PINNED] = pinned,
             [NAVIGABLE_PROVISION_ISSUER] = issuer,
             [NAVIGABLE_PROVISION_OPENER] = opener_id,
+            [NAVIGABLE_PROVISION_HELD] = held,
         };
 
         op = engine_notice_build("navigable.navigate", fields, NAVIGABLE_PROVISION_N);
@@ -1601,9 +1605,10 @@ static void nav_check_embedder_policy_adherence(JSContext *ctx, JSValueConst pro
 
 /* Hands a top-level traversable's load whose response is another origin's (`origin`) to that origin's
    instance, with the job's own provenance, marks and sourceDocument and the sandboxing `flags` known here.
-   The trusted zone loads `addr` for the destination's instance under its own record. */
+   `held` is the zone's token for the response it already fetched for this load, or `-` when the zone is to
+   load `addr` for the destination's instance; either way under the zone's own record. */
 static void nav_load_to_peer(JSContext *ctx, NavLoadState *s, JSValueConst proxy, const char *addr,
-                             const Origin *origin, SandboxFlags flags)
+                             const Origin *origin, SandboxFlags flags, const char *held)
 {
     const char *prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
     const char *drv = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_DRIVEN));
@@ -1617,7 +1622,7 @@ static void nav_load_to_peer(JSContext *ctx, NavLoadState *s, JSValueConst proxy
            "peer is not built: the record naming the address with §7.1.7's container, §8.1.3.1's pair, §7.3.1.3's "
            "parent and §9.5's container answer, the nested form of window_proxy_navigate_to_peer, and its host "
            "route");
-    nav_navigate_to_peer(ctx, proxy, addr, origin, flags, prov, drv, pin, iss);
+    nav_navigate_to_peer(ctx, proxy, addr, origin, flags, prov, drv, pin, iss, held);
     JS_FreeCString(ctx, iss);
     JS_FreeCString(ctx, pin);
     JS_FreeCString(ctx, drv);
@@ -1821,6 +1826,29 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "case\" and returns, and that section's own request never hits the network. This job would send the "
            "script source as the request target. The branch is in navigable_navigate, which every navigation "
            "converges on, so whatever enqueued this load bypassed it");
+    /* A REQUEST FOR ANOTHER ORIGIN IS NOT ASKED HERE: this instance is an origin-keyed agent cluster, so the
+       load goes to the destination's instance (nav_load_to_peer) and the zone fetches it once, for that
+       instance, as a navigable created at another origin's address is the peer's to load. A request of this
+       origin is asked, and the zone judges where its response belongs (the `peer` answer below).
+       Named residual: a cross-origin request the server redirects back to this origin is not covered; the
+       zone refuses to join it into the navigating instance, as for a create. The next diff has the zone
+       answer that navigation into this instance's navigable. Its absence shows as that refusal in the zone. */
+    if (fetches && !s->req) {
+        UrlRecord req_url;
+        const Origin *req_origin = NULL;
+
+        url_record_init(&req_url);
+        if (url_parse(&req_url, addr, strlen(addr), NULL))
+            req_origin = origin_determine(&req_url, false, origin_agent());
+        url_record_free(&req_url);
+        DCHECK(req_origin != NULL, "a document load's address does not parse — navigable_navigate serialized it "
+                                   "from a parse, so the job and that parse disagree");
+        if (!child_in_this_agent(req_origin)) {
+            nav_load_to_peer(ctx, s, proxy, addr, req_origin, window_proxy_creation_sandbox_flags(proxy), "-");
+            JS_FreeCString(ctx, addr);
+            return JS_STEP_DONE;
+        }
+    }
     if (fetches && !s->req) {
         /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer policy><TAB>
            <initiator><TAB><url>` — the address last, as on the pending line, so every fixed-vocabulary token
@@ -1905,9 +1933,9 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     }
     /* A RESPONSE OF ANOTHER ORIGIN IS NEVER HANDED TO THIS INSTANCE. The trusted zone fetched it and judged its
        response URL against its own record of this instance's agent cluster; for another origin it answers here
-       with that origin alone (`peer`) and the destination's instance loads the document, as a browser process
-       commits a cross-site navigation to the destination's renderer. The decision is the response's, so a
-       cross-origin request redirected back to this origin is answered with its bytes here.
+       with that origin and the token of the response it holds (`peer`, `held`), and hands that response to the
+       destination's instance, as a browser process commits a cross-site navigation to the destination's
+       renderer. The decision is the response's, so a request of this origin redirected elsewhere lands here.
        Named residual: the response's opener policy is not seen here, so §7.1.3.2's swap is not covered for a
        cross-origin destination. The next diff has the zone run §7.1.3.2's enforce over its own load and state
        the swap in this answer. Its absence shows as a COOP page opened cross-origin keeping its opener. */
@@ -1916,18 +1944,26 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
         if (!JS_IsUndefined(peerv)) {
             const char *peer = JS_ToCString(ctx, peerv);
+            JSValue heldv = JS_GetPropertyStr(ctx, answer, "held");
+            const char *held = JS_ToCString(ctx, heldv);
             int completion = ENGINE_COMPLETION_NORMAL;
             JSValue taken;
 
             DCHECK(JS_IsString(peerv) && peer != NULL && *peer,
                    "the zone answered a document load with a `peer` decision naming no origin — it names the "
                    "destination's origin on every such answer");
+            DCHECK(JS_IsString(heldv) && held != NULL && *held,
+                   "the zone answered a document load with a `peer` decision naming no held response — it states "
+                   "the token of the response it holds for the destination on every such answer");
             taken = engine_host_take(ctx, s->req, &completion);
             DCHECK(completion == ENGINE_COMPLETION_NORMAL,
                    "a document load's `peer` decision arrived with a THROW completion — the zone states it");
             JS_FreeValue(ctx, taken);
             s->req = 0;
-            nav_load_to_peer(ctx, s, proxy, addr, origin_parse(peer), window_proxy_creation_sandbox_flags(proxy));
+            nav_load_to_peer(ctx, s, proxy, addr, origin_parse(peer), window_proxy_creation_sandbox_flags(proxy),
+                             held);
+            JS_FreeCString(ctx, held);
+            JS_FreeValue(ctx, heldv);
             JS_FreeCString(ctx, peer);
             JS_FreeValue(ctx, peerv);
             JS_FreeCString(ctx, addr);
@@ -2383,7 +2419,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        another origin, so what reaches here is a response of this origin whose final sandboxing flags make its
        origin opaque. */
     if (!swapped && !in_agent)
-        nav_load_to_peer(ctx, s, proxy, dest_url, origin, final_flags);
+        nav_load_to_peer(ctx, s, proxy, dest_url, origin, final_flags, "-");
     /* THE RESPONSE'S HEADER LIST OUTLIVES THIS POINT NOW, and it has to: HTML §13.2.3.2 "Determining the
        character encoding" reads the `Content-Type` header in a form of its own (Fetch §2.2.2 "Headers"' get,
        joined) and that read belongs INSIDE the component that runs the algorithm, not to this frame. The list
