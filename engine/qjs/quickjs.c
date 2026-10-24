@@ -28627,7 +28627,8 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
      DESC_OUT  a JSDescFacts * naming the requester's own record, which tramp_cont_relink_outer re-aims;
      FACTS     a JSDescFacts held by value, whose three values are owned;
      PROPS     an owned own-key table, whose length is the field named in `type`;
-     OWN_ARRAY a JSValue array of `type` slots, every one owned (a slot nothing wrote is js_mallocz's 0).
+     OWN_ARRAY a JSValue array of `type` slots, every one owned (a slot nothing wrote is js_mallocz's 0);
+     BORROW_ARRAY a JSValue array of `type` slots, each a view another owner keeps alive.
    Each role defines one macro per walk; a role a walk does not define is a compile error at that walk. */
 #define CONT_REC_MEMBER_OWN_VAL(t, n) JSValue n;
 #define CONT_REC_MEMBER_OWN_ATOM(t, n) JSAtom n;
@@ -28638,6 +28639,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_MEMBER_FACTS(t, n) JSDescFacts n;
 #define CONT_REC_MEMBER_PROPS(t, n) JSPropertyEnum *n;
 #define CONT_REC_MEMBER_OWN_ARRAY(t, n) JSValue n[t];
+#define CONT_REC_MEMBER_BORROW_ARRAY(t, n) JSValue n[t];
 #define CONT_REC_FREE_OWN_VAL(t, n) JS_FreeValue(ctx, r->n);
 #define CONT_REC_FREE_OWN_ATOM(t, n) JS_FreeAtom(ctx, r->n);
 #define CONT_REC_FREE_POD(t, n)
@@ -28647,6 +28649,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_FREE_FACTS(t, n) js_desc_facts_free(ctx, &r->n);
 #define CONT_REC_FREE_PROPS(t, n) if (r->n) js_free_prop_enum(ctx, r->n, r->t);
 #define CONT_REC_FREE_OWN_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) JS_FreeValue(ctx, r->n[i_]);
+#define CONT_REC_FREE_BORROW_ARRAY(t, n)
 #define CONT_REC_DUP_OWN_VAL(t, n) c->n = js_dup(r->n);
 #define CONT_REC_DUP_OWN_ATOM(t, n) c->n = JS_DupAtom(ctx, r->n);
 #define CONT_REC_DUP_POD(t, n)
@@ -28656,6 +28659,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_DUP_FACTS(t, n) js_desc_facts_dup(&c->n);
 #define CONT_REC_DUP_PROPS(t, n) if (r->n) { c->n = js_prop_enum_dup(ctx, r->n, r->t); CHECK(c->n != NULL, "OOM copying a parked record's own-key table"); }
 #define CONT_REC_DUP_OWN_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) c->n[i_] = js_dup(r->n[i_]);
+#define CONT_REC_DUP_BORROW_ARRAY(t, n)
 #define CONT_REC_NOUTER_OWN_VAL(t, n) 0
 #define CONT_REC_NOUTER_OWN_ATOM(t, n) 0
 #define CONT_REC_NOUTER_POD(t, n) 0
@@ -28665,6 +28669,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_NOUTER_FACTS(t, n) 0
 #define CONT_REC_NOUTER_PROPS(t, n) 0
 #define CONT_REC_NOUTER_OWN_ARRAY(t, n) 0
+#define CONT_REC_NOUTER_BORROW_ARRAY(t, n) 0
 #define CONT_REC_OUTER_GET_OWN_VAL(t, n)
 #define CONT_REC_OUTER_GET_OWN_ATOM(t, n)
 #define CONT_REC_OUTER_GET_POD(t, n)
@@ -28674,6 +28679,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_OUTER_GET_FACTS(t, n)
 #define CONT_REC_OUTER_GET_PROPS(t, n)
 #define CONT_REC_OUTER_GET_OWN_ARRAY(t, n)
+#define CONT_REC_OUTER_GET_BORROW_ARRAY(t, n)
 #define CONT_REC_OUTER_SET_OWN_VAL(t, n)
 #define CONT_REC_OUTER_SET_OWN_ATOM(t, n)
 #define CONT_REC_OUTER_SET_POD(t, n)
@@ -28683,6 +28689,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_OUTER_SET_FACTS(t, n)
 #define CONT_REC_OUTER_SET_PROPS(t, n)
 #define CONT_REC_OUTER_SET_OWN_ARRAY(t, n)
+#define CONT_REC_OUTER_SET_BORROW_ARRAY(t, n)
 #define CONT_REC_DESC_OUT_OWN_VAL(t, n)
 #define CONT_REC_DESC_OUT_OWN_ATOM(t, n)
 #define CONT_REC_DESC_OUT_POD(t, n)
@@ -28692,6 +28699,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_DESC_OUT_FACTS(t, n)
 #define CONT_REC_DESC_OUT_PROPS(t, n)
 #define CONT_REC_DESC_OUT_OWN_ARRAY(t, n)
+#define CONT_REC_DESC_OUT_BORROW_ARRAY(t, n)
 #define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
 #define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(t, n)
 #define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(t, n)
@@ -29194,22 +29202,24 @@ CONT_RECORD_DEFINE(JSTrapGet, js_trapget, JS_TRAPGET_FIELDS)
                                   promise rides the continuation. Driving it through JS_Call instead is what made
                                   `new Promise(function(){for(;;){}})` DFAIL: a loop in the executor preempted in an
                                   activation that was not the flow base. */
-typedef struct JSPromiseExec {
-    JSValue promise;             /* step 3-7: the promise under construction (owned) */
-    void *outer;                 /* non-NULL = requested BY a machine (Reflect.construct(Promise, [fn])): the
-                                    promise is DELIVERED to it, not pushed on a stack this state does not own */
-    uint8_t outer_kind;
-    JSValue executor_own;        /* Reflect.construct spelling: the executor came from an argsList element,
-                                    not a caller-stack operand, so the state owns it (JS_UNDEFINED otherwise) */
-    JSValue resolving_funcs[2];  /* step 8: [resolve, reject] (owned) */
-    JSValue super_ref;           /* super(fn) entry: the owned parent-class ref (freed at finish); UNDEFINED for `new Promise(fn)` */
-    JSValue cb_args[4];          /* [this=undefined, executor, resolve, reject] — BORROWED views for the tramp call.
-                                    Args live in the STATE, not pushed as operands, so sp is untouched and the
-                                    ORIGINAL ctor operands stay exactly where the finish pops them (as reduce does). */
-    int orig_cfirst, orig_cargc; /* the ORIGINAL OP_call_constructor operand shape (pop at finish) */
-    uint8_t orig_is_tail;        /* `return Reflect.construct(Promise, [fn])` IS a tail construct: the frame must
-                                    RETURN the promise, not push it and run off the end of the tail-call opcode */
-} JSPromiseExec;
+/* `new Promise(executor)` (§27.2.3.1) with its executor running on the chain. `promise` is steps 3-7's promise
+   and `resolving_funcs` step 8's [resolve, reject]. `outer` is set when a machine requested the construct
+   (Reflect.construct(Promise, [fn])), which takes the promise rather than an operand stack. `executor_own` is
+   that spelling's executor, taken out of an argsList released before the call (UNDEFINED otherwise, where the
+   executor stays a caller operand). `super_ref` is super(fn)'s parent-class reference. `cb_args` is the call's
+   [undefined, executor, resolve, reject], views of the fields above. `orig_*` is the original
+   OP_call_constructor operand shape the finish pops; `orig_is_tail` makes a tail construct return the promise. */
+#define JS_PROMISE_EXEC_FIELDS(F)                                                                              \
+    F(OWN_VAL, JSValue, promise)                                                                               \
+    F(OUTER, void *, outer)                                                                                    \
+    F(OWN_VAL, JSValue, executor_own)                                                                          \
+    F(OWN_ARRAY, 2, resolving_funcs)                                                                           \
+    F(OWN_VAL, JSValue, super_ref)                                                                             \
+    F(BORROW_ARRAY, 4, cb_args)                                                                                \
+    F(POD, int, orig_cfirst)                                                                                   \
+    F(POD, int, orig_cargc)                                                                                    \
+    F(POD, uint8_t, orig_is_tail)
+CONT_RECORD_DEFINE(JSPromiseExec, js_promise_exec, JS_PROMISE_EXEC_FIELDS)
 static bool promise_exec_ready(JSContext *ctx, JSValueConst *call_argv, int call_argc);
 /* (was 18, which CONT_IMPORT already had: both a frame's cont_kind and a continuation's outer_kind draw from this
    ONE namespace, so two kinds sharing a number is a live misread waiting for the first ToPrimitive whose outer is a
@@ -30895,7 +30905,12 @@ static inline void cont_kinds_are_distinct(int k)
    is what kept TypedArray.from's receiver gate narrowed to the concrete %TypedArray% constructors: 23.2.2.1's
    TypedArrayCreateFromConstructor is Construct(C, «len»), and `TA.from.call(customCtor, [])` makes C user code.
    With an outer continuation set, do_return feeds the constructed object to that machine's step instead. */
-struct JSConstruct { JSValue created_obj; JSValue super_ref; uint8_t from_super; void *outer; uint8_t outer_kind; };
+#define JS_CONSTRUCT_FIELDS(F)                                                                                 \
+    F(OWN_VAL, JSValue, created_obj)                                                                           \
+    F(OWN_VAL, JSValue, super_ref)                                                                             \
+    F(POD, uint8_t, from_super)                                                                                \
+    F(OUTER, void *, outer)
+CONT_RECORD_DEFINE(JSConstruct, js_construct, JS_CONSTRUCT_FIELDS)
 
 /* Only a NORMAL bytecode function trampolines (the common deep-recursion case). */
 static inline bool tramp_body_is_plain(JSValueConst func) {
@@ -53673,7 +53688,9 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_OWNKEYS_CHK, JSOwnKeysChk, js_ownkeys_chk, LINK)                                                    \
     X(CONT_GETPROP, JSGetProp, js_getprop, LINK)                                                               \
     X(CONT_ASYNC_SETTLE, JSAsyncSettle, js_async_settle, LINK)                                                 \
-    X(CONT_ASYNC_AWAIT, JSAsyncSettle, js_async_settle, LINK)
+    X(CONT_ASYNC_AWAIT, JSAsyncSettle, js_async_settle, LINK)                                                  \
+    X(CONT_PROMISE_EXEC, JSPromiseExec, js_promise_exec, ANCHOR)                                               \
+    X(CONT_CONSTRUCT, JSConstruct, js_construct, ANCHOR)
 #define CONT_REC_CASE_OUTER_GET(k, T, p, role)  case k: return p##_outer_get((T *)st, out_kind);
 #define CONT_REC_CASE_OUTER_SET(k, T, p, role)  case k: p##_outer_set((T *)st, outer, outer_kind); return;
 #define CONT_REC_IF_DESC_OUT(k, T, p, role)     if (kind == k) return p##_desc_out((T *)st);
@@ -53721,12 +53738,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
         TOPRIM_ROLE_AGREES(st, kind);
         *out_kind = ((struct JSToPrim *)st)->outer_kind;
         return ((struct JSToPrim *)st)->outer;
-    case CONT_PROMISE_EXEC:
-        *out_kind = ((JSPromiseExec *)st)->outer_kind;
-        return ((JSPromiseExec *)st)->outer;
-    case CONT_CONSTRUCT:
-        *out_kind = ((struct JSConstruct *)st)->outer_kind;
-        return ((struct JSConstruct *)st)->outer;
     case CONT_CTOR_PROTO:
         /* a construct parked on its new.target's `prototype` read: what waits on it is whoever asked for the
            construct (a step machine's Construct request, a capability's subclass construct), or nothing for a
@@ -53804,10 +53815,6 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_TOPRIM: case CONT_TOPRIM_GET:
         TOPRIM_ROLE_AGREES(st, kind);
         ((struct JSToPrim *)st)->outer = outer; ((struct JSToPrim *)st)->outer_kind = outer_kind; return;
-    case CONT_PROMISE_EXEC:
-        ((JSPromiseExec *)st)->outer = outer; ((JSPromiseExec *)st)->outer_kind = outer_kind; return;
-    case CONT_CONSTRUCT:
-        ((struct JSConstruct *)st)->outer = outer; ((struct JSConstruct *)st)->outer_kind = outer_kind; return;
     case CONT_CTOR_PROTO:
         ((JSCtorProto *)st)->outer = outer; ((JSCtorProto *)st)->outer_kind = outer_kind; return;
     case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET:
@@ -53903,8 +53910,8 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         return js_ctor_proto_clone(ctx, (const JSCtorProto *)st);
     /* No arm here. A kind that is only ever a frame's own cont_state (CONT_ARG_LIST_YIELD's anchor, say) is
        cloned by clone_deep_flow's arm for it; any other has not yet been asked to copy a link. */
-    case CONT_ARG_LIST_YIELD: case CONT_NONE: case CONT_AGEN_CREATE: case CONT_CONSTRUCT: case CONT_SETTER:
-    case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_EXEC:
+    case CONT_ARG_LIST_YIELD: case CONT_NONE: case CONT_AGEN_CREATE: case CONT_SETTER:
+    case CONT_ITER_HELPER: case CONT_ITER_FROM:
     case CONT_PROMISE_TRY: case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE:
     case CONT_ITER_CLOSE_CALL: case CONT_ITER_NEXT_OP: case CONT_FOROF_ACQUIRE:
@@ -54459,26 +54466,8 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                    CLONE's fields, and the in-flight executor's arg_buf repointed into them (an external buffer the
                    generic XL relocation would leave pointing at the original state). */
                 JSPromiseExec *os = (JSPromiseExec *)otf->cont_state;
-                JSPromiseExec *ns = js_malloc(ctx, sizeof(*ns));
+                JSPromiseExec *ns = js_promise_exec_clone(ctx, os);
                 if (!ns) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                *ns = *os;
-                ns->promise = js_dup(os->promise);
-                ns->resolving_funcs[0] = js_dup(os->resolving_funcs[0]);
-                ns->resolving_funcs[1] = js_dup(os->resolving_funcs[1]);
-                ns->super_ref = js_dup(os->super_ref);   /* each arm's continuation frees its own */
-                /* AND THE EXECUTOR, ON THE ONE SPELLING WHERE THE STATE OWNS IT. `new Promise(fn)` leaves the
-                   executor on the caller's operand stack (UNDEFINED here, and cb_args[1] borrows it); the
-                   Reflect.construct spelling takes it out of an argsList that is released before the call, so
-                   the state holds the only reference. The struct copy shared that one reference between two
-                   flows and both finishes free it — the field was simply missing from the list, which is the
-                   defect this whole clone is a list against. */
-                ns->executor_own = js_dup(os->executor_own);
-                /* `outer` is left naming the ORIGINAL requester and BOUND by tramp_cont_relink_outer below —
-                   the refusal that stood here asked for exactly that walk and it now exists. */
-                ns->cb_args[0] = JS_UNDEFINED;
-                ns->cb_args[1] = os->cb_args[1];   /* the executor: borrowed, kept alive by the cloned caller stack */
-                ns->cb_args[2] = ns->resolving_funcs[0];
-                ns->cb_args[3] = ns->resolving_funcs[1];
                 ct->cont_state = ns;
                 CLONE_ARG_BUF_NOT_IN_RECORD(ct, os);
             } else if (otf->cont_kind == CONT_STEP) {
@@ -54509,11 +54498,8 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                    pre-fork state whose per-arm property writes the COW delta already isolates — the same rule
                    the Promise executor's promise follows one arm up. */
                 struct JSConstruct *ocs = (struct JSConstruct *)otf->cont_state;
-                struct JSConstruct *ncs = js_malloc(ctx, sizeof(*ncs));
+                struct JSConstruct *ncs = js_construct_clone(ctx, ocs);
                 if (!ncs) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                *ncs = *ocs;
-                ncs->created_obj = js_dup(ocs->created_obj);
-                ncs->super_ref = js_dup(ocs->super_ref);
                 /* An OUTER continuation is a second record under this one (a `new` reached through another
                    continuation — `.finally`'s PromiseResolve delegates to a machine whose NewPromiseCapability
                    Constructs a page-defined Promise subclass, and the body of that constructor is this frame).
@@ -55058,32 +55044,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
            continuation issued (43, 73). */
         js_async_from_sync_end(ctx, (struct JSAsyncFromSync *)st);
         js_free_rt(rt, st);
-        return;
-    }
-    case CONT_PROMISE_EXEC: {
-        /* THE REQUESTER IS RELEASED, NOT REFUSED — the mirror of the clone's relink, and the reason both arms
-           read their link BEFORE the free: the free is what makes the record unreadable. The refusal that stood
-           here was the free half of the pair the clone has now built. */
-        JSPromiseExec *ps = (JSPromiseExec *)st;
-        void *po = ps->outer;
-        uint8_t pk = ps->outer_kind;
-        JS_FreeValue(ctx, ps->promise);
-        JS_FreeValue(ctx, ps->resolving_funcs[0]);
-        JS_FreeValue(ctx, ps->resolving_funcs[1]);
-        JS_FreeValue(ctx, ps->super_ref);
-        JS_FreeValue(ctx, ps->executor_own);   /* the Reflect.construct spelling's argsList element */
-        js_free_rt(rt, ps);
-        next->st = po; next->kind = pk;
-        return;
-    }
-    case CONT_CONSTRUCT: {
-        struct JSConstruct *cs = (struct JSConstruct *)st;
-        void *co = cs->outer;
-        uint8_t ck = cs->outer_kind;
-        JS_FreeValue(ctx, cs->created_obj);
-        JS_FreeValue(ctx, cs->super_ref);
-        js_free_rt(rt, cs);
-        next->st = co; next->kind = ck;
         return;
     }
     case CONT_CTOR_PROTO: {
