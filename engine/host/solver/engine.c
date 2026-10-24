@@ -1322,6 +1322,9 @@ int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) 
     JSValue v = engine_host_take(ctx, req, &completion);
 
     DCHECK(presult != NULL, "a host completion was taken with nowhere to place its value");
+    DCHECK(completion != ENGINE_COMPLETION_DECLINED,
+           "a declined cross-agent operation's answer was taken as a value — no peer computed one, so the asking "
+           "machine asks engine_host_declined first and builds an absent value of its member's type");
     if (completion == ENGINE_COMPLETION_THROW) {
         /* Re-raised at the call site that parked on it, so the page's own `try`/`catch` around the read, write
            or call handles it as it would a local throw. JS_Throw consumes the value. */
@@ -1334,6 +1337,25 @@ int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) 
            "`break` and `continue` do not cross a call site");
     *presult = v;
     return JS_STEP_DONE;
+}
+
+int engine_host_declined(uint32_t req) {
+    Flow *f = flow_running();
+    int declined = 0;
+
+    DCHECK(f != NULL, "a declined answer was asked about outside a flow");
+    for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+        JSValue e = pending_entry(f->pending, i);
+        if (pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ && (uint32_t)pending_get_int(e, PEND_REQ) == req) {
+            DCHECK(pending_get_int(e, PEND_HAVE_VALUE), "a declined answer was asked of a request not yet answered");
+            declined = pending_get_int(e, PEND_COMPLETION) == ENGINE_COMPLETION_DECLINED;
+            JS_FreeValue(pending_ctx(), e);
+            return declined;
+        }
+        JS_FreeValue(pending_ctx(), e);
+    }
+    DFAIL("a declined answer was asked of a request id this flow's register does not hold");
+    return 0;
 }
 
 /* Withdraws the rendezvous; engine.h says which of Fetch §2 Infrastructure's two controller operations this is.
@@ -5815,8 +5837,24 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
             /* For this kind the completion and value are one write (engine_host_take asserts it). The network
                error is a normal completion carrying null, never a throw, which would re-raise at the parked call
                site and make a declined navigation look like a document that threw. And through the register
-               (pending_answer_rendezvous), since `haveValue` here is the write that unblocks the flow. */
-            pending_set(pe, PEND_COMPLETION, JS_NewInt32(ctx, ENGINE_COMPLETION_NORMAL));
+               (pending_answer_rendezvous), since `haveValue` here is the write that unblocks the flow.
+               A cross-agent operation has no network error: HTML §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's
+               getter, §7.3.1.6's close and a lent object's internal methods complete in the agent holding the
+               object. Its answer is unknown because nobody asked, so it is DECLINED and the asking machine
+               builds an absent value of the member's type (engine_host_declined). */
+            JSValue ov = pending_get(e, PEND_OP);
+            const char *op = JS_ToCString(ctx, ov);
+            int is_op;
+
+            DCHECK(JS_IsString(ov), "a synchronous request was parked with no operation text — engine_host_request "
+                                    "writes it at the push");
+            CHECK(op != NULL, "engine: a refused synchronous request's operation text could not be read");
+            is_op = remote_op_names_operation(op);
+            JS_FreeCString(ctx, op);
+            JS_FreeValue(ctx, ov);
+            if (is_op) pending_set(pe, PEND_VALUE, JS_UNDEFINED);
+            pending_set(pe, PEND_COMPLETION,
+                        JS_NewInt32(ctx, is_op ? ENGINE_COMPLETION_DECLINED : ENGINE_COMPLETION_NORMAL));
         }
         reply_arrived(f, pe);
         JS_FreeValue(ctx, pe);

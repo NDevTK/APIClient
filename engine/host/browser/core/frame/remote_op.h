@@ -60,6 +60,10 @@ typedef struct RemoteOp RemoteOp;
    the only fixed slot every verb has (`object.apply`'s tail is variadic). Crashes on a verb this agent does
    not perform: an unanswered record parks the asking flow for ever. */
 RemoteOp *remote_op_parse(const char *record);
+/* Whether `record`'s verb is one of the operations above, read off the verb alone and never crashing: an asking
+   instance's own request register holds these beside its document loads, and a refused one is told apart by
+   it (solver/engine.c's flow_decline_fork). */
+int remote_op_names_operation(const char *record);
 /* WHOSE TIMELINE THE ANSWER IS TRUE IN — the asking flow's world and its ancestry, in world.h's wire form. The
    caller installs the segment before it runs the program; it is not this file's to install, because which
    delta an operation runs against is the scheduler's question and not the grammar's. */

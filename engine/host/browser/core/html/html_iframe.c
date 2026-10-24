@@ -1095,6 +1095,18 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
                         "peer was asked and nothing was");
     if (!engine_host_answered(s->req, &answer))
         return JS_STEP_YIELD;
+    /* A declined read (engine_host_declined): nobody asked the peer, and the member's type is `Document?`.
+       Named residual. Not covered: an unknown Document, so the declined arm answers null, the type's one value
+       buildable without the peer. Next diff builds: a lent-object unknown (remote_object.h) standing for the
+       peer's Document. Absence shows as: a declined `contentDocument` read exploring only a page's null branch. */
+    if (engine_host_declined(s->req)) {
+        int completion;
+
+        JS_FreeValue(ctx, engine_host_take(ctx, s->req, &completion));
+        s->req = 0;
+        *presult = JS_NULL;
+        return JS_STEP_DONE;
+    }
     /* The peer answered with a COMPLETION: §7.3.1.3's read runs the peer's own program, and a throw from it is
        raised here, at the `iframe.contentDocument` that parked. */
     {

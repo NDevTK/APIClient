@@ -527,7 +527,11 @@ int      engine_host_answered(uint32_t req, JSValueConst *out);
  * running a program, which may throw, and a channel without the type would deliver a throw as `undefined` and
  * skip the asker's `catch`. So every delivery and take states the type. A thrown Error crosses as a name
  * (remote_object.h) like any object. */
-enum { ENGINE_COMPLETION_NORMAL, ENGINE_COMPLETION_THROW };
+enum { ENGINE_COMPLETION_NORMAL, ENGINE_COMPLETION_THROW,
+       /* The trusted zone refused the operation, so nobody asked the peer and its answer is unknown: the
+          failure arm of a declined cross-agent operation (flow_decline_fork). It never crosses the wire; the
+          asking machine builds an absent value of its member's type (engine_host_declined). */
+       ENGINE_COMPLETION_DECLINED };
 
 /* Take the answer, removing the request from the register. The caller owns the returned value, and
    `*pcompletion` (required) says whether it is a result or a thrown value to re-raise. */
@@ -536,6 +540,10 @@ JSValue  engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion);
    `*presult` and returns JS_STEP_DONE; a throw is re-raised in the asking flow at the parked call site, as a
    local operation would raise it, and returns JS_STEP_ABRUPT (quickjs-step.h). */
 int      engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult);
+/* Whether the answer on request `req` of the running flow is ENGINE_COMPLETION_DECLINED. Asked by a cross-agent
+   operation's machine after engine_host_answered and before the take, because only that machine knows the
+   type the absent value must have; engine_host_take_completion refuses such an answer. */
+int      engine_host_declined(uint32_t req);
 
 /* Withdraw a rendezvous at its asker's teardown: Fetch §2 Infrastructure's "To terminate a fetch controller
  * controller, set controller's state to 'terminated'", for XHR §3.2 "Garbage collection" when a synchronous

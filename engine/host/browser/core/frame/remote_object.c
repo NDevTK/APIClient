@@ -90,6 +90,7 @@
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
 #include "core/idl_args.h"
+#include "solver/concolic.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/world.h"
@@ -1010,6 +1011,24 @@ static int ref_op_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
     }
     if (!engine_host_answered(s->req, &answer))
         return JS_STEP_YIELD;
+    /* A DECLINED OPERATION (engine_host_declined): the trusted zone refused it, so no peer ran it and its
+       completion is unknown, of the internal method's own type. [[Get]] and [[Call]] complete with any value,
+       so the unknown is example-free and its `typeof` forks; [[Set]], [[Delete]] and [[HasProperty]] complete
+       with a boolean, whose example is false, as every two-armed truth's first arm is (dom/abort.c). One source
+       per request, since the peer's state may differ between two operations. */
+    if (engine_host_declined(s->req)) {
+        static const char *const NAME[REF_OP_N] = { "get", "set", "delete", "apply", "has" };
+        char src[64], shape[68];
+        int completion;
+
+        JS_FreeValue(ctx, engine_host_take(ctx, s->req, &completion));
+        snprintf(src, sizeof src, "object.%s#%u", NAME[op], s->req);
+        snprintf(shape, sizeof shape, "{%s}", src);
+        s->req = 0;
+        *presult = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD,
+                                op == REF_OP_GET || op == REF_OP_APPLY ? JS_UNDEFINED : JS_FALSE);
+        return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
+    }
     /* THE PEER'S COMPLETION, RAISED WHERE THE OPERATION WAS WRITTEN. The peer performs the internal method by
        running a program — an IDL accessor, a page's setter, a page's function — and every one of those can
        throw. The throw belongs at THIS call site, so the page's own `try { remote.x = 1 } catch (e)` around

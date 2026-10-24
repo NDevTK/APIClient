@@ -172,6 +172,18 @@ static int op_of(const char *verb)
     return OP_WPGET;
 }
 
+int remote_op_names_operation(const char *record)
+{
+    size_t n;
+    int i;
+
+    DCHECK(record != NULL, "a record was asked whether it is a cross-agent operation, and there is no record");
+    n = strcspn(record, "\t");
+    for (i = 0; i < OP_N; i++)
+        if (strlen(OPS[i].verb) == n && !strncmp(record, OPS[i].verb, n)) return 1;
+    return 0;
+}
+
 RemoteOp *remote_op_parse(const char *record)
 {
     RemoteOp *o;

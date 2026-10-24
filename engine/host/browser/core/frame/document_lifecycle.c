@@ -792,7 +792,9 @@ static int js_close_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         if (!engine_host_answered(s->req, NULL)) return JS_STEP_YIELD;
         ack = engine_host_take(ctx, s->req, &completion);
         s->req = 0;
-        DCHECK(completion == ENGINE_COMPLETION_NORMAL,
+        /* A declined close (engine_host_declined) completes too: the algorithm returns nothing, so the absent
+           answer of its type is the acknowledgement itself, and whether the peer closed is the peer's unknown. */
+        DCHECK(completion == ENGINE_COMPLETION_NORMAL || completion == ENGINE_COMPLETION_DECLINED,
                "a peer answered a cross-agent close with a throw — its program is "
                "document_lifecycle_close_traversable, a C body that completes normally on every path");
         JS_FreeValue(ctx, ack);

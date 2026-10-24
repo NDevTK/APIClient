@@ -3541,6 +3541,29 @@ int window_proxy_record_member_of_document(JSContext *ctx, uint32_t doc, const c
     return answered;
 }
 
+/* The answer a declined read takes (engine_host_declined): the trusted zone refused it, so no peer ran the
+   getter and the value is unknown, of §7.2.2's declared type. It is minted as the world's unknown, one source
+   per request since the peer's state may differ between two reads, and its example is this agent's own record
+   of the member (proxy_record_member), which is what a read of a navigable whose document this agent never held
+   computes: 0 for `length`, false for an open `closed`. */
+static JSValue proxy_declined_member(JSContext *ctx, JSValueConst nav, int magic, uint32_t req)
+{
+    ProxyData *p = JS_GetOpaque(nav, g_proxy_class);
+    JSValue example = JS_UNDEFINED;
+    char src[192], shape[196];
+    int known, n;
+
+    DCHECK(p != NULL, "a declined cross-agent read was answered for something that is not a WindowProxy");
+    known = proxy_record_member(ctx, nav, magic, &example);
+    DCHECK(known, "a declined cross-agent read names a member this step machine does not route — only `length` "
+                  "and `closed` leave this instance");
+    (void)known;
+    n = snprintf(src, sizeof src, "%s.%s#%u", world_doc_name(p->doc), PROXY_MEMBER[magic], req);
+    CHECK(n > 0 && (size_t)n < sizeof src, "a declined cross-agent read's source name did not fit its room");
+    snprintf(shape, sizeof shape, "{%s}", src);
+    return concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, example);
+}
+
 #define PROXY_GET_STAGES(X) \
     X(PROXY_GET_ASK = IDL_STEP_FIRST, \
       "HTML §7.2.3 the WindowProxy exotic object (the cross-instance member's value, resolved by the instance " \
@@ -3660,6 +3683,14 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     }
     if (!engine_host_answered(s->req, &answer))
         return JS_STEP_YIELD;
+    if (engine_host_declined(s->req)) {
+        int completion;
+
+        JS_FreeValue(ctx, engine_host_take(ctx, s->req, &completion));
+        *presult = proxy_declined_member(ctx, nav, magic, s->req);
+        s->req = 0;
+        return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
+    }
     /* The peer's completion, not its value: §7.2.1's member is an IDL getter the peer runs, so it can throw (a
        SecurityError from a member outside the cross-origin list, or the page's own accessor), and the throw
        belongs at the line that read the member. */
