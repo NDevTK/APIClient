@@ -1335,7 +1335,7 @@ async function main() {
         flush();
         return true;
       }
-      reads.set(token, { asker: e, id, op, by: [] });
+      reads.set(token, { asker: e, id, op, doc, by: [] });
       h.ready.push(['perform', token, b64(op)].join('\t'));
       flush();
       return true;
@@ -1674,7 +1674,7 @@ async function main() {
       const r = reads.get(f[1]);
       if (!r) throw new Error(`a retracted token names no operation this zone asked: ${f[1]}`);
       reads.delete(f[1]);
-      askOperation(r.asker, r.id, r.op);
+      askOperation(r.asker, r.id, r.op, r.doc);
       return;
     }
     /* `world.gone <name>` — a world of the sending instance is finished with, so every peer holding a COW

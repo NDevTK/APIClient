@@ -1402,8 +1402,9 @@ function safeFetchFiringRefusal(facts) {
 function safeFetchCrossDocumentRefusal(act) {
   var m;
   CHECK(act !== null && typeof act === "object" && typeof act.targetOrigin === "string" &&
-        typeof act.marks === "string",
-        "a cross-document act was judged without the receiving instance's origin or the record's marks");
+        typeof act.marks === "string" && act.doc !== null && typeof act.doc === "object",
+        "a cross-document act was judged without the receiving instance's origin, the record's marks or the " +
+        "acting document's record");
   m = act.marks.split(",");
   CHECK(m.length === 3 && (m[0] === "derived" || m[0] === "forced") &&
         (m[1] === "driven" || m[1] === "undriven") && (m[2] === "pinned" || m[2] === "unpinned"),
