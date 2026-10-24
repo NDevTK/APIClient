@@ -124,8 +124,8 @@ lxb_html_parser_t *html_parse_new_parser(void);
  *     the EOF token — so a document whose source produced no `html` element yet (an empty response) grows one
  *     HERE and not before.
  *
- * `html_parse_document` IS OPEN-THEN-CLOSE and not a second implementation: a caller that wants a COMPLETE
- * document — §8.5.1's DOMParser, §4.5.1's createHTMLDocument, XHR's responseXML, an @S fire oracle's scratch
+ * `html_parse_document` IS AN HtmlParseRun DRIVEN TO ITS END and not a second implementation: a caller that
+ * wants a COMPLETE document — §8.5.1's DOMParser, §4.5.1's createHTMLDocument, XHR's responseXML, an @S fire oracle's scratch
  * parse — is asking for a Document the standard gives no live parser and no insertion point at all, which is
  * the state `document.write` reaches through §8.4.1's document open steps rather than through step 11.
  *
@@ -232,8 +232,26 @@ lxb_status_t html_parse_document_write(lxb_html_document_t *document, const lxb_
    would silently do nothing. */
 lxb_status_t html_parse_document_close(lxb_html_document_t *document);
 
-/* THE COMPLETE PARSE — open then close, in one call. What every caller that wants a finished Document uses.
-   Carries `root_kind` and §13.2.4.5's `scripting` through for the reason the open does. */
+/* A WHOLE INPUT PARSED A FILL AT A TIME: open with no bytes, `step` fills the input stream with one rest unit of
+   bytes (solver/rest_unit.h's REST_UNIT_INPUT_BYTES, the scheduler's number) and lets the parser process them,
+   `finish` is §13.2.7 "The end". Between two steps all of the parse's state is this record and the parser the
+   document holds, so a driver may return to the scheduler there. `html` is BORROWED until finish or abort:
+   lexbor's chunked tokenizer keeps pointers into it. A chunk boundary does not change the tokens produced. */
+typedef struct HtmlParseRun HtmlParseRun;
+
+HtmlParseRun *html_parse_run_begin(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                   HtmlScriptingMode scripting, const lxb_char_t *html, size_t size);
+/* Every byte filled, or the open failed. Stepping past it is a DCHECK. A driver that rests between steps brackets
+   each in solver/rest_unit.h's unit; the run does not, since html_parse_document can run inside another unit. */
+bool html_parse_run_ended(const HtmlParseRun *run);
+void html_parse_run_step(HtmlParseRun *run);
+/* §13.2.7's EOF, and the record is freed. A run whose open failed closes nothing and answers its status. */
+lxb_status_t html_parse_run_finish(HtmlParseRun *run);
+/* The driver is gone: close what is open and free the record, leaving the partial tree to the Document's owner. */
+void html_parse_run_abort(HtmlParseRun *run);
+
+/* THE COMPLETE PARSE, for a caller that wants a finished Document (§8.5.1 DOMParser, §4.5.1
+   createHTMLDocument, XHR's responseXML, an @S oracle's scratch parse): an HtmlParseRun driven to its end. */
 lxb_status_t html_parse_document(lxb_html_document_t *document, DomParseRootKind root_kind,
                                  HtmlScriptingMode scripting, const lxb_char_t *html, size_t size);
 

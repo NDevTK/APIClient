@@ -30,6 +30,7 @@
 #include "core/loader/xml_document.h"
 #include "core/mime/mime_type.h"
 #include "solver/quantum.h"
+#include "solver/rest_unit.h"   /* the unit the HTML arm's fill is bracketed in */
 #include "check.h"
 
 /* THE ARM AND THE ARM'S OWN LOAD, and nothing else. The three §7.5 subsections hold entirely different state
@@ -40,7 +41,7 @@
 struct DocumentLoad {
     DocumentLoadType arm;
     union {
-        HtmlDocumentLoad *html;
+        HtmlParseRun *html;
         TextDocumentLoad *text;
         XmlDocumentLoad  *xml;
     } u;
@@ -128,7 +129,7 @@ bool document_load_ended(const DocumentLoad *load)
 {
     DCHECK(load != NULL, "document_load_ended was asked of no load");
     switch (load->arm) {
-    case DOC_LOAD_HTML: return html_document_load_ended(load->u.html);
+    case DOC_LOAD_HTML: return html_parse_run_ended(load->u.html);
     case DOC_LOAD_TEXT: return text_document_load_ended(load->u.text);
     case DOC_LOAD_XML:  return xml_document_load_ended(load->u.xml);
     case DOC_LOAD_MULTIPART:
@@ -148,7 +149,11 @@ void document_load_step(DocumentLoad *load)
            "an HTML §7.4.5 load-a-document was stepped after its §7.5 subsection had nothing left to do — "
            "document_load_ended is what a driver's loop tests, and asking past it is a driver that did not");
     switch (load->arm) {
-    case DOC_LOAD_HTML: html_document_load_step(load->u.html); return;
+    case DOC_LOAD_HTML:
+        rest_unit_begin(REST_UNIT_INPUT_BYTES);
+        html_parse_run_step(load->u.html);
+        rest_unit_end();
+        return;
     case DOC_LOAD_TEXT: text_document_load_step(load->u.text); return;
     case DOC_LOAD_XML:  xml_document_load_step(load->u.xml);   return;
     case DOC_LOAD_MULTIPART:
@@ -170,7 +175,7 @@ lxb_status_t document_load_finish(DocumentLoad *load)
            "END of a parse, and closing one that has not been given the whole response builds a Document out "
            "of a prefix of it");
     switch (load->arm) {
-    case DOC_LOAD_HTML: st = html_document_load_finish(load->u.html); break;
+    case DOC_LOAD_HTML: st = html_parse_run_finish(load->u.html); break;
     case DOC_LOAD_TEXT: st = text_document_load_finish(load->u.text); break;
     case DOC_LOAD_XML:  st = xml_document_load_finish(load->u.xml);   break;
     case DOC_LOAD_MULTIPART:
@@ -188,7 +193,7 @@ void document_load_abort(DocumentLoad *load)
 {
     DCHECK(load != NULL, "document_load_abort was asked of no load");
     switch (load->arm) {
-    case DOC_LOAD_HTML: html_document_load_abort(load->u.html); break;
+    case DOC_LOAD_HTML: html_parse_run_abort(load->u.html); break;
     case DOC_LOAD_TEXT: text_document_load_abort(load->u.text); break;
     case DOC_LOAD_XML:  xml_document_load_abort(load->u.xml);   break;
     case DOC_LOAD_MULTIPART:

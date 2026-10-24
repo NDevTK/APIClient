@@ -26,11 +26,8 @@
  * — it is the algorithm, and handing lexbor the whole response in one call collapsed every one of those tasks
  * into a single un-interruptible span the length of the document.
  *
- * SO THE LOOP IS THE DRIVER'S. `begin` creates the parser and opens the input stream holding nothing; `step`
- * fills it with ONE byte and lets the parser process it; `finish` is §13.2.7 "The end"'s implied EOF. A byte is
- * the finest unit lexbor offers — it will not expose a token boundary — and it needs no chosen quantum, which
- * is exactly the thing a "process 4096 bytes then yield" would have to invent and defend; core/dom/element.c's
- * §13.4 fragment parse feeds its own parser the same way and for the same reason.
+ * SO THE LOOP IS THE DRIVER'S: this begins a core/html/html_parse.h HtmlParseRun, whose steps are §7.5.2's fills
+ * and whose finish is §13.2.7 "The end"'s implied EOF; the driver steps, finishes or aborts it there.
  *
  * IT TAKES THE COMPUTED TYPE FOR ONE REASON: TO REFUSE IT. §7.5.2 itself has no type argument — §7.4.5 has
  * already decided, and there is nothing left for this to branch on — so `type` is here purely as the closure
@@ -50,28 +47,8 @@
  * copied because lexbor's chunked tokenizer already holds pointers into whatever buffer it was handed until
  * the run terminates (core/loader/text_document.c states the same thing about its two synthetic tokens), so a
  * copy would buy nothing the caller does not already owe. */
-typedef struct HtmlDocumentLoad HtmlDocumentLoad;
-
-HtmlDocumentLoad *html_document_load_begin(lxb_html_document_t *document, DomParseRootKind root_kind,
-                                           HtmlScriptingMode scripting,
-                                           const MimeType *type, const lxb_char_t *html, size_t size);
-
-/* HAS EVERY BYTE OF THE RESPONSE BEEN FILLED INTO THE INPUT STREAM, or did the open fail? What a driver's loop
-   tests. Stepping past it is a DCHECK. */
-bool html_document_load_ended(const HtmlDocumentLoad *load);
-
-/* ONE BYTE INTO THE PARSER'S INPUT BYTE STREAM, processed — §7.5.2's per-task fill, at the finest grain the
-   tokenizer has. */
-void html_document_load_step(HtmlDocumentLoad *load);
-
-/* §7.5.2's implied EOF character — §13.2.7 "The end" — and the handle is destroyed. Returns the status the
-   parse ended with; a load whose OPEN failed closes nothing, which is `lxb_html_document_parse`'s own
-   `goto failed`. */
-lxb_status_t html_document_load_finish(HtmlDocumentLoad *load);
-/* ABANDON THE LOAD MID-ITEM — the flow driving it is gone. It closes whatever the arm has open (a stream that
-   is still taking bytes; the tree build's own reader) and destroys the handle. The partially built tree is
-   LEFT WHERE IT STANDS: whoever owns the Document decides what becomes of it, exactly as they do for a failed
-   parse, and a loader that emptied it would be deciding a consequence that is not its own. */
-void html_document_load_abort(HtmlDocumentLoad *load);
+HtmlParseRun *html_document_load_begin(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                       HtmlScriptingMode scripting,
+                                       const MimeType *type, const lxb_char_t *html, size_t size);
 
 #endif

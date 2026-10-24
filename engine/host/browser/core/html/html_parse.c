@@ -1,4 +1,6 @@
 /* See html_parse.h. */
+#include <stdlib.h>
+
 #include <lexbor/core/mraw.h>
 #include <lexbor/dom/dom.h>
 #include <lexbor/html/html.h>
@@ -20,6 +22,7 @@
    where that implementation is installed. */
 #include "solver/dom_cow.h"
 #include "core/timing/thread_work.h"   /* the bytes an HTML parser is fed, for the thread-work census */
+#include "solver/rest_unit.h"   /* how many bytes one fill is: the scheduler's number */
 
 /* LEXBOR'S TOKEN-DONE CALLBACK IS STATIC, SO IT IS CAPTURED RATHER THAN NAMED — `lxb_html_tree_token_callback`
    has no declaration in any header, and re-writing its six lines here would be a second copy of a function
@@ -636,16 +639,90 @@ lxb_status_t html_parse_document_close(lxb_html_document_t *document)
     return st;
 }
 
+/* What a run is between two fills: the Document, the input, how far into it the stream has been filled, and the
+   open's status (a run whose open failed has no EOF to emit). */
+struct HtmlParseRun {
+    lxb_html_document_t *document;
+    const lxb_char_t    *html;
+    size_t               len, off;
+    lxb_status_t         st;
+};
+
+HtmlParseRun *html_parse_run_begin(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                   HtmlScriptingMode scripting, const lxb_char_t *html, size_t size)
+{
+    HtmlParseRun *r;
+
+    DCHECK(document != NULL && html != NULL,
+           "an HTML parse run began with no Document or a NULL input; an empty input is a zero size over a "
+           "real pointer");
+    r = malloc(sizeof *r);
+    CHECK(r != NULL, "html-parse-oom: an HTML parse run could not be allocated");
+    r->document = document;
+    r->html = html;
+    r->len = size;
+    r->off = 0;
+    /* The stream opens holding nothing; the bytes arrive through `step`. */
+    r->st = html_parse_document_open(document, root_kind, scripting, html, 0);
+    return r;
+}
+
+bool html_parse_run_ended(const HtmlParseRun *run)
+{
+    DCHECK(run != NULL, "html_parse_run_ended was asked of no run");
+    return run->st != LXB_STATUS_OK || run->off == run->len;
+}
+
+void html_parse_run_step(HtmlParseRun *run)
+{
+    size_t n;
+
+    DCHECK(run != NULL && !html_parse_run_ended(run),
+           "an HTML parse run was stepped after its input was filled; html_parse_run_ended is the driver's test");
+    /* The last fill is short: `ended` is off == len and this runs only when it is false. */
+    n = rest_unit_items(REST_UNIT_INPUT_BYTES);
+    if (n > run->len - run->off)
+        n = run->len - run->off;
+    html_parse_document_write(run->document, run->html + run->off, n);
+    run->off += n;
+}
+
+lxb_status_t html_parse_run_finish(HtmlParseRun *run)
+{
+    lxb_status_t st;
+
+    DCHECK(run != NULL && html_parse_run_ended(run),
+           "an HTML parse run was finished with input unfilled, which builds a Document out of a prefix of it");
+    st = run->st;
+    /* A parse that never began has no EOF to emit (`lxb_html_document_parse`'s own `goto failed`). */
+    if (st == LXB_STATUS_OK)
+        st = html_parse_document_close(run->document);
+    free(run);
+    return st;
+}
+
+void html_parse_run_abort(HtmlParseRun *run)
+{
+    DCHECK(run != NULL, "html_parse_run_abort was asked of no run");
+    /* The stream is shut rather than left open: §13.2.7 also releases the per-flow parse declaration
+       solver/dom_cow.h keyed on this parse's tree builder. */
+    if (run->st == LXB_STATUS_OK)
+        html_parse_document_close(run->document);
+    free(run);
+}
+
+/* NAMED RESIDUAL: every caller (DOMParser, createHTMLDocument, XHR's responseXML, a navigable's initial
+   document, solve_html's oracles) is a C activation that cannot park, so the run is driven to its end here.
+   The next diff makes §8.5.1 parseFromString a step member that holds the run and yields between fills. Its
+   absence shows as one parseFromString of a large string spanning several quanta of one flow's slice. */
 lxb_status_t html_parse_document(lxb_html_document_t *document, DomParseRootKind root_kind,
                                  HtmlScriptingMode scripting, const lxb_char_t *html, size_t size)
 {
-    lxb_status_t st = html_parse_document_open(document, root_kind, scripting, html, size);
+    HtmlParseRun *run = html_parse_run_begin(document, root_kind, scripting, html, size);
 
-    /* THE FAILURE PATH DOES NOT CLOSE, which is `lxb_html_document_parse`'s own `goto failed` — a parse that
-       did not begin has no EOF token to emit and no stage `chunk_end` would accept. */
-    if (st != LXB_STATUS_OK)
-        return st;
-    return html_parse_document_close(document);
+    while (!html_parse_run_ended(run))
+        html_parse_run_step(run);
+    return html_parse_run_finish(run);
 }
 
 bool html_parse_owns_tokens_of(const lxb_dom_document_t *doc)
