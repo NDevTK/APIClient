@@ -52,6 +52,22 @@ typedef struct FlowAcct FlowAcct;
 /* The flow is a timeline that does not exist (a peer request no timeline will answer): it leaves unfinished. */
 #define FLOW_STEP_RETIRED 3
 
+/* One member's weight as its operands, in the order flow_order_key composes them (solver/flow.c's
+   flow_weight_operands): `w = (reward - coord_notch*Q) + (1/born + ((-own_notch*Q + 1/(1+visits+orphan_seen))
+   + (replay + surv + rung)/FLOW_RUNGS_N))`, with Q = FLOW_AGE_QUANTUM. `coord_notch` is the family notch plus
+   the carry bit. `host_owed`, `running` and `picks` say whether the member could take the thread. */
+typedef struct {
+    int present;
+    double reward;
+    int64_t coord_notch, own_notch, visits, orphan_seen, picks;
+    long born;
+    double replay, surv;
+    int rung;
+    double w;
+    double age_quantum;   /* FLOW_AGE_QUANTUM, which the two notches are priced at */
+    int host_owed, running;
+} FlowWeightOperands;
+
 /* A node of one of the order's leftist max-heaps (flow.c's flow_ix_* banner), embedded in the record it orders so
    the index allocates nothing. It carries a copy of the order's key (flow.c's FlowOrderKey: `key` the weight, then
    the partial sums `x` and `ikey`, then the birth sequence `seq`), and every heap is ordered by it. `s` is the
@@ -1321,6 +1337,10 @@ typedef struct {
     int  cur_deep;        /* gauge: the deepest `Flow.script_i` any live member stands at; 0 on an empty walk */
     long cur_deep_live;   /* gauge: how many live members stand there — the gap's own population */
     double cur_deep_w_gap; /* `w_top` minus the best weight offered by a member standing at `cur_deep` */
+    /* And the operands of the weights at the gap's two ends (`w_top`'s member and the best one at `cur_deep`),
+       in flow_order_key's composition, so a reader recomposes each weight and the gap bit for bit and reads
+       which term holds the gap. `present` is 0 where `cur_deep_w_gap` was not computed. */
+    FlowWeightOperands cur_deep_top_ops, cur_deep_ops;
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 

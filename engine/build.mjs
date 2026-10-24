@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { stampArtifact, gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 import { probeTables } from "./probe_rows.mjs";
 import { abortRecord } from "./abort_record.mjs";
+import { curDeepTermSplit } from "./wfq_gap.mjs";
 import { vehicleReading, compareVehicle, emsdkNode } from "./vehicle.mjs";
 import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
 import { objStore, toolIdentity } from "./obj_store.mjs";
@@ -1419,6 +1420,9 @@ function wfqReading(out) {
              whose: "nothing — there is no census to say whose reward the order is",
              text: "no @WFQ census in this run's output" };
   const w = s[s.length - 1];
+  /* Every census's curDeepWGap recomposed from its operands, which throws where the two weights or the gap do not
+     come back to the bit (engine/wfq_gap.mjs). */
+  for (const c of s) curDeepTermSplit(c, `@WFQ census ${c.censusSeq}`);
   /* AN EMPTY FRONTIER IS A DIFFERENT FACT FROM AN UNORDERED ONE, AND THE CENSUS SAYS WHICH BY OMISSION.
      solver/result.c emits `{"members":0}` and NO term rows when the census is taken with nothing standing —
      rendering `valMin: 0, wTop: 0` there would be readings of an order that does not exist. The field loop

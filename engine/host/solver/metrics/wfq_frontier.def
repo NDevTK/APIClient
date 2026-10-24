@@ -217,6 +217,10 @@ METRIC(w_top_vis, "wTopVis", GAUGE, "visit", AGENT, "solver/flow.c", INT)
 METRIC(cur_deep, "curDeep", GAUGE, "row", AGENT, "solver/flow.c", INT)
 METRIC(cur_deep_live, "curDeepLive", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(cur_deep_wgap, "curDeepWGap", GAUGE, "point", AGENT, "solver/flow.c", FIXED3)
+/* …and the operands of the two weights it is the difference of (solver/flow.h's FlowWeightOperands), with the
+   age quantum and rung count they are priced in, so engine/wfq_gap.mjs recomposes both weights and the gap
+   exactly and reads which term holds it. Absent where the gap was not computed. */
+METRIC(cur_deep_terms, "curDeepTerms", GAUGE, "operand", AGENT, "solver/flow.c", OBJECT)
 /* …and what asking the order cost (solver/flow.h's FLOW_SCANS: three entries, counted apart,
    in counts not time). Two causes of an unreached tail: too little thread for the members
    standing, or thread spent asking. Read `scanNextWeights / steps` against `members` and

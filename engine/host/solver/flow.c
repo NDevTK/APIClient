@@ -3312,6 +3312,40 @@ static double flow_index_key(const Flow *f) {
            + flow_optimism(f) + flow_distance(f);
 }
 
+/* A member's weight rebuilt from its operands, in flow_order_key's composition and order of operations, so it is
+   the same double: the census publishes the operands and a reader recomputes this. */
+static double flow_weight_recompose(const FlowWeightOperands *o) {
+    double opt = 1.0 / (1.0 + (double)o->visits + (double)o->orphan_seen);
+    double dist = (o->replay + o->surv + (double)o->rung) / (double)FLOW_RUNGS_N;
+    double ikey = -(double)o->own_notch * FLOW_AGE_QUANTUM + opt + dist;
+    double x = 1.0 / (double)o->born + ikey;
+    return (o->reward - (double)o->coord_notch * FLOW_AGE_QUANTUM) + x;
+}
+
+/* The operands of `f`'s weight, read through the accessors flow_order_key reads, and asserted to recompose to
+   flow_weight exactly: a summand added to the order and not here fires. */
+static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
+    o->present = 1;
+    o->reward = flow_reward(f);
+    o->coord_notch = flow_family_notch(f) + flow_silence_carry(f);
+    o->own_notch = flow_service_notch(f);
+    o->visits = f->visits;
+    o->orphan_seen = f->orphan_seen;
+    o->picks = f->picks;
+    o->born = flow_branch_born(f);
+    o->replay = f->cand_replay;
+    o->surv = f->cand_surv;
+    o->rung = f->cand_rung;
+    o->w = flow_weight(f);
+    o->age_quantum = FLOW_AGE_QUANTUM;
+    o->host_owed = flow_host_owed(f);
+    o->running = (f == g_running);
+    DCHECKF(flow_weight_recompose(o) == o->w,
+            "a member's weight does not recompose from the operands the census publishes (weight %.17g, recomposed "
+            "%.17g) — flow_order_key gained or reordered a term that flow_weight_operands does not read",
+            o->w, flow_weight_recompose(o));
+}
+
 /* Every term of the weight that is not the family's: the quantity whose invariance between two frontier
    generations every proposed sub-linear order presupposes, and not the key an order may be keyed on, which is
    flow_index_key above. One quantity, two questions, and the stricter decides the composition: what must stand
@@ -4687,6 +4721,8 @@ void flow_wfq_census(WfqCensus *out) {
     long cur_deep_live = 0;
     double cur_deep_w = 0.0;
     int have_cur_deep = 0;
+    /* And the member offering that weight, the gap's far end, for its operands (flow.h's `cur_deep_ops`). */
+    const Flow *cur_deep_holder = NULL;
 
     /* The weighings flow_best performs below, read before it runs: FLOW_SCAN_OTHER is shared (the host's best-weight
        read and the pager's tail run under it), so bracketing is the only way to know what this call spent. The
@@ -4777,6 +4813,8 @@ void flow_wfq_census(WfqCensus *out) {
     out->deliv_w_gap_vis = out->w_top_vis = 0;
     /* And the same for the document-progress gap and its population, written in one branch below. */
     out->cur_deep = 0; out->cur_deep_live = 0; out->cur_deep_w_gap = 0.0;
+    memset(&out->cur_deep_top_ops, 0, sizeof out->cur_deep_top_ops);
+    memset(&out->cur_deep_ops, 0, sizeof out->cur_deep_ops);
     for (i = 0; i < g_flows_n; i++) {
         const Flow *f = g_flows[i];
         int64_t s = flow_service_notch(f);
@@ -4798,10 +4836,10 @@ void flow_wfq_census(WfqCensus *out) {
            `program_cursors` histogram buckets on, so this maximum can be checked against that histogram's top
            non-empty index. */
         if (!have_cur_deep || f->script_i > cur_deep) {
-            have_cur_deep = 1; cur_deep = f->script_i; cur_deep_live = 1; cur_deep_w = w;
+            have_cur_deep = 1; cur_deep = f->script_i; cur_deep_live = 1; cur_deep_w = w; cur_deep_holder = f;
         } else if (f->script_i == cur_deep) {
             cur_deep_live++;
-            if (w > cur_deep_w) cur_deep_w = w;
+            if (w > cur_deep_w) { cur_deep_w = w; cur_deep_holder = f; }
         }
         /* How many decisions this flow stands on, read from where its decision state lives: a parked flow's blob,
            or decide.c's live globals for the flow switched in (cold.c's census makes the same split). Asked of every
@@ -5252,6 +5290,11 @@ void flow_wfq_census(WfqCensus *out) {
         out->cur_deep = cur_deep;
         out->cur_deep_live = cur_deep_live;
         out->cur_deep_w_gap = out->w_top - cur_deep_w;
+        flow_weight_operands(top, &out->cur_deep_top_ops);
+        flow_weight_operands(cur_deep_holder, &out->cur_deep_ops);
+        DCHECK(out->cur_deep_top_ops.w == out->w_top && out->cur_deep_ops.w == cur_deep_w,
+               "the curDeepWGap operands were read off members whose weights are not the gap's two ends — the front "
+               "and the best member at the deepest row are the two the walk recorded");
     }
 
     /* What a sample cost: this function weighs the frontier exactly twice, in its own walk and inside flow_best, so

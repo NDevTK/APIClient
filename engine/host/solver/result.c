@@ -505,8 +505,20 @@ static char *errs_json_array(ErrsArray which) {
    same range, and result_json composes the two adjacently, so the assert could not fail — and a second
    census would raise `g_scan_runs[FLOW_SCAN_CENSUS]`. `framed == members - memUnframed` likewise. It becomes
    assertable when cold_census stops reaching its total that way. */
+/* One end of a weight gap as its operands (solver/flow.h's FlowWeightOperands): doubles in %.17g, so a reader
+   recomposes the weight to the bit. Freed by the caller. */
+static char *weight_operands_json(const FlowWeightOperands *o) {
+    return composef("{\"w\":%.17g,\"reward\":%.17g,\"coordNotch\":%lld,\"ownNotch\":%lld,\"visits\":%lld,"
+                    "\"orphanSeen\":%lld,\"born\":%ld,\"replay\":%.17g,\"surv\":%.17g,\"rung\":%d,"
+                    "\"picks\":%lld,\"hostOwed\":%d,\"running\":%d}",
+                    o->w, o->reward, (long long)o->coord_notch, (long long)o->own_notch, (long long)o->visits,
+                    (long long)o->orphan_seen, o->born, o->replay, o->surv, o->rung, (long long)o->picks,
+                    o->host_owed, o->running);
+}
+
 char *result_wfq_json(void) {
     WfqCensus w;
+    char *terms = NULL;
     NetReachCensus nr;
     JsonBuf b = JSON_BUF_AT_REST;   /* composed between steps: a refusal makes this census absent */
 
@@ -706,6 +718,16 @@ char *result_wfq_json(void) {
     METRIC_SET(cur_deep, w.cur_deep);
     METRIC_SET(cur_deep_live, w.cur_deep_live);
     METRIC_SET_REAL(cur_deep_wgap, w.cur_deep_w_gap);
+    if (w.cur_deep_top_ops.present) {
+        char *top = weight_operands_json(&w.cur_deep_top_ops), *deep = weight_operands_json(&w.cur_deep_ops);
+        terms = composef("{\"ageQuantum\":%.17g,\"rungs\":%d,\"gap\":%.17g,\"top\":%s,\"deep\":%s}",
+                         w.cur_deep_top_ops.age_quantum, FLOW_RUNGS_N, w.cur_deep_w_gap, top, deep);
+        CHECK(top && deep && terms, "result: OOM composing the curDeepWGap operands");
+        METRIC_SET_OBJECT(cur_deep_terms, terms);   /* borrowed until the rows are rendered below */
+        free(top); free(deep);
+    } else {
+        METRIC_ABSENT(cur_deep_terms);
+    }
     METRIC_SET(scan_next_runs, flow_scan_runs(FLOW_SCAN_NEXT));
     METRIC_SET(scan_next_weights, flow_scan_weights(FLOW_SCAN_NEXT));
     METRIC_SET(scan_rival_runs, flow_scan_runs(FLOW_SCAN_RIVAL));
@@ -762,6 +784,7 @@ char *result_wfq_json(void) {
     json_buf_raw(&b, ",");
     metrics_family_members_json(METRIC_FAMILY_WFQ_FRONTIER, &b);
     json_buf_raw(&b, "}");
+    free(terms);
     return json_buf_take(&b);
 }
 
