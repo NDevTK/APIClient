@@ -1360,7 +1360,7 @@ static void ns_member_spell(const char *base, JSAtom name, const char *key, char
    record is not the inline->external channel and there is no server choice in it.
    THE COST IS FAN-OUT AND IT IS THE FRONTIER'S FIRST CAUSE, NOT A ROUNDING TERM. A `&&` chain of N such
    comparisons fans 2^N per arriving arm, every arm is born holding a live frame, and §Offensive-programming's
-   whole task ladder in solver/engine.c sits under `if (!f->frame)` — so the arms this manufactures can run no
+   whole task ladder in solver/engine.c sits under `if (!flow_frame(f))` — so the arms this manufactures can run no
    job, take no reply and start no program until each one individually finishes the program it was forked
    inside. Measured at the artifact stamped head 1d666bda (dirty []), on the smoke: the four heaviest fork
    sites are `mo.threw`, `mo.ran`, `vo.threw`, `vo.ran` at 125 forks each — 500 of 761, TWO THIRDS — and all

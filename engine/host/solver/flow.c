@@ -665,6 +665,35 @@ static void frontier_rank_changed(void) {
 
 /* The frontier's members, in registry order. A walk, not a rank: the pending-fetch register lives on the flows, so
    whoever asks what the host owes visits all of them. flow_best answers a different question. */
+FlowAgent *flow_agent_running(const Flow *f)
+{
+    CHECK(f->agents != NULL && f->cur_agent >= 0 && f->cur_agent < f->n_agents,
+          "a flow's selected agent is outside its agent list");
+    return &f->agents[f->cur_agent];
+}
+
+int flow_holds_frame(const Flow *f)
+{
+    for (int i = 0; i < f->n_agents; i++)
+        if (f->agents[i].frame) return 1;
+    return 0;
+}
+
+void flow_select_agent(Flow *f)
+{
+    DCHECK(f->n_agents >= 1, "a flow with no agent was asked which agent runs next");
+    /* Named residual. Not covered: a choice among several runnable agents. ECMA-262 §9.6 Agents executes each
+       agent's steps independently of the others, so where two are runnable the next one is a choice the page
+       can observe through shared memory or a message. Next diff builds: a second agent on the flow (a dedicated worker's), chosen at this rest point
+       by a scheduler decision charged in work, and the order forked where more than one agent is runnable and
+       the choice is observable. Absence shows as: a page whose worker and window race on a SharedArrayBuffer
+       is explored in one order only. */
+    DCHECK(f->n_agents == 1,
+           "a flow runs more than one agent and its selection takes the first: choosing among runnable agents, "
+           "and forking where the choice is observable, is what a flow with a second agent needs built here");
+    f->cur_agent = 0;
+}
+
 Flow *flow_at(int i) { return (i >= 0 && i < g_flows_n) ? g_flows[i] : NULL; }
 
 void flow_registry_init(const char *doc_name) {
@@ -1359,7 +1388,7 @@ void flow_age_running(int64_t us) {
    residual at the counter below states what that costs. It decides nothing and moves no rank: flow_weight does not
    read it, no fork carries it, and its consumers are an assert and a census counter. */
 static int flow_between_units(const Flow *f) {
-    return f->frame == NULL && !flow_job_microtask(f);
+    return flow_frame(f) == NULL && !flow_job_microtask(f);
 }
 
 /* The third clause of engine.c's unit boundary, asked of a member that is not holding the thread. `Flow::parked`
@@ -1385,7 +1414,7 @@ static int flow_holds_park(const Flow *f) {
    that makes the count a trial count. */
 void flow_credit_visit(Flow *f) {
     DCHECK(f != NULL, "a completed unit of work was credited to no flow");
-    DCHECK(f->frame == NULL,
+    DCHECK(flow_frame(f) == NULL,
            "a flow was credited a completed unit of work while still inside a program — a preempt is the middle of a "
            "trial, and crediting it would make the optimism term a second clock");
     /* And an owed microtask checkpoint is the same sentence, and is where the unit ends. HTML §8.1.4.4 "Calling
@@ -1477,7 +1506,7 @@ void flow_credit_pick(Flow *f) {
 int flow_stack_empty(const Flow *f) {
     int row;
 
-    if (f->frame) return 0;
+    if (flow_frame(f)) return 0;
     if (f->compile) return 0;
     row = f->script_i;
     if (row < f->dyn_n) {
@@ -1727,7 +1756,7 @@ void flow_release(JSContext *ctx, Flow *f) {
        flow, not the engine: `engine_frontier_paged` answers for the whole session, and a partial self-park writes a
        tail while flows above it run on unwritten, so only the per-flow answer is exact.
        A driver that stops stepping without the park fires this, naming the flows it threw away. */
-    DCHECK(f->paged || f->retired || (f->parked == NULL && f->frame == NULL && flow_job_pending(f) == 0 &&
+    DCHECK(f->paged || f->retired || (f->parked == NULL && !flow_holds_frame(f) && flow_job_pending(f) == 0 &&
                         pending_count(f->pending) == 0 && flow_deliver_pending(f) == 0),
            "a flow was released holding work (a parked continuation, a suspended frame, queued reactions, replies "
            "owed to it, or a routed message) without being written to the cold tier — nothing replays it, so the "
@@ -1748,7 +1777,8 @@ void flow_release(JSContext *ctx, Flow *f) {
     /* `frame` is the JS_FlowNew handle holding this flow's whole heap-frame chain (every activation, closure and
        local it is suspended across), so leaving it retains the entire realm, and the runtime's leak walk reports a
        Window, a context and many anonymous Functions with nothing naming the owner. */
-    if (f->frame) { JS_FlowFree(ctx, (JSValue *)f->frame); f->frame = NULL; }
+    for (int i = 0; i < f->n_agents; i++)
+        if (f->agents[i].frame) { JS_FlowFree(ctx, (JSValue *)f->agents[i].frame); f->agents[i].frame = NULL; }
     /* The replies it was still owed: the register is one JS value, so its resolve capabilities, reply values and
        strings go with one release. */
     pending_free(ctx, &f->pending);
@@ -1825,7 +1855,7 @@ void flow_registry_free(JSContext *ctx) {
         g_departures_teardown++;
 #if APICLIENT_DEV
         Flow *rf = g_flows[0];
-        int had_frame = rf->frame != NULL, had_park = rf->parked != NULL;
+        int had_frame = flow_holds_frame(rf), had_park = rf->parked != NULL;
         int paged = rf->paged, started = rf->started;
         int before = JS_TrampFrameCount(rrt);
 
@@ -1946,6 +1976,13 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     }
     Flow *f = reclaim_calloc(1, sizeof(Flow));
     CHECK(f, "flow_add: OOM allocating a flow — a dropped flow corrupts the frontier");
+    /* Its agents: the one whose realm the flow is created over, with no base yet. */
+    f->agents = reclaim_calloc(1, sizeof *f->agents);
+    CHECK(f->agents, "flow_add: OOM allocating a flow's agent list — a flow with no execution context stack "
+                     "cannot run");
+    f->agents[0].agent = JS_GetRealmAgent(ctx);
+    f->n_agents = 1;
+    f->cur_agent = 0;
     /* And it is born owing the host an image if the host asked for every world (@PERWORLD). Marked at the one
        constructor because every timeline passes it: a frontier walk names only the members standing at that
        instant, and an arm forked, run and ended between two host returns is never standing at one. At the mint and
@@ -4322,7 +4359,7 @@ static void flow_count_plateau(const Flow *seed, const FlowIxAnswer *a, int64_t 
                (flow_job_microtask) walks the job queue taking and freeing a JSValue per entry, too costly on the
                hot path of a release build. `frame` is the boundary's primary clause, the one every job arm of
                flow_step is under; the row is an upper bound by the other two, as its residual says. */
-            if (seed->frame == NULL) g_plateau_held_idle++;
+            if (flow_frame(seed) == NULL) g_plateau_held_idle++;
         }
         g_plateau_open = held;
     }
@@ -4875,7 +4912,7 @@ void flow_wfq_census(WfqCensus *out) {
            apart and are edited independently; its absence would show as `jobsReady` or `delivReady` above zero
            beside a `memUnframed` that no ready member is inside, which both tail asserts pass. */
         {
-            const int unframed = (f->frame == NULL);
+            const int unframed = (flow_frame(f) == NULL);
             DCHECK(!flow_stack_empty(f) || unframed,
                    "a member whose JavaScript execution context stack is empty was not counted as unframed — "
                    "flow_stack_empty refuses a live frame first, so this row's predicate must contain its "
@@ -5351,8 +5388,8 @@ void flow_wfq_census(WfqCensus *out) {
            "the frontier's arrivals minus departures do not equal its members — flow_new and flow_remove are each "
            "count's only writer, so a member joined or left `g_flows` another way");
     /* The two spellings of "unframed" are a containment, not an identity: the ready arm is reached through
-       flow_stack_empty, whose first line is `if (f->frame) return 0;`, so every member it admits is inside
-       `mem_unframed` (`f->frame == NULL`) by construction. What this still catches is a ready count with nothing
+       flow_stack_empty, whose first line is `if (flow_frame(f)) return 0;`, so every member it admits is inside
+       `mem_unframed` (`flow_frame(f) == NULL`) by construction. What this still catches is a ready count with nothing
        unframed under it; a re-spelling of `mem_unframed` is caught per member in the walk. One-sided: `mem_unframed
        > 0` with no ready job is the second silence, the state this row was added to name (flow.h). */
     DCHECK(out->mem_unframed >= 0 && out->mem_unframed <= (long)out->members,
@@ -5518,7 +5555,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
     DCHECK(f->delta == NULL && f->dom == NULL && f->dom_base == NULL,
            "a flow was removed with its COW state still attached — flow_finish unapplies the heap delta and the DOM "
            "head before they can be freed");
-    DCHECK(f->frame == NULL && f->parked == NULL,
+    DCHECK(!flow_holds_frame(f) && f->parked == NULL,
            "a flow was removed holding a live frame or parked continuations — its whole activation chain, and "
            "everything those frames close over, would be retained by a handle nothing will ever free");
     DCHECK(JS_IsUndefined(f->jobs) && JS_IsUndefined(f->pending) && JS_IsUndefined(f->perform_q) &&
@@ -5555,6 +5592,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
            (the teardown walks the flows still there). `cand_sink` is static text. */
         free(f->cand_src); free(f->cand_payload); free(f->cand_vfy);
         free(f->orphan_chain);
+        free(f->agents);
         JS_FreeValue(ctx, f->orphan_claim_fn);
         /* And its place in the fork tree. Its work is already on the family's account (flow_age_running
            charges as it is consumed), so there is nothing to hand up; what is left is the node's lifetime, the owner

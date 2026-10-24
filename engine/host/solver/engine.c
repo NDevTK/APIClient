@@ -2730,6 +2730,15 @@ const PolicyContainer *engine_document_policy(uint32_t doc)
     return document_policy(doc_realm(doc));
 }
 
+/* Install `base`, a preemptible base built over `realm`, as the selected agent's execution context stack. A
+   realm runs on the stack of its own agent (HTML §8.1.2.1, realm.[[AgentSignifier]]). */
+static void flow_install_base(Flow *f, JSContext *realm, JSValue *base)
+{
+    DCHECK(JS_GetRealmAgent(realm) == flow_agent_running(f)->agent,
+           "a preemptible base was installed on the execution context stack of another agent than its realm's");
+    flow_frame(f) = base;
+}
+
 /* The sibling this delivery forecloses: two arms of a sender's fork posting two messages belong to two
  * contradictory worlds, and merging them would fabricate a timeline neither sender was in. Minted at the delivery,
  * the one moment the receiving flow is switched in.
@@ -2774,7 +2783,7 @@ static FlowCommitArm deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec, 
        world, and which mechanism minted that arm is the covering row's statement, not a constant: a
        cross-instance answer also pushes received rows (answer_commit_taken), and its arm is owed, not minted. */
     if (deliver_commit_implied(ctx, f, vec, true, &covering)) return covering;
-    DCHECK(f->frame == NULL,
+    DCHECK(flow_frame(f) == NULL,
            "a delivery-time fork was taken by a flow inside a program — flow_step makes deliveries only with no "
            "frame");
     DCHECK(!JS_HasActivation(JS_GetRuntime(ctx)),
@@ -4933,7 +4942,7 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
            sibling has no frame and its step re-runs the same walk, where the arm recorded here replays.
            Assembled now, because no later moment has the parent still switched in. */
         if (restartable) {
-            DCHECK(f->frame == NULL,
+            DCHECK(flow_frame(f) == NULL,
                    "a restartable fork was asked for by a flow holding a live program frame — the sibling would "
                    "re-enter that frame instead of re-reaching the ask");
             DCHECK(!JS_HasActivation(JS_GetRuntime(ctx)),
@@ -5063,7 +5072,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        sibling, which re-enters its scheduler step where the parent was: a fork asked between tasks
        (engine_prepare_fork), the cold tier's rebuilds (flow.h), and the orphan drive's fresh call frame over a
        frameless parent all fit. */
-    DCHECK(clone != NULL || parent->frame == NULL,
+    DCHECK(clone != NULL || flow_frame(parent) == NULL,
            "a fork of a flow inside a program arrived with no frame snapshot — the sibling would recompile the row "
            "and replay the parent's side effects");
     /* Unstarted cross-agent operations and routed deliveries are asserted at the branch hook, not here: an
@@ -5090,7 +5099,12 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        it decides where the flow enters the queue. */
     flow_fork_inherit(sib, parent, marks);
     sib->started = 1;                 /* hot: resume from the blobs (and the cloned frame, when there is one) */
-    sib->frame = clone;               /* the frame snapshot taken at the branch; NULL for a fork between tasks */
+    /* The clone is of the parent's selected agent's base, so the arm runs that agent. A parent running several
+       agents would owe a clone of every agent's base. */
+    DCHECK(parent->n_agents == 1 && sib->n_agents == 1 && sib->agents[0].agent == parent->agents[0].agent,
+           "a fork of a flow running several agents took one base: every agent's execution context stack is "
+           "the parent's state and is cloned into the arm");
+    flow_frame(sib) = clone;               /* the frame snapshot taken at the branch; NULL for a fork between tasks */
     sib->script_i = parent->script_i; /* same position in the script sequence */
     /* What that frame is: a branch inside an `error` listener is inside its parent's §8.1.4.4 step 8 report on
        the same row, so the arm must finish the report and take the row's completion out of it. At zero it would
@@ -5377,7 +5391,7 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     DCHECK(parent != NULL && g_fork_dec != NULL, "engine_fork_finalize: fork without a running flow / prepared state");
     /* A frameless parent is ordinary: a flow whose base is a module body or a job continuation holds no frame
        (flow_step's module arm leaves the row once §8.1.4.4's run a module script Evaluate returns; a job runs
-       only under `!f->frame`), so the clone is an activation that is not a row's program. JS_FlowResume's
+       only under `!flow_frame(f)`), so the clone is an activation that is not a row's program. JS_FlowResume's
        FLOW_BASE_ASYNC_CALL arm is that clone's home, and consumers ask JS_FlowIsProgram rather than
        `!JS_FlowIsCall`, since `base_kind` has three values.
        Unmade deliveries and unstarted operations are inherited, not refused: engine_route attaches to every
@@ -5432,11 +5446,11 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
         DCHECK(flow_running() == f, "an answer fork was taken while another flow was switched in — the arm would "
                                     "clone that flow's delta and DOM head");
         /* Where this flow's suspension is, asked of both homes. A flow inside a program holds its call site in
-           `frame`; a flow inside a job holds no frame (flow_step runs a job only under `!f->frame`) and its call
+           `frame`; a flow inside a job holds no frame (flow_step runs a job only under `!flow_frame(f)`) and its call
            site is the parked continuation of the activation the job entered, as for a `.then` handler making a
            cross-instance read. The park rides the Flow while switched out and sits in the runtime's queue while
            switched in, which this is, so the runtime answers and `f->parked` must be empty. */
-        in_program = f->frame != NULL;
+        in_program = flow_frame(f) != NULL;
         in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
         DCHECK(f->parked == NULL,
                "a flow holds parked continuations on its own slot while switched in — the switch hands the set to "
@@ -5459,7 +5473,7 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
 
         /* The arm is a clone of whichever home holds the suspension (the asserts above established exactly one).
            Each is a CHECK: a clone this engine cannot build is a peer timeline dropped off the frontier. */
-        clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
+        clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(f)) : NULL;
         parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
         CHECK(!in_program || clone != NULL,
               "engine: a flow suspended on a cross-instance read could not be cloned — the peer's other "
@@ -5548,14 +5562,14 @@ static int flow_answer_standby(JSContext *ctx, Flow *f) {
                "first in flow_step, so the arms and the standby would split one timeline between them");
         DCHECK(flow_running() == f && f->parked == NULL,
                "a standby was forked with another flow switched in, or with parked continuations off the runtime");
-        in_program = f->frame != NULL;
+        in_program = flow_frame(f) != NULL;
         in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
         DCHECK(in_program != in_job,
                "a flow holding a peer's answer is suspended in neither home or in both — the standby clones the one "
                "call site the answer is read at");
         w = JS_ToCString(ctx, wv);
         CHECK(w != NULL, "engine: OOM reading the peer timeline a standby's parent takes");
-        clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
+        clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(f)) : NULL;
         parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
         CHECK(!in_program || clone != NULL,
               "engine: a flow at a cross-instance read could not be cloned — a later peer timeline would have "
@@ -5647,7 +5661,7 @@ static int flow_success_arm(JSContext *ctx, Flow *f, int i, int in_program, int 
     if (arm == 1) {
         arm_flow = f;
     } else if (dblob != NULL) {
-        clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
+        clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(f)) : NULL;
         parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
         CHECK(!in_program || clone != NULL,
               "engine: a flow parked on a declined fetch could not be cloned for the arm that explores its success");
@@ -5693,11 +5707,11 @@ static int flow_reply_success_fork(JSContext *ctx, Flow *f) {
         DCHECK(flow_running() == f && f->parked == NULL,
                "a success arm was forked with another flow switched in, or with parked continuations off the "
                "runtime");
-        in_program = f->frame != NULL;
+        in_program = flow_frame(f) != NULL;
         in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
         /* flow_decline_fork's three refusals, for its reasons: two homes at once, and an atomic operation. */
         if (f->compile != NULL || (in_program && in_job) ||
-            (in_program && JS_FlowUnforkable(ctx, (JSValue *)f->frame)) ||
+            (in_program && JS_FlowUnforkable(ctx, (JSValue *)flow_frame(f))) ||
             (in_job && JS_ParkedFlowsUnforkable(ctx)))
             continue;
         flow_success_arm(ctx, f, i, in_program, in_job,
@@ -5769,7 +5783,7 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
            `<script src>` parks inside the inserting program (a frame); a document's external script parks at
            its row (no frame). Both at once is refused, since the arm would carry one suspension and abandon the
            other. */
-        in_program = f->frame != NULL;
+        in_program = flow_frame(f) != NULL;
         in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
         DCHECK(f->parked == NULL,
                "a flow holds parked continuations on its own slot while switched in — the switch hands the set to "
@@ -5785,7 +5799,7 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
            code, and the parked parse is a third home of the suspension no arm could clone. The answer fork
            cannot wait: its arm resumes the call site this one leaves. */
         if (f->compile != NULL ||
-            (in_program && JS_FlowUnforkable(ctx, (JSValue *)f->frame)) ||
+            (in_program && JS_FlowUnforkable(ctx, (JSValue *)flow_frame(f))) ||
             (in_job && JS_ParkedFlowsUnforkable(ctx))) {
             JS_FreeValue(ctx, reason);
             JS_FreeValue(ctx, e);
@@ -5797,7 +5811,7 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
                               &dblob) == 1) {
             arm_flow = f;
         } else if (dblob != NULL) {
-            clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
+            clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(f)) : NULL;
             parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
             CHECK(!in_program || clone != NULL,
                   "engine: a flow parked on a declined request could not be cloned — the waiting arm is what makes "
@@ -6302,7 +6316,7 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
         hash = f->orphan_chain[f->orphan_claim_at];
         g_orphans_driven++;
         base = engine_orphan_call(ctx, f->orphan_claim_fn, f->orphan_argc, hash);
-        f->frame = base;
+        flow_install_base(f, ctx, base);
         /* The body handed over is now the one running: it moves into `fn` under its own name, and the claim moves
            to the next member, which the walks may route as soon as it exists. */
         JS_FreeValue(ctx, f->fn);
@@ -6387,7 +6401,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     DCHECK(flow_running() == f,
            "orphans were taken while another flow was switched in — the arms fork this flow's delta, DOM head and "
            "decision state");
-    DCHECK(f->frame == NULL,
+    DCHECK(flow_frame(f) == NULL,
            "a flow took an orphan with a suspended frame live — the take happens where the flow has run out of "
            "arranged work, and a sibling forked mid-call would carry a half-finished expression");
 
@@ -6504,7 +6518,7 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
     DCHECK(flow_running() == f,
            "a modelled close request was built while another flow was switched in — the task reads the close watcher "
            "manager from the running flow's delta");
-    DCHECK(f->frame == NULL,
+    DCHECK(flow_frame(f) == NULL,
            "a flow modelled a close request with a suspended frame live — the request is modelled only where the "
            "flow has nothing left to run");
     DCHECK(!f->close_req,
@@ -6524,7 +6538,7 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
        document whose traversable was closed (its own close(), a peer's definitely close) is no target, and
        modelling the arrival there would return at step 6 on every ask with nothing latched. */
     if (!document_fully_active(ctx)) return 0;
-    f->frame = close_request_flow(ctx, document);
+    flow_install_base(f, ctx, close_request_flow(ctx, document));
     f->close_req = 1;
     flow_mark_forced_arm();
     DCHECK(flow_path_forced(f),
@@ -6729,9 +6743,9 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
            the slot is the cursor, matching the frameless parent of such an arm (an arm queuing at a different
            slot from the timeline it continues would be a reorder). Those bases stand with the cursor at the end
            of the sequence, so `script_i + 1` would be `dyn_n + 1` and fail the CHECK below on an ordinary page
-           (an SSR hydration shim's inline <script> from a module body). `f->frame &&` stays: JS_FlowIsProgram needs
+           (an SSR hydration shim's inline <script> from a module body). `flow_frame(f) &&` stays: JS_FlowIsProgram needs
            a base to read. */
-        at = (f->frame && JS_FlowIsProgram((JSValue *)f->frame)) ? f->script_i + 1 : f->script_i;
+        at = (flow_frame(f) && JS_FlowIsProgram((JSValue *)flow_frame(f))) ? f->script_i + 1 : f->script_i;
         /* Behind what has already been interposed at that slot: two elements one program prepares run in the order
            prepared (HTML §4.12.1.1's "immediately execute the script element" happens inside the causing
            program), so `document.write("<script>a()</script><script>b()</script>")` and two `appendChild`s run
@@ -8200,7 +8214,7 @@ static inline long step_unit_over_gap_max(void)
    elsewhere, or an early return between the two would break. */
 static long g_steps;
 /* How many of those steps reached the work ladder (solver/engine.h's `unframed_steps` says what it separates and
-   why it is not `unframed_picks_lifetime`). Raised at the line entering flow_step's `if (!f->frame)` block, the
+   why it is not `unframed_picks_lifetime`). Raised at the line entering flow_step's `if (!flow_frame(f))` block, the
    ladder's precondition: a framed step asks none of the ladder's conditions, the orphan ask included. Per pass, not
    per entry (the turn continuation iterates the loop body), so it is not comparable with `g_steps`; the orphan ask
    is raised per pass in the same block, so their containment is exact. A report only. */
@@ -8564,9 +8578,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
        continue set it. */
     int turn_task_done = 0;
     /* Whether this call began with a live frame, read once before the loop: the question is about the call, and its
-       one consumer is the `!framed_at_entry` assert beside `g_unframed_steps++`. The loop may move `f->frame`, and
+       one consumer is the `!framed_at_entry` assert beside `g_unframed_steps++`. The loop may move `flow_frame(f)`, and
        the two disagreeing is what makes that assert a check. In release it is only type-checked inside `sizeof`. */
-    const int framed_at_entry = (f->frame != NULL);
+    /* The rest point between two steps, where the scheduler names the agent this step runs. */
+    flow_select_agent(f);
+    const int framed_at_entry = (flow_frame(f) != NULL);
     for (;;) {
         /* One arm per distinct answer, before anything else this flow could do: everything else consumes what the
            arm is made of. The arm clones the frame this flow is suspended in, and the first resume below takes the
@@ -8633,7 +8649,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
            one line and strictly increasing (the no-replay DCHECK there), so "it moved" means "this step compiled".
            Declared inside the loop body, so it is re-read on every pass. */
         int last_compiled0 = f->last_compiled;
-        if (!f->frame) {
+        if (!flow_frame(f)) {
             const char *body;
             /* The ladder has been descended, counted at the one line entering it, before any arm is asked. The
                orphan ask below is raised on the same per-pass basis, so `asked` is a subset of this, asserted in
@@ -8646,7 +8662,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                function was rewritten out of: the resume that ran a program to its end performed §8.1.7.3 step 2.6's
                task, every arm below is the next iteration of step 2, and the value yield and cooperative quantum are
                consulted only where flow_step returns. Two-sided: `framed_at_entry` is read before the loop and
-               `f->frame` is what the loop moves. */
+               `flow_frame(f)` is what the loop moves. */
             DCHECKF(!framed_at_entry,
                     "this call of flow_step began with a live frame and descended the unframed ladder (step_unit=%d, "
                     "orphan asks %ld) — a frame-clearing exit must return, because the resume performed HTML "
@@ -9292,7 +9308,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "an import map row carries an address — only an inline `importmap` script is a row");
                 if (import_map_create_and_register(prog_ctx, body, body_n, prog_name) < 0) {
                     JSValue exc = JS_GetException(prog_ctx);
-                    f->frame = report_exception_flow(prog_ctx, exc);
+                    flow_install_base(f, prog_ctx, report_exception_flow(prog_ctx, exc));
                     JS_FreeValue(prog_ctx, exc);
                     f->reporting = 1;
                     g_step_unit = STEP_UNIT_REGISTER_IMPORT_MAP;
@@ -9384,7 +9400,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        `compile stints == classic_compiles + arms[compile-handed-the-thread-back]` holds because a
                        stint that never entered the parse is not a compile stint. g_classic_parse_shared rises
                        instead, which makes a falling `classicCompiles` attributable (see its declaration). */
-                    f->frame = JS_FlowInstantiate(prog_ctx, held);
+                    flow_install_base(f, prog_ctx, JS_FlowInstantiate(prog_ctx, held));
                     JS_FreeValue(prog_ctx, held);
                     g_classic_parse_shared++;
                 } else {
@@ -9457,16 +9473,16 @@ static int flow_step(JSContext *ctx, Flow *f) {
                            owns `fn` and frees it below. A second offer of one body's parse keeps the first closure,
                            for the reason dyn_body_parse_hold states. */
                         dyn_body_parse_hold(pb, prog_ctx, prog_name, src_flags, fn);
-                        f->frame = JS_FlowInstantiate(prog_ctx, fn);
+                        flow_install_base(f, prog_ctx, JS_FlowInstantiate(prog_ctx, fn));
                         JS_FreeValue(prog_ctx, fn);
                     } else {
                         /* The parse failed and the exception is pending: no program starts (§4.12.1.1's "if el's
                            result is null, then fire an event named error at el, and return"), and nothing is held,
                            since a SyntaxError is not a fact about the bytes a later timeline may inherit. */
-                        f->frame = NULL;
+                        flow_frame(f) = NULL;
                     }
                 }
-                started = (f->frame != NULL);
+                started = (flow_frame(f) != NULL);
                 /* §4.12.1.1's classic arm, steps 1-2, here rather than around a call: the arm's third step ("run
                    the classic script") is JS_FlowNew plus every JS_FlowResume after it, spread over any number of
                    scheduler steps with sibling flows running between. A C save/restore bracket would set the slot
@@ -9477,7 +9493,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 if (started && flow_dyn_el(f)) {
                     /* Step 1's oldCurrentScript is null for a row of this sequence, asserted here because this
                        caller's premise supports it: a flow holds at most one live program frame (the compile runs
-                       only under `!f->frame`), so the previous row's restore has already run. A non-null value is a
+                       only under `!flow_frame(f)`), so the previous row's restore has already run. A non-null value is a
                        skipped restore, or two flows' writes leaking across the COW delta. §4.12.1.1 step 36's nested
                        run cannot make this claim and carries the value instead (core/html/html_script.c). */
                     JSValue old = document_current_script_set(prog_ctx, flow_dyn_el(f));
@@ -9490,7 +9506,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 }
             }
             /* How many programs started, counted where `started` is decided and nowhere else: the module arm
-               answers from `mr > 0`, the classic from `f->frame != NULL`, and this is the first line with either
+               answers from `mr > 0`, the classic from `flow_frame(f) != NULL`, and this is the first line with either
                answer in hand. A failed compile is not a start (a SyntaxError or the OOM floor leaves `started`
                false), as §4.12.1.1's "if el's result is null, then fire an event named error at el, and return"
                says. The three counters are one partition, asserted in engine_frontier_census. The arm is read from
@@ -9595,7 +9611,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
            so `f->orphan` says what the flow is and this says what this completion is. The position in the sequence
            cannot answer it: a row queued by the running call moves the cursor back inside the sequence while the
            call frame is live. Declared out here so the cursor advance at the tail can ask it too. */
-        int is_call = JS_FlowIsCall((JSValue *)f->frame);
+        int is_call = JS_FlowIsCall((JSValue *)flow_frame(f));
         /* And whether it is a program, which is not the negation of `is_call`. A base has three kinds, and
            `!is_call` is also true of a clone of an activation this host never created, taken by JS_FlowClone at a
            concolic branch inside a module body, whose row flow_step's module arm left when HTML §8.1.4.4 "Calling
@@ -9606,7 +9622,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
            both are one read of `base_kind` (JS_FlowIsProgram). The third kind is driven by JS_FlowResume's
            FLOW_BASE_ASYNC_CALL arm, which refuses a second driver: "two drivers for one state is how a flow gets
            resumed twice". */
-        int is_program = JS_FlowIsProgram((JSValue *)f->frame);
+        int is_program = JS_FlowIsProgram((JSValue *)flow_frame(f));
         /* The frame and the cursor pair agree about it. flow.c's flow_programs_unstarted_for_document declares the
            cursor side ("between two programs the cursor stands one past the last started row and during one it
            stands on it"), so `last_compiled == script_i` is "inside a program of its sequence", from two fields
@@ -9653,7 +9669,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
             DCHECK(!started_here || !is_call,
                    "the frame a step just compiled reports itself as a call root — JS_FlowNew builds a program base");
             g_step_unit = started_here ? STEP_UNIT_START_PROGRAM : STEP_UNIT_RESUME_PROGRAM;
-            int r = JS_FlowResume(ctx, (JSValue *)f->frame, &cv);
+            int r = JS_FlowResume(ctx, (JSValue *)flow_frame(f), &cv);
             /* HTML §6.10.1 Close requests' step 9, taken where a task's completion value is in hand: "Alternative
                processing: Otherwise, there was nothing watching for a close request. The user agent may instead
                interpret this interaction as some other action, instead of interpreting it as a close request."
@@ -9757,6 +9773,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
             else if (JS_IsException(cv)) {
                 JSValue e = JS_GetException(ctx);
                 report = report_exception_flow(doc_realm(flow_dyn_doc(f)), e);
+                DCHECK(JS_GetRealmAgent(doc_realm(flow_dyn_doc(f))) == flow_agent_running(f)->agent,
+                       "a §8.1.4.4 step 8 report was built over a realm of another agent than the one whose "
+                       "execution context stack it is installed on");
                 JS_FreeValue(ctx, e);
             }
             /* One program's completion value is read, and it decides a navigation. HTML §7.4.2.3.2's evaluate a
@@ -9833,7 +9852,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    arm is unreachable today; it is named so that the day a started frame detaches, the step stays in
                    the row HTML §4.12.1.1 position advances are counted in. */
                 g_step_unit = started_here ? STEP_UNIT_START_DETACHED : STEP_UNIT_DETACH_PROGRAM;
-                f->frame = NULL;
+                flow_frame(f) = NULL;
                 return 0;
             }
             /* The program ran to its end: the one event that moves this document's completed depth (g_completed),
@@ -9856,7 +9875,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * script step 8's third bullet is "Otherwise, rethrow errors is false. Perform the following steps:",
              * whose step 1 is "Report an exception given by evaluationStatus.[[Value]] for script's settings
              * object's global object"; that bullet holds one list, so `8.3.1` is a step. The report takes the slot
-             * this program vacated (the tail installs it as `f->frame` and returns), so a completion that owes one
+             * this program vacated (the tail installs it as `flow_frame(f)` and returns), so a completion that owes one
              * ends a program and leaves the member framed: named as an end it would put a framed member in the
              * population that can reach the ladder, named as a resume it would put an ended program among
              * programs that did not end. A start's outcomes split the same way: `start-a-classic-program` returned
@@ -9883,7 +9902,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
             if (!report && (f->reporting || is_program) && flow_dyn_el(f))
                 document_current_script_restore(doc_realm(flow_dyn_doc(f)), flow_dyn_el(f), JS_NULL);
         }
-        JS_FlowFree(ctx, (JSValue *)f->frame);
+        JS_FlowFree(ctx, (JSValue *)flow_frame(f));
         /* The modelled close request's flag dies with the frame it names, at the free rather than at the tail: the
            report install below returns, so a flag cleared only at the bottom would stand over the report's frame,
            whose completion would be read as §6.10.1's step 9 answer. In dev an abruptly-completing task aborts
@@ -9892,9 +9911,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
         f->close_req = 0;
         /* §8.1.4.4 step 8.3.1 takes the slot step 8's program vacated, and the cursor does not move: the report is
            the rest of this row's run a classic script, so the row is advanced once, at the report's completion.
-           Everything the `if (!f->frame)` block above would do, step 8.3.2's microtask checkpoint first, is skipped
+           Everything the `if (!flow_frame(f))` block above would do, step 8.3.2's microtask checkpoint first, is skipped
            while this frame lives, the order §8.1.4.4 states and the reason the report is a frame. */
-        if (report) { f->frame = report; f->reporting = 1; return 0; }
+        if (report) { flow_frame(f) = report; f->reporting = 1; return 0; }
         /* This script done, next: only when the frame that finished is this row's work, by the restore's predicate,
            read before `f->reporting` is cleared. The cursor names a row and a call is not one. A driven orphan's
            drive is assembled with its parent's cursor at `dyn_n` (the parent ran out of rows, which is why the
@@ -9911,7 +9930,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
             ENGINE_LEAVE_ROW(f);
         }
         f->reporting = 0;
-        f->frame = NULL;
+        flow_frame(f) = NULL;
         return 0;
     }
 }
@@ -10174,13 +10193,13 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             "stopped being about the whole turn",
             (long long)g_slice_us, (long long)g_sched_us, (long long)g_step_us);
     /* The orphan ask is a subset of the ladder descents. `g_orphan_asks` is raised inside engine_orphan_seed,
-       which flow_step reaches only from inside the `if (!f->frame)` block the descents are counted at, both per
+       which flow_step reaches only from inside the `if (!flow_frame(f))` block the descents are counted at, both per
        pass, so an ask with no descent is the seed reached from elsewhere (a second caller, or the rung hoisted out
        of the block). A floor across a restart, not an equality: engine_session_close releases `g_orphan_asks` with
        the agent and nothing here, so a second session starts the ask at 0 against a climbing descent count. */
     DCHECKF(g_orphan_asks <= g_unframed_steps,
             "solver/engine.c: the orphan surface was asked %ld time(s) against %ld ladder descent(s) — "
-            "engine_orphan_seed is reached only inside flow_step's `if (!f->frame)` block, so a second path reaches "
+            "engine_orphan_seed is reached only inside flow_step's `if (!flow_frame(f))` block, so a second path reaches "
             "the seed",
             g_orphan_asks, g_unframed_steps);
     /* And the ask's exits partition it (see the rows' declaration). engine_orphan_seed raises the total at its
@@ -10248,14 +10267,14 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     }
     /* The clock chain's containment in the ladder descents, which a reader comparing
        `stepReachedRenderingLife` with `unframedStepsLifetime` on one census line depends on. The same argument as
-       `g_orphan_asks <= g_unframed_steps`, one rung down: both are raised per pass through the `if (!f->frame)`
+       `g_orphan_asks <= g_unframed_steps`, one rung down: both are raised per pass through the `if (!flow_frame(f))`
        block, the rendering rung an `else if` inside it. A floor, and the gap is the reading: every arm above the
        rendering rung that takes a descent never reaches the chain, so descents with all three asks at 0 say the
        ladder stopped above the clock (read off `arms`). Both are per-instance and released by nothing, so a
        restart does not weaken it. */
     DCHECKF(g_clock_render_asks <= g_unframed_steps,
             "solver/engine.c: the clock boundary was reached %ld time(s) against %ld ladder descent(s) — the "
-            "rendering rung is inside the `if (!f->frame)` block the descents are counted in",
+            "rendering rung is inside the `if (!flow_frame(f))` block the descents are counted in",
             g_clock_render_asks, g_unframed_steps);
 }
 
@@ -10382,7 +10401,7 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     DCHECK(f->compile == NULL,
            "a flow finished with a program still being parsed — a completion arm ran for an unreached row, or the "
            "compile handle outlived its program");
-    DCHECK(f->frame == NULL, "a flow finished with a live preemptible frame — its whole activation chain, and "
+    DCHECK(flow_frame(f) == NULL, "a flow finished with a live preemptible frame — its whole activation chain, and "
                              "everything those frames close over, is retained by a handle nothing will free");
     DCHECK(flow_deliver_pending(f) == 0,
            "a flow finished still holding routed deliveries — each is a message a peer sent and this document "
@@ -11474,7 +11493,7 @@ static int engine_sched_slice(void) {
                holding a frame, and `unit_ended` is derived from the ladder. One arm per turn, so a partition (see
                g_unit_mid_program). */
             int unit_ended;
-            if (cur->frame)                                { g_unit_mid_program++;     unit_ended = 0; }
+            if (flow_frame(cur))                                { g_unit_mid_program++;     unit_ended = 0; }
             else if (JS_HasParkedFlow(JS_GetRuntime(ctx))) { g_unit_parked++;          unit_ended = 0; }
             else if (flow_job_microtask(cur))              { g_unit_checkpoint_owed++; unit_ended = 0; }
             else                                             unit_ended = 1;

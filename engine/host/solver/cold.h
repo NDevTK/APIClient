@@ -188,7 +188,7 @@ typedef struct {
            as `step_units`' `none` row — but `step_units` is over the WHOLE frontier and cannot be attributed
            to the members that have run out of programs, which is the same defect `framed` has one row up and
            the reason this block is counts rather than a cross-reference.
-         - THE MEMBER IS SUSPENDED INSIDE A LIVE FRAME. flow_step's whole ladder sits inside `if (!f->frame)`,
+         - THE MEMBER IS SUSPENDED INSIDE A LIVE FRAME. flow_step's whole ladder sits inside `if (!flow_frame(f))`,
            so a framed member takes the resume arm above it and no rung below is reached. `framed` is on this
            line too and has exactly the same attribution problem.
        Only the third population — dispatched, and standing with no frame — is one a rung could be holding at
@@ -215,7 +215,7 @@ typedef struct {
        before it left. And A REPORT AND NEVER A BOUND — a per-member breakdown of "who could have asked" is
        precisely what a starvation detector would be built out of, and nothing in the engine reads these. */
     long  out_of_programs_unrun;        /* … and has never been stepped (`step_unit == STEP_UNIT_NONE`) */
-    long  out_of_programs_framed;       /* … stepped, but suspended in a live frame: below `!f->frame` */
+    long  out_of_programs_framed;       /* … stepped, but suspended in a live frame: below `!flow_frame(f)` */
     /* … stepped, no frame, no row: the members whose NEXT dispatch descends the ladder, and therefore the
        only population of which "which of the four rungs is due" is even a question. It is NOT the population
        a rung IS holding — a member here may equally be one the pick has not returned to, and this row cannot
@@ -255,7 +255,7 @@ typedef struct {
        same evidence.
        AND THOSE TWO CLASSES ARE A BINARY OVER A CHAIN THAT HAS A THIRD POSITION, WHICH IS WHY THIS ROW COULD
        NOT READ THE ONE MEASUREMENT THIS BLOCK ALREADY CARRIES. The arms above are named out of flow_step's
-       ladder, and every one of them is reached under `!f->frame`; the FRAMED branch is the other side of that
+       ladder, and every one of them is reached under `!flow_frame(f)`; the FRAMED branch is the other side of that
        `if`, and its frame-CLEARING outcomes leave a member standing here too. `resume-ended-its-frame`,
        `start-ended-its-frame`, `program-detached-its-base` and `start-detached-its-base` are those outcomes —
        solver/step_unit.h names the property that groups them, "whether a step left its member framed is
@@ -266,7 +266,7 @@ typedef struct {
        SHADE. An above-rung arm says the ladder was ENTERED and something took the member before the seed; a
        below-rung arm says the seed RAN. A frame-clearing arm says the ladder was NEVER ENTERED FOR THIS
        MEMBER: the dispatch that wrote it ended the member's frame and returned (engine.c's END_FRAME tail is
-       `f->frame = NULL; return 0;`, with no `continue`), so the first dispatch that could descend the ladder
+       `flow_frame(f) = NULL; return 0;`, with no `continue`), so the first dispatch that could descend the ladder
        is one the member HAS NOT HAD. The orphan question therefore costs a member TWO dispatches — one to end
        the frame it was born holding, one to ask.
        AND THOSE TWO DISPATCHES ARE TWO TURNS OF THE EVENT LOOP RATHER THAN A COST, WHICH THIS PARAGRAPH SAID

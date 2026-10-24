@@ -33,7 +33,7 @@ void cold_census(ColdCensus *out)
         long e = 0, b = 0;
 
         out->flows++;
-        if (f->frame) out->framed++;
+        if (flow_frame(f)) out->framed++;
         if (flow_blocked(f)) out->blocked++;
         /* …AND WHICH ARM OF flow_step THIS MEMBER LAST RETURNED THROUGH. Asserted in range rather than
            trusted: the field is written at one place from an enum, so a value outside the list is a cast or a
@@ -95,11 +95,11 @@ void cold_census(ColdCensus *out)
                WITHOUT ever having been dispatched, so both arms are true of it and only an order decides which
                row it lands in. The zeroth conjunct wins, because "was never handed the thread" is the stronger
                statement — none of flow_step's conditions was asked of this member at all, so nothing about its
-               frame is evidence of anything. Then the frame, which is what flow_step's own `if (!f->frame)`
+               frame is evidence of anything. Then the frame, which is what flow_step's own `if (!flow_frame(f))`
                tests; then what is left, which is the only population any rung of that ladder can be holding.
                THE IDENTITY IS ASSERTED BELOW THE WALK rather than here, where only one member is in hand. */
             if (f->step_unit == STEP_UNIT_NONE) out->out_of_programs_unrun++;
-            else if (f->frame)                  out->out_of_programs_framed++;
+            else if (flow_frame(f))                  out->out_of_programs_framed++;
             else {
                 out->out_of_programs_at_the_ladder++;
                 /* …AND WHICH ARM THIS ONE LAST RETURNED THROUGH, which is the only row that says whether a

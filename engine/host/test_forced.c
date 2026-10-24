@@ -10047,7 +10047,7 @@ TF_UNIT void probes_fetchreply(const char *js, Probe *tab, int *n) {
        clause already answers it, and folding them made "the await never delivered" and "the reply's field
        did not reach this param" one 0 that named neither. */
     /* THE CONTROL FOR THE FIVE REPLY ROWS — same reply, same await machinery, one difference: the
-       program issuing it ENDS in the step that starts it, so `f->frame` is released and the
+       program issuing it ENDS in the step that starts it, so `flow_frame(f)` is released and the
        delivery arm is reachable. See the frame-control <script> for why the pair is the
        experiment and why either row alone answers nothing — AND for why this row has never yet
        been about the frame at all: `deepest`, the highest program index any flow has ever compiled,
@@ -12862,7 +12862,7 @@ TF_UNIT void probes_orphan(const char *js, Probe *tab, int *n) {
     long long orph_vis_max = 0;
     /* AND THE DESCENT COUNT THE ASK IS A SUBSET OF, because `asked == 0` is TWO STATES and this clause named
        only one of them. solver/engine.c raises `g_orphan_asks` inside engine_orphan_seed, which flow_step
-       reaches only from within its `if (!f->frame)` block, and raises `unframed_steps` at the one line that
+       reaches only from within its `if (!flow_frame(f))` block, and raises `unframed_steps` at the one line that
        ENTERS that block — so a zero ask under a zero descent is "nobody got there" and a zero ask under a
        nonzero descent is "they got there and an arm ABOVE the rung took every descent". Those take opposite
        work: the first is upstream of every arm of the ladder and is a question about the pick and the mint,
@@ -16855,7 +16855,7 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
        names cannot fire on one; a refusal leaves `haveValue` CLEAR, so the flow stays PARKED rather than
        being handed a network error it never observed; and `flow_decline_fork` already names THIS document's
        shape in its own words — "a document's own external script parks at its sequence row with no frame at
-       all". That waiting arm is FRAMELESS, which is what carries it past the `if (!f->frame)` block head and
+       all". That waiting arm is FRAMELESS, which is what carries it past the `if (!flow_frame(f))` block head and
        in front of flow_perform_pending, and its cursor stands at the DYN_SCRIPT_SRC row that sets
        `seq_awaits` — the one cursor this engine cannot pass, which is exactly what the first subproblem asked
        for and reported as absent.
@@ -16887,7 +16887,7 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
        function of post-step state`, and fixture_want_park now asserts the consequence at the seam rather than
        leaving it to be re-derived from three rows reading 0.
        (The seam the surviving half rests on is flow_step's own order, and it is RE-DERIVED here rather than
-       inherited: the `flow_perform_pending` branch sits under `if (!f->frame)` and ABOVE both the networking
+       inherited: the `flow_perform_pending` branch sits under `if (!flow_frame(f))` and ABOVE both the networking
        delivery and the sequence arm, so a member with no live frame that is owed a reply converts an arrival
        to a row on one step and reports OWED on a later one. A member parked MID-FRAME never reaches that
        branch at all — JS_ResumeParkedFlow answers first — which is why the clause says "at the cursor it was

@@ -85,6 +85,17 @@ typedef struct FlowIxTreap {
     long ncls, nnever;
 } FlowIxTreap;
 
+/* One agent's execution context stack inside a flow. `frame` is that agent's live preemptible base, NULL when
+ * it has none. It holds one of three kinds: a program of the row at `script_i` (JS_FlowNew), a call this host
+ * built (JS_FlowNewCall: a driven orphan's, an HTML §8.1.4.4 step 8 report, a §6.10.1 task), or a clone of an
+ * activation this host never created (JS_FlowClone at a concolic branch inside a module body). Ask the kind with
+ * JS_FlowIsProgram / JS_FlowIsCall; never infer it from the slot being occupied. `agent` is the runtime's
+ * record, borrowed, and every realm the base runs in names it. */
+typedef struct FlowAgent {
+    JSAgentRecord *agent;
+    void *frame;
+} FlowAgent;
+
 typedef struct Flow {
     /* This flow's slot in the frontier's array, so locating a member is a load rather than a walk. It names a
        slot, never a rank: the array is in arrival order and the order is by weight, so no term of flow_weight
@@ -304,12 +315,12 @@ typedef struct Flow {
        seamless-stretch aborts; `STEP_UNIT_NONE` on a calloc'd member, the true answer for a flow never stepped.
        Not parked: it describes a step this session took. */
     StepUnit step_unit;
-    /* This flow's live preemptible base, NULL when it has none. It holds one of three kinds: a program of the row
-     * at `script_i` (JS_FlowNew), a call this host built (JS_FlowNewCall: a driven orphan's, an HTML §8.1.4.4
-     * step 8 report, a §6.10.1 task), or a clone of an activation this host never created (JS_FlowClone at a
-     * concolic branch inside a module body). Ask the kind with JS_FlowIsProgram / JS_FlowIsCall, two
-     * predicates over one `base_kind` field; never infer it from this slot being occupied. */
-    void *frame;
+    /* The agents this flow runs, one execution context stack each (ECMA-262 §9.6 Agents), and the one the
+     * scheduler selected at the flow's last rest point (flow_select_agent). Owned; never empty. Read and write
+     * the selected agent's base through flow_frame(f). */
+    FlowAgent *agents;
+    int n_agents;
+    int cur_agent;
     /* This flow's program still being parsed, NULL when there is none (quickjs.h's JS_FlowCompileStep and
      * JS_FlowEvalModule take it). The compile of the row at `script_i` is O(a length the page chose), so it
      * suspends, and a parse that gave the thread back waits here. It is not a second frame: while it stands the
@@ -601,6 +612,16 @@ typedef struct Flow {
     struct Flow *away_prev, *away_next;
     struct Flow *owed_prev, *owed_next;
 } Flow;
+
+/* The selected agent's entry in `f`'s agent list, asserted in range. The entry is the flow's own. */
+FlowAgent *flow_agent_running(const Flow *f);
+/* The selected agent's live preemptible base, as an lvalue. */
+#define flow_frame(f) (flow_agent_running(f)->frame)
+/* HTML §8.1.2.1's "the agent equivalent of the current realm": which of `f`'s agents runs next, chosen at a rest
+   point where no agent's base is mid-step. */
+void flow_select_agent(Flow *f);
+/* Whether any of `f`'s agents holds a live preemptible base. */
+int flow_holds_frame(const Flow *f);
 
 /* `doc_name` is this instance's document identity, a parameter so a frontier cannot exist without one: every
    flow's world is named by it, and two instances sharing a name would hand each other's flows one segment. The
@@ -1191,7 +1212,7 @@ typedef struct {
      *                 unframed member (frames are not ending), or unframed members holding no jobs.
      * Whether frames end is read from `stepUnitRuns`, summed against `steps`; no single arm is a rate, since
      * `resume-ended-its-frame` is the intersection of completions (`g_completed` also counts
-     * `report-an-exception`) and frame clears (`f->frame == NULL` also follows `program-detached-its-base`). */
+     * `report-an-exception`) and frame clears (`flow_frame(f) == NULL` also follows `program-detached-its-base`). */
     /* `job_w_gap` is `w_top` minus the best weight any ready holder offers, in reward points: 0 means the top of
      * the order holds a runnable job; a figure on the scale of `val_max - val_min` is a backlog the aging cannot
      * reach in a session. Read beside `jobs_ready` (0 with no ready holder). `>= 0` by construction (`w_top` is
@@ -1260,7 +1281,7 @@ typedef struct {
      *   `deliv_owed`   host-owed mark, so flow_pick refuses it. Zero when nothing is outstanding, since the mark's
      *                  assert admits only an entry the host can still be asked about (`pending_host_outstanding`)
      *                  or a referenced document; a declined entry is outstanding and owed by nobody.
-     *   `deliv_framed` fails flow_stack_empty, and engine.c's task ladder is under `if (!f->frame)`, so its steps
+     *   `deliv_framed` fails flow_stack_empty, and engine.c's task ladder is under `if (!flow_frame(f))`, so its steps
      *                  never reach the delivery arm. Benign only while frames end (see `jobs_framed`).
      *   `deliv_ready`  neither: the reply waits on rank alone; the whole population an ordering could serve.
      * `canDeliver - delivReady` is the members the arm could serve and the pick will not offer the thread to

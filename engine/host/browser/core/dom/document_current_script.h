@@ -47,7 +47,7 @@
  *
  * WHAT `oldCurrentScript` IS HERE, AND WHY IT IS CARRIED RATHER THAN PROVED NULL. This file used to prove it
  * null, from "a flow holds at most ONE live program frame" (solver/flow.h's `frame`, and solver/engine.c
- * compiles only under `!f->frame`), and asserted it at the set. §4.12.1.1's OWN step 36 is the case that
+ * compiles only under `!flow_frame(f)`), and asserted it at the set. §4.12.1.1's OWN step 36 is the case that
  * falsifies the premise: "immediately execute the script element el, EVEN IF OTHER SCRIPTS ARE ALREADY
  * EXECUTING" runs a program while the program that inserted the element is mid-statement, with that program's
  * own element in this slot. So the set RETURNS the previous value and the restore CONSUMES it, which is what

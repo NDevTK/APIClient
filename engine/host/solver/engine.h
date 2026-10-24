@@ -938,7 +938,7 @@ typedef struct {
     long steps;              /* scheduler steps: every entry into flow_step, counted at its own entry */
     long arms[STEP_UNIT_N];  /* …and how many ran each arm, in solver/step_unit.h's order, counted at the
                                 scheduler's convergence point; engine.c asserts `sum(arms) == steps` there */
-    /* Passes through flow_step's work ladder, the `if (!f->frame)` block every non-frame arm sits in, so a
+    /* Passes through flow_step's work ladder, the `if (!flow_frame(f))` block every non-frame arm sits in, so a
        step on a framed member is in none of its arms. It is not derivable from published rows:
        `unit_mid_program` reads the frame after the step, step_unit.h labels no arm's side of the block, and
        solver/flow.h's `unframed_picks_lifetime` counts switch-ins, not descents. It separates the readings of

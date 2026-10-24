@@ -16,9 +16,9 @@ void net_reach_census(JSContext *ctx, NetReachCensus *out) {
         JSNetSiteAhead a;
 
         out->members++;
-        if (!f->frame)
+        if (!flow_frame(f))
             continue;
-        JS_FlowNetSiteAhead((const JSValue *)f->frame, &a);
+        JS_FlowNetSiteAhead((const JSValue *)flow_frame(f), &a);
         DCHECKF(a.top_ahead <= a.frames_ahead && a.frames_ahead <= a.frames,
                 "a member's stack reads %d frames ahead of a site over %d frames with top %d",
                 a.frames_ahead, a.frames, a.top_ahead);
