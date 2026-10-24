@@ -199,6 +199,8 @@
 #include "check.h"
 #include "solver/absent.h"
 #include "solver/concolic.h"
+
+#define ABSENT_COMPONENT "absent"   /* the claimant of the precondition rows this file declares */
 #include "solver/flow.h"     /* flow_mark_forced_arm, for the read this session throws at */
 #include "browser/i18n_names.h"
 #include "browser/language_names.h"
@@ -1158,6 +1160,8 @@ void absent_free(void)
 {
     int i;
 
+    concolic_undeclare_sources(ABSENT_COMPONENT);
+
     for (i = 0; i < g_ns_n; i++)
         free(g_ns[i].path);
     free(g_ns);
@@ -1330,6 +1334,14 @@ void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSVal
    `base` is the record's published path, or NULL for a member of the global namespace itself; the join is
    ns_join's, which is the same one the publication files a path with. Both outputs are the caller's to
    free. */
+/* A member of injected state is not an attacker source: only the application's own write path changes it, so a
+   finding rooted there is labelled with that precondition (concolic.h's SRC_PRE_APPLICATION_STATE). */
+static void absent_declare_precondition(const char *src)
+{
+    if (!concolic_source_precondition_declared_by(ABSENT_COMPONENT, src))
+        concolic_declare_source_precondition(ABSENT_COMPONENT, src, SRC_PRE_APPLICATION_STATE);
+}
+
 static void ns_member_spell(const char *base, JSAtom name, const char *key, char **shape, char **src)
 {
     char *path = ns_join(base, name, key);
@@ -1427,6 +1439,7 @@ JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JS
        being stated once for both populations. HOW ITS ABSENCE WOULD SHOW: an emitted row whose address rests
        on a member of a record no element of the served markup spells, reading as a class that says a parse
        of the markup could have stated it. */
+    absent_declare_precondition(src);
     r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_SERVED, JS_DupValue(ctx, value));
     /* The record holds the member and its value is `undefined`: those are its bytes, not an absence. */
     if (JS_IsUndefined(value) && concolic_is(r)) concolic_hold_undefined(r);
@@ -1530,6 +1543,7 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name, JSConcol
        the MISS arm, so the member is ABSENT — the document this engine was served states nothing about it,
        and what WOULD stand there is whatever a server injects for a visitor with state. No parse of any byte
        this run received can state it, which is the population the bar exists for. */
+    absent_declare_precondition(src);
     r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
     /* What this session itself reads here. A property read that misses answers undefined (§10.1.8.1
        OrdinaryGet step 2.b), which the unknown holds as its example, so every derivation computes the session's

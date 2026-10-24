@@ -261,6 +261,10 @@ static JSValue st_absent_value(JSContext *ctx, JSValueConst slots, JSAtom key)
     snprintf(src, (size_t)n + 1, "localStorage[\"%s\"]", k);
     snprintf(shape, (size_t)n + 3, "{%s}", src);
     JS_FreeCString(ctx, k);
+    /* Not an attacker source: only script of this origin writes this area, so a finding rooted here is labelled
+       with that precondition rather than reported as a delivery. */
+    if (!concolic_source_precondition_declared_by("storage", src))
+        concolic_declare_source_precondition("storage", src, SRC_PRE_SAME_ORIGIN_STORE);
     r = concolic_source_wrap(ctx, shape, src, JS_NULL);
     js_free(ctx, shape);
     js_free(ctx, src);
@@ -1002,6 +1006,7 @@ void storage_init(JSContext *ctx)
 void storage_free(JSRuntime *rt)
 {
     if (!g_ready) return;
+    concolic_undeclare_sources("storage");   /* the precondition rows st_absent_value declared */
     JS_FreeValueRT(rt, g_key);   /* the prototypes are the REALMS' — each is released with its context */
     g_key = JS_UNDEFINED;
     g_class = 0;
