@@ -1765,6 +1765,11 @@ JS_EXTERN void JS_MarkPromiseHandled(JSContext *ctx, JSValueConst promise);
    ITS ARGUMENT IS A PROMISE: [[PromiseIsHandled]] is a slot only a promise has, so a non-promise is a caller
    error rather than a value with a false answer, and it aborts rather than answering. */
 JS_EXTERN bool JS_IsPromiseHandled(JSContext *ctx, JSValueConst promise);
+/* Whether settling through the resolving function `fn` would run a reaction: its promise is pending and holds a
+   reaction on either list (ECMA-262 §27.5.5.4.1 PerformPromiseThen appends one while pending; §27.5.1.8
+   TriggerPromiseReactions runs them at settlement). False once the pair has fired. `fn` must be one half of a
+   §27.5.1.3 CreateResolvingFunctions pair. Runs no page code. */
+JS_EXTERN bool JS_ResolvingFunctionHasReaction(JSContext *ctx, JSValueConst fn);
 
 /* CALL `func(value)` AS A CALL-ROOT FLOW — the base a promise reaction runs on — rather than as a C activation.
    A trusted-host reply is delivered by calling something, and JS_Call from the host's pump has no flow base, so

@@ -797,6 +797,14 @@ void engine_set_timer_race_hook(int (*fn)(JSContext *ctx))
     g_timer_race_hook = fn;
 }
 
+static int (*g_timer_active_hook)(JSContext *ctx);
+void engine_set_timer_active_hook(int (*fn)(JSContext *ctx))
+{
+    DCHECK(fn == NULL || g_timer_active_hook == NULL,
+           "a second component claimed the count of active timers — there is one timer source per event loop");
+    g_timer_active_hook = fn;
+}
+
 static uint64_t (*g_timer_due_hook)(JSContext *ctx);
 void engine_set_timer_due_hook(uint64_t (*fn)(JSContext *ctx))
 {
@@ -5944,6 +5952,65 @@ void engine_orphan_census(long *driven, long *asked) {
     *driven = g_orphans_driven; *asked = g_orphan_asks;
 }
 
+/* The arms of the orphan rungs' gate (engine.h's EngineOrphanGateCensus), counted per ask. */
+enum { GATE_NONE, GATE_PROGRAM, GATE_TIMER, GATE_REACTION, GATE_UNINSPECTED, GATE_ARMS };
+static long g_gate_asks, g_gate_arm[GATE_ARMS];
+
+/* Can outstanding work still run this flow's page code? A drive claims that nothing called its body, and a call
+ * built while something can still call it puts the drive's questions and that work's in an order a replay need
+ * not reproduce. Asked at the moment of the ask, in one place, for both orphan rungs. A program row or a program
+ * reply always can; so can an active timer; a fetch() reply can exactly when its promise holds a reaction, since
+ * without one nothing holds the Response or can read its body. `seq_awaits` is the ladder's own row fact.
+ * Named residual. Not covered: a reply that has a reaction and never settles (a long poll) blocks drives for as
+ * long as it is owed. Next diff builds: the drive and the reply's arrival as two orders, as security-cors's
+ * deadline race does, since the reply's arrival is unknown. How its absence would show: `orphanGate.reaction`
+ * climbing with `_orphansAsked` flat on a page that holds one request open.
+ * Named residual. Not covered: a resource, XHR or module reply counts as able to run page code, because whether
+ * its object has a listener is not inspected. Next diff builds: the listener test on the delivery's target. How
+ * its absence would show: `orphanGate.uninspected` nonzero on a run whose drives stay at zero. */
+static int engine_outstanding_runs_page_code(JSContext *ctx, Flow *f, int seq_awaits) {
+    int arm = GATE_NONE, n, i;
+
+    g_gate_asks++;
+    if (seq_awaits) arm = GATE_PROGRAM;
+    else if (g_timer_active_hook && g_timer_active_hook(ctx) > 0) arm = GATE_TIMER;
+    n = arm == GATE_NONE ? pending_count(f->pending) : 0;
+    for (i = 0; i < n && arm == GATE_NONE; i++) {
+        JSValue e = pending_entry(f->pending, i);
+        int kind = (int)pending_get_int(e, PEND_KIND);
+
+        if (pending_entry_owed(e)) {
+            DCHECK(kind != FLOW_PENDING_HOSTREQ,
+                   "the orphan gate met an unanswered synchronous request — such a flow is blocked and the ladder "
+                   "returns above both orphan rungs");
+            if (kind == FLOW_PENDING_SCRIPT || kind == FLOW_PENDING_DOCSCRIPT) {
+                arm = GATE_PROGRAM;
+            } else if (kind == FLOW_PENDING_RESOLVE) {
+                JSValue d = pending_get(e, PEND_RESOLVE);
+
+                if (!fetch_is_delivery(ctx, d)) arm = GATE_UNINSPECTED;
+                else if (fetch_delivery_has_reaction(ctx, d)) arm = GATE_REACTION;
+                JS_FreeValue(ctx, d);
+            } else {
+                arm = GATE_UNINSPECTED;
+            }
+        }
+        JS_FreeValue(ctx, e);
+    }
+    g_gate_arm[arm]++;
+    return arm;
+}
+
+EngineOrphanGateCensus engine_orphan_gate_census(void) {
+    EngineOrphanGateCensus c = { g_gate_asks, g_gate_arm[GATE_NONE], g_gate_arm[GATE_PROGRAM],
+                                 g_gate_arm[GATE_TIMER], g_gate_arm[GATE_REACTION], g_gate_arm[GATE_UNINSPECTED] };
+
+    DCHECK(c.none + c.program + c.timer + c.reaction + c.uninspected == c.asks,
+           "the orphan gate's arms do not account for its asks — each ask is counted at entry and its deciding "
+           "arm once at exit, so a difference is an exit that skipped the arm count");
+    return c;
+}
+
 /* How many of those drives the walk's preferred pass chose: a body whose source resolves a network door's entry
    name against the global object. The count lives on the runtime (the walk is quickjs's) and is forwarded here,
    where the session's context and the drive count it is read against are. A run in which no body carries that bit
@@ -8598,6 +8665,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
             ScriptType stype = flow_dyn_type(f);
             /* Which of the orphan step's three outcomes happened, so the branch names its own work. */
             int orphan_step;
+            /* The orphan gate's answer on this pass, GATE_NONE through GATE_UNINSPECTED once asked. */
+            int gate = -1;
             /* What the cursor says this step can do with the flow's own sequence: holding a program and being able
                to run one are different facts. `seq_compiles` means a program starts on this step and selects the
                fall-through to the compile below. `seq_awaits` means the row at the cursor is an external script whose
@@ -8967,9 +9036,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
              *
              * The host-owed return sits between "due now" and "finished". Everything above it is work §8.1.7.3
              * would run on this turn whatever is in flight (step 2 asks only whether a task queue has a runnable
-             * task, and a `fetch()` is on no queue until it completes); the two arms below it claim the run is
-             * finished (no handler will be attached to a rejection, nothing called a function), which an
-             * outstanding reply can still falsify, so it gates only them. */
+             * task, and a `fetch()` is on no queue until it completes); the arms below it claim the run is
+             * finished (no handler will be attached to a rejection), which an outstanding reply can still
+             * falsify, so it gates only them. The seed's claim, that nothing called a function, is gated by
+             * engine_outstanding_runs_page_code instead, which asks whether outstanding work can run page code. */
             /* A flow suspended mid-expression runs nothing else of its own, asked once here for every arm below.
                flow_blocked is an unanswered synchronous cross-instance read: the flow is parked at that operand, and
                running a `load` listener, rendering opportunity or timer callback now would interleave two program
@@ -9003,10 +9073,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                read; and no document-lifecycle stage left. That last terminates: document_lifecycle_step advances
                readiness 0 -> 1 -> 2, one stage per call, asserting it moved, and answers 0 once every document is
                at 2. */
-            /* Not while a reply or an awaited row is outstanding: a reply can still call the body, and a call built
-               before it arrives puts the drive's questions ahead of the reply's on a replay or behind them,
-               whichever the network decides, so a recorded path would diverge at its first slot. */
-            else if (!seq_awaits && !pending_outstanding(f->pending) &&
+            /* Not while outstanding work can still run page code (engine_outstanding_runs_page_code): that work
+               can call the body, and a call built before it puts the drive's questions ahead of the work's on a
+               replay or behind them, so a recorded path would diverge at its first slot. */
+            else if ((gate = engine_outstanding_runs_page_code(ctx, f, seq_awaits)) == GATE_NONE &&
                      (orphan_step = engine_orphan_resume(ctx, f)) != 0) {
                 g_step_unit = engine_orphan_unit(orphan_step); return 0; }
             /* §8.1.7.3's in-parallel half, the first clock-driven source because it can defer: it compares the next
@@ -9024,6 +9094,16 @@ static int flow_step(JSContext *ctx, Flow *f) {
                visit (a period started or one callback queued), because §5.1 step 6 and §5.2 step 3.4 queue a task
                rather than loop. */
             else if (engine_clock_idle_asked(ctx)) { g_step_unit = STEP_UNIT_IDLE_PERIOD; return 0; }
+            /* The forced surface, below every source the page arranged (the project's decision, stated as the
+               rule): the three rungs above are work the page arranged, and a seed is work the engine forces from a
+               body nothing asked for, so the page's clock runs first. It is a priority, not a cap. Above the owed
+               return and behind the gate: "nothing called this function" is a fact once no outstanding work can
+               still run page code, and a reply nobody reacts to is not such work. The exit's two invariants hold
+               by position: `g_orphan_claims_unmet` needs this rung to have answered 0 on the pass that reaches
+               the exit, which the exit asserts through `gate`. */
+            else if ((gate = engine_outstanding_runs_page_code(ctx, f, seq_awaits)) == GATE_NONE &&
+                     (orphan_step = engine_orphan_seed(ctx, f)) != 0) {
+                g_step_unit = engine_orphan_unit(orphan_step); return 0; }
             /* Only host-owed replies, an awaited script row or a refusal remain: no progress, and not finished.
              *
              * Below the clock-driven sources, as the lifecycle arm is: a debt no task source waits on must not
@@ -9033,7 +9113,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * clock and answer 0 where it fails; a due task still runs ahead of this return. Placed above them, one
              * request in the air would take the flow out of the pick until a host event, losing every due timer and
              * rendering opportunity (testharness.js sets `all_loaded` in a `setTimeout(…, 0)` from its `load`
-             * handler and would never complete). It stays above the three arms below, which claim the run is
+             * handler and would never complete). It stays above the two arms below, which claim the run is
              * finished.
              *
              * It asks `pending_outstanding`, not `pending_count`: a register holding one answered entry has a non-
@@ -9060,22 +9140,6 @@ static int flow_step(JSContext *ctx, Flow *f) {
                             : STEP_UNIT_AWAIT_DECLINED;
                 return FLOW_STEP_OWED;
             }
-            /* The forced surface, below every source the page arranged (the project's decision, stated as the
-               rule): the three rungs above are work the page arranged (a `setTimeout`, a `requestAnimationFrame`, a
-               ResizeObserver), and a seed is work the engine forces from a body nothing asked for. "What the bundle
-               CAN do but didn't" does not include a boot-path `setTimeout(…, 0)` the bundle does do, so the page's
-               clock runs first. "Drive early, the WFQ starves the unproductive" argues against the ladder's exit,
-               not against these rungs, where it is symmetric; what breaks the symmetry is whose work it is. It is a
-               priority, not a cap: both the clock and the seed's surface keep refilling (every closure bumps the
-               orphan generation), and this rung is reached whenever the three hooks decline (no fully-active
-               navigable, or a frame strictly ahead with a reply in the air per `event_loop_may_advance`, and no due
-               timer or idle work); the close-request arm below is reached on the solvergate fixtures. Few
-               dispatches reach this boundary at all, so the holder of the clock surface is the histogram's head,
-               not this rung. The exit's two invariants hold by position: `g_orphan_claims_unmet` needs the seed's
-               rung to have answered 0 on the pass that reaches the exit. Below the owed return, because "nothing
-               called this function" is a fact only once no reply is left that could call it. */
-            else if ((orphan_step = engine_orphan_seed(ctx, f)) != 0) {
-                g_step_unit = engine_orphan_unit(orphan_step); return 0; }
             /* HTML §8.1.4.7 Unhandled promise rejections' "notify about rejected promises" is not an arm of this
                ladder: perform a microtask checkpoint runs the queue to empty and then notifies for every settings
                object of the event loop, and engine_sched_slice performs that emptying test, so the notify is called
@@ -9101,8 +9165,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    delta and rank and is out of the pick until the host has something for it. */
                 if (g_referenced) { g_step_unit = STEP_UNIT_AWAIT_PEER; return FLOW_STEP_OWED; }
                 /* A resumed drive that never got its body back is counted on its way out. The seed is its own rung
-                   above this exit, so reaching the exit means the seed's rung answered 0 on this same pass: the heap
-                   holds no untaken orphan at this instant. The orphan set is not final (a live flow creates function
+                   above this exit and its gate answered GATE_NONE on this pass (asserted above), so reaching the exit
+                   means the seed's rung answered 0: the heap holds no untaken orphan at this instant. The orphan set is not final (a live flow creates function
                    objects, which is why js_closure2 bumps the generation), so the route is asked at a body's
                    creation (engine_orphan_born), satisfying a claim at the moment its body exists.
                    Named residual. Not covered: a body created by another member after this flow has passed this
@@ -9116,6 +9180,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    looks like one whose every drive landed. A claimant holding a body cannot stand here:
                    engine_orphan_resume builds the call, returns on exactly that pair and stands above every
                    clock-driven source, so only the two reads disagreeing reach the assert. */
+                DCHECK(gate == GATE_NONE,
+                       "a flow reached the exit while the orphan gate said outstanding work can still run its page "
+                       "code — the owed return above takes every owed row and reply, so this is an active timer "
+                       "every clock-driven source declined, and the seed's rung was never asked on this pass");
                 if (f->orphan_want) {
                     DCHECK(JS_IsUndefined(f->orphan_claim_fn),
                            "a flow holds an open orphan claim and a body at the same time — "
@@ -12520,6 +12588,9 @@ void solver_agent_free(JSContext *ctx)
     DCHECK(g_timer_hook == NULL,
            "§8.1.7's timer step was still registered when the solver's agent state was released — "
            "core/timing/timer.c gives it back at timer_free, which runs first");
+    DCHECK(g_timer_active_hook == NULL,
+           "the count of active timers was still registered when the solver's agent state was released — "
+           "core/timing/timer.c gives it back at timer_free, which runs first");
     DCHECK(g_rendering_hook == NULL,
            "§8.1.7.3's in-parallel half was still registered when the solver's agent state was released — "
            "core/rendering/rendering.c claimed it and gives it back at rendering_free");
@@ -12551,6 +12622,7 @@ void solver_agent_free(JSContext *ctx)
        for. The generation is a memo about one runtime's heap, so a second agent keeping it would skip a walk over a
        heap it never walked. */
     g_orphans_driven = 0; g_orphan_asks = 0;
+    g_gate_asks = 0; memset(g_gate_arm, 0, sizeof g_gate_arm);
     /* And the ask's partition with it: the parts sum to `g_orphan_asks`, so a summand a second session kept would
        break the equality at its first census. */
     g_orphan_asks_memo = 0; g_orphan_asks_empty = 0; g_orphan_asks_took = 0;

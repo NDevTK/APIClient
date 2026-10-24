@@ -267,6 +267,11 @@ int pending_entry_host_owed(JSValueConst e)
     return pend_owed(e) && !pending_entry_declined(e);
 }
 
+int pending_entry_owed(JSValueConst e)
+{
+    return pend_owed(e);
+}
+
 int pending_entry_declined(JSValueConst e)
 {
     JSValue d = pending_get(e, PEND_DECLINED);

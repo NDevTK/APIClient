@@ -876,6 +876,11 @@ JS_EXTERN JSValue JS_NewStepClosure(JSContext *ctx, int stepid, int length, int 
 JS_EXTERN JSValue JS_NewStepClosure2(JSContext *ctx, int stepid, const char *name, int length, int data_len,
                                      JSValueConst *data);
 JS_EXTERN JSValueConst JS_StepClosureData(const JSStepHdr *h, int i);
+/* The same captures read from OUTSIDE the machine, off the closure value a component holds (a parked delivery,
+   say). JS_IsStepClosureOf answers whether `fn` is a closure of the machine `stepid` names; JS_StepClosureDataOf
+   requires that and returns capture `i`, borrowed. Neither runs page code. */
+JS_EXTERN bool JS_IsStepClosureOf(JSContext *ctx, JSValueConst fn, int stepid);
+JS_EXTERN JSValueConst JS_StepClosureDataOf(JSContext *ctx, JSValueConst fn, int stepid, int i);
 
 /* WHAT step() RETURNS. A machine reports one of these at every stage, and a host machine reports them for the
    same reasons the engine's own do. */

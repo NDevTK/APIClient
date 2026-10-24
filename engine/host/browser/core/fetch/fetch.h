@@ -439,6 +439,11 @@ void fetch_set_provider(const FetchProvider *p);
 void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req);
 /* Abort the park fetch_owe made with `deliver`, through the provider's `cancel`. */
 void fetch_cancel(JSContext *ctx, JSValueConst deliver);
+/* Whether a parked delivery is §5.6 fetch()'s, and whether settling it runs page code: true when the fetch()
+   promise holds a reaction (a `then`, an `await`). Without one nothing holds the Response the reply becomes, so
+   nothing can read its body either. fetch_delivery_has_reaction requires fetch_is_delivery. */
+bool fetch_is_delivery(JSContext *ctx, JSValueConst deliver);
+bool fetch_delivery_has_reaction(JSContext *ctx, JSValueConst deliver);
 
 /* PARSE A URL A PAGE WROTE, against HTML's API base URL — the one operation every Fetch entry point performs
    on a URL string, so `new Request("/api/users")` and `Response.redirect("/there")` resolve the same address by

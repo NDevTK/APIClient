@@ -163,6 +163,9 @@ void engine_set_timer_hook(int (*fn)(JSContext *ctx));
 void engine_set_timer_due_hook(uint64_t (*fn)(JSContext *ctx));
 /* The delivery arm's half of the deadline race (core/timing/timer.h's timer_race_arrival). */
 void engine_set_timer_race_hook(int (*fn)(JSContext *ctx));
+/* How many timers stand in the maps of active timers (core/timing/timer.h's timer_active_count), registered by
+   the timer component beside the two above. */
+void engine_set_timer_active_hook(int (*fn)(JSContext *ctx));
 /* The next task this agent queues arrived at `seq` (a stamp flow_work_seq_next issued), so it is ordered by that
    arrival rather than by the enqueue. Named immediately before one enqueue and consumed by it; naming 0 after
    the enqueue asserts that it was. */
@@ -1255,6 +1258,12 @@ long engine_peer_marks_refused(void);
  * The last row cannot say whether the drive was never picked or was cut short; telling them apart needs a
  * picked marker a fork does not copy, since `orphan`, `fn` and `visits` are all inherited. */
 void engine_orphan_census(long *driven, long *asked);
+/* Which arm decided each ask of the orphan rungs' gate, "can outstanding work still run this flow's page code":
+   `none` (no, so a drive may be seeded or resumed), `program` (a script row or a program reply is owed), `timer`
+   (a timer is active), `reaction` (a fetch() reply whose promise holds a reaction is owed) and `uninspected` (a
+   reply whose listeners this engine does not inspect is owed). `asks` is their sum, asserted here. */
+typedef struct { long asks, none, program, timer, reaction, uninspected; } EngineOrphanGateCensus;
+EngineOrphanGateCensus engine_orphan_gate_census(void);
 /* Which exit each orphan ask took, one struct so the partition is one sample: `memo` (the generation cache
  * answered without walking), `empty` (the walk found no takeable body; the walk sees only bodies with a live
  * function object) and `took`. `asked == memo + empty + took` is asserted at engine_step_unit_runs. A high

@@ -742,6 +742,9 @@ int  pending_entry_declined(JSValueConst e);
    has exactly one definition and three callers at two arities, so a fourth question asked of an entry routes
    here instead of becoming a second right answer that can drift. */
 int  pending_entry_host_owed(JSValueConst e);
+/* …and the flow half at entry arity: the entry carries no answer yet, so its flow is still waiting on it. It is
+   `pend_owed` itself, exported for a reader that asks about one entry's kind. */
+int  pending_entry_owed(JSValueConst e);
 
 /* APPEND an entry of `kind` with every field present at its default (no URL, no answer, scriptRow 0, req 0).
    Creates the register if this is the flow's first. Returns the new entry, OWNED by the caller.

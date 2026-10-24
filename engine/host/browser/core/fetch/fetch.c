@@ -845,6 +845,20 @@ static const JSTrampStepDef js_fetch_deliver_def = {
 };
 static int g_deliver_stepid = -1;
 
+bool fetch_is_delivery(JSContext *ctx, JSValueConst deliver)
+{
+    DCHECK(g_deliver_stepid >= 0, "a parked delivery was asked about before fetch()'s machine was declared");
+    return JS_IsStepClosureOf(ctx, deliver, g_deliver_stepid);
+}
+
+/* Either resolving function names the same promise, so asking the resolve half answers for both. */
+bool fetch_delivery_has_reaction(JSContext *ctx, JSValueConst deliver)
+{
+    DCHECK(fetch_is_delivery(ctx, deliver), "fetch()'s promise was asked of a delivery that is not fetch()'s");
+    return JS_ResolvingFunctionHasReaction(ctx, JS_StepClosureDataOf(ctx, deliver, g_deliver_stepid,
+                                                                     FETCH_DELIVER_RESOLVE));
+}
+
 /* Fetch §5.6 "Fetch methods" step 11's abort steps, added to requestObject's signal: set locallyAborted, then
    abort the fetch() call with p, request, responseObject and the signal's abort reason — reject p (a no-op
    once processResponse has settled it) and, when responseObject exists and its body is still readable, error

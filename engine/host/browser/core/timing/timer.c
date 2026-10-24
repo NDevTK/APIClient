@@ -556,6 +556,38 @@ uint64_t timer_due_stamp(JSContext *ctx)
     return unknown ? 0 : best;
 }
 
+/* See timer.h. The walk is timer_due_stamp's, over every global of the agent; an entry counts exactly when it
+   carries an expiry, the test timer_earliest_in uses for membership of the map of active timers. */
+int timer_active_count(JSContext *ctx)
+{
+    JSValue all = navigable_tree_order(ctx);
+    uint32_t i, n = arr_len(ctx, all);
+    int count = 0;
+
+    for (i = 0; i < n; i++) {
+        JSValue proxy = JS_GetPropertyUint32(ctx, all, i);
+        JSContext *docctx = window_proxy_realm(ctx, proxy);
+        JSValue q = timer_map(docctx);
+        uint32_t k, m = arr_len(docctx, q);
+
+        for (k = 0; k < m; k++) {
+            JSValue e = JS_GetPropertyUint32(docctx, q, k);
+
+            if (JS_IsObject(e)) {
+                JSValue when = timer_entry_when(docctx, e);
+
+                if (!JS_IsUndefined(when)) count++;
+                JS_FreeValue(docctx, when);
+            }
+            JS_FreeValue(docctx, e);
+        }
+        JS_FreeValue(docctx, q);
+        JS_FreeValue(ctx, proxy);
+    }
+    JS_FreeValue(ctx, all);
+    return count;
+}
+
 /* See timer.h. Ahead of the clock is asked with event_loop_before, as timer_run_due asks it, so the same keys
    decide both; on the deadline-first arm timer_run_due re-asks the same predicate, reads the recorded answer
    and makes the licensed move. */
@@ -2477,6 +2509,7 @@ void timer_init(JSContext *ctx)
     engine_set_timer_hook(timer_run_due);
     engine_set_timer_due_hook(timer_due_stamp);
     engine_set_timer_race_hook(timer_race_arrival);
+    engine_set_timer_active_hook(timer_active_count);
     agent_state_flag("timer", &g_ready, "the declaration latch");
     agent_state_atom("timer", &g_atom_map, "§8.7 Timers's map key on a global's timer record");
     agent_state_atom("timer", &g_atom_next, "§8.7 Timers's next-handle key on that record");
@@ -2564,6 +2597,7 @@ void timer_free(JSRuntime *rt)
     engine_set_timer_hook(NULL);
     engine_set_timer_due_hook(NULL);
     engine_set_timer_race_hook(NULL);
+    engine_set_timer_active_hook(NULL);
     /* The MAPS are the realms' — each is released with its context, which is what the per-realm slot array is
        for, and each flow's own entries go with the delta that holds them. What this owns is the two interned
        keys. */

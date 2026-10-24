@@ -1778,6 +1778,8 @@ char *result_json(JSContext *ctx) {
         /* …and which exit each ask took, read at the same instant as the pair, since the four terms of one
            equality may not come from two moments. See solver/engine.h's `EngineOrphanExits`. */
         EngineOrphanExits orphanExits;
+        /* …and the gate those asks passed, read at the same instant. */
+        EngineOrphanGateCensus gate;
         JSOrphanWalkCost orphanWalk;
         /* …and what became of the tasks those deliveries queued: a listener running fewer times than delivered
            covers "the spec declined it" (§9.3.3 step 8.1), "no Document left to fire at" (§7.5.10 step 5) and
@@ -1794,6 +1796,7 @@ char *result_json(JSContext *ctx) {
         world_segment_stats(&made, &segf);
         engine_routed_census(&routedDelivered, &routedRefused, &routedZeroDelivery);
         engine_orphan_census(&orphansDriven, &orphansAsked);
+        gate = engine_orphan_gate_census();
         orphanExits = engine_orphan_exits();
         orphanWalk = JS_OrphanWalkCost(JS_GetRuntime(ctx));
         /* The orphan exits partition the asks; asserted here, where all four terms are in one hand (engine.c
@@ -1869,6 +1872,10 @@ char *result_json(JSContext *ctx) {
                                 `took` names the walk, not the cache, as the cost to repair: no cache skips a walk
                                 that succeeds. */
                              "\"_orphanAskMemo\":%ld,\"_orphanAskEmpty\":%ld,\"_orphanAskTook\":%ld,"
+                             /* …and which arm of the orphan rungs' gate decided each of its asks (engine.h's
+                                EngineOrphanGateCensus); the arms sum to `asks`, asserted at the accessor. */
+                             "\"_orphanGate\":{\"asks\":%ld,\"none\":%ld,\"program\":%ld,\"timer\":%ld,"
+                             "\"reaction\":%ld,\"uninspected\":%ld},"
                              /* …and what those walks cost, with both denominators. `_orphanWalkEntries /
                                 _orphanWalks` is the mean object-list length one take reads.
                                 `_orphanWalkFullCandidates / _orphanWalksFull` is the mean candidate population
@@ -1934,6 +1941,7 @@ char *result_json(JSContext *ctx) {
                      scensus, layoutm, schema,
                      orphansDriven, orphansAsked,
                      orphanExits.memo, orphanExits.empty, orphanExits.took,
+                     gate.asks, gate.none, gate.program, gate.timer, gate.reaction, gate.uninspected,
                      (unsigned long long)orphanWalk.walks, (unsigned long long)orphanWalk.entries,
                      (unsigned long long)orphanWalk.walks_full,
                      (unsigned long long)orphanWalk.full_candidates,

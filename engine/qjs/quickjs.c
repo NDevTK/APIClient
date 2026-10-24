@@ -95429,6 +95429,32 @@ JSValueConst JS_StepClosureData(const JSStepHdr *h, int i)
     return rec->data[i];
 }
 
+bool JS_IsStepClosureOf(JSContext *ctx, JSValueConst fn, int stepid)
+{
+    JSRuntime *rt = ctx->rt;
+    JSObject *p;
+
+    CHECK(stepid >= STEPDEF_COUNT && stepid - STEPDEF_COUNT < rt->host_step_def_count,
+          "JS_IsStepClosureOf was given an id JS_RegisterStepDef never handed out");
+    if (JS_VALUE_GET_TAG(fn) != JS_TAG_OBJECT)
+        return false;
+    p = JS_VALUE_GET_OBJ(fn);
+    return p->class_id == JS_CLASS_C_FUNCTION_DATA &&
+           p->u.c_function_data_record->step_def == rt->host_step_defs[stepid - STEPDEF_COUNT];
+}
+
+JSValueConst JS_StepClosureDataOf(JSContext *ctx, JSValueConst fn, int stepid, int i)
+{
+    JSCFunctionDataRecord *rec;
+
+    DCHECK(JS_IsStepClosureOf(ctx, fn, stepid),
+           "a step closure's capture was read off a value that is not a closure of that machine — the index "
+           "names a slot of one machine's capture list, so on any other value it reads an unrelated value");
+    rec = JS_VALUE_GET_OBJ(fn)->u.c_function_data_record;
+    DCHECK(i >= 0 && i < rec->data_len, "a step closure read past the values it captured");
+    return rec->data[i];
+}
+
 /* ATTACH REACTIONS TO A PROMISE THE WAY THE SPEC DOES — PerformPromiseThen, not a `.then` read.
  *
  * A host component that must react to a promise it did not create has only had one way to do it from outside
@@ -117641,6 +117667,27 @@ bool JS_IsPromiseHandled(JSContext *ctx, JSValueConst promise)
     (void)ctx;
     DCHECK(s != NULL, "a spec step asked whether something that is not a promise is handled");
     return s->is_handled;
+}
+
+bool JS_ResolvingFunctionHasReaction(JSContext *ctx, JSValueConst fn)
+{
+    JSObject *p;
+    JSPromiseFunctionData *d;
+    JSPromiseData *s;
+
+    (void)ctx;
+    DCHECK(JS_VALUE_GET_TAG(fn) == JS_TAG_OBJECT &&
+           (JS_VALUE_GET_OBJ(fn)->class_id == JS_CLASS_PROMISE_RESOLVE_FUNCTION ||
+            JS_VALUE_GET_OBJ(fn)->class_id == JS_CLASS_PROMISE_REJECT_FUNCTION),
+           "a promise's reactions were asked of something that is not one of its resolving functions");
+    p = JS_VALUE_GET_OBJ(fn);
+    d = p->u.promise_function_data;
+    if (!d || d->presolved->already_resolved)
+        return false;   /* the pair has fired: settling through it again runs nothing */
+    s = JS_GetOpaque(d->promise, JS_CLASS_PROMISE);
+    DCHECK(s != NULL, "a resolving function's data names something that is not a promise");
+    return s->promise_state == JS_PROMISE_PENDING &&
+           (!list_empty(&s->promise_reactions[0]) || !list_empty(&s->promise_reactions[1]));
 }
 
 /* 27.5.4.7.1 PromiseResolve ( ctor, resolution ) FOR A RESOLUTION THAT IS NOT AN OBJECT, which is a DIFFERENT

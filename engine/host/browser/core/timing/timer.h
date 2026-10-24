@@ -62,6 +62,12 @@ int timer_due_before(JSContext *ctx, JSValueConst moment);
    hoisted. Absence shows as: a due timer's task running behind work that arrived after it was due. */
 uint64_t timer_due_stamp(JSContext *ctx);
 
+/* HOW MANY TIMERS STAND IN THE MAPS OF ACTIVE TIMERS of every global of the agent, for the running flow (§8.7
+   Timers: an entry leaves that map when its task is queued, and a repeating timer re-enters it). A count and not
+   an order: it compares no moments, so it asks nothing a fork would decide, and an entry whose expiry is unknown
+   input counts like any other. */
+int timer_active_count(JSContext *ctx);
+
 /* THE DELIVERY ARM'S HALF OF THE DEADLINE RACE: where the timer source's next task is still ahead of the clock,
    ask whether its expiry comes before the arrival about to be delivered (event_loop_deadline_before_arrival),
    and on that arm fire it as timer_run_due does. Returns 1 when a timer fired; the caller then makes the
