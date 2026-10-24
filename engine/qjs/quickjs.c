@@ -28854,6 +28854,42 @@ static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f)
 static void js_desc_facts_dup(JSDescFacts *f);
 static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
 static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *tab, uint32_t len);
+/* A store into a declared record's OWN_VAL or OWN_ATOM field. The field is const, so `r->f = v` does not
+   compile and each writer states what it hands over: CONT_OWN_SET takes the field's own reference to a value
+   the caller keeps (a borrowed value is stored correctly by construction), CONT_OWN_MOVE adopts the caller's
+   reference, CONT_OWN_CLEAR releases the field's, CONT_OWN_TAKE moves it out to the caller, and CONT_OWN_FORGET
+   drops the slot's copy of a reference already handed elsewhere. A store asserts the slot holds no reference,
+   at the writer's own line. CONT_OWN_SLOT accepts only a field's address, so a wrong type is a compile error. */
+#define CONT_OWN_SLOT(p) _Generic((p), const JSValue *: (JSValue *)(p), JSValue *: (p))
+#define CONT_OWN_ASLOT(p) _Generic((p), const JSAtom *: (JSAtom *)(p), JSAtom *: (p))
+#define CONT_OWN_PUT_(slot, ...)                                                                           \
+    do {                                                                                                      \
+        JSValue *s_ = CONT_OWN_SLOT(slot);                                                                    \
+        DCHECK(!JS_VALUE_HAS_REF_COUNT(*s_), "a store into an owned field that still holds a reference");    \
+        *s_ = (__VA_ARGS__);                                                                                  \
+    } while (0)
+#define CONT_OWN_SET(ctx, slot, ...) CONT_OWN_PUT_(slot, js_dup(__VA_ARGS__))
+#define CONT_OWN_MOVE(slot, ...)    CONT_OWN_PUT_(slot, __VA_ARGS__)
+#define CONT_OWN_CLEAR(ctx, slot)                                                                          \
+    do { JSValue *s_ = CONT_OWN_SLOT(slot); JS_FreeValue((ctx), *s_); *s_ = JS_UNDEFINED; } while (0)
+#define CONT_OWN_FORGET(slot)       (*CONT_OWN_SLOT(slot) = JS_UNDEFINED)
+#define CONT_OWN_FORGET_AS(slot, ...) (*CONT_OWN_SLOT(slot) = (__VA_ARGS__))
+static inline JSValue cont_own_take(JSValue *s) { JSValue v = *s; *s = JS_UNDEFINED; return v; }
+#define CONT_OWN_TAKE(slot)         cont_own_take(CONT_OWN_SLOT(slot))
+#define CONT_OWN_APUT_(slot, a)                                                                            \
+    do {                                                                                                      \
+        JSAtom *s_ = CONT_OWN_ASLOT(slot);                                                                    \
+        DCHECK(__JS_AtomIsConst(*s_), "a store into an owned atom field that still holds a reference");       \
+        *s_ = (a);                                                                                            \
+    } while (0)
+#define CONT_OWN_SET_ATOM(ctx, slot, a) CONT_OWN_APUT_(slot, JS_DupAtom((ctx), (a)))
+#define CONT_OWN_MOVE_ATOM(slot, a)     CONT_OWN_APUT_(slot, a)
+#define CONT_OWN_CLEAR_ATOM(ctx, slot)                                                                     \
+    do { JSAtom *s_ = CONT_OWN_ASLOT(slot); JS_FreeAtom((ctx), *s_); *s_ = JS_ATOM_NULL; } while (0)
+#define CONT_OWN_FORGET_ATOM(slot)      (*CONT_OWN_ASLOT(slot) = JS_ATOM_NULL)
+static inline JSAtom cont_own_take_atom(JSAtom *s) { JSAtom a = *s; *s = JS_ATOM_NULL; return a; }
+#define CONT_OWN_TAKE_ATOM(slot)        cont_own_take_atom(CONT_OWN_ASLOT(slot))
+
 /* A continuation record lists its fields once, as F(role, type, name); CONT_RECORD_DEFINE expands its struct,
    release, copy and requester link from that list, so no walk can name a field another walk misses. Roles:
      OWN_VAL, OWN_ATOM  an owned JSValue (p_init makes it undefined) or JSAtom: copy takes, release drops one;
@@ -28869,8 +28905,8 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
      KIND_IMPLIES, CLONE_HOOK  no member: (kind, predicate on r) each walk asserts, or a copy's last step;
      VISITED   an embedded struct, `type` = (its type, its visit function), freed and taken by the step visitors.
    Each role defines one macro per walk; a role a walk does not define is a compile error at that walk. */
-#define CONT_REC_MEMBER_OWN_VAL(t, n) JSValue n;
-#define CONT_REC_MEMBER_OWN_ATOM(t, n) JSAtom n;
+#define CONT_REC_MEMBER_OWN_VAL(t, n) const JSValue n;
+#define CONT_REC_MEMBER_OWN_ATOM(t, n) const JSAtom n;
 #define CONT_REC_MEMBER_POD(t, n) t n;
 #define CONT_REC_MEMBER_BORROW(t, n) JSValueConst n;
 #define CONT_REC_MEMBER_OUTER(t, n) void *n; uint8_t n##_kind;
@@ -28891,8 +28927,8 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_FREE_OWN_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) JS_FreeValue(ctx, r->n[i_]);
 #define CONT_REC_FREE_BORROW_ARRAY(t, n)
 #define CONT_REC_FREE_OWN_VEC(t, n) if (r->n) { for (uint32_t k_ = 0; k_ < r->t; k_++) JS_FreeValue(ctx, r->n[k_]); js_free(ctx, r->n); }
-#define CONT_REC_DUP_OWN_VAL(t, n) c->n = js_dup(r->n);
-#define CONT_REC_DUP_OWN_ATOM(t, n) c->n = JS_DupAtom(ctx, r->n);
+#define CONT_REC_DUP_OWN_VAL(t, n) *CONT_OWN_SLOT(&c->n) = js_dup(r->n);
+#define CONT_REC_DUP_OWN_ATOM(t, n) *CONT_OWN_ASLOT(&c->n) = JS_DupAtom(ctx, r->n);
 #define CONT_REC_DUP_POD(t, n)
 #define CONT_REC_DUP_BORROW(t, n)
 #define CONT_REC_DUP_OUTER(t, n)
@@ -29002,7 +29038,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_OUTER_SET_KIND_FLAG(t, n)
 #define CONT_REC_DESC_OUT_KIND_FLAG(t, n)
 #define CONT_REC_AGREES_KIND_FLAG(t, n) ok_ = ok_ && (!!r->n == (kind == (t)));
-#define CONT_REC_INIT_OWN_VAL(t, n) r->n = JS_UNDEFINED;
+#define CONT_REC_INIT_OWN_VAL(t, n) *CONT_OWN_SLOT(&r->n) = JS_UNDEFINED;
 #define CONT_REC_INIT_OWN_ATOM(t, n)
 #define CONT_REC_INIT_POD(t, n)
 #define CONT_REC_INIT_BORROW(t, n)
@@ -29136,7 +29172,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
         T *c = js_malloc(ctx, sizeof(*c));                                                                     \
         if (unlikely(!c))                                                                                      \
             return NULL;                                                                                       \
-        *c = *r;                                                                                               \
+        memcpy(c, r, sizeof(*c));                                                                              \
         FIELDS(CONT_REC_DUP)                                                                                   \
         return c;                                                                                              \
     }                                                                                                          \
@@ -31847,8 +31883,8 @@ static void js_iter_consume_clone_view(JSContext *ctx, const JSIterConsume *os, 
 
         DCHECK(os->ta_classid == vp->class_id,
                "an unattached TypedArray view whose class is not the one its consume will attach a buffer for");
-        JS_FreeValue(ctx, ns->ta_target);
-        ns->ta_target = JS_NewObjectProtoClass(ctx, proto, vp->class_id);
+        CONT_OWN_CLEAR(ctx, &ns->ta_target);
+        CONT_OWN_MOVE(&ns->ta_target, JS_NewObjectProtoClass(ctx, proto, vp->class_id));
         CHECK(!JS_IsException(ns->ta_target), "OOM copying an unattached TypedArray view for a fork");
     }
 }
@@ -36005,7 +36041,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     sf->cur_pc = pc;
                     ok = js_mallocz(ctx, sizeof(*ok));
                     if (unlikely(!ok)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                    ok->atom = JS_DupAtom(ctx, atom); ok->pop = 1; ok->push = 1;
+                    CONT_OWN_SET_ATOM(ctx, &ok->atom, atom); ok->pop = 1; ok->push = 1;
                     ok->op = (uint8_t)opcode;
                     gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom;
                     gp_op = GP_GET; gp_val = JS_UNDEFINED;
@@ -36509,13 +36545,15 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                whole construct parks on the sequence and resumes AT the dispatch. */
                             JSArgList *agl = js_mallocz(ctx, sizeof(*agl));
                             if (unlikely(!agl)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                            agl->coerce = JS_UNDEFINED;
-                            agl->idx = JS_ATOM_NULL;
+                            CONT_OWN_FORGET(&agl->coerce);
+                            CONT_OWN_FORGET_ATOM(&agl->idx);
                             agl->phase = ARGL_LEN;
                             agl->resume = ARGL_TO_CONSTRUCT;
                             /* the record OWNS its resume shape — see JSArgList. The operand slots hold their
                                own reference for the whole suspension; this one is what a CLONE needs. */
-                            agl->func = js_dup(cf); agl->this_arg = js_dup(cnt); agl->src = js_dup(carr);
+                            CONT_OWN_SET(ctx, &agl->func, cf);
+                            CONT_OWN_SET(ctx, &agl->this_arg, cnt);
+                            CONT_OWN_SET(ctx, &agl->src, carr);
                             agl->cfirst = -2; agl->cargc = 1;   /* the caller pushed the triple, not the list */
                             agl->is_tail = 0;
                             sf->cur_pc = pc;
@@ -36723,16 +36761,18 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     pobj = js_promise_init_from_obj(ctx, pobj, rfuncs);   /* steps 4-8 */
                 }
                 if (unlikely(JS_IsException(pobj))) goto promise_exec_abort;
-                s = js_malloc_rt(rt, sizeof(*s));
+                s = js_mallocz_rt(rt, sizeof(*s));
                 if (unlikely(!s)) {
                     JS_FreeValue(ctx, pobj); JS_FreeValue(ctx, rfuncs[0]); JS_FreeValue(ctx, rfuncs[1]);
                     JS_ThrowOutOfMemory(ctx); goto promise_exec_abort;
                 }
-                s->promise = pobj;
+                CONT_OWN_MOVE(&s->promise, pobj);
                 s->resolving_funcs[0] = rfuncs[0];
                 s->resolving_funcs[1] = rfuncs[1];
-                s->super_ref = pe_super_ref; pe_super_ref = JS_UNDEFINED;   /* ownership moves to the continuation */
-                s->executor_own = pe_executor_own; pe_executor_own = JS_UNDEFINED;
+                /* ownership moves to the continuation */
+                CONT_OWN_MOVE(&s->super_ref, pe_super_ref);
+                pe_super_ref = JS_UNDEFINED;
+                CONT_OWN_MOVE(&s->executor_own, pe_executor_own); pe_executor_own = JS_UNDEFINED;
                 s->outer = pe_outer; s->outer_kind = pe_outer_kind;
                 /* a machine's own Construct borrows ITS buffer: nothing on the stack to pop */
                 s->orig_cfirst = pe_outer ? 0 : pe_cfirst;
@@ -37305,7 +37345,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     if (unlikely(!cp)) { free_arg_list(ctx, con_args_owned, con_argc); con_args_owned = NULL;
                                          JS_FreeValue(ctx, con_super_ref); JS_ThrowOutOfMemory(ctx); goto exception; }
                     cp->func = con_func; cp->ntgt = con_ntgt;   /* borrowed; see JSCtorProto */
-                    cp->super_ref = con_super_ref;   con_super_ref = JS_UNDEFINED;
+                    CONT_OWN_MOVE(&cp->super_ref, con_super_ref);   con_super_ref = JS_UNDEFINED;
                     cp->args = con_args; cp->argc = con_argc;
                     cp->args_owned = con_args_owned; con_args_owned = NULL;
                     /* THE POP THE ARM OWES, PARKED — not con_cargc, which this dispatch consumed and reset a
@@ -37456,7 +37496,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JSCtorProto *cp = js_mallocz(ctx, sizeof(*cp));
                     if (unlikely(!cp)) { free_arg_list(ctx, con_args_owned, con_argc); con_args_owned = NULL; JS_FreeValue(ctx, con_super_ref); JS_ThrowOutOfMemory(ctx); goto exception; }
                     cp->func = con_func; cp->ntgt = con_ntgt;   /* borrowed; see JSCtorProto */
-                    cp->super_ref = con_super_ref;   con_super_ref = JS_UNDEFINED;
+                    CONT_OWN_MOVE(&cp->super_ref, con_super_ref);   con_super_ref = JS_UNDEFINED;
                     cp->args = con_args; cp->argc = con_argc;
                     cp->args_owned = con_args_owned; con_args_owned = NULL;
                     cp->cargc = con_cargc; con_cargc = -1;
@@ -37521,10 +37561,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JS_FreeValue(ctx, cproto);
                     if (unlikely(JS_IsException(cthis))) { free_arg_list(ctx, con_args_owned, con_argc); con_args_owned = NULL; JS_FreeValue(ctx, con_super_ref); goto exception; }
                 }
-                cs = js_malloc_rt(rt, sizeof(*cs));
+                cs = js_mallocz_rt(rt, sizeof(*cs));
                 if (unlikely(!cs)) { free_arg_list(ctx, con_args_owned, con_argc); con_args_owned = NULL; JS_FreeValue(ctx, cthis); JS_FreeValue(ctx, con_super_ref); JS_ThrowOutOfMemory(ctx); goto exception; }
-                cs->created_obj = cthis;   /* owned here; substituted or freed at do_return / exception unwind */
-                cs->super_ref = con_super_ref; cs->from_super = con_from_super;
+                /* owned here; substituted or freed at do_return / exception unwind */
+                CONT_OWN_MOVE(&cs->created_obj, cthis);
+                CONT_OWN_MOVE(&cs->super_ref, con_super_ref); cs->from_super = con_from_super;
                 cs->outer = con_outer; cs->outer_kind = con_outer_kind;
                 con_outer = NULL; con_outer_kind = CONT_NONE;   /* read + reset: never leak onto the body's own constructs */
                 ntf = tramp_frame_new(rt);
@@ -37676,11 +37717,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     } else {
                         JSArgList *agl = js_mallocz(ctx, sizeof(*agl));
                         if (unlikely(!agl)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                        agl->coerce = JS_UNDEFINED;
-                        agl->idx = JS_ATOM_NULL;
+                        CONT_OWN_FORGET(&agl->coerce);
+                        CONT_OWN_FORGET_ATOM(&agl->idx);
                         agl->phase = ARGL_LEN;
                         /* the record OWNS its resume shape — see JSArgList. */
-                        agl->func = js_dup(nfunc); agl->this_arg = js_dup(thisArg); agl->src = js_dup(arrayArg);
+                        CONT_OWN_SET(ctx, &agl->func, nfunc);
+                        CONT_OWN_SET(ctx, &agl->this_arg, thisArg);
+                        CONT_OWN_SET(ctx, &agl->src, arrayArg);
                         agl->cfirst = ap_cfirst; agl->cargc = ap_cargc; agl->is_tail = tramp_is_tail;
                         sf->cur_pc = pc;
                         cont_st = agl;
@@ -39522,12 +39565,14 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (unlikely(!s)) { JS_FreeValue(ctx, tramp_iter_getiter); tramp_iter_getiter = JS_UNDEFINED; JS_ThrowOutOfMemory(ctx); goto exception; }
                 /* Array.from(items, mapfn, thisArg): dup the mapfn + thisArg (recognition checked mapfn callable).
                    sumPrecise takes no callback at all. */
-                s->mapfn = (sink0 == ITERCONS_FROM && call_argc >= 2) ? js_dup(call_argv[1]) : JS_UNDEFINED;
-                s->mapfn_this = (sink0 == ITERCONS_FROM && call_argc >= 3) ? js_dup(call_argv[2]) : JS_UNDEFINED;
+                CONT_OWN_MOVE(&s->mapfn, (sink0 == ITERCONS_FROM && call_argc >= 2) ? js_dup(call_argv[1])
+                                                                            : JS_UNDEFINED);
+                CONT_OWN_MOVE(&s->mapfn_this, (sink0 == ITERCONS_FROM && call_argc >= 3) ? js_dup(call_argv[2])
+                                                                                 : JS_UNDEFINED);
                 s->k = 0;
                 s->sink = sink0;
                 s->realm = js_callee_realm(ctx, call_argv[-1]);
-                s->from_ctor = (sink0 == ITERCONS_FROM) ? js_dup(thisv) : JS_UNDEFINED;
+                CONT_OWN_MOVE(&s->from_ctor, (sink0 == ITERCONS_FROM) ? js_dup(thisv) : JS_UNDEFINED);
                 s->from_owes_result = (sink0 == ITERCONS_FROM);
                 if (sink0 == ITERCONS_SUMPRECISE) sum_precise_init(&s->sum);
                 CONSUME_ADOPT_SHAPE(s);
@@ -39565,12 +39610,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (JS_IsException(acc)) goto exception;
                 s = js_iter_consume_new(ctx);
                 if (unlikely(!s)) { JS_FreeValue(ctx, acc); JS_ThrowOutOfMemory(ctx); goto exception; }
-                s->r = acc;
-                s->iter = js_dup(iterobj);
+                CONT_OWN_MOVE(&s->r, acc);
+                CONT_OWN_SET(ctx, &s->iter, iterobj);
                 /* GetIteratorDirect's nextMethod is a READ on the page's iterator — an accessor or a Proxy — and
                    it was a plain JS_GetProperty here. It is the same request the consumer's own acquire issues,
                    so the machine is built first and the read fills it in. */
-                s->mapfn = (call_argc >= 1) ? js_dup(call_argv[0]) : JS_UNDEFINED;
+                CONT_OWN_MOVE(&s->mapfn, (call_argc >= 1) ? js_dup(call_argv[0]) : JS_UNDEFINED);
                 s->k = 0;
                 s->sink = ITERCONS_ITERTERM;
                 s->setop = iterterm_kind;
@@ -39609,8 +39654,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        "setop consume: `this` must be a Set (the dispatch checked it)");
                 s = js_iter_consume_new(ctx);
                 if (unlikely(!s)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                s->adder = js_dup(thisset);   /* symmetricDifference / isSupersetOf consult THIS per element */
-                s->setlike = js_dup(setlike);
+                /* symmetricDifference / isSupersetOf consult THIS per element */
+                CONT_OWN_SET(ctx, &s->adder, thisset);
+                CONT_OWN_SET(ctx, &s->setlike, setlike);
                 s->k = 1;                     /* isSupersetOf: found-so-far = true (unused by the other two) */
                 s->sink = ITERCONS_SETOP;
                 s->setop = setop_kind;
@@ -39634,8 +39680,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                generator `*keys()` on the tramp. */
             {
                 JSIterConsume *s = (JSIterConsume *)cont_st;
-                tramp_iter_getiter = s->setrec_keys;
-                s->setrec_keys = JS_UNDEFINED;
+                tramp_iter_getiter = CONT_OWN_TAKE(&s->setrec_keys);
                 tramp_consume_iterable = s->setlike; tramp_consume_state = s; tramp_consume_kind = CONT_ITER_CONSUME;
                 goto do_consume_acquire_iterator;
             }
@@ -39690,7 +39735,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JSToPrim *tp = js_mallocz(ctx, sizeof(*tp));
                 if (unlikely(!tp)) { JS_ThrowOutOfMemory(ctx); goto exception; }
                 tp->outer = tp_outer; tp->outer_kind = tp_outer_kind;
-                tp->obj = js_dup(tp_outer ? tp_value : sp[tp_slot]);
+                CONT_OWN_SET(ctx, &tp->obj, tp_outer ? tp_value : sp[tp_slot]);
                 DCHECK(tp_outer != NULL || tp_op_byte != NULL,
                        "an operand-mode ToPrimitive reached the tramp with no opcode byte — the site must set "
                        "tp_op_byte, which is what the delivery restores `opcode` from");
@@ -40058,9 +40103,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     if (fmode == FOU_FOROF) { JS_FreeValue(ctx, sp[forof_unpack_off]); sp[forof_unpack_off] = JS_UNDEFINED; }
                     goto exception;
                 }
-                fu = js_malloc_rt(rt, sizeof(*fu));
+                fu = js_mallocz_rt(rt, sizeof(*fu));
                 if (unlikely(!fu)) { JS_FreeValue(ctx, ret_val); JS_ThrowOutOfMemory(ctx); goto exception; }
-                fu->res = ret_val; ret_val = JS_UNDEFINED;
+                CONT_OWN_MOVE(&fu->res, ret_val); ret_val = JS_UNDEFINED;
                 fu->rfof = forof_unpack_off;
                 fu->ph = 1;
                 fu->mode = fmode;
@@ -40124,7 +40169,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             int cr = (ki->op == GP_GET) ? js_proxy_get_check(ctx, &ki->facts, ki->operand)
                                                         : js_proxy_set_check(ctx, &ki->facts, ki->operand);
                             if (cr < 0) goto ki_fail_thrown;
-                            if (ki->op == GP_GET) { ret_val = ki->operand; ki->operand = JS_UNDEFINED; }
+                            if (ki->op == GP_GET) { ret_val = CONT_OWN_TAKE(&ki->operand); }
                             else ret_val = JS_TRUE;
                             goto ki_answer;
                         }
@@ -40240,9 +40285,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         /* the prototype pair: an extensible target constrains nothing (10.5.1 step 9 /
                            10.5.2 step 10), so [[GetPrototypeOf]] is a step the spec does not take. */
                         if (pv->extensible) {
-                            ret_val = (pv->op == GP_SETPROTO) ? JS_TRUE : pv->res;
-                            if (pv->op == GP_SETPROTO) JS_FreeValue(ctx, pv->res);
-                            pv->res = JS_UNDEFINED;
+                            if (pv->op == GP_SETPROTO) { ret_val = JS_TRUE; CONT_OWN_CLEAR(ctx, &pv->res); }
+                            else ret_val = CONT_OWN_TAKE(&pv->res);
                             goto pi_done;
                         }
                         pv->phase = PI_PROTO;
@@ -40266,9 +40310,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             JS_ThrowTypeError(ctx, "proxy: inconsistent prototype");
                             goto pi_throw;
                         }
-                        ret_val = (pv->op == GP_SETPROTO) ? JS_TRUE : pv->res;
-                        if (pv->op == GP_SETPROTO) JS_FreeValue(ctx, pv->res);
-                        pv->res = JS_UNDEFINED;
+                        if (pv->op == GP_SETPROTO) { ret_val = JS_TRUE; CONT_OWN_CLEAR(ctx, &pv->res); }
+                        else ret_val = CONT_OWN_TAKE(&pv->res);
                         goto pi_done;
                     }
                 }
@@ -40387,7 +40430,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         goto do_getprop_tramp;
                     }
                     if (ok->phase == OKC_TKEYS_GOT) {
-                        ok->tkeys = ret_val; ret_val = JS_UNDEFINED;
+                        CONT_OWN_MOVE(&ok->tkeys, ret_val); ret_val = JS_UNDEFINED;
                         if (js_ownkeys_atoms(ctx, ok->tkeys, &ok->tab2, &ok->len2) < 0) goto okc_throw;
                         ok->i = 0;
                         ok->phase = OKC_TDESC;
@@ -40512,8 +40555,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         goto do_getprop_complete;
                     }
                     /* step 13 opens: the trap's result is the operand of all twelve. */
-                    gd->cur.cb[0] = gd->trap_res;
-                    gd->trap_res = JS_UNDEFINED;
+                    gd->cur.cb[0] = CONT_OWN_TAKE(&gd->trap_res);
                     gd->phase = GD_WALK;
                     ret_val = JS_UNINITIALIZED;
                 }
@@ -40603,8 +40645,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            the answer is the per-position outcome-fork chain below, which is the question
                            step_length_unknown already asks on the READ side, under the same key, over the same
                            abstract operation. The two sides of §7.3.18 LengthOfArrayLike ( obj ) answer alike. */
-                        JS_FreeValue(ctx, al->coerce);
-                        al->coerce = ret_val; ret_val = JS_UNDEFINED;   /* owned across every ask, and freed by
+                        CONT_OWN_CLEAR(ctx, &al->coerce);
+                        CONT_OWN_MOVE(&al->coerce, ret_val);
+                        ret_val = JS_UNDEFINED;
+                        /* owned across every ask, and freed by
                                                                           the pin or by the teardown */
                         al->phase = ARGL_LEN_UNKNOWN;
                         al->fork_probe = 0;
@@ -40619,13 +40663,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                "with a primitive or with the unknown-input value the arm above has already "
                                "taken, so a second object here means some other request was delivered to this "
                                "machine's phase");
-                        al->coerce = ret_val; ret_val = JS_UNDEFINED;
+                        CONT_OWN_MOVE(&al->coerce, ret_val); ret_val = JS_UNDEFINED;
                         tp_outer = al; tp_outer_kind = CONT_ARG_LIST;
                         tp_value = al->coerce; tp_hint = HINT_NUMBER;
                         tp_slot = 0;
                         goto do_toprim_tramp;
                     }
-                    JS_FreeValue(ctx, al->coerce); al->coerce = JS_UNDEFINED;
+                    CONT_OWN_CLEAR(ctx, &al->coerce);
                     if (unlikely(JS_ToLengthFree(ctx, &al->len, ret_val))) {
                         ret_val = JS_UNDEFINED;
                         goto do_arg_list_throw;
@@ -40635,7 +40679,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 DCHECK(al->phase == ARGL_ELEM, "the arg-list sequence resumed in no phase");
                 /* the previous element arrived */
-                JS_FreeAtom(ctx, al->idx); al->idx = JS_ATOM_NULL;
+                CONT_OWN_CLEAR_ATOM(ctx, &al->idx);
                 al->tab[al->n++] = ret_val; ret_val = JS_UNDEFINED;
                 al->i++;
             do_arg_list_elem:
@@ -40644,7 +40688,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        and 6.b is `Let next be ? Get(obj, indexName)`, which is the read that suspends. (The
                        number stood here as "step 5", which is `Let index be 0` — a citation that sends its
                        reader to the wrong step reads as authoritative and is worse than none.) */
-                    al->idx = JS_NewAtomInt64(ctx, al->i);
+                    CONT_OWN_MOVE_ATOM(&al->idx, JS_NewAtomInt64(ctx, al->i));
                     if (unlikely(al->idx == JS_ATOM_NULL)) goto do_arg_list_throw;
                     gp_outer = al; gp_outer_kind = CONT_ARG_LIST;
                     gp_obj = al->src; gp_atom = al->idx;
@@ -40798,7 +40842,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        the pin is a copy into `len` and not a narrowing: the cursor is declared at ToLength's
                        own width. */
                     al->len = al->fork_probe;
-                    JS_FreeValue(ctx, al->coerce); al->coerce = JS_UNDEFINED;
+                    CONT_OWN_CLEAR(ctx, &al->coerce);
                     /* THE CURSOR IS NOT RESET, and the phase STAYS ARGL_LEN_UNKNOWN until the shared tail
                        stamps ARGL_ELEM: both fields are read by the resume assert one screen up, and a cursor
                        zeroed after a pin at position 7 would tell that reader the chain stands at position 0.
@@ -41349,15 +41393,16 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JS_ThrowOutOfMemory(ctx);
                         goto getprop_throw;
                     }
-                    pk->obj = js_dup(gp_obj);
-                    pk->val = js_dup(gp_val);
+                    CONT_OWN_SET(ctx, &pk->obj, gp_obj);
+                    CONT_OWN_SET(ctx, &pk->val, gp_val);
                     /* RESOLVED, exactly as the trap read resolves it: "the object itself" is a spelling of the
                        receiver and not a third state, and every consumer past this label reads gp_recv_r. */
-                    pk->recv = js_dup(JS_IsUninitialized(gp_recv) ? gp_obj : gp_recv);
-                    pk->method = JS_UNINITIALIZED;   /* no trap read has happened: this record is the operands */
-                    pk->getter = js_dup(gp_getter); pk->setter = js_dup(gp_setter);
+                    CONT_OWN_SET(ctx, &pk->recv, JS_IsUninitialized(gp_recv) ? gp_obj : gp_recv);
+                    /* no trap read has happened: this record is the operands */
+                    CONT_OWN_MOVE(&pk->method, JS_UNINITIALIZED);
+                    CONT_OWN_SET(ctx, &pk->getter, gp_getter); CONT_OWN_SET(ctx, &pk->setter, gp_setter);
                     pk->dflags = gp_dflags;
-                    pk->atom = JS_DupAtom(ctx, gp_atom);
+                    CONT_OWN_SET_ATOM(ctx, &pk->atom, gp_atom);
                     pk->outer = gp_outer; pk->outer_kind = gp_outer_kind;
                     pk->op = gp_op; pk->no_throw = (uint8_t)gp_no_throw;
                     pk->desc_out = gp_desc_out;
@@ -41502,13 +41547,14 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             if (!tg) {
                                 tg = js_mallocz(ctx, sizeof(*tg));
                                 if (unlikely(!tg)) { JS_ThrowOutOfMemory(ctx); goto getprop_throw; }
-                                tg->obj = js_dup(gp_obj);
-                                tg->val = js_dup(gp_val);
-                                tg->recv = js_dup(gp_recv_r);
-                                tg->method = JS_UNINITIALIZED;
-                                tg->getter = js_dup(gp_getter_r); tg->setter = js_dup(gp_setter_r);
+                                CONT_OWN_SET(ctx, &tg->obj, gp_obj);
+                                CONT_OWN_SET(ctx, &tg->val, gp_val);
+                                CONT_OWN_SET(ctx, &tg->recv, gp_recv_r);
+                                CONT_OWN_MOVE(&tg->method, JS_UNINITIALIZED);
+                                CONT_OWN_SET(ctx, &tg->getter, gp_getter_r);
+                                CONT_OWN_SET(ctx, &tg->setter, gp_setter_r);
                                 tg->dflags = gp_dflags_r;
-                                tg->atom = JS_DupAtom(ctx, gp_atom);
+                                CONT_OWN_SET_ATOM(ctx, &tg->atom, gp_atom);
                                 tg->outer = gp_outer; tg->outer_kind = gp_outer_kind;
                                 tg->op = gp_op; tg->no_throw = (uint8_t)gp_nothrow_r;
                                 tg->desc_out = gp_descout_r;
@@ -41525,8 +41571,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         }
                         /* the read produced it. GetMethod maps null onto undefined; a non-callable trap is the
                            convergence point's TypeError, since nothing observable happens in between. */
-                        method = gp_trapst->method;
-                        gp_trapst->method = JS_UNDEFINED;
+                        method = CONT_OWN_TAKE(&gp_trapst->method);
                         if (JS_IsNull(method)) { JS_FreeValue(ctx, method); method = JS_UNDEFINED; }
                         if (JS_IsUndefined(method)
                             && JS_VALUE_GET_TAG(pd->target) == JS_TAG_OBJECT
@@ -41872,10 +41917,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                   if (unlikely(!srealm)) { js_setmap_ctor_free(ctx, sc); goto exception; }
                                   rv = js_dup(srealm->class_proto[JS_CLASS_MAP + sc->magic]);
                               }
-                              scs->r = JS_NewObjectProtoClass(ctx, rv, JS_CLASS_MAP + sc->magic);
+                              CONT_OWN_MOVE(&scs->r, JS_NewObjectProtoClass(ctx, rv, JS_CLASS_MAP + sc->magic));
                               JS_FreeValue(ctx, rv);
                               if (unlikely(JS_IsException(scs->r))) {
-                                  scs->r = JS_UNDEFINED; js_setmap_ctor_free(ctx, sc); goto exception;
+                                  CONT_OWN_FORGET(&scs->r); js_setmap_ctor_free(ctx, sc); goto exception;
                               }
                               if (unlikely(js_map_state_init(ctx, scs->r, sc->magic) < 0)) {
                                   js_setmap_ctor_free(ctx, sc); goto exception;
@@ -41895,8 +41940,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                               js_setmap_ctor_free(ctx, sc);
                               goto exception;
                           }
-                          scs->adder = rv;
-                          tramp_iter_getiter = sc->getiter; sc->getiter = JS_UNDEFINED;
+                          CONT_OWN_MOVE(&scs->adder, rv);
+                          tramp_iter_getiter = CONT_OWN_TAKE(&sc->getiter);
                           tramp_consume_iterable = sc->iterable;
                           tramp_consume_state = scs; tramp_consume_kind = CONT_ITER_CONSUME;
                           sc->consume = NULL;   /* the machine is the acquire's now */
@@ -41916,14 +41961,14 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                               if (unlikely(!trealm)) { js_ta_target_free(ctx, tt); goto exception; }
                               tproto = js_dup(trealm->class_proto[tt->class_id]);
                           }
-                          tcs->ta_target = JS_NewObjectProtoClass(ctx, tproto, tt->class_id);
+                          CONT_OWN_MOVE(&tcs->ta_target, JS_NewObjectProtoClass(ctx, tproto, tt->class_id));
                           JS_FreeValue(ctx, tproto);
                           if (unlikely(JS_IsException(tcs->ta_target))) {
-                              tcs->ta_target = JS_UNDEFINED;
+                              CONT_OWN_FORGET(&tcs->ta_target);
                               js_ta_target_free(ctx, tt);
                               goto exception;
                           }
-                          tramp_iter_getiter = tt->getiter; tt->getiter = JS_UNDEFINED;
+                          tramp_iter_getiter = CONT_OWN_TAKE(&tt->getiter);
                           tramp_consume_iterable = tt->iterable;
                           tramp_consume_state = tcs; tramp_consume_kind = CONT_ITER_CONSUME;
                           tt->consume = NULL;   /* the machine is the acquire's now, not this state's */
@@ -41934,7 +41979,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                           /* the new.target's `prototype` is in hand: restore the parked CONSTRUCT and run it. */
                           JSCtorProto *cp = gouter0;
                           con_func = cp->func; con_ntgt = cp->ntgt;
-                          con_super_ref = cp->super_ref; cp->super_ref = JS_UNDEFINED;
+                          con_super_ref = CONT_OWN_TAKE(&cp->super_ref);
                           con_args = cp->args; con_argc = cp->argc;
                           con_args_owned = cp->args_owned; cp->args_owned = NULL;
                           con_cargc = cp->cargc; con_from_super = cp->from_super;
@@ -41961,7 +42006,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                              every ordinary proxy. Restore the operation waiting on it and re-enter with the
                              method in hand, the SAME arm the suspended read resumes into. */
                           JSTrapGet *tg = gouter0;
-                          tg->method = ret_val;
+                          CONT_OWN_MOVE(&tg->method, ret_val);
                           gp_obj = tg->obj; gp_atom = tg->atom; gp_op = tg->op; gp_val = tg->val;
                           gp_recv = tg->recv; gp_no_throw = tg->no_throw; gp_desc_out = tg->desc_out;
                           gp_getter = tg->getter; gp_setter = tg->setter; gp_dflags = tg->dflags;
@@ -42054,25 +42099,26 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JS_ThrowOutOfMemory(ctx);
                     goto getprop_throw;
                 }
-                gp->target = tgt;
+                CONT_OWN_MOVE(&gp->target, tgt);
                 /* GP_OWNKEYS's invariant is stated over the PROXY, not just its target: 10.5.11 re-reads
                    [[IsRevoked]] between the trap and the check, so the check needs the proxy object. The `value`
                    slot is the write's operand and is otherwise unused, so it carries it. */
-                gp->value = (gp_op == GP_SET || gp_op == GP_DEFINE || gp_op == GP_SETPROTO) ? js_dup(gp_val)
-                          : (gp_op == GP_OWNKEYS || gp_op == GP_GETOWNPROP || gp_op == GP_GETPROTO
-                             || gp_op == GP_ISEXT || gp_op == GP_PREVEXT)
-                            ? js_dup(gp_obj) : JS_UNDEFINED;
-                gp->getter = (gp_op == GP_DEFINE) ? js_dup(gp_getter_r) : JS_UNDEFINED;
-                gp->setter = (gp_op == GP_DEFINE) ? js_dup(gp_setter_r) : JS_UNDEFINED;
+                CONT_OWN_MOVE(&gp->value, (gp_op == GP_SET || gp_op == GP_DEFINE || gp_op == GP_SETPROTO)
+                              ? js_dup(gp_val)
+                              : (gp_op == GP_OWNKEYS || gp_op == GP_GETOWNPROP || gp_op == GP_GETPROTO
+                                 || gp_op == GP_ISEXT || gp_op == GP_PREVEXT)
+                                ? js_dup(gp_obj) : JS_UNDEFINED);
+                CONT_OWN_MOVE(&gp->getter, (gp_op == GP_DEFINE) ? js_dup(gp_getter_r) : JS_UNDEFINED);
+                CONT_OWN_MOVE(&gp->setter, (gp_op == GP_DEFINE) ? js_dup(gp_setter_r) : JS_UNDEFINED);
                 gp->dflags = gp_dflags_r;
-                gp->atom = JS_DupAtom(ctx, gp_atom);
+                CONT_OWN_SET_ATOM(ctx, &gp->atom, gp_atom);
                 gp->outer = gp_outer; gp->outer_kind = gp_outer_kind;
                 gp->op = gp_op;
                 gp->no_throw = (uint8_t)gp_nothrow_r;
                 gp->desc_out = gp_descout_r;
-                gp->recv = (JS_VALUE_GET_OBJ(gp_recv_r) == JS_VALUE_GET_OBJ(gp_obj)
-                            && JS_VALUE_GET_TAG(gp_recv_r) == JS_VALUE_GET_TAG(gp_obj))
-                           ? JS_UNINITIALIZED : js_dup(gp_recv_r);
+                CONT_OWN_MOVE(&gp->recv, (JS_VALUE_GET_OBJ(gp_recv_r) == JS_VALUE_GET_OBJ(gp_obj)
+                                          && JS_VALUE_GET_TAG(gp_recv_r) == JS_VALUE_GET_TAG(gp_obj))
+                                         ? JS_UNINITIALIZED : js_dup(gp_recv_r));
                 if (accessor) {
                     gp->cb[0] = js_dup(gp_recv_r);                           /* this = the receiver */
                     gp->cb[1] = js_dup(JS_MKPTR(JS_TAG_OBJECT, accessor));   /* the accessor */
@@ -42158,14 +42204,14 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            and only this one lacked it — so the arm below had to invent a teardown for a register
                            that should never have reached it holding anything. */
                         ret_val = JS_UNDEFINED;
-                        al->obj = js_dup(gp_obj);
-                        al->val = js_dup(gp_val);
-                        al->recv = js_dup(gp_recv_r);
-                        al->atom = JS_DupAtom(ctx, gp_atom);
+                        CONT_OWN_SET(ctx, &al->obj, gp_obj);
+                        CONT_OWN_SET(ctx, &al->val, gp_val);
+                        CONT_OWN_SET(ctx, &al->recv, gp_recv_r);
+                        CONT_OWN_SET_ATOM(ctx, &al->atom, gp_atom);
                         al->op = (uint8_t)gp_op;
                         al->no_throw = (uint8_t)gp_nothrow_r;
-                        al->getter = js_dup(gp_getter_r);
-                        al->setter = js_dup(gp_setter_r);
+                        CONT_OWN_SET(ctx, &al->getter, gp_getter_r);
+                        CONT_OWN_SET(ctx, &al->setter, gp_setter_r);
                         al->dflags = gp_dflags_r;
                         DCHECK(gp_al_phase == AL_UINT32 || gp_al_phase == AL_TA_PRIM,
                                "a keyed write parked across a coercion with no algorithm selected");
@@ -42187,9 +42233,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     {
                         JSSetRecv *sr = js_mallocz(ctx, sizeof(*sr));
                         if (unlikely(!sr)) { JS_ThrowOutOfMemory(ctx); goto getprop_throw; }
-                        sr->recv = js_dup(gp_recv_r);
-                        sr->val = js_dup(gp_val);
-                        sr->atom = JS_DupAtom(ctx, gp_atom);
+                        CONT_OWN_SET(ctx, &sr->recv, gp_recv_r);
+                        CONT_OWN_SET(ctx, &sr->val, gp_val);
+                        CONT_OWN_SET_ATOM(ctx, &sr->atom, gp_atom);
                         sr->no_throw = (uint8_t)gp_nothrow_r;
                         sr->phase = SR_GOPD;
                         js_desc_facts_init(&sr->facts);
@@ -42453,7 +42499,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 DCHECK(fc->consumer_kind == CONT_ITER_CONSUME,
                        "Array.from's Construct is waited on by an iterator-consume machine and nothing else");
                 DCHECK(JS_IsUndefined(fs2->r), "Array.from's result object is built exactly once");
-                fs2->r = ret_val;
+                CONT_OWN_MOVE(&fs2->r, ret_val);
                 tramp_consume_state = fc->consumer;
                 tramp_consume_kind = fc->consumer_kind;
                 tramp_consume_iterable = fc->iterable;
@@ -42543,9 +42589,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                                              : JS_NULL;
                             }
                             tf->ctor = fs->ta_isfrom ? fs->adder : JS_UNDEFINED;
-                            if (fs->ta_isfrom) fs->adder = JS_UNDEFINED;
-                            tf->mapfn = fs->mapfn;                fs->mapfn = JS_UNDEFINED;
-                            tf->this_arg = fs->mapfn_this;        fs->mapfn_this = JS_UNDEFINED;
+                            if (fs->ta_isfrom) CONT_OWN_FORGET(&fs->adder);
+                            CONT_OWN_MOVE(&tf->mapfn, fs->mapfn);                CONT_OWN_FORGET(&fs->mapfn);
+                            tf->this_arg = CONT_OWN_TAKE(&fs->mapfn_this);
                             tf->el = JS_UNDEFINED;
                             tf->len = 0; tf->k = 0;
                             tf->classid = fs->ta_classid;
@@ -42585,15 +42631,15 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (tramp_consume_kind == CONT_ITER_CONSUME) {
                     JSIterConsume *fs = (JSIterConsume *)tramp_consume_state;
                     if (fs->from_owes_result) {
-                        JSValue ctor = fs->from_ctor;
-                        fs->from_ctor = JS_UNDEFINED;
+                        JSValue ctor = CONT_OWN_TAKE(&fs->from_ctor);
                         fs->from_owes_result = 0;
                         DCHECK(JS_IsUndefined(fs->r), "Array.from's result object is built exactly once");
                         if (!JS_IsConstructor(ctx, ctor)) {
                             JS_FreeValue(ctx, ctor);
-                            fs->r = JS_NewArray(fs->realm);   /* ArrayCreate(0) in `from`'s OWN realm; no user code at all */
+                            /* ArrayCreate(0) in `from`'s OWN realm; no user code at all */
+                            CONT_OWN_MOVE(&fs->r, JS_NewArray(fs->realm));
                             if (JS_IsException(fs->r)) {
-                                fs->r = JS_UNDEFINED;
+                                CONT_OWN_FORGET(&fs->r);
                                 JS_FreeValue(ctx, method);
                                 tramp_consume_acquired = JS_EXCEPTION;
                                 goto do_consume_deliver_iterator;
@@ -42667,7 +42713,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             {
                 JSPromiseAll *ps = (JSPromiseAll *)cont_st;
                 DCHECK(JS_IsUndefined(ps->next), "a Promise combinator already holds a nextMethod");
-                ps->next = ret_val;
+                CONT_OWN_MOVE(&ps->next, ret_val);
                 ret_val = JS_UNINITIALIZED;
                 goto do_promise_all_step;
             }
@@ -42678,7 +42724,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             {
                 JSIterConsume *cs = (JSIterConsume *)cont_st;
                 DCHECK(JS_IsUndefined(cs->next), "a consumer already holds a nextMethod");
-                cs->next = ret_val;
+                CONT_OWN_MOVE(&cs->next, ret_val);
                 ret_val = JS_UNINITIALIZED;   /* first step: no previous next() result */
                 goto do_iter_consume_step;
             }
@@ -42694,7 +42740,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (ckind == CONT_ITER_CONSUME) {
                     JSIterConsume *cs = (JSIterConsume *)cst;
                     if (JS_IsException(acq)) { js_iter_consume_end(ctx, cs); js_free_rt(rt, cs); goto exception; }
-                    cs->iter = acq;
+                    CONT_OWN_MOVE(&cs->iter, acq);
                     /* GetIterator step 5.b: the nextMethod read is the page's code on a Proxy or an accessor. */
                     gp_outer = cs; gp_outer_kind = CONT_CONSUME_NEXT_GET;
                     gp_obj = cs->iter; gp_atom = JS_ATOM_next; gp_op = GP_GET; gp_val = JS_UNDEFINED;
@@ -42725,7 +42771,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JSValue err, rr, r;
                     int cf; int cg; uint8_t itl;
                     if (JS_IsException(acq)) goto consume_deliver_pa_reject;
-                    ps->iter = acq;
+                    CONT_OWN_MOVE(&ps->iter, acq);
                     /* GetIterator step 5.b: the nextMethod read is the page's code on a Proxy or an accessor. */
                     gp_outer = ps; gp_outer_kind = CONT_PROMISE_ALL_NEXT_GET;
                     gp_obj = ps->iter; gp_atom = JS_ATOM_next; gp_op = GP_GET; gp_val = JS_UNDEFINED;
@@ -42819,7 +42865,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 s->orig_cargc  = smc_outer ? 0 : smc_cargc;
                 s->orig_is_tail = smc_outer ? 0 : tramp_is_tail;
                 smc_outer = NULL; smc_outer_kind = CONT_NONE;
-                s->super_ref = smc_super_ref; smc_super_ref = JS_UNDEFINED;   /* super() entry owns it */
+                CONT_OWN_MOVE(&s->super_ref, smc_super_ref); smc_super_ref = JS_UNDEFINED;   /* super() entry owns it */
                 s->args_own = smc_args_own; s->args_own_n = smc_args_own_n;   /* NULL for an operand shape */
                 smc_args_own = NULL; smc_args_own_n = 0;
                 sc = js_mallocz(ctx, sizeof(*sc));
@@ -42829,8 +42875,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JS_ThrowOutOfMemory(ctx); goto exception;
                 }
                 sc->consume = s;
-                sc->ntgt = js_dup(smc_ntgt);
-                sc->getiter = tramp_iter_getiter; tramp_iter_getiter = JS_UNDEFINED;
+                CONT_OWN_SET(ctx, &sc->ntgt, smc_ntgt);
+                CONT_OWN_MOVE(&sc->getiter, tramp_iter_getiter); tramp_iter_getiter = JS_UNDEFINED;
                 sc->iterable = smc_items;
                 sc->magic = smc_magic;
                 sc->phase = SMC_PROTO;
@@ -42859,8 +42905,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (JS_IsException(box)) goto exception;
                 s = js_iter_consume_new(ctx);
                 if (unlikely(!s)) { JS_FreeValue(ctx, box); JS_ThrowOutOfMemory(ctx); goto exception; }
-                s->r = box;
-                s->mapfn = (call_argc >= 2) ? js_dup(call_argv[1]) : JS_UNDEFINED;
+                CONT_OWN_MOVE(&s->r, box);
+                CONT_OWN_MOVE(&s->mapfn, (call_argc >= 2) ? js_dup(call_argv[1]) : JS_UNDEFINED);
                 s->k = 0;
                 s->sink = ITERCONS_GROUPBY;
                 s->setop = groupby_kind;
@@ -42881,7 +42927,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (JS_IsException(obj)) { JS_FreeValue(ctx, tramp_iter_getiter); tramp_iter_getiter = JS_UNDEFINED; goto exception; }
                 s = js_iter_consume_new(ctx);
                 if (unlikely(!s)) { JS_FreeValue(ctx, tramp_iter_getiter); tramp_iter_getiter = JS_UNDEFINED; JS_FreeValue(ctx, obj); JS_ThrowOutOfMemory(ctx); goto exception; }
-                s->r = obj;
+                CONT_OWN_MOVE(&s->r, obj);
                 s->k = 0;
                 s->sink = ITERCONS_OBJENTRIES;
                 CONSUME_ADOPT_SHAPE(s);
@@ -42927,7 +42973,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     }
                     so = js_iter_consume_new(ctx);
                     if (unlikely(!so)) { JS_FreeValue(ctx, lst); JS_ThrowOutOfMemory(ctx); goto exception; }
-                    so->r = lst;
+                    CONT_OWN_MOVE(&so->r, lst);
                     /* The owned argument LIST goes on the state, by the rule the `from` arm below states in as
                        many words: a spread or an .apply builds the arguments on the heap, the teardown frees
                        exactly what the state holds, and this arm was the one that never took them. That leaked
@@ -42935,7 +42981,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        of it — while the plain call, which has no such list, was clean. */
                     so->args_own = tac_args_own; so->args_own_n = tac_args_own_n;
                     tac_args_own = NULL; tac_args_own_n = 0;
-                    so->adder = js_dup(ntgt);
+                    CONT_OWN_SET(ctx, &so->adder, ntgt);
                     so->k = ta_argc; so->ta_k = 0;
                     so->sink = ITERCONS_FROM; so->ta_isfrom = 1; so->ta_classid = 0;
                     so->ta_phase = 1;
@@ -42968,7 +43014,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (unlikely(!s)) { JS_FreeValue(ctx, tramp_iter_getiter); tramp_iter_getiter = JS_UNDEFINED; JS_ThrowOutOfMemory(ctx); goto exception; }
                 tmp = JS_NewArray(ctx);
                 if (JS_IsException(tmp)) { JS_FreeValue(ctx, tramp_iter_getiter); tramp_iter_getiter = JS_UNDEFINED; js_free_rt(rt, s); goto exception; }
-                s->r = tmp;
+                CONT_OWN_MOVE(&s->r, tmp);
                 /* the owned argument LIST goes on the state HERE, before anything that can throw: the create
                    below reads new_target's `prototype` and a getter there is page code. Setting it after that
                    read leaked the whole graph on custom-proto-access-throws, because the teardown frees exactly
@@ -42983,12 +43029,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    teardown and once through the dispatch's. s->outer is the flag from here on. */
                 s->outer = tac_outer; s->outer_kind = tac_outer_kind;
                 tac_outer = NULL; tac_outer_kind = CONT_NONE;
-                s->super_ref = tac_super_ref; tac_super_ref = JS_UNDEFINED;
-                s->adder = js_dup(ntgt);   /* the new_target/ctor, used at the finish to create the typed array */
+                CONT_OWN_MOVE(&s->super_ref, tac_super_ref); tac_super_ref = JS_UNDEFINED;
+                /* the new_target/ctor, used at the finish to create the typed array */
+                CONT_OWN_SET(ctx, &s->adder, ntgt);
                 /* TypedArray.from(gen, mapfn, thisArg): carry the mapfn; it is applied at the finish (via
                    js_typed_array_from on the collected array — spec map-after-create order), NOT during the collect. */
-                s->mapfn = (is_from && ta_argc >= 2) ? js_dup(ta_argv[1]) : JS_UNDEFINED;
-                s->mapfn_this = (is_from && ta_argc >= 3) ? js_dup(ta_argv[2]) : JS_UNDEFINED;
+                CONT_OWN_MOVE(&s->mapfn, (is_from && ta_argc >= 2) ? js_dup(ta_argv[1]) : JS_UNDEFINED);
+                CONT_OWN_MOVE(&s->mapfn_this, (is_from && ta_argc >= 3) ? js_dup(ta_argv[2]) : JS_UNDEFINED);
                 s->ta_classid = is_from ? 0 : ta_classid;   /* the from path CONSTRUCTS the receiver; only new TypedArray(iterable) creates by class id */
                 s->ta_isfrom = is_from;
                 s->k = 0;
@@ -43021,8 +43068,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JS_ThrowOutOfMemory(ctx); goto exception;
                     }
                     tt->consume = s;
-                    tt->ntgt = js_dup(ntgt);
-                    tt->getiter = tramp_iter_getiter; tramp_iter_getiter = JS_UNDEFINED;
+                    CONT_OWN_SET(ctx, &tt->ntgt, ntgt);
+                    CONT_OWN_MOVE(&tt->getiter, tramp_iter_getiter); tramp_iter_getiter = JS_UNDEFINED;
                     tt->iterable = ta_src;
                     tt->class_id = ta_classid;
                     sf->cur_pc = pc;
@@ -43044,7 +43091,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             {
                 JSIterConsume *s = js_iter_consume_new(ctx);
                 if (unlikely(!s)) { JS_FreeValue(ctx, tramp_iter_getiter); tramp_iter_getiter = JS_UNDEFINED; JS_ThrowOutOfMemory(ctx); goto exception; }
-                s->r = js_dup(sp[-3]);            /* the array being built — a shared ref; appends land on sp[-3] too */
+                /* the array being built — a shared ref; appends land on sp[-3] too */
+                CONT_OWN_SET(ctx, &s->r, sp[-3]);
                 s->k = JS_VALUE_GET_INT(sp[-2]);  /* the current append position */
                 s->sink = ITERCONS_SPREAD;
                 tramp_consume_iterable = sp[-1]; tramp_consume_state = s; tramp_consume_kind = CONT_ITER_CONSUME;
@@ -43293,7 +43341,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        not free them); everything else the state owns goes through the ONE owned-field list. Freeing
                        the rest by hand here would be a second list beside JS_ITER_CONSUME_FIELDS. */
                     DCHECK(!s->from_owes_result, "the consume finished without ever building Array.from's result object");
-                    JSValue r = s->r;                          s->r = JS_UNDEFINED;
+                    JSValue r = CONT_OWN_TAKE(&s->r);
                     int cfirst = s->orig_cfirst, cargc = s->orig_cargc;
                     uint8_t itail = s->orig_is_tail;
                     void *fin_outer = s->outer; uint8_t fin_outer_kind = s->outer_kind;
@@ -43302,9 +43350,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     uint8_t sink = s->sink;
                     uint8_t is_tafrom = s->ta_isfrom;
                     int ta_cid = s->ta_classid;
-                    JSValue ta_ntgt = s->adder;                s->adder = JS_UNDEFINED;   /* new TypedArray(gen): the new_target/ctor; else the add/set method or UNDEFINED */
-                    JSValue ta_mapfn = s->mapfn;               s->mapfn = JS_UNDEFINED;   /* TypedArray.from(gen, mapfn): applied here */
-                    JSValue ta_mapfn_this = s->mapfn_this;     s->mapfn_this = JS_UNDEFINED;
+                    /* new TypedArray(gen): the new_target/ctor; else the add/set method or UNDEFINED */
+                    JSValue ta_ntgt = CONT_OWN_TAKE(&s->adder);
+                    /* TypedArray.from(gen, mapfn): applied here */
+                    JSValue ta_mapfn = CONT_OWN_TAKE(&s->mapfn);
+                    JSValue ta_mapfn_this = CONT_OWN_TAKE(&s->mapfn_this);
                     js_iter_consume_end(ctx, s); js_free_rt(rt, s);
                     JS_FreeValue(ctx, ta_ntgt);   /* the add/set method, or the TypedArray new_target the create phase used */
                     JS_FreeValue(ctx, ta_mapfn); JS_FreeValue(ctx, ta_mapfn_this);   /* Array.from's mapfn (applied during collect) */
@@ -43360,27 +43410,27 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (unlikely(!s)) { JS_FreeValue(ctx, tramp_iter_getiter); tramp_iter_getiter = JS_UNDEFINED; JS_ThrowOutOfMemory(ctx); goto exception; }
                 s->result_promise = JS_UNDEFINED;
                 s->resolving_funcs[0] = JS_UNDEFINED; s->resolving_funcs[1] = JS_UNDEFINED;
-                s->this_val = js_dup(thisv);
-                s->promise_resolve = JS_UNDEFINED;   /* read after the capability, which can suspend */
-                s->iter = JS_UNDEFINED;   /* set below (inline) or by the create-cont settle */
-                s->next = JS_UNDEFINED;
+                CONT_OWN_SET(ctx, &s->this_val, thisv);
+                CONT_OWN_FORGET(&s->promise_resolve);   /* read after the capability, which can suspend */
+                CONT_OWN_FORGET(&s->iter);   /* set below (inline) or by the create-cont settle */
+                CONT_OWN_FORGET(&s->next);
                 s->values = JS_UNDEFINED; s->resolve_element_env = JS_UNDEFINED; s->elem_promises = JS_UNDEFINED;
                 s->index = 0;
                 s->magic = pa_magic;
                 s->keyed = pa_keyed;
-                s->src_obj = JS_UNDEFINED; s->key_list = JS_UNDEFINED;
-                s->cur_key = JS_UNDEFINED; s->keys = JS_UNDEFINED;
-                s->cur_atom = JS_ATOM_NULL;
+                CONT_OWN_FORGET(&s->src_obj); CONT_OWN_FORGET(&s->key_list);
+                CONT_OWN_FORGET(&s->cur_key); s->keys = JS_UNDEFINED;
+                CONT_OWN_FORGET_ATOM(&s->cur_atom);
                 s->key_ph = KEY_PH_START;
                 /* the BRIEF-WINDOW values, stated rather than left to js_mallocz: the teardown frees them now (a
                    state torn down mid-request still holds one), and "a zeroed JSValue happens to be an int" is not
                    a contract this file should depend on. */
-                s->fin_arg = JS_UNDEFINED; s->elem_value = JS_UNDEFINED;
-                s->att_promise = JS_UNDEFINED;   /* js_mallocz zeroes it, and a zero JSValue is not UNDEFINED */
-                s->res_obj = JS_UNDEFINED;
-                s->owed_res = JS_UNINITIALIZED;
-                s->acq_method = tramp_iter_getiter; tramp_iter_getiter = JS_UNDEFINED;
-                s->acq_iterable = js_dup((call_argc >= 1) ? call_argv[0] : JS_UNDEFINED);
+                CONT_OWN_FORGET(&s->fin_arg); CONT_OWN_FORGET(&s->elem_value);
+                CONT_OWN_FORGET(&s->att_promise);   /* js_mallocz zeroes it, and a zero JSValue is not UNDEFINED */
+                CONT_OWN_FORGET(&s->res_obj);
+                CONT_OWN_MOVE(&s->owed_res, JS_UNINITIALIZED);
+                CONT_OWN_MOVE(&s->acq_method, tramp_iter_getiter); tramp_iter_getiter = JS_UNDEFINED;
+                CONT_OWN_SET(ctx, &s->acq_iterable, (call_argc >= 1) ? call_argv[0] : JS_UNDEFINED);
                 TAKE_CALL_SHAPE(); s->orig_cfirst = call_first_r; s->orig_cargc = call_pop; s->orig_is_tail = tramp_is_tail;
                 s->args_own = call_args_owned; s->args_own_n = call_args_owned_n;
                 call_args_owned = NULL; call_args_owned_n = 0;
@@ -43433,8 +43483,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 /* the delivered method, or UNDEFINED when the read THREW — the abrupt arm jumps here with the
                    exception still pending, and the setup-failed branch below is the one place that handles it,
                    exactly as it already handles a non-callable `resolve`. */
-                s->promise_resolve = ret_val;
-                tramp_iter_getiter = s->acq_method; s->acq_method = JS_UNDEFINED;
+                CONT_OWN_MOVE(&s->promise_resolve, ret_val);
+                tramp_iter_getiter = CONT_OWN_TAKE(&s->acq_method);
                 s->values = JS_NewArray(ctx);
                 s->resolve_element_env = JS_NewArray(ctx);
                 s->elem_promises = JS_NewArray(ctx);
@@ -43464,7 +43514,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         cont_st = s;
                         goto do_promise_all_settle;
                     }
-                    s->src_obj = js_dup(s->acq_iterable);
+                    CONT_OWN_SET(ctx, &s->src_obj, s->acq_iterable);
                     cont_st = s;
                     ret_val = JS_UNINITIALIZED;
                     goto do_promise_all_step;
@@ -43506,7 +43556,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 DCHECK(sp + 4 <= TRAMP_SP_LIMIT(sf),
                        "Promise combinator attach: operand push exceeds the frame's compiled stack_size");
-                *sp++ = pa->att_promise; pa->att_promise = JS_UNDEFINED;   /* this (owned, transferred) */
+                *sp++ = CONT_OWN_TAKE(&pa->att_promise); /* this (owned, transferred) */
                 *sp++ = ret_val; ret_val = JS_UNDEFINED;                   /* the `then` method (owned) */
                 *sp++ = pre;
                 *sp++ = prj;
@@ -43550,7 +43600,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            "a forked Promise combinator was handed a second delivery, or an abrupt one, before its "
                            "owed capability and re-attach ran — one step is in flight per sibling, and an abrupt "
                            "read is routed to the error entry");
-                    s->owed_res = ret_val;
+                    CONT_OWN_MOVE(&s->owed_res, ret_val);
                     ret_val = JS_UNINITIALIZED;
                 }
                 if (unlikely(s->cap_owed)) {
@@ -43571,7 +43621,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         ep = JS_GetPropertyInt64(ctx, s->elem_promises, s->reattach_i);
                         if (JS_IsException(ep)) { st = -1; goto promise_all_err; }
                         DCHECK(JS_IsUndefined(s->att_promise), "an attach is already in flight on this aggregate");
-                        s->att_promise = ep;
+                        CONT_OWN_MOVE(&s->att_promise, ep);
                         s->att_index = s->reattach_i;
                         s->attaching = 1;
                         s->reattach_i++;
@@ -43595,7 +43645,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        finalize drive as resolve, so a looping reject parks instead of driving to completion. reject
                        is idempotent, so if it throws on the tramp the CONT_PROMISE_ALL exception arm's own reject is
                        a harmless second call (no re-loop). */
-                    s->fin_arg = err; s->fin_is_reject = 1; s->finalizing = 1;
+                    CONT_OWN_MOVE(&s->fin_arg, err); s->fin_is_reject = 1; s->finalizing = 1;
                     /* Close ONLY when an element was retrieved and a LATER stage (Constructor.resolve / attach)
                        threw — spec fail_reject1. An IteratorNext abrupt (driving_next) or a finalize-stage throw
                        (iter_done) leaves [[Done]] true, so no close (spec fail_reject).
@@ -43623,7 +43673,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     /* ADVANCE, with a parked delivery: the step's next input is already here, so it is consumed
                        rather than a second `.next()` driven past it. */
                     ret_val = s->owed_res;
-                    s->owed_res = JS_UNINITIALIZED;
+                    CONT_OWN_FORGET_AS(&s->owed_res, JS_UNINITIALIZED);
                     goto do_promise_all_step;
                 }
                 if (st == 1 && s->keyed) {
@@ -43681,7 +43731,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            "Promise combinator element resolve: operand push exceeds the frame's compiled stack_size");
                     *sp++ = js_dup(s->this_val);          /* this = C */
                     *sp++ = js_dup(s->promise_resolve);   /* C.resolve */
-                    *sp++ = s->elem_value; s->elem_value = JS_UNDEFINED;   /* the value (owned, transferred) */
+                    *sp++ = CONT_OWN_TAKE(&s->elem_value); /* the value (owned, transferred) */
                     call_argv = sp - 1; call_argc = 1; tramp_first = -2; tramp_is_tail = 0;
                     /* the operands ARE the three just pushed, which is what an UNSET shape states — and it has to
                        be stated, because a shape LEFT OVER from an earlier call on this frame is read instead.
@@ -43707,7 +43757,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            "Promise combinator finalize drive: operand push exceeds the frame's compiled stack_size");
                     *sp++ = JS_UNDEFINED;                 /* this */
                     *sp++ = js_dup(fn);                   /* the settle function */
-                    *sp++ = s->fin_arg; s->fin_arg = JS_UNDEFINED;   /* the arg (owned, transferred) */
+                    *sp++ = CONT_OWN_TAKE(&s->fin_arg); /* the arg (owned, transferred) */
                     call_argv = sp - 1; call_argc = 1; tramp_first = -2; tramp_is_tail = 0;
                     call_cfirst = 0; call_cargc = -1;   /* see the element resolve above */
                     tramp_cont_state = s; tramp_cont_kind = CONT_PROMISE_ALL;
@@ -43775,7 +43825,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 prom = JS_NewPromiseCapability(ctx, s->resolving_funcs);
                 if (JS_IsException(prom)) { js_free_rt(rt, s); goto exception; }
                 s->promise = prom;
-                s->sync_iter = js_dup(ws->sync_iter);
+                CONT_OWN_SET(ctx, &s->sync_iter, ws->sync_iter);
                 /* The record's nextMethod, held by the STATE from here on. The wrapper that holds it can be
                    released before the drive returns (its only stack reference is an operand this entry pops), so
                    borrowing it was a use-after-free waiting to happen; and taking the ref into a LOCAL leaked it
@@ -43783,9 +43833,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    settle through their own arms, and a leaked ref to a C function pins its realm, which is the
                    whole 370-object graph of `yield* syncGen` + `.return()`. One owner, freed by
                    js_async_from_sync_free on every exit. */
-                s->drive_next = js_dup(ws->next_method);
-                s->res_obj = JS_UNDEFINED;   /* js_mallocz zeroes it, and a zero JSValue is not UNDEFINED */
-                s->drive_arg = js_dup(afs_arg);   /* owned BEFORE the invocation list below is released */
+                CONT_OWN_SET(ctx, &s->drive_next, ws->next_method);
+                CONT_OWN_FORGET(&s->res_obj);   /* js_mallocz zeroes it, and a zero JSValue is not UNDEFINED */
+                CONT_OWN_SET(ctx, &s->drive_arg, afs_arg);   /* owned BEFORE the invocation list below is released */
                 /* the CALL shape is the only one reached through do_generic_callee, so it is the only one whose
                    caller can have declared a continuation; the opcode shapes own their own delivery. */
                 DCHECK(afs_mode == AFS_DELIVER_CALL || tramp_cont_kind == CONT_NONE,
@@ -43799,7 +43849,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     free_arg_list(ctx, call_args_owned, call_args_owned_n);
                     call_args_owned = NULL; call_args_owned_n = 0;
                 }
-                s->pending_error = JS_UNINITIALIZED;
+                CONT_OWN_MOVE(&s->pending_error, JS_UNINITIALIZED);
                 s->deliver = afs_mode;
                 /* .return() passes closeOnRejection=false (27.1.5.2.2 step 13): it has already asked the sync
                    iterator to close, so neither step 6 nor step 14 may close it again. .next()/.throw() pass
@@ -43925,7 +43975,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        abrupt completion is the result, so whatever the close produced is discarded. */
                     JS_FreeValue(ctx, giter);
                     JS_Throw(ctx, s->pending_error);
-                    s->pending_error = JS_UNINITIALIZED;
+                    CONT_OWN_MOVE(&s->pending_error, JS_UNINITIALIZED);
                     goto async_from_sync_reject;
                 }
                 if (s->res_ph == 0) {
@@ -43937,7 +43987,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         goto async_from_sync_reject;
                     }
                     DCHECK(JS_IsUndefined(s->res_obj), "the wrapper is already unpacking a result");
-                    s->res_obj = giter;                                     /* steps 1-2: IteratorComplete */
+                    /* steps 1-2: IteratorComplete */
+                    CONT_OWN_MOVE(&s->res_obj, giter);
                     s->res_ph = 1;
                     gp_outer = s; gp_outer_kind = CONT_AFS_GET;
                     gp_obj = s->res_obj; gp_atom = JS_ATOM_done;
@@ -43956,7 +44007,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 done = s->res_done;
                 value = giter;
                 s->res_ph = 0; s->res_done = 0;   /* `done` is read out FIRST: the machine below needs it */
-                JS_FreeValue(ctx, s->res_obj); s->res_obj = JS_UNDEFINED;
+                CONT_OWN_CLEAR(ctx, &s->res_obj);
                 {
                     /* steps 5-15 as a MACHINE on this chain: step 5's PromiseResolve reads `constructor` off the
                        value, which is the page's code, and the C version ran it through js_promise_resolve_native
@@ -44053,7 +44104,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                same rejection path the deliver's own abrupt does. */
             {
                 JSAsyncFromSync *s = (JSAsyncFromSync *)cont_st;
-                JS_FreeValue(ctx, s->res_obj); s->res_obj = JS_UNDEFINED;
+                CONT_OWN_CLEAR(ctx, &s->res_obj);
                 s->res_ph = 0; s->res_done = 0;
                 goto do_async_from_sync_abrupt;
             }
@@ -44746,13 +44797,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     void *aw_stt;
                     js_async_function_free(rt, asf.st); asf.st = NULL;   /* the closure took its own reference */
                     if (unlikely(JS_IsException(awfn))) { JS_FreeValue(ctx, asf.value); goto do_async_await_fail; }
-                    ass = js_malloc_rt(rt, sizeof(*ass));
+                    ass = js_mallocz_rt(rt, sizeof(*ass));
                     if (unlikely(!ass)) { JS_FreeValue(ctx, awfn); JS_FreeValue(ctx, asf.value); JS_ThrowOutOfMemory(ctx); goto do_async_await_fail; }
                     aw_stt = tramp_step_state_new(ctx, &js_async_await_def, JS_UNDEFINED, 1, &aw_arg, awfn);
                     JS_FreeValue(ctx, awfn);
                     JS_FreeValue(ctx, asf.value); asf.value = JS_UNDEFINED;
                     if (unlikely(!aw_stt)) { js_free_rt(rt, ass); goto do_async_await_fail; }
-                    ass->promise = aprom; aprom = JS_UNDEFINED;
+                    CONT_OWN_MOVE(&ass->promise, aprom); aprom = JS_UNDEFINED;
                     ass->cont = acs; ass->cont_kind = ack;
                     ass->cfirst = acf; ass->cargc = acp; ass->forof = afof;
                     ass->is_tail = aitail;
@@ -44773,7 +44824,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     /* the SETTLE is a call on THIS chain. The async frame is already popped, so its operands go
                        on the caller's stack above whatever is there; the placement below is deferred until the
                        call returns, which is what the state carries. */
-                    JSAsyncSettle *ass = js_malloc_rt(rt, sizeof(*ass));
+                    JSAsyncSettle *ass = js_mallocz_rt(rt, sizeof(*ass));
                     if (unlikely(!ass)) {
                         JS_FreeValue(ctx, asf.func); JS_FreeValue(ctx, asf.value);
                         JS_FreeValue(ctx, asf.await_promise);
@@ -44783,7 +44834,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JS_ThrowOutOfMemory(ctx);
                         goto exception;
                     }
-                    ass->promise = aprom;
+                    CONT_OWN_MOVE(&ass->promise, aprom);
                     ass->cont = acs; ass->cont_kind = ack;
                     ass->cfirst = acf; ass->cargc = acp; ass->forof = afof;
                     ass->is_tail = aitail;
@@ -46221,7 +46272,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             js_trapget_free(ctx, tg);
                             goto getprop_throw;
                         }
-                        tg->method = ret_val;
+                        CONT_OWN_MOVE(&tg->method, ret_val);
                         gp_obj = tg->obj; gp_atom = tg->atom; gp_op = tg->op; gp_val = tg->val;
                         gp_recv = tg->recv; gp_no_throw = tg->no_throw; gp_desc_out = tg->desc_out;
                         gp_getter = tg->getter; gp_setter = tg->setter; gp_dflags = tg->dflags;
@@ -46278,10 +46329,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             JS_FreeValue(ctx, ret_val); JS_ThrowOutOfMemory(ctx); ret_val = JS_EXCEPTION;
                         } else {
                             JSProxyData *pd5 = JS_VALUE_GET_OBJ(gp->value)->u.opaque;
-                            gd->obj = js_dup(gp->value);
-                            gd->target = js_dup(pd5->target);
-                            gd->trap_res = ret_val;        /* held across steps 10 and 12 */
-                            gd->atom = JS_DupAtom(ctx, gp->atom);
+                            CONT_OWN_SET(ctx, &gd->obj, gp->value);
+                            CONT_OWN_SET(ctx, &gd->target, pd5->target);
+                            CONT_OWN_MOVE(&gd->trap_res, ret_val);        /* held across steps 10 and 12 */
+                            CONT_OWN_SET_ATOM(ctx, &gd->atom, gp->atom);
                             gd->outer = gouter; gd->outer_kind = gouter_kind;
                             gd->desc_out = gp->desc_out;
                             gd->phase = GD_TARGET;
@@ -46304,10 +46355,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                 JS_FreeValue(ctx, ret_val); JS_ThrowOutOfMemory(ctx); ret_val = JS_EXCEPTION;
                             } else {
                                 JSProxyData *pd6 = JS_VALUE_GET_OBJ(gp->value)->u.opaque;
-                                ok->obj = js_dup(gp->value);
-                                ok->target = js_dup(pd6->target);
-                                ok->trap_res = ret_val;
-                                ok->tkeys = JS_UNDEFINED;
+                                CONT_OWN_SET(ctx, &ok->obj, gp->value);
+                                CONT_OWN_SET(ctx, &ok->target, pd6->target);
+                                CONT_OWN_MOVE(&ok->trap_res, ret_val);
+                                CONT_OWN_FORGET(&ok->tkeys);
                                 ok->outer = gouter; ok->outer_kind = gouter_kind;
                                 js_desc_facts_init(&ok->facts);
                                 ok->phase = OKC_LEN;
@@ -46354,17 +46405,17 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                 /* WHAT `value` HOLDS DIFFERS BY OP, and the C form read it accordingly: for
                                    SETPROTO it is the new prototype and the TARGET rides `target`; for the other
                                    three it is the PROXY, whose [[Target]] the invariant needs. */
-                                pv->obj = JS_UNDEFINED;
+                                CONT_OWN_FORGET(&pv->obj);
                                 if (op6 == GP_SETPROTO) {
-                                    pv->target = js_dup(gp->target);
-                                    pv->proto_arg = js_dup(gp->value);
+                                    CONT_OWN_SET(ctx, &pv->target, gp->target);
+                                    CONT_OWN_SET(ctx, &pv->proto_arg, gp->value);
                                 } else {
                                     JSProxyData *pd7 = JS_VALUE_GET_OBJ(gp->value)->u.opaque;
-                                    pv->obj = js_dup(gp->value);
-                                    pv->target = js_dup(pd7->target);
-                                    pv->proto_arg = JS_UNDEFINED;
+                                    CONT_OWN_SET(ctx, &pv->obj, gp->value);
+                                    CONT_OWN_SET(ctx, &pv->target, pd7->target);
+                                    CONT_OWN_FORGET(&pv->proto_arg);
                                 }
-                                pv->res = (op6 == GP_GETPROTO) ? ret_val : JS_UNDEFINED;
+                                CONT_OWN_MOVE(&pv->res, (op6 == GP_GETPROTO) ? ret_val : JS_UNDEFINED);
                                 pv->outer = gouter; pv->outer_kind = gouter_kind;
                                 pv->op = (uint8_t)op6;
                                 pv->tres = tres6;
@@ -46396,8 +46447,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             JSKeyedInv *ki = js_mallocz(ctx, sizeof(*ki));
                             if (unlikely(!ki)) { JS_ThrowOutOfMemory(ctx); ret_val = JS_EXCEPTION; }
                             else {
-                                ki->target = js_dup(gp->target);
-                                ki->atom = JS_DupAtom(ctx, gp->atom);
+                                CONT_OWN_SET(ctx, &ki->target, gp->target);
+                                CONT_OWN_SET_ATOM(ctx, &ki->atom, gp->atom);
                                 ki->outer = gouter; ki->outer_kind = gouter_kind;
                                 ki->op = gp->op;
                                 ki->no_throw = gp->no_throw;
@@ -46442,16 +46493,16 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             if (unlikely(!ki)) {
                                 JS_FreeValue(ctx, ret_val); JS_ThrowOutOfMemory(ctx); ret_val = JS_EXCEPTION;
                             } else {
-                                ki->target = js_dup(gp->target);
-                                ki->atom = JS_DupAtom(ctx, gp->atom);
+                                CONT_OWN_SET(ctx, &ki->target, gp->target);
+                                CONT_OWN_SET_ATOM(ctx, &ki->atom, gp->atom);
                                 ki->outer = gouter; ki->outer_kind = gouter_kind;
                                 ki->op = (uint8_t)op7;
                                 ki->no_throw = gp->no_throw;
                                 /* GET checks against the trap's RESULT; SET and DEFINE against the operands the
                                    request carries. */
-                                ki->operand = (op7 == GP_GET) ? ret_val : js_dup(gp->value);
-                                ki->in_getter = (op7 == GP_DEFINE) ? js_dup(gp->getter) : JS_UNDEFINED;
-                                ki->in_setter = (op7 == GP_DEFINE) ? js_dup(gp->setter) : JS_UNDEFINED;
+                                CONT_OWN_MOVE(&ki->operand, (op7 == GP_GET) ? ret_val : js_dup(gp->value));
+                                CONT_OWN_MOVE(&ki->in_getter, (op7 == GP_DEFINE) ? js_dup(gp->getter) : JS_UNDEFINED);
+                                CONT_OWN_MOVE(&ki->in_setter, (op7 == GP_DEFINE) ? js_dup(gp->setter) : JS_UNDEFINED);
                                 ki->in_flags = (op7 == GP_DEFINE) ? gp->dflags : 0;
                                 js_desc_facts_init(&ki->facts);
                                 ki->phase = KI_DESC;
@@ -46554,10 +46605,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                     if (unlikely(!srealm)) { js_setmap_ctor_free(ctx, sc); goto exception; }
                                     rv = js_dup(srealm->class_proto[JS_CLASS_MAP + sc->magic]);
                                 }
-                                scs->r = JS_NewObjectProtoClass(ctx, rv, JS_CLASS_MAP + sc->magic);
+                                CONT_OWN_MOVE(&scs->r, JS_NewObjectProtoClass(ctx, rv, JS_CLASS_MAP + sc->magic));
                                 JS_FreeValue(ctx, rv);
                                 if (unlikely(JS_IsException(scs->r))) {
-                                    scs->r = JS_UNDEFINED; js_setmap_ctor_free(ctx, sc); goto exception;
+                                    CONT_OWN_FORGET(&scs->r); js_setmap_ctor_free(ctx, sc); goto exception;
                                 }
                                 if (unlikely(js_map_state_init(ctx, scs->r, sc->magic) < 0)) {
                                     js_setmap_ctor_free(ctx, sc); goto exception;
@@ -46577,8 +46628,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                 js_setmap_ctor_free(ctx, sc);
                                 goto exception;
                             }
-                            scs->adder = rv;
-                            tramp_iter_getiter = sc->getiter; sc->getiter = JS_UNDEFINED;
+                            CONT_OWN_MOVE(&scs->adder, rv);
+                            tramp_iter_getiter = CONT_OWN_TAKE(&sc->getiter);
                             tramp_consume_iterable = sc->iterable;
                             tramp_consume_state = scs; tramp_consume_kind = CONT_ITER_CONSUME;
                             sc->consume = NULL;   /* the machine is the acquire's now */
@@ -46607,14 +46658,14 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                 if (unlikely(!trealm)) { js_ta_target_free(ctx, tt); goto exception; }
                                 tproto = js_dup(trealm->class_proto[tt->class_id]);
                             }
-                            tcs->ta_target = JS_NewObjectProtoClass(ctx, tproto, tt->class_id);
+                            CONT_OWN_MOVE(&tcs->ta_target, JS_NewObjectProtoClass(ctx, tproto, tt->class_id));
                             JS_FreeValue(ctx, tproto);
                             if (unlikely(JS_IsException(tcs->ta_target))) {
-                                tcs->ta_target = JS_UNDEFINED;
+                                CONT_OWN_FORGET(&tcs->ta_target);
                                 js_ta_target_free(ctx, tt);
                                 goto exception;
                             }
-                            tramp_iter_getiter = tt->getiter; tt->getiter = JS_UNDEFINED;
+                            tramp_iter_getiter = CONT_OWN_TAKE(&tt->getiter);
                             tramp_consume_iterable = tt->iterable;
                             tramp_consume_state = tcs; tramp_consume_kind = CONT_ITER_CONSUME;
                             tt->consume = NULL;   /* the machine is the acquire's now, not this state's */
@@ -46640,7 +46691,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                           /* the new.target's `prototype` is in hand: restore the parked CONSTRUCT and run it. */
                             JSCtorProto *cp = cpx;
                             con_func = cp->func; con_ntgt = cp->ntgt;
-                            con_super_ref = cp->super_ref; cp->super_ref = JS_UNDEFINED;
+                            con_super_ref = CONT_OWN_TAKE(&cp->super_ref);
                             con_args = cp->args; con_argc = cp->argc;
                             con_args_owned = cp->args_owned; cp->args_owned = NULL;
                             con_cargc = cp->cargc; con_from_super = cp->from_super;
@@ -47336,7 +47387,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 wh = js_mallocz(ctx, sizeof(*wh));
                 if (unlikely(!wh)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                wh->atom = JS_DupAtom(ctx, atom); wh->op = (uint8_t)opcode; wh->phase = WH_HAS; wh->arr = JS_UNDEFINED;
+                CONT_OWN_SET_ATOM(ctx, &wh->atom, atom);
+                wh->op = (uint8_t)opcode;
+                wh->phase = WH_HAS;
+                CONT_OWN_FORGET(&wh->arr);
                 gp_obj = ctx->global_obj; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
                 gp_outer = wh; gp_outer_kind = CONT_WITH_HAS;
@@ -47403,7 +47457,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    an edition that put __proto__ Property Names in Object Initializers at B.3.1; the maintained
                    one numbers Block-Level Function Declarations Web Legacy Compatibility Semantics B.3.2, so
                    the old digit now names a different feature rather than nothing.) */
-                wh->atom = JS_DupAtom(ctx, atom); wh->op = OP_put_var; wh->phase = WH_HAS; wh->arr = JS_UNDEFINED;
+                CONT_OWN_SET_ATOM(ctx, &wh->atom, atom);
+                wh->op = OP_put_var;
+                wh->phase = WH_HAS;
+                CONT_OWN_FORGET(&wh->arr);
                 wh->vdepth = 1;
                 gp_obj = ctx->global_obj; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
@@ -47868,7 +47925,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 wh = js_mallocz(ctx, sizeof(*wh));
                 if (unlikely(!wh)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                wh->atom = JS_DupAtom(ctx, atom); wh->op = (uint8_t)opcode; wh->phase = WH_HAS; wh->arr = JS_UNDEFINED;
+                CONT_OWN_SET_ATOM(ctx, &wh->atom, atom);
+                wh->op = (uint8_t)opcode;
+                wh->phase = WH_HAS;
+                CONT_OWN_FORGET(&wh->arr);
                 gp_obj = ctx->global_obj; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
                 gp_outer = wh; gp_outer_kind = CONT_WITH_HAS;
@@ -48732,7 +48792,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            JS_Call loop. */
                         JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                         if (unlikely(!ok)) {  JS_ThrowOutOfMemory(ctx); goto exception; }
-                        ok->atom = JS_DupAtom(ctx, atom); ok->pop = 1; ok->push = 1;
+                        CONT_OWN_SET_ATOM(ctx, &ok->atom, atom); ok->pop = 1; ok->push = 1;
                         ok->op = (uint8_t)opcode;
                         gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom; gp_op = GP_GET; gp_val = JS_UNDEFINED;
                         gp_recv = obj; gp_no_throw = 0;   /* the RECEIVER stays the original object */
@@ -48839,7 +48899,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            JS_Call loop. */
                         JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                         if (unlikely(!ok)) {  JS_ThrowOutOfMemory(ctx); goto exception; }
-                        ok->atom = JS_DupAtom(ctx, atom); ok->pop = 0; ok->push = 1;
+                        CONT_OWN_SET_ATOM(ctx, &ok->atom, atom); ok->pop = 0; ok->push = 1;
                         ok->op = (uint8_t)opcode;
                         gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom; gp_op = GP_GET; gp_val = JS_UNDEFINED;
                         gp_recv = obj; gp_no_throw = 0;   /* the RECEIVER stays the original object */
@@ -48939,7 +48999,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     sf->cur_pc = pc;
                     ok = js_mallocz(ctx, sizeof(*ok));
                     if (unlikely(!ok)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                    ok->atom = JS_DupAtom(ctx, atom); ok->pop = 2; ok->push = 0;
+                    CONT_OWN_SET_ATOM(ctx, &ok->atom, atom); ok->pop = 2; ok->push = 0;
                     ok->op = (uint8_t)opcode;
                     gp_obj = obj; gp_atom = ok->atom; gp_op = GP_SET; gp_val = sp[-1];
                     gp_recv = JS_UNINITIALIZED; gp_no_throw = !sf->is_strict_mode;
@@ -48957,7 +49017,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     sf->cur_pc = pc;
                     ok = js_mallocz(ctx, sizeof(*ok));
                     if (unlikely(!ok)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                    ok->atom = JS_DupAtom(ctx, atom); ok->pop = 2; ok->push = 0;
+                    CONT_OWN_SET_ATOM(ctx, &ok->atom, atom); ok->pop = 2; ok->push = 0;
                     ok->op = (uint8_t)opcode;
                     gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom; gp_op = GP_SET; gp_val = sp[-1];
                     gp_recv = obj; gp_no_throw = !sf->is_strict_mode;   /* the RECEIVER stays the original object */
@@ -49072,7 +49132,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sf->cur_pc = pc;
                 ok = js_mallocz(ctx, sizeof(*ok));
                 if (unlikely(!ok)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                ok->atom = JS_DupAtom(ctx, atom); ok->pop = 1; ok->push = 0;
+                CONT_OWN_SET_ATOM(ctx, &ok->atom, atom); ok->pop = 1; ok->push = 0;
                 ok->op = (uint8_t)opcode;
                 gp_obj = sp[-2]; gp_atom = ok->atom; gp_op = GP_DEFINE; gp_val = sp[-1];
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;   /* CreateDataPropertyOrThrow */
@@ -49378,7 +49438,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                JS_Call loop. */
                             JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                             if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                            ok->atom = katom; ok->pop = 2; ok->push = 1;
+                            CONT_OWN_MOVE_ATOM(&ok->atom, katom); ok->pop = 2; ok->push = 1;
                             ok->op = (uint8_t)opcode;
                             gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom; gp_op = GP_GET; gp_val = JS_UNDEFINED;
                             gp_recv = sp[-2]; gp_no_throw = 0;   /* the RECEIVER stays the original object */
@@ -49473,7 +49533,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                JS_Call loop. */
                             JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                             if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                            ok->atom = katom; ok->pop = 1; ok->push = 1;
+                            CONT_OWN_MOVE_ATOM(&ok->atom, katom); ok->pop = 1; ok->push = 1;
                             ok->op = (uint8_t)opcode;
                             gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom; gp_op = GP_GET; gp_val = JS_UNDEFINED;
                             gp_recv = sp[-2]; gp_no_throw = 0;   /* the RECEIVER stays the original object */
@@ -49523,8 +49583,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    opcode lives at the shared delivery, entered only through the answer. */
                 wh = js_mallocz(ctx, sizeof(*wh));
                 if (unlikely(!wh)) { JS_FreeAtom(ctx, atom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                wh->atom = atom; wh->op = (uint8_t)opcode; wh->base = 2;
-                wh->phase = WH_HAS2; wh->arr = JS_UNDEFINED;
+                CONT_OWN_MOVE_ATOM(&wh->atom, atom); wh->op = (uint8_t)opcode; wh->base = 2;
+                wh->phase = WH_HAS2; CONT_OWN_FORGET(&wh->arr);
                 gp_obj = sp[-2]; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
                 gp_outer = wh; gp_outer_kind = CONT_WITH_HAS;
@@ -49559,7 +49619,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                JS_Call loop. */
                             JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                             if (unlikely(!ok)) { JS_FreeAtom(ctx, atom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                            ok->atom = atom; ok->pop = 3; ok->push = 1;
+                            CONT_OWN_MOVE_ATOM(&ok->atom, atom); ok->pop = 3; ok->push = 1;
                             ok->op = (uint8_t)opcode;
                             gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom; gp_op = GP_GET; gp_val = JS_UNDEFINED;
                             gp_recv = sp[-3]; gp_no_throw = 0;   /* super's RECEIVER is unchanged either way */
@@ -49696,7 +49756,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            spelling below already was, and the inline coercion goes with it. */
                         JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                         if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                        ok->atom = katom; ok->pop = 3; ok->push = 0;
+                        CONT_OWN_MOVE_ATOM(&ok->atom, katom); ok->pop = 3; ok->push = 0;
                         ok->op = (uint8_t)opcode;
                         gp_obj = sp[-3]; gp_atom = ok->atom; gp_op = GP_SET; gp_val = sp[-1];
                         gp_recv = JS_UNINITIALIZED; gp_no_throw = !sf->is_strict_mode;
@@ -49710,7 +49770,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            spelling after the other three were routed. */
                         JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                         if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                        ok->atom = katom; ok->pop = 3; ok->push = 0;
+                        CONT_OWN_MOVE_ATOM(&ok->atom, katom); ok->pop = 3; ok->push = 0;
                         ok->op = (uint8_t)opcode;
                         gp_obj = sp[-3]; gp_atom = ok->atom; gp_op = GP_SET; gp_val = sp[-1];
                         gp_recv = JS_UNINITIALIZED; gp_no_throw = !sf->is_strict_mode;
@@ -49723,7 +49783,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            key_toprim first, so the coercion runs on the tramp instead of inside JS_ValueToAtom. */
                         JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                         if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                        ok->atom = katom; ok->pop = 3; ok->push = 0;
+                        CONT_OWN_MOVE_ATOM(&ok->atom, katom); ok->pop = 3; ok->push = 0;
                         ok->op = (uint8_t)opcode;
                         gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = katom; gp_op = GP_SET; gp_val = sp[-1];
                         gp_recv = sp[-3]; gp_no_throw = !sf->is_strict_mode;   /* the RECEIVER stays the original object */
@@ -49769,8 +49829,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     sp[-3] = js_dup(ctx->global_obj);
                     wh = js_mallocz(ctx, sizeof(*wh));
                     if (unlikely(!wh)) { JS_FreeAtom(ctx, atom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                    wh->atom = atom; wh->op = (uint8_t)opcode; wh->base = 3;
-                    wh->phase = WH_ACCESS; wh->arr = JS_UNDEFINED; wh->vdepth = 1;
+                    CONT_OWN_MOVE_ATOM(&wh->atom, atom); wh->op = (uint8_t)opcode; wh->base = 3;
+                    wh->phase = WH_ACCESS; CONT_OWN_FORGET(&wh->arr); wh->vdepth = 1;
                     gp_obj = sp[-3]; gp_atom = atom; gp_op = GP_SET; gp_val = sp[-1];
                     gp_recv = JS_UNINITIALIZED; gp_no_throw = is_strict_mode(ctx) ? 0 : 1;
                     gp_outer = wh; gp_outer_kind = CONT_WITH_HAS;
@@ -49780,8 +49840,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    HasProperty — the page's `has` trap on a Proxy base, which this ran from C. */
                 wh = js_mallocz(ctx, sizeof(*wh));
                 if (unlikely(!wh)) { JS_FreeAtom(ctx, atom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                wh->atom = atom; wh->op = (uint8_t)opcode; wh->base = 3;
-                wh->phase = WH_HAS2; wh->arr = JS_UNDEFINED; wh->vdepth = 1;
+                CONT_OWN_MOVE_ATOM(&wh->atom, atom); wh->op = (uint8_t)opcode; wh->base = 3;
+                wh->phase = WH_HAS2; CONT_OWN_FORGET(&wh->arr); wh->vdepth = 1;
                 gp_obj = sp[-3]; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
                 gp_outer = wh; gp_outer_kind = CONT_WITH_HAS;
@@ -49843,7 +49903,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        carrying a `super` reference need not be. */
                     JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                     if (unlikely(!ok)) { JS_FreeAtom(ctx, atom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                    ok->atom = atom; ok->pop = 4; ok->push = 0;
+                    CONT_OWN_MOVE_ATOM(&ok->atom, atom); ok->pop = 4; ok->push = 0;
                     ok->op = (uint8_t)opcode;
                     gp_obj = tramp_px ? JS_MKPTR(JS_TAG_OBJECT, tramp_px) : sp[-3];
                     gp_atom = ok->atom; gp_op = GP_SET; gp_val = sp[-1];
@@ -50670,7 +50730,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (unlikely(katom == JS_ATOM_NULL)) goto exception;
                 ok = js_mallocz(ctx, sizeof(*ok));
                 if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                ok->atom = katom; ok->pop = 2; ok->push = 1;
+                CONT_OWN_MOVE_ATOM(&ok->atom, katom); ok->pop = 2; ok->push = 1;
                 ok->op = (uint8_t)opcode;
                 gp_obj = sp[-1]; gp_atom = katom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
@@ -50745,7 +50805,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (unlikely(katom == JS_ATOM_NULL)) goto exception;
                 ok = js_mallocz(ctx, sizeof(*ok));
                 if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
-                ok->atom = katom; ok->pop = 2; ok->push = 1; ok->throw_on_false = sf->is_strict_mode;
+                CONT_OWN_MOVE_ATOM(&ok->atom, katom);
+                ok->pop = 2;
+                ok->push = 1;
+                ok->throw_on_false = sf->is_strict_mode;
                 ok->op = (uint8_t)opcode;
                 gp_obj = sp[-2]; gp_atom = katom; gp_op = GP_DELETE; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 1;
@@ -50780,7 +50843,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        "the global object became a Proxy: DeleteBinding's own-property step would skip its traps");
                 wh = js_mallocz(ctx, sizeof(*wh));
                 if (unlikely(!wh)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                wh->atom = JS_DupAtom(ctx, atom); wh->op = (uint8_t)opcode; wh->phase = WH_HAS; wh->arr = JS_UNDEFINED;
+                CONT_OWN_SET_ATOM(ctx, &wh->atom, atom);
+                wh->op = (uint8_t)opcode;
+                wh->phase = WH_HAS;
+                CONT_OWN_FORGET(&wh->arr);
                 gp_obj = ctx->global_obj; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
                 gp_outer = wh; gp_outer_kind = CONT_WITH_HAS;
@@ -50874,9 +50940,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    answer: one implementation, not one here and another there. */
                 wh = js_mallocz(ctx, sizeof(*wh));
                 if (unlikely(!wh)) { JS_ThrowOutOfMemory(ctx); goto exception; }
-                wh->atom = JS_DupAtom(ctx, atom); wh->diff = diff; wh->op = (uint8_t)opcode;
+                CONT_OWN_SET_ATOM(ctx, &wh->atom, atom); wh->diff = diff; wh->op = (uint8_t)opcode;
                 wh->is_with = (uint8_t)is_with;
-                wh->phase = WH_HAS; wh->arr = JS_UNDEFINED; wh->base = 1; wh->jumps = 1;
+                wh->phase = WH_HAS; CONT_OWN_FORGET(&wh->arr); wh->base = 1; wh->jumps = 1;
                 wh->vdepth = (opcode == OP_with_put_var) ? 2 : 0;
                 gp_obj = sp[-1]; gp_atom = atom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
@@ -50927,7 +50993,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     gp_obj = obj; gp_atom = JS_ATOM_Symbol_unscopables; gp_op = GP_GET;
                     goto with_request;
                 case WH_UNSCOP_ARR:
-                    wh->arr = ret_val; ret_val = JS_UNDEFINED;
+                    CONT_OWN_MOVE(&wh->arr, ret_val); ret_val = JS_UNDEFINED;
                     /* step 6's condition failing — "If unscopables is an Object" is not met, so the algorithm
                        falls straight to step 7's "Return true" and nothing is blocked. */
                     if (!JS_IsObject(wh->arr)) goto with_resolved;
@@ -51781,7 +51847,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 /* the unpack's read threw: it is an IteratorNext abrupt, so the aggregate rejects WITHOUT closing
                    the iterator — which is exactly what the step's error path does while driving_next is set. */
                 JSPromiseAll *pa = gouter;
-                JS_FreeValue(ctx, pa->res_obj); pa->res_obj = JS_UNDEFINED; pa->res_ph = 0;
+                CONT_OWN_CLEAR(ctx, &pa->res_obj); pa->res_ph = 0;
                 cont_st = pa;
                 ret_val = JS_UNINITIALIZED;
                 goto do_promise_all_err_entry;
@@ -87960,7 +88026,7 @@ static int ta_elem_set(JSContext *ctx, JSIterConsume *s, JSValue v)
     if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
         DCHECK(!s->cb_pending && JS_IsUndefined(s->cb_value),
                "a TypedArray element Set was issued with another round-trip still in flight on this state");
-        s->cb_value = v; s->cb_pending = 14;
+        CONT_OWN_MOVE(&s->cb_value, v); s->cb_pending = 14;
         return 1;
     }
     if (JS_SetPropertyInt64(ctx, s->ta_target, s->ta_k, v) < 0) return -1;   /* consumes v */
@@ -88021,13 +88087,13 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                     if (JS_VALUE_GET_TAG(res) == JS_TAG_OBJECT) {
                         /* ToNumber(rawSize) on an object is @@toPrimitive/valueOf — the page's code */
                         DCHECK(JS_IsUndefined(s->cb_value), "the consume machine already holds a value");
-                        s->cb_value = res;
+                        CONT_OWN_MOVE(&s->cb_value, res);
                         s->setrec_ph = 1;
                         return 5;
                     }
                 }
                 if (JS_ToFloat64Free(ctx, &d, res) < 0) { s->setrec_pending = 0; return -1; }
-                if (s->setrec_ph == 1) { JS_FreeValue(ctx, s->cb_value); s->cb_value = JS_UNDEFINED; }
+                if (s->setrec_ph == 1) {  CONT_OWN_CLEAR(ctx, &s->cb_value); }
                 if (isnan(d)) { s->setrec_pending = 0; JS_ThrowTypeError(ctx, ".size is not a legal size"); return -1; }
                 if (d < 0) { s->setrec_pending = 0; JS_ThrowRangeError(ctx, ".size is not a legal size"); return -1; }
                 s->setrec_size = (isinf(d) || d > (double)MAX_SAFE_INTEGER) ? UINT64_MAX : (uint64_t)d;
@@ -88039,7 +88105,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                 /* union/symmetricDifference/isSupersetOf consult THIS and never call it — it only has to EXIST.
                    The has-WALK calls it per element, so it keeps it. */
                 if (s->setop == SETOP_SUBSET || s->setop == SETOP_DISJOINT
-                    || s->setop == SETOP_INTERSECT || s->setop == SETOP_DIFF) s->setrec_has = res;
+                    || s->setop == SETOP_INTERSECT || s->setop == SETOP_DIFF) CONT_OWN_MOVE(&s->setrec_has, res);
                 else                                                          JS_FreeValue(ctx, res);
                 s->setrec_ph = 3;
             } else {
@@ -88050,7 +88116,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                     JS_ThrowTypeError(ctx, ".keys is not a function");
                     return -1;
                 }
-                s->setrec_keys = res;
+                CONT_OWN_MOVE(&s->setrec_keys, res);
                 s->setrec_ph = 4;
             }
         }
@@ -88067,28 +88133,28 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                 /* 24.2.4.7 step 5: a THIS bigger than `other` cannot be a subset, decided before any element is
                    touched. Otherwise walk THIS's own records — no iterator protocol, nothing to close — calling
                    other.has per element on the tramp. */
-                if (ss->record_count > s->setrec_size) { s->r = js_bool(false); return 0; }
-                s->iter = js_create_map_iterator(ctx, s->adder, 0, NULL, MAGIC_SET);
-                if (JS_IsException(s->iter)) { s->iter = JS_UNDEFINED; return -1; }
+                if (ss->record_count > s->setrec_size) { CONT_OWN_MOVE(&s->r, js_bool(false)); return 0; }
+                CONT_OWN_MOVE(&s->iter, js_create_map_iterator(ctx, s->adder, 0, NULL, MAGIC_SET));
+                if (JS_IsException(s->iter)) { CONT_OWN_FORGET(&s->iter); return -1; }
                 goto setop_has_walk;
             }
             if (s->setop == SETOP_DISJOINT) {
                 /* 24.2.4.5 step 5 vs 6: the size decides WHICH side is walked, and both walks already exist. */
                 s->k = 1;   /* the keys branch's running answer: disjoint so far */
                 if (ss->record_count > s->setrec_size) return 12;   /* walk other.keys() against THIS */
-                s->iter = js_create_map_iterator(ctx, s->adder, 0, NULL, MAGIC_SET);
-                if (JS_IsException(s->iter)) { s->iter = JS_UNDEFINED; return -1; }
+                CONT_OWN_MOVE(&s->iter, js_create_map_iterator(ctx, s->adder, 0, NULL, MAGIC_SET));
+                if (JS_IsException(s->iter)) { CONT_OWN_FORGET(&s->iter); return -1; }
                 goto setop_has_walk;
             }
             if (s->setop == SETOP_SUPERSET) {
                 /* isSupersetOf: no result Set — THIS must contain every key, and a smaller THIS cannot, which
                    the spec decides BEFORE touching keys(). Answering through the machine's own DONE path means
                    the operand pop has one implementation. */
-                if (ss->record_count < s->setrec_size) { s->k = 0; s->r = js_bool(false); return 0; }
+                if (ss->record_count < s->setrec_size) { s->k = 0; CONT_OWN_MOVE(&s->r, js_bool(false)); return 0; }
                 return 12;
             }
-            s->r = js_map_new(ctx, MAGIC_SET);
-            if (JS_IsException(s->r)) { s->r = JS_UNDEFINED; return -1; }
+            CONT_OWN_MOVE(&s->r, js_map_new(ctx, MAGIC_SET));
+            if (JS_IsException(s->r)) { CONT_OWN_FORGET(&s->r); return -1; }
             /* intersection is the one result-building operation that starts EMPTY: its elements are the ones both
                sides have, so there is nothing to seed. The other three start from THIS's records — but WHEN they
                take that copy differs, and it is observable: difference (24.2.4.4 step 4) copies before it decides
@@ -88106,9 +88172,9 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                    `has` keys the receiver never originally held, and stopped short of the ones it did.
                    intersection has no copy to walk (its result starts empty), so step 6.c.i genuinely reads
                    O.[[SetData]] live — a different algorithm, not the same one with a different source. */
-                s->iter = js_create_map_iterator(ctx, s->setop == SETOP_DIFF ? s->r : s->adder,
-                                                 0, NULL, MAGIC_SET);
-                if (JS_IsException(s->iter)) { s->iter = JS_UNDEFINED; return -1; }
+                CONT_OWN_MOVE(&s->iter, js_create_map_iterator(ctx, s->setop == SETOP_DIFF ? s->r : s->adder,
+                                                               0, NULL, MAGIC_SET));
+                if (JS_IsException(s->iter)) { CONT_OWN_FORGET(&s->iter); return -1; }
                 goto setop_has_walk;
             }
             return 12;
@@ -88119,15 +88185,14 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
         /* the per-element `has` CALL returned. `res` may be an exception (the page's has threw), which the
            machine propagates: THIS's own record walk is not an iterator, so there is nothing to close. */
         int ok;
-        JSValue hel = s->cb_value;
-        s->cb_value = JS_UNDEFINED;
+        JSValue hel = CONT_OWN_TAKE(&s->cb_value);
         s->cb_pending = 0;
         if (JS_IsException(res)) { JS_FreeValue(ctx, hel); return -1; }
         ok = JS_ToBoolFree(ctx, res);
         if (s->setop == SETOP_SUBSET || s->setop == SETOP_DISJOINT) {
             /* isSubsetOf is decided by a MISS, isDisjointFrom by a HIT — the same walk, opposite polarity. */
             JS_FreeValue(ctx, hel);
-            if (ok == (s->setop == SETOP_DISJOINT)) { s->r = js_bool(false); return 0; }
+            if (ok == (s->setop == SETOP_DISJOINT)) { CONT_OWN_MOVE(&s->r, js_bool(false)); return 0; }
         } else {
             /* intersection APPENDS on a hit (into a result that started empty), difference REMOVES on one (from a
                result that started as a copy of THIS). The spec mutates [[SetData]] directly — an observable
@@ -88163,11 +88228,11 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                 JS_FreeValue(ctx, item);
                 /* the BOOLEAN operations answer with their verdict; the result-BUILDING ones already hold theirs
                    in `r` and must not have it overwritten. */
-                if (s->setop == SETOP_SUBSET || s->setop == SETOP_DISJOINT) s->r = js_bool(true);
+                if (s->setop == SETOP_SUBSET || s->setop == SETOP_DISJOINT) CONT_OWN_MOVE(&s->r, js_bool(true));
                 return 0;
             }
             DCHECK(JS_IsUndefined(s->cb_value), "the consume machine already holds an element");
-            s->cb_value = item;
+            CONT_OWN_MOVE(&s->cb_value, item);
             s->cb_pending = 11;
             return 3;
         }
@@ -88179,13 +88244,13 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
            completion. Every abrupt exit is an IfAbruptCloseIterator site (return 2). */
         if (JS_IsException(res)) { s->ent_pending = 0; s->abrupt = 1; return 2; }
         if (s->ent_ph == 0) {
-            s->ent_key = res;
+            CONT_OWN_MOVE(&s->ent_key, res);
             s->ent_ph = 1;
             return 6;                       /* read entry[1] */
         }
         if (s->ent_ph == 1) {
-            s->ent_val = res;
-            JS_FreeValue(ctx, s->ent_obj); s->ent_obj = JS_UNDEFINED;   /* both reads done */
+            CONT_OWN_MOVE(&s->ent_val, res);
+            CONT_OWN_CLEAR(ctx, &s->ent_obj);   /* both reads done */
             if (s->sink == ITERCONS_MAP) {
                 /* a Map key is used as-is — no ToPropertyKey — so the entry sequence ends at the adder */
                 s->ent_pending = 0;
@@ -88197,9 +88262,8 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
         }
         DCHECK(s->ent_ph == 2, "fromEntries entry sequence: unknown phase");
         s->ent_pending = 0;
-        { JSValue v = s->ent_val;
-          s->ent_val = JS_UNDEFINED;
-          JS_FreeValue(ctx, s->ent_key); s->ent_key = JS_UNDEFINED;
+        { JSValue v = CONT_OWN_TAKE(&s->ent_val);
+          CONT_OWN_CLEAR(ctx, &s->ent_key);
           /* `res` is a PRIMITIVE now, so the rest of ToPropertyKey inside DefinePropertyValueValue runs no user
              code at all. */
           if (JS_DefinePropertyValueValue(ctx, s->r, res, v, JS_PROP_C_W_E | JS_PROP_THROW) < 0)
@@ -88213,18 +88277,18 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
         JSValue gkey = res, gel;
         s->cb_pending = 0;
         if (gwhich == 12) {
-            gel = s->cb_value; s->cb_value = JS_UNDEFINED;
+            gel = CONT_OWN_TAKE(&s->cb_value);
             if (JS_IsException(gkey)) { JS_FreeValue(ctx, gel); s->abrupt = 1; return 2; }
             if (s->setop == GROUPBY_PROPERTY && JS_VALUE_GET_TAG(gkey) == JS_TAG_OBJECT) {
                 /* ToPropertyKey's user-code half: the key's @@toPrimitive / toString / valueOf. Coercing it ONCE
                    is the point — the C body ran it for the read and again for the write. */
-                s->ent_key = gkey; s->ent_val = gel;
+                CONT_OWN_MOVE(&s->ent_key, gkey); CONT_OWN_MOVE(&s->ent_val, gel);
                 s->cb_pending = 13;
                 return 5;
             }
         } else {
-            gel = s->ent_val; s->ent_val = JS_UNDEFINED;
-            JS_FreeValue(ctx, s->ent_key); s->ent_key = JS_UNDEFINED;
+            gel = CONT_OWN_TAKE(&s->ent_val);
+            CONT_OWN_CLEAR(ctx, &s->ent_key);
             if (JS_IsException(gkey)) { JS_FreeValue(ctx, gel); s->abrupt = 1; return 2; }
         }
         /* AddValueToKeyedGroup. The container is FRESH — a null-prototype object or a Map whose [[MapData]] the
@@ -88273,7 +88337,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
         /* `res` is the ITERTERM callback's RESULT (it ran on the tramp), not an iterator result. */
         JSValue value = s->cb_value, fret = res;
         uint8_t which = s->cb_pending;
-        s->cb_pending = 0; s->cb_value = JS_UNDEFINED;
+        s->cb_pending = 0; CONT_OWN_FORGET(&s->cb_value);
         /* Array.from's mapfn threw: IfAbruptCloseIterator, close the source before propagating
            (Array/from/iter-map-fn-err). An Iterator.prototype terminal's callback keeps returning -1 — its close
            is already handled by the unwind arm's deferral, and routing it through this path instead resumed a
@@ -88281,8 +88345,8 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
         if (JS_IsException(fret)) {
             JS_FreeValue(ctx, value);
             if (which == 4) {   /* the ADDER threw: IfAbruptCloseIterator, so close before propagating */
-                JS_FreeValue(ctx, s->ent_key); s->ent_key = JS_UNDEFINED;
-                JS_FreeValue(ctx, s->ent_val); s->ent_val = JS_UNDEFINED;
+                CONT_OWN_CLEAR(ctx, &s->ent_key);
+                CONT_OWN_CLEAR(ctx, &s->ent_val);
                 s->abrupt = 1; return 2;
             }
             if (which == 2 || which == 9) { s->abrupt = 1; return 2; }
@@ -88301,15 +88365,15 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
         }
         if (which == 4) {   /* the adder RETURNED; Set/Map discard its result */
             JS_FreeValue(ctx, value);   /* SET's element; UNDEFINED for MAP */
-            JS_FreeValue(ctx, s->ent_key); s->ent_key = JS_UNDEFINED;
-            JS_FreeValue(ctx, s->ent_val); s->ent_val = JS_UNDEFINED;
+            CONT_OWN_CLEAR(ctx, &s->ent_key);
+            CONT_OWN_CLEAR(ctx, &s->ent_val);
             JS_FreeValue(ctx, fret);
             return 1;
         }
         if (which == 6) {   /* the source element just read: hand it to the map/set phase */
             DCHECK(JS_IsUndefined(value), "the indexed read parks nothing on cb_value before it runs");
             JS_FreeValue(ctx, value);
-            s->cb_value = fret; s->ta_have_el = 1;
+            CONT_OWN_MOVE(&s->cb_value, fret); s->ta_have_el = 1;
             goto ta_map_loop;
         }
         if (which == 14) {
@@ -88338,7 +88402,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
             /* the same CreateDataPropertyOrThrow the un-mapped element takes — a `defineProperty` trap on a Proxy
                or subclass result, so it is the page's code and a phase, not a C write. */
             DCHECK(JS_IsUndefined(s->cb_value), "the consume machine already holds an element");
-            s->cb_value = fret;
+            CONT_OWN_MOVE(&s->cb_value, fret);
             s->cb_pending = 9;
             return 10;
         }
@@ -88348,22 +88412,22 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
             return 1;
         case ITERTERM_REDUCE:
             JS_FreeValue(ctx, value);
-            JS_FreeValue(ctx, s->r);
-            s->r = fret;
+            CONT_OWN_CLEAR(ctx, &s->r);
+            CONT_OWN_MOVE(&s->r, fret);
             return 1;
         case ITERTERM_SOME:
             JS_FreeValue(ctx, value);
             if (!JS_ToBoolFree(ctx, fret)) return 1;
-            s->r = js_bool(true); s->closing = 1; return 2;
+            CONT_OWN_MOVE(&s->r, js_bool(true)); s->closing = 1; return 2;
         case ITERTERM_EVERY:
             JS_FreeValue(ctx, value);
             if (JS_ToBoolFree(ctx, fret)) return 1;
-            s->r = js_bool(false); s->closing = 1; return 2;
+            CONT_OWN_MOVE(&s->r, js_bool(false)); s->closing = 1; return 2;
         default:
             DCHECK(s->setop == ITERTERM_FIND, "ITERTERM callback resume: unknown terminal rule");
             if (!JS_ToBoolFree(ctx, fret)) { JS_FreeValue(ctx, value); return 1; }
-            JS_FreeValue(ctx, s->r);
-            s->r = value; s->closing = 1; return 2;
+            CONT_OWN_CLEAR(ctx, &s->r);
+            CONT_OWN_MOVE(&s->r, value); s->closing = 1; return 2;
         }
     }
     if (s->ta_phase) {
@@ -88379,7 +88443,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
             /* the construct settled: `res` IS the new object. TypedArrayCreateFromConstructor finishes with
                ValidateTypedArray plus, because a length argument was passed, the [[ArrayLength]] >= len check. */
             if (JS_VALUE_GET_TAG(res) == JS_TAG_UNINITIALIZED) { JS_ThrowTypeError(ctx, "constructor returned nothing"); return -1; }
-            s->ta_target = res;
+            CONT_OWN_MOVE(&s->ta_target, res);
             if (ta_create_from_ctor_check(ctx, s->ta_target, s->k) < 0) return -1;
             s->ta_phase = 3;
         } else if (JS_VALUE_GET_TAG(res) != JS_TAG_UNINITIALIZED) {
@@ -88398,7 +88462,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                 return 6;
             }
             s->ta_have_el = 0;
-            v = s->cb_value; s->cb_value = JS_UNDEFINED;
+            v = CONT_OWN_TAKE(&s->cb_value);
             if (JS_IsUndefined(s->mapfn)) {
                 int w = ta_elem_set(ctx, s, v);   /* consumes v */
                 if (w < 0) return -1;
@@ -88406,18 +88470,18 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                 continue;
             }
             /* mapfn(kValue, k) is USER CODE: hand it to the shared callback drive so its body runs on the tramp. */
-            s->cb_value = v;
+            CONT_OWN_MOVE(&s->cb_value, v);
             s->cb_pending = 3;
             return 3;
         }
-        JS_FreeValue(ctx, s->r);            /* the collected list is spent */
-        s->r = s->ta_target; s->ta_target = JS_UNDEFINED;
+        CONT_OWN_CLEAR(ctx, &s->r);            /* the collected list is spent */
+        CONT_OWN_MOVE(&s->r, s->ta_target); CONT_OWN_FORGET(&s->ta_target);
         return 0;
     }
     if (s->closing) {   /* the short-circuit close has run (result already decided): finish */
         if (JS_VALUE_GET_TAG(res) != JS_TAG_UNINITIALIZED) JS_FreeValue(ctx, res);
         if (s->sink == ITERCONS_SETOP && (s->setop == SETOP_SUPERSET || s->setop == SETOP_DISJOINT))
-            s->r = js_bool(s->k != 0);
+            CONT_OWN_MOVE(&s->r, js_bool(s->k != 0));
         return 0;
     }
     if (JS_VALUE_GET_TAG(res) != JS_TAG_UNINITIALIZED || s->iterres_ph) {
@@ -88441,7 +88505,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
             /* IteratorComplete's `Get(res, "done")` is the page's code on a hand-written iterator, so it is a
                request. The result object parks here for it and for the value read after. */
             DCHECK(JS_IsUndefined(s->iter_res), "the consume machine is already unpacking a result");
-            s->iter_res = res;
+            CONT_OWN_MOVE(&s->iter_res, res);
             s->iterres_ph = 1;
             return 6;
         }
@@ -88452,13 +88516,13 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                 s->iterres_ph = 2;   /* IteratorValue's `Get(res, "value")`, likewise */
                 return 6;
             }
-            res = s->iter_res; s->iter_res = JS_UNDEFINED;
+            res = CONT_OWN_TAKE(&s->iter_res);
             s->iterres_ph = 0;
             goto iterres_done;
         }
         /* iterres_ph == 2: `res` is the `value` property. */
         value = res;
-        JS_FreeValue(ctx, s->iter_res); s->iter_res = JS_UNDEFINED;
+        CONT_OWN_CLEAR(ctx, &s->iter_res);
         s->iterres_ph = 0;
         res = JS_UNDEFINED;
         done = 0;
@@ -88473,8 +88537,8 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                already exhausted the source. Holding the iterator past this point made a throwing element
                coercion call the source's `return`, which the spec never does. Dropping it here is the fact
                itself: the abrupt arms key on s->iter being present. */
-            JS_FreeValue(ctx, s->iter);  s->iter = JS_UNDEFINED;
-            JS_FreeValue(ctx, s->next);  s->next = JS_UNDEFINED;
+              CONT_OWN_CLEAR(ctx, &s->iter);
+              CONT_OWN_CLEAR(ctx, &s->next);
             if (s->ta_isfrom) { s->ta_phase = 1; s->ta_k = 0; return 4; }   /* collect done -> 5.c create */
             if (s->ta_classid != 0) {
                 /* 23.2.5.1 step 5.b.ii InitializeTypedArrayFromList: the object was allocated at step 6.a.i, before
@@ -88489,19 +88553,19 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                 s->ta_phase = 3; s->ta_k = 0;
                 goto ta_map_loop;
             }
-            if (s->sink == ITERCONS_SUMPRECISE) s->r = js_float64(sum_precise_get_result(&s->sum));
+            if (s->sink == ITERCONS_SUMPRECISE) CONT_OWN_MOVE(&s->r, js_float64(sum_precise_get_result(&s->sum)));
             if (s->sink == ITERCONS_SETOP && (s->setop == SETOP_SUPERSET || s->setop == SETOP_DISJOINT))
-            s->r = js_bool(s->k != 0);
+            CONT_OWN_MOVE(&s->r, js_bool(s->k != 0));
             if (s->sink == ITERCONS_ITERTERM) {
-                if (s->setop == ITERTERM_SOME) s->r = js_bool(false);
-                else if (s->setop == ITERTERM_EVERY) s->r = js_bool(true);
-                else if (s->setop == ITERTERM_FIND) s->r = JS_UNDEFINED;
+                if (s->setop == ITERTERM_SOME) CONT_OWN_MOVE(&s->r, js_bool(false));
+                else if (s->setop == ITERTERM_EVERY) CONT_OWN_MOVE(&s->r, js_bool(true));
+                else if (s->setop == ITERTERM_FIND) CONT_OWN_FORGET(&s->r);
                 else if (s->setop == ITERTERM_REDUCE && JS_IsUninitialized(s->r)) {
-                    s->r = JS_UNDEFINED;   /* reduce of an empty iterator with no initial value is a TypeError */
+                    CONT_OWN_FORGET(&s->r);   /* reduce of an empty iterator with no initial value is a TypeError */
                     JS_ThrowTypeError(ctx, "reduce of empty iterator with no initial value");
                     return -1;
                 }
-                else if (s->setop == ITERTERM_FOREACH) s->r = JS_UNDEFINED;
+                else if (s->setop == ITERTERM_FOREACH) CONT_OWN_FORGET(&s->r);
             }
             /* 23.1.2.1 step 6.e.viii Set(A,"length",len) — the page's SETTER on a subclass or Proxy result, and
                the finish performed it from C with the machine already torn down, which is why it has to happen
@@ -88509,7 +88573,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
             if (s->sink == ITERCONS_FROM && !s->ta_isfrom && s->ta_classid == 0 && !s->len_written) {
                 s->len_written = 1;
                 DCHECK(JS_IsUndefined(s->cb_value), "the consume machine already holds a value");
-                s->cb_value = js_uint32((uint32_t)s->k);
+                CONT_OWN_MOVE(&s->cb_value, js_uint32((uint32_t)s->k));
                 s->cb_pending = 10;
                 return 10;
             }
@@ -88536,7 +88600,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
         } else if (s->sink == ITERCONS_SET) {
             /* new Set(iterable): adder(value). The adder is `this.add` — a SUBCLASS can override it with a
                bytecode body, so it is user code and runs as a PHASE on the tramp, never a JS_Call from here. */
-            s->cb_value = value;
+            CONT_OWN_MOVE(&s->cb_value, value);
             s->cb_pending = 4;
             return 7;
         } else if (s->sink == ITERCONS_GROUPBY) {
@@ -88544,7 +88608,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                element waits in cb_value for its key. */
             DCHECK(JS_IsUndefined(s->cb_value), "the consume machine already holds an element");
             s->k++;
-            s->cb_value = value;
+            CONT_OWN_MOVE(&s->cb_value, value);
             s->cb_pending = 12;
             return 3;
         } else if (s->sink == ITERCONS_OBJENTRIES) {
@@ -88555,7 +88619,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                runs before the exception propagates. Returning -1 skipped the close, which is exactly what the
                iterator-closed-for-* tests observe. */
             if (!JS_IsObject(value)) { JS_FreeValue(ctx, value); JS_ThrowTypeErrorNotAnObject(ctx); s->abrupt = 1; return 2; }
-            s->ent_obj = value;   /* ownership moves to the state for the whole entry sequence */
+            CONT_OWN_MOVE(&s->ent_obj, value);   /* ownership moves to the state for the whole entry sequence */
             s->ent_ph = 0;
             s->ent_pending = 1;
             return 6;             /* read ent_obj[0] on the tramp */
@@ -88566,7 +88630,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                Every abrupt exit is an IfAbruptCloseIterator site (Map/iterator-item-*-returns-abrupt,
                iterator-items-are-not-object-close-iterator, iterator-close-after-set-failure). */
             if (!JS_IsObject(value)) { JS_FreeValue(ctx, value); JS_ThrowTypeErrorNotAnObject(ctx); s->abrupt = 1; return 2; }
-            s->ent_obj = value;   /* ownership moves to the state for the whole entry sequence */
+            CONT_OWN_MOVE(&s->ent_obj, value);   /* ownership moves to the state for the whole entry sequence */
             s->ent_ph = 0;
             s->ent_pending = 1;
             return 6;             /* read ent_obj[0] on the tramp */
@@ -88583,20 +88647,20 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
             if (s->setop == ITERTERM_REDUCE) {
                 if (JS_IsUninitialized(s->r)) {   /* no initial value: the first element seeds the accumulator */
                     JS_FreeValue(ctx, idx);
-                    s->r = value;
+                    CONT_OWN_MOVE(&s->r, value);
                     return 1;
                 }
                 /* same tramp protocol as the other terminals, with the accumulator as arg0 */
                 JS_FreeValue(ctx, idx);
                 DCHECK(JS_IsUndefined(s->cb_value), "reduce callback value already held");
-                s->cb_value = value;
+                CONT_OWN_MOVE(&s->cb_value, value);
                 s->cb_pending = 1;
                 return 3;
             }
             /* the callback must run ON THE TRAMP: hold the element and hand the call to do_iter_consume_step. */
             JS_FreeValue(ctx, idx);
             DCHECK(JS_IsUndefined(s->cb_value), "ITERTERM callback value already held");
-            s->cb_value = value;
+            CONT_OWN_MOVE(&s->cb_value, value);
             s->cb_pending = 1;
             return 3;
         } else if (s->sink == ITERCONS_SETOP) {
@@ -88675,7 +88739,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                    inside it has to park. Hold the element and hand the call to do_iter_consume_step (cb_pending 2
                    selects mapfn_this as the receiver and the not-yet-incremented index). */
                 DCHECK(JS_IsUndefined(s->cb_value), "Array.from mapfn value already held");
-                s->cb_value = value;
+                CONT_OWN_MOVE(&s->cb_value, value);
                 s->cb_pending = 2;
                 return 3;
             }
@@ -88684,7 +88748,7 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
                across the write and the index advances when it lands (which == 9 above); a throw there is
                IfAbruptCloseIterator, exactly as the mapfn's is. */
             DCHECK(JS_IsUndefined(s->cb_value), "the consume machine already holds an element");
-            s->cb_value = value;
+            CONT_OWN_MOVE(&s->cb_value, value);
             s->cb_pending = 9;
             return 10;
         }
@@ -117769,7 +117833,7 @@ static int js_promise_all_step(JSContext *ctx, JSPromiseAll *s, JSValue res)
         /* the ATTACH is two pieces of page code — the `then` READ and the CALL — so it is REQUESTED, not
            performed: the state holds the wrapper and the index while the read runs on the tramp. */
         DCHECK(JS_IsUndefined(s->att_promise), "an attach is already in flight on this aggregate");
-        s->att_promise = next_promise;   /* ownership moves */
+        CONT_OWN_MOVE(&s->att_promise, next_promise);   /* ownership moves */
         s->att_index = s->index;
         s->attaching = 1;
         return 5;   /* ATTACH: read `then`, then invoke it */
@@ -117803,7 +117867,7 @@ static int js_promise_all_step(JSContext *ctx, JSPromiseAll *s, JSValue res)
             JS_FreeValue(ctx, res);
             break;
         case KEY_PH_OWNKEYS_SENT:
-            s->key_list = res;
+            CONT_OWN_MOVE(&s->key_list, res);
             if (js_get_length32(ctx, &s->key_n, s->key_list)) return -1;
             s->key_i = 0;
             s->key_ph = KEY_PH_WALK;
@@ -117841,11 +117905,11 @@ static int js_promise_all_step(JSContext *ctx, JSPromiseAll *s, JSValue res)
         /* KEY_PH_WALK: advance to the next key, or the source is exhausted (step 7). */
         if (s->key_i >= s->key_n)
             goto source_done;
-        JS_FreeValue(ctx, s->cur_key);
-        s->cur_key = JS_GetPropertyUint32(ctx, s->key_list, s->key_i);
-        if (JS_IsException(s->cur_key)) { s->cur_key = JS_UNDEFINED; return -1; }
-        JS_FreeAtom(ctx, s->cur_atom);
-        s->cur_atom = JS_ValueToAtom(ctx, s->cur_key);   /* already a property key; runs nothing */
+        CONT_OWN_CLEAR(ctx, &s->cur_key);
+        CONT_OWN_MOVE(&s->cur_key, JS_GetPropertyUint32(ctx, s->key_list, s->key_i));
+        if (JS_IsException(s->cur_key)) { CONT_OWN_FORGET(&s->cur_key); return -1; }
+        CONT_OWN_CLEAR_ATOM(ctx, &s->cur_atom);
+        CONT_OWN_MOVE_ATOM(&s->cur_atom, JS_ValueToAtom(ctx, s->cur_key));   /* already a property key; runs nothing */
         if (s->cur_atom == JS_ATOM_NULL) return -1;
         s->key_ph = KEY_PH_DESC_SENT;
         return 9;                             /* step 6.a: desc = ? promises.[[GetOwnProperty]](key) */
@@ -117864,7 +117928,7 @@ static int js_promise_all_step(JSContext *ctx, JSPromiseAll *s, JSValue res)
         /* IteratorComplete's `Get(res, "done")` — page code on a hand-written iterable, so it is a request and the
            result parks on the state across it and the value read after. */
         DCHECK(JS_IsUndefined(s->res_obj), "this aggregate is already unpacking a result");
-        s->res_obj = res;
+        CONT_OWN_MOVE(&s->res_obj, res);
         s->res_ph = 1;
         return 7;
     }
@@ -117872,11 +117936,11 @@ static int js_promise_all_step(JSContext *ctx, JSPromiseAll *s, JSValue res)
         done = JS_ToBoolFree(ctx, res);
         res = s->res_obj;
         if (!done) { s->res_ph = 2; return 7; }   /* IteratorValue's read, likewise */
-        s->res_obj = JS_UNDEFINED; s->res_ph = 0;
+        CONT_OWN_FORGET(&s->res_obj); s->res_ph = 0;
     } else {
         /* res_ph == 2: `res` is the value. */
         value = res;
-        JS_FreeValue(ctx, s->res_obj); s->res_obj = JS_UNDEFINED; s->res_ph = 0;
+        CONT_OWN_CLEAR(ctx, &s->res_obj); s->res_ph = 0;
         goto have_value;
     }
     if (done) {
@@ -117885,7 +117949,7 @@ static int js_promise_all_step(JSContext *ctx, JSPromiseAll *s, JSValue res)
     }
 have_value:
     s->driving_next = 0;   /* the iterator has fully stepped; from here an error closes it (fail_reject1) */
-    s->elem_value = value;
+    CONT_OWN_MOVE(&s->elem_value, value);
     s->resolving_elem = 1;
     return 4;   /* RESOLVE-ELEMENT: drive C.resolve(value) on the tramp, then re-enter with its promise */
 
@@ -117908,14 +117972,14 @@ source_done:
                 /* any: every element rejected -> reject the aggregate with AggregateError(the collected errors). */
                 JSValue err = js_aggregate_error_constructor(ctx, s->values);
                 if (JS_IsException(err)) return -1;
-                s->fin_arg = err; s->fin_is_reject = 1;
+                CONT_OWN_MOVE(&s->fin_arg, err); s->fin_is_reject = 1;
             } else if (s->keyed) {
                 /* step 8.a: the result is the dictionary, not the values list. */
                 JSValue r = js_keyed_result_object(ctx, s->keys, s->values, (uint32_t)s->index);
                 if (JS_IsException(r)) return -1;
-                s->fin_arg = r; s->fin_is_reject = 0;
+                CONT_OWN_MOVE(&s->fin_arg, r); s->fin_is_reject = 0;
             } else {
-                s->fin_arg = js_dup(s->values); s->fin_is_reject = 0;
+                CONT_OWN_SET(ctx, &s->fin_arg, s->values); s->fin_is_reject = 0;
             }
 #if APICLIENT_DEV
             /* Step 8's values list holds one element per element the walk counted: each of [0, index) was settled
