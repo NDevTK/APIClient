@@ -1228,7 +1228,7 @@ function askerRecord(eng, names, role) {
    a document of `eng`'s answers its record, one another instance holds answers false. */
 function engineOpenerLookup(eng) {
   return function (n) {
-    if (eng.openers.has(n)) return { opener: eng.openers.get(n) };
+    if (eng.openers.has(n)) return eng.openers.get(n);
     return hostHolderOf(n) === null ? undefined : false;
   };
 }
@@ -3407,7 +3407,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
         "a document is being rooted with the flag set `" + String(creationSandboxFlags) + "` beside a record " +
         "whose set is `" + docRecordSandbox(rootDoc) + "` — the engine is handed the record's set, one statement");
   eng.records.set(eng.docId, rootDoc);
-  eng.openers.set(eng.docId, docRecordNavigableIdentity(openerNavigable));
+  eng.openers.set(eng.docId, { opener: docRecordNavigableIdentity(openerNavigable), refused: false });
   await rend.renderer.setArrival({ arrival: msg.arrival });
   /* And the Set-Cookie fields the zone holds for this cluster, the root document's own response's among them,
      in the same window: the jar has them before the root's first script runs. */
@@ -3919,7 +3919,7 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
   CHECK(!eng.records.has(docName) && eng.records.size > 0,
         "a joined document's record was written twice, or into an instance whose root has none");
   eng.records.set(docName, docRecordOfArrival(msg.arrival, msg.sandbox, msg.addressSpace));
-  eng.openers.set(docName, docRecordNavigableIdentity(openerNavigable));
+  eng.openers.set(docName, { opener: docRecordNavigableIdentity(openerNavigable), refused: false });
   CHECK(creationSandboxFlags === docRecordSandbox(eng.records.get(docName)),
         "a document is being joined with the flag set `" + String(creationSandboxFlags) + "` beside a record " +
         "whose set is `" + docRecordSandbox(eng.records.get(docName)) + "` — the engine is handed the record's set");
@@ -4788,7 +4788,10 @@ async function hostNotice(eng, line) {
      must be a document of this instance and the child's name minted from it, as for a create. */
   if (f[0] === "navigable.open") {
     const O = NAVIGABLE_NOTICE.open;
-    DCHECK(f.length === O.parts && f[O.child] !== "" && f[O.creator] !== "" && f[O.opener] !== "",
+    DCHECK(f.length === O.parts && f[O.child] !== "" && f[O.creator] !== "" && f[O.opener] !== "" &&
+           f[O.sandboxFlags] !== "" && f[O.provenance] !== "" &&
+           (f[O.driven] === DRIVEN_YES || f[O.driven] === DRIVEN_NO) &&
+           (f[O.pinned] === "pinned" || f[O.pinned] === "unpinned"),
            "a navigable.open notice does not match lib/navigable-notice.js's open table: " + line);
     const _opened = askerRecord(eng, [f[O.creator]], "creator");
     const _allowedOpener = { doc: f[O.creator], origin: eng.origin };
@@ -4800,7 +4803,21 @@ async function hostNotice(eng, line) {
       engineCountRefusal(eng, _openRefusal.token);
       return;
     }
-    eng.openers.set(f[O.child], docRecordNavigableIdentity(f[O.opener]) === null ? null : _allowedOpener);
+    /* The popup's record, composed by HTML §7.3.1.7's and §7.1.5's rules from the creator's record and never
+       from the engine's answer to them (docRecordAuxiliary): null is the creator's sandboxed auxiliary
+       navigation flag, which refuses the navigable and every navigation of it into a peer. */
+    const _auxDoc = docRecordAuxiliary(_opened.doc, docRecord(f[O.provenance], f[O.driven], f[O.pinned],
+                                                              f[O.sandboxFlags], docRecordAddressSpace(_opened.doc)));
+    if (_auxDoc === null) {
+      const _sandboxed = docRecordAskerRefusal("child", "sandboxed", f[O.child]);
+      console.warn("[bridge] navigable.open " + f[O.child] + " is refused: " + _sandboxed.text);
+      engineCountRefusal(eng, _sandboxed.token);
+      eng.openers.set(f[O.child], { opener: null, refused: true });
+      return;
+    }
+    eng.records.set(f[O.child], _auxDoc);
+    eng.openers.set(f[O.child], { opener: docRecordNavigableIdentity(f[O.opener]) === null ? null : _allowedOpener,
+                                  refused: false });
     return;
   }
   if (f[0] === "navigable.request") {
@@ -5125,9 +5142,7 @@ async function hostNotice(eng, line) {
     /* HTML §7.2.2.4's opener survives the navigation, and the peer gets it only as this zone recorded it at the
        navigable's creation: the engine's claim may name that document or none. */
     const _allowed = docRecordOpenerOf(f[P.document], engineOpenerLookup(eng));
-    const _navOpenerRefusal = _allowed.refusal
-      ? docRecordAskerRefusal("opener", _allowed.refusal, docRecordNameParent(f[P.document]))
-      : docRecordOpenerClaim(f[P.opener], _allowed.opener);
+    const _navOpenerRefusal = _allowed.refusal || docRecordOpenerClaim(f[P.opener], _allowed.opener);
     if (_navOpenerRefusal) {
       console.warn("[bridge] navigable.navigate " + f[P.document] + " is refused: " + _navOpenerRefusal.text);
       engineCountRefusal(eng, _navOpenerRefusal.token);

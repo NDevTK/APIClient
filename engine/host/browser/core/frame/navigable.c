@@ -478,28 +478,36 @@ static bool child_in_this_agent(const Origin *child_origin)
     return origin_same(origin_agent(), child_origin);
 }
 
-/* `navigable.open <child> <creator> <opener>` for an auxiliary navigable this agent created (HTML §7.3.1.7 step
-   8). The opener is what the create just linked: null under `noopener` (§7.2.2.1's noreferrer included, and
-   §7.3.1.7 step 8.3.4's opener-policy severance, both of which set the features' noopener first). */
-static void navigable_announce_open(JSContext *ctx, uint32_t child, JSValueConst proxy)
+/* `navigable.open` for an auxiliary navigable this agent created (HTML §7.3.1.7 step 8), with its creation
+   sandboxing flag set and the creating path's provenance and marks (navigable_notice.h). The opener is what the
+   create just linked, so it is null under `noopener`. */
+static void navigable_announce_open(JSContext *ctx, uint32_t child, JSValueConst proxy, SandboxFlags flags,
+                                    const char *provenance, const char *driven, const char *pinned)
 {
     JSValue opener = window_proxy_opener_navigable(ctx, proxy);
     char *opener_id = remote_object_encode(ctx, window_proxy_is(opener) ? opener : JS_NULL);
+    char *sandbox = sandbox_flags_serialize(flags);
     char *op;
 
-    CHECK(opener_id != NULL, "navigable: OOM naming an auxiliary navigable's §7.2.2.4 opener for the zone");
+    CHECK(opener_id != NULL && sandbox != NULL,
+          "navigable: OOM naming an auxiliary navigable's §7.2.2.4 opener or §7.1.5 flag set for the zone");
     JS_FreeValue(ctx, opener);
     {
         const char *const fields[NAVIGABLE_OPEN_N] = {
             [NAVIGABLE_OPEN_CHILD] = world_doc_name(child),
             [NAVIGABLE_OPEN_CREATOR] = world_doc_name(document_doc(ctx)),
             [NAVIGABLE_OPEN_OPENER] = opener_id,
+            [NAVIGABLE_OPEN_SANDBOX_FLAGS] = sandbox,
+            [NAVIGABLE_OPEN_PROVENANCE] = provenance,
+            [NAVIGABLE_OPEN_DRIVEN] = driven,
+            [NAVIGABLE_OPEN_PINNED] = pinned,
         };
 
         op = engine_notice_build("navigable.open", fields, NAVIGABLE_OPEN_N);
     }
     engine_host_notify(ctx, op);
     free(op);
+    free(sandbox);
     free(opener_id);
 }
 
@@ -1779,8 +1787,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        reports a load that failed, which is a symptom with no `javascript:` anywhere in it.
        WHERE THE ROUTE IS: navigable_navigate serves §7.4.2.2 step 21's arm and every navigation converges
        there, so a `javascript:` URL reaching THIS job is one that got here without passing through it — which
-       today means §7.4's create, whose fold of §7.3.1.7 step 8 and §7.2.2.1 step 15 crashes at child_address
-       with its own message rather than enqueuing a load. This assert is what keeps a THIRD route from being
+       today means a navigable created at its destination (a child or a noopener traversable), which
+       navigable_create crashes on with its own message rather than enqueuing a load. This assert is what keeps a THIRD route from being
        added without the branch. */
     DCHECK(strncmp(addr, "javascript:", sizeof "javascript:" - 1) != 0,
            "§7.4 step 14's document-load job reached its FETCH with a `javascript:` URL — §7.4.2.2 "
@@ -3054,10 +3062,10 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url, 
      * `initialInsertion` is an optional boolean of §7.4.2.2's navigate that nothing below it carries, and the
      * only caller that passes true is §4.8.5's post-connection steps ("process the iframe attributes for
      * insertedNode, with initialInsertion set to true") — an `<iframe>` or `<frame>` whose `src` is already a
-     * `javascript:` URL at the moment it is inserted, which navigable_create refuses outright by the same fold
-     * that residual names. So the branch is
-     * unreachable behind an existing crash rather than skipped, and the diff that unfolds the create owes this
-     * function the parameter in the same breath: without it a markup `javascript:` frame would run its program
+     * `javascript:` URL at the moment it is inserted, which navigable_create refuses outright for a child created
+     * at its destination (its residual names the build). So the branch is
+     * unreachable behind an existing crash rather than skipped, and the diff that creates a child unnavigated owes
+     * this function the parameter in the same breath: without it a markup `javascript:` frame would run its program
      * and never fire its `load` event, which is a frame whose `onload` never runs and nothing to say why.
      *
      * IT IS WRITTEN ABOVE STEP 15'S ASSERTION AND THE TWO ARMS ARE DISJOINT, which is why the order here does
@@ -3989,6 +3997,10 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     embedder.document_flags = document_active_sandbox_flags(ctx);
     creation_flags = sandbox_creation_flags(is_child ? &embedder : NULL,
                                             is_child ? 0 : sandbox_popup_flags(embedder.document_flags));
+    DCHECK(is_child || (feat && feat->noopener) || url == NULL,
+           "§7.3.1.7 step 8 creates an auxiliary traversable with no url, and its opener's §7.2.2.1 step 15 or "
+           "§4.6.5 step 11 navigates it; only a noopener one, in a new browsing context group, is created at "
+           "its destination");
     if (!child_address(ctx, url, creation_flags, &addr, &origin, &destination_is_javascript)) {
         /* the reference does not parse; the caller decides what that means */
         JS_FreeCString(ctx, creator_tlu_s);
@@ -3996,29 +4008,18 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         free(addr);
         return JS_UNDEFINED;
     }
-    /* §7.4.2.2's SCHEME ARM IS UNREACHABLE FROM A CREATE, AND THE REASON IS THE FOLD navigable.h ALREADY NAMES
-       AS THE NEXT THING TO REMOVE. §7.3.1.7 "Navigable target names" step 8 creates a top-level traversable
-       with NO url — the navigable is created holding §7.3.2.1's initial `about:blank` — and §7.2.2.1 "Opening
-       and closing windows" step 15 navigates it afterwards, which is where the `javascript:` branch lives. So
-       in the standard `window.open("javascript:x()")` reaches §7.4.2.3.2 through NAVIGATE, in a navigable that
-       already has an active document to run the program in and to take its settings object and API base URL
-       from. This engine folds step 8 and step 15 into one call that takes a url, so the same spelling arrives
-       HERE with no active document yet, and there is no realm for the settings object §7.4.2.3.2's EVALUATE A
-       `javascript:` URL takes at its step 4 ("let settings be targetNavigable's active document's relevant
-       settings object", whose API base URL its step 5 then reads) to be. The section holds two algorithms —
-       navigate-to-a-`javascript:`-URL and evaluate-a-`javascript:`-URL — so the one is named rather than the
-       step number left bare.
-       UNFOLDING IT IS THE BUILD, not a second evaluate here: make navigable_create take no url, give
-       §7.2.2.1's step 15 and §4.6.5's follow-the-hyperlink step 11 the navigate they each already own
-       (navigable.h states the asymmetry this leaves in the meantime), and this arm then reaches
-       navigable_navigate below like every other destination. */
+    /* §7.4.2.2's scheme arm is unreachable from a create. A navigable this create takes a url for is created at
+       its destination: §4.8.5's child (named residual below) and a noopener traversable, whose new browsing
+       context group no document of this agent can reach. §7.4.2.3.2's evaluate-a-`javascript:`-URL needs the
+       target's active document's settings object (its step 4), and such a navigable has none yet.
+       Named residual: `<iframe src="javascript:…">` and `open("javascript:…", "_blank", "noopener")` are not
+       covered. The next diff creates a child holding its initial about:blank and navigates it from §4.8.5's
+       process-the-iframe-attributes, with the nested peer arm the load job names. Its absence shows as this
+       DCHECK. */
     DCHECK(!destination_is_javascript,
-           "§7.4's create was asked to make a navigable whose ADDRESS is a `javascript:` URL — §7.3.1.7 step 8 "
-           "creates a navigable with no url at all and §7.2.2.1 step 15 navigates it, which is the algorithm "
-           "that routes the scheme to §7.4.2.3.2 \"The javascript: URL special case\". Nothing is fetched for "
-           "one and no Document is created from one, so there is no address here to create a navigable at. "
-           "Unfold the create and the navigate (navigable.h names it), so `window.open(\"javascript:…\")` and "
-           "`<a href=\"javascript:…\" target=_blank>` reach navigable_navigate's scheme branch");
+           "a navigable created at its destination was given a `javascript:` URL — §7.4.2.3.2 evaluates one in "
+           "the target's active document, which a navigable created this way does not have yet. Create it "
+           "holding its initial about:blank and navigate it (navigable_navigate's scheme branch)");
     /* Before the agent split, so a same-origin and a cross-origin destination are one row kind. */
     navigable_record_destination(ctx, addr, prov, drives);
     /* MINTED FROM THE CREATOR, not from the instance root: this agent holds one realm per same-origin
@@ -4032,7 +4033,9 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        is a TOP-LEVEL traversable — it is its own parent and its own top — and what links it back here is
        `opener`. Getting this pair backwards is not a detail: `parent`/`top`/`opener` are how a frame and a
        popup tell each other apart, and how testharness.js finds the window it is running in. */
-    if (child_in_this_agent(origin)) {
+    /* A noopener traversable is created "given null" (§7.3.1.7 step 8.3.7), so it is in a new browsing context
+       group, an agent cluster of its own whatever its origin, which changes what the new navigable may reach. */
+    if (child_in_this_agent(origin) && (is_child || !(feat && feat->noopener))) {
         /* A SECOND REALM IN THIS HEAP — HTML's similar-origin window agent, and the reason it is not a second
            instance: the corpus moves LIVE NODES across this boundary (a subframe created here and appended to
            the child's body, whose `parentNode` is then a node of the child) and assigns LIVE CLOSURES into the
@@ -4154,7 +4157,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         if (!is_child) navigable_group_add(ctx, proxy);
         /* An auxiliary navigable this agent holds is announced, so the zone records who created it and can
            bound the opener a later navigation of it into a peer claims (navigable_notice.h). */
-        if (!is_child) navigable_announce_open(ctx, child, proxy);
+        if (!is_child) navigable_announce_open(ctx, child, proxy, creation_flags, provenance, driven, pinned);
         /* §7.4 STEP 14: NAVIGATE THE NEW NAVIGABLE TO url — and navigating is what makes the document RUN. It
            is a JOB rather than a call, for the reason js_nav_load_step states, but it is ENQUEUED here and
            unconditionally: a navigable's own scripts are an observable that owes nothing to the creator, and a
@@ -4793,7 +4796,8 @@ void navigable_root_opener(JSContext *ctx, JSValueConst proxy, const char *opene
  * say this. Only this block and the header's are corrected; a sweep of the file's other citations would be a
  * diff nobody can check. */
 JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat,
-                       lxb_dom_node_t *source_element, WindowType *out_window_type, const char *referrer_policy)
+                       lxb_dom_node_t *source_element, WindowType *out_window_type, bool *out_at_destination,
+                       const char *referrer_policy)
 {
     const char *name = target ? target : "";
     const bool noopener = feat && feat->noopener;
@@ -4810,6 +4814,9 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
     /* §7.3.1.7 step 2: "Let windowType be `existing or none`." Written before anything can answer, so every
        path out of this function has stated it. */
     *out_window_type = WINDOW_TYPE_EXISTING_OR_NONE;
+    DCHECK(out_at_destination != NULL, "§7.3.1.7's rules were applied by a caller that cannot learn whether "
+                                       "the traversable they created still owes its navigate");
+    *out_at_destination = false;
 
     /* THE ASSERT AT THE CONSUMER, and the question it closes is the one this algorithm structurally cannot ask:
        §7.3.1.7 takes ANY string, so a name carrying smuggled markup is legal here — for `window.open`, which is
@@ -4844,6 +4851,9 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
        the empty url, so neither may be performed here on the other's behalf. */
     if (window_proxy_is(chosen)) return chosen;
     JS_FreeValue(ctx, chosen);
+    /* Step 8's second option: under the sandboxed auxiliary navigation browsing context flag no traversable is
+       created and chosen stays null. The zone refuses the same creation from its own record (navigable.open). */
+    if (document_active_sandbox_flags(ctx) & SANDBOX_AUXILIARY_NAVIGATION) return JS_NULL;
     /* Step 8: nothing answered, so a new top-level traversable is created. "Let targetName be the empty
        string. If name is not an ASCII case-insensitive match for `_blank`, then set targetName to name." —
        so every name that reached step 7 and found nothing NAMES the navigable it creates, `_foo` included,
@@ -4952,8 +4962,28 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
     /* NO §7.4.2.2 `documentResource`: §7.2.2.1 "Opening and closing windows" step 15's navigate states none,
        and the string arm of that argument is §4.8.5's srcdoc alone — an auxiliary navigable has no element for
        one to come off. */
-    return navigable_create(ctx, url, target_name_is(name, "_blank") ? NULL : name, false, feat, 0, JS_NULL,
-                            /*documentResource*/ NULL, referrer_policy);
+    /* Step 8's traversable is created holding its initial about:blank, and the caller's §7.2.2.1 step 15 or
+       §4.6.5 step 11 navigates it. A noopener one is created in a new browsing context group (navigable_create
+       states why), which is created at its destination and owes no navigate. */
+    *out_at_destination = feat && feat->noopener;
+    return navigable_create(ctx, *out_at_destination ? url : NULL, target_name_is(name, "_blank") ? NULL : name,
+                            false, feat, 0, JS_NULL, /*documentResource*/ NULL, referrer_policy);
+}
+
+/* URL §4.1's "matches about:blank": scheme `about`, a path of the single string `blank`, empty username and
+   password, null host; query and fragment are free. Over the serialization, where that is exactly `about:blank`
+   followed by the end, a `?` or a `#`. `url` parses (window open step 4 asked first). */
+static bool url_matches_about_blank(JSContext *ctx, const char *url)
+{
+    char *addr = NULL;
+    const Origin *origin = NULL;
+    bool js = false, ok = child_address(ctx, url, 0, &addr, &origin, &js);
+    bool match;
+
+    DCHECK(ok, "about:blank matching was asked of a URL §7.2.2.1 step 4 had not parsed");
+    match = ok && strncmp(addr, "about:blank", 11) == 0 && (addr[11] == '\0' || addr[11] == '?' || addr[11] == '#');
+    free(addr);
+    return match;
 }
 
 /* HTML §7.2.2.1 "Opening and closing windows" — `window.open`'s WINDOW OPEN STEPS, AS A STEP MACHINE, and it is
@@ -5001,6 +5031,9 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     WindowType window_type;
     /* §7.2.2.1 step 3's urlRecord, as the only thing steps 15 and 16.1 ask about it. */
     bool url_is_null;
+    /* Whether the traversable the rules created was created at its destination (a noopener one), so step 15's
+       navigate is not owed. */
+    bool at_destination = false;
     /* AND THE THIRD STATE OF THAT SAME RECORD, WHICH IS NOT EITHER OF ITS TWO — see the announcement below.
        `url_is_null` is step 3's fact and answers step 16.1's own condition; this one says the record was never
        COMPUTED. Two variables and not one, because steps 15.3 and 15.4 read them in OPPOSITE directions: "if
@@ -5100,24 +5133,53 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            "an unknown destination was converted to bytes on its way into §7.2.2.1 step 13's choose — the "
            "address the created navigable would then carry is a fabricated string with no source identity and "
            "no domain left on it");
+    /* §7.2.2.1 step 4: "If urlRecord is failure, then throw a \"SyntaxError\" DOMException", asked before
+       step 12 chooses or creates anything, so a bad URL opens no window. */
+    if (!url_is_null && !url_is_unknown) {
+        char *parsed = NULL;
+        const Origin *parsed_origin = NULL;
+        bool parsed_js = false;
+        bool ok = child_address(ctx, url, 0, &parsed, &parsed_origin, &parsed_js);
+
+        free(parsed);
+        if (!ok) {
+            if (features) JS_FreeCString(ctx, features);
+            JS_FreeCString(ctx, url);
+            if (target) JS_FreeCString(ctx, target);
+            JS_ThrowDOMException(ctx, "SyntaxError", "the URL to open is not a URL");
+            return JS_STEP_ABRUPT;
+        }
+    }
     /* §7.2.2.1: "Let referrerPolicy be the empty string. If noreferrer is true, then set noopener to true and
        set referrerPolicy to \"no-referrer\"." Both navigates of the window open steps take it. */
     s->result = navigable_open(ctx, url, (target && *target) ? target : "_blank", &feat, NULL, &window_type,
-                               feat.noreferrer ? "no-referrer" : "");
+                               &at_destination, feat.noreferrer ? "no-referrer" : "");
     if (features) JS_FreeCString(ctx, features);
-    /* §7.2.2.1 step 4: "If urlRecord is failure, then throw a \"SyntaxError\" DOMException" — the PAGE's
-       mistake, and the one this algorithm hands back rather than swallowing. */
-    if (JS_IsUndefined(s->result)) {
+    DCHECK(!JS_IsUndefined(s->result), "§7.3.1.7's rules answered no navigable and no null for a URL step 4 "
+                                       "already parsed");
+    /* "If targetNavigable is null, then return null" (step 13). */
+    if (JS_IsNull(s->result)) {
         if (url) JS_FreeCString(ctx, url);
         if (target) JS_FreeCString(ctx, target);
-        JS_ThrowDOMException(ctx, "SyntaxError", "the URL to open is not a URL");
-        return JS_STEP_ABRUPT;
+        *presult = JS_NULL;
+        s->result = JS_UNDEFINED;
+        return JS_STEP_DONE;
     }
-    /* §7.2.2.1 STEPS 15 AND 16 — the two arms, split by windowType, which is the split this member did not
-       have. Step 15's arm ("new and unrestricted" / "new with no opener") is performed by the create inside
-       navigable_open: it sets is-popup from the tokenized features, and §7.4 step 14 enqueues the load that is
-       step 15's navigate. Step 16's arm is HERE because it is the one an EXISTING navigable takes, and it has
-       two steps that step 15 has no counterpart for. */
+    /* §7.2.2.1 step 15's navigate, for a traversable created holding its initial about:blank. A null urlRecord
+       becomes about:blank, and an about:blank one takes the URL and history update steps instead of a
+       navigation, so neither navigates.
+       Named residual: the URL and history update steps for `about:blank?query` are not covered. The next diff
+       runs §7.4.4's steps on the created document's URL. Its absence shows as the popup's `location.href`
+       reading `about:blank` after `open("about:blank?x")`. */
+    if (window_type != WINDOW_TYPE_EXISTING_OR_NONE && !at_destination && !url_is_null && !url_is_unknown &&
+        !url_matches_about_blank(ctx, url)) {
+        JSValue r = navigable_navigate(ctx, s->result, url, /*documentResource*/ NULL,
+                                       feat.noreferrer ? "no-referrer" : "");
+        JS_FreeValue(ctx, s->result);
+        s->result = r;
+    }
+    /* §7.2.2.1 STEP 16 — the arm an EXISTING navigable takes, split from step 15's (above) by windowType. It has
+       two steps step 15 has no counterpart for. */
     if (window_type == WINDOW_TYPE_EXISTING_OR_NONE) {
         /* STEP 16.1: "If urlRecord is not null, then navigate targetNavigable to urlRecord using
            sourceDocument…". The condition is step 3's, read off `url_is_null` above.

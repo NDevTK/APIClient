@@ -420,9 +420,9 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
     char *target;
     WindowFeatures feat = { false, false, false };
     JSValue r;
-    /* §4.6.5 step 6 takes only the FIRST return value of §7.3.1.7's rules, so this exists to be READ ONCE —
-       by the navigate below, and only for the reason stated there. */
+    /* §4.6.5 step 6 takes only the FIRST return value of §7.3.1.7's rules; the second is written and not read. */
     WindowType window_type;
+    bool at_destination = false;   /* a noopener traversable, created at its destination (navigable.h) */
 
     (void)ev;
     /* §4.6.5 STEP 4's ARRIVAL AT THE @S URL CLASS, THROUGH THE ONE DETECTOR AND NEVER AN `if` HERE.
@@ -508,7 +508,7 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
        otherwise the current state of the `referrerpolicy` attribute. */
     referrer_policy = feat.noreferrer ? "no-referrer"
                                       : referrer_policy_attribute_keyword(lxb_dom_interface_element(node_of(el)));
-    r = navigable_open(ctx, href, target, &feat, node_of(el), &window_type, referrer_policy);
+    r = navigable_open(ctx, href, target, &feat, node_of(el), &window_type, &at_destination, referrer_policy);
     /* §4.6.5 STEP 11: "Navigate targetNavigable to urlString using subject's node document, with referrerPolicy
        set to subject's hyperlink referrer policy, userInvolvement set to userInvolvement, and sourceElement set
        to subject." THE NUMBER WAS 9 HERE AND 11 EIGHT LINES ABOVE, IN ONE FUNCTION. Step 9 is "let urlString be
@@ -523,11 +523,8 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
        algorithm and §7.2.2.1's part company: an empty `href` resolves against the document's own address and
        so a click on `<a href="">` reloads, while `window.open("")` on an existing navigable does nothing at
        all. The one navigate that used to live inside navigable_open was THIS one, imposed on both callers.
-       ONLY THE EXISTING-NAVIGABLE ARM IS NAVIGATED HERE, and that is an artefact of this engine rather than of
-       §4.6.5: a navigable the rules CREATED has already been navigated to `href` by §7.4 step 14 inside the
-       create (navigable.h states that contract), so navigating again would load one address into two documents
-       of one navigable. When step 8's create stops taking a url — which is what §7.3.1.7 actually says — this
-       test goes and the step becomes unconditional, as it reads.
+       A traversable the rules created is navigated here too, from the initial about:blank it was created
+       holding; only a noopener one, created at its destination in a new browsing context group, is not.
        AND THE SECOND CONDITION IS NOT STEP 11's — it is the difference between a step whose CONDITION is false
        and a step whose condition is TRUE and which this engine cannot perform, and writing them as one `if` is
        what would hide that. An unknown destination reaches step 11 like any other; what it cannot be given is
@@ -544,7 +541,7 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
        no @H endpoint and no sink of its own to exploration, so the run's learned surface is missing everything
        behind that route while the @S URL entry for the href stands parked — read it as the endpoint set and
        the parked entry disagreeing about the same address. */
-    if (window_type == WINDOW_TYPE_EXISTING_OR_NONE && window_proxy_is(r) && href != NULL) {
+    if (!at_destination && window_proxy_is(r) && href != NULL) {
         /* NO §7.4.2.2 `documentResource`: §4.6.5's follow the hyperlink states none, and the string arm of
            that argument is §4.8.5's `srcdoc` alone. */
         JSValue nav = navigable_navigate(ctx, r, href, /*documentResource*/ NULL, referrer_policy);

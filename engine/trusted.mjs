@@ -720,8 +720,15 @@ async function main() {
      in `role` (lib/document-record.js's docRecordAskerRefusal): the meet of their records (docRecordOfAsker,
      docRecordMeet) as `{doc, refusal: null}`, or `{doc: null, refusal}` naming the first that is not a
      document of `e`, which refuses it. */
+  /* The record of each auxiliary navigable an instance holds without this zone having provisioned it, composed
+     at its `navigable.open` (docRecordAuxiliary), under the instance root it was recorded for. */
+  const heldRecords = new Map();
   const askerRecord = (e, names, role) => {
-    const lookup = (n) => (docRecords.has(n) ? (e.docs.includes(n) ? docRecords.get(n) : false) : undefined);
+    const lookup = (n) => {
+      if (docRecords.has(n)) return e.docs.includes(n) ? docRecords.get(n) : false;
+      const h = heldRecords.get(n);
+      return h === undefined ? undefined : (e.docs.includes(h.root) ? h.doc : false);
+    };
     const recs = [];
     for (const n of names) {
       const r = ZONE.docRecordOfAsker(n, lookup);
@@ -755,7 +762,7 @@ async function main() {
      as the creator or null, keyed by document name with the instance root it was recorded under. An engine's
      opener claim is compared against it (docRecordOpenerClaim) and never provisioned beyond it. */
   const openerRecords = new Map();
-  const recordOpener = (name, root, opener) => openerRecords.set(name, { root, opener });
+  const recordOpener = (name, root, opener, refused = false) => openerRecords.set(name, { root, opener, refused });
   const openerLookup = (e) => (n) => {
     const r = openerRecords.get(n);
     return r === undefined ? undefined : (e.docs.includes(r.root) ? r : false);
@@ -1587,9 +1594,7 @@ async function main() {
       /* §7.2.2.4's opener survives the navigation, and the peer gets it only as this zone recorded it at the
          navigable's creation: the engine's claim may name that document or none. */
       const allowed = ZONE.docRecordOpenerOf(f[P.document], openerLookup(e));
-      const navOpenerRefusal = allowed.refusal
-        ? ZONE.docRecordAskerRefusal('opener', allowed.refusal, ZONE.docRecordNameParent(f[P.document]))
-        : ZONE.docRecordOpenerClaim(f[P.opener], allowed.opener);
+      const navOpenerRefusal = allowed.refusal || ZONE.docRecordOpenerClaim(f[P.opener], allowed.opener);
       if (navOpenerRefusal) {
         e.ready.push(decline(`navigable.navigate ${f[P.document]} — ${askerRefusal(e, navOpenerRefusal)}`));
         return;
@@ -1796,7 +1801,9 @@ async function main() {
        The creator must be a document of this instance and the child's name minted from it, as for a create. */
     if (f[0] === 'navigable.open') {
       const O = NAVIGABLE_NOTICE.open;
-      if (f.length !== O.parts || !f[O.child] || !f[O.creator] || !f[O.opener])
+      if (f.length !== O.parts || !f[O.child] || !f[O.creator] || !f[O.opener] || !f[O.sandboxFlags] ||
+          !f[O.provenance] || (f[O.driven] !== 'driven' && f[O.driven] !== 'undriven') ||
+          (f[O.pinned] !== 'pinned' && f[O.pinned] !== 'unpinned'))
         throw new Error(`a navigable.open notice does not match navigable_notice.h's open table: ${record}`);
       const opened = askerRecord(e, [f[O.creator]], 'creator');
       const allowedOpener = { doc: f[O.creator], origin: e.origin };
@@ -1808,6 +1815,19 @@ async function main() {
         e.ready.push(decline(`navigable.open ${f[O.child]} — ${askerRefusal(e, openRefusal)}`));
         return;
       }
+      /* The popup's record, composed by HTML §7.3.1.7's and §7.1.5's rules from the creator's record and never
+         from the engine's answer to them (docRecordAuxiliary): null is the creator's sandboxed auxiliary
+         navigation flag, which refuses the navigable and every navigation of it into a peer. */
+      const auxOwn = ZONE.docRecord(f[O.provenance], f[O.driven], f[O.pinned], f[O.sandboxFlags],
+                                    ZONE.docRecordAddressSpace(opened.doc));
+      const auxDoc = ZONE.docRecordAuxiliary(opened.doc, auxOwn);
+      if (auxDoc === null) {
+        const sandboxed = ZONE.docRecordAskerRefusal('child', 'sandboxed', f[O.child]);
+        recordOpener(f[O.child], e.docId, null, true);
+        e.ready.push(decline(`navigable.open ${f[O.child]} — ${askerRefusal(e, sandboxed)}`));
+        return;
+      }
+      heldRecords.set(f[O.child], { root: e.docId, doc: auxDoc });
       recordOpener(f[O.child], e.docId,
                    ZONE.docRecordNavigableIdentity(f[O.opener]) === null ? null : allowedOpener);
       return;

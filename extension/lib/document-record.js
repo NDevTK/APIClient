@@ -268,7 +268,7 @@ var _ASKER_REFUSALS = {
   "asker-elsewhere": 1, "asker-unprovisioned": 1, "creator-elsewhere": 1, "creator-unprovisioned": 1,
   "issuer-elsewhere": 1, "issuer-unprovisioned": 1, "navigable-elsewhere": 1, "navigable-unprovisioned": 1,
   "child-not-minted": 1, "document-not-minted": 1, "child-readdressed": 1,
-  "opener-elsewhere": 1, "opener-unprovisioned": 1, "opener-foreign": 1
+  "opener-elsewhere": 1, "opener-unprovisioned": 1, "opener-foreign": 1, "child-sandboxed": 1
 };
 function docRecordAskerRefusal(role, reason, name) {
   var key = role + "-" + reason;
@@ -279,6 +279,8 @@ function docRecordAskerRefusal(role, reason, name) {
           : reason === "unprovisioned" ? "no document this zone provisioned, nor one minted from such a document"
           : reason === "readdressed" ? "already provisioned at another address"
           : reason === "foreign" ? "not the navigable's creator, the only opener this zone's record allows"
+          : reason === "sandboxed" ? "an auxiliary navigable its creator's record forbids (HTML §7.1.5's sandboxed " +
+                                     "auxiliary navigation browsing context flag)"
           : "not minted from the document it must be";
   return { token: "blocked-asker:" + key, text: "blocked-asker:" + key + " (the " + role + " " + name + " is " +
            why + ")" };
@@ -304,20 +306,24 @@ function docRecordNavigableIdentity(token) {
 /* The opener this zone's record allows a navigation minting `minted` to carry: the record of the nearest
    document on the walk up from the navigable's current document (minted's name parent), which is the
    navigable's creation (`navigable.open`) or the instance root it was provisioned as. `lookup(name)` answers
-   that document's record ({ opener: {doc, origin} or null }) for the asking instance, `false` for another
-   instance's, `undefined` for none. Answers { opener, refusal }, the refusal docRecordOfAsker's reason. */
+   that document's record ({ opener: {doc, origin} or null, refused }) for the asking instance, `false` for
+   another instance's, `undefined` for none. Answers { opener, refusal }, the refusal a docRecordAskerRefusal:
+   `opener-elsewhere` or `opener-unprovisioned` for the walk, `child-sandboxed` for a navigable whose creation
+   this zone refused. */
 function docRecordOpenerOf(minted, lookup) {
   CHECK(typeof lookup === "function", "an opener record was asked with no lookup");
-  for (var n = docRecordNameParent(minted); n !== null; n = docRecordNameParent(n)) {
+  var start = docRecordNameParent(minted);
+  for (var n = start; n !== null; n = docRecordNameParent(n)) {
     var r = lookup(n);
-    if (r === false) return { opener: null, refusal: "elsewhere" };
+    if (r === false) return { opener: null, refusal: docRecordAskerRefusal("opener", "elsewhere", n) };
     if (r !== undefined) {
       CHECK(r.opener === null || (typeof r.opener.doc === "string" && typeof r.opener.origin === "string"),
             "an opener record for " + n + " is neither null nor a document and its origin");
+      if (r.refused === true) return { opener: null, refusal: docRecordAskerRefusal("child", "sandboxed", n) };
       return { opener: r.opener, refusal: null };
     }
   }
-  return { opener: null, refusal: "unprovisioned" };
+  return { opener: null, refusal: docRecordAskerRefusal("opener", "unprovisioned", start === null ? minted : start) };
 }
 
 /* Whether the engine's opener claim `token` may stand against the `allowed` opener of this zone's record: `N`

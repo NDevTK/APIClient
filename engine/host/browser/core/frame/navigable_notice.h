@@ -55,12 +55,17 @@
     X(OPENER, opener, TOKEN)                   /* the engine's claim of §7.2.2.4's opener (remote_object.h), or `N` */
 
 /* `navigable.open`: an auxiliary navigable this agent created and holds (HTML §7.3.1.7 step 8), so the zone has
-   its own record of who created it before any navigation of it reaches a peer. The opener is the engine's
-   claim, which the zone accepts only as `N` or as the creator. */
+   its own record of it before any navigation of it reaches a peer: who created it, under which record (the
+   zone composes it from the creator's, docRecordAuxiliary, and refuses one §7.1.5 forbids), and its opener,
+   which the zone accepts only as `N` or as the creator. Each field's grammar is the create notice's. */
 #define NAVIGABLE_OPEN_FIELDS(X)                                                                           \
     X(CHILD, child, TOKEN)                     /* the new navigable's document's world name */                   \
     X(CREATOR, creator, TOKEN)                 /* the creating document's world name */                          \
-    X(OPENER, opener, TOKEN)                   /* the engine's claim of §7.2.2.4's opener (remote_object.h), or `N` */
+    X(OPENER, opener, TOKEN)                   /* the engine's claim of §7.2.2.4's opener (remote_object.h), or `N` */ \
+    X(SANDBOX_FLAGS, sandboxFlags, TOKEN)      /* HTML §7.1.5's creation sandboxing flag set, the engine's */    \
+    X(PROVENANCE, provenance, TOKEN)           /* what the creating path is evidence of (PENDING_PROVENANCE_*) */ \
+    X(DRIVEN, driven, TOKEN)                   /* the drive mark (PENDING_DRIVEN_*) */                           \
+    X(PINNED, pinned, TOKEN)                   /* the witness mark (PENDING_PINNED_*) */
 
 enum { NAVIGABLE_NOTICE_TOKEN, NAVIGABLE_NOTICE_BASE64 };
 

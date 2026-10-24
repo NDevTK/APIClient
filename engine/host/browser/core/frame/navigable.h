@@ -395,8 +395,7 @@ typedef enum {
        the empty name, `_self`, `_parent`, `_top`, or a find-by-target-name hit). §7.2.2.1 step 16 is its arm. */
     WINDOW_TYPE_EXISTING_OR_NONE = 0,
     /* §7.3.1.7 step 8.3's third option, whose step 8.3.2 sets this — a new top-level traversable was created.
-       §7.2.2.1 step 15 is its arm, and in this engine step 15's navigate is already done by the create
-       inside navigable_open. */
+       §7.2.2.1 step 15 is its arm. */
     WINDOW_TYPE_NEW_AND_UNRESTRICTED,
     /* §7.3.1.7 step 8.3.4's opener-policy clause — a COOP document whose origin is not its
        environment's top-level origin. §7.2.2.1 step 17 is its arm and returns null. */
@@ -424,18 +423,15 @@ typedef enum {
    window came to be named after smuggled markup. With it, that call site CRASHES.
    `out_window_type` receives §7.3.1.7's SECOND return value and is NOT optional — a caller that does not read
    it is a caller running one arm of a two-arm algorithm, which is the state this parameter exists to end.
-   AND THE CONTRACT ON `url` IS ASYMMETRIC, WHICH THE CALLER MUST KNOW RATHER THAN GUESS. An EXISTING navigable
-   is chosen and NOT navigated: §7.2.2.1 step 16.1 and §4.6.5 step 11 are the caller's own steps and they do not
-   agree (16.1 skips an empty url; step 11 does not), so doing it here would be one of them imposed on both — the
-   defect this split repaired. A NEW navigable HAS already been navigated to `url`, by §7.4 step 14 inside
-   navigable_create, which is where this engine's create puts it; a caller that navigates it again loads the
-   address twice into two documents of one navigable. The asymmetry is stated because it is real, and it is the
-   next thing to remove: §7.3.1.7 step 8's create takes no url at all, and step 15's navigate belongs to
-   §7.2.2.1 exactly as 16.1's does.
-   Answers the chosen navigable's WindowProxy (owned), or JS_UNDEFINED when the url does not parse — which
-   §7.2.2.1 turns into a SyntaxError and §4.6.5 discards, because a click is not a place a page can catch one. */
+   NO NAVIGABLE IS NAVIGATED HERE. An existing one is the caller's to navigate (§7.2.2.1 step 16.1 and §4.6.5 step
+   11 disagree about an empty url), and a created one holds its initial about:blank for the caller's step 15 or
+   step 11. `*out_at_destination` is true for the one exception, a noopener traversable, which is created in a
+   new browsing context group at `url` (navigable_create) and owes no navigate; `url` is read only for it.
+   Answers the chosen navigable's WindowProxy (owned), JS_NULL when step 8's sandboxed auxiliary navigation
+   option creates nothing, or JS_UNDEFINED when a noopener destination does not parse. */
 JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat,
-                       lxb_dom_node_t *source_element, WindowType *out_window_type, const char *referrer_policy);
+                       lxb_dom_node_t *source_element, WindowType *out_window_type, bool *out_at_destination,
+                       const char *referrer_policy);
 void navigable_free(JSContext *ctx);
 
 /* HOW MANY CHILD REALMS ARE LIVE — the working set child_document's OOM `CHECK` names, asked of the only

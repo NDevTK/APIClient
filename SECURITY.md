@@ -556,9 +556,10 @@ engine folds the line's own marks toward the most permissive member in the same 
 The flag set follows §7.1.5 and §7.3.1.7 exactly. A nested navigable's set is the union of the notice's set
 (the engine's computation of its `<iframe sandbox>` attribute and its embedder's active set) and the creating
 document's record, so no frame regains a permission any sandbox above it removed. An auxiliary navigable (a
-notice with no parent) is refused outright when the creator's record carries the sandboxed auxiliary
-navigation flag, and otherwise starts from the notice's set, plus the creator's whole set only when the
-creator's carries the sandbox-propagates flag. So `allow-popups-to-escape-sandbox` lets a popup out only when
+`navigable.open`, or a create with no parent for a noopener one) is refused outright when the creator's record
+carries the sandboxed auxiliary navigation flag, whatever the engine answered, and so is every navigation of it
+into a peer (`blocked-asker:child-sandboxed`); otherwise it starts from the notice's set, plus the creator's
+whole set only when the creator's carries the sandbox-propagates flag. So `allow-popups-to-escape-sandbox` lets a popup out only when
 every sandbox above the creator allowed it. The one branch that is not the spec's: the risk marks always
 propagate, popups included, because they describe this tool's act and no attribute the page writes can opt
 out of it. The zone hands the engine the record's flag set, never the notice's, so a notice that drops a flag
