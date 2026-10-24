@@ -105,11 +105,18 @@ const SEED_HOST = '127.0.0.1';
 const PEER_HOST = 'localhost';
 
 /* ── THE FIXTURES ────────────────────────────────────────────────────────────────────────────────────────────
-   THE ORDER OF THE STATEMENTS IN THE SEED IS LOAD-BEARING AND IS NOT STYLE. Each `window.open` of a `/beacon/`
-   address is this page reporting one observation to the wire, and a read that never comes back parks the flow
-   that would have made the reports after it. So the two LOCAL reads (W4's pair) are reported FIRST, the
-   crossing `length` next, and the crossing `closed` — the one with a real teardown question under it, see
-   below — LAST. A failure of the last therefore leaves the first three measured instead of erasing them.
+   Which document a read reaches is decided by when it runs. HTML §7.2.2.1 "Opening and closing windows"'
+   window open steps navigate the new traversable at step 15.5 and return its WindowProxy at step 19, and
+   §7.4.2.2 "Beginning navigation"'s navigate fetches in parallel (step 24), so a read on the line after
+   `window.open` reaches the traversable's initial about:blank, which has the creator's origin: `document` is
+   readable, `length` is 0 and `closed` is false. The `blank-*` rows state those answers. A read reaches the
+   peer's document only after an event that document caused, so each peer posts to its opener once it has run
+   (§9.3.3 "Posting messages"), and the crossing rows are read in the seed's `message` handler. The post from
+   `/peer-closed` follows its close(), so in every timeline that delivered it, is closing is true.
+
+   Each `window.open` of a `/beacon/` address reports one observation to the wire, and a read that never comes
+   back parks the flow that would have made the reports after it, so the handler reports the two local-answer
+   rows (W4's pair) before the crossing `length`.
 
    WHY THE BEACON IS A NAVIGATION AND NOT A `fetch()`. `fetch()` would be the obvious channel and it cannot be
    used: trusted.mjs fires only OBSERVED parks (the seed, and a parser-inserted `<script src>` of it), a
@@ -119,52 +126,52 @@ const PEER_HOST = 'localhost';
    navigable THIS instance holds, and asks the zone `document.fetch` with the load's own provenance — which
    for an address the page's own code composed on a path that stood on no contradicted arm is `derived`. The
    bytes then come through the ONE chokepoint like every other byte, which is also what makes the observation
-   trustworthy: it is `safe-fetch.js` that fetched it.
-   THIS SENTENCE ENDED "and a `derived` navigation is one trusted.mjs performs", AND THAT CLAUSE IS RETIRED
-   BY MEASUREMENT RATHER THAN BY ANYBODY DISAGREEING WITH IT — kept in its own words because it is the
-   reading a reader re-derives from that file's own `navigate` banner, which says the same thing twice. Asked
-   of the real chokepoint with `navigate`'s own facts at the table that file states (`{}`), a DERIVED
-   navigation is REFUSED `destination=value`: the `provenance=observed` arm wants `observed` and the
-   `destination=value` arm wants `witness=unpinned`, where a navigation composes no witness mark at all. So a
-   `derived` navigation waits on the per-origin widening exactly as a `forced` one does, which is why the
-   child below is spawned with `--explore` for both of this fixture's authorities. Both sentences describe
-   the single-switch control this model replaced; the refusal `navigate` writes has named `--explore` the
-   whole time.
+   trustworthy: it is `safe-fetch.js` that fetched it. A `derived` navigation is refused `destination=value`
+   at an empty table (no default arm carries a navigation, which composes no witness mark), which is why the
+   child is widened per signal at both authorities (RUN_PERMITS).
 
    AND THE OBSERVATIONS RIDE THE PATH RATHER THAN A QUERY STRING, because the whole address is what this
    server sees and the path is the half no consumer of a result document has to be asked about. */
 const seedDoc = (port) => `<!doctype html>
 <script>
-var peerA = window.open("http://${PEER_HOST}:${port}/peer", "peerA");
-var onlist;
-try { onlist = "ok-" + (peerA.self === peerA); } catch (e) { onlist = "throw-" + e.name; }
-window.open("/beacon/onlist-" + onlist);
-var offlist;
-try { offlist = "value-" + (typeof peerA.document); } catch (e) { offlist = "throw-" + e.name; }
-window.open("/beacon/offlist-" + offlist);
-window.open("/beacon/len-" + (typeof peerA.length) + "-" + peerA.length);
-var peerB = window.open("http://${PEER_HOST}:${port}/peer-closed", "peerB");
-window.open("/beacon/closed-" + (typeof peerB.closed) + "-" + peerB.closed);
+var peerA, peerB;
+window.addEventListener("message", function (e) {
+  if (e.data === "peer-active") {
+    var onlist;
+    try { onlist = "ok-" + (peerA.self === peerA); } catch (x) { onlist = "throw-" + x.name; }
+    window.open("/beacon/onlist-" + onlist);
+    var offlist;
+    try { offlist = "value-" + (typeof peerA.document); } catch (x) { offlist = "throw-" + x.name; }
+    window.open("/beacon/offlist-" + offlist);
+    window.open("/beacon/len-" + (typeof peerA.length) + "-" + peerA.length);
+  } else if (e.data === "peer-closed") {
+    window.open("/beacon/closed-" + (typeof peerB.closed) + "-" + peerB.closed);
+  }
+});
+peerA = window.open("http://${PEER_HOST}:${port}/peer", "peerA");
+var blankDoc;
+try { blankDoc = "value-" + (typeof peerA.document); } catch (x) { blankDoc = "throw-" + x.name; }
+window.open("/beacon/blankdoc-" + blankDoc);
+window.open("/beacon/blanklen-" + (typeof peerA.length) + "-" + peerA.length);
+peerB = window.open("http://${PEER_HOST}:${port}/peer-closed", "peerB");
+window.open("/beacon/blankclosed-" + (typeof peerB.closed) + "-" + peerB.closed);
 </script>`;
 
 /* THE PEER WHOSE `length` IS A FACT THE ASKER CANNOT COMPUTE. Two SRCLESS iframes: §7.4 creates each child
    navigable with the initial `about:blank` and no response, so this document makes NO request of any kind —
    which is W1's first half — and §7.2.2.2's count of them is 2 in the peer and 0 in anything answering
-   locally. There is no script here at all, deliberately: a peer with no script has ONE timeline, so the read
-   is answered once and the asking flow does not fork per answer, and a `length` that came back as anything
-   other than 2 is a defect in the transport rather than in this file's arithmetic. */
-const PEER_DOC = `<!doctype html><iframe></iframe><iframe></iframe>`;
+   locally. Its script runs after both iframes are in the tree, so the post says the count is 2. `unsent` is
+   never called, so the post in it is reached only by this tool's drive of uncalled code: `actor=tool`. */
+const PEER_DOC = `<!doctype html><iframe></iframe><iframe></iframe>` +
+                 `<script>function unsent() { opener.postMessage("driven", "*"); }` +
+                 `opener.postMessage("peer-active", "*");</script>`;
 
 /* THE PEER THAT CLOSES ITSELF — §7.2.2.1's close(), run in the agent that holds the document, which is the
    whole content of the member. The creator holds a WindowProxy for the same traversable and its own `closing`
-   byte is never written, so its local answer is `false` for ever about a window that has closed.
-   THIS ONE HAS A REAL QUESTION UNDER IT AND THE ANSWER IS THE GATE'S TO REPORT RATHER THAN TO AVOID. §7.2.2.1
-   step 6.2 queues DEFINITELY CLOSE, whose step 3 destroys the traversable — so this peer is asked a
-   cross-instance read AFTER its own document has been through §7.3.1.6 "Navigable destruction". That is
-   exactly the case CLAUDE.md says reclamation must be a MECHANISM for rather than a `free`, and if this check
-   fails while the three before it pass, the finding is about destroy-a-navigable under a held reference and
-   not about this fixture. It is placed last for that reason. */
-const PEER_CLOSED_DOC = `<!doctype html><script>window.close();</script>`;
+   byte is never written, so its local answer is `false` for ever about a window that has closed. Step 6.1
+   sets is closing before the post and step 6.2 queues definitely close, which destroys the traversable
+   (§7.3.1.6 "Navigable destruction"), so the read may reach a document already destroyed. */
+const PEER_CLOSED_DOC = `<!doctype html><script>window.close(); opener.postMessage("peer-closed", "*");</script>`;
 
 /* A BEACON'S REPLY IS A DOCUMENT WITH NOTHING IN IT — no script, no subresource, nothing to fetch — so a
    beacon can never itself become a request this gate then has to explain. */
@@ -212,6 +219,21 @@ const PROBE_PERMITS = {
   /* No signature parameter and no JWS in `http://localhost:<port>/pna-probe`. */
   'url-authority': ['unknown'],
   /* The one value this row has today; the chokepoint's own residual says why. */
+  lineage: ['unknown'],
+};
+
+/* What the child may fire at both authorities: every grade of the page's own act, and no act of this tool's.
+   A literal, as PROBE_PERMITS is, so a signal added to the registry is a row this table does not name and the
+   run's navigations are refused by name. */
+const RUN_PERMITS = {
+  destination: ['value'],
+  actor: ['page'],
+  provenance: ['derived', 'forced'],
+  'doc-reach': ['observed'],
+  cookies: ['no'],
+  'header-authority': ['none'],
+  witness: ['unstated'],
+  'url-authority': ['unknown'],
   lineage: ['unknown'],
 };
 
@@ -325,8 +347,20 @@ const CHECKS = [
              'count of the PEER\'s document-tree child navigables. This is the check `qjs_set_referenced` ' +
              'exists for: without it the peer drains and closes before the read arrives. A local answer is 0 ' +
              'and a relayed string would be "2" rather than 2 (W1, W2)'],
-  ['closed', '`peerB.closed` crossed and came back as the BOOLEAN true — §7.2.2.1 writes is-closing in the ' +
-             'agent that ran close(), so the asker\'s own record says false for ever (W2)'],
+  ['closed', '`peerB.closed`, read when `/peer-closed`\'s post arrived, crossed and came back as the BOOLEAN ' +
+             'true — §7.2.2.1 writes is-closing in the agent that ran close(), so the asker\'s own record says ' +
+             'false for ever (W2)'],
+  ['posted', 'both peers\' posts to their opener were delivered to the seed\'s `message` handler: a ' +
+             '`windowproxy.post` routed across instances and judged under its sending document\'s record'],
+  ['refused', 'a cross-document act this tool composed (a post or operation from a drive of uncalled code) ' +
+              'was refused `actor=tool` by the one firing rule, which RUN_PERMITS does not widen; `posted` is ' +
+              'its control, the page\'s own posts delivered under the same rule in the same run'],
+  ['blankdoc', '`peerA.document` on the line after `window.open` is the initial about:blank, whose origin is ' +
+               'the creator\'s (§7.2.2.1 window open steps 15.5 and 19), so it is readable'],
+  ['blanklen', '`peerA.length` on the line after `window.open` is the NUMBER 0 — the initial about:blank has ' +
+               'no child navigables'],
+  ['blankclosed', '`peerB.closed` on the line after `window.open` is the BOOLEAN false — no close() has run in ' +
+                  'any document of that traversable yet'],
   ['routed', '`trusted.mjs` reported no record it could not route — a held operation is an asking flow parked ' +
              'on a question nothing answered, which is a failure and not a note'],
   ['peers', 'every peer instance ended with status 0 — a peer that aborts prints its own `@WHY` above this ' +
@@ -521,42 +555,11 @@ async function main() {
   const probeCount = wire.length;
 
   /* ── THE RUN ───────────────────────────────────────────────────────────────────────────────────────────── */
-  /* AND THE CHILD IS AUTHORIZED FOR THE TWO AUTHORITIES OF THIS GATE'S OWN FIXTURE, WHICH IS A SECOND
-     STATEMENT BY A SECOND HOST AND NOT A SECOND POLICY. `trusted.mjs` states its own table (`{}`, a
-     command line being a sentence for one run) and `--explore <origin>` is the ONE spelling it offers for
-     adding to it, so this is that host's canonical door rather than a mechanism invented here.
-     IT IS REQUIRED AND THAT IS MEASURED RATHER THAN ARGUED, AND IT REFUTES A CLAIM BOTH THIS FILE AND
-     `trusted.mjs` CARRIED. This file's own fixture banner said "a `derived` navigation is one
-     trusted.mjs performs", and that file's `navigate` says twice that "an OBSERVED or DERIVED address is
-     navigated freely ... and only a FORCED one waits on the per-origin widening". Asked of the real
-     chokepoint with `navigate`'s own facts — `document`, `derived`, `pinned: 'unstated'`, `actor: 'page'`,
-     an observed document record — at an empty table the answer is REFUSED `destination=value`. No default arm
-     carries it: the `provenance=observed` arm wants `observed`, and the `destination=value` arm wants
-     `witness=unpinned` where a navigation composes no mark at all. Both sentences describe the
-     single-switch control this model replaced, and the refusal message `navigate` itself writes has been
-     saying "Pass `--explore <origin>` to widen it" the whole time — the CODE was right and the prose
-     above it was stale. The correction is recorded at both sites.
-     SO WITHOUT THESE TWO FLAGS THE CHILD REFUSES EVERY CROSSING READ AND EVERY BEACON. The two peer
-     documents are `window.open`s of literals the seed's own code composed (`derived`), and each
-     `/beacon/` address is composed from a value the run computed — which is how every observation in this
-     gate reaches the wire. A run without them records `onlist`, `offlist`, `length` and `closed` as
-     ABSENT, which is honest and measures no transport at all.
-     BOTH AUTHORITIES AND NOTHING WIDER, WHICH IS THE WHOLE OF THE WIDENING THIS GATE MAKES. They are the
-     two hosts of ONE ephemeral loopback port THIS PROCESS OPENED, serving nothing but literals in this
-     file, for one run — origins that do not exist outside it. `--explore` is COARSE (`safeFetchWiden`
-     permits every value of every gating row) and that is the only sentence this host's command line can
-     say; what bounds it here is the fixture rather than the flag, and `nohold` asserts AT THE WIRE that
-     the peer authority was asked for nothing but its two documents. A narrower per-signal statement
-     WOULD suffice — measured — and giving this host a per-signal flag is a mechanism of its own and is
-     not what this gate needs in order to run.
-     NAMED RESIDUAL. WHAT IS NOT COVERED: the widening is per ORIGIN and not per SIGNAL, so at these two
-     authorities a `forced` navigation would also fire — there is none in this fixture, and a third path
-     at the peer authority fails `nohold` whether it fired or not. WHAT THE NEXT DIFF BUILDS: a
-     `--explore-signal <origin> <signal>=<value>` on `trusted.mjs` routed to `safeFetchPermit`, which the
-     chokepoint already exports as the per-row door a surface writes through, and these two lines become
-     the nav vector this gate actually needs. HOW ITS ABSENCE WOULD SHOW: a person reading what this gate
-     permitted at its own fixture sees every value of every row permitted at both authorities, where the
-     run only ever asks for two vectors. */
+  /* The child's table at the fixture's two authorities, one row per `--explore-signal`: the page's own acts and
+     nothing this tool composes. Every observation reaches the wire as a navigation the page composed (`derived`,
+     or `forced` on an arm the run forked), which no default arm carries (`navigate` composes no witness mark),
+     so those rows are permitted; `actor=tool` is not, so a drive of uncalled code is judged as a fetch would be
+     and refused (`refused`, beside `posted` as its control). */
   /* AND IT IS `detached`, WHICH IS WHAT GIVES THIS GATE A HANDLE ON WHAT ITS CHILD STARTED RATHER THAN ONLY
      ON THE CHILD. `trusted.mjs` spawns each `--abi` instance in its own caller's process group, so without
      this the grandchildren share THIS process's group and `-pid` would name the group peergate itself is in.
@@ -566,7 +569,9 @@ async function main() {
      `unref`'d: the child is still this process's to wait for. */
   const child = spawn(process.execPath,
                       [join(ENGINE, 'trusted.mjs'), seedUrl, bin,
-                       '--explore', seedOrigin, '--explore', peerOrigin],
+                       ...[seedOrigin, peerOrigin].flatMap((o) => Object.entries(RUN_PERMITS)
+                         .flatMap(([signal, values]) => values.map((v) => ['--explore-signal', o, `${signal}=${v}`]))
+                         .flat())],
                       { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let out = '', err = '', spawnError = null;
   child.stdout.on('data', (d) => { out += d; progress(); });
@@ -840,6 +845,7 @@ async function main() {
        out than usual. Everything else this process emits is stderr, so the last non-empty stdout line IS the
        document. */
     const resultLine = out.split('\n').map((l) => l.trim()).filter((l) => l !== '').pop();
+    let seedResult = null;
     if (resultLine === undefined) {
       record('result', 'missing', 'trusted.mjs wrote nothing to stdout — it emits the seed\'s result document ' +
                                   'there and nothing else, so this session produced no document at all');
@@ -850,8 +856,10 @@ async function main() {
         record('result', 'wrong',
                `trusted.mjs's stdout is not a result document with a \`fetchCallSites\` array: ${
                  resultLine.slice(0, 120)}`);
-      else
+      else {
+        seedResult = parsed;
         record('result', 'pass', `${resultLine.length} bytes, ${parsed.fetchCallSites.length} fetch call site(s)`);
+      }
     }
 
     /* ── THE WIRE ──────────────────────────────────────────────────────────────────────────────────────────── */
@@ -949,6 +957,28 @@ async function main() {
     beacon('offlist', 'offlist', 'throw-SecurityError');
     beacon('length', 'len', 'number-2');
     beacon('closed', 'closed', 'boolean-true');
+    beacon('blankdoc', 'blankdoc', 'value-object');
+    beacon('blanklen', 'blanklen', 'number-0');
+    beacon('blankclosed', 'blankclosed', 'boolean-false');
+    /* The seed's own count of routed deliveries, beside the handler's beacons: a beacon from each arm of the
+       handler shows the post reached the page, and the count shows it arrived as a routed delivery. */
+    {
+      const handled = ['onlist', 'closed'].filter((p) => beacons.some((b) => b.startsWith(`/beacon/${p}-`)));
+      const delivered = seedResult === null ? null : seedResult._routedDelivered;
+      if (seedResult === null || typeof delivered !== 'number')
+        record('posted', 'missing', 'the seed printed no result document with a numeric `_routedDelivered`');
+      else
+        record('posted', handled.length === 2 && delivered >= 2 ? 'pass' : 'wrong',
+               `_routedDelivered=${delivered}, handler arms that reported: ${JSON.stringify(handled)}`);
+    }
+    {
+      const posts = (err.match(/a CROSS-DOCUMENT MESSAGE this origin's egress policy refuses on `actor=tool`/g) ||
+                     []).length;
+      const ops = (err.match(/a CROSS-AGENT OPERATION this origin's egress policy refuses on `actor=tool`/g) ||
+                   []).length;
+      record('refused', posts + ops > 0 ? 'pass' : 'missing',
+             `${posts} post refusal(s) and ${ops} operation refusal(s) on \`actor=tool\` in the log`);
+    }
 
     /* ── WHAT THE ZONE ITSELF SAID IT COULD NOT DO ─────────────────────────────────────────────────────────────
        `trusted.mjs` reports a record it held for the whole session in two shapes — a document no instance was
