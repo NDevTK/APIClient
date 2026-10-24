@@ -364,8 +364,8 @@ for the @S half: a vulnerable version whose PoC the engine should construct and 
 version beside it, where the same page must not fire. A fixed variant with no fired PoC is reported as "not
 fired" and never as safe — an unsolved search is a parked search.
 
-One row is one advisory and one delivery route; pdf.js's CVE-2024-4367 has two rows because the generic
-viewer takes a document two ways. The columns:
+One row is one advisory and one delivery route; pdf.js's CVE-2024-4367 has three rows, one per way a
+document reaches it. The columns:
 
 | column | what it states, and how it was established |
 |---|---|
@@ -377,6 +377,7 @@ viewer takes a document two ways. The columns:
 | `entry` | the address loaded, relative to the served directory; its query or fragment is the source's example value |
 | `harness` | the page of ours under `knownbug/`, served as `index.html`, or `-` where the library's own page is the subject |
 | `precondition` | what the page or the PoC must satisfy for the advisory to apply |
+| `expected` | what a correct engine does with the vulnerable variant |
 | `assets_vulnerable`, `assets_fixed` | what is served beside the page: `<served path>=<spec>@sha256:<hex>` |
 
 Every advisory in the list was read in full; what each one says about the scenario is what its harness does,
@@ -396,11 +397,26 @@ only the library and the viewer components, so the tree is the viewer this envir
 vulnerable function (`FontFaceObject.getPathGenerator`'s `new Function`) is the same source either way.
 `node_modules/` and `build/dev-sandbox/` in that tree come from npm assets.
 
-THE pdf.js SEED. Both pdf.js rows carry `test/pdfs/pattern_text_embedded_font.pdf` from pdf.js's own test
+THE pdf.js SEED. Every pdf.js row carries `test/pdfs/pattern_text_embedded_font.pdf` from pdf.js's own test
 corpus at v4.1.392, recorded like a library: a benign PDF whose font is an embedded `/Type1` with a
 `/FontFile3` program, filled through a pattern, so a run over it parses the document, loads the font and
 reaches `getPathGenerator` with no mutation at all. It is the example value of the input, so forced
-execution runs the parse concretely and forks only where the structure is checked. The `file=` row serves it
-at `/seed.pdf` on the viewer's own origin, because the generic viewer refuses a `file=` whose origin differs
-from its own (`validateFileURL` in `web/app.js`, except for a viewer at `null` or mozilla.github.io). The
-drop row delivers bytes through a `drop` event's DataTransfer, so its PoC has to name the drop act.
+execution runs the parse concretely and forks only where the structure is checked.
+
+THE THREE pdf.js ROWS ARE THREE DELIVERIES, AND ONLY ONE IS EXPECTED TO FIRE TODAY.
+- `pdfjs-viewer` is the generic viewer at `?file=<attacker URL>`. Its `validateFileURL` (`web/app.js`)
+  throws unless `new URL(file, location).origin` equals the viewer's origin or the viewer's origin is in
+  `HOSTED_VIEWER_ORIGINS` (`"null"`, `http://mozilla.github.io`, `https://mozilla.github.io`), and the
+  attacker's PDF is on a second origin. Satisfying that comparison needs a same-origin upload or redirect,
+  which are network steps this project does not take, so the expected result is a search parked at that
+  gate, named as the gate. It is never a safe verdict, and a fired PoC here would be a false one.
+- `pdfjs-embed` is a page of ours that hands the query URL to `pdfjsLib.getDocument` with no origin check, as
+  some sites embed pdf.js. The attacker's PDF is fetched cross-origin and is readable only because the
+  attacker origin answers with `access-control-allow-origin: *` (`knownbug/headers.tsv`), which each result
+  row records beside the requests that origin saw.
+- `pdfjs-drop` delivers the file through a `drop` event's DataTransfer on the viewer, so its PoC has to name
+  the drop act.
+
+`expected` states what a correct engine does with the vulnerable variant; the fixed variant is expected not to
+fire in every row. An asset whose served path starts `attacker:` is served from the attacker origin, a
+second loopback port, and `{attacker}` in `entry` is that origin.
