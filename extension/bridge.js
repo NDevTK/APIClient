@@ -144,18 +144,16 @@ function docEndpoints(rows) {
 }
 /* One @S entry's delivery facts, as solver/solve.c's emit_delivery writes them (solve.h's field list): `delivery`
    is absent (the source declares none) or one of the mechanism tokens, `deliveryPrefix` is the victim's address
-   component, present exactly on an `address` delivery, `plantFrom` is what a `plant` requires of the attacker,
-   present exactly on a `plant`, and `precondition` labels a root no attacker writes from outside the victim's
-   own state (a fire-verified entry carries a delivery, a precondition, or both); `principalDemand` is absent
+   component, present exactly on an `address` delivery, and `precondition` labels a root no attacker writes
+   (a fire-verified entry carries a delivery, a precondition, or both); `principalDemand` is absent
    (unexamined) or one of three verdicts, with `principalGates` only beside `forgeable` (and on every one) and
    `principalPins` exactly beside `unforgeable`; `poc` is absent on a parked search and a non-empty string on a
    fire-verified one, and `senderDemand` (the senders a parked search waits on, in the principalPins row
    grammar) only on a parked one. `acts` (the user acts a fire was verified under, after the delivery) only on
    a fire-verified entry, and `firedUnderNoAct` (fires verified under a drive no user act performs) only on a
    parked one. These are what the live-verify layer (offscreen-brain.js) performs a delivery from. */
-const SINK_DELIVERIES = Object.freeze(["address", "plant", "referring-address", "user-file", "cross-document-message",
+const SINK_DELIVERIES = Object.freeze(["address", "referring-address", "user-file", "cross-document-message",
                                        "user-input", "navigable-name"]);
-const SINK_PLANT_FROM = Object.freeze(["sibling-subdomain"]);
 const SINK_PRECONDITIONS = Object.freeze(["same-origin", "application-state"]);
 const SINK_DEMANDS = Object.freeze(["none", "forgeable", "unforgeable"]);
 function docSinkGate(g, f) {
@@ -197,14 +195,8 @@ function docSink(e, f) {
     return f + " states a deliveryPrefix exactly where its delivery is not `address`";
   if ("deliveryPrefix" in e && e.deliveryPrefix !== "#" && e.deliveryPrefix !== "?")
     return f + ".deliveryPrefix " + JSON.stringify(e.deliveryPrefix) + " is neither # nor ?";
-  if (("plantFrom" in e) !== (e.delivery === "plant"))
-    return f + " states a plantFrom exactly where its delivery is not `plant`";
-  if ("plantFrom" in e && SINK_PLANT_FROM.indexOf(e.plantFrom) < 0)
-    return f + ".plantFrom " + JSON.stringify(e.plantFrom) + " is none of " + SINK_PLANT_FROM.join(", ");
   if ("precondition" in e && SINK_PRECONDITIONS.indexOf(e.precondition) < 0)
     return f + ".precondition " + JSON.stringify(e.precondition) + " is none of " + SINK_PRECONDITIONS.join(", ");
-  if ("poc" in e && !("delivery" in e) && !("precondition" in e))
-    return f + " is a fire-verified entry with neither a delivery nor a precondition";
   if ("principalDemand" in e && SINK_DEMANDS.indexOf(e.principalDemand) < 0)
     return f + ".principalDemand " + JSON.stringify(e.principalDemand) + " is none of " + SINK_DEMANDS.join(", ");
   if (e.principalDemand === "forgeable" ? !("principalGates" in e) : ("principalGates" in e && "principalDemand" in e))
@@ -236,6 +228,8 @@ function docSink(e, f) {
     why = "poc" in e ? f + " states firedUnderNoAct on a fire-verified entry, which only a parked search carries"
           : (Number.isInteger(e.firedUnderNoAct) && e.firedUnderNoAct > 0 ? null
              : f + ".firedUnderNoAct is not a positive integer");
+  if (why === null && "poc" in e && !("delivery" in e) && !("precondition" in e))
+    why = f + " is a fire-verified entry with neither a delivery nor a precondition";
   if (why === null && "senderDemand" in e)
     why = ("poc" in e ? f + " states a senderDemand on a fire-verified entry, which only a parked search carries" : null) ||
           (Array.isArray(e.senderDemand) && e.senderDemand.length > 0 ? null : f + ".senderDemand is not a non-empty array") ||

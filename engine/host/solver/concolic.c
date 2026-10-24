@@ -6,7 +6,6 @@
 #include "solver/flow.h"
 #include "solver/decide.h"    /* the one speller of a constraint key */
 #include "solver/solve.h"     /* the search is told when a candidate substitution happens (concolic_deliver) */
-#include "solver/solve_filter.h" /* the search is told which bytes its carrier refuses, before it builds one */
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "solver/endpoint.h"  /* the @H surface is told which globals a program names (`.global_named`) */
 #include "solver/rung_entry.h" /* the scheduler is told the arms a program asks for by name */
@@ -2288,7 +2287,6 @@ static const char *deliver_token(SourceDeliverKind k)
 {
     switch (k) {
     case SRC_DELIVER_ADDRESS:           return "address";
-    case SRC_DELIVER_PLANT:             return "plant";
     case SRC_DELIVER_REFERRING_ADDRESS: return "referring-address";
     case SRC_DELIVER_USER_FILE:         return "user-file";
     case SRC_DELIVER_CROSS_DOCUMENT_MESSAGE: return "cross-document-message";
@@ -2495,23 +2493,6 @@ int concolic_source_delivery(const char *root, const char **kind, char *prefix)
     return 1;
 }
 
-const char *concolic_source_plant_from(const char *root)
-{
-    int row = root_declared_row(root);
-
-    DCHECK(row >= 0, "what a plant requires was asked of a root that declares no delivery — the caller asks "
-                     "concolic_source_delivery first, which answers that root");
-    if (row < 0) return NULL;
-    switch (g_srcs[row].deliver) {
-    case SRC_DELIVER_PLANT: return "sibling-subdomain";
-    case SRC_DELIVER_ADDRESS: case SRC_DELIVER_REFERRING_ADDRESS: case SRC_DELIVER_USER_FILE:
-    case SRC_DELIVER_CROSS_DOCUMENT_MESSAGE: case SRC_DELIVER_NAVIGABLE_NAME: case SRC_DELIVER_USER_INPUT:
-        return NULL;
-    }
-    DFAIL("a source declared a delivery mechanism that does not say whether it is a plant");
-    return NULL;
-}
-
 static const char *precondition_token(SourcePreconditionKind k)
 {
     switch (k) {
@@ -2593,14 +2574,12 @@ const char *concolic_source_encodes(const char *root)
  * ten, so it could not hold it anyway. The shared part is asked of the `deliver` column, so a mechanism added
  * later must answer the question (the switch has no default, so the compiler warns).
  *
- * Three answers. A payload serialized into a URL inherits URL §1.3 "Percent-encoded bytes"'s C0 control
+ * Two answers. A payload serialized into a URL inherits URL §1.3 "Percent-encoded bytes"'s C0 control
  * percent-encode set ("C0 controls and all code points greater than U+007E (~)"), of which the fragment, query
  * and special-query sets are supersets. A payload carried verbatim inherits nothing: HTML §9.3.3 "Posting
- * messages" step 7 serializes and step 8.4 deserializes without transforming a string, and file_system.c reads
- * a file verbatim. A plant has no answer: its `encode` column lists what RFC 6265 §4.1.1 "Syntax"'s
- * cookie-octet cannot carry, and a CTL, DEL or non-ASCII byte is neither percent-encoded (Chrome does not) nor
- * carried; it is refused, and answering either way would be a false PoC, so the caller crashes. */
-typedef enum { CARRIER_URL = 0, CARRIER_VERBATIM, CARRIER_CONSTRAINED } CarrierKind;
+ * messages" step 7 serializes and step 8.4 deserializes without transforming a string, file_system.c reads a
+ * file verbatim, and §7.2.2.1's name is the string the attacker gave it. */
+typedef enum { CARRIER_URL = 0, CARRIER_VERBATIM } CarrierKind;
 
 static CarrierKind root_carrier(const char *root)
 {
@@ -2621,56 +2600,22 @@ static CarrierKind root_carrier(const char *root)
     case SRC_DELIVER_USER_FILE:              return CARRIER_VERBATIM;   /* file_system.c: read verbatim */
     case SRC_DELIVER_CROSS_DOCUMENT_MESSAGE: return CARRIER_VERBATIM;   /* HTML §9.3.3 steps 7/8.4 */
     case SRC_DELIVER_USER_INPUT:             return CARRIER_VERBATIM;   /* input_value.c sanitizes at the edit */
-    case SRC_DELIVER_PLANT:                  return CARRIER_CONSTRAINED;/* RFC 6265 §4.1.1's cookie-octet */
     case SRC_DELIVER_NAVIGABLE_NAME:         return CARRIER_VERBATIM;   /* HTML §7.2.2.1: the name as written */
     }
     DFAIL("a source declared a delivery mechanism that does not say what it does to an UNDECLARED byte — the "
           "declared set is only the part that distinguishes one component from its siblings, so every "
           "mechanism must also state whether it serializes its payload into a URL (and so inherits URL §1.3 "
-          "\"Percent-encoded bytes\"'s C0 control percent-encode set), carries it verbatim, or refuses bytes "
-          "its own production excludes. Without that a candidate is delivered under whichever answer this "
+          "\"Percent-encoded bytes\"'s C0 control percent-encode set) or carries it verbatim. Without that a candidate is delivered under whichever answer this "
           "switch was written for first");
     return CARRIER_VERBATIM;
 }
 
-/* The bytes no row declares and every mechanism must answer for, spelled once for its two readers: the
-   delivery loop below, and concolic_source_carrier_bytes, which tells a search before it builds an escape.
+/* The bytes no row declares and every mechanism must answer for, read by the delivery loop below.
    `< 0x20` is Infra's C0 control ("a code point in the range U+0000 NULL to U+001F INFORMATION SEPARATOR ONE,
    inclusive"); `> 0x7E` is URL §1.3 "Percent-encoded bytes"'s "all code points greater than U+007E (~)", so DEL
    needs no clause of its own. Byte-wise `%XX` over a UTF-8 payload is §1.3's UTF-8 percent-encode, which
    percent-encodes "each byte of encodeOutput". */
 static int carrier_shared_byte(unsigned char b) { return b < 0x20 || b > 0x7E; }
-
-/* Which of a root's bytes cannot arrive at all: the declaration's half of an @S search's delivery table, and
- * the only half that is a fact rather than a prior.
- *
- * The declared encode set is not seeded here (solve_filter.h says why): a page that runs `decodeURIComponent`
- * over its fragment receives the `<` the browser encoded, so the encode column only decides which bytes are
- * worth asking about (solve.c builds its delivery probe from it) and a run decides the answer.
- * What a constrained carrier refuses is a different kind of fact: a byte outside printable US-ASCII reaching
- * SRC_DELIVER_PLANT has no encoded form anywhere in the page's program for the page to decode, and no run can
- * widen that.
- * The answer is returned, not inferred from the table, which looks the same narrowed by a declaration or by a
- * run. 0 states that this root's declaration constrains no byte: either the root has no row (nothing carries
- * these bytes) or its mechanism encodes or carries every byte. It only ever clears, so a second call for one
- * root is the same table and never widens what a run has narrowed. */
-int concolic_source_carrier_bytes(const char *root, struct SolveDelivered *d)
-{
-    int b;
-
-    DCHECK(d != NULL,
-           "the @S delivery table was seeded from a source declaration into nothing — the table is the "
-           "caller's and this call is the only thing that can state the carrier's half of it, so a NULL here "
-           "is a search about to construct escapes out of bytes its carrier refuses");
-    /* Asked of the row first, because root_carrier DFAILs on a root with no row; that assert is concolic_deliver's,
-       where a payload is already being delivered. Here an undeclared root is ordinary: server-injected state
-       (`window.__FLAGS`) is written by the attacker directly. */
-    if (!root || root_declared_row(root) < 0) return 0;
-    if (root_carrier(root) != CARRIER_CONSTRAINED) return 0;
-    for (b = 0; b < 256; b++)
-        if (carrier_shared_byte((unsigned char)b)) d->ok[b] = 0;
-    return 1;
-}
 
 /* JSConcolicHooks.lead: the domain fact the delivery declaration holds, for a builtin deciding whether one of
    its completions is feasible. The prefix is what the component says its value carries (`#` for a fragment,
@@ -2782,28 +2727,9 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
     CHECK(out != NULL, "concolic: OOM delivering a candidate");
     if (at && at->prefix) out[o++] = at->prefix;
     for (p = (const unsigned char *)payload; *p; p++) {
-        /* A byte outside printable US-ASCII is the mechanism's to answer for, not the row's (root_carrier).
-           The predicate is carrier_shared_byte's, shared with concolic_source_carrier_bytes so the two cannot
-           disagree about which bytes those are. */
+        /* A byte outside printable US-ASCII is the mechanism's to answer for, not the row's (root_carrier). */
         int shared = carrier_shared_byte(*p);
 
-        if (shared && carrier == CARRIER_CONSTRAINED) {
-            /* Neither answer exists, so neither is given: percent-encoding claims a transform the carrier does
-               not perform (a `;` does not reach a cookie as `%3B`), and passing it raw claims a plant RFC 6265
-               §4.1.1 "Syntax"'s cookie-octet forbids.
-               This is a backstop over the invariant "no Flow.cand_payload carries such a byte". Every current
-               route refuses first: concolic_source_carrier_bytes tells the search when it learns its root, so
-               solve_html.c's and solve_js.c's emitters decline the escape at construction (for example a
-               cookie-sourced JS-context hole in a SingleLineComment, §12.4 Comments) and solve_seed_candidates
-               withdraws a queued one; solve_resume_candidate checks a parked record's payload with
-               solve_delivered_ok; and engine.c's candidate-session fork copies a payload from a parent that
-               already passed. What would fire it is a new writer of Flow.cand_payload outside those routes. */
-            DFAILF("an @S candidate carries the byte 0x%02X to a source whose carrier can neither encode it nor "
-                   "hold it — the declared set lists only the PRINTABLE bytes the carrier's own production "
-                   "excludes, so a byte outside US-ASCII has no delivery this component can state and both "
-                   "answers are a false PoC. The escape had to be declined where it was CONSTRUCTED",
-                   (unsigned)*p);
-        }
         if ((shared && carrier == CARRIER_URL) || strchr(encode, (char)*p)) {
             static const char HEX[] = "0123456789ABCDEF";
             out[o++] = '%'; out[o++] = HEX[*p >> 4]; out[o++] = HEX[*p & 15];

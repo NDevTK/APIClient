@@ -1802,15 +1802,6 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
     out.delivery = "navigate the victim to a URL whose " + (frag ? "fragment" : "query string") + " is the payload";
     return out;
   }
-  if (delivery === "plant") {
-    // §S(b)'s two-stage PoC. Stage one writes the value on the VICTIM'S origin (a cookie), which an attacker
-    // page cannot do from outside it — so the sandbox can perform stage two and never stage one.
-    out.delivery = "two-stage: plant the value on the victim's origin, then load the page";
-    out.why = "this source is a PLANTED one (§S(b) two-stage): the attacker must place the value on the victim's "
-            + "own origin before the load that fires it, and a sandboxed attacker page has no way to perform that "
-            + "first stage. The second stage is just loading the page.";
-    return out;
-  }
   if (delivery === "referring-address") {
     // The payload rides the ATTACKER's address, not the victim's, and Chrome's default referrer policy sends
     // only the origin cross-origin — so reproducing it needs an attacker-hosted page serving

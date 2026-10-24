@@ -204,8 +204,7 @@ typedef struct {
     /* `deliv` is the delivery table: which bytes of a candidate reach this sink. It is measured
        (observe_delivery) rather than read off the source's percent-encode declaration, because a page that runs
        decodeURIComponent over its own fragment receives the `<` the browser encoded; the declaration only
-       decides which bytes the delivery probe asks about. The root's carrier refusals narrow it as well
-       (cand_learn_root). It starts permissive and only narrows.
+       decides which bytes the delivery probe asks about. It starts permissive and only narrows.
        `deliv_seen` is raised only by a run that found a probe token, so the report emits a measured set only
        when one was taken. `deliv_runs` counts delivery-probe arrivals at a sink whether or not a token
        survived: a probe the page destroyed is evidence, not a probe that never ran.
@@ -703,16 +702,6 @@ static int cand_arrival_is_attack(const Cand *e, const Flow *f) {
     return kind == CAND_ESCAPE || (kind == 0 && f->cand_resumed);
 }
 
-/* The first of a source's declared bytes its delivery table refuses, or 0: cand_learn_root's two-sided check as
-   one side-effect-free call, for cand_arrival_is_attack's reason. 0 is never a declared byte, since bytes_probe
-   writes each declared byte into a NUL-terminated probe and every declared set is printable. */
-static int declared_byte_refused(const SolveDelivered *d, const char *enc) {
-    int i;
-    for (i = 0; enc && enc[i]; i++)
-        if (!d->ok[(unsigned char)enc[i]]) return (unsigned char)enc[i];
-    return 0;
-}
-
 /* The search learns how its attacker bytes arrive, from the value that arrived. One envelope states one
    percent-encode set and one address component, so a second, different root is refused. A derivation over
    several operands unions their roots (concolic.h's derived_root_join) while taking `src` from the first, so
@@ -730,26 +719,6 @@ static void cand_learn_root(Cand *e, const char *root) {
            "entered through two components — and one envelope states one percent-encode set and one address "
            "component, so the report would carry whichever detection "
            "ran last");
-    /* The delivery table takes the half no run can give it here, at the one moment the root becomes known,
-       which both doors pass through (add_pending, solve_resume_candidate); on a found entry this call still
-       seeds. What is seeded is not the declared encode set: what the browser percent-encodes is a prior that
-       only a run settles (a page may decode its own fragment), while a byte a constrained carrier refuses never
-       enters the page's program and no run can widen it. concolic.c owns that column, so it answers. The
-       callers push vectors and probes after this, so the table is complete before anything is queued against
-       it. `deliv_seen` is untouched: a declaration-narrowed table is not a measurement. */
-    /* The other column of the same row: a carrier must not refuse a byte its row also declares, since the
-       declared set is the printable bytes the production excludes and the refusal is everything outside
-       printable US-ASCII. A seed that cleared a declared byte would leave the delivery probe built from it
-       unable to learn anything about that byte, because the table only narrows. Asked only where the seed
-       fired. */
-    if (concolic_source_carrier_bytes(e->root, &e->deliv))
-        DCHECKF(declared_byte_refused(&e->deliv, concolic_source_encodes(e->root)) == 0,
-                "an @S source's carrier refuses byte 0x%02X while the same row DECLARES it as one the "
-                "component percent-encodes — the declared set is the PRINTABLE bytes the carrier's own "
-                "production excludes and the refusal covers everything outside printable US-ASCII, so the two "
-                "cannot name one byte. The delivery probe is built out of the declared set, so this seed has "
-                "just withdrawn the instrument that was going to measure it",
-                (unsigned)declared_byte_refused(&e->deliv, concolic_source_encodes(e->root)));
 }
 
 /* Has this search fired? Derived from the finding store, where a fire is recorded (record_sink), with
@@ -964,7 +933,7 @@ static void add_pending(const char *src, const char *root, int sink) {
     DCHECK(created || e->tried > 0 || e->resumed_withdrawn > 0 || e->snd.n > 0,
            "a sink search is being opened on an entry this detection did not create and nothing accounts for — "
            "g_pending's other writers are the cold tier's rebuild, which either RESUMES a record (raising "
-           "`tried`) or WITHDRAWS one whose carrier refuses its payload (raising `resumed_withdrawn`), and a "
+           "`tried`) or WITHDRAWS one whose delivery table refuses its payload (raising `resumed_withdrawn`), and a "
            "pinned detection, which records a sender (`snd`). An entry with none of the three was put there by "
            "another door and is about to be handed a context probe and a re-injection point on behalf of a "
            "search nobody opened");
@@ -1827,17 +1796,14 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
         /* The root goes on before the entry is visible to any reader. On a later record for the same sink this
            is cand_learn_root's equality assert, the one check that a park document's records agree. */
         cand_learn_root(e, root);
-        /* And the payload is refused here, at the first instant it can be asked, because cand_learn_root has just
-           seeded the carrier half of the table. It is asked with solve_delivered_ok, the predicate
-           solve_seed_candidates asks of a derived escape, so both doors share one refusal. The premise this
-           falsifies is that these bytes reach the sink as themselves: the root's carrier says one of them never
-           enters the program in any form (for a cookie, RFC 6265 §4.1.1's cookie-octet excludes it), so no run
-           can widen it. It is pruning, not a cap: there is no count, age or seen-set, and the world survives,
+        /* And the payload is refused here, at the first instant it can be asked, with solve_delivered_ok, the
+           predicate solve_seed_candidates asks of a derived escape, so both doors share one refusal. The premise
+           this falsifies is that these bytes reach the sink as themselves: a run of this search measured that one
+           of them does not arrive. It is pruning, not a cap: there is no count, age or seen-set, and the world survives,
            since cold.c drops the candidate fields and the flow comes back as an exploration flow that replays to
            this sink, detects, and re-derives against the narrowed table. No probe can be refused here: both
-           probes are printable US-ASCII by construction, the refusal covers only bytes outside it, and
-           cand_learn_root holds the declared and refused sets disjoint. Only the withdrawal is counted, because
-           no run is spent. */
+           probes are printable US-ASCII by construction. Only the withdrawal is counted, because no run is
+           spent. */
         if (!solve_delivered_ok(&e->deliv, payload)) {
             e->resumed_withdrawn++;
             return NULL;
@@ -2200,16 +2166,11 @@ static void emit_delivery(JsonBuf *b, const Cand *e, const char *root, const cha
         json_buf_raw(b, ","); json_buf_key(b, "sourceDelivers"); json_buf_str(b, delivers);
     }
     if (concolic_source_delivery(root, &kind, &prefix) && kind) {
-        const char *from = concolic_source_plant_from(root);
-
         json_buf_raw(b, ","); json_buf_key(b, "delivery"); json_buf_str(b, kind);
         if (prefix) {
             char p[2] = { prefix, 0 };
             json_buf_raw(b, ","); json_buf_key(b, "deliveryPrefix"); json_buf_str(b, p);
         }
-        /* What a plant requires of the attacker: the delivery is two-stage and its first stage is not open to
-           every origin. */
-        if (from) { json_buf_raw(b, ","); json_buf_key(b, "plantFrom"); json_buf_str(b, from); }
     }
     /* A member of the root that no attacker writes from outside the victim's own state: the finding is a sink
        reached under this precondition, not an attacker PoC, and the report labels it so. */

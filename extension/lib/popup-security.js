@@ -32,7 +32,6 @@ var _DELIVERY = {
                          return "delivered in the victim's own URL (" + (p === "#" ? "fragment" : "query string")
                               + ") — one navigation is the whole PoC";
                        },
-  "plant":             function ()  { return "TWO-STAGE (stored): the attacker plants the value on the victim's origin first, and the victim's later load is what fires it"; },
   "referring-address": function ()  { return "the payload rides the address the victim ARRIVES FROM — the attacker's URL, not the victim's"; },
   "user-file":         function ()  { return "the user must hand the document an attacker-supplied file — no navigation delivers it"; },
   "user-input":        function ()  { return "the user must type the attacker's text into the field the typing act names — no navigation delivers it"; },
@@ -54,7 +53,7 @@ var _DELIVERY = {
 // What a root no attacker writes from outside the victim's own state requires, as solve.h's `precondition`.
 var _PRECONDITION = {
   "same-origin":       "the value sits in one of the origin's own stores, which only that origin's script writes — the sink is reached, but no attacker delivers it",
-  "application-state": "the value is state the server injects, which only the application's own write path changes — the sink is reached, but no attacker delivers it directly",
+  "application-state": "the value is application state (a cookie, or state the server injects), which only the application's own write path changes — the sink is reached, but no attacker delivers it directly",
 };
 function _deliverySentence(item) {
   if (item.precondition) {
@@ -73,8 +72,7 @@ function _deliverySentence(item) {
     + "come from solve_json_array (source=" + item.source + ")");
   if (!_DELIVERY[item.delivery])
     return "the engine declares the delivery `" + item.delivery + "`, which this view has no sentence for";
-  return _DELIVERY[item.delivery](item.deliveryPrefix)
-       + (item.plantFrom === "sibling-subdomain" ? " (the attacker must control a sibling subdomain of the victim's site)" : "");
+  return _DELIVERY[item.delivery](item.deliveryPrefix);
 }
 
 // §@S(a): A FIRING BREAKOUT IN THE MODEL IS NOT YET A WORKING EXPLOIT — it has to run under the page's ACTUAL

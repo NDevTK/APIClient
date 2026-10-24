@@ -1135,13 +1135,9 @@ void cookie_store_init(JSContext *ctx)
     idl_overload_split_optional_from(2);
     idl_returns_promise();
 
-    /* THE ATTACKER SOURCE, with the constraint that makes a PoC through it reproduce. The excluded set is RFC
-       6265 §4.1.1's cookie-value production — a value cannot carry whitespace, a double quote, a comma, a
-       semicolon or a backslash — and the delivery is a PLANT because a cookie is not carried by the victim's
-       load: it has to be in the jar BEFORE it.
-       IT IS THE SAME RFC FACT core/dom/document_metadata.c STATES FOR `document.cookie`, and the two are two
-       statements of one thing; see the residual below. */
-    concolic_declare_source(CS_COMPONENT, CS_SOURCE, " \",;\\", 0, SRC_DELIVER_PLANT);
+    /* Application state, not an attacker source, as core/dom/document_metadata.c states for `document.cookie`:
+       only the application's Set-Cookie or its own script writes the jar. */
+    concolic_declare_source_precondition(CS_COMPONENT, CS_SOURCE, SRC_PRE_APPLICATION_STATE);
 
     agent_state_realm_slot(CS_COMPONENT, &g_obj_slot, "§6.1's per-realm CookieStore slot, and the declaration latch");
     agent_state_id(CS_COMPONENT, &g_id_get, "Cookie Store API §3.1's get");

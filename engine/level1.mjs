@@ -1087,7 +1087,7 @@ async function mintDrive(minted, slices) {
     group: 'creator', driven: 'undriven', pinned: 'unpinned', opener: 'N', policy: '', policyReportOnly: '' }, o);
   const provision = (op, o) => tableRecord(NN.provision, { op, document: 'gap-doc.2-0123456789abcdef',
     address: 'https://b.test/n', origin: 'https://b.test', provenance: 'derived', driven: 'undriven',
-    pinned: 'unpinned', issuer: 'gap-doc' }, o);
+    pinned: 'unpinned', issuer: 'gap-doc', opener: 'N', held: '-' }, o);
   const request = (o) => tableRecord(NN.request, { op: 'navigable.request', creator: 'gap-doc',
     child: 'gap-doc.1-0123456789abcdef', destination: 'iframe', referrerPolicy: '', address: 'https://b.test/f' }, o);
   const notices = [
@@ -1188,6 +1188,7 @@ async function mintDrive(minted, slices) {
       let loads = 0;
       const e = inst({ docId: 'gap-doc', joinedDocIds: [], groupId: 'g1', cluster: 'g1|https://a.test', _inflight: new Map(),
                        records: new Map([['gap-doc', ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public')]]),
+                       openers: new Map([['gap-doc', { opener: null, refused: false }]]), held: new Map(),
                        fetchedDocument: async () => { loads++; throw new Error(STOP); } });
       let threw = null;
       try { await ZONE.hostNotice(e, notice(addr)); } catch (x) { threw = x; }
@@ -1237,7 +1238,10 @@ async function mintDrive(minted, slices) {
                  ['an unforgeable message delivery', { delivery: 'cross-document-message', principalDemand: 'unforgeable', principalPins: [pin] }, null],
                  ['a delivery outside the vocabulary', { delivery: 'email' }, '.delivery'],
                  ['an address with no prefix', { delivery: 'address' }, 'deliveryPrefix'],
-                 ['a prefix beside a plant', { delivery: 'plant', deliveryPrefix: '#' }, 'deliveryPrefix'],
+                 ['a prefix beside a navigable name', { delivery: 'navigable-name', deliveryPrefix: '#' }, 'deliveryPrefix'],
+                 ['a precondition outside the vocabulary', { precondition: 'sibling' }, '.precondition'],
+                 ['a fired entry under a precondition', { precondition: 'same-origin', poc: 'X9()' }, null],
+                 ['a fired entry with neither a delivery nor a precondition', { poc: 'X9()' }, 'neither a delivery'],
                  ['a third address component', { delivery: 'address', deliveryPrefix: '/' }, 'deliveryPrefix'],
                  ['a verdict outside the vocabulary', { principalDemand: 'maybe' }, 'principalDemand'],
                  ['forgeable with no gates', { principalDemand: 'forgeable' }, 'principalGates'],

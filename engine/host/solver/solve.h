@@ -179,7 +179,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    and they must never be confused:
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
                       ,"searched":N[,"deliveryProbed":B][,"sourceEncodes":".."][,"sourceDelivers":".."]
-                      [,"delivery":".."][,"deliveryPrefix":"#"][,"plantFrom":".."][,"precondition":".."]
+                      [,"delivery":".."][,"deliveryPrefix":"#"][,"precondition":".."]
                       [,"principalDemand":".."][,"principalGates":[..]][,"principalPins":[..]]}`
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"resumed":R,"resumedWithdrawn":RW,
                       "reached":M,"turns":T,
@@ -188,7 +188,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                       [,"deliveryProbed":B],"probes":P,"payloads":[..],
                       "survivedBy":[..],"withdrawn":[..]
                       [,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."][,"deliveryPrefix":"#"]
-                      [,"plantFrom":".."][,"precondition":".."][,"principalDemand":".."][,"principalGates":[..]]
+                      [,"precondition":".."][,"principalDemand":".."][,"principalGates":[..]]
                       [,"principalPins":[..]][,"senderDemand":[..]]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
@@ -461,14 +461,13 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                     runs none; a derived search over server-injected page state has no byte in question) —
                     decided by reading the search's own entries, never by re-stating the rule that pushes one.
      `delivery`     HOW an attacker puts bytes in this source, from its declaration in the component that owns
-                    it: "address" (the victim's own URL, at `deliveryPrefix`), "plant" (§S(b)'s two-stage
-                    plant-then-load), "referring-address", "user-file", "user-input" (typed into the control the
+                    it: "address" (the victim's own URL, at `deliveryPrefix`), "referring-address" (the
+                    attacker's own URL, arrived from), "user-file", "user-input" (typed into the control the
                     typing act names), "cross-document-message" (HTML §9.3.3: posted to the running victim,
                     bytes untransformed), "navigable-name" (the attacker names the victim's navigable). ABSENT =
                     none declared, and a consumer never guesses one; a fired entry then carries `precondition`.
-     `plantFrom`    Beside a "plant" only: what its first stage requires ("sibling-subdomain" for a cookie).
-     `precondition` A root member no attacker writes from outside the victim's own state: "same-origin" (the
-                    origin's own stores) or "application-state" (server-injected state). Not an attacker PoC.
+     `precondition` A root member no attacker writes: "same-origin" (the origin's own stores) or
+                    "application-state" (cookies, server-injected state). Not an attacker PoC.
      `principalDemand` WHETHER AN ATTACKER CAN HOLD THE IDENTITY THIS DELIVERY NEEDS, and it is a different
                     question from `delivery` rather than a detail of one: `delivery` says HOW bytes get into the
                     source, and for a `cross-document-message` the post itself is performable by anything

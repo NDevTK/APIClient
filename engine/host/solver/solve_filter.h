@@ -102,18 +102,12 @@ void solve_filter_survival(const char *out, const char *cand, FilterObs *o);
  * SOUND-ONLY, IN THE SAME DIRECTION §Solver-half prunes branches: a byte is cleared only by something that
  * CONTRADICTS its arrival, so a source whose probe has not come back yet keeps every arm. An over-tight table
  * declines an escape that would have fired; an over-loose one merely spends a document re-run.
- * TWO THINGS CONTRADICT AN ARRIVAL AND THEY ARE NOT THE SAME KIND OF FACT, which is why the paragraph above
- * refuses the declaration and this one does not contradict it. A RUN is what settles the ENCODE column, for
- * exactly the reason given: the browser percent-encoded the byte on the way in and the page may decode it
- * back, so the declaration is a prior. What a CARRIER REFUSES is settled by the declaration alone — a byte
- * RFC 6265 §4.1.1's cookie-octet excludes and which the plant does not percent-encode either never enters the
- * page's program in ANY form, so there is nothing for a page-side transform to recover and no run can widen
- * it. concolic.c owns that distinction (it owns the column both halves are read from) and states it
- * at one call, concolic_source_carrier_bytes; solve.c asks it where a search learns its root. The declared
- * ENCODE bytes are still never cleared here, and solve.c asserts that after every seed — pre-clearing them
- * would refuse the delivery probe, which is BUILT out of exactly those bytes.
- * A SEEDED TABLE IS NOT A MEASURED ONE, and nothing may read it as one: `deliv_seen` remains the search's
- * answer to whether a run has observed anything, and the report's measured set is emitted only under it.
+ * A RUN is what contradicts an arrival, for exactly the reason given: the browser percent-encoded the byte on
+ * the way in and the page may decode it back, so the declaration is a prior. Every declared mechanism either
+ * percent-encodes a byte or carries it verbatim, so no declaration alone clears one; the declared ENCODE bytes
+ * are never pre-cleared, which would refuse the delivery probe BUILT out of exactly those bytes.
+ * `deliv_seen` is the search's answer to whether a run has observed anything, and the report's measured set
+ * is emitted only under it.
  * (The instruction that stood here — that neither paragraph above may gain a double quote, because the
  * fragment-set listing beside the URL §1.3 citation spells U+0022 inside a code span — is RETIRED, and is
  * recorded rather than deleted so that a reader who spots that unbalanced mark does not re-impose it. It was

@@ -577,7 +577,6 @@ int         concolic_candidate_delivered(void);
    the last set of names went wrong. */
 typedef enum {
     SRC_DELIVER_ADDRESS = 0,          /* the payload rides the VICTIM'S OWN address, at `prefix`'s component */
-    SRC_DELIVER_PLANT,                /* placed BEFORE the victim's load, read back on it — §S(b) two-stage */
     SRC_DELIVER_REFERRING_ADDRESS,    /* the payload rides the address the victim ARRIVES FROM */
     SRC_DELIVER_USER_FILE,            /* the user hands the document a file whose bytes the attacker chose */
     /* THE ATTACKER POSTS IT — HTML §9.3.3 "Posting messages", the window post message steps. It is its own
@@ -691,10 +690,7 @@ void        concolic_declare_source_precondition(const char *component, const ch
 int         concolic_source_precondition_declared_by(const char *component, const char *src);
 /* The precondition token of the first precondition member of `root`, or NULL when no member declares one. */
 const char *concolic_source_precondition(const char *root);
-/* What a `plant` delivery requires of the attacker, as a report token: "sibling-subdomain" for a cookie (a host
-   of the victim's registrable domain sets it with RFC 6265bis's Domain attribute). NULL for every mechanism that
-   is not a plant. The root must declare a delivery (concolic_source_delivery answers that first). */
-const char *concolic_source_plant_from(const char *root);
+
 /* THE DECLARED DELIVERY as a report states it: the mechanism's TOKEN and the address component the payload
    rides (0 for every mechanism that is not an address). Returns 0 when this source declared none — which is a
    FACT, not a default: server-injected page state (`window.__FLAGS`) is written by the attacker directly and
@@ -724,19 +720,6 @@ int         concolic_source_delivery(const char *root, const char **kind, char *
    over as-is). A PARKED @S search reports it because it is the constraint every candidate had to survive, and
    it is a FACT read from the declaration rather than a guess at why nothing fired. */
 const char *concolic_source_encodes(const char *root);
-/* …AND THE BYTES THAT ROOT'S CARRIER CANNOT DELIVER IN ANY FORM, cleared from an @S search's delivery table.
-   The two are DIFFERENT KINDS OF FACT and the caller may not substitute one for the other: what the component
-   PERCENT-ENCODES is a prior, because the page may decode it back and this engine already fires a markup PoC
-   through exactly that round trip, so only a run settles it; what the carrier REFUSES never enters the page's
-   program at all, so no run can widen it and it is the half a search may start from.
-   ANSWERS 1 WHEN THE DECLARATION NARROWED THE TABLE and 0 when it constrains no byte, which is a positive
-   statement and not a silence — a caller cannot read that answer off the table, because a table narrowed by a
-   declaration and one narrowed by a run are the same 256 bytes. Only ever clears, so calling it twice for one
-   root is the same table. The tag is solver/solve_filter.h's; forward-declared at file scope rather than
-   included so a browser component that declares a source does not acquire the @S filter's header, and at file
-   scope rather than in the parameter list so the two spellings are ONE type. */
-struct SolveDelivered;
-int         concolic_source_carrier_bytes(const char *root, struct SolveDelivered *d);
 
 /* Comparison constraint domain: `x === 'admin'` on a concolic must FORK (not collapse to concrete false), and
    the taken arm pins/negates. */

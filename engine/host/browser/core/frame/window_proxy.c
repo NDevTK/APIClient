@@ -119,6 +119,10 @@ typedef struct {
        record's JSValues. */
     char   *remote_ancestor_origins;
     char   *name;      /* §7.2.2.1's name: the browsing context's, not the element's (owned; see proxy_of) */
+    /* The name as the page last wrote it when that value was concolic (`window.name = window.name.replace(…)`
+       over the attacker's name), so a later read returns the same unknown with its example; `name` then holds
+       the example's bytes, which named access compares. JS_UNDEFINED when `name` is the whole value. */
+    JSValue name_val;
     /* Whether anyone stated this navigable's name, which decides whether `name` is a computed value or unknown
        external input. §7.4 states it (`open(url, "chan42")` names the navigable it creates, and the popup's own
        `window.name` is that string), so a navigable this engine created knows its name. The navigable the
@@ -297,8 +301,9 @@ static int g_wp_location_setter_id = -1;
 
 
 #define WP_OFF(f) (uint16_t)offsetof(ProxyData, f)
-static const uint16_t PROXY_VALS[] = { WP_OFF(window), WP_OFF(parent), WP_OFF(opener), WP_OFF(container) };
-static const CowRecord PROXY_REC = { sizeof(ProxyData), PROXY_VALS, 4 };
+static const uint16_t PROXY_VALS[] = { WP_OFF(window), WP_OFF(parent), WP_OFF(opener), WP_OFF(container),
+                                       WP_OFF(name_val) };
+static const CowRecord PROXY_REC = { sizeof(ProxyData), PROXY_VALS, 5 };
 
 /* The capture is in the accessor, as for every other component record: a record a flow has reached is one it may
    write, so there is no write site to miss. `origin` is a POD pointer and `doc` a POD id inside the captured bytes;
@@ -571,6 +576,7 @@ static void proxy_finalizer(JSRuntime *rt, JSValue val)
     DCHECK(p != NULL, "a WindowProxy was finalized with no §7.2.3 record — both mints attach one before the "
                       "object can reach a collection");
     JS_FreeValueRT(rt, p->window);
+    JS_FreeValueRT(rt, p->name_val);
     JS_FreeValueRT(rt, p->parent);
     JS_FreeValueRT(rt, p->opener);
     JS_FreeValueRT(rt, p->container);
@@ -589,6 +595,7 @@ static void proxy_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
        every navigable leaks its global. `parent` and `opener` close cycles of their own: a child names its
        creator's Window, which reaches the child through the element wrapper that holds it. */
     JS_MarkValue(rt, p->window, mark_func);
+    JS_MarkValue(rt, p->name_val, mark_func);
     JS_MarkValue(rt, p->parent, mark_func);
     JS_MarkValue(rt, p->opener, mark_func);
     /* §7.3.1.3's container closes a tighter cycle: the element's wrapper holds this proxy in a hidden own slot and
@@ -914,6 +921,7 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
        `window.open()` (see the field). */
     p->created_by_web_content = 1;
     p->window = JS_UNDEFINED;   /* materialized by proxy_realm, at creation or on the first read */
+    p->name_val = JS_UNDEFINED;
     p->realm  = NULL;
     p->url    = url ? proxy_strdup(url) : NULL;   /* NULL only for the self proxy, whose realm is already built */
     DCHECK(origin != NULL, "a navigable was created with no origin — §7.3.2.1's determine-the-origin "
@@ -1133,6 +1141,7 @@ static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origi
     p = calloc(1, sizeof *p);
     CHECK(p != NULL, "window proxy: OOM building a remote WindowProxy");
     p->window = JS_UNDEFINED;   /* it lives in another instance; there is nothing local to hold */
+    p->name_val = JS_UNDEFINED;
     DCHECK(origin != NULL, "a remote navigable was minted with no origin — the peer's principal is what every "
                            "cross-origin filter over this proxy compares, and it is stated by the trusted zone");
     p->origin = origin;   /* borrowed, and never same origin with this agent's; see origin_parse */
@@ -1754,7 +1763,8 @@ JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy)
        `closed` reads, so a frame removed from the tree answers "" on the next line as it answers `closed`; a
        closing top-level traversable still has its navigable and keeps its name. */
     if (window_proxy_browsing_context_null(ctx, proxy)) return JS_NewStringLen(ctx, "", 0);
-    if (p->name_known) return JS_NewString(ctx, p->name ? p->name : "");
+    if (p->name_known)
+        return JS_IsUndefined(p->name_val) ? JS_NewString(ctx, p->name ? p->name : "") : JS_DupValue(ctx, p->name_val);
     /* The world's: §7.2.2.1's name is written by whoever navigated this navigable, which is another document and
        often an attacker's, and nothing in this document's served bytes states it. */
     return concolic_new(ctx, "{window.name}", "window.name", CONCOLIC_WHOSE_WORLD,
@@ -1772,15 +1782,24 @@ JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueCons
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was written");
     /* §7.2.2: "If this's navigable is null, then return." */
     if (window_proxy_browsing_context_null(ctx, proxy)) return JS_UNDEFINED;
-    /* A concolic name is a capability not yet built, not a value to stringify. `name` is stored as C bytes
-       because named access compares it, so a concolic would have to be de-tainted to be stored, which a concolic
-       must never survive; the message names what to build. */
-    DCHECK(!concolic_is(v),
-           "a navigable was renamed to unknown external input — `name` is held as C bytes so named access can "
-           "compare it, and a concolic cannot be stored there without de-tainting it; hold the navigable's name "
-           "as a JSValue so the triple survives the write");
-    n = JS_ToCString(ctx, v);
-    if (!n) return JS_EXCEPTION;
+    /* A concolic name is kept whole (`name_val`), and named access compares the bytes of its example, which is
+       what concrete execution of this flow wrote. */
+    if (concolic_is(v)) {
+        JSValue ex = concolic_example_string(ctx, v);
+
+        DCHECK(JS_IsString(ex),
+               "a navigable was renamed to an unknown whose example has no string form — §7.2.2.1's setter takes "
+               "a DOMString, so the value reaching here was converted; build the conversion over the example "
+               "where the IDL argument is taken");
+        n = JS_ToCString(ctx, ex);
+        JS_FreeValue(ctx, ex);
+        if (!n) return JS_EXCEPTION;
+        wp_set(ctx, p, &p->name_val, JS_DupValue(ctx, v));
+    } else {
+        n = JS_ToCString(ctx, v);
+        if (!n) return JS_EXCEPTION;
+        wp_set(ctx, p, &p->name_val, JS_UNDEFINED);
+    }
     p->name = proxy_strdup(n);
     p->name_known = 1;
     JS_FreeCString(ctx, n);

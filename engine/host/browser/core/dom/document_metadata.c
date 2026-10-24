@@ -259,23 +259,13 @@ void document_metadata_init(JSContext *ctx)
 {
     DCHECK(g_id_cookie_set < 0, "document_metadata_init ran twice — the setter's declaration and the two "
                                 "sources are declared once per AGENT");
-    /* THE TWO ATTACKER SOURCES THIS COMPONENT OWNS, declared with their INTRINSIC BROWSER CONSTRAINTS — the
-       thing CLAUDE.md says a source without is a PoC generator that does not reproduce.
-       A COOKIE VALUE cannot carry the bytes RFC 6265 §4.1.1's cookie-value production excludes: whitespace, the
-       double quote, the comma, the semicolon and the backslash. A `;` does not arrive escaped, it TERMINATES
-       the cookie, so a candidate containing one is delivered as something else entirely — which is exactly the
-       false-PoC shape the declaration exists to prevent.
-       A REFERRER is a SERIALIZED URL with its fragment stripped, so the bytes a URL serialization
-       percent-encodes never reach the page: space, `"`, `<`, `>`, the backtick — and `#`, because there is no
-       fragment left for one to introduce. The apostrophe survives, which is what makes a JS-context breakout
-       through a referrer real where an HTML-context one is not. */
-    /* AND WITH THEIR DELIVERY MECHANISMS, which differ from each other and from the two address sources. A
-       COOKIE is not carried by the victim's load at all: it has to be there BEFORE it, so a cookie-sourced PoC
-       is §S(b)'s two-stage plant-then-load — the plant is its own delivery and the victim's load is what
-       fires. A REFERRER is carried by the NAVIGATION: the victim arrives from an address the attacker owns, so
-       the payload rides the attacker's URL rather than the victim's, which is a different mechanism and not a
-       different encoding of the same one. */
-    concolic_declare_source(DM_COMPONENT, "document.cookie", " \",;\\", 0, SRC_DELIVER_PLANT);
+    /* A REFERRER is the attacker's own URL, which the victim arrives from: a SERIALIZED URL with its fragment
+       stripped, so the bytes a URL serialization percent-encodes never reach the page — space, `"`, `<`, `>`,
+       the backtick, and `#`, because there is no fragment left for one to introduce. The apostrophe survives,
+       which is what makes a JS-context breakout through a referrer real where an HTML-context one is not.
+       A COOKIE is application state, not an attacker source: only the application's Set-Cookie or its own
+       script writes the jar, so a finding rooted there is labelled with that precondition. */
+    concolic_declare_source_precondition(DM_COMPONENT, "document.cookie", SRC_PRE_APPLICATION_STATE);
     concolic_declare_source(DM_COMPONENT, "document.referrer", " \"<>`#", 0, SRC_DELIVER_REFERRING_ADDRESS);
     /* §3.1.1's `attribute USVString cookie` — the only read-write member here, and its type is what performs
        §3.2.12's scalar value conversion before the body ever sees the string. */
