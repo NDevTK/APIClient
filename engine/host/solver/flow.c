@@ -179,8 +179,8 @@ typedef struct FlowAcct {
      * It is two quantities. `earned` is a ledger, what this account emitted, raised only by flow_credit_emit, one
      * point per finding and unbounded. `base` is a queue coordinate, where the account entered the order: a
      * from-baseline flow founds its own family and is placed at the virtual time of the account in service
-     * (flow_arrive_at_virtual_time), a resumed flow at the total the parking session wrote down; neither was
-     * emitted. The census's assert that `emit_gen` is past zero exactly when the reward is holds of `earned` and
+     * (flow_arrive_at_virtual_time) for its first turn only (`first_turn`), a resumed flow at the total the parking
+     * session wrote down; neither was emitted. The census's assert that `emit_gen` is past zero exactly when the reward is holds of `earned` and
      * would be false of the sum (an arrived account stands at the leader's reward with `emit_gen` 0). The order
      * reads `base + earned` through acct_family_val, so the split changes no arithmetic; `self_emit` and `val_zero`
      * (flow.h) are the census rows about it. */
@@ -197,6 +197,15 @@ typedef struct FlowAcct {
        the account, never a member: two arms forked at two instants must read it the same, so the arm joins the
        family (flow_fork_inherit) and reads this bit through the same pointer. */
     unsigned char placed;
+    /* Whether `base` is the first turn this account is owed: set where flow_set_running freezes the clock into
+       `base`, cleared where the account has received one quantum of service, which zeroes `base`. Level 2's terms
+       are the account's emitted value, the fitness, the UCB bonus and the aging; the placement is none of them, so
+       it buys the turn that tries the account and no standing after it. A cold-tier restore writes a parked
+       coordinate and leaves this clear. */
+    unsigned char first_turn;
+    /* The work this family has ever received, in units of work: a lifetime counter, never forgiven, unlike
+       `fam_work`. It decides when the first turn ends. */
+    int64_t served;
     /* Which silence window this account is in, bumped by every emission credited here and read only against
        `Flow.work_gen`. The aging term's two halves must be measured over one window: `fam_work` is the family's burn
        since any arm emitted, while a flow's own burn since its own emission is a longer window, a debt the
@@ -841,6 +850,7 @@ void  flow_set_running(Flow *f) {
                "the thread, so the reward it is about to be ranked on counts one finding twice");
         f->family->base   = frontier_vt();
         f->family->placed = 1;
+        f->family->first_turn = 1;
         DCHECK(flow_queue_weight(f) == w,
                "freezing the frontier's clock into an account's tag moved the flow's queue coordinate — an unplaced "
                "account's reward is that clock, so the stamp must leave the weight the pick compared unchanged");
@@ -1323,6 +1333,14 @@ void flow_age_running(int64_t us) {
        `emit_gen` describes. Neither is the optimism term's quantity, a count of completed units charged by
        flow_credit_visit. */
     g_running->family->fam_work += us;
+    g_running->family->served += us;
+    /* The first turn ends at one quantum of the family's service, Level 1's unit of a pull: the placement
+       is forgiven and the account stands on what it emitted. A rank change, so the order is told. */
+    if (g_running->family->first_turn && g_running->family->served >= ENGINE_QUANTUM_WORK) {
+        g_running->family->base = 0.0;
+        g_running->family->first_turn = 0;
+        frontier_rank_changed();
+    }
     /* And the same units on this flow's branch bucket: an observation, not a third charge, and nothing in
        flow_weight reads it. This is the one site that adds to either half above, so it is the one site where every
        unit of work can be attributed to a side of a branch without disagreeing with the halves it partitions.
