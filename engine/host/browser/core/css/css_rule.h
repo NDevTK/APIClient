@@ -175,6 +175,7 @@
 #include "quickjs-step.h"
 #include "core/idl_index_arg.h"
 #include "core/css/css_layer_order.h"
+#include "core/css/css_property_registration.h"
 
 void css_rule_init(JSContext *ctx);
 /* Every CSSOM §6.4 and CSS Conditional 3 §7 rule prototype for ONE realm — declared into core/realm.h's list. */
@@ -378,5 +379,11 @@ typedef struct {
 bool css_rule_cascade_sheet(JSContext *ctx, JSValueConst list, CssLayerOrder *order,
                             CssRuleCascadeSheet *out);
 void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s);
+
+/* CSS Properties and Values API 1 §2.1's `@property` half over one rule list, in document order among the rules
+   that apply in `ctx`'s environment: each `@property` rule naming `name` replaces `*out` (freeing the one before
+   it when `*found`) and sets `*found`, so over a document's lists in order the last one stands. */
+void css_rule_property_registration(JSContext *ctx, JSValueConst list, const char *name,
+                                    CssPropertyRegistration *out, bool *found);
 
 #endif

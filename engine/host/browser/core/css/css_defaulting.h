@@ -44,6 +44,9 @@ typedef enum {
    `cascaded` is BORROWED and not freed: which of the three answers this is decides who owns it, and the caller
    is the one that can act on that. */
 CssDefaulting css_defaulting_of(const char *name, const char *cascaded);
+/* The same step for a property whose `Inherited:` line is `inherited` — a custom property's, which its
+   registration states (CSS Properties and Values API 1 §2.1). */
+CssDefaulting css_defaulting_with(bool inherited, const char *cascaded);
 
 /* §7.2's `Inherited:` line for `name` — is this one of the properties whose value propagates from the parent
    element when the cascade does not decide it? */

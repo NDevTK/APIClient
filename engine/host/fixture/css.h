@@ -39,6 +39,14 @@ static const char HTML_CSS[] =
        makes it parse — so the two differ by one byte and must differ in `initialValue`. */
     "@property --pmiss { syntax: \"<percentage>\"; inherits: false; initial-value: 0 }"
     "</style>"
+    /* §2.1's registration reaching computed values, in a sheet of its own so `propsheet`'s indices stand:
+       an inheriting `<length>`, and one name registered twice, where the later rule wins. */
+    "<style id=propsheet2>"
+    "@property --pinh { syntax: \"<length>\"; inherits: true; initial-value: 3px }"
+    "@property --plast { syntax: \"<length>\"; inherits: false; initial-value: 1px }"
+    "@property --plast { syntax: \"<length>\"; inherits: false; initial-value: 2px }"
+    "#pcvp { --pfull: 50%; --pinh: 5px } #pcvbad { --pinh: red }"
+    "</style>"
     "</head><body>"
     /* ---- CSS Nesting Module Level 1 §3 "Nesting Style Rules" .. §6 "CSSOM" — the sheet, its tree, three claims.
        THE PARENT IS A SELECTOR LIST WHOSE MEMBERS DISAGREE ABOUT SPECIFICITY. CSS Nesting §4 "Nesting Selector:
@@ -137,6 +145,17 @@ static const char HTML_CSS[] =
     "fetch('/api/csspropText?v=' + (pt === '@property --pfull { syntax: \"<percentage>\"; inherits: false;"
     " initial-value: 0%; }~@property --pbare { syntax: \"*\"; inherits: true; }'"
     " ? 'CSSTEXTOK' : 'CSSTEXTBAD:' + pt));</script>"
+    /* THE THIRD CLAIM: computed values under a registration. A non-inheriting property's undeclared value is
+       its initial (`--pfull` is `0%` under a parent declaring `50%`); an inheriting one takes the parent's;
+       `red` fails `<length>` and is invalid at computed-value time, so it defaults as `unset`, which for an
+       inheriting property is the parent's `5px`; an element with no declaring ancestor gets the initial `3px`;
+       the later `--plast` rule wins; and `--pmiss`, whose initial-value §3.3 ignored, and the unregistered
+       `--pnone` both read as the empty string. */
+    "<div id=pcvp><div id=pcvc></div><div id=pcvbad></div></div><div id=pcvo></div>"
+    "<script>var pcv = function(i, p){ return getComputedStyle(document.getElementById(i)).getPropertyValue(p); };"
+    "var cv = [pcv('pcvc', '--pfull'), pcv('pcvc', '--pinh'), pcv('pcvbad', '--pinh'), pcv('pcvo', '--pinh'),"
+    " pcv('pcvo', '--plast'), pcv('pcvo', '--pmiss'), pcv('pcvo', '--pnone')].join('|');"
+    "fetch('/api/csspropCv?v=' + (cv === '0%|5px|5px|3px|2px||' ? 'CSSCVOK' : 'CSSCVBAD:' + cv));</script>"
     TF_CANVAS_INK
     "</body></html>";
 

@@ -131,32 +131,11 @@ bool css_property_inherited(const char *name)
     unsigned i;
 
     DCHECK(name != NULL, "CSS Cascade §7.2's `Inherited:` line was asked for with no property name");
-    /* css-variables §2: a CUSTOM PROPERTY is "an ordinary property, so it can be declared on any element, is
-       resolved with the normal inheritance and cascade rules" — the whole family inherits, and it is named by
-       its two-dash prefix rather than enumerated, since the set is the author's and not a spec's.
-       §3's SUBSTITUTION IS BUILT AND READS THIS LINE — core/css/css_var.h for the syntax and
-       core/css/css_computed_value.c for the policy. The pair is why they are two files and why this one is
-       where the residual sat: a custom property's INHERITANCE is what `var(--x)` on a descendant resolves
-       through, so the answer to "what is --x here" is this function's arm for the `--*` family, reached once
-       per reference from the substitution chain.
-       WHAT THE RECORD HERE USED TO SAY, kept because the claim it made is the defect shape and not the
-       coordinate: substitution was performed for NO shape of `var()`, and a declaration behind one therefore
-       computed as the property's initial or inherited value — so a document writing its colours as custom
-       property references rendered its glyphs in the initial colour over an unpainted canvas, which is
-       indistinguishable from a stylesheet that never arrived unless the colours are censused rather than the
-       dominant pixel sampled. That is the observation, and it is what a regression here would look like.
-       NAMED RESIDUAL — WHAT IS NOT COVERED IS NOW NARROWER AND IS A PROPERTY RATHER THAN A LIST: a custom
-       property that carries a REGISTRATION is treated as though it had none. css-variables-1 §2.2
-       "Guaranteed-Invalid Values" gives an unregistered one the guaranteed-invalid value as its initial
-       value, which is the arm this engine implements; a registered one takes its `initial-value` descriptor
-       and is type-checked at computed-value time, and neither happens. WHAT THE NEXT DIFF BUILDS: the
-       registration itself, which is what `@property` and `CSS.registerProperty` both write into and which
-       nothing in this engine holds yet. HOW ITS ABSENCE WOULD SHOW, as an observation: a page that registers
-       a custom property with an `initial-value` and then reads a descendant that never declares it gets the
-       guaranteed-invalid value — so the reference falls to its fallback, or to `unset`, where a browser
-       answers the registered initial.
-       RETIREMENT: this record goes when a registration decides a custom property's initial value. */
-    if (name[0] == '-' && name[1] == '-') return true;
+    /* A custom property's inheritance is its registration's inherit flag (CSS Properties and Values API 1
+       §2.1, true when unregistered), a fact of the document rather than of the name: core/css/
+       css_computed_value.c asks the registration and calls css_defaulting_with. */
+    DCHECK(!(name[0] == '-' && name[1] == '-'),
+           "a custom property's Inherited: line was asked by name; it is the registration's inherit flag");
     for (i = 0; i < sizeof(CSS_INHERITED) / sizeof(CSS_INHERITED[0]); i++)
         if (strcmp(CSS_INHERITED[i], name) == 0) return true;
     return false;
@@ -165,10 +144,15 @@ bool css_property_inherited(const char *name)
 CssDefaulting css_defaulting_of(const char *name, const char *cascaded)
 {
     DCHECK(name != NULL, "CSS Cascade §7's defaulting step was asked about no property");
+    return css_defaulting_with(css_property_inherited(name), cascaded);
+}
+
+CssDefaulting css_defaulting_with(bool inherited, const char *cascaded)
+{
     /* §7.1 and §7.2's shared condition, "unless the cascade results in a value" — which is the state almost
        every property on almost every element is in, and the whole reason inheritance exists. */
     if (cascaded == NULL)
-        return css_property_inherited(name) ? CSS_DEFAULTING_INHERITED : CSS_DEFAULTING_INITIAL;
+        return inherited ? CSS_DEFAULTING_INHERITED : CSS_DEFAULTING_INITIAL;
     if (!css_wide_keyword(cascaded)) return CSS_DEFAULTING_DECLARED;
     /* §7.3.2: "If the cascaded value of a property is the inherit keyword, the property's specified and
        computed values are the inherited value." */
@@ -179,7 +163,7 @@ CssDefaulting css_defaulting_of(const char *name, const char *cascaded)
     /* §7.3.3: "if it is an inherited property, this is treated as inherit, and if it is not, this is treated
        as initial" — which is why §7.2's line is read here and not only above. */
     if (css_def_keyword_is(cascaded, "unset"))
-        return css_property_inherited(name) ? CSS_DEFAULTING_INHERITED : CSS_DEFAULTING_INITIAL;
+        return inherited ? CSS_DEFAULTING_INHERITED : CSS_DEFAULTING_INITIAL;
     DCHECK(css_rollback_keyword(cascaded) != CSS_ROLLBACK_NONE,
            "a CSS-wide keyword reached §7's defaulting that is none of the six — CSS_WIDE and this switch are "
            "one list and have come apart");

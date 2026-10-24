@@ -4916,6 +4916,115 @@ bool css_rule_cascade_sheet(JSContext *ctx, JSValueConst list, CssLayerOrder *or
     return true;
 }
 
+/* ---- CSS Properties and Values API 1 §2.1's `@property` half ------------------------------------------------ */
+
+/* An owned C copy of a string field of a rule record. */
+static char *rule_field_cstr(JSContext *ctx, JSValueConst v)
+{
+    const char *c = JS_ToCString(ctx, v);
+    char *out;
+
+    CHECK(c != NULL, "cssom: OOM reading an `@property` rule's descriptor");
+    out = strdup(c);
+    JS_FreeCString(ctx, c);
+    CHECK(out != NULL, "cssom: OOM copying an `@property` rule's descriptor");
+    return out;
+}
+
+/* Whether the `@property` record `r` represents a registration for `name` (§3: one per name in its prelude). */
+static bool property_rule_names(JSContext *ctx, const CssRuleData *r, const char *name)
+{
+    uint32_t i, n = array_len(ctx, r->property_names);
+    bool hit = false;
+
+    for (i = 0; i < n && !hit; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, r->property_names, i);
+        const char *c = JS_ToCString(ctx, v);
+
+        CHECK(c != NULL, "cssom: OOM reading an `@property` rule's name");
+        hit = strcmp(c, name) == 0;
+        JS_FreeCString(ctx, c);
+        JS_FreeValue(ctx, v);
+    }
+    return hit;
+}
+
+/* One rule list being walked: its Array, the next index and its length. */
+typedef struct {
+    JSValue  kids;
+    uint32_t i, n;
+} RegistrationFrame;
+
+void css_rule_property_registration(JSContext *ctx, JSValueConst list, const char *name,
+                                    CssPropertyRegistration *out, bool *found)
+{
+    RegistrationFrame *v;
+    size_t depth = 1, cap = 8;
+
+    DCHECK(name != NULL && name[0] == '-' && name[1] == '-',
+           "a registration was looked up for a name that is not a <custom-property-name>");
+    DCHECK(JS_IsArray(list), "a registration was looked up in something that is not a rule list");
+    v = malloc(cap * sizeof *v);
+    CHECK(v != NULL, "cssom: OOM walking a sheet's rules for `@property` registrations");
+    v[0].kids = JS_DupValue(ctx, list);
+    v[0].i = 0;
+    v[0].n = array_len(ctx, list);
+    while (depth > 0) {
+        RegistrationFrame *f = &v[depth - 1];
+        JSValue rule, kids = JS_UNDEFINED;
+        CssRuleData *r;
+
+        if (f->i == f->n) {
+            JS_FreeValue(ctx, f->kids);
+            depth--;
+            continue;
+        }
+        rule = JS_GetPropertyUint32(ctx, f->kids, f->i++);
+        r = rule_of(rule);
+        DCHECK(r != NULL, "a CSS rule list holds something that is not a CSS rule");
+        if (r->type == RULE_TYPE_PROPERTY && property_rule_names(ctx, r, name)) {
+            DCHECK(JS_IsString(r->property_syntax) && JS_IsBool(r->property_inherits),
+                   "an `@property` record lacks the syntax or inherits field its constructor always writes");
+            if (*found) css_property_registration_free(out);
+            out->syntax = rule_field_cstr(ctx, r->property_syntax);
+            out->inherits = JS_ToBool(ctx, r->property_inherits);
+            out->initial_value = JS_IsNull(r->property_initial_value)
+                                     ? NULL : rule_field_cstr(ctx, r->property_initial_value);
+            *found = true;
+        } else if (r->type == RULE_TYPE_MEDIA) {
+            /* CSS Conditional 3 §2: a group rule's rules apply only while its condition is true. */
+            MediaQuerySet *set = media_list_query_set(ctx, r->media);
+
+            if (media_query_matches_now(ctx, set)) kids = rule_child_rules(ctx, rule);
+            media_query_free(set);
+        } else if (r->type == RULE_TYPE_SUPPORTS) {
+            if (rule_supports_matches(ctx, r)) kids = rule_child_rules(ctx, rule);
+        } else if (r->type == RULE_TYPE_LAYER_BLOCK) {
+            /* CSS Cascade 5 §6.4.4.1: processed as a conditional group rule with a true condition. */
+            kids = rule_child_rules(ctx, rule);
+        }
+        /* NAMED RESIDUAL: an `@property` inside `@container` or `@starting-style` is not read. Their
+           conditions hold per element or per style change, and a registration is per document. The next
+           diff decides those from CSS Conditional 5 and CSS Transitions 2. Its absence shows as such a
+           property reading as unregistered. */
+        JS_FreeValue(ctx, rule);
+        if (JS_IsUndefined(kids)) continue;
+        if (depth == cap) {
+            RegistrationFrame *grown;
+
+            cap *= 2;
+            grown = realloc(v, cap * sizeof *grown);
+            CHECK(grown != NULL, "cssom: OOM walking a sheet's nested rules for `@property` registrations");
+            v = grown;
+        }
+        v[depth].kids = kids;
+        v[depth].i = 0;
+        v[depth].n = array_len(ctx, kids);
+        depth++;
+    }
+    free(v);
+}
+
 /* ---- the interfaces -------------------------------------------------------------------------------------- */
 
 /* CSSOM §6.4.2's historical constants, which the IDL declares on the interface AND its prototype. */

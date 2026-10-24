@@ -22,9 +22,12 @@
 #include "core/css/css_logical.h"
 #include "core/css/css_math.h"
 #include "core/css/css_pending_substitution.h"
+#include "core/css/css_property_registration.h"
+#include "core/css/css_property_syntax.h"
 #include "core/css/css_property_applies.h"
 #include "core/css/css_property_id.h"
 #include "core/css/css_shorthand.h"
+#include "core/css/css_syntax_match.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_transform_function.h"
 #include "core/css/css_var.h"
@@ -184,6 +187,56 @@ static char *cv_specified_walk(lxb_dom_element_t *el, const char *name)
     }
 }
 
+/* A custom property's specified value under its CSS Properties and Values API 1 §2.1 registration: the
+   registration's inherit flag decides §7's defaulting, its initial value is §7.1's, and an unregistered
+   property inherits and has the guaranteed-invalid value (NULL) as its initial. A declared value that does not
+   parse against a non-universal syntax is invalid at computed-value time (§2.4) and defaults as `unset`.
+   NAMED RESIDUAL: a value with a `var()` is not checked against the syntax, and a value that parses is not
+   computed per §2.4's type rules (canonical units, resolved colors and URLs); it stands as declared. The next
+   diff substitutes inside a registered property's own value with the cycle stack in hand, then computes each
+   type. Its absence shows as `1in` reading back where a browser answers `96px`. */
+static char *cv_custom_specified(lxb_dom_element_t *el, const char *name)
+{
+    CssPropertyRegistration reg = { NULL, true, NULL };
+    CssSyntaxDefinition def = { NULL, 0, false };
+    bool registered = css_property_registration_of(el, name, &reg), typed = false;
+    lxb_dom_element_t *e = el;
+    char *out = NULL;
+
+    if (registered) {
+        bool parsed = css_property_syntax_definition(reg.syntax, strlen(reg.syntax), &def);
+
+        DCHECK(parsed, "a registration holds a syntax string §5.4.2 refuses; the @property constructor keeps "
+                       "only a string that parses, and `*` otherwise");
+        typed = parsed && !def.universal;
+    }
+    for (;;) {
+        char *cascaded = css_cv_cascaded(e, name);
+        CssDefaulting d = css_defaulting_with(reg.inherits, cascaded);
+        lxb_dom_element_t *parent;
+
+        if (d == CSS_DEFAULTING_DECLARED && typed && !css_var_references(cascaded) &&
+            !css_property_syntax_matches(&def, cascaded, strlen(cascaded)))
+            d = css_defaulting_with(reg.inherits, "unset");
+        if (d == CSS_DEFAULTING_DECLARED) {
+            out = cascaded;
+            break;
+        }
+        free(cascaded);
+        parent = d == CSS_DEFAULTING_INHERITED ? css_parent_element(e) : NULL;
+        if (parent == NULL) {
+            out = reg.initial_value != NULL ? css_cv_strdup(reg.initial_value) : NULL;
+            break;
+        }
+        e = parent;
+    }
+    if (registered) {
+        css_syntax_definition_free(&def);
+        css_property_registration_free(&reg);
+    }
+    return out;
+}
+
 static void cv_text_fill(lxb_dom_element_t *el, CssPropertyId id);
 
 static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
@@ -192,6 +245,7 @@ static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
     lxb_dom_element_t *parent;
     char *out;
 
+    if (name[0] == '-' && name[1] == '-') return cv_custom_specified(el, name);
     if (!cv_holds_text(name)) return cv_specified_walk(el, name);
     /* A held-text property's inherited value is the parent's computed one, so the parent's chain is derived
        first, in tree order. */
@@ -206,11 +260,10 @@ static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
 /* ---- css-variables-1 §3's SUBSTITUTION, the policy half ------------------------------------------------- */
 
 /* The lookup css_var_substitute asks of `ud`, the element: `--name`'s value there, unsubstituted.
-   §7's defaulting over the custom property is where its inheritance happens: core/css/css_defaulting.h
-   answers INHERITED for the whole `--*` family, so this one call walks to whichever ancestor declared it. A
-   NULL is css-variables-1 §2.2's guaranteed-invalid value — "The initial value of a custom property is a
-   guaranteed-invalid value" — and css_style_declaration.h already answers NULL for a property with no initial
-   value anywhere, which is exactly a custom property nobody set. */
+   cv_custom_specified's defaulting is where its inheritance and registered initial value happen. A NULL is
+   css-variables-1 §2.2's guaranteed-invalid value — "The initial value of a custom property is a
+   guaranteed-invalid value" — which an unregistered property nobody set, or a registration with no
+   initial value, answers. */
 static char *css_cv_var_lookup(void *ud, const char *name, size_t name_n)
 {
     char *full, *raw;
