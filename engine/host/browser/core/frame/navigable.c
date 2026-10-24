@@ -1600,10 +1600,10 @@ static void nav_check_embedder_policy_adherence(JSContext *ctx, JSValueConst pro
 }
 
 /* Hands a top-level traversable's load whose response is another origin's (`origin`) to that origin's
-   instance, with the job's own provenance, marks and sourceDocument. The trusted zone loads `addr` for the
-   destination's instance under its own record; this instance reads none of the response. */
+   instance, with the job's own provenance, marks and sourceDocument and the sandboxing `flags` known here.
+   The trusted zone loads `addr` for the destination's instance under its own record. */
 static void nav_load_to_peer(JSContext *ctx, NavLoadState *s, JSValueConst proxy, const char *addr,
-                             const Origin *origin)
+                             const Origin *origin, SandboxFlags flags)
 {
     const char *prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
     const char *drv = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_DRIVEN));
@@ -1617,7 +1617,7 @@ static void nav_load_to_peer(JSContext *ctx, NavLoadState *s, JSValueConst proxy
            "peer is not built: the record naming the address with §7.1.7's container, §8.1.3.1's pair, §7.3.1.3's "
            "parent and §9.5's container answer, the nested form of window_proxy_navigate_to_peer, and its host "
            "route");
-    nav_navigate_to_peer(ctx, proxy, addr, origin, window_proxy_creation_sandbox_flags(proxy), prov, drv, pin, iss);
+    nav_navigate_to_peer(ctx, proxy, addr, origin, flags, prov, drv, pin, iss);
     JS_FreeCString(ctx, iss);
     JS_FreeCString(ctx, pin);
     JS_FreeCString(ctx, drv);
@@ -1927,7 +1927,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                    "a document load's `peer` decision arrived with a THROW completion — the zone states it");
             JS_FreeValue(ctx, taken);
             s->req = 0;
-            nav_load_to_peer(ctx, s, proxy, addr, origin_parse(peer));
+            nav_load_to_peer(ctx, s, proxy, addr, origin_parse(peer), window_proxy_creation_sandbox_flags(proxy));
             JS_FreeCString(ctx, peer);
             JS_FreeValue(ctx, peerv);
             JS_FreeCString(ctx, addr);
@@ -2379,32 +2379,11 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         }
     }
     /* THE PEER ARM: §7.1.3.2 kept the browsing context and §7.4.5's response origin is another agent's, so the
-       incoming Document is built in a peer instance. For a TOP-LEVEL traversable that is nav_navigate_to_peer.
-       A nested navigable's Document moving to a peer is not built: its peer needs a record naming the address
-       with §7.1.7's container, §8.1.3.1's pair, §7.3.1.3's parent and Permissions Policy §9.5's container
-       answer (never the bytes — SECURITY.md), and the host route that attaches a Document to a navigable whose
-       parent and container stay here. */
-    if (!swapped && !in_agent) {
-        const char *peer_prov, *peer_drv, *peer_pin, *peer_iss;
-
-        DCHECK(window_proxy_is_top_level(proxy),
-               "§7.4.5 determined a NESTED navigable's response origin and it is not this agent's, so its "
-               "incoming Document belongs to a peer while the navigable, its parent and its container stay "
-               "here. Build the record that names a peer this ADDRESS with §7.1.7's container, §8.1.3.1's pair, "
-               "§7.3.1.3's parent and §9.5's container answer (not the bytes), the nested form of "
-               "window_proxy_navigate_to_peer, and the host route for it");
-        peer_prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
-        peer_drv = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_DRIVEN));
-        peer_pin = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PINNED));
-        peer_iss = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_INITIATOR_DOCUMENT));
-        CHECK(peer_prov != NULL && peer_drv != NULL && peer_pin != NULL && peer_iss != NULL,
-              "navigable: OOM taking the provenance off a load whose Document is a peer's");
-        nav_navigate_to_peer(ctx, proxy, dest_url, origin, final_flags, peer_prov, peer_drv, peer_pin, peer_iss);
-        JS_FreeCString(ctx, peer_iss);
-        JS_FreeCString(ctx, peer_pin);
-        JS_FreeCString(ctx, peer_drv);
-        JS_FreeCString(ctx, peer_prov);
-    }
+       incoming Document is built in a peer instance. The zone answered `peer` above for a response URL of
+       another origin, so what reaches here is a response of this origin whose final sandboxing flags make its
+       origin opaque. */
+    if (!swapped && !in_agent)
+        nav_load_to_peer(ctx, s, proxy, dest_url, origin, final_flags);
     /* THE RESPONSE'S HEADER LIST OUTLIVES THIS POINT NOW, and it has to: HTML §13.2.3.2 "Determining the
        character encoding" reads the `Content-Type` header in a form of its own (Fetch §2.2.2 "Headers"' get,
        joined) and that read belongs INSIDE the component that runs the algorithm, not to this frame. The list
