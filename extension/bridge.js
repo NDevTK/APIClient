@@ -171,8 +171,8 @@ function docSinkPin(p, f) {
 const SINK_ACT_KINDS = Object.freeze(["click", "dispatch"]);
 function docSinkAct(a, f) {
   return docIsRecord(a) && SINK_ACT_KINDS.indexOf(a.kind) >= 0 && docIsName(a.target) && docIsName(a.type) &&
-         (a.kind === "click") === (a.type === "click")
-    ? null : f + " is not {kind: click|dispatch, target, type} with a click exactly where the type is click";
+         (a.kind === "click") === (a.type === "click") && (!("handler" in a) || docIsName(a.handler))
+    ? null : f + " is not {kind: click|dispatch, target, type[, handler]} with a click exactly where the type is click";
 }
 function docSink(e, f) {
   if (!docIsRecord(e)) return f + " is not an object";

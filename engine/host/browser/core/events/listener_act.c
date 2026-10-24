@@ -109,14 +109,44 @@ static char *locator_by_path(lxb_dom_node_t *el)
     return out;
 }
 
-static char *act_json(const char *type, const char *target)
+/* The function's own `name` data property where it is a non-empty identifier, read without running an
+   accessor; NULL otherwise. malloc'd. */
+static char *handler_name(JSContext *ctx, JSValueConst fn)
 {
-    size_t n = strlen(type) + strlen(target) + 64;
+    JSPropertyDescriptor d;
+    JSAtom a = JS_NewAtom(ctx, "name");
+    char *out = NULL;
+    int r;
+
+    CHECK(a != JS_ATOM_NULL, "listener act: OOM naming a handler");
+    r = JS_GetOwnSlotDesc(ctx, &d, fn, a);
+    JS_FreeAtom(ctx, a);
+    if (r <= 0) return NULL;
+    if (!(d.flags & JS_PROP_GETSET) && JS_IsString(d.value)) {
+        size_t n = 0;
+        const char *s = JS_ToCStringLen(ctx, &n, d.value);
+
+        CHECK(s != NULL, "listener act: OOM reading a handler's name");
+        if (id_is_simple(s, n)) { out = strdup(s); CHECK(out, "listener act: OOM copying a handler's name"); }
+        JS_FreeCString(ctx, s);
+    }
+    JS_FreeValue(ctx, d.value);
+    JS_FreeValue(ctx, d.getter);
+    JS_FreeValue(ctx, d.setter);
+    return out;
+}
+
+static char *act_json(JSContext *ctx, JSValueConst fn, const char *type, const char *target)
+{
+    char *name = handler_name(ctx, fn);
+    size_t n = strlen(type) + strlen(target) + (name ? strlen(name) : 0) + 80;
     char *out = malloc(n);
 
     CHECK(out, "listener act: OOM spelling an act");
-    snprintf(out, n, "{\"kind\":\"%s\",\"target\":\"%s\",\"type\":\"%s\"}",
-             strcmp(type, "click") ? "dispatch" : "click", target, type);
+    snprintf(out, n, "{\"kind\":\"%s\",\"target\":\"%s\",\"type\":\"%s\"%s%s%s}",
+             strcmp(type, "click") ? "dispatch" : "click", target, type,
+             name ? ",\"handler\":\"" : "", name ? name : "", name ? "\"" : "");
+    free(name);
     return out;
 }
 
@@ -138,14 +168,14 @@ char *listener_act_of(JSContext *ctx, JSValueConst fn)
         if (u == doc) loc = strdup("document");
         else if (!(loc = locator_by_id(ctx, u, doc))) loc = locator_by_path(u);
         if (!loc) { free(type); return NULL; }
-        act = act_json(type, loc);
+        act = act_json(ctx, fn, type, loc);
         free(type);
         free(loc);
         return act;
     }
     win = document_window_of(doc);
     if (JS_IsObject(win) && (type = event_target_listener_type_of(ctx, win, fn))) {
-        char *act = act_type_ok(type) ? act_json(type, "window") : NULL;
+        char *act = act_type_ok(type) ? act_json(ctx, fn, type, "window") : NULL;
         free(type);
         return act;
     }
