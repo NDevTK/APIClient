@@ -1245,7 +1245,10 @@ async function mintDrive(minted, slices) {
                  ['a gate with no predicates', { principalDemand: 'forgeable', principalGates: [{ principal: 'x', predicates: [] }] }, 'principalGates[0]'],
                  ['a predicate with no arm', { principalDemand: 'forgeable', principalGates: [{ principal: 'x', predicates: [{ method: 'm', arguments: [] }] }] }, 'predicates[0]'],
                  ['a pin with no loose flag', { principalDemand: 'unforgeable', principalPins: [{ principal: 'x', equals: 'y', kind: 'string' }] }, 'principalPins[0]'],
-                 ['an empty poc', { poc: '' }, '.poc']];
+                 ['an empty poc', { poc: '' }, '.poc'],
+                 ['a parked search waiting on a sender', { delivery: 'cross-document-message', senderDemand: [pin] }, null],
+                 ['a senderDemand row with no equals', { senderDemand: [{ principal: 'event.origin', kind: 'string', loose: false }] }, 'senderDemand[0]'],
+                 ['a senderDemand on a fire-verified entry', { poc: 'X9()', senderDemand: [pin] }, 'fire-verified']];
   for (const [label, sink, names] of sinks) {
     const why = ZONE.resultDocumentRefusal(doc(sink === null ? [] : [sink]), false);
     must(names === null ? why === null : typeof why === 'string' && why.startsWith('securitySinks[0]') && why.includes(names),

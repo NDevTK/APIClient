@@ -147,7 +147,9 @@ function docEndpoints(rows) {
    victim's address component, present exactly on an `address` delivery; `principalDemand` is absent
    (unexamined) or one of three verdicts, with `principalGates` only beside `forgeable` (and on every one) and
    `principalPins` exactly beside `unforgeable`; `poc` is absent on a parked search and a non-empty string on a
-   fire-verified one. These are what the live-verify layer (offscreen-brain.js) performs a delivery from. */
+   fire-verified one, and `senderDemand` (the senders a parked search waits on, in the principalPins row
+   grammar) only on a parked one. These are what the live-verify layer (offscreen-brain.js) performs a delivery
+   from. */
 const SINK_DELIVERIES = Object.freeze(["address", "plant", "referring-address", "user-file", "cross-document-message"]);
 const SINK_DEMANDS = Object.freeze(["none", "forgeable", "unforgeable"]);
 function docSinkGate(g, f) {
@@ -185,6 +187,10 @@ function docSink(e, f) {
     why = (Array.isArray(e.principalPins) && e.principalPins.length > 0 ? null : f + ".principalPins is not a non-empty array") ||
           docEach(e.principalPins, f + ".principalPins", docSinkPin);
   if (why === null && "poc" in e && !docIsName(e.poc)) why = f + ".poc is not a non-empty string";
+  if (why === null && "senderDemand" in e)
+    why = ("poc" in e ? f + " states a senderDemand on a fire-verified entry, which only a parked search carries" : null) ||
+          (Array.isArray(e.senderDemand) && e.senderDemand.length > 0 ? null : f + ".senderDemand is not a non-empty array") ||
+          docEach(e.senderDemand, f + ".senderDemand", docSinkPin);
   return why;
 }
 function docRoutedPost(p, f) {
