@@ -142,6 +142,51 @@ function docEndpoints(rows) {
   }
   return null;
 }
+/* One @S entry's delivery facts, as solver/solve.c's emit_delivery writes them (solve.h's field list): `delivery`
+   is absent (the source declares none) or one of the five mechanism tokens, and `deliveryPrefix` is the
+   victim's address component, present exactly on an `address` delivery; `principalDemand` is absent
+   (unexamined) or one of three verdicts, with `principalGates` only beside `forgeable` (and on every one) and
+   `principalPins` exactly beside `unforgeable`; `poc` is absent on a parked search and a non-empty string on a
+   fire-verified one. These are what the live-verify layer (offscreen-brain.js) performs a delivery from. */
+const SINK_DELIVERIES = Object.freeze(["address", "plant", "referring-address", "user-file", "cross-document-message"]);
+const SINK_DEMANDS = Object.freeze(["none", "forgeable", "unforgeable"]);
+function docSinkGate(g, f) {
+  if (!docIsRecord(g) || !docIsName(g.principal) || !Array.isArray(g.predicates) || g.predicates.length === 0)
+    return f + " is not {principal, predicates: [...]} with a principal and at least one predicate";
+  return docEach(g.predicates, f + ".predicates", (pr, h) =>
+    docIsRecord(pr) && docIsName(pr.method) && Array.isArray(pr.arguments) &&
+    pr.arguments.every((a) => typeof a === "string") && typeof pr.holds === "boolean"
+      ? null : h + " is not {method, arguments: [strings], holds: boolean}");
+}
+function docSinkPin(p, f) {
+  return docIsRecord(p) && docIsName(p.principal) && typeof p.equals === "string" && docIsName(p.kind) &&
+         typeof p.loose === "boolean" && (!("subject" in p) || typeof p.subject === "string")
+    ? null : f + " is not {principal, equals, kind, loose[, subject]}";
+}
+function docSink(e, f) {
+  if (!docIsRecord(e)) return f + " is not an object";
+  if ("delivery" in e && SINK_DELIVERIES.indexOf(e.delivery) < 0)
+    return f + ".delivery " + JSON.stringify(e.delivery) + " is none of " + SINK_DELIVERIES.join(", ");
+  if (("deliveryPrefix" in e) !== (e.delivery === "address"))
+    return f + " states a deliveryPrefix exactly where its delivery is not `address`";
+  if ("deliveryPrefix" in e && e.deliveryPrefix !== "#" && e.deliveryPrefix !== "?")
+    return f + ".deliveryPrefix " + JSON.stringify(e.deliveryPrefix) + " is neither # nor ?";
+  if ("principalDemand" in e && SINK_DEMANDS.indexOf(e.principalDemand) < 0)
+    return f + ".principalDemand " + JSON.stringify(e.principalDemand) + " is none of " + SINK_DEMANDS.join(", ");
+  if (e.principalDemand === "forgeable" ? !("principalGates" in e) : ("principalGates" in e && "principalDemand" in e))
+    return f + " states principalGates on a verdict other than forgeable, or a forgeable verdict without them";
+  if (("principalPins" in e) !== (e.principalDemand === "unforgeable"))
+    return f + " states principalPins on a verdict other than unforgeable, or an unforgeable verdict without them";
+  let why = null;
+  if ("principalGates" in e)
+    why = (Array.isArray(e.principalGates) && e.principalGates.length > 0 ? null : f + ".principalGates is not a non-empty array") ||
+          docEach(e.principalGates, f + ".principalGates", docSinkGate);
+  if (why === null && "principalPins" in e)
+    why = (Array.isArray(e.principalPins) && e.principalPins.length > 0 ? null : f + ".principalPins is not a non-empty array") ||
+          docEach(e.principalPins, f + ".principalPins", docSinkPin);
+  if (why === null && "poc" in e && !docIsName(e.poc)) why = f + ".poc is not a non-empty string";
+  return why;
+}
 function docRoutedPost(p, f) {
   return docIsRecord(p) && typeof p.id === "string" && /^[0-9a-f]{16}$/.test(p.id) && typeof p.target === "string" &&
          typeof p.targetOrigin === "string" && typeof p.relation === "string" && Array.isArray(p.symbols) &&
@@ -230,7 +275,8 @@ const RESULT_COUNTERS = Object.freeze(["_switches", "_flows", "_candidates", "_j
    delete of this origin's cross-session entry. */
 function resultDocumentRefusal(r, complete) {
   let why = docObject(r, "the @RESULT document") || docEndpoints(r.fetchCallSites) ||
-    docArray(r.securitySinks, "securitySinks") || docArray(r.pageErrors, "pageErrors") ||
+    docArray(r.securitySinks, "securitySinks") || docEach(r.securitySinks, "securitySinks", docSink) ||
+    docArray(r.pageErrors, "pageErrors") ||
     docArray(r.pageErrorsRetracted, "pageErrorsRetracted") || docArray(r.pageErrorsExplored, "pageErrorsExplored") ||
     docArray(r.routedPosts, "routedPosts") || docEach(r.routedPosts, "routedPosts", docRoutedPost);
   if (why !== null) return why;

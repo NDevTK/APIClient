@@ -1653,28 +1653,25 @@ function _pruneProbeSessions() {
 // the true arm is, and the arm the shipped page did not take. Dropping it would render a path constrained in
 // one direction as one constrained in the other.
 //
-// THE SHAPE IS ASSERTED AND NEVER DEFAULTED. These bytes are the ENGINE'S — this codebase computed them — so a
-// malformed row is our own logic being wrong and a DCHECK is what belongs there (a page's handler, its origin
-// string and a bundle's bytes are the foreign input that may never be asserted on, and none of them is here).
-// A `||` or a `?.` past a missing member would turn "the producer does not emit this" into a plausible
-// sentence, which is the one thing a delivery reason must not be.
+// THE SHAPE IS ASSERTED AND NEVER DEFAULTED. The engine's statement is input, and bridge.js's result door
+// (resultDocumentRefusal's docSink) refuses a whole document whose sink breaks this shape, so a row reaching
+// here passed it and a malformed one is this zone's store or relay having changed it. A `||` or a `?.` past a
+// missing member would turn "the relay does not carry this" into a plausible sentence, which is the one thing a
+// delivery reason must not be.
 function _principalGateSentence(principalGates) {
   DCHECK(Array.isArray(principalGates) && principalGates.length > 0,
-         "a `forgeable` principal verdict arrived with no gates to state — solve.c emits `principalGates` on "
-         + "exactly that verdict and asserts the pairing both ways, so this record would say an identity is "
-         + "constrained and then not say by what");
+         "a `forgeable` principal verdict arrived with no gates to state — the result door (docSink) admits that "
+         + "verdict only with them, so the relay from the stored finding dropped them");
   return principalGates.map(function (pg) {
     DCHECK(pg && typeof pg.principal === "string" && pg.principal.length > 0
            && Array.isArray(pg.predicates) && pg.predicates.length > 0,
-           "a principal gate arrived with no principal named or with no predicates — the engine writes the "
-           + "name and the rows together at the capture, so a row holding one of them names a demand nothing "
-           + "can answer for");
+           "a principal gate arrived with no principal named or with no predicates — the result door "
+           + "(docSinkGate) admits neither, so the relay from the stored finding changed it");
     var preds = pg.predicates.map(function (pr) {
       DCHECK(pr && typeof pr.method === "string" && pr.method.length > 0
              && Array.isArray(pr.arguments) && typeof pr.holds === "boolean",
-             "a principal gate's predicate arrived without its method, its arguments or its arm — the arm IS "
-             + "the fact the record carries, and a predicate missing any of the three is a constraint this "
-             + "reason would state without being able to say which identity satisfies it");
+             "a principal gate's predicate arrived without its method, its arguments or its arm — the result "
+             + "door (docSinkGate) admits none of those, so the relay from the stored finding changed it");
       return "`" + pr.method + "(" + pr.arguments.map(function (a) { return JSON.stringify(a); }).join(", ")
            + ")` answered " + (pr.holds ? "true" : "false");
     });
@@ -1721,9 +1718,9 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
     // would mean the engine grew an address source this layer has no placement for — a contract drift, not a
     // page state, so it asserts rather than degrading to one of the two it knows.
     DCHECK(deliveryPrefix === "#" || deliveryPrefix === "?",
-           "the engine declared an `address` delivery whose component is neither `#` nor `?` (got "
-           + JSON.stringify(deliveryPrefix) + ") — a URL has no third place an attacker-controlled component "
-           + "lives, so this is either a declaration with no prefix or a component this layer cannot place");
+           "an `address` delivery arrived whose component is neither `#` nor `?` (got "
+           + JSON.stringify(deliveryPrefix) + ") — the result door (docSink) admits only those two beside an "
+           + "`address` delivery, so the relay from the stored finding changed it");
     var frag = deliveryPrefix === "#";
     /* THE ADDRESS IS BUILT THROUGH THE URL PARSER, AND IT IS RETURNED, because it is not only the thing to
        navigate to — it is the thing a HIT IS ATTRIBUTED AGAINST. `pageUrl.split("#")[0]` produced a string
@@ -1868,8 +1865,8 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
       // origin, so it names it rather than performing a delivery that would answer no-hit for a reason that is
       // not an engine divergence.
       DCHECK(Array.isArray(principalPins) && principalPins.length > 0,
-             "an `unforgeable` principal verdict arrived with no pins — solve.c emits `principalPins` exactly "
-             + "under that verdict, so the probe was built from a record that lost them (sink=" + sinkName + ")");
+             "an `unforgeable` principal verdict arrived with no pins — the result door (docSink) admits that "
+             + "verdict only with them, so the probe was built from a relay that lost them (sink=" + sinkName + ")");
       out.why = _pgWhy + "The engine reports that the path reaching this sink pinned the victim's "
               + "`event.origin`: " + principalPins.map(function (r) {
                   return "the sender must be " + JSON.stringify(r.equals);
@@ -1950,10 +1947,9 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
     // answer for the `delivery` vocabulary; this verdict is a value rather than a mechanism, and a page's own
     // record is not a thing to abort the zone over.
     DCHECK(principalDemand === undefined || principalDemand === null,
-           "the engine stated a principal-demand verdict this layer has no arm for ("
-           + JSON.stringify(principalDemand) + ") — the token vocabulary is solve.h's `principalDemand` field "
-           + "(none / forgeable / unforgeable), so either a verdict was added in C without its arm here, or "
-           + "this record did not come from solve_json_array");
+           "a principal-demand verdict this layer has no arm for arrived (" + JSON.stringify(principalDemand)
+           + ") — the result door admits bridge.js's SINK_DEMANDS only, so a verdict was added there without "
+           + "its arm here");
     out.why = _pgWhy + "The post itself is performable here — what is not known is the ORIGIN it must come "
             + "from: this engine build does not state what the path reaching the sink demanded of the victim's "
             + "`event.origin`, so a handler that checks nothing and a handler with any origin gate cannot be "
@@ -1962,11 +1958,9 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
             + "victim would see `event.origin === \"null\"`. The sink and its breakout are still fire-verified.";
     return out;
   }
-  DFAIL("the engine declared a delivery mechanism this layer has no arm for: " + JSON.stringify(delivery)
-        + " — the token vocabulary is solve.h's `delivery` field (address / plant / referring-address / "
-        + "user-file / cross-document-message), so "
-        + "either a mechanism was added in C without its delivery arm here, or this record did not come from "
-        + "solve_json_array");
+  DFAIL("a delivery mechanism this layer has no arm for arrived: " + JSON.stringify(delivery)
+        + " — the result door admits bridge.js's SINK_DELIVERIES only (solve.h's `delivery` field), so a "
+        + "mechanism was added there without its delivery arm here");
   // Release only (the DFAIL above is the dev answer): `why` is stated here too, so the record's shape holds
   // on every arm and the panel prints the reason rather than an unexplained absent PoC.
   out.why = "the engine declared the delivery mechanism `" + delivery + "`, which this layer has no arm for.";

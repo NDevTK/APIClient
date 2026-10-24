@@ -1213,6 +1213,45 @@ async function mintDrive(minted, slices) {
          threw ? String(threw.message || threw) : { routed, crashed: e._crashed });
   }
   console.log('[level1]   own agent        4 create/navigate notices and 1 post to a failed boot driven');
+
+  /* The result door over each @S entry's delivery facts, through resultDocumentRefusal on a minimal document the
+     door accepts with no sink (the control): an entry of each shape the live-verify layer performs from is
+     accepted, and each invented one refuses the whole document naming the field. */
+  const counters = runInContext('RESULT_COUNTERS', ZONE), scensus = runInContext('SCENSUS_READ', ZONE);
+  const doc = (sinks) => {
+    const d = { fetchCallSites: [], securitySinks: sinks, pageErrors: [], pageErrorsRetracted: [], pageErrorsExplored: [],
+                routedPosts: [], _wfq: { members: 0 }, _quantum: { sliceWork: 1, hostYieldMs: 0, price: 'work', priceIsCpu: false },
+                _cold: { live: 0 }, _heap: { bytes: 0 }, _swap: { out: 0 }, _absent: { rows: 0 }, _forkAt: {}, _park: [],
+                _parkWhy: 'none', _metricsSchema: { families: [{ family: 'scensus', identities: [],
+                  rows: scensus.map((key) => ({ key, kind: 'lifetime', unit: 'reads', scope: 'session', owner: 'level1' })) }] } };
+    for (const k of counters) d[k] = 0;
+    for (const k of scensus) d[k] = 0;
+    return d;
+  };
+  const gate = { principal: 'event.origin', predicates: [{ method: 'startsWith', arguments: ['https://a.'], holds: true }] };
+  const pin = { principal: 'event.origin', equals: 'https://a.test', kind: 'string', loose: false };
+  const sinks = [['no sink (the control)', null, null], ['a parked entry with no delivery', {}, null],
+                 ['an address delivery', { delivery: 'address', deliveryPrefix: '#', poc: 'X9()' }, null],
+                 ['a forgeable message delivery', { delivery: 'cross-document-message', principalDemand: 'forgeable', principalGates: [gate] }, null],
+                 ['an unforgeable message delivery', { delivery: 'cross-document-message', principalDemand: 'unforgeable', principalPins: [pin] }, null],
+                 ['a delivery outside the vocabulary', { delivery: 'email' }, '.delivery'],
+                 ['an address with no prefix', { delivery: 'address' }, 'deliveryPrefix'],
+                 ['a prefix beside a plant', { delivery: 'plant', deliveryPrefix: '#' }, 'deliveryPrefix'],
+                 ['a third address component', { delivery: 'address', deliveryPrefix: '/' }, 'deliveryPrefix'],
+                 ['a verdict outside the vocabulary', { principalDemand: 'maybe' }, 'principalDemand'],
+                 ['forgeable with no gates', { principalDemand: 'forgeable' }, 'principalGates'],
+                 ['gates beside none', { principalDemand: 'none', principalGates: [gate] }, 'principalGates'],
+                 ['unforgeable with no pins', { principalDemand: 'unforgeable' }, 'principalPins'],
+                 ['a gate with no predicates', { principalDemand: 'forgeable', principalGates: [{ principal: 'x', predicates: [] }] }, 'principalGates[0]'],
+                 ['a predicate with no arm', { principalDemand: 'forgeable', principalGates: [{ principal: 'x', predicates: [{ method: 'm', arguments: [] }] }] }, 'predicates[0]'],
+                 ['a pin with no loose flag', { principalDemand: 'unforgeable', principalPins: [{ principal: 'x', equals: 'y', kind: 'string' }] }, 'principalPins[0]'],
+                 ['an empty poc', { poc: '' }, '.poc']];
+  for (const [label, sink, names] of sinks) {
+    const why = ZONE.resultDocumentRefusal(doc(sink === null ? [] : [sink]), false);
+    must(names === null ? why === null : typeof why === 'string' && why.startsWith('securitySinks[0]') && why.includes(names),
+         'a document with ' + label + ' is ' + (names === null ? 'accepted' : 'refused, naming the field'), { why });
+  }
+  console.log('[level1]   @S entries       ' + sinks.length + ' documents through the result door driven');
 }
 
 /* engineFetchXhr's real path with a counting safeFetch: an invented xhr.send record retires the instance and
