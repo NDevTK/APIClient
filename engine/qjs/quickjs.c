@@ -28619,17 +28619,17 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 /* A continuation record's declaration. A record a parked chain can hold lists its fields once, each as
    F(role, type, name), and its struct, release, copy and requester link are all expanded from that one list
    (CONT_RECORD_DEFINE), so no walk can name a field another walk misses. The roles:
-     OWN_VAL, OWN_ATOM  an owned JSValue or JSAtom: the copy takes a reference, the release drops one;
+     OWN_VAL, OWN_ATOM  an owned JSValue (p_init makes it undefined) or JSAtom: copy takes, release drops one;
      POD       a plain value of `type`, copied;
      BORROW    a JSValueConst another owner keeps alive across the record's life, copied and never released;
      OUTER     the requester link, `void *name` and its kind `uint8_t name##_kind`, at most one per record;
      DESC_OUT  a JSDescFacts * naming the requester's own record, which tramp_cont_relink_outer re-aims;
      FACTS, PROPS  a JSDescFacts held by value (its three values owned), or an own-key table of `type` entries;
      OWN_ARRAY, BORROW_ARRAY  a JSValue array of `type` slots, every one owned, or each kept alive elsewhere;
-     OWN_VEC   a heap JSValue block of `name##_cap` slots, whose first `type` (a field) are owned values;
-     OWN_LIST  a heap list of exactly `type` (a field) owned values, free_arg_list's shape;
+     OWN_VEC, OWN_LIST  `name##_cap` heap slots whose first `type` (a field) are owned, or exactly `type`;
      VIEW      a JSValueConst * that may point into a list, `type` = (list, its count), declared after the list;
-     KIND_FLAG a uint8_t that is nonzero exactly when the record stands under kind `type`, asserted by each walk.
+     KIND_FLAG a uint8_t that is nonzero exactly when the record stands under kind `type`, asserted by each walk;
+     KIND_IMPLIES, CLONE_HOOK  no member: `type` = (kind, predicate on r) each walk asserts, or a copy's last step.
    Each role defines one macro per walk; a role a walk does not define is a compile error at that walk. */
 #define CONT_REC_MEMBER_OWN_VAL(t, n) JSValue n;
 #define CONT_REC_MEMBER_OWN_ATOM(t, n) JSAtom n;
@@ -28764,6 +28764,42 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_OUTER_SET_KIND_FLAG(t, n)
 #define CONT_REC_DESC_OUT_KIND_FLAG(t, n)
 #define CONT_REC_AGREES_KIND_FLAG(t, n) ok_ = ok_ && (!!r->n == (kind == (t)));
+#define CONT_REC_INIT_OWN_VAL(t, n) r->n = JS_UNDEFINED;
+#define CONT_REC_INIT_OWN_ATOM(t, n)
+#define CONT_REC_INIT_POD(t, n)
+#define CONT_REC_INIT_BORROW(t, n)
+#define CONT_REC_INIT_OUTER(t, n)
+#define CONT_REC_INIT_DESC_OUT(t, n)
+#define CONT_REC_INIT_FACTS(t, n)
+#define CONT_REC_INIT_PROPS(t, n)
+#define CONT_REC_INIT_OWN_ARRAY(t, n)
+#define CONT_REC_INIT_BORROW_ARRAY(t, n)
+#define CONT_REC_INIT_OWN_VEC(t, n)
+#define CONT_REC_INIT_OWN_LIST(t, n)
+#define CONT_REC_INIT_VIEW(t, n)
+#define CONT_REC_INIT_KIND_FLAG(t, n)
+#define CONT_REC_UNPAREN2_A(a, b) a
+#define CONT_REC_UNPAREN2_B(a, b) b
+#define CONT_REC_KIND_OF(t) CONT_REC_UNPAREN2_A t
+#define CONT_REC_PRED_OF(t) CONT_REC_UNPAREN2_B t
+#define CONT_REC_MEMBER_KIND_IMPLIES(t, n)
+#define CONT_REC_FREE_KIND_IMPLIES(t, n)
+#define CONT_REC_DUP_KIND_IMPLIES(t, n)
+#define CONT_REC_NOUTER_KIND_IMPLIES(t, n) 0
+#define CONT_REC_OUTER_GET_KIND_IMPLIES(t, n)
+#define CONT_REC_OUTER_SET_KIND_IMPLIES(t, n)
+#define CONT_REC_DESC_OUT_KIND_IMPLIES(t, n)
+#define CONT_REC_AGREES_KIND_IMPLIES(t, n) ok_ = ok_ && (kind != (CONT_REC_KIND_OF(t)) || (CONT_REC_PRED_OF(t)));
+#define CONT_REC_INIT_KIND_IMPLIES(t, n)
+#define CONT_REC_MEMBER_CLONE_HOOK(t, n)
+#define CONT_REC_FREE_CLONE_HOOK(t, n)
+#define CONT_REC_DUP_CLONE_HOOK(t, n) t(ctx, r, c);
+#define CONT_REC_NOUTER_CLONE_HOOK(t, n) 0
+#define CONT_REC_OUTER_GET_CLONE_HOOK(t, n)
+#define CONT_REC_OUTER_SET_CLONE_HOOK(t, n)
+#define CONT_REC_DESC_OUT_CLONE_HOOK(t, n)
+#define CONT_REC_AGREES_CLONE_HOOK(t, n)
+#define CONT_REC_INIT_CLONE_HOOK(t, n)
 #define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
 #define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(t, n)
 #define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(t, n)
@@ -28772,13 +28808,14 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_OUTER_SET(role, t, n)  CONT_REC_OUTER_SET_##role(t, n)
 #define CONT_REC_DESC_OUT(role, t, n)   CONT_REC_DESC_OUT_##role(t, n)
 #define CONT_REC_AGREES(role, t, n)     CONT_REC_AGREES_##role(t, n)
+#define CONT_REC_INIT(role, t, n)       CONT_REC_INIT_##role(t, n)
 /* The struct `T` and its walks, prefixed `p`: p_release drops what the record owns (never its requester, whose
    disposal is each caller's: an unwind abandons it, a destroyed flow releases it) and p_free that plus the
    record;
    p_clone copies it, taking a reference to everything it owns, with its links still naming the original's
    (tramp_cont_relink_outer re-binds them); p_outer_get/p_outer_set read and write the requester link (NULL and
    nothing for a record with none); p_desc_out answers its descriptor-answer slot, or NULL; p_kind_agrees answers
-   whether `kind` is the one its KIND_FLAG fields state (true for a record that declares none). */
+   whether `kind` is the one its KIND_FLAG and KIND_IMPLIES fields state; p_init readies a zeroed record. */
 #define CONT_RECORD_DEFINE(T, p, FIELDS)                                                                       \
     typedef struct T { FIELDS(CONT_REC_MEMBER) } T;                                                           \
     _Static_assert(0 FIELDS(CONT_REC_NOUTER) <= 1, #T " declares more than one requester link");             \
@@ -28815,6 +28852,11 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
     {                                                                                                          \
         FIELDS(CONT_REC_DESC_OUT)                                                                              \
         return NULL;                                                                                           \
+    }                                                                                                          \
+    static inline void p##_init(T *r)                                                                         \
+    {                                                                                                          \
+        FIELDS(CONT_REC_INIT)                                                                                  \
+        (void)r;                                                                                               \
     }                                                                                                          \
     static inline bool p##_kind_agrees(const T *r, uint8_t kind)                                              \
     {                                                                                                          \
@@ -31396,115 +31438,66 @@ typedef struct {
 #define ITERTERM_SOME    3
 #define ITERTERM_EVERY   4
 #define ITERTERM_FIND    5
-typedef struct JSIterConsume {
-    JSValue r;       /* the result being built (owned; ARRAY for FROM/SPREAD, the Set/Map instance for SET/MAP) */
-    JSValue iter;    /* the iterator being consumed (owned) — a generator/helper drives on the tramp, a plain one in-loop */
-    JSValue next;    /* iter's .next method (owned) — GetIterator's nextMethod; drives a PLAIN (non-coroutine) iterator */
-    JSValue adder;   /* SET/MAP: the instance's add/set method (owned); JS_UNDEFINED for FROM/SPREAD */
-    JSValue mapfn;   /* FROM with a mapfn (Array.from(gen, fn)): the per-element map function (owned); UNDEFINED otherwise */
-    JSValue mapfn_this;  /* FROM: the mapfn's thisArg (owned; UNDEFINED) */
-    int ta_classid;  /* FROM: 0 = yield the collected array (Array.from); else new TypedArray(gen) — at finish create
-                        a typed array of this class from the collected array (adder holds the new_target/ctor) */
-    int64_t k;       /* next index to define (SPREAD: the running append position; unused for SET/MAP) */
-    int orig_cfirst, orig_cargc;   /* FROM/SET/MAP: the ORIGINAL call/ctor operand shape (pop at finish) */
-    uint8_t orig_is_tail;
-    /* Non-NULL = this consume was requested BY a state machine — `Reflect.construct(Map, entries)` from the
-       Reflect.construct machine — so its result is DELIVERED to that machine instead of being popped-and-pushed
-       on a caller stack it does not own. The step-CONSTRUCTOR arm one branch away already had exactly this; the
-       consumer arm asserted it away, which is what made a consumer target unreachable from a request. */
-    void *outer;
-    uint8_t outer_kind;
-    uint8_t sink;    /* ITERCONS_FROM / _SPREAD / _SET / _MAP / _OBJENTRIES / _SETOP — the drive is identical; only the per-element sink + setup + finish differ */
-    uint8_t setop;   /* SETOP_* — which Set.prototype set-operation rule ITERCONS_SETOP applies per element */
-    /* ITERCONS_OWNED lists EVERY owned JSValue field exactly once: clone_deep_flow dups each and js_iter_consume_end
-       frees each, so the two can never drift. A field added to the struct but not to this list is shared by a fork
-       and refcount-underflows on the second teardown. */
-    uint8_t len_written; /* ITERCONS_FROM: the closing Set(A,"length") has been performed (it is a phase, and the
-                            done path is re-entered after it) */
-    uint8_t closing; /* 1 = the sink short-circuited: close the iterator on the tramp, then finish */
-    uint8_t setop_seed; /* 1 = the result Set still owes its copy of THIS's [[SetData]]. union (24.2.4.10) and
-                           symmetricDifference (24.2.4.9) take that copy in the step AFTER GetKeysIterator, and
-                           GetKeysIterator runs the page's `keys()` and reads `next` off what it returned — so a
-                           `get next()` that clears THIS is observed by the copy. Seeding it while the record was
-                           being read was one step too early. difference (24.2.4.4) copies BEFORE and is not
-                           flagged; intersection starts empty. */
-    uint8_t cb_pending; /* ITERTERM: 1 = `res` on the next step entry is the CALLBACK's result, not an iterator result */
-    /* THE ITERATOR RECORD'S [[Done]]. 7.4.9 IteratorStepValue step 2 sets it when the `next` CALL completes
-       abruptly, and every consumer's step is then a plain `? IteratorStepValue(...)` — NOT an
-       IfAbruptCloseIterator — so a throwing `next` propagates without closing anything. The close sites read
-       this: `iter.every(fn)` on an iterator whose `next` throws must leave `return` uncalled, and it did not,
-       because the sink's abrupt path could not tell WHICH operation had been abrupt. */
-    uint8_t iter_done;
-    uint8_t drive_pending; /* 1 = the call now in flight is the record's .next() DRIVE, not a callback or an adder.
-                              The operand shape cannot answer this — a PROXIED .next() is reshaped to the trap's
-                              five operands — so the machine that asked records what it asked for. */
-    JSValue cb_value;   /* ITERTERM: the element held across a callback that runs on the tramp (owned) */
-    /* IteratorComplete + IteratorValue (7.4.4 / 7.4.5): `Get(res, "done")` and `Get(res, "value")` on the
-       RESULT OBJECT, which a page's own iterator can make an accessor or a Proxy — so both are page code and the
-       step read them with JS_GetProperty from C. They are requests now, one phase each, with the result object
-       parked here because a request suspends the flow. */
-    JSValue iter_res;   /* the iterator result being unpacked (owned) */
-    uint8_t iterres_ph; /* 0 = none, 1 = the `done` read is in flight, 2 = the `value` read is */
-    uint8_t abrupt;  /* 1 = the sink completed ABRUPTLY with an exception pending. It returns 2 so the shared
-                        close-then-finish runs IteratorClose (spec IfAbruptCloseIterator), and the close must
-                        PRESERVE the pending exception rather than replace it; the next step then propagates.
-                        Without this a plain (non-generator) source was never closed on a bad entry — the five
-                        Object/fromEntries iterator-closed-for-* tests, and the reason the recognizer narrowed to
-                        generator-backed sources and handed everything else to the C loop. */
-    JSValue super_ref;  /* super(iterable) entry: the owned parent-class ref, freed at finish; UNDEFINED
-                           for the OP_call_constructor entry which has no such ref */
-    SumPreciseState sum; /* ITERCONS_SUMPRECISE only. POD, so it needs no entry in ITERCONS_OWNED. */
-    /* The ARGUMENT LIST, owned, for the shapes whose arguments are not caller operands: the spread and .apply
-       build one on the heap (`new Map(...arr)`, `Array.from(...[src])`), and this state borrows from it for the
-       WHOLE consume — the source is the `this` of the @@iterator call and of every .next(), and a mapfn/thisArg
-       is read at the finish. Owning the list is one rule for every arm; dup-what-you-keep would be a different
-       rule per arm, and the arm that got it wrong would dangle. NULL = the ordinary case, where the arguments
-       are caller operands the frame keeps alive. */
-    JSValue *args_own;
-    int args_own_n;
-    /* TypedArray.from, 23.2.2.1 step 5. The collect (5.a/5.b) is the ordinary FROM sink; what follows is two more
-       phases the C entry used to do in a loop: 5.c CREATE the target by CONSTRUCTING the receiver with the
-       collected length, then 5.d MAP+SET each element. Both run user code, so both are phases of this machine
-       rather than a finish. ta_phase: 0 = collecting, 1 = creating, 2 = mapping. */
-    JSValue ta_target;   /* the constructed target (owned); becomes the result at the finish */
-    int64_t ta_k;        /* 5.d's element index — distinct from k, which holds the collected COUNT */
-    uint8_t ta_phase;
-    uint8_t ta_isfrom;   /* 1 = TypedArray.from (construct the receiver); 0 = new TypedArray(iterable), which
-                            creates from ta_classid and never constructs a user ctor */
-    uint8_t ta_have_el;  /* 1 = cb_value holds the source element the map/set phase just read back */
-    /* ITERCONS_OBJENTRIES: the entry's two element reads and the key's ToPropertyKey are USER CODE (an accessor,
-       a Proxy trap, a toString), so each is a PHASE of this machine rather than a C call inside the sink — a loop
-       in that code has to park like any other. ent_ph says which is due: 0 = entry[0], 1 = entry[1], 2 = coerce
-       the key, 3 = define. */
-    uint8_t ent_ph;
-    uint8_t ent_pending; /* 1 = an entry sequence is in flight, so `res` is its phase result, not a .next() one */
-    /* THE CALLEE'S REALM. A consume machine IS a builtin invocation, so the intrinsics it creates come from the
-       builtin's own [[Realm]] and not the caller's — the same rule step_realm states for a step machine, which
-       gets it from its header's func_obj. This machine keeps no callee, so the entry that builds it records the
-       answer. `var from = otherRealm.Array.from; from([1,2,3])` is the observation: C is undefined, so step 4.a
-       is a plain ArrayCreate, and it belongs to the realm of `from`. Defaults to the creating context. */
-    JSContext *realm;
-    /* Array.from's receiver, held ACROSS GetIterator. 23.1.2.1 does step 3's GetMethod BEFORE step 4.a's
-       Construct(C), and constructing first was unobservable only while @@iterator could not be a getter. It can
-       be now, so the result object is created at the deliver arm instead. UNDEFINED for every other sink. */
-    JSValue from_ctor;
-    /* 1 = the deliver arm still owes step 4.a's ArrayCreate/Construct(C). The RECEIVER cannot say so: sink
-       ITERCONS_FROM is shared with TypedArray.from and new TypedArray(iterable), and `Array.from.call(undefined, x)`
-       is a legitimate receiver of UNDEFINED whose result is a plain ArrayCreate — reading "is from_ctor set?" as
-       "is the Construct owed?" would leave that call with no result object at all. */
-    uint8_t from_owes_result;
-    JSValue ent_obj;     /* the entry object, held across its two reads (owned) */
-    JSValue ent_key;     /* entry[0], then its property key (owned) */
-    /* GetSetRecord (24.2.1.2) for a set-operation, performed as PHASES rather than by three JS_GetProperty calls from
-       C: `size` and its ToNumber, then `has`, then `keys` — each of them the page's code on an accessor or a
-       Proxy. setrec_ph: 0 size read, 1 its ToPrimitive, 2 has read, 3 keys read, 4 complete. */
-    JSValue setlike;     /* the `other` argument (owned) — the record is read off it, then the acquire uses it */
-    JSValue setrec_keys; /* the validated keys method (owned), handed to the acquire */
-    JSValue setrec_has;  /* the validated has method (owned) — kept only by the walk that CALLS it */
-    uint64_t setrec_size;
-    uint8_t setrec_ph, setrec_pending;
-    JSValue ent_val;     /* entry[1] (owned) */
-} JSIterConsume;
+/* A consume machine: one iterator drive with a sink. `r` is the result being built, `iter`/`next` the
+   iterator record (7.4.9 IteratorStepValue sets `iter_done` when the `next` call completes abruptly, so a
+   close site leaves `return` uncalled), and `outer` the machine that asked for the consume, to which the result
+   is delivered. The ITERTERM, TypedArray.from (5.c create, 5.d map), Object.fromEntries entry and set-record
+   (24.2.1.2 GetSetRecord) reads are phases of this machine, each the page's code. `args_own` is the argument
+   list when the arguments are not caller operands, borrowed from for the whole consume; `realm` is the
+   builtin's [[Realm]], which the intrinsics it creates come from. js_iter_consume_new readies a record with
+   every owned value undefined, which is how a sink tells "not set" from a zeroed slot. */
+static void js_iter_consume_clone_view(JSContext *ctx, const struct JSIterConsume *os, struct JSIterConsume *ns);
+#define JS_ITER_CONSUME_FIELDS(F)                                                                              \
+    F(OWN_VAL, JSValue, r)            /* ARRAY for FROM/SPREAD, the instance for SET/MAP */                    \
+    F(OWN_VAL, JSValue, iter)                                                                                  \
+    F(OWN_VAL, JSValue, next)         /* GetIterator's nextMethod */                                          \
+    F(OWN_VAL, JSValue, adder)        /* SET/MAP: the instance's add/set; TypedArray: new_target/ctor */       \
+    F(OWN_VAL, JSValue, mapfn)        /* FROM's map function, ITERTERM's predicate or reducer */               \
+    F(OWN_VAL, JSValue, mapfn_this)                                                                            \
+    F(POD, int, ta_classid)           /* FROM: 0 = Array.from, else the TypedArray class to create */          \
+    F(POD, int64_t, k)                /* next index to define; SPREAD's append position; ITERTERM's count */    \
+    F(POD, int, orig_cfirst)          /* the original call/ctor operand shape, popped at the finish */         \
+    F(POD, int, orig_cargc)                                                                                    \
+    F(POD, uint8_t, orig_is_tail)                                                                              \
+    F(OUTER, void *, outer)                                                                                    \
+    F(POD, uint8_t, sink)             /* ITERCONS_*: the drive is one; setup, sink and finish differ */         \
+    F(POD, uint8_t, setop)            /* SETOP_* or ITERTERM_* */                                              \
+    F(POD, uint8_t, len_written)      /* FROM: the closing Set(A, "length") is done */                         \
+    F(POD, uint8_t, closing)          /* the sink short-circuited: close, then finish */                       \
+    F(POD, uint8_t, setop_seed)       /* the result Set still owes its copy of this's [[SetData]] */           \
+    F(POD, uint8_t, cb_pending)       /* `res` at the next entry is the callback's result */                   \
+    F(POD, uint8_t, iter_done)        /* the iterator record's [[Done]] */                                     \
+    F(POD, uint8_t, drive_pending)    /* the call in flight is the .next() drive */                            \
+    F(OWN_VAL, JSValue, cb_value)     /* the element held across a callback */                                 \
+    F(OWN_VAL, JSValue, iter_res)     /* the iterator result whose `done`/`value` reads are out */             \
+    F(POD, uint8_t, iterres_ph)       /* 0 none, 1 `done` read out, 2 `value` read out */                      \
+    F(POD, uint8_t, abrupt)           /* the sink completed abruptly: close keeps the pending exception */     \
+    F(OWN_VAL, JSValue, super_ref)    /* super(iterable)'s parent-class reference */                           \
+    F(POD, SumPreciseState, sum)                                                                               \
+    F(OWN_LIST, args_own_n, args_own)                                                                          \
+    F(POD, int, args_own_n)                                                                                    \
+    F(OWN_VAL, JSValue, ta_target)    /* the constructed target, the result at the finish */                   \
+    F(POD, int64_t, ta_k)             /* 5.d's element index */                                                \
+    F(POD, uint8_t, ta_phase)         /* 0 collecting, 1 creating, 2 mapping */                                \
+    F(POD, uint8_t, ta_isfrom)        /* 1 TypedArray.from, 0 new TypedArray(iterable) */                      \
+    F(POD, uint8_t, ta_have_el)       /* cb_value holds the element the map/set phase read */                  \
+    F(POD, uint8_t, ent_ph)           /* 0 entry[0], 1 entry[1], 2 the key's coercion, 3 define */             \
+    F(POD, uint8_t, ent_pending)      /* `res` is an entry phase's result */                                   \
+    F(POD, JSContext *, realm)                                                                                 \
+    F(OWN_VAL, JSValue, from_ctor)    /* Array.from's receiver, held across GetIterator */                     \
+    F(POD, uint8_t, from_owes_result) /* the deliver arm owes 23.1.2.1 step 4.a's result object */             \
+    F(OWN_VAL, JSValue, ent_obj)                                                                               \
+    F(OWN_VAL, JSValue, ent_key)                                                                               \
+    F(OWN_VAL, JSValue, setlike)      /* the set operation's `other` */                                        \
+    F(OWN_VAL, JSValue, setrec_keys)                                                                           \
+    F(OWN_VAL, JSValue, setrec_has)                                                                            \
+    F(POD, uint64_t, setrec_size)                                                                              \
+    F(POD, uint8_t, setrec_ph)        /* 0 size, 1 its ToPrimitive, 2 has, 3 keys, 4 complete */               \
+    F(POD, uint8_t, setrec_pending)                                                                            \
+    F(OWN_VAL, JSValue, ent_val)                                                                               \
+    F(KIND_IMPLIES, (CONT_CONSUME_NEXT_GET, JS_IsUndefined(r->next)), next_read_unanswered)                   \
+    F(CLONE_HOOK, js_iter_consume_clone_view, view)
+CONT_RECORD_DEFINE(JSIterConsume, js_iter_consume, JS_ITER_CONSUME_FIELDS)
 static int js_typed_array_get_length_unsafe(JSContext *ctx, JSValueConst obj);
 static int js_typed_array_alloc_len(JSContext *ctx, JSValueConst obj, int classid, int64_t len);
 static bool typed_array_is_immutable(JSObject *p);
@@ -31512,10 +31505,6 @@ static JSValue JS_ThrowTypeErrorImmutableArrayBuffer(JSContext *ctx);
 static void sum_precise_init(SumPreciseState *s);
 static void sum_precise_add(SumPreciseState *s, double d);
 static double sum_precise_get_result(SumPreciseState *s);
-#define ITERCONS_OWNED(F) F(r) F(iter) F(next) F(adder) F(mapfn) F(mapfn_this) F(cb_value) F(ta_target) \
-                          F(iter_res) \
-                          F(ent_obj) F(ent_key) F(ent_val) F(from_ctor) F(super_ref) \
-                          F(setlike) F(setrec_keys) F(setrec_has)
 /* NOTE: JSIteratorHelperData::cb_value is owned too — freed by the finalizer and cleared on every path below. */
 static int js_iter_consume_step(JSContext *ctx, struct JSIterConsume *s, JSValue res);
 static void js_iter_consume_end(JSContext *ctx, struct JSIterConsume *s);
@@ -31525,66 +31514,26 @@ static JSValue js_create_map_iterator(JSContext *ctx, JSValueConst this_val,
                                       int argc, JSValueConst *argv, int magic);
 static JSValue js_map_iterator_next(JSContext *ctx, JSValueConst this_val,
                                     int argc, JSValueConst *argv, int *pdone, int magic);
-/* THE allocator: nine call sites build a JSIterConsume, each setting the fields ITS consumer uses, and a
-   js_mallocz leaves the rest as all-zero bytes — which is JS_TAG_INT 0, NOT undefined. That value frees and dups as
-   a no-op, so it looks harmless, and every field is therefore read with `JS_IsUndefined` as "this consumer did not
-   set it". A field added to ITERCONS_OWNED thus reads back as SET at the eight sites that never heard of it — the
-   Array.from receiver did exactly that, and `new Int8Array(iterable)` overwrote its own result with a fresh array,
-   leaking the whole graph. The one owned-field list drives free, clone AND init, so a new field cannot skip a
-   site. */
-#define ITERCONS_INIT_ONE(f) s->f = JS_UNDEFINED;
 static JSIterConsume *js_iter_consume_new(JSContext *ctx)
 {
     JSIterConsume *s = js_mallocz(ctx, sizeof(*s));
     if (unlikely(!s)) return NULL;
     s->realm = ctx;
-    ITERCONS_OWNED(ITERCONS_INIT_ONE)
+    js_iter_consume_init(s);
     return s;
 }
-/* The two roles one JSIterConsume is a link in. 8 is the machine waiting on a read, write or call it issued
-   while consuming; 51 is GetIterator step 5.b's `Get(iterator, "next")`, which do_consume_have_next stores into
-   a record that does not hold a nextMethod yet. */
-#define ITERCONS_ROLE_AGREES(st_, kind_)                                                                \
-    DCHECK((kind_) == CONT_ITER_CONSUME                                                                \
-           || ((kind_) == CONT_CONSUME_NEXT_GET && JS_IsUndefined(((const JSIterConsume *)(st_))->next)), \
-           "a JSIterConsume link's kind disagrees with its record: 51 is the nextMethod read and the "    \
-           "record holds no nextMethod until that read lands")
 /* new TypedArray(source)'s view between §23.2.5.1 step 6.a.i's AllocateTypedArray and its buffer attach, which
    on this machine is the iterable collect (ta_phase 0); the attach site and the array-like hand-off assert it. */
 static bool js_ta_view_unattached(const JSIterConsume *s)
 {
     return s->ta_classid != 0 && !s->ta_isfrom && !JS_IsUndefined(s->ta_target) && s->ta_phase == 0;
 }
-/* A sibling's own copy of a consumer, for every walk that forks one: the generator-drive frame arm and the
-   requester walk. The result and the iterator stay shared objects, isolated per flow by the COW delta; every
-   field the release frees is taken again, the owned argument list included. `outer` still names the
-   original's requester, and tramp_cont_relink_outer binds it. NULL on OOM. */
-static JSIterConsume *js_iter_consume_clone(JSContext *ctx, const JSIterConsume *os)
+/* The last step of a consumer's copy (its CLONE_HOOK). §23.2.5.1 step 6.a.i's view, allocated but not yet given
+   its buffer, is held by nothing but this machine until the finish returns it, so the sibling gets its own
+   object of the same class over the same prototype, which no page code can tell apart; sharing it would have
+   both flows attach a buffer to one record, which is not captured per flow. */
+static void js_iter_consume_clone_view(JSContext *ctx, const JSIterConsume *os, JSIterConsume *ns)
 {
-    JSIterConsume *ns = js_malloc(ctx, sizeof(*ns));
-    uint32_t i;
-
-    if (unlikely(!ns)) return NULL;
-    *ns = *os;
-    #define ITERCONS_DUP_ONE(f) ns->f = js_dup(os->f);
-    ITERCONS_OWNED(ITERCONS_DUP_ONE)
-    #undef ITERCONS_DUP_ONE
-    if (os->args_own) {
-        ns->args_own = js_malloc(ctx, sizeof(JSValue) * (size_t)(os->args_own_n > 0 ? os->args_own_n : 1));
-        if (unlikely(!ns->args_own)) {
-            ns->args_own_n = 0;
-            ns->outer = NULL; ns->outer_kind = CONT_NONE;
-            js_iter_consume_end(ctx, ns);
-            js_free(ctx, ns);
-            return NULL;
-        }
-        for (i = 0; i < (uint32_t)os->args_own_n; i++)
-            ns->args_own[i] = js_dup(os->args_own[i]);
-    }
-    /* §23.2.5.1 step 6.a.i's view, allocated but not yet given its buffer: nothing but this machine holds it
-       until the finish returns it, so the sibling gets its own object of the same class over the same
-       prototype, which no page code can tell apart. Sharing it would have both flows attach a buffer to one
-       record (js_typed_array_alloc_len), and that record is not captured per flow. */
     if (js_ta_view_unattached(os)) {
         JSObject *vp = JS_VALUE_GET_OBJ(os->ta_target);
         JSValueConst proto = vp->shape->proto ? JS_MKPTR(JS_TAG_OBJECT, vp->shape->proto) : JS_NULL;
@@ -31593,15 +31542,8 @@ static JSIterConsume *js_iter_consume_clone(JSContext *ctx, const JSIterConsume 
                "an unattached TypedArray view whose class is not the one its consume will attach a buffer for");
         JS_FreeValue(ctx, ns->ta_target);
         ns->ta_target = JS_NewObjectProtoClass(ctx, proto, vp->class_id);
-        if (unlikely(JS_IsException(ns->ta_target))) {
-            ns->ta_target = JS_UNDEFINED;
-            ns->outer = NULL; ns->outer_kind = CONT_NONE;
-            js_iter_consume_end(ctx, ns);
-            js_free(ctx, ns);
-            return NULL;
-        }
+        CHECK(!JS_IsException(ns->ta_target), "OOM copying an unattached TypedArray view for a fork");
     }
-    return ns;
 }
 /* Set-record primitives — ITERCONS_SETOP folds setlike.keys() straight into the result's [[SetData]] (the spec
    forbids calling the observable .add), so the consume step needs them before their definitions. */
@@ -31846,7 +31788,7 @@ typedef struct JSAsyncFromSync {
    one thing. js_async_from_sync_end frees both; the deep-fork clone dups only REST and mints a FRESH capability,
    since each arm delivers its own wrapper promise to its own OP_await. Written here, beside the fields, so a new
    one cannot be freed in the teardown and forgotten in the clone: that omission co-owned `drive_next`, `res_obj`
-   and `drive_arg` across two flows and underflowed their refcounts — the same bug ITERCONS_OWNED was written to
+   and `drive_arg` across two flows and underflowed their refcounts — the same bug one declared field list exists to
    end, in a second costume. `res_obj`/`drive_arg`/`pending_error` are UNDEFINED or UNINITIALIZED when their
    phase is not in flight, and both operations are no-ops on those. */
 #define AFS_OWNED_CAP(F)  F(promise) F(resolving_funcs[0]) F(resolving_funcs[1])
@@ -43138,8 +43080,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     /* ITERCONS_FROM (set length) / _SET / _MAP: pop the ORIGINAL call/ctor operands, yield the result */
                     /* The four values this path CARRIES OUT are moved off the state (cleared, so the teardown does
                        not free them); everything else the state owns goes through the ONE owned-field list. Freeing
-                       the rest by hand here was a second list to keep in sync with ITERCONS_OWNED, and a field
-                       missing from it leaks silently on the success path only. */
+                       the rest by hand here would be a second list beside JS_ITER_CONSUME_FIELDS. */
                     DCHECK(!s->from_owes_result, "the consume finished without ever building Array.from's result object");
                     JSValue r = s->r;                          s->r = JS_UNDEFINED;
                     int cfirst = s->orig_cfirst, cargc = s->orig_cargc;
@@ -53563,7 +53504,9 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_CONSTRUCT, JSConstruct, js_construct, ANCHOR)                                                       \
     X(CONT_CTOR_PROTO, JSCtorProto, js_ctor_proto, LINK)                                                       \
     X(CONT_TOPRIM, JSToPrim, js_toprim, UNWOUND)                                                               \
-    X(CONT_TOPRIM_GET, JSToPrim, js_toprim, UNWOUND)                                                       \
+    X(CONT_TOPRIM_GET, JSToPrim, js_toprim, UNWOUND)                                                           \
+    X(CONT_ITER_CONSUME, JSIterConsume, js_iter_consume, UNWOUND)                                              \
+    X(CONT_CONSUME_NEXT_GET, JSIterConsume, js_iter_consume, UNWOUND)                                          \
     X(CONT_ARG_LIST, JSArgList, js_arg_list, LINK)                                                             \
     X(CONT_ARG_LIST_YIELD, JSArgList, js_arg_list, ANCHOR)
 #define CONT_REC_AGREES_AT(k, T, p, r)                                                                         \
@@ -53608,12 +53551,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
         *out_kind = ((JSStepHdr *)st)->outer_kind;
         return ((JSStepHdr *)st)->outer;
     CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_GET)
-    case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET:
-        /* BOTH ROLES OF ONE RECORD: a consumer waiting on a read, write or call it issued (8), or on GetIterator
-           step 5.b's nextMethod read (51). What waits on it is whoever asked for the consume either way. */
-        ITERCONS_ROLE_AGREES(st, kind);
-        *out_kind = ((struct JSIterConsume *)st)->outer_kind;
-        return ((struct JSIterConsume *)st)->outer;
     case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
     case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP:
         /* JSPromiseAll HAS no requester field: a combinator is reached from an opcode and settles a capability,
@@ -53676,9 +53613,6 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_STEP: case CONT_STEP_YIELD:
         ((JSStepHdr *)st)->outer = outer; ((JSStepHdr *)st)->outer_kind = outer_kind; return;
     CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_SET)
-    case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET:
-        ITERCONS_ROLE_AGREES(st, kind);
-        ((struct JSIterConsume *)st)->outer = outer; ((struct JSIterConsume *)st)->outer_kind = outer_kind; return;
     case CONT_SETMAP_CTOR: case CONT_TA_TARGET: {
         JSIterConsume *cs = ctor_seq_consume(st, kind);
         cs->outer = outer; cs->outer_kind = outer_kind; return;
@@ -53723,14 +53657,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     case CONT_STEP: case CONT_STEP_YIELD:
         return tramp_step_state_clone(ctx, st);
     CONT_RECORD_KINDS(CONT_REC_CASE_CLONE)
-    case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET: {
-        /* A CONSUMER UNDER THE KEYED OPERATION IT ISSUED — `[...src]`, `new Uint8Array(src)`, `new Map(src)`
-           whose iterator's `next` is a getter (51), or whose result's `done`/`value`, entry element or
-           set-record member is (8). A branch inside that getter forks with the consume mid-loop, so the
-           sibling needs its own cursor and its own result count. */
-        ITERCONS_ROLE_AGREES(st, kind);
-        return js_iter_consume_clone(ctx, (const JSIterConsume *)st);
-    }
     case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
     case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP:
         /* A combinator under a request it issued — a getter or a Proxy trap answering one of its reads, or the
@@ -54403,7 +54329,7 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
             } else if (otf->cont_kind == CONT_ITER_CONSUME) {
                 /* A BRANCH INSIDE A PLAIN ITERATOR'S `next`, OR A MAPFN OR ADDER, DRIVEN BY A CONSUMER — the
                    consume's .next() or callback is this bytecode frame, with the consumer as its continuation.
-                   The field list lives at js_iter_consume_clone, which the requester walk shares. */
+                   The field list is JS_ITER_CONSUME_FIELDS, which the requester walk copies through too. */
                 JSIterConsume *ocs = (JSIterConsume *)otf->cont_state;
                 JSIterConsume *ncs = js_iter_consume_clone(ctx, ocs);
 
@@ -54755,6 +54681,17 @@ static void cont_links_push(JSRuntime *rt, ContLinks *h, void *st, uint8_t kind)
 }
 /* One record of the walk below: released, with the link it was released with (its requester) answered in
    `*next`, and a second chain a record owns pushed on `held`. */
+/* A consumer released with nobody to answer to (UNWOUND), and whoever was waiting on it: js_iter_consume_end is
+   the generated release plus js_construct_requester_abandon, which owns the list of kinds a consume's requester
+   can be, so the walk is handed no next link and the requester is released exactly once. */
+static void js_iter_consume_free_unwound(JSContext *ctx, JSIterConsume *s, ContLink *next, ContLinks *held)
+{
+    (void)held;
+    js_iter_consume_end(ctx, s);
+    js_free_rt(ctx->rt, s);
+    next->st = NULL; next->kind = CONT_NONE;
+}
+
 /* A coercion sequence released with nobody to answer to (CONT_RECORD_KINDS lists it UNWOUND). §7.1.1.1
    OrdinaryToPrimitive ( obj, hint ) step 3.b.i's "? Call(method, obj)" propagates an abrupt completion, so the
    sequence dies and takes its requester with it: tramp_chain_unwind performs that, releasing this record
@@ -54809,17 +54746,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
     /* A declared record, released with nobody to answer to, and its requester after it: the operation can never
        finish, so whatever asked for it can never be answered either. */
     CONT_RECORD_KINDS(CONT_REC_CASE_FREE)
-    case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET: {
-        /* BOTH ROLES OF ONE RECORD, AND WHOEVER WAS WAITING ON IT — `Reflect.construct(Map, entries)` puts a
-           machine under a consume. js_iter_consume_end releases that requester exactly once, through
-           js_construct_requester_abandon, which owns the list of kinds a consume's requester can be; a second
-           release here would free it twice. Each flow holds its own copy of the link, because the clone bound
-           the sibling's in tramp_cont_relink_outer. */
-        ITERCONS_ROLE_AGREES(st, kind);
-        js_iter_consume_end(ctx, (struct JSIterConsume *)st);
-        js_free_rt(rt, st);
-        return;
-    }
     case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
     case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP: {
         /* every role of one JSPromiseAll: the combinator's own state (9), or the requester of a read or a
@@ -88698,11 +88624,9 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
     return 1;   /* drive iter.next() */
 }
 
-/* Tear a consumer down: free every field ITERCONS_OWNED names, and nothing else. EVERY path ends here — the
-   exception unwind, the fork-abandon AND the normal DONE finish, which first MOVES the two-to-four values it
-   carries out off the state (clearing each) so this frees the remainder. The DONE path used to free its fields by
-   hand, which is a second owned-field list: a field missing from it leaked on success only, where no error path
-   ever exercises it. */
+/* Tear a consumer down: release every field JS_ITER_CONSUME_FIELDS owns (js_iter_consume_release), and
+   nothing else. Every path ends here: the exception unwind, the fork-abandon and the normal DONE finish, which
+   first moves the values it carries out off the state (clearing each) so this frees the remainder. */
 /* Release the machine's own state and REPORT its requester chain instead of walking it. That report is the
    whole difference: walking it meant this teardown called the chain walk, which reaches the abandon hooks,
    which call this — one C frame per nested consume, over a depth the page picks (`Array.from(x, f)` where f
@@ -88713,10 +88637,8 @@ static int js_iter_consume_step(JSContext *ctx, JSIterConsume *s, JSValue res)
 static void *js_iter_consume_end_upto(JSContext *ctx, JSIterConsume *s, uint8_t *out_kind)
 {
     void *o = NULL;
-    #define ITERCONS_FREE_ONE(f) JS_FreeValue(ctx, s->f);
-    ITERCONS_OWNED(ITERCONS_FREE_ONE)
-    #undef ITERCONS_FREE_ONE
-    if (s->args_own) { free_arg_list(ctx, s->args_own, s->args_own_n); s->args_own = NULL; s->args_own_n = 0; }
+    js_iter_consume_release(ctx, s);
+    s->args_own = NULL; s->args_own_n = 0;
     *out_kind = CONT_NONE;
     if (s->outer) {
         /* the machine that ASKED for this consume goes with it. This lives HERE, in the one teardown every
