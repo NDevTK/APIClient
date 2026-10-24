@@ -918,8 +918,10 @@ for (const r of reads.values())
    prints for a producer that stopped emitting the field. `held` is the live segment table, `made` how many were
    ever materialized, `forked` how many were built by forking an ancestor the ancestry named. The four ends are
    §9.3.3 step 8's task's (solver/engine.h). */
-const ENDS = ['_routedTasksFired', '_routedTasksTargetOrigin', '_routedTasksTargetGone', '_routedTasksThrew'];
-const ends = { _routedTasksFired: 0, _routedTasksTargetOrigin: 0, _routedTasksTargetGone: 0, _routedTasksThrew: 0 };
+const ENDS = ['_routedTasksFired', '_routedTasksTargetOrigin', '_routedTasksTargetGone', '_routedTasksThrew',
+              '_routedTasksRetracted'];
+const ends = { _routedTasksFired: 0, _routedTasksTargetOrigin: 0, _routedTasksTargetGone: 0, _routedTasksThrew: 0,
+               _routedTasksRetracted: 0 };
 let forked = 0, delivered = 0, refused = 0, marksRefused = 0;
 for (const e of engines) {
   const r = JSON.parse(e.str('qjs_result'));
@@ -940,7 +942,7 @@ for (const e of engines) {
               `orphans driven=${r._orphansDriven} asked=${r._orphansAsked}`);
   console.log(`[${e.tag}] §9.3.3 step 8 task ends: fired=${r._routedTasksFired} ` +
               `declinedByTargetOrigin=${r._routedTasksTargetOrigin} targetDestroyed=${r._routedTasksTargetGone} ` +
-              `threw=${r._routedTasksThrew}`);
+              `threw=${r._routedTasksThrew} retractedForPark=${r._routedTasksRetracted}`);
 }
 /* Named residual. Not covered: whether every routed record reached some timeline of its document.
    `_routedZeroDelivery` is a gauge that reads a record still attached to an unstepped timeline like a lost one,

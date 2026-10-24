@@ -49,7 +49,7 @@
  * `_worldSegmentsForked`, `_park`, the four numbers of the @S arrival census (`_sourceReads`, `_sinkReached`,
  * `_sinkTainted`, `_sinkNeedsSender`), the routed-delivery TRIPLE and the four ends of the task it queues
  * (`_routedDelivered`, `_routedRefused`, `_routedZeroDelivery`, `_routedTasksFired`,
- * `_routedTasksTargetOrigin`, `_routedTasksTargetGone`, `_routedTasksThrew`), the orphan census
+ * `_routedTasksTargetOrigin`, `_routedTasksTargetGone`, `_routedTasksThrew`, `_routedTasksRetracted`), the orphan census
  * (`_orphansDriven`, `_orphansAsked`), the placement census's fourteen lifetime counts (`_layout`), the
  * cascade census's four lifetime counts (`_cascade`), the
  * four subsystem censuses (`_cold`, `_heap`, `_swap`, `_forkAt` — dropped as READINGS OF AN INSTANT rather
@@ -1022,7 +1022,7 @@ const DROP = new Map([
                 /* §9.3.3 step 8's four task ends, each counted per queued task PER ARM — engine.h's
                    conservation law is an inequality for exactly that reason. */
                 "_routedTasksFired", "_routedTasksTargetOrigin", "_routedTasksTargetGone",
-                "_routedTasksThrew",
+                "_routedTasksThrew", "_routedTasksRetracted",
                 /* THE ORPHAN CENSUS, AND `_orphansDriven` IS ARGUED IN RATHER THAN WAIVED. `_orphansAsked`
                    counts the times a flow reached the end of its OWN work, which is the schedule's to choose
                    and never converges — the ground `_switches` is dropped on. `_orphansDriven` looks like it

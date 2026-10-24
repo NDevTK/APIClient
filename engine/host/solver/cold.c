@@ -1158,12 +1158,9 @@ void cold_park_preview(ColdPreview *out)
            exists not to be, and cold_park's two-sided check can only catch a disagreement between the two
            SELECTIONS, not between two readings of one queue. */
         out->commits  += flow_world_commits(f);
-        out->delivers += flow_deliver_pending(f);
-        /* …AND WHETHER THIS MEMBER WOULD STOP THE PARK RATHER THAN BE WRITTEN BY IT — read through the same
-           predicate cold_park_flow refuses on, so the description and the refusal cannot disagree about which
-           flows they are about. Counted in MEMBERS and not in tasks: the refusal is per flow, so a member
-           holding two such tasks is one reason the park cannot be taken and not two. */
-        if (flow_job_external(f) > 0) out->refuses++;
+        /* A delivery already turned into its task counts too: both parks hand it back to `deliver_q` before
+           they write (flow_job_retract_external), so it is an 'm' the park will write. */
+        out->delivers += flow_deliver_pending(f) + flow_job_external(f);
     }
     /* AND THE ROW THAT IS NOT A MEMBER OF THE FRONTIER. A foreign segment belongs to a PEER's flow, so no walk
        of this registry can find it and the host would otherwise be shown a residue smaller than the one it is
@@ -1180,13 +1177,11 @@ void cold_park_preview(ColdPreview *out)
        those take opposite work. Every row below is a count of ASKS — see cold.h for the kinds and the
        identity. */
     g_preview_census.asks++;
-    /* THE TIER'S OWN VERDICT ON THIS ASK, IN THREE MUTUALLY EXCLUSIVE ARMS. `refuses` first because it
-       outranks the other two: a park taken with one ABORTS at the flow that holds the task, so what it would
-       otherwise have written is not the question. EMPTY is asked through the one predicate the row above is
-       asked through, never restated, so the two cannot disagree about what a document with no flow in it is. */
-    if (out->refuses > 0)             g_preview_census.asks_refusing++;
-    else if (!park_writes_document()) g_preview_census.asks_empty++;
-    else                              g_preview_census.asks_writable++;
+    /* THE TIER'S OWN VERDICT ON THIS ASK, IN TWO MUTUALLY EXCLUSIVE ARMS. EMPTY is asked through the one
+       predicate the row above is asked through, never restated, so the two cannot disagree about what a
+       document with no flow in it is. */
+    if (!park_writes_document()) g_preview_census.asks_empty++;
+    else                         g_preview_census.asks_writable++;
     /* …AND WHICH ROWS STOOD NON-ZERO, one per row of the struct and not one per conjunct any host names. */
     if (out->flows     > 0) g_preview_census.asks_with_flows++;
     if (out->cands     > 0) g_preview_census.asks_with_cands++;
@@ -1207,17 +1202,14 @@ void cold_park_preview(ColdPreview *out)
        sample of somebody else's lifetime counter under a key a reader reads as that counter. */
     rows_now = flow_world_commit_rows_written();
     if (rows_now > 0) g_preview_census.asks_after_commit++;
-    /* THE CONSERVATION IDENTITY, ASSERTED WHERE ALL FOUR ARE IN ONE HAND AND AT EVERY ASK. The three arms are
-       one `if` chain over one ask, so a break here is a fourth arm added without a row — which is exactly the
-       edit that would publish a total no part of it accounts for, and a reader differencing the parts would
-       then be doing arithmetic over no quantity. */
-    DCHECKF(g_preview_census.asks_refusing + g_preview_census.asks_empty +
-            g_preview_census.asks_writable == g_preview_census.asks,
-            "the park preview's ask census stopped partitioning itself — refusing %ld + empty %ld + writable "
-            "%ld is not asks %ld, so a park moment that never fired is about to be explained from parts that "
-            "no longer describe one population",
-            g_preview_census.asks_refusing, g_preview_census.asks_empty,
-            g_preview_census.asks_writable, g_preview_census.asks);
+    /* THE CONSERVATION IDENTITY, ASSERTED WHERE ALL THREE ARE IN ONE HAND AND AT EVERY ASK. The two arms are
+       one `if` over one ask, so a break here is a third arm added without a row — which is exactly the edit
+       that would publish a total no part of it accounts for. */
+    DCHECKF(g_preview_census.asks_empty + g_preview_census.asks_writable == g_preview_census.asks,
+            "the park preview's ask census stopped partitioning itself — empty %ld + writable %ld is not asks "
+            "%ld, so a park moment that never fired is about to be explained from parts that no longer describe "
+            "one population",
+            g_preview_census.asks_empty, g_preview_census.asks_writable, g_preview_census.asks);
     /* AND THE CONTAINMENT, WHICH IS ONE FAILURE MODE AND SO ONE ASSERT: a per-row counter above `asks` is a
        raise that reached this census from somewhere other than an ask, after which every row here is a count
        of something else. Every number is printed because they share the message. */
@@ -1351,33 +1343,16 @@ void cold_park_flow(Flow *f)
            "no generation, and it does not outlive that zone's session), so the hand-back that runs before "
            "every park (engine_retract_flow) did not reach this row and the flow that ASKED for it, in another "
            "instance, stays suspended on an answer nothing will ever send");
-    /* AND THE QUEUED JOBS, WHICH ARE NOT ALL THE SAME KIND OF DEBT — the row cold.h writes for them ("re-
-       enqueued by the same reactions, on the same flow's queue") is TRUE of every job the replayed program
-       CAUSES and false of exactly one. A promise reaction, a timer callback, a custom-element reaction and a
-       fetch's continuation are all re-caused by re-running the code that queued them, and their arguments —
-       the capability functions, the settled value, the callee — are re-created with them; that is why the
-       queue is released at flow_release rather than written down, and the argument holds.
-       A ROUTED CROSS-DOCUMENT DELIVERY IS NOT CAUSED BY THIS FLOW'S CODE. The trusted zone handed it in, and
-       engine.c's flow_deliver takes it off `deliver_q` and turns it into a §9.3.3 task in ONE step — so from
-       that instant until the task runs, the message exists nowhere but as a job. The 'm' record this park
-       writes reads `deliver_q`, which is empty by then, and the release frees the task under `paged`: a peer's
-       message silently gone, which is the drop §scheduler's razor forbids and is indistinguishable from a page
-       that registered no handler.
-       WHAT WOULD CLOSE IT is the same primitive the 'm' record already is, moved one step later: the job
-       record would have to carry the delivery's own TEXT — the record the zone routed and the origin it
-       stamped, both of which cross a park — so a park could write the 'm' and the resumed session re-deliver
-       it. What CANNOT be written is what the delivery has already been turned into by then: the arguments of
-       that task are a live MessageEvent init record holding a WindowProxy for the sending document, and a live
-       heap reference has no identity outside this session (cold.h says it of the pending register's `resolve`
-       and it is the same sentence here). So the park refuses, rather than writing a recipe that resumes a
-       document one message short with nothing to say so. */
+    /* AND THE QUEUED JOBS. Every job the replayed program causes (a promise reaction, a timer callback, a
+       fetch's continuation) is re-caused by re-running that code, with its arguments, so the queue is released
+       at flow_release rather than written down. A routed delivery's §9.3.3 task is the one job this flow's code
+       did not cause, and its arguments are a live MessageEvent init with no identity outside this session; both
+       parks hand it back to `deliver_q` as the [record, senderOrigin] entry it was made from before they reach
+       here (flow_job_retract_external), so it is written as an 'm' record and delivered again on resume. */
     DCHECK(flow_job_external(f) == 0,
-           "a flow was parked holding a task that a REPLAY WILL NOT RE-CAUSE — a routed cross-document "
-           "delivery already turned into a §9.3.3 task, so it is off `deliver_q` (nothing writes an 'm' record "
-           "for it) and the release frees it under `paged`. Its arguments are a live event record and cannot "
-           "be written; the delivery's own record and stamped origin CAN, so carry them on the job and write "
-           "the 'm' from there — or retract the delivery back onto `deliver_q` before the park, the way an "
-           "unstarted cross-agent operation is handed back");
+           "a flow was parked holding a routed delivery's §9.3.3 task — engine_park_frontier and the pager hand "
+           "every such task back to `deliver_q` (flow_job_retract_external) before the park, so this park was "
+           "reached by a door that did not");
     DCHECK(!f->started || f->dec_blob != NULL,
            "a flow that has RUN was parked with no suspended decision state — its path is unrecorded, so "
            "its record would name no segment and it would resume as a from-baseline flow, re-exploring the "

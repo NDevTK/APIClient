@@ -274,6 +274,7 @@ function docMetricsFamilies(r) {
 const RESULT_COUNTERS = Object.freeze(["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun",
   "_unitsDone", "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked", "_routedDelivered",
   "_routedRefused", "_routedTasksFired", "_routedTasksTargetOrigin", "_routedTasksTargetGone", "_routedTasksThrew",
+  "_routedTasksRetracted",
   "_orphansDriven", "_orphansAsked", "_orphanAskMemo", "_orphanAskEmpty", "_orphanAskTook", "_orphanWalks",
   "_orphanWalkEntries", "_orphanWalksFull", "_orphanWalkFullCandidates"]);
 /* The whole contract solver/result.c composes, or the first field that breaks it. `complete` adds the session's

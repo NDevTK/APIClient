@@ -2475,20 +2475,35 @@ static int job_fn_id(JSJobFunc *fn) {
    subtraction, never a stored count that can disagree with what is there. */
 enum { JOB_FN = 0, JOB_TASK, JOB_EXTERNAL, JOB_GLOBAL, JOB_HANDLE, JOB_SEQ, JOB_HDR };
 
-/* The provenance bracket (flow.h). A static rather than a field because it is a property of the conversion in
-   flight, not of the timeline: exactly one can be open, as the asserts say. */
-static int g_job_external;
+/* The provenance bracket (flow.h): the delivery entry in flight, or JS_UNDEFINED. A static rather than a field
+   because it is a property of the conversion in flight, not of the timeline: exactly one can be open, as the
+   asserts say. Borrowed from flow_deliver, which holds the entry across the bracket. */
+static JSValue g_job_external = JS_UNDEFINED;
 
-void flow_job_external_begin(void) {
-    DCHECK(!g_job_external, "a second routed record was turned into local work while the first was in flight — "
-                            "deliveries are made from flow_step with no frame, so the brackets cannot nest");
-    g_job_external = 1;
+void flow_job_external_begin(JSValueConst entry) {
+    DCHECK(JS_IsUndefined(g_job_external),
+           "a second routed record was turned into local work while the first was in flight — deliveries are made "
+           "from flow_step with no frame, so the brackets cannot nest");
+    DCHECK(JS_IsObject(entry), "the external-work bracket was opened naming no delivery entry");
+    g_job_external = entry;
 }
 
 void flow_job_external_end(void) {
-    DCHECK(g_job_external, "the external-work bracket was closed without being opened — the pair is what says "
-                           "which jobs a replay would not re-cause");
-    g_job_external = 0;
+    DCHECK(!JS_IsUndefined(g_job_external),
+           "the external-work bracket was closed without being opened — the pair is what says which jobs a "
+           "replay would not re-cause");
+    g_job_external = JS_UNDEFINED;
+}
+
+/* Whether a job record is a routed delivery's task: its external field names the entry it was made from. */
+static int job_is_external(JSValueConst e) {
+    JSValue v = JS_GetPropertyUint32(pending_ctx(), e, JOB_EXTERNAL);
+    int ext = JS_IsObject(v);
+
+    DCHECK(ext || JS_IsUndefined(v), "a job record's external field is neither a delivery entry nor undefined — "
+                                     "the header is written whole at the push");
+    JS_FreeValue(pending_ctx(), v);
+    return ext;
 }
 
 int flow_job_pending(const Flow *f) {
@@ -2625,7 +2640,7 @@ static void job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueCo
     cow_engine_write_begin();
     JS_SetPropertyUint32(ctx, e, JOB_FN, JS_NewInt32(ctx, job_fn_id(fn)));
     JS_SetPropertyUint32(ctx, e, JOB_TASK, JS_NewInt32(ctx, task ? 1 : 0));
-    JS_SetPropertyUint32(ctx, e, JOB_EXTERNAL, JS_NewInt32(ctx, g_job_external));
+    JS_SetPropertyUint32(ctx, e, JOB_EXTERNAL, JS_DupValue(ctx, g_job_external));
     /* The key HTML §7.5.10 "Destroying documents" step 5 compares, held as a reference (flow.h). JS_GetGlobalObject
        is the realm's identity as a JS value, so a destroyed document's jobs are found by comparing two objects,
        neither of which can be freed underneath the comparison. */
@@ -2805,7 +2820,7 @@ int flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm) {
            Counted per arm: a fork gives each arm its own Array naming the same record, so one queued delivery is an
            end in each timeline holding a copy (hence the conservation law is an inequality), and this walk is over
            one flow's queue (solver/engine.c's drop hook says why). */
-        if (mine && job_field_int(e, JOB_EXTERNAL))
+        if (mine && job_is_external(e))
             engine_routed_task_end(ROUTED_TASK_TARGET_GONE);
         if (mine) { JS_FreeValue(ctx, e); continue; }
         JS_SetPropertyUint32(ctx, f->jobs, (uint32_t)keep++, e);
@@ -2843,7 +2858,7 @@ int flow_job_remove(Flow *f, JSTaskHandle handle) {
                page's message deleted by an element's toggle task. A delivery is pushed by the engine rather than the
                runtime's enqueue, so it carries JS_TASK_HANDLE_NONE and no tracker's handle names it; the handle
                field is all that separates the two, hence the assert. */
-            DCHECK(!job_field_int(e, JOB_EXTERNAL),
+            DCHECK(!job_is_external(e),
                    "a tracker's removal by handle named the task a routed cross-document delivery became — "
                    "deliveries carry JS_TASK_HANDLE_NONE so no handle can name them, so two records share one "
                    "handle");
@@ -2885,10 +2900,44 @@ int flow_job_external(const Flow *f) {
     for (i = 0; i < n; i++) {
         JSValue e = job_entry(f, i);
 
-        k += job_field_int(e, JOB_EXTERNAL) ? 1 : 0;
+        k += job_is_external(e);
         JS_FreeValue(pending_ctx(), e);
     }
     return k;
+}
+
+int flow_job_retract_external(JSContext *ctx, Flow *f) {
+    int n = flow_job_pending(f), d = flow_deliver_pending(f), keep = 0, back = 0, i;
+    JSValue q;
+
+    if (n == 0) return 0;
+    q = JS_NewArray(ctx);
+    CHECK(!JS_IsException(q), "flow: OOM handing a routed delivery's task back to its queue — a task the park "
+                              "can neither write nor keep is a peer's message lost");
+    cow_engine_write_begin();
+    for (i = 0; i < n; i++) {
+        JSValue e = job_entry(f, i);
+
+        if (job_is_external(e)) {
+            JS_SetPropertyUint32(ctx, q, (uint32_t)back++, JS_GetPropertyUint32(ctx, e, JOB_EXTERNAL));
+            engine_routed_task_end(ROUTED_TASK_RETRACTED);
+            JS_FreeValue(ctx, e);
+            continue;
+        }
+        JS_SetPropertyUint32(ctx, f->jobs, (uint32_t)keep++, e);
+    }
+    JS_SetPropertyStr(ctx, f->jobs, "length", JS_NewInt32(ctx, keep));
+    if (back) {
+        for (i = 0; i < d; i++) JS_SetPropertyUint32(ctx, q, (uint32_t)(back + i), flow_deliver_entry(f, i));
+        JS_FreeValue(ctx, f->deliver_q);
+        f->deliver_q = q;
+    } else {
+        JS_FreeValue(ctx, q);
+    }
+    cow_engine_write_end();
+    DCHECK(flow_deliver_pending(f) == d + back && flow_job_external(f) == 0,
+           "a hand-back left a routed delivery's task on the queue or lost an entry of the delivery queue");
+    return back;
 }
 
 /* The operation queue's length (flow.h). The context is the pending register's, for that file's reason: the

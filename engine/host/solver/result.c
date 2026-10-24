@@ -1338,11 +1338,10 @@ char *result_cold_json(void) {
            "happen");
     /* The park preview's partition, at the boundary the numbers cross; cold.c asserts it at every ask, so a
        difference only here is a row lost between the accessor and this document. */
-    DCHECK(pv.asks_refusing + pv.asks_empty + pv.asks_writable == pv.asks,
-           "the park preview's ask census does not partition itself — `previewAsksRefusing`, "
-           "`previewAsksEmpty` and `previewAsksWritable` are the three arms of one `if` chain over one ask "
-           "and sum to `previewAsks` by construction, so a difference is a row lost crossing into this "
-           "document and the rows are about to be read as which conjunct of a park moment refused");
+    DCHECK(pv.asks_empty + pv.asks_writable == pv.asks,
+           "the park preview's ask census does not partition itself — `previewAsksEmpty` and "
+           "`previewAsksWritable` are the two arms of one `if` over one ask and sum to `previewAsks` by "
+           "construction, so a difference is a row lost crossing into this document");
     /* The replay ledger's identity, at the one moment all three are in one hand (decide.h returns them in one
        call). Both clauses are needed: `left_arms >= left` alone permits `left == 0` beside a nonzero arm sum.
        dec_leave_path's precondition (`g_c < dec_total()`) makes every divergence abandon at least one arm. */
@@ -1455,7 +1454,6 @@ char *result_cold_json(void) {
     METRIC_SET(paged_unarmed, e.paged_unarmed);
     METRIC_SET(paged_floor, e.paged_floor);
     METRIC_SET(preview_asks, pv.asks);
-    METRIC_SET(preview_asks_refusing, pv.asks_refusing);
     METRIC_SET(preview_asks_empty, pv.asks_empty);
     METRIC_SET(preview_asks_writable, pv.asks_writable);
     METRIC_SET(preview_asks_with_flows, pv.asks_with_flows);
@@ -1846,6 +1844,7 @@ char *result_json(JSContext *ctx) {
                              "\"_peerMarksRefused\":%ld,"
                              "\"_routedTasksFired\":%ld,\"_routedTasksTargetOrigin\":%ld,"
                              "\"_routedTasksTargetGone\":%ld,\"_routedTasksThrew\":%ld,"
+                             "\"_routedTasksRetracted\":%ld,"
                              "%s,%s,\"_metricsSchema\":%s,"
                              /* …and the frontier's order at composition — result.h says why it rides here and what
                                 its two shapes mean. One nested object, because its rows are mostly readings of an
@@ -1931,6 +1930,7 @@ char *result_json(JSContext *ctx) {
                      routedDelivered, routedRefused, routedZeroDelivery, engine_peer_marks_refused(),
                      routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
                      routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
+                     routedEnds[ROUTED_TASK_RETRACTED],
                      scensus, layoutm, schema,
                      orphansDriven, orphansAsked,
                      orphanExits.memo, orphanExits.empty, orphanExits.took,

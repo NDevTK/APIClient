@@ -472,8 +472,8 @@ void cold_census_release(ColdCensus *out);
  *   - the queued jobs           — re-enqueued by the same reactions, on the same flow's queue, WHICH IS TRUE
  *                                 of every job the replayed program CAUSES and of nothing else. A job handed
  *                                 in from OUTSIDE that program has no cause in the replay to re-cause it, and
- *                                 this engine makes exactly one: the §9.3.3 task a routed cross-document
- *                                 delivery becomes. cold_park_flow refuses that flow and says what closes it.
+ *                                 this engine makes exactly one: the §9.3.3 task a routed delivery becomes,
+ *                                 which both parks hand back to `deliver_q` (flow_job_retract_external).
  * The last three are why §Time-travel-resume says a resumed flow "re-derives example VALUES from CURRENT
  * sources": the path is the snapshot's, the data is today's, and that is the point of the tool rather than a
  * concession. What CANNOT be regenerated is asserted at the park rather than quietly written out wrong.
@@ -784,23 +784,6 @@ typedef struct {
        for both at once is asking for two messages, and a host asking for neither has said nothing about
        whether a peer's message is in the document it is storing. */
     long commits, delivers;
-    /* …AND THE ONE ROW THAT IS NOT A RECORD AT ALL: HOW MANY MEMBERS A PARK TAKEN NOW WOULD REFUSE.
-       Every other row here answers "what would be WRITTEN", and the preview's contract is what the HOST is
-       deciding on — so a description that is complete about the residue and silent about whether the park
-       ABORTS is complete about the wrong question. cold_park_flow refuses a flow holding a task a replay will
-       not re-cause (a routed delivery already turned into its §9.3.3 task, which is off `deliver_q` and so
-       named by no 'm'), and a host that evicted on a description missing this meets that abort with its RAM
-       still held and its residue unwritten.
-       IT IS DELIBERATELY NOT IN cold_park's TWO-SIDED CHECK, and that is not an omission. That check compares
-       what the preview PROMISED against what the park WROTE, record for record; this row is a count of
-       members that would stop the park writing anything at all, so it has no `after - before` to be equal to.
-       A park that is taken with this non-zero does not write a different residue — it aborts, by name, at the
-       flow that holds the task.
-       ZERO IS THE ORDINARY ANSWER AND IT IS TRANSIENT, not structural: the task runs on that flow's very next
-       step, so this rises at a delivery and falls again a pick later. A host that wants a moment rather than a
-       race asks for it to be zero, which is a statement about THIS instant and never a wait for the frontier
-       to stop receiving. */
-    long refuses;
 } ColdPreview;
 void cold_park_preview(ColdPreview *out);
 
@@ -827,23 +810,19 @@ void cold_park_preview(ColdPreview *out);
  * die with it in cold_free, exactly as the outcome census does, because the frontier they describe is the
  * document's.
  *
- * THE FIRST THREE PARTITION `asks` AND THE REST ARE CONTAINED BY IT, which is what makes the set reasonable
+ * THE FIRST TWO PARTITION `asks` AND THE REST ARE CONTAINED BY IT, which is what makes the set reasonable
  * FROM rather than merely present: a total that cannot move without one of its parts moving. The partition is
- * the TIER'S OWN verdict on each ask and restates no host's moment — REFUSING is `refuses > 0`, which is
- * cold_park_flow's own refusal and means a park taken then ABORTS rather than writing anything; EMPTY is a
- * park that would write no bytes at all, asked through park_writes_document rather than restated here;
- * WRITABLE is one that would write a residue. A host's conjunction is then read off the per-row counts beside
- * it, and this file never has to know what any host asked for.
- *
- * THERE IS NO `asksWithRefuses` ROW BECAUSE `asksRefusing` IS THAT NUMBER, and two spellings of one number in
- * one document is the drift result.c refuses `resumedOrphans` for.
+ * the TIER'S OWN verdict on each ask and restates no host's moment: EMPTY is a park that would write no bytes
+ * at all, asked through park_writes_document rather than restated here; WRITABLE is one that would write a
+ * residue. A host's conjunction is then read off the per-row counts beside it, and this file never has to know
+ * what any host asked for.
  *
  * RETIREMENT: this record goes when a host no longer chooses the moment — when the tier itself decides when to
  * park — because there is then no conjunction over these rows for a 0 to be ambiguous about. */
 typedef struct {
     long asks;
     /* …AND WHAT THE TIER WOULD HAVE DONE AT EACH ONE, WHICH SUM TO IT. */
-    long asks_refusing, asks_empty, asks_writable;
+    long asks_empty, asks_writable;
     /* …AND WHICH ROWS OF ColdPreview STOOD NON-ZERO, one counter per row and EVERY row. A set restricted to
        the rows some host happens to name would be that host's latch restated here, which is the second copy an
        auditor may not keep; this one is derived from the struct above and from nothing else.

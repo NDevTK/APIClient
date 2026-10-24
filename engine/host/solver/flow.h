@@ -732,7 +732,7 @@ long    flow_world_commit_rows_written(void);
  *   - its JSTaskHandle, the runtime's name for it, held as a JS number (js_task_handle_new asserts < 2^53) so it
  *     matches an element's tracker slot exactly; JS_TASK_HANDLE_NONE names nothing;
  *   - its arrival stamp on the clock `dyn_run` shares (g_work_seq), as a checked JS number;
- *   - whether it came from outside the replayed program (flow_job_external_begin/end). */
+ *   - the routed delivery entry a task from outside the replayed program was made from, else undefined. */
 /* Mutations run inside cow_engine_write_begin/end for pending.h's reason: this is the scheduler's record about a
  * flow, and a routed delivery or engine_unload_document's fan-out pushes onto a queue that is not the running
  * flow's, so a captured delta would restore a dropped job or remove a pushed one at a switch. */
@@ -781,9 +781,15 @@ JSValue flow_job_fork(JSContext *ctx, const Flow *parent);
 /* How much of this flow's queue a replay would not re-cause. Read by the park, which may neither write it down
    nor silently drop it. */
 int  flow_job_external(const Flow *f);
-/* Bracket marking work enqueued from outside the replayed program (engine.c's flow_deliver). Never nested: a
-   delivery is made from flow_step with no frame, which is asserted. */
-void flow_job_external_begin(void);
+/* Hand every such task back as the delivery it was made from, before a park: the tasks leave the queue and their
+   entries go to the front of `deliver_q`, in queue order and ahead of the deliveries still unmade (which arrived
+   later), so the park writes each as an 'm' record and the resumed session delivers it again by the queue's own
+   order. Each is counted as ROUTED_TASK_RETRACTED. Returns how many. */
+int  flow_job_retract_external(JSContext *ctx, Flow *f);
+/* Bracket marking work enqueued from outside the replayed program (engine.c's flow_deliver), naming the
+   delivery entry (borrowed; the job takes its own reference) the work was made from. Never nested: a delivery
+   is made from flow_step with no frame, which is asserted. */
+void flow_job_external_begin(JSValueConst entry);
 void flow_job_external_end(void);
 
 /* How many cross-agent operations this flow has been asked and not yet started: the length of `perform_q`,

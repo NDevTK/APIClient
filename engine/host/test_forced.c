@@ -5264,12 +5264,29 @@ TF_UNIT void flow_job_selftest(JSContext *ctx)
        replay; work handed in from outside it is not, and only the arrival knows which. */
     tf_job_push_int(ctx, &a, 7, 1);
     CHECK(flow_job_external(&a) == 0, "a job the flow's own code queued must not be marked external");
-    flow_job_external_begin();
-    tf_job_push_int(ctx, &a, 8, 1);
-    flow_job_external_end();
+    a.deliver_q = JS_UNDEFINED;
+    flow_deliver_push(ctx, &a, "windowproxy.post\tpeer\tw\tm\t*\teA==", "https://a.test");
+    {
+        JSValue entry = flow_deliver_take(ctx, &a);
+
+        flow_job_external_begin(entry);
+        tf_job_push_int(ctx, &a, 8, 1);
+        flow_job_external_end();
+        JS_FreeValue(ctx, entry);
+    }
     CHECK(flow_job_external(&a) == 1,
           "a job queued while a routed record was being turned into local work was not marked — the park would "
           "then write a recipe that resumes this document one message short with nothing to say so");
+    /* …and the park's hand-back: the task leaves the queue and its delivery is unmade again, so the park
+       writes it (flow_job_retract_external). */
+    {
+        int queued = flow_job_pending(&a);
+
+        CHECK(flow_job_retract_external(ctx, &a) == 1 && flow_job_external(&a) == 0 &&
+              flow_deliver_pending(&a) == 1 && flow_job_pending(&a) == queued - 1,
+              "a delivery's task was not handed back to the delivery queue, or another job went with it");
+    }
+    JS_FreeValue(ctx, a.deliver_q); a.deliver_q = JS_UNDEFINED;
 
     tf_job_run_all(ctx, &a);
     JS_FreeValue(ctx, a.jobs); a.jobs = JS_UNDEFINED;
@@ -18339,19 +18356,12 @@ static int fixture_cold_moment(void) {
            `delivers` reached 0 only once all 13 had delivered, by which time all 11 candidates had FINISHED
            and `deepcands` was 0. The four conjuncts were never true together, the latch never fired, the
            frontier drained, and the session wrote no residue at all.
-           WHAT REPLACES IT IS THE REFUSAL AND NOT THE QUEUE, which is the question this conjunct was really
-           reaching for. A residue carrying an 'm' is safe now — solver/cold.c rebuilds one through the entry
-           that registers its arrival — so what the moment still may not meet is a member the park would
-           REFUSE: one holding a routed delivery already turned into its §9.3.3 task, which is off `deliver_q`
-           and named by no record. That is per-INSTANT and transient (the task runs on that flow's very next
-           step) rather than per-FRONTIER and monotone, so it is reachable in a way `delivers == 0` was not.
-           `commits > 0` STAYS AND ITS ARGUMENT SURVIVED THE MEASUREMENT: a commitment row is never removed and
-           every fork inherits its parent's (flow_world_commit_fork), so it is monotone over the descendants of
-           whatever was live when the post was routed — and the same fork inheritance that refuted the clause
-           above is what makes this one hold, since every arm carries the row whether or not it has delivered
-           yet. */
-        g_cold_moment = would.deepcands > 0 && would.orphans > 0 &&
-                        would.commits > 0 && would.refuses == 0;
+           A residue carrying an 'm' is safe (solver/cold.c rebuilds one through the entry that registers its
+           arrival), and a delivery already turned into its task is handed back to `deliver_q` before the park,
+           so no fourth conjunct is owed. `commits > 0` stays: a commitment row is never removed and every fork
+           inherits its parent's (flow_world_commit_fork), so it is monotone over the descendants of whatever was
+           live when the post was routed. */
+        g_cold_moment = would.deepcands > 0 && would.orphans > 0 && would.commits > 0;
     }
     return g_cold_moment;
 }

@@ -199,10 +199,9 @@ METRIC(paged_floor, "pagedFloor", LIFETIME, "ask", PROCESS, "solver/engine.c", I
    park would write; `previewAsks: 0` is no host consulting it, and every row below is then
    meaningless. A moment is a conjunction, so the rows split it: a row that never rose wants its
    producer built, rows that rose and never coincided want a different moment. The partition is
-   the tier's own verdict — refusing (would abort), empty (writes no bytes), writable (writes a
-   residue) — and the rest derive from ColdPreview's struct. */
+   the tier's own verdict — empty (writes no bytes) or writable (writes a residue) — and the rest
+   derive from ColdPreview's struct. */
 METRIC(preview_asks, "previewAsks", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
-METRIC(preview_asks_refusing, "previewAsksRefusing", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
 METRIC(preview_asks_empty, "previewAsksEmpty", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
 METRIC(preview_asks_writable, "previewAsksWritable", LIFETIME, "ask", AGENT, "solver/cold.c", INT)
 /* The eight `previewAsksWith*` rows are contained in `previewAsks` and partition nothing, since

@@ -1273,10 +1273,11 @@ long engine_orphan_preferred(void);
    of the preference count, since a drive count cannot tell a spread run from a monopolised one. */
 long engine_orphan_scripts(void);
 
-/* The four ends of HTML §9.3.3 "Posting messages" step 8's task, so a handler that ran fewer times than the
- * engine delivered can be explained: the event fired; step 8.1 declined it (the target is not same origin with
- * the requested origin); the target's Document was destroyed (HTML §7.5.10 "Destroying documents" step 5);
- * or the task went abrupt. A task that never ran is a dropped work item, the one defect. Counting the
+/* The ends of HTML §9.3.3 "Posting messages" step 8's task, so a handler that ran fewer times than the engine
+ * delivered can be explained: the event fired; step 8.1 declined it (the target is not same origin with the
+ * requested origin); the target's Document was destroyed (HTML §7.5.10 "Destroying documents" step 5); the task
+ * went abrupt; or a park handed it back to the delivery queue for the resumed session. A task that never ran is a
+ * dropped work item, the one defect. Counting the
  * receiver's fetches cannot answer this, because engine_pending_fetches dedups identical requests from N
  * timelines. The sum of ends is at least `delivered`, never necessarily equal: a fork gives each arm its own
  * job array over the parent's records (flow.c's flow_job_fork), so one queued task can be delivered once per
@@ -1286,6 +1287,7 @@ enum {
     ROUTED_TASK_TARGET_ORIGIN,    /* §9.3.3 step 8.1: the target is not same origin with the requested origin */
     ROUTED_TASK_TARGET_GONE,      /* §7.5.10 step 5: the target's Document was destroyed */
     ROUTED_TASK_THREW,            /* the task itself went abrupt before it could fire anything */
+    ROUTED_TASK_RETRACTED,        /* handed back to the delivery queue before a park (flow_job_retract_external) */
     ROUTED_TASK_END_N
 };
 /* Report the end a routed task reached, at the line that is that end. TARGET_GONE has two such lines because
@@ -1294,7 +1296,7 @@ enum {
  * off a destroyed document's queue. Once per task: the task records which end it reached, so a re-entered
  * machine cannot count twice. */
 void engine_routed_task_end(int end);
-/* The four end counts, filled into `ends[ROUTED_TASK_END_N]`; read together, like engine_routed_census. */
+/* The end counts, filled into `ends[ROUTED_TASK_END_N]`; read together, like engine_routed_census. */
 void engine_routed_task_census(long *ends);
 
 /* The orphan round trip's two numbers this session: waits for a parked drive's function that a take satisfied,

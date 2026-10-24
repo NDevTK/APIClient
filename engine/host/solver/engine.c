@@ -3146,7 +3146,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
     {
         /* Read on its own line and voided below, because the DCHECK that reads it vanishes in release. */
         int jobs0 = flow_job_pending(f);
-        flow_job_external_begin();
+        flow_job_external_begin(entry);
         if (!strcmp(dup, "windowproxy.post"))
             window_message_route(rctx, record, tail, world_doc_name(w.doc), origin);
         else
@@ -10547,6 +10547,9 @@ static void engine_park_frontier(JSContext *ctx, Flow *cur)
        does not outlive the zone session, so it may never enter a recipe (engine.h). Returning them lets cold_park's
        assert name the one shape that has no recipe yet: an operation already started. */
     engine_retract_operations(ctx);
+    /* And a peer's message already turned into a task goes back onto its delivery queue, the one queue a park
+       writes, so the resumed session delivers it by that queue's order (flow_job_retract_external). */
+    for (int i = 0; flow_at(i) != NULL; i++) flow_job_retract_external(ctx, flow_at(i));
     cold_park();
     /* And the foreign segments the residue carries, announced before the deaths below because the zone acts on
        them in that order: these worlds belong to peers and outlive this session in the park document, so the zone
@@ -10669,6 +10672,7 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
        member, as at the retirement arm (engine.h). */
     { const int was_cand = tail->cand_src != NULL;
       engine_retract_flow(g_sess_ctx, tail);
+      flow_job_retract_external(g_sess_ctx, tail);
       flow_withdraw_async_sends(g_sess_ctx, tail);
       cold_park_flow(tail);
       flow_release(g_sess_ctx, tail);
