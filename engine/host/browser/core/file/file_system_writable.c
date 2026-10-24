@@ -1001,12 +1001,9 @@ void fs_writable_free(JSRuntime *rt)
        set and nothing moves it, and the line below for it is a test and a return. The commit that wrote this
        release justified that line as "JS_NewAtom took a reference and a release must give it back", which is
        true of the four above and FALSE of this one.
-       IT IS STILL CALLED, and deliberately, because the two candidate rules are not equally safe. "Free every
-       name you interned" is correct for every atom and requires the caller to know nothing — the guard lives
-       in the API, not here. "Free every name you interned EXCEPT the built-in ones" would make this release's
-       correctness depend on a table inside the submodule that is synced to upstream, so an upstream edit
-       removing `DEF(size, …)` would turn a deliberate omission into a silent leak with nothing to say so. A
-       no-op call is the cheaper of the two mistakes by a wide margin.
+       IT IS STILL CALLED, and deliberately: "free every name you interned" is correct for every atom and
+       requires the caller to know nothing, because the guard lives in the API. Skipping the built-in ones
+       would make this release's correctness a fact about quickjs-atom.h's table.
        WHAT MUST NOT BE GENERALISED FROM THIS FILE is the reverse reading: a built-in atom SURVIVING to
        JS_FreeRuntime's census is not a missing JS_FreeAtom and never can be — it is a leaked JSValue, because
        `__JS_AtomToValue` is the one path that hands the struct out as a string and dups it. The census says so

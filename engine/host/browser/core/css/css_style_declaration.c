@@ -1869,6 +1869,19 @@ static char *cssd_prelude_span(const char *text, size_t len, size_t begin, size_
     return out;
 }
 
+/* Whether a compound of a list in `list` names a pseudo-element (Selectors 4 §3.6 "Pseudo-elements"). */
+static bool cssd_selectors_target_pseudo_element(const lxb_css_selector_list_t *list)
+{
+    const lxb_css_selector_t *sel;
+
+    for (; list != NULL; list = list->next)
+        for (sel = list->first; sel != NULL; sel = sel->next)
+            if (sel->type == LXB_CSS_SELECTOR_TYPE_PSEUDO_ELEMENT ||
+                sel->type == LXB_CSS_SELECTOR_TYPE_PSEUDO_ELEMENT_FUNCTION)
+                return true;
+    return false;
+}
+
 /* A rule list being walked: the next rule to report, and the handle its rules are reported under. */
 typedef struct {
     lxb_css_rule_t *r;
@@ -1911,6 +1924,11 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
         case LXB_CSS_RULE_STYLE: {
             lxb_css_rule_style_t *st = lxb_css_rule_style(r);
 
+            DCHECK(!cssd_selectors_target_pseudo_element(st->selector),
+                   "a style rule's selector names a pseudo-element — core/css/css_computed_value.h answers every "
+                   "style question of a pseudo-element subject as its originating element's, which is the whole "
+                   "answer only while engine/lexbor's pseudo-element state refuses every name; give the cascade "
+                   "a pseudo-element subject before that state answers one");
             lxb_css_selector_serialize_list_chain(st->selector, css_buf_cb, &sel);
             block = cssd_serialize_block(st->declarations, text, len);
             out.prelude = sel.s ? sel.s : "";
@@ -5927,10 +5945,9 @@ static JSValue js_get_computed_style(JSContext *ctx, JSValueConst this_val, int 
            arm that assigns `selector->u.pseudo.type = pseudo->id` is UNREACHABLE for every name a selector
            can spell. `lxb_css_selectors_components_end` then removes and destroys the list, so `::before`
            parses to Selectors 4 §17.1's `failure` and `lxb_css_selectors_parse` answers NULL.
-       So the next-diff clause below states what must EXIST AFTERWARD — a `<pseudo-element-selector>` parse
-       that ANSWERS that id — and deliberately does not say where, because the refusal is in vendored lexbor
-       and whether the answer is a delta there or a caller-side parse beside the matcher is a decision the
-       diff that makes it gets to argue, not one this crash may presume. */
+       So the next-diff clause below states what must EXIST AFTERWARD: engine/lexbor's pseudo-element state,
+       which is this engine's own code, answering that id rather than refusing it. cssd_emit_rules asserts the
+       refusal where the cascade depends on it, so that diff meets the assert it has to retire. */
     if (pseudo && *pseudo == ':')
         DFAIL("CSSOM §7.2 Extensions to the Window Interface's getComputedStyle entered step 3 — its "
               "`pseudoElt` is provided, is not the empty string, and starts with a colon — and BOTH of that "

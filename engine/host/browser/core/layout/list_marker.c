@@ -29,8 +29,7 @@ static char *lm_computed(lxb_dom_element_t *el, const char *name)
 }
 
 /* Checks the premise that §3.2's first arm ("content on the ::marker itself is not normal") is unreachable,
-   since an upstream Lexbor sync can falsify either half silently (like core/layout/box_tree.c's
-   `__UNDEF == 0` static assert):
+   since a change to engine/lexbor's property registry or its pseudo-element state would falsify a half:
      - Lexbor's registry has no `content` property, so css-content-3 §1 "Inserting and Replacing Content: the
        content property"' initial value holds ("For ::marker, ::placeholder, and ::file-selector-button, this
        computes to itself (normal).").

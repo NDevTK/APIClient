@@ -94,16 +94,11 @@
  * and only one of them is this file's.
  *
  * WHAT MAKES §4's TWO ARMS THE COMPLETE ANSWER TODAY RATHER THAN AN APPROXIMATION IS THAT NO DECLARATION CAN
- * REACH A PSEUDO-ELEMENT SUBJECT AT ALL, by TWO INDEPENDENT REFUSALS IN VENDORED LEXBOR, either of which an
- * upstream sync can lift in silence. core/css/css_style_declaration.c's getComputedStyle abort derives the
- * FIRST in full: `lxb_css_selectors_state_pseudo_element` refuses each of the twelve names its own lookup table
- * can return, so `li::marker { ... }` answers Selectors 4 §17.1's `failure`. THE SECOND IS NOT CARRIED BY THAT
- * DERIVATION, and it is why a parse-only sync is harmless rather than merely unlucky:
- * `lxb_selectors_pseudo_element` in engine/lexbor/source/lexbor/selectors/selectors.c returns FALSE for every
- * one of those twelve ids, so a compound that did parse would match no element either. BOTH have to lift before
- * a `::marker` declaration could reach `cssom_cascaded_value` — and on the day both do, these entries answer
- * that declaration as the ORIGINATING ELEMENT'S OWN value, which is a wrong value with no symptom and is the
- * one harm this key prevents.
+ * REACH A PSEUDO-ELEMENT SUBJECT AT ALL: engine/lexbor's `lxb_css_selectors_state_pseudo_element` refuses each
+ * of the twelve names its lookup table can return, so `li::marker { ... }` answers Selectors 4 §17.1's
+ * `failure`, and core/css/css_style_declaration.c's cssd_emit_rules asserts that no style rule it reports
+ * names a pseudo-element. The day lexbor parses one, that assert fires before these entries can answer a
+ * `::marker` declaration as the ORIGINATING ELEMENT'S OWN value, which is a wrong value with no symptom.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_VALUE_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_VALUE_H
