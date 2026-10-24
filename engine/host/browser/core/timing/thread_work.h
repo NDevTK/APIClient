@@ -41,14 +41,14 @@
    box's §10.8.1 metrics counted as REST_UNIT_LAYOUT_LINE_METRICS' hundred items), and a style rule's selector
    tested against an element by the author origin's match, an element itself counting as
    THREAD_WORK_SELECTOR_TESTS_PER_ELEMENT tests. A relative least-squares fit of each kind's own span CPU over
-   its inputs on five fixture documents (dev) gave 47.6 us a question with 0.259 us an item, and 0.885 us an
-   element with 0.161 us a test, each document within a factor of 1.7 of the fit; over 0.222 us an opcode
-   that is 214, 1.17, 4.0 and 0.72 units. A line item is one unit, which a charge of one item rounds to at any
-   rate up to 1024. */
-#define THREAD_WORK_UNITS_PER_KI_LAYOUT_BOXES (214 * 1024)
+   its inputs on five fixture documents (5c3814b1, dev) gave 42.4 us a question with 0.236 us an item, and
+   0.810 us an element with 0.150 us a test, each document within a factor of 1.7 of the fit; over 0.222 us an
+   opcode that is 191, 1.06, 3.65 and 0.67 units. A line item is one unit, which a charge of one item rounds to
+   at any rate up to 1024. */
+#define THREAD_WORK_UNITS_PER_KI_LAYOUT_BOXES (191 * 1024)
 #define THREAD_WORK_UNITS_PER_KI_LINE_ITEMS 1024
-#define THREAD_WORK_UNITS_PER_KI_SELECTOR_TESTS 740
-#define THREAD_WORK_SELECTOR_TESTS_PER_ELEMENT 6
+#define THREAD_WORK_UNITS_PER_KI_SELECTOR_TESTS 686
+#define THREAD_WORK_SELECTOR_TESTS_PER_ELEMENT 5
 /* What one box metric derivation is in line items (solver/rest_unit.h's LINE_METRICS: "one costs what a
    hundred of those do"). */
 #define THREAD_WORK_LINE_ITEMS_PER_METRIC 100
