@@ -29260,11 +29260,11 @@ static void js_array_len_abandon(JSContext *ctx, void *st)
                                   base — and an ACCESSOR `prototype` on an ordinary parent is the same gap. The
                                   operator's operands stay where they are; only the class NAME and the two flag
                                   bits have to ride, because the opcode's own locals are gone on resume. */
-typedef struct JSOpClass {
-    JSAtom name;         /* BORROWED from the bytecode's atom table, which outlives the frame */
-    uint8_t flags;       /* JS_DEFINE_CLASS_* */
-    uint8_t computed;    /* 1 = OP_define_class_computed */
-} JSOpClass;
+#define JS_OP_CLASS_FIELDS(F)                                                                                  \
+    F(POD, JSAtom, name)              /* borrowed from the bytecode's atom table, which outlives the frame */  \
+    F(POD, uint8_t, flags)            /* JS_DEFINE_CLASS_* */                                                  \
+    F(POD, uint8_t, computed)         /* 1 = OP_define_class_computed */
+CONT_RECORD_DEFINE(JSOpClass, js_op_class, JS_OP_CLASS_FIELDS)
 
 #define CONT_TOPRIM_GET    62  /* gp_outer = JSToPrim: §7.1.1 ToPrimitive ( input [ , preferredType ] ) step 1.a's
                                   "Let exoticToPrimitive be ? GetMethod(input, %Symbol.toPrimitive%)." and
@@ -42029,7 +42029,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     if (gk3 == CONT_DEFINE_CLASS) {
                         /* the heritage read threw in place: the class can never be built, and its operands are
                            left for the frame's own catch-search like any throwing operator's. */
-                        js_free_rt(rt, gouter);
+                        js_op_class_free(ctx, gouter);
                         goto exception;
                     }
                     if (gk3 == CONT_TOPRIM_GET) {
@@ -46429,7 +46429,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            parent class and the closure, which the delivery reads. */
                         cont_st = gouter;
                         if (unlikely(JS_IsException(ret_val))) {
-                            js_free_rt(rt, gouter);
+                            js_op_class_free(ctx, gouter);
                             goto exception;
                         }
                         goto do_define_class_deliver;
@@ -48993,7 +48993,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 int cflags = oc->flags;
                 bool ccomp = oc->computed;
                 cont_st = NULL;
-                js_free_rt(rt, oc);
+                js_op_class_free(ctx, oc);
                 if (!JS_IsNull(ret_val) && !JS_IsObject(ret_val)) {
                     JS_FreeValue(ctx, ret_val);
                     JS_ThrowTypeError(ctx, "parent prototype must be an object or null");
@@ -51633,7 +51633,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 goto getprop_throw;
             } else if (gouter && gk2 == CONT_DEFINE_CLASS) {
                 /* the heritage's `prototype` accessor threw after suspending: same as the in-place arm. */
-                js_free_rt(rt, gouter);
+                js_op_class_free(ctx, gouter);
                 gouter = NULL;
                 goto exception;
             } else if (gouter && gk2 == CONT_TOPRIM_GET) {
@@ -53401,7 +53401,8 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_AFS_GET, JSAsyncFromSync, js_async_from_sync, LINK)                                                 \
     X(CONT_AFS_CONT, JSAsyncFromSync, js_async_from_sync, LINK)                                                \
     X(CONT_GOPD_DESC, JSGopdDesc, js_gopd_desc, LINK)                                                          \
-    X(CONT_SET_RECV, JSSetRecv, js_set_recv, LINK)                                          \
+    X(CONT_SET_RECV, JSSetRecv, js_set_recv, LINK)                                                             \
+    X(CONT_DEFINE_CLASS, JSOpClass, js_op_class, LINK)                                          \
     X(CONT_ARG_LIST, JSArgList, js_arg_list, LINK)                                                             \
     X(CONT_ARG_LIST_YIELD, JSArgList, js_arg_list, ANCHOR)
 #define CONT_REC_AGREES_AT(k, T, p, r)                                                                         \
@@ -53459,7 +53460,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS:
-    case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
     }
@@ -53499,7 +53499,6 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS:
-    case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
     }
@@ -53535,7 +53534,7 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     case CONT_ITER_HELPER_GET: case CONT_ITER_CALL_GET:
     case CONT_ITER_CALL_GET_NOARG: case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET:
     case CONT_FOROF_ENUMREC_WRAP: case CONT_ITER_FROM_NEXT_GET:
-    case CONT_FOR_IN_HAS: case CONT_DEFINE_CLASS:
+    case CONT_FOR_IN_HAS:
     case CONT_PROMISE_ALL_SETTLE:
     case CONT_AGEN_DEFER:
     CONT_RECORD_KINDS(CONT_REC_CASE_ANCHOR)
@@ -54611,7 +54610,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
     case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
     case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
     case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS:
-    case CONT_DEFINE_CLASS:
     case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
         break;
     }
