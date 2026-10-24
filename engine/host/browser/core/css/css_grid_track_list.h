@@ -7,10 +7,9 @@
  * are answered differently, as core/css/css_transform_function.h answers them for `transform`: text outside
  * the grammar is CSS Syntax 3's invalid declaration and the parse returns false, so the property computes to
  * its initial `none`; a production §7.2 defines that is not built here crashes by name. */
-/* Named residual. Not covered: `minmax()`, `fit-content()`, `repeat()`, `min-content`, `max-content` and line
- * names — every `<track-size>` but a bare `<track-breadth>` of `<length-percentage>`, `<flex>` or `auto`. Next
- * diff builds `minmax()` with separate min and max sizing functions on a track. How its absence would show: a
- * page's grid aborting at this file's refusal of a function or bracket. */
+/* Named residual. Not covered: line names (§7.2.2), inside `repeat()` as outside it. Next diff builds them as
+ * names on the lines between tracks, which core/layout/grid_placement.h resolves. How its absence would show: a
+ * page's grid aborting at this file's refusal of `[`. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_GRID_TRACK_LIST_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_GRID_TRACK_LIST_H
 
@@ -21,25 +20,40 @@
 
 #include "core/css/css_length.h"
 
-/* One track's sizing function. `auto` is minmax(auto, auto); a `<flex>` "outside a minmax() notation, implies
-   an automatic minimum (i.e. minmax(auto, <flex>))" (§7.2.1 "Track Sizes"); a `<length-percentage>` is both
-   the min and the max. */
+/* One of a track's two sizing functions (§7.2.1 "Track Sizes"). A `<flex>` and `fit-content()` are max sizing
+   functions only; `fit-content()`'s argument is in `length`. */
 typedef enum {
-    CSS_GRID_TRACK_AUTO = 0,
-    CSS_GRID_TRACK_BREADTH,      /* `length`: absolute, a percentage, or a math function holding one */
-    CSS_GRID_TRACK_FLEX          /* `flex`: the flex factor, non-negative */
-} CssGridTrackKind;
+    CSS_GRID_BREADTH_LENGTH = 0,   /* `<length-percentage>`: absolute, a percentage, or a math function */
+    CSS_GRID_BREADTH_FLEX,         /* `<flex>`: the flex factor in `flex`, non-negative */
+    CSS_GRID_BREADTH_AUTO,
+    CSS_GRID_BREADTH_MIN_CONTENT,
+    CSS_GRID_BREADTH_MAX_CONTENT,
+    CSS_GRID_BREADTH_FIT_CONTENT
+} CssGridBreadthKind;
 
 typedef struct {
-    CssGridTrackKind kind;
-    CssLength        length;
-    double           flex;
+    CssGridBreadthKind kind;
+    CssLength          length;
+    double             flex;
+} CssGridBreadth;
+
+/* A `<track-size>` as its min and max sizing functions: `auto` is minmax(auto, auto); a `<flex>` "outside a
+   minmax() notation, implies an automatic minimum (i.e. minmax(auto, <flex>))"; any other `<track-breadth>` is
+   both; `fit-content(L)` is minmax(auto, fit-content(L)), "the smaller of minmax(auto, max-content) and
+   minmax(auto, limit)". */
+typedef struct {
+    CssGridBreadth min, max;
 } CssGridTrackSize;
 
-/* The explicit tracks, in order. `tracks` is owned and released by `css_grid_track_list_free`. */
+/* The explicit tracks, in order, with an integer `repeat()` expanded (§7.2.3.1 "Syntax of repeat()"). An
+   `<auto-repeat>` cannot be expanded here, because §7.2.3.2 "Repeat-to-fill: auto-fill and auto-fit repetitions"
+   counts its repetitions from the grid container's size: its tracks are held once, as the `auto_n` tracks from
+   `auto_at`, and `auto_n` is 0 for a list without one. `auto_fit` is `auto-fit` rather than `auto-fill`.
+   `tracks` is owned and released by `css_grid_track_list_free`. */
 typedef struct {
     CssGridTrackSize *tracks;
-    size_t            n;
+    size_t            n, auto_at, auto_n;
+    bool              auto_fit;
 } CssGridTrackList;
 
 /* `text` against §7.2's `<track-list>`, lengths absolutized with `font` and `realm` as css_length.h's parse

@@ -11,6 +11,7 @@
 #include "core/css/css_style_declaration.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/flex_item.h"
+#include "core/layout/grid_explicit_tracks.h"
 #include "core/layout/grid_placement.h"
 
 lxb_dom_element_t *grid_item_of(lxb_dom_element_t *container, BoxTreeChild c)
@@ -380,18 +381,18 @@ void grid_placement_free(GridPlacement *p)
 
 /* §7.1: "The size of the explicit grid is determined by the larger of the number of rows/columns defined by
    grid-template-areas and the number of rows/columns sized by grid-template-rows/grid-template-columns." */
-static size_t gp_explicit_tracks(lxb_dom_element_t *container, const CssGridTemplateAreas *areas, bool rows)
+static size_t gp_explicit_tracks(lxb_dom_element_t *container, const CssGridTemplateAreas *areas, bool rows,
+                                 bool intrinsic)
 {
-    CssGridTrackList list;
+    GridExplicitTracks t;
     size_t n = 0, from_areas = rows ? areas->rows : areas->columns;
 
-    if (css_computed_grid_track_list(container, rows ? "grid-template-rows" : "grid-template-columns", &list))
-        n = list.n;
-    css_grid_track_list_free(&list);
+    if (grid_explicit_tracks(container, rows, intrinsic, &t)) n = t.list.n;
+    grid_explicit_tracks_free(&t);
     return n > from_areas ? n : from_areas;
 }
 
-void grid_placement_run(lxb_dom_element_t *container, GridPlacement *out)
+void grid_placement_run(lxb_dom_element_t *container, bool intrinsic, GridPlacement *out)
 {
     BoxTreeChild c;
     CssGridTemplateAreas areas;
@@ -405,8 +406,8 @@ void grid_placement_run(lxb_dom_element_t *container, GridPlacement *out)
 
     DCHECK(out != NULL, "a grid was placed with nowhere to put it");
     (void)css_computed_grid_template_areas(container, &areas);
-    explicit_columns = gp_explicit_tracks(container, &areas, false);
-    explicit_rows = gp_explicit_tracks(container, &areas, true);
+    explicit_columns = gp_explicit_tracks(container, &areas, false, intrinsic);
+    explicit_rows = gp_explicit_tracks(container, &areas, true, intrinsic);
     row_axis.areas = col_axis.areas = &areas;
     row_axis.rows = true;
     col_axis.rows = false;

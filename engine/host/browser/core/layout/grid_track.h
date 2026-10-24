@@ -37,19 +37,25 @@ typedef enum {
     GRID_SIZING_MAX_CONTENT
 } GridSizingConstraint;
 
-/* One track. `kind` and `flex` are its sizing function (css_grid_track_list.h); `fixed` its resolved length
-   for a fixed one. `base` and `growth` are §11.4's base size and growth limit, `growth_inf` while the limit is
-   infinite; `growable` is §11.5's "infinitely growable" mark, held between two of its steps. */
+/* One track. `min` and `max` are its sizing functions (css_grid_track_list.h) with each percentage resolved
+   against the available grid space or, with none, treated as `auto` (§7.2.1 "Track Sizes"): a
+   `CSS_GRID_BREADTH_LENGTH` min or max is the length in `min_fixed` or `max_fixed`, and a `fit-content()` max's
+   limit is in `max_fixed`. `flex` is a flexible max's factor. `base` and `growth` are §11.4's base size and
+   growth limit, `growth_inf` while the limit is infinite; `growable` is §11.5's "infinitely growable" mark,
+   held between two of its steps. */
 typedef struct {
-    CssGridTrackKind kind;
-    double           flex;
-    CssPx            fixed, base, growth;
-    bool             growth_inf, growable;
+    CssGridBreadthKind min, max;
+    CssPx              min_fixed, max_fixed;
+    double             flex;
+    CssPx              base, growth;
+    bool               growth_inf, growable;
+    bool               collapsed;   /* an empty `auto-fit` track (§7.2.3.2), sized 0px with its gutters collapsed */
 } GridTrack;
 
-/* One item's §11.5 contributions on the axis, over the `span` tracks from `start`: its minimum contribution
-   (under a min-/max-content constraint, its limited min-content contribution), and its min-content and
-   max-content contributions. */
+/* One item's §11.5 contributions on the axis, over the `span` tracks from `start`: its minimum contribution,
+   and its min-content and max-content contributions. Under a min-/max-content constraint the minimum
+   contribution is measured only where §11.5's limited contributions read it (every spanned track has a fixed
+   max), and is the min-content contribution elsewhere. */
 typedef struct {
     size_t start, span;
     CssPx  minimum, min_content, max_content;

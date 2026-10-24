@@ -36,9 +36,9 @@ typedef struct {
    Items"). Refuses, by name, a pseudo-element or text item. */
 lxb_dom_element_t *grid_item_of(lxb_dom_element_t *container, BoxTreeChild c);
 
-/* §8.5 over `container`'s grid items, in its explicit grid. The implicit grid has at least one column, which
-   an auto-placed item needs. */
-void grid_placement_run(lxb_dom_element_t *container, GridPlacement *out);
+/* §8.5 over `container`'s grid items, in its explicit grid (core/layout/grid_explicit_tracks.h, whose
+   `intrinsic` this passes on). The implicit grid has at least one column, which an auto-placed item needs. */
+void grid_placement_run(lxb_dom_element_t *container, bool intrinsic, GridPlacement *out);
 void grid_placement_free(GridPlacement *p);
 
 #endif

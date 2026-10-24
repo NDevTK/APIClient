@@ -1098,6 +1098,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/clientextent.h"
 #include "fixture/deepnest.h"
 #include "fixture/contain.h"
+#include "fixture/gridsizing.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1554,6 +1555,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "clientextent", HTML_CLIENTEXTENT },
     { "deepnest", HTML_DEEPNEST },
     { "contain", HTML_CONTAIN },
+    { "gridsizing", HTML_GRIDSIZING },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -14234,6 +14236,70 @@ TF_UNIT void probes_contain(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `gridsizing` document (fixture/gridsizing.h). */
+TF_UNIT void probes_gridsizing(const char *js, Probe *tab, int *n) {
+    const char *gs_why = NULL; int gs_tt = 1;
+
+    fold_row(&gs_tt, &gs_why, !!strstr(js, "\"/api/gridsizing\""),
+             "NOT REACHED: there is no /api/gridsizing record at all, so the document aborted before its fetch");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t1b", "220"),
+             "css-grid-1 §11.7: the `1fr` column is not the 220px a `1fr max-content max-content` list leaves it");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t1c", "270"),
+             "css-grid-1 §11.5: the second `max-content` column does not start after the 50px one");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t2a", "40"),
+             "css-grid-1 §11.5: a `min-content` column is not its item's 40px min-content contribution");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t2b", "70"),
+             "css-grid-1 §11.5: a `max-content` column is not its item's 70px max-content contribution");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t3a", "50"),
+             "css-grid-1 §11.4: `minmax(50px, max-content)` over a 20px item is not its 50px fixed min");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t3b", "80"),
+             "css-grid-1 §11.5: `minmax(10px, max-content)` over an 80px item is not 80px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t4x", "100"),
+             "css-grid-1 §7.2.1: `fit-content(60px)` over a 100px item is not its 100px auto minimum");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t4b", "30"),
+             "css-grid-1 §7.2.1: `fit-content(60px)` over a 30px item is not its 30px max-content");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t5b", "200"),
+             "css-grid-1 §11.7: `minmax(min-content, 1fr)` beside 100px is not the 200px left");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t6a", "60"),
+             "css-grid-1 §11.5: the spanning item's max-content contribution is not shared to make the first "
+             "`max-content` column 60px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t6b", "40"),
+             "css-grid-1 §11.5: the spanning item's max-content contribution is not shared to make the second "
+             "`max-content` column 40px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t7", "55"),
+             "css-grid-1 §5.2: the `inline-grid`'s width is not its 25px `min-content` column and 30px one");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t8x", "60"),
+             "css-grid-1 §11.5: `fit-content(60px)` does not clamp a 70px max-content contribution to 60px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t9c", "80"),
+             "css-grid-1 §7.2.3.1: `repeat(3, 40px)`'s third column does not start at 80px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t10a", "140"),
+             "css-grid-1 §7.2.3.2: `auto-fit`'s two occupied 100px columns, the empty ones collapsed with their "
+             "gutters, are not centred at 140px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t10b", "260"),
+             "css-grid-1 §7.2.3.2: `auto-fit`'s second column is not one 20px gutter after the first, at 260px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t11a", "20"),
+             "css-grid-1 §7.2.3.2: `auto-fill`'s four 100px columns and three gutters are not centred at 20px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t11b", "140"),
+             "css-grid-1 §7.2.3.2: `auto-fill`'s second column does not start at 140px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t12b", "125"),
+             "css-grid-1 §10.5: `space-between` does not put the middle column at 125px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t12c", "250"),
+             "css-grid-1 §10.5: `space-between` does not put the last column against the end edge");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t12s", "300"),
+             "css-grid-1 §10.5: an item spanning three `space-between` columns is not widened by the spacing to "
+             "300px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t13a", "50"),
+             "css-grid-1 §10.5: `space-evenly` does not put the first column 50px in");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t13b", "150"),
+             "css-grid-1 §10.5: `space-evenly` does not put the second column at 150px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t14a", "200"),
+             "css-grid-1 §10.5: `end` does not put the first of two 50px columns at 200px");
+    const Probe rows[] = {
+        { "grid-track-sizing-functions", gs_tt, "/api/gridsizing", SESS_EXPLORE, gs_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `boundpark` document (fixture/boundpark.h). */
 TF_UNIT void probes_boundpark(const char *js, Probe *tab, int *n) {
     /* One bound body through four callback routes; each failure arm reports its route, the declined send's
@@ -18151,6 +18217,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_clientextent(js, probes, &np);
     probes_deepnest(js, probes, &np);
     probes_contain(js, probes, &np);
+    probes_gridsizing(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
