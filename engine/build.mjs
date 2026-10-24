@@ -4162,11 +4162,12 @@ function cowHostRecSiteReading(b) {
 function coroSwapReading(b) {
   const g = `generator ${b.coroSwapGenMade}/${b.coroSwapGenCalls}`;
   const a = `async ${b.coroSwapAsyncMade}/${b.coroSwapAsyncCalls}`;
+  const ag = `async generator ${b.coroSwapAgenMade}/${b.coroSwapAgenCalls}`;
   const arming = b.coroSwapGenMade > 0
     ? `the generator half recorded, so this census reaches the line and the async reading is about the run`
     : `NEITHER sub-kind recorded, so nothing here is armed and the async zero is not yet a fact about the run`;
-  return `; coroutine-activation swaps — ${g}, ${a} (entries/calls, never a ratio: the generator gap is ` +
-         `re-forks inside one flow and the async gap is declines) — ` +
+  return `; coroutine-activation swaps — ${g}, ${a}, ${ag} (entries/calls, never a ratio: the generator and ` +
+         `async generator gaps are replacements inside one flow and the async gap is declines) — ` +
          (b.coroSwapAsyncMade > 0
            ? `the async capture RECORDED, so the clone-ownership arm ran`
            : b.coroSwapAsyncCalls > 0

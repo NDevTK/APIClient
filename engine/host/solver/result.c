@@ -843,7 +843,7 @@ static char *cow_site_hist_json(void) {
    `installs > 0`. Sized by composef (solver/compose.h). */
 char *result_swap_json(void) {
     long sc = 0, st = 0, sm = 0, hs = 0, he = 0, ds = 0, de = 0;
-    long gc = 0, gm = 0, ac = 0, am = 0;
+    long gc = 0, gm = 0, ac = 0, am = 0, agc = 0, agm = 0;
     long dw = 0, dsi = 0, du = 0, dn = 0;
     long df = 0, dr = 0, dss = 0;
     long roa = 0, rog = 0, ros = 0, rod = 0;
@@ -852,7 +852,7 @@ char *result_swap_json(void) {
     char *sites, *out;
 
     cow_swap_stats(&sc, &st, &sm);
-    cow_coro_swap_stats(&gc, &gm, &ac, &am);
+    cow_coro_swap_stats(&gc, &gm, &ac, &am, &agc, &agm);
     cow_chain_stats(&hs, &he);
     dom_cow_chain_stats(&ds, &de);
     dom_cow_site_stats(&dw, &dsi, &du, &dn);
@@ -908,13 +908,15 @@ char *result_swap_json(void) {
                  /* The per-flow coroutine-activation swap, the `is_gendata` entry kind (a shared generator's or
                     async closure's execution-state pointer) that `cowStateAsks`/`cowStateMade` cannot see.
                     `Calls` because they are raised before any gate cow.c owns. The gap is per sub-kind and the
-                    two are not added: the generator producer's only early return is the dedup replace of a
-                    re-fork, so `GenCalls - GenMade` is re-forks; the async hook's is the decline, so
-                    `AsyncCalls - AsyncMade` is declines. Lifetime counts (cow.c's `g_coro_*`); `Made <= Calls`
+                    two are not added: the generator and async generator producers' only early return is the
+                    dedup replace of a second clone in one flow, so `GenCalls - GenMade` and `AgenCalls -
+                    AgenMade` are replacements; the async hook's is the decline, so `AsyncCalls - AsyncMade` is
+                    declines. Lifetime counts (cow.c's `g_coro_*`); `Made <= Calls`
                     is DCHECKed in cow.c. A nonzero `coroSwapGenMade` proves the counting reaches this census,
                     not that the async hook (the interpreter's await-resume) is reachable. */
                  "\"coroSwapGenCalls\":%ld,\"coroSwapGenMade\":%ld,"
                  "\"coroSwapAsyncCalls\":%ld,\"coroSwapAsyncMade\":%ld,"
+                 "\"coroSwapAgenCalls\":%ld,\"coroSwapAgenMade\":%ld,"
                  /* Which state units were exercised: per-kind lifetime counts (cow.c's `g_state_asks`/
                     `g_state_made`). A pair because `made` 0 is nothing reached under a running flow, a gate
                     correctly refusing a flow-private object, or a broken unit (solver/cow.h). Not a ratio: a walk
@@ -928,7 +930,7 @@ char *result_swap_json(void) {
                  rc.declines[RENDERING_DECLINE_NO_OPPORTUNITY], rc.declines[RENDERING_DECLINE_FRAME_AHEAD],
                  rc.declines[RENDERING_DECLINE_TIMER_FIRST], rc.declines[RENDERING_DECLINE_REPLY_OWED],
                  rc.step1_no_navigable, rc.step1_hidden, rc.step1_render_blocked, rc.step1_no_work,
-                 gc, gm, ac, am, asks, made, sites);
+                 gc, gm, ac, am, agc, agm, asks, made, sites);
     free(sites);
     return out;
 }

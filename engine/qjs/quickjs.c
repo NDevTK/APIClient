@@ -29532,6 +29532,11 @@ typedef struct JSAgenSettle {
        is the whole reason it stopped being a JS_Call. */
     uint8_t after_drive;            /* 0 = finish the drive, 1 = ask the pump again */
     struct JSAsyncGeneratorData *agen;   /* the machine the pump is driving; BORROWED, kept alive by `hold` */
+    /* NAMED RESIDUAL. Not covered: a fork while this record is in flight (an AwaitReturn or CompleteStep
+       settle running page code) — tramp_cont_clone_one has no CONT_AGEN_DEFER arm. Next diff: the generated
+       record walk gives this record its clone, which re-derives `agen` from `hold` through
+       js_async_generator_resume_isolate instead of copying the pointer. Absence shows as tramp_cont_clone_one's
+       refusal naming this kind on a fork inside an async generator's settle. */
 } JSAgenSettle;
 /* The async call's own outcome, deferred across whatever its completion still owes: the settle CALL, or Await's
    machine. `promise` is the async function's own promise (the call's result is discarded, this is not), and
@@ -33875,6 +33880,11 @@ typedef enum JSAsyncGeneratorStateEnum {
 typedef struct JSAsyncGeneratorData {
     JSObject *generator; /* back pointer to the object (const) */
     JSAsyncGeneratorStateEnum state;
+    /* 0 = the original, owned by its generator object; >0 = a per-flow clone owned by that many COW deltas
+       (JS_AsyncGenDataRef/Unref), freed at 0. mint_gen is the fork generation it was minted in, read as
+       JSGeneratorData.mint_gen is. */
+    int cow_ref;
+    uint32_t mint_gen;
     JSAsyncFunctionState func_state;
     struct list_head queue; /* list of JSAsyncGeneratorRequest.link */
 } JSAsyncGeneratorData;
@@ -33959,6 +33969,10 @@ static JSValue js_async_generator_next(JSContext *ctx, JSValueConst this_val, in
 static JSValue js_async_generator_enqueue(JSContext *ctx, struct JSAsyncGeneratorData *s, int magic,
                                           JSValueConst arg);
 static int js_async_generator_pre(JSContext *ctx, struct JSAsyncGeneratorData *s, JSAsyncPost *out);
+/* Which async generator record THIS flow writes — the async generator twin of js_generator_resume_isolate.
+   NULL only on an allocation failure (with the throw already pending). */
+static struct JSAsyncGeneratorData *js_async_generator_resume_isolate(JSContext *ctx, JSValueConst agobj,
+                                                                      struct JSAsyncGeneratorData *s);
 #define AGEN_POST_AWAIT 2   /* js_async_generator_post: the body reached AWAIT, so the driver runs 27.10.5.3 Await's
                                machine on out->value (owned by the caller) and then places the drive's outcome */
 #define AGEN_SETTLE 4       /* EITHER half of the pump: §27.9.3.5 AsyncGeneratorCompleteStep's Call is owed, and
@@ -45094,6 +45108,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 s = js_mallocz(ctx, sizeof(JSAsyncGeneratorData));
                 if (unlikely(!s)) { js_create_requester_abandon(ctx, acreate_cont, acreate_cont_kind); JS_ThrowOutOfMemory(ctx); goto exception; }
                 ((JSAsyncGeneratorData *)s)->state = JS_ASYNC_GENERATOR_STATE_SUSPENDED_START;
+                ((JSAsyncGeneratorData *)s)->mint_gen = g_flow_gen;
                 init_list_head(&((JSAsyncGeneratorData *)s)->queue);
                 {
                     int aginit = async_func_init(ctx, &((JSAsyncGeneratorData *)s)->func_state, afn,
@@ -45229,6 +45244,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        "do_agen_drive_tramp entered with a receiver that is not a live async generator — the route "
                        "that set tramp_agen_magic must dispatch a non-async-generator .next() through its C entry");
                 agen_s = JS_VALUE_GET_OBJ(agthis)->u.async_generator_data;
+                /* §27.9.3.7 AsyncGeneratorEnqueue and the body run both write the record */
+                agen_s = js_async_generator_resume_isolate(ctx, agthis, agen_s);
+                if (unlikely(!agen_s)) goto exception;
                 agen_hold = js_dup(agthis);   /* the receiver operand is its only ref and this block frees it */
                 agen_prom = js_async_generator_enqueue(ctx, agen_s, tramp_agen_magic, agarg);
                 agen_cont = tramp_cont_state; agen_ck = tramp_cont_kind;
@@ -45537,6 +45555,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        "js_async_generator_resolve_function_create");
                 /* held across the body run, exactly as the drive holds its receiver: the callee operand below
                    is this generator's only reference on this stack and it is about to be freed. */
+                agen_s = js_async_generator_resume_isolate(ctx, rgobj, agen_s);
+                if (unlikely(!agen_s)) { JS_FreeValue(ctx, rarg); goto exception; }
                 agen_hold = js_dup(rgobj);
                 DCHECK(agen_s->state == JS_ASYNC_GENERATOR_STATE_EXECUTING,
                        "an async generator's await continuation fired on a machine that is not EXECUTING — the "
@@ -45563,10 +45583,14 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    js_async_generator_function_call) already record theirs. That is exactly why a NULL here
                    would be someone else's omission arriving at this label, and it would surface as a captured
                    cell rooting nothing rather than as anything naming this. */
-                DCHECK(agen_s->func_state.frame.cur_gc_obj == &agen_s->generator->header,
-                       "an async generator's suspended frame does not name its generator object as owner — a "
-                       "cell captured in this body roots whatever cur_gc_obj says, so a frame that names "
-                       "nothing (or names something else) hands the collector a live coroutine it may free");
+                /* The original record's frame is owned by the generator object; a per-flow clone's is owned
+                   by its COW delta's counted reference, which no collection frees, so it names no owner. */
+                DCHECK(agen_s->func_state.frame.cur_gc_obj ==
+                           (agen_s->cow_ref == 0 ? &agen_s->generator->header : NULL),
+                       "an async generator's suspended frame does not name its owner — the original names its "
+                       "generator object and a per-flow clone names nothing; a cell captured in this body roots "
+                       "whatever cur_gc_obj says, so a wrong owner hands the collector a live coroutine it may "
+                       "free");
                 /* the operands go now, in whatever shape the call was written in: §27.10.5.3 steps 3.c/5.c make
                    this call's value UNDEFINED no matter what the body does, so nothing below needs them. */
                 TAKE_CALL_SHAPE();
@@ -55849,8 +55873,111 @@ static void js_async_generator_finalizer(JSRuntime *rt, JSValueConst obj)
     JSAsyncGeneratorData *s = JS_GetOpaque(obj, JS_CLASS_ASYNC_GENERATOR);
 
     if (s) {
+        /* the object owns its original record; a per-flow clone is installed only while its delta is applied,
+           and every delta is unapplied before teardown */
+        DCHECK(s->cow_ref == 0, "an async generator finalized while a per-flow record clone is installed");
         js_async_generator_free(rt, s);
     }
+}
+
+/* Clone an async generator record: its state, its suspended frame's [0, live) values through clone_susp_frame
+   when the state holds a frame (js_async_generator_free's own test), and every queued request with its owned
+   values — the layout js_async_generator_free releases. The clone is owned by one COW delta (cow_ref 1). NULL
+   on OOM, with nothing left allocated. */
+static JSAsyncGeneratorData *js_async_generator_data_clone(JSContext *ctx, JSAsyncGeneratorData *s)
+{
+    JSAsyncGeneratorData *c = js_mallocz(ctx, sizeof(*c));
+    struct list_head *el;
+
+    if (!c) return NULL;
+    c->generator = s->generator;
+    c->state = JS_ASYNC_GENERATOR_STATE_COMPLETED;   /* no frame to free until the clone below owns one */
+    c->cow_ref = 1;
+    c->mint_gen = g_flow_gen;
+    init_list_head(&c->queue);
+    if (s->state != JS_ASYNC_GENERATOR_STATE_COMPLETED &&
+        s->state != JS_ASYNC_GENERATOR_STATE_AWAITING_RETURN) {
+        JSStackFrame *sf = &s->func_state.frame;
+        ptrdiff_t live;
+
+        DCHECK(sf->cur_sp != NULL && s->func_state.tramp_top == NULL,
+               "an async generator record cloned while its body runs — the body runs on the chain of the flow "
+               "that isolated the record, and a fork inside it is refused by clone_deep_flow");
+        live = sf->cur_sp - sf->arg_buf;
+        /* the clone's frame is owned by its delta, never by the shared object, so it names no owner (see
+           js_generator_data_clone) */
+        DCHECK(c->func_state.frame.cur_gc_obj == NULL, "a fresh async generator record clone names an owner");
+        if (clone_susp_frame(ctx, &c->func_state, &s->func_state, live) < 0) {
+            js_free(ctx, c);
+            return NULL;
+        }
+        c->func_state.argc = s->func_state.argc;
+        c->func_state.throw_flag = s->func_state.throw_flag;
+        c->func_state.tramp_top = NULL;
+        c->func_state.frame.cur_sp = c->func_state.frame.arg_buf + live;
+    }
+    c->state = s->state;
+    list_for_each(el, &s->queue) {
+        JSAsyncGeneratorRequest *r = list_entry(el, JSAsyncGeneratorRequest, link);
+        JSAsyncGeneratorRequest *nr = js_malloc(ctx, sizeof(*nr));
+
+        if (!nr) {
+            js_async_generator_free(ctx->rt, c);
+            return NULL;
+        }
+        nr->completion_type = r->completion_type;
+        nr->result = js_dup(r->result);
+        nr->promise = js_dup(r->promise);
+        nr->resolving_funcs[0] = js_dup(r->resolving_funcs[0]);
+        nr->resolving_funcs[1] = js_dup(r->resolving_funcs[1]);
+        list_add_tail(&nr->link, &c->queue);
+    }
+    return c;
+}
+
+/* ECMAScript §27.9.3.7 AsyncGeneratorEnqueue, the body run, and the completion and await-return steps write the
+   record ([[AsyncGeneratorState]], the execution context and [[AsyncGeneratorQueue]]), which is flow state. A
+   record minted at or before this flow's last fork is cloned and the host installs the clone on `agobj` for this
+   flow (JSTimeTravelHooks.agen_isolate). Returns the record this flow writes; NULL on OOM with the throw
+   pending. */
+static JSAsyncGeneratorData *js_async_generator_resume_isolate(JSContext *ctx, JSValueConst agobj,
+                                                              JSAsyncGeneratorData *s)
+{
+    JSAsyncGeneratorData *c;
+
+    DCHECK(JS_VALUE_GET_OBJ(agobj)->u.async_generator_data == s,
+           "an async generator write was handed a record its object does not name");
+    if (!g_time_travel.agen_isolate || s->mint_gen > g_flow_fork_gen)
+        return s;
+    c = js_async_generator_data_clone(ctx, s);
+    if (unlikely(!c)) {
+        JS_ThrowOutOfMemory(ctx);
+        return NULL;
+    }
+    g_time_travel.agen_isolate(ctx, agobj, s, c);
+    return JS_VALUE_GET_OBJ(agobj)->u.async_generator_data;
+}
+
+/* The per-flow async generator record swap, the twin of the generator one. */
+void JS_SetObjAsyncGenData(JSValueConst agobj, void *ad) {
+    JSObject *p = JS_VALUE_GET_OBJ(agobj);
+    DCHECK(p->class_id == JS_CLASS_ASYNC_GENERATOR, "JS_SetObjAsyncGenData: not an async generator object");
+    p->u.async_generator_data = (JSAsyncGeneratorData *)ad;
+}
+void *JS_GetObjAsyncGenData(JSValueConst agobj) {
+    JSObject *p = JS_VALUE_GET_OBJ(agobj);
+    DCHECK(p->class_id == JS_CLASS_ASYNC_GENERATOR, "JS_GetObjAsyncGenData: not an async generator object");
+    return p->u.async_generator_data;
+}
+void JS_AsyncGenDataRef(void *ad) {
+    JSAsyncGeneratorData *s = (JSAsyncGeneratorData *)ad;
+    DCHECK(s->cow_ref > 0, "JS_AsyncGenDataRef: ref of a record its object owns");
+    s->cow_ref++;
+}
+void JS_AsyncGenDataUnref(JSContext *ctx, void *ad) {
+    JSAsyncGeneratorData *s = (JSAsyncGeneratorData *)ad;
+    DCHECK(s->cow_ref > 0, "JS_AsyncGenDataUnref: unref of a record its object owns, or one already released");
+    if (--s->cow_ref == 0) js_async_generator_free(ctx->rt, s);
 }
 
 static void js_async_generator_mark(JSRuntime *rt, JSValueConst val,
@@ -56111,6 +56238,8 @@ static int js_agen_await_ret_step(JSContext *ctx, void *st, JSValue cb_result, J
     int r, res;
 
     DCHECK(s != NULL, "AsyncGeneratorAwaitReturn ran on something that is not an async generator");
+    s = js_async_generator_resume_isolate(ctx, gobj, s);
+    if (unlikely(!s)) { JS_FreeValue(ctx, cb_result); return -1; }
     if (m->hdr.stage == AR_HEAD) {
         JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
         m->result = JS_UNDEFINED;
@@ -56225,6 +56354,8 @@ static int js_agen_complete_step_step(JSContext *ctx, void *st, JSValue cb_resul
     DCHECK(s != NULL,
            "§27.9.3.9's completion-step closure carries no machine — its captured generator object is the "
            "reference keeping the state alive, so a cleared opaque means it was not built over one");
+    s = js_async_generator_resume_isolate(ctx, gobj, s);
+    if (unlikely(!s)) { JS_FreeValue(ctx, cb_result); return -1; }
     if (m->call_phase == 0) {
         JSValue fn = JS_UNDEFINED, val = JS_UNDEFINED;
         DCHECK(s->state == JS_ASYNC_GENERATOR_STATE_AWAITING_RETURN ||

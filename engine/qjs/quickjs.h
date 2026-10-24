@@ -2213,6 +2213,8 @@ typedef struct JSTimeTravelHooks {
        `genobj` for the duration of this flow and records the swap on its delta, which OWNS cur_gd
        (JS_GenDataRef/Unref), or declines when no flow owns the swap and releases it. */
     void (*gen_isolate)(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd);
+    /* The same for an async generator's record (JS_AsyncGenDataRef/Unref). */
+    void (*agen_isolate)(JSContext *ctx, JSValueConst agobj, void *base_ad, void *cur_ad);
     /* Before a flow changes a shared ARRAY BUFFER's STORAGE STATE — any of its BYTES, or the EXTENT those bytes
        live in (`resize`/`grow`, `transfer`, a detach). `abuf` is the ArrayBuffer/SharedArrayBuffer OBJECT —
        never a view and never a raw pointer — because the buffer is what OWNS the storage and is the only name
@@ -2342,6 +2344,10 @@ JS_EXTERN void  JS_AsyncDataRef(void *ad);
 JS_EXTERN void  JS_AsyncDataUnref(JSContext *ctx, void *ad);
 JS_EXTERN void  JS_SetObjGenData(JSValueConst genobj, void *gd);
 JS_EXTERN void *JS_GetObjGenData(JSValueConst genobj);
+JS_EXTERN void  JS_SetObjAsyncGenData(JSValueConst agobj, void *ad);
+JS_EXTERN void *JS_GetObjAsyncGenData(JSValueConst agobj);
+JS_EXTERN void  JS_AsyncGenDataRef(void *ad);
+JS_EXTERN void  JS_AsyncGenDataUnref(JSContext *ctx, void *ad);
 JS_EXTERN void  JS_GenDataRef(void *gd);
 JS_EXTERN void  JS_GenDataUnref(JSContext *ctx, void *gd);
 /* A closure cell is opaque here (JSVarRef is engine-internal); the host reads/writes its value via these. */

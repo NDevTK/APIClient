@@ -401,6 +401,8 @@ void      cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *bas
 /* JSTimeTravelHooks.gen_isolate: installs `cur_gd` on `genobj` and records the swap on the running flow's delta
    through cow_delta_add_gendata; with no running flow, releases `cur_gd` and leaves `genobj` on `base_gd`. */
 void      cow_capture_gen_isolate(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd);
+/* JSTimeTravelHooks.agen_isolate: the same for an async generator's record. */
+void      cow_capture_agen_isolate(JSContext *ctx, JSValueConst agobj, void *base_ad, void *cur_ad);
 
 /* Record a per-flow GENERATOR-STATE swap into delta `d` (JSTimeTravelHooks.gen_fork): the shared generator
    object `genobj` must resolve to `cur_gd` (a per-flow clone `d` OWNS) while `d` runs and to `base_gd` (the
@@ -500,7 +502,8 @@ void cow_swap_stats(long *count, long *total, long *max);
    entry count of zero is two states that take opposite work — the producer was never reached, or it was
    reached and its own arm declined (no delta owns the swap) or deduped (a re-fork inside one flow) — and only
    the call count tells them apart. See the counters in cow.c for which gap belongs to which sub-kind. */
-void cow_coro_swap_stats(long *gen_calls, long *gen_made, long *async_calls, long *async_made);
+void cow_coro_swap_stats(long *gen_calls, long *gen_made, long *async_calls, long *async_made,
+                         long *agen_calls, long *agen_made);
 
 /* WHAT THE CHAIN IS HOLDING RIGHT NOW — the frozen segments still referenced and the entries in them. The swap
    counters above say what a SWITCH costs and say nothing about what is RETAINED, so a run whose frontier is

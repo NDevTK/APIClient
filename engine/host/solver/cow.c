@@ -40,10 +40,10 @@ enum { COW_CUR_UNRECORDED = 0, COW_CUR_ABSENT = 1, COW_CUR_PRESENT = 2 };
    not exist at all — so its cur_state is only ever PRESENT, and apply asserts that rather than assuming it. */
 /* A THIRD entry kind (is_gendata) swaps a shared COROUTINE object's execution-state pointer per flow: obj is
    the object, g0 its original state, g1 the per-flow clone (owned by this delta). Apply installs g1, unapply
-   restores g0 — a fixed toggle, no cur/base value tracking. TWO OBJECT KINDS share it because they are one
+   restores g0 — a fixed toggle, no cur/base value tracking. THREE OBJECT KINDS share it because they are one
    concept — "which activation does this shared object name while I run" — and differ only in the setter: a
-   GENERATOR object (is_gendata=1) and an async resolve/reject CLOSURE (is_gendata=2), whose activation is
-   consumed by being resumed. */
+   GENERATOR object (is_gendata=1), an async resolve/reject CLOSURE (is_gendata=2), whose activation is
+   consumed by being resumed, and an ASYNC GENERATOR object (is_gendata=3). */
 /* A FOURTH entry kind (is_map=1) is a reversible Set/Map record mutation by this flow (an UNDO-LOG entry, not a
    deduped slot): obj is the Set/Map, base.value holds the record's key, cur.value its new value, map_old its
    prior value — a record is a key and a value and has no attributes, so the descriptors' other fields stay zero.
@@ -1076,13 +1076,18 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
 /* The setter/ownership pair for a coroutine-state entry, chosen by its kind. */
 static void cow_gd_install(const CowEntry *e, void *gd) {
     if (e->is_gendata == 2) JS_SetObjAsyncData(e->obj, gd);
+    else if (e->is_gendata == 3) JS_SetObjAsyncGenData(e->obj, gd);
     else JS_SetObjGenData(e->obj, gd);
 }
 static void cow_gd_ref(const CowEntry *e, void *gd) {
-    if (e->is_gendata == 2) JS_AsyncDataRef(gd); else JS_GenDataRef(gd);
+    if (e->is_gendata == 2) JS_AsyncDataRef(gd);
+    else if (e->is_gendata == 3) JS_AsyncGenDataRef(gd);
+    else JS_GenDataRef(gd);
 }
 static void cow_gd_unref(JSContext *ctx, const CowEntry *e, void *gd) {
-    if (e->is_gendata == 2) JS_AsyncDataUnref(ctx, gd); else JS_GenDataUnref(ctx, gd);
+    if (e->is_gendata == 2) JS_AsyncDataUnref(ctx, gd);
+    else if (e->is_gendata == 3) JS_AsyncGenDataUnref(ctx, gd);
+    else JS_GenDataUnref(ctx, gd);
 }
 
 /* HOW MANY COROUTINE-ACTIVATION SWAPS THIS SESSION REACHED AND HOW MANY IT RECORDED, per sub-kind. LIFETIME
@@ -1101,10 +1106,17 @@ static void cow_gd_unref(JSContext *ctx, const CowEntry *e, void *gd) {
    already passed `cow_hooks_off() || !g_current`, so its zero means "not reached UNDER A RUNNING FLOW"; these
    are raised before any gate this file owns, so their zero means "not reached". Spelling them `asks` would
    claim a denominator they do not have.
-   The gap means something different per sub-kind: the generator producer is handed its delta (by the fork
-   assembly or the resume hook) and returns early only to dedup-REPLACE a second clone of one generator in one
-   flow, so its gap is replacements; the async producer returns early only at the no-delta decline. */
+   The gap differs per sub-kind: the (async) generator producer is handed its delta and returns early only to
+   dedup-REPLACE a second clone of one object in one flow, so its gap is replacements; the async producer
+   returns early only at the no-delta decline. */
 static long g_coro_gen_calls, g_coro_gen_made, g_coro_async_calls, g_coro_async_made;
+static long g_coro_agen_calls, g_coro_agen_made;
+
+/* The census pair of a sub-kind. */
+static void cow_coro_counts(int kind, long **calls, long **made) {
+    *calls = kind == 2 ? &g_coro_async_calls : kind == 3 ? &g_coro_agen_calls : &g_coro_gen_calls;
+    *made = kind == 2 ? &g_coro_async_made : kind == 3 ? &g_coro_agen_made : &g_coro_gen_made;
+}
 
 /* THE ONE CONSTRUCTOR OF A COROUTINE-STATE ENTRY — cow_state_entry_set's twin and written for its reason: the
    sub-kind and the two activation pointers are set together because an entry carrying one and not the others
@@ -1119,31 +1131,33 @@ static long g_coro_gen_calls, g_coro_gen_made, g_coro_async_calls, g_coro_async_
    reads later; delete either `++` in the producers below and this fires on that sub-kind's next entry. */
 static void cow_gd_entry_set(CowEntry *e, int kind, void *base, void *cur) {
     long *made, *calls;
-    DCHECK(kind == 1 || kind == 2,
-           "a coroutine-state entry named a sub-kind that is neither a GENERATOR object (1) nor an async "
-           "resolve/reject CLOSURE (2) — cow_gd_install, cow_gd_ref and cow_gd_unref each choose their "
-           "setter/ownership pair by testing for 2, so a third value would silently take the generator arm "
-           "and install a JSAsyncFunctionData through JS_SetObjGenData");
+    DCHECK(kind >= 1 && kind <= 3,
+           "a coroutine-state entry named a sub-kind that is not a GENERATOR object (1), an async "
+           "resolve/reject CLOSURE (2) or an ASYNC GENERATOR object (3) — cow_gd_install, cow_gd_ref and "
+           "cow_gd_unref fall to the generator arm for any other value, and would install a foreign record "
+           "through JS_SetObjGenData");
     e->is_gendata = kind; e->g0 = base; e->g1 = cur;
-    made  = (kind == 2) ? &g_coro_async_made  : &g_coro_gen_made;
-    calls = (kind == 2) ? &g_coro_async_calls : &g_coro_gen_calls;
+    cow_coro_counts(kind, &calls, &made);
     ++*made;
     DCHECKF(*made <= *calls,
             "a coroutine-state entry of sub-kind `%s` was recorded without its producer having counted the "
             "CALL that made it, so this sub-kind's census reports entries against a denominator that never "
             "moved — which reads as a producer nothing reaches, the one question the pair exists to answer",
-            (kind == 2) ? "async" : "gen");
+            kind == 2 ? "async" : kind == 3 ? "agen" : "gen");
 }
 
 /* WHICH COROUTINE SUB-KINDS THIS SESSION ACTUALLY SWAPPED — see the counters above for what the two halves of
-   each pair mean and why they are a pair. Four out-params rather than a kind-indexed accessor because there
-   is no list to index: the sub-kind is a field of the entry with two values the code spells directly, and an
-   ordinal over it would be a name only while that stays true. */
-void cow_coro_swap_stats(long *gen_calls, long *gen_made, long *async_calls, long *async_made) {
+   each pair mean and why they are a pair. Named out-params rather than a kind-indexed accessor because the
+   sub-kind is a field of the entry with values the code spells directly, and an ordinal over it would be a name
+   only while that stays true. */
+void cow_coro_swap_stats(long *gen_calls, long *gen_made, long *async_calls, long *async_made,
+                         long *agen_calls, long *agen_made) {
     if (gen_calls) *gen_calls = g_coro_gen_calls;
     if (gen_made) *gen_made = g_coro_gen_made;
     if (async_calls) *async_calls = g_coro_async_calls;
     if (async_made) *async_made = g_coro_async_made;
+    if (agen_calls) *agen_calls = g_coro_agen_calls;
+    if (agen_made) *agen_made = g_coro_agen_made;
 }
 
 /* JSTimeTravelHooks.async_fork — the async twin of the generator swap. The engine has already cloned the
@@ -1213,22 +1227,33 @@ void cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_dat
     cow_capture_end();
 }
 
-/* JSTimeTravelHooks.gen_isolate — the resume-time twin of the fork assembly's generator swap. The engine has
-   cloned the record because another flow may still name it; this installs the clone for the running flow and
-   records the toggle, so the record every other arm finds stays as it was. The pointer is set before the entry
-   is recorded because a dedup-REPLACE releases the clone the object names now. */
-void cow_capture_gen_isolate(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd) {
-    CowDelta *d = g_current;
+static void cow_delta_add_coro(JSContext *ctx, CowDelta *d, int kind, JSValueConst obj, void *base,
+                               void *cur);
 
-    DCHECK(JS_GetObjGenData(genobj) == base_gd,
-           "a generator resume asked to isolate a state record its generator object does not name");
+/* JSTimeTravelHooks.gen_isolate and .agen_isolate — the resume-time twins of the fork assembly's generator swap.
+   The engine has cloned the record because another flow may still name it; this installs the clone for the
+   running flow and records the toggle, so the record every other arm finds stays as it was. The pointer is set
+   before the entry is recorded because a dedup-REPLACE releases the clone the object names now. */
+static void cow_capture_coro_isolate(JSContext *ctx, int kind, JSValueConst obj, void *base, void *cur) {
+    CowDelta *d = g_current;
+    CowEntry probe = { 0 };
+
+    probe.is_gendata = kind; probe.obj = obj;
+    DCHECK((kind == 3 ? JS_GetObjAsyncGenData(obj) : JS_GetObjGenData(obj)) == base,
+           "a coroutine resume asked to isolate a record its object does not name");
     if (!d) {
         /* No flow owns the swap, so there is no sibling to isolate from: decline and release the clone. */
-        JS_GenDataUnref(ctx, cur_gd);
+        cow_gd_unref(ctx, &probe, cur);
         return;
     }
-    JS_SetObjGenData(genobj, cur_gd);
-    cow_delta_add_gendata(ctx, d, genobj, base_gd, cur_gd);
+    cow_gd_install(&probe, cur);
+    cow_delta_add_coro(ctx, d, kind, obj, base, cur);
+}
+void cow_capture_gen_isolate(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd) {
+    cow_capture_coro_isolate(ctx, 1, genobj, base_gd, cur_gd);
+}
+void cow_capture_agen_isolate(JSContext *ctx, JSValueConst agobj, void *base_ad, void *cur_ad) {
+    cow_capture_coro_isolate(ctx, 3, agobj, base_ad, cur_ad);
 }
 
 void cow_capture_module_eval(JSContext *ctx, void *mod) {
@@ -1663,17 +1688,25 @@ void cow_capture_varref(JSContext *ctx, void *vref) {
 /* Record a per-flow generator-state swap (see cow.h). Dedup-REPLACES an existing entry for the same generator
    (a re-fork inside this flow): release the previous clone, adopt the new one, keep the ORIGINAL base pointer. */
 void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, void *base_gd, void *cur_gd) {
-    void *gp = JS_VALUE_GET_PTR(genobj);
+    cow_delta_add_coro(ctx, d, 1, genobj, base_gd, cur_gd);
+}
+
+/* The generator and async generator producer: one swap entry per object per delta. */
+static void cow_delta_add_coro(JSContext *ctx, CowDelta *d, int kind, JSValueConst obj, void *base, void *cur) {
+    void *gp = JS_VALUE_GET_PTR(obj);
+    long *calls, *made;
     /* COUNTED AHEAD OF THE DEDUP, which is this producer's only early return — it is handed its delta and has
-       no gate to decline at — so `gen calls - gen made` is exactly the re-forks of one generator inside one
+       no gate to decline at — so `calls - made` is exactly the replacements of one object's clone inside one
        flow and never a refusal. */
-    g_coro_gen_calls++;
+    DCHECK(kind == 1 || kind == 3, "the swap producer records a generator (1) or an async generator (3) record");
+    cow_coro_counts(kind, &calls, &made);
+    ++*calls;
     for (int i = 0; i < d->n; i++) {
         CowEntry *e = &d->e[i];
-        if (e->is_gendata && JS_VALUE_GET_PTR(e->obj) == gp) {
-            JS_GenDataUnref(ctx, e->g1);   /* drop the previous clone; the new clone's creation ref transfers here */
-            e->g1 = cur_gd;
-            (void)base_gd;                 /* base stays e->g0 (the object-owned original), not the intermediate clone */
+        if (e->is_gendata == kind && JS_VALUE_GET_PTR(e->obj) == gp) {
+            cow_gd_unref(ctx, e, e->g1);   /* drop the previous clone; the new clone's creation ref transfers here */
+            e->g1 = cur;
+            (void)base;                    /* base stays e->g0, the record named before this flow's first clone */
             return;
         }
     }
@@ -1686,8 +1719,8 @@ void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, voi
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
-    e->obj = JS_DupValue(ctx, genobj);
-    cow_gd_entry_set(e, 1, base_gd, cur_gd);   /* adopts cur_gd's creation ref (freed on delta free) */
+    e->obj = JS_DupValue(ctx, obj);
+    cow_gd_entry_set(e, kind, base, cur);   /* adopts cur's creation ref (freed on delta free) */
     cow_capture_end();
 }
 
@@ -2259,6 +2292,7 @@ void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork, uint64_t (*time
         .async_state = cow_capture_async_state, .module_eval = cow_capture_module_eval,
         .obj_state = cow_capture_obj_state, .iter_state = cow_capture_iter_state,
         .async_fork = cow_capture_async_fork, .gen_isolate = cow_capture_gen_isolate,
+        .agen_isolate = cow_capture_agen_isolate,
         .body_mark = cow_capture_body_mark };
     DCHECK(gen_fork != NULL,
            "the time-travel hooks were installed with no generator-fork handler — a concolic branch inside a "
