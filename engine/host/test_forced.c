@@ -1121,12 +1121,17 @@ static const char *HTML_MIN =
        ONLY — this fixture is the ASan gate and an added BRANCH would multiply its flow count. */
     "<script>var cfg = { admin: state.admin };"
     " var owa = ['ow1B', 'ow2B']; var _sad = new Set();"
-    " var _mm = new Map([['mmk1', 'base'], ['mmk2', 'base']]);</script>"
+    " var _mm = new Map([['mmk1', 'base'], ['mmk2', 'base']]);"
+    " var _sgi = (function*(){ yield 'sg1'; yield 'sg2'; })(); _sgi.next();</script>"
     "<script>"
     "[1,2].forEach(function(e){ var w = cfg.admin ? 'feADMIN' : 'fePUBLIC'; fetch('/api/fefork?e=' + e + w); });"   /* forEach callback deep clone */
     /* array-element COW. Each arm overwrites its OWN slot and the read renders BOTH — see the full
        document's statement for why reading back only the slot you wrote makes a leak invisible. */
     "if (cfg.admin) { owa[0] = 'owA'; } else { owa[1] = 'owP'; } fetch('/api/owfork?a=' + owa[0] + '-' + owa[1]);"
+    /* A generator suspended across a fork outside its body: `_sgi` is the baseline above, already past its first
+       yield, so each arm's one `.next()` reads `sg2`. An arm resuming a record its sibling already advanced
+       reads `undefined`. */
+    "fetch('/api/genshare?v=' + _sgi.next().value + (cfg.admin ? 'A' : 'P'));"
     "delete globalThis.gdGone; globalThis.gdTag = cfg.admin ? 'gdADMIN' : 'gdPUBLIC';"   /* slot removal on the EXOTIC global — see the full document */
     " fetch('/api/gdel?v=' + globalThis.gdTag + (globalThis.gdGone === undefined ? 'gdSOLE' : 'gdLEAK'));"
     " delete globalThis.gdTag;"
@@ -11350,6 +11355,18 @@ TF_UNIT void probes_isolation_operands_sort(const char *js, Probe *tab, int *n) 
              "a /api/paf2fork value is neither `p0-pf2A` nor `p0-pf2P` (or there is none): an arm's Promise.all "
              "settled without one of the two elements its generator yields, so a forked sibling aggregate lost an "
              "element to its parent's");
+    /* §27.8.3.3 GeneratorResume across a fork made outside the generator's body: each arm resumes the
+       baseline generator once, so each reads its second yield, and nothing else. */
+    const char *genshare_why = NULL;
+    int genshare_tt = 1;
+    FORK_ROW(js, &genshare_tt, &genshare_why, "/api/genshare", "v",
+             "a generator suspended across a fork outside its body, resumed once by each arm",
+             "sg2A", "sg2P");
+    fold_row(&genshare_tt, &genshare_why,
+             param_value_count_of(js, "/api/genshare", "v", "sg2A") +
+             param_value_count_of(js, "/api/genshare", "v", "sg2P") == param_value_count(js, "/api/genshare", "v"),
+             "a /api/genshare value is neither `sg2A` nor `sg2P`: an arm resumed a generator state record its "
+             "sibling had already advanced, so the two arms share one [[GeneratorState]]");
     /* reduce ACCUMULATOR fork (CONT_ARRAY_REDUCE): the reducer branches on opaque state mid-fold ⇒
        clone_deep_flow cloned the JSArrayReduce state so each arm threaded its OWN accumulator across both
        elements (never a shared/contaminated acc). */
@@ -11833,6 +11850,7 @@ TF_UNIT void probes_isolation_operands_sort(const char *js, Probe *tab, int *n) 
         { "paffork", paffork_tt, "/api/paffork?", SESS_EXPLORE, paffork_why },
         { "paf2fork", paf2fork_tt, "/api/paf2fork", SESS_EXPLORE, paf2fork_why },
         { "paf2fork-whole", paf2whole_tt, "/api/paf2fork", SESS_EXPLORE, paf2whole_why },
+        { "genshare", genshare_tt, "/api/genshare", SESS_EXPLORE, genshare_why },
         { "redfork", redfork_tt, "/api/redfork", SESS_EXPLORE, redfork_why },
         { "rerepfork", rerepfork_tt, "/api/rerepfork", SESS_EXPLORE, rerepfork_why },
         { "toprimfork", toprimfork_tt, "/api/toprimfork", SESS_EXPLORE, toprimfork_why },
