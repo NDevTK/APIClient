@@ -1714,17 +1714,27 @@ typedef struct JSProxyData {
    nothing for a later write to invalidate and no reading of the block that could retire it. It therefore
    stands for the life of the buffer, which is over-general in a second way — a concrete `buf[3] = 7` after an
    unknown-index write still reads unknown at 3 — and that is the same direction and the same reason. */
-enum { JS_AB_SPAN_AT = 0, JS_AB_SPAN_ANY };
+/* JS_AB_SPAN_IMAGE records that the covered bytes are positions `image_pos`.. of `codec`'s output over the
+   unknown `unknown`, written as that codec's output over the unknown's example; `image` holds those bytes as
+   written, so staleness is per byte. It is provenance and not a recorded transform: an element read answers an
+   unknown derived from (unknown, position, width) whose example is the block's value, and a gate over it is
+   decided for that derivation alone — concolic_pin pins only a subject that owns its source, so no constraint
+   on a byte is ever carried back onto `unknown`. */
+enum { JS_AB_SPAN_AT = 0, JS_AB_SPAN_ANY, JS_AB_SPAN_IMAGE };
 
 typedef struct JSArrayBufferSpan {
     uint32_t offset;      /* byte offset into the data block; the START of the covered range for an ANY span */
     uint32_t extent;      /* bytes covered: the element's width for AT, the offset domain's extent for ANY */
-    uint8_t kind;         /* JS_AB_SPAN_AT / JS_AB_SPAN_ANY */
+    uint8_t kind;         /* JS_AB_SPAN_AT / JS_AB_SPAN_ANY / JS_AB_SPAN_IMAGE */
     uint8_t witness[8];   /* AT only: the bytes standing in the block when this span was recorded */
     JSValue unknown;      /* the unknown VALUE written, or JS_UNINITIALIZED when an ANY span's value was
                              concrete. ONE COUNTED REFERENCE when set. */
     JSValue index;        /* ANY only: the unknown OFFSET, which is what the read derives from when the value
                              was concrete. ONE COUNTED REFERENCE when set. */
+    JSValue image;        /* IMAGE only: the covered bytes as written, an 8-bit string; one counted reference
+                             when set, JS_UNINITIALIZED otherwise */
+    uint32_t image_pos;   /* IMAGE only: the codec-output position of the span's first byte */
+    const char *codec;    /* IMAGE only: the static name of the algorithm whose output the bytes are */
 } JSArrayBufferSpan;
 
 typedef struct JSArrayBuffer {
@@ -2874,8 +2884,7 @@ static bool js_get_fast_array_element(JSContext *ctx, JSObject *p, uint32_t idx,
 /* see JSArrayBufferSpan. Declared here because the two sides of an unknown element are far apart in this file
    and must stay one mechanism: the STORE is 10.4.5.18's arm in JS_CallInternal and the READ is
    js_get_fast_array_element directly above, while the record they share is defined with the buffer code. */
-static bool js_ab_span_get(JSContext *ctx, JSObject *bufobj, const JSArrayBuffer *abuf,
-                           uint32_t offset, int length, JSValue *pval);
+static bool js_ab_span_get(JSContext *ctx, JSObject *p, uint32_t idx, JSValue *pval);
 static void js_ab_span_set(JSContext *ctx, JSArrayBuffer *abuf, uint32_t offset, int length,
                            JSValueConst unknown);
 static void js_ab_span_set_any(JSContext *ctx, JSArrayBuffer *abuf, JSValueConst index,
@@ -16210,32 +16219,10 @@ static JSAtom js_referenced_name_atom(JSContext *ctx, JSValueConst base,
     return JS_ATOM_NULL;
 }
 
-static bool js_get_fast_array_element(JSContext *ctx, JSObject *p,
-                                      uint32_t idx, JSValue *pval)
+/* The element as the array or the data block holds it, consulting no span: the switch of
+   js_get_fast_array_element below, and the example an IMAGE span's element read derives from. */
+static bool js_get_fast_array_element_concrete(JSContext *ctx, JSObject *p, uint32_t idx, JSValue *pval)
 {
-    /* 10.4.5.17 TypedArrayGetElement ( obj, index ) OVER AN ELEMENT SOME FLOW STORED UNKNOWN EXTERNAL INPUT
-       INTO — the READ half of 10.4.5.18's store, and it is here because this is the ONE point every
-       typed-array element read converges on: [[Get]], JS_GetPropertyUint32 and the interpreter's own fast path
-       all reach the switch below, which is the property that makes the pair ONE mechanism rather than a store
-       with a list of readers to remember.
-       IT LANDS BEFORE THE SWITCH, NOT INSIDE AN ARM, because the answer is the same for every element type: the
-       block's bytes are the unknown's EXAMPLE and the unknown is the value. Answering from an arm would have
-       given each of the ten a copy of that decision to drift from.
-       WHY THE PAIR IS ONE LANDING AND WAS NEVER SPLIT: a store that accepts an unknown beside a read that
-       cannot hand it back is not a partial build, it is a silent DE-TAINT — `ta[i] = x` then `ta[i]` would
-       return the example as a concrete number, deleting the fork and everything behind the arm it never
-       explored, with nothing anywhere to say so. That is strictly worse than the abort this replaces.
-       THE COST FOR AN ORDINARY BUFFER IS THE LOAD OF A ZERO. n_span is 0 for every buffer no flow has stored an
-       unknown into, which is nearly all of them, so the branch below is predictable and the scan never runs. */
-    if (unlikely(is_typed_array(p->class_id)) && idx < p->u.array.count) {
-        JSTypedArray *ta = p->u.typed_array;
-        JSArrayBuffer *abuf = ta->buffer->u.array_buffer;
-        int width = 1 << typed_array_size_log2(p->class_id);
-
-        if (unlikely(abuf->n_span != 0) &&
-            js_ab_span_get(ctx, ta->buffer, abuf, ta->offset + idx * (uint32_t)width, width, pval))
-            return true;
-    }
     switch(p->class_id) {
     case JS_CLASS_ARRAY:
     case JS_CLASS_ARGUMENTS:
@@ -16294,6 +16281,30 @@ static bool js_get_fast_array_element(JSContext *ctx, JSObject *p,
     default:
         return false;
     }
+}
+
+static bool js_get_fast_array_element(JSContext *ctx, JSObject *p,
+                                      uint32_t idx, JSValue *pval)
+{
+    /* 10.4.5.17 TypedArrayGetElement ( obj, index ) OVER AN ELEMENT SOME FLOW STORED UNKNOWN EXTERNAL INPUT
+       INTO — the READ half of 10.4.5.18's store, and it is here because this is the ONE point every
+       typed-array element read converges on: [[Get]], JS_GetPropertyUint32 and the interpreter's own fast path
+       all reach the switch below, which is the property that makes the pair ONE mechanism rather than a store
+       with a list of readers to remember.
+       IT LANDS BEFORE THE SWITCH, NOT INSIDE AN ARM, because the answer is the same for every element type: the
+       block's bytes are the unknown's EXAMPLE and the unknown is the value. Answering from an arm would have
+       given each of the ten a copy of that decision to drift from.
+       WHY THE PAIR IS ONE LANDING AND WAS NEVER SPLIT: a store that accepts an unknown beside a read that
+       cannot hand it back is not a partial build, it is a silent DE-TAINT — `ta[i] = x` then `ta[i]` would
+       return the example as a concrete number, deleting the fork and everything behind the arm it never
+       explored, with nothing anywhere to say so. That is strictly worse than the abort this replaces.
+       THE COST FOR AN ORDINARY BUFFER IS THE LOAD OF A ZERO. n_span is 0 for every buffer no flow has stored an
+       unknown into, which is nearly all of them, so the branch below is predictable and the scan never runs. */
+    if (unlikely(is_typed_array(p->class_id)) && idx < p->u.array.count &&
+        unlikely(p->u.typed_array->buffer->u.array_buffer->n_span != 0) &&
+        js_ab_span_get(ctx, p, idx, pval))
+        return true;
+    return js_get_fast_array_element_concrete(ctx, p, idx, pval);
 }
 
 static JSValue JS_GetPropertyValue(JSContext *ctx, JSValueConst this_obj,
@@ -121973,9 +121984,50 @@ static JSValue js_ab_ctor_fini(JSContext *ctx, void *st, bool take_result)
    earlier one without anything having to delete it. It is also the order a serializer's own writes arrive in,
    so the element a page reads back is usually found at once. An ANY span is walked by the SAME loop and not
    ahead of it, so recency decides between the two kinds too. */
-static bool js_ab_span_get(JSContext *ctx, JSObject *bufobj, const JSArrayBuffer *abuf,
-                           uint32_t offset, int length, JSValue *pval)
+/* Whether any byte of [lo, lo + n) inside the IMAGE span `s` still holds the byte the codec wrote there. */
+static bool js_ab_image_live(const JSArrayBuffer *abuf, const JSArrayBufferSpan *s, uint32_t lo, uint32_t n)
 {
+    const JSString *img = JS_VALUE_GET_STRING(s->image);
+    uint32_t b = lo > s->offset ? lo : s->offset;
+    uint64_t end = (uint64_t)lo + n, send = (uint64_t)s->offset + s->extent;
+
+    if (send < end) end = send;
+    if ((int64_t)end > abuf->byte_length) end = (uint64_t)abuf->byte_length;
+    for (; b < end; b++)
+        if (abuf->data[b] == img->u.str8[b - s->offset])
+            return true;
+    return false;
+}
+
+/* The unknown an element read inside the IMAGE span `s` answers: derived from the span's unknown at this
+   element's codec position and width, with the element as the block holds it for its example. */
+static JSValue js_ab_image_element(JSContext *ctx, JSObject *p, uint32_t idx, const JSArrayBufferSpan *s,
+                                   uint32_t offset, int length)
+{
+    JSValue ex = JS_UNDEFINED, ops[3], r;
+    char op[96];
+
+    DCHECK(g_concolic.derived != NULL,
+           "an IMAGE span exists with no JSConcolicHooks.derived installed — JS_NewUint8ArrayImage records one "
+           "only over an unknown, which only an installed concolic class can mint");
+    if (!js_get_fast_array_element_concrete(ctx, p, idx, &ex))
+        DFAIL("an in-range typed-array element had no concrete value to serve as an IMAGE element's example");
+    ops[0] = s->unknown;
+    ops[1] = JS_NewInt64(ctx, (int64_t)s->image_pos + (int64_t)offset - (int64_t)s->offset);
+    ops[2] = js_int32(length);
+    snprintf(op, sizeof op, "%s[]", s->codec);
+    r = g_concolic.derived(ctx, op, ops, 3, ex);
+    DCHECK(!JS_IsUninitialized(r), "an IMAGE span's unknown is not an unknown — JS_NewUint8ArrayImage records "
+                                   "a span only over one");
+    return r;
+}
+
+static bool js_ab_span_get(JSContext *ctx, JSObject *p, uint32_t idx, JSValue *pval)
+{
+    JSObject *bufobj = p->u.typed_array->buffer;
+    const JSArrayBuffer *abuf = bufobj->u.array_buffer;
+    int length = 1 << typed_array_size_log2(p->class_id);
+    uint32_t offset = p->u.typed_array->offset + idx * (uint32_t)length;
     int i;
 
     if (abuf->n_span == 0 || abuf->detached || abuf->data == NULL)
@@ -121985,6 +122037,14 @@ static bool js_ab_span_get(JSContext *ctx, JSObject *bufobj, const JSArrayBuffer
     for (i = abuf->n_span - 1; i >= 0; i--) {
         const JSArrayBufferSpan *s = &abuf->span[i];
 
+        if (s->kind == JS_AB_SPAN_IMAGE) {
+            if ((int64_t)offset + length <= (int64_t)s->offset ||
+                (int64_t)offset >= (int64_t)s->offset + (int64_t)s->extent ||
+                !js_ab_image_live(abuf, s, offset, (uint32_t)length))
+                continue;
+            *pval = js_ab_image_element(ctx, p, idx, s, offset, length);
+            return true;
+        }
         if (s->kind == JS_AB_SPAN_ANY) {
             /* A WRITE WHOSE OFFSET WAS UNKNOWN COVERS EVERY OFFSET IT COULD HAVE BEEN. Answering the block's
                byte here is the one error that may never be made: nothing was written at this offset, so the
@@ -122086,6 +122146,9 @@ static void js_ab_span_set(JSContext *ctx, JSArrayBuffer *abuf, uint32_t offset,
     memcpy(s->witness, &abuf->data[offset], (size_t)length);
     s->unknown = js_dup(unknown);
     s->index = JS_UNINITIALIZED;
+    s->image = JS_UNINITIALIZED;
+    s->image_pos = 0;
+    s->codec = NULL;
 }
 
 /* RECORD THAT SOME ELEMENT OF THIS BUFFER HOLDS THIS VALUE AND NOTHING KNOWS WHICH — 10.4.5.18 with an unknown
@@ -122109,6 +122172,108 @@ static void js_ab_span_set_any(JSContext *ctx, JSArrayBuffer *abuf, JSValueConst
     memset(s->witness, 0, sizeof s->witness);
     s->unknown = JS_IsUninitialized(unknown) ? JS_UNINITIALIZED : js_dup(unknown);
     s->index = js_dup(index);
+    s->image = JS_UNINITIALIZED;
+    s->image_pos = 0;
+    s->codec = NULL;
+}
+
+/* Record that [offset, offset + extent) of the block holds positions `pos`.. of `codec`'s output over
+   `unknown`, as the bytes stand now. `codec` is a static string. */
+static void js_ab_span_set_image(JSContext *ctx, JSArrayBuffer *abuf, uint32_t offset, uint32_t extent,
+                                 JSValueConst unknown, uint32_t pos, const char *codec)
+{
+    JSArrayBufferSpan *s;
+    JSValue image;
+
+    DCHECK(extent > 0 && !abuf->detached && (int64_t)offset + extent <= (int64_t)abuf->byte_length,
+           "an IMAGE span was recorded over bytes the buffer does not hold");
+    CHECK(extent <= JS_STRING_LEN_MAX, "an IMAGE span is longer than a string can witness");
+    image = js_new_string8_len(ctx, (const char *)abuf->data + offset, (int)extent);
+    CHECK(!JS_IsException(image), "OOM witnessing a codec image of unknown input — a lost span would leave "
+                                  "the example bytes in the block as concrete numbers");
+    s = js_ab_span_push(ctx->rt, abuf);
+    s->kind = JS_AB_SPAN_IMAGE;
+    s->offset = offset;
+    s->extent = extent;
+    memset(s->witness, 0, sizeof s->witness);
+    s->unknown = js_dup(unknown);
+    s->index = JS_UNINITIALIZED;
+    s->image = image;
+    s->image_pos = pos;
+    s->codec = codec;
+}
+
+/* Every owned field of one span, taken or released together. */
+static void js_ab_span_dup_values(const JSArrayBufferSpan *s)
+{
+    (void)js_dup(s->unknown);
+    (void)js_dup(s->index);
+    (void)js_dup(s->image);
+}
+
+static void js_ab_span_free_values(JSRuntime *rt, JSArrayBufferSpan *s)
+{
+    JS_FreeValueRT(rt, s->unknown);
+    JS_FreeValueRT(rt, s->index);
+    JS_FreeValueRT(rt, s->image);
+}
+
+/* A block copy of [src_off, src_off + n) of `src` to `dst_off` of `dst` carries the spans describing those
+   bytes, and runs before the bytes move so a source witness is read before an overlapping copy overwrites it.
+   An AT span wholly inside the range keeps its witness, which the copy makes the destination's bytes; an IMAGE
+   span is clipped to the range; an ANY span meeting the range covers the whole destination, its offset being
+   unknown. A stale span describes nothing and is not carried. `src` may be `dst`. */
+static void js_ab_spans_copy(JSContext *ctx, JSArrayBuffer *dst, uint32_t dst_off,
+                             const JSArrayBuffer *src, uint32_t src_off, uint32_t n)
+{
+    int i, count = src->n_span;   /* spans this copy pushes onto `src` itself are not re-read */
+
+    if (count == 0 || n == 0 || src->detached || dst->detached)
+        return;
+    for (i = 0; i < count; i++) {
+        JSArrayBufferSpan s = src->span[i];   /* by value: a push may move the list when src == dst */
+        uint64_t lo = s.offset > src_off ? s.offset : src_off;
+        uint64_t hi = (uint64_t)s.offset + s.extent;
+        JSArrayBufferSpan *d;
+
+        if (hi > (uint64_t)src_off + n) hi = (uint64_t)src_off + n;
+        if (lo >= hi)
+            continue;
+        if (s.kind == JS_AB_SPAN_AT) {
+            if (lo != s.offset || hi != (uint64_t)s.offset + s.extent ||
+                (int64_t)hi > (int64_t)src->byte_length ||
+                memcmp(src->data + s.offset, s.witness, s.extent) != 0)
+                continue;
+            d = js_ab_span_push(ctx->rt, dst);
+            *d = s;
+            d->offset = dst_off + (s.offset - src_off);
+            js_ab_span_dup_values(d);
+        } else if (s.kind == JS_AB_SPAN_IMAGE) {
+            JSValue img;
+
+            if (!js_ab_image_live(src, &s, (uint32_t)lo, (uint32_t)(hi - lo)))
+                continue;
+            img = js_sub_string(ctx, JS_VALUE_GET_STRING(s.image), (int)(lo - s.offset), (int)(hi - s.offset));
+            CHECK(!JS_IsException(img), "OOM carrying a codec image across a block copy — a lost span would "
+                                        "leave the copied example bytes as concrete numbers");
+            d = js_ab_span_push(ctx->rt, dst);
+            *d = s;
+            d->offset = dst_off + (uint32_t)(lo - src_off);
+            d->extent = (uint32_t)(hi - lo);
+            d->image_pos = s.image_pos + (uint32_t)(lo - s.offset);
+            d->image = img;
+            (void)js_dup(d->unknown);
+        } else {
+            DCHECK(s.kind == JS_AB_SPAN_ANY, "a buffer span has a kind this copy does not carry");
+            if (dst->byte_length <= 0)
+                continue;
+            d = js_ab_span_push(ctx->rt, dst);
+            *d = s;
+            d->offset = 0;
+            d->extent = (uint32_t)dst->byte_length;
+            js_ab_span_dup_values(d);
+        }
+    }
 }
 
 /* THE BUFFER'S STORAGE IS GOING, SO EVERY SPAN NAMING IT GOES TOO — one counted reference per field that has
@@ -122118,8 +122283,7 @@ static void js_ab_spans_free(JSRuntime *rt, JSArrayBuffer *abuf)
     int i;
 
     for (i = 0; i < abuf->n_span; i++) {
-        JS_FreeValueRT(rt, abuf->span[i].unknown);
-        JS_FreeValueRT(rt, abuf->span[i].index);
+        js_ab_span_free_values(rt, &abuf->span[i]);
     }
     js_free_rt(rt, abuf->span);
     abuf->span = NULL;
@@ -122442,8 +122606,7 @@ void JS_BufferStateFree(JSRuntime *rt, void *blob)
     for (i = 0; i < st->n_view; i++)
         JS_FreeValueRT(rt, JS_MKPTR(JS_TAG_OBJECT, st->view[i].obj));
     for (i = 0; i < st->n_span; i++) {
-        JS_FreeValueRT(rt, st->span[i].unknown);
-        JS_FreeValueRT(rt, st->span[i].index);
+        js_ab_span_free_values(rt, &st->span[i]);
     }
     js_free_rt(rt, st->span);
     js_free_rt(rt, st->view);
@@ -122533,8 +122696,7 @@ void *JS_BufferStateSave(JSContext *ctx, JSValueConst obj)
             /* EVERY OWNED FIELD, not just the first. An ANY span holds a second reference — the unknown OFFSET
                the read derives from — and a copy that dup'd one of the two would hand the baseline a value
                whose count the free then over-releases. */
-            (void)js_dup(abuf->span[i].unknown);
-            (void)js_dup(abuf->span[i].index);
+            js_ab_span_dup_values(&abuf->span[i]);
             st->n_span = i + 1;
         }
     }
@@ -122674,8 +122836,7 @@ void JS_BufferStateRestore(JSContext *ctx, JSValueConst obj, void *blob)
         abuf->span_size = st->n_span;
         for (i = 0; i < st->n_span; i++) {
             abuf->span[i] = st->span[i];
-            (void)js_dup(st->span[i].unknown);
-            (void)js_dup(st->span[i].index);
+            js_ab_span_dup_values(&st->span[i]);
             abuf->n_span = i + 1;
         }
     }
@@ -122901,6 +123062,7 @@ static JSValue js_array_buffer_slice_build(JSContext *ctx, JSValueConst this_val
             JS_ThrowTypeErrorDetachedArrayBuffer(ctx);
         goto fail;
     }
+    js_ab_spans_copy(ctx, new_abuf, 0, abuf, (uint32_t)start, (uint32_t)new_len);
     memcpy(new_abuf->data, abuf->data + start, new_len);
     new_abuf->immutable = immutable;
     return new_obj;
@@ -123135,6 +123297,107 @@ bool JS_IsDetachedBufferSource(JSValueConst obj)
     return js_buffer_source_buffer(obj)->detached != 0;
 }
 
+/* The most recent span still describing byte `b`, or NULL — the recency and witness rules js_ab_span_get
+   applies, asked per byte. */
+static const JSArrayBufferSpan *js_ab_span_owner(const JSArrayBuffer *abuf, uint32_t b)
+{
+    int i;
+
+    for (i = abuf->n_span - 1; i >= 0; i--) {
+        const JSArrayBufferSpan *s = &abuf->span[i];
+
+        if (b < s->offset || (uint64_t)b >= (uint64_t)s->offset + s->extent)
+            continue;
+        if (s->kind == JS_AB_SPAN_ANY)
+            return s;
+        if (s->kind == JS_AB_SPAN_IMAGE) {
+            if (abuf->data[b] == JS_VALUE_GET_STRING(s->image)->u.str8[b - s->offset])
+                return s;
+            continue;
+        }
+        if ((int64_t)s->offset + s->extent <= (int64_t)abuf->byte_length &&
+            memcmp(&abuf->data[s->offset], s->witness, s->extent) == 0)
+            return s;
+    }
+    return NULL;
+}
+
+/* see quickjs-step.h */
+int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPiece **ppieces)
+{
+    JSArrayBuffer *abuf = js_buffer_source_buffer(obj);
+    JSObject *p = JS_VALUE_GET_OBJ(obj), *bufobj = p;
+    JSBufferUnknownPiece *pieces = NULL;
+    uint32_t lo = 0, hi, b, e;
+    int n = 0, cap = 0;
+
+    *ppieces = NULL;
+    if (abuf->n_span == 0 || abuf->detached || abuf->data == NULL)
+        return 0;
+    if (p->class_id == JS_CLASS_ARRAY_BUFFER || p->class_id == JS_CLASS_SHARED_ARRAY_BUFFER) {
+        hi = (uint32_t)abuf->byte_length;
+    } else {
+        DCHECK(p->class_id == JS_CLASS_DATAVIEW ? !dataview_is_oob(p) : !typed_array_is_oob(p),
+               "a buffer source's unknown bytes were asked of an out-of-bounds view — Web IDL §3.2.26's copy "
+               "reads no window for one, so the caller has already answered it");
+        bufobj = p->u.typed_array->buffer;
+        lo = p->u.typed_array->offset;
+        hi = lo + (uint32_t)js_buffer_view_byte_length(p);
+    }
+    for (b = lo; b < hi; b = e) {
+        const JSArrayBufferSpan *s = js_ab_span_owner(abuf, b);
+        JSBufferUnknownPiece *u;
+
+        e = b + 1;
+        while (e < hi && js_ab_span_owner(abuf, e) == s)
+            e++;
+        if (!s)
+            continue;
+        if (n == cap) {
+            JSBufferUnknownPiece *g;
+
+            cap = cap ? cap * 2 : 4;
+            g = js_realloc(ctx, pieces, sizeof(*pieces) * (size_t)cap);
+            CHECK(g != NULL, "OOM listing which bytes of a buffer source are unknown input");
+            pieces = g;
+        }
+        u = &pieces[n++];
+        u->offset = b - lo;
+        u->length = e - b;
+        u->codec = NULL;
+        u->image_pos = 0;
+        if (s->kind == JS_AB_SPAN_IMAGE) {
+            u->unknown = js_dup(s->unknown);
+            u->codec = s->codec;
+            u->image_pos = s->image_pos + (b - s->offset);
+            u->example = true;
+        } else if (s->kind == JS_AB_SPAN_AT) {
+            u->unknown = js_dup(s->unknown);
+            u->example = g_concolic.example_held && g_concolic.example_held(s->unknown);
+        } else if (!JS_IsUninitialized(s->unknown)) {
+            u->unknown = js_dup(s->unknown);
+            u->example = false;
+        } else {
+            DCHECK(g_concolic.key_read != NULL, "an ANY span over a concrete value exists with no "
+                                                "JSConcolicHooks.key_read to derive the element from");
+            u->unknown = g_concolic.key_read(ctx, JS_MKPTR(JS_TAG_OBJECT, bufobj), s->index);
+            DCHECK(!JS_IsUninitialized(u->unknown), "an ANY span's unknown offset derived no unknown element");
+            u->example = false;
+        }
+    }
+    *ppieces = pieces;
+    return n;
+}
+
+void JS_FreeBufferUnknowns(JSContext *ctx, JSBufferUnknownPiece *pieces, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++)
+        JS_FreeValue(ctx, pieces[i].unknown);
+    js_free(ctx, pieces);
+}
+
 /* THE VIEW'S BYTE LENGTH AS THE SPEC COMPUTES IT, WHICH IS NOT ALWAYS `ta->length`. A length-tracking view has
    [[ByteLength]] = auto, and ECMAScript §10.4.5.12 TypedArrayByteLength ( taRecord ) and §25.3.1.3
    GetViewByteLength ( viewRecord ) both turn on that one line — §10.4.5.12's is "If obj.[[ByteLength]] is not
@@ -123313,6 +123576,8 @@ static int js_typed_array_set_ta(JSContext *ctx,
             /* the DESTINATION's bytes only: the source is read. The element-by-element tail below needs no
                capture of its own — it stores through JS_SetPropertyUint32, which is routed. */
             cow_capture_bytes(ctx, p);
+            js_ab_spans_copy(ctx, dest_abuf, dest_ta->offset + (uint32_t)(offset << shift),
+                             src_abuf, src_ta->offset, (uint32_t)(src_len << shift));
             memmove(dest_abuf->data + dest_ta->offset + (offset << shift),
                     src_abuf->data + src_ta->offset, src_len << shift);
             return 1;
@@ -123401,6 +123666,7 @@ static JSValue js_typed_array_with_build(JSContext *ctx, JSValueConst this_val, 
     if (copy_len > 0) {
         ta = p->u.typed_array;
         src_abuf = ta->buffer->u.array_buffer;
+        js_ab_spans_copy(ctx, abuf, 0, src_abuf, ta->offset, (uint32_t)((size_t)copy_len << size_log2));
         memcpy(abuf->data, src_abuf->data + ta->offset,
                (size_t)copy_len << size_log2);
     }
@@ -123462,7 +123728,11 @@ static JSValue js_typed_array_copywithin_build(JSContext *ctx, JSValueConst this
     count = min_int(final - from, len - to);
     count = min_int(count, space);
     if (count > 0) {
+        JSArrayBuffer *cabuf = p->u.typed_array->buffer->u.array_buffer;
+
         shift = typed_array_size_log2(p->class_id);
+        js_ab_spans_copy(ctx, cabuf, p->u.typed_array->offset + (uint32_t)(to << shift),
+                         cabuf, p->u.typed_array->offset + (uint32_t)(from << shift), (uint32_t)(count << shift));
         memmove(p->u.array.u.uint8_ptr + (to << shift),
                 p->u.array.u.uint8_ptr + (from << shift),
                 count << shift);
@@ -124104,6 +124374,10 @@ static int js_ta_slice_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 uint8_t *dst = p1->u.array.u.uint8_ptr;
                 const uint8_t *src = p->u.array.u.uint8_ptr + (s->start << shift);
                 size_t nbytes = (size_t)count << shift, bi;
+
+                js_ab_spans_copy(ctx, p1->u.typed_array->buffer->u.array_buffer, p1->u.typed_array->offset,
+                                 p->u.typed_array->buffer->u.array_buffer,
+                                 p->u.typed_array->offset + (uint32_t)(s->start << shift), (uint32_t)nbytes);
                 /* 23.2.3.27 step 8.f.ix copies FORWARD, one unit at a time. When @@species returns a view on
                    the SAME buffer at a HIGHER offset, that propagates the first element through the overlap —
                    memmove deliberately does the opposite (it preserves the source), producing [20,30,40,…]
@@ -124899,6 +125173,7 @@ static JSValue js_ta_copy_finish(JSContext *ctx, JSValue obj, JSValueConst src_o
         goto fail;
     if (p->class_id == classid) {
         /* same type: copy the content */
+        js_ab_spans_copy(ctx, abuf, 0, src_abuf, ta->offset, (uint32_t)abuf->byte_length);
         memcpy(abuf->data, src_abuf->data + ta->offset, abuf->byte_length);
     } else {
         for(i = 0; i < len; i++) {
@@ -125789,6 +126064,22 @@ JSValue JS_NewUint8Array(JSContext *ctx, uint8_t *buf, size_t len,
                                                   class_id, buf, free_func,
                                                   opaque, false);
     return js_new_uint8array(ctx, buffer);
+}
+
+/* see quickjs-step.h */
+JSValue JS_NewUint8ArrayImage(JSContext *ctx, const uint8_t *buf, size_t len, JSValueConst unknown,
+                              const char *codec)
+{
+    JSValue arr = JS_NewUint8ArrayCopy(ctx, buf, len);
+
+    DCHECK(js_value_is_concolic(unknown), "a codec image was recorded over a value that is not unknown input — "
+                                          "a known operand's output is ordinary bytes");
+    DCHECK(codec != NULL, "a codec image names no codec, which is half the identity of every byte in it");
+    if (JS_IsException(arr) || len == 0)
+        return arr;
+    js_ab_span_set_image(ctx, JS_VALUE_GET_OBJ(arr)->u.typed_array->buffer->u.array_buffer, 0, (uint32_t)len,
+                         unknown, 0, codec);
+    return arr;
 }
 
 JSValue JS_NewUint8ArrayCopy(JSContext *ctx, const uint8_t *buf, size_t len)

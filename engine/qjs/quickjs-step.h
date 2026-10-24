@@ -1232,6 +1232,25 @@ JS_EXTERN bool JS_IsSharedBufferSource(JSValueConst obj);
    buffer-source brand test comes first. */
 JS_EXTERN bool JS_IsDetachedBufferSource(JSValueConst obj);
 
+/* The unknown bytes of a buffer source's window, as maximal runs each described by one span, in byte order;
+   bytes in no run are concrete. `offset` is window-relative. `unknown` is owned; for a codec image (`codec`
+   set) it is the unknown the codec ran over and `image_pos` is the run's first position in that output.
+   `example` says the run's bytes in the block are its unknown's example. Requires a brand-tested buffer
+   source that is not out of bounds. Returns the count; free with JS_FreeBufferUnknowns. */
+typedef struct JSBufferUnknownPiece {
+    uint32_t offset, length;
+    JSValue unknown;
+    const char *codec;
+    uint32_t image_pos;
+    bool example;
+} JSBufferUnknownPiece;
+JS_EXTERN int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPiece **ppieces);
+JS_EXTERN void JS_FreeBufferUnknowns(JSContext *ctx, JSBufferUnknownPiece *pieces, int n);
+/* A Uint8Array holding `buf`, recorded as `codec`'s output over the unknown `unknown` (whose example `buf` was
+   computed from), so each element reads as an unknown derived from it. `codec` is a static string. */
+JS_EXTERN JSValue JS_NewUint8ArrayImage(JSContext *ctx, const uint8_t *buf, size_t len, JSValueConst unknown,
+                                        const char *codec);
+
 /* %IteratorPrototype%. Web IDL §3.7.9.2 Iterator prototype object states that the ITERATOR PROTOTYPE OBJECT of
    an `iterable<>` interface has it as its [[Prototype]] ("The [[Prototype]] internal slot of an iterator
    prototype object must be %Iterator.prototype%" — the spec spells the intrinsic the ES2025 way; the engine's
