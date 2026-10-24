@@ -1160,6 +1160,9 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
         JS_SetPropertyStr(ctx, v, "body",
                           body ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)body, len) : JS_NULL);
         JS_SetPropertyStr(ctx, v, "headers", JS_NewString(ctx, field_lines));
+        /* This runner holds no response for a later provision record: a swapped-to or peer document is a child
+           instance that loads its address itself. */
+        JS_SetPropertyStr(ctx, v, "held", JS_NewString(ctx, "-"));
         free(field_lines);
         /* Each Set-Cookie field beside the URL it answered (Fetch §4.7 "HTTP-network fetch"); this runner follows
            no redirect, so every field answered `r->url`. Only this agent's jar is handed its own origin's pairs:

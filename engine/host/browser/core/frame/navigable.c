@@ -515,9 +515,9 @@ static void navigable_announce_open(JSContext *ctx, uint32_t child, JSValueConst
    browsing context: the incoming Document is created in a peer instance of this browsing context group, and the
    navigable here becomes a remote one presenting it. The record is `navigable.navigate <new document> <url>
    <origin> <provenance> <driven> <pinned> <issuer>` — the address, what the load is evidence of, whose act it
-   is, whether its path chose a witness and which document issued it (§7.4.2.2's sourceDocument), never the
-   bytes: the trusted zone
-   loads the address and derives the principal from its own load (SECURITY.md). A top-level traversable has no
+   is, whether its path chose a witness, which document issued it (§7.4.2.2's sourceDocument) and the zone's
+   held-response token, never the bytes: the trusted zone provisions from the response it holds, or loads the
+   address for `-`, and derives the principal from its own load (SECURITY.md). A top-level traversable has no
    parent, container or ancestor list, and its environments' top-level creation URL is its own address, so the
    zone derives those rather than being sent them. */
 static void nav_navigate_to_peer(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
@@ -1694,6 +1694,11 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        used to rest on. */
     char *response_self = NULL;
     JSValue bodyv = JS_UNDEFINED, headersv = JS_UNDEFINED, urlv = JS_UNDEFINED, cookiesv = JS_UNDEFINED;
+    /* The zone's token for the response it holds for this load, or `-` (a host that holds none, or a load that
+       fetched nothing): every exit that builds the Document elsewhere names it, and the in-agent one releases
+       it (navigable.committed). */
+    JSValue heldv = JS_UNDEFINED;
+    const char *held = "-";
     /* §7.1.7's CLONE OF THE INITIATOR'S CONTAINER, carried on the job because whose clone it is belongs to the
        OPERATION — the CREATOR's when §7.4 creates a navigable, the INITIATOR's when §7.4.2.2 navigates one —
        and by the time this job runs the only document it could ask is the one being replaced. It is ALWAYS
@@ -2027,6 +2032,12 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         DCHECK(JS_IsArray(cookiesv),
                "§7.4 step 14's response answer carries no `setCookies` list — the trusted zone states one on every "
                "answer, and a missing one would leave this flow's jar without the cookies its response set");
+        heldv = JS_GetPropertyStr(ctx, answer, "held");
+        DCHECK(JS_IsString(heldv),
+               "§7.4 step 14's response answer carries no `held` token — every host states the token of the "
+               "response it holds for this load, or `-`, and a swap or a peer would otherwise be loaded again");
+        held = JS_ToCString(ctx, heldv);
+        CHECK(held != NULL && *held, "navigable: OOM reading a document load's held-response token");
         /* THE REGISTER IS TAKEN AS SOON AS EVERY FIELD ABOVE IS READ. The response is this navigation's, not
            the outgoing document's, and §7.5.11's abort of that document (nav_navigate_to_peer) cancels the
            document's own fetches, among which a register still held here would be counted. §7.4 step 14's
@@ -2390,10 +2401,10 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                minted either: §7.5.1's own note says the Window, Document and agent on the swapped-past side
                "will not end up being used". */
             swapped = true;
-            /* AND IT CARRIES THIS NAVIGATION'S OWN PROVENANCE, because §7.1.3.2's swap is not a second act:
-               it is THIS load, arriving at a host that must build its Document in another instance. The host
-               re-fetches the address to do that (it may not take bytes from an untrusted engine), so it makes
-               the identical firing decision the create arm makes and needs the identical field. Reading it off
+            /* AND IT CARRIES THIS NAVIGATION'S OWN PROVENANCE AND HELD RESPONSE, because §7.1.3.2's swap is not
+               a second act: it is THIS load, arriving at a host that must build its Document in another
+               instance from the response it holds (it may not take bytes from an untrusted engine), judged by
+               the identical record the create arm is. Reading it off
                the job rather than off the flow running now is §scheduler's rule again — by here the response
                has come back, and the flow standing at this line need not be the one that navigated. */
             {
@@ -2406,7 +2417,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 CHECK(swap_prov != NULL && swap_drv != NULL && swap_pin != NULL && swap_iss != NULL,
                       "navigable: OOM taking §7.1.3.2's provenance off the load job");
                 browsing_context_group_swap(ctx, proxy, dest_url, origin, final_flags, swap_prov, swap_drv,
-                                            swap_pin, swap_iss);
+                                            swap_pin, swap_iss, held);
                 JS_FreeCString(ctx, swap_iss);
                 JS_FreeCString(ctx, swap_pin);
                 JS_FreeCString(ctx, swap_drv);
@@ -2419,7 +2430,15 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        another origin, so what reaches here is a response of this origin whose final sandboxing flags make its
        origin opaque. */
     if (!swapped && !in_agent)
-        nav_load_to_peer(ctx, s, proxy, dest_url, origin, final_flags, "-");
+        nav_load_to_peer(ctx, s, proxy, dest_url, origin, final_flags, held);
+    /* AND THE IN-AGENT ARM RELEASES THE RESPONSE THE ZONE HELD: the Document is built here, from the bytes this
+       answer carried, so nothing will name the token again. */
+    if (!swapped && in_agent && strcmp(held, "-") != 0) {
+        char *op = engine_notice_build("navigable.committed", (const char *const[]){ held }, 1);
+
+        engine_host_notify(ctx, op);
+        free(op);
+    }
     /* THE RESPONSE'S HEADER LIST OUTLIVES THIS POINT NOW, and it has to: HTML §13.2.3.2 "Determining the
        character encoding" reads the `Content-Type` header in a form of its own (Fetch §2.2.2 "Headers"' get,
        joined) and that read belongs INSIDE the component that runs the algorithm, not to this frame. The list
@@ -2534,6 +2553,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        where §13.2.3.2's decode copies the bytes into a buffer the creation record owns. */
     JS_FreeValue(ctx, headersv);
     JS_FreeValue(ctx, cookiesv);
+    if (!JS_IsUndefined(heldv)) JS_FreeCString(ctx, held);
+    JS_FreeValue(ctx, heldv);
     JS_FreeValue(ctx, bodyv);
     JS_FreeValue(ctx, urlv);
     /* THE TWO ADDRESSES THIS FRAME OWNS — the one the navigation asked for and the one the response came from.

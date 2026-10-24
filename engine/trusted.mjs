@@ -969,14 +969,15 @@ async function main() {
      The document this produces is recorded under neither alone but under their join (childDoc), composed by
      the caller at `provision`. */
   /* The response a provision record (`navigable.swap`, `navigable.navigate`) loads its document from: the one
-     this zone holds for the record's token, taken once and only by the instance it was fetched for and at the
-     address it was fetched at, or for `-` a load of the address under the record's own words. */
+     this zone holds for the record's token, taken once and only by the instance it was fetched for and at an
+     end of its redirect chain (the address asked for, or the response's URL), or for `-` a load of the address
+     under the record's own words. */
   async function provisionLoad(e, f, what, fromDoc) {
     const P = NAVIGABLE_NOTICE.provision;
     if (f[P.held] === '-')
       return navigate(f[P.address], e.docUrl, what, f[P.provenance], f[P.driven], f[P.pinned], fromDoc);
     const h = e.held.get(f[P.held]);
-    if (!h || h.address !== f[P.address])
+    if (!h || (h.address !== f[P.address] && h.loaded.url !== f[P.address]))
       return { declined: `${what} — it names the held response \`${f[P.held]}\`, which this zone holds for ` +
                          `no navigation of instance [${e.tag}] to ${f[P.address]}` };
     e.held.delete(f[P.held]);
@@ -1888,6 +1889,14 @@ async function main() {
         throw new Error(`a navigable.request notice does not match navigable_notice.h's request table: ${record}`);
       return;
     }
+    /* `navigable.committed <held>` — the engine built the Document of the load this zone holds `held` for in
+       its own heap, so nothing will name the token again and the response is released. A token this instance
+       does not hold names nothing to release: it was released already, or held by a session before a park. */
+    if (f[0] === 'navigable.committed') {
+      if (f.length !== 2 || !f[1]) throw new Error(`a navigable.committed notice did not name one token: ${record}`);
+      e.held.delete(f[1]);
+      return;
+    }
     if (f[0] === 'world.gone') {
       if (f.length < 2 || !f[1]) throw new Error(`a world.gone notice carried no world name: ${record}`);
       for (const i of instances) if (i !== e && i.live) i.ready.push(`world-gone\t${f[1]}`);
@@ -2221,10 +2230,14 @@ async function main() {
              honour. The header list crosses as the response's HTTP FIELD LINES, which is where §7.1.3's opener
              policy and that document's own CSP are read from. The trailing `0` is ECMA-262 6.2.4's NORMAL
              completion: this zone fetched bytes rather than relaying another instance's program, so it has
-             nothing to have thrown with. */
+             nothing to have thrown with. The response is also held under `held` until the engine builds the
+             Document here (`navigable.committed`) or names the token on a swap or peer record. */
+          const held = `h${++heldSerial}`;
+          e.held.set(held, { address: args.slice(i + 1), loaded });
           e.ready.push(['answer', String(id),
                         /* `setCookies` is empty: this host's loads carry no cookie jar (see the header). */
-                        b64(JSON.stringify({ url: loaded.url, headers: fieldLines(loaded.headers), setCookies: [] })),
+                        b64(JSON.stringify({ url: loaded.url, headers: fieldLines(loaded.headers), setCookies: [],
+                                             held })),
                         '0', b64(loaded.bytes)].join('\t'));
         })());
       } else if (op.startsWith('xhr.send\t')) {

@@ -548,7 +548,7 @@ async function service(e) {
       e.answer(id, { peer: fetchUrl.origin, held: '-' }, new Uint8Array(0));
       continue;
     }
-    e.answer(id, { url: fetchArgs.slice(initTab + 1), headers: "", setCookies: [] }, HTML_B);
+    e.answer(id, { url: fetchArgs.slice(initTab + 1), headers: "", setCookies: [], held: '-' }, HTML_B);
   }
   return { step: r };
 }

@@ -5763,6 +5763,8 @@ static int hostreq_answer_all(JSContext *ctx)
                    make: it serves these bytes out of a string literal. It was `csp: null`, one narrowed
                    field, which is the shape that kept §7.1.3's opener policy out of a navigated Document. */
                 JS_DefinePropertyValueStr(ctx, v, "headers", JS_NewString(ctx, ""), JS_PROP_C_W_E);
+                /* This fixture holds no response for a later provision record (`-`). */
+                JS_DefinePropertyValueStr(ctx, v, "held", JS_NewString(ctx, "-"), JS_PROP_C_W_E);
                 /* The response's Set-Cookie fields, each beside the URL it answered: none, except the `flow-jar`
                    row's load, which sets one cookie a document can read and one HttpOnly cookie it cannot. */
                 {

@@ -52,7 +52,7 @@ void browsing_context_group_release(void)
 
 void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
                                  SandboxFlags final_sandbox_flags, const char *provenance, const char *driven,
-                                 const char *pinned, const char *issuer)
+                                 const char *pinned, const char *issuer, const char *held)
 {
     uint32_t swapped;
     char *op;
@@ -66,9 +66,12 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
        that stopped stating a field whose absence §Attacker-sources makes a crash at the decision. */
     DCHECK(provenance != NULL && *provenance,
            "§7.1.3.2's group swap was asked to announce an instance with NO PROVENANCE for the navigation that "
-           "caused it — the load job carries the word (core/frame/navigable.c) and the trusted zone re-fetches "
-           "this address to build the Document, so without it that zone is deciding whether to spend the "
-           "network, and whose session, on a navigation nothing has told it who named");
+           "caused it — the load job carries the word (core/frame/navigable.c) and the trusted zone judges the "
+           "new Document by it, so without it that zone is deciding, on a navigation nothing has told it who "
+           "named, whose session the Document belongs to");
+    DCHECK(held != NULL && *held && !strchr(held, '\t'),
+           "§7.1.3.2's group swap was asked to announce an instance with no held-response token — the load job "
+           "states the zone's token, or `-`, and the zone builds the swapped-to Document from that response");
     DCHECK(driven != NULL && (!strcmp(driven, PENDING_DRIVEN_YES) || !strcmp(driven, PENDING_DRIVEN_NO)),
            "§7.1.3.2's group swap was asked to announce an instance with no drive mark for the navigation that "
            "caused it — the load job carries it beside the provenance, and the zone's `actor` row reads it");
@@ -118,8 +121,8 @@ void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char 
         [NAVIGABLE_PROVISION_ISSUER] = issuer,
         /* §7.3.2.3 creates the new browsing context with a null opener: a swap severs it. */
         [NAVIGABLE_PROVISION_OPENER] = "N",
-        /* The zone holds no response for a swap: this agent was answered the response's bytes. */
-        [NAVIGABLE_PROVISION_HELD] = "-",
+        /* The response the zone holds for this load, which it builds the swapped-to Document from. */
+        [NAVIGABLE_PROVISION_HELD] = held,
     };
 
     DCHECK(issuer != NULL && *issuer, "§7.1.3.2's swap was reached with no sourceDocument — the load job carries "

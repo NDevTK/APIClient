@@ -184,10 +184,9 @@ void browsing_context_group_release(void);
  *
  * `provenance` IS THE NAVIGATION'S, NOT THIS RECORD'S — CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's
  * `observed`/`derived`/`forced` (solver/engine.h), taken from the load job that reached this arm. The zone
- * fetches the address a SECOND time, as the paragraph above says, so it makes the same firing decision the
- * create arm makes and needs the same field to make it from; a record that named an address and said nothing
- * about who named it left the zone with §Attacker-sources' unestablished provenance, which that section makes
- * a crash at the decision rather than a load. It is a PARAMETER and never a read of the running flow, for the
+ * builds the Document from the response it holds under `held` (the load job's token), judged by the same
+ * record the create arm is; a record that said nothing about who named the address left the zone with
+ * §Attacker-sources' unestablished provenance, which that section makes a crash at the decision. It is a PARAMETER and never a read of the running flow, for the
  * reason the address beside it is one: this is reached from inside a queued task, by whichever flow adopted
  * it, long after the operation that decided what this navigation is evidence of. */
 /* `driven` (solver/engine.h's PENDING_DRIVEN_*) rides beside `provenance` for the same reason: it is whose act
@@ -196,6 +195,6 @@ void browsing_context_group_release(void);
  * its world name, off the same job, which the zone judges the navigation by. */
 void browsing_context_group_swap(JSContext *ctx, JSValueConst proxy, const char *url, const Origin *origin,
                                  SandboxFlags final_sandbox_flags, const char *provenance, const char *driven,
-                                 const char *pinned, const char *issuer);
+                                 const char *pinned, const char *issuer, const char *held);
 
 #endif

@@ -4780,6 +4780,8 @@ function noticeRefusal(f) {
         ? null : "names neither a rendezvous id nor the five-field pair";
     case "world.gone": case "world.parked":
       return parts(2, false) || noticeName(f[1], "world");
+    case "navigable.committed":
+      return parts(2, true) || noticeName(f[1], "held-response token");
     case "remoteop.exhausted": case "remoteop.retracted":
       return parts(2, false) || noticeName(f[1], "rendezvous token");
     default:
@@ -5074,12 +5076,9 @@ async function hostNotice(eng, line) {
      It must not join: an instance is (group, origin) and a swap changes the group, so even at an origin this
      pool runs it is a separate heap. The group id is minted here by a counter, a routing fact that is this
      zone's alone. The new context has a null creator, so no container or opener is inherited, and its
-     top-level creation URL is its own address. This zone loads the bytes: an untrusted engine that supplied
-     bytes and a principal could name any origin's document into existence.
-     Named residual: a record stating `-` after the engine was answered the response (this swap, and a
-     navigation whose final sandboxing flags made a same-origin response opaque) fetches the address again.
-     Next diff has this zone decide §7.1.3.2's swap and the sandboxed origin at the `document.fetch` answer
-     and hold that response too. Absence shows as two server hits for one such navigation. */
+     top-level creation URL is its own address. This zone supplies the bytes, from the response it holds for
+     the navigation's `document.fetch` (engineProvisionLoad): an untrusted engine that supplied bytes and a
+     principal could name any origin's document into existence. */
   if (f[0] === "navigable.swap") {
     /* The name is minted fresh for each swap (solver/world.h), so one this pool holds would provision one heap
        for two Documents. */
@@ -5148,8 +5147,8 @@ async function hostNotice(eng, line) {
      it has no creator container (the empty CSP pair and HTML §7.1.4's new embedder policy), no parent, no
      container and no ancestor list, and its own address is its top-level creation URL. Referenced, since the
      emitting engine's proxy names it. This zone supplies the bytes, for the swap arm's reason: the response it
-     holds from the `document.fetch` it answered `peer`, or a load of a cross-origin request the engine never
-     asked for (engineProvisionLoad). */
+     holds from the navigation's `document.fetch`, or a load of a cross-origin request the engine never asked
+     for (engineProvisionLoad). */
   if (f[0] === "navigable.navigate") {
     /* The name is minted fresh by the navigating engine, as a swap's is. */
     if (hostHolderOf(f[P.document])) { engineRefuseNotice(eng, line, "names a document this pool already holds"); return; }
@@ -5375,6 +5374,13 @@ async function hostNotice(eng, line) {
      or a rendezvous id (inflightKey). */
   if (f[0] === "fetch.cancel") {
     engineCancel(eng, f.slice(1));
+    return;
+  }
+  /* `navigable.committed <held>` — the engine built the Document of the load this zone holds `held` for in its
+     own heap, so the response is released. A token this instance does not hold names nothing to release: it
+     was released already, or held by a session before a park. */
+  if (f[0] === "navigable.committed") {
+    eng.held.delete(f[1]);
     return;
   }
   if (f[0] === "world.gone") {
@@ -5657,19 +5663,23 @@ async function engineDeliverDocument(eng, id, r, address) {
     return engineAnswer(eng, id, { peer: stampOrigin(originOf(r.url)), held }, null);
   }
   const _ownCookies = await zoneAnswerSetCookies(eng, r.setCookies);
-  await engineAnswer(eng, id, { url: r.url, headers: responseFieldLines(r.headers), setCookies: _ownCookies },
+  /* Held until the engine builds the Document here (`navigable.committed`) or names the token on a swap or
+     peer record; the held copy keeps its Set-Cookie pairs for a swap's new group. */
+  const held = "h" + (++_nextHeld);
+  eng.held.set(held, { address, loaded: r });
+  await engineAnswer(eng, id, { url: r.url, headers: responseFieldLines(r.headers), setCookies: _ownCookies, held },
                      r.bytes);
 }
 /* The response a provision record (`navigable.swap`, `navigable.navigate`) loads its document from: the one
-   this zone holds for the record's token, taken once and only by the instance it was fetched for and at the
-   address it was fetched at (its Set-Cookie pairs were routed when it was held), or for `-` a load of the
-   address under the record's own words. Null is a refusal, logged and counted by name. */
+   this zone holds for the record's token, taken once and only by the instance it was fetched for and at an end
+   of its redirect chain (the address asked for, or the response's URL), or for `-` a load of the address under
+   the record's own words. Null is a refusal of the instance, by name. */
 async function engineProvisionLoad(eng, line, f, P, docRecord, issuerDoc) {
   if (f[P.held] === "-")
     return eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned], /*refusalArm*/"none",
                                DOCUMENT_REQUEST_UNSTATED, docRecordOpaque(docRecord), issuerDoc);
   const h = eng.held.get(f[P.held]);
-  if (!h || h.address !== f[P.address]) {
+  if (!h || (h.address !== f[P.address] && h.loaded.url !== f[P.address])) {
     engineRefuseNotice(eng, line, "names the held response `" + f[P.held] + "`, which this zone holds for no " +
                        "navigation of this instance to " + f[P.address]);
     return null;
