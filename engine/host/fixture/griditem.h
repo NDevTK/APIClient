@@ -68,7 +68,7 @@ static const char HTML_GRIDITEM[] =
        15px tall, and its `height: 50%` child, an `auto` height in the contribution, is 7.5px at 30px down;
        the container is 30px plus the 40px row. `p2a` sizes its `auto` row to 20px and is 10px, leaving the
        `1fr` row 180px. In `p3`'s 20px first row the `min-height: 200%` item is 40px and the `max-height: 50%`
-       one 10px. Chrome 155 gives these numbers. */
+       one 10px. Chrome 155.0.8059.84 gave these numbers, and Chrome for Testing 153.0.8010.12 gives the same. */
     "<div id=p1 style=\"display:grid;width:200px;grid-template-rows:auto 40px\"><div id=p1a style=\"height:50%\">"
     "<div style=\"height:30px\"></div><div id=p1c style=\"height:50%\"></div></div><div id=p1b>x</div></div>"
     "<div id=p2 style=\"display:grid;width:200px;height:200px;grid-template-rows:auto 1fr\">"
