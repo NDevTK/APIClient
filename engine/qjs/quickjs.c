@@ -4728,6 +4728,46 @@ static void js_gc_object_census(JSRuntime *rt, const char *tag)
     (free)(n);
 }
 
+#if APICLIENT_DEV
+/* The nested-entry inventory: every entry to JS_CallInternal made while a frame is live below it on the C
+   stack, which is C calling into the engine from inside a running activation rather than the flow base or the
+   chain's own dispatch. A bytecode callee entered that way cannot park, and the bytecode arm below DFAILs on
+   it once a flow exists; this counts every such entry, keyed by the two return addresses above it (relative to
+   JS_CallInternal, so `nm` plus addr2line name them) and by callee kind, and prints the census at teardown. */
+typedef struct JSNestedEntry { uintptr_t ra0, ra1; uint8_t bytecode; uint64_t n; } JSNestedEntry;
+static JSNestedEntry g_nested_entries[1024];
+static int g_nested_entry_count;
+static void js_nested_entry_note(uintptr_t ra0, uintptr_t ra1, bool bytecode)
+{
+    int i;
+    for (i = 0; i < g_nested_entry_count; i++) {
+        JSNestedEntry *e = &g_nested_entries[i];
+        if (e->ra0 == ra0 && e->ra1 == ra1 && e->bytecode == bytecode) { e->n++; return; }
+    }
+    CHECK(g_nested_entry_count < (int)countof(g_nested_entries),
+          "the nested-entry census holds more distinct call sites than its table: grow the table");
+    g_nested_entries[g_nested_entry_count++] = (JSNestedEntry){ ra0, ra1, bytecode, 1 };
+}
+#define JS_NESTED_ENTRY_NOTE(rt_, bytecode_)                                                                \
+    do {                                                                                                      \
+        if ((rt_)->current_stack_frame)                                                                       \
+            js_nested_entry_note((uintptr_t)__builtin_return_address(0) - (uintptr_t)JS_CallInternal,         \
+                                 (uintptr_t)__builtin_return_address(1) - (uintptr_t)JS_CallInternal,         \
+                                 (bytecode_));                                                                \
+    } while (0)
+static void js_nested_entry_report(void)
+{
+    int i;
+    for (i = 0; i < g_nested_entry_count; i++)
+        fprintf(stderr, "@NESTED {\"ra0\":\"%+lld\",\"ra1\":\"%+lld\",\"bytecode\":%d,\"n\":%llu}\n",
+               (long long)(intptr_t)g_nested_entries[i].ra0, (long long)(intptr_t)g_nested_entries[i].ra1,
+               g_nested_entries[i].bytecode, (unsigned long long)g_nested_entries[i].n);
+    fprintf(stderr, "@NESTED-SITES %d\n", g_nested_entry_count);
+}
+#else
+#define JS_NESTED_ENTRY_NOTE(rt_, bytecode_) ((void)0)
+#endif
+
 void JS_FreeRuntime(JSRuntime *rt)
 {
     struct list_head *el, *el1;
@@ -4737,6 +4777,9 @@ void JS_FreeRuntime(JSRuntime *rt)
     rt->in_free = true;
     DCHECK(JS_IsUndefined(rt->suspended_on),
            "JS_FreeRuntime with a suspension the host never took (JS_TakeSuspension)");
+#if APICLIENT_DEV
+    js_nested_entry_report();
+#endif
     /* A PARKED FLOW AT TEARDOWN IS A DROPPED FLOW. The queue is not a GC root: each member holds a raw callback
        plus a reference the park took (the suspended async activation, or the async generator whose body is
        mid-run), and tearing the runtime down without resuming it leaks that whole graph silently — the
@@ -35781,6 +35824,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         }
     }
     p = JS_VALUE_GET_OBJ(func_obj);
+    JS_NESTED_ENTRY_NOTE(rt, p->class_id == JS_CLASS_BYTECODE_FUNCTION);
     if (unlikely(p->class_id != JS_CLASS_BYTECODE_FUNCTION)) {
         JSClassCall *call_func;
         call_func = rt->class_array[p->class_id].call;
