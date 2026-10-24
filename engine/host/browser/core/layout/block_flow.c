@@ -2846,9 +2846,13 @@ bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **ou
        this container's `height` says: a container with a declared height is exactly the one whose text can
        overflow it. */
     if (!flow_placement_anon_ask(el, &held, &hn)) {
+        bool closed;
+
         flow_placement_anon_derived();
         if (!bf_walk(el, BF_BASELINE_NONE, &b)) return false;
-        DCHECK(flow_placement_anon_peek(el, &held, &hn),
+        /* The read is the answer, so it is made outside the assert, which a release build does not evaluate. */
+        closed = flow_placement_anon_peek(el, &held, &hn);
+        DCHECK(closed,
                "a container's stack answered without closing its anonymous boxes in the placement record; the "
                "stack question's body closes them when its BF_BASELINE_NONE pass answers");
     }
