@@ -84,6 +84,45 @@ lxb_dom_element_t *css_parent_element(lxb_dom_element_t *el)
     return lxb_dom_interface_element(p);
 }
 
+/* `el` and its ancestors in the flattened tree, topmost first: all of them for `stop` CSS_PROPERTY_INVALID, and
+   otherwise up to (not including) the first ancestor whose record holds `stop`, so these are the elements an
+   ask for `stop` on `el` derives, and each one's parent is held when it is. It is a walk and not a recursion,
+   so a value inherited down a deep tree costs no C stack. Owned by the caller (cv_chain_free). */
+typedef struct {
+    lxb_dom_element_t **v;
+    size_t              n, cap;
+} CvChain;
+
+static void cv_chain(lxb_dom_element_t *el, CssPropertyId stop, CvChain *c)
+{
+    lxb_dom_element_t *e, *t;
+    size_t i;
+
+    c->v = NULL;
+    c->n = c->cap = 0;
+    for (e = el; e != NULL; e = css_parent_element(e)) {
+        if (stop != CSS_PROPERTY_INVALID && css_computed_style_holds(e, stop)) break;
+        if (c->n == c->cap) {
+            c->cap = c->cap ? 2 * c->cap : 16;
+            c->v = realloc(c->v, c->cap * sizeof *c->v);
+            CHECK(c->v != NULL, "css: OOM growing an element's ancestor chain");
+        }
+        c->v[c->n++] = e;
+    }
+    for (i = 0; i < c->n / 2; i++) {
+        t = c->v[i];
+        c->v[i] = c->v[c->n - 1 - i];
+        c->v[c->n - 1 - i] = t;
+    }
+}
+
+static void cv_chain_free(CvChain *c)
+{
+    free(c->v);
+    c->v = NULL;
+    c->n = c->cap = 0;
+}
+
 /* CSS Cascade §7's SPECIFIED VALUE of a property whose value this file carries as TEXT — the cascaded value, or
    §7.1's initial value, or §7.2's inherited value, decided by core/css/css_defaulting.h. OWNED, and NULL only
    for a property that no layer declares AND that has no initial value to fall to (a custom property nobody
@@ -98,31 +137,69 @@ static char *css_cv_cascaded(lxb_dom_element_t *el, const char *name);
 static CssDisplay cv_display_specified(lxb_dom_element_t *el);
 static void css_cv_modelled(lxb_dom_element_t *el, const char *name);
 
+/* Whether `name`'s computed value is the text this file derives and holds (css_cv_computed). */
+static bool cv_holds_text(const char *name)
+{
+    CssPropertyId id = css_property_id_of(name);
+
+    return id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_TEXT;
+}
+
+/* The walk itself, inside a hold whose record holds `el`'s parent's value for a held-text `name`: an inherited
+   unmodelled property is the parent's specified value, so the walk climbs while it inherits, and an inherited
+   held-text one is the parent's held computed value. */
+static char *cv_specified_walk(lxb_dom_element_t *el, const char *name)
+{
+    lxb_dom_element_t *e = el, *parent;
+    char *cascaded;
+
+    for (;;) {
+        cascaded = css_cv_cascaded(e, name);
+        switch (css_defaulting_of(name, cascaded)) {
+        case CSS_DEFAULTING_DECLARED:
+            return cascaded;
+        case CSS_DEFAULTING_INHERITED:
+            free(cascaded);
+            DCHECKF(!css_computed_models_length(name) && !css_computed_models_keyword(name),
+                   "`%s`: a LENGTH-valued property was inherited through the entry that answers TEXT. §7.2's "
+                   "inherited value is the parent's COMPUTED value, which for one of these is an ABSOLUTE LENGTH "
+                   "carrying the environment fact it derives from — serializing it here to hand it down the tree "
+                   "is exactly the drop css_computed_value.h describes, and `css_computed_length` is the entry "
+                   "that carries it whole",
+                   name);
+            parent = css_parent_element(e);
+            if (parent == NULL) return cssom_initial_value(name);
+            if (cv_holds_text(name)) {
+                const char *t = css_computed_style_held(parent, css_property_id_of(name)).text;
+
+                return t != NULL ? css_cv_strdup(t) : NULL;
+            }
+            e = parent;
+            continue;
+        case CSS_DEFAULTING_INITIAL:
+            free(cascaded);
+            return cssom_initial_value(name);
+        }
+    }
+}
+
+static void cv_text_fill(lxb_dom_element_t *el, CssPropertyId id);
+
 static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
 {
-    char *cascaded = css_cv_cascaded(el, name);
+    CssComputedStyleHold hold;
     lxb_dom_element_t *parent;
+    char *out;
 
-    switch (css_defaulting_of(name, cascaded)) {
-    case CSS_DEFAULTING_DECLARED:
-        return cascaded;
-    case CSS_DEFAULTING_INHERITED:
-        free(cascaded);
-        DCHECKF(!css_computed_models_length(name) && !css_computed_models_keyword(name),
-               "`%s`: a LENGTH-valued property was inherited through the entry that answers TEXT. §7.2's "
-               "inherited value is the parent's COMPUTED value, which for one of these is an ABSOLUTE LENGTH "
-               "carrying the environment fact it derives from — serializing it here to hand it down the tree "
-               "is exactly the drop css_computed_value.h describes, and `css_computed_length` is the entry "
-               "that carries it whole",
-               name);
-        parent = css_parent_element(el);
-        if (parent == NULL) break;
-        return css_computed_models(name) ? css_computed_value(parent, name) : css_cv_specified(parent, name);
-    case CSS_DEFAULTING_INITIAL:
-        free(cascaded);
-        break;
-    }
-    return cssom_initial_value(name);
+    if (!cv_holds_text(name)) return cv_specified_walk(el, name);
+    /* A held-text property's inherited value is the parent's computed one, so the parent's chain is derived
+       first, in tree order. */
+    css_computed_style_hold_begin(&hold);
+    parent = css_parent_element(el);
+    if (parent != NULL) cv_text_fill(parent, css_property_id_of(name));
+    out = cv_specified_walk(el, name);
+    css_computed_style_hold_end(&hold);
+    return out;
 }
 
 /* ---- css-variables-1 §3's SUBSTITUTION, the policy half ------------------------------------------------- */
@@ -315,6 +392,21 @@ bool css_box_parent_display(const lxb_dom_node_t *n, CssDisplay *out)
     return false;
 }
 
+/* The same walk inside a derivation of `display`, whose entry derived every ancestor's first, so each ancestor
+   is read held rather than asked. */
+static bool cv_box_parent_display_held(const lxb_dom_node_t *n, CssDisplay *out)
+{
+    const lxb_dom_node_t *p;
+
+    for (p = n->parent; p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT; p = p->parent) {
+        CssDisplay v = css_computed_style_held(lxb_dom_interface_element((lxb_dom_node_t *)p),
+                                               CSS_PROPERTY_DISPLAY).display;
+
+        if (!css_display_is_box(v, CSS_KEYWORD_CONTENTS)) { *out = v; return true; }
+    }
+    return false;
+}
+
 /* css-flexbox-1's and css-grid-1's containers: a box whose inner display type is `flex` or `grid`, whatever its
    outer type or spelling. */
 static bool display_is_flex_or_grid_container(CssDisplay d)
@@ -497,7 +589,7 @@ static CssDisplay display_blockified_if(lxb_dom_element_t *el, CssDisplay d, boo
        display value blockifies the box's display type". The first two are the caller's `out_of_flow`; the
        third is a fact about the PARENT and survives the hypothetical, because §10.3.7 hypothesises only this
        element's own `position` and `float`. */
-    blockify = root || out_of_flow || (css_box_parent_display(n, &pd) && display_is_flex_or_grid_container(pd));
+    blockify = root || out_of_flow || (cv_box_parent_display_held(n, &pd) && display_is_flex_or_grid_container(pd));
     return blockify ? css_display_blockify(d) : d;
 }
 
@@ -524,7 +616,7 @@ static CssDisplay cv_display_specified(lxb_dom_element_t *el)
     if (defaulting == CSS_DEFAULTING_INHERITED) {
         lxb_dom_element_t *parent = css_parent_element(el);
 
-        if (parent != NULL) return css_computed_display(parent);
+        if (parent != NULL) return css_computed_style_held(parent, CSS_PROPERTY_DISPLAY).display;
     }
     cascaded = cssom_initial_value("display");
     DCHECK(cascaded != NULL, "§7.1 produced no INITIAL value for `display`");
@@ -551,6 +643,22 @@ static CssDisplay cv_display(lxb_dom_element_t *el)
     return display_blockified_if(el, cv_display_specified(el), out_of_flow);
 }
 
+/* `el`'s and its un-held ancestors' `display`, derived top down inside the caller's hold. */
+static void cv_display_fill(lxb_dom_element_t *el)
+{
+    CssComputedValue v;
+    CvChain c;
+    size_t i;
+
+    cv_chain(el, CSS_PROPERTY_DISPLAY, &c);
+    for (i = 0; i < c.n; i++)
+        if (!css_computed_style_ask(c.v[i], CSS_PROPERTY_DISPLAY, &v)) {
+            v.display = cv_display(c.v[i]);
+            css_computed_style_answer(c.v[i], CSS_PROPERTY_DISPLAY, &v);
+        }
+    cv_chain_free(&c);
+}
+
 CssDisplay css_computed_display(lxb_dom_element_t *el)
 {
     CssComputedStyleHold hold;
@@ -558,10 +666,8 @@ CssDisplay css_computed_display(lxb_dom_element_t *el)
 
     DCHECK(el != NULL, "a computed `display` was asked of no element");
     css_computed_style_hold_begin(&hold);
-    if (!css_computed_style_ask(el, CSS_PROPERTY_DISPLAY, &v)) {
-        v.display = cv_display(el);
-        css_computed_style_answer(el, CSS_PROPERTY_DISPLAY, &v);
-    }
+    cv_display_fill(el);
+    v = css_computed_style_held(el, CSS_PROPERTY_DISPLAY);
     css_computed_style_hold_end(&hold);
     return v.display;
 }
@@ -595,7 +701,7 @@ static CssAlign cv_align_specified(lxb_dom_element_t *el, CssPropertyId id)
     if (defaulting == CSS_DEFAULTING_INHERITED) {
         lxb_dom_element_t *parent = css_parent_element(el);
 
-        if (parent != NULL) return css_computed_align(parent, name);
+        if (parent != NULL) return css_computed_style_held(parent, id).align;
     }
     cascaded = cssom_initial_value(name);
     DCHECKF(cascaded != NULL, "`%s`: §7.1 produced no initial value for a css-align-3 property", name);
@@ -618,7 +724,7 @@ static CssAlign cv_align(lxb_dom_element_t *el, CssPropertyId id)
     if (id != CSS_PROPERTY_JUSTIFY_ITEMS || a.value != CSS_KEYWORD_LEGACY) return a;
     parent = css_parent_element(el);
     if (parent != NULL) {
-        CssAlign inherited = css_computed_align(parent, "justify-items");
+        CssAlign inherited = css_computed_style_held(parent, CSS_PROPERTY_JUSTIFY_ITEMS).align;
 
         if (inherited.legacy) return inherited;
     }
@@ -631,22 +737,38 @@ CssAlign css_computed_align(lxb_dom_element_t *el, const char *name)
     CssPropertyId id = css_property_id_of(name);
     CssComputedStyleHold hold;
     CssComputedValue v;
+    CvChain c;
+    size_t i;
 
     DCHECKF(id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_ALIGN,
             "`%s`: css_computed_align was asked for a property that is none of css-align-3's six", name);
     css_computed_style_hold_begin(&hold);
-    if (!css_computed_style_ask(el, id, &v)) {
-        v.align = cv_align(el, id);
-        css_computed_style_answer(el, id, &v);
-    }
+    cv_chain(el, id, &c);
+    for (i = 0; i < c.n; i++)
+        if (!css_computed_style_ask(c.v[i], id, &v)) {
+            v.align = cv_align(c.v[i], id);
+            css_computed_style_answer(c.v[i], id, &v);
+        }
+    cv_chain_free(&c);
+    v = css_computed_style_held(el, id);
     css_computed_style_hold_end(&hold);
     return v.align;
 }
 
 CssDisplay css_hypothetical_static_display(lxb_dom_element_t *el)
 {
+    CssComputedStyleHold hold;
+    lxb_dom_element_t *parent;
+    CssDisplay d;
+
     DCHECK(el != NULL, "CSS 2.1 §10.3.7's hypothetical `display` was asked for with no element");
-    return display_blockified_if(el, cv_display_specified(el), false);
+    /* The hypothesis reads the same held ancestors a derivation of `display` does. */
+    css_computed_style_hold_begin(&hold);
+    parent = css_parent_element(el);
+    if (parent != NULL) cv_display_fill(parent);
+    d = display_blockified_if(el, cv_display_specified(el), false);
+    css_computed_style_hold_end(&hold);
+    return d;
 }
 
 /* ---- the BOX-MODEL LENGTHS' computed value ---------------------------------------------------------------- */
@@ -739,6 +861,21 @@ static CssPx css_cv_parent_font_size(lxb_dom_element_t *el)
            "absolute length` and admits nothing else past the computed value — a percentage refers to the "
            "parent's size and is resolved there, and every keyword is a table entry or a ratio — so this is "
            "the entry below having left an arm unresolved");
+    return len.px;
+}
+
+/* The same number read inside the derivation of `el`'s own `font-size`, whose ask derived every ancestor's
+   first (css_computed_length), so the parent is read held rather than asked. */
+static CssPx cv_held_parent_font_size(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *parent = css_parent_element(el);
+    CssLength len;
+
+    if (parent == NULL) return css_default_font_size(css_cv_realm(el));
+    len = css_computed_style_held(parent, CSS_PROPERTY_FONT_SIZE).length;
+    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+           "a parent element's held `font-size` is not an ABSOLUTE LENGTH, which css-fonts-4 §2.5's `Computed "
+           "value:` line admits nothing else than");
     return len.px;
 }
 
@@ -1007,6 +1144,44 @@ static CssPx css_cv_initial_line_height_px(JSContext *realm)
                                               css_default_font_size(realm));
 }
 
+/* css-values-4 §6.1.1's two FONT SIZES every font-relative unit is a metric over: `em` (`rem` false) and `rem`.
+   Its own function so the callback's other units take their base from it rather than calling the callback. */
+static CssPx css_cv_font_size_base(CssCvFontCtx *f, bool rem)
+{
+    lxb_dom_node_t *root;
+    CssLength len;
+
+    /* §6.1.1: `em` is "equal to the computed value of the font-size property of the element on which it is
+       used" — EXCEPT that "when used in the value of any font-affecting property on the element they refer to,
+       the font-relative lengths resolve against the computed metrics of the parent element—or against the
+       computed metrics corresponding to the initial values of the font and line-height properties, if the
+       element has no parent". `font-size` IS a font-affecting property and the element it refers to is the one
+       it is declared on, so `div { font-size: 1.2em }` is 1.2 times the INHERITED size. That is not a nicety:
+       resolving it against the element's own computed `font-size` would make this walk a definition of itself
+       and it would not terminate. */
+    if (!rem) {
+        if (f->affecting) return css_cv_parent_font_size(f->el);
+        len = css_computed_length(f->el, "font-size");
+        DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+               "an element's own computed `font-size` came back as something other than an ABSOLUTE LENGTH, "
+               "which css-fonts-4 §2.5's `Computed value:` line admits nothing else than");
+        return len.px;
+    }
+    root = css_cv_root_element(f->el);
+    /* §6.1.1: `rem` is "equal to the computed value of the em unit on the root element". The element it REFERS
+       TO is therefore the root, so the font-affecting clause above bites only when the declaration is on the
+       root itself — `html { font-size: 2rem }` is 2 x the INITIAL font size (the root has no parent element),
+       while `div { font-size: 2rem }` is 2 x the root's own computed size and `html { margin: 2rem }` is too,
+       because a margin is not a font-affecting property. */
+    if (root == NULL || (f->affecting && root == lxb_dom_interface_node(f->el)))
+        return css_default_font_size(css_cv_realm(f->el));
+    len = css_computed_length(lxb_dom_interface_element(root), "font-size");
+    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+           "the ROOT element's computed `font-size` came back as something other than an ABSOLUTE LENGTH, "
+           "which css-fonts-4 §2.5's `Computed value:` line admits nothing else than");
+    return len.px;
+}
+
 static CssPx css_cv_font_metric(void *p, CssFontMetric which)
 {
     CssCvFontCtx *f = p;
@@ -1052,7 +1227,7 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
        orientation resolution above and then through the one entry. */
     if (which != CSS_FONT_METRIC_EM && which != CSS_FONT_METRIC_REM) {
         bool root_relative = css_cv_metric_is_root(which);
-        CssPx base = css_cv_font_metric(p, root_relative ? CSS_FONT_METRIC_REM : CSS_FONT_METRIC_EM);
+        CssPx base = css_cv_font_size_base(f, root_relative);
         lxb_dom_element_t *on, *metrics_el;
         FontFallbackList faces;
         uint32_t codepoint;
@@ -1105,40 +1280,12 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
                                       font_matching_font_for_character(&faces, codepoint), codepoint,
                                       css_cv_advance_direction(on, codepoint)));
     }
-    /* §6.1.1: `em` is "equal to the computed value of the font-size property of the element on which it is
-       used" — EXCEPT that "when used in the value of any font-affecting property on the element they refer to,
-       the font-relative lengths resolve against the computed metrics of the parent element—or against the
-       computed metrics corresponding to the initial values of the font and line-height properties, if the
-       element has no parent". `font-size` IS a font-affecting property and the element it refers to is the one
-       it is declared on, so `div { font-size: 1.2em }` is 1.2 times the INHERITED size. That is not a nicety:
-       resolving it against the element's own computed `font-size` would make this walk a definition of itself
-       and it would not terminate. */
-    if (which == CSS_FONT_METRIC_EM) {
-        if (f->affecting) return css_cv_parent_font_size(f->el);
-        len = css_computed_length(f->el, "font-size");
-        DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
-               "an element's own computed `font-size` came back as something other than an ABSOLUTE LENGTH, "
-               "which css-fonts-4 §2.5's `Computed value:` line admits nothing else than");
-        return len.px;
-    }
-    DCHECK(which == CSS_FONT_METRIC_REM,
+    DCHECK(which == CSS_FONT_METRIC_EM || which == CSS_FONT_METRIC_REM,
            "css_length.h's font-metric enumeration named a metric this component answers no arm for — the two "
            "are one list and have come apart. All twelve of css-values-4 §6.1.1's units have a row here now, "
            "so an unanswered one is a THIRTEENTH that the unit table routed and this switch was never told "
            "about");
-    root = css_cv_root_element(f->el);
-    /* §6.1.1: `rem` is "equal to the computed value of the em unit on the root element". The element it REFERS
-       TO is therefore the root, so the font-affecting clause above bites only when the declaration is on the
-       root itself — `html { font-size: 2rem }` is 2 x the INITIAL font size (the root has no parent element),
-       while `div { font-size: 2rem }` is 2 x the root's own computed size and `html { margin: 2rem }` is too,
-       because a margin is not a font-affecting property. */
-    if (root == NULL || (f->affecting && root == lxb_dom_interface_node(f->el)))
-        return css_default_font_size(css_cv_realm(f->el));
-    len = css_computed_length(lxb_dom_interface_element(root), "font-size");
-    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
-           "the ROOT element's computed `font-size` came back as something other than an ABSOLUTE LENGTH, "
-           "which css-fonts-4 §2.5's `Computed value:` line admits nothing else than");
-    return len.px;
+    return css_cv_font_size_base(f, which == CSS_FONT_METRIC_REM);
 }
 
 /* THE PAIR, BOUND TO ONE ELEMENT AND ONE PROPERTY. `slot` is the caller's own storage and must outlive the
@@ -1322,19 +1469,18 @@ typedef struct { CssKeyword keyword; bool absolute; } CvFontSizeOrigin;
 
 static bool cv_length_of(lxb_dom_element_t *el, CssPropertyId id, char *spec, CssLength *out);
 
-static CvFontSizeOrigin cv_font_size_origin(lxb_dom_element_t *el)
+/* One element's origin given its parent's (`up`, the initial style's `medium` above the root). */
+static CvFontSizeOrigin cv_font_size_origin_step(lxb_dom_element_t *el, CvFontSizeOrigin up)
 {
     static const char *const FONT_RELATIVE[] = { "em", "ex", "ch", "ic", "lh", "cap",
                                                  "rcap", "rex", "rch", "ric", "rlh" };
-    lxb_dom_element_t *parent = css_parent_element(el);
-    CvFontSizeOrigin up = { CSS_KEYWORD_MEDIUM, false }, out = { CSS_KEYWORD_INVALID, true };
+    CvFontSizeOrigin out = { CSS_KEYWORD_INVALID, true };
     char *cascaded = css_cv_cascaded(el, "font-size");
     CssDefaulting d = css_defaulting_of("font-size", cascaded);
     const char *p, *u;
     size_t n, i;
     CssKeyword k;
 
-    if (parent != NULL) up = cv_font_size_origin(parent);
     /* A declaration invalid at computed-value time is `unset`, which for this inherited property is the
        parent's, exactly as cv_length_cascaded answers it. */
     if (d == CSS_DEFAULTING_DECLARED) {
@@ -1365,6 +1511,20 @@ static CvFontSizeOrigin cv_font_size_origin(lxb_dom_element_t *el)
     }
     free(cascaded);
     return out;
+}
+
+/* The origin folded from the root down to `el`. It is read inside the derivation of `el`'s `font-size`, whose
+   ask derived every ancestor's first, so each step's probe of a declaration reads a held parent. */
+static CvFontSizeOrigin cv_font_size_origin(lxb_dom_element_t *el)
+{
+    CvFontSizeOrigin up = { CSS_KEYWORD_MEDIUM, false };
+    CvChain c;
+    size_t i;
+
+    cv_chain(el, CSS_PROPERTY_INVALID, &c);
+    for (i = 0; i < c.n; i++) up = cv_font_size_origin_step(c.v[i], up);
+    cv_chain_free(&c);
+    return up;
 }
 
 /* A size whose family changed between monospace and not, from Chromium 0842759f
@@ -1434,7 +1594,7 @@ static bool computed_font_size(lxb_dom_element_t *el, char *spec, CssLength *out
            there, so `html { font-size: larger }` is a ratio of `medium` rather than of itself. */
         case CSS_KEYWORD_LARGER:
         case CSS_KEYWORD_SMALLER:
-            *out = css_cv_px(css_relative_size_px(css_cv_parent_font_size(el), len.keyword == CSS_KEYWORD_LARGER));
+            *out = css_cv_px(css_relative_size_px(cv_held_parent_font_size(el), len.keyword == CSS_KEYWORD_LARGER));
             return true;
         case CSS_KEYWORD_MATH:
             DFAIL("css-fonts-4 §2.5 (Font size: the font-size property)'s `math` value reached the computed value: "
@@ -1471,7 +1631,7 @@ static bool computed_font_size(lxb_dom_element_t *el, char *spec, CssLength *out
        property is ONE absolute length, resolved against the same basis §2.5 gives a bare percentage, and the
        two arms are one because §10.11 makes them one value. */
     if (len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED)
-        len = css_cv_px(css_length_resolve_pct(len, css_cv_parent_font_size(el)));
+        len = css_cv_px(css_length_resolve_pct(len, cv_held_parent_font_size(el)));
     DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
            "a `font-size` cascaded to a value that is neither one of css-fonts-4 §2.5's keywords nor a "
            "`<length-percentage>`. §2.5's `Value:` line is `<absolute-size> | <relative-size> | "
@@ -1512,7 +1672,9 @@ static char *computed_text_align(lxb_dom_element_t *el, const char *name, char *
     free(spec);
     parent = css_parent_element(el);
     if (parent == NULL) return css_cv_strdup("start");
-    inherited = css_computed_value(parent, name);
+    /* Inside the derivation of `name`, whose fill derived the parent's first. */
+    inherited = css_computed_style_held(parent, css_property_id_of(name)).text;
+    inherited = inherited != NULL ? css_cv_strdup(inherited) : NULL;
     DCHECK(inherited != NULL,
            "css-text-4 §7.1's `match-parent` found no COMPUTED value on the parent element for the longhand it "
            "matches. §7.3 and §7.4 both give their property an `Initial:` line, so §7's defaulting always "
@@ -1669,7 +1831,7 @@ static CssLength cv_length_cascaded(lxb_dom_element_t *el, CssPropertyId id)
 
         free(cascaded);
         if (parent != NULL) {
-            CssLength inherited = css_computed_length(parent, name);
+            CssLength inherited = css_computed_style_held(parent, id).length;
 
             return side >= 0 ? css_border_width_inherited(el, side, inherited) : inherited;
         }
@@ -1696,6 +1858,8 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
     CssPropertyId id = css_property_id_of(name);
     CssComputedStyleHold hold;
     CssComputedValue v;
+    CvChain c;
+    size_t i;
 
     DCHECKF(id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_LENGTH,
            "`%s`: css_computed_length was asked for a property whose `Computed value:` line is not a LENGTH. "
@@ -1712,10 +1876,16 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
            "whole of the property; `css_computed_border_spacing` answers the pair",
            name);
     css_computed_style_hold_begin(&hold);
-    if (!css_computed_style_ask(el, id, &v)) {
-        v.length = cv_length(el, id);
-        css_computed_style_answer(el, id, &v);
-    }
+    /* §7.2's inherited value is the parent's computed value, so the ancestors this record does not hold are
+       derived first, top down, and the derivation reads its parent held. */
+    cv_chain(el, id, &c);
+    for (i = 0; i < c.n; i++)
+        if (!css_computed_style_ask(c.v[i], id, &v)) {
+            v.length = cv_length(c.v[i], id);
+            css_computed_style_answer(c.v[i], id, &v);
+        }
+    cv_chain_free(&c);
+    v = css_computed_style_held(el, id);
     css_computed_style_hold_end(&hold);
     return v.length;
 }
@@ -1775,7 +1945,7 @@ static CssKeyword cv_keyword_specified(lxb_dom_element_t *el, CssPropertyId id)
     if (defaulting == CSS_DEFAULTING_INHERITED) {
         lxb_dom_element_t *parent = css_parent_element(el);
 
-        if (parent != NULL) return css_computed_keyword(parent, name);
+        if (parent != NULL) return css_computed_style_held(parent, id).keyword;
     }
     /* §7.1's initial value, which is also §7.2's answer for the root element. */
     cascaded = cssom_initial_value(name);
@@ -1812,16 +1982,22 @@ CssKeyword css_computed_keyword(lxb_dom_element_t *el, const char *name)
     CssPropertyId id = css_property_id_of(name);
     CssComputedStyleHold hold;
     CssComputedValue v;
+    CvChain c;
+    size_t i;
 
     DCHECKF(id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_KEYWORD,
             "`%s`: css_computed_keyword was asked for a property whose row is not KEYWORD-shaped "
             "(core/css/css_property_id.h); ask the entry its shape names",
             name);
     css_computed_style_hold_begin(&hold);
-    if (!css_computed_style_ask(el, id, &v)) {
-        v.keyword = cv_keyword(el, id);
-        css_computed_style_answer(el, id, &v);
-    }
+    cv_chain(el, id, &c);
+    for (i = 0; i < c.n; i++)
+        if (!css_computed_style_ask(c.v[i], id, &v)) {
+            v.keyword = cv_keyword(c.v[i], id);
+            css_computed_style_answer(c.v[i], id, &v);
+        }
+    cv_chain_free(&c);
+    v = css_computed_style_held(el, id);
     css_computed_style_hold_end(&hold);
     return v.keyword;
 }
@@ -1940,7 +2116,7 @@ static CssLineHeight cv_line_height(lxb_dom_element_t *el)
            §5.1's example says the children see. */
         lxb_dom_element_t *parent = css_parent_element(el);
 
-        if (parent != NULL) return css_computed_line_height(parent);
+        if (parent != NULL) return css_computed_style_held(parent, CSS_PROPERTY_LINE_HEIGHT).line_height;
     }
     /* §7.1's initial value, which is also §7.2's answer at the root: §5.1's `Initial:` line is `normal`. */
     cascaded = cssom_initial_value("line-height");
@@ -1996,7 +2172,7 @@ static CssTabSize cv_tab_size(lxb_dom_element_t *el)
     if (defaulting == CSS_DEFAULTING_INHERITED) {
         lxb_dom_element_t *parent = css_parent_element(el);
 
-        if (parent != NULL) return css_computed_tab_size(parent);
+        if (parent != NULL) return css_computed_style_held(parent, CSS_PROPERTY_TAB_SIZE).tab_size;
     }
     /* §4.2's `Initial:` line is `8`. */
     ok = cv_tab_size_of(el, cssom_initial_value("tab-size"), &out);
@@ -2004,16 +2180,24 @@ static CssTabSize cv_tab_size(lxb_dom_element_t *el)
     return out;
 }
 
+/* Each entry below derives the chain's un-held elements top down (cv_chain), as css_computed_length does, so
+   the inherited arm of each derivation reads its parent held. */
 CssTabSize css_computed_tab_size(lxb_dom_element_t *el)
 {
     CssComputedStyleHold hold;
     CssComputedValue v;
+    CvChain c;
+    size_t i;
 
     css_computed_style_hold_begin(&hold);
-    if (!css_computed_style_ask(el, CSS_PROPERTY_TAB_SIZE, &v)) {
-        v.tab_size = cv_tab_size(el);
-        css_computed_style_answer(el, CSS_PROPERTY_TAB_SIZE, &v);
-    }
+    cv_chain(el, CSS_PROPERTY_TAB_SIZE, &c);
+    for (i = 0; i < c.n; i++)
+        if (!css_computed_style_ask(c.v[i], CSS_PROPERTY_TAB_SIZE, &v)) {
+            v.tab_size = cv_tab_size(c.v[i]);
+            css_computed_style_answer(c.v[i], CSS_PROPERTY_TAB_SIZE, &v);
+        }
+    cv_chain_free(&c);
+    v = css_computed_style_held(el, CSS_PROPERTY_TAB_SIZE);
     css_computed_style_hold_end(&hold);
     return v.tab_size;
 }
@@ -2022,12 +2206,18 @@ CssLineHeight css_computed_line_height(lxb_dom_element_t *el)
 {
     CssComputedStyleHold hold;
     CssComputedValue v;
+    CvChain c;
+    size_t i;
 
     css_computed_style_hold_begin(&hold);
-    if (!css_computed_style_ask(el, CSS_PROPERTY_LINE_HEIGHT, &v)) {
-        v.line_height = cv_line_height(el);
-        css_computed_style_answer(el, CSS_PROPERTY_LINE_HEIGHT, &v);
-    }
+    cv_chain(el, CSS_PROPERTY_LINE_HEIGHT, &c);
+    for (i = 0; i < c.n; i++)
+        if (!css_computed_style_ask(c.v[i], CSS_PROPERTY_LINE_HEIGHT, &v)) {
+            v.line_height = cv_line_height(c.v[i]);
+            css_computed_style_answer(c.v[i], CSS_PROPERTY_LINE_HEIGHT, &v);
+        }
+    cv_chain_free(&c);
+    v = css_computed_style_held(el, CSS_PROPERTY_LINE_HEIGHT);
     css_computed_style_hold_end(&hold);
     return v.line_height;
 }
@@ -2117,7 +2307,7 @@ static CssBorderSpacing cv_border_spacing(lxb_dom_element_t *el)
            on every table in a document whose `body` declares one. */
         lxb_dom_element_t *parent = css_parent_element(el);
 
-        if (parent != NULL) return css_computed_border_spacing(parent);
+        if (parent != NULL) return css_computed_style_held(parent, CSS_PROPERTY_BORDER_SPACING).border_spacing;
     }
     /* §7.1's initial value, which is also §7.2's answer at the root: §17.6.1's `Initial:` line is `0`. */
     cascaded = cssom_initial_value("border-spacing");
@@ -2136,12 +2326,18 @@ CssBorderSpacing css_computed_border_spacing(lxb_dom_element_t *el)
 {
     CssComputedStyleHold hold;
     CssComputedValue v;
+    CvChain c;
+    size_t i;
 
     css_computed_style_hold_begin(&hold);
-    if (!css_computed_style_ask(el, CSS_PROPERTY_BORDER_SPACING, &v)) {
-        v.border_spacing = cv_border_spacing(el);
-        css_computed_style_answer(el, CSS_PROPERTY_BORDER_SPACING, &v);
-    }
+    cv_chain(el, CSS_PROPERTY_BORDER_SPACING, &c);
+    for (i = 0; i < c.n; i++)
+        if (!css_computed_style_ask(c.v[i], CSS_PROPERTY_BORDER_SPACING, &v)) {
+            v.border_spacing = cv_border_spacing(c.v[i]);
+            css_computed_style_answer(c.v[i], CSS_PROPERTY_BORDER_SPACING, &v);
+        }
+    cv_chain_free(&c);
+    v = css_computed_style_held(el, CSS_PROPERTY_BORDER_SPACING);
     css_computed_style_hold_end(&hold);
     return v.border_spacing;
 }
@@ -2399,7 +2595,10 @@ static char *computed_font_family(lxb_dom_element_t *el, char *spec)
     if (ok) return spec;
     free(spec);
     parent = css_parent_element(el);
-    return parent != NULL ? css_computed_value(parent, "font-family") : cssom_initial_value("font-family");
+    if (parent == NULL) return cssom_initial_value("font-family");
+    /* Inside the derivation of `font-family`, whose fill derived the parent's first. */
+    spec = css_computed_style_held(parent, CSS_PROPERTY_FONT_FAMILY).text;
+    return spec != NULL ? css_cv_strdup(spec) : NULL;
 }
 
 static char *computed_list_style_image(char *spec)
@@ -2450,7 +2649,7 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
     char *spec;
 
     css_cv_modelled(el, name);
-    spec = css_cv_specified(el, name);
+    spec = cv_specified_walk(el, name);
     DCHECK(spec != NULL,
            "§7's defaulting produced no SPECIFIED value for a property this component models — every one of "
            "them has an `Initial:` value to fall to, either from lexbor's own property registry or from "
@@ -2535,6 +2734,22 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
 /* The element's computed style record answers a value it already derived (core/css/css_computed_style.h).
    The answer is an owned copy. A name with no row, or a row of another shape, crashes; in release each is
    answered with the specified value and held nowhere. */
+/* `el`'s and its un-held ancestors' text value for `id`, derived top down inside the caller's hold. */
+static void cv_text_fill(lxb_dom_element_t *el, CssPropertyId id)
+{
+    CssComputedValue v;
+    CvChain c;
+    size_t i;
+
+    cv_chain(el, id, &c);
+    for (i = 0; i < c.n; i++)
+        if (!css_computed_style_ask(c.v[i], id, &v)) {
+            v.text = css_cv_computed(c.v[i], id);
+            css_computed_style_answer(c.v[i], id, &v);
+        }
+    cv_chain_free(&c);
+}
+
 char *css_computed_value(lxb_dom_element_t *el, const char *name)
 {
     CssPropertyId id = css_property_id_of(name);
@@ -2593,10 +2808,8 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
             name);
     if (shape != CSS_COMPUTED_SHAPE_TEXT) return css_cv_specified(el, name);
     css_computed_style_hold_begin(&hold);
-    if (!css_computed_style_ask(el, id, &v)) {
-        v.text = css_cv_computed(el, id);
-        css_computed_style_answer(el, id, &v);
-    }
+    cv_text_fill(el, id);
+    v = css_computed_style_held(el, id);
     out = v.text != NULL ? css_cv_strdup(v.text) : NULL;
     css_computed_style_hold_end(&hold);
     return out;

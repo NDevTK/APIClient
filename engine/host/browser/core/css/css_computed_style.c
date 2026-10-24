@@ -111,6 +111,26 @@ void css_computed_style_answer(lxb_dom_element_t *el, CssPropertyId id, const Cs
     g_derived++;
 }
 
+bool css_computed_style_holds(lxb_dom_element_t *el, CssPropertyId id)
+{
+    CssComputedStyle *s = css_cascade_pass_style(el);
+
+    DCHECK(s != NULL, "a computed value's presence was read outside a computed style hold");
+    DCHECKF((unsigned)id < CSS_PROPERTY_COUNT, "a computed value's presence was read for id %u, which is no row",
+            (unsigned)id);
+    return s->state[id] == CSS_COMPUTED_HELD;
+}
+
+CssComputedValue css_computed_style_held(lxb_dom_element_t *el, CssPropertyId id)
+{
+    CssComputedStyle *s = css_cascade_pass_style(el);
+
+    CHECK(s != NULL && (unsigned)id < CSS_PROPERTY_COUNT && s->state[id] == CSS_COMPUTED_HELD,
+          "a held computed value was read off a record that does not hold it — the ask's entry derives the "
+          "element's ancestors in tree order before the element, so a parent it reads is held");
+    return s->value[id];
+}
+
 void css_computed_style_census(long long *asks, long long *served, long long *derived)
 {
     DCHECKF(g_asks == g_served + g_derived,

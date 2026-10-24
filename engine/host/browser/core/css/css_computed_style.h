@@ -55,6 +55,14 @@ void css_computed_style_hold_end(CssComputedStyleHold *h);
 bool css_computed_style_ask(lxb_dom_element_t *el, CssPropertyId id, CssComputedValue *out);
 void css_computed_style_answer(lxb_dom_element_t *el, CssPropertyId id, const CssComputedValue *v);
 
+/* Inside a hold: whether `el`'s record holds `id`, read without marking the pair as being derived, so it is not
+   an ask and the census does not count it. An ask's entry reads it to find the ancestors it must derive first,
+   in tree order, so css-cascade-5 §7.2's inheritance reads a held parent rather than climbing. */
+bool css_computed_style_holds(lxb_dom_element_t *el, CssPropertyId id);
+/* Inside a hold: `el`'s value for `id`, which its record must hold (CHECKed, since a value read off a record
+   that holds none would be a zero standing for the parent's computed value); a text arm is borrowed. */
+CssComputedValue css_computed_style_held(lxb_dom_element_t *el, CssPropertyId id);
+
 /* Lifetime counters of this agent: asks, those a record answered, and those derived. They close. */
 void css_computed_style_census(long long *asks, long long *served, long long *derived);
 
