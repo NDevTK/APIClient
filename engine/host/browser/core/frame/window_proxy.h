@@ -480,6 +480,11 @@ JSValue window_proxy_proto(JSContext *ctx);
    §6.6.6's `focus`/`blur` are core/html/focus.c's. Each is installed by its OWNER onto this one object — never
    restated here — and proxy_get_own's steps 4-6 assert per name that the object ended up with all thirteen. */
 void window_proxy_install_proto(JSContext *ctx);
+#if APICLIENT_DEV
+/* Asserts every own key of this realm's §7.2.3 surface is a string that `global` (the realm's Window W) also
+   owns. Called once W's per-document install column has run, the first point both are complete. */
+void window_proxy_assert_surface_owned(JSContext *ctx, JSValueConst global);
+#endif
 
 /* WEB IDL §3.7.6 "Attributes"' `jsValue` FOR A MEMBER WHOSE ANSWER IS A NAVIGABLE — "the this value, if it is
    not null or undefined, or realm's global object otherwise", mapped onto the navigable it names. §3.7.7

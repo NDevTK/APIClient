@@ -918,7 +918,6 @@ const CALL_FORMS = new Map(Object.entries({
    object the C builds with no prototype and one of these nonetheless names cannot be both. */
 const TARGET_FORMS = new Map(Object.entries({
   idl_interface_tag:          1,
-  idl_class_string:           1,
   JS_SetPropertyFunctionList: 1,
   event_target_install_handlers: 1,
   byte_reader_install:        1,
@@ -1234,15 +1233,6 @@ const IFACE_SEEDS = [
      both, and the two differ only in what the tagged object IS — which is exactly why the C says it with two
      functions instead of one, so a reader of either side can tell which kind it is looking at. */
   { fn: "idl_namespace_tag",  obj: 1, iface: 2 },
-  /* §3.7.3's CLASS STRING ON AN OBJECT THAT IS NOT AN INTERFACE PROTOTYPE OBJECT — the same statement about
-     which definition an object's members belong to, made about an object §3.7.3's proto step does not govern.
-     HTML §7.2.3 The WindowProxy exotic object is the only one: "There is no WindowProxy interface object", so
-     its prototype carries WINDOW's class string while the real §3.7.3 Window interface prototype object is a
-     different object. The C says which kind it is with a different function — idl_args.c asserts the proto
-     step at idl_interface_tag and cannot at this one — and the ATTRIBUTION fact is identical, so it seeds the
-     same table: without this row the fifty members installed on that object go back to belonging to no
-     interface, which is the false ABSENT the tag was introduced to end. */
-  { fn: "idl_class_string",   obj: 1, iface: 2 },
 ];
 const IFACE_OBJECT = { fn: "idl_interface_object", iface: 1, obj: 2 };
 /* WHICH INTERFACES THIS ENGINE LETS A PAGE `new`, AND WHY THAT IS NOT THE SAME QUESTION AS WHICH ONES HAVE AN
@@ -2174,6 +2164,18 @@ export function loadEnvironment(root) {
       for (const m of f.body.matchAll(/\b([A-Za-z_]\w*)\s*(?:\[[^\][;]*\])?\s*=\s*([A-Za-z_]\w*)\s*;/g))
         if (slotNames.get(path).has(m[1]) && slotNames.get(path).has(m[2]))
           tarrow(classKey(path, m[2]), classKey(path, m[1]), null);
+      /* A class prototype asserted to hold the members of an object implementing a named interface
+         (idl_assert_class_proto_mirrors) is that interface's: HTML §7.2.3's surface, which has no interface
+         object and no class string, holds Window's. */
+      for (const site of callSites(f.body, "idl_assert_class_proto_mirrors")) {
+        const c = slotBase(site.args[1]), expr = site.args[3] || "", names = R.strings(expr, locals);
+        if (!c || !names) {
+          tagIssues.push({ file: path, line: lineAt(site.at), form: "idl_assert_class_proto_mirrors", expr: expr.trim() });
+          continue;
+        }
+        tagSeeds.push({ node: classKey(path, c), ifaces: names });
+        declares(path, names);
+      }
       /* §3.7.3's [Global] rule, read off the statement the engine already makes: the global object is an
          INSTANCE of this class, so the interface whose prototype the class's slot holds is the interface whose
          members go directly on it. */

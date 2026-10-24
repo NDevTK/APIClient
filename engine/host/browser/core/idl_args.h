@@ -1228,13 +1228,14 @@ void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface);
    Called where the per-realm intrinsic list ends (every member installed), reaching the prototypes through
    core/realm.h's §3.7.3 census. */
 void idl_assert_unscopables_name_members(JSContext *ctx);
+/* Asserts `owner` implements `iface` (its [[Prototype]] carries §3.7.3's class string `iface`) and every own
+   key of class `cls`'s prototype in this realm is a string `owner` also owns, so that object holds `iface`'s
+   members and nothing else. engine/idl_installed.mjs reads the call as that attribution, for an object no
+   §3.7.3 tag can name (HTML §7.2.3's surface, which has no interface object). `at_file`/`at_line` are the
+   caller's (IDL_SITE). */
+void idl_assert_class_proto_mirrors(JSContext *ctx, JSClassID cls, JSValueConst owner, const char *iface,
+                                    const char *at_file, int at_line);
 #endif
-
-/* The same class string on an object that is not an interface prototype object, so §3.7.3's [[Prototype]]
-   is not asserted. Only the WindowProxy's prototype needs it: it carries Window's class string while the real
-   Window interface prototype object is a different object (core/frame/window.c). Not idl_interface_tag, so the
-   C states which kind of object is tagged; engine/idl_installed.mjs reads both forms. */
-void idl_class_string(JSContext *ctx, JSValueConst obj, const char *iface);
 
 /* Web IDL §3.13.1 Namespace object's class string, the namespace's identifier (`[object console]`), with the
    same non-writable, non-enumerable, configurable descriptor. Not idl_interface_tag: a namespace object holds

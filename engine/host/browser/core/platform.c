@@ -1690,6 +1690,7 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
        Window realm legitimately holds prototypes whose property reference this column has not placed yet. A realm
        that reaches no document install is not audited by it (core/realm.h). */
     realm_assert_interface_objects_asked(ctx);
+    window_proxy_assert_surface_owned(ctx, global);   /* §7.2.3's surface against the W it stands for */
 
     for (i = 0; i < PLATFORM_WITNESS_N; i++) {
         JSAtom a = JS_NewAtom(ctx, PLATFORM_WITNESS[i].name);

@@ -7368,19 +7368,6 @@ static void idl_assert_inherits(JSContext *ctx, JSValueConst proto, const char *
 }
 #endif
 
-/* THE WRITE ITSELF, shared by the two statements below. §3.7.3 gives the property { writable: false,
-   enumerable: false, configurable: true }, which is JS_PROP_CONFIGURABLE and nothing else.
-   IT IS A PRIVATE HELPER AND NOT ONE OF THEM CALLING THE OTHER, because engine/idl_installed.mjs reads the two
-   public calls as the SEED that says which definition an object's members belong to: a delegation would put a
-   seed call inside a function whose `iface` is a parameter rather than a literal, which is an install target
-   the auditor honestly cannot decide — its own category, reported, and caused entirely by how this file was
-   spelled rather than by anything in the engine. */
-static void idl_tag_write(JSContext *ctx, JSValueConst obj, const char *iface)
-{
-    JS_DefinePropertyValue(ctx, (JSValue)obj, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG)),
-                           JS_NewString(ctx, iface), JS_PROP_CONFIGURABLE);
-}
-
 /* WEB IDL §3.3.14 [Unscopable], AS §3.7.3 Interface prototype object PERFORMS IT — the %Symbol.unscopables%
  * object on the prototype being tagged, built from browser/idl_unscopables.h.
  *
@@ -7500,7 +7487,7 @@ static void idl_install_unscopables(JSContext *ctx, JSValueConst proto, const ch
     /* "Let desc be the PropertyDescriptor{[[Value]]: unscopableObject, [[Writable]]: false,
        [[Enumerable]]: false, [[Configurable]]: true}. Perform ! DefinePropertyOrThrow(interfaceProtoObj,
        %Symbol.unscopables%, desc)." That descriptor is JS_PROP_CONFIGURABLE and nothing else — the same one
-       §3.7.3 gives the class string, which is why idl_tag_write spells it the same way. */
+       §3.7.3 gives the class string, which idl_interface_tag writes. */
     ret = JS_DefinePropertyValue(ctx, (JSValue)proto,
                                  JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_UNSCOPABLES)),
                                  unscopable_object, JS_PROP_CONFIGURABLE);
@@ -7655,7 +7642,9 @@ void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface)
        goes on building the prototype, and the prototype is what is in hand here. */
     realm_note_interface_prototype_object(ctx, proto, iface);
 #endif
-    idl_tag_write(ctx, proto, iface);
+    /* §3.7.3's class string: { writable: false, enumerable: false, configurable: true }. */
+    JS_DefinePropertyValue(ctx, (JSValue)proto, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG)),
+                           JS_NewString(ctx, iface), JS_PROP_CONFIGURABLE);
     /* §3.7.3's [Unscopable] BLOCK, on the same object and in the same call. §3.7.3 runs it between
        OrdinaryObjectCreate(proto) and "Define the regular attributes of interface on interfaceProtoObj", and
        this call site is at exactly that point in the engine's own sequence — every component tags its
@@ -7668,33 +7657,54 @@ void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface)
     idl_install_unscopables(ctx, proto, iface);
 }
 
-/* §3.7.3's CLASS STRING ON AN OBJECT THAT IS NOT AN INTERFACE PROTOTYPE OBJECT — the write above without the
-   proto-step assertion above it, because there is exactly one object in this engine that must carry an
-   interface's class string while §3.7.3 says nothing about its [[Prototype]].
-   THE OBJECT IS §7.2.3 The WindowProxy exotic object's PROTOTYPE, and §7.2.3 is explicit in one sentence:
-   "There is no WindowProxy interface object." A WindowProxy answers out of the [[Window]] it wraps, so the
-   class string a page reads off it is WINDOW's identifier — which is also what §3.7.3's tag would say — and
-   the two objects are still not the same object: core/frame/window.c builds the REAL §3.7.3 Window interface
-   prototype object over §3.7.4's named properties object, which is what IDL_INHERITS states and what the
-   assertion above checks. Sending this object through the same call would ask §3.7.3's proto-step question
-   about an object §3.7.3 does not define, and get a confident wrong answer.
-   IT IS DELIBERATELY ITS OWN FUNCTION rather than a flag, for the reason idl_namespace_tag and
-   idl_async_iterator_tag are: which KIND of object is being tagged is a fact the C states, and
-   engine/idl_installed.mjs reads the statement rather than guessing it from a name — both forms seed the same
-   attribution table, so the fifty members installed on this object are still credited to Window.
-   RESIDUAL, NAMED: this says only that §3.7.3's proto step does not govern this object; it does not yet say
-   what DOES. §7.2.3.1 [[GetPrototypeOf]] returns OrdinaryGetPrototypeOf(W) for a same-origin WindowProxy, so
-   `Object.getPrototypeOf(otherWindow)` should reach the same Window.prototype window.c builds, and this engine
-   gives WindowProxy instances a SECOND object in that position. The next diff makes the two one object rather
-   than two, and its absence shows as a cross-origin-capable page finding
-   `Object.getPrototypeOf(frames[0]) !== Window.prototype` while both answer "[object Window]". */
-void idl_class_string(JSContext *ctx, JSValueConst obj, const char *iface)
+#if APICLIENT_DEV
+void idl_assert_class_proto_mirrors(JSContext *ctx, JSClassID cls, JSValueConst owner, const char *iface,
+                                    const char *at_file, int at_line)
 {
-    DCHECK(JS_IsObject(obj), "a §3.7.3 class string was installed on something that is not an object");
-    DCHECK(iface != NULL && *iface, "a §3.7.3 class string was written with no identifier — the class string IS "
-                                    "the interface's qualified name, so there is nothing to write");
-    idl_tag_write(ctx, obj, iface);
+    JSValue obj = JS_GetClassProto(ctx, cls), up, tag;
+    JSPropertyEnum *tab = NULL;
+    JSPropertyDescriptor td;
+    uint32_t len = 0, i;
+    const char *tag_s;
+
+    DCHECKF(JS_IsObject(obj) && JS_IsObject(owner), "%s:%d asked whether a class prototype mirrors an object's "
+            "members, and one of the two is not an object", at_file, at_line);
+    up = JS_GetPrototype(ctx, owner);
+    CHECK(!JS_IsException(up), "OOM reading the owner's [[Prototype]]");
+    tag = JS_UNDEFINED;
+    if (JS_IsObject(up) && JS_GetOwnSlotDesc(ctx, &td, up, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG)) == 1) {
+        tag = td.value;
+        JS_FreeValue(ctx, td.getter);
+        JS_FreeValue(ctx, td.setter);
+    }
+    tag_s = JS_IsString(tag) ? JS_ToCString(ctx, tag) : NULL;
+    DCHECKF(tag_s != NULL && strcmp(tag_s, iface) == 0, "%s:%d: the owner's [[Prototype]] carries class string "
+            "`%s`, not `%s` — the object whose members the prototype mirrors is not of the interface the "
+            "caller names", at_file, at_line, tag_s ? tag_s : "(none)", iface);
+    if (tag_s) JS_FreeCString(ctx, tag_s);
+    JS_FreeValue(ctx, tag);
+    JS_FreeValue(ctx, up);
+    CHECK(JS_GetOwnPropertyNames(ctx, &tab, &len, obj, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK) == 0,
+          "OOM listing a class prototype's own keys");
+    for (i = 0; i < len; i++) {
+        JSValue key = JS_AtomToValue(ctx, tab[i].atom);
+        const char *name = JS_AtomToCString(ctx, tab[i].atom);
+        JSPropertyDescriptor d;
+        int sym = JS_IsSymbol(key), owned = JS_GetOwnSlotDesc(ctx, &d, owner, tab[i].atom);
+
+        JS_FreeValue(ctx, key);
+        JS_FreeValue(ctx, d.value);
+        JS_FreeValue(ctx, d.getter);
+        JS_FreeValue(ctx, d.setter);
+        DCHECKF(!sym && owned == 1, "%s:%d: the prototype holds `%s`, which is %s — it is to carry the owner's "
+                "members and nothing else, so every key on it is a string the owner also owns", at_file, at_line,
+                name ? name : "?", sym ? "a symbol, not a member name" : "not an own property of the owner");
+        JS_FreeCString(ctx, name);
+    }
+    JS_FreePropertyEnum(ctx, tab, len);
+    JS_FreeValue(ctx, obj);
 }
+#endif
 
 /* See idl_args.h. §3.13.1's class string on a NAMESPACE object — the same §3.2 descriptor as an interface
    prototype's tag, said through its own function because the object it is said about is a different kind and
@@ -7830,11 +7840,11 @@ static bool idl_target_is_realm_global(JSContext *ctx, JSValueConst target)
  *
  * THE TARGET NAMES ITSELF AND THE ROUND TRIP IS WHAT MAKES THAT SOUND. §3.7.3 Interface prototype object says
  * "The class string of an interface prototype object is the interface's qualified name", so the tag
- * idl_interface_tag wrote IS the identifier — but three other entries in this file write that same property on
- * objects that are NOT interface prototype objects (idl_namespace_tag, idl_async_iterator_tag,
- * idl_class_string), so reading it alone answers a different question from the one asked. Asking the realm's
- * §3.7.3 census for the object it recorded under that name and requiring it to BE this object rejects all
- * three by IDENTITY rather than by naming them, which is what keeps this from being a fourth list to maintain.
+ * idl_interface_tag wrote IS the identifier — but two other entries in this file write that same property on
+ * objects that are NOT interface prototype objects (idl_namespace_tag, idl_async_iterator_tag), so reading it
+ * alone answers a different question from the one asked. Asking the realm's
+ * §3.7.3 census for the object it recorded under that name and requiring it to BE this object rejects both
+ * by IDENTITY rather than by naming them, which is what keeps this from being a third list to maintain.
  *
  * A TARGET THAT IS NOT ONE IS OUTSIDE THE POPULATION AND NOT A FAILURE, and that is Web IDL §3.7.7 Operations'
  * own opening sentence: "Regular operations are exposed on the interface prototype object, unless the operation
@@ -7873,7 +7883,7 @@ static void idl_assert_receiver_is_target(JSContext *ctx, JSValueConst target, c
     tag = d.value;
     JS_FreeValue(ctx, d.getter);
     JS_FreeValue(ctx, d.setter);
-    /* The tag is a STRING by construction — idl_tag_write and its two siblings write JS_NewString — but the
+    /* The tag is a STRING by construction — idl_interface_tag and its two siblings write JS_NewString — but the
        property is [[Configurable]], so a later define could have replaced it with something else; a non-string
        is not this realm's §3.7.3 statement and is nothing to ask the census about. */
     if (!JS_IsString(tag)) { JS_FreeValue(ctx, tag); return; }

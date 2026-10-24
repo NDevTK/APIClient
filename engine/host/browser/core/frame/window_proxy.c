@@ -2395,17 +2395,14 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
  * declared [Global]), continues up W's own chain. For a W the reader may not see the answer is null, and
  * §7.2.3.5's steps 4-6 answer §7.2.1.3.1's names as own properties instead. */
 
-/* §7.2.3's own surface for one name: an own property of this object, not a prototype hit. HTML §7.2.3 "The
- * WindowProxy exotic object": "There is no WindowProxy interface object." Every name a WindowProxy answers is
- * answered by §7.2.3.5's [[GetOwnProperty]] and listed by §7.2.3.10's [[OwnPropertyKeys]], so a member reachable
- * only up a prototype chain would be one `Object.getOwnPropertyDescriptor(w, n)` answers `undefined` for while
- * `w.n` answers a value, and one `Object.getOwnPropertyNames(w)` never mentions. The Window and this surface both
- * carry §7.2.1.3.1's thirteen names, which proxy_get_own's steps 4-6 assert.
- * §7.2.3.5's cross-origin branch (steps 4-6) answers §7.2.1.3.1's names out of the same object, this engine's
- * stand-in for §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's "anonymous built-in function, created in the current
- * realm". One object, two ways in, one answer.
- * The query runs no page code and no walk: own properties only, because Object.prototype's members are the ones
- * the forward should answer out of the other realm.
+/* §7.2.3's own surface for one name: an own property of this object, not a prototype hit. HTML §7.2.3: "There is
+ * no WindowProxy interface object", so every name a WindowProxy answers is answered by §7.2.3.5 and listed by
+ * §7.2.3.10; a member reachable only up a chain would be one `getOwnPropertyDescriptor` and `getOwnPropertyNames`
+ * miss. The Window and this surface both carry §7.2.1.3.1's thirteen names (asserted in proxy_get_own), and the
+ * cross-origin branch answers them out of this object, the stand-in for §7.2.1.3.4's "anonymous built-in function,
+ * created in the current realm". Own properties only, with no page code and no walk: Object.prototype's members
+ * are the forward's to answer out of W's realm.
+ * The surface holds members and nothing else (window_proxy_assert_surface_owned).
  * 1 = the surface answers it (*desc filled and owned when desc != NULL), 0 = it does not. */
 static int proxy_surface_desc(JSContext *ctx, JSPropertyDescriptor *desc, JSAtom prop)
 {
@@ -2585,8 +2582,8 @@ static int proxy_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
            [[GetOwnProperty]] reporting a configurable own property [[Delete]] claimed to remove, and the surface
            object is shared by every proxy in the realm, so no per-proxy entry can be taken out. What closes it is
            what closes §7.2.3.6's local define: route the operation to W (which owns each of these names;
-           proxy_own_keys asserts it) and let W's descriptor be what §7.2.3.5 step 3 answers, which needs the
-           reading realm's Window/WindowProxy identity mapping applied to the forwarded value. */
+           window_proxy_assert_surface_owned asserts it) and let W's descriptor be what §7.2.3.5 step 3 answers,
+           which needs the reading realm's Window/WindowProxy identity mapping applied to the forwarded value. */
         DFAIL("`delete` of one of §7.2.3's own surface names on a WindowProxy. The surface answers the name as "
               "an OWN, configurable property and is shared by every proxy in the realm, so nothing here can "
               "remove it and reporting success would leave [[Delete]] and [[GetOwnProperty]] disagreeing. "
@@ -2630,7 +2627,12 @@ static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCons
        whose readable members are answered out of this record). It is this object's own property: §7.2.3 has no
        interface object, so §7.2.3.5 answers each of these names and §7.2.3.10 lists each, and a prototype-walk
        answer would make `Object.getOwnPropertyDescriptor(popup, "opener")` undefined while `popup.opener` is the
-       opener. */
+       opener.
+       Named residual: §7.2.3.5 step 3 answers these names from W, and W's own properties are page state (`delete
+       self` in the page's global code reaches W, not this object). Not covered: such a change, after which this
+       answer and §7.2.3.10's list, which is W's, disagree. The next diff is proxy_delete's: forward these names
+       to W with the reading realm's identity mapping. Its absence shows as a page that deleted a member of its
+       own global still reading it through `window`. */
     if (proxy_same_origin(p)) return proxy_surface_desc(ctx, desc, prop);
 
     /* Steps 4-6, which only a cross-origin W reaches, with the permit side of the filter checked in the same pass
@@ -2687,27 +2689,6 @@ static int proxy_surface_keys(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *p
     r = JS_GetOwnPropertyNames(ctx, ptab, plen, surface, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK);
     JS_FreeValue(ctx, surface);
     return r;
-}
-
-/* The one-surface invariant, asserted where the two surfaces are reconciled. §7.2.3.10's key list below is W's
-   own key list alone, while §7.2.3.5 answers §7.2.3's own surface names out of the reading realm's surface
-   object. They are one fact only while every name the surface answers is also an own property of W: a surface
-   name W does not own is a property this object reports and never lists. Side-effect-free: it reads two key
-   lists and frees them. */
-static bool proxy_surface_within(JSContext *ctx, const JSPropertyEnum *tab, uint32_t len)
-{
-    JSPropertyEnum *stab = NULL;
-    uint32_t slen = 0, i, j;
-    bool ok = true;
-
-    if (proxy_surface_keys(ctx, &stab, &slen) < 0) return false;
-    for (i = 0; i < slen && ok; i++) {
-        ok = false;
-        for (j = 0; j < len; j++)
-            if (stab[i].atom == tab[j].atom) { ok = true; break; }
-    }
-    JS_FreePropertyEnum(ctx, stab, slen);
-    return ok;
 }
 
 /* The index prefix is the range §7.2.3.5 step 2 walks, the other half of the same one-list rule over the same
@@ -2778,12 +2759,6 @@ static int proxy_own_keys(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen,
 
     if (JS_GetOwnPropertyNames(ctx, &tab, &len, w, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK) < 0)
         return -1;
-    DCHECK(proxy_surface_within(ctx, tab, len),
-           "a name §7.2.3's own surface answers is NOT an own property of the Window this proxy forwards to. "
-           "The key list is W's and the descriptors are the surface's, so that name is a property this object "
-           "reports to `Object.getOwnPropertyDescriptor` and never lists in `Object.getOwnPropertyNames` — one "
-           "navigable with two member surfaces, which is the shape §7.2.1.3.1's list and this component's "
-           "member table are already tied together by an assert to prevent");
 
     /* Steps 2-3's `keys` first: a stable partition of the array-index property names to the front. */
     for (i = 0, j = 0; i < len; i++) {
@@ -3724,7 +3699,7 @@ static const IdlStepDecl PROXY_GET_DECL = { proxy_get_step, sizeof(ProxyGetState
    built. */
 void window_proxy_install_proto(JSContext *ctx)
 {
-    JSValue proto, prev;
+    JSValue surface, prev, obj;
     int i;
 
     DCHECK(g_wp_rt != NULL, "a realm asked for the WindowProxy prototype before window_proxy_init ran");
@@ -3732,45 +3707,47 @@ void window_proxy_install_proto(JSContext *ctx)
     DCHECK(JS_IsNull(prev), "window_proxy_install_proto ran twice in one realm");
     JS_FreeValue(ctx, prev);
 
-    proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(proto), "the WindowProxy prototype could not be allocated");
-    /* HTML §7.2.3 "The WindowProxy exotic object": "There is no WindowProxy interface object." The surface below is
-       the [[Window]]'s (§7.2.3.7's same-origin [[Get]] is an OrdinaryGet answering out of it), so Web IDL §3.7.3
-       "Interface prototype object"'s class string on this object is Window's identifier. It is also what a page
-       reads: `Object.prototype.toString.call(w)` is "[object Window]" for a window it may see, and for one it
-       may not §7.2.3.1's [[GetPrototypeOf]] returns null while §7.2.1.3.2's CrossOriginPropertyFallback answers
-       %Symbol.toStringTag% with undefined before any walk. The statement also lets the Web IDL gap audit
-       attribute the members installed here, and window_message.c's `postMessage` (§9.3.3 "Posting messages"),
-       to Window.
-       idl_class_string, not idl_interface_tag: this object is not §3.7.3's Window interface prototype object,
-       which is core/frame/window.c's, built over §3.7.4's named properties object, whose chain idl_args.c
-       asserts against the IDL at every tag. Both forms seed engine/idl_installed.mjs's table, so the members
-       are attributed to Window either way. */
-    idl_class_string(ctx, proto, "Window");
+    obj = JS_NewObject(ctx);
+    CHECK(!JS_IsException(obj), "the WindowProxy prototype could not be allocated");
+    JS_SetClassProto(ctx, g_proxy_class, obj);   /* the realm's slot owns it */
+    /* HTML §7.2.3 "The WindowProxy exotic object": "There is no WindowProxy interface object", so this object
+       carries members and no class string. A page's `Object.prototype.toString.call(w)` reads Window's
+       @@toStringTag up W's chain (Web IDL §3.7.3, core/frame/window.c's Window.prototype), and for a W it may
+       not see §7.2.1.3.2's CrossOriginPropertyFallback answers undefined. Every member installed here is one W
+       owns, asserted by window_proxy_assert_surface_owned, which is also the IDL audit's attribution of the
+       class slot; the members go on through the slot so that attribution reaches them. */
+    surface = JS_GetClassProto(ctx, g_proxy_class);
     for (i = 0; i < WP_MEMBER_N; i++) {
         if (i == WP_LENGTH)
-            idl_install_accessor_step(ctx, proto, PROXY_MEMBER[i], g_wp_len_getter_id, -1);
+            idl_install_accessor_step(ctx, surface, PROXY_MEMBER[i], g_wp_len_getter_id, -1);
         else if (i == WP_CLOSED)
-            idl_install_accessor_step(ctx, proto, PROXY_MEMBER[i], g_wp_closed_getter_id, -1);
+            idl_install_accessor_step(ctx, surface, PROXY_MEMBER[i], g_wp_closed_getter_id, -1);
         else if (i == WP_NAME)
-            idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, g_wp_name_setter_id);
+            idl_install_accessor(ctx, surface, PROXY_MEMBER[i], proxy_member_get, i, g_wp_name_setter_id);
         else if (i == WP_OPENER)
-            idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, g_wp_opener_setter_id);
+            idl_install_accessor(ctx, surface, PROXY_MEMBER[i], proxy_member_get, i, g_wp_opener_setter_id);
         else if (i == WP_LOCATION)
-            idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, g_wp_location_setter_id);
+            idl_install_accessor(ctx, surface, PROXY_MEMBER[i], proxy_member_get, i, g_wp_location_setter_id);
         else
-            idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, -1);
+            idl_install_accessor(ctx, surface, PROXY_MEMBER[i], proxy_member_get, i, -1);
     }
-    idl_install_method(ctx, proto, "close", g_wp_close_id);
+    idl_install_method(ctx, surface, "close", g_wp_close_id);
     /* §7.2.1.3.1's `focus` and `blur` are on the thirteen-name cross-origin list, and §7.2.1.3.4
        CrossOriginGetOwnPropertyHelper runs OrdinaryGetOwnProperty on the Window, which owns them, so this surface
        carries them too; otherwise `otherW.focus` would be `undefined` once §7.2.3.5's cross-origin branch answers
        `0` and the walk reaches this object. proxy_capture_names's reconciliation iterates the member table and
        cannot see a name with no member entry; the loop in proxy_get_own's steps 4-6 checks this direction. It is
        §6.6.6's own install, the one window_install calls, so the global and this surface hold the same set. */
-    focus_install_window_members(ctx, proto);
-    JS_SetClassProto(ctx, g_proxy_class, proto);
+    focus_install_window_members(ctx, surface);
+    JS_FreeValue(ctx, surface);
 }
+
+#if APICLIENT_DEV
+void window_proxy_assert_surface_owned(JSContext *ctx, JSValueConst global)
+{
+    idl_assert_class_proto_mirrors(ctx, g_proxy_class, global, "Window", IDL_SITE);
+}
+#endif
 
 void window_proxy_init(JSContext *ctx)
 {
