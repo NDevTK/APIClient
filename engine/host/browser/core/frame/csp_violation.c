@@ -347,11 +347,11 @@ static void csp_fields_release(JSContext *ctx, const char **strs)
     for (i = 0; i < 8; i++) if (strs[i]) JS_FreeCString(ctx, strs[i]);
 }
 
-/* ---- §5.5 step 3's task ------------------------------------------------------------------------------------
+/* ---- CSP §5.5 Report a violation, step 3's task -----------------------------------------------------------
    "Queue a task to run the following steps": the targeting (steps 3.1-3.2), the EventTarget test and the fire
    (step 3.3), so the event is created, and its target chosen, after the task responsible for the violation has
-   finished with the DOM, as the step's note says. The dispatch is §2.9's, reached as a request so a listener
-   runs on a flow base. Arguments: the violation's element wrapper (or undefined) and csp_fields_record's Array. */
+   finished with the DOM, as the step's note says. The dispatch is DOM §2.9 Dispatching events, reached as a
+   request so a listener runs on a flow base. Arguments: the violation's element wrapper (or undefined) and csp_fields_record's Array. */
 #define CSP_TASK_STAGES(X) \
     X(CSPT_FIRE, "CSP §5.5 Report a violation step 3 — the queued task's targeting and fire")
 enum { CSP_TASK_STAGES(JS_STEP_STAGE_ENUM) };
