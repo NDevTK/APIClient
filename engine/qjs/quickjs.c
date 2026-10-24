@@ -52827,21 +52827,17 @@ static JSValue JS_FlowCompileSource(JSContext *ctx, const char *src, size_t len,
    the interpreter's dispatch, so a parse raised nothing and polled nothing for a length the PAGE chose —
    solver/rest_unit.h's bound (1) names exactly that quantity as the one that must never appear in a step's
    cost. The parse's own dispatch is the raise source now (js_parse_want_yield), and the park is the descent's
-   frame stack staying exactly where it is: chunks are allocated once and never moved, so a resume is a
-   continuation and not a reconstruction.
+   frame arena staying as it is: frames are named by index and the JSFunctionDef chain does not move, so a
+   resume is a continuation and not a reconstruction.
    A CALLER THAT PASSES NO `pcompile` IS A HOST WITH NO FRONTIER TO BE FAIR BETWEEN, and it gets the same parse
    through the same driver with the seam unarmed — which is JSFlowControlHooks.budget's own arrangement ("A NULL
    `budget` is a host that declines this edge") and is js_parse_descent's relationship to js_parse_descent_at one
    level down. JS_FlowNew is that spelling.
-   IT IS AN IN-RAM PARK AND THAT IS THE WHOLE OF IT, WHICH IS A DESIGN STATEMENT AND NOT A GAP. The state
-   cannot be serialised — the frame stack is a graph of raw pointers into chunk allocations, plus a
-   JSFunctionDef chain — which is exactly the live-graph serialization the cold tier forbids. It does not need
-   to be: a compile is RE-DERIVABLE from the row's own bytes, so a flow paged out mid-parse loses its parse and
-   the recipe that replays the document re-compiles it, which is §the-re-derivable-category and not a
-   truncation. The host therefore DROPS a suspended compile when it releases the flow (JS_FlowCompileDrop)
-   rather than refusing the park. What would make it serialisable — indices into a flat arena instead of
-   pointers, and the top_break list keyed by frame index — is a change to the frame stack's REPRESENTATION,
-   buys only the ability to resume a half-parsed program in a later session, and is not owed by this seam. */
+   IT IS AN IN-RAM PARK. The cold tier resumes a paged-out flow by replaying its arms (solver/cold.h: a frame
+   chain is regenerated, never encoded), and that replay reaches this compile again; a compile is re-derivable
+   from the row's own bytes, so a flow paged out mid-parse loses its parse and the replay re-compiles it. The
+   host therefore drops a suspended compile when it releases the flow (JS_FlowCompileDrop) rather than
+   refusing the park. A serialised image of the parse would only save that re-derivable work. */
 int JS_FlowCompileStep(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags,
                        JSValue *pfn, void **pcompile) {
     JSEvalCompile *carrier = NULL;
@@ -52916,8 +52912,8 @@ JSValue *JS_FlowInstantiate(JSContext *ctx, JSValueConst fn) {
 
 /* THROW AWAY A COMPILE NOBODY WILL FINISH — the flow that started it is being freed with its program still
    half-parsed. It is the one obligation the seam creates for the host, and it is stated as an entry rather
-   than left to a free() because what has to be released is the descent's own: every frame's atoms, the chunk
-   array, the token, the JSFunctionDef chain and any module def. */
+   than left to a free() because what has to be released is the descent's own: every frame's atoms, the frame
+   arena, the token, the JSFunctionDef chain and any module def. */
 void JS_FlowCompileDrop(JSContext *ctx, void **pcompile) {
     JSEvalCompile *ec;
     if (pcompile == NULL || *pcompile == NULL) return;
@@ -61597,7 +61593,7 @@ static BlockEnv *pd_be(JSParseState *s, int h)
 
 /* THROW AWAY A PARSE THAT HANDED THE THREAD BACK AND IS NEVER GOING TO BE ASKED FOR THE REST OF IT — a flow
    dropped while its program was still compiling. It is the driver's own `unwind:` arm, which settles the atom
-   of every frame it is abandoning and then releases the chunks, lifted to where a CARRIER can reach it: the
+   of every frame it is abandoning and then releases the arena, lifted to where a CARRIER can reach it: the
    driver's copy runs only on an OOM inside a live activation, and a carrier that is being torn down has no
    activation to reach it through. The two are the same lines over the same arena and neither is a fallback
    for the other — they are one operation at two entries, the way pd_release already is.
@@ -67633,9 +67629,9 @@ static bool js_parse_want_yield(JSParseState *s)
 
 /* TURN THE CRANK UNTIL THE PARSE IS DONE OR THE SCHEDULER WANTS THE THREAD. Returning with `pd_suspended`
    STILL SET is the whole seam, and the reason it is a CONTINUATION rather than a reconstruction is the frame
-   stack's own design: the descent's chunks are allocated once and never moved, so the frames, the
-   JSFunctionDef chain and every top_break linkage stay at the addresses they already hold across the return.
-   Nothing is serialised, nothing is relocated and nothing is re-derived.
+   arena's own design: a frame is named by its index and top_break by a frame index, so a reallocation of the
+   arena moves nothing a frame refers to, and the JSFunctionDef chain keeps its addresses across the return.
+   Nothing is serialised and nothing is re-derived.
    THE RETURN VALUE IS MEANINGLESS ON THAT EXIT: a production legitimately returns -1, 0, 1 and a prop_type,
    so there is no status to smuggle a fourth answer into — which is the same argument pd_suspended's own
    declaration makes. Every caller reads pd_suspended before it reads the status. */
