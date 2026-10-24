@@ -977,6 +977,45 @@ async function mintDrive(minted, slices) {
          'an xhr.send record with ' + label + ' is ' + (names === null ? 'accepted' : 'refused, naming the field'), { why });
   }
   console.log('[level1]   request records  ' + lines.length + ' GetPending lines and ' + records.length + ' xhr.send records driven');
+
+  /* The engine's ABI answers: the @RESUMED line, a GetReferrerPolicy answer and a partial with no @RESULT. A
+     refused answer is a reason (the root throws it as a boot refusal), and the instance is retired. */
+  const resumed = [['no residue and no line', [], false, 0], ['a residue and its line', ['@RESUMED 3'], true, 3],
+                   ['a count that is not decimal', ['@RESUMED 3x'], true, 'decimal'],
+                   ['two lines', ['@RESUMED 1', '@RESUMED 2'], true, 'twice'],
+                   ['a residue and no line', [], true, 'no rebuild'], ['a line and no residue', ['@RESUMED 1'], false, 'seeded with none']];
+  for (const [label, ls, asked, want] of resumed) {
+    const got = ZONE.engineResumeCount(ls, asked);
+    must(typeof want === 'number' ? got === want : typeof got === 'string' && got.includes(want),
+         '@RESUMED with ' + label + ' is ' + (typeof want === 'number' ? 'read as ' + want : 'refused'), { got });
+  }
+  for (const [policy, ok] of [['', true], ['origin', true], ['always', false], [null, false]]) {
+    const name = 'policy-' + String(policy);
+    ZONE.documentPolicyOpen(name);
+    const e = inst({});
+    const why = ZONE.enginePolicySettle(e, name, policy);
+    const settled = await ZONE.documentReferrerPolicy(name);
+    const r = e._crashed ? refusedRun(e) : null;
+    must(ok ? why === null && settled === policy && !e._crashed
+            : typeof why === 'string' && settled === null && e._crashed === true && r.rows.length === 1,
+         'a GetReferrerPolicy answer of ' + JSON.stringify(policy) + ' is ' +
+           (ok ? 'settled as the document\'s policy' : 'refused, settling null and retiring the instance'),
+         { why, settled, crashed: e._crashed, r });
+  }
+  for (const withResult of [true, false]) {
+    const e = inst({ _lastPartial: 1, lines: [], _resumed: null, _coldLookup: null, _bundleId: null, _coldOther: null,
+                     r: { renderer: { emitPartial: async () => { if (withResult) e.lines.push('@RESULT {}'); return {}; } } } });
+    let threw = null;
+    try { await ops.streamPartial(e); } catch (x) { threw = x; }
+    const r = e._crashed ? refusedRun(e) : null;
+    /* `{}` fails the door, so the control is refused too, through the document's own refusal rather than this one. */
+    must(threw === null && e._crashed === true && r.rows.length === 1 &&
+         r.rows[0].includes('@RESULT') === !withResult,
+         'a partial ' + (withResult ? 'whose @RESULT fails the door is refused as a document (the control)'
+                                    : 'answered with no @RESULT line is refused as the instance\'s answer'),
+         threw ? String(threw.message || threw) : { crashed: e._crashed, r });
+  }
+  console.log('[level1]   ABI answers      ' + resumed.length + ' @RESUMED readings, 4 referrer policies, 2 partials driven');
 }
 
 /* engineFetchXhr's real path with a counting safeFetch: an invented xhr.send record retires the instance and

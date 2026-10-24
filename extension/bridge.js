@@ -2414,7 +2414,7 @@ function documentPolicySettle(documentId, policy) {
                           "opened (" + documentId + ")");
   DCHECK(policy === null || policy === "" || REFERRER_POLICIES.indexOf(policy) >= 0,
          "a seed's referrer policy was settled as " + JSON.stringify(policy) + ", which is not a Referrer Policy " +
-         "§3 policy — qjs_referrer_policy answers its container's item, which policy_container.c asserts is one");
+         "§3 policy — enginePolicySettle refuses an instance's other answers and settles null for them");
   e.settle(policy);
 }
 
@@ -3161,34 +3161,42 @@ function engineBootFailed(eng, e) {
 /* How many parked flows seeded this session's frontier, read once where the seeding happened. solver/cold.c
    prints `@RESUMED <n>` from cold_resume, called only for a non-empty residue: `n >= 1` after a rebuild (it
    DCHECKs `flows > 0`), and 0 for a residue refused whole for an older build's name spelling (solver/cold.h).
-   An absent line and a zero are distinct. `asked` (this zone composed the `recipes` argument) and the line are
-   asserted against each other: a residue with no line is a silent rebuild, a line with no residue a resume of
-   a frontier never given. Release answers `null`, not `0`, for asked-but-silent, since the count is unknown. */
+   An absent line and a zero are distinct. The line is the engine's statement: answers the count, or the
+   reason the line is refused (a malformed or repeated line, or one that disagrees with `asked`, whether this
+   zone composed the `recipes` argument), which engineRoot refuses the instance with. */
 function engineResumeCount(lines, asked) {
   let n = -1;
   for (const raw of lines) {
     const ln = String(raw);
     if (!ln.startsWith("@RESUMED ")) continue;
     const tail = ln.slice(9);
-    DCHECK(/^[0-9]+$/.test(tail),
-           "the engine printed an @RESUMED line whose count is not a decimal number (`" + tail + "`) — " +
-           "solver/cold.c writes it with one `%ld`, so anything else is that line having been composed by " +
-           "something other than the rebuild it reports on");
-    DCHECK(n < 0,
-           "a session printed @RESUMED twice (" + n + " then " + tail + ") — solver/engine.c calls cold_resume " +
-           "once per session and the frontier is seeded once, so a second line is a second rebuild landing on " +
-           "top of a frontier that already stands on the first one's segments");
+    /* solver/cold.c writes the count with one `%ld`, once per session. */
+    if (!/^[0-9]+$/.test(tail)) return "the engine printed an @RESUMED count that is not a decimal number (`" + tail + "`)";
+    if (n >= 0) return "the engine printed @RESUMED twice (" + n + " then " + tail + ") in one session";
     n = Number(tail);
   }
-  DCHECK((n >= 0) === asked,
-         asked ? "this zone handed the engine a parked residue and the engine reported no rebuild — the " +
-                 "recipes are the only thing that seeds a resumed session, so a silent begin is every parked " +
-                 "flow of that document dropped between the store and the frontier, with the next park " +
-                 "writing the survivors back as if they were all there had ever been"
-               : "the engine reported resuming " + n + " parked flows into a session this zone seeded with no " +
-                 "recipes at all — solver/engine.c seeds from a residue or from a boot flow and never both, " +
-                 "so those flows stand on decision vectors this document was never handed");
-  return n >= 0 ? n : (asked ? null : 0);
+  /* solver/engine.c seeds from a residue or from a boot flow and never both: a residue with no line is every
+     parked flow dropped between the store and the frontier, and a line with none is flows standing on decision
+     vectors this document was never handed. */
+  if (asked && n < 0) return "this zone handed the engine a parked residue and the engine reported no rebuild";
+  if (!asked && n >= 0) return "the engine reported resuming " + n + " parked flows into a session seeded with none";
+  return n >= 0 ? n : 0;
+}
+/* The error engineRoot throws for an instance it refused before the instance became hot (engineRefuse has
+   marked it), which engineBootFailed reads as a refusal rather than an abort. */
+function engineBootRefusal(why) {
+  return Object.assign(new Error(why), { zoneRefused: true });
+}
+/* An instance's GetReferrerPolicy answer for `docName`, settled into the document's entry. It is the
+   instance's statement (qjs_referrer_policy), so a word that is not a Referrer Policy §3 policy settles null
+   and refuses the instance. Answers the refusal, or null. */
+function enginePolicySettle(eng, docName, policy) {
+  if (policy === "" || REFERRER_POLICIES.indexOf(policy) >= 0) { documentPolicySettle(docName, policy); return null; }
+  const why = "qjs_referrer_policy answered " + JSON.stringify(policy) + " for " + docName +
+              ", which is not a Referrer Policy §3 policy";
+  documentPolicySettle(docName, null);
+  if (!eng._crashed) engineRefuse(eng, why);
+  return why;
 }
 /* The local is `rend` and the field `eng.r` because the fetch closures below bind `const r` to Fetch's reply
    record; a renderer named `r` would be shadowed there. engineRoot fills the reservation and returns nothing:
@@ -3276,8 +3284,13 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     inheritedCoepReportOnlyEndpoint: _initEp.reportOnlyEndpoint,
     inheritedReferrerPolicy: inherited ? inherited.referrerPolicy : DEFAULT_REFERRER_POLICY,
     parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags });
-  DCHECK(_init.rc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
-                         "CHECKs every precondition and aborts, so a non-zero return is a contract that changed");
+  /* The engine's entry CHECKs every precondition and aborts, so a non-zero return is a contract this zone does
+     not speak, refused as the instance's answer. */
+  if (_init.rc !== 0) {
+    const why = "qjs_init answered rc " + JSON.stringify(_init.rc) + ", which this zone has no handling for";
+    engineRefuse(eng, why);
+    throw engineBootRefusal(why);
+  }
   /* Whether a peer holds a WindowProxy for this document, stated after `Init` and before `Begin`, the C entry's
      own bounds: there must be a document (`g_ctx`) and the frontier must not be seeded yet (`!g_begun`), since
      the flag decides whether the last timeline may finish. It is stated unconditionally, including 0, so the
@@ -3312,8 +3325,12 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* `>>> 0` because the wire carries an i32 (mojom `int32 bundleId`) for a C `unsigned`; the reader
      reinterprets it. */
   const _bidRaw = (await rend.renderer.getBundleId()).bundleId >>> 0;
-  DCHECK(_bidRaw !== 0, "the engine answered a bundle id of 0 — document_bundle_id never returns one, and a 0 " +
-                        "collides every document's frontier key with every other's");
+  /* A 0 would collide every document's frontier key with every other's. */
+  if (_bidRaw === 0) {
+    const why = "the engine answered a bundle id of 0, which document_bundle_id never returns";
+    engineRefuse(eng, why);
+    throw engineBootRefusal(why);
+  }
   const _bid = _bidRaw.toString(36);
   /* The address parses in this zone too: qjs_init has CHECKed that the engine's url.c parsed it, so an empty
      origin here means the two parsers disagree about which document the key names. */
@@ -3365,12 +3382,17 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   DCHECK(!msg || typeof msg.seedUrl !== "string" || String(msg.documentId) === eng.docId,
          "a live seed was rooted under a name that is not its browser documentId — engineCreate keeps that name " +
          "for a reported root, and the seed's referrer policy entry is keyed by it");
-  if (_documentReferrerPolicies.has(eng.docId))
-    documentPolicySettle(eng.docId, (await rend.renderer.getReferrerPolicy({ docId: eng.docId })).referrerPolicy);
+  if (_documentReferrerPolicies.has(eng.docId)) {
+    const why = enginePolicySettle(eng, eng.docId,
+                                   (await rend.renderer.getReferrerPolicy({ docId: eng.docId })).referrerPolicy);
+    if (why !== null) throw engineBootRefusal(why);
+  }
   /* The engine's half: `cold_resume` prints `@RESUMED <n>`, and every reply drains the output with it (mojo.js
      `_envelope`), so the line is in `lines` when this await resolves and never again. It is read once here and
      linesToAnalysis reads the field. */
-  eng._resumed = engineResumeCount(lines, _residue !== "");
+  const _resumedCount = engineResumeCount(lines, _residue !== "");
+  if (typeof _resumedCount === "string") { engineRefuse(eng, _resumedCount); throw engineBootRefusal(_resumedCount); }
+  eng._resumed = _resumedCount;
   // Dev-only verification hook (a real page never carries this query param): `?__forcepark=1` forces the
   // RAM-pressure park, so the cross-session round trip (park recipes, IndexedDB, restart, resume) is verifiable
   // without a 512MB working set. The param is part of the address and so of the frontier key: that address
@@ -3672,7 +3694,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   await level1AskSites([eng.msg.sourceUrl]);
   /* A refused first reply leaves nothing to rank, so the boot fails with the refusal as its cause. */
   const refused = await engineRecordFacts(eng);
-  if (refused !== null) throw Object.assign(new Error(refused), { zoneRefused: true });
+  if (refused !== null) throw engineBootRefusal(refused);
   eng.state = "hot";
 }
 /* A second document of an agent cluster joins the instance already running it, with the same arguments
@@ -3784,15 +3806,19 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
     inheritedReferrerPolicy: inherited.referrerPolicy,
     parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags,
     arrival: msg.arrival });
-  DCHECK(_join.rc === 0,
-         "qjs_join reported a failure this zone has no handling for — the engine's own entry CHECKs " +
-         "every precondition and aborts, so a non-zero return is a contract that changed");
+  /* As qjs_init's: a non-zero return is a contract this zone does not speak, so the instance is refused and
+     the join goes no further; the instance is finalized at its next step. */
+  if (_join.rc !== 0) {
+    if (!eng._crashed) engineRefuse(eng, "qjs_join answered rc " + JSON.stringify(_join.rc) + ", which this zone has no handling for");
+    return;
+  }
   /* A joined document's open referrer policy entry, read before any step, as engineRoot reads a rooted one. */
   DCHECK(typeof msg.seedUrl !== "string" || String(msg.documentId) === docName,
          "a live seed was joined under a name that is not its browser documentId — the navigation arm joins it as " +
          "the group's new top under that name, and the seed's referrer policy entry is keyed by it");
-  if (_documentReferrerPolicies.has(docName))
-    documentPolicySettle(docName, (await eng.r.renderer.getReferrerPolicy({ docId: docName })).referrerPolicy);
+  if (_documentReferrerPolicies.has(docName) &&
+      enginePolicySettle(eng, docName, (await eng.r.renderer.getReferrerPolicy({ docId: docName })).referrerPolicy)
+        !== null) return;
   /* The name enters the routing table only once the engine holds it; a delivery in between is refused by the
      post branch's assert rather than routed to an agent that has never heard the name. */
   eng.joinedDocIds.push(docName);
@@ -5398,11 +5424,9 @@ async function engineFinalize(eng) {
        engine's crash would blame the instance and discard the page's findings. */
     try { json = (await eng.r.renderer.getResult()).result; }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "result", e); }
+    /* No document is pushed for an empty answer, and linesToAnalysis refuses a complete run without one. */
     if (!eng._crashed) {
-      DCHECK(typeof json === "string" && json.length > 0,
-             "qjs_result answered with no document — result_json returns nothing only when the composition " +
-             "itself could not be allocated, which is this page's entire finding set being dropped");
-      if (json) eng.lines.push("@RESULT " + json);
+      if (typeof json === "string" && json !== "") eng.lines.push("@RESULT " + json);
     }
   }
   /* Outstanding rendezvous go with the asking instance: a completion relayed into a torn-down instance would be
@@ -6202,10 +6226,8 @@ const _hostOps = {
     if (eng._dropped || eng._crashed) return;
     let idx = -1;
     for (let i = eng.lines.length - 1; i >= 0; i--) if (String(eng.lines[i]).startsWith("@RESULT ")) { idx = i; break; }
-    /* qjs_emit_partial prints one result unconditionally; none here is this zone's capture failing. */
-    DCHECK(idx >= 0, "qjs_emit_partial produced no @RESULT line — it prints the one result document every time " +
-                     "it is called, so its absence is this zone's own capture of the engine's output failing");
-    if (idx < 0) return;   // release
+    /* qjs_emit_partial prints one result unconditionally, so an answer without one is refused. */
+    if (idx < 0) { engineRefuse(eng, "qjs_emit_partial answered with no @RESULT line"); return; }
     const partial = linesToAnalysis([eng.lines[idx]], eng.msg, "partial", eng);   // parse only the snapshot line
     eng.lines.splice(idx, 1);                                           // consume it
     /* A refused snapshot is the instance's output failing this zone's door, so the instance is retired as
@@ -6550,10 +6572,11 @@ const _hostOps = {
       for (const line of owedList("GetHostNotices", (await eng.r.renderer.getHostNotices()).notices))
         await hostNotice(eng, line);
       const _owedAtDone = owedList("GetHostRequests", (await eng.r.renderer.getHostRequests()).requests);
-      DCHECK(_owedAtDone.length === 0,
-             "an engine answered DONE while owing " + _owedAtDone.length + " host request(s) (" +
-             JSON.stringify(_owedAtDone.slice(0, 3)) + ") — a request is a parked flow's, and a drained " +
-             "frontier holds none, so finalizing would discard a flow the engine still counts");
+      /* A request is a parked flow's, and a drained frontier holds none, so an instance that answered DONE
+         while owing one is refused rather than finalized as complete. */
+      if (_owedAtDone.length !== 0 && !eng._crashed)
+        engineRefuse(eng, "the engine answered DONE while owing " + _owedAtDone.length + " host request(s) (" +
+                          JSON.stringify(_owedAtDone.slice(0, 3)) + ")");
     }
     const i = _pool.indexOf(eng); if (i >= 0) _pool.splice(i, 1);
     zoneReclaimHeldCookies(eng.groupId);
