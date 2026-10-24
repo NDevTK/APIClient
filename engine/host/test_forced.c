@@ -1109,6 +1109,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/importchain.h"
 #include "fixture/borrowedkey.h"
 #include "fixture/boundpark.h"
+#include "fixture/msgchain.h"
+#include "fixture/clickhash.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1562,6 +1564,8 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "importchain", HTML_IMPORTCHAIN },
     { "borrowedkey", HTML_BORROWEDKEY },
     { "boundpark", HTML_BOUNDPARK },
+    { "msgchain", HTML_MSGCHAIN },
+    { "clickhash", HTML_CLICKHASH },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -9823,6 +9827,33 @@ static int s_poc(const char *js, const char *sink, const char *src, const char *
     return strstr(js, pat) != NULL;
 }
 
+/* The highest @S stage any record for `sink` whose source begins with `prefix` reached, with that record's
+   source copied into `src` (empty where none matched). A delivery source carries a per-record id and a member
+   read a derivation after its root, neither of which a row can spell before the run. */
+static int s_stage_prefix(const char *js, const char *sink, const char *prefix, char *src, size_t cap) {
+    char pat[192];
+    const char *e = js;
+    int best = S_UNSEEN;
+
+    *src = 0;
+    snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s", sink, prefix);
+    while ((e = strstr(e, pat)) != NULL) {
+        const char *b = e + strlen(pat) - strlen(prefix), *q = strchr(b, '"');
+        char one[192];
+        int st;
+
+        if (!q) break;
+        if ((size_t)(q - b) < sizeof one) {
+            memcpy(one, b, (size_t)(q - b));
+            one[q - b] = 0;
+            st = s_stage(js, sink, one);
+            if (st > best) { best = st; snprintf(src, cap, "%s", one); }
+        }
+        e = q;
+    }
+    return best;
+}
+
 /* THE PROBE ROWS, ONE FUNCTION PER FIXTURE DOCUMENT. Each computes its document's rows from `js` and
    appends their table entries to probes_eval's table; documents whose rows share a computation share one.
    They are separate functions, and kept out of line, because a single body holding every row's locals was
@@ -17927,6 +17958,64 @@ TF_UNIT void probes_decoder(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `msgchain` document: a listener behind `?mode=dev` whose sink needs three ordered messages. */
+TF_UNIT void probes_msgchain(const char *js, Probe *tab, int *n) {
+    char src[192], src2[192];
+    int st = s_stage_prefix(js, "innerHTML", "message.data", src, sizeof src);
+    int st2 = s_stage_prefix(js, "innerHTML", "{message.data", src2, sizeof src2);
+    const char *listen_why = NULL, *init_why = NULL, *cfg_why = NULL, *go_why = NULL, *sink_why = NULL;
+    const char *poc_why = NULL;
+    int listen = 1, init = 1, cfg = 1, go = 1, sink = 1, poc = 1;
+
+    if (st2 > st) { st = st2; snprintf(src, sizeof src, "%s", src2); }
+    fold_row(&listen, &listen_why, param_value_is(js, "/api/mcgate", "v", "mcLISTEN"),
+             "NOT REACHED: no flow took the arm where URLSearchParams(location.search).get('mode') is 'dev', "
+             "so the listener was never registered");
+    fold_row(&init, &init_why, param_value_is(js, "/api/mcstep", "v", "mcINIT"),
+             "NOT REACHED: no message reached the handler's `init` arm — nothing delivered a message whose "
+             "origin passes the indexOf test, whose data is an object, and whose type is 'init'");
+    fold_row(&cfg, &cfg_why, param_value_is(js, "/api/mcstep", "v", "mcCFG"),
+             "NOT REACHED: no flow delivered a `cfg` message after its own `init` — a second delivery in the "
+             "same world, after the state the first one wrote");
+    fold_row(&go, &go_why, param_value_is(js, "/api/mcstep", "v", "mcGO"),
+             "NOT REACHED: no flow delivered `go` after its own `init` and `cfg`");
+    fold_row(&sink, &sink_why, st >= S_SEEN,
+             "NOT REACHED: the markup sink has no @S record over message data");
+    fold_row(&poc, &poc_why, st == S_FIRED,
+             "the markup sink's search over message data did not fire a PoC");
+    const Probe rows[] = {
+        { "mc-listener-gated", listen, "/api/mcgate", SESS_EXPLORE, listen_why },
+        { "mc-msg-init", init, "/api/mcstep", SESS_EXPLORE, init_why, .gate = "mc-listener-gated" },
+        { "mc-msg-cfg", cfg, "/api/mcstep", SESS_EXPLORE, cfg_why, .gate = "mc-msg-init" },
+        { "mc-msg-sequence", go, "/api/mcstep", SESS_EXPLORE, go_why, .gate = "mc-msg-cfg" },
+        { "mc-msg-sink", sink, "mcEl.innerHTML", SESS_EXPLORE, sink_why },
+        { "mc-msg-poc", poc, "mcEl.innerHTML", SESS_EXPLORE, poc_why, .gate = "mc-msg-sink" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `clickhash` document: a click listener nothing fires, writing the decoded fragment. */
+TF_UNIT void probes_clickhash(const char *js, Probe *tab, int *n) {
+    char src[192];
+    int st = s_stage_prefix(js, "innerHTML", "{" LOCATION_HASH_SRC, src, sizeof src);
+    const char *click_why = NULL, *sink_why = NULL, *poc_why = NULL;
+    int click = 1, sink = 1, poc = 1;
+
+    if (st == S_UNSEEN)
+        st = s_stage_prefix(js, "innerHTML", LOCATION_HASH_SRC, src, sizeof src);
+    fold_row(&click, &click_why, param_value_is(js, "/api/chclick", "v", "chRAN"),
+             "NOT REACHED: the click listener was never driven");
+    fold_row(&sink, &sink_why, st >= S_SEEN, "NOT REACHED: the markup sink has no @S record over location.hash");
+    fold_row(&poc, &poc_why, st == S_FIRED, "the markup sink's search over location.hash did not fire a PoC");
+    const Probe rows[] = {
+        { "ch-click-driven", click, "/api/chclick", SESS_EXPLORE, click_why },
+        { "ch-click-sink", sink, "getElementById('chout').innerHTML", SESS_EXPLORE, sink_why },
+        { "ch-click-poc", poc, "getElementById('chout').innerHTML", SESS_EXPLORE, poc_why,
+          .gate = "ch-click-sink" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* Fill `out` with the rows this invocation carries and answer how many. Every row's `ok` is computed by the
    functions above from the same bytes, so the mid-run report and the final one are the same function of
    them. */
@@ -17998,6 +18087,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_popover(js, probes, &np);
     probes_forms(js, probes, &np);
     probes_decoder(js, probes, &np);
+    probes_msgchain(js, probes, &np);
+    probes_clickhash(js, probes, &np);
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
        the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
 
