@@ -864,6 +864,9 @@ static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
     css_px_diff_range(a, b, &lo, &hi);
     if (lo >= 0.0) win = want_hi ? &a : &b;
     else if (hi <= 0.0) win = want_hi ? &b : &a;
+    /* Two equal infinities (css-values-4 §10.7.2's `infinity`) difference to a NaN, which orders nothing; equal
+       operands are decided either way, so the examples' winner stands. */
+    else if (lo != lo && a.px == b.px) win = a_wins ? &a : &b;
     /* Undecided, so the winner moves with the facts. The result is `lo + max(hi - lo, 0)` (`min` for the
        smaller), one atom over the operands' DIFFERENCE added to one of them, so moving both operands by one
        length moves the result by it and leaves the atom alone: two boxes alike but for where they sit compose
@@ -887,7 +890,9 @@ static CssPx css_px_extreme(CssPx a, CssPx b, bool want_hi)
         return out;
     }
     tol = 1e-9 * fmax(1.0, fmax(fabs(a.px), fabs(b.px)));
-    DCHECKF(fabs(out.px - win->px) <= tol,
+    /* Equal examples agree before any tolerance is asked, which is what keeps two infinities (css-values-4
+       §10.7.2's `infinity`) from differencing to a NaN. */
+    DCHECKF(out.px == win->px || fabs(out.px - win->px) <= tol,
             "an extreme over %g and %g was decided for every world by the facts' ranges (a - b in [%g, %g]) "
             "and the examples disagree with that decision — one operand's form is not the function its "
             "example was computed by", a.px, b.px, lo, hi);
