@@ -770,6 +770,11 @@
           inheritedReferrerPolicy: "strict-origin-when-cross-origin",
           parentNavigable: "u", openerNavigable: "N", containerPolicy: "null", ancestorOrigins: "none",
           creationSandboxFlags: "none" });
+        /* `Init` returns with the document's load begun; `Load` fills it a work quantum at a time until 0. */
+        for (var more = 1; more === 1; ) {
+          more = (await r.renderer.load()).more;
+          DCHECK(more === 0 || more === 1, "qjs_load answered " + more + ", which is neither 1 nor 0");
+        }
         var b = await r.renderer.getBundleId();
         var child = await r.childProcess.getMojoStats();
         rec.peers[idx] = { origin: p.origin, routingId: r.routingId, name: r.name, addr: p.addr,

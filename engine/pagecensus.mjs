@@ -293,6 +293,7 @@ const operands = abiOperands("Init", "qjs_init", {
   ...topLevelFacts(finalUrl),
 }, cs);
 M.ccall("qjs_init", "number", operands.map(() => "number"), operands);
+while (M.ccall("qjs_load", "number", [], []) === 1) {}   /* the load qjs_init began, a work quantum per call */
 /* The page is the one a person named on this command line (solver/engine.h's engine_set_arrival). */
 M.ccall("qjs_set_arrival", null, ["number"], [cs("observed,undriven,unpinned")]);
 M.ccall("qjs_begin", "void", ["number"], [cs("")]);

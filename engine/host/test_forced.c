@@ -30663,6 +30663,9 @@ TF_UNIT int abi_main(int argc, char **argv)
                  csp, csp_ro, csp_self, coep, coep_ep, coep_ro, coep_ro_ep, referrer_policy,
                  parent, opener, container_policy, ancestor_origins, creation_sandbox_flags);
     DCHECK(r == 0, "qjs_init refused the document this process was handed");
+    /* The root document's load, which the entry began, a work quantum per call (the ABI's `Load`). */
+    while ((r = qjs_load()) == 1) {}
+    DCHECK(r == 0, "qjs_load answered neither 1 (more) nor 0 (installed)");
     /* THE POLICY BYTES ARE PARSED AND COPIED INSIDE THE ENTRY, exactly as the header block below is. */
     free(csp);
     free(csp_ro);

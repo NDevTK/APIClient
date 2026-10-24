@@ -237,6 +237,7 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arriv
     }, cs);
 
     M.ccall('qjs_init', 'number', operands.map(() => 'number'), operands);
+    while (M.ccall('qjs_load', 'number', [], []) === 1) {}   /* the load qjs_init began, a work quantum per call */
     /* AND THE DOCUMENT'S BLOCK IS NOT FREED, because the declaration says the entry KEEPS it: `mojom.js` marks
        that one parameter `retained`, and what it is retained FOR is the load that fills the parser's input
        byte stream, which reads through this pointer rather than copying it. This driver used to free it here —

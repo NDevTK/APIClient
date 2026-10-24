@@ -713,6 +713,7 @@ async function child(docPath, schedName) {
          parameter was, so a literal count beside the call would be one more hand-kept copy of the fact that
          just went short. */
       e.M.ccall("qjs_init", "number", operands.map(() => "number"), operands);
+      while (e.M.ccall("qjs_load", "number", [], []) === 1) {}   /* the load qjs_init began, a quantum per call */
       /* AND THE DOCUMENT'S BLOCK IS NOT FREED, WHICH IS A CHANGE AND NOT AN OVERSIGHT. This line was
          `e.M._free(hp)`, and `mojom.js` declares `document` as the ONE parameter of this interface the entry
          RETAINS: the bytes are not copied, the pointer is handed to the load that fills the parser's input

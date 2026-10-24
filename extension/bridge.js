@@ -3382,6 +3382,17 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     engineRefuse(eng, why);
     throw engineBootRefusal(why);
   }
+  /* The root document's load, which `Init` began: one work quantum per `Load`, each its own message, so this
+     zone's event loop runs between two of them, and nothing else is sent to the instance until it answers 0. */
+  for (;;) {
+    const _more = (await rend.renderer.load()).more;
+    if (_more === 0) break;
+    if (_more !== 1) {
+      const why = "qjs_load answered " + JSON.stringify(_more) + ", which is neither 1 (more) nor 0 (installed)";
+      engineRefuse(eng, why);
+      throw engineBootRefusal(why);
+    }
+  }
   /* Whether a peer holds a WindowProxy for this document, stated after `Init` and before `Begin`, the C entry's
      own bounds: there must be a document (`g_ctx`) and the frontier must not be seeded yet (`!g_begun`), since
      the flag decides whether the last timeline may finish. It is stated unconditionally, including 0, so the

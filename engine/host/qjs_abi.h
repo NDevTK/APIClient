@@ -65,6 +65,9 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                         const char *container_policy,
                         const char *ancestor_origins, const char *creation_sandbox_flags,
                         const char *arrival);
+/* qjs_init returns with the root document's load begun; this fills it a work quantum per call, answering 1
+   while bytes remain and 0 once the document is installed. Nothing else of the instance is called between. */
+QJS_EXPORT int qjs_load(void);
 QJS_EXPORT void qjs_unload(const char *doc_id);
 QJS_EXPORT const char *qjs_check_request_policy(const char *doc_id, const char *url, const char *destination);
 QJS_EXPORT const char *qjs_referrer_policy(const char *doc_id);

@@ -126,12 +126,10 @@ lxb_status_t document_load_finish(DocumentLoad *load);
 void document_load_abort(DocumentLoad *load);
 
 /* THE COMPLETE LOAD — begin, step to the end, finish — FOR A CALLER ON THE HOST'S OWN TIME, and the DCHECK
-   inside it is what holds that to being true. Its callers are the ABI's own, and "no flow to yield to" is
-   what is true of all three rather than "the frontier has no member": the production ABI's `qjs_init`, which
-   parses before the first flow is seeded because it must return the document identity synchronously; that
-   same ABI's `qjs_join`, which parses a SECOND document of a LIVE agent — its own asserts require the
-   frontier to be seeded already — between two `qjs_step` returns; and the WPT runner's top-level document,
-   which drives flows under its own preempt policy with no frontier to be fair between.
+   inside it is what holds that to being true. Its one caller is the WPT runner's top-level document, which
+   drives flows under its own preempt policy with no frontier to be fair between. The production ABI fills its
+   documents through the pull seam itself: main.c's `qjs_load` a work quantum per call for the root, and
+   `qjs_join` inside its own call, which main.c names as a residual.
    THE CHILD NAVIGABLE IS NOT ONE OF THEM. core/frame/navigable.c's create-a-new-child-navigable is a step
    machine that uses the pull seam directly — it opens the load in `child_document`, steps it in
    `nav_create_step` and closes it in `nav_create_finish` — so it has a driver to park in and never reaches

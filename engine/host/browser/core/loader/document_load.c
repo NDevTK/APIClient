@@ -212,12 +212,9 @@ lxb_status_t document_load(lxb_html_document_t *document, DomParseRootKind root_
        O(document), so driving one to completion while a flow holds the thread is exactly the
        drive-to-completion CLAUDE.md §scheduler forbids — a higher-value sibling cannot preempt it, the
        cooperative quantum cannot take the thread back during it, and it cannot be parked to the IDB cold tier
-       half-parsed. It is not forbidden on the HOST'S OWN TIME, and every caller of this entry is there: the
-       production ABI's `qjs_init`, which parses before the first flow is seeded (it must return the document
-       identity synchronously, which is why the frontier key is a Lexbor `<script>` scan and not something boot
-       computes); the same ABI's `qjs_join`, which the trusted zone calls BETWEEN two `qjs_step` returns; and
-       the WPT runner's top-level document, which drives flows under its own preempt policy with no frontier to
-       be fair between.
+       half-parsed. It is not forbidden on the HOST'S OWN TIME, and this entry's one caller is there: the WPT
+       runner's top-level document, which drives flows under its own preempt policy with no frontier to be fair
+       between. The production ABI fills through the pull seam (main.c's `qjs_load` and `qjs_join`).
        AND "HOST TIME" HAS EXACTLY ONE SPELLING IN THIS ENGINE, WHICH IS WHY THIS ASKS ABOUT THE SLICE AND NOT
        ABOUT THE FLOW STAMP. `flow_running() == NULL` stood here, and that register does not answer this
        question: solver/engine.c's engine_sched_step returns the cooperative-quantum yield WITHOUT switching the

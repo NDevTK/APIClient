@@ -681,6 +681,11 @@ try {
   if (initReply.rc !== 0)
     fail(`the renderer refused the document phase 4 handed it (rc=${initReply.rc}) — every precondition in ` +
          '`qjs_init` aborts rather than returning, so a non-zero return is a contract that changed');
+  /* `Init` returns with the document's load begun; `Load` fills it a work quantum per message until 0. */
+  for (let more = 1; more === 1; ) {
+    more = (await opener.renderer.load()).more;
+    if (more !== 0 && more !== 1) fail(`qjs_load answered ${more}, which is neither 1 (more) nor 0 (installed)`);
+  }
   /* THE EMPTY STRING IS A FRESH FRONTIER, which the mojom declares is a different thing from a resumed one
      that happened to hold nothing. This gate has no residue to replay. */
   /* A document this driver names, as a person names a seed (solver/engine.h's engine_set_arrival). */

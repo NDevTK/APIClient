@@ -81,9 +81,9 @@
      that is true when written and wrong at the next addition; what is CHECKED is the SET, in `build.mjs`'s
      `abiCheck` and in `fieldgate.mjs`'s entry/export/binding/method diff, and neither asks about order.
      ONE INTERFACE FOR ALL OF THEM, WHICH IS AN ORDERING DECISION AND NOT A FILING ONE. Mojo orders messages
-     within a pipe and across none; `Begin` may not overtake `Init` and `Step` may not overtake `Begin` — the C
-     entries assert exactly that, on `g_ctx` and `g_begun` — so the sequence stays ordered by being one
-     interface rather than by a rule somebody remembers.
+     within a pipe and across none; `Load`, `Begin` and `Step` may not overtake the call before them — the C
+     entries assert that, on `g_ctx`, the pending load and `g_begun` — so the sequence stays ordered by being
+     one interface rather than by a rule somebody remembers.
      WHY THE DOCUMENT IS `array<uint8>` AND NOT THE TWO SHAPES IT REPLACES. The old envelope carried a document
      EITHER as a JS string (a content script fetched the top document in the PAGE'S own realm and shipped its
      characters — a second, unpoliced document-load transport, since deleted) OR as bytes (a child navigable's
@@ -407,6 +407,18 @@
             why: "qjs_init's own return. Its C body is a wall of CHECKs whose failures abort the instance, so " +
                  "the only value it can produce is 0 — which is exactly why reading it costs nothing and why a " +
                  "non-zero is an entry that started reporting a failure this zone was not listening for" },
+          WORKING_SET] },
+
+      /* `Init` returns with the root document's §7.5 load begun; each `Load` fills it for one work quantum and
+         hands the renderer back, so a large document is many messages and this zone's event loop runs between
+         two of them. The zone sends `Load` until it answers 0 and nothing else to the instance in between. */
+      { ordinal: 32, name: "Load",
+        params: [],
+        reply: [
+          { name: "more", type: "int32",
+            why: "qjs_load's own return: 1 while the load has bytes left after this quantum, 0 once the document " +
+                 "is installed (its realm, navigable and script inventory, which GetBundleId reads). Nothing " +
+                 "else; a third value is an engine output this zone refuses" },
           WORKING_SET] },
 
       { ordinal: 1, name: "Join",

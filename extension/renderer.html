@@ -165,6 +165,7 @@
      under, and `rendererImpl` below checks both against the mojom's own reply list. */
   var ABI = {
     init:             { fn: "qjs_init",               ret: "number", out: "rc" },
+    load:             { fn: "qjs_load",               ret: "number", out: "more" },
     join:             { fn: "qjs_join",               ret: "number", out: "rc" },
     getBundleId:      { fn: "qjs_bundle_id",          ret: "number", out: "bundleId" },
     begin:            { fn: "qjs_begin",              ret: null,     out: null },

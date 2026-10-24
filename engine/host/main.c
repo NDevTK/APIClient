@@ -91,6 +91,7 @@
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/quantum.h"
+#include "browser/core/timing/thread_work.h"   /* the charge a document load's fills retire, which qjs_load meters */
 #include "solver/world.h"
 #include "solver/result.h"
 #include "solver/solve.h"
@@ -263,19 +264,45 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
    It asks which kind of document the response loads as (§7.4.5's load-a-document dispatches on the computed type,
    from the response's header list) and which encoding it is in (§13.2.3.2 "Determining the character encoding"),
    through core/loader's classification, decoder and §7.5 subsection, the same ones the child loader uses.
-   `out_kind` (DOM §4.5's type and content type) and `out_encoding` (what DOM §4.5 "Interface Document"'s
-   `characterSet` reports) are handed back for the install, because the response is here and the realm is built
-   after this returns. */
-static lxb_html_document_t *engine_parse_document(const char *html, size_t html_n,
-                                                  const HeaderList *response_headers, DocumentKind *out_kind,
-                                                  int *out_encoding)
-{
+   The load is begun here and filled by `qjs_load`, a work quantum per call; engine_parse_finish closes it and
+   hands back DOM §4.5's type and content type and the encoding DOM §4.5 "Interface Document"'s `characterSet`
+   reports, for the install, because the realm is built after the tree. */
+
+/* A document whose §7.5 load is begun and not yet installed, with everything its install reads.
+   The ABI's strings are the caller's only for the call that carried them, so each is owned here; the document's
+   bytes are retained by the wire (mojom.js's DOCUMENT), and the decode the load borrows is this record's. */
+typedef struct {
     lxb_html_document_t *dom;
-    MimeType computed;
-    lxb_status_t st;
-    char *decoded;
+    DocumentLoad        *load;
+    MimeType             computed;
+    char                *decoded;
+    int                  encoding;
+    NavigationParams     np;
+    SandboxFlags         creation_flags;
+    uint32_t             doc;   /* the joined document's interned name */
+    char *url, *origin, *top_level_url;
+    char *inherited_csp, *inherited_csp_report_only, *inherited_csp_self_origin, *inherited_coep,
+         *inherited_coep_endpoint, *inherited_coep_report_only, *inherited_coep_report_only_endpoint,
+         *inherited_referrer_policy;
+    char *parent_navigable, *opener_navigable, *container_policy, *ancestor_origins, *arrival;
+} QjsPendingDocument;
+
+static QjsPendingDocument *g_pending;
+
+static char *qjs_own(const char *s)
+{
+    char *c;
+
+    if (s == NULL) return NULL;
+    c = strdup(s);
+    CHECK(c != NULL, "OOM keeping an ABI argument for a document whose load is still filling");
+    return c;
+}
+
+static void engine_parse_begin(QjsPendingDocument *p, const char *html, size_t html_n,
+                               const HeaderList *response_headers)
+{
     size_t decoded_n;
-    int encoding;
 
     /* No default for a missing document: an empty-page analysis reads exactly like a page with no endpoints and
        no sinks. Both entries CHECK the pointer, so this asserts. A zero length is legitimate: an empty response
@@ -289,49 +316,98 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
            "a Document was built out of a response with no header list — MIME Sniffing §7's computed type is "
            "what HTML §7.4.5 dispatches on, and a caller with bytes and no headers is one that never asked "
            "which kind of document it fetched");
-    document_load_computed_type(&computed, response_headers, html, html_n);
+    document_load_computed_type(&p->computed, response_headers, html, html_n);
     /* §13.2.3.2 over the same response, and the decode its answer names. The type is computed from `html`, not
-       `decoded`, because MIME Sniffing §5.2 "Reading the resource header" reads the resource's own bytes. No
+       the decode, because MIME Sniffing §5.2 "Reading the resource header" reads the resource's own bytes. No
        parent encoding: §13.2.3.2's container-document step is for a document whose navigable has a parent, and
        this is the instance's root; the child navigable's entry passes its container's. */
-    encoding = document_load_decode(&decoded, &decoded_n, response_headers, html, html_n,
-                                    /*parent_encoding*/-1);
-    dom = dom_document_create();
-
-    CHECK(dom != NULL, "the document allocation failed");
+    p->encoding = document_load_decode(&p->decoded, &decoded_n, response_headers, html, html_n,
+                                       /*parent_encoding*/-1);
+    p->dom = dom_document_create();
+    CHECK(p->dom != NULL, "the document allocation failed");
     /* Shared: this is the active document, whose tree is the baseline every flow reads, so §13.2.6's writes are
        the ones a live parse captures, which makes §8.4.3 `document.write()` a lifecycle change (solver/dom_cow.h).
        Which parser runs is §7.4.5's arm, routed by core/loader/document_load.h, which asserts the HTML parser is
        unreachable for a type it does not serve; the CHECK_FAIL below is this host's release half of an unbuilt arm.
        §13.2.4.5's scripting flag is set: the boot flow drives this document's scripts, and the navigable and realm
-       come after this returns (core/html/html_parse.h says why the flag is a parameter). The parser is given the
+       come after the load (core/html/html_parse.h says why the flag is a parameter). The parser is given the
        decode, never the response's bytes (§13.2.3.1 "Parsing with a known character encoding"), with the
        encoding beside it so the loader can refuse a caller that determined none. */
-    st = document_load(dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED, &computed, encoding,
-                       (const lxb_char_t *)decoded, decoded_n);
-    /* Before the record is freed, because the pair is read out of it. */
-    DCHECK(out_kind != NULL, "a document was parsed with nowhere to put its §7.5.1 type and content type — "
-                             "the Document those two facts belong to is installed by this host and there is "
-                             "exactly one caller shape, so a null here is an entry that will install a "
-                             "Document without knowing what was fetched");
-    DCHECK(out_encoding != NULL,
-           "a document was parsed with nowhere to put HTML §13.2.3.2 Determining the character encoding's "
-           "answer — the Document it belongs to is installed by this host after this returns, so a null here "
-           "is an entry that will install a Document reporting DOM §4.5's utf-8 default for a response that "
-           "was decoded as something else");
-    *out_kind     = document_load_kind(&computed);
-    *out_encoding = encoding;
-    mime_type_free(&computed);
-    /* The decode is borrowed for the life of the load (core/loader/document_load.h), and this load is complete,
-       so these bytes are this frame's to release. */
-    free(decoded);
-    if (st != LXB_STATUS_OK)
+    p->load = document_load_begin(p->dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED, &p->computed,
+                                  p->encoding, (const lxb_char_t *)p->decoded, decoded_n);
+    if (p->load == NULL)
         CHECK_FAIL("the document parse failed — the DOM is the ground truth every flow reads");
-    return dom;
 }
 
-/* Phase 1: parse and identify. No script runs: the host reads the frontier key back synchronously and looks up
- * the prior session before any flow is seeded.
+static lxb_html_document_t *engine_parse_finish(QjsPendingDocument *p, DocumentKind *out_kind, int *out_encoding)
+{
+    lxb_status_t st;
+
+    DCHECK(document_load_ended(p->load), "a document's load was finished with response bytes still unfilled");
+    st = document_load_finish(p->load);
+    p->load = NULL;
+    *out_kind = document_load_kind(&p->computed);
+    *out_encoding = p->encoding;
+    mime_type_free(&p->computed);
+    /* The decode is borrowed for the life of the load (core/loader/document_load.h), and the load is over. */
+    free(p->decoded);
+    p->decoded = NULL;
+    if (st != LXB_STATUS_OK)
+        CHECK_FAIL("the document parse failed — the DOM is the ground truth every flow reads");
+    return p->dom;
+}
+
+static void qjs_pending_free(QjsPendingDocument *p)
+{
+    char **owned[] = { &p->url, &p->origin, &p->top_level_url, &p->inherited_csp, &p->inherited_csp_report_only,
+                       &p->inherited_csp_self_origin, &p->inherited_coep, &p->inherited_coep_endpoint,
+                       &p->inherited_coep_report_only, &p->inherited_coep_report_only_endpoint,
+                       &p->inherited_referrer_policy, &p->parent_navigable, &p->opener_navigable,
+                       &p->container_policy, &p->ancestor_origins, &p->arrival };
+    size_t i;
+
+    DCHECK(p->load == NULL && p->decoded == NULL, "a pending document was freed with its load still open");
+    for (i = 0; i < sizeof owned / sizeof owned[0]; i++) free(*owned[i]);
+    navigation_params_free(&p->np);
+    free(p);
+}
+
+/* What both entries keep for the install, copied out of the call that carried them. */
+static QjsPendingDocument *qjs_pending_new(const char *url, const char *top_level_url,
+                                           const char *inherited_csp, const char *inherited_csp_report_only,
+                                           const char *inherited_csp_self_origin,
+                                           const char *inherited_coep, const char *inherited_coep_endpoint,
+                                           const char *inherited_coep_report_only,
+                                           const char *inherited_coep_report_only_endpoint,
+                                           const char *inherited_referrer_policy,
+                                           const char *parent_navigable, const char *opener_navigable,
+                                           const char *container_policy, const char *ancestor_origins,
+                                           SandboxFlags creation_flags, NavigationParams np)
+{
+    QjsPendingDocument *p = calloc(1, sizeof *p);
+
+    CHECK(p != NULL, "OOM keeping a document whose load is still filling");
+    p->url = qjs_own(url);
+    p->top_level_url = qjs_own(top_level_url);
+    p->inherited_csp = qjs_own(inherited_csp);
+    p->inherited_csp_report_only = qjs_own(inherited_csp_report_only);
+    p->inherited_csp_self_origin = qjs_own(inherited_csp_self_origin);
+    p->inherited_coep = qjs_own(inherited_coep);
+    p->inherited_coep_endpoint = qjs_own(inherited_coep_endpoint);
+    p->inherited_coep_report_only = qjs_own(inherited_coep_report_only);
+    p->inherited_coep_report_only_endpoint = qjs_own(inherited_coep_report_only_endpoint);
+    p->inherited_referrer_policy = qjs_own(inherited_referrer_policy);
+    p->parent_navigable = qjs_own(parent_navigable);
+    p->opener_navigable = qjs_own(opener_navigable);
+    p->container_policy = qjs_own(container_policy);
+    p->ancestor_origins = qjs_own(ancestor_origins);
+    p->creation_flags = creation_flags;
+    p->np = np;   /* moved: the pending record frees it */
+    return p;
+}
+
+/* Phase 1: parse and identify. No script runs: this begins the root document's load, the host fills it with
+ * qjs_load, then reads the frontier key back and looks up the prior session before any flow is seeded.
  * `doc_id` names this instance's document; the host names the root one because only it knows there is more than
  * one. A cross-origin iframe or popup is a peer instance that keys its segment of the flow's world by this name,
  * so two instances sharing a name would be one timeline wearing two names. Documents below this one are named by
@@ -466,18 +542,15 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
     SandboxFlags creation_flags = 0;
     char *origin, *novelty_scope;
     HeaderList response_headers;
-    /* §7.5.1's type and content type for the Document this entry installs, decided by the parse's §7.4.5 dispatch
-       and carried to the install. */
-    DocumentKind      root_kind;
-    int               root_encoding;
     NavigationParams np;
 
     /* This entry roots the agent at one document. An instance is an origin-keyed agent cluster with one realm per
        same-origin document (engine_child_realm), so what may not happen twice is the rooting: the runtime, class
        registrations, world registry and frontier exist once. A second document of the cluster joins through
        `qjs_join`; calling this twice would silently be a second agent. */
-    CHECK(g_dom == NULL, "qjs_init ran twice in one WASM instance — it ROOTS the agent, and a second document "
-                         "of this origin-keyed cluster joins through the join entry rather than re-rooting it");
+    CHECK(g_dom == NULL && g_pending == NULL,
+          "qjs_init ran twice in one WASM instance — it ROOTS the agent, and a second document of this "
+          "origin-keyed cluster joins through the join entry rather than re-rooting it");
     CHECK(html != NULL, "the host started this engine with no document at all — a Document is a tree over the "
                         "bytes the trusted zone captured, and there is no tree to build from nothing");
     /* The length and the guard are one fact both sides state: renderer.html writes a NUL after the sequence, and
@@ -566,9 +639,51 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
     concolic_install_hooks();
     concolic_install_source_overlay();   /* a solver host: attacker-controlled values are symbolic sources */
 
-    g_dom = engine_parse_document(html, html_len, &response_headers, &root_kind, &root_encoding);
+    g_pending = qjs_pending_new(url, top_level_url, inherited_csp, inherited_csp_report_only,
+                                inherited_csp_self_origin, inherited_coep, inherited_coep_endpoint,
+                                inherited_coep_report_only, inherited_coep_report_only_endpoint,
+                                inherited_referrer_policy, parent_navigable, opener_navigable, container_policy,
+                                ancestor_origins, creation_flags, np);
+    g_pending->origin = origin;   /* taken */
+    engine_parse_begin(g_pending, html, html_len, &response_headers);
     header_list_free(&response_headers);
+    return 0;
+}
 
+static void qjs_join_install(QjsPendingDocument *p);
+
+/* One work quantum of `p`'s load (ENGINE_QUANTUM_WORK of the charge its fills retire): true while bytes remain.
+   A fill that charges no work (an XML construct, which core/timing/thread_work.h prices at nothing) ends the
+   quantum after itself, since its cost is unmeasured. */
+static bool qjs_load_fill(QjsPendingDocument *p)
+{
+    ThreadWorkCensus c;
+    uint64_t start, before;
+
+    DCHECK(!quantum_slice_open() && cow_current() == NULL && JS_FlowGen() == 0,
+           "a document's load was filled while a flow's slice, capture route or stamp was up — the load is the "
+           "host's own time, between two qjs_step returns, and its §13.2.6 writes are the baseline's");
+    thread_work_census(&c);
+    start = c.charged_units;
+    while (!document_load_ended(p->load)) {
+        before = c.charged_units;
+        document_load_step(p->load);
+        thread_work_census(&c);
+        if (document_load_ended(p->load)) return false;
+        if (c.charged_units == before || c.charged_units - start >= (uint64_t)ENGINE_QUANTUM_WORK) return true;
+    }
+    return false;
+}
+
+/* The root document's install, once its load has filled (`qjs_load`). */
+static void qjs_init_install(QjsPendingDocument *p)
+{
+    const char *url = p->url, *origin = p->origin, *top_level_url = p->top_level_url;
+    NavigationParams *np = &p->np;
+    DocumentKind root_kind;
+    int root_encoding;
+
+    g_dom = engine_parse_finish(p, &root_kind, &root_encoding);
     /* Identity and script inventory from the DOM's own executable scripts: a concatenation of them cannot
        represent per-<script> scope and would shift with an inline script the page did not ship. */
     g_bundle_id = document_bundle_id(g_dom);
@@ -576,7 +691,7 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
 
     /* The web-platform surface, installed on the baseline before any flow runs, so these globals are pre-flow
        state and never land in a delta. What is not built is absent, and the page's own throw names it. */
-    engine_agent_init(g_ctx, origin, top_level_url, np.requests_oac, np.opener.value);
+    engine_agent_init(g_ctx, origin, top_level_url, np->requests_oac, np->opener.value);
     /* §7.4 calls back here for a same-origin child: a same-origin document is a second realm in this heap (HTML's
        similar-origin window agent), and what a document's platform surface is in this build is this file's
        answer. */
@@ -593,39 +708,39 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
            inherited container makes disagree. It is computed before the mint because §7.1.4.2's step 2 reads its
            embedder policy, and a check after the Document exists could not block it. */
         SerializedPolicyContainer inherited =
-            qjs_inherited_container(inherited_csp, inherited_csp_report_only, inherited_csp_self_origin,
-                                    inherited_coep,
-                                    inherited_coep_endpoint, inherited_coep_report_only,
-                                    inherited_coep_report_only_endpoint, inherited_referrer_policy);
+            qjs_inherited_container(p->inherited_csp, p->inherited_csp_report_only, p->inherited_csp_self_origin,
+                                    p->inherited_coep, p->inherited_coep_endpoint, p->inherited_coep_report_only,
+                                    p->inherited_coep_report_only_endpoint, p->inherited_referrer_policy);
         /* §7.5.1's opener policy row for the root Document: §7.1.3's policy obtained from this instance's
            response, the navigable's because §7.1.3.2 and §7.3.2.1 read it off a browsing context's active
            document (core/frame/window_proxy.h). §7.3.1.3's parent, stated by the zone that routed the create,
            decides whether this root is a top-level traversable; navigable_root runs §7.1.4.2 over it. */
-        JSValue root_proxy = navigable_root(g_ctx, world_local_doc(), NULL, np.opener.value,
-                                            parent_navigable, inherited, &np.embedder, creation_flags);
+        JSValue root_proxy = navigable_root(g_ctx, world_local_doc(), NULL, np->opener.value,
+                                            p->parent_navigable, inherited, &np->embedder, p->creation_flags);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         /* §7.3.1.3's other link, before the document below is installed: Permissions Policy §9.5 runs once per
            Document a navigable is given, and for a navigable rooted in a peer's frame tree only the creating
            instance can answer it. §7.3.1.3 creates a navigable and links it afterwards. */
-        navigable_root_container(g_ctx, root_proxy, container_policy);
+        navigable_root_container(g_ctx, root_proxy, p->container_policy);
         /* §7.2.2.4's opener for that navigable, which an auxiliary one has in the creating instance. */
-        navigable_root_opener(g_ctx, root_proxy, opener_navigable);
+        navigable_root_opener(g_ctx, root_proxy, p->opener_navigable);
         /* §3.1.3's ancestor origins for that navigable's document, before the install, since §7.3.2.1 reads it
            there (see core/frame/navigable.h). */
-        navigable_root_ancestor_origins(g_ctx, root_proxy, ancestor_origins);
+        navigable_root_ancestor_origins(g_ctx, root_proxy, p->ancestor_origins);
         /* §7.5.1's Document, from the navigation params decided above: §7.4.5's final sandboxing flag set, §7.1.7
            step 3's CSP list and §7.1.7's create-a-policy-container-from-a-fetch-response step 4 embedder item are
            `np`'s (core/frame/navigation_params.c); this file says which navigable and which realm. */
         SerializedPolicyContainer response =
-            serialized_policy_container(np.csp, np.csp_report_only, origin, serialized_embedder_policy_of(&np.embedder),
-                                        np.integrity_policy, np.referrer_policy);
+            serialized_policy_container(np->csp, np->csp_report_only, origin,
+                                        serialized_embedder_policy_of(&np->embedder), np->integrity_policy,
+                                        np->referrer_policy);
         SerializedPolicyContainer policy =
             policy_container_determine_navigation_params(url, response, inherited);
 
         engine_realm_install(g_ctx, g_dom, url, origin, root_kind, policy,
-                             serialized_response_permissions_policy(np.permissions_policy,
-                                                                    np.permissions_policy_report_only),
-                             np.sandbox_flags,
+                             serialized_response_permissions_policy(np->permissions_policy,
+                                                                    np->permissions_policy_report_only),
+                             np->sandbox_flags,
                              /* §7.4's about base URL: NULL. This root document is created from a response, the
                                 arm §2.4.3 "Document base URLs" answers with the document's own address. */
                              world_local_doc(), root_proxy, /*about_base_url*/ NULL,
@@ -646,9 +761,7 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
 
     /* The response is no longer reachable: its decisions are on the Document and the agent's cluster, and nothing
        the bundle runs can ask for a header again. */
-    navigation_params_free(&np);
-    free(origin);
-    return 0;
+    qjs_pending_free(p);
 }
 
 /* A second document of this agent cluster, joined to the instance already running it. `qjs_init` roots the agent
@@ -682,19 +795,16 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
     /* §7.1.5's set for this document's navigable, stated as in qjs_init. */
     SandboxFlags creation_flags = 0;
     HeaderList response_headers;
-    /* §7.5.1's type and content type for the Document this entry installs, decided by the parse's §7.4.5 dispatch
-       and carried to the install. */
-    DocumentKind      joined_kind;
-    int               joined_encoding;
     NavigationParams np;
-    lxb_html_document_t *dom;
-    JSContext *cctx;
-    DocScripts scripts;
+    QjsPendingDocument *p;
     uint32_t doc;
 
     /* A join needs an agent to join (qjs_init) and a frontier for this document's scripts (qjs_begin). A host may
        hold the instance between the two (it reads the bundle id there); a document joined then would never run a
        line and would read as one with no scripts. */
+    DCHECK(g_pending == NULL,
+           "qjs_join ran while the root document's load was still filling — qjs_load is called until it answers "
+           "0 before anything else of this instance");
     DCHECK(g_dom != NULL,
            "qjs_join ran on an instance qjs_init never rooted — a join ADDS a document to a LIVE agent, so "
            "there is no runtime to build its realm in, no origin to check it against and no heap for its tree");
@@ -777,9 +887,37 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            "building a second realm for a name that already answers with one would leave every peer's route "
            "to it resolving to whichever of the two the registry wrote last");
     world_doc_adopt(doc);
-
-    dom = engine_parse_document(html, html_len, &response_headers, &joined_kind, &joined_encoding);
+    p = qjs_pending_new(url, top_level_url, inherited_csp, inherited_csp_report_only, inherited_csp_self_origin,
+                        inherited_coep, inherited_coep_endpoint, inherited_coep_report_only,
+                        inherited_coep_report_only_endpoint, inherited_referrer_policy, parent_navigable,
+                        opener_navigable, container_policy, ancestor_origins, creation_flags, np);
+    p->doc = doc;
+    p->arrival = qjs_own(arrival);
+    engine_parse_begin(p, html, html_len, &response_headers);
     header_list_free(&response_headers);
+    /* RESIDUAL — a joined document's load is filled inside this call. Not covered: the yield at the work
+       quantum the root's load takes through qjs_load. Next diff: the joined load as the frontier's own work,
+       filled by qjs_step between flows, since a join arrives while the zone steps this instance and a second
+       pump would interleave with that one. Its absence shows as a joined document's whole parse inside one
+       Join message. */
+    while (qjs_load_fill(p)) {}
+    qjs_join_install(p);
+    return 0;
+}
+
+/* A joined document's install, once its load has filled (`qjs_load`). */
+static void qjs_join_install(QjsPendingDocument *p)
+{
+    const char *url = p->url, *top_level_url = p->top_level_url;
+    NavigationParams *np = &p->np;
+    uint32_t doc = p->doc;
+    DocumentKind joined_kind;
+    int joined_encoding;
+    lxb_html_document_t *dom;
+    JSContext *cctx;
+    DocScripts scripts;
+
+    dom = engine_parse_finish(p, &joined_kind, &joined_encoding);
     cctx = engine_realm_new(g_rt, top_level_url);
     {
         /* NULL: this host does not know the navigable's name. Whoever embeds this document (a peer or the browser)
@@ -790,35 +928,34 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            instance announced, so an inherited container is the ordinary case. It is computed before the mint, for
            qjs_init's reason (§7.1.4.2 step 2 reads its embedder policy). */
         SerializedPolicyContainer inherited =
-            qjs_inherited_container(inherited_csp, inherited_csp_report_only, inherited_csp_self_origin,
-                                    inherited_coep,
-                                    inherited_coep_endpoint, inherited_coep_report_only,
-                                    inherited_coep_report_only_endpoint, inherited_referrer_policy);
+            qjs_inherited_container(p->inherited_csp, p->inherited_csp_report_only, p->inherited_csp_self_origin,
+                                    p->inherited_coep, p->inherited_coep_endpoint, p->inherited_coep_report_only,
+                                    p->inherited_coep_report_only_endpoint, p->inherited_referrer_policy);
         /* §7.5.1's opener policy row for the joined Document, from its own response's header list, and §7.3.1.3's
            parent: a same-origin document nested through a cross-origin one belongs to this cluster and to another
            instance's frame tree at once. */
-        JSValue proxy = navigable_root(cctx, doc, NULL, np.opener.value, parent_navigable, inherited,
-                                       &np.embedder, creation_flags);
+        JSValue proxy = navigable_root(cctx, doc, NULL, np->opener.value, p->parent_navigable, inherited,
+                                       &np->embedder, p->creation_flags);
 
         CHECK(!JS_IsException(proxy), "the joined navigable's WindowProxy could not be allocated");
         /* §7.3.1.3's container, for qjs_init's reason: a document nested through a cross-origin one has both of
            its §7.3.1.3 links in a peer instance. */
-        navigable_root_container(cctx, proxy, container_policy);
+        navigable_root_container(cctx, proxy, p->container_policy);
         /* §7.2.2.4's opener, stated as in qjs_init. */
-        navigable_root_opener(cctx, proxy, opener_navigable);
+        navigable_root_opener(cctx, proxy, p->opener_navigable);
         /* §3.1.3's ancestor origins for that navigable's document, composed in the peer that holds them. */
-        navigable_root_ancestor_origins(cctx, proxy, ancestor_origins);
+        navigable_root_ancestor_origins(cctx, proxy, p->ancestor_origins);
         SerializedPolicyContainer response =
-            serialized_policy_container(np.csp, np.csp_report_only, origin_serialized(origin_agent()),
-                                        serialized_embedder_policy_of(&np.embedder), np.integrity_policy,
-                                        np.referrer_policy);
+            serialized_policy_container(np->csp, np->csp_report_only, origin_serialized(origin_agent()),
+                                        serialized_embedder_policy_of(&np->embedder), np->integrity_policy,
+                                        np->referrer_policy);
         SerializedPolicyContainer policy =
             policy_container_determine_navigation_params(url, response, inherited);
 
         engine_realm_install(cctx, dom, url, origin_serialized(origin_agent()), joined_kind, policy,
-                             serialized_response_permissions_policy(np.permissions_policy,
-                                                                    np.permissions_policy_report_only),
-                             np.sandbox_flags, doc, proxy,
+                             serialized_response_permissions_policy(np->permissions_policy,
+                                                                    np->permissions_policy_report_only),
+                             np->sandbox_flags, doc, proxy,
                              /* a joined document is a second response of this cluster; see the root's install
                                 for why §7.4's about base URL is null */
                              /*about_base_url*/ NULL, /*is_iframe_srcdoc*/ false);
@@ -849,10 +986,23 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
        engine_join_document copies every body it queues and resolves every `src` it parks on. */
     scripts = document_exec_scripts(dom);
     engine_join_document(cctx, doc, scripts.bodies, scripts.srcs, scripts.types, scripts.sched, scripts.els,
-                         scripts.n, engine_arrival_of_token(arrival));
+                         scripts.n, engine_arrival_of_token(p->arrival));
     doc_scripts_free(&scripts);
+    qjs_pending_free(p);
+}
 
-    navigation_params_free(&np);
+/* The root document's §7.5 load, which qjs_init began, filled for one work quantum (qjs_load_fill) and then
+   handed back to the host: 1 while bytes remain, 0 once the load has ended and the root's realm, navigable and
+   script inventory are installed. The host calls this until it answers 0 and calls nothing else of this
+   instance in between; the bundle id is the parsed document's. */
+QJS_EXPORT int qjs_load(void)
+{
+    QjsPendingDocument *p = g_pending;
+
+    DCHECK(p != NULL, "qjs_load ran with no document load begun — qjs_init begins one");
+    if (qjs_load_fill(p)) return 1;
+    g_pending = NULL;
+    qjs_init_install(p);
     return 0;
 }
 
@@ -959,10 +1109,11 @@ QJS_EXPORT const char *qjs_referrer_policy(const char *doc_id)
     return policy_container_referrer_policy(engine_document_policy(world_doc_intern(doc_id)));
 }
 
-/* The frontier key's document half. Pure scan, so the host may ask the instant qjs_init returns. */
+/* The frontier key's document half, a pure scan of the root document qjs_load installed. */
 QJS_EXPORT unsigned qjs_bundle_id(void)
 {
-    DCHECK(g_dom != NULL, "qjs_bundle_id was asked before the document was parsed");
+    DCHECK(g_dom != NULL && g_pending == NULL,
+           "qjs_bundle_id was asked before the root document's load ended — qjs_load answers 0 when it has");
     return g_bundle_id;
 }
 
@@ -1040,6 +1191,8 @@ QJS_EXPORT int qjs_referenced(void)
 QJS_EXPORT void qjs_begin(const char *recipes)
 {
     DCHECK(g_ctx != NULL, "qjs_begin ran before qjs_init built the context");
+    DCHECK(g_pending == NULL && g_dom != NULL,
+           "qjs_begin ran before the root document's load ended — qjs_load installs it and its script inventory");
     DCHECK(!g_begun, "qjs_begin ran twice — the frontier is seeded once and stepped thereafter");
     /* The parked residue seeds the frontier instead of the boot flow (solver/cold.h). Each stored recipe names the
        path one suspended flow had taken, as arms over shared frozen segments, and resumes by replaying that path
@@ -1061,6 +1214,7 @@ QJS_EXPORT int qjs_step(void)
     int r;
 
     DCHECK(g_begun, "qjs_step ran before the frontier was seeded");
+    DCHECK(g_pending == NULL, "qjs_step ran while a document's load was still filling (qjs_load)");
     if (g_done)
         return ENGINE_STEP_DONE;   /* the session is over; stepping it again is not a question to ask twice */
     r = engine_sched_step();
