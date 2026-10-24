@@ -15508,7 +15508,11 @@ retry:
                             JS_PROP_CONFIGURABLE;
                         desc->getter = JS_UNDEFINED;
                         desc->setter = JS_UNDEFINED;
-                        desc->value = JS_GetPropertyUint32(ctx, JS_MKPTR(JS_TAG_OBJECT, p), idx);
+                        /* an element of a fast array in range is a slot, so it is read as one, not through a
+                           second [[Get]] that would find the same slot */
+                        bool got = js_get_fast_array_element(ctx, p, idx, &desc->value);
+                        DCHECK(got, "a fast array's in-range element has no slot to read");
+                        (void)got;
                     } else if (flags_only) {
                         *pflags = JS_PROP_WRITABLE | JS_PROP_ENUMERABLE |
                             JS_PROP_CONFIGURABLE;
