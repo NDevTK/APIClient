@@ -1174,6 +1174,45 @@ async function mintDrive(minted, slices) {
     }
   }
   console.log('[level1]   peer targets     ' + peerCases.length + ' targets through the service round and hostNotice driven');
+
+  /* A create or navigate notice at an address in the announcing instance's own agent is refused before
+     anything is loaded; one at another origin (the control) is loaded, which a counting fetchedDocument that
+     stops the arm right after the load shows. A post whose target's boot fails is delivered to no one. */
+  const STOP = 'stop-after-load';
+  const own = [['a create', (addr) => create({ address: addr }).join('\t')],
+               ['a navigate', (addr) => provision('navigable.navigate', { address: addr }).join('\t')]];
+  for (const [label, notice] of own) {
+    for (const [where, addr, refused] of [['in its own agent', 'https://a.test/same', true],
+                                          ['at another origin (the control)', 'https://b.test/other', false]]) {
+      let loads = 0;
+      const e = inst({ docId: 'gap-doc', joinedDocIds: [], groupId: 'g1', cluster: 'g1|https://a.test', _inflight: new Map(),
+                       records: new Map([['gap-doc', ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public')]]),
+                       fetchedDocument: async () => { loads++; throw new Error(STOP); } });
+      let threw = null;
+      try { await ZONE.hostNotice(e, notice(addr)); } catch (x) { threw = x; }
+      const r = e._crashed ? refusedRun(e) : null;
+      must(refused ? threw === null && loads === 0 && e._crashed === true && r.rows[0].includes('own agent cluster')
+                   : threw !== null && threw.message === STOP && loads === 1 && !e._crashed,
+           label + ' notice ' + where + (refused ? ' is refused with nothing loaded' : ' is loaded'),
+           { threw: threw && threw.message, loads, crashed: e._crashed, r });
+    }
+  }
+  {
+    let routed = 0;
+    const target = { state: 'booting', docId: 'boot-doc', joinedDocIds: [], origin: 'https://b.test',
+                     r: { renderer: { route: async () => { routed++; return {}; } } } };
+    target._readyP = Promise.resolve().then(() => { target.state = 'failed'; });
+    const e = inst({ docId: 'gap-doc', joinedDocIds: [], groupId: 'g1', _inflight: new Map(),
+                     records: new Map([['gap-doc', ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public')]]) });
+    pool.push(target);
+    let threw = null;
+    try { await ZONE.hostNotice(e, 'windowproxy.post\tboot-doc\tgap-doc:1:2\tderived,undriven,unpinned\tx\ty'); }
+    catch (x) { threw = x; }
+    pool.splice(pool.indexOf(target), 1);
+    must(threw === null && routed === 0 && !e._crashed, 'a post whose target\'s boot fails is delivered to no one',
+         threw ? String(threw.message || threw) : { routed, crashed: e._crashed });
+  }
+  console.log('[level1]   own agent        4 create/navigate notices and 1 post to a failed boot driven');
 }
 
 /* engineFetchXhr's real path with a counting safeFetch: an invented xhr.send record retires the instance and

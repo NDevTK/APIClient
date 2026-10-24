@@ -4773,6 +4773,13 @@ async function hostNotice(eng, line) {
        at the emission (core/frame/navigable.c). This is the zone's record of that, read when the instance is
        re-rooted and by the join arms below. */
     const _inCreatorGroup = f[C.group] === "creator";
+    /* A child at an address already in the creator's agent (its group and origin) is one child_in_this_agent
+       builds as a realm and announces to nobody, so the notice is the engine's statement and nothing is loaded. */
+    if (_inCreatorGroup && principalOf(_childDoc, originOf(f[C.address])) === eng.origin) {
+      documentPolicySettle(f[C.child], null);
+      engineRefuseNotice(eng, line, "announces a child at an address in the creator's own agent cluster");
+      return;
+    }
     if (_inCreatorGroup) eng.referenced = 1;
     /* The provenance is the engine's word for what this navigation is evidence of, beside its drive mark and
        witness mark; navigationLoad and the chokepoint decide on them, and this arm passes them through. */
@@ -4879,21 +4886,27 @@ async function hostNotice(eng, line) {
        page), which HTML puts in one heap: it is joined to the running instance. A cluster with no instance is
        provisioned one. */
     const _ckey = clusterKeyOf(msg);
-    DCHECK(_ckey !== eng.cluster,
-           "the engine sent a create notice for a child in its OWN agent cluster — a same-origin child is a " +
-           "second REALM in that heap and never leaves it, so this zone and navigable.c's child_in_this_agent " +
-           "have answered one origin question two ways");
+    /* The address the engine asked for is outside the creator's agent (refused above, before the load), so a
+       child in the creator's own cluster is a response that redirected into the creator's origin, which only
+       this zone saw. */
+    if (_ckey === eng.cluster) {
+      DFAIL("a cross-origin child's response redirected into its creator's origin (" + f[C.address] + " -> " +
+            loaded.url + "): the engine built it as a remote navigable before the response, and this zone has no " +
+            "arm that turns it into a realm of the creator's heap. Build that commit of the response into the " +
+            "creator's agent, as child_in_this_agent would have done for the landed address");
+      documentPolicySettle(f[C.child], null);
+      return;
+    }
     /* Reservations answer too: engineCreate takes the pool slot before its first await, so a cluster being
-       provisioned answers here as a provisioned one does. */
-    const holder = hostClusterOf(_ckey);
+       provisioned answers here as a provisioned one does. A reservation still booting is waited for (`qjs_join`
+       needs `qjs_init` and `qjs_begin`), and asked again: one whose boot failed has left the pool, so the child
+       is provisioned an instance of its own. */
+    let holder = hostClusterOf(_ckey);
+    if (holder && holder.state === "booting") { await holder._readyP; holder = hostClusterOf(_ckey); }
     if (holder) {
-      /* A reservation is still the holder, so the join waits for it: `qjs_join` needs `qjs_init` and
-         `qjs_begin` to have run, which `_readyP` settling means. */
-      if (holder.state === "booting") await holder._readyP;
       DCHECK(holder.state === "hot" || holder.state === "fetching",
-             "a document was announced for a cluster whose instance never became one — the reservation holding " +
-             "it failed to boot, so this child has an agent that does not exist rather than one it can join, " +
-             "and every read through its proxy would park forever");
+             "a cluster's instance answered in state `" + holder.state + "` after its boot settled — a settled " +
+             "reservation is hot, or has left the pool");
       /* The joined document is referenced (the creating engine minted this name because its page holds a
          WindowProxy under it), so its instance may not be one whose timelines may run out. Every instance of a
          group other than its top-level one was provisioned for a navigable a peer created, and the top-level
@@ -5014,6 +5027,12 @@ async function hostNotice(eng, line) {
       return;
     }
     const _navDoc = childDocRecord(_navFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
+    /* A navigation to an address in the navigating instance's own agent is one it performs itself, so a notice
+       sending it to a peer is the engine's statement and nothing is loaded. */
+    if (principalOf(_navDoc, originOf(f[P.address])) === eng.origin) {
+      engineRefuseNotice(eng, line, "navigates to a peer at an address in its own agent cluster");
+      return;
+    }
     const navd = await eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned],
                                            /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED,
                                            docRecordOpaque(_navDoc), _navFrom.issuerDoc);
@@ -5031,12 +5050,18 @@ async function hostNotice(eng, line) {
     /* The load's Set-Cookie fields go to the jars their URLs' origins key in this document's group. */
     await zoneRouteSetCookies(navMsg.groupId, navd.setCookies);
     const _nkey = clusterKeyOf(navMsg);
-    DCHECK(_nkey !== eng.cluster,
-           "the engine sent a top-level navigation to a peer for a response in its OWN agent cluster — the " +
-           "engine's child_in_this_agent and this zone's cluster key answered one origin question two ways");
-    const navHolder = hostClusterOf(_nkey);
+    /* The address the engine stated is outside its own agent (refused above, before the load), so a document in
+       its own cluster is a re-fetch that landed there: the response changed between this zone's two loads. */
+    if (_nkey === eng.cluster) {
+      DFAIL("a top-level navigation into a peer re-fetched " + f[P.address] + " and landed in the navigating " +
+            "instance's own origin (" + navd.url + "): this zone loads the document twice and has no arm for the " +
+            "two loads disagreeing. Build the commit of the navigation's own response, which the swap arm's named " +
+            "residual also needs");
+      return;
+    }
+    let navHolder = hostClusterOf(_nkey);
+    if (navHolder && navHolder.state === "booting") { await navHolder._readyP; navHolder = hostClusterOf(_nkey); }
     if (navHolder) {
-      if (navHolder.state === "booting") await navHolder._readyP;
       DCHECK(navHolder.referenced === 1,
              "a top-level navigation into a peer joined an instance that holds no peer reference — the " +
              "navigating engine's proxy names this document, so that instance may not let its timelines run " +
@@ -5140,10 +5165,9 @@ async function hostNotice(eng, line) {
     /* A target mid-boot is still the target, and the delivery waits for it: the reservation carries the name
        from the start, so routing now would post into `null` and refusing would drop a delivery the page already
        holds a WindowProxy for. */
+    /* A target whose boot failed has crashed and receives nothing, as a crashed provisioned target does. */
     if (target.state === "booting") await target._readyP;
-    DCHECK(target.state === "hot" || target.state === "fetching",
-           "a message was posted to a document whose instance never became one — the reservation holding that " +
-           "name failed to boot, so the send is a delivery with nowhere to go rather than a message in flight");
+    if (target.state !== "hot" && target.state !== "fetching") return;
     /* The stamp is the sender's browser-stated origin, serialized. An empty one is an instance rehydrated from a
        recipe written before the principal was recorded; this zone does not know whose message it is and must
        not invent one. A CHECK, because in release the delivery would carry a fabricated identity into a
