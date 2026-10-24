@@ -5639,6 +5639,17 @@ async function engineDeliverDocument(eng, id, r) {
   DCHECK(Array.isArray(r.setCookies) && r.setCookies.every((c) => Array.isArray(c) && c.length === 2 &&
                                                               typeof c[0] === "string" && typeof c[1] === "string"),
          "a document load answered no [URL, Set-Cookie field] list — navigationLoad states one on every arm");
+  /* A response of another origin never reaches the asking instance. Judged by this zone's record of the
+     instance's origin against the response URL it fetched: the asker learns only the destination's origin
+     (`peer`), and its `navigable.navigate` provisions or joins the destination's instance, which loads the
+     document under its own record. A browser process commits a cross-site navigation to the destination's
+     renderer the same way; the initiator's never holds the bytes. Every Set-Cookie of the chain, a hop on the
+     asker's own origin included, goes to its own jar, stored before anything reads the response (Fetch
+     §4.7 HTTP-network fetch). */
+  if (originOf(r.url) !== eng.origin) {
+    await zoneRouteSetCookies(eng.groupId, r.setCookies);
+    return engineAnswer(eng, id, { peer: stampOrigin(originOf(r.url)) }, null);
+  }
   const _ownCookies = await zoneAnswerSetCookies(eng, r.setCookies);
   await engineAnswer(eng, id, { url: r.url, headers: responseFieldLines(r.headers), setCookies: _ownCookies },
                      r.bytes);

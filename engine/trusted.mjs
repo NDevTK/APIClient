@@ -2172,6 +2172,17 @@ async function main() {
           const loaded = await navigate(args.slice(i + 1), e.docUrl, 'document.fetch', args.slice(0, t),
                                         args.slice(t + 1, u), args.slice(u + 1, w), doc);
           if (loaded.declined) { e.ready.push(declineAnswer(id, loaded.declined)); return; }
+          /* A RESPONSE OF ANOTHER ORIGIN NEVER REACHES THE ASKING INSTANCE. Judged by this zone's own record of
+             that instance's origin and the response URL it fetched: the asker learns only the destination's
+             origin (`peer`), and its `navigable.navigate` is what provisions the destination's instance, which
+             loads the document under its own record. A browser process commits a cross-site navigation to the
+             destination's renderer the same way; the initiator's never holds the bytes. */
+          const destOrigin = new URL(loaded.url).origin;
+          if (destOrigin !== e.origin) {
+            e.ready.push(['answer', String(id), b64(JSON.stringify({ peer: stampOrigin(destOrigin) })), '0',
+                          b64(new Uint8Array(0))].join('\t'));
+            return;
+          }
           /* THE ANSWER IS §7.4.5's `{url, headers}` PLUS THE DOCUMENT AS BYTES: a Document is parsed from a
              byte sequence, so the bytes travel BESIDE the record rather than through a decode this zone would
              have had to run first — which is what left HTML §8.1.4.2's classic-script decode nothing to

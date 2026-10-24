@@ -1599,6 +1599,31 @@ static void nav_check_embedder_policy_adherence(JSContext *ctx, JSValueConst pro
            "value this load carries, the same shape §7.4.5's network-error arm above still needs");
 }
 
+/* Hands a top-level traversable's load whose response is another origin's (`origin`) to that origin's
+   instance, with the job's own provenance, marks and sourceDocument. The trusted zone loads `addr` for the
+   destination's instance under its own record; this instance reads none of the response. */
+static void nav_load_to_peer(JSContext *ctx, NavLoadState *s, JSValueConst proxy, const char *addr,
+                             const Origin *origin)
+{
+    const char *prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
+    const char *drv = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_DRIVEN));
+    const char *pin = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PINNED));
+    const char *iss = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_INITIATOR_DOCUMENT));
+
+    CHECK(prov != NULL && drv != NULL && pin != NULL && iss != NULL,
+          "navigable: OOM taking the provenance off a load whose Document is another origin's");
+    DCHECK(window_proxy_is_top_level(proxy),
+           "a NESTED navigable's navigation went to another origin, and a nested navigable's Document moving to a "
+           "peer is not built: the record naming the address with §7.1.7's container, §8.1.3.1's pair, §7.3.1.3's "
+           "parent and §9.5's container answer, the nested form of window_proxy_navigate_to_peer, and its host "
+           "route");
+    nav_navigate_to_peer(ctx, proxy, addr, origin, window_proxy_creation_sandbox_flags(proxy), prov, drv, pin, iss);
+    JS_FreeCString(ctx, iss);
+    JS_FreeCString(ctx, pin);
+    JS_FreeCString(ctx, drv);
+    JS_FreeCString(ctx, prov);
+}
+
 /* THE RESPONSE IS `{url, body, headers}` — one answer, because everything §7.5.1 creates a Document from is a
    property of THE RESPONSE and asking for any of it separately is asking a second time and may get a second
    answer. It was `{body, csp}`, one policy the trusted zone had pulled out of the list, and that is why a
@@ -1877,6 +1902,37 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         s->req = 0;
         JS_FreeCString(ctx, addr);
         return JS_STEP_DONE;
+    }
+    /* A RESPONSE OF ANOTHER ORIGIN IS NEVER HANDED TO THIS INSTANCE. The trusted zone fetched it and judged its
+       response URL against its own record of this instance's agent cluster; for another origin it answers here
+       with that origin alone (`peer`) and the destination's instance loads the document, as a browser process
+       commits a cross-site navigation to the destination's renderer. The decision is the response's, so a
+       cross-origin request redirected back to this origin is answered with its bytes here.
+       Named residual: the response's opener policy is not seen here, so §7.1.3.2's swap is not covered for a
+       cross-origin destination. The next diff has the zone run §7.1.3.2's enforce over its own load and state
+       the swap in this answer. Its absence shows as a COOP page opened cross-origin keeping its opener. */
+    if (fetches) {
+        JSValue peerv = JS_GetPropertyStr(ctx, answer, "peer");
+
+        if (!JS_IsUndefined(peerv)) {
+            const char *peer = JS_ToCString(ctx, peerv);
+            int completion = ENGINE_COMPLETION_NORMAL;
+            JSValue taken;
+
+            DCHECK(JS_IsString(peerv) && peer != NULL && *peer,
+                   "the zone answered a document load with a `peer` decision naming no origin — it names the "
+                   "destination's origin on every such answer");
+            taken = engine_host_take(ctx, s->req, &completion);
+            DCHECK(completion == ENGINE_COMPLETION_NORMAL,
+                   "a document load's `peer` decision arrived with a THROW completion — the zone states it");
+            JS_FreeValue(ctx, taken);
+            s->req = 0;
+            nav_load_to_peer(ctx, s, proxy, addr, origin_parse(peer));
+            JS_FreeCString(ctx, peer);
+            JS_FreeValue(ctx, peerv);
+            JS_FreeCString(ctx, addr);
+            return JS_STEP_DONE;
+        }
     }
     /* §7.4.2.2's initiatorOriginSnapshot, CARRIED AS A HANDLE. It is an INPUT of the operation — the origin of
        the document whose script ran — and a handle is what preserves its identity across a JSValue: §7.3.2.1's

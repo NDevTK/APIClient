@@ -540,6 +540,13 @@ async function service(e) {
            `\`document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer policy>` +
            `<TAB><initiator><TAB><url>\`: ${op} — core/frame/navigable.c writes all eight fields on every ` +
            'path, the policy possibly empty');
+    /* A response of another origin never reaches the asking instance: the asker is answered the destination's
+       origin alone (`peer`), as extension/bridge.js and engine/trusted.mjs answer it. */
+    const fetchUrl = new URL(fetchArgs.slice(initTab + 1), e.docUrl);
+    if (fetchUrl.origin !== e.origin) {
+      e.answer(id, { peer: fetchUrl.origin }, new Uint8Array(0));
+      continue;
+    }
     e.answer(id, { url: fetchArgs.slice(initTab + 1), headers: "", setCookies: [] }, HTML_B);
   }
   return { step: r };
