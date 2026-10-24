@@ -34,7 +34,7 @@
  * the per-type dispatch, which fires for any supported name this file does not decide.
  *
  * A TYPE THIS ENGINE HAS NO GRAMMAR FOR CRASHES AT THE VALUE THAT NEEDS IT, never quietly refuses. Answering
- * "does not match" for `<transform-function>` would turn an unbuilt component into a rule the page's own
+ * "does not match" for an unbuilt type (a 3D transform function) would turn it into a rule the page's own
  * `initialValue` reports as absent — a plausible datum indistinguishable from a measurement — so a name whose
  * grammar is a whole component in its own right aborts by name, and the abort says which component to build.
  * Refusing is reserved for values the grammars below actually decided.

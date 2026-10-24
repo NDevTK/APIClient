@@ -245,11 +245,40 @@ static bool css_tf_length(JSContext *realm, const CssFontMetrics *font, const ch
     return ok;
 }
 
+/* `<length-percentage>` over a whole span, deciding the grammar alone: a math function by css-values-4 §10.9's
+   type, a percentage, a dimension in one of css-values-4 §6's length units, or the unitless zero §6 admits for a
+   length. Nothing is absolutized, so no realm and no font is asked. */
+static bool css_tf_length_valid(const char *s, const char *e)
+{
+    const char *p = s;
+    double num;
+    size_t ulen;
+
+    if (memchr(s, '(', (size_t)(e - s)) != NULL)
+        return css_math_matches(s, (size_t)(e - s), CSS_MATH_PROD_LENGTH_PERCENTAGE);
+    /* The number ends where its digits, sign, dot and exponent do, as css_tf_angle splits a dimension. */
+    while (p < e && (isdigit((unsigned char)*p) || *p == '+' || *p == '-' || *p == '.')) p++;
+    if (p < e && (*p == 'e' || *p == 'E')) {
+        const char *q = p + 1;
+
+        if (q < e && (*q == '+' || *q == '-')) q++;
+        if (q < e && isdigit((unsigned char)*q)) {
+            while (q < e && isdigit((unsigned char)*q)) q++;
+            p = q;
+        }
+    }
+    if (!css_tf_number(s, p, &num)) return false;
+    ulen = (size_t)(e - p);
+    if (ulen == 0) return num == 0.0;
+    if (ulen == 1 && *p == '%') return true;
+    return css_length_is_length_unit(p, ulen);
+}
+
 /* ONE `<transform-function>`'s arguments, split on the commas its own grammar writes. `s`..`e` is the text
    BETWEEN the function's parentheses. A comma nested inside a further function — `min()`, `calc()` — belongs
    to that function and not to this list, which is why the split tracks depth rather than scanning for commas. */
-static bool css_tf_args(JSContext *realm, const CssFontMetrics *font, const char *s, const char *e,
-                        CssTfArgType type, unsigned min, unsigned max, CssTransformFunction *fn)
+static bool css_tf_args(JSContext *realm, const CssFontMetrics *font, bool absolutize, const char *s,
+                        const char *e, CssTfArgType type, unsigned min, unsigned max, CssTransformFunction *fn)
 {
     const char *arg = s;
     unsigned depth = 0;
@@ -285,6 +314,11 @@ static bool css_tf_args(JSContext *realm, const CssFontMetrics *font, const char
         if (fn->argc >= max) return false;
         switch (type) {
         case CSS_TF_ARG_NUMBER:
+            /* The grammar alone asks a math function its §10.9 type; only a value has to evaluate one. */
+            if (!absolutize && memchr(as, '(', (size_t)(ae - as)) != NULL) {
+                if (!css_math_matches(as, (size_t)(ae - as), CSS_MATH_PROD_NUMBER)) return false;
+                break;
+            }
             css_tf_reject_math(as, ae);
             if (!css_tf_number(as, ae, &fn->number[fn->argc])) return false;
             break;
@@ -298,7 +332,9 @@ static bool css_tf_args(JSContext *realm, const CssFontMetrics *font, const char
                    "css-transforms-1 §7.1 \"2D Transform Functions\" writes at most two in any translation's "
                    "grammar — so CSS_TF_GRAMMAR's `max` column and CssTransformFunction's `length` array "
                    "disagree about the same section");
-            if (!css_tf_length(realm, font, as, ae, &fn->length[fn->argc])) return false;
+            if (absolutize ? !css_tf_length(realm, font, as, ae, &fn->length[fn->argc])
+                           : !css_tf_length_valid(as, ae))
+                return false;
             break;
         case CSS_TF_ARG_ANGLE:
             DCHECK(fn->argc < 2,
@@ -306,6 +342,10 @@ static bool css_tf_args(JSContext *realm, const CssFontMetrics *font, const char
                    "css-transforms-1 §7.1 \"2D Transform Functions\" writes at most two in any rotation's or "
                    "skew's grammar — so CSS_TF_GRAMMAR's `max` column and CssTransformFunction's `angle` array "
                    "disagree about the same section");
+            if (!absolutize && memchr(as, '(', (size_t)(ae - as)) != NULL) {
+                if (!css_math_matches(as, (size_t)(ae - as), CSS_MATH_PROD_ANGLE)) return false;
+                break;
+            }
             if (!css_tf_angle(as, ae, &fn->angle[fn->argc], fn->angle_unit[fn->argc])) return false;
             break;
         }
@@ -314,6 +354,84 @@ static bool css_tf_args(JSContext *realm, const CssFontMetrics *font, const char
         arg = stop + 1;                                      /* past the comma */
     }
     return fn->argc >= min;
+}
+
+/* CSS Syntax §4.3.7's escapes, asked of the whole value: see the crash. */
+static void css_tf_refuse_escapes(const char *value, const char *end)
+{
+    /* CSS Syntax §4.3.7 "Consume an escaped code point" is a capability this reader does not have, and it is a
+       CRASH rather than a refusal because an escape is always VALID syntax: `\74 ranslate(1px)` is a
+       declaration every browser honours, so answering CSS Syntax §2.2 "Error Handling"'s dropped declaration
+       for it would drop what an author wrote. It is asked of the whole value up front because an escape may
+       appear in a function name OR in a unit identifier, and those are two readers below. */
+    if (memchr(value, '\\', (size_t)(end - value)) != NULL)
+        DFAIL("a transform value carries a CSS Syntax §4.3.7 \"Consume an escaped code point\" escape, "
+              "and this component's ident and unit readers walk bytes rather than consuming ident sequences. "
+              "An escape is VALID CSS — `\\74 ranslate(1px)` names translate() in every browser — so refusing "
+              "it as CSS Syntax §2.2 \"Error Handling\"'s invalid declaration would drop an author's own "
+              "transform and report `none` where a browser reports a translation. WHAT TO BUILD: CSS Syntax "
+              "§4.3.12 \"Consume an ident sequence\" over the name scan and the unit scan in this file, which "
+              "is where both would decode. HOW ITS ABSENCE SHOWS: a stylesheet whose transform function name "
+              "or angle unit is written with an escape aborts here instead of computing");
+}
+
+/* ONE `<transform-function>` at `*pp`, read into `fn` with `*pp` moved past its closing parenthesis. False is CSS
+   Syntax §2.2's dropped declaration. `absolutize` false decides the grammar alone and asks no realm or font. */
+static bool css_tf_function(JSContext *realm, const CssFontMetrics *font, bool absolutize, const char **pp,
+                            const char *end, CssTransformFunction *fn)
+{
+    const char *p = *pp, *name = p, *open, *body;
+    size_t nlen, i;
+    unsigned depth;
+
+    /* CSS Syntax §4.3.4 "Consume an ident-like token" makes a FUNCTION TOKEN an ident sequence immediately
+       followed by U+0028, so no whitespace may stand between the name and its parenthesis. Every §7.1
+       function name is ASCII alphanumeric, and the escape arm above has already left. */
+    while (p < end && (isalnum((unsigned char)*p) || *p == '-' || *p == '_')) p++;
+    nlen = (size_t)(p - name);
+    if (nlen == 0 || p == end || *p != '(') return false;
+    open = p;
+    /* The matching close, by depth, so a nested function's own parentheses do not end this one. */
+    depth = 0;
+    do {
+        if (*p == '(') depth++;
+        else if (*p == ')') depth--;
+        p++;
+    } while (p < end && depth > 0);
+    if (depth != 0) return false;
+    body = open + 1;                                     /* p is one past the matching ')' */
+    for (i = 0; i < sizeof CSS_TF_LEVEL2 / sizeof CSS_TF_LEVEL2[0]; i++)
+        if (css_tf_name_is(name, nlen, CSS_TF_LEVEL2[i]))
+            DFAILF("css-transforms-2 §12.2 \"3D Transform Functions\" defines `%s()` and this engine "
+                   "implements no level 2, so this is a capability that is MISSING rather than an "
+                   "authoring mistake — CSS Syntax §2.2 \"Error Handling\"'s dropped declaration is the "
+                   "answer for a value no standard names, and answering it here would report the author's "
+                   "transform as `none` and hand every consumer a WRONG matrix rather than an absent one. "
+                   "WHAT TO BUILD: §12.2's ten grammars beside §7.1's table in this file, and with them "
+                   "the third row and column css-transforms-2 §11 \"Current Transformation Matrix\" gives "
+                   "every function — the 2D matrix this file's consumers reduce to is that 4x4 with the "
+                   "Z axis left as the identity, so the two land together or a translate3d() computes as "
+                   "a translate(). HOW ITS ABSENCE SHOWS: a page whose transform names any 3D function "
+                   "aborts here rather than computing. THE RELEASE ARM IS THE LINE BELOW AND IT IS A "
+                   "STATE RATHER THAN A SILENCE: with the abort compiled out the name matches no row of "
+                   "CSS_TF_GRAMMAR either, so the value is refused, the declaration is dropped and the "
+                   "element computes §3's `Initial:` value of `none` — which every consumer of this "
+                   "component already handles as the identity, so the pair of arms leaves no state a "
+                   "sibling has to test for",
+                   CSS_TF_LEVEL2[i]);
+    for (i = 0; i < sizeof CSS_TF_GRAMMAR / sizeof CSS_TF_GRAMMAR[0]; i++) {
+        if (!css_tf_name_is(name, nlen, CSS_TF_GRAMMAR[i].name)) continue;
+        memset(fn, 0, sizeof *fn);
+        fn->kind = CSS_TF_GRAMMAR[i].kind;
+        if (!css_tf_args(realm, font, absolutize, body, p - 1, CSS_TF_GRAMMAR[i].arg, CSS_TF_GRAMMAR[i].min,
+                         CSS_TF_GRAMMAR[i].max, fn))
+            return false;
+        *pp = p;
+        return true;
+    }
+    /* A name §7.1 does not write and css-transforms-2 §12.2 does not write either is a function no
+       standard this engine knows enumerates, which is CSS Syntax §2.2's invalid declaration. */
+    return false;
 }
 
 bool css_transform_list_parse(JSContext *realm, const CssFontMetrics *font, const char *value,
@@ -330,92 +448,24 @@ bool css_transform_list_parse(JSContext *realm, const CssFontMetrics *font, cons
     out->fn = NULL;
     out->n = 0;
     end = value + strlen(value);
-    /* CSS Syntax §4.3.7 "Consume an escaped code point" is a capability this reader does not have, and it is a
-       CRASH rather than a refusal because an escape is always VALID syntax: `\74 ranslate(1px)` is a
-       declaration every browser honours, so answering CSS Syntax §2.2 "Error Handling"'s dropped declaration
-       for it would drop what an author wrote. It is asked of the whole value up front because an escape may
-       appear in a function name OR in a unit identifier, and those are two readers below. */
-    if (memchr(value, '\\', (size_t)(end - value)) != NULL)
-        DFAIL("a `transform` declaration carries a CSS Syntax §4.3.7 \"Consume an escaped code point\" escape, "
-              "and this component's ident and unit readers walk bytes rather than consuming ident sequences. "
-              "An escape is VALID CSS — `\\74 ranslate(1px)` names translate() in every browser — so refusing "
-              "it as CSS Syntax §2.2 \"Error Handling\"'s invalid declaration would drop an author's own "
-              "transform and report `none` where a browser reports a translation. WHAT TO BUILD: CSS Syntax "
-              "§4.3.12 \"Consume an ident sequence\" over the name scan and the unit scan in this file, which "
-              "is where both would decode. HOW ITS ABSENCE SHOWS: a stylesheet whose transform function name "
-              "or angle unit is written with an escape aborts here instead of computing");
+    css_tf_refuse_escapes(value, end);
     p = css_tf_skip_ws(value, end);
     /* `<transform-list> = <transform-function>+` admits no empty match, so an all-whitespace value is not a
        list. The `none` arm of §3's `Value:` line is the caller's and never reaches here. */
     if (p == end) return false;
     while (p < end) {
-        const char *name = p;
-        size_t nlen, i;
-        const char *open, *body;
-        unsigned depth;
-        bool known = false;
+        CssTransformFunction fn;
 
-        /* CSS Syntax §4.3.4 "Consume an ident-like token" makes a FUNCTION TOKEN an ident sequence immediately
-           followed by U+0028, so no whitespace may stand between the name and its parenthesis. Every §7.1
-           function name is ASCII alphanumeric, and the escape arm above has already left. */
-        while (p < end && (isalnum((unsigned char)*p) || *p == '-' || *p == '_')) p++;
-        nlen = (size_t)(p - name);
-        if (nlen == 0 || p == end || *p != '(') { css_transform_list_free(out); return false; }
-        open = p;
-        /* The matching close, by depth, so a nested function's own parentheses do not end this one. */
-        depth = 0;
-        do {
-            if (*p == '(') depth++;
-            else if (*p == ')') depth--;
-            p++;
-        } while (p < end && depth > 0);
-        if (depth != 0) { css_transform_list_free(out); return false; }
-        body = open + 1;                                     /* p is one past the matching ')' */
-        for (i = 0; i < sizeof CSS_TF_LEVEL2 / sizeof CSS_TF_LEVEL2[0]; i++)
-            if (css_tf_name_is(name, nlen, CSS_TF_LEVEL2[i]))
-                DFAILF("css-transforms-2 §12.2 \"3D Transform Functions\" defines `%s()` and this engine "
-                       "implements no level 2, so this is a capability that is MISSING rather than an "
-                       "authoring mistake — CSS Syntax §2.2 \"Error Handling\"'s dropped declaration is the "
-                       "answer for a value no standard names, and answering it here would report the author's "
-                       "transform as `none` and hand every consumer a WRONG matrix rather than an absent one. "
-                       "WHAT TO BUILD: §12.2's ten grammars beside §7.1's table in this file, and with them "
-                       "the third row and column css-transforms-2 §11 \"Current Transformation Matrix\" gives "
-                       "every function — the 2D matrix this file's consumers reduce to is that 4x4 with the "
-                       "Z axis left as the identity, so the two land together or a translate3d() computes as "
-                       "a translate(). HOW ITS ABSENCE SHOWS: a page whose transform names any 3D function "
-                       "aborts here rather than computing. THE RELEASE ARM IS THE LINE BELOW AND IT IS A "
-                       "STATE RATHER THAN A SILENCE: with the abort compiled out the name matches no row of "
-                       "CSS_TF_GRAMMAR either, so the value is refused, the declaration is dropped and the "
-                       "element computes §3's `Initial:` value of `none` — which every consumer of this "
-                       "component already handles as the identity, so the pair of arms leaves no state a "
-                       "sibling has to test for",
-                       CSS_TF_LEVEL2[i]);
-        for (i = 0; i < sizeof CSS_TF_GRAMMAR / sizeof CSS_TF_GRAMMAR[0]; i++) {
-            CssTransformFunction fn;
+        if (!css_tf_function(realm, font, true, &p, end, &fn)) { css_transform_list_free(out); return false; }
+        if (out->n == cap) {
+            CssTransformFunction *g;
 
-            if (!css_tf_name_is(name, nlen, CSS_TF_GRAMMAR[i].name)) continue;
-            memset(&fn, 0, sizeof fn);
-            fn.kind = CSS_TF_GRAMMAR[i].kind;
-            if (!css_tf_args(realm, font, body, p - 1, CSS_TF_GRAMMAR[i].arg,
-                             CSS_TF_GRAMMAR[i].min, CSS_TF_GRAMMAR[i].max, &fn)) {
-                css_transform_list_free(out);
-                return false;
-            }
-            if (out->n == cap) {
-                CssTransformFunction *g;
-
-                cap = cap ? cap * 2 : 4;
-                g = realloc(out->fn, cap * sizeof *g);
-                CHECK(g != NULL, "css-transforms-1 §3: OOM growing a <transform-list>");
-                out->fn = g;
-            }
-            out->fn[out->n++] = fn;
-            known = true;
-            break;
+            cap = cap ? cap * 2 : 4;
+            g = realloc(out->fn, cap * sizeof *g);
+            CHECK(g != NULL, "css-transforms-1 §3: OOM growing a <transform-list>");
+            out->fn = g;
         }
-        /* A name §7.1 does not write and css-transforms-2 §12.2 does not write either is a function no
-           standard this engine knows enumerates, which is CSS Syntax §2.2's invalid declaration. */
-        if (!known) { css_transform_list_free(out); return false; }
+        out->fn[out->n++] = fn;
         p = css_tf_skip_ws(p, end);
     }
     DCHECK(out->n > 0,
@@ -424,6 +474,18 @@ bool css_transform_list_parse(JSContext *realm, const CssFontMetrics *font, cons
            "and the empty-value arm above already left. An empty list would also be indistinguishable from "
            "`none` at every consumer, which is the other arm of §3's `Value:` line and a different fact");
     return true;
+}
+
+bool css_transform_function_matches(const char *value, size_t len)
+{
+    const char *p = value, *end = value + len;
+    CssTransformFunction fn;
+
+    DCHECK(value != NULL || len == 0, "a <transform-function> was matched over a NULL span");
+    css_tf_refuse_escapes(value, end);
+    p = css_tf_skip_ws(p, end);
+    if (!css_tf_function(NULL, NULL, false, &p, end, &fn)) return false;
+    return css_tf_skip_ws(p, end) == end;
 }
 
 void css_transform_list_free(CssTransformList *list)

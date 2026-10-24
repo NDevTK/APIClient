@@ -21843,6 +21843,22 @@ TF_UNIT void css_property_grammar_selftest(void)
           "THE NEGATIVE CONTROL FOR THE WHOLE GROUP. Every row above asserts something about a gradient "
           "grammar, and all of them would still pass against a matcher that answered true for any functional "
           "notation at all — this is the one that would not" },
+        /* css-transforms-1 §7.1 "2D Transform Functions", one argument production per function. */
+        { "<transform-function>", "rotate(45deg)", true, "§7.1's `rotate( [ <angle> | <zero> ] )`" },
+        { "<transform-function>", "translate(10px, 50%)", true,
+          "`translate( <length-percentage> , <length-percentage>? )`, a percentage left unresolved" },
+        { "<transform-function>", "translateX(calc(1em + 10%))", true,
+          "a math function is asked its css-values-4 §10.9 type and not evaluated, so no realm is needed" },
+        { "<transform-function>", "matrix(1, 0, 0, 1, 0, 0)", true, "`matrix( <number>#{6} )`" },
+        { "<transform-function>", "skew(0)", true, "§7's `<zero>` legacy arm for an angle" },
+        { "<transform-function>", "rotate(2)", false, "a non-zero number is no angle" },
+        { "<transform-function>", "translate(red)", false, "`red` is no `<length-percentage>`" },
+        { "<transform-function>", "matrix(1, 0, 0, 1, 0)", false, "`#{6}` is exactly six" },
+        { "<transform-function>", "rotate(45deg) scale(2)", false,
+          "a component matches ONE component value, so two functions are a `<transform-list>` and not this" },
+        { "<transform-list>", "rotate(45deg) scale(2)", true, "§5.1's pre-multiplied `<transform-function>+`" },
+        { "<transform-function>", "spin(45deg)", false,
+          "THE NEGATIVE CONTROL: a function no transforms level names is invalid, not a crash" },
     };
     unsigned i;
 

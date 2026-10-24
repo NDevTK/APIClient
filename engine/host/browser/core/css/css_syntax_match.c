@@ -18,6 +18,7 @@
 #include "core/css/css_length.h"
 #include "core/css/css_math.h"
 #include "core/css/css_syntax_match.h"
+#include "core/css/css_transform_function.h"
 
 /* ONE VALUE BEING READ. `base`/`len` are the source every span below indexes — lexbor stamps each token with a
    pointer into the very buffer handed to the tokenizer, so a span is subtraction and not a second cursor. */
@@ -497,23 +498,7 @@ static bool val_type_matches(const char *type, const ValLead *lead, const char *
            "`<transform-function>` with §5.2's space multiplier one level up, where the multiplier belongs, so "
            "one arriving here is that unrolling having been skipped and a list being asked to match as a single "
            "value");
-    if (strcmp(type, "<transform-function>") == 0)
-        DFAIL("a registered custom property's syntax names a transform and this engine has no "
-              "`<transform-function>` grammar. CSS Transforms 1 §7.1 '2D Transform Functions' defines "
-              "matrix(<number>#{6}), translate/translateX/translateY over `<length-percentage>`, "
-              "scale/scaleX/scaleY over `<number>`, and rotate/skew/skewX/skewY over `[<angle>|<zero>]`; CSS "
-              "Transforms 2 §12.2 '3D Transform Functions' adds matrix3d, translate3d/translateZ, "
-              "scale3d/scaleZ, rotate3d/rotateX/rotateY/rotateZ and perspective. Every argument type in both "
-              "lists is one this file already decides, and `<zero>` is CSS Values §5.3's literal number 0. "
-              "BUILD it as core/css/css_transform_function.c and route both names to it, the way `<image>` "
-              "above is routed to core/css/css_image.c. IT IS NOT core/css/css_transform.c: that name is "
-              "TAKEN, by the component answering CSS Transforms 1's transformable and transformed ELEMENT "
-              "(cited with its edition note in that component's own header, because the CR numbers the "
-              "defining section and the Editor's Draft leaves it unnumbered) — a walk over lexbor elements and "
-              "computed values, which is a different question from whether a run of BYTES matches a value "
-              "production, and bolting this grammar onto it would give one file two contracts. "
-              "`<transform-list>` is §5.1's pre-multiplied name for `<transform-function>+` and is already "
-              "unrolled to that here");
+    if (strcmp(type, "<transform-function>") == 0) return css_transform_function_matches(span, span_len);
     DFAIL("a syntax component names a type that is not one of CSS Properties and Values API 1 §5.1's fifteen "
           "supported names. §5.4.4 only ever produces a name it has already checked against that list, so a "
           "name reaching here is that list having grown in the parser and not in the matcher");

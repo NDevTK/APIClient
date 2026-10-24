@@ -128,6 +128,12 @@ typedef struct {
 bool css_transform_list_parse(JSContext *realm, const CssFontMetrics *font, const char *value,
                               CssTransformList *out);
 
+/* Does `value`/`len` hold exactly ONE `<transform-function>` by §7's grammar — CSS Properties and Values API 1
+   §5.1's question for a registered property whose syntax names that type (core/css/css_syntax_match.c). It
+   decides the grammar alone: nothing is absolutized, a math function is asked its css-values-4 §10.9 type and
+   not evaluated, and a level-2 name crashes by name as it does in the list parse. */
+bool css_transform_function_matches(const char *value, size_t len);
+
 /* Releases a list `css_transform_list_parse` wrote. Idempotent over a zeroed list, so a caller may release on
    a path the parse refused without asking which it took. */
 void css_transform_list_free(CssTransformList *list);
