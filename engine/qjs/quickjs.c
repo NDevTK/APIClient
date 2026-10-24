@@ -28628,7 +28628,8 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
      FACTS     a JSDescFacts held by value, whose three values are owned;
      PROPS     an owned own-key table, whose length is the field named in `type`;
      OWN_ARRAY a JSValue array of `type` slots, every one owned (a slot nothing wrote is js_mallocz's 0);
-     BORROW_ARRAY a JSValue array of `type` slots, each a view another owner keeps alive.
+     BORROW_ARRAY a JSValue array of `type` slots, each a view another owner keeps alive;
+     OWN_VEC   a heap JSValue block of `name##_cap` slots, whose first `type` (a field) are owned values.
    Each role defines one macro per walk; a role a walk does not define is a compile error at that walk. */
 #define CONT_REC_MEMBER_OWN_VAL(t, n) JSValue n;
 #define CONT_REC_MEMBER_OWN_ATOM(t, n) JSAtom n;
@@ -28640,6 +28641,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_MEMBER_PROPS(t, n) JSPropertyEnum *n;
 #define CONT_REC_MEMBER_OWN_ARRAY(t, n) JSValue n[t];
 #define CONT_REC_MEMBER_BORROW_ARRAY(t, n) JSValue n[t];
+#define CONT_REC_MEMBER_OWN_VEC(t, n) JSValue *n; uint32_t n##_cap;
 #define CONT_REC_FREE_OWN_VAL(t, n) JS_FreeValue(ctx, r->n);
 #define CONT_REC_FREE_OWN_ATOM(t, n) JS_FreeAtom(ctx, r->n);
 #define CONT_REC_FREE_POD(t, n)
@@ -28650,6 +28652,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_FREE_PROPS(t, n) if (r->n) js_free_prop_enum(ctx, r->n, r->t);
 #define CONT_REC_FREE_OWN_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) JS_FreeValue(ctx, r->n[i_]);
 #define CONT_REC_FREE_BORROW_ARRAY(t, n)
+#define CONT_REC_FREE_OWN_VEC(t, n) if (r->n) { for (uint32_t k_ = 0; k_ < r->t; k_++) JS_FreeValue(ctx, r->n[k_]); js_free(ctx, r->n); }
 #define CONT_REC_DUP_OWN_VAL(t, n) c->n = js_dup(r->n);
 #define CONT_REC_DUP_OWN_ATOM(t, n) c->n = JS_DupAtom(ctx, r->n);
 #define CONT_REC_DUP_POD(t, n)
@@ -28660,6 +28663,12 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_DUP_PROPS(t, n) if (r->n) { c->n = js_prop_enum_dup(ctx, r->n, r->t); CHECK(c->n != NULL, "OOM copying a parked record's own-key table"); }
 #define CONT_REC_DUP_OWN_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) c->n[i_] = js_dup(r->n[i_]);
 #define CONT_REC_DUP_BORROW_ARRAY(t, n)
+#define CONT_REC_DUP_OWN_VEC(t, n)                                                                         \
+    if (r->n) {                                                                                               \
+        c->n = js_mallocz(ctx, sizeof(JSValue) * (size_t)r->n##_cap);                                         \
+        CHECK(c->n != NULL, "OOM copying a parked record's value vector for a fork");                         \
+        for (uint32_t k_ = 0; k_ < r->t; k_++) c->n[k_] = js_dup(r->n[k_]);                                   \
+    }
 #define CONT_REC_NOUTER_OWN_VAL(t, n) 0
 #define CONT_REC_NOUTER_OWN_ATOM(t, n) 0
 #define CONT_REC_NOUTER_POD(t, n) 0
@@ -28670,6 +28679,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_NOUTER_PROPS(t, n) 0
 #define CONT_REC_NOUTER_OWN_ARRAY(t, n) 0
 #define CONT_REC_NOUTER_BORROW_ARRAY(t, n) 0
+#define CONT_REC_NOUTER_OWN_VEC(t, n) 0
 #define CONT_REC_OUTER_GET_OWN_VAL(t, n)
 #define CONT_REC_OUTER_GET_OWN_ATOM(t, n)
 #define CONT_REC_OUTER_GET_POD(t, n)
@@ -28680,6 +28690,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_OUTER_GET_PROPS(t, n)
 #define CONT_REC_OUTER_GET_OWN_ARRAY(t, n)
 #define CONT_REC_OUTER_GET_BORROW_ARRAY(t, n)
+#define CONT_REC_OUTER_GET_OWN_VEC(t, n)
 #define CONT_REC_OUTER_SET_OWN_VAL(t, n)
 #define CONT_REC_OUTER_SET_OWN_ATOM(t, n)
 #define CONT_REC_OUTER_SET_POD(t, n)
@@ -28690,6 +28701,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_OUTER_SET_PROPS(t, n)
 #define CONT_REC_OUTER_SET_OWN_ARRAY(t, n)
 #define CONT_REC_OUTER_SET_BORROW_ARRAY(t, n)
+#define CONT_REC_OUTER_SET_OWN_VEC(t, n)
 #define CONT_REC_DESC_OUT_OWN_VAL(t, n)
 #define CONT_REC_DESC_OUT_OWN_ATOM(t, n)
 #define CONT_REC_DESC_OUT_POD(t, n)
@@ -28700,6 +28712,7 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_DESC_OUT_PROPS(t, n)
 #define CONT_REC_DESC_OUT_OWN_ARRAY(t, n)
 #define CONT_REC_DESC_OUT_BORROW_ARRAY(t, n)
+#define CONT_REC_DESC_OUT_OWN_VEC(t, n)
 #define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
 #define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(t, n)
 #define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(t, n)
@@ -28871,46 +28884,36 @@ CONT_RECORD_DEFINE(JSOpKeyed, js_op_keyed, JS_OP_KEYED_FIELDS)
                                   performed the lot from C. It is the first of these sequences whose length is not
                                   known when it starts, so it carries a CURSOR rather than a phase alone, and the
                                   list it is filling has to survive every suspension in the middle of it. */
-typedef struct JSArgList {
-    JSValue *tab;           /* the list being built (owned): tab[0..n) are values, the rest UNDEFINED */
-    uint32_t n;             /* how many slots are filled — also what a teardown frees */
-    int64_t len;            /* LengthOfArrayLike(src), once step 3 has answered */
-    int64_t i;              /* the collect cursor: an element read suspends, so it cannot be a C local */
-    JSAtom idx;             /* the index atom the current element read borrows (owned) */
-    JSValue coerce;         /* the raw `length` value across its ToPrimitive (owned) */
-    uint8_t phase;          /* ARGL_* */
-    /* WHERE the finished list goes. One sequence, several consumers: the list is an operand and reading it is the
-       same algorithm whoever asked, so the resumption point is a field rather than a second continuation. */
-    uint8_t resume;         /* ARGL_TO_APPLY / ARGL_TO_CONSTRUCT */
-    /* THE SHAPE TO RESUME INTO, OWNED — because a machine that can be CLONED cannot hold a pointer into the
-       stack of the flow it was cloned from. These three were borrowed views of the caller's operand slots,
-       which is sound for the flow that pushed them: those slots outlive the suspension exactly as an
-       operator's do, and that is still what keeps the values alive across the finish (the registers below take
-       them as borrowed and this record releases its own reference a line later). It is NOT sound for a
-       sibling. clone_deep_flow copies the frame, so the clone's stack_buf is a different allocation and every
-       borrowed slot pointer copied into it names storage belonging to a flow that is free to unwind it — the
-       cross-flow read no assert downstream could attribute. A record that owns what it resumes into is
-       self-sufficient, which is the whole precondition for §7.3.19 forking at all.
-       cfirst/cargc/is_tail stay POSITIONAL: they describe the operand CLEANUP the call performs on whichever
-       stack it is running on, and the sibling's own copies sit at the same offsets. */
-    JSValue func, this_arg, src;
-    int cfirst, cargc;
-    uint8_t is_tail;
-    /* §7.3.19 step 3 OVER UNKNOWN EXTERNAL INPUT — the elimination chain's own state, held here for
-       step_length_unknown's reason: the sequence SUSPENDS at every ask (the sibling's snapshot is taken there)
-       and a C local is gone when it resumes. The four fields are JSArrayLen's four, asked of the same hook with
-       the same two-phase discipline, because this carrier is not a JSStepHdr either and so cannot call
-       step_fork_run.
-       THE QUESTION IS NOT STORED, only the CONTENT HASH of the one last asked, recomposed at every site from
-       the cursor — so a resume that lands at a different position than the ask crashes instead of filing one
-       world's answer under another's question. Nothing else catches that: fork_arm is a real, in-range arm
-       either way. The unknown itself rides `coerce`, which the clone dups and the teardown frees. */
-    int64_t  fork_probe;   /* WHICH length is being asked about — declared at §7.1.22 ToLength's own width, so
-                              the pin into `len` is a copy and never a narrowing */
-    uint32_t fork_ask_key;
-    int      fork_arm;
-    uint8_t  fork_phase;   /* ARGL_FORK_ASK / ARGL_FORK_ANSWERED — ASK in the sibling's snapshot, on purpose */
-} JSArgList;
+/* §7.3.19 CreateListFromArrayLike suspended in its reads. `tab` is the list being built, `n` slots filled (what
+   a teardown frees), `tab_cap` = max(1, `len`) slots allocated; `len` is LengthOfArrayLike(src) once step 3 has
+   answered and `i` the collect cursor. `idx` is the index atom the current element read uses, `coerce` the raw
+   `length` across its ToPrimitive (and the unknown, over unknown input), `phase` an ARGL_*, `resume`
+   ARGL_TO_APPLY / ARGL_TO_CONSTRUCT. `func`, `this_arg` and `src` are owned, because a record a fork copies
+   cannot point into the stack of the flow it was copied from; `cfirst`, `cargc` and `is_tail` are positional
+   operand cleanup, the same offsets on the sibling's stack. The fork fields are the outcome fork over unknown
+   input, JSArrayLen's discipline: `fork_ask_key` is the content hash of the question last asked, recomposed
+   from the cursor (`fork_probe`, §7.1.22 ToLength's width), and `fork_phase` is ARGL_FORK_ASK in the
+   sibling's snapshot, on purpose. Terminal: the finished list goes to a call, whose result is the stack's. */
+#define JS_ARG_LIST_FIELDS(F)                                                                                  \
+    F(OWN_VEC, n, tab)                                                                                         \
+    F(POD, uint32_t, n)                                                                                        \
+    F(POD, int64_t, len)                                                                                       \
+    F(POD, int64_t, i)                                                                                         \
+    F(OWN_ATOM, JSAtom, idx)                                                                                   \
+    F(OWN_VAL, JSValue, coerce)                                                                                \
+    F(POD, uint8_t, phase)                                                                                     \
+    F(POD, uint8_t, resume)                                                                                    \
+    F(OWN_VAL, JSValue, func)                                                                                  \
+    F(OWN_VAL, JSValue, this_arg)                                                                              \
+    F(OWN_VAL, JSValue, src)                                                                                   \
+    F(POD, int, cfirst)                                                                                        \
+    F(POD, int, cargc)                                                                                         \
+    F(POD, uint8_t, is_tail)                                                                                   \
+    F(POD, int64_t, fork_probe)                                                                                \
+    F(POD, uint32_t, fork_ask_key)                                                                             \
+    F(POD, int, fork_arm)                                                                                      \
+    F(POD, uint8_t, fork_phase)
+CONT_RECORD_DEFINE(JSArgList, js_arg_list, JS_ARG_LIST_FIELDS)
 /* ARGL_LEN/ARGL_LEN_PRIM are step 3's read and its coercion; ARGL_ELEM is step 6's per-element walk.
    …AND ARGL_LEN_UNKNOWN is step 3 over UNKNOWN EXTERNAL INPUT, where the coercion is never asked for at all:
    §7.1.1 ToPrimitive over a concolic is the identity, so it would hand the unknown straight to §7.1.22
@@ -30404,68 +30407,7 @@ static bool arr_len_write_needs_toprim(JSValueConst target, JSAtom atom, JSValue
 /* Either read threw or was abandoned: the instance can never be consumed into, so the CONSUME machine goes with
    it by its own teardown — it holds the argument list, the construct requester and (past the first read) the
    instance itself. */
-/* The list can never be completed: free the values already collected and the block, exactly as free_arg_list does
-   for a finished one — `n` is the count precisely so a mid-collect teardown frees no more than was filled. */
-static void js_arg_list_free(JSContext *ctx, JSArgList *al)
-{
-    uint32_t k;
-    for (k = 0; k < al->n; k++) JS_FreeValue(ctx, al->tab[k]);
-    js_free(ctx, al->tab);
-    JS_FreeValue(ctx, al->coerce);
-    JS_FreeAtom(ctx, al->idx);
-    /* the resume shape, which this record OWNS — see the struct. EVERY exit of the sequence converges here
-       (the two finish paths, do_arg_list_throw, and the four teardowns the keyed and coercion abandons reach),
-       which is why owning these three costs one release site and not seven. The finish paths read them into
-       con_func/ap_func FIRST and the caller's operand slots hold their own reference, so this release is the
-       machine's alone. */
-    JS_FreeValue(ctx, al->func);
-    JS_FreeValue(ctx, al->this_arg);
-    JS_FreeValue(ctx, al->src);
-    js_free_rt(ctx->rt, al);
-}
 
-/* THE SAME SEQUENCE FOR A SIBLING. 7.3.19's `length` and every one of its element reads are the page's code, so
-   a flow can fork ANYWHERE inside this machine — a getter that branches on unknown input, a Proxy `get` trap
-   that does — and until this existed tramp_cont_clone_one crashed by kind on the link instead, which made
-   `f.apply(t, arrayLikeWithAForkingGetter)` unreachable rather than merely slow.
-   EVERY OWNED FIELD IS DUPPED, and the list is the one js_arg_list_free releases: the two are read together
-   precisely so a field added to the record cannot be added to only one of them. `tab` is the collected prefix
-   and the clone allocates its own — two arms sharing one block would have the first to finish hand its values
-   to a call while the second still names them. */
-static JSArgList *js_arg_list_clone(JSContext *ctx, const JSArgList *al)
-{
-    JSArgList *n = js_mallocz(ctx, sizeof(*n));
-    uint32_t k;
-
-    if (unlikely(!n))
-        return NULL;
-    n->len = al->len; n->i = al->i;
-    n->phase = al->phase; n->resume = al->resume;
-    n->cfirst = al->cfirst; n->cargc = al->cargc; n->is_tail = al->is_tail;
-    /* THE CHAIN'S BOOKKEEPING, COPIED VERBATIM — fork_phase included. That is ARGL_FORK_ASK at every clone the
-       fork itself takes (it is asserted AT the fork), so the sibling re-asks at the position it was forked at
-       and its own decision vector answers; and it is whatever a PAGED snapshot held, which is how a parked
-       chain resumes next session without asking one question twice. */
-    n->fork_probe = al->fork_probe;
-    n->fork_ask_key = al->fork_ask_key;
-    n->fork_arm = al->fork_arm;
-    n->fork_phase = al->fork_phase;
-    n->coerce = js_dup(al->coerce);
-    n->idx = JS_DupAtom(ctx, al->idx);
-    n->func = js_dup(al->func);
-    n->this_arg = js_dup(al->this_arg);
-    n->src = js_dup(al->src);
-    if (al->tab) {
-        /* the block is sized by the LENGTH the sequence answered, not by the fill — js_mallocz gives the
-           unfilled tail the UNDEFINED the original's has, and `n` is what a teardown frees. */
-        size_t cap = (size_t)max_uint32(1, (uint32_t)al->len);
-        n->tab = js_mallocz(ctx, sizeof(JSValue) * cap);
-        if (unlikely(!n->tab)) { js_arg_list_free(ctx, n); return NULL; }
-        for (k = 0; k < al->n; k++) n->tab[k] = js_dup(al->tab[k]);
-        n->n = al->n;
-    }
-    return n;
-}
 
 /* Can CreateListFromArrayLike(src) be performed without invoking anything? Only for a FAST array or arguments
    object: `length` is then an own data slot whose value IS u.array.count, and every element is a slot read, so
@@ -40637,7 +40579,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        stays the dispatch's question. */
                     con_func = al->func; con_ntgt = al->this_arg;
                     con_args = (JSValueConst *)al->tab; con_argc = (int)al->n; con_args_owned = al->tab;
-                    al->tab = NULL; al->n = 0;
+                    al->tab = NULL; al->n = 0; al->tab_cap = 0;
                     con_cargc = al->cargc;
                     con_from_super = 0; con_super_ref = JS_UNDEFINED;
                     con_outer = NULL; con_outer_kind = CONT_NONE;
@@ -40647,7 +40589,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 DCHECK(al->resume == ARGL_TO_APPLY, "the arg list finished with no resumption point");
                 ap_list = al->tab; ap_list_n = (int)al->n;
-                al->tab = NULL; al->n = 0;
+                al->tab = NULL; al->n = 0; al->tab_cap = 0;
                 ap_func = al->func; ap_this = al->this_arg; ap_array = al->src;
                 ap_cfirst = al->cfirst; ap_cargc = al->cargc; tramp_is_tail = al->is_tail;
                 js_arg_list_free(ctx, al);
@@ -40669,7 +40611,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     goto do_arg_list_throw;
                 }
                 /* avoid allocating 0 bytes, exactly as the C form did */
-                al->tab = js_mallocz(ctx, sizeof(JSValue) * (size_t)max_uint32(1, (uint32_t)al->len));
+                al->tab_cap = max_uint32(1, (uint32_t)al->len);
+                al->tab = js_mallocz(ctx, sizeof(JSValue) * (size_t)al->tab_cap);
                 if (unlikely(!al->tab)) { JS_ThrowOutOfMemory(ctx); goto do_arg_list_throw; }
                 al->i = 0;
                 al->phase = ARGL_ELEM;
@@ -53690,7 +53633,9 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_ASYNC_SETTLE, JSAsyncSettle, js_async_settle, LINK)                                                 \
     X(CONT_ASYNC_AWAIT, JSAsyncSettle, js_async_settle, LINK)                                                  \
     X(CONT_PROMISE_EXEC, JSPromiseExec, js_promise_exec, ANCHOR)                                               \
-    X(CONT_CONSTRUCT, JSConstruct, js_construct, ANCHOR)
+    X(CONT_CONSTRUCT, JSConstruct, js_construct, ANCHOR)                                                       \
+    X(CONT_ARG_LIST, JSArgList, js_arg_list, LINK)                                                             \
+    X(CONT_ARG_LIST_YIELD, JSArgList, js_arg_list, ANCHOR)
 #define CONT_REC_CASE_OUTER_GET(k, T, p, role)  case k: return p##_outer_get((T *)st, out_kind);
 #define CONT_REC_CASE_OUTER_SET(k, T, p, role)  case k: p##_outer_set((T *)st, outer, outer_kind); return;
 #define CONT_REC_IF_DESC_OUT(k, T, p, role)     if (kind == k) return p##_desc_out((T *)st);
@@ -53720,15 +53665,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
         *out_kind = ((JSStepHdr *)st)->outer_kind;
         return ((JSStepHdr *)st)->outer;
     CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_GET)
-    case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD:
-        /* 7.3.19 IS TERMINAL FOR THE SAME REASON, and the record says so by having no `outer` field at all: the
-           finished List is handed to do_apply_tramp / do_construct_dispatch, which place their result on the
-           operand stack. The sequence sits UNDER a keyed read or a coercion (it is their gp_outer / tp_outer),
-           never over one, so this is where a chain walked up from either of those stops.
-           BOTH ROLES, because clone_deep_flow relinks EVERY frame's continuation and reaches the anchor form
-           through this same walk: a kind absent here CRASHES, and "terminal" is the answer for the record
-           whichever role it is standing in — the field it would name does not exist. */
-        return NULL;
     case CONT_TOPRIM: case CONT_TOPRIM_GET:
         /* BOTH ROLES, because both are reachable here: 21 is the coercion's METHOD CALL and 62 is the METHOD
            READ that fetches it, ONE JSToPrim, and what waits on it is the same either way — whoever asked for
@@ -53825,7 +53761,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         cs->outer = outer; cs->outer_kind = outer_kind; return;
     }
     /* Terminal: cont_outer_get answers no link for these, so there is nothing to write back. */
-    case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: case CONT_PROMISE_ALL:
+    case CONT_PROMISE_ALL:
     case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
     case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP: case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET:
     case CONT_AFS_CONT: case CONT_NONE:
@@ -53873,15 +53809,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         TOPRIM_ROLE_AGREES(st, kind);
         return js_toprim_clone(ctx, (const struct JSToPrim *)st);
     }
-    case CONT_ARG_LIST:
-        /* 7.3.19's sequence IN ITS LINK ROLE — under whichever read it is waiting on: its `length` Get, its
-           ToPrimitive, or an element Get. Both of the page's operations it performs can fork, so this is
-           reached by an ordinary `f.apply(t, x)` whose `x` has a getter that branches on unknown input.
-           A LINK IS ALL THIS WALK EVER SEES OF IT, and that is a fact about the walk rather than about the
-           record: the sequence's other role is CONT_ARG_LIST_YIELD, a frame's own cont_state at the
-           unknown-length chain's outcome fork, and clone_deep_flow's arm builds that one — reached here would
-           mean one record cloned twice, which is exactly what the two kinds exist to keep apart. */
-        return js_arg_list_clone(ctx, (const JSArgList *)st);
     CONT_RECORD_KINDS(CONT_REC_CASE_CLONE)
     case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET: {
         /* A CONSUMER UNDER THE KEYED OPERATION IT ISSUED — `[...src]`, `new Uint8Array(src)`, `new Map(src)`
@@ -53910,7 +53837,7 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         return js_ctor_proto_clone(ctx, (const JSCtorProto *)st);
     /* No arm here. A kind that is only ever a frame's own cont_state (CONT_ARG_LIST_YIELD's anchor, say) is
        cloned by clone_deep_flow's arm for it; any other has not yet been asked to copy a link. */
-    case CONT_ARG_LIST_YIELD: case CONT_NONE: case CONT_AGEN_CREATE: case CONT_SETTER:
+    case CONT_NONE: case CONT_AGEN_CREATE: case CONT_SETTER:
     case CONT_ITER_HELPER: case CONT_ITER_FROM:
     case CONT_PROMISE_TRY: case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
     case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE:
@@ -54940,20 +54867,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
     /* A declared record, released with nobody to answer to, and its requester after it: the operation can never
        finish, so whatever asked for it can never be answered either. */
     CONT_RECORD_KINDS(CONT_REC_CASE_FREE)
-    case CONT_ARG_LIST: case CONT_ARG_LIST_YIELD: {
-        /* 7.3.19's SEQUENCE, TERMINAL for cont_outer_get's reason — the finished List goes to a call, whose
-           result is the operand stack's, so there is nothing above it to release and the walk stops here.
-           THE OTHER DIRECTION OF js_arg_list_clone, and it lands in the SAME diff because that is what this
-           walk's own DFAIL asks for: a kind present in only one of the two is a flow that can be forked and
-           cannot be evicted, paged or freed, which is exactly the shape a flow suspended inside
-           `f.apply(t, arrayLikeWithAGetter)` has. The record owns its resume shape, its collected prefix and
-           its index atom, and js_arg_list_free is the one place that list is spelled.
-           BOTH ROLES, because both are reachable here: the LINK a keyed read or a coercion is waiting under,
-           and the ANCHOR a flow parked at the unknown-length chain's own outcome fork owns as its frame's
-           cont_state. */
-        js_arg_list_free(ctx, (JSArgList *)st);
-        return;
-    }
     case CONT_TOPRIM: case CONT_TOPRIM_GET: {
         /* THE ARM THE CLONE HAD AND THIS DID NOT. clone_deep_flow has copied a coercion sequence since the
            frame it rides was first cloned, so a parked flow could hold one and could not be released — the
