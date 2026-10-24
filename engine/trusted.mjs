@@ -607,8 +607,8 @@ async function main() {
   const raise = (e) => { fatal = fatal || e; };
   /* HOW MUCH WORK THIS ZONE HAS STARTED AND NOT FINISHED. It is the difference between "nobody can be paid"
      and "nobody has been paid YET", and those take opposite actions: the first ends the session with the
-     zone's reason, the second waits. Without it a fetch in flight for one instance would be read as a refusal
-     by another that happened to stall while it was outstanding. */
+     zone's reason, the second waits. Without it a fetch in flight for one instance, or a notice still loading
+     the peer it provisions, would be read as a refusal by another that happened to stall meanwhile. */
   let busy = 0;
 
   /* WORK THIS ZONE COULD NOT ROUTE YET — a post or an operation naming a document no instance holds. HELD and
@@ -1316,11 +1316,16 @@ async function main() {
     i.say('go');
   };
 
+  /* A `decline` explains a notice this zone would not act on and owes nothing, so it unparks no flow and the
+     child does not count it as a payment. A stalled child reads a round that paid nothing as this zone's end of
+     its session (a referenced one rests no further), so a round of declines alone is never written to one: they
+     ride with its next payment, or with the session's end below. */
+  const pays = (rec) => !rec.startsWith('decline\t');
   const flush = () => {
     let moved = false;
 
     for (const i of instances) {
-      if (!i.live || !i.stalled || !i.ready.length) continue;
+      if (!i.live || !i.stalled || !i.ready.some(pays)) continue;
       payRound(i);
       i.stalled = false;
       moved = true;
@@ -2173,7 +2178,16 @@ async function main() {
           'those is one the engine emits for and nothing performs'));
       }
     } else if (f[0] === 'notice') {
-      await onNotice(e, line.slice('notice\t'.length));
+      /* A notice may load and provision a peer across several awaits; until it has, its instance is work this
+         zone has started, so another instance stalling meanwhile is not every instance stalled. */
+      busy++;
+      try {
+        await onNotice(e, line.slice('notice\t'.length));
+      } finally {
+        busy--;
+        retryHeld();
+        flush();
+      }
     } else if (line === 'poll') {
       /* A RUNNING CHILD ASKING TO BE PAID, which is the round that carries the reply path on a document whose
          frontier never empties. It is answered IN THIS TURN and with whatever is READY — see the header's
