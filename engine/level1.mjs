@@ -95,7 +95,8 @@ async function swRpc(method, hosts) {
 const ZONE = (() => {
   /* `_globalStoreReady` is offscreen-brain.js's read of the cumulative store, which this realm does not load;
      it never settles here, so bridge.js's start-up kick never drives the live pool under these rows. */
-  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, MessageChannel, swRpc,
+  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, MessageChannel,
+                    AbortController, swRpc,
                     _globalStoreReady: new Promise(() => {}) };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
@@ -924,6 +925,58 @@ async function mintDrive(minted, slices) {
     gapRows++;
   }
   console.log('[level1]   retired rounds   ' + gapRows + ' interleavings of a policy refusal and a round driven');
+
+  /* The engine's two request statements on the egress path. A GetPending line is driven through the real
+     service round: a refused line retires the instance and nothing reaches `fetched`, while the valid line
+     (the control) is issued once. An xhr.send record is judged by xhrRecordRefusal, which fetchedXhr asks
+     before anything is sent. */
+  const line = (o) => {
+    const f = ['GET', '', 'script', 'derived', 'unpinned', 'undriven', 'same-origin', 'cors', '', 'https://a.test/',
+               'gap-doc', 'https://a.test/api'];
+    for (const k of Object.keys(o)) f[k] = o[k];
+    return f.join('\t');
+  };
+  const lines = [['the valid line', line({}), null], ['eleven fields', line({}).split('\t').slice(1).join('\t'), 'fields'],
+                 ['initiator', line({ 2: 'worker' }), 'initiator'], ['provenance', line({ 3: 'guessed' }), 'provenance'],
+                 ['witness mark', line({ 4: 'unstated' }), 'witness mark'], ['drive mark', line({ 5: 'maybe' }), 'drive mark'],
+                 ['mode', line({ 7: 'navigate' }), 'mode'], ['referrer policy', line({ 8: 'always' }), 'referrer policy'],
+                 ['referrer', line({ 9: 'client' }), 'referrer'], ['asker set', line({ 10: 'gap-doc,gap-doc' }), 'asker set']];
+  for (const [label, text, names] of lines) {
+    let fired = 0;
+    const e = inst({ docId: 'gap-doc', joinedDocIds: [], _inflight: new Map(), residentBytes: 131072,
+                     _egress: { asked: 0 },
+                     records: new Map([['gap-doc', ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public')]]),
+                     fetched: async () => { fired++; return null; },
+                     r: { renderer: { getPending: async () => ({ requests: text }), getHostNotices: async () => ({ notices: '' }),
+                                      getHostRequests: async () => ({ requests: '' }), provide: async () => ({}),
+                                      getLevel1Account: account } } });
+    let threw = null;
+    try { await ops.serviceFetch(e, false); } catch (x) { threw = x; }
+    const r = e._crashed ? refusedRun(e) : null;
+    must(threw === null && (names === null ? fired === 1 && !e._crashed && e.level1.paid === 5
+           : fired === 0 && e._crashed === true && e.level1.paid === 3 && r.run === 'crashed' && r.rows.length === 1 &&
+             r.rows[0].includes(names) && r.rows[0].includes(text)),
+         names === null ? 'a valid GetPending line is issued once and the round recorded'
+                        : 'a GetPending line with a bad ' + label + ' retires the instance and reaches no fetch',
+         threw ? String(threw.message || threw) : { fired, crashed: e._crashed, level1: e.level1, r });
+  }
+  const xhr = (o) => JSON.stringify(Object.assign({ url: '/api', method: 'GET', credentials: 'same-origin', mode: 'cors',
+                                                    referrerPolicy: '', referrer: 'https://a.test/', useCorsPreflight: false,
+                                                    provenance: 'derived', pinned: 'unpinned', driven: 'undriven' }, o));
+  const records = [['the valid record', xhr({}), null], ['an older build with no witness mark', xhr({ pinned: undefined }), null],
+                   ['text that is not JSON', '{"url":', 'not a JSON object'], ['no URL', xhr({ url: '' }), 'no URL'],
+                   ['no method', xhr({ method: 7 }), 'no method'], ['credentials', xhr({ credentials: 'omit' }), 'credentials'],
+                   ['mode', xhr({ mode: 'no-cors' }), 'mode'], ['referrer policy', xhr({ referrerPolicy: 'always' }), 'referrer policy'],
+                   ['referrer', xhr({ referrer: 'client' }), 'referrer'], ['preflight flag', xhr({ useCorsPreflight: 'no' }), 'preflight'],
+                   ['provenance', xhr({ provenance: 'guessed' }), 'provenance'], ['witness mark', xhr({ pinned: 'unstated' }), 'witness mark'],
+                   ['drive mark', xhr({ driven: 'maybe' }), 'drive mark']];
+  for (const [label, text, names] of records) {
+    let q; try { q = JSON.parse(text); } catch (_) { q = undefined; }
+    const why = ZONE.xhrRecordRefusal(q, text);
+    must(names === null ? why === null : typeof why === 'string' && why.includes(names),
+         'an xhr.send record with ' + label + ' is ' + (names === null ? 'accepted' : 'refused, naming the field'), { why });
+  }
+  console.log('[level1]   request records  ' + lines.length + ' GetPending lines and ' + records.length + ' xhr.send records driven');
 }
 
 console.log('[level1] ── verdict ──');

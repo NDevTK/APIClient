@@ -3635,25 +3635,18 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     DCHECK(signal instanceof AbortSignal,
            "an XMLHttpRequest send reached the fetch relay with no abort signal — engineIssue owns one per send, " +
            "and a `fetch.cancel` notice naming its rendezvous ends the send through it");
-    let q = null;
-    /* The request record is the engine's, crossing as JSON so it carries its types; unparseable text is
-       xml_http_request.c writing something other than its record, so it aborts rather than becoming an
-       `error` event on the page's XHR. */
-    try { q = JSON.parse(rec); }
-    catch (e) { DFAIL("the engine's xhr.send record is not JSON: " + String(e && e.message || e)); }
-    DCHECK(q && typeof q === "object" && typeof q.url === "string" && q.url,
-           "the engine's xhr.send record names no URL — the chokepoint decides SOP, CORS, method and " +
-           "credentials, and cannot decide about a request it was never told");
-    // Release: the DCHECK above is stripped, so a missing record answers a network error here.
-    if (!q || typeof q.url !== "string") return { meta: { status: 0, statusText: "", headers: [] }, bytes: null };
-    /* The method is part of the request's identity: a method this zone cannot issue is refused, never
-       downgraded. safeFetch is GET only (SECURITY.md), so a POST answered with a GET's reply would be a
-       response the server never gave, from which every @H example and @S verdict would derive. The method
-       arrives normalized (Fetch §2.2.1 Methods; XHR §3.5.1 The open() method runs "normalize a method"), so
-       GET, HEAD included, is exactly what this zone can perform. */
-    DCHECK(typeof q.method === "string" && q.method !== "",
-           "the engine's xhr.send record names no method — xhr_request_op writes one on every record, and a " +
-           "request whose method is unknown cannot be refused OR issued");
+    /* The request record is the engine's, crossing as JSON so it carries its types, and so input: a record
+       xhrRecordRefusal refuses retires the instance and is never sent. The method arrives normalized (Fetch
+       §2.2.1 Methods; XHR §3.5.1 The open() method runs "normalize a method"), so GET, HEAD included, is
+       exactly what this zone can perform; another is refused below, never downgraded, because safeFetch is GET
+       only (SECURITY.md) and a POST answered with a GET's reply is a response the server never gave. */
+    let q;
+    try { q = JSON.parse(rec); } catch (_) { q = undefined; }
+    const _xhrRefusal = xhrRecordRefusal(q, rec);
+    if (_xhrRefusal !== null) {
+      if (!eng._crashed) engineRefuse(eng, _xhrRefusal);
+      return { declined: _xhrRefusal };
+    }
     /* The refusal is the chokepoint's grade (`safeFetchMethodRefusal`), shared with `fetched` and
        engine/trusted.mjs. It is a decline: no browser refuses a POST, so the rendezvous is declined and the
        engine forks a waiting arm and a failure arm, as for a refused document load. */
@@ -3662,76 +3655,33 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     try {
       const abs = new URL(q.url, msg.sourceUrl).href;
       /* The credentials mode (XHR §3.5.6 The send() method: `include` if cross-origin credentials is true,
-         otherwise `same-origin`, which xml_http_request.c writes on the record) is relayed as `opts.credentials`,
-         a statement about the request that safe-fetch.js composes with `credentialed` and so can refuse and
-         never grant. Fetch §4.10 CORS check reads it: an `include` reply passes only with the exact origin and
-         `Access-Control-Allow-Credentials: true`. */
-      DCHECK(q.credentials === "include" || q.credentials === "same-origin",
-             "the engine's xhr.send record names no credentials mode this zone speaks (`" + q.credentials +
-             "`) — XHR §3.5.6 The send() method computes exactly two, and xhr_request_op writes one on every " +
-             "record. A request whose credentials mode is unknown cannot be refused OR issued, and answering " +
-             "it uncredentialed would hand the page a response for a request it did not make");
-      /* The mode, §3.5.6's own `cors`, stated on the record by xml_http_request.c and relayed; safe-fetch.js's
-         `_modeOf` CHECKs the word. The origin is the instance's, from this zone's record (see `fetched`). */
+         otherwise `same-origin`) is relayed as `opts.credentials`, a statement about the request that
+         safe-fetch.js composes with `credentialed` and so can refuse and never grant. Fetch §4.10 CORS check
+         reads it: an `include` reply passes only with the exact origin and `Access-Control-Allow-Credentials:
+         true`. The mode is §3.5.6's own `cors`; safe-fetch.js's `_modeOf` CHECKs the word. The origin is the
+         instance's, from this zone's record (see `fetched`). */
       CHECK(typeof eng.origin === "string",
             "an XMLHttpRequest is about to be judged with no origin on the instance that made it — the zone " +
             "assigns every instance its cluster origin at creation");
-      CHECK(_REFERRER_POLICIES.indexOf(q.referrerPolicy) >= 0 && typeof q.referrer === "string" &&
-            (q.referrer === "no-referrer" || URL.canParse(q.referrer)),
-            "the engine's xhr.send record states no Referrer Policy §3 referrer policy, or a referrer that is " +
-            "neither \"no-referrer\" nor a URL — xml_http_request.c's xhr_request_op writes both");
-      CHECK(typeof q.useCorsPreflight === "boolean",
-            "the engine's xhr.send record states no use-CORS-preflight flag — xhr_request_op writes XHR " +
-            "§3.5.6 step 6's flag on every record, and the chokepoint decides from it whether to preflight");
-      CHECK(q.mode === "cors",
-            "XHR §3.5.6 \"The send() method\" builds every request in cors mode, and the engine's xhr.send " +
-            "record states another (" + q.mode + "); a reply that returns to the page in any other mode would " +
-            "skip the CORS check the chokepoint runs for it");
       /* @security-finding: `headers` come from the untrusted bundle and are read by the chokepoint. That is
          within the model for an uncredentialed GET to a public host (the browser strips forbidden header names),
          and must be re-decided the day this path is credentialed. Only what the chokepoint reads is passed. */
       /* An XMLHttpRequest's destination is the empty string (Fetch §2.2.5 Requests), stated so its CORB class
          is not decided by silence. */
-      /* What the request is evidence of: the engine composes it at the record (`xhr_request_op` →
-         `engine_provenance_of_running_path`), `derived` or `forced` and never `observed`, since no parser
-         inserted an XHR (HTML §4.12.1 The script element). Asserted, never defaulted: `derived` for a record that
-         stopped stating one could fire a request whose values exist only past a gate. The chokepoint CHECKs the
-         vocabulary again in release; this names the producer. */
-      DCHECK(q.provenance === PROVENANCE_OBSERVED || q.provenance === PROVENANCE_DERIVED ||
-             q.provenance === PROVENANCE_FORCED,
-             "the engine's xhr.send record states the provenance `" + q.provenance + "`, which is none of " +
-             "the three solver/engine.h declares — xhr_request_op writes one on every record from " +
-             "engine_provenance_of_running_path, and the firing decision is made from it, so an absent or " +
-             "unknown one is a producer that stopped stating what its request is evidence of");
-      /* `credentials` is relayed (see above) and `credentialed: false` is stated as a literal, since the egress
-         surface grades the `cookies` row `certain` and the door asserts every caller states one. */
-      /* The witness mark is relayed off the record: `xhr_request_op` writes `pinned` from
-         `engine_pinned_of_running_path` beside the grade. `in`, never `||`: an absent key is an older build (this
-         JS ships before the engine is rebuilt), and the default a `||` would supply, `unpinned`, is the word
-         safe-fetch.js's value arm fires on. An absent key is answered `unstated`, a word the engine never spells.
-         The vocabulary assert sits inside the present arm, because `unstated` is not one of the engine's two
-         tokens and the assert must not judge the absence the `in` test already handled. */
-      var _xhrPinned;
-      if (!("pinned" in q)) {
-        _xhrPinned = "unstated";
-      } else {
-        DCHECK(q.pinned === PINNED_YES || q.pinned === PINNED_NO,
-               "the engine's xhr.send record states the witness mark `" + q.pinned + "`, which is neither " +
-               "token solver/engine.h declares — `xhr_request_op` writes one through `engine_pinned_token`, " +
-               "whose fall-through is fatal in release, so anything else here is that mapping and this " +
-               "reader having parted. The firing decision is made from this field and `unpinned` is the word " +
-               "it FIRES on, so a mark nothing can be read as may not be relayed as one");
-        _xhrPinned = q.pinned;
-      }
+      /* What the request is evidence of (`derived` or `forced`, never `observed`, since no parser inserted an
+         XHR) and its witness mark, both composed at the record by `xhr_request_op`. `credentials` is relayed
+         and `credentialed: false` is stated as a literal, since the egress surface grades the `cookies` row
+         `certain` and the door asserts every caller states one. The witness mark is read with `in`, never
+         `||`: an absent key is an older build (this JS ships before the engine is rebuilt), and the default a
+         `||` would supply, `unpinned`, is the word safe-fetch.js's value arm fires on, so an absent key is
+         answered `unstated`, a word the engine never spells. */
+      const _xhrPinned = "pinned" in q ? q.pinned : "unstated";
       /* `doc` is the instance's record, for the reason `fetched` gives. */
       /* `actor: "page"`: every XHR is made by running the page's code, the same population as the `fetch()`
          relay. With a real witness mark, an XHR whose path pinned nothing fires at an origin the person
          permitted for that row, and one whose path pinned a witness is refused, as such a `fetch()` is. */
       /* The drive mark is relayed off the record (`xhr_request_op` writes it beside the grade); the chokepoint
          CHECKs that a `page` request states one. */
-      DCHECK(q.driven === DRIVEN_YES || q.driven === DRIVEN_NO,
-             "the engine's xhr.send record states the drive mark `" + q.driven + "`, which is neither token " +
-             "solver/engine.h declares — `xhr_request_op` writes one through `engine_driven_token`");
       const r = await self.safeFetch(abs, { pageOrigin: eng.origin, destination: "",
                                             mode: q.mode, provenance: q.provenance, pinned: _xhrPinned,
                                             driven: q.driven,
@@ -4152,102 +4102,88 @@ async function engineDecline(eng, method, mode, referrerPolicy, referrer, url, r
          "the only account of it anybody gets and it is what says whether a widening would change the answer");
   await eng.r.renderer.decline({ method, mode, referrerPolicy, referrer, url, reason });
 }
+/* The engine's xhr.send record (xml_http_request.c's `xhr_request_op`), or the first field that breaks it.
+   Every field is one the chokepoint decides from: the URL and method (SOP, CORS, the method refusal), XHR
+   §3.5.6 The send() method's two credentials modes and its `cors` mode (a reply in another mode would skip the
+   CORS check), the referrer policy and referrer the `Referer` is composed from, step 6's use-CORS-preflight
+   flag, and solver/engine.h's provenance, witness mark (absent on an older build) and drive mark. */
+function xhrRecordRefusal(q, raw) {
+  const f = "the engine's xhr.send record (" + JSON.stringify(String(raw).slice(0, 200)) + ")";
+  if (!docIsRecord(q)) return f + " is not a JSON object";
+  if (!docIsName(q.url)) return f + " names no URL";
+  if (!docIsName(q.method)) return f + " names no method";
+  if (q.credentials !== "include" && q.credentials !== "same-origin")
+    return f + " states the credentials mode " + JSON.stringify(q.credentials) + ", neither include nor same-origin";
+  if (q.mode !== "cors") return f + " states the mode " + JSON.stringify(q.mode) + ", not cors";
+  if (_REFERRER_POLICIES.indexOf(q.referrerPolicy) < 0)
+    return f + " states the referrer policy " + JSON.stringify(q.referrerPolicy) + ", which Referrer Policy §3 does not define";
+  if (typeof q.referrer !== "string" || (q.referrer !== "no-referrer" && !URL.canParse(q.referrer)))
+    return f + " states the referrer " + JSON.stringify(q.referrer) + ", neither no-referrer nor a URL";
+  if (typeof q.useCorsPreflight !== "boolean") return f + " states no use-CORS-preflight flag";
+  if (q.provenance !== PROVENANCE_OBSERVED && q.provenance !== PROVENANCE_DERIVED && q.provenance !== PROVENANCE_FORCED)
+    return f + " states the provenance " + JSON.stringify(q.provenance) + ", none of observed, derived and forced";
+  if ("pinned" in q && q.pinned !== PINNED_YES && q.pinned !== PINNED_NO)
+    return f + " states the witness mark " + JSON.stringify(q.pinned) + ", neither pinned nor unpinned";
+  if (q.driven !== DRIVEN_YES && q.driven !== DRIVEN_NO)
+    return f + " states the drive mark " + JSON.stringify(q.driven) + ", neither driven nor undriven";
+  return null;
+}
 /* One pending line, split in one place, mirroring the engine's `engine_pending_split` so the grammar cannot
    drift across hosts. The TAB delimiter is unambiguous: URL Standard §4.4 URL parsing strips every ASCII tab
    or newline from its input first, and a method is a token (Fetch §2.2.1 Methods) whose tchar (RFC 9110 §5.6.2
-   Tokens) excludes HTAB. It is a CHECK, as the engine's splitter is, because the release path has no defined
-   answer: a mis-split line would be delivered against a method nobody asked for, and never against an assumed
-   `GET`. */
-/* It splits on the TAB rather than counting indexes because the destination field is legitimately empty
-   (Fetch §2.2.5 Requests: "" for a `fetch()`), so the shape assert is over the field count and the two ends. */
+   Tokens) excludes HTAB. It splits on the TAB rather than counting indexes because the destination field is
+   legitimately empty (Fetch §2.2.5 Requests: "" for a `fetch()`).
+   The line is the instance's statement and so input: answers the request record, or the reason the line is
+   refused, which the caller refuses the instance with. A refused line is never delivered against or issued,
+   since a mis-split line would key a reply on a request nothing parked on. */
 function pendingRequest(line) {
   const f = line.split("\t");
-  CHECK(f.length === 12 && f[0] !== "" && f[7] !== "" && f[9] !== "" && f[10] !== "" && f[11] !== "",
-        "content.mojom.Renderer.GetPending answered a line that is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>" +
-        "PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>" +
-        "URL`: `" +
-        line + "` — the engine joins the twelve and this zone must deliver against (method, mode, referrer " +
-        "policy, referrer, url), so a line missing a field puts a token where the address belongs and keys a " +
-        "reply on a request nothing parked on");
-  const destination = f[1];
-  const initiator = f[2];
-  const provenance = f[3];
-  /* Whether the address may rest on a witness the engine chose: solver/engine.h's `pinned`/`unpinned`,
-     composed at the park from solver/flow.h's `path_pinned`. Relayed; safe-fetch.js decides from it with the
-     destination. */
-  const pinned = f[4];
-  /* Whose act the request is: solver/engine.h's `driven`/`undriven`, the parking flow's drive mark. Relayed;
-     safe-fetch.js's `actor` row reads it. */
-  const driven = f[5];
-  const credentials = f[6];
+  const why = pendingLineRefusal(f);
+  if (why !== null) return "content.mojom.Renderer.GetPending answered `" + line + "`, whose " + why;
   /* The destination (Fetch §2.2.5 Requests) is what this zone acts on: safe-fetch.js decides the CORB class
-     with §2.2.5's script-like predicate over it. The initiator is HTML §4.12.1.1 Processing model's
-     parser-inserted (solver/engine.h), whether a real load of the document makes this request; nothing here
-     branches on it. The provenance (observed, derived, forced) is composed at the park from that flag and the
-     parking flow's `path_forced`; the per-origin firing decision is safe-fetch.js's, never this zone's or the
-     engine's.
-     Membership checks here cover the small fixed vocabularies. The destination's enumeration is refused where
-     the decision is made: safe-fetch.js's `_destinationOf` CHECKs it before the request goes out (its
-     `_isScriptLike` answers false for an unknown value, so an invented token would take the permissive arm),
-     and engine/trusted.mjs loads that file verbatim, so one check covers both hosts. The engine's own asserts
-     on this field are DCHECKs on the untrusted side and cannot be relied on. */
-  CHECK(initiator === "parser" || initiator === "script",
-        "GetPending stated an initiator this zone does not know: `" + initiator + "` — solver/engine.h " +
-        "declares exactly `parser` and `script`, and a third value would be answered by whichever arm a " +
-        "consumer happened to write first");
-  CHECK(provenance === "observed" || provenance === "derived" || provenance === "forced",
-        "GetPending stated a provenance this zone does not know: `" + provenance + "` — solver/engine.h " +
-        "declares exactly `observed`, `derived` and `forced`, and a fourth value would be answered by " +
-        "whichever arm the firing policy happens to be written with as its else");
-  CHECK(pinned === "pinned" || pinned === "unpinned",
-        "GetPending stated a witness mark this zone does not know: `" + pinned + "` — solver/engine.h " +
-        "declares exactly `pinned` and `unpinned` on this line, and the firing policy reads it to decide " +
-        "whether an ACT MAY BE SPENT on an address that may be one this engine composed, so an unknown word " +
-        "would take that policy's permissive arm. `unstated` is safe-fetch.js's word for an act that carries " +
-        "no mark at all and is never one a pending line may state");
-  CHECK(driven === DRIVEN_YES || driven === DRIVEN_NO,
-        "GetPending stated a drive mark this zone does not know: `" + driven + "` — solver/engine.h declares " +
-        "exactly `driven` and `undriven` on this line, and the chokepoint's `actor` row reads it");
-  /* The credentials mode (Fetch §2.2.5 Requests) says whose session pays. Only the algorithm that created the
-     request knows it (an `<img>`'s potential-CORS request, a `<script src>`'s CORS settings attribute, a
-     `fetch()`'s `RequestInit`), so it is relayed, never re-derived; its membership is checked at the deciding
-     door (`_credentialedOf`), one check for both hosts. Here only the line's shape is asserted. */
-  /* The request mode (Fetch §2.2.5 Requests), which the engine states and safe-fetch.js decides from
-     (`_modeOf` is the vocabulary CHECK, one for both hosts): what the page may read of the reply. This channel
-     returns the reply to the instance that asked, so it carries only the three modes whose reader is the
-     asking page; a `navigate` request is a host request whose bytes become another instance's document
-     (fetchedDocument), and an engine stating it here would be asking for another origin's bytes with no CORS
-     question asked. */
-  const mode = f[7];
-  CHECK(mode === "same-origin" || mode === "cors" || mode === "no-cors",
-        "GetPending stated the mode `" + mode + "` on a request whose reply returns to the asking page — " +
-        "only `same-origin`, `cors` and `no-cors` requests are read by their requester, and anything else " +
-        "here would skip the response tainting the chokepoint decides from the mode");
-  /* The request's referrer policy, after Fetch §4.1 "Main fetch" gave an empty one the policy container's,
-     and its referrer, "no-referrer" or a URL (core/fetch/fetch.h's fetch_referrer_for_wire resolved "client"
-     against the parking document). Both are part of the request's identity and are relayed for the
-     `Referer` this zone composes with Referrer Policy §8.3's later steps. */
-  const referrerPolicy = f[8];
-  const referrer = f[9];
-  CHECK(_REFERRER_POLICIES.indexOf(referrerPolicy) >= 0,
-        "GetPending stated the referrer policy `" + referrerPolicy + "`, which Referrer Policy §3 does not " +
-        "define — the `Referer` this request carries is composed from it, so an unknown word cannot be relayed");
-  CHECK(referrer === "no-referrer" || URL.canParse(referrer),
-        "GetPending stated the referrer `" + referrer + "`, which is neither \"no-referrer\" nor a URL — the " +
-        "engine resolves Fetch §2.2.5's \"client\" before the line is joined, so nothing else may arrive here");
-  /* The documents whose parks the line folds (solver/engine.h's ASKERS), each a name the engine states; the
-     caller checks each names a document of the asking instance and judges the request by their records. */
-  const askers = f[10].split(",");
-  CHECK(askers.every(function (a, i) { return a !== "" && askers.indexOf(a) === i; }),
-        "GetPending stated the asker set `" + f[10] + "`, which is not a comma-joined set of document names — " +
-        "the engine writes each folded park's document once");
-  return { method: f[0], destination, initiator, provenance, pinned, driven, credentials, mode, referrerPolicy,
-           referrer, askers, url: f[11] };
+     with §2.2.5's script-like predicate over it, and its `_destinationOf` CHECKs the enumeration where the
+     decision is made, as `_credentialedOf` does for the credentials mode (Fetch §2.2.5 Requests: only the
+     algorithm that created the request knows it, so it is relayed, never re-derived). The initiator is HTML
+     §4.12.1.1 Processing model's parser-inserted; nothing here branches on it. The provenance, witness mark
+     and drive mark are composed at the park (solver/engine.h) and relayed; the firing decision is
+     safe-fetch.js's. The referrer policy is after Fetch §4.1 "Main fetch" gave an empty one the policy
+     container's, and the referrer is "no-referrer" or a URL (fetch_referrer_for_wire resolved "client"); both
+     are relayed for the `Referer` this zone composes. The askers are the documents whose parks the line folds;
+     the caller checks each names a document of the asking instance. */
+  return { method: f[0], destination: f[1], initiator: f[2], provenance: f[3], pinned: f[4], driven: f[5],
+           credentials: f[6], mode: f[7], referrerPolicy: f[8], referrer: f[9], askers: f[10].split(","),
+           url: f[11] };
 }
 /* Referrer Policy §3 "Referrer Policies", the empty string included. */
 const _REFERRER_POLICIES = ["", "no-referrer", "no-referrer-when-downgrade", "same-origin", "origin",
                             "strict-origin", "origin-when-cross-origin", "strict-origin-when-cross-origin",
                             "unsafe-url"];
+/* The small fixed vocabularies of a GetPending line, by field index, each solver/engine.h's. An unknown word
+   would be answered by whichever arm a consumer wrote first, and for the witness mark that is the firing
+   policy's permissive one (`unstated` is safe-fetch.js's word for an act with no mark, never a line's). The
+   mode is one of the three whose reader is the asking page: a `navigate` request's bytes become another
+   instance's document (fetchedDocument), so stating it here would ask for another origin's bytes with no CORS
+   question asked. */
+const PENDING_TOKENS = Object.freeze([
+  [2, "initiator", ["parser", "script"]],
+  [3, "provenance", ["observed", "derived", "forced"]],
+  [4, "witness mark", ["pinned", "unpinned"]],
+  [5, "drive mark", ["driven", "undriven"]],
+  [7, "mode", ["same-origin", "cors", "no-cors"]],
+  [8, "referrer policy", _REFERRER_POLICIES]]);
+/* The line's shape, or what breaks it, worded to follow "whose". */
+function pendingLineRefusal(f) {
+  if (!(f.length === 12 && f[0] !== "" && f[7] !== "" && f[9] !== "" && f[10] !== "" && f[11] !== ""))
+    return "fields are not METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>" +
+           "CREDENTIALS<TAB>MODE<TAB>REFERRER_POLICY<TAB>REFERRER<TAB>ASKERS<TAB>URL";
+  for (const [k, name, words] of PENDING_TOKENS)
+    if (words.indexOf(f[k]) < 0) return name + " `" + f[k] + "` is none of " + words.join(", ");
+  if (f[9] !== "no-referrer" && !URL.canParse(f[9])) return "referrer `" + f[9] + "` is neither no-referrer nor a URL";
+  const askers = f[10].split(",");
+  if (!askers.every((a, n) => a !== "" && askers.indexOf(a) === n))
+    return "asker set `" + f[10] + "` is not a comma-joined set of document names";
+  return null;
+}
 /* The door that does not await a body with no end. A round that waited on each pending fetch in turn would let
    a response the server never ends (one `fetch()` or XHR to an endpoint that holds its body open) keep the
    document out of the rankable set for the session. No deadline is used: a timeout would truncate a legitimate
@@ -4317,6 +4253,7 @@ function engineCancel(eng, identity) {
 async function engineDeliverLanded(eng) {
   let n = 0;
   for (const key of [...eng._inflight.keys()]) {
+    if (eng._crashed) return n;
     const rec = eng._inflight.get(key);
     if (!rec.landed) continue;
     eng._inflight.delete(key);
@@ -4340,8 +4277,12 @@ async function engineServiceFetch(eng, stalled) {   // one round: issue, act, de
          "this round may wait on bytes; inferring it here would be a second answer to a question the engine " +
          "already answered, and defaulting it either spins or freezes");
   let did = await engineIssuePending(eng);
+  /* A retirement can land at any await, and a retired instance is asked nothing more. */
+  if (eng._crashed) return;
   did += await engineServiceHostRequests(eng);
+  if (eng._crashed) return;
   did += await engineDeliverLanded(eng);
+  if (eng._crashed) return;
   if (stalled && did === 0 && eng._inflight.size > 0) {
     await Promise.race([...eng._inflight.values()].map((r) => r.settled));
     await engineDeliverLanded(eng);
@@ -4356,13 +4297,17 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
      own `<script src>` and an injected one are classified like a dynamic `import()`. A fact about a request
      belongs on the request. */
   const requests = owedList("GetPending", (await eng.r.renderer.getPending()).requests);
+  if (eng._crashed) return 0;
   /* The provenance travels with its request to safe-fetch.js, the sole owner of the firing decision. */
   /* How many requests this round started, as `wpt_issue_pending` returns: progress, so the round has something
      outstanding to wait on. */
   let issued = 0;
   for (const line of requests) {
+    const req = pendingRequest(line);
+    /* A refused line retires the instance; nothing more of this list is issued. */
+    if (typeof req === "string") { engineRefuse(eng, req); return issued; }
     const { method, destination, provenance, pinned, driven, credentials, mode, referrerPolicy, referrer, askers,
-            url } = pendingRequest(line);
+            url } = req;
     /* The ask is counted at the call, before the gate, so the census separates a request nobody made from one
        the gate refused: `declined: {}` beside a nonzero `asked` says the policy refused nothing (an empty
        surface is then about the driving), while `asked: 0` says this loop never ran. */
