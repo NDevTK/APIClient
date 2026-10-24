@@ -409,7 +409,8 @@ async function runOne(row, variant, opts) {
   return {
     case: row.case, variant, version: row[variant], advisory: row.advisory, source: row.source, sink: row.sink,
     expected: variant === 'vulnerable' ? row.expected : 'not fired',
-    url, ended: backstop ? 'backstop' : 'zone-exit', exit: end.code, signal: end.signal,
+    /* A signal this driver did not send (the OOM killer, say) ended the zone from outside. */
+    url, ended: backstop ? 'backstop' : end.signal ? `signal ${end.signal}` : 'zone-exit', exit: end.code, signal: end.signal,
     seconds: Math.round((Date.now() - started) / 1000), budget: opts.budget,
     results: rootEntry ? rootEntry.n : 0,
     sourceReads: num('_sourceReads'), sinkReached: num('_sinkReached'), sinkTainted: num('_sinkTainted'),
@@ -423,7 +424,9 @@ async function runOne(row, variant, opts) {
       reached: s.reached, substituted: s.substituted, sinkStrings: s.sinkStrings })) : null,
     pageErrors: root ? root.pageErrors : null,
     attackerServed: manifest.attacker, attackerRequests: attacker.log(),
-    abort: aborts[0] ?? null, crash: opts.crashIdentity(aborts.join('\n'), end.signal),
+    /* The backstop's own SIGTERM is this driver's act, not a crash; an abort record still is one. */
+    abort: aborts[0] ?? null,
+    crash: opts.crashIdentity(aborts.join('\n'), backstop && end.signal === 'SIGTERM' ? null : end.signal),
     log: relative(REPO, `${stem}.log`), served: relative(REPO, join(base, 'served.json')),
   };
 }
