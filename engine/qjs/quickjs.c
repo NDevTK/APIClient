@@ -31790,6 +31790,9 @@ typedef struct JSPromiseAll {
        iterable can make an accessor or a Proxy, so both are requests with the result parked here. */
     JSValue res_obj;             /* the iterator result being unpacked (owned) */
     uint8_t res_ph;              /* 0 = none, 1 = the `done` read is in flight, 2 = the `value` read is */
+    JSValue owed_res;            /* a delivery that reached a forked sibling before its owed capability and
+                                    re-attach ran: it is the step's next input, handed over where the step would
+                                    otherwise drive `.next()` (owned; UNINITIALIZED when none) */
     JSValue att_promise;         /* the resolved element wrapper the attach is on (owned) */
     int att_index;               /* which element it is */
     uint8_t attaching;           /* 1 while that attach is being driven on the tramp */
@@ -43399,6 +43402,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 s->fin_arg = JS_UNDEFINED; s->elem_value = JS_UNDEFINED;
                 s->att_promise = JS_UNDEFINED;   /* js_mallocz zeroes it, and a zero JSValue is not UNDEFINED */
                 s->res_obj = JS_UNDEFINED;
+                s->owed_res = JS_UNINITIALIZED;
                 s->acq_method = tramp_iter_getiter; tramp_iter_getiter = JS_UNDEFINED;
                 s->acq_iterable = js_dup((call_argc >= 1) ? call_argv[0] : JS_UNDEFINED);
                 TAKE_CALL_SHAPE(); s->orig_cfirst = call_first_r; s->orig_cargc = call_pop; s->orig_is_tail = tramp_is_tail;
@@ -43561,6 +43565,18 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    page's constructor and a fork has nowhere to suspend. This is the same request the original
                    acquisition makes, at the first point in the sibling's own execution where suspending is
                    possible. */
+                /* A forked sibling's first entry can carry a delivery: its generator yielded, or a read it issued
+                   was answered, before its owed capability and re-attach ran. Both of those re-enter the step
+                   with nothing to consume, so the delivery parks on the state until they are done. */
+                if (unlikely((s->cap_owed || (s->reattach_pending > 0 && !s->attaching)) &&
+                             !JS_IsUninitialized(ret_val))) {
+                    DCHECK(JS_IsUninitialized(s->owed_res) && !JS_IsException(ret_val),
+                           "a forked Promise combinator was handed a second delivery, or an abrupt one, before its "
+                           "owed capability and re-attach ran — one step is in flight per sibling, and an abrupt "
+                           "read is routed to the error entry");
+                    s->owed_res = ret_val;
+                    ret_val = JS_UNINITIALIZED;
+                }
                 if (unlikely(s->cap_owed)) {
                     s->cap_owed = 0;
                     tramp_cap_ctor = s->this_val; tramp_cap_outer = s; tramp_cap_kind = CONT_PROMISE_ALL_RECAP;
@@ -43627,6 +43643,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JS_FreeValue(ctx, JS_GetException(ctx));   /* the OOM; the rejection still stands */
                     }
                     st = 2;   /* fall through to the FINALIZE drive below, then DONE */
+                }
+                if (st == 1 && !JS_IsUninitialized(s->owed_res)) {
+                    /* ADVANCE, with a parked delivery: the step's next input is already here, so it is consumed
+                       rather than a second `.next()` driven past it. */
+                    ret_val = s->owed_res;
+                    s->owed_res = JS_UNINITIALIZED;
+                    goto do_promise_all_step;
                 }
                 if (st == 1 && s->keyed) {
                     /* ADVANCE. For an iterator source that is a .next() drive; for the keyed source the next
@@ -53496,6 +53519,7 @@ static JSPromiseAll *js_promise_all_clone(JSContext *ctx, const JSPromiseAll *os
     ns->elem_value = js_dup(os->elem_value);
     ns->att_promise = js_dup(os->att_promise);   /* mid-attach: the sibling redoes it with its OWN closures */
     ns->res_obj = js_dup(os->res_obj);
+    ns->owed_res = js_dup(os->owed_res);
     ns->acq_method = js_dup(os->acq_method);
     ns->acq_iterable = js_dup(os->acq_iterable);
     ns->fin_arg = js_dup(os->fin_arg);
@@ -118137,6 +118161,7 @@ static void js_promise_all_end(JSContext *ctx, JSPromiseAll *s)
     JS_FreeValue(ctx, s->fin_arg);     /* held only between the step that builds it and the drive that takes it */
     JS_FreeValue(ctx, s->att_promise); /* held across the attach's `then` read */
     JS_FreeValue(ctx, s->res_obj);     /* held across the result unpack's two reads */
+    JS_FreeValue(ctx, s->owed_res);    /* a forked sibling's delivery parked behind its capability */
     JS_FreeValue(ctx, s->elem_value);  /* likewise, for the per-element resolve */
     JS_FreeValue(ctx, s->acq_method);    /* both held across the capability request */
     JS_FreeValue(ctx, s->acq_iterable);
