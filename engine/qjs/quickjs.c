@@ -28623,9 +28623,9 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
      POD, BORROW  a plain value of `type`, or a JSValueConst another owner keeps alive: copied, never released;
      OUTER     the requester link, `void *name` and its kind `uint8_t name##_kind`, at most one per record;
      OWN_SUB   a declared record of prefix `type` owned whole, carrying the requester link its release releases;
-     DESC_OUT  a JSDescFacts * naming the requester's own record, which tramp_cont_relink_outer re-aims;
-     FACTS, PROPS  a JSDescFacts held by value (its three values owned), or an own-key table of `type` entries;
+     DESC_OUT, FACTS, PROPS  the requester's JSDescFacts * (relinked), one held by value, an own-key table;
      OWN_ARRAY, BORROW_ARRAY  a JSValue array of `type` slots, every one owned, or each kept alive elsewhere;
+     FRESH, FRESH_ARRAY  an owned JSValue (or `type` of them) a copy never shares: undefined until its hook;
      OWN_VEC, OWN_LIST  `name##_cap` heap slots whose first `type` (a field) are owned, or exactly `type`;
      VIEW      a JSValueConst * that may point into a list, `type` = (list, its count), declared after the list;
      KIND_FLAG a uint8_t that is nonzero exactly when the record stands under kind `type`, asserted by each walk;
@@ -28833,6 +28833,26 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_AGREES_OWN_SUB(t, n)
 #define CONT_REC_INIT_OWN_SUB(t, n)
 #define CONT_REC_FREE_NEXT_OWN_SUB(t, n)
+#define CONT_REC_MEMBER_FRESH(t, n) JSValue n;
+#define CONT_REC_FREE_FRESH(t, n) JS_FreeValue(ctx, r->n);
+#define CONT_REC_DUP_FRESH(t, n) c->n = JS_UNDEFINED;
+#define CONT_REC_NOUTER_FRESH(t, n) 0
+#define CONT_REC_OUTER_GET_FRESH(t, n)
+#define CONT_REC_OUTER_SET_FRESH(t, n)
+#define CONT_REC_DESC_OUT_FRESH(t, n)
+#define CONT_REC_AGREES_FRESH(t, n)
+#define CONT_REC_INIT_FRESH(t, n) r->n = JS_UNDEFINED;
+#define CONT_REC_FREE_NEXT_FRESH(t, n)
+#define CONT_REC_MEMBER_FRESH_ARRAY(t, n) JSValue n[t];
+#define CONT_REC_FREE_FRESH_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) JS_FreeValue(ctx, r->n[i_]);
+#define CONT_REC_DUP_FRESH_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) c->n[i_] = JS_UNDEFINED;
+#define CONT_REC_NOUTER_FRESH_ARRAY(t, n) 0
+#define CONT_REC_OUTER_GET_FRESH_ARRAY(t, n)
+#define CONT_REC_OUTER_SET_FRESH_ARRAY(t, n)
+#define CONT_REC_DESC_OUT_FRESH_ARRAY(t, n)
+#define CONT_REC_AGREES_FRESH_ARRAY(t, n)
+#define CONT_REC_INIT_FRESH_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) r->n[i_] = JS_UNDEFINED;
+#define CONT_REC_FREE_NEXT_FRESH_ARRAY(t, n)
 #define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
 #define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(t, n)
 #define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(t, n)
@@ -31594,99 +31614,63 @@ static bool ta_consume_ready(JSContext *ctx, JSValueConst *call_argv, int call_a
 static bool ta_buffer_ctor_ready(JSValueConst *call_argv, int call_argc);
 static const JSTrampStepDef js_ta_ctor_defs[JS_TYPED_ARRAY_COUNT];
 
-/* Promise.all(gen): drive the generator's .next() on the tramp chain, wrapping each yielded value in
-   Promise.resolve(v).then(resolve_element) as js_promise_all's own loop does. iter/next drive the generator;
-   result_promise is the returned aggregate; the other fields are the spec's per-call accumulation state. */
-typedef struct JSPromiseAll {
-    JSValue iter, next;          /* the generator being consumed (owned) + its .next method */
-    JSValue this_val;            /* the Promise constructor (for %Promise%.resolve) (owned) */
-    JSValue promise_resolve;     /* this_val.resolve (owned) */
-    JSValue result_promise;      /* the aggregate promise returned to the caller (owned) */
-    JSValue resolving_funcs[2];  /* result_promise's [resolve, reject] (owned) */
-    JSValue values;              /* the result values array (owned) */
-    JSValue resolve_element_env; /* [remainingElementsCount] holder (owned) */
-    JSValue elem_promises;       /* retained resolved element wrappers [0..index) — a mid-consume FORK re-attaches a
-                                    sibling resolve_element to each (the sibling's gen fork is past them). O(n). (owned) */
-    int reattach_pending;        /* >0 on a freshly-forked sibling: re-attach elements [0..reattach_pending) to THIS
-                                    aggregate on the sibling's first do_promise_all_step entry (deferred out of the
-                                    clone so no interpreter re-entry — .then — happens mid-clone_deep_flow). */
-    /* THE AGGREGATE CAPABILITY IS OWED, for the same reason and deferred the same way. The clone used to build
-       it with js_new_promise_capability(ctx, funcs, os->this_val), and for `Promise.all.call(Sub, …)` that
-       Construct is the page's constructor — run from inside clone_deep_flow, which is a FORK and has nowhere to
-       suspend. It was the last C-route caller of that function with a subclass, and it is what put
-       js_new_promise_capability, JS_CallConstructor and the whole async-generator group in the interpreter's
-       recursion cycle. The sibling asks for its own capability on its first step, through the same
-       do_promise_cap_tramp seam the ORIGINAL acquisition already used. */
-    uint8_t cap_owed;
-    int index;                   /* next element index */
-    int magic;                   /* PROMISE_MAGIC_all / allSettled (per-element reject handling differs) */
-    uint8_t finalizing;          /* 1 while the aggregate resolve/reject callback is being driven on the tramp: the
-                                    settle re-enters the step, which then returns 0 (DONE) — a custom Promise
-                                    subclass's resolve/reject is USER bytecode whose loop must park, so it cannot be
-                                    a JS_Call to completion from inside js_promise_all_step. */
-    uint8_t fin_is_reject;       /* which resolving_funcs[] the finalize drives */
-    uint8_t resolving_elem;      /* 1 while the PER-ELEMENT `C.resolve(value)` is being driven on the tramp. It is
-                                    user code — Promise.resolve is a page-visible builtin and C may be a subclass
-                                    that overrides it — and a JS_Call to completion from inside this step was the
-                                    last C drive in the combinator. Mirrors `finalizing` exactly. */
-    JSValue elem_value;          /* that call's argument, owned only until it moves onto the operand stack */
-    JSValue acq_method;          /* the @@iterator method the acquire already has in hand, held ACROSS the
-                                    aggregate capability's Construct — which is user code for a subclass and can
-                                    suspend, and an interpreter register does not survive that. */
-    JSValue acq_iterable;        /* the same, for the ITERABLE. It was borrowed from the caller's stack, which the
-                                    acquire is allowed to do because the operand outlives it; recovering that slot
-                                    across a suspension means recomputing an operand address, so the state holds
-                                    an owned one and the borrow points at that instead. */
-    uint8_t driving_next;        /* 1 while a .next() is being driven / its result extracted: the iterator has NOT
-                                    yet successfully stepped, so an error here is an IteratorNext abrupt and must
-                                    NOT close it (spec fail_reject, not fail_reject1). Cleared once value is in hand. */
-    uint8_t close_then_step;     /* 1 while IfAbruptCloseIterator runs ON THE CHAIN for the step-dispatch error
-                                    path. That path does not tear the machine down — it falls into the FINALIZE
-                                    drive — so the close owes a DIFFERENT continuation than the two that reach
-                                    do_promise_all_reject, and only the state can say which. */
-    uint8_t iter_done;           /* 1 after {done:true}: the iterator is exhausted, so a finalize-stage error must
-                                    NOT close it either. Only a post-retrieval error (resolve/attach) closes. */
-    JSValue fin_arg;             /* the finalize argument (values dup / AggregateError), owned only in the brief
-                                    window before it is transferred onto the tramp operand stack */
-    /* The per-element ATTACH — `Invoke(next_promise, "then", [resolve_element, reject_element])`. BOTH halves are
-       page code for a subclass or a thenable (the `then` READ and the CALL), and js_promise_all_attach did them
-       with JS_InvokeFree from C. Only the PROMISE and the index ride the state across the read: the two element
-       closures are built when the method is in hand, so a fork landing mid-attach gives the sibling its OWN
-       closures bound to ITS aggregate, which is what dup'ing them could not have done. */
-    /* IteratorComplete + IteratorValue on the .next() RESULT: both read the result object, which a hand-written
-       iterable can make an accessor or a Proxy, so both are requests with the result parked here. */
-    JSValue res_obj;             /* the iterator result being unpacked (owned) */
-    uint8_t res_ph;              /* 0 = none, 1 = the `done` read is in flight, 2 = the `value` read is */
-    JSValue owed_res;            /* a delivery that reached a forked sibling before its owed capability and
-                                    re-attach ran: it is the step's next input, handed over where the step would
-                                    otherwise drive `.next()` (owned; UNINITIALIZED when none) */
-    JSValue att_promise;         /* the resolved element wrapper the attach is on (owned) */
-    int att_index;               /* which element it is */
-    uint8_t attaching;           /* 1 while that attach is being driven on the tramp */
-    int reattach_i;              /* the fork re-attach cursor, one element per drive */
-    int orig_cfirst, orig_cargc; uint8_t orig_is_tail;   /* the ORIGINAL OP_call_method operand shape */
-    /* mirrors JSIterConsume's: an .apply / spread CALL's arguments live in a heap list, and the iterable is
-       borrowed out of it until the acquire has an iterator. */
-    JSValue *args_own; int args_own_n;
-    /* THE ELEMENT SOURCE IS THE VARIABLE (proposal-await-dictionary). allKeyed / allSettledKeyed differ from
-       all / allSettled in exactly ONE dimension — where the elements come from — so the SETTLEMENT rule stays
-       in `magic` and the SOURCE is this flag. Everything downstream is shared unchanged: C.resolve per element,
-       the `then` attach and its two element closures, remainingElementsCount, the finalize drive, the error
-       path. Only the walk that produces values differs (PerformPromiseAllKeyed's [[OwnPropertyKeys]] +
-       per-key [[GetOwnProperty]] + Get, instead of the iterator protocol) and the shape of the result
-       (CreateKeyedPromiseCombinatorResultObject instead of the values array).
-       A second machine would have had to re-derive all of that, and every rule it re-derived would be one
-       that could drift. */
-    uint8_t keyed;
-    JSValue src_obj;      /* the entries object the walk reads (owned) */
-    JSValue key_list;     /* its [[OwnPropertyKeys]] answer, in order (owned) */
-    JSValue cur_key;      /* the key under examination, held ACROSS its [[GetOwnProperty]] and its Get — both are
-                             the page's code on a Proxy, so it cannot live in an interpreter local (owned) */
-    JSAtom cur_atom;      /* the same key as an atom: a request BORROWS gp_atom, so the owner is the state */
-    JSValue keys;         /* the keys that reached the result, parallel to `values` by element index (owned) */
-    uint32_t key_i, key_n;
-    uint8_t key_ph;       /* KEY_PH_* — which half of the per-key pair is in flight */
-} JSPromiseAll;
+/* A Promise combinator (all, allSettled, any, and the keyed allKeyed/allSettledKeyed, which differ only in
+   where elements come from: `keyed`) driving its source on the chain. It has no requester: it is reached from
+   an opcode and settles a capability. `this_val` is the constructor and `promise_resolve` its `resolve`;
+   `result_promise` and `resolving_funcs` the aggregate capability, and `values`, `resolve_element_env` and
+   `elem_promises` the per-call arrays built from `constructor.resolve`'s answer: a copy takes none of these
+   (js_promise_all_clone_fresh builds the sibling's own, and `cap_owed` asks for its capability on its first
+   step). Each of the page's calls and reads (`C.resolve`, the `then` attach, the finalize drive, the result
+   unpack, the keyed walk's [[OwnPropertyKeys]], [[GetOwnProperty]] and Get) is a phase whose operands this
+   record holds across the suspension. */
+static void js_promise_all_clone_fresh(JSContext *ctx, const struct JSPromiseAll *os, struct JSPromiseAll *ns);
+#define JS_PROMISE_ALL_FIELDS(F)                                                                               \
+    F(OWN_VAL, JSValue, iter)                                                                                  \
+    F(OWN_VAL, JSValue, next)                                                                                  \
+    F(OWN_VAL, JSValue, this_val)                                                                              \
+    F(OWN_VAL, JSValue, promise_resolve)                                                                       \
+    F(FRESH, JSValue, result_promise)                                                                          \
+    F(FRESH_ARRAY, 2, resolving_funcs)                                                                         \
+    F(FRESH, JSValue, values)                                                                                  \
+    F(FRESH, JSValue, resolve_element_env) /* [remainingElementsCount] */                                      \
+    F(FRESH, JSValue, elem_promises)   /* the element wrappers [0..index), re-attached by a sibling */         \
+    F(POD, int, reattach_pending)     /* a sibling's elements still to re-attach on its first step */          \
+    F(POD, uint8_t, cap_owed)         /* a sibling asks for its own capability on its first step */            \
+    F(POD, int, index)                /* next element index */                                                 \
+    F(POD, int, magic)                /* PROMISE_MAGIC_*: how an element's rejection is handled */             \
+    F(POD, uint8_t, finalizing)       /* the aggregate resolve/reject is being driven on the chain */          \
+    F(POD, uint8_t, fin_is_reject)    /* which resolving function the finalize drives */                       \
+    F(POD, uint8_t, resolving_elem)   /* the per-element C.resolve(value) is being driven */                   \
+    F(OWN_VAL, JSValue, elem_value)   /* its argument, until it moves onto the operand stack */                \
+    F(OWN_VAL, JSValue, acq_method)   /* the @@iterator the acquire holds across the capability's Construct */ \
+    F(OWN_VAL, JSValue, acq_iterable) /* the iterable, likewise */                                             \
+    F(POD, uint8_t, driving_next)     /* a .next() is in flight: an error is IteratorNext's, which no close */ \
+    F(POD, uint8_t, close_then_step)  /* IfAbruptCloseIterator runs on the chain, then the finalize drive */   \
+    F(POD, uint8_t, iter_done)        /* the iterator is exhausted: a finalize error does not close it */      \
+    F(OWN_VAL, JSValue, fin_arg)      /* the finalize argument, until it moves onto the operand stack */       \
+    F(OWN_VAL, JSValue, res_obj)      /* the iterator result whose `done`/`value` reads are out */             \
+    F(POD, uint8_t, res_ph)           /* 0 none, 1 `done` read out, 2 `value` read out */                      \
+    F(OWN_VAL, JSValue, owed_res)     /* a sibling's delivery parked behind its capability (UNINITIALIZED) */  \
+    F(OWN_VAL, JSValue, att_promise)  /* the element wrapper the `then` attach is on */                        \
+    F(POD, int, att_index)                                                                                     \
+    F(POD, uint8_t, attaching)                                                                                 \
+    F(POD, int, reattach_i)           /* the re-attach cursor, one element per drive */                        \
+    F(POD, int, orig_cfirst)          /* the original OP_call_method operand shape */                          \
+    F(POD, int, orig_cargc)                                                                                    \
+    F(POD, uint8_t, orig_is_tail)                                                                              \
+    F(OWN_LIST, args_own_n, args_own) /* an .apply or spread call's arguments; the iterable is borrowed */     \
+    F(POD, int, args_own_n)                                                                                    \
+    F(POD, uint8_t, keyed)                                                                                     \
+    F(OWN_VAL, JSValue, src_obj)      /* the keyed walk's entries object */                                    \
+    F(OWN_VAL, JSValue, key_list)     /* its [[OwnPropertyKeys]] answer */                                     \
+    F(OWN_VAL, JSValue, cur_key)      /* the key held across its [[GetOwnProperty]] and Get */                 \
+    F(OWN_ATOM, JSAtom, cur_atom)     /* the same key: a request borrows gp_atom, so the record owns it */     \
+    F(FRESH, JSValue, keys)            /* the keys that reached the result, parallel to `values` */            \
+    F(POD, uint32_t, key_i)                                                                                    \
+    F(POD, uint32_t, key_n)                                                                                    \
+    F(POD, uint8_t, key_ph)           /* KEY_PH_* */                                                           \
+    F(CLONE_HOOK, js_promise_all_clone_fresh, fresh)
+CONT_RECORD_DEFINE(JSPromiseAll, js_promise_all, JS_PROMISE_ALL_FIELDS)
 /* The keyed walk's phases. START is "nothing asked yet"; the three _SENT phases each name the request whose
    answer the next entry is consuming, which is what makes the walk resumable at any point in it. */
 enum { KEY_PH_START = 0, KEY_PH_OWNKEYS_SENT, KEY_PH_WALK, KEY_PH_DESC_SENT, KEY_PH_GET_SENT };
@@ -53327,51 +53311,18 @@ static void flow_clone_state_free_shell(JSContext *ctx, JSAsyncFunctionState *c)
     js_free(ctx, c);
 }
 
-/* A sibling's own Promise combinator, for every walk that forks one: the generator-drive frame arm (9) and the
-   requester walk, which reaches the record under each request it issues — GetIterator's `next` read (52), the
-   result unpack (45), the per-element `then` read (42), `constructor.resolve` (69), the aggregate capability
-   (9) and a forked sibling's own capability (76). The iterator and the element wrappers stay shared objects,
-   isolated per flow by the COW delta; every field the release frees is taken again.
-   THE AGGREGATE IS THE SIBLING'S OWN AND IS BUILT LATER: its capability is a Construct of the page's constructor
-   for a subclass, and a fork has nowhere to suspend, so `cap_owed` asks on the sibling's first step for an
-   original that holds one, and a capability still in flight is delivered to the sibling's own copy of the
-   request. The pre-fork element wrappers [0..index) are copied and re-attached on that first step too, since the
-   sibling's iterator is past them. `values`, the count environment and `keys` are fresh where the original has
-   built them, and left unbuilt where `constructor.resolve` is still being read, whose answer builds them. NULL on
-   OOM, with nothing left allocated. */
-static JSPromiseAll *js_promise_all_clone(JSContext *ctx, const JSPromiseAll *os)
+/* The last step of a combinator's copy (its CLONE_HOOK). The sibling's aggregate is its own and is built
+   later: its capability is a Construct of the page's constructor for a subclass and a fork has nowhere to
+   suspend, so `cap_owed` asks on the sibling's first step, and a capability still in flight is delivered to the
+   sibling's own copy of the request. `values`, the count environment and `keys` are fresh where the original
+   has built them and left unbuilt where `constructor.resolve` is still being read; the element wrappers
+   [0..index) are copied, and re-attached on that first step since the sibling's iterator is past them. Array
+   operations only: the `then` re-attach is page code. */
+static void js_promise_all_clone_fresh(JSContext *ctx, const JSPromiseAll *os, JSPromiseAll *ns)
 {
-    JSPromiseAll *ns = js_mallocz(ctx, sizeof(*ns));
     int i, fail = 0;
 
-    if (!ns) return NULL;
-    *ns = *os;
-    ns->iter = js_dup(os->iter);
-    ns->next = js_dup(os->next);
-    ns->this_val = js_dup(os->this_val);
-    ns->promise_resolve = js_dup(os->promise_resolve);
-    ns->elem_value = js_dup(os->elem_value);
-    ns->att_promise = js_dup(os->att_promise);   /* mid-attach: the sibling redoes it with its OWN closures */
-    ns->res_obj = js_dup(os->res_obj);
-    ns->owed_res = js_dup(os->owed_res);
-    ns->acq_method = js_dup(os->acq_method);
-    ns->acq_iterable = js_dup(os->acq_iterable);
-    ns->fin_arg = js_dup(os->fin_arg);
-    ns->src_obj = js_dup(os->src_obj);
-    ns->key_list = js_dup(os->key_list);
-    ns->cur_key = js_dup(os->cur_key);
-    ns->cur_atom = JS_DupAtom(ctx, os->cur_atom);
-    ns->result_promise = JS_UNDEFINED;
-    ns->resolving_funcs[0] = ns->resolving_funcs[1] = JS_UNDEFINED;
     ns->cap_owed = os->cap_owed || !JS_IsUndefined(os->result_promise);
-    ns->values = ns->resolve_element_env = ns->elem_promises = ns->keys = JS_UNDEFINED;
-    ns->args_own = NULL; ns->args_own_n = 0;
-    if (os->args_own) {
-        ns->args_own = js_malloc(ctx, sizeof(JSValue) * (size_t)(os->args_own_n > 0 ? os->args_own_n : 1));
-        if (!ns->args_own) { js_promise_all_end(ctx, ns); js_free(ctx, ns); return NULL; }
-        ns->args_own_n = os->args_own_n;
-        for (i = 0; i < os->args_own_n; i++) ns->args_own[i] = js_dup(os->args_own[i]);
-    }
     DCHECK(JS_IsUndefined(os->values) == JS_IsUndefined(os->resolve_element_env) &&
            JS_IsUndefined(os->values) == JS_IsUndefined(os->elem_promises),
            "a Promise combinator holds some of the three arrays `constructor.resolve`'s answer builds together");
@@ -53386,7 +53337,6 @@ static JSPromiseAll *js_promise_all_clone(JSContext *ctx, const JSPromiseAll *os
                JS_IsException(ns->elem_promises) || JS_IsException(ns->keys) ||
                JS_DefinePropertyValueUint32(ctx, ns->resolve_element_env, 0, js_int32(1),
                                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE | JS_PROP_WRITABLE) < 0;
-        /* Array operations only: the `then` re-attach is page code and runs on the sibling's first step. */
         for (i = 0; !fail && i < os->index; i++) {
             JSValue ep = JS_GetPropertyInt64(ctx, os->elem_promises, i);
             fail = JS_IsException(ep) || JS_DefinePropertyValueInt64(ctx, ns->elem_promises, i, ep,
@@ -53397,19 +53347,10 @@ static JSPromiseAll *js_promise_all_clone(JSContext *ctx, const JSPromiseAll *os
             fail = JS_IsException(kk) || JS_DefinePropertyValueInt64(ctx, ns->keys, i, kk, JS_PROP_C_W_E) < 0;
         }
     }
-    if (fail) {
-        if (JS_IsException(ns->values)) ns->values = JS_UNDEFINED;
-        if (JS_IsException(ns->resolve_element_env)) ns->resolve_element_env = JS_UNDEFINED;
-        if (JS_IsException(ns->elem_promises)) ns->elem_promises = JS_UNDEFINED;
-        if (JS_IsException(ns->keys)) ns->keys = JS_UNDEFINED;
-        js_promise_all_end(ctx, ns);
-        js_free(ctx, ns);
-        return NULL;
-    }
+    CHECK(!fail, "OOM building a forked Promise combinator's own arrays");
     /* the sibling re-attaches every counted element from the first, whatever the source's own cursor had reached */
     ns->reattach_pending = os->index;
     ns->reattach_i = 0;
-    return ns;
 }
 
 /* A sibling's own async-from-sync wrapper call, for every walk that forks one: the generator-drive frame arm (10)
@@ -53503,7 +53444,13 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_ITER_CONSUME, JSIterConsume, js_iter_consume, UNWOUND)                                              \
     X(CONT_CONSUME_NEXT_GET, JSIterConsume, js_iter_consume, UNWOUND)                                          \
     X(CONT_SETMAP_CTOR, JSSetMapCtor, js_setmap_ctor, LINK)                                                    \
-    X(CONT_TA_TARGET, JSTATarget, js_ta_target, LINK)                                          \
+    X(CONT_TA_TARGET, JSTATarget, js_ta_target, LINK)                                                          \
+    X(CONT_PROMISE_ALL, JSPromiseAll, js_promise_all, LINK)                                                    \
+    X(CONT_PROMISE_ALL_NEXT_GET, JSPromiseAll, js_promise_all, LINK)                                           \
+    X(CONT_PROMISE_ALL_GET, JSPromiseAll, js_promise_all, LINK)                                                \
+    X(CONT_PROMISE_ALL_THEN, JSPromiseAll, js_promise_all, LINK)                                               \
+    X(CONT_PROMISE_ALL_RESOLVE, JSPromiseAll, js_promise_all, LINK)                                            \
+    X(CONT_PROMISE_ALL_RECAP, JSPromiseAll, js_promise_all, LINK)                                          \
     X(CONT_ARG_LIST, JSArgList, js_arg_list, LINK)                                                             \
     X(CONT_ARG_LIST_YIELD, JSArgList, js_arg_list, ANCHOR)
 #define CONT_REC_AGREES_AT(k, T, p, r)                                                                         \
@@ -53548,13 +53495,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
         *out_kind = ((JSStepHdr *)st)->outer_kind;
         return ((JSStepHdr *)st)->outer;
     CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_GET)
-    case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
-    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP:
-        /* JSPromiseAll HAS no requester field: a combinator is reached from an opcode and settles a capability,
-           so nothing waits on the record in any of the roles its requests name it in. Stated rather than
-           defaulted — if one is ever added it belongs here, and the DCHECK on the sibling's links is what will
-           say so. */
-        return NULL;
     case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET: case CONT_AFS_CONT:
         /* `call_outer` is the requester of an IN-FLIGHT CALL, not of the record, and the wrapper is reached
            from a for-await opcode. A fork standing on one has a link this walk has never carried. The same
@@ -53605,9 +53545,7 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         ((JSStepHdr *)st)->outer = outer; ((JSStepHdr *)st)->outer_kind = outer_kind; return;
     CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_SET)
     /* Terminal: cont_outer_get answers no link for these, so there is nothing to write back. */
-    case CONT_PROMISE_ALL:
-    case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
-    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP: case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET:
+    case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET:
     case CONT_AFS_CONT: case CONT_NONE:
         break;
     /* No arm yet, as in cont_outer_get. */
@@ -53644,11 +53582,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
     case CONT_STEP: case CONT_STEP_YIELD:
         return tramp_step_state_clone(ctx, st);
     CONT_RECORD_KINDS(CONT_REC_CASE_CLONE)
-    case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
-    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP:
-        /* A combinator under a request it issued — a getter or a Proxy trap answering one of its reads, or the
-           subclass constructor its capability Constructs, branching on unknown input. */
-        return js_promise_all_clone(ctx, (const JSPromiseAll *)st);
     case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET: case CONT_AFS_CONT:
         /* a for-await wrapper call under a read its continuation issued — a getter or a Proxy trap on the sync
            result, or on the value's `constructor` — branching on unknown input */
@@ -54729,14 +54662,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
     /* A declared record, released with nobody to answer to, and its requester after it: the operation can never
        finish, so whatever asked for it can never be answered either. */
     CONT_RECORD_KINDS(CONT_REC_CASE_FREE)
-    case CONT_PROMISE_ALL: case CONT_PROMISE_ALL_NEXT_GET: case CONT_PROMISE_ALL_GET: case CONT_PROMISE_ALL_THEN:
-    case CONT_PROMISE_ALL_RESOLVE: case CONT_PROMISE_ALL_RECAP: {
-        /* every role of one JSPromiseAll: the combinator's own state (9), or the requester of a read or a
-           capability it issued (52, 45, 42, 69, 76); js_promise_all_clone names them. */
-        js_promise_all_end(ctx, (struct JSPromiseAll *)st);
-        js_free_rt(rt, st);
-        return;
-    }
     case CONT_ASYNC_FROM_SYNC: case CONT_AFS_GET: case CONT_AFS_CONT: {
         /* every role of one JSAsyncFromSync: the wrapper call's own state (10), or the requester of a read its
            continuation issued (43, 73). */
@@ -117855,29 +117780,8 @@ static void js_async_from_sync_end(JSContext *ctx, JSAsyncFromSync *s)
 /* Free a Promise.all(gen) state's owned fields (result_promise moved out by the caller before this on the happy path). */
 static void js_promise_all_end(JSContext *ctx, JSPromiseAll *s)
 {
-    JS_FreeValue(ctx, s->iter);
-    JS_FreeValue(ctx, s->next);
-    JS_FreeValue(ctx, s->this_val);
-    JS_FreeValue(ctx, s->promise_resolve);
-    JS_FreeValue(ctx, s->result_promise);
-    JS_FreeValue(ctx, s->resolving_funcs[0]);
-    JS_FreeValue(ctx, s->resolving_funcs[1]);
-    JS_FreeValue(ctx, s->values);
-    JS_FreeValue(ctx, s->resolve_element_env);
-    JS_FreeValue(ctx, s->elem_promises);
-    JS_FreeValue(ctx, s->fin_arg);     /* held only between the step that builds it and the drive that takes it */
-    JS_FreeValue(ctx, s->att_promise); /* held across the attach's `then` read */
-    JS_FreeValue(ctx, s->res_obj);     /* held across the result unpack's two reads */
-    JS_FreeValue(ctx, s->owed_res);    /* a forked sibling's delivery parked behind its capability */
-    JS_FreeValue(ctx, s->elem_value);  /* likewise, for the per-element resolve */
-    JS_FreeValue(ctx, s->acq_method);    /* both held across the capability request */
-    JS_FreeValue(ctx, s->acq_iterable);
-    if (s->args_own) { free_arg_list(ctx, s->args_own, s->args_own_n); s->args_own = NULL; s->args_own_n = 0; }
-    JS_FreeValue(ctx, s->src_obj);    /* the keyed source's four, each NULL/UNDEFINED for an iterator walk */
-    JS_FreeValue(ctx, s->key_list);
-    JS_FreeValue(ctx, s->cur_key);
-    JS_FreeValue(ctx, s->keys);
-    JS_FreeAtom(ctx, s->cur_atom);
+    js_promise_all_release(ctx, s);
+    s->args_own = NULL; s->args_own_n = 0;
 }
 
 /* DELETED: promise_all_ready. It was the LAST identity test on the call side — it read the callee's class, then
