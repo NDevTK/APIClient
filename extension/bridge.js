@@ -200,6 +200,10 @@ function docSink(e, f) {
     why = ("poc" in e ? null : f + " states acts on a parked search, which only a fire-verified entry carries") ||
           (Array.isArray(e.acts) && e.acts.length > 0 ? null : f + ".acts is not a non-empty array") ||
           docEach(e.acts, f + ".acts", docSinkAct);
+  if (why === null && "firedUnderUnsolvedAct" in e)
+    why = "poc" in e ? f + " states firedUnderUnsolvedAct on a fire-verified entry, which only a parked search carries"
+          : (Number.isInteger(e.firedUnderUnsolvedAct) && e.firedUnderUnsolvedAct > 0 ? null
+             : f + ".firedUnderUnsolvedAct is not a positive integer");
   if (why === null && "firedUnderNoAct" in e)
     why = "poc" in e ? f + " states firedUnderNoAct on a fire-verified entry, which only a parked search carries"
           : (Number.isInteger(e.firedUnderNoAct) && e.firedUnderNoAct > 0 ? null

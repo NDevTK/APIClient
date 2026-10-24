@@ -8,7 +8,7 @@
 /* The act that runs `fn` as an event listener in this realm's document, as one step of a PoC envelope's
    `acts` list — `{"kind":"click","target":"#id","type":"click"}` — or NULL when no node of the document and not
    its Window holds `fn` as a listener of a type a page user can cause. `kind` is `click` for a click and
-   `dispatch` for another user-interface event; `target` is a locator a page script can resolve (`#id` for a
+   `dispatch` for another user-interface event, `message` for a postMessage to the Window; `target` is a locator a page script can resolve (`#id` for a
    unique identifier, otherwise a tag path from the document element, or `document` / `window`); `handler` is
    the listener's own `name` where it is a non-empty identifier, for a reader. Asked in the
    running flow's world, so it reads the registrations that world holds. malloc'd. */

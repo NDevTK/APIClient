@@ -176,6 +176,20 @@ char *listener_act_of(JSContext *ctx, JSValueConst fn)
     win = document_window_of(doc);
     if (JS_IsObject(win) && (type = event_target_listener_type_of(ctx, win, fn))) {
         char *act = act_type_ok(type) ? act_json(ctx, fn, type, "window") : NULL;
+
+        /* §9.3.3's `message` on the Window is caused by another document's postMessage, so it is an act too;
+           its data and origin are the event argument's, which the PoC composition does not solve yet, and
+           solve.c refuses a fire verified under one (`firedUnderUnsolvedAct`). */
+        if (!act && !strcmp(type, "message")) {
+            char *name = handler_name(ctx, fn);
+            size_t n = (name ? strlen(name) : 0) + 96;
+
+            act = malloc(n);
+            CHECK(act, "listener act: OOM spelling an act");
+            snprintf(act, n, "{\"kind\":\"message\",\"target\":\"window\",\"type\":\"message\"%s%s%s}",
+                     name ? ",\"handler\":\"" : "", name ? name : "", name ? "\"" : "");
+            free(name);
+        }
         free(type);
         return act;
     }

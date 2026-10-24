@@ -134,6 +134,10 @@ typedef struct {
        calls (a chain member with no listener act): each proved the bytes execute and none is a PoC, because a
        browser never makes that call. Emitted on the parked entry as `firedUnderNoAct`. */
     int fired_no_act;
+    /* Fires verified under an act whose content the PoC composition does not solve: a `message` act's data and
+       origin are the event argument's. Each proved the bytes execute; none states how a sender reproduces it.
+       Emitted as `firedUnderUnsolvedAct`. */
+    int fired_unsolved_act;
     /* The runway position as its two halves, emitted as `runwayWalked`/`runwayOf`, so a best of 3/8000 is not
        rounded to 0 as it is in `replay_pm`. Ratcheted on itself by cross-multiplication (observe_runway), in
        integers. `replay_of` is dec_total() at that sample, not `reinject_len`: for an arm forked off a
@@ -255,18 +259,20 @@ static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
    no drive. `*no_act` is set where a called member of the chain has no act a page user can perform: a browser
    never makes that call, so the fire proves the bytes execute and is not a PoC. Members a resumed drive has not
    built a call for yet are not part of the path the fire ran on. malloc'd. */
-static char *fire_acts(const Flow *f, int *no_act)
+static char *fire_acts(const Flow *f, int *no_act, int *unsolved)
 {
     int called = f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n, k;
     size_t n = 3, at = 1;
     char *out;
 
     *no_act = 0;
+    *unsolved = 0;
     if (!f->orphan) return NULL;
     DCHECK(called > 0, "a fire ran in a drive whose chain has no called member — the mark and the chain are "
                        "written together at the seed and at the claim");
     for (k = 0; k < called; k++) {
         if (!f->orphan_acts[k]) { *no_act = 1; return NULL; }
+        if (strstr(f->orphan_acts[k], "\"kind\":\"message\"")) { *unsolved = 1; return NULL; }
         n += strlen(f->orphan_acts[k]) + 1;
     }
     out = malloc(n);
@@ -285,7 +291,7 @@ static char *fire_acts(const Flow *f, int *no_act)
 
 static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     Flow *f = flow_running();
-    int no_act;
+    int no_act, unsolved;
     char *acts;
 
     (void)ctx; (void)t; (void)c; (void)v;
@@ -294,12 +300,13 @@ static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
            "an @S candidate flow fired the marker holding a source but no payload or no sink class — a finding "
            "IS that triple, so a flow carrying half of it was assembled somewhere that does not go through the "
            "seeder or the cold tier's rebuild");
-    acts = fire_acts(f, &no_act);
-    if (no_act) {
+    acts = fire_acts(f, &no_act, &unsolved);
+    if (no_act || unsolved) {
         Cand *e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
 
         CHECK(e != NULL, "an @S candidate fired for a search this session has no entry for");
-        e->fired_no_act++;
+        if (no_act) e->fired_no_act++;
+        else e->fired_unsolved_act++;
         return JS_UNDEFINED;
     }
     record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload, acts, f->orphan);
@@ -2422,6 +2429,10 @@ char *solve_json_array(JSContext *ctx) {
         if (g_pending[i].fired_no_act) {
             json_buf_raw(&b, ","); json_buf_key(&b, "firedUnderNoAct");
             snprintf(t, sizeof t, "%d", g_pending[i].fired_no_act); json_buf_raw(&b, t);
+        }
+        if (g_pending[i].fired_unsolved_act) {
+            json_buf_raw(&b, ","); json_buf_key(&b, "firedUnderUnsolvedAct");
+            snprintf(t, sizeof t, "%d", g_pending[i].fired_unsolved_act); json_buf_raw(&b, t);
         }
         json_buf_raw(&b, "}");
     }
