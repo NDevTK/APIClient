@@ -3510,6 +3510,13 @@ JS_EXTERN JSContext *JS_NextRealm(JSRuntime *rt, JSContext *prev);
    context running a script or module's code, or NULL when no such context is on the stack. Borrowed. */
 JS_EXTERN JSContext *JS_GetActiveScriptRealm(JSContext *ctx);
 JS_EXTERN bool JS_AgentCanBlock(const JSAgentRecord *agent);
+/* A host's per-agent values: JS_NewAgentSlot mints a slot every agent of `rt` has, JS_SetAgentSlot stores an
+   agent's value once (consumed), JS_GetAgentSlot reads it (borrowed; JS_UNDEFINED before it is set) and
+   JS_FreeAgentSlot gives the slot's value back in every agent. Every slot is given back before JS_FreeRuntime. */
+JS_EXTERN int JS_NewAgentSlot(JSRuntime *rt);
+JS_EXTERN void JS_SetAgentSlot(JSAgentRecord *agent, int slot, JSValue v);
+JS_EXTERN JSValueConst JS_GetAgentSlot(const JSAgentRecord *agent, int slot);
+JS_EXTERN void JS_FreeAgentSlot(JSRuntime *rt, int slot);
 /* The system time zone's offset for Date's local time (ECMAScript §21.4.1.25 LocalTime): minutes of UTC minus
    local time at `time_ms` ms from the epoch, as Date.prototype.getTimezoneOffset answers. Process-wide, and
    required before any script reads local time. */

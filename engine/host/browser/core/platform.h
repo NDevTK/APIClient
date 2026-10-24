@@ -124,6 +124,10 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
  * core/realm.h's realm_install_intrinsics for every later Window realm of this instance (HTML §8.1.2.2: one such
  * agent per browsing context group and site, and an instance is one origin of one group). Owned by the runtime. */
 JSAgentRecord *platform_window_agent(void);
+/* HTML §8.1.2.1's create an agent, given canBlock, for an agent of this declared runtime beside the entry's: its
+ * Agent Record and what core/agent.h's install column builds for it, its event loop first. `ctx` is the realm
+ * that will be the agent's first, allocated in but not yet named to it. Owned by the runtime. */
+JSAgentRecord *platform_create_agent(JSContext *ctx, bool can_block);
 
 /* THE AGENT HALF FOR AN AGENT THAT IS NOT A WINDOW'S — HTML §8.1.2.2 "Integration with the JavaScript agent
  * cluster formalism"'s obtain-a-worker/worklet-agent, which is the OTHER of that section's two cluster

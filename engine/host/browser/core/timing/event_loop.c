@@ -4,31 +4,42 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent.h"
 #include "core/agent_state.h"
 #include "core/timing/event_loop.h"
 #include "solver/concolic.h"   /* a moment can be unknown external input, and its ordering is a predicate */
 #include "solver/decide.h"     /* …asked as a restartable branch, and read back by this file's invariants */
 #include "solver/flow.h"       /* the clock's second mover writes into the RUNNING flow's delta, and asserts it */
 
-/* THE RECORD, held for the AGENT. A module static is the CORRECT scope here and the wrong one for a prototype:
-   §8.1.7 gives one event loop to a similar-origin window agent, so one record answering every realm IS the
-   fact, where one prototype answering every realm is a defect. What must not be shared is the TIMELINE, and
+/* THE RECORD, held by each AGENT in its host slot `g_slot`: HTML §8.1.7.1 Definitions, "Each agent has an
+   associated event loop, which is unique to that agent", so every realm of one agent answers from one record
+   and a second agent (a dedicated worker's) answers from its own. What must not be shared is the TIMELINE, and
    that is answered by the object's properties riding the per-flow COW delta rather than by a second object. */
-static JSValue g_rec = JS_UNDEFINED;
+static int g_slot = -1;
 static JSAtom  g_atom_now = JS_ATOM_NULL, g_atom_render = JS_ATOM_NULL, g_atom_seq = JS_ATOM_NULL,
                g_atom_nest = JS_ATOM_NULL, g_atom_work = JS_ATOM_NULL, g_atom_licence = JS_ATOM_NULL;
 
 /* A FIELD OF THE RECORD, as the VALUE it is. OWNED. The two moments may be unknown external input; the
    insertion counter may not, and el_num_get below is where that half is asserted. */
+/* The record of `ctx`'s agent, borrowed. */
+static JSValueConst el_rec(JSContext *ctx)
+{
+    JSValueConst rec;
+
+    DCHECK(g_slot >= 0, "the event loop's state was read before event_loop_init declared its slot");
+    rec = JS_GetAgentSlot(JS_GetRealmAgent(ctx), g_slot);
+    DCHECK(JS_IsObject(rec),
+           "the event loop's state was read in an agent whose install never built it — core/agent.h's install "
+           "column runs before the agent's first realm, so the record is in the baseline every flow of the agent "
+           "is layered over");
+    return rec;
+}
+
 static JSValue el_get(JSContext *ctx, JSAtom key)
 {
     JSValue v;
 
-    DCHECK(JS_IsObject(g_rec),
-           "the event loop's state was read before event_loop_init built it — the record has to be in the "
-           "PRE-BOOT baseline, or the first flow to touch it creates it inside its own delta and every "
-           "sibling then reads a clock that is not there");
-    v = JS_GetProperty(ctx, g_rec, key);
+    v = JS_GetProperty(ctx, el_rec(ctx), key);
     DCHECK(JS_IsNumber(v) || concolic_is(v),
            "the event loop's state holds a value that is neither a moment on its clock nor unknown external "
            "input — every field of it is one of those or a counter, and every writer here writes one");
@@ -38,11 +49,12 @@ static JSValue el_get(JSContext *ctx, JSAtom key)
 /* BORROWS `v`. */
 static void el_set(JSContext *ctx, JSAtom key, JSValueConst v)
 {
-    DCHECK(JS_IsObject(g_rec), "the event loop's state was written before event_loop_init built it");
+    JSValueConst rec = el_rec(ctx);
+
     DCHECK(JS_IsNumber(v) || concolic_is(v),
            "the event loop was asked to store something that is not a moment — a moment is a number or the "
            "unknown external input §8.7's `timeout` can carry into an expiry, and nothing else");
-    JS_SetProperty(ctx, g_rec, key, JS_DupValue(ctx, v));
+    JS_SetProperty(ctx, rec, key, JS_DupValue(ctx, v));
 }
 
 /* A COUNTER FIELD, which is the kind that can never be unknown — the INSERTION ORDER (§8.1.7 hands out a real
@@ -117,9 +129,37 @@ static int el_num_before(JSContext *ctx, JSValueConst a, JSValueConst b)
     return x < y;
 }
 
+/* HTML §8.1.2.1 create an agent step 4, "Set agent's event loop to a new event loop": this agent's record. */
+static void event_loop_agent_install(JSContext *ctx, JSAgentRecord *agent)
+{
+    /* NULL-PROTOTYPED, like §8.12 Animation frames's map: this is the loop's own storage and never the page's
+       object, so it carries no members a page could have replaced. */
+    JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
+
+    CHECK(!JS_IsException(rec), "event loop: the loop's own state could not be allocated");
+    JS_SetProperty(ctx, rec, g_atom_now, JS_NewFloat64(ctx, 0));
+    JS_SetProperty(ctx, rec, g_atom_render, JS_NewFloat64(ctx, 0));
+    JS_SetProperty(ctx, rec, g_atom_seq, JS_NewFloat64(ctx, 0));
+    /* §8.1.7 Event loops: "Each event loop has a currently running task, which is either a task or null.
+       Initially, this is null." Null is level 0 here — see event_loop.h on why 0 is the positive statement
+       and not an absence. */
+    JS_SetProperty(ctx, rec, g_atom_nest, JS_NewFloat64(ctx, 0));
+    /* NO WORK HAS BEEN RETIRED AT THE BASE, which is what makes the clock's value at agent init the base
+       itself rather than a sum that happens to equal it — see event_loop_now on why that distinction is load
+       bearing for §8.1.7.1's last render opportunity time. */
+    JS_SetProperty(ctx, rec, g_atom_work, JS_NewFloat64(ctx, 0));
+    /* 1 between event_loop_deadline_first answering that a deadline comes before the owed replies and the move
+       to it; a per-flow fact, so it rides the delta like the clock. */
+    JS_SetProperty(ctx, rec, g_atom_licence, JS_NewFloat64(ctx, 0));
+    /* THE CLOCK STARTS AT A KNOWN MOMENT and becomes unknown only where a task source's own due moment is —
+       which is what makes HIGH RESOLUTION TIME Level 3 §4 Time Origin, stamped from this clock at every
+       realm's creation, a real number for every document created before the first such task fires. */
+    JS_SetAgentSlot(agent, g_slot, rec);
+}
+
 void event_loop_init(JSContext *ctx)
 {
-    DCHECK(JS_IsUndefined(g_rec), "event_loop_init ran twice — §8.1.7 gives one event loop to an agent");
+    DCHECK(g_slot < 0, "event_loop_init ran twice in one runtime — its slot is registration every agent shares");
     g_atom_now = JS_NewAtom(ctx, "eventLoopNow");
     g_atom_render = JS_NewAtom(ctx, "lastRenderOpportunityTime");
     g_atom_seq = JS_NewAtom(ctx, "taskInsertionOrder");
@@ -129,34 +169,13 @@ void event_loop_init(JSContext *ctx)
     CHECK(g_atom_now != JS_ATOM_NULL && g_atom_render != JS_ATOM_NULL && g_atom_seq != JS_ATOM_NULL
           && g_atom_nest != JS_ATOM_NULL && g_atom_work != JS_ATOM_NULL && g_atom_licence != JS_ATOM_NULL,
           "event loop: the record's own keys could not be interned");
-    /* NULL-PROTOTYPED, like §8.12 Animation frames's map: this is the loop's own storage and never the page's object, so it
-       carries no members a page could have replaced. */
-    g_rec = JS_NewObjectProto(ctx, JS_NULL);
-    CHECK(!JS_IsException(g_rec), "event loop: the loop's own state could not be allocated");
-    JS_SetProperty(ctx, g_rec, g_atom_now, JS_NewFloat64(ctx, 0));
-    JS_SetProperty(ctx, g_rec, g_atom_render, JS_NewFloat64(ctx, 0));
-    JS_SetProperty(ctx, g_rec, g_atom_seq, JS_NewFloat64(ctx, 0));
-    /* §8.1.7 Event loops: "Each event loop has a currently running task, which is either a task or null.
-       Initially, this is null." Null is level 0 here — see event_loop.h on why 0 is the positive statement
-       and not an absence. */
-    JS_SetProperty(ctx, g_rec, g_atom_nest, JS_NewFloat64(ctx, 0));
-    /* NO WORK HAS BEEN RETIRED AT THE BASE, which is what makes the clock's value at agent init the base
-       itself rather than a sum that happens to equal it — see event_loop_now on why that distinction is load
-       bearing for §8.1.7.1's last render opportunity time. */
-    JS_SetProperty(ctx, g_rec, g_atom_work, JS_NewFloat64(ctx, 0));
-    /* 1 between event_loop_deadline_first answering that a deadline comes before the owed replies and the move
-       to it; a per-flow fact, so it rides the delta like the clock. */
-    JS_SetProperty(ctx, g_rec, g_atom_licence, JS_NewFloat64(ctx, 0));
-    /* THE CLOCK STARTS AT A KNOWN MOMENT and becomes unknown only where a task source's own due moment is —
-       which is what makes HIGH RESOLUTION TIME Level 3 §4 Time Origin, stamped from this clock at every
-       realm's creation, a real number for every document created before the first such task fires. */
-    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The RECORD is also this init's
-       own latch (`JS_IsUndefined(g_rec)` above), which is exactly the slot the header says must be given back:
-       a second agent whose event_loop_init returned early would hold a clock object minted in a runtime that
-       is gone, and every el_get on it reads that heap. */
-    agent_state_value("event_loop", &g_rec,
-                      "HTML §8.1.7 Event loops's own record — the virtual clock, §8.1.7.1's last render "
-                      "opportunity time and the task insertion order — and this component's declaration latch");
+    g_slot = JS_NewAgentSlot(JS_GetRuntime(ctx));
+    agent_declare_install(event_loop_agent_install);
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The slot id is this init's own
+       latch (`g_slot < 0` above). */
+    agent_state_id("event_loop", &g_slot,
+                   "the agent host slot holding HTML §8.1.7 Event loops's own record — the virtual clock, §8.1.7.1's "
+                   "last render opportunity time and the task insertion order — and this component's latch");
     agent_state_atom("event_loop", &g_atom_now,
                      "HTML §8.1.7 Event loops's virtual-clock key on that record");
     agent_state_atom("event_loop", &g_atom_render,
@@ -178,15 +197,15 @@ void event_loop_init(JSContext *ctx)
    would end on JS_FreeRuntime's gc_obj_list walk with this component's null-prototyped record still in it. */
 void event_loop_free(JSRuntime *rt)
 {
-    /* NOT `if (JS_IsUndefined(g_rec)) return;`. The release is the inverse of the DECLARATION and rides the
+    /* NOT `if (g_slot < 0) return;`. The release is the inverse of the DECLARATION and rides the
        same row of core/platform.c's one list, whose declare pass is unconditional and whose table asserts that
        a release row has a declare — so an early return here would silently absorb a teardown reached without
        an init instead of naming it. */
-    DCHECK(JS_IsObject(g_rec),
-           "HTML §8.1.7 Event loops's record was released in an agent that never declared it — §8.1.7 gives one "
-           "event loop to a similar-origin window agent and event_loop_init is what builds it");
-    JS_FreeValueRT(rt, g_rec);
-    g_rec = JS_UNDEFINED;
+    DCHECK(g_slot >= 0,
+           "HTML §8.1.7 Event loops's records were released in a runtime that never declared their slot — "
+           "event_loop_init is what declares it");
+    JS_FreeAgentSlot(rt, g_slot);   /* every agent's record */
+    g_slot = -1;
     JS_FreeAtomRT(rt, g_atom_now);
     JS_FreeAtomRT(rt, g_atom_render);
     JS_FreeAtomRT(rt, g_atom_seq);

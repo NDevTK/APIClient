@@ -651,6 +651,7 @@ struct JSRuntime {
     /* The ECMA-262 §9.6 Agent Records of the agents this runtime hosts (JSAgentRecord.link), owned here and
        freed with the runtime. The runtime is the executing thread every one of them shares. */
     struct list_head agent_list;
+    int agent_slot_count;   /* JS_NewAgentSlot's next slot */
     uint32_t dump_flags : 24;
 
     /* Shape hash table */
@@ -896,7 +897,10 @@ enum {
    and a realm names it once, at creation (realm.[[AgentSignifier]]); its address is the signifier. */
 struct JSAgentRecord {
     struct list_head link;   /* JSRuntime.agent_list */
+    JSRuntime *rt;
     bool can_block;          /* [[CanBlock]] */
+    JSValue *slots;          /* the host's per-agent values (JS_SetAgentSlot), n_slots of them, owned */
+    int n_slots;
 };
 
 struct JSContext {
@@ -3989,6 +3993,7 @@ JSAgentRecord *JS_NewAgentRecord(JSRuntime *rt, bool can_block)
     JSAgentRecord *agent = js_mallocz_rt(rt, sizeof(*agent));
 
     CHECK(agent != NULL, "an agent's Agent Record could not be allocated");
+    agent->rt = rt;
     agent->can_block = can_block;
     list_add_tail(&agent->link, &rt->agent_list);
     return agent;
@@ -4036,6 +4041,48 @@ JSContext *JS_NextRealm(JSRuntime *rt, JSContext *prev)
 bool JS_AgentCanBlock(const JSAgentRecord *agent)
 {
     return agent->can_block;
+}
+
+int JS_NewAgentSlot(JSRuntime *rt)
+{
+    return rt->agent_slot_count++;
+}
+
+void JS_SetAgentSlot(JSAgentRecord *agent, int slot, JSValue v)
+{
+    DCHECK(slot >= 0 && slot < agent->rt->agent_slot_count, "an agent slot this runtime never minted was set");
+    if (slot >= agent->n_slots) {
+        int n = agent->rt->agent_slot_count, i;
+        JSValue *a = js_realloc_rt(agent->rt, agent->slots, sizeof(*a) * (size_t)n);
+        CHECK(a != NULL, "an agent's host slots could not be grown");
+        for (i = agent->n_slots; i < n; i++)
+            a[i] = JS_UNDEFINED;
+        agent->slots = a;
+        agent->n_slots = n;
+    }
+    DCHECK(JS_IsUndefined(agent->slots[slot]),
+           "an agent's host slot was set twice — every reader already holds the first value");
+    agent->slots[slot] = v;
+}
+
+JSValueConst JS_GetAgentSlot(const JSAgentRecord *agent, int slot)
+{
+    DCHECK(slot >= 0 && slot < agent->rt->agent_slot_count, "an agent slot this runtime never minted was read");
+    return slot < agent->n_slots ? agent->slots[slot] : JS_UNDEFINED;
+}
+
+void JS_FreeAgentSlot(JSRuntime *rt, int slot)
+{
+    struct list_head *el;
+
+    DCHECK(slot >= 0 && slot < rt->agent_slot_count, "an agent slot this runtime never minted was given back");
+    list_for_each(el, &rt->agent_list) {
+        JSAgentRecord *agent = list_entry(el, JSAgentRecord, link);
+        if (slot < agent->n_slots) {
+            JS_FreeValueRT(rt, agent->slots[slot]);
+            agent->slots[slot] = JS_UNDEFINED;
+        }
+    }
 }
 
 /* return 0 if OK, < 0 if exception */
@@ -4857,7 +4904,12 @@ void JS_FreeRuntime(JSRuntime *rt)
     js_free_rt(rt, rt->class_array);
     list_for_each_safe(el, el1, &rt->agent_list) {
         JSAgentRecord *agent = list_entry(el, JSAgentRecord, link);
+        for (i = 0; i < agent->n_slots; i++)
+            DCHECK(JS_IsUndefined(agent->slots[i]),
+                   "the runtime went down with an agent's host slot still holding a value — the host gives every "
+                   "slot back (JS_FreeAgentSlot) in its release, before the collection above, or the value leaks");
         list_del(&agent->link);
+        js_free_rt(rt, agent->slots);
         js_free_rt(rt, agent);
     }
 

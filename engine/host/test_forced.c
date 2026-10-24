@@ -7138,9 +7138,9 @@ TF_UNIT void exposure_selftest(JSContext *ctx, const char *top_level_url)
        standard never lets a WorkerGlobalScope reach. */
     /* Each is a dedicated worker agent of its own (HTML §8.1.2.1: one DedicatedWorkerGlobalScope per agent),
        created given canBlock true as §8.1.2.2's obtain-a-dedicated-worker-agent does. */
-    realm_install_intrinsics(worker, JS_NewAgentRecord(JS_GetRuntime(ctx), true), NULL,
+    realm_install_intrinsics(worker, platform_create_agent(worker, true), NULL,
                              "DedicatedWorkerGlobalScope", owner_secure);
-    realm_install_intrinsics(worker_insecure, JS_NewAgentRecord(JS_GetRuntime(ctx), true), NULL,
+    realm_install_intrinsics(worker_insecure, platform_create_agent(worker_insecure, true), NULL,
                              "DedicatedWorkerGlobalScope", !owner_secure);
     /* AND THESE TWO REALMS ARE FINISHED, WHICH USED TO BE A STATEMENT ONLY THIS FIXTURE COULD MAKE. Two calls
        to core/realm.h's owed half — every interface object a realm owes is one some component asked Web IDL

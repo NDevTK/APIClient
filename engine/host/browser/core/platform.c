@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/agent.h"
 #include "core/agent_state.h"
 #include "core/canvas/canvas_rendering_context_2d.h"
 #include "core/canvas/image_data.h"
@@ -1432,13 +1433,24 @@ static void agent_declare_column(JSContext *ctx, const PlatformAgent *agent)
 /* HTML §8.1.2.1 "Integration with the JavaScript agent formalism"'s create an agent, given canBlock, which
    §8.1.2.2 hands it: an ECMA-262 §9.6 Agent Record in this runtime, whose address is its [[Signifier]]. The
    first realm names it through realm_install_intrinsics, which asserts the pairing with its global's kind.
-   Step 4's event loop is the `event_loop` row, still declared once per runtime. */
+   Step 4's event loop is built by core/agent.h's install column, which each entry runs after its declare column. */
 static JSAgentRecord *agent_create(bool can_block)
 {
     DCHECK(g_declared_in != NULL,
            "§8.1.2.1's create-an-agent ran before the platform was declared in this runtime, and the Agent "
            "Record belongs to the runtime agent_prologue records");
     return JS_NewAgentRecord(g_declared_in, can_block);
+}
+
+JSAgentRecord *platform_create_agent(JSContext *ctx, bool can_block)
+{
+    JSAgentRecord *agent;
+
+    DCHECK(g_window_agent != NULL,
+           "an agent was created beside the entry's in a runtime whose entry has not run its install column");
+    agent = agent_create(can_block);
+    agent_install(ctx, agent);
+    return agent;
 }
 
 JSAgentRecord *platform_window_agent(void)
@@ -1483,6 +1495,8 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
        `originAgentCluster`, §7.1.1.2's `document.domain` setter or anything else asks which cluster this is. */
     agent_cluster_obtain_window_agent(origin_agent(), agent->requests_oac);
     agent_declare_column(ctx, agent);
+    /* What the agent owns beside its record, §8.1.2.1 create an agent step 4's event loop first. */
+    agent_install(ctx, g_window_agent);
     /* The agent's first realm, built through the same call a child navigable's realm makes, so the first document
        cannot get a different set of per-realm intrinsics. It is a Window realm, and that is this entry's statement,
        not the host's: every realm this entry brings up gets `document`, `location`, `history` and `navigator` from
@@ -1533,6 +1547,7 @@ void platform_worker_agent_init(JSContext *ctx, const char *origin, const char *
     agent_cluster_obtain_worker_agent(is_top_level);
     JSAgentRecord *record = agent_create(can_block);
     agent_declare_column(ctx, agent);
+    agent_install(ctx, record);
     /* The agent's first realm is its only one, through the same call the window entry ends in. The arguments are
        §10.2.6.2's and §8.1.3.5's, and realm_install_intrinsics asserts the pair: NULL for the top-level creation
        URL, and the owner's secure-context answer, which §8.1.3.5 "Secure contexts" step 1.2.1 reads from this
@@ -1576,6 +1591,7 @@ void platform_agent_free(void)
     agent_state_check_released();
     agent_state_reset();
     g_window_agent = NULL;   /* the record itself is the runtime's, freed by JS_FreeRuntime */
+    agent_installs_free();
     g_declared_in = NULL;
 }
 
