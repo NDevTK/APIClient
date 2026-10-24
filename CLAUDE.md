@@ -175,6 +175,7 @@ A comment is read by every agent that opens the file, so its cost is paid on eve
 ## Attacker sources, values and discovery
 
 - Each attacker source carries its real browser constraints (origin forgeability, per-component percent-encoding). Deliver candidates through the source's real transform.
+- The attacker sets only the URL (its components), `window.name`, `postMessage` from a window it can reach under COOP and framing, and the victim's ordinary interaction (clicks, typing, drops). Storage, cookies and other app state are forked to explore code, but a PoC that depends on them includes every link of the chain back to one of those sources, the app's own write included; without it the result is a precondition, not a PoC.
 - Run, don't match: values are computed by QuickJS, never pattern-matched. Absent injected app state is symbolic; app-owned resources are loaded and executed; config loaded for examples still forks branches.
 - Active discovery from the learning document, CORS-bounded and one per endpoint. Static assets are not endpoints.
 - A request carries the provenance of its values (observed, derived, forced) and its reply inherits it; forced replies are never merged into observed data.
