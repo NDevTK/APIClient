@@ -5,6 +5,7 @@
 
 #include "solver/engine.h"     /* ENGINE_QUANTUM_WORK and the work counter: the ceiling is the scheduler's slice */
 #include "check.h"
+#include "core/timing/thread_work.h"   /* the host work an overrun reports, by kind */
 
 /* HTML §7.5.2 "Loading HTML documents" / §7.5.4 "Loading text documents": one networking task's bytes. The
    standard names the unit but cannot size it, and this engine's transport hands the loader a whole decoded
@@ -94,6 +95,7 @@ size_t rest_unit_items(RestUnitKind kind)
 static int          g_rest_open;
 static RestUnitKind g_rest_kind;
 static int64_t      g_rest_mark_work;
+static ThreadWorkCensus g_rest_mark_tw;   /* the host work counters at the bracket's begin */
 #endif
 
 void rest_unit_begin(RestUnitKind kind)
@@ -107,6 +109,7 @@ void rest_unit_begin(RestUnitKind kind)
     g_rest_open    = 1;
     g_rest_kind    = kind;
     g_rest_mark_work = engine_work_retired();
+    thread_work_census(&g_rest_mark_tw);
 #else
     (void)kind;
 #endif
@@ -116,6 +119,7 @@ void rest_unit_end(void)
 {
 #if APICLIENT_DEV
     int64_t spent;
+    ThreadWorkCensus tw;
 
     DCHECK(g_rest_open,
            "a rest unit was closed with none open — rest_unit_begin and rest_unit_end are a pair around the "
@@ -127,6 +131,10 @@ void rest_unit_end(void)
        overrun is fixed one layer down. The reading is work, a function of the unit's input, so no load moves it. */
     if (rest_unit_items(g_rest_kind) <= 1)
         return;
+    /* What the unit's work was, for the message: the host charges and each kind's input over the unit. The
+       remainder of `spent` is retired opcodes and script parse. */
+    thread_work_census(&tw);
+#define RU_IN(k) (unsigned long long)(tw.charged_input[k] - g_rest_mark_tw.charged_input[k])
     DCHECKF(spent < ENGINE_QUANTUM_WORK,
             "one rest unit of kind %d (%zu items) retired %lld units of work — a whole cooperative quantum is "
             "%lld, and the entire argument for resting at a chosen granularity rather than at the substrate's "
@@ -135,7 +143,16 @@ void rest_unit_end(void)
             "At this size it is not: a higher-value sibling that became runnable at the start of this unit "
             "waited longer than the scheduler's own decision interval to be picked. LOWER THE NUMBER FOR THIS "
             "KIND IN rest_unit.c — it is a policy input for exactly this reason and no loader changes — unless "
-            "the per-item cost itself has grown, in which case the substrate's item is what to look at",
-            (int)g_rest_kind, rest_unit_items(g_rest_kind), (long long)spent, (long long)ENGINE_QUANTUM_WORK);
+            "the per-item cost itself has grown, in which case the substrate's item is what to look at. Of it, "
+            "host charges are %llu units over %llu box questions, %llu line items, %llu rule tests, %llu CSS "
+            "bytes, %llu decoded bytes, %llu HTML bytes, %llu constraint bytes and %llu orphan entries; %llu "
+            "script bytes were parsed; the rest is retired opcodes",
+            (int)g_rest_kind, rest_unit_items(g_rest_kind), (long long)spent, (long long)ENGINE_QUANTUM_WORK,
+            (unsigned long long)(tw.charged_units - g_rest_mark_tw.charged_units), RU_IN(THREAD_WORK_LAYOUT_BOX),
+            RU_IN(THREAD_WORK_LAYOUT_LINE), RU_IN(THREAD_WORK_SELECTOR_MATCH), RU_IN(THREAD_WORK_CSS_PARSE),
+            RU_IN(THREAD_WORK_DECODE), RU_IN(THREAD_WORK_HTML_PARSE), RU_IN(THREAD_WORK_CONSTRAINT),
+            RU_IN(THREAD_WORK_ORPHAN_WALK),
+            (unsigned long long)(tw.script_parse_bytes_all - g_rest_mark_tw.script_parse_bytes_all));
+#undef RU_IN
 #endif
 }
