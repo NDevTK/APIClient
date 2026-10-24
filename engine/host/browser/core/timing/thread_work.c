@@ -18,6 +18,19 @@ static uint64_t g_charged_input[THREAD_WORK_N];
    depth `d` took, which that span subtracts from its own. */
 static int64_t *g_inner;
 static int      g_depth, g_inner_cap;
+#if APICLIENT_DEV
+/* `g_inner_input[d]`: the input-byte kinds (thread_work_kind_is_input) whose spans ended inside the open span at
+   depth `d`, at any nesting. A span of one of those kinds that ends over one of its own kind counts the same
+   bytes twice, once per seam. */
+static uint32_t *g_inner_input;
+_Static_assert(THREAD_WORK_N <= 32, "the input-kind mask is one bit per kind");
+
+static bool thread_work_kind_is_input(ThreadWorkKind kind)
+{
+    return kind == THREAD_WORK_DECODE || kind == THREAD_WORK_HTML_PARSE || kind == THREAD_WORK_CSS_PARSE ||
+           kind == THREAD_WORK_XML_PARSE;
+}
+#endif
 
 void thread_work_begin(ThreadWorkSpan *s)
 {
@@ -28,9 +41,20 @@ void thread_work_begin(ThreadWorkSpan *s)
 
         CHECK(grown != NULL, "thread_work: OOM growing the span stack");
         g_inner = grown;
+#if APICLIENT_DEV
+        {
+            uint32_t *kinds = realloc(g_inner_input, (size_t)cap * sizeof *kinds);
+
+            CHECK(kinds != NULL, "thread_work: OOM growing the span stack");
+            g_inner_input = kinds;
+        }
+#endif
         g_inner_cap = cap;
     }
     s->depth = g_depth;
+#if APICLIENT_DEV
+    g_inner_input[g_depth] = 0;
+#endif
     g_inner[g_depth++] = 0;
     s->t0 = quantum_thread_us();
 }
@@ -46,6 +70,16 @@ void thread_work_end(ThreadWorkSpan *s, ThreadWorkKind kind, uint64_t bytes)
     took = quantum_thread_us() - s->t0;
     g_depth--;
     if (g_depth > 0) g_inner[g_depth - 1] += took;
+#if APICLIENT_DEV
+    if (thread_work_kind_is_input(kind)) {
+        DCHECKF(bytes == 0 || !(g_inner_input[g_depth] & (1u << kind)),
+                "a thread-work span of input kind %d ended over an inner span of the same kind, so its bytes are "
+                "counted and charged once per seam: charge input at the innermost seam that parses it and drop "
+                "the outer span", (int)kind);
+        if (g_depth > 0 && bytes > 0) g_inner_input[g_depth - 1] |= 1u << kind;
+    }
+    if (g_depth > 0) g_inner_input[g_depth - 1] |= g_inner_input[g_depth];
+#endif
     g_spans[kind]++;
     g_bytes[kind] += bytes;
     g_cpu_us[kind] += took - g_inner[g_depth];

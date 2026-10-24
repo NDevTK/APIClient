@@ -61,7 +61,7 @@ typedef enum {
     THREAD_WORK_SCRIPT_PARSE,   /* a classic compile stint (solver/engine.c's start site) */
     THREAD_WORK_DECODE,         /* Encoding §6.1 decode (core/encoding/encoding.c's encoding_decode) */
     THREAD_WORK_HTML_PARSE,     /* bytes fed to an HTML parser (core/html/html_parse.c, fragment_parser.c) */
-    THREAD_WORK_CSS_PARSE,      /* a style sheet's rules parsed from text (core/css/css_style_sheet.c) */
+    THREAD_WORK_CSS_PARSE,      /* bytes a style sheet parse tokenized (core/css/css_style_declaration.c) */
     THREAD_WORK_XML_PARSE,      /* bytes an XML parse step consumed (core/xml/xml_parse.c's xml_parse_step) */
     THREAD_WORK_CONSTRAINT,     /* a path-constraint key hashed for a probe (solver/concolic.c's cons_hash) */
     THREAD_WORK_ORPHAN_WALK,    /* heap entries an orphan take visited (solver/engine.c's engine_orphan_seed) */
