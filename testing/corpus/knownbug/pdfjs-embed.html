@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>knownbug: pdf.js embedded through getDocument (CVE-2024-4367)</title>
+</head>
+<body>
+<canvas id="page"></canvas>
+<script type="module">
+  // An embedding page of the kind some sites ship: the document's address comes from the query and goes
+  // straight to getDocument, with none of the generic viewer's origin check, and page 1 is rendered to a
+  // canvas. Every option is pdf.js's default, so isEvalSupported is true, which the advisory requires.
+  import * as pdfjsLib from './build/pdf.mjs';
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = './build/pdf.worker.mjs';
+  const url = new URLSearchParams(location.search).get('file');
+  const pdf = await pdfjsLib.getDocument(url).promise;
+  const page = await pdf.getPage(1);
+  const viewport = page.getViewport({ scale: 1 });
+  const canvas = document.getElementById('page');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+</script>
+</body>
+</html>
