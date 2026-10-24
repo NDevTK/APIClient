@@ -23,6 +23,7 @@
 #define THREAD_WORK_UNITS_PER_KIB_DECODE 41
 #define THREAD_WORK_UNITS_PER_KIB_HTML 78
 #define THREAD_WORK_UNITS_PER_KIB_CSS 490
+#define THREAD_WORK_UNITS_PER_KIB_XML 78
 /* A constraint-store probe hashes its whole key (solver/concolic.c's cons_hash): 1.25 ns per byte at -O1 on the
    calibration box, so 6 units per KiB. A key is the predicate's spelling and grows with the path that built
    it, which is why a probe is priced by its bytes and not per call. */
@@ -61,6 +62,7 @@ typedef enum {
     THREAD_WORK_DECODE,         /* Encoding §6.1 decode (core/encoding/encoding.c's encoding_decode) */
     THREAD_WORK_HTML_PARSE,     /* bytes fed to an HTML parser (core/html/html_parse.c, fragment_parser.c) */
     THREAD_WORK_CSS_PARSE,      /* a style sheet's rules parsed from text (core/css/css_style_sheet.c) */
+    THREAD_WORK_XML_PARSE,      /* bytes an XML parse step consumed (core/xml/xml_parse.c's xml_parse_step) */
     THREAD_WORK_CONSTRAINT,     /* a path-constraint key hashed for a probe (solver/concolic.c's cons_hash) */
     THREAD_WORK_ORPHAN_WALK,    /* heap entries an orphan take visited (solver/engine.c's engine_orphan_seed) */
     THREAD_WORK_INTL,           /* an Intl host question's bytes (core/intl/intl_host.h) */

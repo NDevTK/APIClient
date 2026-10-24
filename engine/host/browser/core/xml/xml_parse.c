@@ -16,6 +16,7 @@
 #include "core/xml/xml_ref.h"
 #include "core/xml/xml_tag.h"
 #include "check.h"
+#include "core/timing/thread_work.h"   /* a step's bytes, charged to the running flow's clock */
 
 /* §8.5.1's own spelling of the namespace, written once. */
 #define XML_PARSERERROR_NAMESPACE "http://www.mozilla.org/newlayout/xml/parsererror.xml"
@@ -153,8 +154,18 @@ void xml_parse_step(XmlParse *p)
            "did not");
     /* THE ERROR IS LATCHED AND NOT RETURNED, and the reason is core/xml/xml_tree.h's own: a build that has
        reported an error IS ended, so a driver that tests `xml_parse_ended` needs no second question and
-       cannot forget to ask one. */
-    p->report.tree = xml_tree_build_step(p->b, &p->report.detail);
+       cannot forget to ask one. The step's work is the bytes it consumed, charged at
+       THREAD_WORK_XML_PARSE's rate, so every consumer of this parse is priced in the scheduler's currency. */
+    {
+        size_t before = xml_tree_build_offset(p->b), took;
+        ThreadWorkSpan tw;
+
+        thread_work_begin(&tw);
+        p->report.tree = xml_tree_build_step(p->b, &p->report.detail);
+        took = xml_tree_build_offset(p->b) - before;
+        thread_work_end(&tw, THREAD_WORK_XML_PARSE, took);
+        thread_work_charge(THREAD_WORK_XML_PARSE, took);
+    }
 }
 
 lxb_dom_node_t *xml_parse_closed_element(const XmlParse *p)

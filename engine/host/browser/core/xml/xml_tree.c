@@ -311,6 +311,12 @@ size_t xml_tree_build_line(const XmlTreeBuild *b)
     return b->r.line;
 }
 
+size_t xml_tree_build_offset(const XmlTreeBuild *b)
+{
+    DCHECK(b != NULL, "xml_tree_build_offset was asked of no build");
+    return (size_t)(b->r.p - b->r.start);
+}
+
 size_t xml_tree_build_column(const XmlTreeBuild *b)
 {
     DCHECK(b != NULL, "xml_tree_build_column was asked of no build");

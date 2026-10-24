@@ -653,8 +653,8 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
 static void qjs_join_install(QjsPendingDocument *p);
 
 /* One work quantum of `p`'s load (ENGINE_QUANTUM_WORK of the charge its fills retire): true while bytes remain.
-   A fill that charges no work (an XML construct, which core/timing/thread_work.h prices at nothing) ends the
-   quantum after itself, since its cost is unmeasured. */
+   A step that charges no work (an XML load's script preparation or one of its subtree removals, which consume
+   no bytes) ends the quantum after itself, since its cost is unmeasured. */
 static bool qjs_load_fill(QjsPendingDocument *p)
 {
     ThreadWorkCensus c;

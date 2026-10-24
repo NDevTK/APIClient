@@ -178,6 +178,8 @@ bool xml_tree_build_ended(const XmlTreeBuild *b);
    name the mistake rather than the character after it. */
 size_t xml_tree_build_line(const XmlTreeBuild *b);
 size_t xml_tree_build_column(const XmlTreeBuild *b);
+/* How many bytes of the entity the reader has consumed, which is what a step's work is priced by. */
+size_t xml_tree_build_offset(const XmlTreeBuild *b);
 
 /* THE CHARACTER LAYER'S §1.2 LATCH. Three of the errors below this file end in "ask the character layer" —
    XML_DOCUMENT_ERR_CHARACTER and, through it, XML_ELEMENT_ERR_CHARACTER and XML_TAG_ERR_CHARACTER — and the
