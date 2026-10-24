@@ -192,32 +192,44 @@ function _httpCacheVaryMatches(entry, fields) {
     .every(function (n) { return n !== "*" && entry.fields.get(n) === fields.get(n); });
 }
 
+/* The stored responses RFC 9111 §4 could choose for a request with the header fields `fields`: the target
+   URI's, whose Vary fields match (§4.1). */
+function _httpCacheCandidates(cache, url, fields) {
+  return (cache.entries.get(_httpCacheTarget(url)) || []).filter(function (e) {
+    return _httpCacheVaryMatches(e, fields);
+  });
+}
 /* RFC 9111 §4 "Constructing Responses from Caches" for a GET to `url` with the header fields `fields` at
-   `nowMs`: the most recent stored response (by `Date`) whose Vary fields match, that has no `no-cache`, and
-   that is fresh (§4.2: freshness_lifetime > current_age), within the request's own `max-age` and
-   `min-fresh` (§5.2.1). Answers {entry, age} or null.
-   Named residual. Not covered: §4.3 "Validation"; a stale or `no-cache` entry, and a request's `no-cache`,
-   are a miss and a full refetch. Next diff: send `If-None-Match` and `If-Modified-Since` from the entry and
-   freshen it on a 304 (§4.3.4). Its absence shows as a 200 refetched in full for a stored response that
-   carried a validator. */
+   `nowMs`: the most recent candidate (by `Date`, §4). It answers the request, `fresh`, when it has no
+   `no-cache`, is fresh (§4.2: freshness_lifetime > current_age) and is within the request's own `no-cache`,
+   `max-age` and `min-fresh` (§5.2.1). Otherwise it is one Fetch §4.6 must validate ("If storedResponse is a
+   stale response, then set the revalidatingFlag"), which needs a validator (§4.3.1), and one with none is no
+   answer. Answers {entry, age, fresh} or null. */
 function httpCacheSelect(cache, url, method, fields, nowMs) {
   DCHECK(method === "GET", "a " + method + " asked the cache for a stored response — RFC 9111 §4 makes a cache " +
          "write through an unsafe method, and this cache stores GETs only");
-  var req = _httpCacheDirectives(fields.get("cache-control"));
-  if (req.has("no-cache")) return null;
-  var list = cache.entries.get(_httpCacheTarget(url)) || [], best = null;
-  list.forEach(function (entry) {
-    if (!_httpCacheVaryMatches(entry, fields)) return;
-    if (_httpCacheDirectives(entry.headers["cache-control"]).has("no-cache")) return;
-    var age = _httpCacheCurrentAge(entry, nowMs), lifetime = _httpCacheLifetime(entry);
-    if (!(lifetime > age)) return;
-    var maxAge = _httpCacheDeltaSeconds(req.has("max-age") ? req.get("max-age") : null);
-    if (!isNaN(maxAge) && age > maxAge) return;
-    var minFresh = _httpCacheDeltaSeconds(req.has("min-fresh") ? req.get("min-fresh") : null);
-    if (!isNaN(minFresh) && lifetime < age + minFresh) return;
-    if (best === null || entry.dateValue >= best.entry.dateValue) best = { entry: entry, age: age };
+  var best = null;
+  _httpCacheCandidates(cache, url, fields).forEach(function (e) {
+    if (best === null || e.dateValue >= best.dateValue) best = e;
   });
-  return best;
+  if (best === null) return null;
+  var req = _httpCacheDirectives(fields.get("cache-control"));
+  var age = _httpCacheCurrentAge(best, nowMs), lifetime = _httpCacheLifetime(best);
+  var maxAge = _httpCacheDeltaSeconds(req.has("max-age") ? req.get("max-age") : null);
+  var minFresh = _httpCacheDeltaSeconds(req.has("min-fresh") ? req.get("min-fresh") : null);
+  var fresh = !req.has("no-cache") && !_httpCacheDirectives(best.headers["cache-control"]).has("no-cache") &&
+              lifetime > age && !(age > maxAge) && !(lifetime < age + minFresh);
+  if (!fresh && best.headers.etag === undefined && best.headers["last-modified"] === undefined) return null;
+  return { entry: best, age: age, fresh: fresh };
+}
+/* RFC 9111 §4.3.1 "Sending a Validation Request" for one stored response: it "MUST send the relevant entity
+   tags" (If-None-Match) and "SHOULD send the Last-Modified value (using If-Modified-Since)". Fetch §4.6
+   appends them to its own copy of the request, after the CORS-preflight decision. */
+function httpCacheValidators(entry) {
+  var out = [];
+  if (entry.headers.etag !== undefined) out.push(["If-None-Match", entry.headers.etag]);
+  if (entry.headers["last-modified"] !== undefined) out.push(["If-Modified-Since", entry.headers["last-modified"]]);
+  return out;
 }
 /* Whether the cache holds any stored response for `url`'s target URI, so a caller composes the Vary fields
    only where a selection can find something. */
@@ -252,22 +264,71 @@ function httpCacheInvalidate(cache, method, url, status) {
   if (_HTTP_SAFE_METHODS.indexOf(method) < 0 && status >= 200 && status <= 399)
     cache.entries.delete(_httpCacheTarget(url));
 }
-/* What Fetch §4.6 does with a response the network answered, for one hop: the invalidation step, then, unless
-   the mode is "no-store" (§2.2.5 "Requests": "Fetch behaves as if there is no HTTP cache at all"), "Store
-   httpRequest and forwardResponse in httpCache" when RFC 9111 §3 permits.
-   `resp` is the wire's Response, still unread; a storable one is cloned and stored once its whole body has
-   arrived, and a body that fails or is aborted first is incomplete and is not stored (§3.3 "Storing
-   Incomplete Responses"). Set-Cookie is not stored: a reply's cookies are stored once, at the send that
-   received it, and a hit is not a send. `fields` is the request's (httpCacheRequestFields) as it was sent. */
-function httpCacheForwarded(cache, mode, partitionKey, url, method, fields, resp, requestTime, responseTime) {
-  httpCacheInvalidate(cache, method, url, resp.status);
-  if (mode === "no-store") return;
+/* A response's header fields as this cache stores them: lowercased, with no Set-Cookie, since a reply's
+   cookies are stored once, at the send that received it, and a hit is not a send. */
+function _httpCacheStoredHeaders(resp) {
   var headers = {};
   resp.headers.forEach(function (v, k) {
     k = String(k).toLowerCase();
     if (k !== "set-cookie" && k !== "set-cookie2") headers[k] = v;
   });
-  if (!httpCacheStorable(method, resp.status, headers, fields)) return;
+  return headers;
+}
+/* RFC 9110 §8.8.3.2 "Comparison": strong comparison needs both tags strong and equal; weak comparison
+   ignores the `W/` prefix. */
+function _httpEtagWeak(tag) { return tag.indexOf("W/") === 0; }
+function _httpEtagOpaque(tag) { return _httpEtagWeak(tag) ? tag.slice(2) : tag; }
+/* RFC 9111 §4.3.4 "Freshening Stored Responses upon Validation" over the candidates `set`, for the 304's
+   header fields `h`: those sharing one of its strong validators, else the most recent sharing a weak one
+   (a weak entity tag or `Last-Modified`), else a lone candidate when neither carries a validator. Each one
+   identified takes the 304's fields (§3.2 "Updating Stored Header Fields", except Content-Length) and is
+   validated now. Answers how many were identified. */
+function _httpCacheFreshen(set, h, requestTime, responseTime) {
+  var tag = h.etag === undefined ? null : h.etag.trim(), chosen;
+  if (tag !== null && !_httpEtagWeak(tag)) {
+    chosen = set.filter(function (e) { return e.headers.etag !== undefined && !_httpEtagWeak(e.headers.etag) &&
+                                              e.headers.etag.trim() === tag; });
+  } else if (tag !== null || h["last-modified"] !== undefined) {
+    var weak = set.filter(function (e) {
+      return (tag !== null && e.headers.etag !== undefined &&
+              _httpEtagOpaque(e.headers.etag.trim()) === _httpEtagOpaque(tag)) ||
+             (h["last-modified"] !== undefined && e.headers["last-modified"] === h["last-modified"]);
+    }).sort(function (a, b) { return b.dateValue - a.dateValue; });
+    chosen = weak.slice(0, 1);
+  } else {
+    chosen = set.length === 1 && set[0].headers.etag === undefined && set[0].headers["last-modified"] === undefined
+      ? set : [];
+  }
+  chosen.forEach(function (e) {
+    Object.keys(h).forEach(function (k) { if (k !== "content-length") e.headers[k] = h[k]; });
+    var date = _httpDate(e.headers.date, responseTime);
+    e.requestTime = requestTime;
+    e.responseTime = responseTime;
+    e.dateValue = isNaN(date) ? responseTime : date;
+  });
+  return chosen.length;
+}
+/* What Fetch §4.6 does with a response the network answered, for one hop: the invalidation step; then, for a
+   request sent to validate `validating` (httpCacheSelect's answer, or null), "If the revalidatingFlag is set
+   and forwardResponse's status is 304", freshen the stored responses and answer the stored one (§4.3.3
+   "Handling a Validation Response"); otherwise, unless the mode is "no-store" (§2.2.5 "Requests": "Fetch
+   behaves as if there is no HTTP cache at all"), "Store httpRequest and forwardResponse in httpCache" when
+   RFC 9111 §3 permits. Answers the Response the request reads in place of `resp`, or null for `resp` itself.
+   `resp` is the wire's Response, still unread; a storable one is cloned and stored once its whole body has
+   arrived, and a body that fails or is aborted first is incomplete and is not stored (§3.3 "Storing
+   Incomplete Responses"). `fields` is the request's (httpCacheRequestFields) as it was sent. */
+function httpCacheForwarded(cache, mode, partitionKey, url, method, fields, resp, requestTime, responseTime,
+                            validating) {
+  httpCacheInvalidate(cache, method, url, resp.status);
+  if (validating !== null && resp.status === 304) {
+    _httpCacheFreshen(_httpCacheCandidates(cache, url, fields), _httpCacheStoredHeaders(resp), requestTime,
+                      responseTime);
+    return httpCacheResponse({ entry: validating.entry,
+                               age: _httpCacheCurrentAge(validating.entry, responseTime) });
+  }
+  if (mode === "no-store") return null;
+  var headers = _httpCacheStoredHeaders(resp);
+  if (!httpCacheStorable(method, resp.status, headers, fields)) return null;
   var date = _httpDate(headers.date, responseTime);
   var entry = { partition: { topLevelSite: partitionKey.topLevelSite,
                              hasCrossSiteAncestor: partitionKey.hasCrossSiteAncestor },
@@ -282,6 +343,7 @@ function httpCacheForwarded(cache, mode, partitionKey, url, method, fields, resp
     kept.push(entry);
     cache.entries.set(target, kept);
   }, function (e) { RETHROW_FATAL(e); });
+  return null;
 }
 
 if (typeof self !== "undefined") {
@@ -292,6 +354,7 @@ if (typeof self !== "undefined") {
   self.httpCacheStorable = httpCacheStorable;
   self.httpCacheHolds = httpCacheHolds;
   self.httpCacheSelect = httpCacheSelect;
+  self.httpCacheValidators = httpCacheValidators;
   self.httpCacheResponse = httpCacheResponse;
   self.httpCacheInvalidate = httpCacheInvalidate;
   self.httpCacheForwarded = httpCacheForwarded;

@@ -2128,28 +2128,29 @@ async function safeFetch(url, opts) {
     /* Fetch §4.6 "HTTP-network-or-cache fetch", asked before the firing decision: a hit sends nothing, so it
        is no act to judge. The partition is the identity's (lib/http-cache.js's httpCacheFor), and the Vary
        fields are the header list and the speak-as set this send would carry, composed only for a URL the
-       cache holds, so a request it cannot answer reads no cookie before its firing decision.
-       Named residual. Not covered: a request that needs a CORS preflight is never answered from the cache,
-       since the preflight is a send and §4.4 runs it before §4.6. Next diff: judge and send the preflight,
-       then select. Its absence shows as a repeat send of a fresh reply to a request with CORS-unsafe
-       headers. */
+       cache holds, so a request it cannot answer reads no cookie before its firing decision. A request that
+       needs a CORS preflight sends it even on a fresh hit, since §4.4 runs §4.8 before §4.6, so its hit is
+       judged as a send and answered in place of the wire once the preflight passes (`_answered`). */
     var _cache = httpCacheFor(_identity ? _identity.partitionKey : null);
     var _cacheFields = null, _cacheMode = "no-store", _stored = null, _sent;
     if (_cache !== null) {
       _cacheFields = httpCacheRequestFields(_headerList, {});
       _cacheMode = httpCacheMode("default", _cacheFields);
-      if (_cacheMode !== "no-store" && !_preflight && httpCacheHolds(_cache, _current.href))
+      if (_cacheMode !== "no-store" && httpCacheHolds(_cache, _current.href))
         _stored = httpCacheSelect(_cache, _current.href, _method, httpCacheRequestFields(_headerList,
           (await _speakAsRequest(_identity, _urlList, _method, mode, destination, _cookies)).headers), Date.now());
     }
-    if (_stored !== null) {
-      /* A hit is a reply read with no send, so an entry of another partition would hand this document the
-         answer to another cookie jar's request. */
-      CHECK(_stored.entry.partition.topLevelSite === _identity.partitionKey.topLevelSite &&
-            _stored.entry.partition.hasCrossSiteAncestor === _identity.partitionKey.hasCrossSiteAncestor,
-            "the HTTP cache answered " + _current.href + " for the partition " +
-            JSON.stringify(_identity.partitionKey) + " with an entry stored for " +
-            JSON.stringify(_stored.entry.partition) + " — Fetch §2.8 gives each network partition key its own cache");
+    /* A hit, or a 304 to its validation, is a reply read from the entry, so an entry of another partition would
+       hand this document the answer to another cookie jar's request. */
+    CHECK(_stored === null ||
+          (_stored.entry.partition.topLevelSite === _identity.partitionKey.topLevelSite &&
+           _stored.entry.partition.hasCrossSiteAncestor === _identity.partitionKey.hasCrossSiteAncestor),
+          "the HTTP cache chose for " + _current.href + " in the partition " +
+          JSON.stringify(_identity && _identity.partitionKey) + " an entry stored for " +
+          JSON.stringify(_stored && _stored.entry.partition) + " — Fetch §2.8 gives each network partition key " +
+          "its own cache");
+    var _answered = _stored !== null && _stored.fresh;
+    if (_answered && !_preflight) {
       /* The record carries no grade: the host attaches the asking flow's provenance where it delivers the
          reply, so a forced arm answered here stays forced and is never merged into observed data. */
       _sent = { resp: httpCacheResponse(_stored), setCookies: [] };
@@ -2183,10 +2184,12 @@ async function safeFetch(url, opts) {
          model for the request this file issues (an uncredentialed GET whose forbidden header names the
          browser strips) and is refused on a cookie-bearing one by `_credentialedOf`. This file never adds
          auth headers; cookies, in credentialed mode, are the identity's (`_speakAs`) and are gated by the
-         SOP/CORS check. The cache mode's fields (httpCacheModeHeaders) are appended after the preflight
-         decision, as §4.6 appends them to its own copy of the request. */
+         SOP/CORS check. The cache mode's fields (httpCacheModeHeaders) and a stale entry's validators
+         (httpCacheValidators) are appended after the preflight decision, as §4.6 appends them to its own copy
+         of the request. */
       var _sentList = _cache === null ? _headerList
-        : (_headerList || []).concat(httpCacheModeHeaders(_cacheMode, _cacheFields));
+        : (_headerList || []).concat(httpCacheModeHeaders(_cacheMode, _cacheFields),
+                                     _stored === null || _answered ? [] : httpCacheValidators(_stored.entry));
       if (_sentList && _sentList.length) init.headers = _sentList;
       if (opts.signal) init.signal = opts.signal;
       /* Fetch §4.1 "Main fetch": the preflight (§4.8) and then the request, as one send. A request with an
@@ -2201,14 +2204,19 @@ async function safeFetch(url, opts) {
           if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + _current.origin,
                                               [parsed.href], {}) };
         }
+        if (_answered) return { resp: httpCacheResponse(_stored) };
         init.speakAs = speak === null ? null : speak.request;
         return { resp: await _wire(_current.href, init) };
       });
       if (_sent.refusal) return _sent.refusal;
-      if (_cache !== null)
-        httpCacheForwarded(_cache, _cacheMode, _identity.partitionKey, _current.href, _method,
-                           httpCacheRequestFields(init.headers, _sent.requestHeaders), _sent.resp,
-                           _requestTime, Date.now());
+      if (_cache !== null && !_answered) {
+        /* A 304 to a validation is answered from the freshened entry (§4.6: "Set response to storedResponse");
+           the 304 itself has a null body (Fetch §2.2.3 "Statuses"), so nothing is left unread. */
+        var _validated = httpCacheForwarded(_cache, _cacheMode, _identity.partitionKey, _current.href, _method,
+                                            httpCacheRequestFields(init.headers, _sent.requestHeaders), _sent.resp,
+                                            _requestTime, Date.now(), _stored);
+        if (_validated !== null) _sent.resp = _validated;
+      }
     }
     resp = _sent.resp;
     DCHECK(Array.isArray(_sent.setCookies), "a send answered no Set-Cookie list — _speakAs states one for every reply");

@@ -12,14 +12,32 @@ import { NAVIGABLE_NOTICE } from '../engine/noticegen.mjs';
 
 const hits = new Map();
 const count = (method, path) => hits.get(method + ' ' + path) || 0;
+/* The validators each send carried, by path, in arrival order. */
+const conditions = new Map();
+const OLD = 'Wed, 01 Jan 2020 00:00:00 GMT';
 const server = createServer((req, res) => {
   const path = new URL(req.url, 'http://x').pathname;
   const key = req.method + ' ' + path;
   hits.set(key, (hits.get(key) || 0) + 1);
+  const inm = req.headers['if-none-match'] || null, ims = req.headers['if-modified-since'] || null;
+  conditions.set(path, (conditions.get(path) || []).concat([[inm, ims]]));
   const head = { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' };
-  if (path === '/fresh' || path === '/inval' || path === '/part') head['Cache-Control'] = 'max-age=600';
+  if (path === '/fresh' || path === '/inval' || path === '/part' || path === '/pf') head['Cache-Control'] = 'max-age=600';
+  if (req.method === 'OPTIONS') head['Access-Control-Allow-Headers'] = 'X-Probe';
   if (path === '/nostore') head['Cache-Control'] = 'no-store, max-age=600';
   if (path === '/vary') { head['Cache-Control'] = 'max-age=600'; head.Vary = 'X-Probe'; }
+  /* Stale at once, with an entity tag the server always matches. */
+  if (path === '/etag') {
+    Object.assign(head, { 'Cache-Control': 'max-age=0', ETag: '"v1"' });
+    if (inm === '"v1"') { res.writeHead(304, head); res.end(); return; }
+  }
+  /* `no-cache` with only a date; its 304 carries no validator, as Python's http.server answers one. */
+  if (path === '/lm') {
+    Object.assign(head, { 'Cache-Control': 'no-cache', 'Last-Modified': OLD });
+    if (ims === OLD) { res.writeHead(304, { 'Access-Control-Allow-Origin': '*' }); res.end(); return; }
+  }
+  /* A new entity tag on every send, so a validation is always answered in full. */
+  if (path === '/changed') Object.assign(head, { 'Cache-Control': 'max-age=0', ETag: `"v${hits.get(key)}"` });
   res.writeHead(200, head);
   res.end(`${key} #${hits.get(key)} probe=${req.headers['x-probe'] || ''}`);
 });
@@ -63,10 +81,12 @@ const ROWS = [
   { label: 'CONTROL: a reply with no freshness is fetched again', run: async () => {
       await pageGet(PAGE_A, `${A}/stale`); await pageGet(PAGE_A, `${A}/stale`);
       return [['GET /stale', count('GET', '/stale'), 2]]; } },
+  /* `Date` has a resolution of one second, so the apparent age (RFC 9111 §4.2.3) of an immediate hit is 0 or
+     1; the row asks that `Age` is one of the two, not which. */
   { label: 'a fresh hit sends nothing, and answers the stored body with an Age', run: async () => {
       const one = await pageGet(PAGE_A, `${A}/fresh`), two = await pageGet(PAGE_A, `${A}/fresh`);
       return [['GET /fresh', count('GET', '/fresh'), 1], ['same body', one.text === two.text, true],
-              ['Age', two.age, '0']]; } },
+              ['Age is 0 or 1', /^[01]$/.test(two.age), true]]; } },
   { label: 'a no-store reply is fetched again', run: async () => {
       await pageGet(PAGE_A, `${A}/nostore`); await pageGet(PAGE_A, `${A}/nostore`);
       return [['GET /nostore', count('GET', '/nostore'), 2]]; } },
@@ -88,6 +108,25 @@ const ROWS = [
       await pageGet(PAGE_A, `${A}/part`);
       await pageGet(PAGE_B, `${A}/part`);
       return [['GET /part', count('GET', '/part'), 2]]; } },
+  { label: 'a fresh hit that needs a CORS preflight sends the preflight and not the request', run: async () => {
+      const one = await pageGet(PAGE_B, `${A}/pf`, [['X-Probe', 'a']]);
+      const two = await pageGet(PAGE_B, `${A}/pf`, [['X-Probe', 'a']]);
+      return [['OPTIONS /pf', count('OPTIONS', '/pf'), 2], ['GET /pf', count('GET', '/pf'), 1],
+              ['stored body', two.text, one.text]]; } },
+  { label: 'a stale entry is validated with its entity tag, and a 304 answers the stored body', run: async () => {
+      const one = await pageGet(PAGE_A, `${A}/etag`), two = await pageGet(PAGE_A, `${A}/etag`);
+      return [['GET /etag', count('GET', '/etag'), 2], ['If-None-Match sent', conditions.get('/etag')[1][0], '"v1"'],
+              ['status', two.status, 200], ['stored body', two.text, one.text]]; } },
+  { label: 'a no-cache entry is validated with its date, and a validator-less 304 answers it', run: async () => {
+      const one = await pageGet(PAGE_A, `${A}/lm`), two = await pageGet(PAGE_A, `${A}/lm`);
+      return [['GET /lm', count('GET', '/lm'), 2], ['If-Modified-Since sent', conditions.get('/lm')[1][1], OLD],
+              ['status', two.status, 200], ['stored body', two.text, one.text]]; } },
+  { label: 'a full reply to a validation replaces the entry', run: async () => {
+      await pageGet(PAGE_A, `${A}/changed`);
+      const two = await pageGet(PAGE_A, `${A}/changed`);
+      await pageGet(PAGE_A, `${A}/changed`);
+      return [['new body', /#2 /.test(two.text), true],
+              ['third send validates the second', conditions.get('/changed')[2][0], '"v2"']]; } },
 ];
 
 let bad = 0;
@@ -103,7 +142,8 @@ try {
   server.close();
 }
 /* Every row's first send reached the server, or nothing above is a reading. */
-const first = ['/stale', '/fresh', '/nostore', '/vary', '/inval', '/part'].every((p) => count('GET', p) >= 1);
+const first = ['/stale', '/fresh', '/nostore', '/vary', '/inval', '/part', '/pf', '/etag', '/lm', '/changed']
+  .every((p) => count('GET', p) >= 1);
 if (!first) { console.log('  CONTROL FAILED: a row\'s first send never reached the server'); process.exit(2); }
 console.log(bad === 0 ? '  every row answered as Fetch §4.6 predicts' : `  ${bad} ROW(S) DISAGREED`);
 process.exit(bad === 0 ? 0 : 1);
