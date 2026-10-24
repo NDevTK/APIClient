@@ -607,8 +607,8 @@ async function main() {
   const raise = (e) => { fatal = fatal || e; };
   /* HOW MUCH WORK THIS ZONE HAS STARTED AND NOT FINISHED. It is the difference between "nobody can be paid"
      and "nobody has been paid YET", and those take opposite actions: the first ends the session with the
-     zone's reason, the second waits. Without it a fetch in flight for one instance, or a notice still loading
-     the peer it provisions, would be read as a refusal by another that happened to stall meanwhile. */
+     zone's reason, the second waits. Without it a fetch in flight for one instance would be read as a refusal
+     by another that happened to stall while it was outstanding. */
   let busy = 0;
 
   /* WORK THIS ZONE COULD NOT ROUTE YET — a post or an operation naming a document no instance holds. HELD and
@@ -2178,16 +2178,7 @@ async function main() {
           'those is one the engine emits for and nothing performs'));
       }
     } else if (f[0] === 'notice') {
-      /* A notice may load and provision a peer across several awaits; until it has, its instance is work this
-         zone has started, so another instance stalling meanwhile is not every instance stalled. */
-      busy++;
-      try {
-        await onNotice(e, line.slice('notice\t'.length));
-      } finally {
-        busy--;
-        retryHeld();
-        flush();
-      }
+      await onNotice(e, line.slice('notice\t'.length));
     } else if (line === 'poll') {
       /* A RUNNING CHILD ASKING TO BE PAID, which is the round that carries the reply path on a document whose
          frontier never empties. It is answered IN THIS TURN and with whatever is READY — see the header's
