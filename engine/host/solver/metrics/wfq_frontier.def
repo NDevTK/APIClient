@@ -7,9 +7,9 @@ METRIC(val_min, "valMin", GAUGE, "point", AGENT, "solver/flow.c", FIXED1)
 METRIC(val_max, "valMax", GAUGE, "point", AGENT, "solver/flow.c", FIXED1)
 METRIC(val_top, "valTop", GAUGE, "point", AGENT, "solver/flow.c", FIXED1)
 /* …and the clock those three are positions on. `vt` is the frontier's virtual time
-   (solver/flow.h): the queue coordinate of the item in service, where every never-served
-   account stands. A `valMin` far below `vt` is accounts left behind by a clock that moved on;
-   a `vt` above the whole band is a clock no member stands at. */
+   (solver/flow.h): the largest ledger any account has itself produced, where every never-served
+   account stands. A placed account stands above it by what it produced since its placement;
+   `valMax - vt` is that lead at its largest. */
 METRIC(vt, "vt", MAXIMUM, "point", AGENT, "solver/flow.c", FIXED1)
 /* `valZero` is the ceiling population; `valArrived` the members that emitted nothing, which
    since a from-baseline flow enters at the frontier's virtual time includes @S candidate

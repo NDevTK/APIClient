@@ -881,14 +881,13 @@ typedef struct {
     double val_min;
     double val_max;
     double val_top;    /* …and flow_best's family's, so the top of the order is named rather than inferred */
-    /* The frontier's virtual time at the census (flow.c's `g_vt`, SFQ's v(t)): the coordinate of the item in
-       service and of every never-served account. Assigned unconditionally, so an empty frontier reports the
-       clock. With `val_min` it says whether accounts are left behind (`val_min` far below `vt`) or the floor is
-       where the queue stands; `vt` above `val_max` or frozen while `val_max` climbs means it stopped being a
-       clock. */
+    /* The frontier's virtual time at the census (flow.c's `g_vt`, SFQ's v(t)): the largest ledger any account has
+       itself produced, and the coordinate of every never-served account. Assigned unconditionally, so an empty
+       frontier reports the clock. `val_max - vt` is the largest lead a placed account has produced since its
+       placement. */
     double vt;
     /* Members whose fork family's whole reward is zero: the population whose weight ceiling is 1.0. An arrived
-       account has emitted nothing but holds the leader's coordinate, so it is outside this row (see
+       account has emitted nothing but holds the clock's coordinate, so it is outside this row (see
        `val_arrived`). */
     long val_zero;
     /* Members whose account has `earned == 0`: standing on the coordinate it arrived at, having produced nothing

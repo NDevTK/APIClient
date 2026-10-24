@@ -491,12 +491,15 @@ static double flow_index_key(const Flow *f);
  * that answers only while `g_running` is set would place every newcomer differently depending on whether the host
  * was between two dispatches).
  *
- * It is written at one event, an emission by the item in service, which raises that item's coordinate by what it
- * earned, so v(t) follows it up; between emissions the clock is constant, as SFQ says, so a newcomer's placement is
- * a fact rather than a race with its creation instant. A dispatch does not write it: moving the clock to the
- * winner's own coordinate would lift every unplaced account the pick compared it against to that coordinate,
- * where a full optimism bonus puts them above it, and the pick would un-choose its own winner (see
- * flow_set_running). The clock follows what the frontier earns, never which member holds the thread.
+ * It is the most any account has itself produced: the largest `earned` ledger, raised at one event, an emission by
+ * the item in service. Between emissions it is constant, as SFQ says, so a newcomer's placement is a fact rather
+ * than a race with its creation instant. It reads ledgers and not coordinates (`base + earned`): a coordinate
+ * carries the clock its account was placed at, so a clock following coordinates hands each newcomer every earlier
+ * newcomer's placement too, and placements compound into a lead no account produced, above an account that
+ * produced more. A dispatch does not write it: moving the clock to the winner's own coordinate would lift every
+ * unplaced account the pick compared it against to that coordinate, where a full optimism bonus puts them above
+ * it, and the pick would un-choose its own winner (see flow_set_running). The clock follows what accounts produce,
+ * never which member holds the thread.
  *
  * Every write raises the frontier generation at the writer: the clock is a term of every unplaced account's
  * weight, and the preempt hook's rival cache is correct only if such a move arrives through the generation.
@@ -504,11 +507,7 @@ static double flow_index_key(const Flow *f);
  * It does not follow the aging down: the item in service sinks as it burns, and following it would charge every
  * never-served member for the work of the one being served. A member given nothing owes nothing.
  *
- * Floored at zero, the clock's origin rather than a clamp: the first flow enters at v(0) = 0 and none enters
- * below, so a serving tag below zero (an item that has burned more than its whole reward, flow_pick's monopolizer
- * state) moves the clock no further back than the busy period's start. The floor also keeps that guard's
- * derivation true: it reads `val + 1` off the picked flow and an untouched member, and a negative reward on a
- * member that did nothing would fire it on a healthy run.
+ * Its origin is zero: the first flow enters at v(0) = 0, and a ledger is a sum of positive credits.
  *
  * Read-only and O(1) at every reader, because acct_family_val is called once per member per pick and inside DCHECK
  * conditions. */
@@ -532,7 +531,7 @@ static double frontier_vt(void) {
 static int acct_vt_leads(void) {
     int i;
     for (i = 0; i < g_flows_n; i++)
-        if (g_flows[i]->family && acct_family_val(g_flows[i]) > g_vt) return 0;
+        if (g_flows[i]->family && g_flows[i]->family->earned > g_vt) return 0;
     return 1;
 }
 
@@ -544,30 +543,20 @@ static void frontier_vt_serve(const Flow *f) {
     DCHECK(f->family->placed,
            "the frontier's clock was asked to follow an account that still reads the clock — the dispatch must stamp "
            "the account before installing the flow, as flow_set_running does");
-    /* The reward, not the queue weight: the queue weight carries the server's own aging, grown by the whole
-       family's work, so a coordinate sampled from it would charge every newcomer for the leader's debt, and a
-       member given nothing owes nothing. The coordinate a newcomer arrives at is what the frontier has earned. */
-    v = acct_family_val(f);
-    v = v > 0.0 ? v : 0.0;      /* the clock's origin: no member has ever entered below the busy period's start */
-    /* And it is the maximum over accounts, taken incrementally: SFQ's `max(v(t), F)` computed here rather than at
-       every arrival. Not a clamp over a falling quantity: `acct_family_val` is `base + earned`, with `base` frozen
-       at placement and `earned` a ledger nothing decreases, so no account's coordinate ever falls, and a lower
-       sample is a lesser account emitting; the maximum answers where the front of the order stands. The
-       incremental form is exact, because every increase of an account's `acct_family_val` passes through one of
-       three sites, all covered: an emission (`earned += v`, which calls this); a placement (flow_set_running writes
-       `base = frontier_vt()` and asserts `earned == 0`, so the value equals `g_vt`); and a cold-tier restore
-       (flow_restore_reward writes a parked coordinate that can lead, and calls this). An unplaced account stands
-       exactly at `g_vt` (acct_family_val asserts `earned == 0` there). The assertion below checks there is no
-       fourth writer. */
+    /* The account's own ledger, neither the queue weight (which carries the server's aging, so a newcomer would be
+       charged for the leader's debt, and a member given nothing owes nothing) nor its coordinate (whose `base` is a
+       placement, see the banner). */
+    v = f->family->earned;
+    /* And the maximum over accounts, taken incrementally: SFQ's `max(v(t), F)` computed here rather than at every
+       arrival. `earned` is a ledger nothing decreases and an emission is its only writer, which calls this, so the
+       incremental maximum is exact; a placement and a cold-tier restore write `base` and leave it. */
     if (v > g_vt) g_vt = v;
-    /* The definition, asserted: `g_vt` is the maximum coordinate any account stands at. Stronger than
-       monotonicity, since a clock that never decreases can still sit below the leading account, so newcomers would
-       arrive underneath a member they are entitled to tie, silently, for the rest of the session. It catches a
-       fourth writer of a reward. O(members) and dev-only, as flow_is_min_weight, and paid once per emission rather
-       than per pick. */
-    DCHECK(acct_vt_leads(), "an account stands at a reward above the frontier's clock — the clock must be the "
-                            "maximum coordinate any account stands at, so a site wrote a reward without serving the "
-                            "clock");
+    /* The definition, asserted: `g_vt` is the largest ledger any account holds. It catches a second writer of
+       `earned` that does not serve the clock. O(members) and dev-only, as flow_is_min_weight, and paid once per
+       emission rather than per pick. */
+    DCHECK(acct_vt_leads(), "an account holds an `earned` ledger above the frontier's clock — the clock must be "
+                            "the largest ledger any account holds, so a site credited an account without serving "
+                            "the clock");
     /* And moving the clock is a rank change, raised at the writer: this value is a term of every unplaced account's
        weight, and the preempt hook's rival cache is correct only if every such move arrives through the frontier
        generation (engine.c: "the eligible set the hook ranks against is the same one the pick used"). Raised on
@@ -640,10 +629,9 @@ void flow_restore_reward(Flow *f, double val) {
        member of this session was served at. */
     f->family->base   = val;
     f->family->placed = 1;
-    /* And the clock learns about it, the third writer of a reward: a restored leader the clock did not know about
-       would leave arrivals entering below a member they are entitled to tie for the rest of the session. It is one
-       of the three sites frontier_vt_serve's incremental maximum enumerates, and the serve also raises the
-       frontier generation, which a rebuild owes, since a member coming back at its own tag changes the order. */
+    /* The clock reads ledgers and this writes a coordinate, so the serve leaves the clock where it is; it is
+       called for the frontier generation, which a rebuild owes, since a member coming back at its own tag changes
+       the order. */
     frontier_vt_serve(f);
 }
 
@@ -924,10 +912,10 @@ int flow_credit_emit(double v) {
     g_running->family->earned += v;
     g_credit_paid++;   /* and the arm that reached an account: the ledger write and its count are one event */
     g_credit_paid_value += v;
-    /* And the frontier's clock, because the item in service is what the clock reads and its tag has just moved.
-       This is frontier_vt_serve's one event, and it makes v(t) a continuing relation: without it every account
-       never served would stand at the leader's coordinate when last picked, and be passed by the findings the
-       leader makes during the slice it holds. */
+    /* And the frontier's clock, because the ledger it reads has just grown. This is frontier_vt_serve's one
+       event, and it makes v(t) a continuing relation: without it every account never served would stand at the
+       largest ledger as of its last pick, and be passed by the findings the producer makes during the slice it
+       holds. */
     frontier_vt_serve(g_running);
     /* And this member's own ledger, which ranks nothing. The family total is what an account has emitted and is
        the order; this is what this flow emitted, which the census asks (a frontier retiring members while every
@@ -2126,8 +2114,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
  * has completed nothing (flow_optimism), the reward is a reading, and the aging is not copied either. Copying the
  * incumbent's `flow_own_silence` and `acct_family_work` onto an account founding its own family would leave a debt
  * the source family forgives at its next emission (FlowAcct's `emit_gen`) but the newcomer can clear only by
- * emitting, which needs the dispatch the debt forecloses; and frontier_vt() is already the serving item's queue
- * coordinate, aging included.
+ * emitting, which needs the dispatch the debt forecloses; and frontier_vt() carries no aging to copy.
  *
  * An account per branch arm is inadmissible for a separate reason. An arm founding its own account would arrive
  * here unplaced, copying nothing, but an unplaced account reads a clock, and `frontier_vt()` advances: two arms of
