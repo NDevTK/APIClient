@@ -202,7 +202,9 @@ JSValue page_reveal_begin(JSContext *ctx)
     /* Step 3: doc's active view transition. Only CSS View Transitions starts one (`startViewTransition`, a
        cross-document @view-transition rule), and this engine has not built it, so the value is null. Whether
        it is built is asked of this realm's Web IDL §3.7.3 census, which only the engine writes: a page may
-       define a global named `ViewTransition` itself, and that is input, not the interface. */
+       define a global named `ViewTransition` itself, and that is input, not the interface. The census is
+       dev-only (core/realm.h), as the assert is. */
+#if APICLIENT_DEV
     {
         JSValue vt = realm_interface_prototype_object(ctx, "ViewTransition");
         bool built = !JS_IsUndefined(vt);
@@ -214,6 +216,7 @@ JSValue page_reveal_begin(JSContext *ctx)
                "transition) is not written. Build CSS View Transitions' document state here and in "
                "update-the-rendering step 18");
     }
+#endif
     /* STEP 4: fire an event named `pagereveal` at doc's relevant global object, using PageRevealEvent. It does
        not bubble and is not cancelable — nothing in the algorithm reads a canceled flag. */
     ev = pr_new(ctx, event_new(ctx, "pagereveal", /*bubbles*/ false, /*cancelable*/ false), JS_NULL);
