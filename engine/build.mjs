@@ -9159,6 +9159,13 @@ STAGES.push(onHost(runProgram("classic-script global scope audit", [join(ENGINE,
                        "two scripts that share one global scope bind one name, and the line names both. Rename " +
                        "one. Exit 2 means the audit's own control failed or a script could not be read, so " +
                        "nothing was judged."), STAGE_HOST.SOURCE));
+/* Every recursive cycle in the native engine's direct-call graph, which is C-stack recursion a flow cannot park
+   inside. It reads the binary this build linked, so it is a native stage. */
+if (NATIVE_BUILT.bin !== null)
+  STAGES.push(onHost(runProgram("call-graph recursion census", [join(ENGINE, "recgate.mjs"), NATIVE_BUILT.bin],
+                         "a cycle of direct calls is recursion on the C stack, which no flow can park inside and an " +
+                         "input can deepen until the stack overflows. Convert the cycle to a step machine over a " +
+                         "heap frame stack. Exit 2 means the census itself could not be taken."), STAGE_HOST.NATIVE));
 /* The provisioning notices' field table: extension/lib/navigable-notice.js must be what navigable_notice.h
    renders, since bridge.js indexes the engine's notices by it. The node readers refuse a stale copy on import;
    this stage states the same disagreement for a build that runs none of them. */
