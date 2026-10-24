@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>knownbug: Bootstrap tooltip data-template (CVE-2019-8331)</title>
+</head>
+<body>
+<button id="help" type="button" title="Help">?</button>
+<script src="lib/jquery.js"></script>
+<script src="lib/bootstrap.bundle.js"></script>
+<script>
+  // The advisory's attribute: a tooltip whose data-template the attacker supplies. Bootstrap 4.3.0 hands
+  // the template to $() as markup; 4.3.1 sanitizes it first.
+  var template = new URLSearchParams(location.search).get('template');
+  if (template !== null) document.getElementById('help').setAttribute('data-template', template);
+  $('#help').tooltip({ trigger: 'manual' }).tooltip('show');
+</script>
+</body>
+</html>

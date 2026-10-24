@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>knownbug: marked sanitize:true link (CVE-2016-10531)</title>
+</head>
+<body>
+<div id="preview"></div>
+<script src="lib/marked.js"></script>
+<script>
+  // A Markdown preview rendered with marked's sanitize option, as the advisory requires. marked 0.3.5
+  // decodes entities in a link URI on a best-effort basis after its javascript: check, so the rendered
+  // href can be a javascript: URL; it runs when the link is activated.
+  document.getElementById('preview').innerHTML =
+    marked(decodeURIComponent(location.hash.slice(1)), { sanitize: true });
+</script>
+</body>
+</html>

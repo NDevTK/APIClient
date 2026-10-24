@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>knownbug: jQuery UI .position() of (CVE-2021-41184)</title>
+</head>
+<body>
+<div id="anchor">anchor</div>
+<div id="popup">popup</div>
+<script src="lib/jquery.js"></script>
+<script src="lib/version.js"></script>
+<script src="lib/position.js"></script>
+<script>
+  // The advisory's call, with the `of` option taken from the query. jQuery UI 1.12.1 passes a string to
+  // $(), which reads markup; 1.13.0 passes it to $(document).find(), which reads a selector.
+  var of = new URLSearchParams(location.search).get('of');
+  $('#popup').position({ my: 'left top', at: 'right bottom', of: of === null ? '#anchor' : of, collision: 'none' });
+</script>
+</body>
+</html>

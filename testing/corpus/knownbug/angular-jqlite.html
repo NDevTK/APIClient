@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>knownbug: AngularJS jqLite append after sanitizing (GHSA-5cp4-xmrw-59wf)</title>
+</head>
+<body>
+<div id="feed"></div>
+<script src="lib/angular.js"></script>
+<script>
+  // The advisory's pattern: user HTML is sanitized and then handed to a jqLite method. jqLiteBuildFragment
+  // in 1.7.9 expands an XHTML self-closing tag before parsing, which can turn raw-text content back into
+  // markup; 1.8.0 no longer rewrites it. The markup arrives by postMessage, from any origin.
+  function sanitize(html) {
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('script').forEach(function (s) { s.remove(); });
+    doc.body.querySelectorAll('*').forEach(function (el) {
+      Array.from(el.attributes).forEach(function (a) {
+        if (/^on/i.test(a.name) || /^\s*javascript:/i.test(a.value)) el.removeAttribute(a.name);
+      });
+    });
+    return doc.body.innerHTML;
+  }
+  window.addEventListener('message', function (e) {
+    if (typeof e.data !== 'string') return;
+    angular.element(document.getElementById('feed')).append(sanitize(e.data));
+  });
+</script>
+</body>
+</html>

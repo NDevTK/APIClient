@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>knownbug: jQuery selector from location.hash (CVE-2011-4969)</title>
+</head>
+<body>
+<ul id="tabs"><li><a href="#intro">Intro</a></li><li><a href="#usage">Usage</a></li></ul>
+<section id="intro" hidden>Intro</section>
+<section id="usage" hidden>Usage</section>
+<script src="lib/jquery.js"></script>
+<script>
+  // The advisory's pattern: the fragment selects the element to show. The URL parser percent-encodes `<`
+  // and `>` in a fragment, so a page that selects by an encoded id decodes it first; the decoded string
+  // still begins with `#`, which is the input jQuery 1.6.2 reads as HTML and 1.6.3 reads as a selector.
+  $(function () {
+    $(decodeURIComponent(location.hash)).show();
+  });
+</script>
+</body>
+</html>

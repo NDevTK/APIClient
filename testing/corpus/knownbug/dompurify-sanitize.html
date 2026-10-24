@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>knownbug: DOMPurify mutation XSS (CVE-2020-26870)</title>
+</head>
+<body>
+<div id="out"></div>
+<script src="lib/purify.js"></script>
+<script>
+  // The ordinary use: sanitize, then assign. DOMPurify 2.0.16 returns a serialization whose re-parse can
+  // move an element from the MathML namespace into HTML (nested form elements), so markup it judged inert
+  // is live after the assignment; 2.0.17 removes the elements that make that possible.
+  document.getElementById('out').innerHTML = DOMPurify.sanitize(decodeURIComponent(location.hash.slice(1)));
+</script>
+</body>
+</html>

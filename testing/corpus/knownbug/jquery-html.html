@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>knownbug: jQuery .html() after sanitizing (CVE-2020-11022, CVE-2020-11023)</title>
+</head>
+<body>
+<div id="comment"></div>
+<script src="lib/jquery.js"></script>
+<script>
+  // A sanitizer of the kind both advisories mean by "even after sanitizing it": parse the markup inert,
+  // drop script elements, event-handler attributes and javascript: URLs, serialize the rest. Raw-text
+  // element content (a <style>'s text) is not markup to it, which is the property the htmlPrefilter
+  // rewrite (CVE-2020-11022) and the <option>-in-<select> wrap (CVE-2020-11023) turn back into markup.
+  function sanitize(html) {
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('script').forEach(function (s) { s.remove(); });
+    doc.body.querySelectorAll('*').forEach(function (el) {
+      Array.from(el.attributes).forEach(function (a) {
+        if (/^on/i.test(a.name) || /^\s*javascript:/i.test(a.value)) el.removeAttribute(a.name);
+      });
+    });
+    return doc.body.innerHTML;
+  }
+  $('#comment').html(sanitize(decodeURIComponent(location.hash.slice(1))));
+</script>
+</body>
+</html>
