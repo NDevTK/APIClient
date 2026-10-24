@@ -1541,12 +1541,18 @@ async function main() {
          has no record of its own. */
       const childOrigin = principalOf(doc, loaded.url);
       const holder = clusterOf(group, childOrigin);
+      if (holder === e) {
+        /* The server chose this origin, so it is refused rather than asserted. */
+        refuseCreate(e, f[C.child], `navigable.create ${f[C.child]} at ${loaded.url} — ` + 'a cross-origin request whose response the server redirected back to this instance\'s own origin — ' +
+                     'its document belongs to the navigable here, which handed the load to a peer, and that ' +
+                     'return is not built (core/frame/navigable.c names it)');
+        return;
+      }
       if (holder) {
-        if (holder === e || holder.referenced !== 1)
-          throw new Error(`navigable.create ${f[C.child]} would join instance [${holder.tag}], which ` +
-                          `${holder === e ? 'is its own creator — a same-origin child never leaves its ' +
-                          'creator\'s heap' : 'holds no peer reference — every instance of a group was ' +
-                          'provisioned for a peer\'s navigable or created one'}`);
+        if (holder.referenced !== 1)
+          throw new Error(`navigable.create ${f[C.child]} would join instance [${holder.tag}], which holds no ` +
+                          'peer reference — every instance of a group was provisioned for a peer\'s navigable ' +
+                          'or created one');
         holder.docs.push(f[C.child]);
         recordDocument(f[C.child], createdDoc(doc, loaded.url, creatorDoc));
         recordOpener(f[C.child], f[C.child], childOpener);
@@ -1648,11 +1654,17 @@ async function main() {
       /* A cluster of this group at that origin already runs (another timeline's navigation of the same
          navigable, or another navigable's), so the incoming Document joins it, as a create's child does. */
       const navHolder = clusterOf(e.group, navOrigin);
+      if (navHolder === e) {
+        /* The server chose this origin, so it is refused rather than asserted. */
+        e.ready.push(decline(`navigable.navigate ${f[P.document]} at ${loaded.url} — ` + 'a cross-origin request whose response the server redirected back to this instance\'s own origin — ' +
+                     'its document belongs to the navigable here, which handed the load to a peer, and that ' +
+                     'return is not built (core/frame/navigable.c names it)'));
+        return;
+      }
       if (navHolder) {
-        if (navHolder === e || navHolder.referenced !== 1)
+        if (navHolder.referenced !== 1)
           throw new Error(`navigable.navigate ${f[P.document]} would join instance [${navHolder.tag}], which ` +
-                          `${navHolder === e ? 'is the navigating instance — a response in its own cluster ' +
-                          'never leaves its heap' : 'holds no peer reference'}`);
+                          'holds no peer reference');
         navHolder.docs.push(f[P.document]);
         recordDocument(f[P.document], createdDoc(doc, loaded.url, navFrom.issuerDoc));
         recordOpener(f[P.document], f[P.document], navOpener);

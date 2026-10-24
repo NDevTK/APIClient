@@ -5019,13 +5019,13 @@ async function hostNotice(eng, line) {
        provisioned one. */
     const _ckey = clusterKeyOf(msg);
     /* The address the engine asked for is outside the creator's agent (refused above, before the load), so a
-       child in the creator's own cluster is a response that redirected into the creator's origin, which only
-       this zone saw. */
+       child in the creator's own cluster is a response the server redirected into the creator's origin: input,
+       refused by name. */
     if (_ckey === eng.cluster) {
-      DFAIL("a cross-origin child's response redirected into its creator's origin (" + f[C.address] + " -> " +
-            loaded.url + "): the engine built it as a remote navigable before the response, and this zone has no " +
-            "arm that turns it into a realm of the creator's heap. Build that commit of the response into the " +
-            "creator's agent, as child_in_this_agent would have done for the landed address");
+      console.warn("[bridge] navigable.create " + f[C.child] + " at " + loaded.url + " is refused: " +
+                   "a cross-origin request whose response the server redirected back to this instance's own origin — its " +
+                   "document belongs to the navigable here, which handed the load to a peer, and that return is " +
+                   "not built (core/frame/navigable.c names it)");
       documentPolicySettle(f[C.child], null);
       return;
     }
@@ -5195,13 +5195,12 @@ async function hostNotice(eng, line) {
     /* The load's Set-Cookie fields go to the jars their URLs' origins key in this document's group. */
     await zoneRouteSetCookies(navMsg.groupId, navd.setCookies);
     const _nkey = clusterKeyOf(navMsg);
-    /* The address the engine stated is outside its own agent (refused above, before the load), so a document in
-       its own cluster is a re-fetch that landed there: the response changed between this zone's two loads. */
+    /* As for a create: a response in the navigating instance's own cluster is the server's choice. */
     if (_nkey === eng.cluster) {
-      DFAIL("a top-level navigation into a peer re-fetched " + f[P.address] + " and landed in the navigating " +
-            "instance's own origin (" + navd.url + "): this zone loads the document twice and has no arm for the " +
-            "two loads disagreeing. Build the commit of the navigation's own response, which the swap arm's named " +
-            "residual also needs");
+      console.warn("[bridge] navigable.navigate " + f[P.document] + " at " + navd.url + " is refused: " +
+                   "a cross-origin request whose response the server redirected back to this instance's own origin — its " +
+                   "document belongs to the navigable here, which handed the load to a peer, and that return is " +
+                   "not built (core/frame/navigable.c names it)");
       return;
     }
     let navHolder = hostClusterOf(_nkey);
