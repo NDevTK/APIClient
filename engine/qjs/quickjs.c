@@ -195,6 +195,36 @@ typedef enum {
     JS_GC_PHASE_REMOVE_CYCLES,
 } JSGCPhaseEnum;
 
+/* Where a cycle collection stands, a different fact from JSGCPhaseEnum (which free path the C stack is in): the
+   phase the collection has reached, between its steps as well as inside them. */
+typedef enum {
+    JS_GC_CYCLE_IDLE,
+    JS_GC_CYCLE_DECREF,   /* subtracting the references GC objects hold on each other */
+    JS_GC_CYCLE_SCAN,     /* restoring what is reachable from a reference held outside the graph */
+} JSGCCycleStep;
+
+/* A cycle collection's progress record. The decref phase visits gc_obj_list's first object and moves it to
+   `decref_done` (or to tmp_obj_list when nothing outside the graph holds it), so gc_obj_list's head is the cursor
+   and the visited objects keep their order. `work` counts the objects and edges visited, the unit a step is
+   budgeted in. The trial counts live in each object's header under `serial`, never in ref_count, so the mutator
+   may run between two steps; a step that finds JSRuntime.gc_mut_epoch moved since the trial began restarts it.
+   Named residual. Not covered: the scan and the freeing run to their end inside the decref's last step
+   (JS_GCStep), and the engine drives no collection as steps yet (JS_RunGC runs one whole). Next diff builds: the
+   scan as a step over this record, the weak references to the cycles reset before any mutator can run, the
+   freeing as steps the mutator interleaves with, and the scheduler's collector steps at the work quantum.
+   Absence shows as: a collection's scan and free work arriving inside one engine step however large the heap. */
+typedef struct JSGCCycle {
+    JSGCCycleStep step;
+    struct list_head decref_done;
+    uint64_t work;
+    /* Which collection the trial counts belong to; raised at every begin and restart, never 0. */
+    uint32_t serial;
+    /* JSRuntime.gc_mut_epoch when the trial began: a mutator's entry since then restarts it (gc_decref_step). */
+    uint64_t mut_epoch0;
+    /* Lifetime counts, read by JS_GCCycleStats: steps taken, trials restarted, GC objects freed as cycles. */
+    uint64_t steps, restarts, freed;
+} JSGCCycle;
+
 typedef struct JSMallocState {
     size_t malloc_count;
     size_t malloc_size;
@@ -465,6 +495,10 @@ struct JSRuntime {
     /* list of JSGCObjectHeader.link. Used during JS_FreeValueRT() */
     struct list_head gc_zero_ref_count_list;
     struct list_head tmp_obj_list; /* used during GC */
+    JSGCCycle gc_cycle;
+    /* Raised by JS_MutatorEnter at every entry of code that can change the heap's graph between two of a
+       collection's steps. */
+    uint64_t gc_mut_epoch;
     /* THE OBJECT WHOSE CHILDREN THE DECREF PASS IS WALKING. gc_decref_child is a JS_MarkFunc, so it is handed
        a CHILD and nothing else — and the edge being walked belongs to the PARENT, which is where a mark with
        no reference behind it is written. Every gc_mark in this engine reaches that one line, so the abort
@@ -730,9 +764,15 @@ typedef enum {
    a particular type of GC object. */
 struct JSGCObjectHeader {
     /* ref_count/gc_obj_type/mark live in the allocator block header (js_rc(p),
-       the 8 bytes before every allocation); only the GC list link remains in
-       the object body. */
+       the 8 bytes before every allocation); the GC list link and the cycle
+       collector's trial count remain in the object body. */
     struct list_head link;
+    /* The trial count of the collection numbered `gc_serial` (JSGCCycle.serial): ref_count less the references
+       the collection has found other GC objects hold on this one. Kept apart from ref_count so the mutator,
+       which may run between two of a collection's steps, only ever reads and writes the real count. Valid only
+       while gc_serial is the current collection's; gc_trial() initialises it on first touch. */
+    uint32_t gc_serial;
+    int gc_trial;
 };
 
 typedef struct JSVarRef {
@@ -3779,6 +3819,8 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     init_list_head(&rt->gc_zero_ref_count_list);
     init_list_head(&rt->gc_ctx_sweep_list);
     init_list_head(&rt->net_site_bodies);
+    init_list_head(&rt->gc_cycle.decref_done);
+    rt->gc_cycle.step = JS_GC_CYCLE_IDLE;
     rt->gc_phase = JS_GC_PHASE_NONE;
 
 #ifdef ENABLE_DUMPS // JS_DUMP_LEAKS
@@ -10972,6 +11014,8 @@ static void add_gc_object(JSRuntime *rt, JSGCObjectHeader *h,
 {
     JS_GC_MARK(h) = 0;
     JS_GC_TYPE(h) = type;
+    h->gc_serial = 0;   /* no collection's: JSGCCycle.serial is never 0 */
+    h->gc_trial = 0;
     list_add_tail(&h->link, &rt->gc_obj_list);
 }
 
@@ -11322,6 +11366,17 @@ static __maybe_unused const char *gc_edge_census_run(JSRuntime *rt, JSGCObjectHe
     return c->text;
 }
 
+/* `p`'s trial count in the current collection, taken from its ref_count the first time the collection touches
+   it. */
+static int *gc_trial(JSRuntime *rt, JSGCObjectHeader *p)
+{
+    if (p->gc_serial != rt->gc_cycle.serial) {
+        p->gc_serial = rt->gc_cycle.serial;
+        p->gc_trial = JS_REF_COUNT(p);
+    }
+    return &p->gc_trial;
+}
+
 static void gc_decref_child(JSRuntime *rt, JSGCObjectHeader *p)
 {
     /* EVERY EDGE mark_children REPORTS MUST BE ONE THE PARENT HOLDS A COUNTED REFERENCE FOR — that is the
@@ -11391,8 +11446,10 @@ static void gc_decref_child(JSRuntime *rt, JSGCObjectHeader *p)
        allocation the sweep has not touched (a zero refcount only moves a header to tmp_obj_list), and it is
        read only on the failing branch — DCHECKF evaluates its arguments inside the `if`. It is -1 for a child
        that is not a JSObject, because only a JSObject has one. */
+    int *trial = gc_trial(rt, p);
+
     rt->gc_decref_edge++;   /* 1-based, and BEFORE the assert so the number names THIS edge */
-    DCHECKF(JS_REF_COUNT(p) > 0,
+    DCHECKF(*trial > 0,
             "a mark edge with no counted reference behind it: refcount hit 0 before the walk finished its "
             "edges. CHILD %p %s(%d) class %d; the edge that tipped it: #%u of %p. %s",
             (void *)p,
@@ -11401,26 +11458,75 @@ static void gc_decref_child(JSRuntime *rt, JSGCObjectHeader *p)
             JS_GC_TYPE(p) == JS_GC_OBJ_TYPE_JS_OBJECT ? (int)((JSObject *)p)->class_id : -1,
             (unsigned)rt->gc_decref_edge, (void *)rt->gc_decref_parent,
             gc_edge_census_run(rt, p));
-    JS_REF_COUNT(p)--;
-    if (JS_REF_COUNT(p) == 0 && JS_GC_MARK(p) == 1) {
+    (*trial)--;
+    if (*trial == 0 && JS_GC_MARK(p) == 1) {
         list_del(&p->link);
         list_add_tail(&p->link, &rt->tmp_obj_list);
     }
 }
 
-static void gc_decref(JSRuntime *rt)
+/* A new trial: a serial no object's trial count carries, so every count is taken afresh from ref_count. */
+static void gc_cycle_serial_next(JSRuntime *rt)
 {
-    struct list_head *el, *el1;
-    JSGCObjectHeader *p;
+    if (++rt->gc_cycle.serial == 0)
+        rt->gc_cycle.serial = 1;
+    rt->gc_cycle.mut_epoch0 = rt->gc_mut_epoch;
+}
 
+/* A collection's start: nothing visited, nothing found unreferenced. */
+static void gc_decref_begin(JSRuntime *rt)
+{
+    DCHECKF(rt->gc_cycle.step == JS_GC_CYCLE_IDLE,
+            "a cycle collection began while one stood at step %d — the trial counts and the visited lists are "
+            "that collection's, and a second one would take them over half-built", (int)rt->gc_cycle.step);
     init_list_head(&rt->tmp_obj_list);
+    init_list_head(&rt->gc_cycle.decref_done);
+    rt->gc_cycle.step = JS_GC_CYCLE_DECREF;
+    rt->gc_cycle.work = 0;
+    gc_cycle_serial_next(rt);
+}
 
-    /* decrement the refcount of all the children of all the GC
-       objects and move the GC objects with zero refcount to
-       tmp_obj_list */
-    list_for_each_safe(el, el1, &rt->gc_obj_list) {
-        p = list_entry(el, JSGCObjectHeader, link);
-        DCHECK(JS_GC_MARK(p) == 0, "JS_GC_MARK(p) == 0");
+/* The trial restarts: a mutator ran since it began, so the counts it subtracted were read off a graph that may
+   have changed under them (a counted reference moved between two holders changes no count). Every visited object
+   goes back to the unvisited list, unmarked, and the new serial discards every trial count. The real refcounts
+   were never touched, so nothing else is undone. */
+static void gc_decref_restart(JSRuntime *rt)
+{
+    struct list_head *lists[2] = { &rt->gc_cycle.decref_done, &rt->tmp_obj_list };
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        while (!list_empty(lists[i])) {
+            JSGCObjectHeader *p = list_entry(lists[i]->next, JSGCObjectHeader, link);
+            JS_GC_MARK(p) = 0;
+            list_del(&p->link);
+            list_add_tail(&p->link, &rt->gc_obj_list);
+        }
+    }
+    rt->gc_cycle.restarts++;
+    gc_cycle_serial_next(rt);
+}
+
+/* The decref phase, for at most `budget` units of work: decrement the refcount of the children of gc_obj_list's
+   first objects, and move each visited object to `decref_done`, or to tmp_obj_list when its count is then zero.
+   Returns true when gc_obj_list is exhausted, with the visited objects back on it in visit order and the
+   collection at its scan. */
+static bool gc_decref_step(JSRuntime *rt, uint64_t budget)
+{
+    JSGCObjectHeader *p;
+    uint64_t spent = 0;
+    bool done;
+
+    DCHECKF(rt->gc_cycle.step == JS_GC_CYCLE_DECREF,
+            "a decref step ran with the collection at step %d", (int)rt->gc_cycle.step);
+    if (rt->gc_mut_epoch != rt->gc_cycle.mut_epoch0)
+        gc_decref_restart(rt);
+    rt->gc_cycle.steps++;
+    while (!list_empty(&rt->gc_obj_list) && spent < budget) {
+        p = list_entry(rt->gc_obj_list.next, JSGCObjectHeader, link);
+        DCHECK(JS_GC_MARK(p) == 0,
+               "an object on gc_obj_list's unvisited head is already marked — the decref cursor is the list's "
+               "head, so a marked object there was visited and never moved off it");
         /* THE ADDRESS TRAVELS WITH THE OPERATION, captured at the caller that knows it. gc_decref_child is
            handed only the child, and the unbacked edge belongs to this object. Written unconditionally so the
            field means the same thing in both builds and is readable in a debugger on either. */
@@ -11428,21 +11534,44 @@ static void gc_decref(JSRuntime *rt)
         rt->gc_decref_edge = 0;   /* the ordinal is per PARENT, so it is reset where the parent is written */
         mark_children(rt, p, gc_decref_child);
         JS_GC_MARK(p) = 1;
-        if (JS_REF_COUNT(p) == 0) {
-            list_del(&p->link);
-            list_add_tail(&p->link, &rt->tmp_obj_list);
-        }
+        list_del(&p->link);
+        list_add_tail(&p->link, *gc_trial(rt, p) == 0 ? &rt->tmp_obj_list : &rt->gc_cycle.decref_done);
+        spent += 1 + rt->gc_decref_edge;
     }
     /* The pass owns this field only for its own length — a stale parent read by anything else would name an
        object that has nothing to do with the walk asking. */
     rt->gc_decref_parent = NULL;
     rt->gc_decref_edge = 0;
+    rt->gc_cycle.work += spent;
+    done = list_empty(&rt->gc_obj_list);
+    if (done) {
+        /* The visited objects go back where gc_scan reads them, in the order they were visited. */
+        if (!list_empty(&rt->gc_cycle.decref_done)) {
+            rt->gc_obj_list.next = rt->gc_cycle.decref_done.next;
+            rt->gc_obj_list.prev = rt->gc_cycle.decref_done.prev;
+            rt->gc_obj_list.next->prev = &rt->gc_obj_list;
+            rt->gc_obj_list.prev->next = &rt->gc_obj_list;
+        }
+        init_list_head(&rt->gc_cycle.decref_done);
+        rt->gc_cycle.step = JS_GC_CYCLE_SCAN;
+    }
+    return done;
+}
+
+/* The decref phase in one call: the collection's steps with no budget, which the residual on JSGCCycle names. */
+static void gc_decref(JSRuntime *rt)
+{
+    gc_decref_begin(rt);
+    while (!gc_decref_step(rt, UINT64_MAX))
+        ;
 }
 
 static void gc_scan_incref_child(JSRuntime *rt, JSGCObjectHeader *p)
 {
-    JS_REF_COUNT(p)++;
-    if (JS_REF_COUNT(p) == 1) {
+    int *trial = gc_trial(rt, p);
+
+    (*trial)++;
+    if (*trial == 1) {
         /* ref_count was 0: remove from tmp_obj_list and add at the
            end of gc_obj_list */
         list_del(&p->link);
@@ -11451,29 +11580,27 @@ static void gc_scan_incref_child(JSRuntime *rt, JSGCObjectHeader *p)
     }
 }
 
-static void gc_scan_incref_child2(JSRuntime *rt, JSGCObjectHeader *p)
-{
-    JS_REF_COUNT(p)++;
-}
-
 static void gc_scan(JSRuntime *rt)
 {
     struct list_head *el;
     JSGCObjectHeader *p;
 
+    DCHECKF(rt->gc_cycle.step == JS_GC_CYCLE_SCAN,
+            "the scan ran with the collection at step %d — it restores what the decref phase subtracted, so it "
+            "follows a finished decref and nothing else", (int)rt->gc_cycle.step);
     /* keep the objects with a refcount > 0 and their children. */
     list_for_each(el, &rt->gc_obj_list) {
         p = list_entry(el, JSGCObjectHeader, link);
-        DCHECK(JS_REF_COUNT(p) > 0, "JS_REF_COUNT(p) > 0");
+        DCHECK(*gc_trial(rt, p) > 0,
+               "an object the scan keeps has no reference from outside the graph — the decref phase moves "
+               "every object whose trial count reaches zero to tmp_obj_list, and the scan only returns one with "
+               "its count raised again");
         JS_GC_MARK(p) = 0; /* reset the mark for the next GC call */
         mark_children(rt, p, gc_scan_incref_child);
     }
-
-    /* restore the refcount of the objects to be deleted. */
-    list_for_each(el, &rt->tmp_obj_list) {
-        p = list_entry(el, JSGCObjectHeader, link);
-        mark_children(rt, p, gc_scan_incref_child2);
-    }
+    /* What is left on tmp_obj_list is the cycles. Their real refcounts were never subtracted, so unlike the
+       algorithm this replaces there is nothing to restore before gc_free_cycles frees them. */
+    rt->gc_cycle.step = JS_GC_CYCLE_IDLE;
 }
 
 static void gc_free_cycles(JSRuntime *rt)
@@ -11503,6 +11630,7 @@ static void gc_free_cycles(JSRuntime *rt)
            JSObject — so nothing in the walk would ever reach it and both members ended on the zero-refcount
            list, where the assert at the end of this function is what would have reported it. */
         case JS_GC_OBJ_TYPE_ASYNC_FUNCTION:
+            rt->gc_cycle.freed++;
 #ifdef ENABLE_DUMPS // JS_DUMP_GC_FREE
             if (check_dump_flag(rt, JS_DUMP_GC_FREE)) {
                 if (!header_done) {
@@ -11544,6 +11672,34 @@ static void gc_free_cycles(JSRuntime *rt)
        reference to something, and a cascade reaching free_zero_refcount while those zombies were still on the
        zero-ref list would free each of them a second time. */
     free_zero_refcount(rt);   /* the realms and weak resets the collection queued */
+}
+
+void JS_GCBegin(JSRuntime *rt)
+{
+    gc_decref_begin(rt);
+}
+
+bool JS_GCStep(JSRuntime *rt, uint64_t budget)
+{
+    if (!gc_decref_step(rt, budget))
+        return false;
+    gc_scan(rt);
+    gc_free_cycles(rt);
+    return true;
+}
+
+void JS_MutatorEnter(JSRuntime *rt)
+{
+    rt->gc_mut_epoch++;
+}
+
+void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out)
+{
+    out->step = (int)rt->gc_cycle.step;
+    out->work = rt->gc_cycle.work;
+    out->steps = rt->gc_cycle.steps;
+    out->restarts = rt->gc_cycle.restarts;
+    out->freed = rt->gc_cycle.freed;
 }
 
 void JS_RunGC(JSRuntime *rt)

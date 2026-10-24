@@ -2528,6 +2528,78 @@ TF_UNIT void policy_container_selftest(void)
  * IT IS THE CASE THAT TURNS AN ABORT INTO A WRONG ANSWER IF IT IS GOT WRONG. §6.7.3.2 alone answers "Blocked"
  * for every nonce-bearing policy, which is right for injected content and refuses a `<style nonce=…>` real
  * Chrome applies — so the whole cascade below it would then resolve from a document no browser has. */
+/* @GCSTEP: the cycle collector as budgeted steps (JS_GCBegin/JS_GCStep), on a runtime of its own. The heap holds
+   N garbage two-object cycles and one live cycle reachable only through the global `g`. Between the first and second
+   steps a mutator, announced by JS_MutatorEnter, moves the live cycle's only path from `g` to a new object's field.
+   The step after it must restart the trial, the live cycle must survive whole, and the garbage must be freed. The
+   heap is built through the C API because a program evaluated from C needs a flow to run on. */
+TF_UNIT void gc_cycle_step_selftest(void)
+{
+    enum { N = 2000, BUDGET = 64 };
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx;
+    JSGCCycleStats st0, st;
+    JSValue global, g, holder, keep, c, cb, cba;
+    uint64_t steps = 0;
+    bool done = false;
+    int alive;
+
+    CHECK(rt != NULL, "the collector's witness could not make a runtime");
+    JS_SetGCThreshold(rt, (size_t)-1);   /* no collection but the one this test steps */
+    ctx = JS_NewContext(rt);
+    CHECK(ctx != NULL, "the collector's witness could not make a context");
+    global = JS_GetGlobalObject(ctx);
+    for (int i = 0; i < N; i++) {
+        JSValue a = JS_NewObject(ctx), b = JS_NewObject(ctx);
+        CHECK(JS_SetPropertyStr(ctx, b, "a", JS_DupValue(ctx, a)) >= 0 && JS_SetPropertyStr(ctx, a, "b", b) >= 0,
+              "the collector's witness could not build a garbage cycle");
+        JS_FreeValue(ctx, a);
+    }
+    g = JS_NewObject(ctx);
+    holder = JS_NewObject(ctx);
+    CHECK(JS_SetPropertyStr(ctx, holder, "a", JS_DupValue(ctx, g)) >= 0 &&
+          JS_SetPropertyStr(ctx, g, "b", holder) >= 0 && JS_SetPropertyStr(ctx, global, "g", g) >= 0,
+          "the collector's witness could not build its live cycle");
+
+    JS_GCCycleStats(rt, &st0);
+    JS_GCBegin(rt);
+    done = JS_GCStep(rt, BUDGET);
+    steps++;
+    CHECK(!done, "the collector finished a heap of thousands of objects inside one 64-unit step");
+    JS_MutatorEnter(rt);
+    holder = JS_NewObject(ctx);
+    CHECK(JS_SetPropertyStr(ctx, holder, "c", JS_GetPropertyStr(ctx, global, "g")) >= 0 &&
+          JS_SetPropertyStr(ctx, global, "keep", holder) >= 0 &&
+          JS_SetPropertyStr(ctx, global, "g", JS_UNDEFINED) >= 0,
+          "the collector's witness could not move the live cycle's path");
+    while (!done) {
+        done = JS_GCStep(rt, BUDGET);
+        steps++;
+    }
+    JS_GCCycleStats(rt, &st);
+
+    keep = JS_GetPropertyStr(ctx, global, "keep");
+    c = JS_GetPropertyStr(ctx, keep, "c");
+    cb = JS_GetPropertyStr(ctx, c, "b");
+    cba = JS_GetPropertyStr(ctx, cb, "a");
+    alive = JS_IsObject(c) && JS_IsObject(cba) && JS_VALUE_GET_PTR(cba) == JS_VALUE_GET_PTR(c);
+    printf("@GCSTEP {\"steps\":%llu,\"restarts\":%llu,\"freed\":%llu,\"work\":%llu,\"alive\":%d}\n",
+           (unsigned long long)steps, (unsigned long long)(st.restarts - st0.restarts),
+           (unsigned long long)(st.freed - st0.freed), (unsigned long long)st.work, alive);
+    CHECK(st.restarts - st0.restarts == 1,
+          "the step after a mutator's entry did not restart the trial, so it read counts off a graph the mutator "
+          "changed");
+    CHECK(alive, "the live cycle the mutator moved did not survive the collection whole");
+    CHECK(st.freed - st0.freed >= 2 * N, "the collection freed fewer GC objects than the garbage cycles hold");
+    JS_FreeValue(ctx, cba);
+    JS_FreeValue(ctx, cb);
+    JS_FreeValue(ctx, c);
+    JS_FreeValue(ctx, keep);
+    JS_FreeValue(ctx, global);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+}
+
 /* FIPS PUB 180-4, CHECKED AGAINST PUBLISHED KNOWN ANSWERS — because a cryptographic primitive that agrees with
  * itself proves nothing at all. Every expected value below is transcribed from RFC 6234 §8.5's test driver,
  * which is the IETF's restatement of this standard and ships the vectors with it; the empty-message row is the
@@ -31437,6 +31509,7 @@ int main(int argc, char **argv) {
        otherwise be reported as a CSP verdict being wrong. */
     secure_hash_selftest();
     hmac_selftest();
+    gc_cycle_step_selftest();
     /* AFTER the two digest primitives and for their reason: this one stands on FIPS 197's cipher
        and on nothing they compute, so its failure is its own — but it shares their tier, and a
        primitive's row must be reported at the primitive rather than at the §14 method that will

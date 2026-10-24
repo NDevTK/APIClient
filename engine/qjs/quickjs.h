@@ -667,6 +667,21 @@ typedef void JS_MarkFunc(JSRuntime *rt, JSGCObjectHeader *gp);
 JS_EXTERN void JS_MarkValue(JSRuntime *rt, JSValueConst val,
                             JS_MarkFunc *mark_func);
 JS_EXTERN void JS_RunGC(JSRuntime *rt);
+/* The cycle collection as steps. JS_GCBegin starts one; JS_GCStep advances it by at most `budget` units of
+   collector work (objects and edges visited) and returns true when it has finished and freed its cycles.
+   JS_MutatorEnter is called at every entry of code that can change the heap's graph between two steps; the
+   trial a step finds started before such an entry restarts. */
+JS_EXTERN void JS_GCBegin(JSRuntime *rt);
+JS_EXTERN bool JS_GCStep(JSRuntime *rt, uint64_t budget);
+JS_EXTERN void JS_MutatorEnter(JSRuntime *rt);
+typedef struct JSGCCycleStats {
+    int step;            /* where the current collection stands: 0 idle */
+    uint64_t work;       /* the current collection's work so far */
+    uint64_t steps;      /* lifetime: decref steps taken */
+    uint64_t restarts;   /* lifetime: trials restarted by a mutator's entry */
+    uint64_t freed;      /* lifetime: GC objects freed as cycles */
+} JSGCCycleStats;
+JS_EXTERN void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out);
 JS_EXTERN bool JS_IsLiveObject(JSRuntime *rt, JSValueConst obj);
 
 JS_EXTERN JSContext *JS_NewContext(JSRuntime *rt);
