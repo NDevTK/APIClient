@@ -71037,10 +71037,10 @@ static void js_module_loading_settle_one(JSContext *ctx, JSValueConst state)
 
 static void js_inner_module_loading(JSContext *ctx, JSValueConst state, JSModuleDef *m);
 
-/* 16.2.1.6.1.1.2 ContinueModuleLoading — the RE-ENTRY POINT, and the reason the walk needs no parked cursor: a
-   request answered later restarts the loading process AT THE MODULE THAT ARRIVED, not at the position some
-   traversal had reached. `m == NULL` is the throw completion, whose exception is in flight. */
-static void js_continue_module_loading(JSContext *ctx, JSValueConst state, JSModuleDef *m)
+/* 16.2.1.6.1.1.2 ContinueModuleLoading for a throw completion, whose exception is in flight. It is its own
+   function because InnerModuleLoading's host load reaches it, and the normal completion's arm is the one that
+   walks the graph: kept apart, a failing request never re-enters the walk that issued it. */
+static void js_module_loading_fail(JSContext *ctx, JSValueConst state)
 {
     JSValue rej, err, ret;
 
@@ -71049,12 +71049,8 @@ static void js_continue_module_loading(JSContext *ctx, JSValueConst state, JSMod
            second one failing after the first has already rejected is ordinary. A discarded THROW completion
            still has its exception in flight, and leaving it there hands somebody else's failure to whatever
            runs next out of this job. */
-        if (!m && JS_HasException(ctx))
+        if (JS_HasException(ctx))
             JS_FreeValue(ctx, JS_GetException(ctx));
-        return;
-    }
-    if (m) {
-        js_inner_module_loading(ctx, state, m);
         return;
     }
     DCHECK(JS_HasException(ctx),
@@ -71068,6 +71064,20 @@ static void js_continue_module_loading(JSContext *ctx, JSValueConst state, JSMod
     JS_FreeValue(ctx, ret);
     JS_FreeValue(ctx, err);
     JS_FreeValue(ctx, rej);
+}
+
+/* 16.2.1.6.1.1.2 ContinueModuleLoading — the RE-ENTRY POINT, and the reason the walk needs no parked cursor: a
+   request answered later restarts the loading process AT THE MODULE THAT ARRIVED, not at the position some
+   traversal had reached. `m == NULL` is the throw completion (js_module_loading_fail). */
+static void js_continue_module_loading(JSContext *ctx, JSValueConst state, JSModuleDef *m)
+{
+    if (!m) {
+        js_module_loading_fail(ctx, state);
+        return;
+    }
+    if (!js_gls_is_loading(ctx, state))
+        return;                          /* step 1: the load already settled, so this completion is discarded */
+    js_inner_module_loading(ctx, state, m);
 }
 
 /* THE RE-ENTRY ITSELF. func_data = [state, referrer, request index, resolved specifier]; argv[0] is the module's
@@ -71176,7 +71186,7 @@ static JSModuleDef *js_module_request_host_load(JSContext *ctx, JSValueConst sta
     }
     pending = js_module_take_pending(ctx, &name);
     if (JS_IsUndefined(pending)) {
-        js_continue_module_loading(ctx, state, NULL);
+        js_module_loading_fail(ctx, state);
         return NULL;
     }
     /* WHAT THE RE-ENTRY NEEDS, AND ONLY THAT: the state to continue, the referrer and the INDEX of the request

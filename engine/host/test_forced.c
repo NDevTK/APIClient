@@ -1104,6 +1104,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/intl.h"
 #include "fixture/contchain.h"
 #include "fixture/weakchain.h"
+#include "fixture/importchain.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -1544,6 +1545,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "intl", HTML_INTL },
     { "contchain", HTML_CONTCHAIN },
     { "weakchain", HTML_WEAKCHAIN },
+    { "importchain", HTML_IMPORTCHAIN },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -13902,6 +13904,22 @@ TF_UNIT void probes_weakchain(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `importchain` document (fixture/importchain.h). */
+TF_UNIT void probes_importchain(const char *js, Probe *tab, int *n) {
+    /* A 20000-module import chain loads, links and evaluates, and the first module reads the last one's depth
+       through every link. */
+    const char *ic_why = NULL; int ic_tt = 1;
+    fold_row(&ic_tt, &ic_why, !!strstr(js, "\"/api/importchain\""),
+             "NOT REACHED: there is no /api/importchain record at all, so the import neither settled nor threw");
+    fold_row(&ic_tt, &ic_why, param_value_is(js, "/api/importchain", "d", "20000"),
+             "ECMAScript §16.2.1.6.1.3 Evaluate ( ): the chain's first module did not read a depth of 20000 through "
+             "its imports");
+    const Probe rows[] = {
+        { "import-chain-depth", ic_tt, "/api/importchain", SESS_EXPLORE, ic_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -17622,6 +17640,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_inlineflex(js, probes, &np);
     probes_contchain(js, probes, &np);
     probes_weakchain(js, probes, &np);
+    probes_importchain(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
