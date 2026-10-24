@@ -59112,6 +59112,9 @@ static __exception int next_token(JSParseState *s)
     s->token.col_num = s->col_num;
     s->token.ptr = p;
     s->token.line_start = s->line_start;
+    /* The token's column is read off `mark` when the token ends, so `mark` starts at the token's first byte;
+       a scan that crosses a line break inside the token moves it itself. */
+    s->mark = p;
     c = *p;
     switch(c) {
     case 0:
@@ -59764,6 +59767,7 @@ static __exception int json_next_token(JSParseState *s)
     s->token.col_num = s->col_num;
     s->token.ptr = p;
     s->token.line_start = s->line_start;
+    s->mark = p;   /* the token's own first byte, as next_token's */
     c = *p;
     switch(c) {
     case 0:
@@ -78167,8 +78171,10 @@ static JSFunctionDef *js_parse_function_class_fields_init(JSParseState *s)
 {
     JSFunctionDef *fd;
 
+    /* At the token that needed it — the class's first field or private method — so two classes' initialisers
+       are two positions and JS_OrphanHash names them apart. */
     fd = js_new_function_def(s->ctx, s->cur_func, false, false,
-                             s->filename, 0, 0);
+                             s->filename, s->token.line_num, s->token.col_num);
     if (!fd)
         return NULL;
     fd->func_name = JS_ATOM_NULL;
