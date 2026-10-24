@@ -12127,6 +12127,19 @@ JSValue JS_Throw(JSContext *ctx, JSValue obj)
 
 /* return the pending exception (cannot be called twice). */
 static bool js_error_stack_is_pending(JSValueConst v);
+/* Element `i` of the pending pair [prepareStackTrace, callsites] build_backtrace parks in an Error's
+   u.object_data. The engine made that array with exactly two elements and it has no JS exposure, so the element
+   is read out of its own storage: a [[Get]] here would put every throw's trace capture on the property walk. */
+static JSValue js_error_stack_pair_get(JSValueConst pair, uint32_t i)
+{
+    JSObject *p;
+
+    DCHECK(js_error_stack_is_pending(pair), "a pending stack pair's element was read off something else");
+    p = JS_VALUE_GET_OBJ(pair);
+    DCHECK(p->fast_array && p->u.array.count == 2 && i < 2,
+           "the pending stack pair is not the two-element fast array build_backtrace made");
+    return js_dup(p->u.array.u.values[i]);
+}
 
 /* THE NAME OF THE RECEIVER'S TYPE, read WITHOUT running a line of the page's code — the same discipline
    get_func_name follows, and for the same reason: a stack trace is built while an exception is in flight, so
@@ -12465,11 +12478,9 @@ JSValue JS_GetErrorStackString(JSContext *ctx, JSValueConst error)
     if (js_error_stack_is_pending(p->u.object_data)) {
         /* THE PAIR IS NOT THE ARRAY, and only the array is page data. `u.object_data` has no JS exposure — the
            accessor takes the pair's two elements and hands out the SECOND, never the pair — so this read is on
-           an object build_backtrace made and nothing else can reach, which is why it stays an ordinary one
-           while the element read below is not. */
-        JSValue sites = JS_GetPropertyUint32(ctx, p->u.object_data, 1), r;
-        if (JS_IsException(sites))
-            return JS_UNDEFINED;
+           an object build_backtrace made and nothing else can reach, read out of its own storage
+           (js_error_stack_pair_get) while the element read below is page data. */
+        JSValue sites = js_error_stack_pair_get(p->u.object_data, 1), r;
         r = js_callsite_array_render(ctx, sites);
         JS_FreeValue(ctx, sites);
         return JS_IsException(r) ? JS_UNDEFINED : r;
@@ -13014,8 +13025,8 @@ static void build_backtrace(JSContext *ctx, JSValueConst error_val,
        accessed". Eager here is the API, not a narrowing of it. */
     if (pstack || to_own_slot) {
         if (js_error_stack_is_pending(stack)) {
-            JSValue sites = JS_GetPropertyUint32(ctx, stack, 1);
-            JSValue rendered = JS_IsException(sites) ? JS_NULL : js_callsite_array_render(ctx, sites);
+            JSValue sites = js_error_stack_pair_get(stack, 1);
+            JSValue rendered = js_callsite_array_render(ctx, sites);
             JS_FreeValue(ctx, sites);
             JS_FreeValue(ctx, stack);
             stack = JS_IsException(rendered) ? JS_NULL : rendered;
@@ -86482,11 +86493,9 @@ static int js_error_get_stack_step(JSContext *ctx, void *st, JSValue cb_result,
         /* [prepare, callsites] -> prepare.call(Error, error, callsites). The pair's own elements are taken
            into the request buffer so the memoizing write below cannot free them out from under the call. */
         s->cb[0] = js_dup(ctx->error_ctor);           /* `this` */
-        s->cb[1] = JS_GetPropertyUint32(ctx, d, 0);   /* the callee: prepareStackTrace */
+        s->cb[1] = js_error_stack_pair_get(d, 0);    /* the callee: prepareStackTrace */
         s->cb[2] = js_dup(s->hdr.this_val);
-        s->cb[3] = JS_GetPropertyUint32(ctx, d, 1);
-        if (JS_IsException(s->cb[1]) || JS_IsException(s->cb[3]))
-            return -1;
+        s->cb[3] = js_error_stack_pair_get(d, 1);
         /* THE DEFAULT RENDERING IS THE OTHER HALF OF THIS ONE OPERATION, not a case the CAPTURE decided.
            build_backtrace used to render it, which is what made building an error reach the string builder and
            through it every throw; it parks the frames now and the choice is made here, where it is a read of
