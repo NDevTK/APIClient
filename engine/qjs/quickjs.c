@@ -28616,20 +28616,20 @@ static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f)
 static void js_desc_facts_dup(JSDescFacts *f);
 static void js_desc_facts_free(JSContext *ctx, JSDescFacts *f);
 static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *tab, uint32_t len);
-/* A CONTINUATION RECORD'S DECLARATION. A record a parked chain can hold lists its fields once, each as
-   F(role, type, name), and its struct, its release, its copy and its requester link are all expanded from that
-   one list (CONT_RECORD_DEFINE), so no walk can name a field another walk misses. The roles:
-     OWN_VAL   an owned JSValue: the copy takes a reference, the release drops one;
-     OWN_ATOM  an owned JSAtom, likewise;
+/* A continuation record's declaration. A record a parked chain can hold lists its fields once, each as
+   F(role, type, name), and its struct, release, copy and requester link are all expanded from that one list
+   (CONT_RECORD_DEFINE), so no walk can name a field another walk misses. The roles:
+     OWN_VAL, OWN_ATOM  an owned JSValue or JSAtom: the copy takes a reference, the release drops one;
      POD       a plain value of `type`, copied;
      BORROW    a JSValueConst another owner keeps alive across the record's life, copied and never released;
      OUTER     the requester link, `void *name` and its kind `uint8_t name##_kind`, at most one per record;
      DESC_OUT  a JSDescFacts * naming the requester's own record, which tramp_cont_relink_outer re-aims;
      FACTS     a JSDescFacts held by value, whose three values are owned;
      PROPS     an owned own-key table, whose length is the field named in `type`;
-     OWN_ARRAY a JSValue array of `type` slots, every one owned (a slot nothing wrote is js_mallocz's 0);
-     BORROW_ARRAY a JSValue array of `type` slots, each a view another owner keeps alive;
-     OWN_VEC   a heap JSValue block of `name##_cap` slots, whose first `type` (a field) are owned values.
+     OWN_ARRAY, BORROW_ARRAY  a JSValue array of `type` slots, every one owned, or each kept alive elsewhere;
+     OWN_VEC   a heap JSValue block of `name##_cap` slots, whose first `type` (a field) are owned values;
+     OWN_LIST  a heap list of exactly `type` (a field) owned values, free_arg_list's shape;
+     VIEW      a JSValueConst * that may point into a list, `type` = (list, its count), declared after the list.
    Each role defines one macro per walk; a role a walk does not define is a compile error at that walk. */
 #define CONT_REC_MEMBER_OWN_VAL(t, n) JSValue n;
 #define CONT_REC_MEMBER_OWN_ATOM(t, n) JSAtom n;
@@ -28713,6 +28713,36 @@ static JSPropertyEnum *js_prop_enum_dup(JSContext *ctx, const JSPropertyEnum *ta
 #define CONT_REC_DESC_OUT_OWN_ARRAY(t, n)
 #define CONT_REC_DESC_OUT_BORROW_ARRAY(t, n)
 #define CONT_REC_DESC_OUT_OWN_VEC(t, n)
+#define CONT_REC_MEMBER_OWN_LIST(t, n) JSValue *n;
+#define CONT_REC_FREE_OWN_LIST(t, n) if (r->n) free_arg_list(ctx, r->n, r->t);
+#define CONT_REC_DUP_OWN_LIST(t, n)                                                                        \
+    if (r->n) {                                                                                               \
+        c->n = js_malloc(ctx, sizeof(JSValue) * (size_t)max_int(1, r->t));                                    \
+        CHECK(c->n != NULL, "OOM copying a parked record's owned value list for a fork");                     \
+        for (int k_ = 0; k_ < r->t; k_++) c->n[k_] = js_dup(r->n[k_]);                                       \
+    }
+#define CONT_REC_NOUTER_OWN_LIST(t, n) 0
+#define CONT_REC_OUTER_GET_OWN_LIST(t, n)
+#define CONT_REC_OUTER_SET_OWN_LIST(t, n)
+#define CONT_REC_DESC_OUT_OWN_LIST(t, n)
+#define CONT_REC_MEMBER_VIEW(t, n) JSValueConst *n;
+#define CONT_REC_FREE_VIEW(t, n)
+#define CONT_REC_UNPAREN(...) __VA_ARGS__
+#define CONT_REC_DUP_VIEW(t, n) CONT_REC_DUP_VIEW_ARGS(n, CONT_REC_UNPAREN t)
+#define CONT_REC_DUP_VIEW_ARGS(n, ...) CONT_REC_DUP_VIEW_(n, __VA_ARGS__)
+/* A view into the record's own list moves into the copy's list by the same offset; a view of storage the
+   record does not own is the caller's to move (clone_deep_flow's argument windows). */
+#define CONT_REC_DUP_VIEW_(n, list, len)                                                                   \
+    if (r->list) {                                                                                            \
+        DCHECK(c->list != r->list, "a view was copied before the list it points into: declare it after it"); \
+        DCHECK(r->n >= r->list && r->n <= r->list + r->len,                                                   \
+               "a record owns a value list and its view points somewhere else");                              \
+        c->n = c->list + (r->n - r->list);                                                                    \
+    }
+#define CONT_REC_NOUTER_VIEW(t, n) 0
+#define CONT_REC_OUTER_GET_VIEW(t, n)
+#define CONT_REC_OUTER_SET_VIEW(t, n)
+#define CONT_REC_DESC_OUT_VIEW(t, n)
 #define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
 #define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(t, n)
 #define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(t, n)
@@ -28976,30 +29006,30 @@ static void js_ta_target_free(JSContext *ctx, JSTATarget *tt);
                                   answers an own data property in place, without a frame. The state is the parked
                                   CONSTRUCT: everything do_construct_tramp reads out of the con_* registers, which
                                   are interpreter locals and are gone when the read resumes. */
-typedef struct JSCtorProto {
-    /* the callee and new.target are BORROWED, exactly as `args` is and as do_construct_tramp itself borrows them:
-       whatever owns them across the construct owns them across this suspension too — the caller's operand slots
-       for `new C()`, con_super_ref plus the derived frame for super(), the machine's own buffer for a Construct
-       request. Duping them here instead leaked two references per construct, because the con_* registers the
-       resume hands them back to are borrowed registers that nothing frees. */
-    JSValueConst func, ntgt;
-    JSValue super_ref;       /* super()'s parent-class reference (owned; UNDEFINED for `new C()`) */
-    JSValueConst *args;      /* the arguments: a borrowed window onto the caller's operand stack or the derived
-                                frame's argv, both of which outlive the suspension, or args_owned's block */
-    JSValue *args_owned;     /* non-NULL = the block AND every element belong to this state */
-    int argc, cargc;
-    void *outer;             /* the machine that requested the construct, if any */
-    uint8_t outer_kind;
-    uint8_t from_super;
-    int8_t first;            /* tramp_first: -2 = the stack shape, 0 = super()'s */
-    uint8_t is_tail;
-    /* WHICH ARM SUSPENDED, so the delivery resumes INTO IT past its own predicate. Re-testing the arm conditions
-       on the way back would re-decide from operands the `prototype` getter has had a chance to mutate — a replay,
-       which is what the hoist above do_construct_tramp exists to remove. */
-    uint8_t resume_arm;
-} JSCtorProto;
+/* `func` and `ntgt` are the callee and new.target, borrowed exactly as do_construct_tramp borrows them: what
+   owns them across the construct (the caller's operand slots, con_super_ref and the derived frame, a Construct
+   request's buffer) owns them across this suspension, and the con_* registers the resume hands them back to
+   free nothing. `super_ref` is super()'s parent-class reference (UNDEFINED for `new C()`). `args` is the
+   argument window: into `args_owned` when the record owns the list, otherwise a borrowed window onto the
+   caller's operand stack or the derived frame's argv, which clone_deep_flow moves. `cargc` is the pop the
+   dispatch consumed and `first` its tramp_first (-2 the stack's shape, 0 super()'s); `resume_arm` is the arm
+   that suspended, so the delivery resumes into it rather than re-deciding from operands the getter could have
+   mutated. */
+#define JS_CTOR_PROTO_FIELDS(F)                                                                                \
+    F(BORROW, JSValueConst, func)                                                                              \
+    F(BORROW, JSValueConst, ntgt)                                                                              \
+    F(OWN_VAL, JSValue, super_ref)                                                                             \
+    F(OWN_LIST, argc, args_owned)                                                                              \
+    F(VIEW, (args_owned, argc), args)                                                                          \
+    F(POD, int, argc)                                                                                          \
+    F(POD, int, cargc)                                                                                         \
+    F(OUTER, void *, outer)                                                                                    \
+    F(POD, uint8_t, from_super)                                                                                \
+    F(POD, int8_t, first)                                                                                      \
+    F(POD, uint8_t, is_tail)                                                                                   \
+    F(POD, uint8_t, resume_arm)
+CONT_RECORD_DEFINE(JSCtorProto, js_ctor_proto, JS_CTOR_PROTO_FIELDS)
 enum { CTOR_RESUME_CONSTRUCT = 0, CTOR_RESUME_PROMISE_EXEC };
-static void js_ctor_proto_free(JSContext *ctx, JSCtorProto *cp);
 
 #define CONT_ARRAY_LEN     64  /* tp_outer = JSArrayLen: 10.4.2.4 ArraySetLength steps 3-5, whose TWO coercions
                                   are the page's code — ToUint32(V) then ToNumber(V), both on the ORIGINAL V, so
@@ -30463,37 +30493,6 @@ static void js_ta_target_free(JSContext *ctx, JSTATarget *tt)
     JS_FreeValue(ctx, tt->getiter);
     js_free_rt(ctx->rt, tt);
 }
-
-static void js_ctor_proto_free(JSContext *ctx, JSCtorProto *cp)
-{
-    JS_FreeValue(ctx, cp->super_ref);
-    if (cp->args_owned) free_arg_list(ctx, cp->args_owned, cp->argc);
-    js_free_rt(ctx->rt, cp);
-}
-
-/* A parked construct copied for the sibling: a second reference to exactly what js_ctor_proto_free releases one
-   of. `outer` still names the original requester, which tramp_cont_relink_outer binds; a borrowed `args` window
-   still names the parent's storage, which clone_deep_flow moves into the sibling's copy of it. func and ntgt are
-   borrowed from operand slots the sibling's cloned frames hold too. NULL on OOM. */
-static JSCtorProto *js_ctor_proto_clone(JSContext *ctx, const JSCtorProto *cp)
-{
-    JSCtorProto *n = js_malloc(ctx, sizeof(*n));
-    int i;
-
-    if (!n) return NULL;
-    *n = *cp;
-    if (cp->args_owned) {
-        DCHECK(cp->args >= cp->args_owned && cp->args <= cp->args_owned + cp->argc,
-               "a parked construct owns an argument block and reads its arguments from somewhere else");
-        n->args_owned = js_malloc(ctx, sizeof(JSValue) * (size_t)(cp->argc > 0 ? cp->argc : 1));
-        if (!n->args_owned) { js_free(ctx, n); return NULL; }
-        for (i = 0; i < cp->argc; i++) n->args_owned[i] = js_dup(cp->args_owned[i]);
-        n->args = n->args_owned + (cp->args - cp->args_owned);
-    }
-    n->super_ref = js_dup(cp->super_ref);
-    return n;
-}
-
 
 /* The same question the interpreter's write site asks, in the form the KEYED ENTRY can ask it: the entry has
    resolved the key to an atom already, so the canonical-numeric-index test is a property of that atom and needs
@@ -53634,6 +53633,7 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
     X(CONT_ASYNC_AWAIT, JSAsyncSettle, js_async_settle, LINK)                                                  \
     X(CONT_PROMISE_EXEC, JSPromiseExec, js_promise_exec, ANCHOR)                                               \
     X(CONT_CONSTRUCT, JSConstruct, js_construct, ANCHOR)                                                       \
+    X(CONT_CTOR_PROTO, JSCtorProto, js_ctor_proto, LINK)                                                       \
     X(CONT_ARG_LIST, JSArgList, js_arg_list, LINK)                                                             \
     X(CONT_ARG_LIST_YIELD, JSArgList, js_arg_list, ANCHOR)
 #define CONT_REC_CASE_OUTER_GET(k, T, p, role)  case k: return p##_outer_get((T *)st, out_kind);
@@ -53674,12 +53674,6 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
         TOPRIM_ROLE_AGREES(st, kind);
         *out_kind = ((struct JSToPrim *)st)->outer_kind;
         return ((struct JSToPrim *)st)->outer;
-    case CONT_CTOR_PROTO:
-        /* a construct parked on its new.target's `prototype` read: what waits on it is whoever asked for the
-           construct (a step machine's Construct request, a capability's subclass construct), or nothing for a
-           bytecode `new`, whose answer goes on the operand stack */
-        *out_kind = ((JSCtorProto *)st)->outer_kind;
-        return ((JSCtorProto *)st)->outer;
     case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET:
         /* BOTH ROLES OF ONE RECORD: a consumer waiting on a read, write or call it issued (8), or on GetIterator
            step 5.b's nextMethod read (51). What waits on it is whoever asked for the consume either way. */
@@ -53751,8 +53745,6 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
     case CONT_TOPRIM: case CONT_TOPRIM_GET:
         TOPRIM_ROLE_AGREES(st, kind);
         ((struct JSToPrim *)st)->outer = outer; ((struct JSToPrim *)st)->outer_kind = outer_kind; return;
-    case CONT_CTOR_PROTO:
-        ((JSCtorProto *)st)->outer = outer; ((JSCtorProto *)st)->outer_kind = outer_kind; return;
     case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET:
         ITERCONS_ROLE_AGREES(st, kind);
         ((struct JSIterConsume *)st)->outer = outer; ((struct JSIterConsume *)st)->outer_kind = outer_kind; return;
@@ -53831,10 +53823,6 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         /* a construct sequence under one of its reads — a new.target `prototype` getter or Proxy trap, or a
            subclass's `add`/`set` accessor — branching on unknown input */
         return js_ctor_seq_clone(ctx, st, kind);
-    case CONT_CTOR_PROTO:
-        /* an ordinary construct under its new.target's `prototype` read — a getter or a Proxy `get` trap
-           branching on unknown input. clone_deep_flow moves a borrowed argument window afterwards. */
-        return js_ctor_proto_clone(ctx, (const JSCtorProto *)st);
     /* No arm here. A kind that is only ever a frame's own cont_state (CONT_ARG_LIST_YIELD's anchor, say) is
        cloned by clone_deep_flow's arm for it; any other has not yet been asked to copy a link. */
     case CONT_NONE: case CONT_AGEN_CREATE: case CONT_SETTER:
@@ -54957,19 +54945,6 @@ static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink
            continuation issued (43, 73). */
         js_async_from_sync_end(ctx, (struct JSAsyncFromSync *)st);
         js_free_rt(rt, st);
-        return;
-    }
-    case CONT_CTOR_PROTO: {
-        /* A construct parked on its new.target's `prototype` read (10.1.13 step 2), released with nobody to
-           answer to. js_ctor_proto_free releases what the record owns (super_ref, the args_owned block and its
-           elements, the record); func, ntgt and a borrowed args window are the caller's operand slots, freed by
-           that frame's arm. The construct's requester goes with it, as in the CONT_CONSTRUCT arm. The link is
-           read before the free. */
-        JSCtorProto *cp = st;
-        void *co = cp->outer;
-        uint8_t ck = cp->outer_kind;
-        js_ctor_proto_free(ctx, cp);
-        next->st = co; next->kind = ck;
         return;
     }
     case CONT_NONE:
