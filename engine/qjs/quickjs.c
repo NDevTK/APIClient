@@ -55063,12 +55063,36 @@ static void free_generator_stack_rt(JSRuntime *rt, JSGeneratorData *s)
    Every kind in CONT_KIND_LIST has a case here, so the kinds with no arm yet are the group spelled before
    the DFAIL, and a kind added to the list without a case here does not compile. */
 CONT_KIND_SWITCH_CHECKED_BEGIN
-static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
+typedef struct ContLink {
+    void *st;
+    uint8_t kind;
+} ContLink;
+typedef struct ContLinks {
+    ContLink inline_[4], *v;
+    int n, cap;
+} ContLinks;
+static void cont_links_push(JSRuntime *rt, ContLinks *h, void *st, uint8_t kind)
+{
+    if (h->n == h->cap) {
+        ContLink *grown = h->v == h->inline_ ? js_malloc_rt(rt, sizeof(*grown) * (size_t)h->cap * 2)
+                                              : js_realloc_rt(rt, h->v, sizeof(*grown) * (size_t)h->cap * 2);
+        CHECK(grown != NULL, "tramp_cont_free: OOM holding a continuation chain still to release");
+        if (h->v == h->inline_) memcpy(grown, h->inline_, sizeof(h->inline_));
+        h->v = grown;
+        h->cap *= 2;
+    }
+    h->v[h->n].st = st;
+    h->v[h->n].kind = kind;
+    h->n++;
+}
+/* One record of the walk below: released, with the link it was released with (its requester) answered in
+   `*next`, and a second chain a record owns pushed on `held`. */
+static void tramp_cont_free_one(JSContext *ctx, void *st, uint8_t kind, ContLink *next, ContLinks *held)
 {
     JSRuntime *rt = ctx->rt;
 
-    if (kind == CONT_NONE || !st)
-        return;
+    next->st = NULL;
+    next->kind = CONT_NONE;
     switch ((enum ContKind)kind) {
     case CONT_STEP: case CONT_STEP_YIELD: {
         /* the machine AND every machine waiting on it. What the walk does not own it REPORTS, and here that
@@ -55078,7 +55102,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         int lcf = 0, lcg = 0;
         void *rest = tramp_step_chain_free_upto(ctx, st, &left, &lcf, &lcg);
         (void)lcf; (void)lcg;
-        tramp_cont_free(ctx, rest, left);
+        next->st = rest; next->kind = left;
         return;
     }
     case CONT_GETPROP_YIELD: case CONT_TRAP_GET: {
@@ -55092,7 +55116,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         void *co = tg->outer;
         uint8_t ck = tg->outer_kind;
         js_trapget_free(ctx, tg);
-        tramp_cont_free(ctx, co, ck);
+        next->st = co; next->kind = ck;
         return;
     }
     case CONT_GETPROP: {
@@ -55108,7 +55132,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         void *go = gp->outer;
         uint8_t gk = gp->outer_kind;
         js_getprop_free(ctx, gp);
-        tramp_cont_free(ctx, go, gk);
+        next->st = go; next->kind = gk;
         return;
     }
     case CONT_ARRAY_LEN: case CONT_ARRAY_LEN_YIELD: {
@@ -55122,7 +55146,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         void *ao = al->outer;
         uint8_t ak = al->outer_kind;
         js_array_len_free(ctx, al);
-        tramp_cont_free(ctx, ao, ak);
+        next->st = ao; next->kind = ak;
         return;
     }
     case CONT_OP_KEYED: {
@@ -55210,9 +55234,9 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
             uint8_t pk = ctx->pending_gp_unwind_kind;
             ctx->pending_gp_unwind = pgu0;
             ctx->pending_gp_unwind_kind = pgk0;
-            tramp_cont_free(ctx, pg, pk);
+            cont_links_push(rt, held, pg, pk);
         }
-        tramp_cont_free(ctx, rest, left);
+        next->st = rest; next->kind = left;
         return;
     }
     case CONT_ITER_CONSUME: case CONT_CONSUME_NEXT_GET: {
@@ -55240,7 +55264,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         void *co = ag->consumer;
         uint8_t ck = ag->consumer_kind;
         js_free_rt(rt, ag);
-        tramp_cont_free(ctx, co, ck);
+        next->st = co; next->kind = ck;
         return;
     }
     case CONT_SETMAP_CTOR:
@@ -55270,7 +55294,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         JS_FreeValue(ctx, ps->super_ref);
         JS_FreeValue(ctx, ps->executor_own);   /* the Reflect.construct spelling's argsList element */
         js_free_rt(rt, ps);
-        tramp_cont_free(ctx, po, pk);
+        next->st = po; next->kind = pk;
         return;
     }
     case CONT_CONSTRUCT: {
@@ -55280,7 +55304,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         JS_FreeValue(ctx, cs->created_obj);
         JS_FreeValue(ctx, cs->super_ref);
         js_free_rt(rt, cs);
-        tramp_cont_free(ctx, co, ck);
+        next->st = co; next->kind = ck;
         return;
     }
     case CONT_ASYNC_SETTLE: case CONT_ASYNC_AWAIT: {
@@ -55295,7 +55319,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         uint8_t ak = ass->cont_kind;
         js_async_settle_end(ctx, ass);
         js_free_rt(rt, ass);
-        tramp_cont_free(ctx, ao, ak);
+        next->st = ao; next->kind = ak;
         return;
     }
     case CONT_WITH_HAS:
@@ -55313,7 +55337,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         void *co = cp->outer;
         uint8_t ck = cp->outer_kind;
         js_ctor_proto_free(ctx, cp);
-        tramp_cont_free(ctx, co, ck);
+        next->st = co; next->kind = ck;
         return;
     }
     case CONT_OWNKEYS_CHK: {
@@ -55323,7 +55347,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         void *oo = okc->outer;
         uint8_t ok2 = okc->outer_kind;
         js_ownkeys_chk_free(ctx, okc);
-        tramp_cont_free(ctx, oo, ok2);
+        next->st = oo; next->kind = ok2;
         return;
     }
     case CONT_PROXY_INV: {
@@ -55331,7 +55355,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         void *po = pv->outer;
         uint8_t pk = pv->outer_kind;
         js_proxy_inv_free(ctx, pv);
-        tramp_cont_free(ctx, po, pk);
+        next->st = po; next->kind = pk;
         return;
     }
     case CONT_KEYED_INV: {
@@ -55339,7 +55363,7 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         void *ko = ki->outer;
         uint8_t kk = ki->outer_kind;
         js_keyed_inv_free(ctx, ki);
-        tramp_cont_free(ctx, ko, kk);
+        next->st = ko; next->kind = kk;
         return;
     }
     case CONT_NONE:
@@ -55369,6 +55393,26 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
                  (int)kind);
         DCHECK(kind == CONT_NONE, why);
     }
+}
+/* The chain from `st` outward, and every chain a record on it holds, released as one loop: a chain is as long
+   as the nesting of the operations parked on it, which the page sets. */
+static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
+{
+    ContLinks held = { .n = 0, .cap = 4 };
+    ContLink next = { st, kind };
+
+    held.v = held.inline_;
+    for (;;) {
+        if (next.kind == CONT_NONE || next.st == NULL) {
+            if (held.n == 0)
+                break;
+            next = held.v[--held.n];
+            continue;
+        }
+        tramp_cont_free_one(ctx, next.st, next.kind, &next, &held);
+    }
+    if (held.v != held.inline_)
+        js_free_rt(ctx->rt, held.v);
 }
 CONT_KIND_SWITCH_CHECKED_END
 
