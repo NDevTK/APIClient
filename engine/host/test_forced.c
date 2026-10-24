@@ -14453,6 +14453,18 @@ TF_UNIT void probes_qnamefork(const char *js, Probe *tab, int *n) {
              "the arm in which the local name is valid did not create an element");
     fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/lname", "arm", "InvalidCharacterError"),
              "the arm in which the local name is not valid did not throw InvalidCharacterError");
+    /* createAttribute reaches §4.5 step 1's two completions and createAttributeNS §1.4's three. */
+    const char *ca_why = NULL; int ca_tt = 1;
+    fold_row(&ca_tt, &ca_why, param_value_is(js, "/api/caname", "arm", "attr"),
+             "createAttribute's arm in which the name is valid did not create an attribute");
+    fold_row(&ca_tt, &ca_why, param_value_is(js, "/api/caname", "arm", "InvalidCharacterError"),
+             "createAttribute's arm in which the name is not valid did not throw InvalidCharacterError");
+    fold_row(&ca_tt, &ca_why, param_value_is(js, "/api/cansname", "arm", "attr"),
+             "createAttributeNS's arm in which the name is valid did not create an attribute");
+    fold_row(&ca_tt, &ca_why, param_value_is(js, "/api/cansname", "arm", "InvalidCharacterError"),
+             "createAttributeNS's InvalidCharacterError arm was not reached");
+    fold_row(&ca_tt, &ca_why, param_value_is(js, "/api/cansname", "arm", "NamespaceError"),
+             "createAttributeNS's NamespaceError arm was not reached");
     /* setAttribute reaches §4.9 step 1's two completions and setAttributeNS §1.4's three. */
     const char *an_why = NULL; int an_tt = 1;
     fold_row(&an_tt, &an_why, param_value_is(js, "/api/aname", "arm", "set"),
@@ -14469,6 +14481,7 @@ TF_UNIT void probes_qnamefork(const char *js, Probe *tab, int *n) {
         { "unknown-qualified-name-forks", qn_tt, "/api/qname", SESS_EXPLORE, qn_why },
         { "unknown-local-name-forks", ln_tt, "/api/lname", SESS_EXPLORE, ln_why },
         { "unknown-attribute-name-forks", an_tt, "/api/aname", SESS_EXPLORE, an_why },
+        { "unknown-attribute-factory-name-forks", ca_tt, "/api/caname", SESS_EXPLORE, ca_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

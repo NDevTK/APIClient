@@ -1564,8 +1564,8 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
  * element the example name creates when that name is valid. A known name runs the internal steps directly.
  *
  * Named residual. Not covered: an unknown namespace beside the name, §4.5.1 createDocument's qualified name and
- * createDocumentType's name, createAttribute, createAttributeNS and createProcessingInstruction, each a byte
- * consumer of its name, and toggleAttribute, which validates the unknown's shape. Next diff builds: the same fork
+ * createDocumentType's name and createProcessingInstruction's target, each a byte consumer of its name, and
+ * toggleAttribute, which validates the unknown's shape. Next diff builds: the same fork
  * at each, asking dom_qname_outcome or the entry's own name predicate. Absence shows as: a @WHY naming ToString
  * over unknown external input at one of those entries' conversions. */
 #define CEN_ALGORITHM "DOM §4.5 Interface Document createElementNS(namespace, qualifiedName)"

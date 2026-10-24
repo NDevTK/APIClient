@@ -551,8 +551,8 @@ const IdlStepDecl *attr_set_attribute_decl(void) { return &ATTR_SET_STEP; }
  * there is no element yet. Every other lowercasing site in the attribute surface (get an attribute by name, setAttribute,
  * hasAttribute, toggleAttribute, NamedNodeMap's supported property names) tests TWO terms, and
  * `createAttributeNS` tests none at all. magic 0 = createAttribute, 1 = createAttributeNS. */
-static JSValue js_doc_create_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                       int magic)
+static JSValue doc_create_attribute(JSContext *ctx, JSValueConst this_val, JSValueConst *argv, int magic,
+                                    bool decided_valid)
 {
     lxb_dom_node_t *n = node_of(this_val);
     lxb_dom_document_t *doc;
@@ -570,7 +570,7 @@ static JSValue js_doc_create_attribute(JSContext *ctx, JSValueConst this_val, in
 
         if (!local) return JS_EXCEPTION;
         len = strlen(local);
-        if (!dom_valid_attribute_local_name(local, len)) {          /* step 1 */
+        if (!decided_valid && !dom_valid_attribute_local_name(local, len)) {          /* step 1 */
             JS_FreeCString(ctx, local);
             return JS_ThrowDOMException(ctx, "InvalidCharacterError",
                                         "createAttribute was given a name that is not a valid attribute local name");
@@ -594,7 +594,17 @@ static JSValue js_doc_create_attribute(JSContext *ctx, JSValueConst this_val, in
         ns_arg = JS_IsNull(argv[0]) ? NULL : JS_ToCStringLen(ctx, &ns_len, argv[0]);
         qn = JS_ToCString(ctx, argv[1]);
         if (!qn) { if (ns_arg) JS_FreeCString(ctx, ns_arg); return JS_EXCEPTION; }
-        ok = dom_validate_and_extract(ctx, ns_arg, ns_len, qn, strlen(qn), DOM_NAME_ATTRIBUTE, &ex);   /* step 1 */
+        if (decided_valid) {
+            /* Step 1 was decided valid over an unknown name, whose shape stands as the whole local name: its
+               prefix is not a fact this run holds. */
+            ex.ns = (ns_arg && ns_len) ? ns_arg : NULL;
+            ex.ns_len = ex.ns ? ns_len : 0;
+            ex.prefix = NULL; ex.prefix_len = 0;
+            ex.local = qn; ex.local_len = strlen(qn);
+            ok = true;
+        } else {
+            ok = dom_validate_and_extract(ctx, ns_arg, ns_len, qn, strlen(qn), DOM_NAME_ATTRIBUTE, &ex);   /* step 1 */
+        }
         if (ok) {
             /* The three slices are borrowed halves of `qn` and `ns_arg`, so they are NUL-terminated here and
                nowhere else — "create an attribute" takes strings, and the colon is the separator. */
@@ -617,6 +627,107 @@ static JSValue js_doc_create_attribute(JSContext *ctx, JSValueConst this_val, in
     }
     return node_wrap(ctx, lxb_dom_interface_node(a));
 }
+
+/* The two factories as the page calls them: step machines, because the name may be unknown external input, and
+ * step 1 then has every completion its name check can reach — createAttribute's valid attribute local name or
+ * InvalidCharacterError, createAttributeNS's §1.4 three (names.h's DomQNameOutcome, each feasible for every
+ * namespace as document.c's createElementNS says). The valid arm creates the attribute under the unknown's shape,
+ * as setAttribute stores one; a known name runs the factory directly. */
+#define CAT_ALGORITHM "DOM §4.5 Interface Document createAttribute / createAttributeNS"
+#define CAT_STAGES(X) X(CAT_CREATE, CAT_ALGORITHM " (step 1's name check, then create an attribute)")
+enum { IDL_STEP_STAGE_BASE(CAT_STAGES) CAT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CAT_STEPS[] = { CAT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+static const char *const CAT_OP[2] = {
+    "DOM §4.5 createAttribute step 1 (localName is a valid attribute local name)",
+    "DOM §4.5 createAttributeNS step 1 (validate and extract with context attribute)",
+};
+
+typedef struct { int unused; } CatState;   /* the fork's request lives on the header; nothing is owned here */
+static void cat_visit(JSContext *ctx, void *state, JSStepVisit *v) { (void)ctx; (void)state; (void)v; }
+
+/* Which completion the example name reaches, for step_fork_run's `real`. */
+static int cat_real(JSContext *ctx, int magic, JSValueConst ns_v, JSValueConst name)
+{
+    JSValue ex = concolic_example(ctx, name);
+    int real = JS_OUTCOME_REAL_UNSTATED;
+
+    if (JS_IsString(ex)) {
+        size_t q_len = 0, ns_len = 0;
+        const char *q = JS_ToCStringLen(ctx, &q_len, ex), *ns = NULL, *why = NULL;
+        DomQName qn;
+
+        CHECK(q != NULL, "createAttribute could not read the bytes of a string it was handed");
+        if (magic == 0) {
+            real = dom_valid_attribute_local_name(q, q_len) ? 0 : 1;
+        } else {
+            if (!JS_IsNull(ns_v)) ns = JS_ToCStringLen(ctx, &ns_len, ns_v);
+            CHECK(ns != NULL || JS_IsNull(ns_v), "createAttributeNS could not read its namespace's bytes");
+            real = (int)dom_qname_outcome(ns, ns_len, q, q_len, DOM_NAME_ATTRIBUTE, &qn, &why);
+            if (ns) JS_FreeCString(ctx, ns);
+        }
+        JS_FreeCString(ctx, q);
+    }
+    JS_FreeValue(ctx, ex);
+    return real;
+}
+
+static int js_doc_create_attribute_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc,
+                                        JSValueConst *argv, JSValue cb_result, JSValue *presult,
+                                        JSValue **out_cb, int *out_argc)
+{
+    int magic = idl_step_magic(hdr), at = magic == 0 ? 0 : 1, rc, arm = 0;
+    bool decided = false;
+    JSValue r;
+
+    (void)state; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(magic == 0 || magic == 1, "a document attribute factory was declared with a magic this file does not name");
+    DCHECK(hdr->stage == CAT_CREATE, "createAttribute resumed into a stage its declaration does not have");
+    DCHECK(argc == at + 1, "createAttribute reached its body with an argument count its declaration does not produce");
+    if (concolic_is(argv[at])) {
+        int n = magic == 0 ? 2 : DOM_QNAME_OUTCOMES;
+
+        DCHECK(magic == 0 || !concolic_is(argv[0]),
+               "createAttributeNS was handed an unknown namespace beside an unknown qualified name — the "
+               "completion then depends on both, so build the fork over the pair (concolic_new_rel) here");
+        rc = step_fork_run(ctx, hdr, argv[at], CAT_OP[magic], n, cat_real(ctx, magic, argv[0], argv[at]), &arm);
+        if (rc)
+            return rc;
+        DCHECKF(arm >= 0 && arm < n, "createAttribute's fork answered completion %d", arm);
+        if (arm != 0) {
+            JS_ThrowDOMException(ctx, magic == 0 ? "InvalidCharacterError"
+                                                 : dom_qname_outcome_exception((DomQNameOutcome)arm),
+                                 "the name is not one step 1 accepts");
+            return JS_STEP_ABRUPT;
+        }
+        decided = true;
+    }
+    if (decided) {
+        /* The unknown's shape, a real string, is the name the valid arm creates under. */
+        JSValueConst a2[2];
+        JSValue shape;
+        const char *sh = concolic_shape_c(argv[at]);
+
+        DCHECK(sh != NULL, "an unknown name answered no display shape");
+        shape = JS_NewString(ctx, sh);
+        CHECK(!JS_IsException(shape), "createAttribute could not make a string of an unknown name's shape");
+        a2[0] = magic == 0 ? shape : argv[0];
+        a2[1] = shape;
+        r = doc_create_attribute(ctx, hdr->this_val, a2, magic, true);
+        JS_FreeValue(ctx, shape);
+    } else {
+        r = doc_create_attribute(ctx, hdr->this_val, argv, magic, false);
+    }
+    if (JS_IsException(r))
+        return JS_STEP_ABRUPT;
+    *presult = r;
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl CAT_DECL = {
+    js_doc_create_attribute_step, sizeof(CatState), cat_visit, NULL, CAT_ALGORITHM, CAT_STEPS, 0, NULL
+};
 
 void attr_install_document_members(JSContext *ctx, JSValueConst doc_proto)
 {
@@ -682,8 +793,8 @@ void attr_init(JSContext *ctx)
     g_set_named_id = idl_method_id_step(ctx, ONE_ATTR, 1, NULL, 0, &ATTR_SET_STEP, 1);
     idl_iface_brand(node_class_id());
     idl_iface_narrow(attr_is);
-    g_create_attr_id = idl_method_id(ctx, ONE_STR, 1, js_doc_create_attribute, 0);
-    g_create_attr_ns_id = idl_method_id(ctx, NS_LOCAL, 2, js_doc_create_attribute, 1);
+    g_create_attr_id = idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, &CAT_DECL, 0);
+    g_create_attr_ns_id = idl_method_id_step(ctx, NS_LOCAL, 2, NULL, 0, &CAT_DECL, 1);
     g_ready = 1;
     realm_declare_intrinsic(attr_install_protos);
 }
