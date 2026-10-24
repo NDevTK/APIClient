@@ -362,7 +362,7 @@ static IdbKeyResult idb_key_concrete_arm(JSContext *ctx, JSValueConst input, JSV
  * a real array key whose SUBKEYS carry whatever concolics its elements were, which is where the taint stays.
  *
  * THE UNWRAP IS A LOOP AND NOT A RECURSIVE CALL. It was a call into the entry below, which is a C cycle, and
- * engine/check_recursion.mjs counts those over the whole program; asking the same question of the example in a
+ * engine/recgate.mjs counts those over the whole program; asking the same question of the example in a
  * loop says the same thing with no frame. */
 IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *pkey, JSValue *parray,
                                   JSValue *punknown)
@@ -480,7 +480,7 @@ int idb_key_from_value(JSContext *ctx, JSValueConst input, JSValue *pkey)
 
 /* §7.3's FOUR ARMS THAT ARE NOT THE ARRAY ONE, over a key whose rank the caller has already read. Factored out
    so that neither the array walk nor the entry below is on a call CYCLE with the other — a leaf both of them
-   reach, rather than an entry the walk calls back into, which engine/check_recursion.mjs would report over the
+   reach, rather than an entry the walk calls back into, which engine/recgate.mjs would report over the
    whole program as C recursion whatever its actual depth. */
 static JSValue idb_key_scalar_to_value(JSContext *ctx, int rank, JSValueConst key)
 {
@@ -537,7 +537,7 @@ static JSValue idb_key_scalar_to_value(JSContext *ctx, int rank, JSValueConst ke
  * let status be CreateDataProperty(array, index, entry); assert: status is true … return array."
  *
  * NOT C RECURSION, and not as a matter of style: an array key's DEPTH is whatever the page nested, so a C frame
- * per level is a stack whose height the page picks, and engine/check_recursion.mjs reports one over the whole
+ * per level is a stack whose height the page picks, and engine/recgate.mjs reports one over the whole
  * program. A level holds exactly what the recursive call would have — the subkey list, the Array being filled,
  * and ONE cursor into both, because keys[index] becomes array[index].
  *

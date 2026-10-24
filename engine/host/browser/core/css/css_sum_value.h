@@ -69,7 +69,7 @@
  * THE WALK IS ITERATIVE ON A HEAP STACK, for the reason core/css/css_math_value.c's §6.5 walk and core/css/
  * css_numeric_value.c's equal-numeric-values walk are: §4.3.1 states create a sum value recursively over a
  * tree whose DEPTH THE PAGE PICKS (`for (…) v = new CSSMathNegate(v)`), so a C function calling itself here
- * would be a self-contained recursion of unbounded depth — what engine/check_recursion.mjs fails by name and
+ * would be a self-contained recursion of unbounded depth — what engine/recgate.mjs fails by name and
  * what CLAUDE.md's flat-C-stack rule forbids outright. There is no depth cap either; the stack grows to the
  * allocation floor, which is the honest limit. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_SUM_VALUE_H

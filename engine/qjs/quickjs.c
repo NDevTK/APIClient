@@ -3955,7 +3955,7 @@ static uint32_t js_mint_creation_ord(JSContext *ctx)
 
 /* A C CALL CYCLE'S DEPTH, ASSERTED WHERE IT IS RELIED ON.
  *
- * engine/check_recursion.mjs reports four self-contained cycles over the whole program, and every one of them
+ * engine/recgate.mjs reports four self-contained cycles over the whole program, and every one of them
  * is BOUNDED — but three were bounded by an ARGUMENT rather than by a measurement. free_zero_refcount set the
  * standard the other two are held to here: it is a worklist, it says so, and a DCHECK proves the phase flag
  * that makes it one is never violated, so its cycle is a static artefact and not a stack. An argument written
@@ -10725,7 +10725,7 @@ static void free_gc_object(JSRuntime *rt, JSGCObjectHeader *gp)
    A dying object's properties are released while gc_phase is DECREF, so js_free_value_rt only APPENDS to
    gc_zero_ref_count_list and this loop drains it; `for (;;) a = {next: a}` then dropped is one iteration per
    link and no C frames at all. The DCHECK is that invariant stated where it is relied on, because the whole
-   argument rests on this function never being re-entered: engine/check_recursion.mjs still reports the cycle
+   argument rests on this function never being re-entered: engine/recgate.mjs still reports the cycle
    (free_object -> free_property -> JS_FreeValueRT -> here -> free_gc_object -> free_object) since a static
    walk cannot see a phase flag, and the assert is what makes that a MEASURED claim rather than a read one. */
 static void free_zero_refcount(JSRuntime *rt)
@@ -18710,7 +18710,7 @@ static void js_why_backtrace(JSContext *ctx, char *dst, size_t n)
 
 /* THE C-DRIVES-JS PATH IN ToPrimitive IS GONE — the body that ran @@toPrimitive / valueOf / toString through
    JS_CallFree has been DELETED, not left behind an assert. It was the last of the three functions whose mutual
-   reachability manufactures the interpreter cycle (engine/check_recursion.mjs --why-blob), and a superseded
+   reachability manufactures the interpreter cycle (engine/recgate.mjs --why=JS_CallInternal), and a superseded
    system kept as a fallback is what lets an unrouted site stay unrouted.
    THE COVERAGE CLAIM THAT STOOD HERE — that the assert was "silent over the whole corpus" — WAS A CLAIM ABOUT
    A CORPUS OF FIXTURES, AND REAL PAGES FALSIFIED IT: driven over thirty signed-out product surfaces in Chrome,
@@ -21951,7 +21951,7 @@ bool JS_IsArray(JSValueConst val)
    deep `new Proxy(new Proxy(...))` was a stack overflow. What stood in for an answer was a
    js_check_stack_overflow that threw RangeError — a BOUND in an error's clothes, reported for a question the
    spec always answers. The loop has no depth to run out of, and js_proxy_isArray is deleted with it: it existed
-   only to be the other half of the cycle. Found by engine/check_recursion.mjs, which named the two-function
+   only to be the other half of the cycle. Found by engine/recgate.mjs, which named the two-function
    cycle; no test had ever built a chain deep enough to fail. */
 static int js_is_array(JSContext *ctx, JSValueConst val)
 {
@@ -57734,7 +57734,7 @@ typedef struct JSONParseRecordEntry {
    depth chosen by the input — `JSON.parse("[".repeat(1e6) + ...)` — and the js_check_stack_overflow standing in
    front of it turned that into a RangeError, which is a BOUND in an error's clothes: the grammar has an answer
    at every depth and the parser refused to give it. Nothing here is a state machine for suspension's sake; the
-   descent simply IS a stack, so it is written as one. Found by engine/check_recursion.mjs. */
+   descent simply IS a stack, so it is written as one. Found by engine/recgate.mjs. */
 typedef struct JSONFrame {
     JSValue container;      /* the object or array being built (owned) */
     JSONParseRecord *pr;    /* its parse record, or NULL when there is no reviver */

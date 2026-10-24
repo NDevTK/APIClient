@@ -2170,7 +2170,7 @@ static bool update_modifier(bool val, int add_mask, int remove_mask,
    is always inside exactly one alternative of exactly one disjunction, and only a NESTED disjunction needs a
    frame of its own. `resume` is where that nested disjunction's completion lands: the four places a term
    descends are `(?:`, `(?i-m:`, a lookaround, and a capture, and each has different work waiting after it.
-   Found by engine/check_recursion.mjs. */
+   Found by engine/recgate.mjs. */
 enum { RR_ROOT = 0, RR_NONCAP, RR_MODIFIER, RR_LOOKAHEAD, RR_CAPTURE };
 
 typedef struct REParseFrame {

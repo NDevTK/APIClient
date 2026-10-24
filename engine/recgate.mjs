@@ -4,7 +4,9 @@
  * overflows; the standing target is zero. The graph comes from the binary's own disassembly, so it is what
  * compiled, after inlining. Calls through a function pointer do not appear, so the count is a floor.
  *
- *   node engine/recgate.mjs <native binary> [--list]
+ *   node engine/recgate.mjs <native binary> [--list] [--why=NAME]
+ *
+ * --why=NAME prints the shortest call chain from NAME back to itself, which names the edges to cut.
  *
  * Exit 0: no cycle. 1: cycles found, each printed with its area and members. 2: the census could not be taken
  * (no binary, no objdump, or its own control failed), so nothing was judged. */
@@ -16,6 +18,7 @@ import { createInterface } from 'node:readline';
 const argv = process.argv.slice(2);
 const bin = argv.find((a) => !a.startsWith('--'));
 const list = argv.includes('--list');
+const why = (argv.find((a) => a.startsWith('--why=')) || '').slice('--why='.length);
 const die = (msg) => { console.error('[recgate] ' + msg); process.exit(2); };
 
 /* Strongly connected components of `edges` (Map name -> Set of names) that are cycles: more than one member, or
@@ -115,6 +118,25 @@ for (const comp of found) {
   if (list || comp.length > 1)
     console.log(`[recgate] ${String(comp.length).padStart(4)}  ${areas.join(',').padEnd(16)} ` +
                 comp.slice(0, 10).join(' ') + (comp.length > 10 ? ` … (+${comp.length - 10})` : ''));
+}
+/* The shortest cycle through `why`, by breadth-first search inside its own component. */
+if (why) {
+  const comp = found.find((c) => c.includes(why));
+  if (!comp) console.log(`[recgate] --why=${why}: ${addr.has(why) ? 'it is in no cycle' : 'no such function'}`);
+  else {
+    const inComp = new Set(comp), prev = new Map([[why, null]]), queue = [why];
+    let closer = null;
+    while (queue.length && closer === null) {
+      const v = queue.shift();
+      for (const w of edges.get(v) || []) {
+        if (w === why) { closer = v; break; }
+        if (inComp.has(w) && !prev.has(w)) { prev.set(w, v); queue.push(w); }
+      }
+    }
+    const chain = [why];
+    for (let v = closer; v !== why; v = prev.get(v)) chain.splice(1, 0, v);
+    console.log(`[recgate] --why=${why}: ${chain.join(' -> ')} -> ${why}`);
+  }
 }
 const selfLoops = found.filter((c) => c.length === 1).length;
 console.log(`[recgate] ${found.length} cycle(s) over ${addr.size} function(s) and ` +

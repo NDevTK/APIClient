@@ -484,7 +484,7 @@ JSValue css_math_value_serialize(JSContext *ctx, JSValueConst v)
     /* THE WALK IS ITERATIVE AND ITS STACK IS ON THE HEAP, WHICH IS NOT A STYLE CHOICE. §6.5 is stated
        recursively over a tree whose DEPTH THE PAGE PICKS (`for (…) v = new CSSMathNegate(v)`), so a C function
        that called itself here would be a self-contained recursion of unbounded depth — the shape
-       engine/check_recursion.mjs fails by name and CLAUDE.md's flat-C-stack rule forbids. There is no depth
+       engine/recgate.mjs fails by name and CLAUDE.md's flat-C-stack rule forbids. There is no depth
        CAP either: the stack grows until the allocation floor, which is the honest limit. */
     for (;;) {
         MvFrame *f;

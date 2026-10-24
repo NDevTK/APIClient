@@ -6760,8 +6760,8 @@ const EXT_QJS = join(ENGINE, "..", "extension", "lib", "qjs");   // where bridge
    claim about a place rather than about the program. */
 const ROOT = resolve(ENGINE, "..");
 
-/* `--list-sources` answers WHAT THE PROGRAM IS and exits — check_recursion.sh shells back into this file to ask,
-   and a list with build output in front of it is not a list.
+/* `--list-sources` answers WHAT THE PROGRAM IS and exits — a lane's `clang -fsyntax-only` shells back into this
+   file to ask, and a list with build output in front of it is not a list.
    `--list-include-roots` answers WHERE ITS HEADERS COME FROM, for the same reason and to the same rule: the
    compiler is handed these roots and nobody else may restate them. gate_revision.mjs's dangling-include check
    had its own copy of the list — four roots, hand-written — and a second program's extra `-I` made that copy
@@ -7159,20 +7159,16 @@ const STAMP_CONE = ["engine/host", "engine/qjs", "engine/lexbor"];
 
 /* WHAT THE PROGRAM IS — BOTH entries, because both are compiled and both are linked. This used to be whichever
    single entry the `abi` argument selected, and that argument is gone: it chose which of the two programs a run
-   produced, and a run now produces both, so nothing is left for it to select. check_recursion.sh shells in here
-   for this list, and an answer naming one entry excluded the other from the recursion check too. */
-/* DEDUPED, because check_recursion.sh reads this list to decide what to analyse and a file named twice is a
-   unit analysed twice. The `new Set` earned itself when core/mime/mime_type.c was in two programs and one
+   produced, and a run now produces both, so nothing is left for it to select. a consumer of this list that
+   saw one entry would have checked half the program. */
+/* DEDUPED, because a consumer reads this list to decide what to analyse and a file named twice is a unit
+   analysed twice. The `new Set` earned itself when core/mime/mime_type.c was in two programs and one
    file; it stays because the property it guarantees is about this list and not about how many programs
    happen to exist. */
 const sources = [...new Set(SHARED_SOURCES.concat([ENTRY_SMOKE, ENTRY_ABI]))];
 
-/* WHAT THE PROGRAM IS, asked rather than copied. check_recursion.sh needs exactly this list — its header says
-   "the unit list mirrors engine/build.mjs" — and it was a second copy that had drifted to a THIRD of it: every
-   browser component (the DOM tree walks, the HTML serialiser, custom elements, fetch, Headers) was outside the
-   check entirely, so its zero was a zero about quickjs and the solver and nothing else. A checker that covers a
-   fraction is worse than none, which is what that script's own header warns; the fix is that there is one list
-   and the checker reads it. */
+/* WHAT THE PROGRAM IS, asked rather than copied: a consumer that kept its own copy of this list would drift
+   from what compiles, and a checker that covers a fraction of the program is believed when it reads zero. */
 if (LIST_SOURCES) {
   console.log(sources.join("\n"));
   process.exit(0);

@@ -216,8 +216,8 @@ const leaks = gcLeaks + mallocLeaks;
    top level was enough. 342 of the 606 came from annexB/language/eval-code alone.
    The number being large said nothing about the number of causes, and treating it as a backlog is what kept
    it unexamined — a single file bisected to the construct in five probes.
-   It ratchets like engine/check_recursion.mjs: MORE is a regression the build refuses, FEWER must be recorded
-   here so the gain cannot be given back. At zero the two detectors finally agree, and any raw-allocation leak
+   It ratchets: MORE is a regression the build refuses, FEWER must be recorded here so the gain cannot be
+   given back. At zero the two detectors finally agree, and any raw-allocation leak
    is now as loud as a gc-object one. The ceiling applies only to a whole-corpus run; a subdirectory run
    reports its count and enforces nothing, because the number is not comparable. */
 const MALLOC_LEAK_CEILING = 0;
@@ -330,13 +330,13 @@ if (notEngaged) {
    them leaves this counter at zero.
    So it must NOT print "pure suspend/resume-at-any-depth". It did, and that label was read back as evidence of
    resumability it cannot provide — a claim about the whole engine derived from a probe scoped to one path. The
-   number that covers the rest is engine/check_recursion.sh, which is STATIC and whole-program; this line now
+   number that covers the rest is engine/recgate.mjs, which is STATIC and whole-program; this line now
    says which question it answered and points at the one that answers the others. */
 const driveN = d2c ? +d2c[1] : 0;
 if (d2c) console.log(`  drive-to-completion: ${driveN}` +
   (driveN > 0 ? "  <-- some coroutine body ran to COMPLETION off-tramp (not suspend/resume) — route it onto the tramp chain"
               : "  (no bytecode body was entered by C recursion under a flow — says NOTHING about C-to-C\n" +
-                "                          recursion, which only engine/check_recursion.sh measures)"));
+                "                          recursion, which only engine/recgate.mjs measures)"));
 /* THE REVISION IN THE TAIL, because the tail is what gets pasted — see engine/wpt.mjs's summary for the run
    whose nine-atom report was quoted for hours against a tree that had already fixed all three of its roots. */
 for (const l of revisionLines(REV_AT_START)) console.log(l);

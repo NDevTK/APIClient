@@ -7,7 +7,7 @@
  *   arguments entry and seen", and an element that is itself an Array re-enters the same steps — so a level
  *   holds exactly what one entry of that recursion holds (the array, its len, its index, and the keys collected
  *   off it) and a PUSH is the recursive call. C recursion could not be one: the depth is `[[[[…]]]]` as deep as
- *   the page wrote it, and engine/check_recursion.mjs is the gate that says so over the whole program.
+ *   the page wrote it, and engine/recgate.mjs is the gate that says so over the whole program.
  *
  *   `seen` IS NOT THAT STACK, and reading it as one is the mistake this file is built to make impossible. §7.4
  *   never REMOVES from seen — step 2 appends and nothing pops — so the set is every array the whole conversion

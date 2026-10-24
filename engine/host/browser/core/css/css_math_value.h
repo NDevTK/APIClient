@@ -24,7 +24,7 @@
  * THE TYPE IS COMPUTED ONCE, AT THE MINT, AND THAT IS NOT A CACHE — IT IS WHAT KEEPS THE C STACK FLAT.
  * §4.3.4 states a math value's type recursively ("the result of adding the types of each of the items in its
  * values internal slot"), and a C function that walked the tree to answer `type()` would be a self-contained
- * recursion whose depth the PAGE picks — `for (…) v = new CSSMathNegate(v)` — which engine/check_recursion.mjs
+ * recursion whose depth the PAGE picks — `for (…) v = new CSSMathNegate(v)` — which engine/recgate.mjs
  * fails by name and which CLAUDE.md's flat-C-stack rule forbids outright. The type is IMMUTABLE: the `values`,
  * `value`, `lower` and `upper` slots are `readonly`, and a leaf's contribution is its `unit` slot, which
  * §4.3.3 also declares `readonly`. (A leaf's `value` IS writable and the type does not read it.) So the answer

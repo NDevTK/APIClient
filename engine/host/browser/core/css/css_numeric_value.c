@@ -578,7 +578,7 @@ static void nv_pair_push(JSContext *ctx, NvPair **stk, int *depth, int *cap, JSV
  *
  * THE WALK IS ITERATIVE ON A HEAP STACK, for the reason core/css/css_math_value.c's §6.5 walk is: the DEPTH IS
  * THE PAGE'S (`for (…) v = new CSSMathNegate(v)`), so a C function calling itself here would be a
- * self-contained recursion of unbounded depth — what engine/check_recursion.mjs fails by name. There is no
+ * self-contained recursion of unbounded depth — what engine/recgate.mjs fails by name. There is no
  * depth cap either; the stack grows to the allocation floor. */
 static int nv_equal_numeric(JSContext *ctx, JSValueConst value1, JSValueConst value2, JSValue *held)
 {
