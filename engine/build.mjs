@@ -8290,8 +8290,10 @@ async function nativeProgram(kind, dev) {
 function intlEnvironment(intlHost) {
   const header = readFileSync(join(HOST, "browser", "core", "intl", "intl_environment.h"), "utf8");
   const zone = /^#define INTL_SYSTEM_TIME_ZONE "([^"]+)"$/m.exec(header);
-  if (!zone) throw new Error("[build] core/intl/intl_environment.h states no INTL_SYSTEM_TIME_ZONE");
-  return { systemTimeZone: zone[1], intlHost };
+  const locale = /^#define INTL_DEFAULT_LOCALE "([^"]+)"$/m.exec(header);
+  if (!zone || !locale)
+    throw new Error("[build] core/intl/intl_environment.h states no INTL_SYSTEM_TIME_ZONE or INTL_DEFAULT_LOCALE");
+  return { defaultLocale: locale[1], systemTimeZone: zone[1], intlHost };
 }
 /* The native artifact's Intl host data, as the artifact itself states it. */
 function nativeIntlHost(bin) {

@@ -332,8 +332,8 @@ static void vocab_assert_disjoint(void)
    it forces, are the price of giving ECMA-402 a SPECS row rather than of claiming its name. The row buys the
    only regen path there is (`regen()` resolves through SPEC_BY_KEY and throws for an unknown key), which is
    why i18nglobalgen fetches where esglobalgen reads a committed index and why that generator carries its own
-   retirement condition. This engine still builds NO part of ECMA-402; what changed is that its one global
-   name is now answered by a standard instead of defaulting to server-injected app state. */
+   retirement condition. Every realm has %Intl% (core/intl/intl.h), so the name misses only where the page
+   deleted it; an unbuilt member misses on the Intl object, which this file is not asked about. */
 const char *absent_standard_name(const char *name, AbsentVocab *vocab)
 {
     const char *e;

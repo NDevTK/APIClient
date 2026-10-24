@@ -63,6 +63,7 @@
 #include "core/frame/navigator_beacon.h"
 #include "core/html/user_activation.h"
 #include "core/idl_args.h"
+#include "core/intl/intl_environment.h"
 #include "core/locks/lock_manager.h"
 #include "core/permissions/permissions.h"
 #include "core/realm.h"
@@ -587,7 +588,7 @@ static JSValue nav_build_values(JSContext *ctx)
        navigator.language", so `languages[0]` is `language` — the SAME concolic value object, not a second one
        minted from the same string. Two would compare unequal under `===` where a browser compares two equal
        strings, and a flow pinning one would leave the other unpinned. */
-    nav_env(ctx, rec, NAV_LANGUAGE, JS_NewString(ctx, "en-US"));
+    nav_env(ctx, rec, NAV_LANGUAGE, JS_NewString(ctx, INTL_DEFAULT_LOCALE));
     /* Read back out of the record being built, not through nav_value: the realm slot this record is going into
        is not set until this function RETURNS it, and reading a slot before its install is what realm.h's own
        assert is for. */

@@ -31,10 +31,10 @@
    heap entries visited: 112 ns an entry on the live `platform` fixture at load ~35 (scratchpad
    level1w_walkrate.sh: 59876243 entries over 6.72 s of thread CPU), read as about half that unloaded. */
 #define THREAD_WORK_UNITS_PER_KI_ORPHAN_ENTRIES 256
-/* An Intl host question (core/intl/intl_host.h), priced by its argument and answer bytes: 20,000 time zone offset
-   questions took 20,314 us over 380,000 bytes at load ~16 (scratchpad si-tzsite, 1d05ecec, dev), against 0.13 us
-   a unit of stepUs over stepWork in the same census, so 415 units per KiB. */
-#define THREAD_WORK_UNITS_PER_KIB_INTL 415
+/* An Intl host question (core/intl/intl_host.h), priced by the bytes it asks with, which both hosts are asked
+   with alike: 20,000 time zone offset questions asked with 220,000 bytes took 20,314 us at load ~16 (1d05ecec,
+   dev), against 0.13 us a unit of stepUs over stepWork in the same census, so 727 units per KiB. */
+#define THREAD_WORK_UNITS_PER_KIB_INTL 727
 /* Layout, per 1024 items of each kind's input: a CSS 2.1 §9.4.1 question answered (core/layout/layout_job.h's
    BF_BOX and BF_WALK memo entries), a line box item taken (a character collected with its advance measured, so
    a glyph run is priced by its characters, a css-sizing-3 §2.1 walk position or a §9.4.2 fill position, with a

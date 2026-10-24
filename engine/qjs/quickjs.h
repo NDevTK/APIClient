@@ -3460,6 +3460,8 @@ JS_EXTERN void JS_SetCanBlock(JSRuntime *rt, bool can_block);
    required before any script reads local time. */
 typedef int JSLocalTimeZoneOffsetFunc(int64_t time_ms);
 JS_EXTERN void JS_SetLocalTimeZoneOffsetFunc(JSLocalTimeZoneOffsetFunc *fn);
+/* ECMAScript §21.4.3.1 Date.now ( )'s time value, for an embedder algorithm that calls %Date.now%. */
+JS_EXTERN double JS_DateNow(void);
 /* set the [IsHTMLDDA] internal slot */
 JS_EXTERN void JS_SetIsHTMLDDA(JSContext *ctx, JSValueConst obj);
 

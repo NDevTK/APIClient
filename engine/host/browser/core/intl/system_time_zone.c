@@ -33,7 +33,7 @@ static int system_time_zone_offset(int64_t time_ms)
     req.nargs = 2;
     thread_work_begin(&span);
     answer = intl_host_call(&req);
-    bytes = sizeof ZONE - 1 + sizeof t + strlen(answer);
+    bytes = sizeof ZONE - 1 + sizeof t;   /* what it asks with: an answer's bytes are the host's */
     ms = intl_host_answer_number(answer, req.op);
     free(answer);
     thread_work_end(&span, THREAD_WORK_INTL, bytes);

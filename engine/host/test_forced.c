@@ -13926,8 +13926,58 @@ TF_UNIT void probes_intl(const char *js, Probe *tab, int *n) {
              "NOT REACHED: there is no /api/intltz record at all — the script threw before its fetch");
     for (i = 0; i < sizeof TZ / sizeof TZ[0]; i++)
         fold_row(&tz_tt, &tz_why, param_value_only(js, "/api/intltz", TZ[i].p, TZ[i].v), TZ[i].why);
+    /* Each service's row: the record exists, and every value is the one ECMA-402 computes over data every ICU
+       and CLDR release agrees on. */
+    static const struct { const char *url, *p, *v, *why; } VALS[] = {
+        { "/api/intlcol", "s", "abC", "ECMA-402 §10.3.3.1 CompareStrings: the default collator does not order b, a, C" },
+        { "/api/intlcol", "base", "0", "ECMA-402 §10.1.1: sensitivity base does not compare a and A equal" },
+        { "/api/intlcol", "num", "9-10", "ECMA-402 §10.1.1: numeric collation does not order 9 before 10" },
+        { "/api/intlcol", "loc", "en-US", "ECMA-402 §9.2.7 ResolveLocale: no locales does not resolve DefaultLocale" },
+        { "/api/intlnf", "sig", "1,234.6", "ECMA-402 §16.1.2: maximumSignificantDigits 5 does not round 1234.56789" },
+        { "/api/intlnf", "cur", "$12.50", "ECMA-402 §16.5.1 CurrencyDigits: USD is not formatted with two digits" },
+        { "/api/intlnf", "big", "12345678901234567890",
+          "ECMA-402 §16.5.15 ToIntlMathematicalValue: a BigInt is not formatted exactly" },
+        { "/api/intlnf", "parts", "minusSign.integer.group.integer.decimal.fraction",
+          "ECMA-402 §16.5.6 FormatNumericToParts: -1,234.5's parts are not typed" },
+        { "/api/intldtf", "tz", "UTC", "ECMA-402 §11.1.2 step 17: the default time zone is not the system's UTC" },
+        { "/api/intldtf", "d", "1/2/2024", "ECMA-402 §11.5.6 FormatDateTime: the default date format is not M/d/y" },
+        { "/api/intldtf", "parts", "month.literal.year", "ECMA-402 §11.5.7 FormatDateTimeToParts: parts not typed" },
+        { "/api/intldtf", "hc", "h23", "ECMA-402 §11.1.2 step 15: hour12 false does not take hourCycle24" },
+        { "/api/intlsvo", "tz", "true", "ECMA-402 §8.3.2: timeZone's list does not hold America/New_York" },
+        { "/api/intlsvo", "units", "45", "ECMA-402 §6.6.3 AvailableCanonicalUnits: Table 2 is not 45 units" },
+        { "/api/intlsvo", "rtf", "undefined", "Intl.RelativeTimeFormat is installed, which this engine does not build" },
+        { "/api/intlsvo", "tag", "Intl", "ECMA-402 §8.1.1: Intl's @@toStringTag is not Intl" },
+        { "/api/intlsvo", "canon", "en-US", "ECMA-402 §8.3.1: getCanonicalLocales does not canonicalize and dedupe" },
+        { "/api/intlsvo", "slo", "de", "ECMA-402 §16.2.2: supportedLocalesOf does not filter to available locales" },
+    };
+    static const char *const SVC[][2] = {
+        { "/api/intlcol", "intl-collator" }, { "/api/intlnf", "intl-number-format" },
+        { "/api/intldtf", "intl-date-time-format" }, { "/api/intlsvo", "intl-namespace" },
+    };
+    const char *svc_why[4] = { NULL, NULL, NULL, NULL }, *der_why = NULL;
+    int svc_tt[4] = { 1, 1, 1, 1 }, der_tt = 1, k;
+    char key[48];
+    for (k = 0; k < 4; k++) {
+        snprintf(key, sizeof key, "\"%s\"", SVC[k][0]);
+        fold_row(&svc_tt[k], &svc_why[k], !!strstr(js, key),
+                 "NOT REACHED: the service's record is absent — the Intl script threw before its fetch");
+        for (i = 0; i < sizeof VALS / sizeof VALS[0]; i++)
+            if (strcmp(VALS[i].url, SVC[k][0]) == 0)
+                fold_row(&svc_tt[k], &svc_why[k], param_value_only(js, VALS[i].url, VALS[i].p, VALS[i].v), VALS[i].why);
+    }
+    fold_row(&der_tt, &der_why, !!strstr(js, "\"/api/intlder\""),
+             "NOT REACHED: there is no /api/intlder record — the derived NumberFormat threw before its fetch");
+    fold_row(&der_tt, &der_why, param_value_only(js, "/api/intlder", "v", "1,234.5"),
+             "a NumberFormat over navigator.language does not carry the default locale's 1,234.5 as its example");
+    fold_row(&der_tt, &der_why, !!strstr(js, "\"name\":\"v\",\"location\":\"query\",\"valueClass\":\"unknown\""),
+             "a NumberFormat over navigator.language formats a concrete value: the locale's unknown was not kept");
     const Probe rows[] = {
         { "intl-local-time", tz_tt, "/api/intltz", SESS_EXPLORE, tz_why },
+        { SVC[0][1], svc_tt[0], "/api/intlcol", SESS_EXPLORE, svc_why[0] },
+        { SVC[1][1], svc_tt[1], "/api/intlnf", SESS_EXPLORE, svc_why[1] },
+        { SVC[2][1], svc_tt[2], "/api/intldtf", SESS_EXPLORE, svc_why[2] },
+        { SVC[3][1], svc_tt[3], "/api/intlsvo", SESS_EXPLORE, svc_why[3] },
+        { "intl-derived", der_tt, "/api/intlder", SESS_EXPLORE, der_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

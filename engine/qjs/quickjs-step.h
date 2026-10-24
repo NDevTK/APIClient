@@ -1019,6 +1019,18 @@ JS_EXTERN int step_toint64_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSV
 JS_EXTERN int step_todouble_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, double *pres,
                                 JSValue **out_cb, int *out_argc);
 
+/* §7.1.1 ToPrimitive ( input, number ) as a request, delivering the primitive itself: ECMA-402 §16.5.15
+   ToIntlMathematicalValue inspects whether it is a BigInt or a String before converting it. Returns
+   JS_STEP_REQUEST-family codes as step_todouble_run does, JS_STEP_UNKNOWN over unknown input, 0 once *pout
+   is set (owned), or -1. */
+JS_EXTERN int step_toprimitive_number_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, JSValue *pout,
+                                         JSValue **out_cb, int *out_argc);
+
+/* §7.3.11 HasProperty ( obj, propertyKey ) as a request: a Proxy's `has` trap is the page's code. `atom` is
+   BORROWED. Returns a step code to return, 0 once *pres is set, or -1. */
+JS_EXTERN int step_hasproperty_run(JSContext *ctx, JSStepHdr *h, JSValueConst obj, JSAtom atom, JSValue in,
+                                  int *pres, JSValue **out_cb, int *out_argc);
+
 /* A CALL AS A REQUEST — see the definition in quickjs.c. A browser component that must RUN the page's code and
    then continue (dispatchEvent walking a listener list, §2.9's synchronous dispatch) cannot JS_Call from C:
    that is the drive-to-completion the engine aborts on. `phase` and `cb` are the MACHINE's own — a host machine

@@ -8,6 +8,7 @@
 #include "core/canvas/image_data.h"
 #include "core/canvas/path_2d.h"
 #include "core/console/console.h"
+#include "core/intl/intl.h"
 #include "core/intl/system_time_zone.h"
 #include "core/crypto/crypto.h"
 #include "core/css/css_keyword_value.h"
@@ -172,6 +173,7 @@ typedef struct {
 
 static void d_console(JSContext *c, const PlatformAgent *a) { (void)a; console_init(c); }
 static void d_system_time_zone(JSContext *c, const PlatformAgent *a) { (void)a; system_time_zone_init(c); }
+static void d_intl(JSContext *c, const PlatformAgent *a) { (void)a; intl_init(c); }
 static void d_css_namespace(JSContext *c, const PlatformAgent *a) { (void)a; css_namespace_init(c); }
 static void d_css_numeric_value(JSContext *c, const PlatformAgent *a) { (void)a; css_numeric_value_init(c); }
 static void d_css_keyword_value(JSContext *c, const PlatformAgent *a) { (void)a; css_keyword_value_init(c); }
@@ -290,6 +292,7 @@ static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; mod
 
 static void r_input_device_capabilities(JSRuntime *rt) { input_device_capabilities_free(rt); }
 static void r_console(JSRuntime *rt) { (void)rt; console_free(); }
+static void r_intl(JSRuntime *rt) { intl_free(rt); }
 static void r_css_namespace(JSRuntime *rt) { (void)rt; css_namespace_free(); }
 static void r_css_numeric_value(JSRuntime *rt) { (void)rt; css_numeric_value_free(); }
 static void r_css_keyword_value(JSRuntime *rt) { (void)rt; css_keyword_value_free(); }
@@ -623,6 +626,9 @@ static const PlatformComponent PLATFORM[] = {
        no other row touches the console namespace, and every later row may call it. The namespace goes on the
        global through a realm intrinsic, so a child navigable gets its own count map, group stack and timer table. */
     { "console",             d_console,             NULL,        r_console },
+    /* ECMA-402 §8 The Intl Object: %Intl% and its services are realm intrinsics, so a child navigable gets its
+       own; the agent half declares the classes and the step machines. */
+    { "intl",                d_intl,                NULL,        r_intl },
     /* URL §6.1 "URL class" and §6.2 "URLSearchParams class", both `[Exposed=*]`: no document half. */
     { "url",                 d_url,                 NULL,        r_url },
     { "url_search_params",   d_usp,                 NULL,        r_usp },

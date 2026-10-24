@@ -26022,6 +26022,12 @@ static int step_hasprop_run(JSContext *ctx, JSStepHdr *h, JSValueConst obj, JSAt
     return 0;
 }
 
+int step_hasproperty_run(JSContext *ctx, JSStepHdr *h, JSValueConst obj, JSAtom atom, JSValue in, int *pres,
+                         JSValue **out_cb, int *out_argc)
+{
+    return step_hasprop_run(ctx, h, obj, atom, in, pres, out_cb, out_argc);
+}
+
 /* HasProperty(O, ! ToString(𝔽(idx))) — the OTHER half of the element access indexOf/lastIndexOf perform, which
    skip holes and so must ask before they read. A Proxy `has` trap is the page's code exactly as `get` is, and
    JS_TryGetPropertyInt64 reached it from C. 0 = *pres is filled, 7 = the caller must return that step code. */
@@ -26834,6 +26840,18 @@ static int step_toprim_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, int hin
     h->num_phase = NUM_PH_START;
     *pout = in;
     return 0;
+}
+
+int step_toprimitive_number_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, JSValue *pout,
+                                JSValue **out_cb, int *out_argc)
+{
+    /* §7.1.1 over unknown external input returns it unchanged, so the coercion is the unknown's — see
+       step_coerce_unknown. */
+    if (h->num_phase == NUM_PH_START && unlikely(g_concolic.is && g_concolic.is(v))) {
+        JS_FreeValue(ctx, in);
+        return step_coerce_unknown(h, v, &h->num_phase);
+    }
+    return step_toprim_run(ctx, h, v, HINT_NUMBER, in, pout, out_cb, out_argc);
 }
 
 int step_toint64_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, int64_t *pres,
@@ -120867,6 +120885,11 @@ static JSValue get_date_string(JSContext *ctx, JSValueConst this_val,
 /* OS dependent: return the UTC time in ms since 1970. */
 static int64_t date_now(void) {
     return js__gettimeofday_us() / 1000;
+}
+
+double JS_DateNow(void)
+{
+    return (double)date_now();
 }
 
 

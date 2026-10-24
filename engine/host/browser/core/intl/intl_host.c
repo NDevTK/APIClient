@@ -27,3 +27,12 @@ double intl_host_answer_number(const char *answer, IntlHostOp op)
            "the Intl host's answer to %s is not one number: %s", intl_host_op_name(op), answer);
     return v;
 }
+
+const IntlHostValue *intl_host_field(const IntlHostRequest *req, const char *key)
+{
+    int i;
+
+    for (i = 0; i < req->nfields; i++)
+        if (strcmp(req->fields[i].key, key) == 0) return &req->fields[i].value;
+    return NULL;
+}
