@@ -692,7 +692,7 @@ payload's code ran in the delivered document, not that the sink produced the cal
   rewrites the engine's fire marker into `apiclientsink('<marker>')`. Only an `address` delivery produces a PoC:
   the page the sink was observed on, re-parsed by the URL parser, with its fragment (and for a query delivery,
   its query) cleared and the payload appended at the component the engine declared. Every other mechanism
-  (`plant`, `referring-address`, `user-file`, `cross-document-message`) answers a stated reason (`pocWhy`)
+  (`plant`, `referring-address`, `user-file`, `cross-document-message`, `user-input`) answers a stated reason (`pocWhy`)
   instead of a PoC.
 - `EXPLOIT_PROBE_ARM` runs `armAttackerPage`: the service worker's `attackerPage.open` opens its own
   `ATTACKER_PAGE_URL` (`https://example.com/`) and records the tab in `_attackerTabs`; after a wait for the tab

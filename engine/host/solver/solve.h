@@ -464,10 +464,10 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                     component that owns it: "address" (the victim's own URL, at `deliveryPrefix`), "plant"
                     (§S(b)'s TWO-STAGE plant-then-load — there is no separate `stored` flag because being
                     stored is not a fact beside the mechanism, it IS the mechanism), "referring-address" (the
-                    payload rides the address the victim arrives FROM), "user-file",
-                    "cross-document-message" (HTML §9.3.3 "Posting messages": the attacker holds the victim
-                    open in a document of their own and posts to it while it runs — no navigation and no
-                    plant, and nothing transforms the bytes on the way in). ABSENT = the source declared
+                    payload rides the address the victim arrives FROM), "user-file", "user-input" (typed into
+                    the control the typing act names), "cross-document-message" (HTML §9.3.3 "Posting
+                    messages": the attacker holds the victim open beside it and posts to it while it runs —
+                    no navigation, no plant, nothing transforms the bytes on the way in). ABSENT = the source declared
                     none, which is what server-injected page state is: the attacker writes it directly and no
                     component carries or transforms it. A consumer states that; it never guesses a vector.
      `principalDemand` WHETHER AN ATTACKER CAN HOLD THE IDENTITY THIS DELIVERY NEEDS, and it is a different

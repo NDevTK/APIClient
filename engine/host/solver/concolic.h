@@ -591,6 +591,13 @@ typedef enum {
        deserializes it, and neither transforms a string — so the bytes the attacker writes are the bytes the
        handler reads. That is precisely why postMessage breakouts reproduce where a raw-fragment one does not. */
     SRC_DELIVER_CROSS_DOCUMENT_MESSAGE,
+    /* The person types the attacker's text into a text control: HTML §4.10.5 The input element's dirty value
+       flag "must be set to true whenever the user interacts with the control in a way that changes the value".
+       No address or document carries it, so a PoC over it reproduces only where the person types the text into
+       the control its typing act names. Carried verbatim: the control's own value sanitization runs over the
+       typed text at the edit (core/html/input_value.c), which is where §4.10.5.1.2's "User agents must not
+       allow users to insert U+000A LINE FEED (LF) or U+000D CARRIAGE RETURN (CR) characters" is applied. */
+    SRC_DELIVER_USER_INPUT,
 } SourceDeliverKind;
 /* AND EVERY ROW NAMES ITS CLAIMANT — the declare, the give-back and the ask-first below are one mechanism
    around that one field. A declaration here is core/platform.h's FOURTH paragraph exactly: the STORAGE is this component's array and

@@ -35,6 +35,7 @@ var _DELIVERY = {
   "plant":             function ()  { return "TWO-STAGE (stored): the attacker plants the value on the victim's origin first, and the victim's later load is what fires it"; },
   "referring-address": function ()  { return "the payload rides the address the victim ARRIVES FROM — the attacker's URL, not the victim's"; },
   "user-file":         function ()  { return "the user must hand the document an attacker-supplied file — no navigation delivers it"; },
+  "user-input":        function ()  { return "the user must type the attacker's text into the field the typing act names — no navigation delivers it"; },
   // HTML §9.3.3 "Posting messages". No navigation and no plant: the attacker holds a SECOND DOCUMENT open
   // beside the victim — the victim in an iframe on the attacker's page, or opened as a popup — and posts to it
   // while it runs. The bytes are not transformed on the way in (§9.3.3 step 7's StructuredSerializeWithTransfer
@@ -1459,7 +1460,8 @@ function _attackerSaid(ran) {
    steps after the delivery: the finding needs that interaction, which lowers its severity and not its truth. */
 function _actsSentence(acts) {
   return acts.map(function (a) {
-    return (a.kind === "click" ? "click " : "a `" + a.type + "` event on ") + "`" + a.target + "`";
+    return (a.kind === "click" ? "click " : a.kind === "input" ? "type into " : "a `" + a.type + "` event on ")
+         + "`" + a.target + "`";
   }).join(", then ");
 }
 /* What performing the PoC's acts in the delivered document reported (offscreen _performProbeActs), stated

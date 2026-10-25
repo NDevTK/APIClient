@@ -51,6 +51,18 @@ JSValue input_value_set(JSContext *ctx, JSValueConst wrap, JSValueConst val);
    five text states, so a caller that reaches here has already asked. */
 void input_value_set_relevant(JSContext *ctx, JSValueConst wrap, JSValueConst val);
 
+/* Whether a person can type free text into `wrap`: an `input` in one of the states of §4.10.5.1.2 through
+   §4.10.5.1.6 (Text, Search, Telephone, URL, Email, Password), which is mutable (§4.10.5 "If the element is
+   mutable, its value should be editable by the user"). */
+bool input_value_user_types(JSContext *ctx, JSValueConst wrap);
+
+/* The person types text into `wrap`, which input_value_user_types answers true for. The typed text is the attacker
+   source `src` (delivery `user-input`), declared by this component on first sight. It becomes the element's
+   value under the dirty value flag (§4.10.5: the flag "must be set to true whenever the user interacts with the
+   control in a way that changes the value"), sanitized under the element's state, and the text entry cursor
+   ends after it. */
+void input_value_user_edit(JSContext *ctx, JSValueConst wrap, const char *src);
+
 /* §4.10.5's TYPE CHANGE STEPS — "When an input element's type attribute changes state, the user agent must run
    the following steps". A no-op for every element and attribute but an `input`'s `type`, like every other
    member of §4.9's attribute change steps.

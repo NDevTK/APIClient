@@ -14794,8 +14794,10 @@ TF_UNIT void probes_typedinput(const char *js, Probe *tab, int *n) {
     const char *tp_why = NULL; int tp_tt = 1;
     fold_row(&tp_tt, &tp_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
              "the innerHTML search over the field's value did not fire a PoC");
-    fold_row(&tp_tt, &tp_why, rec && memmem(rec, span, "tiField", 7) != NULL,
-             "the PoC does not name the element `tiField`, so it cannot state typing into it");
+    fold_row(&tp_tt, &tp_why, rec && memmem(rec, span, "{\"kind\":\"input\",\"target\":\"#tiField\"", 35) != NULL,
+             "the PoC does not state typing into `#tiField` as its act");
+    fold_row(&tp_tt, &tp_why, has && s_field(js, "innerHTML", src, "\"delivery\":\"user-input\""),
+             "the record does not state the user-input delivery the typed text declares");
     const Probe rows[] = {
         { "ti-driven", td_tt, "/api/ti-input", SESS_EXPLORE, td_why },
         { "ti-sink", ts_tt, "'tiPreview'", SESS_EXPLORE, ts_why },

@@ -1,6 +1,7 @@
 /* The dispatch loop — see engine.h. */
 #include "core/fetch/fetch.h"
 #include "core/events/listener_act.h"   /* the user act a driven listener is reached by, stated by a PoC */
+#include "core/html/input_value.h"      /* the person typing into a text control, a drive's typing act */
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/heap.h>   /* emscripten_get_heap_max: the linear memory's ceiling, RAM pressure's limit */
 #else
@@ -5090,6 +5091,9 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     DCHECK(parent != NULL, "a sibling was assembled with no parent flow — every field below is copied from one");
     DCHECK(dec_blob != NULL, "a sibling was assembled with no decision state — every branch its parent took would be "
                              "re-asked");
+    DCHECK(!parent->typing_due,
+           "a flow forked before performing the typing act its drive was assembled with — the act is performed at "
+           "its first switch-in, before any opcode that could fork");
     /* A frameless sibling is safe only over a frameless parent. A parent inside a program would give a hot
        sibling (`started` is set below) with nothing to resume, and flow_step would compile the row at
        `script_i` again and replay its side effects. A parent with no frame is between programs, and so is its
@@ -6240,6 +6244,24 @@ static JSValue engine_attacker_message_event(JSContext *ctx, uint64_t hash, int 
     return ev;
 }
 
+/* The person types into the text control whose listener `fn` is (core/events/listener_act.h's `input` act), in
+   the running flow's timeline, before the drive's first opcode. The typed text is the attacker source
+   `user-input:<locator>`, with the chain position past a body's first call, as engine_orphan_call names the
+   call's other unknowns. */
+static bool act_is_typing(const char *act) { return act && strstr(act, "\"kind\":\"input\"") != NULL; }
+
+static void engine_orphan_type(JSContext *ctx, JSValueConst fn, uint64_t hash, int pos) {
+    JSValueConst control = listener_act_typed_control(ctx, fn);
+    char src[64];
+
+    DCHECK(JS_IsObject(control),
+           "a drive whose act is typing found no text control holding its listener — the act is answered in the "
+           "world the call is built in, and that world's state is the one the drive types into");
+    if (pos > 0) snprintf(src, sizeof src, "user-input:%016llx#%d", (unsigned long long)hash, pos);
+    else snprintf(src, sizeof src, "user-input:%016llx", (unsigned long long)hash);
+    input_value_user_edit(ctx, control, src);
+}
+
 static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, uint64_t hash, int pos,
                                    const char *act) {
     JSValue *args = NULL, self, *base;
@@ -6393,6 +6415,9 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
         g_orphans_driven++;
         base = engine_orphan_call(ctx, f->orphan_claim_fn, f->orphan_argc, hash,
                                   orphan_chain_position(f, f->orphan_claim_at), f->orphan_acts[f->orphan_claim_at]);
+        /* This flow is the drive, so the person types in its own timeline now. */
+        if (act_is_typing(f->orphan_acts[f->orphan_claim_at]))
+            engine_orphan_type(ctx, f->orphan_claim_fn, hash, orphan_chain_position(f, f->orphan_claim_at));
         flow_install_base(f, ctx, base);
         /* The body handed over is now the one running: it moves into `fn` under its own name, and the claim moves
            to the next member, which the walks may route as soon as it exists. */
@@ -6432,8 +6457,11 @@ static int engine_orphan_redrive(JSContext *ctx, Flow *f) {
            "a drive with a called listener member holds no function, or names another body — `fn` and the hash "
            "are written with the member's call");
     f->redrive_seeded = 1;
+    /* The next event's act is asked in the world the last call left, which may have removed the listener or
+       changed its target. */
+    if (!(act = listener_act_of(ctx, f->fn))) return 0;
     g_orphans_driven++;
-    base = engine_orphan_call(ctx, f->fn, f->orphan_argc, hash, called, f->orphan_acts[called - 1]);
+    base = engine_orphan_call(ctx, f->fn, f->orphan_argc, hash, called, act);
     sib = engine_sibling_assemble(ctx, f, base,
                                   decide_fork_same_path("(a listener the page never fired was driven again — no "
                                                         "predicate was asked)"),
@@ -6443,8 +6471,8 @@ static int engine_orphan_redrive(JSContext *ctx, Flow *f) {
     JS_FreeValue(ctx, sib->fn);
     sib->fn = JS_DupValue(ctx, f->fn);
     sib->orphan_hash = hash;
-    act = strdup(f->orphan_acts[called - 1]);
-    CHECK(act != NULL, "engine: OOM copying a listener's act");
+    sib->typing_due = act_is_typing(act);
+    sib->typing_pos = called;
     flow_orphan_chain_push(sib, hash, act, 1);
     sib->orphan_claim_at = sib->orphan_chain_n;
     {
@@ -6576,6 +6604,8 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     DCHECK(sib->orphan_chain_n == (f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0),
            "a seeded drive's chain does not begin with the drives its seeding flow has called — the assembly copies "
            "exactly those");
+    sib->typing_due = act_is_typing(act);
+    sib->typing_pos = 0;
     flow_orphan_chain_push(sib, hash, act, 0);
     sib->orphan_claim_at = sib->orphan_chain_n;
     /* And how much of this body the product had already explored, read at the seed: the drive's key is the
@@ -10492,6 +10522,10 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
         concolic_pins_resume(f->pin_blob);   concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
     }
     flow_set_running(f);
+    if (f->typing_due) {
+        f->typing_due = 0;
+        engine_orphan_type(ctx, f->fn, f->orphan_hash, f->typing_pos);
+    }
     /* What this flow was ranked on when it took the thread: the pick compared it against every runnable member and
        found none strictly better, so from here the value yield may fire only if one of these moves. The hook's
        assertion reads them; nothing decides from them. */

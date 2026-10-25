@@ -1813,6 +1813,12 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
             + "opening the page and selecting the attacker's file by hand.";
     return out;
   }
+  if (delivery === "user-input") {
+    out.delivery = "the user types attacker-chosen text into a field of the page";
+    out.why = "this source is TEXT the user types into the field the PoC's typing act names. No navigation "
+            + "delivers it, so reproducing it means opening the page and typing the payload by hand.";
+    return out;
+  }
   if (delivery === "cross-document-message") {
     // HTML §9.3.3 "Posting messages". The POST itself is the one delivery this layer is best placed to make —
     // open the victim, hold the handle, post the payload — and it is deliberately NOT made, because the thing

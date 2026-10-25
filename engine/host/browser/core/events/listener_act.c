@@ -18,6 +18,7 @@
 #include "core/events/listener_act.h"
 #include "core/frame/opener_policy.h"
 #include "core/frame/window_proxy.h"
+#include "core/html/input_value.h"
 #include "solver/world.h"
 
 /* The user-interface event types a page user causes by acting on a node. A click is stated as itself, because a
@@ -139,46 +140,83 @@ static char *handler_name(JSContext *ctx, JSValueConst fn)
     return out;
 }
 
-static char *act_json(JSContext *ctx, JSValueConst fn, const char *type, const char *target)
+/* The event types that follow a person typing into a text control, in UI Events' order after the value
+   changes: `input`, the `keyup` of the last key, and `change` at the commit (HTML §4.10.5.5 Common event
+   behaviors). A `keydown` or `keypress` listener runs before the value changes and reads it untyped. */
+static bool typing_type(const char *type)
+{
+    return !strcmp(type, "input") || !strcmp(type, "keyup") || !strcmp(type, "change");
+}
+
+static char *act_json(JSContext *ctx, JSValueConst fn, const char *kind, const char *type, const char *target)
 {
     char *name = handler_name(ctx, fn);
-    size_t n = strlen(type) + strlen(target) + (name ? strlen(name) : 0) + 80;
+    size_t n = strlen(kind) + strlen(type) + strlen(target) + (name ? strlen(name) : 0) + 80;
     char *out = malloc(n);
 
     CHECK(out, "listener act: OOM spelling an act");
-    snprintf(out, n, "{\"kind\":\"%s\",\"target\":\"%s\",\"type\":\"%s\"%s%s%s}",
-             strcmp(type, "click") ? "dispatch" : "click", target, type,
+    snprintf(out, n, "{\"kind\":\"%s\",\"target\":\"%s\",\"type\":\"%s\"%s%s%s}", kind, target, type,
              name ? ",\"handler\":\"" : "", name ? name : "", name ? "\"" : "");
     free(name);
     return out;
 }
 
-char *listener_act_of(JSContext *ctx, JSValueConst fn)
+/* The node of the document whose listener list holds `fn`, in tree order, with the listener's type (malloc'd);
+   NULL when no node's list holds it. */
+static lxb_dom_node_t *listener_holder(JSContext *ctx, JSValueConst fn, char **type)
 {
     lxb_dom_document_t *d = document_associated(ctx);
     lxb_dom_node_t *doc;
+
+    *type = NULL;
+    if (!JS_IsFunction(ctx, fn) || d == NULL) return NULL;
+    doc = lxb_dom_interface_node(d);
+    for (lxb_dom_node_t *u = doc; u; u = shadow_root_next_in_shadow_including(ctx, u, doc)) {
+        JSValueConst w = node_wrap_peek(u);
+
+        if (JS_IsObject(w) && (*type = event_target_listener_type_of(ctx, w, fn))) return u;
+    }
+    return NULL;
+}
+
+JSValueConst listener_act_typed_control(JSContext *ctx, JSValueConst fn)
+{
+    char *type;
+    lxb_dom_node_t *u = listener_holder(ctx, fn, &type);
+    bool typed = u && typing_type(type) && input_value_user_types(ctx, node_wrap_peek(u));
+
+    free(type);
+    return typed ? node_wrap_peek(u) : JS_UNDEFINED;
+}
+
+char *listener_act_of(JSContext *ctx, JSValueConst fn)
+{
+    lxb_dom_document_t *d = document_associated(ctx);
+    lxb_dom_node_t *doc, *u;
     JSValueConst win;
     char *type;
 
     if (!JS_IsFunction(ctx, fn) || d == NULL) return NULL;
     doc = lxb_dom_interface_node(d);
-    for (lxb_dom_node_t *u = doc; u; u = shadow_root_next_in_shadow_including(ctx, u, doc)) {
-        JSValueConst w = node_wrap_peek(u);
+    if ((u = listener_holder(ctx, fn, &type))) {
         char *loc, *act;
+        const char *kind;
 
-        if (!JS_IsObject(w) || !(type = event_target_listener_type_of(ctx, w, fn))) continue;
         if (!act_type_ok(type)) { free(type); return NULL; }
         if (u == doc) loc = strdup("document");
         else if (!(loc = locator_by_id(ctx, u, doc))) loc = locator_by_path(u);
         if (!loc) { free(type); return NULL; }
-        act = act_json(ctx, fn, type, loc);
+        kind = !strcmp(type, "click") ? "click"
+             : typing_type(type) && input_value_user_types(ctx, node_wrap_peek(u)) ? "input" : "dispatch";
+        act = act_json(ctx, fn, kind, type, loc);
         free(type);
         free(loc);
         return act;
     }
     win = document_window_of(doc);
     if (JS_IsObject(win) && (type = event_target_listener_type_of(ctx, win, fn))) {
-        char *act = act_type_ok(type) ? act_json(ctx, fn, type, "window") : NULL;
+        char *act = act_type_ok(type) ? act_json(ctx, fn, !strcmp(type, "click") ? "click" : "dispatch", type,
+                                                "window") : NULL;
 
         /* §9.3.3's `message` on the Window is caused by another document's postMessage, so it is an act when
            an attacker document holds this window: as its opener, unless the document's Cross-Origin-Opener-

@@ -97,6 +97,8 @@
    compose a type change's two algorithms LAZILY, at read time, because §4.10.5's type change steps had no site
    to run at; with those steps running eagerly on §4.9's attribute change steps nothing reads it, and a field
    written at four sites and read at none is the broken contract CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS names. */
+/* The claimant of the typed-text sources (input_value_user_edit), given back at input_value_free. */
+#define IV_COMPONENT "input_value"
 #define IV_VALUE  "value"            /* §4.10.5.1's ELEMENT'S VALUE, already sanitized */
 #define IV_FILES  "selectedFiles"    /* §4.10.5.1.17's LIST OF SELECTED FILES, as the FileList that IS one */
 
@@ -548,6 +550,45 @@ void input_value_set_relevant(JSContext *ctx, JSValueConst wrap, JSValueConst va
        step 2. The sanitization the `value` setter runs at its step 4 is deliberately NOT run here; see the
        header. */
     dom_cow_set_prop_taint(ctx, el, IV_VALUE, val);
+}
+
+bool input_value_user_types(JSContext *ctx, JSValueConst wrap)
+{
+    lxb_dom_element_t *el;
+
+    switch (iv_state_of(wrap, &el)) {
+    case INPUT_STATE_TEXT: case INPUT_STATE_SEARCH: case INPUT_STATE_TEL: case INPUT_STATE_URL:
+    case INPUT_STATE_EMAIL: case INPUT_STATE_PASSWORD:
+        return html_form_input_is_mutable(ctx, wrap);
+    default:
+        return false;
+    }
+}
+
+void input_value_user_edit(JSContext *ctx, JSValueConst wrap, const char *src)
+{
+    lxb_dom_element_t *el;
+    HtmlInputState st = iv_state_of(wrap, &el);
+    char shape[96];
+    JSValue typed, now;
+    int n;
+
+    DCHECK(input_value_user_types(ctx, wrap),
+           "a person typed into a control that takes no typed text — the typing act is stated only for a mutable "
+           "`input` in a free-text state, so the act and its target were answered from different elements");
+    DCHECK(src != NULL && *src, "typed text was minted with no source identity");
+    if (!concolic_source_declared_by(IV_COMPONENT, src))
+        concolic_declare_source(IV_COMPONENT, src, "", 0, SRC_DELIVER_USER_INPUT);
+    n = snprintf(shape, sizeof shape, "{%s}", src);
+    CHECK(n > 0 && (size_t)n < sizeof shape, "input: a typed source's name does not fit its shape");
+    typed = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
+    now = iv_sanitize(ctx, el, st, typed, NULL);
+    dom_cow_set_prop_taint(ctx, el, IV_VALUE, now);
+    JS_FreeValue(ctx, now);
+    /* §4.10.20's clamp runs whenever the relevant value changes; the cursor stands after the last character
+       typed. Every free-text state has a text entry cursor. */
+    text_control_selection_value_changed(ctx, wrap);
+    text_control_selection_move_to_end(ctx, wrap);
 }
 
 JSValue input_value_set(JSContext *ctx, JSValueConst wrap, JSValueConst val)
@@ -1531,4 +1572,5 @@ void input_value_free(void)
     g_id_value_as_date = -1;
     g_id_step_up = -1;
     g_id_step_down = -1;
+    concolic_undeclare_sources(IV_COMPONENT);
 }

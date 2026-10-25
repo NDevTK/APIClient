@@ -311,6 +311,12 @@ typedef struct Flow {
     /* Has this drive seeded the drive of its listener again (engine.c's engine_orphan_redrive)? Once per flow:
        the re-drive is the next event in this flow's world, and an arm forked later carries its own. */
     int redrive_seeded;
+    /* Is the typing act of the member this drive was just assembled to call still to be performed? A seeded or
+       re-driven drive is a sibling whose own timeline begins at its first switch-in, so the person's typing is
+       performed there (engine.c's engine_orphan_type), before the call's first opcode, and the flag cleared.
+       `typing_pos` is that member's chain position, which names the typed source. */
+    int typing_due;
+    int typing_pos;
 
     /* Has this flow's recipe been written to the park document? A per-flow fact because a partial self-park
        writes and releases the lowest-value tail while the engine keeps running. flow_release reads it (a

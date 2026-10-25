@@ -2229,6 +2229,7 @@ static const char *deliver_token(SourceDeliverKind k)
     case SRC_DELIVER_REFERRING_ADDRESS: return "referring-address";
     case SRC_DELIVER_USER_FILE:         return "user-file";
     case SRC_DELIVER_CROSS_DOCUMENT_MESSAGE: return "cross-document-message";
+    case SRC_DELIVER_USER_INPUT:        return "user-input";
     }
     DFAIL("a source declared a delivery mechanism with no report token — the token is what the reproduction "
           "envelope states and what the delivery layer switches on, so the mechanism would cross as nothing");
@@ -2464,6 +2465,7 @@ static CarrierKind root_carrier(const char *root)
     case SRC_DELIVER_REFERRING_ADDRESS:      return CARRIER_URL;        /* the address the victim arrives from */
     case SRC_DELIVER_USER_FILE:              return CARRIER_VERBATIM;   /* file_system.c: read verbatim */
     case SRC_DELIVER_CROSS_DOCUMENT_MESSAGE: return CARRIER_VERBATIM;   /* HTML §9.3.3 steps 7/8.4 */
+    case SRC_DELIVER_USER_INPUT:             return CARRIER_VERBATIM;   /* input_value.c sanitizes at the edit */
     case SRC_DELIVER_PLANT:                  return CARRIER_CONSTRAINED;/* RFC 6265 §4.1.1's cookie-octet */
     }
     DFAIL("a source declared a delivery mechanism that does not say what it does to an UNDECLARED byte — the "

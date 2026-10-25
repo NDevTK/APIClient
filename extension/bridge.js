@@ -151,7 +151,8 @@ function docEndpoints(rows) {
    grammar) only on a parked one. `acts` (the user acts a fire was verified under, after the delivery) only on
    a fire-verified entry, and `firedUnderNoAct` (fires verified under a drive no user act performs) only on a
    parked one. These are what the live-verify layer (offscreen-brain.js) performs a delivery from. */
-const SINK_DELIVERIES = Object.freeze(["address", "plant", "referring-address", "user-file", "cross-document-message"]);
+const SINK_DELIVERIES = Object.freeze(["address", "plant", "referring-address", "user-file", "cross-document-message",
+                                         "user-input"]);
 const SINK_DEMANDS = Object.freeze(["none", "forgeable", "unforgeable"]);
 function docSinkGate(g, f) {
   if (!docIsRecord(g) || !docIsName(g.principal) || !Array.isArray(g.predicates) || g.predicates.length === 0)
@@ -166,13 +167,17 @@ function docSinkPin(p, f) {
          typeof p.loose === "boolean" && (!("subject" in p) || typeof p.subject === "string")
     ? null : f + " is not {principal, equals, kind, loose[, subject]}";
 }
-/* One act of solve.c's `acts`: a click is stated as `click` of type `click`, any other user-interface event as
-   `dispatch`, on a locator a page script resolves (core/events/listener_act.h). */
-const SINK_ACT_KINDS = Object.freeze(["click", "dispatch"]);
+/* One act of solve.c's `acts`: a click is stated as `click` of type `click`, the person typing into a text
+   control as `input` of type `input`, `keyup` or `change`, any other user-interface event as `dispatch`, on a
+   locator a page script resolves (core/events/listener_act.h). */
+const SINK_ACT_KINDS = Object.freeze(["click", "dispatch", "input"]);
+const SINK_TYPING_TYPES = Object.freeze(["input", "keyup", "change"]);
 function docSinkAct(a, f) {
   return docIsRecord(a) && SINK_ACT_KINDS.indexOf(a.kind) >= 0 && docIsName(a.target) && docIsName(a.type) &&
-         (a.kind === "click") === (a.type === "click") && (!("handler" in a) || docIsName(a.handler))
-    ? null : f + " is not {kind: click|dispatch, target, type[, handler]} with a click exactly where the type is click";
+         (a.kind === "click") === (a.type === "click") &&
+         (a.kind !== "input" || SINK_TYPING_TYPES.indexOf(a.type) >= 0) && (!("handler" in a) || docIsName(a.handler))
+    ? null : f + " is not {kind: click|dispatch|input, target, type[, handler]} with a click exactly where the "
+           + "type is click and typing only under input, keyup or change";
 }
 function docSink(e, f) {
   if (!docIsRecord(e)) return f + " is not an object";
