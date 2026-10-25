@@ -1152,6 +1152,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/replyrole.h"
 #include "fixture/storedxss.h"
 #include "fixture/windowname.h"
+#include "fixture/twinread.h"
 #include "fixture/clobber.h"
 #include "fixture/typedinput.h"
 #include "fixture/closerequest.h"
@@ -1668,6 +1669,8 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "bytesimage", HTML_BYTESIMAGE },
     { "dynfuncsink", HTML_DYNFUNCSINK },
     { "joincompose", HTML_JOINCOMPOSE },
+    { "twinread", HTML_TWINREAD },
+    { "onceread", HTML_ONCEREAD },
     { "recordless", HTML_RECORDLESS },
     { "agenfork", HTML_AGENFORK },
     { "msgchain", HTML_MSGCHAIN },
@@ -15334,6 +15337,36 @@ TF_UNIT void probes_storedxss(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `twinread` and `onceread` documents (fixture/twinread.h). In `twinread` an eval record rooted in
+   a component may exist (parked); a fired one would be a world in which the component held two values. In
+   `onceread` the same derived reads, read once, fire. */
+TF_UNIT void probes_twinread(const char *js, Probe *tab, int *n) {
+    static const char *const roots[2] = { LOCATION_SEARCH_SRC, LOCATION_HASH_SRC };
+    const char *tw_why[2] = { NULL, NULL }, *on_why[2] = { NULL, NULL };
+    int tw_tt[2] = { 1, 1 }, on_tt[2] = { 1, 1 }, i;
+
+    for (i = 0; i < 2; i++) {
+        char src[192] = "";
+        int has = s_rooted_source(js, "eval", roots[i], src, sizeof src);
+
+        fold_row(&tw_tt[i], &tw_why[i], !(has && s_stage(js, "eval", src) == S_FIRED),
+                 i == 0 ? "a fired eval record over the query: the re-fire world read `x` as the payload while "
+                          "`location.search` read empty, two values of one delivered URL"
+                        : "a fired eval record over the fragment: the re-fire world read the slice as the payload "
+                          "while `location.hash` read empty, two values of one delivered URL");
+        fold_row(&on_tt[i], &on_why[i], has && s_stage(js, "eval", src) == S_FIRED,
+                 i == 0 ? "the query parameter's eval did not fire with one read of the query"
+                        : "the fragment slice's eval did not fire with one read of the fragment");
+    }
+    const Probe rows[] = {
+        { "tw-key-one-world", tw_tt[0], "twKey", SESS_EXPLORE, tw_why[0] },
+        { "tw-hash-one-world", tw_tt[1], "twFrag", SESS_EXPLORE, tw_why[1] },
+        { "on-key-fires", on_tt[0], "onKey", SESS_EXPLORE, on_why[0] },
+        { "on-hash-fires", on_tt[1], "onFrag", SESS_EXPLORE, on_why[1] },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `windowname` document (fixture/windowname.h): per sink, the write is reached tainted by
    `window.name`, and the fired PoC states a delivery for it that is not this document's address. */
 TF_UNIT void probes_windowname(const char *js, Probe *tab, int *n) {
@@ -20007,6 +20040,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_bytesimage(js, probes, &np);
     probes_dynfuncsink(js, probes, &np);
     probes_joincompose(js, probes, &np);
+    probes_twinread(js, probes, &np);
     probes_recordless(js, probes, &np);
     probes_agenfork(js, probes, &np);
     probes_flagflow(js, probes, &np);
