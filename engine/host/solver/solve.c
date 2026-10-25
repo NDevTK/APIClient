@@ -2191,7 +2191,11 @@ static void emit_delivery(JsonBuf *b, JSContext *ctx, const Cand *e, const char 
         if (!strcmp(kind, "cross-document-message")) emit_message_routes(b, ctx);
         if (prefix) {
             char p[2] = { prefix, 0 };
+            const char *key = concolic_source_delivery_key(root);
+
             json_buf_raw(b, ","); json_buf_key(b, "deliveryPrefix"); json_buf_str(b, p);
+            /* The payload is that tuple's value: the reproduction writes `key=` and the payload serialized. */
+            if (key) { json_buf_raw(b, ","); json_buf_key(b, "deliveryKey"); json_buf_str(b, key); }
         }
     }
     /* A referrer PoC states the attacker's page and the policy it is served under; a fired one states the page's

@@ -727,6 +727,9 @@ const char *concolic_source_precondition(const char *root);
    constraint as the whole of one; the mechanism to build is one candidate per declaring member, each with its
    own envelope, and the one that fires is the one emitted. */
 int         concolic_source_delivery(const char *root, const char **kind, char *prefix);
+/* The URL §5.2 serialization of the tuple name a root's payload rides as the value of, or NULL where the
+   payload is the component's own bytes (concolic_new_urlencoded_value). */
+const char *concolic_source_delivery_key(const char *root);
 /* The bytes this source's component percent-encodes, or NULL if the source declared no delivery (it is handed
    over as-is). A PARKED @S search reports it because it is the constraint every candidate had to survive, and
    it is a FACT read from the declaration rather than a guess at why nothing fired. */
@@ -960,6 +963,13 @@ JSValue     concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op
  * for a known operand: the caller already computed the answer and there is nothing to derive. */
 JSValue     concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst *operands, int n,
                                  JSValue example);
+/* The value of the first tuple named `name` in the application/x-www-form-urlencoded list (URL §5.1) parsed from
+   the unknown string `list`, as `op` reads it. Where `list` is a declared query's own bytes, the value is its own
+   injection point and delivery root, `<list's shape>[key]`, which `component` declares an address row for on
+   first use: the payload rides the query as that tuple's value, `key` being the name's URL §5.2 serialization.
+   Otherwise it is concolic_new_derived over (list, name). Operands borrowed, `example` consumed. */
+JSValue     concolic_new_urlencoded_value(JSContext *ctx, const char *component, const char *op, JSValueConst list,
+                                          JSValueConst name, const char *key, JSValue example);
 /* concolic_new_derived over the elements of the array `list`, which is borrowed. */
 JSValue     concolic_new_derived_list(JSContext *ctx, const char *op, JSValueConst list, JSValue example);
 struct JSBufferUnknownPiece;

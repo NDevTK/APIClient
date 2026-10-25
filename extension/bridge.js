@@ -144,7 +144,8 @@ function docEndpoints(rows) {
 }
 /* One @S entry's delivery facts, as solver/solve.c's emit_delivery writes them (solve.h's field list): `delivery`
    is absent (the source declares none) or one of the mechanism tokens, `deliveryPrefix` is the victim's address
-   component, present exactly on an `address` delivery, `messageRoutes` the routes (`frame`, `opener`) a
+   component, present exactly on an `address` delivery, `deliveryKey` the serialized tuple name the payload is the
+   value of, only beside the `?` component, `messageRoutes` the routes (`frame`, `opener`) a
    `cross-document-message` delivery may take, empty when the target refuses both, `attackerPolicy` (and on a fired entry `attackerPage`) is
    a `referring-address` delivery's attacker page and its referrer policy, and `precondition` labels a root no
    attacker writes
@@ -198,6 +199,8 @@ function docSink(e, f) {
     return f + " states a deliveryPrefix exactly where its delivery is not `address`";
   if ("deliveryPrefix" in e && e.deliveryPrefix !== "#" && e.deliveryPrefix !== "?")
     return f + ".deliveryPrefix " + JSON.stringify(e.deliveryPrefix) + " is neither # nor ?";
+  if ("deliveryKey" in e && !(e.deliveryPrefix === "?" && docIsName(e.deliveryKey)))
+    return f + ".deliveryKey is not a non-empty name beside a `?` deliveryPrefix";
   if (("messageRoutes" in e) !== (e.delivery === "cross-document-message"))
     return f + " states messageRoutes exactly where its delivery is not `cross-document-message`";
   if ("messageRoutes" in e && !(Array.isArray(e.messageRoutes) &&

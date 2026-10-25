@@ -1682,7 +1682,7 @@ function _principalGateSentence(principalGates) {
   }).join("; and ");
 }
 
-function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, pageUrl, marker,
+function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, deliveryKey, pageUrl, marker,
                            principalDemand, principalGates, principalPins, precondition) {
   DCHECK(typeof poc === "string" && poc.length > 0,
          "an @S live-verify was started with no engine poc — solve_json_array emits `poc` on every fire-verified "
@@ -1737,6 +1737,9 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
            "an `address` delivery arrived whose component is neither `#` nor `?` (got "
            + JSON.stringify(deliveryPrefix) + ") — the result door (docSink) admits only those two beside an "
            + "`address` delivery, so the relay from the stored finding changed it");
+    DCHECK(deliveryKey === undefined || (deliveryPrefix === "?" && typeof deliveryKey === "string" && deliveryKey),
+           "a deliveryKey arrived beside a component other than the query — the result door (docSink) admits "
+           + "it only beside `?`");
     var frag = deliveryPrefix === "#";
     /* THE ADDRESS IS BUILT THROUGH THE URL PARSER, AND IT IS RETURNED, because it is not only the thing to
        navigate to — it is the thing a HIT IS ATTRIBUTED AGAINST. `pageUrl.split("#")[0]` produced a string
@@ -1752,7 +1755,10 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
     }
     base.hash = "";                       // empty string ⇒ fragment null ⇒ no trailing `#` in href
     if (!frag) base.search = "";
-    out.targetUrl = base.href + deliveryPrefix + payload;
+    // A tuple's value is written through the browser's own URL §5.2 serializer, which the page's §5.1 parse
+    // undoes; a whole component is placed raw (below).
+    out.targetUrl = base.href + deliveryPrefix
+                  + (deliveryKey ? deliveryKey + new URLSearchParams([["", payload]]).toString() : payload);
     out.targetOrigin = base.origin;       // OUR expectation, compared against the browser's MessageSender.origin — never the reverse
     /* WHICH COMPONENT THE PAYLOAD WAS PLACED IN, stated here because this is the only place that knows and
        because a witness reading needs it. A delivery witness compares the FULL address, so the component never
@@ -1981,7 +1987,7 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
 }
 function startExploitProbe(msg) {
   _pruneProbeSessions();
-  const { waitMs, findingId, sinkName, poc, source, delivery, deliveryPrefix, precondition,
+  const { waitMs, findingId, sinkName, poc, source, delivery, deliveryPrefix, deliveryKey, precondition,
           principalDemand, principalGates, principalPins, acts } = msg || {};
   if (!poc) throw new Error("need the engine's poc (the fire-verified breakout input from the @S finding)");
   DCHECK(acts === undefined || (Array.isArray(acts) && acts.length > 0 && acts.every(function (a) {
@@ -2068,7 +2074,7 @@ function startExploitProbe(msg) {
   // the user activation window.open needs. When the real page's sink fires, intercept.js → content.js →
   // PROBE_HIT lands on this marker and _recordProbeHit decides whether the reporting document is the one the
   // payload was delivered to.
-  var _poc = buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, session.pageUrl, marker,
+  var _poc = buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, deliveryKey, session.pageUrl, marker,
                                principalDemand, principalGates, principalPins, precondition);
   DCHECK(!!_poc && typeof _poc === "object" && typeof _poc.payload === "string",
          "buildLiveDelivery answered with no record — it returns {pocJs, payload, context, source} on every "

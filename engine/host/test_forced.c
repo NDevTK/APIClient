@@ -15404,6 +15404,9 @@ TF_UNIT void probes_clobber(const char *js, Probe *tab, int *n) {
     fold_row(&mw_tt, &mw_why, has_h,
              "NOT REACHED: no innerHTML @S record carries a source rooted in location.search, so the filtered "
              "banner write was never reached tainted");
+    fold_row(&mw_tt, &mw_why, has_h && s_field(js, "innerHTML", hs, "\"deliveryKey\":\"banner\""),
+             "the banner write's record states no `banner` deliveryKey, so its reproduction would put the payload "
+             "in the whole query rather than in the parameter URLSearchParams.get('banner') reads");
     const char *cp_why = NULL; int cp_tt = 1;
     fold_row(&cp_tt, &cp_why, !!strstr(js, "\"/api/cl-plain\""),
              "NOT REACHED: there is no /api/cl-plain record, so the world with no clobbering element never ran");

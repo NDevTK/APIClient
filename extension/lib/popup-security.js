@@ -23,13 +23,14 @@ var _DELIVERY = {
   // of a record that cannot exist. offscreen-brain.js's buildLiveDelivery asserts the identical pair at the
   // layer that PERFORMS the navigation; this is the same contract at the layer that DESCRIBES it, and the two
   // disagreeing is how a card and its verify came to say different things before.
-  "address":           function (p) {
+  "address":           function (p, k) {
                          DCHECK(p === "#" || p === "?",
                            "an @S record declared an `address` delivery whose component is neither `#` nor `?` ("
                            + JSON.stringify(p) + ") — concolic_declare_source (solver/concolic.c) refuses an "
                            + "address source with no prefix, so this is either a component added in C with no "
                            + "placement here or a record that did not come from solve_json_array");
                          return "delivered in the victim's own URL (" + (p === "#" ? "fragment" : "query string")
+                              + (k ? ", as the value of its `" + k + "` parameter" : "")
                               + ") — one navigation is the whole PoC";
                        },
   "referring-address": function ()  { return "the payload rides the address the victim ARRIVES FROM — the attacker's URL, not the victim's"; },
@@ -74,7 +75,7 @@ function _deliverySentence(item) {
     return "the engine declares the delivery `" + item.delivery + "`, which this view has no sentence for";
   if (item.delivery === "cross-document-message" && Array.isArray(item.messageRoutes) && item.messageRoutes.length === 0)
     return "REFUSED: the target's response forbids both routes to it (framing, and an opener's handle), so no attacker page can post it a message";
-  return _DELIVERY[item.delivery](item.deliveryPrefix)
+  return _DELIVERY[item.delivery](item.deliveryPrefix, item.deliveryKey)
        + (Array.isArray(item.messageRoutes) ? " — route: " + item.messageRoutes.join(" or ") : "")
        + (item.attackerPage ? " (the attacker serves " + item.attackerPage + " under Referrer-Policy: " + item.attackerPolicy + ")" : "");
 }
@@ -937,6 +938,7 @@ function renderSecurityPanel() {
                        sourceUrl: entry.sourceUrl, pageUrl: entry.pageUrl, findingId: key };
       if (item.delivery)       probeObj.delivery = item.delivery;
       if (item.deliveryPrefix) probeObj.deliveryPrefix = item.deliveryPrefix;
+      if (item.deliveryKey)    probeObj.deliveryKey = item.deliveryKey;
       if (item.precondition)   probeObj.precondition = item.precondition;
       if (item.cspBlocks)      probeObj.cspBlocks = item.cspBlocks;
       if (item.trustedTypes)   probeObj.trustedTypes = item.trustedTypes;

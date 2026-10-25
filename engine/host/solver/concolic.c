@@ -2111,8 +2111,11 @@ int concolic_src_determined(const char *src) {
 /* `principal` is a column of the same row, not a second registry: whether the attacker writes this value or
    merely owns it (concolic.h states the pair; HTML §9.3.2.2 "User agents" states why one exists). The
    claimant's release then takes the property with the row. */
+/* `key` is the URL §5.2 serialization of the name of the application/x-www-form-urlencoded tuple whose value
+   the payload is, within the component (concolic_new_urlencoded_value), and NULL for a row whose payload is the
+   component's own bytes. */
 typedef struct { const char *component; char *src; char *encode; char prefix; SourceDeliverKind deliver;
-                 int principal; }
+                 int principal; char *key; }
         SourceDelivery;
 static SourceDelivery *g_srcs;
 static int g_srcs_n, g_srcs_cap;
@@ -2339,6 +2342,7 @@ void concolic_declare_source(const char *component, const char *src, const char 
     /* A source the attacker writes, which nearly every source is. The exception says so with its own call
        (concolic_declare_source_principal); written here at the mint so the column is never uninitialized. */
     g_srcs[g_srcs_n].principal = 0;
+    g_srcs[g_srcs_n].key = NULL;
     CHECK(g_srcs[g_srcs_n].src && g_srcs[g_srcs_n].encode, "concolic: OOM declaring a source's delivery");
     g_srcs_n++;
 }
@@ -2364,6 +2368,7 @@ void concolic_undeclare_sources(const char *component)
         if (strcmp(g_srcs[i].component, component) != 0) { i++; continue; }
         free(g_srcs[i].src);
         free(g_srcs[i].encode);
+        free(g_srcs[i].key);
         /* The order of the rest is preserved rather than closed with a swap: lookups are by identity, but a
            walk's order must not depend on which unrelated component released first. */
         memmove(&g_srcs[i], &g_srcs[i + 1], (size_t)(g_srcs_n - i - 1) * sizeof *g_srcs);
@@ -2491,6 +2496,13 @@ int concolic_source_delivery(const char *root, const char **kind, char *prefix)
     *kind = deliver_token(g_srcs[row].deliver);
     *prefix = g_srcs[row].prefix;
     return 1;
+}
+
+const char *concolic_source_delivery_key(const char *root)
+{
+    int row = root_declared_row(root);
+
+    return row < 0 ? NULL : g_srcs[row].key;
 }
 
 static const char *precondition_token(SourcePreconditionKind k)
@@ -2724,6 +2736,9 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
            "each, so this value took them from two, and the payload would be percent-encoded for one source "
            "and prefixed for the other");
     if (!at && !encode) return JS_NewString(ctx, payload);   /* nothing carries these bytes: delivered as itself */
+    /* A tuple's value arrives as written: the reproduction serializes it (URL §5.2) and the page's own §5.1
+       parse percent-decodes every byte the serialization encoded. */
+    if (at && at->key) return JS_NewString(ctx, payload);
     if (!encode) encode = "";
     /* The same key as the encode set: the declared and the shared halves of one row's answer, so reading them
        from different rows would apply one mechanism's rule to another's bytes. */
@@ -5025,6 +5040,41 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
     free((void *)fields);
     free(args);
     free(shape);
+    return r;
+}
+
+/* See concolic.h. */
+JSValue concolic_new_urlencoded_value(JSContext *ctx, const char *component, const char *op, JSValueConst list,
+                                      JSValueConst name, const char *key, JSValue example)
+{
+    JSValueConst ops[2] = { list, name };
+    const char *psrc = concolic_src_c(list), *fields[3];
+    int row, i;
+    char *src, *ident;
+    JSValue r;
+
+    DCHECK(concolic_is(list) && !concolic_is(name) && key != NULL && *key && component != NULL,
+           "a tuple's value was minted over a list that is not unknown, a name that is, or no spelled key");
+    row = root_declared_row(concolic_root_c(list));
+    /* Named residual. Not covered: a list parsed from a derivation of a component (`location.hash.slice(1)`), or
+       from a carrier other than the query, whose reproduction this row cannot compose. Next diff builds: the
+       row for each verbatim carrier and for a fragment parsed without its `#`. Absence shows as: an @S record
+       over such a tuple whose envelope delivers the whole component, and a live verify that never hits. */
+    if (row < 0 || !psrc || strcmp(psrc, g_srcs[row].src) != 0 || g_srcs[row].deliver != SRC_DELIVER_ADDRESS ||
+        g_srcs[row].prefix != '?')
+        return concolic_new_derived(ctx, op, ops, 2, example);
+    src = shapef("%s[%s]", concolic_shape_c(list), key);
+    if (!concolic_source_declared_by(component, src)) {
+        concolic_declare_source(component, src, "", '?', SRC_DELIVER_ADDRESS);
+        g_srcs[g_srcs_n - 1].key = strdup(key);
+        CHECK(g_srcs[g_srcs_n - 1].key, "concolic: OOM declaring a tuple's key");
+    }
+    for (i = 0; i < 2; i++) fields[i] = ident_of_operand(ctx, ops[i]);
+    fields[2] = op;
+    ident = concolic_ident_compose("b", fields, 3);
+    r = concolic_derived(ctx, src, src, src, root_whose_or_unstated(derived_root_whose(ops, 2)), ident, example);
+    for (i = 0; i < 2; i++) free((char *)fields[i]);
+    free(src);
     return r;
 }
 

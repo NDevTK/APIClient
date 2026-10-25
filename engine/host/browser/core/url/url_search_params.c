@@ -45,11 +45,17 @@ typedef UrlEncodedList UspList;
    and every other read answers a derivation over it (usp_derive).
    THE LIST IS PER-FLOW STATE AND IS NEVER CHANGED IN PLACE. `list` points into `list_box`, a payload whose
    storage the box owns (usp_list_box); a write builds a changed copy in a new box (usp_list_edit), so the
-   capture restores a sibling's `list` and `list_box` together and no arm sees another's write. */
-typedef struct { JSValue list_box; UspList *list; JSValue owner; JSValue unknown; int unknown_example; } UspObj;
+   capture restores a sibling's `list` and `list_box` together and no arm sees another's write.
+   `mutated` says a §6.2 mutation has made `unknown` the derivation it ran (usp_rederive), so the list is no
+   longer the parse of a source's own bytes. */
+typedef struct { JSValue list_box; UspList *list; JSValue owner; JSValue unknown; int unknown_example; int mutated; }
+        UspObj;
 #define USP_OFF(f) (uint16_t)offsetof(UspObj, f)
 static const uint16_t USP_VALS[] = { USP_OFF(list_box), USP_OFF(owner), USP_OFF(unknown) };
 static const CowRecord USP_REC = { sizeof(UspObj), USP_VALS, (int)(sizeof USP_VALS / sizeof *USP_VALS) };
+
+/* This component's claimant name in the source registry: core/platform.c's row for it. */
+#define USP_COMPONENT "url_search_params"
 
 static JSClassID g_usp_class;
 static JSRuntime *g_usp_rt;
@@ -306,6 +312,7 @@ static void usp_rederive(JSContext *ctx, UspObj *u, const char *op, int argc, JS
     d = concolic_new_derived(ctx, op, ops, n, ex);
     DCHECK(!JS_IsUninitialized(d), "a URLSearchParams list parsed from an unknown derived no unknown list");
     cow_record_set(ctx, u, &USP_REC, &u->unknown, d);
+    u->mutated = 1;   /* a POD field of the record usp_rec captured */
 }
 
 static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -491,16 +498,16 @@ static void usp_lookup_visit(JSContext *ctx, void *st, JSStepVisit *v)
     idl_name_chain_supplied_visit(ctx, &((UspLookupState *)st)->key, v);
 }
 
-/* Over an unknown list, get's found arm answers the tuple's value as an unknown String named by the operation
-   and `name`, with the example's value as its example where the example holds the tuple; its other arm is
-   null. has(name) answers the same question as a boolean. has(name, value) over an unknown list derives, as
-   getAll does. */
+/* Over an unknown list, get's found arm answers the tuple's value as an unknown String
+   (concolic_new_urlencoded_value), with the example's value as its example where the example holds the tuple;
+   its other arm is null. has(name) answers the same question as a boolean. has(name, value) over an unknown
+   list derives, as getAll does. */
 static int usp_lookup_answer(JSContext *ctx, JSStepHdr *hdr, UspLookupState *s, UspObj *u, int magic,
                              int argc, JSValueConst *argv, const char *name, size_t nn, const char *value,
                              size_t vn, JSValue *presult)
 {
     int i = usp_find(u->list, name, nn, value, vn), real, rc;
-    JSValue ops[2], ex = JS_UNDEFINED;
+    JSValue ex = JS_UNDEFINED;
     bool yes = false;
     char *member;
 
@@ -521,17 +528,23 @@ static int usp_lookup_answer(JSContext *ctx, JSStepHdr *hdr, UspLookupState *s, 
     CHECK(member != NULL, "URLSearchParams: OOM spelling a name for its constraint key");
     rc = idl_name_chain_ask_supplied(ctx, hdr, &s->key, u->unknown, USP_TUPLE_PREDICATE, member, real,
                                      USP_LOOKUP_ALGORITHM, &yes);
-    free(member);
-    if (rc) return rc;
-    if (magic == USP_HAS) { *presult = JS_NewBool(ctx, yes); return JS_STEP_DONE; }
-    if (!yes) { *presult = JS_NULL; return JS_STEP_DONE; }
+    if (rc || magic == USP_HAS || !yes) {
+        free(member);
+        if (rc) return rc;
+        *presult = magic == USP_HAS ? JS_NewBool(ctx, yes) : JS_NULL;
+        return JS_STEP_DONE;
+    }
     if (u->unknown_example && i >= 0 && !u->list->e[i].vhole)   /* a hole's bytes are a shape, not an example */
         ex = JS_NewStringLen(ctx, u->list->e[i].value, u->list->e[i].vlen);
     CHECK(!JS_IsException(ex), "URLSearchParams: OOM taking a tuple's example value");
-    ops[0] = u->unknown;
-    ops[1] = argv[0];
-    *presult = concolic_new_derived(ctx, "URLSearchParams.get", ops, 2, ex);
-    DCHECK(!JS_IsUninitialized(*presult), "a URLSearchParams list parsed from an unknown derived no unknown read");
+    if (u->mutated) {
+        JSValueConst ops[2] = { u->unknown, argv[0] };
+        *presult = concolic_new_derived(ctx, "URLSearchParams.get", ops, 2, ex);
+    } else {
+        *presult = concolic_new_urlencoded_value(ctx, USP_COMPONENT, "URLSearchParams.get", u->unknown, argv[0],
+                                                 member, ex);
+    }
+    free(member);
     concolic_state_string(*presult);   /* §6.2: the found arm's value is a USVString */
     return JS_STEP_DONE;
 }
@@ -1096,5 +1109,6 @@ void usp_free(void)
        row from its own file, and no line here can name that slot, so a hand-written release could not have
        given it back at all. */
     idl_pair_iter_release(g_usp_pair_handle);
+    concolic_undeclare_sources(USP_COMPONENT);   /* the tuple rows usp_lookup_answer declared */
     agent_state_undo("url_search_params");
 }
