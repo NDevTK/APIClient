@@ -2,8 +2,10 @@
    the data's `kind` is 'show', behind an origin check. An attacker meets moSub's `indexOf('trusted.example')`
    with a subdomain of its own site carrying the string, and moSuffix's `endsWith('trusted.example')` with a
    registrable domain of its own ending in it; no origin it owns meets moDotSuffix's
-   `endsWith('.trusted.example')` (a subdomain of another site) or moExact's `https://trusted.example`. Each
-   listener reports its entry before its check. Nothing in the page posts a message.
+   `endsWith('.trusted.example')` (a subdomain of another site) or moExact's `https://trusted.example`. moTwin
+   arms on a message from an origin ending in `alpha.example` and writes on a later one from an origin ending in
+   `beta.example`: no one origin ends in both, so no one window delivers the chain. Each listener reports its
+   entry before its check. Nothing in the page posts a message.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_MSGORIGIN_H
@@ -14,7 +16,7 @@
 
 static const char HTML_MSGORIGIN[] =
     "<!doctype html><html><body>"
-    "<div id='moA'></div><div id='moB'></div><div id='moC'></div><div id='moD'></div>"
+    "<div id='moA'></div><div id='moB'></div><div id='moC'></div><div id='moD'></div><div id='moE'></div>"
     "<script>"
     "window.addEventListener('message', function moSub(e) {"
     "  fetch('/api/mo-sub-entered');"
@@ -35,6 +37,15 @@ static const char HTML_MSGORIGIN[] =
     "  fetch('/api/mo-exact-entered');"
     "  if (e.origin !== 'https://trusted.example') return;"
     "  if (e.data && e.data.kind === 'show') document.getElementById('moB').innerHTML = e.data.markup;"
+    "});"
+    "var moTwinArmed = false;"
+    "window.addEventListener('message', function moTwin(e) {"
+    "  fetch('/api/mo-twin-entered');"
+    "  if (e.data && e.data.twin === 'arm') { if (e.origin.endsWith('alpha.example')) moTwinArmed = true; return; }"
+    "  if (!moTwinArmed) return;"
+    "  fetch('/api/mo-twin-armed');"
+    "  if (!e.origin.endsWith('beta.example')) return;"
+    "  if (e.data && e.data.twin === 'show') document.getElementById('moE').innerHTML = e.data.twinMarkup;"
     "});"
     "</script>"
     TF_CANVAS_INK

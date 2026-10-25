@@ -21073,7 +21073,8 @@ static int s_fired_with(const char *js, const char *sink, const char *const *nee
 }
 
 /* The rows of the `msgorigin` document (fixture/msgorigin.h): an origin a substring or a bare suffix check
-   admits is composed and fires; a dotted suffix or an exact match on another site's origin never does. */
+   admits is composed and fires; a dotted suffix, an exact match on another site's origin, or a chain whose
+   messages need two different origins never does. */
 TF_UNIT void probes_msgorigin(const char *js, Probe *tab, int *n) {
     static const char *const SUB[] = { "\"handler\":\"moSub\"", "trusted.example", "\"kind\":\"show\"" };
     static const char *const EXACT[] = { "\"handler\":\"moExact\"" };
@@ -21103,11 +21104,22 @@ TF_UNIT void probes_msgorigin(const char *js, Probe *tab, int *n) {
     fold_row(&md_tt, &md_why, !s_fired_with(js, "innerHTML", DOTSUFFIX, 1),
              "a fired innerHTML record states a moDotSuffix message: its check admits only subdomains of another "
              "site, which no sender the attacker owns presents");
+    static const char *const TWIN[] = { ".twinMarkup\"" };
+    const char *mt_why = NULL; int mt_tt = 1;
+    fold_row(&mt_tt, &mt_why, !!strstr(js, "\"/api/mo-twin-armed\""),
+             "NOT REACHED: there is no /api/mo-twin-armed record, so no drive of moTwin ran a message after the "
+             "one that arms it");
+    fold_row(&mt_tt, &mt_why, !!strstr(js, ".twinMarkup\""),
+             "NOT REACHED: no @S record searches moTwin's markup sink, so the chain was never detected at it");
+    fold_row(&mt_tt, &mt_why, !s_fired_with(js, "innerHTML", TWIN, 1),
+             "a fired innerHTML record states moTwin's chain: its two messages need origins ending in "
+             "`alpha.example` and in `beta.example`, which no one window presents");
     const Probe rows[] = {
         { "mo-sub-poc", ms_tt, "function moSub", SESS_EXPLORE, ms_why },
         { "mo-suffix-poc", mf_tt, "function moSuffix", SESS_EXPLORE, mf_why },
         { "mo-dotsuffix-nopoc", md_tt, "function moDotSuffix", SESS_EXPLORE, md_why },
         { "mo-exact-nopoc", me_tt, "function moExact", SESS_EXPLORE, me_why },
+        { "mo-twowin-nopoc", mt_tt, "function moTwin", SESS_EXPLORE, mt_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
