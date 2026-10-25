@@ -1530,7 +1530,6 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     key = decide_key(cond);
     /* The arm the compared value's type facet leaves an equality, in the predicate's terms (-1 when both). */
     refined = tok && op != OPCMP_NONE ? concolic_equality_outcome(ctx, cond) : -1;
-    if (refined >= 0 && op == OPCMP_NE) refined = !refined;
     arm = decide_arm(ctx, key, cond, NULL, -1, restartable, nonforking, real, refined, &forked, site);
     /* Whether that fork was taken over a subject this flow had already proved (see the counter). Raised here,
        the one line holding both `forked` (decide_arm's answer) and `src` (the subject's source as concolic_cmp
