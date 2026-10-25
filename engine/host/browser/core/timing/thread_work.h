@@ -23,7 +23,7 @@
 #define THREAD_WORK_UNITS_PER_KIB_DECODE 41
 #define THREAD_WORK_UNITS_PER_KIB_HTML 78
 #define THREAD_WORK_UNITS_PER_KIB_CSS 490
-#define THREAD_WORK_UNITS_PER_KIB_XML 78
+#define THREAD_WORK_UNITS_PER_KIB_XML 364  /* HTML's rate times XML's CPU per byte over HTML's, one sample */
 /* A constraint-store probe hashes its whole key (solver/concolic.c's cons_hash): 1.25 ns per byte at -O1 on the
    calibration box, so 6 units per KiB. A key is the predicate's spelling and grows with the path that built
    it, which is why a probe is priced by its bytes and not per call. */
