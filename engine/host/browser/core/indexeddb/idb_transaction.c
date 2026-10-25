@@ -43,6 +43,7 @@
 
 #include "check.h"
 #include "core/indexeddb/indexed_db.h"
+#include "solver/concolic.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
@@ -1552,58 +1553,133 @@ static JSValue js_tx_get_db(JSContext *ctx, JSValueConst this_val, int magic)
     return idb_transaction_connection(ctx, this_val);
 }
 
-/* "The objectStore(name) method steps are: if this's state is finished, then throw an InvalidStateError. Let
-   store be the object store named name in this's scope, or throw a NotFoundError if none. Return an object
-   store handle associated with store and this."
-   THE STORE IS RESOLVED FIRST AND THE HANDLE IS ASKED FOR BY THE STORE, which is the order the three steps
-   above are written in and is not a stylistic choice: §2.2.1 scopes "only one object store handle" to the
-   STORE, so a lookup by NAME answers a different question. `s.name = 'b'` inside an upgrade transaction leaves
-   the handle set holding a store this member is about to be asked for under 'b' — a name-first lookup finds
-   nothing, mints a second handle for that one store, and `tx.objectStore('b') !== s` where every browser
-   answers true.
-   The SCOPE is what is searched and not the database: a transaction may only reach the stores it named. */
-static JSValue js_tx_object_store(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+#define TXOS_STAGES(X) \
+    X(TXOS_FIND, "Indexed Database §4.10 objectStore(name) step 2 (store is the object store named name in this's " \
+                 "scope, or a NotFoundError) - an unknown name forks over the scope's names, one ask per store")
+enum { IDL_STEP_STAGE_BASE(TXOS_STAGES) TXOS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TXOS_STEPS[] = { TXOS_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    uint8_t  started;
+    uint32_t cand;   /* which store of the scope an unknown name's fork asks next */
+    JSValue  pred;   /* that ask's IsStrictlyEqual, held across its fork (owned) */
+} TxObjectStoreState;
+
+static void tx_object_store_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    JSValue scope, handle, store = JS_UNDEFINED;
-    const char *name;
-    uint32_t i, n;
+    TxObjectStoreState *s = st;
 
-    (void)argc; (void)magic;
-    if (!tx_brand(ctx, this_val)) return JS_EXCEPTION;
-    if (idb_transaction_state(ctx, this_val) == IDB_TX_FINISHED)
-        return JS_ThrowDOMException(ctx, "InvalidStateError",
-                                    "the transaction has finished, so it has no object stores");
-    name = idb_name_cstr(ctx, argv[0]);
-    if (name == NULL) return JS_EXCEPTION;
-    scope = tx_scope(ctx, this_val);
-    n = tx_array_len(ctx, scope);
-    for (i = 0; i < n; i++) {
-        JSValue candidate = JS_GetPropertyUint32(ctx, scope, i);
-        JSValue cname = idb_object_store_name(ctx, candidate);
-        const char *c = JS_ToCString(ctx, cname);
-        bool same;
+    if (s->started) v->val(ctx, &s->pred);
+}
 
+/* Step 2's lookup over the scope. A stated name is compared as bytes. An unknown names the store filed under
+   the name its identity bought (idb_name_cstr) where the scope holds one; otherwise which store it names
+   depends on it, so the lookup forks over IsStrictlyEqual of the unknown and each store's name in scope
+   order, each equal arm a predicate over the unknown's domain, and the arm equal to none is the NotFoundError.
+   Answers 0 with the store in *pstore (owned, or JS_UNDEFINED for none), a request code, or -1. */
+static int tx_scope_find(JSContext *ctx, JSStepHdr *hdr, TxObjectStoreState *s, JSValueConst name_v,
+                         JSValue *pstore)
+{
+    JSValue scope = tx_scope(ctx, hdr->this_val), candidate, cname;
+    const char *name = idb_name_cstr(ctx, name_v), *c;
+    uint32_t i, n = tx_array_len(ctx, scope);
+    int r, arm;
+    bool same;
+
+    *pstore = JS_UNDEFINED;
+    if (name == NULL) { JS_FreeValue(ctx, scope); return -1; }
+    for (i = 0; i < n && JS_IsUndefined(*pstore); i++) {
+        candidate = JS_GetPropertyUint32(ctx, scope, i);
+        cname = idb_object_store_name(ctx, candidate);
+        c = JS_ToCString(ctx, cname);
         CHECK(c != NULL, "IndexedDB: a store in a transaction's scope could not report its own name");
         same = strcmp(c, name) == 0;
         JS_FreeCString(ctx, c);
         JS_FreeValue(ctx, cname);
-        if (same) { store = candidate; break; }
+        if (same) *pstore = candidate;
+        else JS_FreeValue(ctx, candidate);
+    }
+    JS_FreeCString(ctx, name);
+    if (!JS_IsUndefined(*pstore) || !concolic_is(name_v)) {
+        JS_FreeValue(ctx, scope);
+        return 0;
+    }
+    for (; s->cand < n; s->cand++) {
+        candidate = JS_GetPropertyUint32(ctx, scope, s->cand);
+        if (JS_IsUninitialized(s->pred)) {
+            JSValue sp[2];
+
+            sp[0] = JS_DupValue(ctx, name_v);
+            sp[1] = idb_object_store_name(ctx, candidate);
+            CHECK(concolic_cmp_hook(ctx, sp + 2, 0, JS_CONCOLIC_EQ_STRICT),
+                  "IndexedDB: objectStore's equality declined a name already established as unknown");
+            s->pred = sp[0];
+        }
+        r = step_tobool_run(ctx, hdr, s->pred,
+                            "Indexed Database §4.10 objectStore(name) step 2 (the object store named name)", &arm);
+        if (r) { JS_FreeValue(ctx, candidate); JS_FreeValue(ctx, scope); return r; }
+        JS_FreeValue(ctx, s->pred);
+        s->pred = JS_UNINITIALIZED;
+        if (arm) {
+            *pstore = candidate;
+            break;
+        }
         JS_FreeValue(ctx, candidate);
     }
     JS_FreeValue(ctx, scope);
-    JS_FreeCString(ctx, name);
-    if (JS_IsUndefined(store))
-        return JS_ThrowDOMException(ctx, "NotFoundError",
-                                    "no object store with that name is in the transaction's scope");
-    handle = idb_transaction_handle_find(ctx, this_val, store);
+    return 0;
+}
+
+/* "The objectStore(name) method steps are: if this's state is finished, then throw an InvalidStateError. Let
+   store be the object store named name in this's scope, or throw a NotFoundError if none. Return an object
+   store handle associated with store and this."
+   The store is resolved first and the handle is asked for by the store, the order the steps are written in:
+   §2.2.1 scopes "only one object store handle" to the store, so after `s.name = 'b'` inside an upgrade
+   transaction a name-first lookup would mint a second handle for one store (`tx.objectStore('b') !== s`).
+   The scope is what is searched and not the database: a transaction may only reach the stores it named. */
+static int tx_object_store_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    TxObjectStoreState *s = st;
+    JSValue store, handle;
+    int r;
+
+    (void)argc; (void)out_cb; (void)out_argc;
+    *presult = JS_UNDEFINED;
+    JS_FreeValue(ctx, cb_result);
+    if (!s->started) {
+        s->started = 1;
+        s->cand = 0;
+        s->pred = JS_UNINITIALIZED;
+        if (!tx_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
+        if (idb_transaction_state(ctx, hdr->this_val) == IDB_TX_FINISHED) {
+            JS_ThrowDOMException(ctx, "InvalidStateError", "the transaction has finished, so it has no object stores");
+            return JS_STEP_ABRUPT;
+        }
+        hdr->stage = TXOS_FIND;
+    }
+    DCHECK(hdr->stage == TXOS_FIND, "objectStore(name) resumed at a stage it does not declare");
+    r = tx_scope_find(ctx, hdr, s, argv[0], &store);
+    if (r) return r;
+    if (JS_IsUndefined(store)) {
+        JS_ThrowDOMException(ctx, "NotFoundError", "no object store with that name is in the transaction's scope");
+        return JS_STEP_ABRUPT;
+    }
+    handle = idb_transaction_handle_find(ctx, hdr->this_val, store);
     if (JS_IsNull(handle)) {
         JS_FreeValue(ctx, handle);
-        handle = idb_object_store_handle(ctx, store, this_val);
-        idb_transaction_handle_add(ctx, this_val, handle);
+        handle = idb_object_store_handle(ctx, store, hdr->this_val);
+        idb_transaction_handle_add(ctx, hdr->this_val, handle);
     }
     JS_FreeValue(ctx, store);
-    return handle;
+    *presult = handle;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl TXOS_DECL = {
+    tx_object_store_step, sizeof(TxObjectStoreState), tx_object_store_visit, NULL,
+    "Indexed Database §4.10 IDBTransaction objectStore(name)", TXOS_STEPS
+};
 
 /* §3.7's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — per realm because a C member runs in the realm that
    DEFINED it, so one prototype shared by two documents would answer both from whichever built it. */
@@ -1657,7 +1733,7 @@ void idb_transaction_init(JSContext *ctx)
     {
         static const IdlArgType OS_ARGS[1] = { IDL_DOMSTRING };
 
-        g_id_object_store = idl_method_id(ctx, OS_ARGS, 1, js_tx_object_store, 0);
+        g_id_object_store = idl_method_id_step(ctx, OS_ARGS, 1, NULL, 0, &TXOS_DECL, 0);
     }
     g_id_commit = idl_method_id(ctx, NULL, 0, js_tx_commit, 0);
     g_id_abort = idl_method_id(ctx, NULL, 0, js_tx_abort, 0);
