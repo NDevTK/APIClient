@@ -52,6 +52,7 @@
 #include "core/html/html_iframe.h"
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "solver/engine.h"
+#include "solver/realm_holders.h"   /* the realm-sell row reads whether every live realm was unheld at a census */
 #include "solver/cow.h"
 #include "core/loader/cookie_jar.h"   /* the root document's own Set-Cookie, received at the baseline */
 #include "core/loader/document_scripts.h"
@@ -1116,6 +1117,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/isolation.h"
 #include "fixture/platform.h"
 #include "fixture/windowclose.h"
+#include "fixture/realmsell.h"
+#include "fixture/realmsellclose.h"
 #include "fixture/fragfork.h"
 #include "fixture/fragplace.h"
 #include "fixture/fragxml.h"
@@ -1613,8 +1616,10 @@ static const char *HTML_POPOVER =
    HTML_MIN, HTML_COLD and HTML_POPOVER are selected by their own flags and are not members: their rows
    answer different questions (the ASan gate, the cross-session round trip, a one-flow frontier).
    `coop` is the opener policy the root navigable is created with, as a response header would set it (HTML §7.1.3
-   Cross-origin opener policies); a row that omits it gets §7.1.3's initial `unsafe-none`. */
-static const struct { const char *name; const char *src; OpenerPolicyValue coop; } TF_DOCS[] = {
+   Cross-origin opener policies); a row that omits it gets §7.1.3's initial `unsafe-none`. `share` is the RAM
+   pressure share the document's instance is configured with (solver/engine.h's engine_set_ram_share, permille),
+   as a host configures an instance; a row that omits it leaves the engine's default. */
+static const struct { const char *name; const char *src; OpenerPolicyValue coop; unsigned share; } TF_DOCS[] = {
     { "css", HTML_CSS },
     { "timers", HTML_TIMERS },
     { "idb", HTML_IDB },
@@ -1644,6 +1649,8 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "isolation", HTML_ISOLATION },
     { "platform", HTML_PLATFORM },
     { "windowclose", HTML_WINDOWCLOSE },
+    { "realmsell", HTML_REALMSELL, OPENER_POLICY_UNSAFE_NONE, 1 },
+    { "realmsellclose", HTML_REALMSELLCLOSE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "fragfork", HTML_FRAGFORK },
     { "fragplace", HTML_FRAGPLACE },
     { "fragxml", HTML_FRAGXML },
@@ -1764,6 +1771,15 @@ static OpenerPolicyValue tf_doc_coop(const char *name) {
     for (i = 0; name && i < COUNTOF(TF_DOCS); i++)
         if (!strcmp(TF_DOCS[i].name, name)) return TF_DOCS[i].coop;
     return OPENER_POLICY_UNSAFE_NONE;
+}
+
+/* The RAM pressure share the member named `name` is configured with, or 0 for the engine's default. */
+static unsigned tf_doc_share(const char *name) {
+    size_t i;
+
+    for (i = 0; name && i < COUNTOF(TF_DOCS); i++)
+        if (!strcmp(TF_DOCS[i].name, name)) return TF_DOCS[i].share;
+    return 0;
 }
 
 /* How many exploring documents contain `key` — the row-to-document declaration probes_eval asserts. */
@@ -17348,6 +17364,65 @@ TF_UNIT void probes_windowclose(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The `_heap` census row `key` of the result document, or -2 when the document carries none. */
+static long tf_heap_row(const char *js, const char *key) {
+    const char *h = strstr(js, "\"_heap\":{"), *p;
+    char k[64];
+
+    if (h == NULL) return -2;
+    snprintf(k, sizeof k, "\"%s\":", key);
+    p = strstr(h, k);
+    return p != NULL ? strtol(p + strlen(k), NULL, 10) : -2;
+}
+
+/* The rows of the `realmsell` document. */
+TF_UNIT void probes_realmsell(const char *js, Probe *tab, int *n) {
+    /* RAM pressure sells a parked arm that alone names a child realm, and the collection pressure owes after the
+       sale frees it: the release path of a sold flow's realm, end to end. Ladder: the realm existed, its last delta
+       holder went (every live realm unheld at some census), and the result document's heap census finds none live. */
+    const char *rsell_why = NULL;
+    int rsell_tt = 1;
+    fold_row(&rsell_tt, &rsell_why, navigable_realm_made() >= 1,
+             "NOT REACHED: no child realm was made, so the holder arm's `open()` and its read through the proxy "
+             "never ran and this row says nothing about release");
+    fold_row(&rsell_tt, &rsell_why, realm_holders_all_unheld_seen(),
+             "the realm was made and no census found it unheld: some resident flow's delta still named its "
+             "Window, proxy or Document at every census, so pressure never sold its last holder");
+    fold_row(&rsell_tt, &rsell_why, tf_heap_row(js, "childRealms") == 0,
+             "the realm was unheld at a census and is still live in the result document's heap census. The "
+             "popup is still open, and its traversable was created by the holder this run sold: if a collection "
+             "finished after the sale, that traversable is held as a root of its own rather than owned by the "
+             "flow that created it, and the realm leaks with it");
+    const Probe rows[] = {
+        { "realm-sell", rsell_tt, "/api/realmsell", SESS_EXPLORE, rsell_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `realmsellclose` document: realm-sell's ladder over a popup its holder closed before parking,
+   with HTML §7.5.10's destroy as the rung between the realm's making and its holder's sale. */
+TF_UNIT void probes_realmsellclose(const char *js, Probe *tab, int *n) {
+    const char *rsc_why = NULL;
+    int rsc_tt = 1;
+    fold_row(&rsc_tt, &rsc_why, navigable_realm_made() >= 1,
+             "NOT REACHED: no child realm was made, so the holder arm's `open()` and its read through the proxy "
+             "never ran and this row says nothing about release");
+    fold_row(&rsc_tt, &rsc_why, tf_heap_row(js, "destroyStep9Releases") >= 1,
+             "the realm was made and §7.5.10's destroy never released its Document: the holder arm's close() "
+             "did not definitely close the popup, so its traversable still names the realm");
+    fold_row(&rsc_tt, &rsc_why, realm_holders_all_unheld_seen(),
+             "the popup was destroyed and no census found the realm unheld: some resident flow's delta still "
+             "named its Window, proxy or Document at every census, so pressure never sold its last holder");
+    fold_row(&rsc_tt, &rsc_why, tf_heap_row(js, "childRealms") == 0,
+             "the destroyed popup's realm was unheld at a census and is still live in the result document's "
+             "heap census: either no collection finished after its last holder was sold, or something this "
+             "census does not walk holds it");
+    const Probe rows[] = {
+        { "realm-sell-close", rsc_tt, "/api/rsclose", SESS_EXPLORE, rsc_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `windowopenerclose` document. */
 TF_UNIT void probes_windowopenerclose(const char *js, Probe *tab, int *n) {
     /* And over a cross-origin popup, which the incumbent is familiar with only through its opener link. */
@@ -21103,6 +21178,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_custommedia(js, probes, &np);
     probes_visualupdate(js, probes, &np);
     probes_windowclose(js, probes, &np);
+    probes_realmsell(js, probes, &np);
+    probes_realmsellclose(js, probes, &np);
     probes_windowopenerclose(js, probes, &np);
     probes_timers(js, probes, &np);
     probes_idlindex(js, probes, &np);
@@ -35020,6 +35097,7 @@ int main(int argc, char **argv) {
         /* AND AN EMPTY §7.1.5 CREATION SANDBOXING FLAG SET, from the same fact one link along: a top-level
            traversable has no embedder element, so §7.1.5 answers from its POPUP sandboxing flag set, which
            begins empty and which only §7.3.1.7's rules for choosing a navigable ever fill. */
+        if (tf_doc_share(doc_name) != 0) engine_set_ram_share(tf_doc_share(doc_name));
         root_proxy = navigable_root(ctx, world_local_doc(), NULL, tf_doc_coop(doc_name), "u",
                                     serialized_policy_container_none(), &root_embedder, 0);
         embedder_policy_free(&root_embedder);
