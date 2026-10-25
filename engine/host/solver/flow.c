@@ -874,6 +874,7 @@ int flow_agent_add(Flow *f, JSAgentRecord *agent, JSContext *realm)
     a->realm = JS_DupContext(realm);   /* each flow running the agent holds its realm; released with the flow */
     a->work = 0;
     a->module = JS_UNDEFINED;
+    a->reporting = 0;
     return f->n_agents++;
 }
 
@@ -901,6 +902,7 @@ void flow_agents_fork(JSContext *ctx, Flow *sib, const Flow *parent)
 
         sa->work = pa->work;
         sa->module = JS_DupValue(ctx, pa->module);
+        sa->reporting = pa->reporting;   /* the running agent's frame too: the caller's clone is this frame */
         if (i == parent->cur_agent) continue;   /* the caller clones the running agent's base and parks */
         if (pa->frame) {
             sa->frame = JS_FlowClone(ctx, (JSValue *)pa->frame);

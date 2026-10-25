@@ -8934,10 +8934,12 @@ void engine_set_agent_program_done_hook(void (*hook)(JSContext *realm, bool ran,
    flow_step, then the agent's program (a module root not yet evaluated, or a classic script's base), then one of
    its jobs (flow_job_take applies the microtask checkpoint). flow_select_agent picks this agent only when it has
    one of these.
-   Named residual. Not covered: HTML §8.1.4.6 Runtime script errors' report for a worker global, whose unhandled
-   error is reported at the Worker object (HTML §10.2.4 Processing model). Next diff builds: the report's worker
-   arm through core/events/report_exception.c. Absence shows as: a worker's uncaught throw is a page error with no
-   `error` event at the Worker. */
+   A classic program that completes abruptly is reported by HTML §8.1.4.4 run a classic script step 8's third
+   bullet: the report is installed as the agent's frame, its next work, and the program is done when the report is.
+   Named residual. Not covered: an abrupt completion surfacing from a parked continuation's resume, which is
+   written to the console without HTML §8.1.4.6's report. Next diff builds: the report for that completion, keyed
+   by whose continuation it was. Absence shows as: a worker's throw after a park is a page error with no `error`
+   event at the Worker. */
 static int flow_step_agent(JSContext *ctx, Flow *f) {
     FlowAgent *a = flow_agent_running(f);
     JSRuntime *rt = JS_GetRuntime(ctx);
@@ -8976,8 +8978,28 @@ static int flow_step_agent(JSContext *ctx, Flow *f) {
         g_step_unit = STEP_UNIT_AGENT_RESUME_PROGRAM;
         r = JS_FlowResume(a->realm, (JSValue *)a->frame, &cv);
         a = flow_agent_running(f);   /* the program may have added an agent (a nested worker), moving the list */
+        DCHECK(!(r == JS_FLOW_DETACHED && a->reporting),
+               "§8.1.4.4 step 8's report detached from a worker agent's frame — it is a step-machine call with "
+               "no await of its own, so it ends or parks");
         if (r == 0) { JS_FlowFree(a->realm, (JSValue *)a->frame); a->frame = NULL; }
         else if (r == JS_FLOW_DETACHED) a->frame = NULL;   /* the base is the awaited promise's now */
+        if (r == 0 && a->reporting) {
+            /* DOM's inner invoke catches a listener's throw and §8.1.4.6 step 6 stops a report of a report, so
+               a report that completed abruptly is a step of §8.1.4.6 that threw. */
+            DCHECK(!JS_IsException(cv), "§8.1.4.4 step 8's report of a worker program's abrupt completion itself "
+                                        "completed abruptly (core/events/report_exception.c)");
+            a->reporting = 0;
+        } else if (r == 0 && JS_IsException(cv)) {
+            /* §8.1.4.4 run a classic script step 8's third bullet: report evaluationStatus.[[Value]] for the
+               worker global, as the agent's next work, before the steps after run a worker's script. */
+            JSValue e = JS_GetException(a->realm);
+
+            a->frame = report_exception_flow(a->realm, e);
+            a->reporting = 1;
+            JS_FreeValue(a->realm, e);
+            JS_FreeValue(a->realm, cv);
+            return 0;
+        }
         program_done = r == 0;
     } else {
         DCHECK(flow_job_pending(f) > 0, "an agent with no parks, no program and no job was selected to step");

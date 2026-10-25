@@ -144,6 +144,9 @@ typedef struct FlowAgent {
     /* A module worker's program not yet evaluated: [url, source text] (HTML §10.2.4 run a worker step 13's module
        worker script graph's root), evaluated when the agent is next selected; JS_UNDEFINED otherwise. Owned. */
     JSValue module;
+    /* `frame` is HTML §8.1.4.4 run a classic script step 8's report of the program's abrupt completion rather
+       than the program; the program's steps after it run when the report ends. */
+    uint8_t reporting;
 } FlowAgent;
 
 typedef struct Flow {
