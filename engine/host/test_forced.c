@@ -15895,6 +15895,11 @@ TF_UNIT void probes_bytesimage(const char *js, Probe *tab, int *n) {
     fold_row(&fr_tt, &fr_why, fread_ || fthrow, "NOT REACHED: neither arm of the far DataView read emitted");
     fold_row(&fr_tt, &fr_why, fread_ && fthrow,
              "only one arm of the far read's in-range test ran: the bounds test used the example's extent");
+    int ishort = !!strstr(js, "\"/api/bimg/iter-short\""), ilong = !!strstr(js, "\"/api/bimg/iter-long\"");
+    const char *it_why = NULL; int it_tt = 1;
+    fold_row(&it_tt, &it_why, ishort || ilong, "NOT REACHED: neither arm of the for-of count gate emitted");
+    fold_row(&it_tt, &it_why, ishort && ilong,
+             "only one arm of the for-of count gate ran: the iterator stopped at the example's count in every world");
     int pundef = !!strstr(js, "\"/api/bimg/past-undef\""), pbyte = !!strstr(js, "\"/api/bimg/past-byte\"");
     const char *pe_why = NULL; int pe_tt = 1;
     fold_row(&pe_tt, &pe_why, pundef || pbyte, "NOT REACHED: neither arm of the past-the-example element read emitted");
@@ -15906,6 +15911,7 @@ TF_UNIT void probes_bytesimage(const char *js, Probe *tab, int *n) {
         { "bytes-length-fork", ln_tt, "/api/bimg/len-long", SESS_EXPLORE, ln_why },
         { "bytes-bounds-fork", fr_tt, "/api/bimg/far-read", SESS_EXPLORE, fr_why },
         { "bytes-past-element", pe_tt, "/api/bimg/past-undef", SESS_EXPLORE, pe_why },
+        { "bytes-iter-fork", it_tt, "/api/bimg/iter-short", SESS_EXPLORE, it_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

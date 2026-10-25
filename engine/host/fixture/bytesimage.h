@@ -5,7 +5,8 @@
    and the second the negative one, over one buffer.
    A second reply's length gates a branch (the length is the reply's unknown too), and a DataView read far past its
    example bytes takes both arms of the in-range test: a value with no example, or the RangeError. An element
-   read past them is undefined in the example world and a byte where the reply is longer.
+   read past them is undefined in the example world and a byte where the reply is longer, and a for-of over the
+   bytes runs past the example in those worlds.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_BYTESIMAGE_H
@@ -32,6 +33,8 @@ static const char HTML_BYTESIMAGE[] =
     "    fetch(e instanceof RangeError ? '/api/bimg/far-range' : '/api/bimg/far-other'); }"
     "  var by = new Uint8Array(ab);"
     "  if (by[5000] === undefined) fetch('/api/bimg/past-undef'); else fetch('/api/bimg/past-byte');"
+    "  var n = 0; for (var b of by) n++;"
+    "  if (n > 30) fetch('/api/bimg/iter-long'); else fetch('/api/bimg/iter-short');"
     "})();"
     "</script>"
     TF_CANVAS_INK

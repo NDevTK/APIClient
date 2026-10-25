@@ -32494,6 +32494,7 @@ typedef struct JSArrayIterNext {
     JSValue obj;      /* the source, held across both reads (owned) */
     JSValue el;       /* the element, held across its read (owned) */
     JSValue result;   /* DONE (owned) */
+    JSValue pred;     /* a typed array's `index < len` over its unknown length (owned), held across its fork */
     int64_t len, idx;
     int kind;
 } JSArrayIterNext;
@@ -98979,7 +98980,7 @@ static int js_array_iter_next_step(JSContext *ctx, void *st, JSValue cb_result, 
     if (s->hdr.stage == AIN_START) {
         JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
         /* FIRST, before anything that can throw: the teardown frees exactly what the state holds. */
-        s->obj = JS_UNDEFINED; s->el = JS_UNDEFINED; s->result = JS_UNDEFINED;
+        s->obj = JS_UNDEFINED; s->el = JS_UNDEFINED; s->result = JS_UNDEFINED; s->pred = JS_UNINITIALIZED;
         s->len = 0; s->idx = 0; s->kind = JS_ITERATOR_KIND_VALUE;
         it = array_iter_reach(ctx, s->hdr.this_val, JS_CLASS_ARRAY_ITERATOR);
         if (!it) return -1;
@@ -99009,10 +99010,34 @@ static int js_array_iter_next_step(JSContext *ctx, void *st, JSValue cb_result, 
         s->hdr.stage = AIN_INDEX;
     }
     if (s->hdr.stage == AIN_INDEX) {
+        JSObject *ap = JS_VALUE_GET_OBJ(s->obj);
+        int done;
+
         it = array_iter_reach(ctx, s->hdr.this_val, JS_CLASS_ARRAY_ITERATOR);
         DCHECK(it != NULL, "the array iterator lost its data across its own length read");
         s->idx = it->idx;
-        if (s->idx >= s->len) {
+        done = s->idx >= s->len;
+        if (is_typed_array(ap->class_id) && !JS_IsUninitialized(ap->u.typed_array->length_unknown)) {
+            /* step 1.b.iii over a typed array whose length is an unknown: `index >= len` is a fork per
+               iteration, and the continuing arm reads past the example where the length is longer */
+            int more;
+
+            if (JS_IsUninitialized(s->pred)) {
+                JSValue sp[2];
+
+                sp[0] = js_int64(s->idx);
+                sp[1] = js_dup(ap->u.typed_array->length_unknown);
+                CHECK(g_concolic.rel && g_concolic.rel(ctx, sp + 2, OP_lt),
+                      "the relation hook declined a typed array's unknown length");
+                s->pred = sp[0];
+            }
+            r = step_tobool_run(ctx, &s->hdr, s->pred, "23.1.5.1 step 1.b.iii index against len", &more);
+            if (r) return r < 0 ? -1 : r;
+            JS_FreeValue(ctx, s->pred);
+            s->pred = JS_UNINITIALIZED;
+            done = !more;
+        }
+        if (done) {
             JS_FreeValue(ctx, it->obj);
             it->obj = JS_UNDEFINED;
             s->result = js_create_iterator_result(ctx, JS_UNDEFINED, true);
@@ -99052,6 +99077,7 @@ static void js_array_iter_next_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->result);
     v->val(ctx, &s->el);
     v->val(ctx, &s->obj);
+    v->val(ctx, &s->pred);
 }
 
 static JSValue js_array_iter_next_fini(JSContext *ctx, void *st, bool take_result)
