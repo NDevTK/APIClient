@@ -470,8 +470,11 @@ void    endpoint_surface_census(long *minted, long *assets, long *emitted, long 
    host edge's own algorithm can throw or park before it records (see the edge censuses below).
    Every row is a lifetime count, never a gauge, scoped to the surface: reset with the record array in
    endpoint_init and endpoint_free. They are reports and never bounds. */
+/* `origin_finding` and `origin_driven` are the two further exits of an address whose scheme and host an
+   attacker source decides: handed to the request class, or dropped under a drive with no victim act. With the
+   three above they partition `asks`. */
 void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *merged, long *minted,
-                            long *merged_pre_program);
+                            long *merged_pre_program, long *origin_finding, long *origin_driven);
 
 /* The fetch edge's own entry, the population the ask census cannot see, counted over the states of
    core/fetch/fetch.c's §5.4/§5.6 machine. Each row names its kind (`Ask` or `Out`; `Life` is a lifetime count):

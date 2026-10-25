@@ -3,6 +3,7 @@
 #include "solver/solve.h"
 #include "solver/solve_html.h"
 #include "solver/solve_js.h"
+#include "solver/solve_url.h"
 #include "solver/solve_filter.h"
 #include "core/json_buf.h"
 #include "core/frame/policy_container.h"
@@ -27,7 +28,7 @@
 #include "core/dom/node_interface.h"   /* dom_document_create, where a Document is made */
 #include "core/html/html_parse.h"      /* html_parse_document, which owns the tokens it produces */
 
-enum { SINK_EVAL = 0, SINK_HTML = 1, SINK_URL = 2 };   /* sink classes, each with its own breakouts and fire oracle */
+enum { SINK_EVAL = 0, SINK_HTML = 1, SINK_URL = 2, SINK_REQUEST = 3 };   /* sink classes, each with its own breakouts and fire oracle */
 
 /* Candidate flows seeded this session, fresh or resumed. Each re-runs the page, so this count times the page's
    cost is most of what @S spends; it is reported beside the switch count so a run that slowed can be read as
@@ -403,7 +404,7 @@ static const char *CANDS_URL[] = {
 
 /* Where a sink class gets its breakouts. These are two different algorithms, not a fallback: a class declares
    exactly one, written-down vectors or a derivation, and solve_init asserts it. */
-enum { SINK_DERIVE_NONE = 0, SINK_DERIVE_HTML, SINK_DERIVE_JS };
+enum { SINK_DERIVE_NONE = 0, SINK_DERIVE_HTML, SINK_DERIVE_JS, SINK_DERIVE_URL };
 /* The sink classes: one row per lexical context the solver breaks out of, holding every fact about the sink
    rather than about a run, which together are the sink's fire oracle. `fires_on` is read off that oracle:
      - eval evaluates its own argument. 19.2.1 and 20.2.1.1.1 announce the source to this file and then compile
@@ -437,6 +438,11 @@ static const SinkClass SINKS[] = {
     /* §6.8.2 maps the inline type "navigation" to `script-src-elem`, not to `script-src-attr`, so
        `script-src 'unsafe-inline'; script-src-attr 'none'` must not block a javascript: URL. */
     [SINK_URL]  = { "location",  CANDS_URL, SINK_DERIVE_NONE, CSP_INLINE_NAVIGATION,       -1,                  1, "navigation"     },
+    /* A request whose scheme and host an attacker source decides names no endpoint of the app, so it is a
+       finding and never an API record; the proof is the request leaving the engine for the attacker's host.
+       A request the attacker only shapes inside the app's own endpoint is a marked API record
+       (solver/endpoint.c), not this row. No inline check governs it and no Trusted Types sink is involved. */
+    [SINK_REQUEST] = { "request", NULL,   SINK_DERIVE_URL,  -1,                          -1,                  0, "request-observed" },
 };
 #define SINK_CLASS_N ((int)(sizeof SINKS / sizeof SINKS[0]))
 
@@ -489,6 +495,7 @@ static const char *derive_probe(int derive) {
     switch (derive) {
     case SINK_DERIVE_HTML: return SOLVE_HTML_LOCATOR;
     case SINK_DERIVE_JS:   return SOLVE_JS_LOCATOR;
+    case SINK_DERIVE_URL:  return SOLVE_URL_LOCATOR;
     default: break;
     }
     DFAIL("a sink class declared a context derivation this file has no probe for - the probe is the run the "
@@ -533,10 +540,11 @@ void solve_init(JSContext *ctx) {
        also spray its list, and one with neither is seeded nothing and parks forever. `tt` may be -1, since the
        standard makes the URL sink no Trusted Types sink. */
     for (int i = 0; i < SINK_CLASS_N; i++) {
-        DCHECK(!SINKS[i].queues_fire == !!(SINKS[i].derive == SINK_DERIVE_JS),
-               "a sink class disagrees with itself about who runs a fired breakout — the JS-context class is "
-               "the one whose sink EVALUATES its own argument, so it is exactly the class that queues no "
-               "program, and any other pairing means one of the two was changed without the other");
+        DCHECK(!SINKS[i].queues_fire == (SINKS[i].derive == SINK_DERIVE_JS || SINK_DERIVE_URL == SINKS[i].derive),
+               "a sink class disagrees with itself about who runs a fired breakout — the JS-context class's "
+               "sink evaluates its own argument and the request class's proof is the request leaving, so "
+               "exactly those two queue no program, and any other pairing means one of the two was changed "
+               "without the other");
         DCHECK(SINKS[i].name && SINKS[i].fires_on,
                "a sink class was declared without its display name or the fire semantics its oracle gives it — "
                "a PoC cannot state how it reproduces without that row being whole");
@@ -547,16 +555,22 @@ void solve_init(JSContext *ctx) {
     /* The two context locators partition their probes, so neither may contain the other: a page that writes one
        source into both an eval sink and a markup sink runs each probe past the other class's sink, and
        candidate_search declines that write by class. */
-    DCHECK(!strstr(SOLVE_JS_LOCATOR, SOLVE_HTML_LOCATOR) && !strstr(SOLVE_HTML_LOCATOR, SOLVE_JS_LOCATOR),
-           "the @S markup and JS context locators are not distinct — one contains the other, so the substring "
+    DCHECK(!strstr(SOLVE_JS_LOCATOR, SOLVE_HTML_LOCATOR) && !strstr(SOLVE_HTML_LOCATOR, SOLVE_JS_LOCATOR) &&
+           !strstr(SOLVE_URL_LOCATOR, SOLVE_HTML_LOCATOR) && !strstr(SOLVE_HTML_LOCATOR, SOLVE_URL_LOCATOR) &&
+           !strstr(SOLVE_URL_LOCATOR, SOLVE_JS_LOCATOR)   && !strstr(SOLVE_JS_LOCATOR, SOLVE_URL_LOCATOR),
+           "the @S context locators are not distinct — one contains another, so the substring "
            "test that routes a probe's output to its own derivation answers for both");
     /* The delivery locator is a third, distinct from both, so a probe built to carry `<` is never routed into a
        context derivation. */
     DCHECK(!strstr(SOLVE_BYTES_LOCATOR, SOLVE_HTML_LOCATOR) && !strstr(SOLVE_HTML_LOCATOR, SOLVE_BYTES_LOCATOR) &&
-           !strstr(SOLVE_BYTES_LOCATOR, SOLVE_JS_LOCATOR)   && !strstr(SOLVE_JS_LOCATOR, SOLVE_BYTES_LOCATOR),
+           !strstr(SOLVE_BYTES_LOCATOR, SOLVE_JS_LOCATOR)   && !strstr(SOLVE_JS_LOCATOR, SOLVE_BYTES_LOCATOR) &&
+           !strstr(SOLVE_BYTES_LOCATOR, SOLVE_URL_LOCATOR)  && !strstr(SOLVE_URL_LOCATOR, SOLVE_BYTES_LOCATOR),
            "the @S byte-delivery locator is not distinct from a context locator — one contains the other, so a "
            "probe built to carry the bytes a source encodes would be routed into a context derivation and the "
            "state it reported would be a state of the probe rather than of the page");
+    DCHECK(!strcmp(ATTACKER_PAGE, "https://" SOLVE_URL_ATTACKER_HOST "/"),
+           "the request class's breakout host is not the attacker page's — a breakout reaches the host the "
+           "attacker serves its page from, so the two name one origin");
     DCHECK(!strstr(SOLVE_BYTES_LOCATOR, "X9"),
            "the @S byte-delivery locator carries the fire marker's own bytes — the probe is inert by "
            "construction and a marker in it would be recorded as a breakout arriving at its sink");
@@ -1230,13 +1244,14 @@ static void derive_from_witness(Cand *e) {
     /* The routed classes are named rather than reached by an `else`, so in a release build a class with no
        routed parser constructs nothing instead of handing HTML-tokenizer bytes to the JS derivation. The DFAIL
        is dev-only because SINKS is a static of this build whose columns solve_init asserts at startup. */
-    if (derive != SINK_DERIVE_HTML && derive != SINK_DERIVE_JS)
+    if (derive != SINK_DERIVE_HTML && derive != SINK_DERIVE_JS && derive != SINK_DERIVE_URL)
         DFAIL("a sink class stored a context witness and declares no derivation to read it with — a class "
               "whose breakouts are written down never stores one, so this is a class whose derivation column "
               "was set without a parser being routed for it");
     for (int i = 0; i < e->nwit; i++) {
         if      (derive == SINK_DERIVE_HTML) built += solve_html_breakouts(e->wit[i], &e->deliv, queue_derived, e);
         else if (derive == SINK_DERIVE_JS)   built += solve_js_breakouts(e->wit[i], &e->deliv, queue_derived, e);
+        else if (derive == SINK_DERIVE_URL)  built += solve_url_breakouts(e->wit[i], &e->deliv, queue_derived, e);
     }
     DCHECK(built == 0 || cand_has_escape(e) || search_solved(e),
            "a derivation constructed an escape that this search does not hold — the constructed count and the "
@@ -1749,6 +1764,36 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
         return;
     }
     detect_sink(arg, SINK_HTML);
+}
+
+/* A request whose scheme and host an attacker source decides: the request class. Detection records the source;
+   a candidate run's request carrying the context probe is the witness, read with the document base beside it
+   because a relative address's parse depends on it. */
+void solve_request_sink(JSContext *ctx, JSValueConst url, const char *base) {
+    if (is_verifying()) {
+        Cand *e;
+        const char *s;
+        if (concolic_is(url)) return;
+        if (!concolic_candidate_delivered()) return;
+        /* The class is asked first: a request is no other class's sink, so another class's candidate making one
+           is not an observation of that search's filter. */
+        if (!(e = candidate_search(SINK_REQUEST))) return;
+        if (!(s = JS_ToCString(ctx, url))) return;
+        filter_survived(s);
+        /* Named residual. Not covered: the fire; a breakout that reaches the attacker's host arrives here and is
+           not yet observed leaving. Next diff builds: the request observed at engine.c's pending_park_request,
+           read through the flow's fire target. Absence shows as: a request search with escapes in its payload
+           list and turns past its tried count that never fires. */
+        if (strstr(s, SOLVE_URL_LOCATOR)) {
+            char *w = solve_url_witness(base, s);
+            learn_witness(e, w);
+            free(w);
+            derive_from_witness(e);
+        }
+        JS_FreeCString(ctx, s);
+        return;
+    }
+    detect_sink(url, SINK_REQUEST);
 }
 
 /* The delivery root of the search a live candidate belongs to, asked by cold.c when it parks the candidate's

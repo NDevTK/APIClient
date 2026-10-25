@@ -2560,6 +2560,17 @@ int concolic_root_delivered_any(const char *root)
     return 0;
 }
 
+int concolic_root_delivered_all(const char *root)
+{
+    const char *p;
+    size_t n;
+    int i;
+
+    for (i = 0; root_member(root, i, &p, &n); i++)
+        if (src_row(p, n) < 0) return 0;
+    return i > 0;
+}
+
 int concolic_source_delivery(const char *root, const char **kind, char *prefix)
 {
     int row = root_declared_row(root);

@@ -67,6 +67,23 @@ bool url_record_copy(UrlRecord *dst, const UrlRecord *src);
    URL constructor throw. `out` is left initialised-and-empty on failure, so the caller frees it either way. */
 bool url_parse(UrlRecord *out, const char *input, size_t len, const UrlRecord *base);
 
+/* The §4.4 state the basic URL parser is in when its pointer reaches the end of `prefix` (resolved against `base`,
+   with no trailing strip, since a prefix is not the input's end): the parse context of whatever bytes follow.
+   FAILED is a prefix that fails before its end, which fails whatever follows it. */
+typedef enum {
+    URL_PREFIX_FAILED, URL_PREFIX_SCHEME_START, URL_PREFIX_SCHEME, URL_PREFIX_NO_SCHEME,
+    URL_PREFIX_SPECIAL_RELATIVE_OR_AUTHORITY, URL_PREFIX_PATH_OR_AUTHORITY, URL_PREFIX_RELATIVE,
+    URL_PREFIX_RELATIVE_SLASH, URL_PREFIX_SPECIAL_AUTHORITY_SLASHES, URL_PREFIX_SPECIAL_AUTHORITY_IGNORE_SLASHES,
+    URL_PREFIX_AUTHORITY, URL_PREFIX_HOST, URL_PREFIX_PORT, URL_PREFIX_FILE, URL_PREFIX_FILE_SLASH,
+    URL_PREFIX_FILE_HOST, URL_PREFIX_PATH_START, URL_PREFIX_PATH, URL_PREFIX_OPAQUE_PATH, URL_PREFIX_QUERY,
+    URL_PREFIX_FRAGMENT,
+} UrlPrefixState;
+UrlPrefixState url_prefix_state(const char *prefix, size_t len, const UrlRecord *base);
+/* Has a prefix ending in `s` decided the scheme and host? Past the authority (port, path start, path, opaque
+   path, query, fragment) no later byte returns the machine to the scheme or host states; a failed prefix
+   decides that no request is made. */
+bool url_prefix_decides_host(UrlPrefixState s);
+
 /* §4.4 with a STATE OVERRIDE — the entry every setter algorithm in every standard is one call to, named by the
    STATE its own section names rather than by a number.
    THE SEVEN ARE THE ONES OTHER STANDARDS INVOKE, and there is no eighth: §6.1's URL setters and HTML §7.2.4's

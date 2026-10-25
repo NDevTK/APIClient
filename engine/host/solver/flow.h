@@ -1759,6 +1759,10 @@ int   flow_path_peer_pinned(const Flow *f);
    flow_path_forced: what such a flow requests is this tool's act, so its drive mark (solver/engine.h's
    PENDING_DRIVEN_*) reads `driven` and it never fires as the page's. */
 int   flow_path_driven(const Flow *f);
+/* Does a victim act this tool performed stand on this flow's path: a modelled user act, or a drive member whose
+   body runs as the listener of an act (a click, typing, a drop)? A subset of flow_path_driven; a timeline that
+   took a delivery from a driven peer reads 0, since the peer's acts are held in its own instance. */
+int   flow_path_victim_act(const Flow *f);
 /* Charge the running flow for the work a step just burned, in units of work (the reward's currency), after
    the step and by the scheduler alone, which holds both ends of the interval. Never a step count (see `work`). A
    flow that leaves the frontier also hands what it burned to the flow that forked it, which prices a fork

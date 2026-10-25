@@ -15523,21 +15523,25 @@ static void rq_marks(const char *js, const char *prefix, int *seen, int *marked,
     }
 }
 
-/* The rows of the `requestsink` document (fixture/requestsink.h): the engine's security-relevant mark on a
-   request record. Marked where an attacker source roots the address on a path no act of this tool stands on;
-   plain where only a drive reaches the request (a click listener, a never-called function) or only stored state
-   roots it. The zone's can-change-nothing predicate is not the engine's, so the uncredentialed rows carry the
-   engine's mark here. */
+/* The rows of the `requestsink` document (fixture/requestsink.h). A request whose host the fragment decides is a
+   request-class record and no API record. The rest carry the engine's security-relevant mark where an attacker
+   source roots the address on a path no act of this tool stands on, and are plain where only a drive reaches
+   the request (a click listener, a never-called function) or only stored state roots it. The zone's
+   can-change-nothing predicate is not the engine's, so the uncredentialed rows carry the engine's mark here. */
 TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
     static const char *const marked_at[3] = { "/api/users/", "https://rq-other.test/q", "/api/rq-pinned" };
     static const char *const plain_at[3] = { "/api/drafts/", "/api/rq-orphan/", "/api/rq-store" };
     const char *mk_why[3] = { NULL, NULL, NULL }, *pr_why[3] = { NULL, NULL, NULL }, *pl_why[3] = { NULL, NULL, NULL };
     int mk_tt[3] = { 1, 1, 1 }, pr_tt[3] = { 1, 1, 1 }, pl_tt[3] = { 1, 1, 1 }, i, seen, marked, plain;
-    const char *to_why = NULL; int to_tt = 1;
+    const char *to_why = NULL, *tn_why = NULL; int to_tt = 1, tn_tt = 1;
+    char to_src[192] = "";
 
-    fold_row(&to_tt, &to_why, fcs_has(js, "\"attackerRooted\":{\"address\":\"" LOCATION_HASH_SRC "\"}"),
-             "no request record is marked with the fragment as its root, so the credentialed fetch to an address "
-             "the fragment supplies was not read as attacker-rooted");
+    fold_row(&to_tt, &to_why, s_rooted_source(js, "request", LOCATION_HASH_SRC, to_src, sizeof to_src),
+             "NOT REACHED: no request-class record is rooted in the fragment, so the fetch to an address the "
+             "fragment supplies was not read as a request whose host the attacker decides");
+    fold_row(&tn_tt, &tn_why, !fcs_has(js, "\"addressRoot\":\"" LOCATION_HASH_SRC "\""),
+             "an API record carries the fragment as its address root, so a request whose host the attacker picks "
+             "was filed as an endpoint of the app");
     for (i = 0; i < 3; i++) {
         rq_marks(js, marked_at[i], &seen, &marked, &plain);
         fold_row(&mk_tt[i], &mk_why[i], seen > 0, "NOT REACHED: there is no record of this address");
@@ -15552,7 +15556,8 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
                           "page's");
     }
     const Probe rows[] = {
-        { "rq-to-marked", to_tt, "rqTo", SESS_EXPLORE, to_why },
+        { "rq-to-found", to_tt, "rqTo", SESS_EXPLORE, to_why },
+        { "rq-to-no-record", tn_tt, "rqTo", SESS_EXPLORE, tn_why, .reach = "rq-to-found" },
         { "rq-id-marked", mk_tt[0], "rqId", SESS_EXPLORE, mk_why[0] },
         { "rq-other-marked", mk_tt[1], "rqH", SESS_EXPLORE, mk_why[1] },
         { "rq-pinned-marked", mk_tt[2], "rqP", SESS_EXPLORE, mk_why[2] },

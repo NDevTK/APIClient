@@ -16,6 +16,7 @@ var _FIRES_ON = {
   "sink-evaluates": "auto-fires: the sink evaluates the payload where it stands — no interaction, no navigation",
   "parse-insert":   "auto-fires at insertion: the injected markup's onload/onerror handler runs when the page parses it — no click needed",
   "navigation":     "fires on navigation: the payload is a javascript: URL, so it runs when the navigation this sink starts is performed (for a form action, on submission)",
+  "request-observed": "proven by the request: the page sends it to a host the attacker's bytes chose, and it is seen leaving the browser with that host",
 };
 var _DELIVERY = {
   // A URL HAS EXACTLY TWO PLACES an attacker-controlled component lives, and `concolic_declare_source` refuses

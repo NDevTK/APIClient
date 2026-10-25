@@ -822,7 +822,7 @@ static bool url_includes_credentials(const UrlRecord *u)
    instead of running on into the path. Writing the setters as field assignments instead would be eleven
    places to get `u.protocol = "https:"` wrong; this is one. */
 static bool url_parse_into(UrlRecord *url, const char *input_raw, size_t raw_len, const UrlRecord *base,
-                           int state_override)
+                           int state_override, int *eof_state)
 {
     char *input;
     size_t len = 0, i;
@@ -848,7 +848,8 @@ static bool url_parse_into(UrlRecord *url, const char *input_raw, size_t raw_len
         size_t b = 0, e = raw_len;
         if (state_override < 0) {
             while (b < e && (unsigned char)input_raw[b] <= 0x20) b++;
-            while (e > b && (unsigned char)input_raw[e - 1] <= 0x20) e--;
+            /* A prefix (`eof_state`) is not the input's end, so its trailing bytes are not stripped. */
+            while (!eof_state && e > b && (unsigned char)input_raw[e - 1] <= 0x20) e--;
         }
         for (i = b; i < e; i++) {
             char c = input_raw[i];
@@ -868,6 +869,7 @@ static bool url_parse_into(UrlRecord *url, const char *input_raw, size_t raw_len
     for (pointer = 0; pointer <= len; pointer++) {
         int c = (pointer < len) ? (unsigned char)input[pointer] : -1;
         int reprocess = 1;
+        if (c < 0 && eof_state) *eof_state = state;
         while (reprocess) {
             reprocess = 0;
             switch (state) {
@@ -1355,7 +1357,48 @@ fail:
 
 bool url_parse(UrlRecord *out, const char *input, size_t len, const UrlRecord *base)
 {
-    return url_parse_into(out, input, len, base, -1);
+    return url_parse_into(out, input, len, base, -1, NULL);
+}
+
+UrlPrefixState url_prefix_state(const char *prefix, size_t len, const UrlRecord *base)
+{
+    UrlRecord u;
+    int st = -1;
+
+    (void)url_parse_into(&u, prefix, len, base, -1, &st);
+    url_record_free(&u);
+    switch (st) {
+    case -1:                                  return URL_PREFIX_FAILED;
+    case ST_SCHEME_START:                     return URL_PREFIX_SCHEME_START;
+    case ST_SCHEME:                           return URL_PREFIX_SCHEME;
+    case ST_NO_SCHEME:                        return URL_PREFIX_NO_SCHEME;
+    case ST_SPECIAL_RELATIVE_OR_AUTHORITY:    return URL_PREFIX_SPECIAL_RELATIVE_OR_AUTHORITY;
+    case ST_PATH_OR_AUTHORITY:                return URL_PREFIX_PATH_OR_AUTHORITY;
+    case ST_RELATIVE:                         return URL_PREFIX_RELATIVE;
+    case ST_RELATIVE_SLASH:                   return URL_PREFIX_RELATIVE_SLASH;
+    case ST_SPECIAL_AUTHORITY_SLASHES:        return URL_PREFIX_SPECIAL_AUTHORITY_SLASHES;
+    case ST_SPECIAL_AUTHORITY_IGNORE_SLASHES: return URL_PREFIX_SPECIAL_AUTHORITY_IGNORE_SLASHES;
+    case ST_AUTHORITY:                        return URL_PREFIX_AUTHORITY;
+    case ST_HOST:                             return URL_PREFIX_HOST;
+    case ST_PORT:                             return URL_PREFIX_PORT;
+    case ST_FILE:                             return URL_PREFIX_FILE;
+    case ST_FILE_SLASH:                       return URL_PREFIX_FILE_SLASH;
+    case ST_FILE_HOST:                        return URL_PREFIX_FILE_HOST;
+    case ST_PATH_START:                       return URL_PREFIX_PATH_START;
+    case ST_PATH:                             return URL_PREFIX_PATH;
+    case ST_OPAQUE_PATH:                      return URL_PREFIX_OPAQUE_PATH;
+    case ST_QUERY:                            return URL_PREFIX_QUERY;
+    case ST_FRAGMENT:                         return URL_PREFIX_FRAGMENT;
+    }
+    DFAIL("§4.4's basic URL parser reached the end of a prefix in a state this file does not name — the "
+          "hostname override is entered only through url_parse_override, never by a fresh parse");
+    return URL_PREFIX_FAILED;
+}
+
+bool url_prefix_decides_host(UrlPrefixState s)
+{
+    return s == URL_PREFIX_FAILED || s == URL_PREFIX_PORT || s == URL_PREFIX_PATH_START || s == URL_PREFIX_PATH ||
+           s == URL_PREFIX_OPAQUE_PATH || s == URL_PREFIX_QUERY || s == URL_PREFIX_FRAGMENT;
 }
 
 /* §4.4's STATE OVERRIDE, NAMED BY THE STATE RATHER THAN NUMBERED — the entry another standard reaches this
@@ -1389,7 +1432,7 @@ bool url_parse_override(UrlRecord *url, const char *input, size_t len, UrlStateO
     }
     /* §4.4's `base` is not passed with a state override and never can be: every one of the seven states above
        is reached with the record ALREADY built, and a base is what a state before them would have consumed. */
-    return url_parse_into(url, input, len, NULL, st);
+    return url_parse_into(url, input, len, NULL, st, NULL);
 }
 
 

@@ -39,6 +39,10 @@ void solve_free(void);
 void solve_eval_sink(JSContext *ctx, JSValueConst arg);
 void solve_html_sink(JSContext *ctx, JSValueConst arg);
 void solve_url_sink(JSContext *ctx, JSValueConst arg);
+/* A request whose scheme and host an attacker source decides (solver/endpoint.c's mint), with `url` the address
+   the page handed it and `base` the document base URL it resolves against: detected on an exploring flow, and
+   read for the context probe on a candidate run of the request class. */
+void solve_request_sink(JSContext *ctx, JSValueConst url, const char *base);
 
 /* …AND THE SAME PAIR OF DECISIONS FOR A HOST ALGORITHM THAT TURNS A STRING INTO CODE ITSELF. Announces `handler`
    at the JS-context sink UNCONDITIONALLY and returns the program TEXT (owned) that algorithm should compile, or

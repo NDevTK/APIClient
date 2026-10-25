@@ -541,6 +541,11 @@ METRIC(ep_ask_suppressed, "epAskSuppressed", LIFETIME, "ask", AGENT, "solver/end
 METRIC(ep_ask_merged, "epAskMerged", LIFETIME, "ask", AGENT, "solver/endpoint.c", INT)
 METRIC(ep_ask_minted, "epAskMinted", LIFETIME, "ask", AGENT, "solver/endpoint.c", INT)
 METRIC(ep_ask_merged_pre_program, "epAskMergedPreProgram", LIFETIME, "ask", AGENT, "solver/endpoint.c", INT)
+/* …and the two exits of an address whose scheme and host an attacker source decides, which names no endpoint
+   of the app: handed to the request class, or dropped because a drive with no victim act stands on the path.
+   They sum with suppressed, merged and minted to `epAsks`. */
+METRIC(ep_ask_origin_finding, "epAskOriginFinding", LIFETIME, "ask", AGENT, "solver/endpoint.c", INT)
+METRIC(ep_ask_origin_driven, "epAskOriginDriven", LIFETIME, "ask", AGENT, "solver/endpoint.c", INT)
 /* The fetch edge's, the XHR edge's and the invoker rungs' rows follow these in `_cold`, from their own
    families (solver/metrics/fetch_edge.def, xhr_edge.def, rung_entry.def). The fetch edge's are the
    host edge's own entry, which `epAsks` cannot see: a `fetch()` thrown out of or parked inside before

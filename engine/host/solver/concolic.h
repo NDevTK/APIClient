@@ -742,6 +742,9 @@ int         concolic_source_delivery(const char *root, const char **kind, char *
    asks to learn whether an attacker source roots it at all, so two declaring members answer 1 rather than
    crashing as concolic_source_delivery does, which must name one member's envelope. */
 int         concolic_root_delivered_any(const char *root);
+/* …and is every member such a source? 0 for NULL, never vacuously 1: an address all of whose bytes an attacker
+   delivers, where a member from app state means the app chose that part. */
+int         concolic_root_delivered_all(const char *root);
 /* The URL §5.2 serialization of the tuple name a root's payload rides as the value of, or NULL where the
    payload is the component's own bytes (concolic_new_urlencoded_value). */
 const char *concolic_source_delivery_key(const char *root);

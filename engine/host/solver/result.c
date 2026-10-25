@@ -1108,6 +1108,7 @@ char *result_cold_json(void) {
     /* what the emitted @H array is a fraction of, and what of it predates any program — endpoint.h */
     long ep_minted, ep_assets, ep_emitted, ep_pre_program;
     long ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre;
+    long ep_ask_origin_finding, ep_ask_origin_driven;
     /* …and what stands in front of the door those six are counted at: solver/endpoint.h states the contract,
        its three identities, and that the stage arms are a partition. Spliced as rows beside `epAsks`, so
        consumers of `_cold` (including extension/bridge.js and extension/popup.js, live on write while this
@@ -1250,7 +1251,7 @@ char *result_cold_json(void) {
        arms sum to the mint where all three are in one hand. */
     endpoint_surface_census(&ep_minted, &ep_assets, &ep_emitted, &ep_pre_program);
     endpoint_ask_census(&ep_asks, &ep_ask_pre, &ep_ask_sup, &ep_ask_merged, &ep_ask_minted,
-                        &ep_ask_merged_pre);
+                        &ep_ask_merged_pre, &ep_ask_origin_finding, &ep_ask_origin_driven);
     /* Rows awaiting bytes are a subset of the register entries owing them. Every row standing as an external
        script has one entry naming it by `dyn_id` on the same member's register: engine.c pushes both at the
        one creating site, flow_deliver_one_reply removes the entry and flips the row's kind in one activation,
@@ -1640,6 +1641,8 @@ char *result_cold_json(void) {
     METRIC_SET(ep_ask_merged, ep_ask_merged);
     METRIC_SET(ep_ask_minted, ep_ask_minted);
     METRIC_SET(ep_ask_merged_pre_program, ep_ask_merged_pre);
+    METRIC_SET(ep_ask_origin_finding, ep_ask_origin_finding);
+    METRIC_SET(ep_ask_origin_driven, ep_ask_origin_driven);
     /* The edges' and the rungs' rows are spliced after this family's: each text carries its own leading
        comma, and the empty string is a host with no population (solver/endpoint.h, solver/rung_entry.h). */
     json_buf_raw(&b, "{");

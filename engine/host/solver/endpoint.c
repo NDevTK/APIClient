@@ -10,6 +10,9 @@
 #include "solver/novelty.h"   /* what a mint or a header gain is worth: its identity against the product */
 #include "solver/pending.h"   /* …and PROV_*, the vocabulary those words spell */
 #include "solver/witness_verify.h"   /* the queue an eligible witness is verified through */
+#include "solver/solve.h"            /* the request class an attacker-chosen host is handed to */
+#include "core/dom/document.h"       /* the base an address prefix is parsed against */
+#include "core/url/url.h"
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -549,6 +552,9 @@ static int g_suppress = 0;   /* a candidate/verify re-run's requests are @S arti
 static long g_asks;             /* every call that reached the door, counted before the gate */
 static long g_asks_pre_program; /* …of those, the ones asked before this instance had started any program */
 static long g_ask_suppressed;   /* declined AT the gate: a candidate/verify re-fire is an @S artifact */
+/* Asks whose scheme and host an attacker source decides, which name no endpoint of the app: handed to the
+   request class, or dropped because a drive with no victim act stands on the path. */
+static long g_ask_origin_finding, g_ask_origin_driven;
 static long g_ask_merged;       /* reached a record this surface already held — the invisible arm */
 static long g_ask_minted;       /* created a record — the arm, and the only one, that moves `epMinted` */
 /* The cut of the merged arm that answers the razor's own sentence, which `asks - preProgram` bounds from above and
@@ -685,6 +691,7 @@ static void edge_release(EndpointEdge *e) {
 void endpoint_init(void) {
     g_eps = NULL; g_eps_n = 0; g_eps_cap = 0; g_suppress = 0;
     g_asks = g_asks_pre_program = g_ask_suppressed = g_ask_merged = g_ask_minted = 0;
+    g_ask_origin_finding = g_ask_origin_driven = 0;
     g_ask_merged_pre_program = 0;
     g_boundary_spent = 0;
     /* The edge's rows beside the ask rows they are read against. The partition array is asserted absent rather
@@ -2044,6 +2051,47 @@ static void endpoint_verify_observe(JSContext *ctx, const char *key, const char 
     free(path); free(vm); free(vp); free(vc);
 }
 
+/* Does this door's request leave from code the running flow ran, through engine.c's park, so that the flow
+   standing here is the one that sent it? Navigations (a form submission included) leave through the navigate
+   algorithm, a batch part never leaves on its own, and the remaining doors record off a park or a reply. */
+static int door_sends_request(int door) {
+    switch ((EndpointDoor)door) {
+    case EPD_SCRIPT_ELEMENT: case EPD_LINK_ELEMENT: case EPD_IMAGE_ELEMENT:
+    case EPD_FETCH: case EPD_XHR: case EPD_BEACON:
+        return 1;
+    case EPD_DOCUMENT_SCRIPT: case EPD_INJECTED_SCRIPT: case EPD_MODULE_IMPORT: case EPD_FORM_SUBMIT:
+    case EPD_NAVIGATION: case EPD_BATCH_PART: case EPD_REPLY_CHUNK:
+        return 0;
+    case EPD_UNSTATED: case EPD_COUNT:
+        break;
+    }
+    DFAIL("a door outside ENDPOINT_DOORS was asked whether its request leaves through the park");
+    return 0;
+}
+
+/* Do the page's own bytes ahead of the first hole in `url` (a concolic address) decide its scheme and host?
+   They are parsed by URL §4.4 "URL parsing" against the document base; past the authority no later byte can
+   move them (url_prefix_decides_host). */
+static int address_prefix_decides_host(JSContext *ctx, JSValueConst url) {
+    char *disp = url_display(ctx, url);
+    unsigned char *hole = concolic_shape_hole_mask(url);
+    const char *b = document_base_url(ctx);
+    UrlRecord base;
+    size_t n = 0;
+    int r;
+
+    CHECK(disp && hole, "endpoint: OOM reading an address's page bytes");
+    while (disp[n] && !hole[n]) n++;
+    url_record_init(&base);
+    CHECKF(b && url_parse(&base, b, strlen(b), NULL),
+           "endpoint: the document base URL `%s` does not parse — HTML §2.4.1 makes it a URL record", b ? b : "");
+    r = url_prefix_decides_host(url_prefix_state(disp, n, &base));
+    url_record_free(&base);
+    free(hole);
+    free(disp);
+    return r;
+}
+
 /* Mark `e` security-relevant with the root of the sighting that made it so (see the struct). The root is copied:
    the caller's copy may move to `addr_root` on the same call. */
 static void endpoint_mark_attacker_rooted(Endpoint *e, const char *root) {
@@ -2143,6 +2191,8 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         const Flow *f = flow_running();
         g_ask_suppressed++;
         if (f && f->cand_vfy) endpoint_verify_observe(ctx, f->cand_vfy, method, url);
+        /* A sink candidate's request is where the request class reads its context probe. */
+        if (f && f->cand_sink && door_sends_request(door)) solve_request_sink(ctx, url, document_base_url(ctx));
         return;
     }
     /* Whether this sighting's address was one the run had determined, read once here from the value the display
@@ -2200,6 +2250,29 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     DCHECK(!atk || acls != EPA_CONCRETE,
            "an address whose root names a declared attacker source was classed concrete — the root is read off "
            "the same concolic value address_class_of classes, so one of the two misread it");
+    /* A request whose scheme and host an attacker source decides names no endpoint of the app: whatever it
+       reaches is the attacker's pick. It is the request class's finding, a victim act on the path included,
+       since no control asks to send to the attacker's host: the act is listed in its proof as a PoC's acts are.
+       Under a drive with no victim act it is nothing at all. Every root member must be an attacker source.
+       Named residual. Not covered: an address joining app state and an attacker source, whose roots are not
+       held per hole. Next diff builds: the root of the hole the host's bytes come from. Absence shows as: a
+       marked API record whose address begins with an app-state hole the attacker's bytes follow. */
+    if (aroot && door_sends_request(door) && concolic_root_delivered_all(aroot) &&
+        !address_prefix_decides_host(ctx, url)) {
+        const Flow *f = flow_running();
+
+        DCHECK(f != NULL, "a request whose host an attacker source decides was composed with no flow running — "
+                          "an attacker source is read inside a flow");
+        if (!driven || (f && flow_path_victim_act(f))) {
+            g_ask_origin_finding++;
+            solve_request_sink(ctx, url, document_base_url(ctx));
+        } else {
+            g_ask_origin_driven++;
+        }
+        free(aroot);
+        witness_free(&wit);
+        return;
+    }
     /* Path, then query, then body: the order a request is written in and the identity compares in. The path is
        re-spelled by the scan (see path_scan), and the re-spelled one becomes the endpoint's `url`, because the
        params are named in its grammar. The example is aligned against both halves of the address, so a hole in a
@@ -2430,13 +2503,14 @@ void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pr
    instant costs nothing a reader can observe. The two partitions and the cut are asserted here, where all six are
    in hand; the cross identity against the record array is in endpoint_surface_census. */
 void endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *merged, long *minted,
-                         long *merged_pre_program) {
-    DCHECK(asks && pre_program && suppressed && merged && minted && merged_pre_program,
+                         long *merged_pre_program, long *origin_finding, long *origin_driven) {
+    DCHECK(asks && pre_program && suppressed && merged && minted && merged_pre_program && origin_finding &&
+           origin_driven,
            "the @H ask census was asked for with somewhere to put fewer than six of its numbers — the two partitions "
            "and the cut are returned whole");
-    DCHECK(g_asks == g_ask_suppressed + g_ask_merged + g_ask_minted,
-           "the @H surface's asks do not sum over suppressed, merged and minted — they are the three exits of one "
-           "door, so a total that moves without an arm is a fourth exit added above them");
+    DCHECK(g_asks == g_ask_suppressed + g_ask_merged + g_ask_minted + g_ask_origin_finding + g_ask_origin_driven,
+           "the @H surface's asks do not sum over suppressed, merged, minted and the two attacker-host exits — "
+           "they are the exits of one door, so a total that moves without an arm is an exit added above them");
     DCHECK(g_asks_pre_program <= g_asks,
            "the @H surface counted more pre-program asks than asks — the pre-program count is raised only inside the "
            "entry that raises the total, so a larger value is a second raise");
@@ -2462,6 +2536,7 @@ void endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *
     *asks = g_asks; *pre_program = g_asks_pre_program;
     *suppressed = g_ask_suppressed; *merged = g_ask_merged; *minted = g_ask_minted;
     *merged_pre_program = g_ask_merged_pre_program;
+    *origin_finding = g_ask_origin_finding; *origin_driven = g_ask_origin_driven;
 }
 
 /* The edge hands over its own stage table once per session at its declaration: `js_fetch_steps[]` itself, a table of
@@ -3368,6 +3443,7 @@ void endpoint_free(void) {
        (`asks > preProgram` says running code composed a request). The mint arm is reset with `g_eps_n` because the
        identity between them is asserted on every read of the surface. */
     g_asks = g_asks_pre_program = g_ask_suppressed = g_ask_merged = g_ask_minted = 0;
+    g_ask_origin_finding = g_ask_origin_driven = 0;
     g_ask_merged_pre_program = 0;
     /* And what the next session would be grading against, taken here, where the scopes part: this resets this
        file's program-state boundary and the engine's stays, the latch is the difference, and the door asserts on
