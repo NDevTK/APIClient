@@ -127286,10 +127286,13 @@ JSValue JS_NewUint8ArrayImage(JSContext *ctx, const uint8_t *buf, size_t len, JS
 JSValue JS_NewArrayBufferImage(JSContext *ctx, const uint8_t *buf, size_t len, JSValueConst unknown,
                                const char *codec)
 {
-    JSValue ab = JS_NewArrayBufferCopy(ctx, buf, len);
+    static const uint8_t none[1];
+    JSValue ab;
 
     DCHECK(js_value_is_concolic(unknown), "a codec image was recorded over a value that is not unknown input — "
                                           "a known operand's output is ordinary bytes");
+    DCHECK(buf != NULL || len == 0, "a codec image with no example bytes was given a length for them");
+    ab = JS_NewArrayBufferCopy(ctx, buf ? buf : none, len);
     DCHECK(codec != NULL, "a codec image names no codec, which is half the identity of every byte in it");
     if (JS_IsException(ab))
         return ab;

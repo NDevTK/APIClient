@@ -177,10 +177,15 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
             if (rd->unknown == BYTE_READER_UNKNOWN_CALL) {
                 DCHECK(rd->callee != NULL, "a reader answers an unknown body by a call and names no function");
                 STEP_GOTO(s->hdr.stage, BR_CONVERT, &s->cphase, NULL);
+            } else if (rd->unknown == BYTE_READER_UNKNOWN_IMAGE) {
+                DCHECK(rd->image != NULL, "a reader answers an unknown body by a container and names no builder");
+                s->value = rd->image(ctx, unknown);
+                JS_FreeValue(ctx, unknown);
+                if (JS_IsException(s->value)) { s->value = JS_GetException(ctx); reject = 1; }
             } else if (rd->unknown != BYTE_READER_UNKNOWN_SELF) {
-                DFAILF("%s.%s() was asked to read a body of unknown external input — it owes a container over a "
-                       "byte sequence of unknown length. Build that container (an ArrayBuffer whose length and "
-                       "bytes are unknowns) and give the reader its ByteReaderUnknown answer",
+                DFAILF("%s.%s() was asked to read a body of unknown external input and declares no answer for "
+                       "one — give the reader its ByteReaderUnknown answer (a container image of the unknown, as "
+                       "arrayBuffer() has, or a call over it, as json() has)",
                        f->iface, rd->name);
                 JS_FreeValue(ctx, s->value);
                 JS_ThrowTypeError(ctx, "this engine cannot yet read a body of unknown bytes as a container");
@@ -503,4 +508,14 @@ JSValue byte_reader_array_buffer(JSContext *ctx, JSValueConst recv, const char *
 JSValue byte_reader_bytes(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
     return byte_reader_image(ctx, recv, bytes, len, true);
+}
+
+JSValue byte_reader_array_buffer_unknown(JSContext *ctx, JSValueConst unknown)
+{
+    return JS_NewArrayBufferImage(ctx, NULL, 0, unknown, BYTE_READER_IMAGE);
+}
+
+JSValue byte_reader_bytes_unknown(JSContext *ctx, JSValueConst unknown)
+{
+    return JS_NewUint8ArrayImage(ctx, NULL, 0, unknown, BYTE_READER_IMAGE);
 }

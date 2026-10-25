@@ -958,8 +958,8 @@ static void body_install_realm(JSContext *ctx)
 static const ByteReader BODY_READERS[] = {
     { "text",        byte_reader_text,         BYTE_READER_UNKNOWN_SELF, NULL },
     { "json",        byte_reader_json,         BYTE_READER_UNKNOWN_CALL, body_json_parse },
-    { "arrayBuffer", byte_reader_array_buffer, BYTE_READER_UNKNOWN_NONE, NULL },
-    { "bytes",       byte_reader_bytes,        BYTE_READER_UNKNOWN_NONE, NULL },
+    { "arrayBuffer", byte_reader_array_buffer, BYTE_READER_UNKNOWN_IMAGE, NULL, byte_reader_array_buffer_unknown },
+    { "bytes",       byte_reader_bytes,        BYTE_READER_UNKNOWN_IMAGE, NULL, byte_reader_bytes_unknown },
     { "blob",        body_read_blob,           BYTE_READER_UNKNOWN_NONE, NULL },
     { "formData",    body_read_form_data,      BYTE_READER_UNKNOWN_NONE, NULL },
 };

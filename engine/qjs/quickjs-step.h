@@ -1261,7 +1261,8 @@ JS_EXTERN void JS_FreeBufferUnknowns(JSContext *ctx, JSBufferUnknownPiece *piece
    is an unknown with no example. */
 JS_EXTERN JSValue JS_NewUint8ArrayImage(JSContext *ctx, const uint8_t *buf, size_t len, JSValueConst unknown,
                                         const char *codec);
-/* The same for an ArrayBuffer: its bytes read through any view as unknowns derived from `unknown`. */
+/* The same for an ArrayBuffer: its bytes read through any view as unknowns derived from `unknown`, and a NULL
+   `buf` with `len` 0 likewise holds no example bytes. */
 JS_EXTERN JSValue JS_NewArrayBufferImage(JSContext *ctx, const uint8_t *buf, size_t len, JSValueConst unknown,
                                          const char *codec);
 
