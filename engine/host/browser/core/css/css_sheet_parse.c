@@ -12,7 +12,7 @@
 #include "check.h"
 #include "core/css/css_sheet_parse.h"
 #include "core/timing/thread_work.h"
-#include "solver/engine.h"   /* ENGINE_QUANTUM_WORK */
+#include "solver/rest_unit.h"   /* the bytes a step tokenizes */
 
 struct CssSheetParse {
     lxb_css_parser_t     *parser;
@@ -22,9 +22,9 @@ struct CssSheetParse {
     lxb_status_t          status;  /* the last answer: LXB_STATUS_SUSPENDED until the run ends */
 };
 
-/* The parser's yield hook: between two tokens, once the bytes tokenized since the last charge cost a work
-   quantum, they are charged and the run suspends. Charging only there keeps thread_work_charge's per-call
-   rounding to one unit per quantum. */
+/* The parser's yield hook: between two tokens, once a rest unit of bytes has been tokenized since the last
+   charge, they are charged and the run suspends. Charging only there keeps thread_work_charge's per-call
+   rounding to one unit per step. */
 static bool css_sheet_parse_yield(lxb_css_parser_t *parser, void *ctx)
 {
     CssSheetParse *run = ctx;
@@ -33,7 +33,7 @@ static bool css_sheet_parse_yield(lxb_css_parser_t *parser, void *ctx)
     DCHECK(run->parser == parser, "a sheet parse's yield hook was reached by another run's parser");
     DCHECK(at >= run->charged && at <= run->len, "a sheet's tokenizer stands outside the bytes it was handed");
     fresh = at - run->charged;
-    if ((uint64_t)fresh * THREAD_WORK_UNITS_PER_KIB_CSS / 1024 < (uint64_t)ENGINE_QUANTUM_WORK) return false;
+    if (fresh < rest_unit_items(REST_UNIT_CSS_PARSE_BYTES)) return false;
     thread_work_charge(THREAD_WORK_CSS_PARSE, fresh);
     run->charged = at;
     return true;
@@ -84,11 +84,19 @@ bool css_sheet_parse_finish(CssSheetParse *run)
     return ok;
 }
 
-/* NAMED RESIDUAL. Not covered: resting between quanta. Both callers (the cascade's per-sheet parse table and
-   cssom_parse_rules, which a sheet's text set from script reaches) are C activations that cannot park, so the
-   run is driven here to its end and only the charge is per quantum. Next diff: the callers hold the run in a
-   step machine's state and rest between steps, with the run's record captured for a fork. Its absence shows as
-   a single sheet's parse spanning several quanta of one flow's slice. */
+void css_sheet_parse_abort(CssSheetParse *run)
+{
+    DCHECK(run != NULL && !css_sheet_parse_ended(run), "a sheet parse was aborted with no run or after it ended");
+    lxb_css_parser_selectors_destroy(run->parser);
+    lxb_css_parser_destroy(run->parser, true);
+    free(run);
+}
+
+/* Named residual. Not covered: resting between steps for a caller that cannot park: cssom_parse_rules, which
+   a sheet's text set from script reaches, and the cascade's per-sheet parse asked by a reader that cannot rest
+   (core/css/css_style_declaration.c's parse table steps its run under a resting drive). Next diff: those
+   callers hold the run in a step machine's state and rest between steps. Its absence shows as a single sheet's
+   parse charging several rest units of bytes inside one REST_UNIT_LAYOUT_DESCENDANTS bracket. */
 bool css_sheet_parse(lxb_css_stylesheet_t *sst, const char *text, size_t len)
 {
     ThreadWorkSpan tw;

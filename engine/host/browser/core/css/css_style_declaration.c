@@ -1337,26 +1337,16 @@ static void cssd_inline_collect(lxb_dom_element_t *el, CssCascadedStyle *s, CssL
 
 /* ---- The sheet, parsed once per content -----------------------------------------------------------------
  *
- * The match-result build below hands each held sheet's emission to lexbor to get back the selector lists and
- * declaration blocks its rules were parsed from, a round trip CSSOM §6.4's objects force because a rule holds
- * only the serialization lexbor produced for it. This table holds one parse per sheet position and serves it
- * while the emission is byte-identical to the one it was parsed from; it removes the arena create, the parse
- * and the arena destroy from every build after the first.
- *
- * It is keyed on content, so no flow can be served another flow's parse: `lxb_css_stylesheet_parse` is a
- * function of the text alone (the parser's arena is swapped in and out around each parse and its selector
- * record is asserted unchanged after it), so a hit and a miss produce the same stylesheet. Two flows whose
- * sheets differ emit different text and each parse their own; two alternating on one slot thrash it.
- *
- * One entry per position bounds it to one parsed copy of the sheet set the document has, as Blink's
- * StyleSheetContents is. It is not flow state: nothing here is captured into the COW delta, no rule or sheet
- * names it, every entry is derived from an emission any flow can rebuild, and dropping the table at any
- * instant changes no answer.
- *
- * The round-trip assertions run at every build, against the freshly emitted `view.n` and `view.layer`, so a
- * parse from different bytes than the emission beside it fires at its first use. A sheet whose text does not
- * parse leaves its slot empty and is re-parsed at every build; caching the failure would be a second thing to
- * invalidate for no answer served.
+ * The match-result build re-parses each held sheet's emission for its selector lists and declaration blocks,
+ * a round trip CSSOM §6.4's objects force because a rule holds only lexbor's serialization of itself. This
+ * table holds one parse per sheet position (as Blink's StyleSheetContents), served while the emission is
+ * byte-identical to the one parsed. It is keyed on content, and a parse is a function of the text alone (each
+ * run has its own parser, core/css/css_sheet_parse.h), so no flow is served another's parse; two flows
+ * alternating on one slot thrash it. An unfinished parse stays in its slot with its run, so a build asking for
+ * the same bytes continues it and one asking for other bytes aborts it. It is not flow state: nothing is
+ * captured into the COW delta, every entry is rebuilt from an emission, and dropping the table changes no
+ * answer. The round-trip asserts run at every build against the fresh `view.n` and `view.layer`. A sheet whose
+ * text does not parse leaves its slot empty and is re-parsed at every build.
  *
  * RETIREMENT: this table goes when a CSSOM §6.4 rule owns a parsed form that survives its own serialization. */
 typedef struct {
@@ -1367,6 +1357,8 @@ typedef struct {
     lxb_css_rule_t      **rules; /* OWNED array of rules borrowed from `mem`: the top-level list, by index, so a
                                     build that rests continues at a rule without walking the list to it */
     uint32_t              nrules;
+    CssSheetParse        *run;   /* OWNED while the parse of `text` into `sst` is under way, else NULL */
+    bool                  parsed;   /* the run ended with `sst` holding the rules, and `rules` indexes them */
 } CssdSheetParse;
 
 /* Indexed by the sheet's position in CSSOM §6.2's list — a POSITION and not an identity, so two documents in
@@ -1376,6 +1368,8 @@ static uint32_t        g_sheet_parse_n;
 
 static void cssd_sheet_parse_drop(CssdSheetParse *e)
 {
+    if (e->run != NULL) css_sheet_parse_abort(e->run);
+    e->run = NULL;
     if (e->mem != NULL) {
         /* The arena is destroyed outright: `lxb_css_stylesheet_create` ref-increments the memory it is handed
            and `lxb_css_stylesheet_destroy` only decrements it, so the arena the stylesheet, its rules and its
@@ -1390,6 +1384,7 @@ static void cssd_sheet_parse_drop(CssdSheetParse *e)
     e->sst = NULL;
     e->rules = NULL;
     e->nrules = 0;
+    e->parsed = false;
 }
 
 static void cssd_sheet_parse_free(void)
@@ -1406,20 +1401,24 @@ static void cssd_sheet_parse_free(void)
 /* THE PARSE OF `text`, WHICH IS EITHER THE ONE SLOT `si` ALREADY HOLDS OF THESE EXACT BYTES OR A FRESH ONE
    THAT REPLACES IT. NULL when the text did not parse, which is the same answer and the same cost the
    uncached path gave. The returned entry is BORROWED and is valid until this slot is next replaced — which,
-   because the author walk is asserted non-re-entrant at its call, cannot happen while a caller holds one. */
-static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, size_t len)
+   because the author walk is asserted non-re-entrant at its call, cannot happen while a caller holds one.
+   An unfinished parse stays in the slot with its run, keyed by the text it parses, so whichever build asks for
+   those bytes next continues it; a slot replaced in between aborts it. With `rests`, each step is asked of the
+   resting drive (layout_job_parse_take) and `*parked` answers NULL for a parse the drive stopped. */
+static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, size_t len, bool rests,
+                                               bool *parked)
 {
     CssdSheetParse *e;
-    lxb_css_memory_t *mem;
-    lxb_css_stylesheet_t *sst;
     lxb_css_rule_t *r;
+    ThreadWorkSpan tw;
     uint32_t n;
-    char *copy;
+    bool ok;
 
     DCHECK(text != NULL && len > 0,
            "a sheet was handed to the parse table with no emission to be a parse OF — the walk tests for an "
            "empty emission before it gets here, because a sheet that declares only `@layer` names emits no "
            "text and has nothing to match against");
+    *parked = false;
     if (si >= g_sheet_parse_n) {
         uint32_t want = si + 1;
         CssdSheetParse *grown = realloc(g_sheet_parse, (size_t)want * sizeof *grown);
@@ -1430,50 +1429,53 @@ static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, si
         g_sheet_parse_n = want;
     }
     e = &g_sheet_parse[si];
-    if (e->text != NULL && e->len == len && memcmp(e->text, text, len) == 0) {
-        /* THE KEY IS THIS TABLE'S OWN COPY AND NEVER THE CALLER'S POINTER, which is the one invariant a
-           later reader can quietly break to save a `memcpy`: the caller frees its emission at the end of
-           every sheet iteration, so a key borrowed from it would be read out of freed memory on the very
-           next ask and would then compare equal to whatever happened to be reallocated there. */
-        DCHECK(e->text != text,
-               "the per-sheet parse table is keyed on a pointer its caller owns rather than on a copy of "
-               "its own — the emission is freed at the end of each sheet iteration, so every later "
-               "comparison would read freed memory. Copy the bytes at the store");
-        DCHECK(e->sst != NULL,
-               "the per-sheet parse table holds an emission with no stylesheet parsed from it — the store "
-               "below is the only writer and it stores the two together, so a half-filled slot is a failure "
-               "arm that took the key with it");
-        return e;
+    if (e->text == NULL || e->len != len || memcmp(e->text, text, len) != 0) {
+        cssd_sheet_parse_drop(e);
+        /* THE KEY IS THIS TABLE'S OWN COPY AND NEVER THE CALLER'S POINTER: the caller frees its emission at
+           the end of every sheet iteration, and the run's tokenizer reads the text it was begun on until it
+           ends, across rests. */
+        e->text = malloc(len + 1);
+        CHECK(e->text != NULL, "cssom: the per-sheet parse key allocation failed");
+        memcpy(e->text, text, len);
+        e->text[len] = '\0';
+        e->len = len;
+        e->mem = lxb_css_memory_create();
+        CHECK(e->mem != NULL && lxb_css_memory_init(e->mem, 128) == LXB_STATUS_OK,
+              "cssom: the per-sheet parse arena could not be allocated");
+        /* The arena is the sheet's, so the run fills it and this table owns it afterwards. */
+        e->sst = lxb_css_stylesheet_create(e->mem);
+        CHECK(e->sst != NULL, "cssom: the per-sheet parse's stylesheet could not be allocated");
     }
-    cssd_sheet_parse_drop(e);
-    mem = lxb_css_memory_create();
-    if (mem == NULL) return NULL;
-    if (lxb_css_memory_init(mem, 128) != LXB_STATUS_OK) {
-        lxb_css_memory_destroy(mem, true);
+    DCHECK(e->text != text,
+           "the per-sheet parse table is keyed on a pointer its caller owns rather than on a copy of its own — "
+           "the emission is freed at the end of each sheet iteration, so every later comparison would read "
+           "freed memory. Copy the bytes at the store");
+    if (e->parsed) return e;
+    /* The span counts the sheet's bytes once, at the run's end, as css_sheet_parse's does. */
+    thread_work_begin(&tw);
+    if (e->run == NULL && !(rests && !layout_job_parse_take())) e->run = css_sheet_parse_begin(e->sst, e->text, len);
+    while (e->run != NULL && !css_sheet_parse_ended(e->run) && !(rests && !layout_job_parse_take()))
+        css_sheet_parse_step(e->run);
+    if (e->run == NULL || !css_sheet_parse_ended(e->run)) {
+        thread_work_end(&tw, THREAD_WORK_CSS_PARSE, 0);
+        *parked = true;
         return NULL;
     }
-    sst = lxb_css_stylesheet_create(mem);
-    /* The arena is the sheet's, so the run fills it and this table owns it afterwards. */
-    if (sst && !css_sheet_parse(sst, text, len)) sst = NULL;
-    if (sst == NULL) {
-        lxb_css_memory_destroy(mem, true);
+    ok = css_sheet_parse_finish(e->run);
+    e->run = NULL;
+    thread_work_end(&tw, THREAD_WORK_CSS_PARSE, len);
+    if (!ok) {
+        cssd_sheet_parse_drop(e);
         return NULL;
     }
-    copy = malloc(len + 1);
-    CHECK(copy != NULL, "cssom: the per-sheet parse key allocation failed");
-    memcpy(copy, text, len);
-    copy[len] = '\0';
-    e->text = copy;
-    e->len = len;
-    e->mem = mem;
-    e->sst = sst;
-    if (sst->root != NULL && sst->root->type == LXB_CSS_RULE_LIST) {
-        for (n = 0, r = lxb_css_rule_list(sst->root)->first; r; r = r->next) n++;
+    if (e->sst->root != NULL && e->sst->root->type == LXB_CSS_RULE_LIST) {
+        for (n = 0, r = lxb_css_rule_list(e->sst->root)->first; r; r = r->next) n++;
         e->rules = malloc((size_t)(n ? n : 1) * sizeof *e->rules);
         CHECK(e->rules != NULL, "cssom: the per-sheet parse's rule index allocation failed");
-        for (n = 0, r = lxb_css_rule_list(sst->root)->first; r; r = r->next) e->rules[n++] = r;
+        for (n = 0, r = lxb_css_rule_list(e->sst->root)->first; r; r = r->next) e->rules[n++] = r;
         e->nrules = n;
     }
+    e->parsed = true;
     return e;
 }
 
@@ -1487,16 +1489,17 @@ static bool g_collecting_sheets = false;
 /* Builds `m`, an open author match result (core/css/css_match_result.h), from its position on: every longhand
    declaration of every style rule whose selector matches its element, with the rule's position in the set's
    emission counted across sheets and the declaration's index in its rule's collapsed block, closed at the set's
-   end. With `rests`, each rule tested is taken from the resting drive's allowance (layout_job_rule_take) and
-   the build stops where one is refused, its position left in `m`; the sheet's parse is found again by its text
-   when it continues, because another flow's build may have replaced the slot in between. True when closed. */
+   end. With `rests`, each rule tested and each step of a sheet's parse is asked of the resting drive
+   (layout_job_rule_take, layout_job_parse_take) and the build stops where one is refused, its position left
+   in `m`; the sheet's parse is found again by its text when it continues, because another flow's build may
+   have replaced the slot in between. True when closed. */
 static bool cssd_match_result_run(CssMatchResult *m, bool rests)
 {
     lxb_dom_node_t *self = lxb_dom_interface_node(css_match_result_element(m));
     const CssAuthorSheets *sheets = css_match_result_sheets(m);
     CssMatchPosition *at = css_match_result_position(m);
     uint64_t tested = 0, own = at->begun ? 0 : THREAD_WORK_SELECTOR_TESTS_PER_ELEMENT;
-    bool closed = false;
+    bool closed = false, parked;
     ThreadWorkSpan tw;
 
     thread_work_begin(&tw);
@@ -1510,7 +1513,8 @@ static bool cssd_match_result_run(CssMatchResult *m, bool rests)
            position's emission has changed since the last build (the parse table above). The table's arena owns
            the stylesheet, and nothing kept here points into it: every value taken from a matched rule is
            copied, and a parked build keeps only indices. */
-        p = cssd_sheet_parsed(sheet->si, view->text, strlen(view->text));
+        p = cssd_sheet_parsed(sheet->si, view->text, strlen(view->text), rests, &parked);
+        if (parked) goto out;
         if (p != NULL && p->rules != NULL) {
             /* The round trip is asserted per rule: each emitted rule parses back as exactly one rule at the
                same index, because the index names its cascade layer. The layer entry is NULL for exactly the

@@ -233,6 +233,11 @@ bool layout_job_rule_take(void);
    write: false when the drive has spent its items, and the walk then parks; otherwise it takes one. */
 bool layout_job_emit_take(void);
 
+/* Whether a resting build may run one more step of a style sheet's parse (core/css/css_sheet_parse.h), a rest
+   unit of bytes whose work the drive's work allowance counts: false when any allowance is spent, and the
+   build then parks; it takes no count of its own. */
+bool layout_job_parse_take(void);
+
 /* ---- the open chain, for the kinds that are not stacked in release ------------------------------------- */
 
 /* Push a computing question that its own frame pops, and pop it. The kinds asked through these never

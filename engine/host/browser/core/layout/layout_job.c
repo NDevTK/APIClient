@@ -577,6 +577,16 @@ bool layout_job_rule_take(void)
     return true;
 }
 
+bool layout_job_parse_take(void)
+{
+    LayoutJob *job = lj_current();
+
+    DCHECK(job->resting && job->drives == 1,
+           "a style sheet parse step was taken from a resting drive's allowance with no resting drive innermost "
+           "— only a resting build asks, and a build under any other drive runs to completion");
+    return !lj_quota_spent(job);
+}
+
 bool layout_job_emit_take(void)
 {
     LayoutJob *job = lj_current();

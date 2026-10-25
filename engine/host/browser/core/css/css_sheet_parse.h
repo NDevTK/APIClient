@@ -13,7 +13,8 @@ typedef struct CssSheetParse CssSheetParse;
 
 /* Starts the parse of `text` into `sst`, whose arena receives the rules, and runs it to its first suspension
    or its end. `text` and `sst` are BORROWED until finish or abort: the tokenizer keeps pointers into the text.
-   Each quantum of bytes tokenized is charged as CSS parse work at the suspension that ends it. */
+   The run suspends after each rest_unit_items(REST_UNIT_CSS_PARSE_BYTES) bytes tokenized (solver/rest_unit.h),
+   and those bytes are charged as CSS parse work at the suspension that ends them. */
 CssSheetParse *css_sheet_parse_begin(lxb_css_stylesheet_t *sst, const char *text, size_t len);
 /* The parse has consumed every byte or failed. Stepping past it is a DCHECK. */
 bool css_sheet_parse_ended(const CssSheetParse *run);
@@ -21,6 +22,8 @@ bool css_sheet_parse_ended(const CssSheetParse *run);
 void css_sheet_parse_step(CssSheetParse *run);
 /* Charges the bytes not yet charged and frees the run. True when `sst` holds the parsed rules. */
 bool css_sheet_parse_finish(CssSheetParse *run);
+/* Frees a run that has not ended, leaving `sst` partly filled for its owner to destroy. */
+void css_sheet_parse_abort(CssSheetParse *run);
 
 /* The complete parse, for a caller that cannot rest between quanta: a run driven to its end. */
 bool css_sheet_parse(lxb_css_stylesheet_t *sst, const char *text, size_t len);

@@ -93,6 +93,11 @@ typedef enum {
        and the drive rests. Cost: one rule's serialization, and a conditional group rule's condition; bound (2)
        is asserted by the REST_UNIT_LAYOUT_DESCENDANTS bracket. */
     REST_UNIT_CASCADE_EMITS,
+    /* One byte of a style sheet's text tokenized by its parse (core/css/css_sheet_parse.h): the run suspends
+       after this many, and a resting drive's parse rests between two suspensions. Cost: CSS Syntax 3 §5.4.3's
+       tokenization and the rules it builds, linear in the bytes; bound (2) is asserted by the
+       REST_UNIT_LAYOUT_DESCENDANTS bracket. */
+    REST_UNIT_CSS_PARSE_BYTES,
     /* One unit of engine work (opcodes and host charges, core/timing/thread_work.h) a resting drive spends in
        one activation, beside the six counts above: a body the drive takes, resumed or new, a cascade it
        reads and a walk step all spend it, so an activation whose work is in no counted item still stops at
