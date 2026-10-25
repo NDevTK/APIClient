@@ -451,7 +451,7 @@ void engine_request_park(void);
    at the floor or with no session, where its own CHECK is the answer. */
 int engine_reclaim_at_rest(void);
 /* RAM pressure, the scheduler's policy for when the cold tail relocates: at rest between two steps, while the
-   instance's live bytes (engine_c_alloc_live) stand above `share` permille of its known limit, the lowest-value
+   instance's live bytes (solver/c_alloc.h's c_alloc_live) stand above `share` permille of its known limit, the lowest-value
    flow is sold to the cold tier. The limit is the wasm build's maximum linear memory or the native process's
    RLIMIT_AS, read when the session begins; with neither the census says `ramLimitSource` `{"none":1}` and only the
    refusal edge sells. The margin below the wall is room for the allocations that do not ask the edge, and for
@@ -1251,14 +1251,6 @@ void engine_note_net_prog_fetch_ask(void);
 void engine_note_net_prog_fetch_queued(void);
 void engine_note_net_prog_xhr_ask(void);
 void engine_note_net_prog_xhr_queued(void);
-
-/* The C allocator under the JS heap, which JS_ComputeMemoryUsage cannot see (Lexbor arenas, COW deltas, every
- * other `malloc`). `live` is what the allocator has handed out now, quickjs's bytes included, since js_malloc
- * routes to malloc; `arena` is the address space it has ever needed. In wasm linear memory only grows, so
- * `arena` is a high-water mark that RSS follows, and a flat `live` with a climbing `arena` is fragmentation,
- * not a leak. */
-size_t engine_c_alloc_live(void);
-size_t engine_c_alloc_arena(void);
 
 /* What this instance's timelines did with the routed records handed to it. `delivered` counts tasks queued
    (each is HTML §9.3.3 step 8's one global task at the receiving Window; engine_routed_task_census says how

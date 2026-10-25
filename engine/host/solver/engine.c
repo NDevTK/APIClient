@@ -26,6 +26,7 @@
                                           as the frame a modelled potential close request runs as */
 #include "core/idl_args.h"   /* the one point every Web API member passes through — see idl_slowest_step */
 #include "solver/result.h"
+#include "solver/c_alloc.h"   /* the C heap's running total, RAM pressure's reading */
 #include "solver/solve.h"
 #include "solver/witness_verify.h"
 #include "solver/post_index.h"
@@ -71,7 +72,6 @@
 #include "check.h"
 #include <time.h>
 #include <stdlib.h>
-#include <malloc.h>   /* the allocator under the JS heap — see engine_c_alloc_live, read by result.c */
 #include <stdio.h>
 #include <string.h>
 
@@ -11208,7 +11208,7 @@ static void engine_relocate_under_pressure(void) {
 
     if (g_ram_limit == 0) return;
     line = g_ram_limit / 1000 * g_ram_share;
-    while ((uint64_t)engine_c_alloc_live() > line) {
+    while ((uint64_t)c_alloc_live() > line) {
         if (!engine_reclaim_at_rest()) return;
         g_pressure_sold++;
     }
@@ -12591,31 +12591,6 @@ int engine_sched_step(void) {
 /* Sized against what a run costs: this fixture's whole exploration is under six thousand switches, so a cadence in
    the hundreds of thousands would emit nothing. */
 #define ENGINE_PROGRESS_EVERY 1000
-
-/* The C allocator's own two numbers (engine.h). `live` is what it has handed out and not been given back (quickjs's
-   bytes included, since js_malloc routes to malloc); `arena` is the space taken from the system, which in wasm is
-   linear memory and only grows. One interface, two spellings: emscripten's dlmalloc exports the classic `mallinfo`
-   with size_t fields, while glibc's `mallinfo` is int-wide (it would wrap on a run this size) and deprecated in
-   favour of `mallinfo2`. */
-#if defined(__EMSCRIPTEN__)
-#define ENGINE_MALLINFO_T struct mallinfo
-#define ENGINE_MALLINFO() mallinfo()
-#else
-#define ENGINE_MALLINFO_T struct mallinfo2
-#define ENGINE_MALLINFO() mallinfo2()
-#endif
-
-size_t engine_c_alloc_live(void)
-{
-    ENGINE_MALLINFO_T m = ENGINE_MALLINFO();
-    return (size_t)m.uordblks;
-}
-
-size_t engine_c_alloc_arena(void)
-{
-    ENGINE_MALLINFO_T m = ENGINE_MALLINFO();
-    return (size_t)m.arena + (size_t)m.hblkhd;   /* brk'd space plus whatever came from mmap */
-}
 
 /* The frontier's own reading (engine.h has each row and why it is one struct). It decides nothing and reads no other
    component: every row is a static of this file, and what a reader wants beside them (the delta chains, the cold

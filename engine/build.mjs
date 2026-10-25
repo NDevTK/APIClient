@@ -2639,6 +2639,20 @@ function censusRefSites(b) {
                     "census.");
   return rows;
 }
+/* The @HEAP census's allocator residue (solver/c_alloc.h's c_alloc_census): the allocator's in-use bytes beyond the
+   C heap's running total. A non-negative integer, or null under a sanitizer, which keeps no such reading; the engine
+   asserts the bound itself, so this reader checks only the shape. */
+function censusResidue(b) {
+  const r = b.cResidueBytes;
+  if (r === undefined)
+    throw new Error("[build] the @HEAP census carries no `cResidueBytes` — solver/result.c composes it on every " +
+                    "census, so its absence is that composer having changed.");
+  if (r !== null && !(Number.isInteger(r) && r >= 0))
+    throw new Error(`[build] the @HEAP census's \`cResidueBytes\` is ${JSON.stringify(r)} — it is a byte count ` +
+                    "the allocator holds beyond the running total, never negative (c_alloc_census asserts that), " +
+                    "or null under a sanitizer.");
+  return r;
+}
 /* THE SHAPE EVERY PER-ARM ROW SHARES, SEPARATED FROM THE IDENTITY NOT ONE OF THEM SHARES. Four of @COLD's
    step-unit rows are PARTITIONS and one is a MAXIMUM, and the two need the same five checks in front of them —
    the object is present, it is non-empty, every row is a number, the scalar it is read against is a number —
@@ -3968,7 +3982,7 @@ function coldRoundTrip(v1, v2, store) {
    `cowStateReading`, which states its own contract because the pair is NOT a partition: two key sets that
    must be IDENTICAL and per-key `made <= asks` has no total to be a partition of. */
 const heapFields = sourceFact(() => censusRowSet(
-  "solver/result.c", "char *result_heap_json(JSContext *ctx)", "\n}\n", ["childRealmRefSites"],
+  "solver/result.c", "char *result_heap_json(JSContext *ctx)", "\n}\n", ["childRealmRefSites", "cResidueBytes"],
   "the @HEAP reader states which rows it requires of the runtime's memory census, and it takes that set " +
   "from the composer rather than from a list beside it"));
 const swapFields = sourceFact(() => censusRowSet(
@@ -4259,7 +4273,9 @@ function censusReading(out) {
     const grew = (k) => h.b[k] - h.a[k];
     /* FRAGMENTING AND LEAKING ARE NAMED APART rather than both reported as "memory grew", because engine.h
        states the difference and it is the whole of what a reader does next. */
+    censusResidue(h.a);
     parts.push(`heap: live ${h.b.cLiveKiB} KiB / arena ${h.b.arenaKiB} KiB` +
+               (censusResidue(h.b) === null ? `` : ` / allocator residue ${h.b.cResidueBytes} B`) +
                (grew("arenaKiB") > 0 && grew("cLiveKiB") <= 0
                  ? ` — arena grew ${grew("arenaKiB")} KiB while live did NOT, which is FRAGMENTATION and not a leak`
                  : grew("cLiveKiB") > 0 ? ` — live grew ${grew("cLiveKiB")} KiB` : ` — flat`) +
@@ -5462,8 +5478,8 @@ function runLogs(label) {
 /* THE SPAWN'S SPEC, ONE PLACE FOR THE THREE LIMITS: the CPU budget's soft and hard rlimit, and the wall-clock
    deadlock backstop. The CPU meter is the kernel's; the wall clock is CONTEXT — the number that six builds'
    worth of readers mistook for a budget. */
-const budgetedSpec = (slug, prog, args, log) =>
-  ({ slug, prog, args, log, hardS: RUN_CPU_HARD_S, softS: RUN_CPU_BUDGET_S, deadlockMs: RUN_DEADLOCK_MS });
+const budgetedSpec = (slug, prog, args, log, env) =>
+  ({ slug, prog, args, log, hardS: RUN_CPU_HARD_S, softS: RUN_CPU_BUDGET_S, deadlockMs: RUN_DEADLOCK_MS, env });
 /* THE OUTCOME OF A FINISHED RUN, its bytes written to this process's stdout whole and in order. */
 function finishChild(label, t, logs, hint) {
   /* Best-effort convenience only: a failure here must never change the verdict below. */
@@ -5480,10 +5496,10 @@ function finishChild(label, t, logs, hint) {
      is what CLAUDE.md measured an abort count double on. */
   return Object.assign(runOutcome(label, t, hint), { captured: t.captured, log: logs.log, signal: t.signal });
 }
-function runChild(label, prog, args, hint) {
+function runChild(label, prog, args, hint, env) {
   const logs = runLogs(label);
   console.log(`[build] ${label} — live at ${logs.log}`);
-  return finishChild(label, spawnBudgeted(budgetedSpec(logs.slug, prog, args, logs.log)), logs, hint);
+  return finishChild(label, spawnBudgeted(budgetedSpec(logs.slug, prog, args, logs.log, env)), logs, hint);
 }
 /* SEVERAL CHILDREN AT ONCE, at most one per core, each judged exactly as `runChild` judges one. Each child is
    spawned through engine/child_run.mjs, so its CPU is measured by a reaper of its own — this process reaps
@@ -8024,6 +8040,32 @@ function coldRoundTripStages(bin, kind) {
   return [onHost(v1, STAGE_HOST.NATIVE), onHost(v2, STAGE_HOST.NATIVE)];
 }
 
+/* The C heap's running total (engine/host/solver/c_alloc.c) against glibc's own count, exact. With glibc's tcache
+   on, freed chunks the tcache holds still count as in use, so a census can only bound the total; with it off the
+   two must be equal, and c_alloc_census asserts that per census. This stage runs one small fixture document that
+   way, and requires every census to have printed a zero residue, so a run that took no census is not a pass. The
+   tunable changes the allocator, so the label states it and no number of this run is a measurement. */
+const ALLOC_EXACT_ENV = { GLIBC_TUNABLES: "glibc.malloc.tcache_count=0" };
+function allocatorContractStage(bin) {
+  const label = `allocator contract (${Object.entries(ALLOC_EXACT_ENV).map(([k, v]) => k + "=" + v).join(" ")}, ` +
+                `--doc sort; not a measurement)`;
+  if (bin === null) return onHost(skipped(label, "the native program did not link"), STAGE_HOST.NATIVE);
+  const run = runChild(label, bin, ["--doc", "sort"],
+                       "a DCHECK naming solver/c_alloc.c above is a block the malloc family's replacement did " +
+                       "not see; the residue rows below are glibc's in-use bytes beyond the running total",
+                       ALLOC_EXACT_ENV);
+  if (run.code) return onHost(run, STAGE_HOST.NATIVE);
+  const res = [...run.captured.matchAll(/"cResidueBytes":(null|-?\d+)/g)].map((m) => m[1]);
+  const off = res.filter((r) => r !== "0");
+  if (res.length && !off.length) return onHost(run, STAGE_HOST.NATIVE);
+  return onHost(Object.assign(run, { code: 1, kind: STAGE_KIND.DEFECT,
+    verdict: res.length
+      ? `RESIDUE ${off.join(" ")} over ${res.length} census(es) — with the tcache off glibc's in-use bytes must ` +
+        `equal the running total, and solver/c_alloc.c's check did not refuse this`
+      : `NO CENSUS — the run printed no \`cResidueBytes\` row, so the exact equality was never asked` }),
+    STAGE_HOST.NATIVE);
+}
+
 /* WHAT A STAMP'S `dirty`/`unasked` PAIR SAYS, IN ONE PLACE, BECAUSE BOTH STAMP SITES SAY IT. The wasm install
    gate below turns this answer into a DECISION — `null` installs, anything else refuses — and the native link
    below puts it in the line that names the binary. The words are ONE fact, and two spellings of one fact are two
@@ -8387,6 +8429,7 @@ if (NATIVE) {
    * and a boot flow, and everything between the two spawns is the store — which is exactly what the trusted
    * zone is to the shipped engine. */
   stages.push(...coldRoundTripStages(bin, kind));
+  stages.push(allocatorContractStage(bin));
   /* AND IT IS RUN, because a target that is only built is the excluded test one layer down: the whole point is
      the stream it prints and the report it ends with, and nothing else in the tree produces either. */
   stages.push(...(bin === null
@@ -9040,6 +9083,7 @@ FINDINGS.push(documentRowsText(STAGE_HOST.NATIVE.tag, NATIVE_SMOKE));
    PATHS and a caller that spreads holds nothing. The records are the same records; only the binding is new. */
 const COLD_STAGES = coldRoundTripStages(NATIVE_BUILT.bin, "none");
 STAGES.push(...COLD_STAGES);
+STAGES.push(allocatorContractStage(NATIVE_BUILT.bin));
 
 /* ── AND THE VEHICLE'S RUN, WHICH STILL RUNS AND DECIDES NOTHING ──────────────────────────────────────────
    ITS HOST DEPENDS ON WHETHER THE NATIVE RUN HAPPENED, and that is not a hedge - it is the rule STAGE_HOST

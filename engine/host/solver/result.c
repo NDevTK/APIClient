@@ -5,6 +5,7 @@
 #include "check.h"
 #include "solver/compose.h"   /* every census below is sized by what it writes — see composef */
 #include "solver/result.h"
+#include "solver/c_alloc.h"   /* the C heap's running total against the allocator's reading, per census */
 #include "solver/endpoint.h"
 #include "solver/novelty.h"
 #include "solver/rung_entry.h"  /* the invoker rungs' denominator, read beside `stepUnitRuns` */
@@ -1683,6 +1684,11 @@ char *result_heap_json(JSContext *ctx) {
     long rreleased = 0;
     int  rsites_n, ri;
     char *rsites_json, *heap;
+    /* The C allocator under the JS heap, which JS_ComputeMemoryUsage cannot see (Lexbor arenas, COW deltas, every
+       other malloc): its running total, and its own reading checked against that total (solver/c_alloc.h). A flat
+       live total with a climbing arena is fragmentation, not a leak. `null` residue where no reading exists. */
+    CAllocCensus ca;
+    char residue[24];
 
     DCHECK(ctx != NULL, "the heap census was asked for against no realm — every row of it is a walk of ONE "
                         "runtime, so a census with no runtime to walk is a reading of nothing");
@@ -1692,6 +1698,9 @@ char *result_heap_json(JSContext *ctx) {
     rsites_n = navigable_realm_ref_sites(rsites, NAVIGABLE_REALM_REF_SITES_MAX, &rreleased);
     /* `null` for a build that watches no references, never `[]`: an empty array is a run holding no live
        realm, the opposite fact. */
+    c_alloc_census(&ca);
+    if (ca.residue < 0) snprintf(residue, sizeof residue, "null");
+    else                snprintf(residue, sizeof residue, "%lld", ca.residue);
     rsites_json = composef("%s", rsites_n < 0 ? "null" : "{");
     for (ri = 0; ri < rsites_n; ri++) {
         char *next;
@@ -1723,7 +1732,7 @@ char *result_heap_json(JSContext *ctx) {
                  "\"objBytes\":%lld,\"propBytes\":%lld,\"shapeBytes\":%lld,\"strBytes\":%lld,"
                  "\"atomBytes\":%lld,\"funcBytes\":%lld,\"arrayElemBytes\":%lld,"
                  "\"unattributed\":%lld,\"stepMachines\":%d,\"trampFrames\":%d,"
-                 "\"cLiveKiB\":%lld,\"arenaKiB\":%lld}",
+                 "\"cLiveKiB\":%lld,\"arenaKiB\":%lld,\"cResidueBytes\":%s}",
                  (long long)mem.malloc_count, (long long)mem.atom_count, (long long)mem.str_count,
                  (long long)mem.obj_count, (long long)mem.shape_count, (long long)mem.prop_count,
                  (long long)mem.js_func_count, (long long)mem.js_func_code_size, (long long)mem.array_count,
@@ -1736,7 +1745,7 @@ char *result_heap_json(JSContext *ctx) {
                  (long long)mem.fast_array_elements * (long long)sizeof(JSValue),
                  (long long)mem.malloc_size - attributed,
                  JS_StepMachineCount(rt), JS_TrampFrameCount(rt),
-                 (long long)engine_c_alloc_live() / 1024, (long long)engine_c_alloc_arena() / 1024);
+                 (long long)c_alloc_live() / 1024, (long long)ca.arena / 1024, residue);
     free(rsites_json);
     return heap;
 }

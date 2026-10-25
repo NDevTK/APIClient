@@ -47,13 +47,17 @@ export function cgroupOomKills() {
 
 /* Runs `prog args` under the two CPU limits and the wall-clock backstop, output to `log`. Returns the fields
    build.mjs's `runOutcome` reads: status, signal, error (its `code` only), cpuSeconds, wallSeconds, and
-   oomKills, the cgroup's OOM-kill count's rise across the run (null when the counter is unreadable). */
-export function spawnBudgeted({ slug, prog, args, log, hardS, softS, deadlockMs }) {
+   oomKills, the cgroup's OOM-kill count's rise across the run (null when the counter is unreadable). `env`, when
+   given, is variables set over this process's own environment for the child. */
+export function spawnBudgeted({ slug, prog, args, log, hardS, softS, deadlockMs, env }) {
   for (const [k, v] of Object.entries({ slug, prog, log }))
     if (typeof v !== "string" || !v) throw new Error(`[child_run] spec field \`${k}\` is ${JSON.stringify(v)}`);
   for (const [k, v] of Object.entries({ hardS, softS, deadlockMs }))
     if (!(Number.isInteger(v) && v > 0)) throw new Error(`[child_run] spec field \`${k}\` is ${JSON.stringify(v)}`);
   if (!Array.isArray(args)) throw new Error(`[child_run] spec field \`args\` is ${JSON.stringify(args)}`);
+  if (env !== undefined && (env === null || typeof env !== "object" ||
+                            Object.values(env).some((v) => typeof v !== "string")))
+    throw new Error(`[child_run] spec field \`env\` is ${JSON.stringify(env)}`);
   const fd = openSync(log, "w");
   const oomBefore = cgroupOomKills();
   const cpuBefore = childCpuSeconds();
@@ -62,7 +66,8 @@ export function spawnBudgeted({ slug, prog, args, log, hardS, softS, deadlockMs 
   try {
     t = spawnSync("/bin/sh",
                   ["-c", CPU_BUDGET_SH, `apiclient-build:${slug}`, String(hardS), String(softS), prog, ...args],
-                  { stdio: ["inherit", fd, fd], shell: false, timeout: deadlockMs });
+                  { stdio: ["inherit", fd, fd], shell: false, timeout: deadlockMs,
+                    env: env === undefined ? process.env : { ...process.env, ...env } });
   }
   finally { closeSync(fd); }
   const cpuAfter = childCpuSeconds();
