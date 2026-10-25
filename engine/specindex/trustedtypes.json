@@ -2,8 +2,8 @@
  "spec": "Trusted Types",
  "key": "trustedtypes",
  "base": "https://w3c.github.io/trusted-types/dist/spec/",
- "specUpdated": "23 June 2026",
- "fetched": "2026-09-06",
+ "specUpdated": "7 October 2026",
+ "fetched": "2026-10-25",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -85,27 +85,37 @@
    "page": "",
    "id": "trused-script-url"
   },
+  "2.2.4": {
+   "title": "TrustedHTMLParserOptions",
+   "page": "",
+   "id": "trusted-html-parser-options"
+  },
   "2.3": {
    "title": "Policies",
    "page": "",
    "id": "policies-hdr"
   },
   "2.3.1": {
+   "title": "Using together with a sanitizer",
+   "page": "",
+   "id": "trusted-types-with-sanitizer"
+  },
+  "2.3.2": {
    "title": "TrustedTypePolicyFactory",
    "page": "",
    "id": "trusted-type-policy-factory"
   },
-  "2.3.2": {
+  "2.3.3": {
    "title": "TrustedTypePolicy",
    "page": "",
    "id": "trusted-type-policy"
   },
-  "2.3.3": {
+  "2.3.4": {
    "title": "TrustedTypePolicyOptions",
    "page": "",
    "id": "trusted-type-policy-options"
   },
-  "2.3.4": {
+  "2.3.5": {
    "title": "Default policy",
    "page": "",
    "id": "default-policy-hdr"
@@ -119,6 +129,16 @@
    "title": "Content Security Policy",
    "page": "",
    "id": "content-security-policy-hdr"
+  },
+  "2.4.2": {
+   "title": "Sanitization enforcement with createParserOptions",
+   "page": "",
+   "id": "sanitization-enforcement-hdr"
+  },
+  "2.4.3": {
+   "title": "Summary of input enforcement",
+   "page": "",
+   "id": "summary-of-input-enforcement"
   },
   "3.1": {
    "title": "Create a Trusted Type Policy",
@@ -136,26 +156,36 @@
    "id": "get-trusted-type-policy-value-algorithm"
   },
   "3.4": {
+   "title": "Get Trusted Type compliant input",
+   "page": "",
+   "id": "get-trusted-type-compliant-input-algorithm"
+  },
+  "3.5": {
    "title": "Get Trusted Type compliant string",
    "page": "",
    "id": "get-trusted-type-compliant-string-algorithm"
   },
-  "3.5": {
+  "3.6": {
+   "title": "Get Trusted Type compliant parser options",
+   "page": "",
+   "id": "get-trusted-type-compliant-parser-options-algorithm"
+  },
+  "3.7": {
    "title": "Process value with a default policy",
    "page": "",
    "id": "process-value-with-a-default-policy-algorithm"
   },
-  "3.6": {
+  "3.8": {
    "title": "Prepare the script text",
    "page": "",
    "id": "prepare-script-text"
   },
-  "3.7": {
+  "3.9": {
    "title": "Get Trusted Type compliant attribute value",
    "page": "",
    "id": "validate-attribute-mutation"
   },
-  "3.8": {
+  "3.10": {
    "title": "Get Trusted Type data for attribute",
    "page": "",
    "id": "get-trusted-type-data-for-attribute"
@@ -181,31 +211,16 @@
    "id": "slots-with-trusted-values"
   },
   "4.1.2.2": {
-   "title": "The innerText IDL attribute",
+   "title": "Update script trustedness algorithm",
    "page": "",
-   "id": "the-innerText-idl-attribute"
+   "id": "update-script-trustedness-algorithm"
   },
   "4.1.2.3": {
-   "title": "The textContent IDL attribute",
-   "page": "",
-   "id": "the-textContent-idl-attribute"
-  },
-  "4.1.2.4": {
-   "title": "The text IDL attribute",
-   "page": "",
-   "id": "the-text-idl-attribute"
-  },
-  "4.1.2.5": {
-   "title": "The src IDL attribute",
-   "page": "",
-   "id": "the-src-idl-attribute"
-  },
-  "4.1.2.6": {
    "title": "Setting slot values from parser",
    "page": "",
    "id": "setting-slot-values-from-parser"
   },
-  "4.1.2.7": {
+  "4.1.2.4": {
    "title": "Slot value verification",
    "page": "",
    "id": "slot-value-verification"
@@ -276,10 +291,16 @@
    "4.2.3"
   ],
   "get trusted type compliant attribute value": [
-   "3.7"
+   "3.9"
+  ],
+  "get trusted type compliant input": [
+   "3.4"
+  ],
+  "get trusted type compliant parser options": [
+   "3.6"
   ],
   "get trusted type compliant string": [
-   "3.4"
+   "3.5"
   ],
   "require trusted types for": [
    "4.2.1"
@@ -287,14 +308,23 @@
   "require trusted types for directive": [
    "4.2.1"
   ],
+  "sanitizer configuration": [
+   "2.2.4"
+  ],
   "script text": [
    "4.1.2.1"
+  ],
+  "should sink type mismatch violation be blocked by content security policy": [
+   "4.2.4"
   ],
   "trusted types": [
    "4.2.2"
   ],
   "trusted types directive": [
    "4.2.2"
+  ],
+  "update script trustedness": [
+   "4.1.2.2"
   ]
  },
  "ops": {},
@@ -303,8 +333,11 @@
    "4.2.1.1": 2
   },
   "script text": {
-   "3.6": 2,
-   "4.1.2.6": 2
+   "3.8": 2,
+   "4.1.2.3": 2
+  },
+  "should sink type mismatch violation be blocked by content security policy": {
+   "3.6": 3
   }
  }
 }
