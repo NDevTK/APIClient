@@ -1193,6 +1193,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbscopefork.h"
 #include "fixture/idbindexfork.h"
 #include "fixture/idbscopejson.h"
+#include "fixture/idbscopeown.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1716,6 +1717,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbscopefork", HTML_IDBSCOPEFORK },
     { "idbindexfork", HTML_IDBINDEXFORK },
     { "idbscopejson", HTML_IDBSCOPEJSON },
+    { "idbscopeown", HTML_IDBSCOPEOWN },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16642,6 +16644,23 @@ TF_UNIT void probes_idbscopejson(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `idbscopeown` document (fixture/idbscopeown.h): a page-defined slice's result has no declared
+   type, so transaction() over it runs §3.2.25's sequence arm (both stores) beside its string arm. */
+TF_UNIT void probes_idbscopeown(const char *js, Probe *tab, int *n) {
+    const char *p_why = NULL; int p_tt = 1;
+    fold_row(&p_tt, &p_why, param_value_is(js, "/api/idbso-tx", "got", "alpha_beta"),
+             "no /api/idbso-tx?got=alpha_beta record: the page-defined slice's result took no sequence arm, so a "
+             "type was stated for a call whose callee no definition fixes");
+    const char *s_why = NULL; int s_tt = 1;
+    fold_row(&s_tt, &s_why, param_value_is(js, "/api/idbso-tx", "got", "alpha"),
+             "no /api/idbso-tx?got=alpha record: no arm took the page-defined slice's result as the one name");
+    const Probe rows[] = {
+        { "idbso-pair", p_tt, "/api/idbso-tx", SESS_EXPLORE, p_why },
+        { "idbso-name", s_tt, "/api/idbso-tx", SESS_EXPLORE, s_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -20993,6 +21012,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbscopefork(js, probes, &np);
     probes_idbindexfork(js, probes, &np);
     probes_idbscopejson(js, probes, &np);
+    probes_idbscopeown(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
