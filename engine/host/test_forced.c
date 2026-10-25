@@ -1186,6 +1186,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/protoset.h"
 #include "fixture/idbnamefork.h"
 #include "fixture/idbnameorder.h"
+#include "fixture/idbstorefork.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1701,6 +1702,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "protoset", HTML_PROTOSET },
     { "idbnamefork", HTML_IDBNAMEFORK },
     { "idbnameorder", HTML_IDBNAMEORDER },
+    { "idbstorefork", HTML_IDBSTOREFORK },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16417,6 +16419,26 @@ TF_UNIT void probes_idbnameorder(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `idbstorefork` document (fixture/idbstorefork.h): objectStore over an unknown name runs one
+   world per store in the transaction's scope and the NotFoundError world. */
+TF_UNIT void probes_idbstorefork(const char *js, Probe *tab, int *n) {
+    const char *a_why = NULL; int a_tt = 1;
+    fold_row(&a_tt, &a_why, param_value_is(js, "/api/idbs-store", "got", "alpha"),
+             "no /api/idbs-store?got=alpha record: no arm took the unknown name as the scope's store 'alpha'");
+    const char *b_why = NULL; int b_tt = 1;
+    fold_row(&b_tt, &b_why, param_value_is(js, "/api/idbs-store", "got", "beta"),
+             "no /api/idbs-store?got=beta record: no arm took the unknown name as the scope's store 'beta'");
+    const char *m_why = NULL; int m_tt = 1;
+    fold_row(&m_tt, &m_why, param_value_is(js, "/api/idbs-store", "got", "NotFoundError"),
+             "no /api/idbs-store?got=NotFoundError record: no arm took the unknown name as naming no store");
+    const Probe rows[] = {
+        { "idbs-alpha", a_tt, "/api/idbs-store", SESS_EXPLORE, a_why },
+        { "idbs-beta", b_tt, "/api/idbs-store", SESS_EXPLORE, b_why },
+        { "idbs-missing", m_tt, "/api/idbs-store", SESS_EXPLORE, m_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -20699,6 +20721,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_protoset(js, probes, &np);
     probes_idbnamefork(js, probes, &np);
     probes_idbnameorder(js, probes, &np);
+    probes_idbstorefork(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
