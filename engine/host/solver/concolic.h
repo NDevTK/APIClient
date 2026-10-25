@@ -1045,6 +1045,10 @@ int         concolic_equality_facet(JSContext *ctx, JSValueConst cond, int holds
    facet leaves only one arm's types (`typeof d === 'string'` once `d == null` held answers 0), -1 where both
    arms stay open or the compared value owns no `src`. Runs no page code. */
 int         concolic_equality_outcome(JSContext *ctx, JSValueConst cond);
+/* An ordering against a finite Number narrows its subject's type facet on the arm the flow took (`holds`): no
+   arm admits a Symbol and a holding one no Undefined (§7.2.12 IsLessThan ( x, y, leftFirst )). A call through a
+   member read narrows the parent at the call itself (concolic.c's tyf_callable_member). */
+void        concolic_ordering_facet(JSValueConst cond, int holds);
 int         concolic_cmp_is_typeof(JSValueConst cond);
 unsigned    concolic_types(const char *src);
 /* A DECLARED ROOT'S MEMBER STRUCTURE, as the member reads this session minted: every read under `root` with its

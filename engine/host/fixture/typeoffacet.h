@@ -5,7 +5,10 @@
    A second absent global's members are compared loosely, so §7.2.13 IsLooselyEqual ( x, y )'s steps decide the
    types each arm leaves: `== null` holding admits only null, undefined and an [[IsHTMLDDA]] object, failing
    excludes exactly null and undefined, and `== "5"` holding admits no Boolean (ToNumber gives 5, not 0 or 1).
-   /api/tf-loose-* mark those arms and /api/tf-loose-impossible-* the worlds they rule out.
+   /api/tf-loose-* mark those arms and /api/tf-loose-impossible-* the worlds they rule out. A third global's
+   member ordered `> 5` and held is no Undefined (§7.2.12 IsLessThan answers undefined for NaN), and one whose
+   `startsWith` call completed is no Number (%Number.prototype% holds no startsWith): /api/tf-ord and
+   /api/tf-call mark the arms, /api/tf-ord-impossible and /api/tf-call-impossible the worlds they rule out.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_TYPEOFFACET_H
@@ -33,6 +36,15 @@ static const char HTML_TYPEOFFACET[] =
     "if (lfCfg && lfCfg.n == '5') {"
     "  if (typeof lfCfg.n === 'boolean') fetch('/api/tf-loose-impossible-five');"
     "  else fetch('/api/tf-loose-five');"
+    "}"
+    "var ocCfg = window.__tfOrderCfg;"
+    "if (ocCfg && ocCfg.n > 5) {"
+    "  if (typeof ocCfg.n === 'undefined') fetch('/api/tf-ord-impossible');"
+    "  else fetch('/api/tf-ord');"
+    "}"
+    "if (ocCfg && ocCfg.s.startsWith('a')) {"
+    "  if (typeof ocCfg.s === 'number') fetch('/api/tf-call-impossible');"
+    "  else fetch('/api/tf-call');"
     "}"
     "</script>"
     TF_CANVAS_INK

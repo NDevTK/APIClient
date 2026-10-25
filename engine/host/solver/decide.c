@@ -1617,6 +1617,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
                    "relation a flow stands on is decided by WHICH arm it took, so an undecided one would "
                    "file the true arm's constraint under a path that may run the false one");
             concolic_bound(rsubj, arm ? rel : rel_op_negate(rel), rnum, rtok);
+            concolic_ordering_facet(cond, arm);
         }
     }
     /* The third class: a method call over an unknown whose result is the boolean tested, §@H's headline shape

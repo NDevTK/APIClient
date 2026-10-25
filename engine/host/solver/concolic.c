@@ -146,6 +146,10 @@ typedef struct {
        the name from the display shape would parse a string composed for a human, and a `.` in a property name
        would decide it wrong. */
     char *member;
+    /* On a member read, the parent's `src` where the parent owns it, so a call through the member can narrow
+       the parent's type facet (concolic_call_hook); on an ordering whose subject owns its `src`, that `src`,
+       narrowed on the arm (concolic_ordering_facet). NULL otherwise. Owned. */
+    char *facet_src;
     /* The call predicate's fields, a third class beside the equality's and the ordering's: a call determines
        neither a value nor an interval and still narrows. Written together by pred_set_strpred and read together
        by concolic_strpred; `sp_meth` is the presence test, as `rel_op != REL_NONE` is the ordering's. */
@@ -2055,6 +2059,7 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->rel_tok);
     free(c->rel_subj);
     free(c->member);
+    free(c->facet_src);
     free(c->sp_meth);
     ident_list_free(c->sp_args, c->sp_nargs);
     free(c->sp_subj);
@@ -3260,6 +3265,10 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
                    "of the two landed last");
             rc->member = strdup(name);
             CHECK(rc->member, "concolic: OOM recording the name a member read went through");
+            if (c->src_own == 1 && c->src) {
+                rc->facet_src = strdup(c->src);
+                CHECK(rc->facet_src, "concolic: OOM naming a member read's parent");
+            }
             JS_FreeCString(ctx, name);
         }
     }
@@ -3435,12 +3444,59 @@ static unsigned tyf_strict(ConcolicLit kind, const char *tok, int holds)
     return own & (CONCOLIC_TYF_NULL | CONCOLIC_TYF_UNDEFINED) ? CONCOLIC_TYF_ALL & ~own : CONCOLIC_TYF_ALL;
 }
 
-static void type_facet_narrow(const char *src, unsigned admitted)
+/* A facet left with no type is a world no value produces: an equality's emptied arm is refined away before it
+   is filed (concolic_equality_outcome), so the narrowings that can reach it are an operation that throws a
+   TypeError for every remaining type, a throw arm its hook does not fork. `file`/`line` are the narrowing's. */
+#define type_facet_narrow(src, admitted) type_facet_narrow_at((src), (admitted), __FILE__, __LINE__)
+static void type_facet_narrow_at(const char *src, unsigned admitted, const char *file, int line)
 {
     Cons *e = cons_entry(src);
 
     e->types_out |= (unsigned short)(CONCOLIC_TYF_ALL & ~admitted);
     g_type_facet_any = 1;
+    DCHECKF(e->types_out != CONCOLIC_TYF_ALL,
+            "%s:%d left %s no type: the operation throws a TypeError in every world this flow admits — build "
+            "its throw arm as a forked completion, as a throwing builtin forks one", file, line, src);
+}
+
+/* The types whose values hold a callable under the property `name`, as the running realm's intrinsic chains
+   stand: Undefined and Null hold none (§6.2.5.5 GetValue ( refRecord ) step 3.a's ToObject throws), a
+   primitive type holds one where its %T.prototype% chain does (an accessor or a Proxy link answers by the
+   page's code, so it keeps the type), and an Object or a function may hold its own. */
+static unsigned tyf_callable_member(JSContext *ctx, const char *name)
+{
+    static const struct { JSClassID id; unsigned tyf; } PRIM[] = {
+        { JS_CLASS_BOOLEAN, CONCOLIC_TYF_BOOLEAN }, { JS_CLASS_STRING, CONCOLIC_TYF_STRING },
+        { JS_CLASS_SYMBOL, CONCOLIC_TYF_SYMBOL }, { JS_CLASS_NUMBER, CONCOLIC_TYF_NUMBER },
+        { JS_CLASS_BIG_INT, CONCOLIC_TYF_BIGINT },
+    };
+    JSAtom atom = JS_NewAtom(ctx, name);
+    unsigned t = TYF_OBJECTS;
+
+    CHECK(atom != JS_ATOM_NULL, "concolic: OOM naming a called member");
+    for (size_t i = 0; i < sizeof PRIM / sizeof PRIM[0]; i++) {
+        JSValue proto = JS_GetClassProto(ctx, PRIM[i].id), v;
+
+        DCHECK(JS_IsObject(proto), "a realm answered a primitive type's intrinsic prototype with no object");
+        if (!example_member(ctx, proto, atom, &v) || JS_IsFunction(ctx, v)) t |= PRIM[i].tyf;
+        JS_FreeValue(ctx, v);
+        JS_FreeValue(ctx, proto);
+    }
+    JS_FreeAtom(ctx, atom);
+    return t;
+}
+
+void concolic_ordering_facet(JSValueConst cond, int holds)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(cond, g_concolic_class) : NULL;
+
+    DCHECK(c != NULL && c->rel_op != REL_NONE, "an ordering facet was asked of a value that records no ordering");
+    /* Against a finite Number: §7.2.12 IsLessThan ( x, y, leftFirst ) steps 7-8's ToNumeric throws for a Symbol,
+       and an Undefined x is NaN, for which step 9.a's Number::lessThan answers undefined, which every §13.10.1
+       relational production returns as false. */
+    if (c->facet_src)
+        type_facet_narrow(c->facet_src, CONCOLIC_TYF_ALL & ~CONCOLIC_TYF_SYMBOL &
+                                        ~(holds ? CONCOLIC_TYF_UNDEFINED : 0u));
 }
 
 /* The types the equality `c` admits for the value it compares on the arm where it `holds`, and in `*subject`
@@ -3723,6 +3779,10 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
     d->cmp_typeof = s->cmp_typeof;
     d->rel_op  = s->rel_op;
     d->rel_num = s->rel_num;
+    if (s->rel_op != REL_NONE && s->facet_src) {
+        d->facet_src = strdup(s->facet_src);
+        CHECK(d->facet_src, "concolic: OOM carrying an ordering's subject through a negation");
+    }
     if (s->rel_tok)  { d->rel_tok  = strdup(s->rel_tok);  CHECK(d->rel_tok,  "concolic: OOM carrying an ordering's token through a negation"); }
     if (s->rel_subj) { d->rel_subj = strdup(s->rel_subj); CHECK(d->rel_subj, "concolic: OOM carrying an ordering's hole through a negation"); }
     if (s->sp_meth)  { d->sp_meth  = strdup(s->sp_meth);  CHECK(d->sp_meth,  "concolic: OOM carrying a call predicate's method through a negation"); }
@@ -4283,6 +4343,9 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
        so a candidate substitutes at the call), and not new bytes: whatever carried the callee's bytes in
        carried these. */
     r = concolic_derived(ctx, shape, shape, c->root, c->root_whose, ident, example);
+    /* The call completed, so the member read under it found a callable (§13.3.6.2 EvaluateCall steps 4-5),
+       which narrows the parent the member was read off. */
+    if (c->member && c->facet_src) type_facet_narrow(c->facet_src, tyf_callable_member(ctx, c->member));
     /* …and the predicate the page just wrote, if this result can name one. `if (path.startsWith("/api"))`
        gates `path` as `path === "/api"` does, but determines no value, so it pins nothing and carries no bound.
        (A `!`-spelled gate reaches no branch here; concolic.h's residual beside concolic_strpred names why.)
@@ -4448,6 +4511,13 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
                 /* Normalised subject-left exactly once: `700 < x` is `x > 700`, so no consumer has to re-derive
                    which operand the page wrote first. */
                 if (txt) pred_set_bound(res, ca ? rel : rel_op_mirror(rel), txt, num, subj);
+                if (txt && ((const Concolic *)JS_GetOpaque(opq, g_concolic_class))->src_own == 1 &&
+                    concolic_src_c(opq)) {
+                    Concolic *rc = JS_GetOpaque(res, g_concolic_class);
+
+                    rc->facet_src = strdup(concolic_src_c(opq));
+                    CHECK(rc->facet_src, "concolic: OOM naming an ordering's subject");
+                }
                 free(txt);
                 free(subj);
             }
