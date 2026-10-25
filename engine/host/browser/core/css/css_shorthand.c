@@ -13,6 +13,7 @@
 #include "core/css/css_contain.h"
 #include "core/css/css_counter_style.h"
 #include "core/css/css_font_shorthand.h"
+#include "core/css/css_grid_template.h"
 #include "core/css/css_image.h"
 #include "core/css/css_keyword.h"
 #include "core/css/css_length.h"
@@ -1141,6 +1142,10 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
        row, exactly as CSS_SH_FONT is the seam for §2.7. */
     if (strcmp(shorthand, "background") == 0) return css_background_shorthand_component(value, longhand);
 
+    /* ---- css-grid-1 §7.4's `grid-template` and §7.8's `grid` --------------------------------------------- */
+    if (strcmp(shorthand, "grid-template") == 0) return css_grid_template_component(false, value, longhand);
+    if (strcmp(shorthand, "grid") == 0) return css_grid_template_component(true, value, longhand);
+
     /* ---- css-lists-3 §3.6's `list-style` ------------------------------------------------------------------ */
     if (strcmp(shorthand, "list-style") == 0) {
         int term = -1;
@@ -1454,6 +1459,9 @@ bool css_shorthand_validates_longhand(const char *longhand)
        `grep -rniE 'list.style' engine/lexbor/source/lexbor/css/` exits 1 with no output, against a `z.index`
        control over the same path that exits 0 and prints. */
     if (list_style_owns(longhand)) return true;
+    /* css-grid-1 §7's six template and implicit-grid longhands, which lexbor's registry does not carry;
+       core/css/css_grid_template.h owns their grammars. */
+    if (css_grid_template_validates_longhand(longhand)) return true;
     part = border_part_index(longhand, &side);
     (void)side;
     /* The four widths and the four styles. The four `border-*-color` longhands ARE in lexbor's registry — it
@@ -1502,6 +1510,7 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
     /* css-lists-3 §3.6's three, AFTER §7.3's keywords, because `list-style-type: inherit` is not a
        `<counter-style>` and a `<counter-style-name>` is an ident sequence that would admit it. */
     if (list_style_owns(longhand)) return list_style_longhand_value(longhand, value);
+    if (css_grid_template_validates_longhand(longhand)) return css_grid_template_longhand_value(longhand, value);
     if (css_align_property(css_property_id_of(longhand))) {
         CssAlign a;
 
@@ -1596,8 +1605,10 @@ typedef enum {
                            — which is why its row still carries the per-longhand `initial` list that rule reads
                            — over an EXPANSION whose `none` is distributed across two terms rather than
                            assigned to one. See that section's block above `LH_LIST_STYLE` */
-    CSS_SH_BACKGROUND   /* css-backgrounds-3 §2.10's `background`, whose grammar is a LIST OF LAYERS and lives
+    CSS_SH_BACKGROUND,  /* css-backgrounds-3 §2.10's `background`, whose grammar is a LIST OF LAYERS and lives
                            in core/css/css_background_shorthand.h */
+    CSS_SH_GRID_TEMPLATE,   /* css-grid-1 §7.4's `grid-template`, whose grammar is core/css/css_grid_template.h's */
+    CSS_SH_GRID             /* css-grid-1 §7.8's `grid`, the same component's */
 } CssShKind;
 
 typedef struct {
@@ -1715,6 +1726,13 @@ static const CssShorthandRow SHORTHANDS[] = {
        everything else is optional — so the round trip exercises all nineteen longhands (the seven set, and the
        twelve reset to their initial values) without depending on how any one component canonicalizes. */
     { "font", CSS_FONT_SHORTHAND_LONGHANDS, CSS_FONT_SHORTHAND_N, CSS_SH_FONT, "12px sans-serif", NULL, NULL },
+    /* css-grid-1 §7.8 and §7.4. `grid`'s fixture is the row-flow form with every optional term present, the one
+       arrangement that sets four of its six longhands away from their initials; `grid-template`'s is the
+       ASCII-art form with names spliced between two rows, a size omitted (`auto`), a minmax() and a column list,
+       which exercises every rule of §7.4's third arm and of its serialization at once. */
+    { "grid", CSS_GRID_LONGHANDS, CSS_GRID_N, CSS_SH_GRID, "auto-flow dense 10px / 1fr 2fr", NULL, NULL },
+    { "grid-template", CSS_GRID_LONGHANDS, CSS_GRID_TEMPLATE_N, CSS_SH_GRID_TEMPLATE,
+      "[a] \"x y\" 10px [b c] \"z z\" / 1fr minmax(0px, 2fr)", NULL, NULL },
     /* css-position-3 §3.2's THREE ROWS, in the ascending name order the table is asserted to be in. The
        fixtures name every arm of §3.1's `auto | <length-percentage>` that one value can reach: `inset`'s four
        components are all DIFFERENT, which is the one arrangement in which the rotation writes all four and
@@ -2145,6 +2163,8 @@ char *css_shorthand_serialize_value(const char *shorthand, const char *const *va
     case CSS_SH_FONT:      return css_font_shorthand_value(values);
     case CSS_SH_TEXT_ALIGN: return css_sh_text_align_value(values);
     case CSS_SH_BACKGROUND: return css_background_shorthand_value(values);
+    case CSS_SH_GRID_TEMPLATE: return css_grid_template_value(false, values);
+    case CSS_SH_GRID:       return css_grid_template_value(true, values);
     default:
         DCHECK(row->kind == CSS_SH_BORDER,
                "a shorthand row carries a value-serialization kind this switch does not implement");
@@ -2953,6 +2973,10 @@ bool css_shorthand_complete_for(const char *longhand)
         "top", "right", "bottom", "left",
         "inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end",
         "list-style-position", "list-style-image", "list-style-type",
+        /* css-grid-1 §7.4's `grid-template` and §7.8's `grid`, both in the table above, are the only shorthands
+           over the three template longhands, and `grid` the only one over the three implicit-grid ones. */
+        "grid-template-rows", "grid-template-columns", "grid-template-areas",
+        "grid-auto-rows", "grid-auto-columns", "grid-auto-flow",
         "z-index",
     };
     unsigned i;

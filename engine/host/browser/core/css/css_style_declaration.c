@@ -3027,6 +3027,11 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
        three are computed values core/css/css_computed_value.c answers: core/layout/list_marker.h reads the
        first two for css-lists-3 §3.2 "Generating Marker Contents" and the third for §3.5's position. */
     { "list-style-type", "disc" }, { "list-style-image", "none" }, { "list-style-position", "outside" },
+    /* css-grid-1 §7.2, §7.3, §7.6 and §7.7's `Initial:` lines: `none` for the three template longhands, `auto`
+       for the two implicit track sizes and `row` for the flow. Lexbor's registry carries none of the six;
+       core/css/css_grid_template.h owns their grammars and the two shorthands that set them. */
+    { "grid-template-rows", "none" }, { "grid-template-columns", "none" }, { "grid-template-areas", "none" },
+    { "grid-auto-rows", "auto" }, { "grid-auto-columns", "auto" }, { "grid-auto-flow", "row" },
 };
 
 /* THE UNREGISTERED-INITIAL TABLE'S OWN INVARIANT, asserted once per instance beside the UA stylesheet's and

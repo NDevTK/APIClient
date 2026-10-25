@@ -41,12 +41,6 @@ static void gt_require_initial(lxb_dom_element_t *el, const char *name, const ch
    than their explicit track list. */
 static void gt_require_supported_columns(lxb_dom_element_t *c)
 {
-    static const char SHORTHAND[] =
-        "the css-grid-1 §7.4 \"Explicit Grid Shorthand: the grid-template property\" and §7.8 \"Grid Definition "
-        "Shorthand: the grid property\" expansions into the track lists";
-
-    gt_require_initial(c, "grid-template", "none", SHORTHAND);
-    gt_require_initial(c, "grid", "none", SHORTHAND);
     gt_require_initial(c, "grid-auto-columns", "auto",
                        "css-grid-1 §7.6 \"Implicit Track Sizing\"' sizing functions for the implicit columns");
     gt_require_initial(c, "grid-auto-flow", "row",

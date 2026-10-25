@@ -1155,6 +1155,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/cascfork.h"
 #include "fixture/cascforkview.h"
 #include "fixture/scrollflex.h"
+#include "fixture/gridtemplate.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1695,6 +1696,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "cascfork", HTML_CASCFORK },
     { "cascforkview", HTML_CASCFORKVIEW },
     { "scrollflex", HTML_SCROLLFLEX },
+    { "gridtemplate", HTML_GRIDTEMPLATE },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15403,6 +15405,49 @@ TF_UNIT void probes_scrollflex(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `gridtemplate` document (fixture/gridtemplate.h); Chrome 155.0.8059.84 and Firefox 158.0.1
+   give every value they expect. */
+TF_UNIT void probes_gridtemplate(const char *js, Probe *tab, int *n) {
+    const char *gt_why = NULL; int gt_tt = !!strstr(js, "\"/api/gridtemplate\"");
+
+    fold_row(&gt_tt, &gt_why, gt_tt,
+             "NOT REACHED: there is no /api/gridtemplate record at all, so the document aborted before its fetch");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "ht", "0"),
+             "css-grid-1 §7.4: the header placed by its area name over the `auto` row is not at the grid's top");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "hh", "10"),
+             "css-grid-1 §7.4: the header is not its own 10px");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "ct", "10"),
+             "css-grid-1 §7.4: the content area does not start below the 10px `auto` row");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "ch", "50"),
+             "css-grid-1 §7.4: the `minmax(0,1fr)` row does not take the other 50px of the 60px grid");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "cw", "100"),
+             "css-grid-1 §7.4: the `minmax(0,1fr)` column does not take the grid's 100px");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "st", "ok"),
+             "CSSOM §6.7.2: `grid-template` does not serialize back as the ASCII-art form with `auto` dropped and `0px`");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "sr", "ok"),
+             "css-grid-1 §7.4: the shorthand's rows are not `auto minmax(0px, 1fr)`");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "sc", "ok"),
+             "css-grid-1 §7.4: the shorthand's columns are not `minmax(0px, 1fr)`");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "sa", "ok"),
+             "css-grid-1 §7.4: the shorthand's areas are not the two strings");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "s2", "ok"),
+             "CSSOM §6.7.2: the rows/columns form does not round-trip");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "s2a", "ok"),
+             "css-grid-1 §7.4: the rows/columns form does not set the areas to `none`");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "s3", "ok"),
+             "css-cascade-5 §3: a `grid-template` outside the grammar set something");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "s3r", "ok"),
+             "css-cascade-5 §3: a `grid-template` outside the grammar set its rows");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "s4", "ok"),
+             "CSSOM §6.7.2: line names between two rows are not spliced into one list in the shorthand");
+    fold_row(&gt_tt, &gt_why, param_value_is(js, "/api/gridtemplate", "s4r", "ok"),
+             "css-grid-1 §7.4: line names between two rows are not spliced into one list in the rows");
+    const Probe rows[] = {
+        { "grid-template-shorthand", gt_tt, "/api/gridtemplate", SESS_EXPLORE, gt_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `flexwrap` document (fixture/flexwrap.h). */
 TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
     const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
@@ -21376,6 +21421,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_cascfork(js, probes, &np);
     probes_cascforkview(js, probes, &np);
     probes_scrollflex(js, probes, &np);
+    probes_gridtemplate(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
