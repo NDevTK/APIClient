@@ -1251,6 +1251,9 @@ typedef struct JSBufferUnknownPiece {
     bool example;
 } JSBufferUnknownPiece;
 JS_EXTERN int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPiece **ppieces);
+/* ECMAScript §7.1.16 StringToBigInt ( string ) over the String `str`: 1 where it answers a BigInt, 0 where it answers
+   undefined, -1 with a throw live (allocation). Runs no page code. */
+JS_EXTERN int JS_StringToBigIntDefined(JSContext *ctx, JSValueConst str);
 JS_EXTERN void JS_FreeBufferUnknowns(JSContext *ctx, JSBufferUnknownPiece *pieces, int n);
 /* A Uint8Array holding `buf`, recorded as `codec`'s output over the unknown `unknown` (whose example `buf` was
    computed from), so each element reads as an unknown derived from it. `codec` is a static string. */

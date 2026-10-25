@@ -22464,6 +22464,19 @@ static JSValue JS_StringToBigInt(JSContext *ctx, JSValue val)
     return val;
 }
 
+/* See quickjs-step.h. */
+int JS_StringToBigIntDefined(JSContext *ctx, JSValueConst str)
+{
+    JSValue v = JS_StringToBigInt(ctx, JS_DupValue(ctx, str));
+    int defined;
+
+    if (JS_IsException(v))
+        return -1;
+    defined = !JS_VALUE_IS_NAN(v);
+    JS_FreeValue(ctx, v);
+    return defined;
+}
+
 static JSValue JS_StringToBigIntErr(JSContext *ctx, JSValue val)
 {
     val = JS_StringToBigInt(ctx, val);

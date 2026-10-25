@@ -1544,10 +1544,10 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
            "that is not an equality must stand on NEITHER (an ordering and a call predicate determine no "
            "value), and one that is must stand on exactly one, or a pin and the exclusion that contradicts it "
            "are recorded off the same run of the same gate");
-    /* A typeof equality narrows its operand's type facet on both arms where the operand owns its source
-       (concolic_type_facet); the typeof result's own spelling is never pinned or excluded. */
-    if (tok && (eq_holds || eq_fails) && concolic_cmp_is_typeof(cond)) {
-        if (concolic_cmp_typeof_of(cond)) concolic_type_facet(cond, eq_holds);
+    /* Every equality arm narrows the compared source's type facet by the algorithm the page wrote
+       (concolic_equality_facet); a typeof outcome is a fact about its operand only, so it is never pinned or
+       excluded under its own spelling. */
+    if (tok && (eq_holds || eq_fails) && concolic_equality_facet(ctx, cond, eq_holds)) {
     }
     else if (src && tok && eq_holds) {
         /* concolic_pin pins `src` only where the compared value is that source; a derivation of it pins nothing. */

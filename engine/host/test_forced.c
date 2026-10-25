@@ -15386,7 +15386,8 @@ TF_UNIT void probes_closerequest(const char *js, Probe *tab, int *n) {
 }
 
 /* The rows of the `typeoffacet` document (fixture/typeoffacet.h): the string arm is reached, and the number arm
-   inside it is not, because the first test fixed the member's type facet in that world. */
+   inside it is not, because the first test fixed the member's type facet in that world; each loose-equality arm
+   is reached and the typeof arm its outcome rules out is not. */
 TF_UNIT void probes_typeoffacet(const char *js, Probe *tab, int *n) {
     const char *ts_why = NULL; int ts_tt = 1;
     fold_row(&ts_tt, &ts_why, !!strstr(js, "\"/api/tf-string\""),
@@ -15397,9 +15398,25 @@ TF_UNIT void probes_typeoffacet(const char *js, Probe *tab, int *n) {
     fold_row(&ti_tt, &ti_why, !strstr(js, "\"/api/tf-impossible\""),
              "a world that proved the member a string took its `typeof … === 'number'` arm — the typeof outcome was "
              "not filed as the member's type facet");
+    static const char *const LOOSE[3][4] = {
+        { "tf-loose-null", "\"/api/tf-loose-null\"", "\"/api/tf-loose-impossible-null\"",
+          "a world where `lfCfg.v == null` held took `typeof … === 'string'`: the loose equality left String open" },
+        { "tf-loose-other", "\"/api/tf-loose-other\"", "\"/api/tf-loose-impossible-other\"",
+          "a world where `lfCfg.v == null` failed took `typeof … === 'undefined'`: its failure did not exclude undefined" },
+        { "tf-loose-five", "\"/api/tf-loose-five\"", "\"/api/tf-loose-impossible-five\"",
+          "a world where `lfCfg.n == '5'` held took `typeof … === 'boolean'`: ToNumber of the token was not consulted" },
+    };
+    const char *lw[3] = { NULL, NULL, NULL }; int lt[3] = { 1, 1, 1 };
+    for (int i = 0; i < 3; i++) {
+        fold_row(&lt[i], &lw[i], !!strstr(js, LOOSE[i][1]), "NOT REACHED: the arm's witness fetch has no record");
+        fold_row(&lt[i], &lw[i], !strstr(js, LOOSE[i][2]), LOOSE[i][3]);
+    }
     const Probe rows[] = {
         { "tf-string", ts_tt, "/api/tf-string", SESS_EXPLORE, ts_why },
         { "tf-no-impossible", ti_tt, "/api/tf-impossible", SESS_EXPLORE, ti_why },
+        { LOOSE[0][0], lt[0], "/api/tf-loose-null", SESS_EXPLORE, lw[0] },
+        { LOOSE[1][0], lt[1], "/api/tf-loose-other", SESS_EXPLORE, lw[1] },
+        { LOOSE[2][0], lt[2], "/api/tf-loose-five", SESS_EXPLORE, lw[2] },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

@@ -1028,21 +1028,21 @@ int         concolic_pin(JSValueConst cmp);
 /* The pin itself: 1 with the literal's kind and spelling (borrowed from the constraint until it next changes),
    0 when the running flow pinned nothing at `src`. */
 int concolic_src_pin(const char *src, ConcolicLit *kind, const char **val);
-/* A SOURCE'S TYPE FACET. An equality over a §13.5.3.1 typeof result narrows the operand's types, not a value:
-   `typeof d.session === 'string'` holding leaves the "string" row alone and failing removes it. Where the
-   operand owns its `src` (a source or member read), concolic_cmp_typeof_of names it, and decide.c files the arm
-   here; a typeof result is never pinned or excluded under its own spelling (concolic_cmp_is_typeof), since
-   it is an outcome over its operand, not a source. The facet is per flow, lives in the
-   constraint under the operand's `src`, and narrows every later reading of the operand's type in this flow (a
-   typeof answers its row once one remains). concolic_typeof_rows answers the rows still open for `src`, as
-   CONCOLIC_TYR_* bits in §13.5.3.1's table order. */
-enum { CONCOLIC_TYR_UNDEFINED = 1u << 0, CONCOLIC_TYR_OBJECT = 1u << 1, CONCOLIC_TYR_BOOLEAN = 1u << 2,
-       CONCOLIC_TYR_STRING = 1u << 3, CONCOLIC_TYR_SYMBOL = 1u << 4, CONCOLIC_TYR_NUMBER = 1u << 5,
-       CONCOLIC_TYR_BIGINT = 1u << 6, CONCOLIC_TYR_FUNCTION = 1u << 7, CONCOLIC_TYR_ALL = 0xFFu };
-void        concolic_type_facet(JSValueConst cond, int holds);
+/* A SOURCE'S TYPE FACET: the types (CONCOLIC_TYF_* bits, §6.1's language types with Object split by [[Call]] as
+   §13.5.3.1 typeof splits it) the running flow has not proved its value cannot take. An equality's outcome
+   narrows it on both arms where the compared value owns its `src` (a source or member read): a typeof result's
+   equality by §13.5.3.1's row for its operand, a `==` by the steps of §7.2.13 IsLooselyEqual ( x, y ) over the
+   token, a `===` by §7.2.14 IsStrictlyEqual ( x, y ). decide.c files each equality arm through
+   concolic_equality_facet, which answers 1 for a typeof outcome, never itself pinned or excluded; the facet is
+   per flow, lives in the constraint under the source's `src`, and narrows every later reading of its type (a
+   typeof answers once one row remains). concolic_types answers the facet for `src`. */
+enum { CONCOLIC_TYF_UNDEFINED = 1u << 0, CONCOLIC_TYF_NULL = 1u << 1, CONCOLIC_TYF_BOOLEAN = 1u << 2,
+       CONCOLIC_TYF_STRING = 1u << 3, CONCOLIC_TYF_SYMBOL = 1u << 4, CONCOLIC_TYF_NUMBER = 1u << 5,
+       CONCOLIC_TYF_BIGINT = 1u << 6, CONCOLIC_TYF_OBJECT = 1u << 7, CONCOLIC_TYF_FUNCTION = 1u << 8,
+       CONCOLIC_TYF_ALL = 0x1FFu };
+int         concolic_equality_facet(JSContext *ctx, JSValueConst cond, int holds);
 int         concolic_cmp_is_typeof(JSValueConst cond);
-const char *concolic_cmp_typeof_of(JSValueConst cond);
-unsigned    concolic_typeof_rows(const char *src);
+unsigned    concolic_types(const char *src);
 /* A DECLARED ROOT'S MEMBER STRUCTURE, as the member reads this session minted: every read under `root` with its
    `src`, its identity and its member path from the root (the root's own row has length 0). A fact about naming
    rather than a world, so it answers every flow; what one flow decided about each read is asked of the

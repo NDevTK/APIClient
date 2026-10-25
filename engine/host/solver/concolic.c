@@ -128,7 +128,7 @@ typedef struct {
     /* For a §13.5.3.1 typeof result, the `src` of the operand it was taken of, where that operand owns its
        `src` (a source or member read); NULL otherwise. For an equality whose subject is such a result, the
        same operand's `src` (`cmp_typeof_of`), carried through a negation with the rest of the observation:
-       decide.c files the arm as that operand's type facet (concolic_type_facet) rather than a pin. Owned. */
+       decide.c files the arm as that operand's type facet (concolic_equality_facet) rather than a pin. Owned. */
     char *typeof_of;
     char *cmp_typeof_of;
     /* Whether this value is a typeof result (`is_typeof`), or an equality whose subject is one (`cmp_typeof`),
@@ -787,9 +787,9 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    leq: the loose equalities that held, each as the operand the page wrote and its kind. A strict equality's
    holding arm determines a value (`val`); a loose one's (§7.2.13 IsLooselyEqual ( x, y )) bounds the operand
    to a set only that algorithm can read; both failing arms are `excl`. An exact repeat adds nothing. */
-/* typeof_out: the §13.5.3.1 typeof rows (CONCOLIC_TYR_* bits) this flow proved the source at this key does not
-   answer: a typeof equality's holding arm excludes every other row and its failing arm the one it tested. It is
-   the source's type facet, filed on the operand's own key by concolic_type_facet; cty_of_operand narrows by it. */
+/* types_out: the types (CONCOLIC_TYF_* bits) this flow proved the source at this key does not take — its type
+   facet, filed on the operand's own key by concolic_equality_facet from a typeof equality's row or from the steps
+   of §7.2.13 IsLooselyEqual / §7.2.14 IsStrictlyEqual over the token; cty_of_operand narrows by it. */
 /* adec, adec_what, adec_arm, adec_neg: this flow took an arm no observation of the run established (its
    example contradicts it, or it has none) at the decision this key names, and the arm determined no value (a pin states the ones that did). `adec` is the decision as the
    page wrote it; for a branch `adec_arm` is the predicate's arm and `adec_neg` the polarity `adec` reads it in,
@@ -803,7 +803,7 @@ typedef struct { char *key; char *val; signed char valkind; char **excl; int nex
                  ConcolicPred *pred; int npred; ConcolicLooseEq *leq; int nleq;
                  ConcolicPrincipalPin *ppin; int nppin; signed char truth; signed char ex_contra;
                  char *adec; int adec_arm; signed char adec_what; signed char adec_neg;
-                 unsigned char typeof_out; } Cons;
+                 unsigned short types_out; } Cons;
 
 static void bound_side_free(BoundSide *s) { free(s->txt); s->txt = NULL; s->present = 0; }
 /* The one copy of one side, used by the fork's copy-up; a field added to BoundSide must be copied here or a
@@ -1030,7 +1030,7 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].adec_what = below ? below->adec_what : (signed char)CONCOLIC_DECISION_NONE;
     g_pins[g_pins_n].adec_arm = below ? below->adec_arm : 0;
     g_pins[g_pins_n].adec_neg = below ? below->adec_neg : 0;
-    g_pins[g_pins_n].typeof_out = below ? below->typeof_out : 0;
+    g_pins[g_pins_n].types_out = below ? below->types_out : 0;
     g_pins_n++;
     if (!g_pins_hash || g_pins_hash_cap < g_pins_n * 2) cons_hash_rebuild();
     else cons_hash_put(g_pins_n - 1);
@@ -3281,64 +3281,68 @@ static unsigned cty_of_concrete(JSValueConst v)
     return CTY_OBJECT;
 }
 
-/* §13.5.3.1 typeof's table as rows: the eight strings it answers, in TYR_* bit order. The Object type takes two
-   rows, "object" or "function" by [[Call]], and Null shares "object" with it. */
-static const char *const TYR_NAME[8] = { "undefined", "object", "boolean", "string", "symbol", "number", "bigint",
-                                         "function" };
+/* A SOURCE'S TYPE FACET is a set of CONCOLIC_TYF_* bits: §6.1's eight language types with Object split by
+   [[Call]], since §13.5.3.1 typeof tells the two apart. */
+#define TYF_OBJECTS (CONCOLIC_TYF_OBJECT | CONCOLIC_TYF_FUNCTION)
 
-/* The row `name` is, or 0 for a string §13.5.3.1 never answers. */
-static unsigned tyr_of_name(const char *name)
+/* §13.5.3.1's table: the types each string it answers covers, 0 for a string it never answers. */
+static unsigned tyf_of_typeof(const char *name)
 {
-    for (int i = 0; i < 8; i++) if (!strcmp(TYR_NAME[i], name)) return 1u << i;
+    static const struct { const char *name; unsigned tyf; } ROW[] = {
+        { "undefined", CONCOLIC_TYF_UNDEFINED }, { "object", CONCOLIC_TYF_NULL | CONCOLIC_TYF_OBJECT },
+        { "boolean", CONCOLIC_TYF_BOOLEAN }, { "string", CONCOLIC_TYF_STRING }, { "symbol", CONCOLIC_TYF_SYMBOL },
+        { "number", CONCOLIC_TYF_NUMBER }, { "bigint", CONCOLIC_TYF_BIGINT }, { "function", CONCOLIC_TYF_FUNCTION },
+    };
+
+    for (size_t i = 0; i < sizeof ROW / sizeof ROW[0]; i++) if (!strcmp(ROW[i].name, name)) return ROW[i].tyf;
     return 0;
 }
 
-/* The rows a type set can answer (every row for the empty set, which states nothing), and the types a set of
-   rows admits. */
-static unsigned tyr_of_cty(unsigned ty)
+/* The facet bits a type set covers (every bit for the empty set, which states nothing), and back. */
+static unsigned tyf_of_cty(unsigned ty)
 {
     unsigned r = 0;
 
-    if (!ty) return CONCOLIC_TYR_ALL;
-    if (ty & CTY_UNDEFINED) r |= CONCOLIC_TYR_UNDEFINED;
-    if (ty & CTY_NULL) r |= CONCOLIC_TYR_OBJECT;
-    if (ty & CTY_BOOLEAN) r |= CONCOLIC_TYR_BOOLEAN;
-    if (ty & CTY_STRING) r |= CONCOLIC_TYR_STRING;
-    if (ty & CTY_SYMBOL) r |= CONCOLIC_TYR_SYMBOL;
-    if (ty & CTY_NUMBER) r |= CONCOLIC_TYR_NUMBER;
-    if (ty & CTY_BIGINT) r |= CONCOLIC_TYR_BIGINT;
-    if (ty & CTY_OBJECT) r |= CONCOLIC_TYR_OBJECT | CONCOLIC_TYR_FUNCTION;
+    if (!ty) return CONCOLIC_TYF_ALL;
+    if (ty & CTY_UNDEFINED) r |= CONCOLIC_TYF_UNDEFINED;
+    if (ty & CTY_NULL) r |= CONCOLIC_TYF_NULL;
+    if (ty & CTY_BOOLEAN) r |= CONCOLIC_TYF_BOOLEAN;
+    if (ty & CTY_STRING) r |= CONCOLIC_TYF_STRING;
+    if (ty & CTY_SYMBOL) r |= CONCOLIC_TYF_SYMBOL;
+    if (ty & CTY_NUMBER) r |= CONCOLIC_TYF_NUMBER;
+    if (ty & CTY_BIGINT) r |= CONCOLIC_TYF_BIGINT;
+    if (ty & CTY_OBJECT) r |= TYF_OBJECTS;
     return r;
 }
 
-static unsigned cty_of_tyr(unsigned rows)
+static unsigned cty_of_tyf(unsigned tyf)
 {
     unsigned ty = 0;
 
-    if (rows & CONCOLIC_TYR_UNDEFINED) ty |= CTY_UNDEFINED;
-    if (rows & CONCOLIC_TYR_OBJECT) ty |= CTY_NULL | CTY_OBJECT;
-    if (rows & CONCOLIC_TYR_BOOLEAN) ty |= CTY_BOOLEAN;
-    if (rows & CONCOLIC_TYR_STRING) ty |= CTY_STRING;
-    if (rows & CONCOLIC_TYR_SYMBOL) ty |= CTY_SYMBOL;
-    if (rows & CONCOLIC_TYR_NUMBER) ty |= CTY_NUMBER;
-    if (rows & CONCOLIC_TYR_BIGINT) ty |= CTY_BIGINT;
-    if (rows & CONCOLIC_TYR_FUNCTION) ty |= CTY_OBJECT;
+    if (tyf & CONCOLIC_TYF_UNDEFINED) ty |= CTY_UNDEFINED;
+    if (tyf & CONCOLIC_TYF_NULL) ty |= CTY_NULL;
+    if (tyf & CONCOLIC_TYF_BOOLEAN) ty |= CTY_BOOLEAN;
+    if (tyf & CONCOLIC_TYF_STRING) ty |= CTY_STRING;
+    if (tyf & CONCOLIC_TYF_SYMBOL) ty |= CTY_SYMBOL;
+    if (tyf & CONCOLIC_TYF_NUMBER) ty |= CTY_NUMBER;
+    if (tyf & CONCOLIC_TYF_BIGINT) ty |= CTY_BIGINT;
+    if (tyf & TYF_OBJECTS) ty |= CTY_OBJECT;
     return ty;
 }
 
 /* Has any flow filed a type facet? A gate on the lookup below only: a facet is per flow and lives in the
    constraint, so this answers "may one exist", never which. */
-static int g_typeof_facet_any;
+static int g_type_facet_any;
 
-/* The typeof rows this flow proved `c`'s source does not answer: its type facet (Cons.typeof_out). Only a value
-   that owns its `src` is that source; a derivation carries its operand's `src` and is not it. */
-static unsigned tyr_out_of(const Concolic *c)
+/* The types this flow proved `c`'s source does not take: its type facet (Cons.types_out). Only a value that owns
+   its `src` is that source; a derivation carries its operand's `src` and is not it. */
+static unsigned tyf_out_of(const Concolic *c)
 {
     const Cons *e;
 
-    if (!g_typeof_facet_any || !c || c->src_own != 1 || !c->src) return 0;
+    if (!g_type_facet_any || !c || c->src_own != 1 || !c->src) return 0;
     e = cons_lookup(c->src);
-    return e ? e->typeof_out : 0;
+    return e ? e->types_out : 0;
 }
 
 /* The types an operand takes: a concrete value's one, an unknown's stated set narrowed by its type facet in the
@@ -3349,35 +3353,130 @@ static unsigned cty_of_operand(JSValueConst v)
     unsigned out;
 
     if (!c) return cty_of_concrete(v);
-    out = tyr_out_of(c);
-    return out ? cty_of_tyr(tyr_of_cty(c->ty) & ~out) : c->ty;
+    out = tyf_out_of(c);
+    return out ? cty_of_tyf(tyf_of_cty(c->ty) & ~out) : c->ty;
 }
 
-/* §13.5.3.1 typeof's answer where the operand's rows are one: its type set, and its type facet in the running
-   flow. NULL when more than one row remains. */
-static const char *tyr_fixed(JSValueConst v)
+/* §13.5.3.1 typeof's answer where the operand's remaining types fall in one row of its table: its type set and
+   its type facet in the running flow. NULL when more than one row remains. */
+static const char *tyf_typeof_fixed(JSValueConst v)
 {
+    static const char *const NAME[] = { "undefined", "object", "boolean", "string", "symbol", "number", "bigint",
+                                        "function" };
     const Concolic *c = concolic_is(v) ? JS_GetOpaque(v, g_concolic_class) : NULL;
-    unsigned rows = c ? tyr_of_cty(c->ty) & ~tyr_out_of(c) : tyr_of_cty(cty_of_concrete(v));
+    unsigned tyf = c ? tyf_of_cty(c->ty) & ~tyf_out_of(c) : tyf_of_cty(cty_of_concrete(v));
 
-    for (int i = 0; i < 8; i++) if (rows == (1u << i)) return TYR_NAME[i];
+    for (size_t i = 0; i < sizeof NAME / sizeof NAME[0]; i++) {
+        unsigned row = tyf_of_typeof(NAME[i]);
+        if (tyf && !(tyf & ~row)) return NAME[i];
+    }
     return NULL;
 }
 
-void concolic_type_facet(JSValueConst cond, int holds)
+/* The types x may take for §7.2.13 IsLooselyEqual ( x, y ) to answer `holds` against the concrete operand `y`
+   (kind `kind`, spelled `tok`), each type decided by the step that answers for it. `num` is ! ToNumber ( y )
+   for a String `y` (NaN where it has no numeric value), and `big` whether StringToBigInt ( y ) is defined.
+   On the holding arm a type is admitted when some value of it makes the steps answer true; on the failing arm
+   when some value makes them answer false, which every type with more than one value does. */
+static unsigned tyf_loose(ConcolicLit kind, const char *tok, double num, int big, int holds)
+{
+    unsigned t = 0;
+    double n = kind == CONCOLIC_LIT_NUMBER ? strtod(tok, NULL) : kind == CONCOLIC_LIT_STRING ? num : 0;
+    int nan = (kind == CONCOLIC_LIT_NUMBER && (!strcmp(tok, "NaN"))) || (kind == CONCOLIC_LIT_STRING && n != n);
+    int zero_one = !nan && (n == 0 || n == 1);
+
+    if (!holds) {
+        /* Null and Undefined each hold one value, so the steps decide them outright: steps 2-3 (or step 1 for
+           the same type) answer true against null or undefined and false against anything else. */
+        t = CONCOLIC_TYF_ALL & ~(CONCOLIC_TYF_NULL | CONCOLIC_TYF_UNDEFINED);
+        if (kind != CONCOLIC_LIT_NULL && kind != CONCOLIC_LIT_UNDEFINED)
+            t |= CONCOLIC_TYF_NULL | CONCOLIC_TYF_UNDEFINED;
+        return t;
+    }
+    switch (kind) {
+    case CONCOLIC_LIT_NULL: case CONCOLIC_LIT_UNDEFINED:
+        /* Steps 1-3, and step 4's [[IsHTMLDDA]] object (the host is a web browser). */
+        return CONCOLIC_TYF_NULL | CONCOLIC_TYF_UNDEFINED | CONCOLIC_TYF_OBJECT;
+    case CONCOLIC_LIT_NUMBER:
+        if (nan) return 0;   /* step 1's IsStrictlyEqual and every conversion answer false against NaN */
+        t = CONCOLIC_TYF_NUMBER | CONCOLIC_TYF_STRING | TYF_OBJECTS;   /* steps 1, 6, 12 */
+        if (zero_one) t |= CONCOLIC_TYF_BOOLEAN;                         /* step 9: ToNumber(x) is 0 or 1 */
+        if (isfinite(n) && n == floor(n)) t |= CONCOLIC_TYF_BIGINT;      /* step 13: an integral value */
+        return t;
+    case CONCOLIC_LIT_STRING:
+        t = CONCOLIC_TYF_STRING | TYF_OBJECTS;                           /* steps 1 and 12 */
+        if (!nan) t |= CONCOLIC_TYF_NUMBER;                              /* step 5 */
+        if (zero_one) t |= CONCOLIC_TYF_BOOLEAN;                         /* steps 9 then 5 */
+        if (big) t |= CONCOLIC_TYF_BIGINT;                               /* step 7 */
+        return t;
+    case CONCOLIC_LIT_BOOL:
+        /* Step 10 makes y a Number, 0 or 1, which every type step 1, 6, 12 or 13 relates to it admits. */
+        return CONCOLIC_TYF_BOOLEAN | CONCOLIC_TYF_NUMBER | CONCOLIC_TYF_STRING | CONCOLIC_TYF_BIGINT | TYF_OBJECTS;
+    case CONCOLIC_LIT_BIGINT:
+        t = CONCOLIC_TYF_BIGINT | CONCOLIC_TYF_NUMBER | CONCOLIC_TYF_STRING | TYF_OBJECTS;   /* steps 1, 8, 12, 13 */
+        if (!strcmp(tok, "0") || !strcmp(tok, "1")) t |= CONCOLIC_TYF_BOOLEAN;           /* step 9 */
+        return t;
+    default:
+        return CONCOLIC_TYF_ALL;
+    }
+}
+
+/* The types x may take for §7.2.14 IsStrictlyEqual ( x, y ) to answer `holds` against the concrete `y`: step 1
+   makes the holding arm y's own type, and on the failing arm only a one-value type equal to y is excluded. */
+static unsigned tyf_strict(ConcolicLit kind, const char *tok, int holds)
+{
+    unsigned own = kind == CONCOLIC_LIT_STRING ? CONCOLIC_TYF_STRING : kind == CONCOLIC_LIT_NUMBER ? CONCOLIC_TYF_NUMBER
+                 : kind == CONCOLIC_LIT_BOOL ? CONCOLIC_TYF_BOOLEAN : kind == CONCOLIC_LIT_NULL ? CONCOLIC_TYF_NULL
+                 : kind == CONCOLIC_LIT_UNDEFINED ? CONCOLIC_TYF_UNDEFINED : kind == CONCOLIC_LIT_BIGINT ? CONCOLIC_TYF_BIGINT
+                 : 0;
+
+    if (!own) return CONCOLIC_TYF_ALL;
+    if (holds) return kind == CONCOLIC_LIT_NUMBER && !strcmp(tok, "NaN") ? 0 : own;   /* step 2's Number::equal */
+    return own & (CONCOLIC_TYF_NULL | CONCOLIC_TYF_UNDEFINED) ? CONCOLIC_TYF_ALL & ~own : CONCOLIC_TYF_ALL;
+}
+
+static void type_facet_narrow(const char *src, unsigned admitted)
+{
+    Cons *e = cons_entry(src);
+
+    e->types_out |= (unsigned short)(CONCOLIC_TYF_ALL & ~admitted);
+    g_type_facet_any = 1;
+}
+
+int concolic_equality_facet(JSContext *ctx, JSValueConst cond, int holds)
 {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(cond, g_concolic_class) : NULL;
-    unsigned row;
-    Cons *e;
+    double num = 0;
+    int big = 0;
 
-    DCHECK(c != NULL && c->cmp_typeof_of != NULL && c->cmp_op != OPCMP_NONE && c->cmp_tok != NULL,
-           "a type facet was filed off a value that is not an equality over a typeof result of an operand that "
-           "owns its source — decide.c asks concolic_cmp_typeof_of first");
-    /* A typeof result is a String, so a token of any other kind is a row the operand never answers. */
-    row = c->cmp_kind == CONCOLIC_LIT_STRING ? tyr_of_name(c->cmp_tok) : 0;
-    e = cons_entry(c->cmp_typeof_of);
-    e->typeof_out |= (unsigned char)(holds ? (CONCOLIC_TYR_ALL & ~row) : row);
-    g_typeof_facet_any = 1;
+    DCHECK(c != NULL && c->cmp_op != OPCMP_NONE && c->cmp_tok != NULL,
+           "an equality facet was asked of a value that records no equality with a token");
+    /* A typeof outcome narrows its operand by §13.5.3.1's row, and is never itself a source. */
+    if (c->cmp_typeof) {
+        if (c->cmp_typeof_of) {
+            unsigned row = c->cmp_kind == CONCOLIC_LIT_STRING ? tyf_of_typeof(c->cmp_tok) : 0;
+            type_facet_narrow(c->cmp_typeof_of, holds ? row : CONCOLIC_TYF_ALL & ~row);
+        }
+        return 1;
+    }
+    if (c->cmp_src_own != 1 || !c->src) return 0;
+    if (c->cmp_algo == JS_CONCOLIC_EQ_LOOSE) {
+        if (c->cmp_kind == CONCOLIC_LIT_STRING) {
+            JSValue str = JS_NewString(ctx, c->cmp_tok);
+            double d;
+
+            CHECK(!JS_IsException(str), "concolic: OOM converting an equality's token");
+            CHECK(JS_ToFloat64(ctx, &d, str) == 0, "concolic: ToNumber of a String token threw");
+            num = d;
+            big = JS_StringToBigIntDefined(ctx, str);
+            CHECK(big >= 0, "concolic: StringToBigInt of a String token threw");
+            JS_FreeValue(ctx, str);
+        }
+        type_facet_narrow(c->src, tyf_loose((ConcolicLit)c->cmp_kind, c->cmp_tok, num, big, holds));
+    } else {
+        type_facet_narrow(c->src, tyf_strict((ConcolicLit)c->cmp_kind, c->cmp_tok, holds));
+    }
+    return 0;
 }
 
 int concolic_cmp_is_typeof(JSValueConst cond)
@@ -3387,18 +3486,11 @@ int concolic_cmp_is_typeof(JSValueConst cond)
     return c && c->cmp_typeof;
 }
 
-const char *concolic_cmp_typeof_of(JSValueConst cond)
+unsigned concolic_types(const char *src)
 {
-    const Concolic *c = g_concolic_class ? JS_GetOpaque(cond, g_concolic_class) : NULL;
+    const Cons *e = src && g_type_facet_any ? cons_lookup(src) : NULL;
 
-    return c ? c->cmp_typeof_of : NULL;
-}
-
-unsigned concolic_typeof_rows(const char *src)
-{
-    const Cons *e = src && g_typeof_facet_any ? cons_lookup(src) : NULL;
-
-    return CONCOLIC_TYR_ALL & ~(e ? e->typeof_out : 0u);
+    return CONCOLIC_TYF_ALL & ~(e ? e->types_out : 0u);
 }
 
 /* State a fresh mint's type set: what its algorithm fixes the result's type to. Once per value, and the
@@ -5173,7 +5265,7 @@ JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     /* An operand whose type set fixes §13.5.3.1's row is answered by the row: `typeof !x` is "boolean" in
        every world, so nothing here is unknown and nothing forks over it. */
     {
-        const char *fixed = tyr_fixed(v);
+        const char *fixed = tyf_typeof_fixed(v);
 
         if (fixed) return JS_NewString(ctx, fixed);
     }
@@ -5900,7 +5992,7 @@ void concolic_free(void)
     /* …and the pin latch, for the same reason. */
     g_pin_any = 0;
     /* …and the type facet latch. */
-    g_typeof_facet_any = 0;
+    g_type_facet_any = 0;
     /* The value class is deliberately not given back here, and that is asserted (core/dom/document.c says the
        same of its realm-mark hook). Every live Concolic outlives this call: JS_FreeRuntime's finalizer reaches
        each record through this id, and the collection before it marks each example through it. A cleared id
