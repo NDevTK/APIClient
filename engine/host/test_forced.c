@@ -155,6 +155,8 @@
 #include <stdlib.h>
 #include <errno.h>   /* `abi_paint`'s file I/O — the one place this host's failures are the DISK's */
 #include <sys/resource.h>   /* RLIMIT_AS: the address-space ceiling native_ceiling_arm gives this host */
+#include <sys/wait.h>       /* nested_entry_selftest's children, whose abort is the answer it reads */
+#include <unistd.h>
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 /* A FIXTURE UNIT: a selftest, a step of main, or one document's probe rows — called once and kept out of line.
@@ -5353,6 +5355,100 @@ TF_UNIT void concat_keyed_selftest(JSContext *ctx)
           "forcing every offer produced no more suspensions than declining every one");
     JS_SetFlowControlHooks(&TF_DIFF_NONE);
 }
+
+#if APICLIENT_DEV
+/* The nested-entry witness: a C function this selftest alone registers, which calls JS_Call on the page's
+   callback from inside its own activation, is the shape the engine refuses to run below a live frame. */
+static bool g_tf_nest_leaf_ran;
+static __attribute__((noinline)) JSValue tf_nest_call(JSContext *ctx, JSValueConst this_val, int argc,
+                                                       JSValueConst *argv)
+{
+    (void)this_val;
+    CHECK(argc == 1 && JS_IsFunction(ctx, argv[0]), "the nested-entry witness was called without its callback");
+    return JS_Call(ctx, argv[0], JS_UNDEFINED, 0, NULL);
+}
+static JSValue tf_nest_leaf(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)ctx; (void)this_val; (void)argc; (void)argv;
+    g_tf_nest_leaf_ran = true;
+    return JS_UNDEFINED;
+}
+
+/* Run `src` in a child with `name` registered as `fn` on the global, its stderr captured into `out`. Answers
+   the child's wait status. The child exits 0 when the program completed and the leaf witness ran, 3 when it
+   completed without it, and is otherwise killed by whatever the engine raised. */
+static int tf_nest_child(JSContext *ctx, const char *src, const char *name, JSCFunction *fn, char *out, size_t cap)
+{
+    int fds[2], status = 0;
+    size_t n = 0;
+    ssize_t got;
+    pid_t pid;
+
+    CHECK(pipe(fds) == 0, "the nested-entry witness could not open its pipe");
+    fflush(stdout);
+    fflush(stderr);
+    pid = fork();
+    CHECK(pid >= 0, "the nested-entry witness could not fork");
+    if (pid == 0) {
+        struct rlimit no_core = { 0, 0 };
+        JSValue global = JS_GetGlobalObject(ctx), res = JS_UNDEFINED, *flow;
+        int r;
+
+        setrlimit(RLIMIT_CORE, &no_core);
+        dup2(fds[1], 2);
+        close(fds[0]);
+        JS_SetPropertyStr(ctx, global, name, JS_NewCFunction(ctx, fn, name, 1));
+        JS_FreeValue(ctx, global);
+        JS_SetFlowControlHooks(&TF_DIFF_NONE);
+        flow = JS_FlowNew(ctx, src, strlen(src), "nested-entry", 0);
+        do r = JS_FlowResume(ctx, flow, &res); while (r != 0 && r != JS_FLOW_DETACHED);
+        fflush(stderr);
+        _exit(g_tf_nest_leaf_ran ? 0 : 3);
+    }
+    close(fds[1]);
+    while (n + 1 < cap && (got = read(fds[0], out + n, cap - 1 - n)) > 0)
+        n += (size_t)got;
+    out[n] = '\0';
+    close(fds[0]);
+    CHECK(waitpid(pid, &status, 0) == pid, "the nested-entry witness lost its child");
+    return status;
+}
+
+/* Does the record in `out` name an address inside tf_nest_call? JS_Call may reach JS_CallInternal as a tail
+   call, so either of the two return addresses can be the witness's own. */
+static bool tf_nest_names_witness(const char *out, const char *k0, const char *k1)
+{
+    const char *keys[2] = { k0, k1 };
+    for (int i = 0; i < 2; i++) {
+        const char *at = strstr(out, keys[i]);
+        uintptr_t a, lo = (uintptr_t)tf_nest_call;
+        if (!at) continue;
+        a = (uintptr_t)strtoull(at + strlen(keys[i]), NULL, 16);
+        if (a >= lo && a < lo + 512) return true;
+    }
+    return false;
+}
+
+TF_UNIT void nested_entry_selftest(JSContext *ctx)
+{
+    char out[8192];
+    int nest, leaf;
+    bool named;
+
+    nest = tf_nest_child(ctx, "__tfNestCall(function () { return 1; }); 0", "__tfNestCall", tf_nest_call,
+                         out, sizeof out);
+    named = strstr(out, "@NESTED-NEW") && tf_nest_names_witness(out, "\"abs0\":\"", "\"abs1\":\"");
+    leaf = tf_nest_child(ctx, "__tfNestLeaf(); 0", "__tfNestLeaf", tf_nest_leaf, out, sizeof out);
+    printf("@NESTED-SELFTEST {\"nestNamed\":%d,\"leafExit\":%d,\"leafRows\":%d}\n", named,
+           WIFEXITED(leaf) ? WEXITSTATUS(leaf) : -1, strstr(out, "@NESTED-NEW") != NULL);
+    (void)nest;
+    CHECK(named, "a C function calling JS_Call on a callback from inside its activation was not named by the "
+                 "nested-entry census at its own address");
+    CHECK(WIFEXITED(leaf) && WEXITSTATUS(leaf) == 0,
+          "the leaf-dispatch witness did not complete with its C function run");
+    CHECK(!strstr(out, "@NESTED-NEW"), "the interpreter's own call of a C function was counted as a nested entry");
+}
+#endif
 
 TF_UNIT void flow_job_selftest(JSContext *fixture_ctx)
 {
@@ -33687,6 +33783,9 @@ int main(int argc, char **argv) {
     flow_job_selftest(ctx);         /* §8.1.7's two queues, §7.5.10 step 5, and the fork's copy-on-nothing */
     sort_merge_selftest(ctx);       /* 23.1.3.30.1 step 4 rests per element, and both schedules agree */
     concat_keyed_selftest(ctx);     /* §23.1.3.2's keyed walk rests per request, declaring no yield of its own */
+#if APICLIENT_DEV
+    nested_entry_selftest(ctx);     /* a C activation entering the engine is named; the leaf dispatch is not */
+#endif
     endpoint_init();
     novelty_set_scope("https://x.test");   /* the origin of the address tf_realm_install below gives the document */
     solve_init(ctx);

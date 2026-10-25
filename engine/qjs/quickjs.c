@@ -4749,6 +4749,7 @@ static JSNestedEntry g_nested_entries[1024];
 static int g_nested_entry_count;
 static void js_nested_entry_note(uintptr_t ra0, uintptr_t ra1, bool bytecode)
 {
+    uintptr_t base = (uintptr_t)JS_CallInternal;
     int i;
     for (i = 0; i < g_nested_entry_count; i++) {
         JSNestedEntry *e = &g_nested_entries[i];
@@ -4758,8 +4759,9 @@ static void js_nested_entry_note(uintptr_t ra0, uintptr_t ra1, bool bytecode)
           "the nested-entry census holds more distinct call sites than its table: grow the table");
     g_nested_entries[g_nested_entry_count++] = (JSNestedEntry){ ra0, ra1, bytecode, 1 };
     /* each new site as it is first seen, so a run that aborts before teardown still names it */
-    fprintf(stderr, "@NESTED-NEW {\"ra0\":\"%+lld\",\"ra1\":\"%+lld\",\"bytecode\":%d}\n",
-            (long long)(intptr_t)ra0, (long long)(intptr_t)ra1, bytecode);
+    fprintf(stderr, "@NESTED-NEW {\"ra0\":\"%+lld\",\"ra1\":\"%+lld\",\"bytecode\":%d,\"abs0\":\"%#llx\","
+            "\"abs1\":\"%#llx\"}\n", (long long)(intptr_t)ra0, (long long)(intptr_t)ra1, bytecode,
+            (unsigned long long)(ra0 + base), (unsigned long long)(ra1 + base));
 }
 #define JS_NESTED_ENTRY_NOTE(rt_, bytecode_)                                                                \
     do {                                                                                                      \
