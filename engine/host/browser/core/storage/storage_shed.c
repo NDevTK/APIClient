@@ -53,10 +53,10 @@ static int     g_ready;
 
 /* §4.1's REGISTERED STORAGE ENDPOINTS, as the table states them. `quota` is in bytes; -1 is the table's null,
    which §4.6 calls "the lack of a limit".
-   File System §3 reaches `obtain a local storage bottle map` with the identifier "fileSystem", which that
-   standard registers in ITS table rather than in this one — there is no row for it here because this component
-   is not yet that standard's door (core/file/storage_manager.c reaches its root directly). The DFAIL below
-   names it. */
+   Web Locks §2.2 Lock Managers obtains a local bottle map with "web-locks", an identifier §4.1's table does
+   not list; its row (local, no quota) is the one that obtaining needs. File System §3 reaches the same
+   algorithm with "fileSystem", which has no row because this component is not yet that standard's door
+   (core/file/storage_manager.c reaches its root directly). The DFAIL below names it. */
 typedef struct {
     const char *identifier;
     StorageType type;
@@ -69,6 +69,7 @@ static const StorageEndpoint ENDPOINTS[] = {
     { "localStorage",               STORAGE_TYPE_LOCAL,   5.0 * 1024 * 1024 },
     { "serviceWorkerRegistrations", STORAGE_TYPE_LOCAL,   -1 },
     { "sessionStorage",             STORAGE_TYPE_SESSION, 5.0 * 1024 * 1024 },
+    { "web-locks",                  STORAGE_TYPE_LOCAL,   -1 },
 };
 #define ENDPOINTS_N ((int)(sizeof(ENDPOINTS) / sizeof(ENDPOINTS[0])))
 
@@ -286,10 +287,10 @@ JSValue storage_shed_obtain_bottle_map(JSContext *ctx, StorageType type, const c
     for (i = 0; i < ENDPOINTS_N; i++)
         if (ENDPOINTS[i].type == type && strcmp(ENDPOINTS[i].identifier, identifier) == 0) known = 1;
     if (!known)
-        DFAILF("no registered storage endpoint of this type has the identifier `%s` — Storage §4.1's table "
-               "is the five rows this component builds, and a standard that registers its own (File System "
-               "§3's \"fileSystem\") adds its row to ENDPOINTS here rather than obtaining a bottle nothing "
-               "created", identifier);
+        DFAILF("no registered storage endpoint of this type has the identifier `%s` — ENDPOINTS holds Storage "
+               "§4.1's table and the identifiers other standards obtain (Web Locks' \"web-locks\"); a standard "
+               "that registers its own (File System §3's \"fileSystem\") adds its row there rather than "
+               "obtaining a bottle nothing created", identifier);
 
     /* §4.6 steps 1-3 choose the shed and step 4 obtains the shelf; obtain_shelf performs both, because which
        shed a type names is the same fact §4.4's own algorithm needs. */
