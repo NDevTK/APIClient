@@ -537,14 +537,17 @@ int         concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op);
    NULL src and payload clear it. */
 void        concolic_set_candidate(const char *src, const char *root, const char *payload);
 /* The running flow's further deliveries (flow.h's `cand_dsrc`/`cand_dval`), installed after its candidate at
-   every switch-in: each a cross-document message's data source whose read answers the structured value its
-   JSON text spells, the payload's own delivery included where the search injects inside that message. */
+   every switch-in: each a cross-document message's data or origin source whose read answers the value its JSON
+   text spells, the payload's own delivery included where the search injects inside that message. */
 void        concolic_set_deliveries(char *const *srcs, char *const *vals, int n);
 /* The running flow decided the branch `cond`, whose value a declared principal's bytes reach (a message's
    origin): latched in its constraint, so concolic_principal_decided answers whether this world asked anything of
    a principal however the predicate was spelled (`origin.indexOf(x) === -1` pins and gates nothing). */
 void        concolic_note_principal_branch(JSValueConst cond);
 int         concolic_principal_decided(void);
+/* The String operands the page passed to methods it called over the declared principal `src` this session,
+   each handed to `cb` once (borrowed for the call). */
+void        concolic_principal_tokens_each(const char *src, void (*cb)(void *ud, const char *tok), void *ud);
 /* Whether the installed candidate is delivered at `root`'s declared source read (its parent's, for a keyed root)
    and its bytes have entered the program: the one delivery a fired PoC over a declared root may have. */
 int         concolic_candidate_at_root(const char *root);

@@ -18,19 +18,23 @@ static void acts_append(JsonBuf *b, int *first, const char *act)
     json_buf_raw(b, act);
 }
 
-/* `act` with the candidate `data` composed for its message (borrowed), malloc'd. */
-static char *act_with_data(const char *act, const char *data)
+/* `act` with the `data` (JSON) and the `origin` (a JSON String) its message is posted with (both borrowed),
+   malloc'd. */
+static char *act_with_message(const char *act, const char *data, const char *origin)
 {
     JsonBuf b = { 0 };
     size_t l = strlen(act);
     char *body = malloc(l);
 
     DCHECK(l > 2 && act[l - 1] == '}', "a message act is not an object");
-    CHECK(body, "solve: OOM composing a message act");
+    CHECK(body, "act list: OOM composing a message act");
     memcpy(body, act, l - 1);
     body[l - 1] = 0;
     json_buf_raw(&b, body);
     free(body);
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "origin");
+    json_buf_raw(&b, origin);
     json_buf_raw(&b, ",");
     json_buf_key(&b, "data");
     json_buf_raw(&b, data);
@@ -38,42 +42,65 @@ static char *act_with_data(const char *act, const char *data)
     return json_buf_take(&b);
 }
 
-/* A message act of the chain. Where the flow delivers this message's data (a verification), the act states the
-   delivered value and is solved. Otherwise it states the data its message's domain composes (message_compose)
-   where it can, `*unsolved` is raised, and the composition is appended to `*dl` (flow_deliveries_text's format)
-   for the verification that delivers it; `*refused` takes the first composition refusal, malloc'd. */
+/* One delivery appended to `*dl` in flow_deliveries_text's format. */
+static void dl_append(char **dl, const char *src, const char *val)
+{
+    size_t o = *dl ? strlen(*dl) : 0, n = o + strlen(src) + strlen(val) + 44;
+    char *grown = realloc(*dl, n);
+
+    CHECK(grown, "act list: OOM recording a message's composition");
+    snprintf(grown + o, n - o, "%zu:%s%zu:%s", strlen(src), src, strlen(val), val);
+    *dl = grown;
+}
+
+/* The origin message_compose_origin composes for `osrc`, as a JSON String, malloc'd. */
+static char *origin_json(const char *osrc)
+{
+    char *origin = message_compose_origin(osrc), *out;
+    JsonBuf b = { 0 };
+
+    json_buf_str(&b, origin);
+    free(origin);
+    out = json_buf_take(&b);
+    CHECK(out, "act list: OOM spelling a composed origin");
+    return out;
+}
+
+/* A message act of the chain, stating the origin it is posted from and its data. Where the flow delivers both
+   (a candidate's composed messages), the act states the delivered values and is solved. Otherwise each value
+   not delivered is composed (message_compose, message_compose_origin), `*unsolved` is raised, and the
+   compositions are appended to `*dl` (flow_deliveries_text's format) for the verification that delivers them;
+   `*refused` takes the first data composition's refusal, malloc'd, and the act then states neither value. */
 static char *message_act(const Flow *f, int k, char **refused, int *unsolved, char **dl)
 {
-    char root[96], *data, *why = NULL, *act;
+    char root[96], osrc[96], *data, *origin, *why = NULL, *act;
     /* An exploring flow (a sighting's witness) injects nothing: every message holds what its own domain admits. */
     const char *inject = f->cand_src ? f->cand_src : "", *payload = f->cand_payload ? f->cand_payload : "";
-    const char *delivered;
+    const char *ddel, *odel;
 
-    engine_orphan_message_data_src(f, k, root, sizeof root);
-    delivered = flow_delivery_of(f, root);
-    if (delivered) return act_with_data(f->orphan_acts[k], delivered);
+    engine_orphan_message_sources(f, k, root, osrc, sizeof root);
+    ddel = flow_delivery_of(f, root);
+    odel = flow_delivery_of(f, osrc);
+    if (ddel && odel) return act_with_message(f->orphan_acts[k], ddel, odel);
     *unsolved = 1;
     /* The payload rides this message only where the search's injection is this message's data or one of its
        members; every other message of the chain carries what its own domain admits. */
     if (*inject && strcmp(inject, root) && !concolic_member_of_root(inject, root)) inject = "";
-    data = message_compose(root, inject, payload, &why);
+    data = ddel ? strdup(ddel) : message_compose(root, inject, payload, &why);
     if (!data) {
         if (!*refused) *refused = why;
         else free(why);
         act = strdup(f->orphan_acts[k]);
-        CHECK(act, "solve: OOM copying a message act");
+        CHECK(act, "act list: OOM copying a message act");
         return act;
     }
-    act = act_with_data(f->orphan_acts[k], data);
-    {
-        size_t o = *dl ? strlen(*dl) : 0, n = o + strlen(root) + strlen(data) + 44;
-        char *grown = realloc(*dl, n);
-
-        CHECK(grown, "solve: OOM recording a message's composition");
-        snprintf(grown + o, n - o, "%zu:%s%zu:%s", strlen(root), root, strlen(data), data);
-        *dl = grown;
-    }
+    origin = odel ? strdup(odel) : origin_json(osrc);
+    CHECK(origin, "act list: OOM copying a delivered origin");
+    act = act_with_message(f->orphan_acts[k], data, origin);
+    if (!ddel) dl_append(dl, root, data);
+    if (!odel) dl_append(dl, osrc, origin);
     free(data);
+    free(origin);
     return act;
 }
 
@@ -119,25 +146,22 @@ char *act_list_message_deliveries(const Flow *f, const char *inject, const char 
 {
     int called = !f->orphan ? 0 : f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n;
     char *out = NULL;
-    size_t o = 0;
 
     DCHECK(inject && *inject && payload && *payload, "message deliveries were composed with no injection or payload");
     for (int k = 0; k < called; k++) {
-        char root[96], *data, *why = NULL, *grown;
+        char root[96], osrc[96], *data, *origin, *why = NULL;
         const char *inj = inject;
-        size_t n;
 
         if (!f->orphan_acts[k] || !strstr(f->orphan_acts[k], "\"kind\":\"message\"")) continue;
-        engine_orphan_message_data_src(f, k, root, sizeof root);
+        engine_orphan_message_sources(f, k, root, osrc, sizeof root);
         if (strcmp(inj, root) && !concolic_member_of_root(inj, root)) inj = "";
         data = message_compose(root, inj, payload, &why);
         if (!data) { free(why); free(out); return NULL; }
-        n = o + strlen(root) + strlen(data) + 44;
-        grown = realloc(out, n);
-        CHECK(grown, "act list: OOM composing a chain's message deliveries");
-        out = grown;
-        o += (size_t)snprintf(out + o, n - o, "%zu:%s%zu:%s", strlen(root), root, strlen(data), data);
+        origin = origin_json(osrc);
+        dl_append(&out, root, data);
+        dl_append(&out, osrc, origin);
         free(data);
+        free(origin);
     }
     return out;
 }

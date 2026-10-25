@@ -19,6 +19,7 @@
 #include "core/json_buf.h"
 #include "solver/concolic.h"
 #include "solver/message_compose.h"
+#include "solver/solve_url.h"   /* SOLVE_URL_ATTACKER_HOST, the site the attacker owns */
 
 typedef struct { const char *src, *ident; const char *const *path; int n; } Node;
 typedef struct { Node *v; int n, cap; } Nodes;
@@ -332,4 +333,63 @@ char *message_compose(const char *root, const char *inject, const char *payload,
     *why = c.why;
     if (c.why) { json_buf_free(&b); return NULL; }
     return json_buf_take(&b);
+}
+
+/* One host fragment from a constant the page compared the origin with: the host of an absolute URL, or the
+   constant itself, kept to the characters a host label may hold (lowercased) and trimmed of separators. */
+typedef struct { JsonBuf host; } OriginFrags;
+
+static void origin_frag(void *ud, const char *tok)
+{
+    OriginFrags *o = ud;
+    const char *p = strstr(tok, "://"), *end;
+    char frag[256];
+    size_t n = 0;
+
+    p = p ? p + 3 : tok;
+    end = p + strcspn(p, "/:?#");
+    for (; p < end && n < sizeof frag - 1; p++) {
+        char ch = (char)(*p >= 'A' && *p <= 'Z' ? *p - 'A' + 'a' : *p);
+
+        if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '.') frag[n++] = ch;
+    }
+    while (n && (frag[n - 1] == '.' || frag[n - 1] == '-')) n--;
+    frag[n] = 0;
+    p = frag;
+    while (*p == '.' || *p == '-') p++;
+    if (!*p) return;
+    json_buf_raw(&o->host, p);
+    json_buf_raw(&o->host, ".");
+}
+
+/* The pins the running flow made on the origin, as constants like the call operands. */
+typedef struct { const char *src; OriginFrags *o; } OriginPins;
+
+static void origin_pins(void *user, const char *src, const ConcolicPrincipalPin *pin, int n)
+{
+    const OriginPins *op = user;
+
+    if (strcmp(src, op->src)) return;
+    for (int i = 0; i < n; i++) origin_frag(op->o, pin[i].tok);
+}
+
+char *message_compose_origin(const char *origin_src)
+{
+    OriginFrags o = { { 0 } };
+    OriginPins op = { origin_src, &o };
+    char *host, *out;
+    size_t n;
+
+    DCHECK(origin_src && *origin_src, "an origin was composed for no source");
+    concolic_principal_tokens_each(origin_src, origin_frag, &o);
+    concolic_principal_pins(origin_pins, &op);
+    json_buf_raw(&o.host, SOLVE_URL_ATTACKER_HOST);
+    host = json_buf_take(&o.host);
+    CHECK(host, "message compose: OOM spelling an origin");
+    n = strlen(host) + sizeof "https://";
+    out = malloc(n);
+    CHECK(out, "message compose: OOM spelling an origin");
+    snprintf(out, n, "https://%s", host);
+    free(host);
+    return out;
 }

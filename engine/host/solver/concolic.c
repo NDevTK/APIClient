@@ -2989,10 +2989,9 @@ void concolic_set_deliveries(char *const *srcs, char *const *vals, int n) {
     for (int i = 0; i < n; i++) {
         int row = src_row(srcs[i], strlen(srcs[i]));
 
-        DCHECK(deliv_find(srcs[i]) < 0 && row >= 0 && g_srcs[row].deliver == SRC_DELIVER_CROSS_DOCUMENT_MESSAGE &&
-               !g_srcs[row].principal,
-               "a further delivery names a source twice, or a source that is not a cross-document message's data: "
-               "only a message's data is delivered as a structured value");
+        DCHECK(deliv_find(srcs[i]) < 0 && row >= 0 && g_srcs[row].deliver == SRC_DELIVER_CROSS_DOCUMENT_MESSAGE,
+               "a further delivery names a source twice, or a source that is not a cross-document message's: "
+               "only a message's data and origin are delivered this way");
         (void)row;
         g_dl_src[i] = strdup(srcs[i]);
         g_dl_val[i] = strdup(vals[i]);
@@ -3044,6 +3043,51 @@ int concolic_candidate_at_root(const char *root) {
    principal (concolic_note_principal_branch). Not a branch identity: concolic_ident_compose's tag keeps it apart
    from every `branch` key. */
 #define PRINCIPAL_DECIDED_TAG "principal-decided"
+
+/* The String operands the page passed to a method it called over a declared principal (an origin), per
+   principal: the constants a composed origin is built from (message_compose_origin), each checked by firing.
+   A naming fact of the session, like the member table, so it answers every flow. */
+typedef struct { char *src, *tok; } PrincipalToken;
+static PrincipalToken *g_ptok;
+static int g_ptok_n, g_ptok_cap;
+
+static void principal_tokens_note(JSContext *ctx, JSValueConst recv, int argc, JSValueConst *argv) {
+    const char *root = concolic_root_c(recv), *p;
+    size_t n;
+
+    for (int i = 0; root_member(root, i, &p, &n); i++) {
+        if (!src_principal(p, n)) continue;
+        for (int a = 0; a < argc; a++) {
+            const char *tok;
+            int dup = 0;
+
+            if (!JS_IsString(argv[a])) continue;
+            tok = JS_ToCString(ctx, argv[a]);
+            CHECK(tok, "concolic: OOM reading a principal's operand");
+            for (int k = 0; k < g_ptok_n && !dup; k++)
+                dup = strlen(g_ptok[k].src) == n && !strncmp(g_ptok[k].src, p, n) && !strcmp(g_ptok[k].tok, tok);
+            if (!dup && *tok) {
+                if (g_ptok_n == g_ptok_cap) {
+                    int nc = g_ptok_cap ? g_ptok_cap * 2 : 8;
+                    PrincipalToken *g = realloc(g_ptok, (size_t)nc * sizeof *g);
+
+                    CHECK(g, "concolic: OOM recording a principal's operand");
+                    g_ptok = g; g_ptok_cap = nc;
+                }
+                g_ptok[g_ptok_n].src = strndup(p, n);
+                g_ptok[g_ptok_n].tok = strdup(tok);
+                CHECK(g_ptok[g_ptok_n].src && g_ptok[g_ptok_n].tok, "concolic: OOM recording a principal's operand");
+                g_ptok_n++;
+            }
+            JS_FreeCString(ctx, tok);
+        }
+    }
+}
+
+void concolic_principal_tokens_each(const char *src, void (*cb)(void *ud, const char *tok), void *ud) {
+    DCHECK(src && cb, "a principal's operands were enumerated with no principal or no visitor");
+    for (int i = 0; i < g_ptok_n; i++) if (!strcmp(g_ptok[i].src, src)) cb(ud, g_ptok[i].tok);
+}
 
 void concolic_note_principal_branch(JSValueConst cond) {
     const char *root = concolic_root_c(cond), *p;
@@ -4705,6 +4749,7 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
     int i;
 
     DCHECK(c != NULL, "the concolic call handler ran on something that is not a concolic value");
+    if (concolic_is(this_val)) principal_tokens_note(ctx, this_val, argc, argv);
     /* §13.3.6.2 EvaluateCall steps 4-5 over a member read off a parent whose remaining types hold no callable
        under the name: the call throws in every world this flow admits. Named residual. Not covered: a parent
        whose facet admits types on both sides, where the throwing types' arm is not forked (the narrowing below
@@ -6683,6 +6728,10 @@ static void source_overlay_withdraw(void);
 
 void concolic_free(void)
 {
+    for (int i = 0; i < g_ptok_n; i++) { free(g_ptok[i].src); free(g_ptok[i].tok); }
+    free(g_ptok);
+    g_ptok = NULL;
+    g_ptok_n = g_ptok_cap = 0;
     for (int i = 0; i < g_members_n; i++) {
         free(g_members[i].src); free(g_members[i].ident); free(g_members[i].root);
         for (int k = 0; k < g_members[i].n; k++) free(g_members[i].path[k]);

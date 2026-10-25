@@ -1205,6 +1205,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/recordless.h"
 #include "fixture/agenfork.h"
 #include "fixture/msgchain.h"
+#include "fixture/msgorigin.h"
 #include "fixture/clickhash.h"
 #include "fixture/msgchaincoop.h"
 #include "fixture/flagflow.h"
@@ -1729,6 +1730,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "recordless", HTML_RECORDLESS },
     { "agenfork", HTML_AGENFORK },
     { "msgchain", HTML_MSGCHAIN },
+    { "msgorigin", HTML_MSGORIGIN },
     { "clickhash", HTML_CLICKHASH },
     { "msgchaincoop", HTML_MSGCHAINCOOP, OPENER_POLICY_SAME_ORIGIN },
     { "flagflow", HTML_FLAGFLOW },
@@ -20770,6 +20772,49 @@ TF_UNIT void probes_msgchain(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* Whether some fired @S record of `sink` (one carrying a `poc`) holds every one of `needles`, read within that
+   record's own object. */
+static int s_fired_with(const char *js, const char *sink, const char *const *needles, int n)
+{
+    char head[64];
+    const char *at;
+
+    snprintf(head, sizeof head, "{\"sink\":\"%s\"", sink);
+    for (at = strstr(js, head); at; at = strstr(at + 1, head)) {
+        const char *next = strstr(at + 1, "{\"sink\":"), *end = next ? next : at + strlen(at);
+        size_t len = (size_t)(end - at);
+        int all = memmem(at, len, "\"poc\":", 6) != NULL;
+
+        for (int i = 0; i < n && all; i++) all = memmem(at, len, needles[i], strlen(needles[i])) != NULL;
+        if (all) return 1;
+    }
+    return 0;
+}
+
+/* The rows of the `msgorigin` document (fixture/msgorigin.h): an origin a substring check admits is composed
+   and fires; an exact match on another site's origin never does. */
+TF_UNIT void probes_msgorigin(const char *js, Probe *tab, int *n) {
+    static const char *const SUB[] = { "\"handler\":\"moSub\"", "trusted.example", "\"kind\":\"show\"" };
+    static const char *const EXACT[] = { "\"handler\":\"moExact\"" };
+    const char *ms_why = NULL; int ms_tt = 1;
+    fold_row(&ms_tt, &ms_why, !!strstr(js, "\"/api/mo-sub-entered\""),
+             "NOT REACHED: there is no /api/mo-sub-entered record, so moSub was never driven");
+    fold_row(&ms_tt, &ms_why, s_fired_with(js, "innerHTML", SUB, 3),
+             "no fired innerHTML record states a moSub message posted from an origin holding `trusted.example` with "
+             "data whose kind is 'show' — the origin the substring check admits was not composed and fired");
+    const char *me_why = NULL; int me_tt = 1;
+    fold_row(&me_tt, &me_why, !!strstr(js, "\"/api/mo-exact-entered\""),
+             "NOT REACHED: there is no /api/mo-exact-entered record, so moExact was never driven");
+    fold_row(&me_tt, &me_why, !s_fired_with(js, "innerHTML", EXACT, 1),
+             "a fired innerHTML record states a moExact message: its exact check admits only another site's "
+             "origin, which no sender the attacker owns presents");
+    const Probe rows[] = {
+        { "mo-sub-poc", ms_tt, "function moSub", SESS_EXPLORE, ms_why },
+        { "mo-exact-nopoc", me_tt, "function moExact", SESS_EXPLORE, me_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `msgchaincoop` document: msgchain served with COOP same-origin, so no opener route. */
 TF_UNIT void probes_msgchaincoop(const char *js, Probe *tab, int *n) {
     char src[192], src2[192];
@@ -20955,6 +21000,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_forms(js, probes, &np);
     probes_decoder(js, probes, &np);
     probes_msgchain(js, probes, &np);
+    probes_msgorigin(js, probes, &np);
     probes_msgchaincoop(js, probes, &np);
     probes_clickhash(js, probes, &np);
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run

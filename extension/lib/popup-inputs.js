@@ -5,7 +5,8 @@
    `location.search`, `window.name`, `document.referrer`, `message.data:<id>`. It reads the producer fields
    the Endpoints panel reads and says "unknown" where none is carried. Built only through lib/dom-builder.js.
    A sighting's acts (the act list its flow performed) are steps too: a message act is one unit under
-   `postMessage`, with its route and the data its domain composes, and every other act sits under `user act`.
+   `postMessage`, with its route, the origin and the data their domains compose, and every other act sits under
+   `user act`.
    Named residual. Not covered: an input's address delivery and the value a verified recipe composes for it;
    the witness still spells its pins and branches. Next diff builds: inputRecipeOf over the composed, verified
    recipes that replace the spelled entries. How its absence shows: a source's conditions listed as the page
@@ -54,6 +55,7 @@ function inputActStep(a, where) {
          "a stored witness act is not {kind, target, …} (" + where + "): " + JSON.stringify(a));
   if (a.kind === "message") {
     return { text: "a message posted to the window by " + a.route + " route" +
+                   ("origin" in a ? " from " + a.origin : "") +
                    ("data" in a ? " with data " + JSON.stringify(a.data) : ", its data not composed"),
              inputs: ["postMessage"] };
   }

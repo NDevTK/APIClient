@@ -6314,14 +6314,14 @@ static void engine_attacker_post_record(uint64_t hash, int pos, char *out, size_
     CHECK(n > 0 && (size_t)n < cap, "engine: an attacker post's record name did not fit its room");
 }
 
-void engine_orphan_message_data_src(const Flow *f, int k, char *out, size_t cap) {
-    char record[64], osrc[64];
+void engine_orphan_message_sources(const Flow *f, int k, char *data, char *origin, size_t cap) {
+    char record[64];
 
     DCHECK(f != NULL && f->orphan && k >= 0 && k < f->orphan_chain_n && f->orphan_acts[k] &&
            strstr(f->orphan_acts[k], "\"kind\":\"message\"") != NULL,
            "a message delivery's source was asked of a chain member that is not a driven message listener");
     engine_attacker_post_record(f->orphan_chain[k], orphan_chain_position(f, k), record, sizeof record);
-    window_message_delivery_sources(record, out, osrc, cap < sizeof osrc ? cap : sizeof osrc);
+    window_message_delivery_sources(record, data, origin, cap);
 }
 
 /* The event an attacker document's postMessage hands a driven Window `message` listener (§9.3.3 step 8.4):
