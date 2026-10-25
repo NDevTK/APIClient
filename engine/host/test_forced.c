@@ -742,6 +742,9 @@ static const TfServed TF_SERVED[] = {
       "fetch('/api/mhdep?w=mhDEP');"
       "export const mhTag = 'mhTAG';"
       "export default { tag: 'mhDEF' };" },
+    /* HTML_LAZYLOAD's chunk, imported once its observed box is visible. */
+    { "https://x.test/chunk/lllazy.js", "text/javascript",
+      "export function llInit() { fetch('/api/ll-chunk'); }" },
     /* HTML_SPAROUTE's `#/reports` chunk: a module whose mount registers the handler that holds the sink. */
     { "https://x.test/chunk/srreports.js", "text/javascript",
       "fetch('/api/sr-chunk');"
@@ -1131,6 +1134,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/envgate.h"
 #include "fixture/timegate.h"
 #include "fixture/framemsg.h"
+#include "fixture/lazyload.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1600,6 +1604,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "envgate", HTML_ENVGATE },
     { "timegate", HTML_TIMEGATE },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
+    { "lazyload", HTML_LAZYLOAD },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -14891,6 +14896,28 @@ TF_UNIT void probes_framemsg(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `lazyload` document (fixture/lazyload.h). */
+TF_UNIT void probes_lazyload(const char *js, Probe *tab, int *n) {
+    const char *lo_why = NULL; int lo_tt = 1;
+    fold_row(&lo_tt, &lo_why, !!strstr(js, "\"/api/ll-offscreen\""),
+             "NOT REACHED: there is no /api/ll-offscreen record, so the observer's first notification never ran");
+    const char *lv_why = NULL; int lv_tt = 1;
+    fold_row(&lv_tt, &lv_why, !!strstr(js, "\"/api/ll-visible\""),
+             "NOT REACHED: there is no /api/ll-visible record, so no world scrolled the box into view: the first "
+             "frame's geometry decided the observer's arm");
+    fold_row(&lv_tt, &lv_why, !!strstr(js, "\"/api/ll-chunk\""),
+             "the visible arm ran but its lazy chunk never loaded or its init never ran");
+    const char *lh_why = NULL; int lh_tt = 1;
+    fold_row(&lh_tt, &lh_why, !!strstr(js, "\"/api/ll-hidden\""),
+             "NOT REACHED: there is no /api/ll-hidden record, so no world had the person leave the page");
+    const Probe rows[] = {
+        { "ll-offscreen", lo_tt, "/api/ll-offscreen", SESS_EXPLORE, lo_why },
+        { "ll-visible-chunk", lv_tt, "/api/ll-visible", SESS_EXPLORE, lv_why },
+        { "ll-hidden", lh_tt, "/api/ll-hidden", SESS_EXPLORE, lh_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18714,6 +18741,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_envgate(js, probes, &np);
     probes_timegate(js, probes, &np);
     probes_framemsg(js, probes, &np);
+    probes_lazyload(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
