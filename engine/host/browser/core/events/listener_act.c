@@ -182,19 +182,22 @@ char *listener_act_of(JSContext *ctx, JSValueConst fn)
 
         /* §9.3.3's `message` on the Window is caused by another document's postMessage, so it is an act when
            an attacker document holds this window: as its opener, unless the document's Cross-Origin-Opener-
-           Policy severs a cross-origin opener (every value but `unsafe-none`, HTML §7.1.3), or as its parent.
-           Its data and origin are the event argument's, which the PoC composition does not solve yet, so solve.c
-           refuses a fire verified under one (`firedUnderUnsolvedAct`) and states the act on the parked search.
-           NAMED RESIDUAL. Not covered: the frame route — X-Frame-Options and CSP frame-ancestors are not read
-           here, so a page COOP cuts from its opener is stated with no route even where it may be framed. Next
-           diff: read both from the navigation response and state `frame` where they allow a cross-origin
-           parent. Absence shows as: a COOP page that allows framing stating `"route":"none"`. */
+           Policy severs a cross-origin opener (every value but `unsafe-none`, HTML §7.1.3), or as its parent,
+           where the response lets a cross-origin document embed it (HTML §7.7 and frame-ancestors, as the host
+           stated it on the navigable). Its data and origin are the event argument's, which the PoC composition
+           does not solve yet, so solve.c refuses a fire verified under one (`firedUnderUnsolvedAct`) and states
+           the act on the parked search. */
         if (!act && !strcmp(type, "message")) {
             char *name = handler_name(ctx, fn);
             JSValue proxy = window_proxy_of_document(ctx, world_local_doc());
             OpenerPolicyValue coop = window_proxy_opener_policy(proxy);
+            int framing = window_proxy_cross_origin_framing(proxy);
             const char *route = coop == OPENER_POLICY_UNSAFE_NONE ? "\"route\":\"opener\""
-                                : "\"route\":\"none\",\"routeRefused\":\"opener: Cross-Origin-Opener-Policy\"";
+                                : framing == 1 ? "\"route\":\"frame\""
+                                : framing == 0 ? "\"route\":\"none\",\"routeRefused\":\"Cross-Origin-Opener-Policy "
+                                                 "and the response's framing policy\""
+                                : "\"route\":\"none\",\"routeRefused\":\"Cross-Origin-Opener-Policy, and no "
+                                  "framing policy was stated for the response\"";
             size_t n = (name ? strlen(name) : 0) + strlen(route) + 96;
 
             act = malloc(n);

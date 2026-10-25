@@ -875,6 +875,10 @@ void window_proxy_navigate_to_peer(JSContext *ctx, JSValueConst proxy, uint32_t 
    one until something touches it. PER FLOW. Asked of a REMOTE proxy this CRASHES rather than answering
    `unsafe-none`, which is a legal value and would be indistinguishable from an answer. */
 OpenerPolicyValue window_proxy_opener_policy(JSValueConst proxy);
+/* Whether the navigable's active document lets a cross-origin document embed it, as the host stated it when it
+   rooted the navigable from the response (navigation_params_allows_cross_origin_parent): 1, 0, or -1 unstated. */
+int  window_proxy_cross_origin_framing(JSValueConst proxy);
+void window_proxy_set_cross_origin_framing(JSValueConst proxy, bool allowed);
 
 /* THE NEGATION OF HTML §3.1.1 "The Document object"'s "is initial about:blank", asked of the navigable because
    a navigable still showing the Document §7.4 created it with has no realm to hold a Document-side field. §7.4

@@ -18716,9 +18716,10 @@ TF_UNIT void probes_msgchaincoop(const char *js, Probe *tab, int *n) {
              "NOT REACHED: no flow delivered `go` after its own `init` and `cfg`");
     fold_row(&sink, &sink_why, st >= S_SEEN, "NOT REACHED: the markup sink has no @S record over message data");
     fold_row(&noopener, &noopener_why, st >= S_SEEN && !s_field(js, "innerHTML", src, "\"route\":\"opener\"") &&
-                                       s_field(js, "innerHTML", src, "\"routeRefused\":\"opener: "),
+                                       s_field(js, "innerHTML", src, "\"route\":\"frame\""),
              "the page is served with Cross-Origin-Opener-Policy same-origin, which severs a cross-origin opener, "
-             "and the search's record either states an opener route or does not state the opener route refused");
+             "and came from no response that refuses a cross-origin parent, so its message act must state the "
+             "frame route and no opener route");
     const Probe rows[] = {
         { "mcc-msg-sequence", go, "/api/mccstep", SESS_EXPLORE, go_why },
         { "mcc-msg-sink", sink, "mccEl.innerHTML", SESS_EXPLORE, sink_why },
@@ -32678,6 +32679,8 @@ int main(int argc, char **argv) {
                                     serialized_policy_container_none(), &root_embedder, 0);
         embedder_policy_free(&root_embedder);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
+        /* The document came from no response, so no header refuses a cross-origin parent. */
+        window_proxy_set_cross_origin_framing(root_proxy, true);
         /* NULL: this fixture's document is a C string literal, so it came from no response and has no
            header-borne policy. That is a fact about it, not a gap. */
         /* AND AN EMPTY §7.1.5 ACTIVE SANDBOXING FLAG SET, from the same fact and the same sentence: the two

@@ -43,6 +43,9 @@ typedef struct {
     /* …and §2.2.2's REPORT policies, the `Content-Security-Policy-Report-Only` get, NULL when the response
        carried none. Owned. */
     char        *csp_report_only;
+    /* The `X-Frame-Options` value Fetch's get returned, NULL for a response that carried none — HTML §7.7 The
+       `X-Frame-Options` header's input, read by navigation_params_allows_cross_origin_parent. Owned. */
+    char        *x_frame_options;
     /* PERMISSIONS POLICY §9.1's TWO HEADER FIELD VALUES, as Fetch §2.2.2 step 2's get returned them — the
        enforced `Permissions-Policy` and the report-only `Permissions-Policy-Report-Only`. NULL for a response
        that carried neither, which is §9.1 step 3's empty ordered map and not a hole. Owned.
@@ -86,5 +89,10 @@ typedef struct {
 void navigation_params_from_response(NavigationParams *out, const HeaderList *headers,
                                      SandboxFlags target_sandbox_flags, bool secure_context);
 void navigation_params_free(NavigationParams *p);
+/* Whether a cross-origin document may embed the document this response creates: HTML §7.7 The
+   `X-Frame-Options` header's "check a navigation response's adherence to `X-Frame-Options`" for a container
+   that is not same origin with it, and, where an enforced policy states `frame-ancestors`, that directive
+   admitting an origin the caller does not choose (`*` or a bare `https:` / `http:` scheme). */
+bool navigation_params_allows_cross_origin_parent(const NavigationParams *np);
 
 #endif

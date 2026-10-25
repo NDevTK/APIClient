@@ -718,6 +718,7 @@ static void qjs_init_install(QjsPendingDocument *p)
         JSValue root_proxy = navigable_root(g_ctx, world_local_doc(), NULL, np->opener.value,
                                             p->parent_navigable, inherited, &np->embedder, p->creation_flags);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
+        window_proxy_set_cross_origin_framing(root_proxy, navigation_params_allows_cross_origin_parent(np));
         /* §7.3.1.3's other link, before the document below is installed: Permissions Policy §9.5 runs once per
            Document a navigable is given, and for a navigable rooted in a peer's frame tree only the creating
            instance can answer it. §7.3.1.3 creates a navigable and links it afterwards. */
@@ -938,6 +939,7 @@ static void qjs_join_install(QjsPendingDocument *p)
                                        &np->embedder, p->creation_flags);
 
         CHECK(!JS_IsException(proxy), "the joined navigable's WindowProxy could not be allocated");
+        window_proxy_set_cross_origin_framing(proxy, navigation_params_allows_cross_origin_parent(np));
         /* §7.3.1.3's container, for qjs_init's reason: a document nested through a cross-origin one has both of
            its §7.3.1.3 links in a peer instance. */
         navigable_root_container(cctx, proxy, p->container_policy);
