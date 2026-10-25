@@ -8635,8 +8635,8 @@ static JSValue JS_ConcatString2(JSContext *ctx, JSValue op1, JSValue op2)
    whenever EITHER side is one, so the concatenation below runs only after both were ruled out. (An ordinary
    object whose ToPrimitive ANSWERS with unknown input arrives the same way: js_toprim_operand excludes a
    concolic, so the coerced result re-enters js_add_slow and meets the same hook.) String.prototype.concat
-   folds an unknown piece through that same hook at js_str_concat_join; every other caller holds engine
-   strings. Asserted here rather than at the ToString below because THIS is the operand's origin — the
+   folds an unknown piece through that same hook at js_str_concat_join, and CreateDynamicFunction at
+   js_dynfunc_cat; every other caller holds engine strings. Asserted here rather than at the ToString below because THIS is the operand's origin — the
    conversion boundary can only say that something unknown arrived, not which operator let it. */
 static JSValue JS_ConcatString(JSContext *ctx, JSValue op1, JSValue op2)
 {
@@ -85054,11 +85054,62 @@ static JSValue js_function_proto(JSContext *ctx, JSValueConst this_val,
    has nowhere to put what follows. */
 enum { DYNSRC_ALL, DYNSRC_PARAMS, DYNSRC_BODY };
 
+/* `*acc` and `piece` (consumed) joined as §6.1.4's string-concatenation. An unknown piece makes the whole
+   unknown through the + hook's concatenation arm, as String.prototype.concat's join does: the shape is joined,
+   the source kept and the example concatenated. */
+static int js_dynfunc_cat(JSContext *ctx, JSValue *acc, JSValue piece)
+{
+    JSValue pair[2];
+
+    if (!js_value_is_concolic(*acc) && !js_value_is_concolic(piece)) {
+        *acc = JS_ConcatString(ctx, *acc, piece);
+        return JS_IsException(*acc) ? -1 : 0;
+    }
+    pair[0] = *acc;
+    pair[1] = piece;
+    if (!g_concolic.add(ctx, pair + 2, JS_CONCOLIC_ADD_CONCAT))
+        DFAIL("the concolic + hook declined an unknown piece of a CreateDynamicFunction source");
+    *acc = pair[0];
+    return 0;
+}
+
+/* §20.2.1.1.1 steps 12-16 over pieces of which one or more are unknown: sourceString is still the
+   concatenation the steps state, so the code-execution sink is handed the unknown it is. */
+static JSValue js_dynfunc_source_unknown(JSContext *ctx, JSFunctionKindEnum func_kind, JSValue *strs, int n,
+                                         int mode)
+{
+    JSValue acc;
+    char head[32];
+    int i;
+
+    snprintf(head, sizeof head, "(%sfunction%s anonymous(",
+             func_kind == JS_FUNC_ASYNC || func_kind == JS_FUNC_ASYNC_GENERATOR ? "async " : "",
+             func_kind == JS_FUNC_GENERATOR || func_kind == JS_FUNC_ASYNC_GENERATOR ? "*" : "");
+    acc = JS_NewString(ctx, head);
+    if (JS_IsException(acc))
+        return acc;
+    for (i = 0; mode != DYNSRC_BODY && i < n - 1; i++) {
+        if ((i != 0 && js_dynfunc_cat(ctx, &acc, JS_NewString(ctx, ","))) ||
+            js_dynfunc_cat(ctx, &acc, js_dup(strs[i])))
+            return JS_EXCEPTION;
+    }
+    if (js_dynfunc_cat(ctx, &acc, JS_NewString(ctx, "\n) {\n")))
+        return JS_EXCEPTION;
+    if (mode != DYNSRC_PARAMS && n > 0 && js_dynfunc_cat(ctx, &acc, js_dup(strs[n - 1])))
+        return JS_EXCEPTION;
+    if (js_dynfunc_cat(ctx, &acc, JS_NewString(ctx, "\n})")))
+        return JS_EXCEPTION;
+    return acc;
+}
+
 static JSValue js_dynfunc_source(JSContext *ctx, JSFunctionKindEnum func_kind, JSValue *strs, int n, int mode)
 {
     StringBuffer b_s, *b = &b_s;
     int i;
 
+    for (i = 0; i < n; i++)
+        if (js_value_is_concolic(strs[i]))
+            return js_dynfunc_source_unknown(ctx, func_kind, strs, n, mode);
     string_buffer_init(ctx, b, 0);
     string_buffer_putc8(b, '(');
     if (func_kind == JS_FUNC_ASYNC || func_kind == JS_FUNC_ASYNC_GENERATOR)
@@ -85111,6 +85162,17 @@ static int js_dynfunc_check_halves(JSContext *ctx, JSFunctionKindEnum func_kind,
         src = js_dynfunc_source(ctx, func_kind, strs, n, mode);
         if (JS_IsException(src))
             return -1;
+        if (js_value_is_concolic(src)) {
+            /* a half over unknown input parses as its example; with none its text is nobody's to parse */
+            JSValue ex = g_concolic.example(ctx, src);
+
+            JS_FreeValue(ctx, src);
+            if (!JS_IsString(ex)) {
+                JS_FreeValue(ctx, ex);
+                continue;
+            }
+            src = ex;
+        }
         cstr = JS_ToCStringLen(ctx, &len, src);
         JS_FreeValue(ctx, src);
         if (!cstr)
@@ -85180,9 +85242,17 @@ static int js_dynfunc_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         JSValue src;
         while (s->nstrs < s->hdr.argc) {
             JSValue str;
-            r = step_tostring_run(ctx, &s->hdr, step_arg(&s->hdr, s->nstrs), cb_result, &str, out_cb, out_argc);
-            cb_result = JS_UNDEFINED;
-            if (r) return r < 0 ? -1 : r;
+            if (js_value_is_concolic(step_arg(&s->hdr, s->nstrs))) {
+                /* §7.1.19 ToString over unknown input has no String to give, and these strings exist only to
+                   be concatenated (steps 12-16), so the unknown is kept as its own piece of that
+                   concatenation rather than completing the constructor as one unknown value. */
+                str = js_dup(step_arg(&s->hdr, s->nstrs));
+            } else {
+                r = step_tostring_run(ctx, &s->hdr, step_arg(&s->hdr, s->nstrs), cb_result, &str, out_cb,
+                                      out_argc);
+                cb_result = JS_UNDEFINED;
+                if (r) return r < 0 ? -1 : r;
+            }
             s->strs[s->nstrs++] = str;
         }
         if (js_dynfunc_check_halves(ctx, func_kind, s->strs, s->nstrs) < 0)

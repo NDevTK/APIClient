@@ -1167,6 +1167,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/uspiso.h"
 #include "fixture/boundpark.h"
 #include "fixture/bytesimage.h"
+#include "fixture/dynfuncsink.h"
 #include "fixture/recordless.h"
 #include "fixture/agenfork.h"
 #include "fixture/msgchain.h"
@@ -1657,6 +1658,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "uspiso", HTML_USPISO },
     { "boundpark", HTML_BOUNDPARK },
     { "bytesimage", HTML_BYTESIMAGE },
+    { "dynfuncsink", HTML_DYNFUNCSINK },
     { "recordless", HTML_RECORDLESS },
     { "agenfork", HTML_AGENFORK },
     { "msgchain", HTML_MSGCHAIN },
@@ -15832,6 +15834,21 @@ TF_UNIT void probes_uspiso(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `dynfuncsink` document (fixture/dynfuncsink.h). */
+TF_UNIT void probes_dynfuncsink(const char *js, Probe *tab, int *n) {
+    char hsrc[192] = "", qsrc[192] = "";
+    int ev = s_rooted_source(js, "eval", LOCATION_HASH_SRC, hsrc, sizeof hsrc);
+    int fn = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, qsrc, sizeof qsrc);
+    const Probe rows[] = {
+        { "dfs-eval-source", ev, "eval(decodeURIComponent(location.hash", SESS_EXPLORE,
+          ev ? NULL : "NOT REACHED: no eval @S record is rooted in location.hash, so the control did not arm" },
+        { "dfs-function-source", fn, "new Function('x', decodeURIComponent(location.search", SESS_EXPLORE,
+          fn ? NULL : "no eval @S record is rooted in location.search: new Function's source reached the sink "
+                      "without the query's provenance" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bytesimage` document (fixture/bytesimage.h). */
 TF_UNIT void probes_bytesimage(const char *js, Probe *tab, int *n) {
     int brace = !!strstr(js, "\"/api/bimg/lead-brace\""), other = !!strstr(js, "\"/api/bimg/lead-other\"");
@@ -19738,6 +19755,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_uspiso(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_bytesimage(js, probes, &np);
+    probes_dynfuncsink(js, probes, &np);
     probes_recordless(js, probes, &np);
     probes_agenfork(js, probes, &np);
     probes_flagflow(js, probes, &np);
