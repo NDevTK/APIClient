@@ -334,6 +334,11 @@ bool used_value_abs_cb_content_height_read(lxb_dom_element_t *el, lxb_dom_elemen
    (§9.3.2's `Applies to:` "positioned elements"). */
 CssPx used_value_rel_offset_px(lxb_dom_element_t *el, bool vertical);
 
+/* The same pair as CSSOM §9 reports it: a block-axis percentage over an indefinite containing-block height,
+   which layout treats as `auto` (`used_value_inset_behaves_as_auto`), resolved against the containing block's
+   laid-out content height instead, as Chrome 155 and Firefox 158 both report it. */
+CssPx used_value_rel_offset_resolved_px(lxb_dom_element_t *el, bool vertical);
+
 /* One declared inset resolved to pixels against its own axis: css-position-3 §3.1 "Box Insets: the top,
    right, bottom, left, inset-block-start, inset-inline-start, inset-block-end, and inset-inline-end
    properties"' `<percentage>` arm, "The inset is a percentage relative to the containing block's size in the
@@ -350,6 +355,9 @@ CssPx used_value_inset_length_px(lxb_dom_element_t *el, CssLength len, bool vert
    positioned box, a percentage or math function on the block axis whose containing block's height is
    indefinite (`used_value_containing_block_height` false). */
 bool used_value_inset_behaves_as_auto(lxb_dom_element_t *el, CssLength len, bool vertical);
+
+/* `used_value_inset_length_px` as CSSOM §9 reports it, with the reading above. */
+CssPx used_value_inset_resolved_px(lxb_dom_element_t *el, CssLength len, bool vertical);
 
 /* css-position-3 §2.1 "Containing Blocks of Positioned Boxes"' open list of properties, as one fact with two
    readers. §2.1's Notes name what can make a box establish an absolute or fixed positioning containing block

@@ -3240,7 +3240,7 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
     };
     const char *phys = name;
     CssLogicalGroup group;
-    bool physical = true, as_auto;
+    bool physical = true;
     int side = -1;
     unsigned i;
     CssLength len;
@@ -3270,15 +3270,13 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
     if (side < 0) return css_resolved_computed(ctx, el, name);
 
     len = css_computed_length(el, phys);
-    as_auto = used_value_inset_behaves_as_auto(el, len, PHYS[side].vertical);
     /* A DECLARED INSET — §3.1's `<length-percentage>`, in any of the three shapes a `CssLength` carries one
        as. Its used value is its own length resolved against the axis basis in every configuration the two
        rewriting rules above do not reach, and where they DO reach it §9's third conjunct is what sends the
        page here instead of to the solve. A STICKY box is the one member of §9.3.1's positioned set that this
        cannot answer for a percentage, and it is refused below rather than resolved against the wrong
        rectangle. */
-    if (!as_auto && (len.kind == CSS_LENGTH_ABSOLUTE || len.kind == CSS_LENGTH_PERCENTAGE ||
-                     len.kind == CSS_LENGTH_CALCULATED)) {
+    if (len.kind == CSS_LENGTH_ABSOLUTE || len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED) {
         pos = css_computed_keyword(el, "position");
         if (pos == CSS_KEYWORD_STICKY && len.kind != CSS_LENGTH_ABSOLUTE) {
             DFAIL("css-position-3 §3.1 \"Box Insets: the top, right, bottom, left, inset-block-start, "
@@ -3331,13 +3329,20 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
            of getComputedStyle-insets-relative.html red, which is why the choice is recorded here rather than
            left to be re-derived. §3.5.2 above does NOT cover this case: its over-constraint is a NEGATIVE
            inset-modified containing block, and §3.3's is simply both members being non-auto. */
+        /* A RELATIVELY POSITIONED BOX'S PERCENTAGE OVER AN INDEFINITE HEIGHT IS READ TWO WAYS ON PURPOSE. Layout
+           treats it as `auto` (WPT css/css-position/position-relative-015.html, `used_value_inset_behaves_as_auto`),
+           while the value a page reads here is the percentage of the containing block's laid-out height, which
+           is what Chrome 155 and Firefox 158 both report (`top: 50%` under a 110px auto-height parent reads
+           `55px`, `bottom` reads `-55px`, and the box stays where flow put it). WPT's cssom
+           getComputedStyle-insets-relative.html uses a definite container and states neither. */
+        if (pos == CSS_KEYWORD_RELATIVE)
+            return css_resolved_px(ctx, used_value_inset_resolved_px(el, len, PHYS[side].vertical));
         return css_resolved_px(ctx, used_value_inset_length_px(el, len, PHYS[side].vertical));
     }
     /* §3.1's `auto` — "Represents an unconstrained inset; the exact meaning depends on the positioning
-       scheme", which is the dispatch below and is why it is a dispatch rather than a value — and a block-axis
-       percentage over an indefinite containing-block height, which layout treats as `auto`
-       (`used_value_inset_behaves_as_auto`), so the used value reported is the one layout used. */
-    if (!as_auto) return css_resolved_computed(ctx, el, name);
+       scheme", which is the dispatch below and is why it is a dispatch rather than a value. */
+    if (!css_length_is_keyword(len, CSS_KEYWORD_AUTO))
+        return css_resolved_computed(ctx, el, name);
 
     pos = css_computed_keyword(el, "position");
     /* css-position-3 §3.3 "Relative Positioning"' three rules, which core/layout/used_value.h answers as a
@@ -3350,7 +3355,7 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
        vertical writing mode — but that arm is "If neither is auto" and this call is made only when THIS
        member is. */
     if (pos == CSS_KEYWORD_RELATIVE) {
-        CssPx lead = used_value_rel_offset_px(el, PHYS[side].vertical);
+        CssPx lead = used_value_rel_offset_resolved_px(el, PHYS[side].vertical);
 
         return css_resolved_px(ctx, PHYS[side].trailing ? css_px_sub(css_px(0.0), lead) : lead);
     }

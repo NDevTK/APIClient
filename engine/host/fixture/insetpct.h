@@ -4,11 +4,12 @@
    resolvable percentage height, a `calc()` length and an abspos box with both insets, and leaves it unshifted
    under an auto height, an unresolvable percentage and an unresolvable `calc()` — WPT's
    css/css-position/position-relative-015.html cases 1-4, 11, 16 and 18 — and `bottom: 50%` likewise; the
-   unshifted box's resolved `top` is the used `0px` it was laid out with. jQuery 1.6's offset test places an
+   unshifted box's resolved `top` and `bottom` are its percentage of the laid-out 20px height, `10px` and
+   `-10px`, as Chrome and Firefox report them. jQuery 1.6's offset test places an
    absolutely positioned table with `top: 0; left: 0` (CSS 2.1 §17.4: the wrapper takes the table's
-   `position`), and a second one is placed by `right` and `bottom`. Chrome 155.0.8059.84 gives every layout
-   number the rows expect for this markup, and reports `10px` for the unshifted box's resolved `top`. It ends
-   with TF_CANVAS_INK, which test_forced.c defines before including it. */
+   `position`), and a second one is placed by `right` and `bottom`. Chrome 155.0.8059.84 and Firefox 158.0.1
+   give every number the rows expect for this markup. It ends with TF_CANVAS_INK, which test_forced.c defines
+   before including it. */
 #ifndef ENGINE_HOST_FIXTURE_INSETPCT_H
 #define ENGINE_HOST_FIXTURE_INSETPCT_H
 #ifndef TF_CANVAS_INK
@@ -45,7 +46,8 @@ static const char HTML_INSETPCT[] =
     "var q='t1='+O('t1','t1-cb')+'&t2='+O('t2','t2-cb')+'&t3='+O('t3','t3-cb')+'&t4='+O('t4','t4-cb')"
     "+'&t11='+O('t11','t11-cb')+'&t16='+O('t16','t16-cb')+'&t18='+O('t18','t18-cb')"
     "+'&t21='+O('t21','t21-cb')"
-    "+'&t2cs='+getComputedStyle(E('t2')).top+'&t1cs='+getComputedStyle(E('t1')).top"
+    "+'&t2cs='+getComputedStyle(E('t2')).top+'&t2cb='+getComputedStyle(E('t2')).bottom"
+    "+'&t1cs='+getComputedStyle(E('t1')).top"
     "+'&jtx='+(E('jt').getBoundingClientRect().left-E('jq').getBoundingClientRect().left)"
     "+'&jty='+O('jt','jq')+'&jtd='+E('jtd').offsetTop+'&jtl='+E('jtd').offsetLeft"
     "+'&j2r='+(E('jq2').getBoundingClientRect().right-E('jt2').getBoundingClientRect().right)"

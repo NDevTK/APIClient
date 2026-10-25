@@ -14437,8 +14437,11 @@ TF_UNIT void probes_insetpct(const char *js, Probe *tab, int *n) {
              "WPT position-relative-015 case 18: `top: 50%` under an unresolvable `calc()` height shifts the box");
     fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t21", "40"),
              "css-position-3 §3.1: `bottom: 50%` under an auto-height containing block shifts the box");
-    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t2cs", "0px"),
-             "CSSOM §9: the unshifted box's resolved `top` is not the used `0px` layout placed it with");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t2cs", "10px"),
+             "CSSOM §9: the unshifted box's resolved `top` is not 50% of its containing block's laid-out 20px, "
+             "as Chrome and Firefox report it");
+    fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t2cb", "-10px"),
+             "CSSOM §9: the unshifted box's resolved `bottom` is not the negation of its resolved `top`");
     fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "t1cs", "100px"),
              "CSSOM §9: a definite containing block's `top: 50%` does not resolve to `100px`");
     fold_row(&ip_tt, &ip_why, param_value_is(js, "/api/insetpct", "jtx", "0"),

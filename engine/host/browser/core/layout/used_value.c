@@ -4704,7 +4704,18 @@ bool used_value_inset_behaves_as_auto(lxb_dom_element_t *el, CssLength len, bool
 }
 
 /* CSS 2.2 §9.4.3's used translation — see used_value.h. */
-CssPx used_value_rel_offset_px(lxb_dom_element_t *el, bool vertical)
+static CssPx uv_inset_resolved_px(lxb_dom_element_t *el, CssLength len, bool vertical);
+
+/* One member of the pair, resolved for layout or for the resolved value (`laid_out`). */
+static CssPx uv_rel_member(lxb_dom_element_t *el, CssLength len, bool vertical, bool laid_out)
+{
+    return laid_out ? uv_inset_resolved_px(el, len, vertical) : used_value_inset_length_px(el, len, vertical);
+}
+
+/* §9.4.3's pair over `el`'s two members on one axis. With `laid_out`, a block-axis percentage over an indefinite
+   containing-block height is resolved against that block's laid-out height rather than behaving as auto: the
+   reading CSSOM's resolved value takes (`used_value_rel_offset_resolved_px`). */
+static CssPx uv_rel_pair(lxb_dom_element_t *el, bool vertical, bool laid_out)
 {
     static const char *const LEADING[2]  = { "left",  "top"    };
     static const char *const TRAILING[2] = { "right", "bottom" };
@@ -4728,8 +4739,8 @@ CssPx used_value_rel_offset_px(lxb_dom_element_t *el, bool vertical)
        one cascade walk per member instead of two. */
     lead  = css_computed_length(el, LEADING[vertical ? 1 : 0]);
     trail = css_computed_length(el, TRAILING[vertical ? 1 : 0]);
-    lead_auto  = used_value_inset_behaves_as_auto(el, lead, vertical);
-    trail_auto = used_value_inset_behaves_as_auto(el, trail, vertical);
+    lead_auto  = laid_out ? uv_len_is_auto(lead) : used_value_inset_behaves_as_auto(el, lead, vertical);
+    trail_auto = laid_out ? uv_len_is_auto(trail) : used_value_inset_behaves_as_auto(el, trail, vertical);
 
     /* "If both 'left' and 'right' are 'auto' (their initial values), the used values are '0' (i.e., the boxes
        stay in their original position)." — and its vertical twin, "If both are 'auto', their used values are
@@ -4738,16 +4749,51 @@ CssPx used_value_rel_offset_px(lxb_dom_element_t *el, bool vertical)
     /* "If 'left' is 'auto', its used value is minus the value of 'right' (i.e., the boxes move to the left by
        the value of 'right')." — vertically, "If one of them is 'auto', it becomes the negative of the
        other." */
-    if (lead_auto) return css_px_sub(css_px(0.0), used_value_inset_length_px(el, trail, vertical));
+    if (lead_auto) return css_px_sub(css_px(0.0), uv_rel_member(el, trail, vertical, laid_out));
     /* "If 'right' is specified as 'auto', its used value is minus the value of 'left'" — which is a statement
        about the TRAILING member, so the leading one this entry answers is that value unchanged. */
-    if (trail_auto) return used_value_inset_length_px(el, lead, vertical);
+    if (trail_auto) return uv_rel_member(el, lead, vertical, laid_out);
     /* OVER-CONSTRAINED: "If neither 'left' nor 'right' is 'auto', the position is over-constrained, and one of
        them has to be ignored." The horizontal arm reads the CONTAINING BLOCK's `direction` and the vertical
        arm has no such sentence — see the note above `used_value_inset_length_px`. */
     if (!vertical && used_value_containing_block_is_rtl(el))
-        return css_px_sub(css_px(0.0), used_value_inset_length_px(el, trail, vertical));
-    return used_value_inset_length_px(el, lead, vertical);
+        return css_px_sub(css_px(0.0), uv_rel_member(el, trail, vertical, laid_out));
+    return uv_rel_member(el, lead, vertical, laid_out);
+}
+
+CssPx used_value_rel_offset_px(lxb_dom_element_t *el, bool vertical)
+{
+    return uv_rel_pair(el, vertical, false);
+}
+
+CssPx used_value_rel_offset_resolved_px(lxb_dom_element_t *el, bool vertical)
+{
+    return uv_rel_pair(el, vertical, true);
+}
+
+/* A declared inset against the containing block's laid-out size: `used_value_inset_length_px` where the basis is
+   definite, and otherwise a block-axis percentage against the containing block's laid-out content height. */
+static CssPx uv_inset_resolved_px(lxb_dom_element_t *el, CssLength len, bool vertical)
+{
+    UvCb cb;
+    char nbuf[160];
+
+    if (!used_value_inset_behaves_as_auto(el, len, vertical) || uv_len_is_auto(len))
+        return used_value_inset_length_px(el, len, vertical);
+    cb = uv_cb(el);
+    if (cb.box != UV_CB_PRINCIPAL) {
+        DFAILF("%s: a percentage `top`/`bottom` was asked for its resolved value over a containing block (§10.1 "
+               "tag %d) that is not a box's content edge: a grid area while its rows are sized, or a table "
+               "wrapper. BUILD the laid-out height of that box", box_subject(el, nbuf, sizeof nbuf), (int)cb.box);
+        return css_px(0.0);
+    }
+    return css_length_resolve_pct(len, uv_content_size(cb.element, true, uv_surround(cb.element, true)));
+}
+
+CssPx used_value_inset_resolved_px(lxb_dom_element_t *el, CssLength len, bool vertical)
+{
+    DCHECK(el != NULL, "an inset's resolved value was asked of no element");
+    return uv_inset_resolved_px(el, len, vertical);
 }
 
 
