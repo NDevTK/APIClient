@@ -1042,7 +1042,7 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
     *f = (Finding){
         .cls = cls,
         .source = strdup(source ? source : "?"),
-        .poc = strdup(poc),
+        .poc = concolic_candidate_poc(twin->root, poc),   /* the markup a named-access chain composed */
         .root = strdup(twin->root),
         .acts = acts,
         .under_act = under_act,

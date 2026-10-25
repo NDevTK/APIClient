@@ -2151,12 +2151,13 @@ int concolic_src_determined(const char *src) {
 /* `principal` is a column of the same row, not a second registry: whether the attacker writes this value or
    merely owns it (concolic.h states the pair; HTML §9.3.2.2 "User agents" states why one exists). The
    claimant's release then takes the property with the row. */
-/* `key` is the URL §5.2 serialization of the name of the application/x-www-form-urlencoded tuple whose value
-   the payload is, `parent` the declared source whose bytes carry that tuple, and `serialize` the claimant's §5.2
-   value serializer (concolic_new_urlencoded_value); all three NULL for a row whose payload is the component's
-   own bytes. A candidate over a keyed root is delivered at `parent` (concolic_set_candidate). */
+/* A derived row carries `parent`, the declared row whose bytes carry its value, and one transform from its own
+   value to its parent's: `key` (with `serialize`) for a tuple of an application/x-www-form-urlencoded list,
+   or `path` for an element reached by named access over unknown markup. A row whose payload is the component's
+   own bytes has none of them. A candidate walks the chain to its base (concolic_set_candidate). */
 typedef struct { const char *component; char *src; char *encode; char prefix; SourceDeliverKind deliver;
-                 int principal; char *key; char *parent; char *(*serialize)(const char *s, size_t n); }
+                 int principal; char *key; char *parent; char *(*serialize)(const char *s, size_t n);
+                 char *path; }
         SourceDelivery;
 static SourceDelivery *g_srcs;
 static int g_srcs_n, g_srcs_cap;
@@ -2386,6 +2387,7 @@ void concolic_declare_source(const char *component, const char *src, const char 
     g_srcs[g_srcs_n].key = NULL;
     g_srcs[g_srcs_n].parent = NULL;
     g_srcs[g_srcs_n].serialize = NULL;
+    g_srcs[g_srcs_n].path = NULL;
     CHECK(g_srcs[g_srcs_n].src && g_srcs[g_srcs_n].encode, "concolic: OOM declaring a source's delivery");
     g_srcs_n++;
 }
@@ -2413,6 +2415,7 @@ void concolic_undeclare_sources(const char *component)
         free(g_srcs[i].encode);
         free(g_srcs[i].key);
         free(g_srcs[i].parent);
+        free(g_srcs[i].path);
         /* The order of the rest is preserved rather than closed with a swap: lookups are by identity, but a
            walk's order must not depend on which unrelated component released first. */
         memmove(&g_srcs[i], &g_srcs[i + 1], (size_t)(g_srcs_n - i - 1) * sizeof *g_srcs);
@@ -2546,6 +2549,8 @@ const char *concolic_source_delivery_key(const char *root)
 {
     int row = root_declared_row(root);
 
+    while (row >= 0 && !g_srcs[row].key && g_srcs[row].parent)
+        row = src_row(g_srcs[row].parent, strlen(g_srcs[row].parent));
     return row < 0 ? NULL : g_srcs[row].key;
 }
 
@@ -2781,8 +2786,8 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
            "each, so this value took them from two, and the payload would be percent-encoded for one source "
            "and prefixed for the other");
     if (!at && !encode) return JS_NewString(ctx, payload);   /* nothing carries these bytes: delivered as itself */
-    DCHECK(!at || !at->key, "a candidate was delivered at a keyed tuple's own read — concolic_set_candidate "
-                            "delivers it at the parent component, whose parse yields the tuple");
+    DCHECK(!at || !at->parent, "a candidate was delivered at a derived row's own read — concolic_set_candidate "
+                               "delivers it at the chain's base component, whose real parse yields the row");
     if (!encode) encode = "";
     /* The same key as the encode set: the declared and the shared halves of one row's answer, so reading them
        from different rows would apply one mechanism's rule to another's bytes. */
@@ -2823,8 +2828,63 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
    caller, the scheduler. A mismatch would have an exploring flow read an attacker payload where its concolic
    source belongs, silently stop forking and stop being a detectable sink. Two-sided: a candidate flow must
    have its payload installed, and any other flow must have none. */
-void concolic_set_candidate(const char *src, const char *root, const char *payload) {
+/* The markup composer the claimant of named-access rows registers (concolic_set_markup_composer). */
+static const char *g_markup_component;
+static char *(*g_markup_compose)(const char *path, const char *href);
+
+/* One row's transform from its value to its parent's: the tuple `key=<serialized bytes>`, or the markup whose
+   parse makes the named access along `path` reach `bytes`. Owned; NULL where the composer refuses the path. */
+static char *row_transform(int row, const char *bytes)
+{
+    char *out = NULL;
+
+    if (g_srcs[row].key) {
+        char *v = g_srcs[row].serialize(bytes, strlen(bytes));
+        size_t n;
+
+        CHECK(v != NULL, "concolic: OOM serializing a candidate as a tuple's value");
+        n = strlen(g_srcs[row].key) + strlen(v) + 2;
+        out = malloc(n);
+        CHECK(out != NULL, "concolic: OOM composing a candidate's tuple");
+        snprintf(out, n, "%s=%s", g_srcs[row].key, v);
+        free(v);
+    } else {
+        DCHECK(g_srcs[row].path && g_markup_compose, "a derived row has neither a key nor a composable path");
+        out = g_markup_compose(g_srcs[row].path, bytes);
+    }
+    return out;
+}
+
+/* Walk `root`'s chain from `bytes` (consumed) toward its base, applying each row's transform, and stop at the
+   base, or before the first keyed row when `stop_at_key`. Answers the row reached and the bytes there (owned,
+   NULL when a composer refused a path); -1 and the bytes unchanged for a root no component declares. */
+static int row_chain_walk(const char *root, char **bytes, int stop_at_key)
+{
     int row = root ? root_declared_row(root) : -1;
+
+    while (row >= 0 && g_srcs[row].parent && *bytes && !(stop_at_key && g_srcs[row].key)) {
+        char *next = row_transform(row, *bytes);
+
+        free(*bytes);
+        *bytes = next;
+        row = src_row(g_srcs[row].parent, strlen(g_srcs[row].parent));
+        DCHECK(row >= 0, "a derived row's parent is no declared row");
+    }
+    return row;
+}
+
+char *concolic_candidate_poc(const char *root, const char *payload)
+{
+    char *bytes = strdup(payload);
+
+    CHECK(bytes != NULL, "concolic: OOM composing a PoC");
+    row_chain_walk(root, &bytes, 1);
+    DCHECK(bytes != NULL, "a fired PoC's markup could not be composed from the path its candidate was delivered by");
+    return bytes;
+}
+
+void concolic_set_candidate(const char *src, const char *root, const char *payload) {
+    int row;
 
     free(g_cand_src); free(g_cand_payload); free(g_cand_at); free(g_cand_bytes);
     g_cand_src = g_cand_payload = g_cand_at = g_cand_bytes = NULL;
@@ -2833,26 +2893,18 @@ void concolic_set_candidate(const char *src, const char *root, const char *paylo
         g_cand_src = strdup(src);
         g_cand_payload = strdup(payload);
         CHECK(g_cand_src && g_cand_payload, "concolic: OOM installing an @S candidate");
-        /* One delivery per source per world: the payload enters at the root's declared source read, so every
-           read of that source answers it and every derivation re-runs on it. A keyed root rides its parent
-           component as one urlencoded tuple (URL §5.2). A root no component declares (a precondition, or a
-           witness verification's pinned value, which passes no root) substitutes at the identity itself. */
-        if (row >= 0 && g_srcs[row].key) {
-            char *v = g_srcs[row].serialize(payload, strlen(payload));
-            size_t n;
-
-            CHECK(v != NULL, "concolic: OOM serializing a candidate as a tuple's value");
-            n = strlen(g_srcs[row].key) + strlen(v) + 2;
-            g_cand_bytes = malloc(n);
-            CHECK(g_cand_bytes != NULL, "concolic: OOM composing a candidate's tuple");
-            snprintf(g_cand_bytes, n, "%s=%s", g_srcs[row].key, v);
-            free(v);
-            g_cand_at = strdup(g_srcs[row].parent);
-        } else {
-            g_cand_bytes = strdup(payload);
+        /* One delivery per source per world: the payload enters at the root's declared base source read,
+           through each derived row's transform on the way (a tuple, URL §5.2; markup for a named access), so
+           every read of that source answers it and every derivation re-runs on it. A root no component
+           declares (a precondition, or a witness verification, which passes no root) substitutes at the
+           identity. A path the composer refuses delivers nothing, and the candidate cannot fire. */
+        g_cand_bytes = strdup(payload);
+        CHECK(g_cand_bytes != NULL, "concolic: OOM installing an @S candidate's delivery");
+        row = row_chain_walk(root, &g_cand_bytes, 0);
+        if (g_cand_bytes) {
             g_cand_at = strdup(row >= 0 ? g_srcs[row].src : src);
+            CHECK(g_cand_at != NULL, "concolic: OOM installing an @S candidate's delivery");
         }
-        CHECK(g_cand_at && g_cand_bytes, "concolic: OOM installing an @S candidate's delivery");
     }
     {
         const Flow *f = flow_running();
@@ -2875,8 +2927,9 @@ void concolic_set_candidate(const char *src, const char *root, const char *paylo
 int concolic_candidate_at_root(const char *root) {
     int row = root ? root_declared_row(root) : -1;
 
+    while (row >= 0 && g_srcs[row].parent) row = src_row(g_srcs[row].parent, strlen(g_srcs[row].parent));
     if (row < 0 || !g_cand_at) return 0;
-    return !strcmp(g_cand_at, g_srcs[row].key ? g_srcs[row].parent : g_srcs[row].src) && g_cand_delivered;
+    return !strcmp(g_cand_at, g_srcs[row].src) && g_cand_delivered;
 }
 
 int concolic_candidate_delivered(void) {
@@ -3298,6 +3351,7 @@ int concolic_value_truth(const char *ident)
     free(key);
     return arm;
 }
+static char *row_segment(const char *name);
 
 static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
     (void)receiver;
@@ -3355,8 +3409,28 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     {
         JSValue mex;
         int held = c->ex_has && example_member(ctx, c->example, atom, &mex);
+        int nrow = c->root ? root_declared_row(c->root) : -1;
+        char *nsrc = NULL;
 
-        r = concolic_alloc(ctx, shape, shape, c->root, c->root_whose, ident, held ? mex : JS_UNDEFINED);
+        /* A member of an element named access reached over unknown markup is reached along a longer path, so
+           it roots at its own named-access row: the markup that makes this member the payload differs. */
+        if (nrow >= 0 && g_srcs[nrow].path && !atom_is_symbol(ctx, atom)) {
+            const char *mname = JS_AtomToCString(ctx, atom);
+
+            CHECK(mname != NULL, "concolic: OOM reading a member's name");
+            {
+                char *seg = row_segment(mname), *path = shapef("%s.%s", g_srcs[nrow].path, mname);
+
+                nsrc = shapef("%s.%s", g_srcs[nrow].src, seg);
+                concolic_declare_named_source(nsrc, g_srcs[nrow].parent, path);
+                free(seg);
+                free(path);
+            }
+            JS_FreeCString(ctx, mname);
+        }
+        r = nsrc ? concolic_alloc(ctx, nsrc, nsrc, nsrc, c->root_whose, ident, held ? mex : JS_UNDEFINED)
+                 : concolic_alloc(ctx, shape, shape, c->root, c->root_whose, ident, held ? mex : JS_UNDEFINED);
+        free(nsrc);
         if (held) {
             Concolic *rc = JS_GetOpaque(r, g_concolic_class);
 
@@ -5150,15 +5224,122 @@ void concolic_declare_keyed_source(const char *src, const char *parent, const ch
     CHECK(g_srcs[g_srcs_n - 1].key && g_srcs[g_srcs_n - 1].parent, "concolic: OOM declaring a tuple's key");
 }
 
-int concolic_source_keyed(const char *root, const char **parent, const char **key)
+void concolic_set_markup_composer(const char *component, char *(*compose)(const char *path, const char *href))
+{
+    DCHECK(!component == !compose, "a markup composer was registered without its claimant, or the reverse");
+    DCHECK(!component || !g_markup_component, "a second component registered the named-access markup composer");
+    g_markup_component = component;
+    g_markup_compose = compose;
+}
+
+void concolic_declare_named_source(const char *src, const char *parent, const char *path)
+{
+    int prow;
+
+    DCHECK(g_markup_component && src && parent && path && *path,
+           "a named-access row was declared with no registered claimant, or with no identity, parent or path");
+    prow = src_row(parent, strlen(parent));
+    DCHECK(prow >= 0 && !g_srcs[prow].path, "a named-access row names a parent that is not a markup row");
+    if (prow < 0 || concolic_source_declared_by(g_markup_component, src)) return;
+    concolic_declare_source(g_markup_component, src, "", g_srcs[prow].prefix, g_srcs[prow].deliver);
+    g_srcs[g_srcs_n - 1].parent = strdup(parent);
+    g_srcs[g_srcs_n - 1].path = strdup(path);
+    CHECK(g_srcs[g_srcs_n - 1].parent && g_srcs[g_srcs_n - 1].path, "concolic: OOM declaring a named-access row");
+}
+
+/* A page-supplied name as one segment of a row's identity: bytes outside [A-Za-z0-9_-] percent-encoded, so no
+   name can spell the joint separator or a brace. Owned. */
+static char *row_segment(const char *name)
+{
+    static const char HEX[] = "0123456789ABCDEF";
+    size_t n = strlen(name), o = 0, i;
+    char *out = malloc(n * 3 + 1);
+
+    CHECK(out != NULL, "concolic: OOM spelling a row segment");
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')
+            out[o++] = (char)c;
+        else { out[o++] = '%'; out[o++] = HEX[c >> 4]; out[o++] = HEX[c & 15]; }
+    }
+    out[o] = 0;
+    return out;
+}
+
+char *concolic_source_chain(const char *root)
 {
     int row = root ? root_declared_row(root) : -1;
+    char *out = NULL;
+    size_t len = 0;
 
-    if (row < 0 || !g_srcs[row].key) return 0;
-    *parent = g_srcs[row].parent;
-    *key = g_srcs[row].key;
-    return 1;
+    while (row >= 0 && g_srcs[row].parent) {
+        const char *kind = g_srcs[row].key ? "k" : "n", *param = g_srcs[row].key ? g_srcs[row].key : g_srcs[row].path;
+        size_t add = strlen(g_srcs[row].src) + strlen(g_srcs[row].parent) + strlen(param) + 6;
+        char *grown = realloc(out, len + add + 1);
+
+        CHECK(grown != NULL, "concolic: OOM spelling a row chain");
+        out = grown;
+        len += (size_t)snprintf(out + len, add + 1, "%s%s\x1f%s\x1f%s\x1f%s", len ? "\x1e" : "", kind,
+                                g_srcs[row].src, g_srcs[row].parent, param);
+        row = src_row(g_srcs[row].parent, strlen(g_srcs[row].parent));
+    }
+    return out;
 }
+
+void concolic_declare_source_chain(const char *chain)
+{
+    char *copy = strdup(chain), *rec[64];
+    int n = 0, i;
+
+    CHECK(copy != NULL, "concolic: OOM re-declaring a row chain");
+    for (char *p = copy; p; ) {
+        char *e = strchr(p, '\x1e');
+        DCHECKF(n < 64, "a parked row chain holds more than %d rows", 64);
+        if (n < 64) rec[n++] = p;
+        if (e) *e++ = 0;
+        p = e;
+    }
+    /* Declared base side first: each row's parent must already be one. */
+    for (i = n - 1; i >= 0; i--) {
+        char *f[4], *p = rec[i];
+        int k;
+
+        for (k = 0; k < 4; k++) { f[k] = p; p = p ? strchr(p, '\x1f') : NULL; if (p) *p++ = 0; }
+        DCHECK(f[3] && (!strcmp(f[0], "k") || !strcmp(f[0], "n")), "a parked row chain holds a malformed row");
+        if (!f[3]) continue;
+        if (!strcmp(f[0], "k")) concolic_declare_keyed_source(f[1], f[2], f[3]);
+        else concolic_declare_named_source(f[1], f[2], f[3]);
+    }
+    free(copy);
+}
+
+JSValue concolic_new_named_access(JSContext *ctx, JSValueConst markup, JSValueConst name, const char *name_c)
+{
+    JSValueConst ops[2] = { markup, name };
+    const char *root = concolic_root_c(markup);
+    int row = root ? root_declared_row(root) : -1;
+    char *seg, *src, *ident;
+    const char *fields[3];
+    JSValue r;
+    int i;
+
+    DCHECK(concolic_is(markup) && name_c && *name_c, "a named access over markup was minted with no markup or name");
+    if (row < 0 || g_srcs[row].path || !g_markup_component)
+        return concolic_new_derived(ctx, "HTML §7.2.2.3 named access", ops, 2, JS_UNDEFINED);
+    seg = row_segment(name_c);
+    src = shapef("%s.named(%s)", g_srcs[row].src, seg);
+    concolic_declare_named_source(src, g_srcs[row].src, name_c);
+    for (i = 0; i < 2; i++) fields[i] = ident_of_operand(ctx, ops[i]);
+    fields[2] = "HTML §7.2.2.3 named access";
+    ident = concolic_ident_compose("b", fields, 3);
+    r = concolic_derived(ctx, src, src, src, root_whose_or_unstated(derived_root_whose(ops, 2)), ident,
+                         JS_UNDEFINED);
+    for (i = 0; i < 2; i++) free((char *)fields[i]);
+    free(seg);
+    free(src);
+    return r;
+}
+
 
 /* See concolic.h. */
 JSValue concolic_new_urlencoded_value(JSContext *ctx, const char *op, JSValueConst list, JSValueConst name,

@@ -617,19 +617,15 @@ static void park_rec_cand(const Flow *f, long id)
        be kept in step with. Two characters a byte is the price of never being right about a set of bytes. */
     park_hex(root);
     park_str(",");
-    /* A keyed root's parent component and key, `-,-` for any other root: the resume re-declares the row from
-       them before the candidate is installed (concolic_declare_keyed_source). */
+    /* The root's derived rows, `-` for a root with none: the resume re-declares them before the candidate is
+       installed (concolic_declare_source_chain), since each is a derivation of what the record names. */
     {
-        const char *kparent, *kkey;
+        char *chain = concolic_source_chain(root);
 
-        if (concolic_source_keyed(root, &kparent, &kkey)) {
-            park_hex(kparent);
-            park_str(",");
-            park_hex(kkey);
-            park_str(",");
-        } else {
-            park_str("-,-,");
-        }
+        if (chain) park_hex(chain);
+        else park_str("-");
+        park_str(",");
+        free(chain);
     }
     /* THE PAYLOAD IS LAST AND STAYS LAST. The 'c' arm reads it to the record's `end` and not to a separator,
        which is what makes it the field a new one goes BEFORE: appended after, its hex would be read as the
@@ -2429,29 +2425,19 @@ int cold_resume(JSContext *ctx, const char *recipes)
             root = park_unhex(rb, q);
             q = park_comma(q);
             {
-                const char *pb, *kb;
-                bool keyed;
+                const char *cb;
 
-                for (pb = q; q < end && *q != ','; q++)
+                for (cb = q; q < end && *q != ','; q++)
                     ;
-                DCHECK(q < end, "a parked @S candidate has no key field after its root's parent — a residue from "
-                                "a build whose 'c' record carried no keyed-root fields; drop it and re-seed");
-                keyed = !(q - pb == 1 && *pb == '-');
-                q = park_comma(q);
-                for (kb = q; q < end && *q != ','; q++)
-                    ;
-                DCHECK(q < end, "a parked @S candidate has no payload after its root's key — a residue from a "
-                                "build whose 'c' record carried no keyed-root fields; drop it and re-seed");
-                DCHECK(keyed == !(q - kb == 1 && *kb == '-'), "a parked @S candidate names a keyed root's parent "
-                                                              "without its key, or the reverse");
-                /* The row is a derivation of the root's identity, parent and key: declared before the candidate
-                   is installed at its first switch-in, so its delivery is at the parent component. */
-                if (keyed) {
-                    char *kparent = park_unhex(pb, kb - 1), *kkey = park_unhex(kb, q);
+                DCHECK(q < end, "a parked @S candidate has no payload after its root's row chain — a residue from "
+                                "a build whose 'c' record carried no chain field; drop it and re-seed");
+                /* The rows are derivations of what the record names: declared before the candidate is installed
+                   at its first switch-in, so its delivery is at the chain's base component. */
+                if (!(q - cb == 1 && *cb == '-')) {
+                    char *chain = park_unhex(cb, q);
 
-                    concolic_declare_keyed_source(root, kparent, kkey);
-                    free(kparent);
-                    free(kkey);
+                    concolic_declare_source_chain(chain);
+                    free(chain);
                 }
                 q = park_comma(q);
             }

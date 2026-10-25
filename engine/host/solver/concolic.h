@@ -985,8 +985,24 @@ void        concolic_set_tuple_serializer(const char *component, char *(*seriali
    derivation of its root's identity, its parent and its key, so a cold-resumed candidate re-declares it from
    those before it is installed; declaring an existing row is a no-op. */
 void        concolic_declare_keyed_source(const char *src, const char *parent, const char *key);
-/* Whether `root` is a keyed row, with its parent component and key (borrowed) when it is. */
-int         concolic_source_keyed(const char *root, const char **parent, const char **key);
+/* The component that claims named-access rows and its composer: the markup whose parse makes HTML §7.2.2.3's
+   named access along `path` (dot-joined: the named object, then each member read off it) reach a value that
+   stringifies to `href`; owned, or NULL for a path it refuses. Registered once per agent, cleared with NULL. */
+void        concolic_set_markup_composer(const char *component, char *(*compose)(const char *path, const char *href));
+/* Declare the named-access row `src`: the element named along `path` in the markup carried by the declared row
+   `parent`. A derivation of those three, re-declared for a cold-resumed candidate; existing rows are a no-op. */
+void        concolic_declare_named_source(const char *src, const char *parent, const char *path);
+/* The found arm of a named access for `name_c` (the String `name`) over the unknown `markup`: rooted at a
+   named-access row where the markup's root is a declared, non-named row, else a derivation over (markup,
+   name). A member read off it (concolic_exotic_get) roots at the row one member longer. Borrowed operands. */
+JSValue     concolic_new_named_access(JSContext *ctx, JSValueConst markup, JSValueConst name, const char *name_c);
+/* `root`'s derived rows, root to base, as text concolic_declare_source_chain re-declares (owned), or NULL for a
+   root with none. What a parked candidate carries so its resume re-derives the rows before install. */
+char       *concolic_source_chain(const char *root);
+void        concolic_declare_source_chain(const char *chain);
+/* `payload` composed through `root`'s derived rows down to its first keyed row or its base: the bytes a PoC
+   states beside its deliveryKey. Owned. */
+char       *concolic_candidate_poc(const char *root, const char *payload);
 /* concolic_new_derived over the elements of the array `list`, which is borrowed. */
 JSValue     concolic_new_derived_list(JSContext *ctx, const char *op, JSValueConst list, JSValue example);
 struct JSBufferUnknownPiece;

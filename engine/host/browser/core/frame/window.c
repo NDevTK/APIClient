@@ -34,6 +34,7 @@
  * referrer — and it is a computed value when this engine's own `open(url, target)` named the navigable. Read
  * through a GETTER either way, for the same reason location.hash is: a candidate run substitutes a source at
  * MINT time, and a source minted once at install could never receive a breakout. */
+#include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
@@ -1050,8 +1051,7 @@ static int win_named_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         if (real == 1) {
             v = win_named_value(ctx, name);
         } else {
-            JSValueConst ops[2] = { markup, argv[1] };
-            v = concolic_new_derived(ctx, "HTML §7.2.2.3 named access", ops, 2, JS_UNDEFINED);
+            v = concolic_new_named_access(ctx, markup, argv[1], name);
         }
         JS_FreeValue(ctx, markup);
         goto answer;
@@ -1066,6 +1066,56 @@ answer:
     if (op == 1) { JS_FreeValue(ctx, v); v = JS_TRUE; }
     *presult = v;
     return JS_STEP_DONE;
+}
+
+/* An attribute value for markup this file composes: `&` and `"` as character references, so the attribute
+   parse (HTML §13.2.5.36 attribute value (double-quoted) state) returns `s`. Owned. */
+static char *win_attr_escape(const char *s, size_t n)
+{
+    size_t o = 0, i;
+    char *out = malloc(n * 6 + 1);
+
+    CHECK(out != NULL, "window: OOM escaping an attribute value");
+    for (i = 0; i < n; i++) {
+        if (s[i] == '&') { memcpy(out + o, "&amp;", 5); o += 5; }
+        else if (s[i] == '"') { memcpy(out + o, "&quot;", 6); o += 6; }
+        else out[o++] = s[i];
+    }
+    out[o] = 0;
+    return out;
+}
+
+/* The markup whose parse makes the access path reach a value that stringifies to `href`, composed as the inverse
+   of each step the path went through (concolic_set_markup_composer):
+     - the named object N, HTML §7.2.2.3 Named access on the Window object: one element whose ID is N answers as
+       that element, and two answer as an HTMLCollection;
+     - a member M read off it, DOM §4.2.10.2 Interface HTMLCollection's namedItem: the collection a second
+       element with ID N makes, whose element with name M answers;
+     - the string the last element is read as, HTML §4.6.3 API for hyperlink elements: an `a` whose stringifier
+       is its href.
+   Named residual. Not covered: a member read off the element the collection answered, or a member that is the
+   collection's own (length, item, namedItem). Next diff builds: each further step's getter inverse. Absence
+   shows as: a parked search whose root is a named-access row with such a path. */
+static char *win_named_markup(const char *path, const char *href)
+{
+    const char *dot = strchr(path, '.');
+    size_t nn = dot ? (size_t)(dot - path) : strlen(path);
+    char *n, *h, *m = NULL, *out;
+    size_t need;
+
+    if (nn == 0 || (dot && (!dot[1] || strchr(dot + 1, '.')))) return NULL;
+    if (dot && (!strcmp(dot + 1, "length") || !strcmp(dot + 1, "item") || !strcmp(dot + 1, "namedItem")))
+        return NULL;
+    n = win_attr_escape(path, nn);
+    h = win_attr_escape(href, strlen(href));
+    if (dot) m = win_attr_escape(dot + 1, strlen(dot + 1));
+    need = 2 * strlen(n) + strlen(h) + (m ? strlen(m) : 0) + 64;
+    out = malloc(need);
+    CHECK(out != NULL, "window: OOM composing named-access markup");
+    if (m) snprintf(out, need, "<a id=\"%s\"></a><a id=\"%s\" name=\"%s\" href=\"%s\"></a>", n, n, m, h);
+    else   snprintf(out, need, "<a id=\"%s\" href=\"%s\"></a>", n, h);
+    free(n); free(h); free(m);
+    return out;
 }
 
 static const IdlStepDecl WN_DECL = {
@@ -1171,6 +1221,7 @@ void window_init(JSContext *ctx)
         static const IdlArgType NAMED_ARGS[4] = { IDL_ANY, IDL_ANY, IDL_ANY, IDL_ANY };
         g_id_named_step = idl_method_id_step(ctx, NAMED_ARGS, 4, NULL, 0, &WN_DECL, 0);
     }
+    concolic_set_markup_composer("window", win_named_markup);
     g_id_close = idl_method_id(ctx, NULL, 0, js_win_close, 0);
     /* ONE BODY PER MEMBER. `stop` and §6.6.6's `blur` shared `js_win_noeffect` and were told apart only by a
        magic, which is how §6.6.6's specified do-nothing and §7.2.2.1's unbuilt two steps came to be
@@ -1455,6 +1506,7 @@ void window_free(JSRuntime *rt)
        entry in a pool the next agent has not built, read by the first window_install that agent runs. Their
        pre-init value is -1 and not 0, because entry 0 is a real member (see the declarations above). */
     g_id_opener_set = g_id_name_set = g_id_status_set = g_id_named_step = -1;
+    concolic_set_markup_composer(NULL, NULL);
     g_id_close = g_id_stop = -1;
     /* AND §8.1.4.6's MACHINE, for the reason the five pool entries above are given back and the one
        core/events/report_exception.c states at its own flow definition: JS_RegisterStepDef hands out an index
