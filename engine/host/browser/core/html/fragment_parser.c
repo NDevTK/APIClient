@@ -29,6 +29,7 @@
 #include "core/dom/attr_list.h"
 #include "core/dom/document.h"       /* §8.5.4's fragment parsing algorithm steps step 2 asks the DOCUMENT */
 #include "core/html/declarative_shadow.h"
+#include "solver/concolic.h"
 #include "core/html/html_parse.h"    /* the ONE place an HTML parser is made — that header owns the token bytes */
 #include "core/html/html_script.h"
 #include "core/html/media_element.h"
@@ -196,6 +197,24 @@ void fragment_parse_release(JSContext *ctx, void *st)
 /* Set the machine up for a parse of `html` into `where` around `anchor`, parsed in `context`'s tree-building
    context, under §13.2.4.5's `scripting` mode. `html` is COPIED because the JSString it came from is released
    before the first suspension. */
+const char *fragment_markup_cstr(JSContext *ctx, JSValueConst markup)
+{
+    JSValue ex;
+    const char *html;
+
+    if (!concolic_is(markup)) {
+        DCHECK(JS_IsString(markup), "an HTML sink reached the parse unconverted — the IDL declaration converts "
+                                    "it, and running the page's toString here would drive it to completion");
+        return JS_ToCString(ctx, markup);
+    }
+    ex = concolic_example_string(ctx, markup);
+    if (JS_IsUndefined(ex)) ex = JS_NewString(ctx, "");
+    if (JS_IsException(ex)) return NULL;
+    html = JS_ToCString(ctx, ex);
+    JS_FreeValue(ctx, ex);
+    return html;
+}
+
 void fragment_parse_begin(JSContext *ctx, FragmentParse *s, lxb_dom_element_t *context, lxb_dom_node_t *anchor,
                        int where, const char *html, bool clear_first, bool allow_declarative,
                        FragScriptingMode scripting)

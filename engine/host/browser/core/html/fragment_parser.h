@@ -155,6 +155,11 @@ const char *fragment_parse_unforkable(const void *st);
    insert's post-connection steps, after every node is inserted — that is, after FRAG_DONE. */
 const char *fragment_parse_script_forbidden(int stage, const void *st);
 
+/* The markup a fragment parse runs over: a string's own bytes, or for an unknown its example's (the real
+   operation runs on the example), or the empty string where the unknown carries none. `markup` is a String or a
+   concolic, which the member's IDL conversion guarantees. Freed with JS_FreeCString; NULL with a throw live. */
+const char *fragment_markup_cstr(JSContext *ctx, JSValueConst markup);
+
 /* Set the machine up for a parse of `html` into `where` around `anchor`, parsed in `context`'s tree-building
    context, under §13.2.4.5's `scripting` mode. `html` is COPIED because the JSString it came from is released
    before the first suspension. The member sets `hdr->stage = FRAG_FEED` and yields. */

@@ -594,7 +594,7 @@ static JSValue js_el_get_tag(JSContext *ctx, JSValueConst this_val)
    built, or every getElementById after it answers null and the engine reports a surface the page never had.
    Reporting the sink and dropping the markup was the second half missing.
    Both halves go through the per-flow chokepoints, so two forked arms each see their own subtree. A concolic
-   value has no bytes to parse — the sink report IS the answer for it.
+   value parses as its example, or as the empty string where it carries none (fragment_markup_cstr).
    The magic is element.h's ELEMENT_SET_* / SHADOW_ROOT_SET_*: five members over one parse, differing in the
    TARGET the fragment replaces, the CONTEXT it is parsed in, and whether §13.4's allowDeclarativeShadowRoots
    is true. */
@@ -758,13 +758,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
             }
         }
         solve_html_sink(ctx, val);
-        if (concolic_is(val))
-            return JS_STEP_DONE;   /* nothing concrete to parse; the sink is what this write means */
-
-        DCHECK(JS_IsString(val), "an HTML sink reached the body unconverted — the IDL declaration is what "
-                                 "converts it, and running the page's toString from here is the "
-                                 "drive-to-completion the flow machinery exists to avoid");
-        html = JS_ToCString(ctx, val);
+        html = fragment_markup_cstr(ctx, val);
         if (!html) return JS_STEP_ABRUPT;
         if (magic == ELEMENT_SET_OUTER_HTML) {
             /* §8.5.5 step 6: parsed in the PARENT's context, because that is where it lives — or in step 5's
@@ -993,9 +987,7 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
                "Element step 3 resolved or the `body` step 4 created, and HTML §13.4 \"Parsing HTML fragments\" "
                "step 2 reads the context element's local name and namespace to choose the tokenizer state");
         solve_html_sink(ctx, s->compliant);
-        if (concolic_is(s->compliant)) return JS_STEP_DONE;
-        DCHECK(JS_IsString(s->compliant), "insertAdjacentHTML reached the body unconverted");
-        html = JS_ToCString(ctx, s->compliant);
+        html = fragment_markup_cstr(ctx, s->compliant);
         if (!html) return JS_STEP_ABRUPT;
         /* Parsed in the context it will LIVE in: the parent for the outside positions, this element for the
            inside ones — or step 4's `body` where neither of those is a context §13.4 can parse against. A

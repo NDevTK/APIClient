@@ -242,10 +242,10 @@ static int dw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
      * oracle, all of which solve.c performs on the string itself. Neither half needs this document's tree,
      * which is why the sink lands ahead of the parser rather than behind it. */
     solve_html_sink(ctx, s->string);
-    /* NOTHING CONCRETE TO TOKENIZE — core/dom/element.c's own line, and for the same reason: unknown external
-       input is not markup, so there is no document to build out of it and the SINK is what this write means.
-       This is also the arm `document.write(location.hash)` takes, which is why the canonical DOM-XSS shape
-       reaches its search without needing the two mechanisms document_write.h names. */
+    /* Named residual. Not covered: an unknown string inserts nothing into the input stream, where the fragment
+       sinks parse its example (fragment_markup_cstr). Next diff builds: step 9's insertion of the example's
+       bytes. Absence shows as: a flow after `document.write(<unknown>)` finding none of the elements the
+       example's markup holds. */
     if (concolic_is(s->string)) return JS_STEP_DONE;
 
     DCHECK(JS_IsString(s->string),

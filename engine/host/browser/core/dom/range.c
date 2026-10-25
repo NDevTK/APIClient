@@ -41,7 +41,6 @@
 #include "core/html/trusted_types.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
-#include "solver/concolic.h"
 #include "solver/cow.h"
 #include "solver/dom_cow.h"
 #include "solver/solve.h"
@@ -1647,19 +1646,7 @@ static int js_range_contextual_fragment(JSContext *ctx, JSStepHdr *hdr, void *st
         dom_cow_note_created(lxb_dom_interface_node(out));
         /* THE SINK, BEFORE THE PARSE and whatever the value turns out to be — see the header above. */
         solve_html_sink(ctx, s->compliant);
-        if (concolic_is(s->compliant)) {
-            /* A concolic value has no bytes to parse and the sink report IS what this call means. The member
-               still RETURNS a DocumentFragment, because its IDL return type is one and a page that reads
-               `.childNodes` off it must find an empty list rather than a TypeError on undefined. */
-            *presult = node_wrap(ctx, lxb_dom_interface_node(out));
-            return JS_STEP_DONE;
-        }
-        DCHECK(JS_IsString(s->compliant),
-               "HTML §8.5.7 \"The createContextualFragment() method\" reached its body with an unconverted "
-               "argument — the IDL declaration is what converts "
-               "it, and running the page's toString from here is the drive-to-completion the flow machinery "
-               "exists to avoid");
-        html = JS_ToCString(ctx, s->compliant);
+        html = fragment_markup_cstr(ctx, s->compliant);
         if (!html) return JS_STEP_ABRUPT;
         /* STEP 7 — "Return the result of invoking the fragment parsing algorithm steps with element,
            compliantString, and Fragment." THREE arguments, and the third is the one this member exists to
