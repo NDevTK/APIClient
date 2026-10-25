@@ -937,6 +937,12 @@ static JSContext *g_sess_ctx;
    own document, which is what lets a child navigable's scripts be work items of this frontier. It is the handle,
    not the realm, because a handle survives a park and a realm does not. */
 static uint32_t g_sess_doc;
+/* That document's navigable, by its WindowProxy (owned while the session is live): a top-level navigation in one
+   timeline, such as a fresh open of the page, gives the navigable another active document there, so a row about
+   "the page" names the navigable and resolves to its active document when it runs (DYN_DOC_TOP_LEVEL). */
+static JSValue g_sess_proxy = JS_UNDEFINED;
+/* A row document meaning the active document of g_sess_proxy's navigable in the timeline running the row. */
+#define DYN_DOC_TOP_LEVEL UINT32_MAX
 /* The root document's script inventory: a seed, not a sequence. Every flow's programs are rows of its own dyn
    table, and this is only the template each flow of this document is seeded from when created;
    engine_seed_scripts is its one reader. One address space is required by HTML §4.12.1.1, whose "immediately
@@ -7097,6 +7103,9 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
     DCHECK(body != NULL, "a program was queued with no body — the caller has nothing to run and the queue "
                          "entry would be a slot the compile below dereferences");
     DCHECK(doc != 0, "a program was queued naming no document — the realm it compiles in is its document's");
+    DCHECK(doc != DYN_DOC_TOP_LEVEL || kind == DYN_VALUE_DUMP,
+           "a program other than a host instrument's was queued for whatever page its timeline shows — a page's own "
+           "program belongs to the document that caused it");
     /* The kind and the token are one statement, asserted both ways at the one site that creates a row: a
        cross-agent operation's row carries the token of the peer parked on its completion, and no other kind's
        completion is read as an answer. */
@@ -7601,8 +7610,11 @@ long engine_rows_awaiting_bytes(void)
 /* Which document it belongs to, from the same cursor. Past the end there is no row, and the flow's own document is
    the session's. */
 static uint32_t flow_dyn_doc(const Flow *f) {
-    if (f->script_i >= f->dyn_n) return g_sess_doc;
-    return f->dyn_doc[f->script_i];
+    uint32_t d = f->script_i >= f->dyn_n ? DYN_DOC_TOP_LEVEL : f->dyn_doc[f->script_i];
+
+    DCHECK(f == flow_running(), "a row's document was resolved for a flow that is not switched in — the top-level "
+                                "navigable's active document is a fact of the running timeline");
+    return d == DYN_DOC_TOP_LEVEL ? window_proxy_doc(g_sess_proxy) : d;
 }
 
 /* Which of §8.1.4.4 Calling scripts' two algorithms evaluates it, from the same cursor; the row answers for every
@@ -7753,8 +7765,9 @@ void engine_queue_javascript_url(uint32_t doc, const char *body, size_t body_n) 
 /* A host instrument's program, queued into every live timeline (engine.h). Nothing runs inside this call: it is
    called between steps on the host's time, with no flow running and no slice open, and only appends a row to
    each flow's sequence; the scheduler compiles and evaluates it later with that flow switched in, so the answer
-   is about that timeline's document. The document is the session's, as for engine_queue_candidate (a child
-   navigable is reached by walking into it from the root, the instrument's business). Appended: two dumps asked in
+   is about that timeline's document: whichever page the session document's navigable shows there
+   (DYN_DOC_TOP_LEVEL), since a timeline may have navigated it (a child navigable is reached by walking into it
+   from the root, the instrument's business). Appended: two dumps asked in
    turn are two questions, not two worlds. `flow_clear_host_owed` is part of the ask: the flow now holds work it
    did not hold, and without the clear the flows parked on a reply, most of them on a real page, would never
    answer. */
@@ -7776,7 +7789,7 @@ void engine_request_dump(const char *program) {
            "a dump was asked of a document whose every timeline has finished — there is no flow to run the program");
     for (i = 0; i < n; i++) {
         Flow *f = flow_at(i);
-        engine_queue_into(f, g_sess_doc, b, DYN_VALUE_DUMP, SCRIPT_TYPE_CLASSIC,
+        engine_queue_into(f, DYN_DOC_TOP_LEVEL, b, DYN_VALUE_DUMP, SCRIPT_TYPE_CLASSIC,
                           NULL, NULL, TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, NULL,
                           /*parser_inserted*/0);   /* the host's own text, and no element */
         flow_clear_host_owed(f);
@@ -11097,6 +11110,8 @@ static void engine_session_close(void) {
        g_sess_cur NULL). Otherwise flow_registry_free would be handed a flow with its delta applied, leaving its
        writes in the shared baseline with nothing able to unapply them; flow_release asserts it. */
     if (g_sess_cur) { flow_switch_out(g_sess_ctx, g_sess_cur); g_sess_cur = NULL; }
+    JS_FreeValue(g_sess_ctx, g_sess_proxy);
+    g_sess_proxy = JS_UNDEFINED;
 #if APICLIENT_DEV
     /* The heap walk the census leaves out, once, at rest: its breakdown printed and the running counts checked. */
     {
@@ -11595,6 +11610,10 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     g_sess_doc = world_local_doc();
     DCHECK(doc_realm(g_sess_doc) == ctx,
            "a session was opened with a realm that is not the root document's");
+    DCHECK(JS_IsUndefined(g_sess_proxy), "a session was opened while the last one still holds its navigable");
+    g_sess_proxy = JS_DupValue(ctx, document_window_proxy(ctx));
+    DCHECK(window_proxy_doc(g_sess_proxy) == g_sess_doc,
+           "the root document's WindowProxy names another document as its navigable's active one");
     /* HTML §4.12.1.1 "Processing model": "Let url be the result of encoding-parsing a URL given src, relative to
        el's node document." Resolved once, here, because the standard computes this url once per element and uses
        it for both things this engine asks of it, §8.1.4.2's fetch and, for a module, the record's [[HostDefined]]
