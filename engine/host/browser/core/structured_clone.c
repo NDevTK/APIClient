@@ -26,11 +26,11 @@
  *
  * TRANSFERRING IS HERE TOO, AND IT IS THE SAME WRITER AGAIN. §2.7.7's ArrayBuffer arm has to move
  * [[ArrayBufferData]], [[ArrayBufferByteLength]] and — for a resizable one — [[ArrayBufferMaxByteLength]] into
- * a realm-independent holder, and the engine's own writer already encodes exactly those three (BC_TAG_ARRAY_BUFFER
- * carries byte_length AND max_byte_length, and the reader hands them both back to the constructor). So the
- * ArrayBuffer transfer steps are `serialize, then JS_DetachArrayBuffer`, and the receiving steps are
- * `deserialize` — no second encoding of a buffer, and the resizable arm is right without this file knowing what
- * resizable means. A DETACHED buffer is refused by the writer, which IS §2.7.7 step 5.1's IsDetachedBuffer check,
+ * a realm-independent holder, and the engine's own writer encodes those three and the spans describing the
+ * bytes (BC_TAG_ARRAY_BUFFER_SPANS), the spans' unknowns resolved through the record's numbering. So the
+ * ArrayBuffer transfer steps are `serialize under the record's memory, then JS_DetachArrayBuffer` (which frees
+ * the source's spans, so they move rather than copy), and the receiving steps are `deserialize` against the
+ * record's symbols. A DETACHED buffer is refused by the writer, which IS §2.7.7 step 5.1's IsDetachedBuffer check,
  * re-reported as the DataCloneError the standard names. A SharedArrayBuffer is a different class, so it is not
  * transferable here at all — also a DataCloneError, which is what §2.7.7's IsSharedArrayBuffer test gives it. */
 #include <stdlib.h>
@@ -76,6 +76,9 @@
 typedef struct {
     JSValueConst transfer;   /* §2.7.7's materialized transfer list, or JS_UNDEFINED for a write with none */
     uint32_t     n;          /* its length — the first n indices of the ONE numbering the reader resolves */
+    /* how many of those entries a value is matched against: n for the message body, 0 for a holder's own
+       serialization, which writes the transferable itself as data under the record's numbering */
+    uint32_t     searched;
     JSValue      leaves;     /* the values that are their own copy, in the order reached; JS_UNDEFINED on the
                                 path whose bytes outlive the turn */
     JSValue      concolics;  /* the CONCOLICS reached, in the order reached, for a record that HAS a second
@@ -118,7 +121,7 @@ static int sc_memory_index(JSContext *ctx, void *opaque, JSValueConst obj)
     SCWriteMemory *m = opaque;
     uint32_t i, ln;
 
-    for (i = 0; i < m->n; i++) {
+    for (i = 0; i < m->searched; i++) {
         JSValue e = JS_GetPropertyUint32(ctx, m->transfer, i);
         bool same;
 
@@ -157,10 +160,8 @@ static int sc_memory_index(JSContext *ctx, void *opaque, JSValueConst obj)
            ArrayBuffer's byte record` -- and an enumeration of inputs is verified against the PIPELINE rather
            than against the algorithm, which this one had not been. It is kept in its own words because a
            reader who re-derives it from this file's own §2.7.7 ArrayBuffer arm will write it again.
-           AN ArrayBuffer's BYTE RECORD CANNOT REACH THIS ARM AT ALL: ab_out serializes the BUFFER, and the
-           writer answers a buffer with JS_WriteArrayBuffer -- a tag, two leb128 lengths and dbuf_put of the
-           raw bytes -- which recurses into no JSValue, so `index_of` is asked about the buffer itself and
-           about nothing inside it. A BROADCAST no longer reaches it either, §9.5's post having taken the
+           AN ArrayBuffer's BYTE RECORD CANNOT REACH THIS ARM: ab_out writes its holder under the record's own
+           numbering (sc_serialize with the record's memory), so a span's unknown rides `symbols`. A BROADCAST no longer reaches it either, §9.5's post having taken the
            no-transfer-list entry. And the clause MISSED §7.2.6.6 "The history entry list"'s
            updateCurrentEntry -- whose method steps live under that surprising title, which is stated here so
            a reader does not correct the number -- so it was wrong in both directions at once.
@@ -204,9 +205,8 @@ static int sc_memory_index(JSContext *ctx, void *opaque, JSValueConst obj)
               "it owes the same arm: the triple AS DATA beside the bytes, rebuilt by concolic_new where they "
               "are read. DERIVE THE SET RATHER THAN TRUSTING THIS SENTENCE, replacing each comment and string "
               "body with its OWN newline count so the line numbers are the file's: match the call construct "
-              "and subtract the four exemptions this crash states for itself — the DEFINITION, the "
-              "DECLARATION, ab_out (whose operand is the BUFFER, which recurses into no JSValue), and a caller "
-              "whose operand is a LITERAL primitive; the SAME-TURN clone answers it by seeding `memory` with "
+              "and subtract the three exemptions this crash states for itself — the DEFINITION, the "
+              "DECLARATION, and a caller whose operand is a LITERAL primitive; the SAME-TURN clone answers it by seeding `memory` with "
               "the value itself instead");
         return -1;
     }
@@ -329,7 +329,7 @@ int structured_serialize(JSContext *ctx, JSValueConst v, StructuredData *out)
     /* NO TRANSFER LIST AND NO LEAVES. These bytes are the half of §2.7 that is handed to a LATER turn — a
        history entry, a broadcast, the byte record an ArrayBuffer's transfer steps build — so nothing live may
        be named from them, and the map above is what states that rather than a silence. */
-    SCWriteMemory memory = { JS_UNDEFINED, 0, JS_UNDEFINED, JS_UNDEFINED };
+    SCWriteMemory memory = { .transfer = JS_UNDEFINED, .leaves = JS_UNDEFINED, .concolics = JS_UNDEFINED };
 
     return sc_serialize(ctx, v, out, &memory);
 }
@@ -373,7 +373,7 @@ JSValue structured_deserialize(JSContext *ctx, const StructuredData *in)
    Indexed Database's §5.11/§6.2, whose store holds the copy as a live value. */
 JSValue structured_clone(JSContext *ctx, JSValueConst v)
 {
-    SCWriteMemory memory = { JS_UNDEFINED, 0, JS_UNDEFINED, JS_UNDEFINED };
+    SCWriteMemory memory = { .transfer = JS_UNDEFINED, .leaves = JS_UNDEFINED, .concolics = JS_UNDEFINED };
     SCReadMemory back = { JS_UNDEFINED, 0, 0, JS_UNDEFINED };
     JSTransferReadHook hook;
     StructuredData d;
@@ -421,10 +421,23 @@ static bool ab_is(JSValueConst v)
     return JS_IsArrayBuffer(v);
 }
 
-static JSValue ab_out(JSContext *ctx, JSValueConst v)
+struct StructuredRecordSymbols {
+    SCWriteMemory *write;        /* the record being written, for a holder's transfer steps */
+    const SCReadMemory *read;    /* the record being read, for its transfer-receiving steps */
+};
+
+static JSValue ab_out(JSContext *ctx, JSValueConst v, StructuredRecordSymbols *symbols)
 {
     StructuredData d;
     JSValue h;
+    SCWriteMemory held;
+
+    DCHECK(symbols != NULL && symbols->write != NULL,
+           "an ArrayBuffer's transfer steps ran outside a record — its spans' unknowns have no numbering to ride");
+    /* The holder is the buffer's [[ArrayBufferData]] as data: its bytes and the spans describing them, whose
+       unknowns join the record's symbols. Matched against no transfer entry, because the buffer itself is one. */
+    held = *symbols->write;
+    held.searched = 0;
 
     /* §2.7.7 step 5.1: a DETACHED buffer is a "DataCloneError" DOMException — and the writer refusing one IS
        that check, re-reported by structured_serialize as the exception the standard names.
@@ -436,7 +449,7 @@ static JSValue ab_out(JSContext *ctx, JSValueConst v)
        sub-steps 5.1 and 5.2, and the DetachArrayBuffer below really is 5.4.3. A step number that is IN RANGE
        and names the wrong step is invisible to every channel this tree has — the section resolves, the title
        matches, no quotation is compared — and only counting the list separates them. */
-    if (structured_serialize(ctx, v, &d) < 0)
+    if (sc_serialize(ctx, v, &d, &held) < 0)
         return JS_EXCEPTION;
     h = JS_NewArrayBufferCopy(ctx, d.buf, d.len);
     structured_data_free(ctx, &d);
@@ -448,15 +461,21 @@ static JSValue ab_out(JSContext *ctx, JSValueConst v)
     return h;
 }
 
-static JSValue ab_in(JSContext *ctx, JSValueConst holder)
+static JSValue ab_in(JSContext *ctx, JSValueConst holder, StructuredRecordSymbols *symbols)
 {
     StructuredData d;
     size_t n = 0;
+    JSTransferReadHook hook;
 
+    DCHECK(symbols != NULL && symbols->read != NULL,
+           "an ArrayBuffer's transfer-receiving steps ran outside a record — its spans name symbols of one");
     d.buf = JS_GetArrayBuffer(ctx, &n, holder);
     d.len = n;
     DCHECK(d.buf != NULL, "an ArrayBuffer transfer holder was not the byte record its transfer steps wrote");
-    return structured_deserialize(ctx, &d);
+    hook.value_at = sc_memory_value;
+    hook.count = symbols->read->n;
+    hook.opaque = (void *)symbols->read;
+    return sc_deserialize(ctx, &d, &hook);
 }
 
 static const StructuredTransferable AB_TRANSFERABLE = { "ArrayBuffer", ab_is, ab_out, ab_in };
@@ -649,6 +668,8 @@ int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst t
 {
     uint32_t n, i, j, cn;
     JSValue concolics = JS_UNDEFINED;
+    SCWriteMemory memory;
+    StructuredRecordSymbols symbols;
 
     out->data.buf = NULL;
     out->data.len = 0;
@@ -699,9 +720,9 @@ int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst t
            CONCOLICS, THOUGH: this record HAS a second array to carry a triple as data, so the write hook
            interns them here and the loop after step 5 writes them out. The live array is an interning table
            and is freed below whatever happens -- nothing in `symbols` points into it. */
-        SCWriteMemory memory = { transfer, n, JS_UNDEFINED, JS_UNDEFINED };
         int rc;
 
+        memory = (SCWriteMemory){ .transfer = transfer, .n = n, .searched = n, .leaves = JS_UNDEFINED };
         memory.concolics = JS_NewArray(ctx);
         CHECK(!JS_IsException(memory.concolics),
               "StructuredSerializeWithTransfer: the concolic interning table could not be allocated");
@@ -731,7 +752,9 @@ int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst t
 
         DCHECK(t != NULL, "a transfer list entry stopped being transferable between §2.7.7's step 2 and its "
                           "step 5 — the list is the engine's own array and nothing may mutate it between them");
-        h = t->out(ctx, e);
+        symbols.write = &memory;
+        symbols.read = NULL;
+        h = t->out(ctx, e, &symbols);
         JS_FreeValue(ctx, e);
         if (JS_IsException(h)) goto fail;
         rec = JS_NewArray(ctx);
@@ -794,48 +817,15 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
 {
     JSValue values = JS_NewArray(ctx);
     uint32_t n, i, ns;
+    SCReadMemory back;
+    StructuredRecordSymbols symbols;
 
     *pvalues = JS_UNDEFINED;
     if (JS_IsException(values)) return JS_EXCEPTION;
     n = structured_transfer_len(ctx, in->holders);
     ns = structured_transfer_len(ctx, in->symbols);
-    /* §2.7.8 STEP 2: the transfer-receiving steps run BEFORE the message is deserialized, because `memory` is
-       seeded with their results — so this loop is not merely ordered ahead of the body, it is what the body's
-       transfer references are resolved against. */
-    for (i = 0; i < n; i++) {
-        JSValue rec = JS_GetPropertyUint32(ctx, in->holders, i), h, nv;
-        const StructuredTransferable *t;
-        const char *type;
-
-        DCHECK(!JS_IsException(rec), "reading an engine-built holder record threw");
-        {
-            JSValue tv = JS_GetPropertyUint32(ctx, rec, TH_TYPE);
-            type = JS_ToCString(ctx, tv);
-            JS_FreeValue(ctx, tv);
-        }
-        DCHECK(type != NULL, "a transfer data holder carried no [[Type]] — §2.7.8 chooses the receiving steps "
-                             "by it, so a holder without one names no interface at all");
-        t = transferable_named(type);
-        if (!t) {
-            /* §2.7.8 step 2.4.2: an interface the target realm does not expose is a "DataCloneError". It is
-               reachable from a ROUTED message, whose holders were written by another instance. */
-            JS_ThrowDOMException(ctx, "DataCloneError",
-                                 "the message transfers an object of an interface this realm does not expose");
-            JS_FreeCString(ctx, type);
-            JS_FreeValue(ctx, rec);
-            JS_FreeValue(ctx, values);
-            return JS_EXCEPTION;
-        }
-        JS_FreeCString(ctx, type);
-        h = JS_GetPropertyUint32(ctx, rec, TH_DATA);
-        JS_FreeValue(ctx, rec);
-        nv = t->in(ctx, h);
-        JS_FreeValue(ctx, h);
-        if (JS_IsException(nv)) { JS_FreeValue(ctx, values); return JS_EXCEPTION; }
-        JS_SetPropertyUint32(ctx, values, i, nv);
-    }
     /* §2.7.8's MAP, SECOND HALF: the triples, rebuilt in the order they were written, at the indices the
-       write hook named. They are appended to the SAME array the holders filled because the writer used ONE
+       write hook named. They go in the SAME array the holders fill because the writer used ONE
        numbering -- a holder is index i and a symbol is index n + k -- so a reference the body carries resolves
        without the reader having to know which kind it was.
        THE REBUILD IS WHERE THE SYMBOL RE-ENTERS THIS HEAP, and it is keyed on the source identity the record
@@ -899,6 +889,46 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
         JS_FreeValue(ctx, sr);
         JS_SetPropertyUint32(ctx, values, n + i, nv);
     }
+    /* THE SYMBOLS ARE REBUILT FIRST, at indices n + k, because a holder's receiving steps resolve its own
+       unknowns against them (an ArrayBuffer's spans); a holder never names another holder. */
+    back = (SCReadMemory){ values, n + ns, n, JS_UNDEFINED };
+    symbols.write = NULL;
+    symbols.read = &back;
+    /* §2.7.8 STEP 2: the transfer-receiving steps run BEFORE the message is deserialized, because `memory` is
+       seeded with their results — so this loop is not merely ordered ahead of the body, it is what the body's
+       transfer references are resolved against. */
+    for (i = 0; i < n; i++) {
+        JSValue rec = JS_GetPropertyUint32(ctx, in->holders, i), h, nv;
+        const StructuredTransferable *t;
+        const char *type;
+
+        DCHECK(!JS_IsException(rec), "reading an engine-built holder record threw");
+        {
+            JSValue tv = JS_GetPropertyUint32(ctx, rec, TH_TYPE);
+            type = JS_ToCString(ctx, tv);
+            JS_FreeValue(ctx, tv);
+        }
+        DCHECK(type != NULL, "a transfer data holder carried no [[Type]] — §2.7.8 chooses the receiving steps "
+                             "by it, so a holder without one names no interface at all");
+        t = transferable_named(type);
+        if (!t) {
+            /* §2.7.8 step 2.4.2: an interface the target realm does not expose is a "DataCloneError". It is
+               reachable from a ROUTED message, whose holders were written by another instance. */
+            JS_ThrowDOMException(ctx, "DataCloneError",
+                                 "the message transfers an object of an interface this realm does not expose");
+            JS_FreeCString(ctx, type);
+            JS_FreeValue(ctx, rec);
+            JS_FreeValue(ctx, values);
+            return JS_EXCEPTION;
+        }
+        JS_FreeCString(ctx, type);
+        h = JS_GetPropertyUint32(ctx, rec, TH_DATA);
+        JS_FreeValue(ctx, rec);
+        nv = t->in(ctx, h, &symbols);
+        JS_FreeValue(ctx, h);
+        if (JS_IsException(nv)) { JS_FreeValue(ctx, values); return JS_EXCEPTION; }
+        JS_SetPropertyUint32(ctx, values, i, nv);
+    }
     *pvalues = values;
     /* §2.7.8's LAST STEP, under the `memory` the loop above filled: a reference the writer left for a holder
        resolves to the value that holder produced, so the message body carries the MOVED object and not a copy
@@ -906,7 +936,6 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
     {
         /* THE COUNT IS THE WHOLE NUMBERING AND NOT THE HOLDERS' HALF OF IT: a reference past it is refused
            outright by the reader, so a count of `n` would make every symbol reference a forged one. */
-        SCReadMemory back = { values, n + ns, n, JS_UNDEFINED };
         JSTransferReadHook hook;
 
         hook.value_at = sc_memory_value;

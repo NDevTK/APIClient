@@ -20,7 +20,25 @@ static const char HTML_FILEPARSE_WORKER[] =
     "  var buf = await (await fetch(url)).arrayBuffer();"
     "  var fpwWorker = new Worker('/chunk/fpworker.js');"
     "  fpwWorker.postMessage(buf, [buf]);"
-    "  fetch('/api/fpw-posted');"
+    "  fetch('/api/fpw-posted?det=' + (buf.byteLength === 0));"
+    "})();"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+/* THE SAME FILE POSTED BY COPY: no transfer list, so §2.7.3 StructuredSerializeInternal's ArrayBuffer arm
+   copies the bytes and the page's buffer stays attached. The worker (the same TF_SERVED script) must see the
+   same provenance either way. */
+static const char HTML_FILEPARSE_WORKER_COPY[] =
+    "<!doctype html><html><body>"
+    "<script>"
+    "(async function () {"
+    "  var q = location.search, at = q.indexOf('file=');"
+    "  var url = at >= 0 ? decodeURIComponent(q.slice(at + 5).split('&')[0]) : '/files/fpseed.bin';"
+    "  var buf = await (await fetch(url)).arrayBuffer();"
+    "  var fpcWorker = new Worker(\"/chunk/fpworker.js\");"   /* spelled apart: fpw-worker-ran keys the other */
+    "  fpcWorker.postMessage(buf);"
+    "  fetch('/api/fpc-posted?det=' + (buf.byteLength === 0));"
     "})();"
     "</script>"
     TF_CANVAS_INK

@@ -690,6 +690,10 @@ struct JSRuntime {
        continuations resume in the order they parked, which is the order they would have completed had no
        preempt fired, at any nesting depth and for any number of them. */
     struct list_head parked_flows;   /* JSAsyncFunctionState.park_link, oldest park first */
+    /* The codec names a deserialized IMAGE span points at (JSArrayBufferSpan.codec is a name with the life of
+       the runtime): each distinct name read from a serialized buffer, copied once and freed with the runtime. */
+    char **ab_codec;
+    int ab_codec_n, ab_codec_size;
 };
 
 struct JSClass {
@@ -2989,6 +2993,9 @@ static void js_ab_span_set(JSContext *ctx, JSObject *bufobj, uint32_t offset, in
                            JSValueConst unknown);
 static void js_ab_span_set_any(JSContext *ctx, JSObject *bufobj, JSValueConst index,
                                JSValueConst unknown);
+/* and the serializer's, which writes the record as data and rebuilds it (BC_TAG_ARRAY_BUFFER_SPANS) */
+static JSArrayBufferSpan *js_ab_span_push(JSRuntime *rt, JSArrayBuffer *abuf);
+static void js_ab_span_free_values(JSRuntime *rt, JSArrayBufferSpan *s);
 /* the two sides of an element of a view whose [[ByteOffset]] is unknown (JSTypedArray.offset_unknown), defined
    beside js_ab_span_get for the reason the span pair is declared here */
 static JSValue js_ta_byte_index(JSContext *ctx, const JSTypedArray *ta, int64_t rel);
@@ -4806,6 +4813,11 @@ void JS_FreeRuntime(JSRuntime *rt)
            "JS_FreeRuntime with a flow still parked — the host tore down without draining the pump's parked "
            "flows (JS_ResumeParkedFlow); that flow and everything it holds is dropped, not finished");
     JS_FreeValueRT(rt, rt->current_exception);
+    for (i = 0; i < rt->ab_codec_n; i++)
+        js_free_rt(rt, rt->ab_codec[i]);
+    js_free_rt(rt, rt->ab_codec);
+    rt->ab_codec = NULL;
+    rt->ab_codec_n = rt->ab_codec_size = 0;
 
     list_for_each_safe(el, el1, &rt->job_list) {
         JSJobEntry *e = list_entry(el, JSJobEntry, link);
@@ -79202,7 +79214,20 @@ typedef enum BCTagEnum {
        tier stays readable — and a bump would make all of them unreadable, which is a regression rather than
        a protection. */
     BC_TAG_SERIALIZABLE,
+    /* An ArrayBuffer whose bytes carry unknown input: BC_TAG_ARRAY_BUFFER's record, then a span section
+       (BC_AB_SPAN_FORMAT and the live JSArrayBufferSpans as data, see JS_WriteArrayBuffer), then the spans'
+       values as sub-values, so an unknown crosses as whatever the write's transfer hook makes of it and
+       never as a pointer. A buffer with no live span keeps BC_TAG_ARRAY_BUFFER, so no earlier record changes
+       meaning. */
+    BC_TAG_ARRAY_BUFFER_SPANS,
 } BCTagEnum;
+
+/* The span section's own format byte, refused by the reader when it is not this one. */
+#define BC_AB_SPAN_FORMAT 1
+/* A span's sub-values, as bits of its mask byte, in the order they follow the section. */
+#define BC_AB_SPAN_HAS_UNKNOWN 1
+#define BC_AB_SPAN_HAS_INDEX   2
+#define BC_AB_SPAN_HAS_IMAGE   4
 
 /* THE LONGEST INTERFACE IDENTIFIER BC_TAG_SERIALIZABLE CARRIES. It is a bound on a NAME and not on a graph,
    so it is not the kind of cap that truncates work: Web IDL §2.4 Interfaces gives an interface an identifier,
@@ -79968,18 +79993,76 @@ static int JS_WriteTypedArray(BCWriterState *s, JSValueConst obj)
     return 0;
 }
 
+static bool js_ab_span_live(const JSArrayBuffer *abuf, const JSArrayBufferSpan *sp);
+
 static int JS_WriteArrayBuffer(BCWriterState *s, JSValueConst obj)
 {
     JSObject *p = JS_VALUE_GET_OBJ(obj);
     JSArrayBuffer *abuf = p->u.array_buffer;
+    bool has_len;
+    int i, live = 0, k;
+
     if (abuf->detached) {
         JS_ThrowTypeErrorDetachedArrayBuffer(s->ctx);
         return -1;
     }
-    bc_put_u8(s, BC_TAG_ARRAY_BUFFER);
+    for (i = 0; i < abuf->n_span; i++)
+        live += js_ab_span_live(abuf, &abuf->span[i]);
+    has_len = !JS_IsUninitialized(abuf->length_unknown);
+    bc_put_u8(s, live || has_len ? BC_TAG_ARRAY_BUFFER_SPANS : BC_TAG_ARRAY_BUFFER);
     bc_put_leb128(s, abuf->byte_length);
     bc_put_leb128(s, abuf->max_byte_length);
     dbuf_put(&s->dbuf, abuf->data, abuf->byte_length);
+    if (!live && !has_len)
+        return 0;
+    /* The facts about the bytes go with them, as data: each live span's fields, then its values as
+       sub-values the transfer hook resolves (HTML §2.7's symbol numbering), so no live unknown crosses. A
+       stale span describes bytes that are no longer there and is not written. */
+    DCHECK(s->transfer != NULL,
+           "an ArrayBuffer carrying unknown input was serialized with no transfer hook — its span values would "
+           "be written as live objects; the record's owner (core/structured_clone.c) always passes one");
+    bc_put_u8(s, BC_AB_SPAN_FORMAT);
+    bc_put_u8(s, has_len);
+    bc_put_leb128(s, live);
+    for (i = 0; i < abuf->n_span; i++) {
+        const JSArrayBufferSpan *sp = &abuf->span[i];
+        uint8_t mask = 0;
+
+        if (!js_ab_span_live(abuf, sp))
+            continue;
+        if (!JS_IsUninitialized(sp->unknown)) mask |= BC_AB_SPAN_HAS_UNKNOWN;
+        if (!JS_IsUninitialized(sp->index)) mask |= BC_AB_SPAN_HAS_INDEX;
+        if (!JS_IsUninitialized(sp->image)) mask |= BC_AB_SPAN_HAS_IMAGE;
+        bc_put_u8(s, sp->kind);
+        bc_put_leb128(s, sp->offset);
+        bc_put_leb128(s, sp->extent);
+        bc_put_u8(s, mask);
+        if (sp->kind == JS_AB_SPAN_AT)
+            dbuf_put(&s->dbuf, sp->witness, sizeof sp->witness);
+        if (sp->kind == JS_AB_SPAN_IMAGE) {
+            size_t cl = strlen(sp->codec);
+
+            bc_put_leb128(s, sp->image_pos);
+            bc_put_leb128(s, (uint32_t)cl);
+            dbuf_put(&s->dbuf, (const uint8_t *)sp->codec, cl);
+        }
+    }
+    /* The sub-values in section order: the work stack pops last-pushed first, so they are pushed reversed. */
+    if (has_len && bcw_push(s, bcw_val(abuf->length_unknown, false)))
+        return -1;
+    for (i = abuf->n_span - 1; i >= 0; i--) {
+        const JSArrayBufferSpan *sp = &abuf->span[i];
+        JSValueConst f[3];
+
+        if (!js_ab_span_live(abuf, sp))
+            continue;
+        f[0] = sp->unknown;
+        f[1] = sp->index;
+        f[2] = sp->image;
+        for (k = 2; k >= 0; k--)
+            if (!JS_IsUninitialized(f[k]) && bcw_push(s, bcw_val(f[k], false)))
+                return -1;
+    }
     return 0;
 }
 
@@ -80544,7 +80627,7 @@ typedef struct BCRFrame {
     uint32_t u1, u2, u3;/* TA: class id, length, byte offset (u3 = the reserved ref slot) */
 } BCRFrame;
 enum { BCR_READ, BCR_ARRAY, BCR_OBJ, BCR_MAP, BCR_DATE, BCR_OBJVAL,
-       BCR_TA, BCR_FUNC, BCR_MODULE, BCR_SERIALIZABLE };
+       BCR_TA, BCR_FUNC, BCR_MODULE, BCR_SERIALIZABLE, BCR_ABSPAN };
 
 typedef struct BCReaderState {
     JSContext *ctx;
@@ -81399,6 +81482,185 @@ static JSValue JS_ReadTypedArray(BCReaderState *s)
     return JS_UNDEFINED;
 }
 
+static const char *js_ab_codec_intern(JSRuntime *rt, const uint8_t *name, uint32_t len)
+{
+    int i;
+    char *c;
+
+    for (i = 0; i < rt->ab_codec_n; i++)
+        if (strlen(rt->ab_codec[i]) == len && memcmp(rt->ab_codec[i], name, len) == 0)
+            return rt->ab_codec[i];
+    if (rt->ab_codec_n == rt->ab_codec_size) {
+        int ns = rt->ab_codec_size ? rt->ab_codec_size * 2 : 4;
+        char **nv = js_realloc_rt(rt, rt->ab_codec, sizeof(*nv) * (size_t)ns);
+
+        if (!nv)
+            return NULL;
+        rt->ab_codec = nv;
+        rt->ab_codec_size = ns;
+    }
+    c = js_malloc_rt(rt, (size_t)len + 1);
+    if (!c)
+        return NULL;
+    memcpy(c, name, len);
+    c[len] = '\0';
+    rt->ab_codec[rt->ab_codec_n++] = c;
+    return c;
+}
+
+static JSValue JS_ReadArrayBuffer(BCReaderState *s);
+
+/* BC_TAG_ARRAY_BUFFER_SPANS: the buffer as BC_TAG_ARRAY_BUFFER reads it, then its span section. Each span's
+   values are owed by its sub-values: an owed field holds JS_UNDEFINED, which no span field otherwise holds, and
+   a BCR_ABSPAN frame fills them in section order (bcr_abspan_take). */
+static JSValue JS_ReadArrayBufferSpans(BCReaderState *s)
+{
+    JSContext *ctx = s->ctx;
+    JSValue obj = JS_ReadArrayBuffer(s);
+    JSArrayBuffer *abuf;
+    uint8_t fmt, has_len, kind, mask;
+    uint32_t n, i, owed = 0, off, ext, pos, cl;
+    BCRFrame *f;
+
+    if (JS_IsException(obj))
+        return obj;
+    abuf = JS_VALUE_GET_OBJ(obj)->u.array_buffer;
+    if (bc_get_u8(s, &fmt) || bc_get_u8(s, &has_len) || bc_get_leb128(s, &n))
+        goto fail;
+    if (fmt != BC_AB_SPAN_FORMAT || has_len > 1) {
+        JS_ThrowSyntaxError(ctx, "invalid array buffer span section (format %u, expected %u)", fmt,
+                            BC_AB_SPAN_FORMAT);
+        goto fail;
+    }
+    for (i = 0; i < n; i++) {
+        JSArrayBufferSpan *sp;
+
+        if (bc_get_u8(s, &kind) || bc_get_leb128(s, &off) || bc_get_leb128(s, &ext) || bc_get_u8(s, &mask))
+            goto fail;
+        if (kind > JS_AB_SPAN_IMAGE || mask > 7 || ext == 0 || (uint64_t)off + ext > (uint64_t)abuf->byte_length ||
+            (kind == JS_AB_SPAN_AT && ext > 8)) {
+            JS_ThrowSyntaxError(ctx, "invalid array buffer span");
+            goto fail;
+        }
+        sp = js_ab_span_push(ctx->rt, abuf);
+        memset(sp, 0, sizeof *sp);
+        sp->kind = kind;
+        sp->offset = off;
+        sp->extent = ext;
+        sp->unknown = (mask & BC_AB_SPAN_HAS_UNKNOWN) ? JS_UNDEFINED : JS_UNINITIALIZED;
+        sp->index = (mask & BC_AB_SPAN_HAS_INDEX) ? JS_UNDEFINED : JS_UNINITIALIZED;
+        sp->image = (mask & BC_AB_SPAN_HAS_IMAGE) ? JS_UNDEFINED : JS_UNINITIALIZED;
+        owed += !!(mask & 1) + !!(mask & 2) + !!(mask & 4);
+        if (kind == JS_AB_SPAN_AT) {
+            if (s->buf_end - s->ptr < (ptrdiff_t)sizeof sp->witness) {
+                bc_read_error_end(s);
+                goto fail;
+            }
+            memcpy(sp->witness, s->ptr, sizeof sp->witness);
+            s->ptr += sizeof sp->witness;
+        }
+        if (kind == JS_AB_SPAN_IMAGE) {
+            if (bc_get_leb128(s, &pos) || bc_get_leb128(s, &cl))
+                goto fail;
+            if (s->buf_end - s->ptr < (ptrdiff_t)cl) {
+                bc_read_error_end(s);
+                goto fail;
+            }
+            sp->image_pos = pos;
+            sp->codec = js_ab_codec_intern(ctx->rt, s->ptr, cl);
+            if (!sp->codec) {
+                JS_ThrowOutOfMemory(ctx);
+                goto fail;
+            }
+            s->ptr += cl;
+        }
+    }
+    if (has_len) {
+        abuf->length_unknown = JS_UNDEFINED;
+        owed++;
+    }
+    if (owed == 0)
+        return obj;
+    if (bcr_push(s) < 0)
+        goto fail;
+    f = &s->r_stack[s->r_sp - 1];
+    f->kind = BCR_ABSPAN;
+    f->obj = obj;
+    f->i = 0;
+    f->len = owed;
+    return JS_UNDEFINED;   /* the driver sees the pushed frame */
+ fail:
+    JS_FreeValue(ctx, obj);
+    return JS_EXCEPTION;
+}
+
+/* One sub-value of a BC_TAG_ARRAY_BUFFER_SPANS record, into the first owed field in section order. A value
+   the read resolved to something not unknown is a determination the receiving flow holds (HTML §2.7's symbol
+   rebuild answers a pinned source plainly), so the field is left unset and bcr_abspan_settle drops a span that
+   no longer states anything. Takes `v`. */
+static int bcr_abspan_take(JSContext *ctx, JSArrayBuffer *abuf, JSValue v)
+{
+    int i;
+
+    for (i = 0; i < abuf->n_span; i++) {
+        JSArrayBufferSpan *sp = &abuf->span[i];
+        JSValue *slot = JS_IsUndefined(sp->unknown) ? &sp->unknown
+                      : JS_IsUndefined(sp->index) ? &sp->index
+                      : JS_IsUndefined(sp->image) ? &sp->image : NULL;
+
+        if (!slot)
+            continue;
+        if (slot == &sp->image) {
+            if (!JS_IsString(v) || JS_VALUE_GET_STRING(v)->is_wide_char ||
+                JS_VALUE_GET_STRING(v)->len != sp->extent) {
+                JS_FreeValue(ctx, v);
+                JS_ThrowSyntaxError(ctx, "invalid array buffer span image");
+                return -1;
+            }
+            *slot = v;
+            return 0;
+        }
+        if (js_value_is_concolic(v)) {
+            *slot = v;
+        } else {
+            *slot = JS_UNINITIALIZED;
+            JS_FreeValue(ctx, v);
+        }
+        return 0;
+    }
+    DCHECK(JS_IsUndefined(abuf->length_unknown),
+           "a span section's sub-value arrived with no field owing it — the frame's count is the owed fields'");
+    if (js_value_is_concolic(v)) {
+        abuf->length_unknown = v;
+    } else {
+        abuf->length_unknown = JS_UNINITIALIZED;
+        JS_FreeValue(ctx, v);
+    }
+    return 0;
+}
+
+/* Every owed field is filled: keep the spans that still state an unknown. AT and IMAGE describe their
+   `unknown`; ANY derives a read from its `index`, so it needs that. */
+static void bcr_abspan_settle(JSRuntime *rt, JSArrayBuffer *abuf)
+{
+    int i, j = 0;
+
+    for (i = 0; i < abuf->n_span; i++) {
+        JSArrayBufferSpan *sp = &abuf->span[i];
+        bool keep = sp->kind == JS_AB_SPAN_ANY ? !JS_IsUninitialized(sp->index)
+                                               : !JS_IsUninitialized(sp->unknown);
+
+        if (sp->kind == JS_AB_SPAN_IMAGE)
+            keep = keep && !JS_IsUninitialized(sp->image);
+        if (!keep) {
+            js_ab_span_free_values(rt, sp);
+            continue;
+        }
+        abuf->span[j++] = *sp;
+    }
+    abuf->n_span = j;
+}
+
 static JSValue JS_ReadArrayBuffer(BCReaderState *s)
 {
     JSContext *ctx = s->ctx;
@@ -81644,6 +81906,9 @@ static JSValue bcr_read_one(BCReaderState *s)
     case BC_TAG_ARRAY_BUFFER:
         obj = JS_ReadArrayBuffer(s);
         break;
+    case BC_TAG_ARRAY_BUFFER_SPANS:
+        obj = JS_ReadArrayBufferSpans(s);
+        break;
     case BC_TAG_REGEXP:
         obj = JS_ReadRegExp(s);
         break;
@@ -81877,6 +82142,16 @@ static JSValue JS_ReadObjectRec(BCReaderState *s)
                         goto fail;
                     continue;
                 }
+                if (f->kind == BCR_ABSPAN) {
+                    int r = bcr_abspan_take(ctx, JS_VALUE_GET_OBJ(f->obj)->u.array_buffer, result);
+
+                    result = JS_UNDEFINED;
+                    if (r < 0)
+                        goto fail;
+                    f->i++;
+                    f->phase = 0;
+                    continue;
+                }
                 if (f->kind == BCR_MODULE) {
                     JSModuleDef *m = f->p1;
                     m->func_obj = result;
@@ -81945,6 +82220,13 @@ static JSValue JS_ReadObjectRec(BCReaderState *s)
                 f->phase = 1;
                 need_read = true;
                 continue;
+            } else if (f->kind == BCR_ABSPAN) {
+                if (f->i < f->len) {
+                    f->phase = 1;
+                    need_read = true;
+                    continue;
+                }
+                bcr_abspan_settle(ctx->rt, JS_VALUE_GET_OBJ(f->obj)->u.array_buffer);
             } else if (f->kind == BCR_FUNC) {
                 if (f->i < f->len) {
                     f->phase = 1;
@@ -123831,6 +124113,19 @@ static void js_ab_span_free_values(JSRuntime *rt, JSArrayBufferSpan *s)
     JS_FreeValueRT(rt, s->image);
 }
 
+/* Whether span `sp` of `abuf` still describes the bytes it covers: an AT span whose witness stands, an IMAGE
+   span whose image does, and every ANY span (it has no witness, see JSArrayBufferSpan). */
+static bool js_ab_span_live(const JSArrayBuffer *abuf, const JSArrayBufferSpan *sp)
+{
+    if (abuf->detached || (uint64_t)sp->offset + sp->extent > (uint64_t)abuf->byte_length)
+        return false;
+    if (sp->kind == JS_AB_SPAN_AT)
+        return memcmp(abuf->data + sp->offset, sp->witness, sp->extent) == 0;
+    if (sp->kind == JS_AB_SPAN_IMAGE)
+        return js_ab_image_live(abuf, sp, sp->offset, sp->extent);
+    return true;
+}
+
 /* A block copy of [src_off, src_off + n) of `src` to `dst_off` of `dst` carries the spans describing those
    bytes, and runs before the bytes move so a source witness is read before an overlapping copy overwrites it.
    An AT span wholly inside the range keeps its witness, which the copy makes the destination's bytes; an IMAGE
@@ -124089,6 +124384,9 @@ void JS_DetachArrayBuffer(JSContext *ctx, JSValueConst obj)
     /* §25.1.3.5 DetachArrayBuffer step 5: [[ArrayBufferByteLength]] is 0, a stated length */
     JS_FreeValue(ctx, abuf->length_unknown);
     abuf->length_unknown = JS_UNINITIALIZED;
+    /* Step 4's [[ArrayBufferData]] is null, so the facts about its bytes go with them: a transfer moves the
+       spans into its data holder rather than leaving a copy behind. */
+    js_ab_spans_free(ctx->rt, abuf);
 
     list_for_each(el, &abuf->array_list) {
         JSTypedArray *ta;

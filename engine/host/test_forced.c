@@ -1754,6 +1754,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbkpinject", HTML_IDBKPINJECT },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
+    { "fileparse-worker-copy", HTML_FILEPARSE_WORKER_COPY },
     { "workererror", HTML_WORKERERROR },
     { "workererror-cancel", HTML_WORKERERROR_CANCEL },
     { "uspiter", HTML_USPITER },
@@ -16984,6 +16985,9 @@ TF_UNIT void probes_fileparse_worker(const char *js, Probe *tab, int *n) {
     fold_row(&wp_tt, &wp_why, !!strstr(js, "\"/api/fpw-posted\""),
              "NOT REACHED: there is no /api/fpw-posted record, so the page never constructed its Worker and posted "
              "the file's buffer to it");
+    fold_row(&wp_tt, &wp_why, param_undriven_count(js, "/api/fpw-posted", "det", "true") > 0,
+             "the page's buffer is still attached after postMessage(buf, [buf]) — HTML §2.7.7's transfer steps "
+             "detach it");
     const char *wr_why = NULL; int wr_tt = 1;
     fold_row(&wr_tt, &wr_why, !!strstr(js, "\"/api/fpw-worker\""),
              "NOT REACHED: there is no /api/fpw-worker record, so the worker's message handler never ran");
@@ -17002,6 +17006,31 @@ TF_UNIT void probes_fileparse_worker(const char *js, Probe *tab, int *n) {
         { "fpw-worker-ran", wr_tt, "new Worker('/chunk/fpworker.js')", SESS_EXPLORE, wr_why },
         { "fpw-sink-file", ws_tt, "fpwWorker.postMessage(buf", SESS_EXPLORE, ws_why },
         { "fpw-sink-query", wq_tt, "var fpwWorker", SESS_EXPLORE, wq_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `fileparse-worker-copy` document (fixture/fileparseworker.h): the same file posted without a
+   transfer list, so the bytes are copied and their provenance must cross with the copy. */
+TF_UNIT void probes_fileparse_worker_copy(const char *js, Probe *tab, int *n) {
+    char seed[192] = "", query[192] = "";
+    int has_seed = s_rooted_source(js, "eval", "fpseed", seed, sizeof seed);
+    int has_query = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, query, sizeof query);
+    const char *cp_why = NULL; int cp_tt = 1;
+    fold_row(&cp_tt, &cp_why, param_undriven_count(js, "/api/fpc-posted", "det", "false") > 0,
+             "NOT REACHED: no undriven /api/fpc-posted?det=false, so the page did not post its buffer by copy and "
+             "keep it attached");
+    const char *cs_why = NULL; int cs_tt = 1;
+    fold_row(&cs_tt, &cs_why, has_seed,
+             "NOT REACHED: no eval @S record carries a source rooted in the seed file's reply, so the copied bytes "
+             "lost their provenance on the way into the worker");
+    const char *cq_why = NULL; int cq_tt = 1;
+    fold_row(&cq_tt, &cq_why, has_query,
+             "NOT REACHED: no eval @S record carries a source rooted in location.search through the copied bytes");
+    const Probe rows[] = {
+        { "fpc-posted", cp_tt, "/api/fpc-posted", SESS_EXPLORE, cp_why },
+        { "fpc-sink-file", cs_tt, "fpcWorker.postMessage(buf)", SESS_EXPLORE, cs_why },
+        { "fpc-sink-query", cq_tt, "var fpcWorker", SESS_EXPLORE, cq_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -21420,6 +21449,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbkpinject(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
+    probes_fileparse_worker_copy(js, probes, &np);
     probes_workererror(js, probes, &np);
     probes_uspiter(js, probes, &np);
     probes_fileparse_text(js, probes, &np);

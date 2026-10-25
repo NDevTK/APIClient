@@ -64,11 +64,17 @@ void structured_data_free(JSContext *ctx, StructuredData *d);
  *
  * The HOLDER is a JS value of the registering component's own choosing — it is never seen by a page, and making
  * it a JS value rather than a C record is what lets it ride the frontier and be parked like everything else. */
+/* The record's one numbering of transfer holders and symbols, handed to a holder's two steps: a holder that
+   serializes values (an ArrayBuffer's spans) writes its unknowns through it, so they ride the record's
+   `symbols` as data, and reads them back through it. Opaque; a holder that serializes nothing ignores it. */
+typedef struct StructuredRecordSymbols StructuredRecordSymbols;
 typedef struct {
     const char *type;                                      /* §2.7.7's interfaceName = dataHolder.[[Type]] */
     bool    (*is)(JSValueConst v);
-    JSValue (*out)(JSContext *ctx, JSValueConst v);        /* the holder, or JS_EXCEPTION with a throw live */
-    JSValue (*in)(JSContext *ctx, JSValueConst holder);    /* the new object in this realm */
+    /* the holder, or JS_EXCEPTION with a throw live */
+    JSValue (*out)(JSContext *ctx, JSValueConst v, StructuredRecordSymbols *symbols);
+    /* the new object in this realm */
+    JSValue (*in)(JSContext *ctx, JSValueConst holder, StructuredRecordSymbols *symbols);
 } StructuredTransferable;
 void structured_register_transferable(const StructuredTransferable *t);
 

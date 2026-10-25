@@ -825,8 +825,9 @@ static void port_handler_set(JSContext *ctx, JSValueConst target, const char *na
 
 enum { TH_QUEUE = 0, TH_HEAD, TH_REMOTE, TH_N };
 
-static JSValue port_transfer_out(JSContext *ctx, JSValueConst v)
+static JSValue port_transfer_out(JSContext *ctx, JSValueConst v, StructuredRecordSymbols *symbols)
 {
+    (void)symbols;   /* a port's holder carries no value */
     PortData *d = port_of(v);
     JSValue h;
 
@@ -855,8 +856,9 @@ static JSValue port_transfer_out(JSContext *ctx, JSValueConst v)
 
 static JSValue port_new(JSContext *ctx);
 
-static JSValue port_transfer_in(JSContext *ctx, JSValueConst holder)
+static JSValue port_transfer_in(JSContext *ctx, JSValueConst holder, StructuredRecordSymbols *symbols)
 {
+    (void)symbols;
     JSValue obj = port_new(ctx), remote;
     PortData *d;
     uint32_t head = 0;
