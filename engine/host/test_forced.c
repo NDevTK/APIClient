@@ -1094,6 +1094,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/decoder.h"
 #include "fixture/forms.h"
 #include "fixture/hashsinks.h"
+#include "fixture/hashpark.h"
 #include "fixture/dwfork.h"
 #include "fixture/tokenlist.h"
 #include "fixture/srcdoc.h"
@@ -1610,6 +1611,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "decoder", HTML_DECODER },
     { "forms", HTML_FORMS },
     { "hashsinks", HTML_HASHSINKS },
+    { "hashpark", HTML_HASHPARK },
     { "dwfork", HTML_DWFORK },
     { "tokenlist", HTML_TOKENLIST },
     { "srcdoc", HTML_SRCDOC },
@@ -19183,7 +19185,7 @@ TF_UNIT void probes_hashsinks_statesinks(const char *js, Probe *tab, int *n) {
     int s_loc_built   = s_derived  (ss, "eval",      LOCATION_HASH_SRC,   st_loc);
     int s_park_wit    = s_witnessed(ss, "innerHTML", LOCATION_HASH_SRC,   st_lpark);
     int s_park_built  = s_derived  (ss, "innerHTML", LOCATION_HASH_SRC,   st_lpark);
-    /* Which writes the `location.hash` markup search learned: its bytes reach `lhHost` directly and `lhAttr`
+    /* Which writes the `location.hash` markup search learned: its bytes reach `lhHost` directly and `lhQuoted`
        through the page's `.slice(1)`, never `lhOther`, which carries `state.other`. A parked record carries
        `witnessed`; any other stage reads -1, which the row below does not accept. */
     int st_other      = s_stage(ss, "innerHTML", "{state}.other");
@@ -19297,13 +19299,10 @@ TF_UNIT void probes_hashsinks_statesinks(const char *js, Probe *tab, int *n) {
        therefore which spellings of an exit the source can carry. A build that fires BOTH has stopped applying
        the source's transform (the data state's only exit is `<`); a build that fires NEITHER has a derivation
        that stops at the first spelling, which is the defect this fixture was added for. */
-    /* The `location.hash` search's one value also reaches lhAttr through `.slice(1)` (its own witness there),
-       so it can fire at that write with the attribute escape s-attr fires with. What it cannot do is fire at
-       lhHost, whose data state is left only through `<`, which the fragment percent-encode set holds. */
-    DCHECK(st_lpark != S_FIRED || s_poc(ss, "innerHTML", LOCATION_HASH_SRC, "'//src='x'//onerror='X9()'//x9pad='"),
-           "the markup search over the raw fragment fired with something other than the attribute escape its "
-           "lhAttr witness derives — lhHost's §13.2.5.1 data state is left only through `<`, which the fragment "
-           "percent-encode set holds, so such a PoC means a candidate skipped the source's own transform");
+    DCHECK(!(st_lpark == S_FIRED),
+           "the markup search over the raw fragment produced a fire-verified PoC — both of its writes "
+           "(fixture/hashpark.h) are left only through `<` or `\"`, which the fragment percent-encode set holds, "
+           "so a PoC there means a candidate was delivered without the source's own transform being applied");
     const Probe rows[] = {
         { "json-fork", jsonfork_tt, "/api/jsonok", SESS_EXPLORE, jsonfork_why },
         { "s-eval", s_eval, "state.code", SESS_EXPLORE },
@@ -19428,17 +19427,17 @@ TF_UNIT void probes_hashsinks_statesinks(const char *js, Probe *tab, int *n) {
            the string a real run handed it. */
         { "s-park-witnessed", s_park_wit, "lhHost.innerHTML = location.hash", SESS_EXPLORE },
         /* WHICH WRITES THIS SEARCH LEARNS FROM, by byte provenance. Its probe's bytes reach `lhHost` directly
-           and `lhAttr` through the page's `.slice(1)` — both are its parse contexts — and never `lhOther`, which
+           and `lhQuoted` through the page's `.slice(1)` — both are its parse contexts — and never `lhOther`, which
            in its runs carries `state.other` unknown. Exactly two is the positive and the negative together.
            `s-other-fired` arms the negative: `lhOther` is a live markup sink of attacker bytes in this run,
            solved by its own search, so a credit leaking across sources had a write to land on. */
         { "s-park-ownwrites", s_park_nwit == 2, "lhHost.innerHTML = location.hash", SESS_EXPLORE, .gate = "s-park-ran" },
         { "s-other-fired", st_other == S_FIRED, "lhOther.innerHTML", SESS_EXPLORE },
         /* WHAT IT BUILDS FROM THEM IS DELIVERABLE OR WITHDRAWN. §13.2.5.1 "Data state" is left only through
-           `<`, which the fragment percent-encode set holds; the attribute-value context `lhAttr` gives it is
-           left by `'` and `/`, which it does not. So the search builds escapes, and every one it keeps carries
-           no byte the source's declaration encodes — a kept one that does is a regressed delivery table, seen
-           here before it could arrive, escape or fire. Its premise is that something was built. */
+           `<` and the `lhQuoted` value only through `"`, both of which the fragment set holds. The derivation
+           builds before the delivery probe has measured, so it builds escapes, and every one it keeps after
+           the measurement carries no byte the source's declaration encodes — a kept one that does is a
+           regressed delivery table. Its premise is that something was built. */
         { "s-park-keptdeliverable", s_park_built && s_park_kept == 0, "lhHost.innerHTML = location.hash",
           SESS_EXPLORE, .gate = "s-park-ran" },
         /* AND THE POSITIVE SEARCH'S OWN STAGES, so a 0 on `s-attr` names one — and now names ONE. The three

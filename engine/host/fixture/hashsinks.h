@@ -1,4 +1,4 @@
-/* THE FRAGMENT SINKS DOCUMENT: `location.hash` into a script, markup, attribute and URL sink, and JSON.parse's outcome fork.
+/* THE FRAGMENT SINKS DOCUMENT: `location.hash` into a script, attribute and URL sink, and JSON.parse's outcome fork.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_HASHSINKS_H
@@ -18,34 +18,20 @@ static const char HTML_HASHSINKS[] =
          - an HTML-context sink fed from the same source is NOT (the `<` arrives as %3C and parses as text).
        Before the delivery transform existed the solver handed the payload over raw and would report BOTH as
        working, which is a false PoC — the thing this half of the engine must never produce.
-       BOTH HALVES ARE ASSERTED, through ONE source into TWO sink contexts, which is the only arrangement that
-       can tell "the transform is applied" apart from "the solver is failing to solve": the apostrophe survives
-       the fragment set so the JS sink FIRES (through `'#';X9()//'` — the leading `#` included), while `<` does
-       not survive so the HTML sink CANNOT, and it is reported as a PARKED SEARCH rather than omitted. The
-       negative half costs the run TWO extra candidate re-fires that are known not to fire — the markup sink's
-       context PROBE and the one escape solve_html.c derives from it — where the deleted CANDS_HTML spray cost
-       five; that cost buys the one property the @S half must never lose, so it is paid on every build. */
+       The JS sink FIRES (through `'#';X9()//'` — the leading `#` included). The markup sink that cannot is in
+       its own document (fixture/hashpark.h): here, a raw-fragment markup write would share its search with
+       `lhAttr` below and rightly fire there. */
     "eval(\"'\" + location.hash + \"'\");"
-    "var lhHost = document.createElement('div'); document.body.appendChild(lhHost);"
-    "lhHost.innerHTML = location.hash;"
-    /* AND THE SAME SOURCE INTO AN ATTRIBUTE-VALUE HOLE — §@S's observations solved JOINTLY. The write above
-       lands in §13.2.5.1's data state, whose only exit is `<`, which the fragment percent-encode set (URL §1.3
-       "Percent-encoded bytes") holds, so that search is unsolvable. This one lands in §13.2.5.37 "Attribute
-       value (single-quoted) state", left by the apostrophe the set does not hold, into §13.2.5.39 "After
-       attribute value (quoted) state", left by whitespace and by U+002F SOLIDUS, which no set holds. So an
-       escape exists with no `<`, `>` or space: a derivation reading only the sink's parse context constructs
-       a spelling the source cannot carry and misses a real raw-fragment XSS. The first write must NOT fire and
-       this one MUST.
-       A DERIVED SOURCE IDENTITY ON PURPOSE: `location.hash.slice(1)` composes `{location.hash}.slice(1)`
-       (argument included), so this is its own search and the negative half keeps its parked entry; the root
-       is still `location.hash`, which carries the percent-encode set through the derivation. */
+    /* AND THE SAME SOURCE INTO AN ATTRIBUTE-VALUE HOLE — §@S's observations solved JOINTLY. This lands in
+       §13.2.5.37 "Attribute value (single-quoted) state", left by the apostrophe the fragment percent-encode
+       set (URL §1.3 "Percent-encoded bytes") does not hold, into §13.2.5.39 "After attribute value (quoted)
+       state", left by whitespace and by U+002F SOLIDUS, so an escape exists with no `<`, `>` or space. And
+       the one delivered value is also what the eval above reads, so the escape must leave that eval parsing:
+       the separator is §12.4's `//`, which the markup tokenizer also reads as one (solver/solve_joint.h).
+       `location.hash.slice(1)` composes `{location.hash}.slice(1)`, its own search; its root is still
+       `location.hash`, which carries the percent-encode set through the derivation. */
     "var lhAttr = document.createElement('div'); document.body.appendChild(lhAttr);"
     "lhAttr.innerHTML = \"<img alt='\" + location.hash.slice(1) + \"'>\";"
-    /* ANOTHER ATTACKER SOURCE INTO A MARKUP WRITE, the negative control of `s-park-ownwrites`: in a
-       `location.hash` candidate run `state.other` is still unknown, so this write carries none of that
-       search's bytes and must not be learned as its context; its own search learns it alone. */
-    "var lhOther = document.createElement('div'); document.body.appendChild(lhOther);"
-    "lhOther.innerHTML = \"<b title='\" + state.other + \"'>\";"
     /* AND THE SAME SOURCE INTO THE URL CONTEXT, the third of the three, whose class has one vector —
        solver/solve.h: "navigating executes the `javascript:` scheme and nothing else does". The fragment set
        holds space, `"`, `<`, `>` and the backtick and none of `javascript:X9()`, so this one is solvable
