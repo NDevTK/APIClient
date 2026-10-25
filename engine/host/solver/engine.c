@@ -5151,8 +5151,8 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        again. */
     sib->close_req = parent->close_req;
     sib->close_req_none = parent->close_req_none;
-    /* The scroll acts the parent's world has had performed: the arm stands in them. */
-    flow_scroll_acts_copy(sib, parent);
+    /* The modelled user acts the parent's world has had performed: the arm stands in them. */
+    flow_user_acts_copy(sib, parent);
     /* How far the sequence has been run, so the no-replay assert at the compile site holds for an arm, which has
        run what its parent ran; a frameless sibling is the shape that can reach that compile. */
     sib->last_compiled = parent->last_compiled;
@@ -6707,7 +6707,7 @@ static bool scroll_already_asked(void *arg, lxb_dom_element_t *t) {
  * observer's next Intersection Observer §3.2.10 update sees it intersect. A person may or may not scroll, so both
  * arms run: a recorded two-armed choice (decide_completion) whose arm 0 does not scroll and whose arm 1 performs
  * the scroll as its next frame and states it as a scroll act (which a PoC states). Like a drive of a listener,
- * the scrolling arm is this tool's act, so flow_path_driven reads its scroll acts. A replay re-asks the choice
+ * the scrolling arm is this tool's act, so flow_path_driven reads its user acts. A replay re-asks the choice
  * at this rung and takes the recorded arm, so nothing is cold-tier state.
  * Returns 1 when the question was asked; 0 when no observed target is out of view or every one was asked.
  * Named residual. Not covered: the other members of what a scroll changes — `scroll` and `scrollend` listeners
@@ -6742,14 +6742,14 @@ static int engine_user_scroll(JSContext *ctx, Flow *f) {
     arm = decide_completion("(the person scrolls an observed target into view)", &dblob);
     if (arm == 1) {   /* a replay whose recorded path scrolled: this flow is the scrolling arm */
         DCHECK(dblob == NULL, "a recorded scroll choice handed back a sibling's decision state");
-        flow_scroll_act_push(f, act, at);
+        flow_user_act_push(f, act, at);
         flow_install_base(f, ctx, user_scroll_flow(ctx, target));
     } else if (dblob != NULL) {   /* a new choice: this flow does not scroll, its sibling does */
         Flow *sib;
 
         base = user_scroll_flow(ctx, target);
         sib = engine_sibling_assemble(ctx, f, base, dblob, concolic_pins_suspend(), flow_path_marks(f));
-        flow_scroll_act_push(sib, act, at);
+        flow_user_act_push(sib, act, at);
     } else {
         free(act);   /* a replay whose recorded path did not scroll */
     }
@@ -6765,8 +6765,9 @@ static int engine_user_scroll(JSContext *ctx, Flow *f) {
  * §6.10.2 takes the last group, so three groups are modelled three times, and step 9's "nothing watching for a
  * close request" (core/html/close_request.h) is latched on the flow. A flow that closed something is asked again
  * next step, so a page that adds a watcher in its own `close` handler keeps being modelled.
- * Everything past it is forced: the mark is taken with the frame, before one opcode runs, so pending_prov_compose
- * stamps every park PROV_FORCED and endpoint.c keeps sightings out of the derived pool; the mark is monotone.
+ * The request is the victim's act performed by this tool, as a drive of a listener is, so it is recorded as a
+ * modelled user act before one opcode runs: flow_path_driven reads it, every park past it is graded driven, and
+ * a PoC verified past it states it.
  * Returns 1 if it installed the task as this flow's frame; 0 when nothing is left to model or no fully active
  * document is there to target, which lets the caller finish. */
 static int engine_close_request_fork(JSContext *ctx, Flow *f) {
@@ -6803,9 +6804,14 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
     if (!document_fully_active(ctx)) return 0;
     flow_install_base(f, ctx, close_request_flow(ctx, document));
     f->close_req = 1;
-    flow_mark_forced_arm();
-    DCHECK(flow_path_forced(f),
-           "a flow inside a modelled close request is not marked forced — its requests would be graded derived "
+    {
+        char *act = strdup("{\"kind\":\"close-request\",\"target\":\"document\",\"type\":\"close-request\"}");
+
+        CHECK(act, "engine: OOM spelling a close-request act");
+        flow_user_act_push(f, act, f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0);
+    }
+    DCHECK(flow_path_driven(f),
+           "a flow inside a modelled close request is not graded driven — its requests would be graded the page's "
            "although no user sent the gesture");
     return 1;
 }

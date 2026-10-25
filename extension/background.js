@@ -224,6 +224,9 @@ const _PROBE_INJECTORS = {
       if (a.kind === "click" && typeof t.click === "function") t.click();
       else if (a.kind === "scroll" && typeof t.scrollIntoView === "function")
         t.scrollIntoView({ block: "nearest", inline: "nearest" });
+      else if (a.kind === "close-request")
+        t.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true,
+                                                       cancelable: true }));
       else t.dispatchEvent(new Event(a.type, { bubbles: true, cancelable: true }));
       steps.push({ target: a.target, type: a.type, found: true });
     }

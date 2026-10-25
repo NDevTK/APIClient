@@ -1063,21 +1063,21 @@ void flow_orphan_chain_copy(Flow *dst, const Flow *src, int n)
     }
 }
 
-void flow_scroll_act_push(Flow *f, char *act, int at)
+void flow_user_act_push(Flow *f, char *act, int at)
 {
     char **acts;
     int *ats;
 
-    DCHECK(act != NULL && at >= 0 && (f->scroll_n == 0 || f->scroll_at[f->scroll_n - 1] <= at),
+    DCHECK(act != NULL && at >= 0 && (f->user_acts_n == 0 || f->user_act_at[f->user_acts_n - 1] <= at),
            "a scroll act was recorded with no envelope step, or before one already recorded");
-    acts = realloc(f->scroll_acts, (size_t)(f->scroll_n + 1) * sizeof *acts);
+    acts = realloc(f->user_acts, (size_t)(f->user_acts_n + 1) * sizeof *acts);
     CHECK(acts, "engine: OOM recording a scroll act");
-    f->scroll_acts = acts;
-    ats = realloc(f->scroll_at, (size_t)(f->scroll_n + 1) * sizeof *ats);
+    f->user_acts = acts;
+    ats = realloc(f->user_act_at, (size_t)(f->user_acts_n + 1) * sizeof *ats);
     CHECK(ats, "engine: OOM recording a scroll act");
-    f->scroll_at = ats;
-    f->scroll_acts[f->scroll_n] = act;
-    f->scroll_at[f->scroll_n++] = at;
+    f->user_act_at = ats;
+    f->user_acts[f->user_acts_n] = act;
+    f->user_act_at[f->user_acts_n++] = at;
 }
 
 void flow_scroll_asked_push(Flow *f, char *loc)
@@ -1090,15 +1090,15 @@ void flow_scroll_asked_push(Flow *f, char *loc)
     f->scroll_asked[f->scroll_asked_n++] = loc;
 }
 
-void flow_scroll_acts_copy(Flow *dst, const Flow *src)
+void flow_user_acts_copy(Flow *dst, const Flow *src)
 {
-    DCHECK(dst->scroll_n == 0 && dst->scroll_asked_n == 0,
+    DCHECK(dst->user_acts_n == 0 && dst->scroll_asked_n == 0,
            "an arm's scroll acts were copied over ones it already had");
-    for (int i = 0; i < src->scroll_n; i++) {
-        char *act = strdup(src->scroll_acts[i]);
+    for (int i = 0; i < src->user_acts_n; i++) {
+        char *act = strdup(src->user_acts[i]);
 
         CHECK(act, "engine: OOM copying a scroll act");
-        flow_scroll_act_push(dst, act, src->scroll_at[i]);
+        flow_user_act_push(dst, act, src->user_act_at[i]);
     }
     for (int i = 0; i < src->scroll_asked_n; i++) {
         char *loc = strdup(src->scroll_asked[i]);
@@ -1290,7 +1290,7 @@ int flow_path_driven(const Flow *f) {
            "a candidate session is missing its payload or names neither or both of a sink and a witness key");
     DCHECK(f->path_peer_driven == 0 || f->path_peer_driven == 1,
            "a flow's peer drive mark is neither set nor clear — flow_take_peer_marks writes it as a bit");
-    return f->orphan || f->scroll_n > 0 || f->cand_src != NULL || f->path_peer_driven;
+    return f->orphan || f->user_acts_n > 0 || f->cand_src != NULL || f->path_peer_driven;
 }
 
 FlowPathMarks flow_path_marks(const Flow *f) {
@@ -5765,9 +5765,9 @@ void flow_remove(JSContext *ctx, Flow *f) {
         for (int k = 0; k < f->orphan_chain_n; k++) free(f->orphan_acts[k]);
         free(f->orphan_acts);
         free(f->orphan_chain);
-        for (int k = 0; k < f->scroll_n; k++) free(f->scroll_acts[k]);
-        free(f->scroll_acts);
-        free(f->scroll_at);
+        for (int k = 0; k < f->user_acts_n; k++) free(f->user_acts[k]);
+        free(f->user_acts);
+        free(f->user_act_at);
         for (int k = 0; k < f->scroll_asked_n; k++) free(f->scroll_asked[k]);
         free(f->scroll_asked);
         free(f->agents);

@@ -259,9 +259,10 @@ static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
    a sold flow's substitution without passing solve_flow_end. A call outside a candidate flow is the page's own,
    since X9 is a global the bundle can reach, and proves nothing. */
 /* The acts a fire in `f` was verified under, as the envelope's `acts` array in performance order (its drives'
-   acts and its scroll acts), or NULL when `f` is neither a drive nor scrolled. `*no_act` is set where a called member of the chain has no act a page user can perform: a browser
-   never makes that call, so the fire proves the bytes execute and is not a PoC. Members a resumed drive has not
-   built a call for yet are not part of the path the fire ran on. malloc'd. */
+   acts and its modelled user acts), or NULL when `f` has neither. `*no_act` is set where a called member of the
+   chain has no act a page user can perform: a browser never makes that call, so the fire proves the bytes
+   execute and is not a PoC. Members a resumed drive has not built a call for yet are not part of the path the
+   fire ran on. malloc'd. */
 static void acts_append(char *out, size_t *at, const char *act)
 {
     size_t l = strlen(act);
@@ -279,7 +280,7 @@ static char *fire_acts(const Flow *f, int *no_act, int *unsolved)
 
     *no_act = 0;
     *unsolved = 0;
-    if (!f->orphan && f->scroll_n == 0) return NULL;
+    if (!f->orphan && f->user_acts_n == 0) return NULL;
     DCHECK(!f->orphan || called > 0, "a fire ran in a drive whose chain has no called member — the mark and the "
                                      "chain are written together at the seed and at the claim");
     for (k = 0; k < called; k++) {
@@ -287,14 +288,13 @@ static char *fire_acts(const Flow *f, int *no_act, int *unsolved)
         if (strstr(f->orphan_acts[k], "\"kind\":\"message\"")) *unsolved = 1;
         n += strlen(f->orphan_acts[k]) + 1;
     }
-    for (k = 0; k < f->scroll_n; k++) n += strlen(f->scroll_acts[k]) + 1;
+    for (k = 0; k < f->user_acts_n; k++) n += strlen(f->user_acts[k]) + 1;
     out = malloc(n);
     CHECK(out, "solve: OOM spelling the acts a PoC was verified under");
     out[0] = '[';
-    /* In performance order: a scroll act performed after `scroll_at` called members stands before member
-       `scroll_at`. */
+    /* In performance order: a user act performed after `user_act_at` called members stands before that member. */
     for (k = 0; k <= called; k++) {
-        for (; s < f->scroll_n && f->scroll_at[s] <= k; s++) acts_append(out, &at, f->scroll_acts[s]);
+        for (; s < f->user_acts_n && f->user_act_at[s] <= k; s++) acts_append(out, &at, f->user_acts[s]);
         if (k < called) acts_append(out, &at, f->orphan_acts[k]);
     }
     out[at++] = ']';
@@ -324,7 +324,7 @@ static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
         else free(acts);
         return JS_UNDEFINED;
     }
-    record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload, acts, f->orphan || f->scroll_n > 0);
+    record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload, acts, f->orphan || f->user_acts_n > 0);
     return JS_UNDEFINED;
 }
 

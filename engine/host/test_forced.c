@@ -1146,6 +1146,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/windowname.h"
 #include "fixture/clobber.h"
 #include "fixture/typedinput.h"
+#include "fixture/closerequest.h"
 #include "fixture/sparoute.h"
 #include "fixture/envgate.h"
 #include "fixture/timegate.h"
@@ -1628,6 +1629,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "windowname", HTML_WINDOWNAME },
     { "clobber", HTML_CLOBBER },
     { "typedinput", HTML_TYPEDINPUT },
+    { "closerequest", HTML_CLOSEREQUEST },
     { "sparoute", HTML_SPAROUTE },
     { "envgate", HTML_ENVGATE },
     { "timegate", HTML_TIMEGATE },
@@ -15073,6 +15075,30 @@ TF_UNIT void probes_typedinput(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `closerequest` document (fixture/closerequest.h): the witness exists, and no sighting of it
+   reads as the page's own act. A modelled close request is this tool's act, so every record of the witness is
+   driven, which is what the trusted zone's `actor` row reads as `tool`. */
+TF_UNIT void probes_closerequest(const char *js, Probe *tab, int *n) {
+    const char *cc_why = NULL; int cc_tt = 1;
+    fold_row(&cc_tt, &cc_why, !!strstr(js, "\"/api/cr-closed\""),
+             "NOT REACHED: there is no /api/cr-closed record, so no modelled close request closed the dialog");
+    const char *ct_why = NULL; int ct_tt = 1;
+    fold_row(&ct_tt, &ct_why, !!strstr(js, "\"/api/cr-closed\""),
+             "NOT REACHED: there is no /api/cr-closed record to grade");
+    fold_row(&ct_tt, &ct_why, !strstr(js, "\"/api/cr-closed\",\"provenance\":\"derived\",\"driven\":false") &&
+                              !strstr(js, "\"/api/cr-closed\",\"provenance\":\"forced\",\"driven\":false"),
+             "a record of the close request's request reads driven:false, so the trusted zone would fire it as the "
+             "page's own act although this tool sent the Escape");
+    fold_row(&ct_tt, &ct_why, !!strstr(js, "\"/api/cr-closed\",\"provenance\":\"derived\",\"driven\":true"),
+             "no record of the close request's request reads derived and driven — the close request is graded as "
+             "neither the tool's act nor an unforced path");
+    const Probe rows[] = {
+        { "cr-closed", cc_tt, "/api/cr-closed", SESS_EXPLORE, cc_why },
+        { "cr-actor-tool", ct_tt, "function crOnClose", SESS_EXPLORE, ct_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `sparoute` document (fixture/sparoute.h); the chunk's witnesses are in TF_SERVED's body,
    so those rows are keyed by the document's own import of it. */
 TF_UNIT void probes_sparoute(const char *js, Probe *tab, int *n) {
@@ -19363,6 +19389,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_windowname(js, probes, &np);
     probes_clobber(js, probes, &np);
     probes_typedinput(js, probes, &np);
+    probes_closerequest(js, probes, &np);
     probes_sparoute(js, probes, &np);
     probes_envgate(js, probes, &np);
     probes_timegate(js, probes, &np);
