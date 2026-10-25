@@ -52,7 +52,6 @@
 #include "core/html/html_iframe.h"
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "solver/engine.h"
-#include "solver/realm_holders.h"   /* the realm-sell row reads whether every live realm was unheld at a census */
 #include "solver/cow.h"
 #include "core/loader/cookie_jar.h"   /* the root document's own Set-Cookie, received at the baseline */
 #include "core/loader/document_scripts.h"
@@ -17492,11 +17491,14 @@ TF_UNIT void probes_windowclose(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The `_heap` census row `key` of the result document, or -2 when the document carries none. */
-static long tf_heap_row(const char *js, const char *key) {
-    const char *h = strstr(js, "\"_heap\":{"), *p;
+/* The row `key` of the result document's census object `census` (`_heap`, `_cold`), or -2 when the document
+   carries none. */
+static long tf_census_row(const char *js, const char *census, const char *key) {
+    const char *h, *p;
     char k[64];
 
+    snprintf(k, sizeof k, "\"%s\":{", census);
+    h = strstr(js, k);
     if (h == NULL) return -2;
     snprintf(k, sizeof k, "\"%s\":", key);
     p = strstr(h, k);
@@ -17506,21 +17508,20 @@ static long tf_heap_row(const char *js, const char *key) {
 /* The rows of the `realmsell` document. */
 TF_UNIT void probes_realmsell(const char *js, Probe *tab, int *n) {
     /* RAM pressure sells a parked arm that alone names a child realm, and the collection pressure owes after the
-       sale frees it: the release path of a sold flow's realm, end to end. Ladder: the realm existed, its last delta
-       holder went (every live realm unheld at some census), and the result document's heap census finds none live. */
+       sale frees it: the release path of a sold flow's realm, end to end. Ladder: the realm existed, pressure sold
+       a flow, and the result document's heap census finds no realm live. */
     const char *rsell_why = NULL;
     int rsell_tt = 1;
     fold_row(&rsell_tt, &rsell_why, navigable_realm_made() >= 1,
              "NOT REACHED: no child realm was made, so the holder arm's `open()` and its read through the proxy "
              "never ran and this row says nothing about release");
-    fold_row(&rsell_tt, &rsell_why, realm_holders_all_unheld_seen(),
-             "the realm was made and no census found it unheld: some resident flow's delta still named its "
-             "Window, proxy or Document at every census, so pressure never sold its last holder");
-    fold_row(&rsell_tt, &rsell_why, tf_heap_row(js, "childRealms") == 0,
-             "the realm was unheld at a census and is still live in the result document's heap census. The "
-             "popup is still open, and its traversable was created by the holder this run sold: if a collection "
-             "finished after the sale, that traversable is held as a root of its own rather than owned by the "
-             "flow that created it, and the realm leaks with it");
+    fold_row(&rsell_tt, &rsell_why, tf_census_row(js, "_cold", "soldFlows") >= 1,
+             "the realm was made and RAM pressure sold no flow, so its holder was never sold: the other arm's "
+             "growth did not pass the share's footprint mark after the holder parked");
+    fold_row(&rsell_tt, &rsell_why, tf_census_row(js, "_heap", "childRealms") == 0,
+             "pressure sold the holder and the realm is still live in the result document's heap census: no "
+             "collection finished after the sale, or something holds it from outside every flow — read "
+             "`childRealmsUnheldRooted` and the @REALMROOT chain"); 
     const Probe rows[] = {
         { "realm-sell", rsell_tt, "/api/realmsell", SESS_EXPLORE, rsell_why },
     };
@@ -17535,16 +17536,15 @@ TF_UNIT void probes_realmsellclose(const char *js, Probe *tab, int *n) {
     fold_row(&rsc_tt, &rsc_why, navigable_realm_made() >= 1,
              "NOT REACHED: no child realm was made, so the holder arm's `open()` and its read through the proxy "
              "never ran and this row says nothing about release");
-    fold_row(&rsc_tt, &rsc_why, tf_heap_row(js, "destroyStep9Releases") >= 1,
+    fold_row(&rsc_tt, &rsc_why, tf_census_row(js, "_heap", "destroyStep9Releases") >= 1,
              "the realm was made and §7.5.10's destroy never released its Document: the holder arm's close() "
              "did not definitely close the popup, so its traversable still names the realm");
-    fold_row(&rsc_tt, &rsc_why, realm_holders_all_unheld_seen(),
-             "the popup was destroyed and no census found the realm unheld: some resident flow's delta still "
-             "named its Window, proxy or Document at every census, so pressure never sold its last holder");
-    fold_row(&rsc_tt, &rsc_why, tf_heap_row(js, "childRealms") == 0,
-             "the destroyed popup's realm was unheld at a census and is still live in the result document's "
-             "heap census: either no collection finished after its last holder was sold, or something this "
-             "census does not walk holds it");
+    fold_row(&rsc_tt, &rsc_why, tf_census_row(js, "_cold", "soldFlows") >= 1,
+             "the popup was destroyed and RAM pressure sold no flow, so its holder was never sold");
+    fold_row(&rsc_tt, &rsc_why, tf_census_row(js, "_heap", "childRealms") == 0,
+             "pressure sold the destroyed popup's holder and its realm is still live in the result document's "
+             "heap census: no collection finished after the sale, or something holds it from outside every "
+             "flow — read `childRealmsUnheldRooted` and the @REALMROOT chain");
     const Probe rows[] = {
         { "realm-sell-close", rsc_tt, "/api/rsclose", SESS_EXPLORE, rsc_why },
     };
@@ -17558,7 +17558,7 @@ TF_UNIT void probes_adoptexpando(const char *js, Probe *tab, int *n) {
     int axp_tt = 1;
     fold_row(&axp_tt, &axp_why, !!strstr(js, "\"/api/adoptexp\""),
              "NOT REACHED: there is no /api/adoptexp record, so the element was never read back");
-    fold_row(&axp_tt, &axp_why, navigable_realm_made() >= 1 && tf_heap_row(js, "childRealms") == 0,
+    fold_row(&axp_tt, &axp_why, navigable_realm_made() >= 1 && tf_census_row(js, "_heap", "childRealms") == 0,
              "NOT REACHED: the popup's realm was not collected before the read, so the read says nothing about "
              "a wrapper whose creation realm is gone");
     fold_row(&axp_tt, &axp_why, param_value_is(js, "/api/adoptexp", "v", "kept"),

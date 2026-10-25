@@ -9,6 +9,7 @@
 #include "solver/flow.h"
 #include "core/frame/navigable.h"
 #include "core/dom/document.h"
+#include "core/frame/window_proxy.h"
 
 /* One frozen segment's answer: the realms whose Window its entries name, as a bitset over the census's realm
    order. Segments are shared by families, so each is walked once per census and its bits are ORed into every
@@ -90,13 +91,9 @@ static void holder_visit(const void *seg, JSValueConst v, void *arg) {
     if (seg != NULL) w->cur[r / 64] |= 1ull << (r % 64);
 }
 
-/* Whether a census has seen every live realm unheld (realm_holders.h). Lifetime, never reset. */
-static bool g_all_unheld_seen;
 #if APICLIENT_DEV
 static bool g_root_path_dumped;   /* a @REALMROOT chain was printed */
 #endif
-
-bool realm_holders_all_unheld_seen(void) { return g_all_unheld_seen; }
 
 /* See realm_holders.h. */
 bool realm_holders_census(RealmHolders *out) {
@@ -127,9 +124,13 @@ bool realm_holders_census(RealmHolders *out) {
     for (int i = 0; i < w.n; i++) {
         JSContext *realm = navigable_realm_at(i);
         JSValue g = JS_GetGlobalObject(realm);
-        JSValueConst handles[3] = { g, document_window_proxy(realm), document_object(realm) };
+        JSValueConst proxy = document_window_proxy(realm);
+        JSValueConst handles[3] = { g, proxy, document_object(realm) };
         for (int h = 0; h < 3; h++) {
             if (!JS_IsObject(handles[h])) continue;   /* a realm with no browsing context has no proxy */
+            /* A destroyed navigable's proxy names its realm no longer (window_proxy_set_destroyed releases both
+               the Window and the realm borrow), so holding it is not holding the realm. */
+            if (h == 1 && window_proxy_destroyed(proxy)) continue;
             w.globals[w.n_globals].global = JS_VALUE_GET_PTR(handles[h]);
             w.globals[w.n_globals].realm = i;
             w.n_globals++;
@@ -209,6 +210,5 @@ out:
     out->unheld = none;
     out->unheld_rooted = rooted;
     out->unheld_outside = outside;
-    if (none == w.n) g_all_unheld_seen = true;
     return true;
 }
