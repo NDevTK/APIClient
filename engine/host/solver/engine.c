@@ -12309,7 +12309,7 @@ static int engine_sched_slice(void) {
                        body) are page bytes of any length; everything else is the assert's message, sized by
                        check.h. */
                     char pl_txt[512], body_txt[1024];
-                    const char *sk = cur && cur->fire.kind == FIRE_MARKER ? cur->fire.sink : "(exploration flow)";
+                    const char *sk = cur && cur->fire.kind == FIRE_SINK ? cur->fire.sink : "(exploration flow)";
                     const char *pl = cur ? cur->cand_payload : NULL;
                     /* Which program: script_i indexes the one sequence, the document's scripts and the flow's own
                        dynamic bodies (a lazy chunk, an injected <script>, a fired PoC) as rows of one table

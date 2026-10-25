@@ -59,5 +59,5 @@ void request_observe_park(const FetchRequest *req)
     if (!f || !f->cand_src) return;
     /* A sink candidate's class decides what its request proves (solve.c's request class). A witness verification
        observes at the mint today (solver/endpoint.c), so it is not read here. */
-    if (f->fire.kind == FIRE_MARKER) solve_request_parked(req);
+    if (f->fire.kind == FIRE_SINK) solve_request_parked(req);
 }

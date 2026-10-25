@@ -577,7 +577,7 @@ static void park_rec_cand(const Flow *f, long id)
     const char *p;
     const char *root;
 
-    DCHECK(f->cand_src && *f->cand_src && f->cand_payload && *f->cand_payload && f->fire.kind == FIRE_MARKER,
+    DCHECK(f->cand_src && *f->cand_src && f->cand_payload && *f->cand_payload && f->fire.kind == FIRE_SINK,
            "an @S candidate was parked missing part of its substitution — the source, the payload and the sink "
            "class are one identity, and a record holding two of the three resumes a flow that injects nothing "
            "or cannot say what it fired");
@@ -2494,7 +2494,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
             {
                 const char *sink = solve_resume_candidate(fl->cand_src, root, sname, fl->cand_payload);
 
-                if (sink) fire_target_marker(&fl->fire, sink);
+                if (sink) fire_target_sink_set(&fl->fire, sink);
             }
             free(root);
             if (fl->fire.kind == FIRE_NONE) {

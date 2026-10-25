@@ -409,7 +409,7 @@ static void fire_observed(Flow *f) {
     int no_act, unsolved;
     char *acts, *refused, *dl;
 
-    DCHECK(f && f->cand_src && f->cand_payload && f->fire.kind == FIRE_MARKER,
+    DCHECK(f && f->cand_src && f->cand_payload && f->fire.kind == FIRE_SINK,
            "an @S candidate flow fired holding no source, no payload or no sink class — a finding IS that "
            "triple, so a flow carrying half of it was assembled somewhere that does not go through the seeder "
            "or the cold tier's rebuild");
@@ -1495,7 +1495,7 @@ static void filter_survived(const char *out) {
     Cand *e;
     double had, now;
 
-    CHECK(f != NULL && f->cand_src != NULL && f->cand_payload != NULL && f->fire.kind == FIRE_MARKER,
+    CHECK(f != NULL && f->cand_src != NULL && f->cand_payload != NULL && f->fire.kind == FIRE_SINK,
           "solve: a string reached a code-execution sink inside a candidate run while the running flow holds "
           "no substitution — this rung measures the sink's output against the bytes THIS flow injected, so a "
           "flow with none is not a candidate at all, and all three are dereferenced immediately below");
@@ -1645,7 +1645,7 @@ static Cand *candidate_search(int sink) {
     int created = 0;
     Cand *e;
 
-    DCHECK(f && f->cand_src && f->fire.kind == FIRE_MARKER,
+    DCHECK(f && f->cand_src && f->fire.kind == FIRE_SINK,
            "an @S candidate's own bytes reached a sink outside a candidate flow — nothing but a candidate run "
            "injects them, so a string carrying one was built by something that is not this search");
     if (sink_class_of_name(fire_target_sink(&f->fire)) != sink) return NULL;
@@ -2028,7 +2028,7 @@ static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload) {
     f = flow_add_unseeded(ctx, JS_UNDEFINED, WORLD_NONE);
     f->cand_src     = strdup(e->src);
     f->cand_payload = strdup(payload);
-    fire_target_marker(&f->fire, sink_name(e->sink));
+    fire_target_sink_set(&f->fire, sink_name(e->sink));
     CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
     flow_seed(f);
     /* And the flow stands on the path the detection proved reaches this sink. It still re-runs the
@@ -2123,7 +2123,7 @@ int solve_seed_candidates(JSContext *ctx) {
 void solve_observe_substitution(Flow *f) {
     Cand *e;
 
-    CHECK(f != NULL && f->cand_src != NULL && f->fire.kind == FIRE_MARKER,
+    CHECK(f != NULL && f->cand_src != NULL && f->fire.kind == FIRE_SINK,
           "solve: an @S substitution was performed for a flow carrying no source or no sink class — a search "
           "is the pair, and both are dereferenced immediately below, so a flow holding half of one is a "
           "candidate assembled outside solve_seed_candidates and solve_resume_candidate");
@@ -2198,7 +2198,7 @@ void solve_flow_begin(Flow *f) {
 
     /* A sink candidate is delivered through its search's root; a witness verification pins a value at its
        identity and is no search's. */
-    if (f && f->cand_src && f->fire.kind == FIRE_MARKER) {
+    if (f && f->cand_src && f->fire.kind == FIRE_SINK) {
         const Cand *rc = search_of(f->cand_src, sink_class_of_name(fire_target_sink(&f->fire)));
 
         DCHECK(rc != NULL && rc->root != NULL, "a candidate flow was switched in whose search holds no root");
@@ -2281,7 +2281,7 @@ void solve_flow_end(Flow *f) {
                 "payloads=%d turns=%d verifying=%d sink=%s src=\"%s\"",
                 e->tried, e->ends, e->resumed, e->resumed_withdrawn, e->seeded, e->npl, e->turns,
                 f->cand_verifying,
-                f->fire.kind == FIRE_MARKER ? f->fire.sink : "(null)", e->src ? e->src : "(null)");
+                f->fire.kind == FIRE_SINK ? f->fire.sink : "(null)", e->src ? e->src : "(null)");
         e->ends++;
     }
     f->cand_verifying = 0;

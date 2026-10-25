@@ -14,17 +14,17 @@ static void fire_target_check(const FireTarget *t)
 {
     DCHECK(t != NULL, "a fire target was asked of nothing");
     DCHECK(t->kind == FIRE_NONE ? !t->sink && !t->key
-           : t->kind == FIRE_MARKER ? t->sink && *t->sink && !t->key
+           : t->kind == FIRE_SINK ? t->sink && *t->sink && !t->key
            : t->kind == FIRE_REQUEST && t->key && *t->key && !t->sink,
-           "a fire target holds fields of a kind it is not — a marker owns its sink class, a request its "
+           "a fire target holds fields of a kind it is not — a sink target owns its class, a request its "
            "verification key, and an exploring flow neither");
 }
 
-void fire_target_marker(FireTarget *t, const char *sink)
+void fire_target_sink_set(FireTarget *t, const char *sink)
 {
     fire_target_check(t);
-    DCHECK(t->kind == FIRE_NONE && sink && *sink, "a marker target was set over another target or with no sink");
-    t->kind = FIRE_MARKER;
+    DCHECK(t->kind == FIRE_NONE && sink && *sink, "a sink target was set over another target or with no class");
+    t->kind = FIRE_SINK;
     t->sink = sink;
 }
 
@@ -42,7 +42,7 @@ void fire_target_copy(FireTarget *dst, const FireTarget *src)
     fire_target_check(src);
     fire_target_check(dst);
     DCHECK(dst->kind == FIRE_NONE, "a fire target was copied over another target");
-    if (src->kind == FIRE_MARKER) fire_target_marker(dst, src->sink);
+    if (src->kind == FIRE_SINK) fire_target_sink_set(dst, src->sink);
     else if (src->kind == FIRE_REQUEST) fire_target_request(dst, src->key);
 }
 
@@ -58,7 +58,7 @@ void fire_target_clear(FireTarget *t)
 const char *fire_target_sink(const FireTarget *t)
 {
     fire_target_check(t);
-    DCHECK(t->kind == FIRE_MARKER, "a sink class was asked of a fire target that is not a marker's");
+    DCHECK(t->kind == FIRE_SINK, "a sink class was asked of a fire target that is not a sink's");
     return t->sink;
 }
 

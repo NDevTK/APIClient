@@ -2785,7 +2785,7 @@ static void cand_observe_delivery(Flow *f)
        flows. It lets a parked report tell "bytes never entered" from "entered and reached no sink" and from
        "sinks ran carrying none", which otherwise all read `turns:N,reached:0,survived:0`. Not a credit:
        solve.c raises a counter and moves no ordering. */
-    if (f->fire.kind == FIRE_MARKER) solve_observe_substitution(f);   /* a verification is no search's (solve_flow_begin) */
+    if (f->fire.kind == FIRE_SINK) solve_observe_substitution(f);   /* a verification is no search's (solve_flow_begin) */
     /* Every candidate delivers bytes this engine chose (a breakout, or the value a witness's pin chose), so
        from here an address the run composes may rest on them, and its requests say so (flow.h's
        `path_forced` and `path_pinned`). Whose act the run is, which holds from its first opcode, is the
