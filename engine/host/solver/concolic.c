@@ -3780,9 +3780,10 @@ int concolic_equality_outcome(JSContext *ctx, JSValueConst cond)
     can_hold = eq_admitted(ctx, c, 1, &subject);
     can_fail = eq_admitted(ctx, c, 0, &subject);
     types = c->cmp_subj_types & (subject ? concolic_types(subject) : CONCOLIC_TYF_ALL);
-    DCHECK(types & (can_hold | can_fail),
-           "an equality's two arms each admit only types the compared value's facet excludes — a facet emptied "
-           "by an earlier arm is a world the outcome refinement should have pruned before it was filed");
+    DCHECKF(types & (can_hold | can_fail),
+            "an equality against %s (typeof subject %d) over %s admits types 0x%x holding and 0x%x failing, and "
+            "its subject takes only 0x%x (stated 0x%x): every arm is a world no value produces", c->cmp_tok,
+            c->cmp_typeof, subject ? subject : "(no src)", can_hold, can_fail, types, c->cmp_subj_types);
     if ((types & can_hold) && (types & can_fail)) return -1;
     return (types & can_hold) != 0;
 }
