@@ -45,6 +45,7 @@
 
 #include <stddef.h>
 #include "solver/solve_filter.h"   /* the DELIVERABILITY half of §@S's joint solve — see that header */
+#include "solver/solve_joint.h"
 
 /* THE LOCATOR the context probe injects at the source. ASCII alphanumeric and nothing else, which is the whole
    of its design: it is inert in EVERY §13.2.5 state (it starts no tag, closes no quote, ends no comment), so
@@ -82,6 +83,10 @@ typedef void (*SolveHtmlEmit)(void *user, const char *breakout);
    observes a byte failing to arrive; re-calling this on the SAME witness under the changed table is §@S's
    "a near-miss is mutated toward the gap using byte-provenance", and it needs no second search and no retry
    count — what it constructs joins the one search and the next drain seeds it. */
-int solve_html_breakouts(const char *output, const SolveDelivered *d, SolveHtmlEmit emit, void *user);
+/* `j` holds the other contexts the same delivered value reaches (solver/solve_joint.h), or NULL. Where an
+   attribute value's quote also leaves one of theirs, the continuation they require is emitted as a second
+   separator beside this state's own, when this context's tokenizer reads it as one. */
+int solve_html_breakouts(const char *output, const SolveDelivered *d, const SolveJoint *j, SolveHtmlEmit emit,
+                        void *user);
 
 #endif

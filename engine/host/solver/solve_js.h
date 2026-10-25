@@ -127,4 +127,16 @@ int solve_js_breakouts(const char *output, const SolveDelivered *d, SolveJsEmit 
  * change the scan it is being used to measure. The @S fire marker's own first byte satisfies it. */
 int solve_js_at_source(const char *output, size_t at);
 
+/* The continuation §12.4 makes inert between input elements: a SingleLineComment, which absorbs every byte up
+   to a LineTerminator. After a literal's terminator on a line it closes, it also absorbs the literal's own
+   terminator the page wrote, so nothing after it is read as source. */
+#define SOLVE_JS_INERT_RESUME "//"
+
+/* Is `payload`, delivered at every locator of `output` (an eval witness), admissible in that program: does it
+   leave each hole's §12 state only where SOLVE_JS_INERT_RESUME follows the byte that left it, with no
+   LineTerminator after? A payload that never leaves the state reads as the page's own bytes did. This is the
+   JS half of a joint solve: a markup breakout delivered through a source an eval also reads must not make that
+   eval throw before the markup write runs. Sound in one direction: 0 may refuse a payload that would parse. */
+int solve_js_admits(const char *output, const char *payload);
+
 #endif

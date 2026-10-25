@@ -4,6 +4,7 @@
 #include "solver/solve_html.h"
 #include "solver/solve_js.h"
 #include "solver/solve_url.h"
+#include "solver/solve_joint.h"
 #include "solver/request_observe.h"
 #include "solver/solve_filter.h"
 #include "core/json_buf.h"
@@ -1228,26 +1229,45 @@ static void learn_witness(Cand *e, const char *out) {
     e->nwit++;
 }
 
+/* The other contexts this search's delivered value reaches (solver/solve_joint.h): the witnesses of every
+   script-context search over the same delivery root. The array is owned by the caller; the strings are the
+   searches'. */
+static const char **joint_witnesses(const Cand *e, int *n) {
+    const char **w = NULL;
+    int cap = 0;
+
+    *n = 0;
+    for (int i = 0; i < g_pending_n; i++) {
+        const Cand *s = &g_pending[i];
+
+        if (s == e || !s->root || !e->root || strcmp(s->root, e->root) != 0) continue;
+        if (sink_class(s->sink)->derive != SINK_DERIVE_JS) continue;
+        for (int k = 0; k < s->nwit; k++) {
+            if (*n == cap) {
+                cap = cap ? cap * 2 : 4;
+                w = realloc(w, (size_t)cap * sizeof *w);
+                CHECK(w, "solve: OOM gathering a search's joint contexts");
+            }
+            w[(*n)++] = s->wit[k];
+        }
+    }
+    return w;
+}
+
 /* Derive this search's breakouts from its witnesses: ECMAScript §12 for the eval sink, §13.2.5 for the markup
    one, each read by the parser that owns the sink's language, under the search's delivery table. There are
-   two callers: the context probe arriving, and a delivery observation narrowing the table, which re-derives
-   from the stored witnesses. That is the near-miss mutation performed by re-derivation, so every escape is
+   three callers: the context probe arriving, a delivery observation narrowing the table, and a script context
+   of the same root arriving (derive_joint_siblings); the last two re-derive from the stored witnesses. That is the near-miss mutation performed by re-derivation, so every escape is
    still the state's own exit and nothing is invented; what comes back joins the search (push_breakout
    dedups) and the next drain seeds it, and a table that yields no new spelling pushes nothing. The
    derivations' return counts are read: an escape constructed but not held by the search afterwards was
-   dropped, and the report would state `probes == payloads`. */
-static void derive_from_witness(Cand *e) {
-    int derive, built = 0;
+   dropped, and the report would state `probes == payloads`. A markup search derives under the joint
+   contexts of its root (joint_witnesses). */
+static void derive_breakouts(Cand *e) {
+    int derive, built = 0, njs = 0;
+    const char **js;
+    SolveJoint joint;
 
-    DCHECK(e != NULL && e->nwit > 0,
-           "a derivation was asked to run on a search that holds no witness — the witness is the string the "
-           "context probe's own run handed this sink, so without one there is no observation to read a state "
-           "off and the re-derivation would be a static shape of the expression");
-    /* The second door onto the one capture (cand_learn_path): a witness means one of this search's candidate
-       flows reached this sink with this source. It is a no-op for a search this session detected; for a resumed
-       one it is the only capture, without which queue_derived would drop every escape built below. Taken before
-       the derivation, because the hand-off asserted below needs it. */
-    cand_learn_path(e);
     derive = sink_class(e->sink)->derive;
     /* The routed classes are named rather than reached by an `else`, so in a release build a class with no
        routed parser constructs nothing instead of handing HTML-tokenizer bytes to the JS derivation. The DFAIL
@@ -1256,11 +1276,19 @@ static void derive_from_witness(Cand *e) {
         DFAIL("a sink class stored a context witness and declares no derivation to read it with — a class "
               "whose breakouts are written down never stores one, so this is a class whose derivation column "
               "was set without a parser being routed for it");
+    /* Named residual. Not covered: a script or request search's own breakouts are not checked against the
+       other script contexts of their root. Next diff builds: solve_js and solve_url taking the joint as
+       solve_html does. Absence shows as: a parked eval or request search whose candidate runs end in another
+       eval's SyntaxError before reaching its sink. */
+    js = derive == SINK_DERIVE_HTML ? joint_witnesses(e, &njs) : NULL;
+    joint.js = js;
+    joint.njs = njs;
     for (int i = 0; i < e->nwit; i++) {
-        if      (derive == SINK_DERIVE_HTML) built += solve_html_breakouts(e->wit[i], &e->deliv, queue_derived, e);
+        if      (derive == SINK_DERIVE_HTML) built += solve_html_breakouts(e->wit[i], &e->deliv, &joint, queue_derived, e);
         else if (derive == SINK_DERIVE_JS)   built += solve_js_breakouts(e->wit[i], &e->deliv, queue_derived, e);
         else if (derive == SINK_DERIVE_URL)  built += solve_url_breakouts(e->wit[i], &e->deliv, queue_derived, e);
     }
+    free(js);
     DCHECK(built == 0 || cand_has_escape(e) || search_solved(e),
            "a derivation constructed an escape that this search does not hold — the constructed count and the "
            "search's own payload list are the two ends of one hand-off, so a search left holding nothing but "
@@ -1270,6 +1298,33 @@ static void derive_from_witness(Cand *e) {
            "closed by a fire seeds nothing further by design, and a RESUMED one that fired holds no row in "
            "`pl` to show for it, so the list is a proxy for closure that answers `no` about a solved search "
            "and the fire is the fact");
+}
+
+
+/* A script context's witness constrains every markup search over the same root, so each one already holding a
+   path re-derives with it. A sibling without a path derives when its own probe arrives. */
+static void derive_joint_siblings(const Cand *e) {
+    for (int i = 0; i < g_pending_n; i++) {
+        Cand *s = &g_pending[i];
+
+        if (s == e || !s->root || !e->root || strcmp(s->root, e->root) != 0) continue;
+        if (sink_class(s->sink)->derive != SINK_DERIVE_HTML || s->nwit == 0 || !search_seeds(s)) continue;
+        derive_breakouts(s);
+    }
+}
+
+static void derive_from_witness(Cand *e) {
+    DCHECK(e != NULL && e->nwit > 0,
+           "a derivation was asked to run on a search that holds no witness — the witness is the string the "
+           "context probe's own run handed this sink, so without one there is no observation to read a state "
+           "off and the re-derivation would be a static shape of the expression");
+    /* The second door onto the one capture (cand_learn_path): a witness means one of this search's candidate
+       flows reached this sink with this source. It is a no-op for a search this session detected; for a resumed
+       one it is the only capture, without which queue_derived would drop every escape built below. Taken before
+       the derivation, because the hand-off asserted below needs it. */
+    cand_learn_path(e);
+    derive_breakouts(e);
+    if (sink_class(e->sink)->derive == SINK_DERIVE_JS) derive_joint_siblings(e);
 }
 
 /* Which of the bytes the source's component percent-encodes reached the sink: the character-provenance

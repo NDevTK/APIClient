@@ -19129,7 +19129,9 @@ TF_UNIT void probes_hashsinks_statesinks(const char *js, Probe *tab, int *n) {
        quoted because the solidus is not an exit from §13.2.5.38 "Attribute value (unquoted) state" — it is
        appended there — so an unquoted value would swallow the rest of the escape. A payload table could not
        have held this: it is a function of the source's measured byte set AND the element the hole is in. */
-    int s_attr  = s_poc(ss, "innerHTML", ATTR_SRC, "'/src='x'/onerror='X9()'/x9pad='");
+    /* The document's first statement evals `'` + location.hash + `'`, so the one delivered value must leave that
+       eval parsing: each separator is §12.4's `//`, which the markup tokenizer also reads as one. */
+    int s_attr  = s_poc(ss, "innerHTML", ATTR_SRC, "'//src='x'//onerror='X9()'//x9pad='");
     int s_attrd = s_field(ss, "innerHTML", ATTR_SRC, "\"sourceDelivers\":\"\"");
     /* THE STAGES BEHIND EACH OF THOSE ROWS. The rows above assert the PAYLOAD TEXT, which only a real
        derivation followed by a real fire can produce, and nothing here relaxes them — these say WHERE a run

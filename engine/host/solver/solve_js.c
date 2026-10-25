@@ -956,3 +956,75 @@ int solve_js_at_source(const char *output, size_t at) {
     free(z.tpl);
     return h.st == JS_SOURCE;
 }
+
+/* The §12 state at `mark` (an ASCII alphanumeric offset) of `s`. */
+static Hole state_at(const char *s, size_t mark) {
+    Scan z;
+    Hole h;
+
+    z.s = s; z.n = strlen(s); z.at = mark;
+    z.prev = PREV_NONE; z.sol = 1; z.brace = 0; z.tpl = NULL; z.ntpl = z.tplcap = 0;
+    h = scan(&z);
+    free(z.tpl);
+    return h;
+}
+
+/* `output` with the locator at `off` replaced by `ins` followed by `mark`, owned; `*at` is where `mark` stands. */
+static char *substitute(const char *output, size_t off, const char *ins, size_t ins_n, const char *mark,
+                        size_t *at) {
+    size_t loclen = sizeof SOLVE_JS_LOCATOR - 1, n = strlen(output), mn = strlen(mark);
+    char *t = malloc(n - loclen + ins_n + mn + 1);
+
+    CHECK(t != NULL, "solve_js: OOM substituting a payload into an eval witness");
+    memcpy(t, output, off);
+    memcpy(t + off, ins, ins_n);
+    memcpy(t + off + ins_n, mark, mn);
+    memcpy(t + off + ins_n + mn, output + off + loclen, n - off - loclen + 1);
+    *at = off + ins_n;
+    return t;
+}
+
+static int same_hole(Hole a, Hole b) { return a.st == b.st && a.esc == b.esc && a.owed == b.owed; }
+
+/* One occurrence of the locator at `off`: does `payload` there leave the program as the original was, or
+   inert behind a SingleLineComment? */
+static int admits_at(const char *output, size_t off, const char *payload) {
+    static const char mark[] = "apiclientjsmark";
+    size_t pn = strlen(payload), at, i, k;
+    Hole h0 = state_at(output, off), hi = h0;
+    char *t;
+
+    for (i = 1; i <= pn; i++) {
+        t = substitute(output, off, payload, i, mark, &at);
+        hi = state_at(t, at);
+        free(t);
+        if (!same_hole(hi, h0)) break;
+    }
+    if (i > pn) return 1;   /* every byte stayed in the hole's own state, so the page's suffix reads as before */
+    /* The first byte that left the state must land between input elements, and the two after it must open a
+       §12.4 SingleLineComment, which absorbs everything up to a LineTerminator: the rest of the payload and the
+       page's own terminator for the literal. No LineTerminator may follow, in the payload or after the hole. */
+    if (hi.st != JS_SOURCE || pn - i < 2 || memcmp(payload + i, SOLVE_JS_INERT_RESUME, 2) != 0) return 0;
+    t = substitute(output, off, payload, i + 2, mark, &at);
+    hi = state_at(t, at);
+    free(t);
+    if (hi.st != JS_COMMENT_LINE) return 0;
+    for (k = i + 2; k < pn; k++)
+        if (payload[k] == '\n' || payload[k] == '\r') return 0;
+    for (k = off + sizeof SOLVE_JS_LOCATOR - 1; output[k]; k++) {
+        size_t l = 0;
+        if (is_lt(cp_at(output, strlen(output), k, &l))) return 0;
+    }
+    return 1;
+}
+
+int solve_js_admits(const char *output, const char *payload) {
+    size_t loclen = sizeof SOLVE_JS_LOCATOR - 1;
+    const char *p;
+
+    DCHECK(output && payload && strstr(output, SOLVE_JS_LOCATOR),
+           "the JS admissibility question was asked of no witness, no payload, or a witness without the locator");
+    for (p = output; (p = strstr(p, SOLVE_JS_LOCATOR)) != NULL; p += loclen)
+        if (!admits_at(output, (size_t)(p - output), payload)) return 0;
+    return 1;
+}
