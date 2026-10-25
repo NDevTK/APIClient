@@ -1,6 +1,6 @@
-/* THE JOIN-COMPOSITION DOCUMENT: §23.1.3.18 Array.prototype.join over an array holding one unknown (an injected
-   global the document does not spell, which solver/absent.c mints) is string-concatenation of its pieces, so
-   its address composes exactly as the same pieces joined by `+` do, every known piece kept. String(array) and a
+/* THE JOIN-COMPOSITION DOCUMENT: §23.1.3.18 Array.prototype.join over an array holding one unknown (the fragment,
+   whose example is a String) is string-concatenation of its pieces, so its address composes exactly as the same
+   pieces joined by `+` do, every known piece kept. String(array) and a
    template literal reach the same join through Array.prototype.toString, and an all-constant join stays
    concrete.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
@@ -14,7 +14,7 @@
 static const char HTML_JOINCOMPOSE[] =
     "<!doctype html><html><body>"
     "<script>"
-    "var jcU = window.__tfJoinU;"
+    "var jcU = location.hash;"
     "fetch('/api/jc/join/' + ['aa', jcU, 'bb'].join('&'));"
     "fetch('/api/jc/plus/' + ('aa' + '&' + jcU + '&' + 'bb'));"
     "fetch('/api/jc/tostr/' + String(['aa', jcU, 'bb']));"

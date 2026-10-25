@@ -15838,16 +15838,31 @@ TF_UNIT void probes_uspiso(const char *js, Probe *tab, int *n) {
 
 /* The rows of the `joincompose` document (fixture/joincompose.h). */
 TF_UNIT void probes_joincompose(const char *js, Probe *tab, int *n) {
-    int plus = !!strstr(js, "\"/api/jc/plus/{aa&__tfJoinU&bb}\"");
-    int join = !!strstr(js, "\"/api/jc/join/{aa&__tfJoinU&bb}\"");
-    int tostr = !!strstr(js, "\"/api/jc/tostr/{aa,__tfJoinU,bb}\"");
-    int tpl = !!strstr(js, "\"/api/jc/tpl/{aa,__tfJoinU,bb}\"");
+    /* each record's address after its route prefix, so join's composition is compared with `+`'s and not with a
+       spelling written here */
+    char addr[4][256];
+    static const char *const routes[] = { "\"url\":\"/api/jc/join/", "\"url\":\"/api/jc/plus/",
+                                          "\"url\":\"/api/jc/tostr/", "\"url\":\"/api/jc/tpl/" };
+    for (int k = 0; k < 4; k++) {
+        const char *at = strstr(js, routes[k]);
+        size_t m = 0;
+        addr[k][0] = '\0';
+        if (at) {
+            at += strlen(routes[k]);
+            while (at[m] && at[m] != '"' && m + 1 < sizeof addr[k]) { addr[k][m] = at[m]; m++; }
+            addr[k][m] = '\0';
+        }
+    }
     int cst = !!strstr(js, "\"/api/jc/const/aa&cc&bb\"");
     const char *jw = NULL; int jt = 1;
-    fold_row(&jt, &jw, plus, "NOT REACHED: the `+` control did not compose to {aa&__tfJoinU&bb}");
-    fold_row(&jt, &jw, join, "join over the same pieces did not compose as `+` does");
+    fold_row(&jt, &jw, addr[0][0] && addr[1][0], "NOT REACHED: the join or the `+` record is missing");
+    fold_row(&jt, &jw, strcmp(addr[0], addr[1]) == 0 && strstr(addr[0], "aa&") && strstr(addr[0], "&bb"),
+             "join over the same pieces did not compose as `+` does, every known piece kept");
     const char *tw = NULL; int tt = 1;
-    fold_row(&tt, &tw, tostr && tpl, "String(array) or a template literal over it did not compose through join");
+    fold_row(&tt, &tw, addr[2][0] && addr[3][0], "NOT REACHED: the String(array) or template record is missing");
+    fold_row(&tt, &tw, strstr(addr[2], "aa,") && strstr(addr[2], ",bb") && strstr(addr[3], "aa,") &&
+                       strstr(addr[3], ",bb"),
+             "String(array) or a template literal over it lost the known pieces of its join");
     const Probe rows[] = {
         { "join-compose", jt, "/api/jc/join/", SESS_EXPLORE, jw },
         { "join-tostring-compose", tt, "/api/jc/tostr/", SESS_EXPLORE, tw },
