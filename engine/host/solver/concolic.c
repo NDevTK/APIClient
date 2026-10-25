@@ -3918,6 +3918,19 @@ static void pred_set_subject_ident(JSValueConst pred, const char *ident) {
     CHECK(c->cmp_subj_ident, "concolic: OOM recording the value an equality is a fact about");
 }
 
+/* …and the same identity for an ordering whose other side is known: §7.2.12 IsLessThan's example was run on
+   this operand's example and a constant, so an arm contradicting it contradicts the operand's example, as an
+   equality's does. An ordering files no exclusion, so it needs no hole. */
+static void pred_set_order_subject(JSValueConst pred, const char *ident) {
+    Concolic *c = JS_GetOpaque(pred, g_concolic_class);
+
+    DCHECK(c != NULL && c->cmp_op == OPCMP_NONE,
+           "an ordering's operand identity was stamped on something that is not an ordering result");
+    DCHECK(c->cmp_subj_ident == NULL, "an ordering was given a second subject identity");
+    c->cmp_subj_ident = strdup(ident);
+    CHECK(c->cmp_subj_ident, "concolic: OOM recording the value an ordering is a fact about");
+}
+
 /* The ordering's observation, stamped on a predicate pred_new has just minted. A second call rather than four
    more parameters, because only the ordering hook has one and every other caller would spell `REL_NONE, NULL,
    0, NULL`. The facts are written here together, so the one-observation assert has a single site. */
@@ -4772,6 +4785,8 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
             JS_FreeValue(ctx, exa);
             JS_FreeValue(ctx, exb);
         }
+        if (!concolic_is(other) && concolic_ident_c(opq))
+            pred_set_order_subject(res, concolic_ident_c(opq));
         if (!concolic_is(other) && JS_IsNumber(other)) {
             double num = 0;
             int gotn = JS_ToFloat64(ctx, &num, other);

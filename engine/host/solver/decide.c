@@ -1467,9 +1467,9 @@ static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
  * silence that value in flows that proved nothing); the mark needs no key.
  * It drops the predicate's subject too, where the @H value lives: `x === 'admin'` over an example of `'admin'`
  * taken false would otherwise go on emitting `"/api/" + x` with bytes this path disproved. That is exact for an
- * equality, not an inversion: the comparison's example was computed from the operand's (concolic.c's
- * cmp_example), so a contradicted result about operand O contradicts O's example, the same inference
- * `concolic_pin` and `concolic_exclude` make. concolic_example asks the pin first under `src_self`, so the holding
+ * equality, and for an ordering against a known side: the comparison's example was computed from the operand's,
+ * so a contradicted result about operand O contradicts O's example, the inference `concolic_pin` and
+ * `concolic_exclude` make. concolic_example asks the pin first under `src_self`, so the holding
  * arm concretizes the value wherever the page holds it and the failing arm degrades it. The subject is named by
  * its identity, while the exclusion uses the hole, because the emission has only printed text. */
 /* It is asked of an outcome fork's operand too: a machine's `real` (quickjs.h) is the completion reached when run
