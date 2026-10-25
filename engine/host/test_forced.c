@@ -1156,6 +1156,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/uspiter.h"
 #include "fixture/fileparsetext.h"
 #include "fixture/boundpark.h"
+#include "fixture/recordless.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
 #include "fixture/msgchaincoop.h"
@@ -1633,6 +1634,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "uspiter", HTML_USPITER },
     { "fileparse-text", HTML_FILEPARSE_TEXT },
     { "boundpark", HTML_BOUNDPARK },
+    { "recordless", HTML_RECORDLESS },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
     { "msgchaincoop", HTML_MSGCHAINCOOP, OPENER_POLICY_SAME_ORIGIN },
@@ -15194,6 +15196,26 @@ TF_UNIT void probes_fileparse_text(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `recordless` document (fixture/recordless.h). */
+TF_UNIT void probes_recordless(const char *js, Probe *tab, int *n) {
+    /* Both arms of a branch on an unknown inside four recordless callees: each pair is reached only if the
+       fork copied the callee's frame. */
+    static const char *const arms[] = { "/api/rl/setter-a", "/api/rl/setter-b", "/api/rl/next-a", "/api/rl/next-b",
+                                        "/api/rl/star-a", "/api/rl/star-b", "/api/rl/return-a", "/api/rl/return-b" };
+    const char *rl_why = NULL; int rl_tt = 1;
+    for (size_t i = 0; i < COUNTOF(arms); i++) {
+        char q[64];
+        snprintf(q, sizeof q, "\"%s\"", arms[i]);
+        fold_row(&rl_tt, &rl_why, !!strstr(js, q),
+                 "NOT REACHED: an arm of a branch inside a recordless callee has no record, so that fork's frame "
+                 "was not copied");
+    }
+    const Probe rows[] = {
+        { "recordless-frame-fork", rl_tt, "/api/rl/setter-a", SESS_EXPLORE, rl_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -19062,6 +19084,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_uspiter(js, probes, &np);
     probes_fileparse_text(js, probes, &np);
     probes_boundpark(js, probes, &np);
+    probes_recordless(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_deepnest(js, probes, &np);

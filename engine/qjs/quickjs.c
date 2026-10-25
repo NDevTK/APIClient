@@ -53738,6 +53738,50 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v);
         next->st = o_; next->kind = ok_;                                                                       \
         return;                                                                                                \
     }
+/* The frame kinds a call pushes with no record: the frame's own operands are the whole continuation, so a fork
+   copies nothing for them and a release frees nothing. Every walk reads them from this list. */
+#define CONT_RECORDLESS_KINDS(X) X(CONT_SETTER) X(CONT_FOROF_NEXT) X(CONT_ITER_CALL) X(CONT_ITER_NEXT_OP)
+#define CONT_REC_CASE_TRUE(k, ...)              case k: return true;
+#define CONT_REC_CASE_SIZE(k, T, p, role)       case k: return sizeof(T);
+#define CONT_REC_CASE_FRAME_CLONE(k, T, p, role)                                                               \
+    case k: CONT_REC_AGREES_AT(k, T, p, st); return p##_clone(ctx, (const T *)st);
+/* Is `kind` a declared record's (CONT_RECORD_KINDS)? */
+static bool cont_kind_declared(uint8_t kind)
+{
+    switch (kind) {
+    CONT_RECORD_KINDS(CONT_REC_CASE_TRUE)
+    default: return false;
+    }
+}
+/* Is `kind` one CONT_RECORDLESS_KINDS names? */
+static bool cont_kind_recordless(uint8_t kind)
+{
+    switch (kind) {
+    CONT_RECORDLESS_KINDS(CONT_REC_CASE_TRUE)
+    default: return false;
+    }
+}
+/* The bytes of a declared record under `kind`. */
+static size_t cont_record_size(uint8_t kind)
+{
+    switch (kind) {
+    CONT_RECORD_KINDS(CONT_REC_CASE_SIZE)
+    default:
+        DFAIL("the size of an undeclared continuation record was asked");
+        return 0;
+    }
+}
+/* A declared record that is a frame's own cont_state, copied for the sibling (its generated p_clone); NULL on
+   OOM. The links it names are bound by tramp_cont_relink_outer afterwards. */
+static void *cont_frame_clone(JSContext *ctx, const void *st, uint8_t kind)
+{
+    switch (kind) {
+    CONT_RECORD_KINDS(CONT_REC_CASE_FRAME_CLONE)
+    default:
+        DFAIL("a frame's continuation record was copied under a kind no record is declared for");
+        return NULL;
+    }
+}
 CONT_KIND_SWITCH_CHECKED_BEGIN
 static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
 {
@@ -53864,15 +53908,13 @@ static JSDescFacts **cont_desc_out_slot(void *st, uint8_t kind)
     CONT_RECORD_KINDS(CONT_REC_IF_DESC_OUT)
     return NULL;
 }
-/* The bytes of a requester a descriptor answer can live in: the kinds that issue GP_GETOWNPROP for a record (a
-   step machine's state, JSKeyedInv, JSOwnKeysChk and JSGopdDesc), and 0 for any other. */
+/* The bytes of a requester a descriptor answer can live in: a step machine's state or any declared record, and 0
+   for any other. */
 static size_t cont_requester_size(const void *st, uint8_t kind)
 {
     switch (kind) {
     case CONT_STEP: case CONT_STEP_YIELD: return ((const JSStepHdr *)st)->def->size;
-    case CONT_KEYED_INV: return sizeof(JSKeyedInv);
-    case CONT_OWNKEYS_CHK: return sizeof(struct JSOwnKeysChk);
-    default: return 0;
+    default: return cont_kind_declared(kind) ? cont_record_size(kind) : 0;
     }
 }
 
@@ -54141,7 +54183,7 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
             DCHECK(i == 0,
                    "clone_deep_flow: a keyed-operation ANCHOR below the top of a parked chain — it is bodyless, "
                    "so the frame under it would inherit a zeroed frame as its caller");
-            ntg = js_trapget_clone(ctx, otf->cont_state);
+            ntg = cont_frame_clone(ctx, otf->cont_state, otf->cont_kind);
             if (!ntg) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
             ct->cont_state = ntg;
             ct->local_buf = NULL; ct->b = NULL; ct->local_slots = 0;
@@ -54161,7 +54203,7 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                pager or a cross-instance fork carrying its answer (ANSWERED, so it resumes without asking
                twice). The invariant that the FORK's clone is taken at the ask belongs at the fork, which is
                the one site that knows, and it is asserted there. */
-            nal = js_array_len_clone(ctx, otf->cont_state);
+            nal = cont_frame_clone(ctx, otf->cont_state, otf->cont_kind);
             if (!nal) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
             ct->cont_state = nal;
             ct->local_buf = NULL; ct->b = NULL; ct->local_slots = 0;
@@ -54179,7 +54221,7 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
             DCHECK(i == 0,
                    "clone_deep_flow: an argument-list ANCHOR below the top of a parked chain — it is bodyless, "
                    "so the frame under it would inherit a zeroed frame as its caller");
-            nagl = js_arg_list_clone(ctx, otf->cont_state);
+            nagl = cont_frame_clone(ctx, otf->cont_state, otf->cont_kind);
             if (!nagl) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
             ct->cont_state = nagl;
             ct->local_buf = NULL; ct->b = NULL; ct->local_slots = 0;
@@ -54312,23 +54354,10 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                (async_promise stays UNDEFINED from *ct=*otf); the iterator rides the cloned caller stack instead. */
             if (!gen_forof) ct->async_promise = js_dup(genobj);
             ct->local_buf = NULL; ct->b = NULL; ct->local_slots = 0;   /* the gen frame owns its buffers via g1->func_state */
-            if (otf->cont_kind == CONT_ITER_CONSUME) {
-                /* Array.from(gen) forked mid-consume: clone the consumer state so the sibling accumulates
-                   INDEPENDENTLY. r is the SHARED result array (js_dup, COW-isolated per-flow like any post-fork
-                   object mutation — each arm's DefinePropertyValueInt64 is captured on its own delta). iter is the
-                   SHARED generator object (== genobj), COW-gendata-isolated by the gen_fork above. k/orig are copied
-                   by the struct assignment. */
-                JSIterConsume *ns = js_iter_consume_clone(ctx, (const JSIterConsume *)otf->cont_state);
-                if (!ns) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                ct->cont_state = ns;
-            } else if (otf->cont_kind == CONT_ASYNC_FROM_SYNC) {
-                /* `for await (x of syncGen)` forked mid-syncGen.next(), the generator drive on the chain. */
-                JSAsyncFromSync *ns = js_async_from_sync_clone(ctx, (const JSAsyncFromSync *)otf->cont_state);
-                if (!ns) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                ct->cont_state = ns;
-            } else if (otf->cont_kind == CONT_PROMISE_ALL) {
-                /* Promise.all(gen) forked mid-consume, the generator drive on the chain. */
-                JSPromiseAll *ns = js_promise_all_clone(ctx, (const JSPromiseAll *)otf->cont_state);
+            if (otf->cont_kind != CONT_NONE) {
+                /* the consumer the generator drive feeds — Array.from(gen), `for await (x of syncGen)`,
+                   Promise.all(gen) — forked mid-consume: the sibling accumulates in its own record. */
+                void *ns = cont_frame_clone(ctx, otf->cont_state, otf->cont_kind);
                 if (!ns) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
                 ct->cont_state = ns;
             }
@@ -54372,19 +54401,7 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                    "an ordinary bytecode frame on a forked chain names a collectable owner — its storage is the "
                    "flow's own heap stack, so any object named here is one that does not hold this frame and a "
                    "cell minted in it would root the wrong thing");
-            if (otf->cont_kind == CONT_PROMISE_EXEC) {
-                /* the Promise EXECUTOR body forked: each arm must settle its own timeline, so the sibling gets its
-                   own state. The promise object and its resolving functions are SHARED (created pre-fork, js_dup)
-                   and COW-isolated per-flow like any other post-fork object mutation — so arm A resolving with X
-                   and arm B with Y do not collide. cb_args[2..3] are BORROWED views and must be rebuilt against the
-                   CLONE's fields, and the in-flight executor's arg_buf repointed into them (an external buffer the
-                   generic XL relocation would leave pointing at the original state). */
-                JSPromiseExec *os = (JSPromiseExec *)otf->cont_state;
-                JSPromiseExec *ns = js_promise_exec_clone(ctx, os);
-                if (!ns) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                ct->cont_state = ns;
-                CLONE_ARG_BUF_NOT_IN_RECORD(ct, os);
-            } else if (otf->cont_kind == CONT_STEP) {
+            if (otf->cont_kind == CONT_STEP) {
                 /* A STEP MACHINE drove this callback, and the sibling needs its own — two arms of the same
                    `[1,2].forEach(e => cfg.admin ? …)` must not share one cursor and one result array. The state
                    is byte-copied and its owned references re-taken (tramp_step_state_clone), which keeps every
@@ -54401,93 +54418,25 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                     if ((const uint8_t *)otf->sf.arg_buf >= ob && (const uint8_t *)otf->sf.arg_buf < ob + ssz)
                         ct->sf.arg_buf = (JSValue *)((uint8_t *)ns + ((const uint8_t *)otf->sf.arg_buf - ob));
                 }
-            } else if (otf->cont_kind == CONT_CONSTRUCT) {
-                /* A CONCOLIC BRANCH INSIDE A CONSTRUCTOR BODY. `new C()` runs the body on this chain with the
-                   created `this` riding the continuation, and a branch in it forks like a branch anywhere else —
-                   testharness.js's own `new Tests()` is one, which is why every WPT document stopped here. The
-                   sibling needs its OWN continuation record because do_return consumes it (it substitutes the
-                   created object for a non-object result and frees what it holds), and two flows advancing and
-                   freeing one record is the shape this whole clone exists to prevent.
-                   The created OBJECT is shared, not re-created: it existed before the branch, so it is ordinary
-                   pre-fork state whose per-arm property writes the COW delta already isolates — the same rule
-                   the Promise executor's promise follows one arm up. */
-                struct JSConstruct *ocs = (struct JSConstruct *)otf->cont_state;
-                struct JSConstruct *ncs = js_construct_clone(ctx, ocs);
-                if (!ncs) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                /* An OUTER continuation is a second record under this one (a `new` reached through another
-                   continuation — `.finally`'s PromiseResolve delegates to a machine whose NewPromiseCapability
-                   Constructs a page-defined Promise subclass, and the body of that constructor is this frame).
-                   It is left naming the ORIGINAL and BOUND by tramp_cont_relink_outer below. */
-                ct->cont_state = ncs;
-            } else if (otf->cont_kind == CONT_ASYNC_SETTLE) {
-                /* A CONCOLIC BRANCH INSIDE THE CAPABILITY'S RESOLVING FUNCTION. An async body that completed on
-                   this chain settles its promise by CALLING that function, and a subclass supplies its own — so
-                   the body is ordinary page code and forks where any other callee does. The record carries
-                   everything the placement still owes (the promise, who asked for it, in what operand shape)
-                   because the async frame has already popped, which is exactly why the sibling must not share
-                   it: the first arm to reach the settled label frees what the second still has to place.
-                   ONLY 40 HAS A FRAME ROLE. 74 is written as a machine's requester and never as a frame's
-                   cont_kind, so it has no arm here and the walk below is where it is answered — which is the
-                   whole reason a kind can be absent from every walk at once and read as covered from any one.
-                   THE FIELD LIST LIVES AT js_async_settle_clone, beside the release it mirrors, because this is
-                   not its only caller. */
-                JSAsyncSettle *oass = (JSAsyncSettle *)otf->cont_state;
-                JSAsyncSettle *nass = js_async_settle_clone(ctx, oass);
-
-                if (!nass) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                ct->cont_state = nass;
-                CLONE_ARG_BUF_NOT_IN_RECORD(ct, oass);
-            } else if (otf->cont_kind == CONT_TOPRIM) {
-                /* A CONCOLIC BRANCH INSIDE A COERCION METHOD. §7.1.1 ToPrimitive ( input [ , preferredType ] )
-                   drives `@@toPrimitive` / `valueOf` / `toString` on this chain (see CONT_TOPRIM), so a
-                   `toString` that branches on unknown external input forks exactly where any other callee does
-                   — and every `"" + o`, every `${o}`, every `o == s` and every `obj[o]` in a bundle is one such
-                   drive. nodejs.org stopped here.
-                   The field list is JS_TOPRIM_FIELDS, which the requester walk below copies through too. */
-                JSToPrim *ots = (JSToPrim *)otf->cont_state;
-                JSToPrim *nts;
-                /* A FRAME carrying kind 21 IS the coercion's method call, so its record must not be mid-READ:
-                   the read role rides a CONT_GETPROP / CONT_GETPROP_YIELD frame with this record as its
-                   gp_outer, which the requester walk below reaches under CONT_TOPRIM_GET. */
-                DCHECK(js_toprim_kind_agrees(ots, CONT_TOPRIM),
-                       "a frame carrying a coercion's method call holds a record whose method read is still out");
-                nts = js_toprim_clone(ctx, ots);
-
-                if (!nts) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                ct->cont_state = nts;
-                CLONE_ARG_BUF_NOT_IN_RECORD(ct, ots);
-            } else if (otf->cont_kind == CONT_GETPROP) {
-                /* A CONCOLIC BRANCH INSIDE A GETTER OR A PROXY TRAP. A keyed property operation runs the page's
-                   code two ways — §10.1.8.1 OrdinaryGet ( obj, propertyKey, receiver ) step 7's
-                   "Return ? Call(getter, receiver)", and the handler traps, of which §10.5.8 [[Get]] (
-                   propertyKey, receiver ) step 7's "Let trapResult be ? Call(trap, handler, « target,
-                   propertyKey, receiver »)" and §10.5.5 [[GetOwnProperty]] ( propertyKey ) step 7's "Let
-                   trapResultObj be ? Call(trap, handler, « target, propertyKey »)" are two — and a branch
-                   inside any of them forks exactly where a branch in any other callee does.
-                   NONE OF THAT IS EXOTIC BUNDLE SHAPE, which is why this arm is not an edge case: an object
-                   spread performs §7.3.25 CopyDataProperties ( target, source, excludedItems ) step 4, one
-                   [[Get]] per own key, so it reaches EVERY getter the source has; a descriptor walk reaches a
-                   `getOwnPropertyDescriptor` trap once per key the same way. A getter or a trap that reads an
-                   attacker source and branches on it therefore forks with the walk suspended MID-KEY.
-                   THE FIELD LIST LIVES AT js_getprop_clone, beside the release it mirrors, because this is not
-                   its only caller: the requester walk below finds this same record as a LINK whenever the trap
-                   turned out to be a step machine rather than a bytecode body. */
-                JSGetProp *ogp = (JSGetProp *)otf->cont_state;
-                JSGetProp *ngp = js_getprop_clone(ctx, ogp);
-
-                if (!ngp) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                ct->cont_state = ngp;
-                CLONE_ARG_BUF_NOT_IN_RECORD(ct, ogp);
-            } else if (otf->cont_kind == CONT_ITER_CONSUME) {
-                /* A BRANCH INSIDE A PLAIN ITERATOR'S `next`, OR A MAPFN OR ADDER, DRIVEN BY A CONSUMER — the
-                   consume's .next() or callback is this bytecode frame, with the consumer as its continuation.
-                   The field list is JS_ITER_CONSUME_FIELDS, which the requester walk copies through too. */
-                JSIterConsume *ocs = (JSIterConsume *)otf->cont_state;
-                JSIterConsume *ncs = js_iter_consume_clone(ctx, ocs);
-
-                if (!ncs) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
-                ct->cont_state = ncs;
-                CLONE_ARG_BUF_NOT_IN_RECORD(ct, ocs);
+            } else if (cont_kind_declared(otf->cont_kind)) {
+                /* A BRANCH INSIDE A CALLEE WHOSE CALLER LEFT A DECLARED RECORD — a getter or trap (CONT_GETPROP),
+                   a coercion method (CONT_TOPRIM), a constructor body (CONT_CONSTRUCT), a Promise executor
+                   (CONT_PROMISE_EXEC), a subclass's resolving function (CONT_ASYNC_SETTLE), a consumer's `next`
+                   or callback (CONT_ITER_CONSUME). The callee consumes that record at its return, so the sibling
+                   takes its own copy (the record's generated p_clone); what the record shares with the parent
+                   is pre-fork heap the COW delta isolates. */
+                const void *os = otf->cont_state;
+                void *ns = cont_frame_clone(ctx, os, otf->cont_kind);
+                if (!ns) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
+                ct->cont_state = ns;
+                DCHECK(ct->sf.arg_buf == NULL || (const uint8_t *)ct->sf.arg_buf < (const uint8_t *)os
+                       || (const uint8_t *)ct->sf.arg_buf >= (const uint8_t *)os + cont_record_size(otf->cont_kind),
+                       "clone_deep_flow: a forked frame reads its arguments out of the PARENT's continuation record "
+                       "— a callback/accessor frame owns its arguments, and one with none has no argument buffer");
+            } else if (cont_kind_recordless(otf->cont_kind)) {
+                /* a setter body, an iterator's `next` or a delegated call: the frame's own operands are the whole
+                   continuation, so there is nothing to copy. */
+                DCHECK(otf->cont_state == NULL, "a frame kind declared recordless carries a record");
             } else {
                 /* The KIND is the one fact needed to act on this, so it is in the message. A DFAIL that says
                    "some other continuation" sends the reader back to a bisection to learn what it already knew. */
