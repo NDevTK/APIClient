@@ -21076,14 +21076,16 @@ static int s_fired_with(const char *js, const char *sink, const char *const *nee
    admits is composed and fires; a dotted suffix, an exact match on another site's origin, or a chain whose
    messages need two different origins never does. */
 TF_UNIT void probes_msgorigin(const char *js, Probe *tab, int *n) {
-    static const char *const SUB[] = { "\"handler\":\"moSub\"", "trusted.example", "\"kind\":\"show\"" };
+    static const char *const SUB[] = { "\"handler\":\"moSub\"", "trusted.example", "\"kind\":\"show\"",
+                                       "\"originOwned\":\"attacker-site\"" };
     static const char *const EXACT[] = { "\"handler\":\"moExact\"" };
     const char *ms_why = NULL; int ms_tt = 1;
     fold_row(&ms_tt, &ms_why, !!strstr(js, "\"/api/mo-sub-entered\""),
              "NOT REACHED: there is no /api/mo-sub-entered record, so moSub was never driven");
-    fold_row(&ms_tt, &ms_why, s_fired_with(js, "innerHTML", SUB, 3),
-             "no fired innerHTML record states a moSub message posted from an origin holding `trusted.example` with "
-             "data whose kind is 'show' — the origin the substring check admits was not composed and fired");
+    fold_row(&ms_tt, &ms_why, s_fired_with(js, "innerHTML", SUB, 4),
+             "no fired innerHTML record states a moSub message posted from a name under the attacker's own site "
+             "holding `trusted.example` with data whose kind is 'show' — the origin the substring check admits "
+             "was not composed from its own constant and fired");
     const char *me_why = NULL; int me_tt = 1;
     fold_row(&me_tt, &me_why, !!strstr(js, "\"/api/mo-exact-entered\""),
              "NOT REACHED: there is no /api/mo-exact-entered record, so moExact was never driven");
