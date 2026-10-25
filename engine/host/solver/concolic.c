@@ -4538,9 +4538,23 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
     char *shape, *ident, **owned;
     const char **f;
     JSValue r;
+    unsigned callable = 0;
     int i;
 
     DCHECK(c != NULL, "the concolic call handler ran on something that is not a concolic value");
+    /* §13.3.6.2 EvaluateCall steps 4-5 over a member read off a parent whose remaining types hold no callable
+       under the name: the call throws in every world this flow admits. Named residual. Not covered: a parent
+       whose facet admits types on both sides, where the throwing types' arm is not forked (the narrowing below
+       takes the completing one). Next diff builds: a throw arm forked beside the completion, as the machine's
+       CCALL_OUTCOME forks an example run's throw. Absence shows as: a `catch` behind `x.m()` never reached
+       while x's facet still admits a type lacking `m`. */
+    if (c->member && c->facet_src) {
+        callable = tyf_callable_member(ctx, c->member);
+        if (!(concolic_types(c->facet_src) & callable)) {
+            JS_FreeValue(ctx, example);
+            return JS_ThrowTypeError(ctx, "%s is not a function", c->member);
+        }
+    }
     /* The arguments are part of the call's identity and therefore of its shape. `x.startsWith("/api")` and
        `x.startsWith("javascript:")` are two gates over one source, and a shape is also the field path an @S
        candidate is injected at and the atom keyname_record buys: `h.slice(1)` and `h.slice(2)` must not share
@@ -4579,7 +4593,7 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
        null still forking where the receiver's facet admits only Strings. */
     /* The call completed, so the member read under it found a callable (§13.3.6.2 EvaluateCall steps 4-5),
        which narrows the parent the member was read off. */
-    if (c->member && c->facet_src) type_facet_narrow(c->facet_src, tyf_callable_member(ctx, c->member));
+    if (c->member && c->facet_src) type_facet_narrow(c->facet_src, callable);
     /* …and the predicate the page just wrote, if this result can name one. `if (path.startsWith("/api"))`
        gates `path` as `path === "/api"` does, but determines no value, so it pins nothing and carries no bound.
        (A `!`-spelled gate reaches no branch here; concolic.h's residual beside concolic_strpred names why.)

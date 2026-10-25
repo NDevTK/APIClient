@@ -96472,6 +96472,8 @@ static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JS
         if (!runs) {
             s->result = g_concolic.call(ctx, s->hdr.func_obj, s->hdr.this_val, n,
                                         (JSValueConst *)s->hdr.argv, JS_UNDEFINED);
+            /* The hook's own throw (a callee no remaining type of its parent holds) is the call's completion. */
+            if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; return -1; }
             return 0;
         }
         s->hdr.stage = CCALL_RUN;
@@ -96506,6 +96508,7 @@ static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JS
         }
         s->result = g_concolic.call(ctx, s->hdr.func_obj, s->hdr.this_val, n,
                                     (JSValueConst *)s->hdr.argv, example);
+        if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; return -1; }
         /* A candidate re-fire answers the attacker's payload, which is not unknown: that run takes the normal
            completion, the one a run with no forking policy takes. */
         if (JS_IsUndefined(s->thrown) || !g_concolic.is(s->result))
