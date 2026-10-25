@@ -785,6 +785,31 @@ static const TfServed TF_SERVED[] = {
    time it gets here. Fetch §5.4 "Request class" step 5.1 parses a string input against HTML's API base URL
    and the record keeps the SERIALIZATION of the result (core/fetch/request.c), so a host matching the
    relative reference the page wrote would be matching a spelling no park has ever held. */
+/* The invocation's document (defined with the facts that say what this run is, below). */
+static const char *g_doc;
+static const char *g_tf_doc_url;
+
+/* Is `abs` a document load of this run's own page: the zone serves the page's bytes for it, as it does when the
+   page is loaded again (a reload, or the attacker opening its address in a new window). The fragment is
+   compared away because no server sees it: RFC 9112 §3.2.1 origin-form is `absolute-path [ "?" query ]`. */
+static int tf_own_document_at(const char *abs, const char *destination) {
+    UrlRecord u;
+    char *bare;
+    int own;
+
+    if (strcmp(destination, "document") != 0) return 0;
+    DCHECK(g_doc != NULL && g_tf_doc_url != NULL,
+           "a document load was answered before this run named its document and that document's address");
+    url_record_init(&u);
+    CHECK(url_parse(&u, abs, strlen(abs), NULL), "the fixture could not re-parse an address it serialized");
+    bare = url_serialize(&u, /*exclude_fragment*/ true);
+    url_record_free(&u);
+    CHECK(bare, "the fixture could not serialize the address it is answering");
+    own = !strcmp(bare, g_tf_doc_url);
+    free(bare);
+    return own;
+}
+
 static const TfServed *tf_served_at(const char *abs) {
     unsigned i;
 
@@ -937,8 +962,9 @@ static int fixture_provide(JSContext *ctx) {
                is the JSON above. See TF_SERVED for its rows: a `fetch()` pair of which one is the other's
                control, and a third answered to a `<script src>` park rather than to a `fetch()` at all. */
             const TfServed *sv = tf_served_at(abs);
-            const char *rbody = sv ? sv->body : "{\"region\":\"us-west-2\"}";
-            const char *rtype = sv ? sv->type : "application/json";
+            int own = !sv && tf_own_document_at(abs, destination);
+            const char *rbody = sv ? sv->body : own ? g_doc : "{\"region\":\"us-west-2\"}";
+            const char *rtype = sv ? sv->type : own ? "text/html" : "application/json";
 
             header_list_append(&eh, "x-echo-method", method);
             /* AND THE REFERRER, for the sandbox-fetch rows of HTML_NAVIGATION only: whose request a fetch taken
@@ -959,7 +985,7 @@ static int fixture_provide(JSContext *ctx) {
                IT IS APPENDED FOR THIS TABLE'S ROWS ONLY. Every other reply here has always carried none,
                and giving them all one would change what several statements that read `r.headers` observe — a
                change to rows under test, made in passing, to tidy a reply nobody is asking about. */
-            if (sv) header_list_append(&eh, "content-type", rtype);
+            if (sv || own) header_list_append(&eh, "content-type", rtype);
             reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody),
                                     (const char *const *)&abs, 1, rtype, "basic");
             header_list_free(&eh);
@@ -6347,13 +6373,13 @@ static TfErrEdges g_tf_err_edges[] = {
    `https://x.test/p` is already a literal at several sites and one of their comments complains about it, so a
    fresh copy here would be a seventh answer to `where is this document` that could drift from the one the
    agent was actually built with. Written at tf_agent_init and read only by the edge counter below. */
-/* THIS FIXTURE'S DOCUMENT, NAMED ONCE. `g_tf_doc_url` below exists because deriving the address from the
-   argument the agent is built with "is what stops it becoming another copy of the literal" (tf_agent_init);
+/* THIS FIXTURE'S DOCUMENT, NAMED ONCE. `g_tf_doc_url` (declared above the host, which reads it) exists because
+   deriving the address from the argument the agent is built with "is what stops it becoming another copy of the
+   literal" (tf_agent_init);
    a SECOND agent brought up at the same principal needs both facts, and spelling either of them twice would
    be the copy that sentence refuses. The origin has no `g_` twin because nothing reads it back. */
 static const char *const TF_ORIGIN  = "https://x.test";
 static const char *const TF_TOP_URL = "https://x.test/p";
-static const char *g_tf_doc_url;
 
 /* THE ROW FOR ONE TOKEN, ASSERTED PRESENT: a probe that asked about a token no edge is counted for would read
    0 for ever with nothing to say the question was never wired up, which is the defect the table exists to
@@ -8808,10 +8834,9 @@ static void fold_row(int *row, const char **why, int ok, const char *what) {
    names' lengths in a constant expression, so it needs the table to stop being a local with locals in it. */
 #define PROBE_UNANSWERED_MAX (PROBE_MAX * 32)
 
-/* WHAT THIS INVOCATION IS: the document whose statements are being answered, which of the three sessions it is,
-   and the realm the result document is rendered from. Set once in main before the scheduler runs, because the
+/* WHAT THIS INVOCATION IS: the document whose statements are being answered (g_doc, declared above the host,
+   which serves it), which of the three sessions it is, and the realm the result document is rendered from. Set once in main before the scheduler runs, because the
    streamed report reads them from INSIDE the run. */
-static const char *g_doc;
 static int g_sess = SESS_EXPLORE;
 static JSContext *g_probe_ctx;
 /* …and the two censuses the cold rows are statements about, filled by main after its run. An exploring session
