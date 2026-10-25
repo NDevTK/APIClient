@@ -327,9 +327,14 @@ static char *fire_acts(const Flow *f, int *no_act, int *unsolved, char **refused
     *no_act = 0;
     *unsolved = 0;
     *refused = NULL;
-    if (!f->orphan && f->user_acts_n == 0) return NULL;
-    DCHECK(!f->orphan || called > 0, "a fire ran in a drive whose chain has no called member — the mark and the "
-                                     "chain are written together at the seed and at the claim");
+    /* A seeded drive writes its chain with its mark, so only the cold tier's rebuild (cold.c's 'o' record:
+       `orphan_want` with nothing claimed) leaves a drive that has called nothing. Its replay before the first
+       claim is the page's own reach, as engine.c's fork treats it ("a drive that has called nothing"), so it
+       contributes no drive act; the modelled user acts still name themselves. */
+    DCHECK(!f->orphan || called > 0 || (f->orphan_want && f->orphan_claim_at == 0),
+           "a fire ran in a drive whose chain has no called member and which is not a resumed drive waiting "
+           "for its first call — the mark and the chain are written together at the seed and at the claim");
+    if (called == 0 && f->user_acts_n == 0) return NULL;
     for (k = 0; k < called; k++)
         if (!f->orphan_acts[k]) { *no_act = 1; return NULL; }
     json_buf_raw(&b, "[");
@@ -374,7 +379,7 @@ static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
         return JS_UNDEFINED;
     }
     DCHECK(refused == NULL, "a fire recorded as a PoC carries a message composition's refusal");
-    record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload, acts, f->orphan || f->user_acts_n > 0);
+    record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload, acts, acts != NULL);
     return JS_UNDEFINED;
 }
 
