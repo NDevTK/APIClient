@@ -1,10 +1,8 @@
 /* THE ADOPT EXPANDO DOCUMENT: an element created in a same-origin popup's document carries an expando, is adopted
    into this document by being appended to it, and the popup is closed and every script reference to it dropped.
    The heap is then grown so collections run, and the element is read back through this document's tree. A browser
-   keeps the element's wrapper, and its expando, while the element is in a live tree; this engine's identity map
-   entry belongs to the wrapper's creation realm (core/dom/node.c's RealmWraps residual), so once the popup's realm
-   is collected the element's next wrapper is a new object. One of test_forced.c's exploring documents. It ends
-   with TF_CANVAS_INK, which test_forced.c defines before including it. */
+   keeps the element's wrapper, and its expando, while the element is in a live tree. One of test_forced.c's
+   exploring documents. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_ADOPTEXPANDO_H
 #define ENGINE_HOST_FIXTURE_ADOPTEXPANDO_H
 #ifndef TF_CANVAS_INK

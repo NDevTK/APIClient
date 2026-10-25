@@ -17689,20 +17689,21 @@ TF_UNIT void probes_realmsellclose(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `adoptexpando` document: an element adopted out of a popup whose realm is then collected keeps
-   the wrapper a browser keeps — the RealmWraps residual in core/dom/node.c, read red until that diff is built. */
+/* The rows of the `adoptexpando` document: an element adopted out of a popup that is then closed keeps the wrapper,
+   and so the expando, a browser keeps. The popup's realm stays live here for as long as any world that adopted the
+   element (the creating flow's own captures name its Document), so the RealmWraps residual in core/dom/node.c is
+   not what this read meets; the row guards against a change that frees the realm under a surviving element. */
 TF_UNIT void probes_adoptexpando(const char *js, Probe *tab, int *n) {
     const char *axp_why = NULL;
     int axp_tt = 1;
     fold_row(&axp_tt, &axp_why, !!strstr(js, "\"/api/adoptexp\""),
              "NOT REACHED: there is no /api/adoptexp record, so the element was never read back");
-    fold_row(&axp_tt, &axp_why, navigable_realm_made() >= 1 && tf_census_row(js, "_heap", "childRealms") == 0,
-             "NOT REACHED: the popup's realm was not collected before the read, so the read says nothing about "
-             "a wrapper whose creation realm is gone");
+    fold_row(&axp_tt, &axp_why, navigable_realm_made() >= 1,
+             "NOT REACHED: no child realm was made, so the element was not created in a popup's document");
     fold_row(&axp_tt, &axp_why, param_value_is(js, "/api/adoptexp", "v", "kept"),
-             "an element adopted out of a realm since collected lost its expando: the identity map's entry "
-             "belonged to the wrapper's creation realm, whose teardown forgot it, so the read minted a new "
-             "wrapper (core/dom/node.c's RealmWraps residual: report the edge from the node's tree owner)");
+             "an element adopted out of a closed popup lost its expando: the read minted a new wrapper, so the "
+             "identity map's entry was released while the element lived (core/dom/node.c's RealmWraps residual: "
+             "the creation realm's teardown forgot it; report the edge from the node's tree owner)");
     const Probe rows[] = {
         { "adopt-expando", axp_tt, "/api/adoptexp", SESS_EXPLORE, axp_why },
     };
