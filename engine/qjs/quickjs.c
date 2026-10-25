@@ -34018,6 +34018,7 @@ typedef struct JSTAIdx {
     JSValue src;          /* ToObject(source) (owned) */
     JSValue el;           /* the element held across its coercion (owned) */
     int64_t src_len, i;
+    JSValue pred;         /* set's step 14 range test over an unknown length, held across its fork (owned) */
 } JSTAIdx;
 
 /* String.prototype trim / trimStart / trimEnd / at / codePointAt: ONE machine. Their whole shared prologue is
@@ -126008,6 +126009,7 @@ static JSValue js_ta_slice_fini(JSContext *ctx, void *st, bool take_result)
                   "step 4's negative-relative half, which resolves here")
 #define TAIDX_TAIL_SET(X) \
     X(TAIDX_SRC,   "23.2.3.26 steps 5-6 (source is ToObject(source); a typed-array source is set whole)") \
+    X(TAIDX_TA_RANGE, "23.2.3.26.2 step 14 over an unknown length or byteOffset (the range test forks)") \
     X(TAIDX_LEN,   "23.2.3.26.1 step 3 (srcLength is LengthOfArrayLike(src))") \
     X(TAIDX_NEXT,  "23.2.3.26.1 step 6 (the next index k of the source)") \
     X(TAIDX_VALUE, "23.2.3.26.1 step 6.c via 10.4.5.16 step 1 (value is ToBigInt or ToNumber)") \
@@ -126023,8 +126025,163 @@ static const char *const js_ta_at_steps[] = {
 static const char *const js_ta_set_steps[] = {
     TAIDX_STAGES(JS_STEP_STAGE_LABEL,
         "23.2.3.26 steps 1-2 (target has [[TypedArrayName]]; its buffer is mutable)",
-        "23.2.3.26 step 3 (targetOffset is ToIntegerOrInfinity(offset))", TAIDX_TAIL_SET)
+        "23.2.3.26 step 4 (targetOffset is ToIntegerOrInfinity(offset))", TAIDX_TAIL_SET)
     NULL };
+
+/* Whether a typed array class's [[ContentType]] is bigint. */
+static bool typed_array_is_bigint(JSClassID class_id)
+{
+    return class_id == JS_CLASS_BIG_INT64_ARRAY || class_id == JS_CLASS_BIG_UINT64_ARRAY;
+}
+
+/* Whether %TypedArray%.prototype.set's source is a typed array that SetTypedArrayFromTypedArray must read through
+   an unknown: a length or a [[ByteOffset]] of either view, or a source holding unknown elements copied across
+   element types (a same-type copy carries its spans with the bytes). */
+static bool js_ta_set_from_ta_unknown_asks(JSContext *ctx, JSTAIdx *s)
+{
+    JSObject *p = get_typed_array(ctx, s->hdr.this_val), *sp;
+
+    if (!p || JS_VALUE_GET_TAG(s->src) != JS_TAG_OBJECT || !is_typed_array(JS_VALUE_GET_OBJ(s->src)->class_id))
+        return false;
+    sp = JS_VALUE_GET_OBJ(s->src);
+    return !JS_IsUninitialized(p->u.typed_array->length_unknown) ||
+           !JS_IsUninitialized(p->u.typed_array->offset_unknown) ||
+           !JS_IsUninitialized(sp->u.typed_array->length_unknown) ||
+           !JS_IsUninitialized(sp->u.typed_array->offset_unknown) ||
+           (sp->class_id != p->class_id && sp->u.typed_array->buffer->u.array_buffer->n_span != 0);
+}
+
+/* 10.4.5.18 TypedArraySetElement of `v`, an element value another typed array answered (a Number, a BigInt or an
+   unknown), at index `k` of `p`. An unknown is stored as the unknown-value arm stores it: its example through the
+   ordinary store, then a span, or a write at an unknown offset where [[ByteOffset]] is one. Takes `v`. */
+static int js_ta_store_element(JSContext *ctx, JSObject *p, int64_t k, JSValue v)
+{
+    JSTypedArray *ta = p->u.typed_array;
+    int width = 1 << typed_array_size_log2(p->class_id);
+    JSValue ex, at;
+
+    if (!js_value_is_concolic(v))
+        return JS_SetPropertyValue(ctx, JS_MKPTR(JS_TAG_OBJECT, p), js_int64(k), v, JS_PROP_THROW) < 0 ? -1 : 0;
+    if (typed_array_is_immutable(p) || typed_array_is_oob(p) || k >= p->u.array.count) {
+        JS_FreeValue(ctx, v);                   /* step 3 skips the store */
+        return 0;
+    }
+    if (!JS_IsUninitialized(ta->offset_unknown)) {
+        at = js_ta_byte_index(ctx, ta, k * width);
+        js_ab_span_set_any(ctx, ta->buffer, at, v);
+        JS_FreeValue(ctx, at);
+        JS_FreeValue(ctx, v);
+        return 0;
+    }
+    ex = js_concolic_held(v) ? js_concolic_operand(ctx, v) : JS_UNDEFINED;
+    DCHECK(!js_value_is_concolic(ex), "an unknown's example is another unknown");
+    if (!JS_IsUndefined(ex) &&
+        JS_SetPropertyValue(ctx, JS_MKPTR(JS_TAG_OBJECT, p), js_int64(k), ex, JS_PROP_THROW) < 0) {
+        JS_FreeValue(ctx, v);
+        return -1;
+    }
+    js_ab_span_set(ctx, ta->buffer, ta->offset + (uint32_t)(k * width), width, v);
+    JS_FreeValue(ctx, v);
+    return 0;
+}
+
+/* 23.2.3.26.2 SetTypedArrayFromTypedArray where js_ta_set_from_ta_unknown_asks holds. Step 14's RangeError is a
+   predicate over the lengths, so it forks; on its in-range arm the source's example window is read first (step
+   17's clone) as 10.4.5.17 answers each element, then stored as 10.4.5.18 does, and an unknown source length
+   makes its elements past the example one write at an unknown offset of the target, derived from them.
+   0, a request code, or -1. */
+static int js_ta_set_from_ta_unknown(JSContext *ctx, JSTAIdx *s, JSValue cb_result)
+{
+    JSObject *p = get_typed_array(ctx, s->hdr.this_val), *sp = JS_VALUE_GET_OBJ(s->src);
+    JSTypedArray *ta, *sta;
+    JSValue *vals, v, at;
+    int64_t n, k;
+    int arm, r;
+
+    JS_FreeValue(ctx, cb_result);
+    if (!p) return -1;
+    if (s->idx < 0) {                                   /* 23.2.3.26 step 5 */
+        JS_ThrowRangeError(ctx, "invalid array length");
+        return -1;
+    }
+    if (typed_array_is_oob(p) || typed_array_is_oob(sp)) {   /* steps 2 and 5 */
+        JS_ThrowTypeErrorArrayBufferOOB(ctx);
+        return -1;
+    }
+    ta = p->u.typed_array;
+    sta = sp->u.typed_array;
+    if (JS_IsUninitialized(s->pred)) {
+        JSValue sv[2], ops[2], slen, ex;
+        double d = 0;
+
+        slen = JS_IsUninitialized(sta->length_unknown) ? js_int64(sp->u.array.count) : js_dup(sta->length_unknown);
+        if (js_value_is_concolic(slen)) {
+            ex = js_concolic_held(slen) ? js_concolic_operand(ctx, slen) : JS_UNDEFINED;
+            ops[0] = slen;
+            ops[1] = JS_NewInt64(ctx, s->idx);
+            sv[0] = g_concolic.derived(ctx, "23.2.3.26.2 step 14 (sourceLength + targetOffset)", ops, 2,
+                                       JS_IsNumber(ex) && JS_ToFloat64(ctx, &d, ex) == 0
+                                       ? js_float64(d + (double)s->idx) : JS_UNDEFINED);
+            JS_FreeValue(ctx, ex);
+            DCHECK(!JS_IsUninitialized(sv[0]), "an unknown source length derived no unknown extent");
+        } else {
+            sv[0] = js_float64((double)sp->u.array.count + (double)s->idx);
+        }
+        JS_FreeValue(ctx, slen);
+        sv[1] = JS_IsUninitialized(ta->length_unknown) ? js_int64(p->u.array.count) : js_dup(ta->length_unknown);
+        if (!js_value_is_concolic(sv[0]) && !js_value_is_concolic(sv[1])) {
+            /* both lengths stated (an offset is what is unknown): the test is decided */
+            s->pred = js_bool((double)sp->u.array.count + (double)s->idx <= (double)p->u.array.count);
+        } else {
+            DCHECK(g_concolic.rel != NULL, "a view's length is unknown with no JSConcolicHooks.rel installed");
+            CHECK(g_concolic.rel(ctx, sv + 2, OP_lte), "the relation hook declined set's range test");
+            s->pred = sv[0];
+        }
+    }
+    r = step_tobool_run(ctx, &s->hdr, s->pred, "23.2.3.26.2 step 14 range test", &arm);
+    if (r) return r;
+    if (!arm) {
+        JS_ThrowRangeError(ctx, "invalid array length");
+        return -1;
+    }
+    if (typed_array_is_bigint(p->class_id) != typed_array_is_bigint(sp->class_id)) {   /* step 15 */
+        JS_ThrowTypeError(ctx, "incompatible typed array types");
+        return -1;
+    }
+    n = sp->u.array.count;
+    if (n > (int64_t)p->u.array.count - s->idx) {
+        if (!JS_IsUninitialized(ta->length_unknown)) {
+            DFAIL("23.2.3.26.2 steps 21-22 past an unknown-length target's example bytes: build a store past the "
+                  "example window that a read past it answers");
+            return -1;
+        }
+        n = max_int64((int64_t)p->u.array.count - s->idx, 0);   /* this arm bounds the source's length */
+    }
+    vals = js_malloc(ctx, sizeof(*vals) * (size_t)max_int64(n, 1));
+    if (!vals) return -1;
+    for (k = 0; k < n; k++) {
+        bool got = js_get_fast_array_element(ctx, sp, (uint32_t)k, &vals[k]);
+        DCHECK(got, "a source element below its stored count has no value");
+    }
+    for (k = 0; k < n; k++) {
+        if (js_ta_store_element(ctx, p, s->idx + k, vals[k]) < 0) {
+            for (k++; k < n; k++) JS_FreeValue(ctx, vals[k]);
+            js_free(ctx, vals);
+            return -1;
+        }
+    }
+    js_free(ctx, vals);
+    if (!JS_IsUninitialized(sta->length_unknown) && n == sp->u.array.count) {
+        v = js_ta_get_past_example(ctx, sp, (uint32_t)n);
+        if (js_value_is_concolic(v) && !typed_array_is_immutable(p)) {
+            at = js_ta_byte_index(ctx, ta, (s->idx + n) << typed_array_size_log2(p->class_id));
+            js_ab_span_set_any(ctx, ta->buffer, at, v);
+            JS_FreeValue(ctx, at);
+        }
+        JS_FreeValue(ctx, v);
+    }
+    return 0;
+}
 
 static int js_ta_idx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
@@ -126037,6 +126194,7 @@ static int js_ta_idx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
         s->result = JS_UNDEFINED;
         s->src = JS_UNDEFINED; s->el = JS_UNDEFINED;
+        s->pred = JS_UNINITIALIZED;
         p = get_typed_array(ctx, s->hdr.this_val);
         if (!p) return -1;
         if (s->hdr.arg == TAIDX_AT) {
@@ -126066,10 +126224,21 @@ static int js_ta_idx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
             int h;
             s->src = JS_ToObject(ctx, step_arg(&s->hdr, 0));
             if (JS_IsException(s->src)) { s->src = JS_UNDEFINED; return -1; }
-            h = js_typed_array_set_ta(ctx, s->hdr.this_val, s->src, s->idx, &s->len);
-            if (h < 0) return -1;
-            if (h) { s->result = JS_UNDEFINED; return 0; }   /* a typed-array source needs no steps at all */
-            s->hdr.stage = TAIDX_LEN;
+            if (js_ta_set_from_ta_unknown_asks(ctx, s)) {
+                s->hdr.stage = TAIDX_TA_RANGE;
+            } else {
+                h = js_typed_array_set_ta(ctx, s->hdr.this_val, s->src, s->idx, &s->len);
+                if (h < 0) return -1;
+                if (h) { s->result = JS_UNDEFINED; return 0; }   /* a typed-array source needs no steps at all */
+                s->hdr.stage = TAIDX_LEN;
+            }
+        }
+        if (s->hdr.stage == TAIDX_TA_RANGE) {
+            r = js_ta_set_from_ta_unknown(ctx, s, cb_result);
+            cb_result = JS_UNDEFINED;
+            if (r) return r < 0 ? -1 : r;
+            s->result = JS_UNDEFINED;
+            return 0;
         }
         if (s->hdr.stage == TAIDX_LEN) {   /* LengthOfArrayLike on the source, re-entered until it finishes */
             int r2 = step_length_run(ctx, &s->hdr, s->src, cb_result, &s->src_len, out_cb, out_argc);
@@ -126179,6 +126348,7 @@ static void js_ta_idx_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->result);
     v->val(ctx, &s->src);
     v->val(ctx, &s->el);
+    v->val(ctx, &s->pred);
 }
 
 static JSValue js_ta_idx_fini(JSContext *ctx, void *st, bool take_result)

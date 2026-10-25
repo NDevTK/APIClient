@@ -478,10 +478,6 @@ JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, s
    is an unknown whose example is undefined (js_ta_get_past_example).
    An array iterator's done test forks per iteration on it (js_array_iter_next_step), and a consumer reading
    through JS_BufferSourceUnknowns (a decoder, a digest, a body) is handed the bytes past the example as a run. */
-/* Named residual. Not covered: %TypedArray%.prototype.set copies only the source's example extent (slice and
-   subarray take the unknown length). Next diff builds: set's range test over an unknown length as a fork, and the
-   bytes past the source's example derived as an element read past it is. Absence shows as: a view set from a
-   reply holds the example's bytes in every world. */
 static const char BYTE_READER_IMAGE[] = "the byte sequence whose UTF-8 decode text() reads";
 
 /* The copy, recorded as an image of text()'s unknown when these bytes have one. */
