@@ -676,19 +676,136 @@ int flow_holds_frame(const Flow *f)
     return 0;
 }
 
-void flow_select_agent(Flow *f)
+static int job_queue_len(JSValueConst q);
+
+int flow_holds_parks(const Flow *f)
 {
+    if (f->parked != NULL) return 1;
+    for (int i = 0; i < f->n_agents; i++)
+        if (f->agents[i].parked != NULL) return 1;
+    return 0;
+}
+
+/* Whether agent `i`, which is not the selected one, has work: a base, parks or a queued job. */
+static int flow_agent_runnable_off(const Flow *f, int i)
+{
+    const FlowAgent *a = &f->agents[i];
+
+    DCHECK(i != f->cur_agent, "the off-runtime runnable test was asked of the selected agent, whose parks are in "
+                              "the runtime");
+    return a->frame != NULL || a->parked != NULL || !JS_IsUndefined(a->module) || job_queue_len(a->jobs) > 0;
+}
+
+/* The selected agent's parks go onto its own slot and agent `i`'s into the runtime. */
+static void flow_agent_switch(JSContext *ctx, Flow *f, int i)
+{
+    JSRuntime *rt = JS_GetRuntime(ctx);
+
+    DCHECK(i >= 0 && i < f->n_agents, "an agent outside the flow's list was selected");
+    if (i == f->cur_agent) return;
+    DCHECK(g_running == f, "a flow's agent was switched while the flow was not switched in, so the runtime does not "
+                           "hold the selected agent's parks");
+    DCHECK(f->agents[f->cur_agent].parked == NULL,
+           "the selected agent's own park slot holds a set while its parks are in the runtime");
+    f->agents[f->cur_agent].parked = JS_TakeParkedFlows(rt);
+    JS_PutParkedFlows(rt, f->agents[i].parked);
+    f->agents[i].parked = NULL;
+    f->cur_agent = i;
+}
+
+void flow_select_agent(JSContext *ctx, Flow *f)
+{
+    int best = 0;
+
     DCHECK(f->n_agents >= 1, "a flow with no agent was asked which agent runs next");
-    /* Named residual. Not covered: a choice among several runnable agents. ECMA-262 §9.6 Agents executes each
-       agent's steps independently of the others, so where two are runnable the next one is a choice the page
-       can observe through shared memory or a message. Next diff builds: a second agent on the flow (a dedicated worker's), chosen at this rest point
-       by a scheduler decision charged in work, and the order forked where more than one agent is runnable and
-       the choice is observable. Absence shows as: a page whose worker and window race on a SharedArrayBuffer
-       is explored in one order only. */
-    DCHECK(f->n_agents == 1,
-           "a flow runs more than one agent and its selection takes the first: choosing among runnable agents, "
-           "and forking where the choice is observable, is what a flow with a second agent needs built here");
-    f->cur_agent = 0;
+    /* ECMA-262 §9.6 Agents executes each agent's steps independently of the others, so which runnable agent goes
+       next is this scheduler's decision, charged in work: the runnable agent that has retired the least work while
+       selected. The window agent is always a candidate, since its ladder decides for itself whether it has work;
+       flow_select_other_agent takes over when it has none.
+       Named residual. Not covered: forking the order where more than one agent is runnable and the choice is
+       observable. Next diff builds: a fork at this rest point over the runnable agents whose next steps touch
+       state another agent reads (a SharedArrayBuffer, a posted message). Absence shows as: a page whose worker and
+       window race on a SharedArrayBuffer is explored in one order only. */
+    for (int i = 1; i < f->n_agents; i++) {
+        int runnable = i == f->cur_agent
+                     ? (f->agents[i].frame != NULL || JS_HasParkedFlow(JS_GetRuntime(ctx)) ||
+                        !JS_IsUndefined(f->agents[i].module) || job_queue_len(f->agents[i].jobs) > 0)
+                     : flow_agent_runnable_off(f, i);
+
+        if (runnable && f->agents[i].work < f->agents[best].work) best = i;
+    }
+    flow_agent_switch(ctx, f, best);
+}
+
+int flow_select_other_agent(JSContext *ctx, Flow *f)
+{
+    int best = -1;
+
+    for (int i = 0; i < f->n_agents; i++)
+        if (i != f->cur_agent && flow_agent_runnable_off(f, i) &&
+            (best < 0 || f->agents[i].work < f->agents[best].work))
+            best = i;
+    if (best < 0) return 0;
+    flow_agent_switch(ctx, f, best);
+    return 1;
+}
+
+int flow_agent_add(Flow *f, JSAgentRecord *agent, JSContext *realm)
+{
+    FlowAgent *a;
+    int i;
+
+    DCHECK(agent != NULL && realm != NULL && JS_GetRealmAgent(realm) == agent,
+           "an agent was added to a flow without the one realm it runs in");
+    for (i = 0; i < f->n_agents; i++)
+        DCHECK(f->agents[i].agent != agent, "an agent was added to a flow that already runs it");
+    a = reclaim_realloc(f->agents, sizeof *a * (size_t)(f->n_agents + 1));
+    CHECK(a != NULL, "flow: OOM growing a flow's agent list — the agent's work would have no execution context stack");
+    f->agents = a;
+    a = &f->agents[f->n_agents];
+    a->agent = agent;
+    a->frame = NULL;
+    a->jobs = JS_UNDEFINED;
+    a->parked = NULL;
+    a->realm = JS_DupContext(realm);   /* each flow running the agent holds its realm; released with the flow */
+    a->work = 0;
+    a->module = JS_UNDEFINED;
+    return f->n_agents++;
+}
+
+FlowAgent *flow_agent_of(Flow *f, JSAgentRecord *agent)
+{
+    for (int i = 0; i < f->n_agents; i++)
+        if (f->agents[i].agent == agent) return &f->agents[i];
+    DCHECK(0, "an agent's entry was asked of a flow that does not run it");
+    return NULL;
+}
+
+void flow_agents_fork(JSContext *ctx, Flow *sib, const Flow *parent)
+{
+    DCHECK(sib->n_agents == 1 && sib->agents[0].frame == NULL && sib->agents[0].parked == NULL &&
+           JS_IsUndefined(sib->agents[0].jobs),
+           "an arm's agent list was inherited onto an arm that is not freshly assembled");
+    /* The arm was assembled over the realm the branch ran in, which may be another agent's (a worker's), so its
+       first agent is restated as the parent's window agent. */
+    sib->agents[0].agent = parent->agents[0].agent;
+    for (int i = 1; i < parent->n_agents; i++)
+        flow_agent_add(sib, parent->agents[i].agent, parent->agents[i].realm);
+    for (int i = 0; i < parent->n_agents; i++) {
+        const FlowAgent *pa = &parent->agents[i];
+        FlowAgent *sa = &sib->agents[i];
+
+        sa->work = pa->work;
+        sa->module = JS_DupValue(ctx, pa->module);
+        if (i == parent->cur_agent) continue;   /* the caller clones the running agent's base and parks */
+        if (pa->frame) {
+            sa->frame = JS_FlowClone(ctx, (JSValue *)pa->frame);
+            CHECK(sa->frame != NULL, "flow: an agent's suspended base could not be cloned onto an arm — that "
+                                     "agent's timeline in the arm would be dropped");
+        }
+        sa->parked = JS_CloneParkedFlowsOf(ctx, pa->parked);
+    }
+    sib->cur_agent = parent->cur_agent;
 }
 
 Flow *flow_at(int i) { return (i >= 0 && i < g_flows_n) ? g_flows[i] : NULL; }
@@ -1464,7 +1581,7 @@ static int flow_holds_park(const Flow *f) {
            "a member's parked continuations were asked for while it holds the thread — its queue is in the runtime "
            "for its turn, not on Flow::parked; build the runtime handle at the pick (engine.c asks JS_HasParkedFlow "
            "of the runtime)");
-    return f->parked != NULL;
+    return flow_holds_parks(f);
 }
 
 /* A flow completed a unit of work: the optimism term's quantity, a count rather than a clock (flow.h's `visits`
@@ -1817,7 +1934,7 @@ void flow_release(JSContext *ctx, Flow *f) {
        flow, not the engine: `engine_frontier_paged` answers for the whole session, and a partial self-park writes a
        tail while flows above it run on unwritten, so only the per-flow answer is exact.
        A driver that stops stepping without the park fires this, naming the flows it threw away. */
-    DCHECK(f->paged || f->retired || (f->parked == NULL && !flow_holds_frame(f) && flow_jobs_held(f) == 0 &&
+    DCHECK(f->paged || f->retired || (!flow_holds_parks(f) && !flow_holds_frame(f) && flow_jobs_held(f) == 0 &&
                         pending_count(f->pending) == 0 && flow_deliver_pending(f) == 0),
            "a flow was released holding work (a parked continuation, a suspended frame, queued reactions, replies "
            "owed to it, or a routed message) without being written to the cold tier — nothing replays it, so the "
@@ -1835,11 +1952,19 @@ void flow_release(JSContext *ctx, Flow *f) {
     JS_FlowCompileDrop(ctx, &f->compile);
     JS_FreeParkedFlows(f->parked);
     f->parked = NULL;
+    for (int i = 0; i < f->n_agents; i++) { JS_FreeParkedFlows(f->agents[i].parked); f->agents[i].parked = NULL; }
     /* `frame` is the JS_FlowNew handle holding this flow's whole heap-frame chain (every activation, closure and
        local it is suspended across), so leaving it retains the entire realm, and the runtime's leak walk reports a
        Window, a context and many anonymous Functions with nothing naming the owner. */
     for (int i = 0; i < f->n_agents; i++)
         if (f->agents[i].frame) { JS_FlowFree(ctx, (JSValue *)f->agents[i].frame); f->agents[i].frame = NULL; }
+    /* And the references this flow holds on its other agents' realms (flow_agent_add), after their bases and an
+       unevaluated module program. */
+    for (int i = 1; i < f->n_agents; i++) {
+        JS_FreeValue(ctx, f->agents[i].module);
+        f->agents[i].module = JS_UNDEFINED;
+        if (f->agents[i].realm) { JS_FreeContext(f->agents[i].realm); f->agents[i].realm = NULL; }
+    }
     /* The replies it was still owed: the register is one JS value, so its resolve capabilities, reply values and
        strings go with one release. */
     pending_free(ctx, &f->pending);
@@ -1916,7 +2041,7 @@ void flow_registry_free(JSContext *ctx) {
         g_departures_teardown++;
 #if APICLIENT_DEV
         Flow *rf = g_flows[0];
-        int had_frame = flow_holds_frame(rf), had_park = rf->parked != NULL;
+        int had_frame = flow_holds_frame(rf), had_park = flow_holds_parks(rf);
         int paged = rf->paged, started = rf->started;
         int before = JS_TrampFrameCount(rrt);
 
@@ -2043,6 +2168,10 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
                      "cannot run");
     f->agents[0].agent = JS_GetRealmAgent(ctx);
     f->agents[0].jobs = JS_UNDEFINED;   /* most flows are enqueued nothing */
+    f->agents[0].parked = NULL;
+    f->agents[0].realm = NULL;          /* the window agent's rows each name their own realm */
+    f->agents[0].work = 0;
+    f->agents[0].module = JS_UNDEFINED;
     f->n_agents = 1;
     f->cur_agent = 0;
     /* And it is born owing the host an image if the host asked for every world (@PERWORLD). Marked at the one
@@ -5726,7 +5855,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
     DCHECK(f->delta == NULL && f->dom == NULL && f->dom_base == NULL,
            "a flow was removed with its COW state still attached — flow_finish unapplies the heap delta and the DOM "
            "head before they can be freed");
-    DCHECK(!flow_holds_frame(f) && f->parked == NULL,
+    DCHECK(!flow_holds_frame(f) && !flow_holds_parks(f),
            "a flow was removed holding a live frame or parked continuations — its whole activation chain, and "
            "everything those frames close over, would be retained by a handle nothing will ever free");
     DCHECK(flow_jobs_held(f) == 0 && JS_IsUndefined(f->pending) && JS_IsUndefined(f->perform_q) &&

@@ -3501,6 +3501,8 @@ JS_EXTERN void     JS_FreeParkedFlows(void *parked);
    a park is one activation's one resume point, so two records naming one activation resume it twice and the
    second rebuilds a frame the first already freed. NULL when the runtime holds no parks. */
 JS_EXTERN void    *JS_CloneParkedFlows(JSContext *ctx);
+/* The same for a set held off the runtime (a JS_TakeParkedFlows handle, left untouched). */
+JS_EXTERN void    *JS_CloneParkedFlowsOf(JSContext *ctx, void *parked);
 /* Frame-snapshot fork: deep-copy a SUSPENDED flow into an INDEPENDENT clone that resumes from the same point.
    No fallback — an un-built frame shape (deep tramp chain / live closures) crashes loud. */
 JS_EXTERN JSValue *JS_FlowClone(JSContext *ctx, JSValue *flow);

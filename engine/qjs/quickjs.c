@@ -34699,54 +34699,80 @@ void JS_FreeParkedFlows(void *parked) {
  * The handle is the one JS_TakeParkedFlows returns: a detached ring, put into a runtime with
  * JS_PutParkedFlows or released through each member's own disposer with JS_FreeParkedFlows. NULL means the
  * runtime holds no parks, which is the same answer an empty set gives. */
-void *JS_CloneParkedFlows(JSContext *ctx)
+/* One member of a parked set, cloned and parked on its own record at the tail of `ring`. */
+static void js_clone_parked_member(JSAsyncFunctionState *b, struct list_head *ring)
 {
-    JSRuntime *rt = ctx->rt;
-    struct list_head *el, ring, *first, *last;
+    JSAsyncFunctionState *c;
+    void *op;
 
-    init_list_head(&ring);
-    list_for_each(el, &rt->parked_flows) {
-        JSAsyncFunctionState *b = list_entry(el, JSAsyncFunctionState, park_link);
-        JSAsyncFunctionState *c;
-        void *op;
+    DCHECK(b->park_fn != NULL && b->park_free_fn != NULL && b->park_clone_fn != NULL &&
+           b->park_ctx != NULL,
+           "the pump's queue named a flow base holding no parked continuation — the record and the link "
+           "are written together at the park, so this base was spliced onto the queue by something else");
+    /* THE CLONE RUNS IN THE REALM THAT PARKED, for the reason the record keeps that realm at all: the
+       resume runs there, so the activation the arm resumes must be allocated there too. */
+    c = (JSAsyncFunctionState *)JS_FlowClone(b->park_ctx, (JSValue *)b);
+    /* A `CHECK`: an arm that cannot be built is a peer timeline dropped off the frontier, and §NO BOUNDS
+       forbids dropping a work item in dev and in release alike. */
+    CHECK(c != NULL, "engine: a parked continuation could not be cloned — an arm of this flow has no "
+                     "activation to resume, so a timeline it was forked for is dropped");
+    DCHECK(c != b, "a parked continuation's clone IS the source — the two records would name one "
+                   "activation and the second resume would rebuild a frame the first already freed");
+    DCHECK(c->park_fn == NULL,
+           "a freshly cloned activation arrived already parked — flow_clone_state_alloc leaves a clone "
+           "unparked on purpose, so a record on it was written by something between the two");
+    op = b->park_clone_fn(b->park_ctx, b->park_opaque, c);
+    CHECK(op != NULL, "engine: a park site's fork produced no handle for the arm — the site could not "
+                      "build one, and this arm therefore has no continuation to resume");
+    /* AND IT IS THE ARM'S OWN HANDLE, ASSERTED HERE BECAUSE HERE IS WHERE IT IS BORN. A site answering
+       with the SOURCE's handle would leave two records naming one activation: each resume discharges the
+       reference its own park took, so the second frees what the first already did, and before that it
+       re-enters a frame that has been completed. It is the identical sentence as the clone above, one
+       level out — the base can be distinct while the handle that reaches it is not. */
+    DCHECK(op != b->park_opaque,
+           "a park site's fork answered with the SOURCE's own handle — both records would then resume ONE "
+           "activation, and the second resume rebuilds a frame the first already freed. A fork gives the "
+           "arm a continuation of its own or it does not fork at all");
+    flow_park_write(b->park_ctx, c, b->park_fn, b->park_free_fn, b->park_clone_fn, op);
+    list_add_tail(&c->park_link, ring);
+}
 
-        DCHECK(b->park_fn != NULL && b->park_free_fn != NULL && b->park_clone_fn != NULL &&
-               b->park_ctx != NULL,
-               "the pump's queue named a flow base holding no parked continuation — the record and the link "
-               "are written together at the park, so this base was spliced onto the queue by something else");
-        /* THE CLONE RUNS IN THE REALM THAT PARKED, for the reason the record keeps that realm at all: the
-           resume runs there, so the activation the arm resumes must be allocated there too. */
-        c = (JSAsyncFunctionState *)JS_FlowClone(b->park_ctx, (JSValue *)b);
-        /* A `CHECK`: an arm that cannot be built is a peer timeline dropped off the frontier, and §NO BOUNDS
-           forbids dropping a work item in dev and in release alike. */
-        CHECK(c != NULL, "engine: a parked continuation could not be cloned — an arm of this flow has no "
-                         "activation to resume, so a timeline it was forked for is dropped");
-        DCHECK(c != b, "a parked continuation's clone IS the source — the two records would name one "
-                       "activation and the second resume would rebuild a frame the first already freed");
-        DCHECK(c->park_fn == NULL,
-               "a freshly cloned activation arrived already parked — flow_clone_state_alloc leaves a clone "
-               "unparked on purpose, so a record on it was written by something between the two");
-        op = b->park_clone_fn(b->park_ctx, b->park_opaque, c);
-        CHECK(op != NULL, "engine: a park site's fork produced no handle for the arm — the site could not "
-                          "build one, and this arm therefore has no continuation to resume");
-        /* AND IT IS THE ARM'S OWN HANDLE, ASSERTED HERE BECAUSE HERE IS WHERE IT IS BORN. A site answering
-           with the SOURCE's handle would leave two records naming one activation: each resume discharges the
-           reference its own park took, so the second frees what the first already did, and before that it
-           re-enters a frame that has been completed. It is the identical sentence as the clone above, one
-           level out — the base can be distinct while the handle that reaches it is not. */
-        DCHECK(op != b->park_opaque,
-               "a park site's fork answered with the SOURCE's own handle — both records would then resume ONE "
-               "activation, and the second resume rebuilds a frame the first already freed. A fork gives the "
-               "arm a continuation of its own or it does not fork at all");
-        flow_park_write(b->park_ctx, c, b->park_fn, b->park_free_fn, b->park_clone_fn, op);
-        list_add_tail(&c->park_link, &ring);
-    }
-    if (list_empty(&ring)) return NULL;
-    /* Close the ring over the members alone, exactly as the take does — the local head is about to go out of
-       scope, and a member still pointing at it is a link into a dead stack frame. */
-    first = ring.next; last = ring.prev;
+/* A local ring's members, closed over themselves as the take does, or NULL for an empty one. */
+static void *js_parked_ring_detach(struct list_head *ring)
+{
+    struct list_head *first, *last;
+
+    if (list_empty(ring)) return NULL;
+    /* Close the ring over the members alone — the local head is about to go out of scope, and a member still
+       pointing at it is a link into a dead stack frame. */
+    first = ring->next; last = ring->prev;
     first->prev = last; last->next = first;
     return first;
+}
+
+void *JS_CloneParkedFlows(JSContext *ctx)
+{
+    struct list_head *el, ring;
+
+    init_list_head(&ring);
+    list_for_each(el, &ctx->rt->parked_flows)
+        js_clone_parked_member(list_entry(el, JSAsyncFunctionState, park_link), &ring);
+    return js_parked_ring_detach(&ring);
+}
+
+void *JS_CloneParkedFlowsOf(JSContext *ctx, void *parked)
+{
+    struct list_head *first = parked, *el, ring;
+
+    (void)ctx;
+    init_list_head(&ring);
+    if (!first) return NULL;
+    el = first;
+    do {
+        js_clone_parked_member(list_entry(el, JSAsyncFunctionState, park_link), &ring);
+        el = el->next;
+    } while (el != first);
+    return js_parked_ring_detach(&ring);
 }
 
 /* THE STEP-BOUNDARY ADOPTION POINT — the second half of baseline_call_list, and the half that does not need

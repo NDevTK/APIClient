@@ -500,6 +500,12 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
    `deliver` is called for a failure too, because HTML §4.6.8.12 step 14.1's `error` event and §4.6.8.20's
    network-error branch are the failure arm, and they live at the element. */
 void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const FetchRequest *req);
+/* Called with an agent's realm when that agent's program has run (HTML §10.2.4 Processing model's run a worker:
+   after "run the classic script script" or "run the module script", the ports' queues are enabled): `ran` true,
+   with a module's evaluation promise in `evaluation` (JS_UNDEFINED for a classic script), or `ran` false for a
+   module that did not parse (onComplete's null-script arm). One hook, set by core/workers/worker.c; NULL clears
+   it. */
+void engine_set_agent_program_done_hook(void (*hook)(JSContext *realm, bool ran, JSValueConst evaluation));
 /* Whether a member can be handed the thread now (flow_next_to_run with no incumbent finds one): 0 for an empty
    frontier and a fully host-owed one alike, since neither can convert a slice into work. It reads runnable
    members, not flow_best, because a stall code says "pay me" and host-owed marks last until the host acts. The

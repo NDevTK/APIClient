@@ -123,6 +123,18 @@ typedef struct FlowAgent {
        A JS Array of immutable job records, so the leak walk sees the values, it parks and forks, and a fork shares
        entries at one refcount each. JS_UNDEFINED until the first enqueue. */
     JSValue jobs;
+    /* This agent's parked continuations while another agent of the flow is selected; NULL while it is selected,
+       when its set rides Flow::parked (switched out) or the runtime (switched in). */
+    void *parked;
+    /* The realm a non-window agent runs its program and its jobs in, a reference this flow holds: a dedicated
+       worker agent has one realm (HTML §8.1.2.1, "Contains a single DedicatedWorkerGlobalScope"). NULL for the
+       window agent, whose rows each name their document's realm. */
+    JSContext *realm;
+    /* Engine work retired while this agent was selected, which flow_select_agent charges it. */
+    uint64_t work;
+    /* A module worker's program not yet evaluated: [url, source text] (HTML §10.2.4 run a worker step 13's module
+       worker script graph's root), evaluated when the agent is next selected; JS_UNDEFINED otherwise. Owned. */
+    JSValue module;
 } FlowAgent;
 
 typedef struct Flow {
@@ -657,8 +669,22 @@ FlowAgent *flow_agent_running(const Flow *f);
 /* The selected agent's live preemptible base, as an lvalue. */
 #define flow_frame(f) (flow_agent_running(f)->frame)
 /* HTML §8.1.2.1's "the agent equivalent of the current realm": which of `f`'s agents runs next, chosen at a rest
-   point where no agent's base is mid-step. */
-void flow_select_agent(Flow *f);
+   point where no agent's base is mid-step. `f` is switched in: the runtime holds the selected agent's parks. */
+void flow_select_agent(JSContext *ctx, Flow *f);
+/* Selects a runnable agent other than the selected one, when the selected one has nothing to do this step;
+   answers whether it switched. */
+int flow_select_other_agent(JSContext *ctx, Flow *f);
+/* Adds `agent`, whose one realm is `realm`, to `f`'s agents with no base, no queue and no parks; answers its index.
+   A dedicated worker's agent joins the flow whose window constructed it. */
+int flow_agent_add(Flow *f, JSAgentRecord *agent, JSContext *realm);
+/* The entry of `f`'s agent list for `agent`, which must be one of the flow's. */
+FlowAgent *flow_agent_of(Flow *f, JSAgentRecord *agent);
+/* Gives a forked arm its parent's agent list: every agent the parent was not running gets a clone of its base and
+   of its parks, and the arm selects the agent the parent was running, whose base and parks the fork's caller
+   clones. The arm's own first agent is its root realm's, the parent's first. */
+void flow_agents_fork(JSContext *ctx, Flow *sib, const Flow *parent);
+/* Whether any agent of `f` holds parked continuations off the runtime (Flow::parked or an agent's own set). */
+int flow_holds_parks(const Flow *f);
 /* Whether any of `f`'s agents holds a live preemptible base. */
 int flow_holds_frame(const Flow *f);
 

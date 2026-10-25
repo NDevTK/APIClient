@@ -5133,11 +5133,9 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        it decides where the flow enters the queue. */
     flow_fork_inherit(sib, parent, marks);
     sib->started = 1;                 /* hot: resume from the blobs (and the cloned frame, when there is one) */
-    /* The clone is of the parent's selected agent's base, so the arm runs that agent. A parent running several
-       agents would owe a clone of every agent's base. */
-    DCHECK(parent->n_agents == 1 && sib->n_agents == 1 && sib->agents[0].agent == parent->agents[0].agent,
-           "a fork of a flow running several agents took one base: every agent's execution context stack is "
-           "the parent's state and is cloned into the arm");
+    /* The clone is of the parent's selected agent's base, so the arm selects that agent; every other agent's
+       base and parks are the parent's state too, cloned onto the arm. */
+    flow_agents_fork(ctx, sib, parent);
     flow_frame(sib) = clone;               /* the frame snapshot taken at the branch; NULL for a fork between tasks */
     sib->script_i = parent->script_i; /* same position in the script sequence */
     /* What that frame is: a branch inside an `error` listener is inside its parent's §8.1.4.4 step 8 report on
@@ -7921,6 +7919,8 @@ static void engine_work_bank(JSContext *ctx, uint64_t units) {
             (long long)g_service_work);
     event_loop_work_advance(ctx, units);
     g_service_work += (int64_t)units;
+    /* …and the selected agent's charge, which flow_select_agent compares between the flow's agents. */
+    flow_agent_running(flow_running())->work += units;
 }
 
 /* The work this slice has banked. The scheduler loop asks it between steps, where the running flow's standing
@@ -8821,6 +8821,88 @@ static void module_report_rejection(JSContext *ctx, JSValueConst eval_promise) {
     JS_FreeValue(ctx, on_rejected);
 }
 
+static void (*g_agent_program_done_hook)(JSContext *realm, bool ran, JSValueConst evaluation);
+
+void engine_set_agent_program_done_hook(void (*hook)(JSContext *realm, bool ran, JSValueConst evaluation))
+{
+    DCHECK(hook == NULL || g_agent_program_done_hook == NULL,
+           "a second component claimed the agent-program-done hook while the first still holds it");
+    g_agent_program_done_hook = hook;
+}
+
+/* One step of the selected agent when it is not the window's: HTML §8.1.7.3 Processing model for a worker event
+   loop, which has no parser, no rendering and no document lifecycle. A parked continuation resumes first, as in
+   flow_step, then the agent's program (a module root not yet evaluated, or a classic script's base), then one of
+   its jobs (flow_job_take applies the microtask checkpoint). flow_select_agent picks this agent only when it has
+   one of these.
+   Named residual. Not covered: HTML §8.1.4.6 Runtime script errors' report for a worker global, whose unhandled
+   error is reported at the Worker object (HTML §10.2.4 Processing model). Next diff builds: the report's worker
+   arm through core/events/report_exception.c. Absence shows as: a worker's uncaught throw is a page error with no
+   `error` event at the Worker. */
+static int flow_step_agent(JSContext *ctx, Flow *f) {
+    FlowAgent *a = flow_agent_running(f);
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    JSValue cv = JS_UNDEFINED, evaluation = JS_UNDEFINED;
+    int program_done = 0, program_ran = 1;
+
+    DCHECK(f->cur_agent != 0 && a->realm != NULL, "the agent step ran for the window agent or an agent with no realm");
+    if (JS_HasParkedFlow(rt)) {
+        g_step_unit = STEP_UNIT_AGENT_RESUME_PARKED;
+        JS_ResumeParkedFlow(rt, &cv);
+    } else if (!JS_IsUndefined(a->module)) {
+        /* A module worker's root: "run the module script", evaluated in the agent's realm on its own turn. The
+           evaluation promise settles through the module bodies' own continuations. */
+        JSValue m = a->module, url_v = JS_GetPropertyUint32(a->realm, m, 0), src_v = JS_GetPropertyUint32(a->realm, m, 1);
+        const char *url = JS_ToCString(a->realm, url_v);
+        size_t src_n = 0;
+        const char *src = JS_ToCStringLen(a->realm, &src_n, src_v);
+        JSValue ev = JS_UNDEFINED;
+
+        g_step_unit = STEP_UNIT_AGENT_EVAL_MODULE;
+        a->module = JS_UNDEFINED;
+        CHECK(url && src, "engine: OOM reading a module worker's program");
+        program_ran = JS_FlowEvalModule(a->realm, src, src_n, url, JS_EVAL_TYPE_MODULE, &ev, NULL) > 0;
+        a = flow_agent_running(f);   /* the evaluation may have added an agent, moving the list */
+        if (!program_ran) JS_FreeValue(a->realm, JS_GetException(a->realm));
+        JS_FreeCString(a->realm, url);
+        JS_FreeCString(a->realm, src);
+        JS_FreeValue(a->realm, url_v);
+        JS_FreeValue(a->realm, src_v);
+        JS_FreeValue(a->realm, m);
+        evaluation = ev;
+        program_done = 1;
+    } else if (a->frame) {
+        int r;
+
+        g_step_unit = STEP_UNIT_AGENT_RESUME_PROGRAM;
+        r = JS_FlowResume(a->realm, (JSValue *)a->frame, &cv);
+        a = flow_agent_running(f);   /* the program may have added an agent (a nested worker), moving the list */
+        if (r == 0) { JS_FlowFree(a->realm, (JSValue *)a->frame); a->frame = NULL; }
+        else if (r == JS_FLOW_DETACHED) a->frame = NULL;   /* the base is the awaited promise's now */
+        program_done = r == 0;
+    } else {
+        DCHECK(flow_job_pending(f) > 0, "an agent with no parks, no program and no job was selected to step");
+        g_step_unit = STEP_UNIT_AGENT_RUN_JOB;
+        flow_run_one_job(a->realm, f);
+        return 0;
+    }
+    if (JS_IsException(cv)) {
+        JSValue e = JS_GetException(a->realm);
+        result_page_error_value(a->realm, e);
+        JS_FreeValue(a->realm, e);
+    }
+    JS_FreeValue(a->realm, cv);
+    if (program_done) {
+        JSContext *pr = a->realm;
+
+        DCHECK(g_agent_program_done_hook != NULL,
+               "an agent's program ran to its end with no component to take the steps after it");
+        g_agent_program_done_hook(pr, program_ran, evaluation);
+        JS_FreeValue(pr, evaluation);
+    }
+    return 0;
+}
+
 /* The programs are the flow's own rows (`f->dyn`), so this takes no inventory. */
 static int flow_step(JSContext *ctx, Flow *f) {
     /* A flow is about to run, so the flow stamp and the DOM capture must both be on. This is the one point a flow
@@ -8850,7 +8932,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
        one consumer is the `!framed_at_entry` assert beside `g_unframed_steps++`. The loop may move `flow_frame(f)`, and
        the two disagreeing is what makes that assert a check. In release it is only type-checked inside `sizeof`. */
     /* The rest point between two steps, where the scheduler names the agent this step runs. */
-    flow_select_agent(f);
+    flow_select_agent(ctx, f);
+    if (f->cur_agent != 0) return flow_step_agent(ctx, f);
     const int framed_at_entry = (flow_frame(f) != NULL);
     for (;;) {
         /* One arm per distinct answer, before anything else this flow could do: everything else consumes what the
@@ -9346,6 +9429,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * engine_document_load_scripts_held per document. A `fetch()` and a dynamic `import()` delay nothing. */
             else if (g_docdone_hook && g_docdone_hook(ctx)) {
                 g_step_unit = STEP_UNIT_LIFECYCLE; return 0; }
+            /* Another agent of this flow with work of its own (a dedicated worker's program, parks or jobs): the
+               window agent has nothing due, so that agent runs before any clock-driven source may move this one's
+               clock, and before the flow may rest or finish. */
+            else if (flow_select_other_agent(ctx, f))
+                return flow_step_agent(ctx, f);
             /* The flow's own recorded drive: the half of the orphan surface that stays above the clock. A resume is
                this flow's own identity (recorded in a previous session as the drive of one body, carrying the path
                that made it reachable, and able to do nothing else until handed that body), so it stays where the
@@ -10669,7 +10757,7 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     /* "all scripts, chunks, jobs and fetches are done" cannot be true with a continuation still parked — the
        loop above resumes one before it can answer that. Asserting it here is what keeps the park inside the
        no-work-item-is-ever-dropped rule rather than merely intending to. */
-    DCHECK(!JS_HasParkedFlow(JS_GetRuntime(ctx)) && f->parked == NULL,
+    DCHECK(!JS_HasParkedFlow(JS_GetRuntime(ctx)) && !flow_holds_parks(f),
            "a flow finished with a continuation still parked — that flow's async activation is dropped");
     /* A finished flow has no live frame and no program still being parsed. `frame` is the JS_FlowNew handle
        holding this flow's heap frame chain (every activation, closure and local it is suspended across), so one
@@ -10681,7 +10769,7 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     DCHECK(f->compile == NULL,
            "a flow finished with a program still being parsed — a completion arm ran for an unreached row, or the "
            "compile handle outlived its program");
-    DCHECK(flow_frame(f) == NULL, "a flow finished with a live preemptible frame — its whole activation chain, and "
+    DCHECK(!flow_holds_frame(f), "a flow finished with a live preemptible frame — its whole activation chain, and "
                              "everything those frames close over, is retained by a handle nothing will free");
     DCHECK(flow_deliver_pending(f) == 0,
            "a flow finished still holding routed deliveries — each is a message a peer sent and this document "

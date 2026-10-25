@@ -268,6 +268,12 @@
     /* of its parse result's error to rethrow.                                */ \
     X(REGISTER_IMPORT_MAP, "register-an-import-map")                              \
     X(RESUME_PROGRAM,     "resume-program")                                       \
+    /* a step of an agent other than the window's (a dedicated worker's):     */ \
+    /* its parked continuation, its program, or one of its queued jobs        */ \
+    X(AGENT_RESUME_PARKED, "another-agent-resume-parked-continuation")            \
+    X(AGENT_RESUME_PROGRAM, "another-agent-resume-program")                       \
+    X(AGENT_EVAL_MODULE,  "another-agent-evaluate-module")                        \
+    X(AGENT_RUN_JOB,      "another-agent-run-a-job")                              \
     /* AND THE RESUME HAS FOUR OUTCOMES AND HAD ONE NAME, which is the SAME   */ \
     /* defect as the block above and one rung lower down. A resume ends in    */ \
     /* exactly one of the four states flow_step already branches on: the      */ \
