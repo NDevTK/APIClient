@@ -2359,8 +2359,8 @@ static int idl_union_seq_arm(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w, ui
     return 0;
 }
 
-/* §3.2.25 Union types over `(DOMString or sequence<DOMString>)`, and its nullable spelling, for unknown external
-   input, whose arm is a type test the input does not answer. Step 2's IDL null, step 11.2's sequence (an Object
+/* §3.2.25 Union types over `(S or sequence<S>)`, S the string type `elem` names (DOMString, and its nullable
+   spelling, or USVString), for unknown external input, whose arm is a type test the input does not answer. Step 2's IDL null, step 11.2's sequence (an Object
    whose GetMethod(V, %Symbol.iterator%) is not undefined) and step 15's string are each a world where the
    value's type set admits it, so the arms its type facet leaves are forked, outcome 0 the string arm; a String
    takes the string arm with no ask. The sequence arm is §3.2.21.1 over §23.1.5.2.1 %ArrayIteratorPrototype%.next
@@ -2368,11 +2368,14 @@ static int idl_union_seq_arm(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w, ui
    Named residual. Not covered: an unknown standing for app state whose iterator is the page's own (a Set, a
    generator) is iterated as an Array. Next diff: fork the @@iterator member's worlds at its read. How its
    absence shows: such a value's elements carry index paths no read of the page names.
-   *pv receives the IDL value (owned): `v` itself on the string arm, since a DOMString crosses unknown input,
+   *pv receives the IDL value (owned): `v` itself on the string arm, since a string type crosses unknown input,
    null, or the built Array. Returns >0 (the caller returns it), 0, or -1 with a throw live. */
 static int idl_union_seq_unknown(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w, uint8_t *phase, JSValueConst v,
-                                 bool nullable, JSValue *pin, JSValue *pv, JSValue **out_cb, int *out_argc)
+                                 IdlArgType elem, bool nullable, JSValue *pin, JSValue *pv, JSValue **out_cb,
+                                 int *out_argc)
 {
+    DCHECK(elem == IDL_DOMSTRING || (elem == IDL_USVSTRING && !nullable),
+           "the unknown arm of a string-or-sequence union was asked for an element type no declared union has");
     DCHECK(concolic_is(v), "the unknown arm of a string-or-sequence union was asked of a value that is not "
                            "unknown input — a concrete value answers §3.2.25's type tests through idl_union_seq_arm");
     if (*phase == IDL_UNI_ASK) {
@@ -2403,12 +2406,14 @@ static int idl_union_seq_unknown(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w
         if (n == 1) {
             *phase = arms[0];
         } else {
-            static const char *const OPS[2][2] = {
-                { NULL, "§3.2.25 (DOMString or sequence<DOMString>)? arm: string, null" },
-                { "§3.2.25 (DOMString or sequence<DOMString>) arm: string, sequence",
-                  "§3.2.25 (DOMString or sequence<DOMString>)? arm: string, sequence, null" },
+            static const char *const OPS[2][2][2] = {
+                { { NULL, "§3.2.25 (DOMString or sequence<DOMString>)? arm: string, null" },
+                  { "§3.2.25 (DOMString or sequence<DOMString>) arm: string, sequence",
+                    "§3.2.25 (DOMString or sequence<DOMString>)? arm: string, sequence, null" } },
+                { { NULL, NULL },
+                  { "§3.2.25 (USVString or sequence<USVString>) arm: string, sequence", NULL } },
             };
-            const char *op = OPS[!!(ty & objs)][!!(ty & nullish)];
+            const char *op = OPS[elem == IDL_USVSTRING][!!(ty & objs)][!!(ty & nullish)];
             int r;
 
             DCHECK(op != NULL, "a forked string-or-sequence arm set has neither a sequence nor a null arm");
@@ -2462,8 +2467,9 @@ static int idl_union_seq_unknown(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w
         *pin = JS_UNDEFINED;
         if (r > 0) return r;
         if (r < 0) return -1;
-        /* §3.2.10 DOMString over the element: an unknown crosses as itself, and a member read of an unknown
-           answers an unknown or a pinned primitive, whose ToString runs no page code. */
+        /* The element's string conversion (§3.2.10, or §3.2.12 with its scalar value replacement): an unknown
+           crosses as itself, and a member read of an unknown answers an unknown or a pinned primitive, whose
+           ToString runs no page code. */
         if (!concolic_is(e)) {
             JSValue str;
 
@@ -2471,6 +2477,7 @@ static int idl_union_seq_unknown(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w
                                     "— its ToString would be the page's code, which this synchronous arm cannot run");
             str = JS_ToString(ctx, e);
             JS_FreeValue(ctx, e);
+            if (!JS_IsException(str) && elem == IDL_USVSTRING) str = JS_ToScalarValueString(ctx, str);
             if (JS_IsException(str)) return -1;
             e = str;
         }
@@ -2631,6 +2638,16 @@ static int idl_conv_rec_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlC
             IdlArgType vt = IDL_USVSTRING;
             JSValue str = JS_UNDEFINED;
 
+            /* Unknown external input is not asked for @@iterator: its arms are forked, as at the argument and
+               member boundaries. A record of unknown keys reaches here with unknown values. */
+            if (concolic_is(f->rec.value)) {
+                r = idl_union_seq_unknown(ctx, hdr, &f->lvl, &f->lvl.uni_phase, f->rec.value, IDL_USVSTRING,
+                                          false, &in, &str, out_cb, out_argc);
+                in = JS_UNDEFINED;
+                if (r > 0) return r;   /* parked on the value's arm fork, length chain or element read */
+                if (r < 0) return -1;
+                goto pair;
+            }
             r = idl_union_seq_arm(ctx, hdr, &f->lvl, &f->lvl.uni_phase, f->rec.value, &in, &vt,
                                   IDL_SEQUENCE_USVSTRING, IDL_USVSTRING, out_cb, out_argc);
             if (r > 0) return r;   /* parked INSIDE the page's @@iterator getter or its Proxy trap */
@@ -2674,6 +2691,7 @@ static int idl_conv_rec_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlC
                 str = JS_ToScalarValueString(ctx, str);
                 if (JS_IsException(str)) return -1;
             }
+        pair:
             {
                 /* THE KEY IS CONVERTED HERE AND NOT AT `key_ok`, WHICH ONLY REFUSED A SYMBOL. §3.2.12's
                    replacement is what makes two ES keys converge, and the map set below is what step 4.2.4
@@ -3091,7 +3109,7 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
             } else if (concolic_is(w->mv)) {
                 JSValue v = JS_UNDEFINED;
 
-                r = idl_union_seq_unknown(ctx, hdr, w, &w->uni_phase, w->mv,
+                r = idl_union_seq_unknown(ctx, hdr, w, &w->uni_phase, w->mv, IDL_DOMSTRING,
                                           mt == IDL_DOMSTRING_OR_SEQUENCE_NULLABLE, &in, &v, out_cb, out_argc);
                 if (r > 0) return r;   /* parked on this member's arm fork, length chain or element read */
                 if (r < 0) return -1;
@@ -5130,7 +5148,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 DCHECK(idl_concolic_rule(t) == IDL_CONCOLIC_FORKS,
                        "this conversion forked §3.2.25's arm for a type idl_args.h does not declare as one it "
                        "forks — the site and the rule are the two halves of one statement");
-                r = idl_union_seq_unknown(ctx, &s->hdr, &s->dw.lvl, &s->dw.lvl.uni_phase, a,
+                r = idl_union_seq_unknown(ctx, &s->hdr, &s->dw.lvl, &s->dw.lvl.uni_phase, a, IDL_DOMSTRING,
                                           t == IDL_DOMSTRING_OR_SEQUENCE_NULLABLE, &cb_result, &v, out_cb, out_argc);
                 if (r > 0) return r;
                 if (r < 0) return JS_STEP_ABRUPT;
