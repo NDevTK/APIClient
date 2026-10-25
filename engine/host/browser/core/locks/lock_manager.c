@@ -1552,6 +1552,7 @@ void lock_manager_free(void)
     g_manager_class = 0;
     g_lock_class = 0;
     g_id_request = g_id_query = -1;
+    g_lk_options_atoms = NULL;   /* the IDL pool's, released with the runtime */
     g_grant_stepid = g_settled_stepid = g_abort_stepid = -1;
     g_ready = 0;
     g_rt = NULL;
