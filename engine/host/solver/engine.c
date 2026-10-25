@@ -6219,7 +6219,7 @@ static int orphan_chain_position(const Flow *f, int k) {
    position so each event is its own delivery, with no lastEventId, no source and no ports. Owned. */
 static JSValue engine_attacker_message_event(JSContext *ctx, uint64_t hash, int pos) {
     char record[64], dsrc[64], osrc[64], dshape[68], oshape[68];
-    JSValue data, origin, ports, ev;
+    JSValue data, origin, ports, noid, ev;
 
     snprintf(record, sizeof record, "attacker-post:%016llx#%d", (unsigned long long)hash, pos);
     window_message_delivery_sources(record, dsrc, osrc, sizeof dsrc);
@@ -6229,7 +6229,10 @@ static JSValue engine_attacker_message_event(JSContext *ctx, uint64_t hash, int 
     origin = concolic_new(ctx, oshape, osrc, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
     ports = JS_NewArray(ctx);
     CHECK(!JS_IsException(ports), "engine: OOM building an attacker message's ports");
-    ev = message_event_new(ctx, "message", data, origin, JS_NewString(ctx, ""), JS_NULL, ports);
+    noid = JS_NewString(ctx, "");
+    CHECK(!JS_IsException(noid), "engine: OOM building an attacker message's lastEventId");
+    ev = message_event_new(ctx, "message", data, origin, noid, JS_NULL, ports);
+    JS_FreeValue(ctx, noid);
     JS_FreeValue(ctx, data);
     JS_FreeValue(ctx, origin);
     JS_FreeValue(ctx, ports);
