@@ -125,6 +125,15 @@ typedef struct {
        is derived from it, -1 unstated (concolic_alloc's value, which concolic_pin refuses). Carried through a
        negation with the rest of the observation. */
     signed char cmp_src_own;
+    /* For a §13.5.3.1 typeof result, the `src` of the operand it was taken of, where that operand owns its
+       `src` (a source or member read); NULL otherwise. For an equality whose subject is such a result, the
+       same operand's `src` (`cmp_typeof_of`), carried through a negation with the rest of the observation:
+       decide.c files the arm as that operand's type facet (concolic_type_facet) rather than a pin. Owned. */
+    char *typeof_of;
+    char *cmp_typeof_of;
+    /* Whether this value is a typeof result (`is_typeof`), or an equality whose subject is one (`cmp_typeof`),
+       whatever its operand: a typeof outcome is a fact about its operand's type, never a value to pin. */
+    signed char is_typeof, cmp_typeof;
     /* The ordering's own fields, kept apart from the equality's: an equality determines a value on one arm, an
        ordering a bound on both. `rel_op` is normalised subject-on-the-left (`5 < x` arrives as `x > 5`), so
        decide.c reads a relation without knowing which operand the page wrote first. */
@@ -778,6 +787,9 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    leq: the loose equalities that held, each as the operand the page wrote and its kind. A strict equality's
    holding arm determines a value (`val`); a loose one's (§7.2.13 IsLooselyEqual ( x, y )) bounds the operand
    to a set only that algorithm can read; both failing arms are `excl`. An exact repeat adds nothing. */
+/* typeof_out: the §13.5.3.1 typeof rows (TYR_* bits) this flow proved the source at this key does not answer: a
+   typeof equality's holding arm excludes every other row and its failing arm the one it tested. It is the
+   source's type facet, filed on the operand's own key by concolic_type_facet; cty_of_operand narrows by it. */
 /* adec, adec_what, adec_arm, adec_neg: this flow took an arm no observation of the run established (its
    example contradicts it, or it has none) at the decision this key names, and the arm determined no value (a pin states the ones that did). `adec` is the decision as the
    page wrote it; for a branch `adec_arm` is the predicate's arm and `adec_neg` the polarity `adec` reads it in,
@@ -790,7 +802,8 @@ typedef struct { BoundSide lo, hi; } Bound;
 typedef struct { char *key; char *val; signed char valkind; char **excl; int nexcl; Bound *bnd;
                  ConcolicPred *pred; int npred; ConcolicLooseEq *leq; int nleq;
                  ConcolicPrincipalPin *ppin; int nppin; signed char truth; signed char ex_contra;
-                 char *adec; int adec_arm; signed char adec_what; signed char adec_neg; } Cons;
+                 char *adec; int adec_arm; signed char adec_what; signed char adec_neg;
+                 unsigned char typeof_out; } Cons;
 
 static void bound_side_free(BoundSide *s) { free(s->txt); s->txt = NULL; s->present = 0; }
 /* The one copy of one side, used by the fork's copy-up; a field added to BoundSide must be copied here or a
@@ -1017,6 +1030,7 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].adec_what = below ? below->adec_what : (signed char)CONCOLIC_DECISION_NONE;
     g_pins[g_pins_n].adec_arm = below ? below->adec_arm : 0;
     g_pins[g_pins_n].adec_neg = below ? below->adec_neg : 0;
+    g_pins[g_pins_n].typeof_out = below ? below->typeof_out : 0;
     g_pins_n++;
     if (!g_pins_hash || g_pins_hash_cap < g_pins_n * 2) cons_hash_rebuild();
     else cons_hash_put(g_pins_n - 1);
@@ -2027,6 +2041,8 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->cmp_tok);
     free(c->cmp_subj);
     free(c->cmp_subj_ident);
+    free(c->typeof_of);
+    free(c->cmp_typeof_of);
     free(c->rel_tok);
     free(c->rel_subj);
     free(c->member);
@@ -3129,29 +3145,126 @@ static unsigned cty_of_concrete(JSValueConst v)
     return CTY_OBJECT;
 }
 
-/* The types an operand takes: a concrete value's one, an unknown's stated set, 0 for an unknown no mint typed. */
+/* §13.5.3.1 typeof's table as rows: the eight strings it answers, in TYR_* bit order. The Object type takes two
+   rows, "object" or "function" by [[Call]], and Null shares "object" with it. */
+enum { TYR_UNDEFINED = 1u << 0, TYR_OBJECT = 1u << 1, TYR_BOOLEAN = 1u << 2, TYR_STRING = 1u << 3,
+       TYR_SYMBOL = 1u << 4, TYR_NUMBER = 1u << 5, TYR_BIGINT = 1u << 6, TYR_FUNCTION = 1u << 7, TYR_ALL = 0xFFu };
+static const char *const TYR_NAME[8] = { "undefined", "object", "boolean", "string", "symbol", "number", "bigint",
+                                         "function" };
+
+/* The row `name` is, or 0 for a string §13.5.3.1 never answers. */
+static unsigned tyr_of_name(const char *name)
+{
+    for (int i = 0; i < 8; i++) if (!strcmp(TYR_NAME[i], name)) return 1u << i;
+    return 0;
+}
+
+/* The rows a type set can answer (every row for the empty set, which states nothing), and the types a set of
+   rows admits. */
+static unsigned tyr_of_cty(unsigned ty)
+{
+    unsigned r = 0;
+
+    if (!ty) return TYR_ALL;
+    if (ty & CTY_UNDEFINED) r |= TYR_UNDEFINED;
+    if (ty & CTY_NULL) r |= TYR_OBJECT;
+    if (ty & CTY_BOOLEAN) r |= TYR_BOOLEAN;
+    if (ty & CTY_STRING) r |= TYR_STRING;
+    if (ty & CTY_SYMBOL) r |= TYR_SYMBOL;
+    if (ty & CTY_NUMBER) r |= TYR_NUMBER;
+    if (ty & CTY_BIGINT) r |= TYR_BIGINT;
+    if (ty & CTY_OBJECT) r |= TYR_OBJECT | TYR_FUNCTION;
+    return r;
+}
+
+static unsigned cty_of_tyr(unsigned rows)
+{
+    unsigned ty = 0;
+
+    if (rows & TYR_UNDEFINED) ty |= CTY_UNDEFINED;
+    if (rows & TYR_OBJECT) ty |= CTY_NULL | CTY_OBJECT;
+    if (rows & TYR_BOOLEAN) ty |= CTY_BOOLEAN;
+    if (rows & TYR_STRING) ty |= CTY_STRING;
+    if (rows & TYR_SYMBOL) ty |= CTY_SYMBOL;
+    if (rows & TYR_NUMBER) ty |= CTY_NUMBER;
+    if (rows & TYR_BIGINT) ty |= CTY_BIGINT;
+    if (rows & TYR_FUNCTION) ty |= CTY_OBJECT;
+    return ty;
+}
+
+/* Has any flow filed a type facet? A gate on the lookup below only: a facet is per flow and lives in the
+   constraint, so this answers "may one exist", never which. */
+static int g_typeof_facet_any;
+
+/* The typeof rows this flow proved `c`'s source does not answer: its type facet (Cons.typeof_out). Only a value
+   that owns its `src` is that source; a derivation carries its operand's `src` and is not it. */
+static unsigned tyr_out_of(const Concolic *c)
+{
+    const Cons *e;
+
+    if (!g_typeof_facet_any || !c || c->src_own != 1 || !c->src) return 0;
+    e = cons_lookup(c->src);
+    return e ? e->typeof_out : 0;
+}
+
+/* The types an operand takes: a concrete value's one, an unknown's stated set narrowed by its type facet in the
+   running flow, 0 for an unknown neither a mint nor a facet typed. */
 static unsigned cty_of_operand(JSValueConst v)
 {
     const Concolic *c = concolic_is(v) ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    unsigned out;
 
-    return c ? c->ty : cty_of_concrete(v);
+    if (!c) return cty_of_concrete(v);
+    out = tyr_out_of(c);
+    return out ? cty_of_tyr(tyr_of_cty(c->ty) & ~out) : c->ty;
 }
 
-/* §13.5.3.1 typeof's answer where a type set fixes it: every member's row of §13.5.3.1's table agrees, and no
-   member is an Object, whose row depends on [[Call]]. NULL when the set does not fix it. */
-static const char *cty_typeof_fixed(unsigned ty)
+/* §13.5.3.1 typeof's answer where the operand's rows are one: its type set, and its type facet in the running
+   flow. NULL when more than one row remains. */
+static const char *tyr_fixed(JSValueConst v)
 {
-    static const char *const ROW[8] = { "undefined", "object", "boolean", "string", "symbol", "number", "bigint", NULL };
-    const char *fixed = NULL;
-    int i;
+    const Concolic *c = concolic_is(v) ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    unsigned rows = c ? tyr_of_cty(c->ty) & ~tyr_out_of(c) : tyr_of_cty(cty_of_concrete(v));
 
-    if (!ty || (ty & CTY_OBJECT)) return NULL;
-    for (i = 0; i < 8; i++) {
-        if (!(ty & (1u << i))) continue;
-        if (fixed && strcmp(fixed, ROW[i]) != 0) return NULL;
-        fixed = ROW[i];
-    }
-    return fixed;
+    for (int i = 0; i < 8; i++) if (rows == (1u << i)) return TYR_NAME[i];
+    return NULL;
+}
+
+void concolic_type_facet(JSValueConst cond, int holds)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(cond, g_concolic_class) : NULL;
+    unsigned row;
+    Cons *e;
+
+    DCHECK(c != NULL && c->cmp_typeof_of != NULL && c->cmp_op != OPCMP_NONE && c->cmp_tok != NULL,
+           "a type facet was filed off a value that is not an equality over a typeof result of an operand that "
+           "owns its source — decide.c asks concolic_cmp_typeof_of first");
+    /* A typeof result is a String, so a token of any other kind is a row the operand never answers. */
+    row = c->cmp_kind == CONCOLIC_LIT_STRING ? tyr_of_name(c->cmp_tok) : 0;
+    e = cons_entry(c->cmp_typeof_of);
+    e->typeof_out |= (unsigned char)(holds ? (TYR_ALL & ~row) : row);
+    g_typeof_facet_any = 1;
+}
+
+int concolic_cmp_is_typeof(JSValueConst cond)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(cond, g_concolic_class) : NULL;
+
+    return c && c->cmp_typeof;
+}
+
+const char *concolic_cmp_typeof_of(JSValueConst cond)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(cond, g_concolic_class) : NULL;
+
+    return c ? c->cmp_typeof_of : NULL;
+}
+
+unsigned concolic_typeof_rows(const char *src)
+{
+    const Cons *e = src && g_typeof_facet_any ? cons_lookup(src) : NULL;
+
+    return TYR_ALL & ~(e ? e->typeof_out : 0u);
 }
 
 /* State a fresh mint's type set: what its algorithm fixes the result's type to. Once per value, and the
@@ -3353,6 +3466,8 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
                                     algorithm. */
     if (s->cmp_subj)       { d->cmp_subj       = strdup(s->cmp_subj);       CHECK(d->cmp_subj,       "concolic: OOM carrying an equality's hole through a negation"); }
     if (s->cmp_subj_ident) { d->cmp_subj_ident = strdup(s->cmp_subj_ident); CHECK(d->cmp_subj_ident, "concolic: OOM carrying an equality's subject identity through a negation"); }
+    if (s->cmp_typeof_of)  { d->cmp_typeof_of  = strdup(s->cmp_typeof_of);  CHECK(d->cmp_typeof_of,  "concolic: OOM carrying a typeof equality's operand through a negation"); }
+    d->cmp_typeof = s->cmp_typeof;
     d->rel_op  = s->rel_op;
     d->rel_num = s->rel_num;
     if (s->rel_tok)  { d->rel_tok  = strdup(s->rel_tok);  CHECK(d->rel_tok,  "concolic: OOM carrying an ordering's token through a negation"); }
@@ -3846,6 +3961,17 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
     /* …and whether the operand is the value its `src` names, or a derivation that carries its operand's: the
        pin is filed under `src` only in the first case (concolic_pin). */
     if (tok) pred_set_src_own(res, ((const Concolic *)JS_GetOpaque(opq, g_concolic_class))->src_own == 1);
+    /* …and, for a typeof result, the operand whose type facet the arm narrows. */
+    if (tok) {
+        const Concolic *oc = JS_GetOpaque(opq, g_concolic_class);
+        Concolic *rc = JS_GetOpaque(res, g_concolic_class);
+
+        if (rc) rc->cmp_typeof = oc->is_typeof;
+        if (oc->typeof_of && rc) {
+            rc->cmp_typeof_of = strdup(oc->typeof_of);
+            CHECK(rc->cmp_typeof_of, "concolic: OOM naming a typeof equality's operand");
+        }
+    }
     /* …and the result's own example, run rather than derived, attached after the mint (as page_visibility.c
        does) because pred_new's parameters are the predicate and the example is what this run computed it to
        be. */
@@ -4913,7 +5039,7 @@ JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     /* An operand whose type set fixes §13.5.3.1's row is answered by the row: `typeof !x` is "boolean" in
        every world, so nothing here is unknown and nothing forks over it. */
     {
-        const char *fixed = cty_typeof_fixed(cty_of_operand(v));
+        const char *fixed = tyr_fixed(v);
 
         if (fixed) return JS_NewString(ctx, fixed);
     }
@@ -4936,6 +5062,16 @@ JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     r = concolic_derived(ctx, shape, shape, concolic_root_c(v), root_whose_of(v), ident, example);
     free(shape);
     concolic_type_state(r, CTY_STRING);   /* §13.5.3.1's every row is a String */
+    {
+        const Concolic *oc = JS_GetOpaque(v, g_concolic_class);
+        Concolic *rc = concolic_is(r) ? JS_GetOpaque(r, g_concolic_class) : NULL;
+
+        if (rc) rc->is_typeof = 1;
+        if (rc && oc->src_own == 1 && oc->src) {
+            rc->typeof_of = strdup(oc->src);
+            CHECK(rc->typeof_of, "concolic: OOM naming a typeof result's operand");
+        }
+    }
     return r;
 }
 
@@ -5618,6 +5754,8 @@ void concolic_free(void)
     g_ex_contra_any = 0;
     /* …and the pin latch, for the same reason. */
     g_pin_any = 0;
+    /* …and the type facet latch. */
+    g_typeof_facet_any = 0;
     /* The value class is deliberately not given back here, and that is asserted (core/dom/document.c says the
        same of its realm-mark hook). Every live Concolic outlives this call: JS_FreeRuntime's finalizer reaches
        each record through this id, and the collection before it marks each example through it. A cleared id

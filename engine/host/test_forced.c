@@ -1151,6 +1151,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/clobber.h"
 #include "fixture/typedinput.h"
 #include "fixture/closerequest.h"
+#include "fixture/typeoffacet.h"
 #include "fixture/sparoute.h"
 #include "fixture/envgate.h"
 #include "fixture/timegate.h"
@@ -1638,6 +1639,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "clobber", HTML_CLOBBER },
     { "typedinput", HTML_TYPEDINPUT },
     { "closerequest", HTML_CLOSEREQUEST },
+    { "typeoffacet", HTML_TYPEOFFACET },
     { "sparoute", HTML_SPAROUTE },
     { "envgate", HTML_ENVGATE },
     { "timegate", HTML_TIMEGATE },
@@ -15329,6 +15331,25 @@ TF_UNIT void probes_closerequest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `typeoffacet` document (fixture/typeoffacet.h): the string arm is reached, and the number arm
+   inside it is not, because the first test fixed the member's type facet in that world. */
+TF_UNIT void probes_typeoffacet(const char *js, Probe *tab, int *n) {
+    const char *ts_why = NULL; int ts_tt = 1;
+    fold_row(&ts_tt, &ts_why, !!strstr(js, "\"/api/tf-string\""),
+             "NOT REACHED: there is no /api/tf-string record, so no world took the member's string arm");
+    const char *ti_why = NULL; int ti_tt = 1;
+    fold_row(&ti_tt, &ti_why, !!strstr(js, "\"/api/tf-string\""),
+             "NOT REACHED: the string arm never ran, so the inner test was never asked");
+    fold_row(&ti_tt, &ti_why, !strstr(js, "\"/api/tf-impossible\""),
+             "a world that proved the member a string took its `typeof … === 'number'` arm — the typeof outcome was "
+             "not filed as the member's type facet");
+    const Probe rows[] = {
+        { "tf-string", ts_tt, "/api/tf-string", SESS_EXPLORE, ts_why },
+        { "tf-no-impossible", ti_tt, "/api/tf-impossible", SESS_EXPLORE, ti_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `sparoute` document (fixture/sparoute.h); the chunk's witnesses are in TF_SERVED's body,
    so those rows are keyed by the document's own import of it. */
 TF_UNIT void probes_sparoute(const char *js, Probe *tab, int *n) {
@@ -19634,6 +19655,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_clobber(js, probes, &np);
     probes_typedinput(js, probes, &np);
     probes_closerequest(js, probes, &np);
+    probes_typeoffacet(js, probes, &np);
     probes_sparoute(js, probes, &np);
     probes_envgate(js, probes, &np);
     probes_timegate(js, probes, &np);

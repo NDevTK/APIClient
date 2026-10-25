@@ -1544,7 +1544,12 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
            "that is not an equality must stand on NEITHER (an ordering and a call predicate determine no "
            "value), and one that is must stand on exactly one, or a pin and the exclusion that contradicts it "
            "are recorded off the same run of the same gate");
-    if (src && tok && eq_holds) {
+    /* A typeof equality narrows its operand's type facet on both arms where the operand owns its source
+       (concolic_type_facet); the typeof result's own spelling is never pinned or excluded. */
+    if (tok && (eq_holds || eq_fails) && concolic_cmp_is_typeof(cond)) {
+        if (concolic_cmp_typeof_of(cond)) concolic_type_facet(cond, eq_holds);
+    }
+    else if (src && tok && eq_holds) {
         /* concolic_pin pins `src` only where the compared value is that source; a derivation of it pins nothing. */
         pinned = concolic_pin(cond);
         /* The path records that it has chosen a witness on an arm no example of this run confirmed: one the
@@ -1575,7 +1580,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
        on the algorithm the page wrote rather than the arm. It is keyed by the hole, as a domain is, not by `src`
        (concolic_cmp_subject states the pair). `concolic_cmp_algo` aborts on a non-equality, so `eq_holds`, false
        for every OPCMP_NONE, is evaluated first. No value is determined by a predicate answering true. */
-    if (tok && eq_holds && concolic_cmp_algo(cond) == JS_CONCOLIC_EQ_LOOSE) {
+    if (tok && eq_holds && concolic_cmp_algo(cond) == JS_CONCOLIC_EQ_LOOSE && !concolic_cmp_is_typeof(cond)) {
         const char *subj = concolic_cmp_subject(cond);
         DCHECK(tok_kind != CONCOLIC_LIT_NONE,
                "an equality reached the loose-domain record with an operand this engine cannot spell — "

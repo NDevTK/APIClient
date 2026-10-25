@@ -1025,6 +1025,18 @@ int         concolic_pin_store(const char *src, const char *root, ConcolicLit ki
    two its subject is. Answers concolic_pin_store's 1 where a value was written, 0 otherwise. Only this and the
    store's own selftests call concolic_pin_store, because only they know `src` names the compared value. */
 int         concolic_pin(JSValueConst cmp);
+/* A SOURCE'S TYPE FACET. An equality over a §13.5.3.1 typeof result narrows the operand's types, not a value:
+   `typeof d.session === 'string'` holding leaves the "string" row alone and failing removes it. Where the
+   operand owns its `src` (a source or member read), concolic_cmp_typeof_of names it, and decide.c files the arm
+   here; a typeof result is never pinned or excluded under its own spelling (concolic_cmp_is_typeof), since
+   it is an outcome over its operand, not a source. The facet is per flow, lives in the
+   constraint under the operand's `src`, and narrows every later reading of the operand's type in this flow (a
+   typeof answers its row once one remains). concolic_typeof_rows answers the rows still open for `src`, as
+   TYR bits in §13.5.3.1's table order (undefined, object, boolean, string, symbol, number, bigint, function). */
+void        concolic_type_facet(JSValueConst cond, int holds);
+int         concolic_cmp_is_typeof(JSValueConst cond);
+const char *concolic_cmp_typeof_of(JSValueConst cond);
+unsigned    concolic_typeof_rows(const char *src);
 /* One pin of the running flow, as concolic_pins_each hands it over: `src` is the source path the pin is keyed
    under (what a later read concretizes through), `val` the §7.1.19 ToString ( argument ) spelling of the
    operand the page's equality wrote, and `kind` what that spelling denotes. All three are borrowed from the
