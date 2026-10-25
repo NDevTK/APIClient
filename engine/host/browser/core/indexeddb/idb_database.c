@@ -54,6 +54,7 @@
  * and records the INVERSE of what it is about to write. The sixth is §2.11's key generator, whose algorithms
  * live in core/indexeddb/idb_key_generator.c and reach this list through the one recorder exported for them.
  * The revert is at the bottom of this file, beside the writes it runs backwards. */
+#include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -798,6 +799,7 @@ void idb_store_record_walk_visit(JSContext *ctx, IdbStoreWalk *sw, JSStepVisit *
     v->val(ctx, &sw->generated);
     v->val(ctx, &sw->indexes);
     v->val(ctx, &sw->index_key);
+    idb_inject_walk_visit(ctx, &sw->iw, v);
 }
 
 void idb_store_record_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *sw, JSValueConst tx,
@@ -920,8 +922,13 @@ static int sr_generate(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *sw, int bas
                already run §7.2's other algorithm over this same pair — which is why §7.2's steps here are
                assertions rather than refusals. */
             key_path = idb_object_store_key_path(ctx, sw->store);
-            if (!JS_IsNull(key_path))                                            /* STEP 1.1.3 */
-                idb_key_path_inject(ctx, sw->value, sw->generated, key_path);
+            if (!JS_IsNull(key_path)) {                                          /* STEP 1.1.3 */
+                JS_FreeValue(ctx, key_path);
+                memset(&sw->iw, 0, sizeof sw->iw);
+                sw->iw.segs = sw->iw.seg_len = JS_UNDEFINED;
+                IDB_SR_GOTO(hdr, base + IDB_SR_INJECT);
+                return JS_STEP_YIELD;
+            }
             JS_FreeValue(ctx, key_path);
         } else {
             /* "Otherwise, run possibly update the key generator for store with key." */
@@ -1070,6 +1077,18 @@ int idb_store_record_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *sw, 
 
     if (phase == IDB_SR_GENERATE)
         return sr_generate(ctx, hdr, sw, base);
+
+    /* §6.1 STEP 1.1.3 in a stage of its own, because over an unknown key path §7.2 forks and re-enters, and the
+       stage before it generated the key. */
+    if (phase == IDB_SR_INJECT) {
+        JSValue key_path = idb_object_store_key_path(ctx, sw->store);
+        int r = idb_key_path_inject_run(ctx, hdr, &sw->iw, sw->value, sw->generated, key_path);
+
+        JS_FreeValue(ctx, key_path);
+        if (r) return r;
+        IDB_SR_GOTO(hdr, base + IDB_SR_NO_OVERWRITE);
+        return JS_STEP_YIELD;
+    }
 
     if (phase == IDB_SR_NO_OVERWRITE) {
         bool exists = sr_key_exists(ctx, sw);

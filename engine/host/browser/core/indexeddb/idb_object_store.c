@@ -486,6 +486,7 @@ static int js_idb_store_operation(JSContext *ctx, void *st, JSValue cb_result, J
     STEP_ARM(OSOP_LEAVE);
     STEP_ARM(OSOP_UNKNOWN);
     STEP_ARM(OSOP_GENERATE);
+    STEP_ARM(OSOP_INJECT);
     STEP_ARM(OSOP_NO_OVERWRITE);
     STEP_ARM(OSOP_REMOVE);
     STEP_ARM(OSOP_STORE);

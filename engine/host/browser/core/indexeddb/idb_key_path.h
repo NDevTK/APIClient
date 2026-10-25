@@ -131,4 +131,22 @@ bool idb_key_path_can_inject(JSContext *ctx, JSValueConst value, JSValueConst ke
  * step of these is an assertion, because §4.5 step 11.4.2 ran the check above over this same pair first. */
 void idb_key_path_inject(JSContext *ctx, JSValueConst value, JSValueConst key, JSValueConst key_path);
 
+/* §7.2's injection as a step machine's stage, for a key path that may hold unknown input. The identifiers past
+   the deepest member the path names are unknown, so how many there are is a chain of forks (over the length of
+   the page's own `path.split(".")`), and each becomes a property key named by its identity, the name a page's
+   `o[path.split(".")[i]]` reads. `iw` is the caller's record, zeroed before the first entry; the caller's stage
+   re-enters this until it returns 0. A concrete key path is idb_key_path_inject. */
+typedef struct IdbInjectWalk {
+    JSValue  segs;      /* the key path strictly split on '.', as the page's split mints it (owned) */
+    JSValue  seg_len;   /* its `length`, the unknown the count's chain asks about (owned) */
+    uint32_t depth;     /* identifiers naming members the value already holds */
+    uint32_t n;         /* the count's chain cursor: the path has at least this many identifiers */
+    uint8_t  phase;     /* 0 = not begun, as a zeroed record reads; 1 = counting */
+    char     op[32];    /* the chain's operation string, which the fork borrows across its suspension */
+} IdbInjectWalk;
+
+void idb_inject_walk_visit(JSContext *ctx, IdbInjectWalk *iw, JSStepVisit *v);
+int  idb_key_path_inject_run(JSContext *ctx, JSStepHdr *hdr, IdbInjectWalk *iw, JSValueConst value,
+                             JSValueConst key, JSValueConst key_path);
+
 #endif

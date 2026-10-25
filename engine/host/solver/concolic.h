@@ -905,6 +905,11 @@ JSValue     concolic_strict_equal(JSContext *ctx, JSValueConst a, JSValueConst b
    entry, with no page code run. Its example is the operation on `s`'s example. Operands borrowed; owned
    result, a Boolean where `s`'s example is determined. */
 JSValue     concolic_starts_with(JSContext *ctx, JSValueConst s, JSValueConst prefix);
+/* ECMAScript §22.1.3.23 String.prototype.split over the unknown string `s` with a one-byte separator, for the
+   same kind of caller (Indexed Database §7.2's strictly split): the value the page's `s.split(sep)` mints, so
+   its `length` and its elements are the members the page's own reads of that result name. Its example is the
+   split of `s`'s example; an Array where that example is determined. Owned result. */
+JSValue     concolic_split(JSContext *ctx, JSValueConst s, char sep);
 /* JSConcolicHooks.rel for < <= > >= — the ordering twin of cmp, and it composes its operator and BOTH operands
    into the result's identity exactly as the equality hook does. It composed neither, which made every ordering
    over one source ONE predicate: `parseInt(gCS(a).width) < 700` decided `parseInt(gCS(b).width) < 300`. */
@@ -1140,6 +1145,12 @@ int         concolic_pin(JSValueConst cmp);
    concolic_pin_store under §7.2.14's determination; a derivation, which owns no `src`, pins nothing. Answers
    concolic_pin_store's 1 where a value was written, 0 otherwise. */
 int         concolic_pin_tostring(JSValueConst v, const char *s);
+/* AN EQUALITY THIS FLOW'S OWN DECIDED PREDICATES ENTAIL, filed as holding without a fork: its branch key decided
+   true and its pin written (concolic_pin), so every later read of the compared value answers the literal —
+   concretize-on-pin, as decide.c's holding arm files it. For a component whose algorithm knows the entailment
+   (Indexed Database §7.2: a decided `path.startsWith("a.")` makes `path.split(".")[0]` "a"). `eq` is what
+   concolic_strict_equal minted against a literal; asserts the flow had not decided it false. */
+void        concolic_entail(JSValueConst eq);
 /* The pin itself: 1 with the literal's kind and spelling (borrowed from the constraint until it next changes),
    0 when the running flow pinned nothing at `src`. */
 int concolic_src_pin(const char *src, ConcolicLit *kind, const char **val);

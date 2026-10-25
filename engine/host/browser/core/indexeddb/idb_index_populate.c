@@ -157,6 +157,7 @@ static int js_idb_populate_operation(JSContext *ctx, void *st, JSValue cb_result
        refuse, nothing to displace and nothing to write. `start_index` points the cursor at step 5 and the
        block only ever moves forward, so reaching one of these means the entry pointed somewhere else. */
     STEP_ARM(POP_GENERATE);
+    STEP_ARM(POP_INJECT);
     STEP_ARM(POP_NO_OVERWRITE);
     STEP_ARM(POP_REMOVE);
     STEP_ARM(POP_STORE);

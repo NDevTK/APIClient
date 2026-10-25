@@ -461,10 +461,9 @@ static bool idb_key_path_evaluate(JSContext *ctx, JSValueConst value, JSValueCon
 static void idb_key_path_precondition(JSContext *ctx, JSValueConst key_path)
 {
     if (idb_key_path_has_unknown(ctx, key_path)) {
-        DFAIL("Indexed Database §7.2's injection (or §7.1's C entry, which no member calls) was asked to walk a "
-              "key path holding unknown input. §7.1's step walk resolves one first (idb_key_path_resolve_run); "
-              "build §7.2 over one the same way, where the worlds are the value's members its prefix can name "
-              "and a last identifier that may be a name the value does not hold");
+        DFAIL("Indexed Database §7.1's or §7.2's C entry was asked to walk a key path holding unknown input. "
+              "Every member reaches these through a step machine's stage (idb_key_path_walk_start and "
+              "idb_key_path_inject_run), which can fork over the path; route the caller onto one");
         return;
     }
     DCHECK(idb_key_path_value_is_valid(ctx, key_path),
@@ -834,6 +833,81 @@ static void idb_inject_not_concolic(JSContext *ctx, JSValueConst value)
     (void)ctx; (void)value;
 }
 
+/* The truth this flow decided for `pred` (a predicate value, or the Boolean a determined operand answers), or -1
+   when it decided nothing. Consumes `pred`. */
+static int idb_kp_truth(JSContext *ctx, JSValue pred)
+{
+    int t;
+
+    if (JS_IsBool(pred)) {
+        t = JS_ToBool(ctx, pred);
+    } else {
+        t = concolic_value_truth(concolic_branch_ident_c(pred));
+        if (t >= 0 && concolic_branch_neg(pred)) t = !t;
+    }
+    JS_FreeValue(ctx, pred);
+    return t;
+}
+
+/* §7.2's walk over the leading identifiers of an unknown key path `unknown`, in the world where §7.1 decided it
+   names no member of `value`: the questions idb_kp_resolve_one asked, read back rather than asked, descending
+   through each member the path begins with. *pm (owned) is the deepest member it names and *pdepth how many
+   identifiers name it; *pprefix (owned, when asked for) is their path. A question this flow never decided means
+   §7.1's walk did not run over this pair. */
+static void idb_kp_stop(JSContext *ctx, JSValueConst value, JSValueConst unknown, JSValue *pm, uint32_t *pdepth,
+                        JSValue *pprefix)
+{
+    JSValue cur = JS_DupValue(ctx, value), root = JS_NewString(ctx, ""), level, prefix = JS_NewString(ctx, "");
+    uint32_t depth = 0;
+
+    level = idb_kp_children(ctx, root, value);
+    JS_FreeValue(ctx, root);
+    for (;;) {
+        uint32_t i, n = idb_key_path_list_len(ctx, level);
+        JSValue next_level = JS_UNDEFINED;
+
+        for (i = 0; i < n && JS_IsUndefined(next_level); i++) {
+            JSValue pair = JS_GetPropertyUint32(ctx, level, i), path = JS_GetPropertyUint32(ctx, pair, 0);
+            const char *ps = JS_ToCString(ctx, path);
+            char *buf = ps ? malloc(strlen(ps) + 2) : NULL;
+            JSValue dotted;
+            int eq, below;
+
+            CHECK(buf != NULL, "IndexedDB: OOM composing a key path prefix");
+            sprintf(buf, "%s.", ps);
+            JS_FreeCString(ctx, ps);
+            dotted = JS_NewString(ctx, buf);
+            free(buf);
+            eq = idb_kp_truth(ctx, concolic_strict_equal(ctx, unknown, path));
+            below = idb_kp_truth(ctx, concolic_starts_with(ctx, unknown, dotted));
+            JS_FreeValue(ctx, dotted);
+            DCHECK(eq == 0 && below >= 0,
+                   "§7.2 walked an unknown key path over a value §7.1's resolution did not decide it names no "
+                   "member of: the key path equals a member path here, or this flow never asked whether it "
+                   "begins with one — §4.5 step 11.4 reaches §7.2 only on §7.1's failure arm over this pair");
+            if (below == 1) {
+                JSValue member = JS_GetPropertyUint32(ctx, pair, 1);
+
+                next_level = idb_kp_children(ctx, path, member);
+                JS_FreeValue(ctx, cur);
+                cur = member;
+                JS_FreeValue(ctx, prefix);
+                prefix = JS_DupValue(ctx, path);
+                depth++;
+            }
+            JS_FreeValue(ctx, path);
+            JS_FreeValue(ctx, pair);
+        }
+        JS_FreeValue(ctx, level);
+        if (JS_IsUndefined(next_level)) break;
+        level = next_level;
+    }
+    *pm = cur;
+    *pdepth = depth;
+    if (pprefix) *pprefix = prefix;
+    else JS_FreeValue(ctx, prefix);
+}
+
 bool idb_key_path_can_inject(JSContext *ctx, JSValueConst value, JSValueConst key_path)
 {
     size_t len = 0, i = 0, n = 0;
@@ -841,9 +915,17 @@ bool idb_key_path_can_inject(JSContext *ctx, JSValueConst value, JSValueConst ke
     JSValue cur;
     bool answer;
 
-    if (idb_key_path_has_unknown(ctx, key_path)) {
-        idb_key_path_precondition(ctx, key_path);   /* the DFAIL naming the unbuilt walk */
-        return false;                               /* its release arm: nowhere to inject */
+    /* An unknown key path: steps 4-5's walk ends at the deepest member the path names, since every identifier
+       past it is one that member does not hold (step 4.3, "return true") or the last (step 5); either way the
+       answer is whether that member is an Object or an Array. */
+    if (concolic_is(key_path)) {
+        JSValue m;
+        uint32_t depth;
+
+        idb_kp_stop(ctx, value, key_path, &m, &depth, NULL);
+        answer = JS_IsObject(m);
+        JS_FreeValue(ctx, m);
+        return answer;
     }
     path = idb_inject_path(ctx, key_path, &len);
     cur = JS_DupValue(ctx, value);
@@ -968,4 +1050,158 @@ void idb_key_path_inject(JSContext *ctx, JSValueConst value, JSValueConst key, J
                         "own data property");
     JS_FreeValue(ctx, cur);
     JS_FreeCString(ctx, path);
+}
+
+void idb_inject_walk_visit(JSContext *ctx, IdbInjectWalk *iw, JSStepVisit *v)
+{
+    v->val(ctx, &iw->segs);
+    v->val(ctx, &iw->seg_len);
+}
+
+/* `name` (an identifier of the key path, unknown or not) as the property key it denotes: an unknown's identity
+   name (concolic_key_name_hook), so two different unknowns never share a key and one read twice is one key. */
+static JSAtom idb_inject_atom(JSContext *ctx, JSValueConst name)
+{
+    JSValue s = concolic_is(name) ? concolic_key_name_hook(ctx, name) : JS_DupValue(ctx, name);
+    JSAtom a;
+
+    DCHECK(JS_IsString(s), "an identifier of a key path denotes no String property key");
+    a = JS_ValueToAtom(ctx, s);
+    JS_FreeValue(ctx, s);
+    CHECK(a != JS_ATOM_NULL, "IndexedDB: OOM interning an injected identifier");
+    return a;
+}
+
+/* CreateDataProperty(target, atom, v), which §7.2 steps 4.3.2 and 7 are: a define, so a name equal to
+   `__proto__` or to an accessor on Object.prototype makes an own data property and runs no page code. `target`
+   is the object step 4.3.1 made or a StructuredDeserialize output's own member, so it is an ordinary object
+   holding no own property under the name. Consumes `v`. */
+static void idb_inject_define(JSContext *ctx, JSValueConst target, JSAtom atom, JSValue v)
+{
+    JSValue had = JS_UNDEFINED;
+    int has, status;
+
+    DCHECK(JS_GetClassID(target) == JS_CLASS_OBJECT || JS_IsArray(target),
+           "§7.2 is about to create a property on something that is neither an ordinary object nor an Array");
+    has = JS_GetOwnSlot(ctx, &had, target, atom);
+    JS_FreeValue(ctx, had);
+    DCHECK(has == 0, "§7.2 is about to create a property its own walk found the target already holds");
+    status = JS_DefinePropertyValue(ctx, target, atom, v, JS_PROP_C_W_E);
+    CHECK(status >= 0, "IndexedDB: §7.2's CreateDataProperty threw — an allocation failure");
+    DCHECK(status == 1, "IndexedDB: §7.2's `Assert: status is true` does not hold");
+}
+
+/* The split's first `depth` elements are the identifiers of `prefix`, the path of the deepest member the key
+   path names: each decided "begins with c." entails the element under it, so each is filed as that equality
+   holding (concolic_entail) and every later read of it, the page's own included, answers the real name. */
+static void idb_inject_pin_prefix(JSContext *ctx, JSValueConst segs, JSValueConst prefix, uint32_t depth)
+{
+    const char *p = JS_ToCString(ctx, prefix), *seg;
+    uint32_t j;
+
+    CHECK(p != NULL, "IndexedDB: OOM reading a key path prefix");
+    seg = p;
+    for (j = 0; j < depth; j++) {
+        const char *dot = strchr(seg, '.');
+        size_t n = dot ? (size_t)(dot - seg) : strlen(seg);
+        JSValue e = JS_GetPropertyUint32(ctx, segs, j), lit = JS_NewStringLen(ctx, seg, n), eq;
+
+        DCHECK(n > 0, "a member path the resolver descended through has an empty identifier");
+        if (concolic_is(e)) {
+            eq = concolic_strict_equal(ctx, e, lit);
+            concolic_entail(eq);
+            JS_FreeValue(ctx, eq);
+        }
+        JS_FreeValue(ctx, lit);
+        JS_FreeValue(ctx, e);
+        seg = dot ? dot + 1 : seg + n;
+    }
+    DCHECK(*seg == '\0', "a key path prefix holds more identifiers than the depth it was reached at");
+    JS_FreeCString(ctx, p);
+}
+
+int idb_key_path_inject_run(JSContext *ctx, JSStepHdr *hdr, IdbInjectWalk *iw, JSValueConst value,
+                            JSValueConst key, JSValueConst key_path)
+{
+    JSValue cur;
+    uint32_t j;
+
+    if (!concolic_is(key_path)) {
+        idb_key_path_inject(ctx, value, key, key_path);
+        return 0;
+    }
+    if (iw->phase == 0) {
+        JSValue m;
+
+        JSValue prefix;
+
+        idb_kp_stop(ctx, value, key_path, &m, &iw->depth, &prefix);
+        JS_FreeValue(ctx, m);
+        iw->segs = concolic_split(ctx, key_path, '.');
+        idb_inject_pin_prefix(ctx, iw->segs, prefix, iw->depth);
+        JS_FreeValue(ctx, prefix);
+        iw->seg_len = JS_GetPropertyStr(ctx, iw->segs, "length");
+        iw->n = iw->depth + 1;   /* the path names no member, so it has an identifier past the deepest one */
+        iw->phase = 1;
+    }
+    /* STEPS 1-3's split over unknown input: how many identifiers there are is the chain LengthOfArrayLike asks
+       over the split's `length` (one fork per position, the same key a page's own walk of that list asks), from
+       the position the walk above already established. */
+    while (concolic_is(iw->seg_len)) {
+        JSValue ex = concolic_example(ctx, iw->seg_len);
+        int real = JS_OUTCOME_REAL_UNSTATED, arm = 0, r;
+        double len;
+
+        if (JS_IsNumber(ex) && JS_ToFloat64(ctx, &len, ex) == 0)
+            real = iw->n < len ? 1 : iw->n == len ? 0 : JS_OUTCOME_REAL_UNSTATED;
+        JS_FreeValue(ctx, ex);
+        snprintf(iw->op, sizeof iw->op, "LengthOfArrayLike>%u", iw->n);
+        r = step_fork_run(ctx, hdr, iw->seg_len, iw->op, 2, real, &arm);
+        if (r) return r;
+        if (arm == 0) break;     /* the path has exactly n identifiers */
+        iw->n++;
+    }
+    if (!concolic_is(iw->seg_len)) {
+        uint32_t len = 0;
+
+        CHECK(JS_ToUint32(ctx, &len, iw->seg_len) == 0, "IndexedDB: a determined split's length is not a number");
+        iw->n = len;
+    }
+    DCHECK(iw->n > iw->depth, "§7.2's injection over an unknown key path has no identifier past the deepest member "
+                              "the path names, which §7.1's failure arm for this pair rules out");
+    /* STEPS 4-8 from the deepest member the path names (step 4.3's "hop is false" holds for every identifier
+       past it): an object per identifier but the last, then the key at the last. */
+    {
+        JSValue m;
+        uint32_t depth;
+
+        idb_kp_stop(ctx, value, key_path, &m, &depth, NULL);
+        DCHECK(depth == iw->depth, "§7.2's walk over one key path and one value reached two different depths");
+        cur = m;
+    }
+    for (j = iw->depth; j + 1 < iw->n; j++) {                      /* STEP 4.3 */
+        JSValue name = JS_GetPropertyUint32(ctx, iw->segs, j), o = JS_NewObject(ctx);
+        JSAtom a = idb_inject_atom(ctx, name);
+
+        CHECK(!JS_IsException(o), "IndexedDB: §7.2 could not allocate the object it inserts");
+        idb_inject_define(ctx, cur, a, JS_DupValue(ctx, o));      /* STEPS 4.3.1-4.3.3 */
+        JS_FreeAtom(ctx, a);
+        JS_FreeValue(ctx, name);
+        JS_FreeValue(ctx, cur);
+        cur = o;                                                   /* STEP 4.4 */
+    }
+    {
+        JSValue name = JS_GetPropertyUint32(ctx, iw->segs, iw->n - 1);
+        JSAtom a = idb_inject_atom(ctx, name);
+
+        idb_inject_define(ctx, cur, a, idb_key_to_value(ctx, key));   /* STEPS 6-8 */
+        JS_FreeAtom(ctx, a);
+        JS_FreeValue(ctx, name);
+    }
+    JS_FreeValue(ctx, cur);
+    JS_FreeValue(ctx, iw->segs);
+    JS_FreeValue(ctx, iw->seg_len);
+    iw->segs = iw->seg_len = JS_UNDEFINED;
+    iw->phase = 0;
+    return 0;
 }

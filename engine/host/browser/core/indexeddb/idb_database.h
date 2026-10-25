@@ -126,6 +126,9 @@ JSValue idb_object_store_find(JSContext *ctx, JSValueConst db, const char *name)
     X(P##_GENERATE, W " → Indexed Database §6.1 step 1 (if store uses a key generator: generate a key for " \
                       "store and inject it into value, or possibly update the key generator with the key " \
                       "that was given)") \
+    X(P##_INJECT, W " → Indexed Database §6.1 step 1.1.3 (store also uses in-line keys: inject a key into a " \
+                    "value using a key path with value, key and store's key path; over an unknown key path the " \
+                    "count of its identifiers past the deepest member it names forks)") \
     X(P##_NO_OVERWRITE, W " → Indexed Database §6.1 step 2 (the no-overwrite flag is true and a record " \
                           "already exists in store with its key equal to key: a ConstraintError)") \
     X(P##_REMOVE, W " → Indexed Database §6.1 step 3 (a record already exists in store with its key equal to " \
@@ -151,6 +154,7 @@ typedef struct IdbStoreWalk {
     IdbKeyPathResult kpres;
     JSValue  tx, store, value, key;   /* §6.1's operands; `key` is also its answer (owned) */
     JSValue  generated;               /* step 1.1.1's key, held until step 1.1.3 has injected it (owned) */
+    IdbInjectWalk iw;                 /* step 1.1.3's §7.2, which an unknown key path makes a fork chain */
     JSValue  indexes;                 /* step 5's "each index which references store", as it stood (owned) */
     JSValue  index_key;               /* step 5.1's answer, between steps 5.2 and 5.6 (owned) */
     uint32_t idx;                     /* the cursor into `indexes` */

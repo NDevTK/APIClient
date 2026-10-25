@@ -1924,6 +1924,26 @@ static void pred_set_subject_types(JSValueConst pred, unsigned types) {
    later read of `t` answer bytes `t` never held. So only a subject that owns `src` is pinned there. A derived
    subject's equality pins nothing (its arm is the branch decision decide.c records, and an assumption the
    witness states); the demand on the root is made either way. */
+void concolic_entail(JSValueConst eq)
+{
+    const char *f[1] = { concolic_branch_ident_c(eq) };
+    char *key;
+    int had, pinned;
+
+    DCHECK(concolic_is(eq) && f[0] != NULL && !concolic_branch_neg(eq),
+           "an entailed equality is not a predicate this engine can key, or is a negation");
+    key = concolic_ident_compose("branch", f, 1);
+    CHECK(key, "concolic: OOM composing an entailed equality's branch key");
+    had = concolic_branch_decided(key);
+    DCHECK(had != 0, "an equality this flow's own predicates entail was decided false on this flow's path");
+    if (had == 1) { free(key); return; }                     /* already filed on this flow's path */
+    concolic_constrain_branch(key, 1);
+    free(key);
+    pinned = concolic_pin(eq);
+    DCHECK(pinned, "an entailed equality pinned nothing: its subject is a derivation, not a value with a source");
+    (void)pinned;
+}
+
 int concolic_pin(JSValueConst cmp) {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(cmp, g_concolic_class) : NULL;
 
@@ -4771,36 +4791,88 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
 static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValueConst this_val,
                                   int argc, JSValueConst *argv, JSValue example);
 
-JSValue concolic_starts_with(JSContext *ctx, JSValueConst s, JSValueConst prefix)
+/* The page's `s.<name>(...argv)` over the unknown string `s`, minted as concolic_exotic_get and
+   concolic_call_hook mint it, with `ex` (consumed) as its example. */
+static JSValue concolic_string_method(JSContext *ctx, JSValueConst s, const char *name, int argc,
+                                      JSValueConst *argv, JSValue ex)
 {
-    JSValue ex = JS_UNDEFINED, member, r;
-    JSAtom atom;
+    JSAtom atom = JS_NewAtom(ctx, name);
+    JSValue member, r;
 
-    DCHECK(concolic_is(s) && JS_IsString(prefix), "a startsWith was minted over an operand that is not unknown, or "
-                                                  "with a prefix that is not a String");
+    CHECK(atom != JS_ATOM_NULL, "concolic: OOM interning a String method's name");
+    member = concolic_exotic_get(ctx, s, atom, s);
+    JS_FreeAtom(ctx, atom);
+    DCHECK(concolic_is(member), "the member read under a minted String method answered a concrete value, so the "
+                                "string it was read off is not the unknown its own example state says it is");
+    r = concolic_call_hook(ctx, member, s, argc, argv, ex);
+    JS_FreeValue(ctx, member);
+    return r;
+}
+
+/* `s`'s example as C bytes when it holds a String one (*pdet: the flow determined it), else NULL. */
+static const char *string_example_c(JSContext *ctx, JSValueConst s, size_t *plen, int *pdet)
+{
+    const char *r = NULL;
+
+    *pdet = 0;
     if (concolic_example_present(s)) {
         JSValue e = concolic_example(ctx, s);
 
         if (JS_IsString(e)) {
-            size_t el = 0, pl = 0;
-            const char *es = JS_ToCStringLen(ctx, &el, e), *ps = JS_ToCStringLen(ctx, &pl, prefix);
-
-            CHECK(es && ps, "concolic: OOM reading a startsWith's operands");
-            ex = JS_NewBool(ctx, pl <= el && !memcmp(es, ps, pl));
-            JS_FreeCString(ctx, es); JS_FreeCString(ctx, ps);
+            r = JS_ToCStringLen(ctx, plen, e);
+            CHECK(r != NULL, "concolic: OOM reading a String example");
+            *pdet = concolic_example_state(s) == CONCOLIC_EX_DETERMINED;
         }
         JS_FreeValue(ctx, e);
-        if (concolic_example_state(s) == CONCOLIC_EX_DETERMINED && JS_IsBool(ex))
-            return ex;                                       /* the flow proved the bytes: the answer is theirs */
     }
-    atom = JS_NewAtom(ctx, "startsWith");
-    CHECK(atom != JS_ATOM_NULL, "concolic: OOM interning `startsWith`");
-    member = concolic_exotic_get(ctx, s, atom, s);
-    JS_FreeAtom(ctx, atom);
-    DCHECK(concolic_is(member), "the member read under a minted startsWith answered a concrete value, so the "
-                                "string it was read off is not the unknown its own example state says it is");
-    r = concolic_call_hook(ctx, member, s, 1, &prefix, ex);
-    JS_FreeValue(ctx, member);
+    return r;
+}
+
+JSValue concolic_starts_with(JSContext *ctx, JSValueConst s, JSValueConst prefix)
+{
+    JSValue ex = JS_UNDEFINED;
+    size_t el = 0, pl = 0;
+    int det;
+    const char *es, *ps;
+
+    DCHECK(concolic_is(s) && JS_IsString(prefix), "a startsWith was minted over an operand that is not unknown, or "
+                                                  "with a prefix that is not a String");
+    es = string_example_c(ctx, s, &el, &det);
+    if (es) {
+        ps = JS_ToCStringLen(ctx, &pl, prefix);
+        CHECK(ps != NULL, "concolic: OOM reading a startsWith's prefix");
+        ex = JS_NewBool(ctx, pl <= el && !memcmp(es, ps, pl));
+        JS_FreeCString(ctx, es); JS_FreeCString(ctx, ps);
+        if (det) return ex;                                  /* the flow proved the bytes: the answer is theirs */
+    }
+    return concolic_string_method(ctx, s, "startsWith", 1, &prefix, ex);
+}
+
+JSValue concolic_split(JSContext *ctx, JSValueConst s, char sep)
+{
+    char sepstr[2] = { sep, 0 };
+    JSValue sv = JS_NewString(ctx, sepstr), ex = JS_UNDEFINED, r;
+    size_t el = 0, i, from = 0;
+    uint32_t n = 0;
+    int det;
+    const char *es;
+
+    DCHECK(concolic_is(s), "a split was minted over an operand that is not unknown");
+    DCHECK((unsigned char)sep < 0x80, "a minted split's separator is not one UTF-8 byte");
+    es = string_example_c(ctx, s, &el, &det);
+    if (es) {
+        ex = JS_NewArray(ctx);
+        CHECK(!JS_IsException(ex), "concolic: OOM building a split's example");
+        for (i = 0; i <= el; i++)
+            if (i == el || es[i] == sep) {
+                JS_SetPropertyUint32(ctx, ex, n++, JS_NewStringLen(ctx, es + from, i - from));
+                from = i + 1;
+            }
+        JS_FreeCString(ctx, es);
+        if (det) { JS_FreeValue(ctx, sv); return ex; }      /* the flow proved the bytes: the answer is theirs */
+    }
+    r = concolic_string_method(ctx, s, "split", 1, (JSValueConst *)&sv, ex);
+    JS_FreeValue(ctx, sv);
     return r;
 }
 
