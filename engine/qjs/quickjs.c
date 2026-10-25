@@ -85299,6 +85299,16 @@ static int js_dynfunc_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         if (r) return r < 0 ? -1 : r;
         created = true;
     }
+    if (created && js_value_is_concolic(s->func)) {
+        /* sourceString was unknown input with no text for an example, so the sub-sequence handed the source
+           back unevaluated (the sink was still told of it). F is then an unknown derived from that source, whose
+           prototype is its own, so step 25 sets none. */
+        s->result = js_concolic_derive(ctx, s->func, "20.2.1.1.1 CreateDynamicFunction F", JS_UNDEFINED);
+        JS_FreeValue(ctx, s->func);
+        s->func = JS_UNDEFINED;
+        DCHECK(!JS_IsUninitialized(s->result), "an unknown dynamic-function source derived no unknown");
+        return 0;
+    }
     if (created) {
         /* THE OTHER SIDE OF js_parse_fn_ctor_source'S REFUSAL. 20.2.1.1.1 returns an ECMAScript function
            object, and the only reason the value this sub-sequence hands back is one is that step 23's goal
