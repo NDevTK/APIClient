@@ -289,6 +289,16 @@ static void trusted_type_policy_factory_install_realm(JSContext *ctx)
     idl_define_global_property_reference(ctx, global, "TrustedTypePolicyFactory",
                                          idl_interface_object(ctx, "TrustedTypePolicyFactory", proto));
 
+    /* NAMED RESIDUAL. Not covered: the Worker half of `trustedTypes`' [Exposed=(Window,Worker)] — a worker
+       global gets no factory and no attribute, because its CSP list, which createPolicy and every sink read,
+       is not built. Next diff: the WorkerGlobalScope's policy container from its script's response, as HTML's
+       run a worker steps set it, then this install in worker realms. How its absence shows: a worker that
+       feature-detects `self.trustedTypes` takes its fallback. */
+    if (realm_global_is_worker(ctx)) {
+        JS_FreeValue(ctx, proto);
+        JS_FreeValue(ctx, global);
+        return;
+    }
     /* HTML's "Window and Worker objects have a trusted type policy factory" (§4.1): one per global, built
        with the realm so every flow forks from the same object. Default policy null, created names « ». */
     factory = JS_NewObjectProtoClass(ctx, proto, g_class);
