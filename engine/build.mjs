@@ -29,6 +29,7 @@ import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
 import { objStore, toolIdentity } from "./obj_store.mjs";
 import { cpuText } from "./gate_cpu.mjs";
 import { spawnBudgeted, BUDGET_NOT_INSTALLED } from "./child_run.mjs";
+import { composerFields, defFields } from "./census_rows.mjs";
 import { NATIVE_HOST_LIBS } from "./native_libs.mjs";
 
 /* THE INSTANT A SOURCE-DERIVED FACT IS TAKEN AT, AND WHY IT IS THE REVISION'S AND NOT THE READER'S.
@@ -1097,83 +1098,17 @@ function hostDefine(file, name, why) {
                           `substitute a remembered value for one it cannot find.`);
   return Number(m[1]);
 }
-/* AND THE SAME RULE FOR A CENSUS'S FIELD LIST, WHICH IS THE ONE FACT THIS FILE KEPT A SECOND COPY OF.
-   `hostDefine` and `forkCensusName` exist because a constant and a spelling belong to the engine; a census's
-   ROW SET belongs to the engine in exactly the same way and was being retyped here, and the cost of that is
-   not hypothetical and is not small. A required-PRESENCE loop cannot notice a row that was never in its list,
-   so every row added over there and not here joins the unchecked half BY DEFAULT and is computed on every
-   sample of every run and read by nothing. This file's own note records THREE such rows found months later;
-   at the revision this function was written the count was SEVEN — `picksLive`, `picksMax`, `picksLifetime`,
-   `topForgiven`, `scanCensusRuns`, `scanCensusWeights` and the four of test_forced.c's progress line — and two
-   of those landed WHILE it was being written. A list that has been wrong seven times is not a list anybody is
-   going to remember to update; it is a derivation somebody typed out.
-   THE ARTIFACT IT DERIVES FROM IS THE COMPOSER'S OWN FORMAT STRING, which is the thing that decides what the
-   line carries, so the rule and its check cannot drift. This is `idlgen`'s argument applied one layer down: an
-   auditor reads the declaration the producer already obeys and never a table of names beside it.
-   IT FAILS LOUD IN THE DIRECTION THAT MATTERS, which is the half a derivation has to answer for. §Testing's
-   record is a scan that read a peer's half-written file and INVERTED its own signal, and a truncated read here
-   would yield a SHORT list — a check that quietly got weaker, which is worse than a stale one. So the region
-   is bounded by the composer's own closing bytes and a region that does not close throws, and a region that
-   closes and names nothing throws: a composer emits rows or it is not this composer. What it cannot catch is a
-   file mid-edit that happens to close, and that is why the region is the smallest one that contains the format
-   string rather than the whole file.
-   NO C STRING DECODING, on `forkCensusName`'s rule and for its reason: a name is matched as the bytes between
-   `\"` and `\":%`, so a key that needed an escape would simply not be found, and not-found is this function's
-   loud arm rather than its quiet one. */
+/* A census's row set belongs to the engine, so it is read from the engine's own declarations, never retyped
+   here: a hand-composed census from its composer's format string, a registry census from its families' .def
+   files, both through engine/census_rows.mjs, which the trusted zone's generated row table is read through too.
+   Each returns {numeric, object}, split by representation, and throws on a region or row it cannot read rather
+   than answer a short set. */
 function censusComposerFields(file, from, to, why) {
-  const src = hostSource(file, why);
-  const open = src.indexOf(from);
-  if (open < 0)
-    throw new Error(`[build] cannot find ${JSON.stringify(from)} in engine/host/${file} — ${why}, and this ` +
-                    `reader takes the census's row set from that composer rather than from a list here. A ` +
-                    `renamed or moved composer is a change this file must be told about, not one it guesses ` +
-                    `a remembered list past.`);
-  const close = src.indexOf(to, open);
-  if (close < 0)
-    throw new Error(`[build] the composer at ${JSON.stringify(from)} in engine/host/${file} does not reach ` +
-                    `${JSON.stringify(to)} — ${why}. An unterminated region yields a SHORT row set, which is ` +
-                    `a contract that silently got weaker rather than one that broke, so it stops here.`);
-  const body = src.slice(open, close).replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^[ \t]*\/\/.*$/gm, " ");
-  /* SPLIT BY THE CONVERSION, BECAUSE THE TWO KINDS TAKE DIFFERENT CHECKS AND A CALLER THAT CONFLATES THEM
-     THROWS ON A HEALTHY CENSUS. A row spliced in with `%s` is a nested composer's object — @COLD's `stepUnits`,
-     `stepUnitRuns` and `programCursors` — and its rows are validated as a PARTITION by `censusHistRows`, which
-     is a contract a numeric-presence loop cannot state and would refuse outright. Everything else is a number.
-     The distinction is NAMED rather than filtered silently: a caller asks for the kind it can check, so the day
-     a composer splices a fourth object the caller that wanted numbers is not handed one. */
-  const numeric = [], object = [];
-  for (const m of body.matchAll(/\\"([A-Za-z_][A-Za-z0-9_]*)\\":%([-0-9.]*)([a-zA-Z]+)/g)) {
-    const to = m[3] === "s" ? object : numeric;
-    if (!numeric.includes(m[1]) && !object.includes(m[1])) to.push(m[1]);
-  }
-  if (!numeric.length && !object.length)
-    throw new Error(`[build] the composer at ${JSON.stringify(from)} in engine/host/${file} names no field ` +
-                    `at all — ${why}. Every row it publishes is written \`\\"name\\":%…\` in its own format ` +
-                    `string, so a composer with none is one whose shape this reader no longer recognises and ` +
-                    `an empty required-field list would pass every census ever printed.`);
-  return { numeric, object };
+  return composerFields(hostSource(file, why), from, to, `engine/host/${file}`, why);
 }
-/* A census composed through solver/metrics.h's registry: its rows are the METRIC lines of the declaration
-   files of the families it composes, in emission order, split by representation (an OBJECT row is a nested
-   composer's object, every other row a number). Every `METRIC(` is one row of the full grammar or a throw, so
-   a row this reader cannot parse is never dropped from the required set. */
 function censusDefFields(families, why) {
-  const numeric = [], object = [];
-  for (const fam of families) {
-    const file = `solver/metrics/${fam}.def`;
-    const code = hostSource(file, why).replace(/\/\*[\s\S]*?\*\//g, " ");
-    const opens = (code.match(/\bMETRIC\s*\(/g) || []).length;
-    let rows = 0;
-    for (const m of code.matchAll(/\bMETRIC\(\s*\w+\s*,\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*,\s*[A-Z]+\s*,\s*"[^"]*"\s*,\s*[A-Z]+\s*,\s*"[^"]*"\s*,\s*([A-Z0-9]+)\s*\)/g)) {
-      rows++;
-      if (numeric.includes(m[1]) || object.includes(m[1]))
-        throw new Error(`[build] engine/host/${file} declares \`${m[1]}\` a second time in one census — ${why}.`);
-      (m[2] === "OBJECT" ? object : numeric).push(m[1]);
-    }
-    if (!rows || rows !== opens)
-      throw new Error(`[build] engine/host/${file} holds ${opens} METRIC( row(s) and ${rows} parse — ${why}, and ` +
-                      `a row this reader cannot read would leave the required set short.`);
-  }
-  return { numeric, object };
+  return defFields(families.map((f) => ({ label: `engine/host/solver/metrics/${f}.def`,
+                                          src: hostSource(`solver/metrics/${f}.def`, why) })), why);
 }
 /* AND THE HALF A NUMERIC ROW SET CANNOT SPEAK FOR: WHICH OBJECTS THE COMPOSER SPLICES, AND WHETHER THIS FILE
    CHECKS THEM. `censusComposerFields` names the two kinds apart so that a caller asks for the one it can
@@ -8037,6 +7972,23 @@ function coldRoundTripStages(bin, kind) {
   return [onHost(v1, STAGE_HOST.NATIVE), onHost(v2, STAGE_HOST.NATIVE)];
 }
 
+/* The trusted zone's acceptance of each native document's last result, asked through extension/bridge.js's own
+   resultDocumentRefusal (engine/bridge_accept.mjs, one process per document so the zone's start-up work stays in
+   it). The native fixture never otherwise reaches the bridge, so a row the engine starts writing in a shape the
+   zone refuses would reach only live runs. A run that printed no document is not asked here; its own stage says
+   why. */
+const BRIDGE_NO_DOCUMENT = "no @RESULT document in the log";   /* engine/bridge_accept.mjs's own sentence */
+function bridgeAcceptanceStages(runs) {
+  return runs.filter((r) => r && r.doc && r.log).map((r) => {
+    const label = `bridge acceptance (${r.doc})`;
+    const t = runProgram(label, [join(ENGINE, "bridge_accept.mjs"), r.log],
+                         "the refusal names the first field of the native document extension/bridge.js's " +
+                         "resultDocumentRefusal rejects; a live run's whole result would be refused the same way");
+    return onHost(t.captured.includes(BRIDGE_NO_DOCUMENT) ? skipped(label, "the run printed no @RESULT document")
+                                                         : t, STAGE_HOST.NATIVE);
+  });
+}
+
 /* The C heap's running total (engine/host/solver/c_alloc.c) against glibc's own count, exact. With glibc's tcache
    on, freed chunks the tcache holds still count as in use, so a census can only bound the total; with it off the
    two must be equal, and c_alloc_census asserts that per census. This stage runs one small fixture document that
@@ -8429,11 +8381,12 @@ if (NATIVE) {
   stages.push(allocatorContractStage(bin));
   /* AND IT IS RUN, because a target that is only built is the excluded test one layer down: the whole point is
      the stream it prints and the report it ends with, and nothing else in the tree produces either. */
-  stages.push(...(bin === null
+  const runs = bin === null
     ? [skipped("the native run (" + kind + ")", "the native program did not link")]
     : await runDocuments("the native run (" + kind + ")", bin, [],
-                         "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault"))
-    .map((s) => onHost(s, STAGE_HOST.NATIVE)));
+                         "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault");
+  stages.push(...runs.map((s) => onHost(s, STAGE_HOST.NATIVE)));
+  stages.push(...bridgeAcceptanceStages(runs));
   /* This target runs no wasm, so it has no vehicle stage; the gate suite (`node engine/build.mjs gates`) runs
      the `vehicle (<document>)` comparisons. */
   report(stages, []);
@@ -9070,6 +9023,7 @@ const NATIVE_SMOKE = NATIVE_BUILT.bin === null
              "paths. The @H row printed 0 above names a statement engine/host/test_forced.c's " +
              "probe table declares and this run did not answer.");
 STAGES.push(...NATIVE_SMOKE.map((s) => onHost(s, STAGE_HOST.NATIVE)));
+STAGES.push(...bridgeAcceptanceStages(NATIVE_SMOKE));
 FINDINGS.push(documentRowsText(STAGE_HOST.NATIVE.tag, NATIVE_SMOKE));
 
 /* AND THE CROSS-SESSION ROUND TRIP, ON THE BUILD CLAUDE.md NAMES AS THE BUILD. The `native` target runs it
@@ -9250,6 +9204,12 @@ STAGES.push(onHost(NATIVE_BUILT.bin === null
    written in. */
 /* BOTH AUDITS READ THE SOURCES AND COMPILE NOTHING, so neither has an engine slice to be denominated and
    neither answers for one host: their findings are about the REVISION on every host and they decide. */
+/* The census row sets the trusted zone accepts the result document by (extension/lib/census-rows.js) against the
+   engine's declarations they are generated from: a row added to a .def or a composer and not regenerated would
+   refuse every live run's result. */
+STAGES.push(onHost(runProgram("census row table", [join(ENGINE, "census_rows.mjs"), "--check"],
+                       "each line names a row the generated table and the engine's declarations disagree on; " +
+                       "regenerate it with `node engine/census_rows.mjs --write`"), STAGE_HOST.SOURCE));
 STAGES.push(onHost(runProgram("record-field contract audit", [join(ENGINE, "fieldgate.mjs")],
                        "each category above is one side of a contract with nothing on the other: a field read " +
                        "off a record no producer emits, a field emitted and never read, a default that stops " +

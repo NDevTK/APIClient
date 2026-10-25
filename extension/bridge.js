@@ -237,8 +237,8 @@ function docRoutedPost(p, f) {
            typeof s.shape === "string" && typeof s.path === "string")
     ? null : f + " is not {id: 16 hex, target, targetOrigin, relation, symbols: [{source, shape, path}, ...]}";
 }
-/* A census row is a finite number or a histogram whose arms are finite numbers or positional tuples of them
-   (solver/result.c composes each `childRealmRefSites` arm as `[min, max, total]`). */
+/* A row of a census keyed by what the run met (`_forkAt` by predicate, `_absent` by global name), which no
+   declaration fixes: a finite number or a histogram whose arms are finite numbers or positional tuples of them. */
 function docCensusRow(v, f) {
   if (docIsCount(v)) return null;
   if (!docIsRecord(v)) return f + " is neither a finite number nor a histogram";
@@ -259,30 +259,42 @@ function docCensus(c, f, nonEmpty) {
   }
   return null;
 }
-/* The `_wfq` rows solver/metrics/wfq_frontier.def declares with kind OBJECT: the operands of a weight gap, a
-   record of numbers whose members may themselves be records of numbers (`top`, `deep`). */
-const WFQ_OPERAND_ROWS = Object.freeze(["curDeepTerms", "neverPickedTerms"]);
-function docWfqOperands(v, f, depth) {
-  if (!docIsRecord(v)) return f + " is not an object";
+/* An object row of a declared census (lib/census-rows.js): what a nested composer writes, a finite number or a
+   tuple of them or a record of either, at any depth, or `null` at the row itself for a reading the build cannot
+   make (solver/result.c's `childRealmRefSites`, `cResidueBytes`). */
+function docCensusObject(v, f, top) {
+  if (docIsCount(v) || (top && v === null)) return null;
+  if (Array.isArray(v)) return v.every(docIsCount) ? null : f + " is a tuple holding something other than numbers";
+  if (!docIsRecord(v)) return f + " is neither a number, a tuple of numbers nor a record of them";
   for (const k of Object.keys(v)) {
-    const why = docIsRecord(v[k]) && depth > 0 ? docWfqOperands(v[k], f + "." + k, depth - 1)
-                                               : docCount(v[k], f + "." + k);
+    const why = docCensusObject(v[k], f + "." + k, false);
     if (why !== null) return why;
+  }
+  return null;
+}
+/* A census whose row set a declaration fixes, checked row by row against CENSUS_ROWS, generated from those
+   declarations by engine/census_rows.mjs: a number row is a finite number, an object row is docCensusObject, and
+   a key the engine does not declare is refused, since this zone and the engine it runs come from one build. */
+function docDeclaredCensus(c, f, nonEmpty) {
+  const rows = CENSUS_ROWS[f];
+  const why = docObject(c, f);
+  if (why !== null) return why;
+  if (nonEmpty && Object.keys(c).length === 0) return f + " is empty";
+  for (const k of Object.keys(c)) {
+    const bad = rows.numeric.includes(k) ? docCount(c[k], f + "." + k)
+              : rows.object.includes(k) ? docCensusObject(c[k], f + "." + k, true)
+              : f + "." + k + " is a row no declaration of the engine names (lib/census-rows.js)";
+    if (bad !== null) return bad;
   }
   return null;
 }
 /* `members` is always present; term rows appear exactly when it is above zero. */
 function docWfq(w) {
-  const why = docObject(w, "_wfq");
+  const why = docDeclaredCensus(w, "_wfq", true);
   if (why !== null) return why;
   if (!Number.isInteger(w.members) || w.members < 0) return "_wfq.members is not a count";
   if ((Object.keys(w).length > 1) !== (w.members > 0))
     return "_wfq reports " + w.members + " members with " + (Object.keys(w).length - 1) + " term rows";
-  for (const k of Object.keys(w)) {
-    const bad = WFQ_OPERAND_ROWS.includes(k) ? docWfqOperands(w[k], "_wfq." + k, 1)
-              : docIsCount(w[k]) ? null : "_wfq." + k + " is not a finite number";
-    if (bad !== null) return bad;
-  }
   return null;
 }
 function docQuantum(q) {
@@ -345,7 +357,9 @@ function resultDocumentRefusal(r, complete) {
   if (why !== null) return why;
   /* `_forkAt` lists predicates that forked, so `{}` is a document that never forked; the other four read state
      that exists at every instant. */
-  for (const k of ["_cold", "_heap", "_swap", "_forkAt", "_absent"])
+  for (const k of ["_cold", "_heap", "_swap"])
+    if ((why = docDeclaredCensus(r[k], k, true)) !== null) return why;
+  for (const k of ["_forkAt", "_absent"])
     if ((why = docCensus(r[k], k, k !== "_forkAt")) !== null) return why;
   why = docArray(r._park, "_park");
   if (why !== null) return why;
