@@ -1150,6 +1150,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/gcchurn.h"
 #include "fixture/forkkey.h"
 #include "fixture/qnamefork.h"
+#include "fixture/rafcancel.h"
 #include "fixture/importchain.h"
 #include "fixture/borrowedkey.h"
 #include "fixture/replyrole.h"
@@ -1648,6 +1649,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "gcchurn", HTML_GCCHURN },
     { "forkkey", HTML_FORKKEY },
     { "qnamefork", HTML_QNAMEFORK },
+    { "rafcancel", HTML_RAFCANCEL },
     { "importchain", HTML_IMPORTCHAIN },
     { "borrowedkey", HTML_BORROWEDKEY },
     { "replyrole", HTML_REPLYROLE },
@@ -14500,6 +14502,24 @@ TF_UNIT void probes_qnamefork(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rafcancel` document (fixture/rafcancel.h). */
+TF_UNIT void probes_rafcancel(const char *js, Probe *tab, int *n) {
+    /* cancelAnimationFrame over an unknown handle reaches each world §8.12 step 3 tells apart. */
+    const char *rf_why = NULL; int rf_tt = 1;
+    fold_row(&rf_tt, &rf_why, !!strstr(js, "\"/api/rafcancel\""),
+             "NOT REACHED: there is no /api/rafcancel record at all, so the third callback never ran");
+    fold_row(&rf_tt, &rf_why, param_value_is(js, "/api/rafcancel", "ran", "1-2"),
+             "the world in which the handle names no callback did not run both");
+    fold_row(&rf_tt, &rf_why, param_value_is(js, "/api/rafcancel", "ran", "2"),
+             "the world in which the handle is the first callback's did not remove it");
+    fold_row(&rf_tt, &rf_why, param_value_is(js, "/api/rafcancel", "ran", "1"),
+             "the world in which the handle is the second callback's did not remove it");
+    const Probe rows[] = {
+        { "unknown-animation-frame-handle-forks", rf_tt, "/api/rafcancel", SESS_EXPLORE, rf_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `importchain` document (fixture/importchain.h). */
 TF_UNIT void probes_importchain(const char *js, Probe *tab, int *n) {
     /* A 20000-module import chain loads, links and evaluates, and the first module reads the last one's depth
@@ -20130,6 +20150,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_gcchurn(js, probes, &np);
     probes_forkkey(js, probes, &np);
     probes_qnamefork(js, probes, &np);
+    probes_rafcancel(js, probes, &np);
     probes_importchain(js, probes, &np);
     probes_borrowedkey(js, probes, &np);
     probes_replyrole(js, probes, &np);

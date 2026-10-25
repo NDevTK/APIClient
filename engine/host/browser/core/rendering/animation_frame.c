@@ -1,11 +1,15 @@
 /* ANIMATION FRAMES — HTML §8.12 Animation frames. See animation_frame.h for why the map is a heap object and why the
    snapshot-then-recheck is the algorithm rather than an optimisation. */
+#include <stdio.h>
 #include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
+#include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/idl_name_chain.h"   /* an unknown handle is a name-keyed elimination chain over the map's keys */
+#include "solver/concolic.h"
 #include "core/realm.h"
 #include "core/rendering/animation_frame.h"
 #include "solver/rung_entry.h"  /* this rung's denominator — the names a program must spell to ask for it */
@@ -155,96 +159,119 @@ static JSValue js_request_animation_frame(JSContext *ctx, JSValueConst this_val,
     return JS_NewUint32(ctx, handle);
 }
 
-/* HTML §8.12 Animation frames: `undefined cancelAnimationFrame(unsigned long handle)` — "remove callbacks[handle]". A handle
-   that names nothing does nothing, which is why there is no throw here and no report: a page cancelling a
-   frame it already ran is ordinary code. */
-static JSValue js_cancel_animation_frame(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                         int magic)
+/* The entry list's handle at slot `i`, or 0 for a hole (a handle is never 0: af_reset starts the identifier at 1). */
+static uint32_t af_handle_at(JSContext *ctx, JSValueConst q, uint32_t i)
 {
-    JSValue q;
-    uint32_t i, n, want = 0;
+    JSValue e = JS_GetPropertyUint32(ctx, q, i), h;
+    uint32_t got = 0;
 
-    (void)this_val; (void)magic;
-    DCHECK(argc >= 1,
-           "cancelAnimationFrame reached its body with no handle — §3.6 step 5's TypeError is the "
-           "declaration's, not this body's");
-    /* AN UNKNOWN HANDLE IS A FORK, AND THE FORK THIS ENGINE ALREADY HAS IS THE WRONG ONE — which is why this
-       crashes here rather than reaching for it. §3.2's conversion is a BOUNDARY unknown external input crosses
-       AS ITSELF (core/idl_args.h's idl_concolic_rule answers IDL_CONCOLIC_CROSSES for IDL_UNSIGNED_LONG), so
-       `cancelAnimationFrame(location.hash.length)` reaches this body still holding the unknown, and both the
-       tag assert below and the JS_ToUint32 under it are FALSE for it — the coercion aborting inside ToNumber,
-       one frame below this file, where there is no return to check.
-       WHAT IS NOT COVERED. §8.12 step 3 is "Remove callbacks[handle]" over "this's target object's map of
-       animation frame callbacks", whose KEYS are the handles requestAnimationFrame minted ("Increment target's
-       animation frame callback identifier by one, and let handle be the result … Set callbacks[handle] to
-       callback"). So the worlds this algorithm tells apart are exactly the keys that map holds, plus ONE
-       remainder — a handle the map does not hold, which §8.12 answers by doing nothing, which is why there is
-       no throw on this path.
-       WHY IT IS NOT core/idl_index_arg.h's CHAIN. That component decomposes a §3.2.4.6 `unsigned long` into
-       `npositions` singleton worlds by asking `index == k` for k ASCENDING FROM 0 — its links are POSITIONS,
-       and its own banner requires each to be a world the algorithm tells apart. A handle is not a position:
-       the map is sparse (every fired frame and every cancel removes a key) and the identifier only ever grows,
-       so running that chain with `npositions` set to the animation frame callback identifier would ask about
-       handles naming NOTHING while claiming, in the component's own words, to separate worlds §8.12 does not
-       separate.
-       WHAT THE NEXT DIFF BUILDS, AND THE CLAUSE HAS NOW BEEN WRONG TWICE IN THE TWO DIRECTIONS CLAUDE.md NAMES.
-       Its first draft said the handle-keyed chain had to be INVENTED, and the mandated grep found it already
-       written — core/timing/timer.c's js_clear_timer asks exactly this question for §8.7 Timers, one identifier
-       at a time, ascending, keyed by "is `id` the timer with identifier H" so the completion carries its NAME
-       and never its rank in a map the page mutates. Its second said the next diff must LIFT that chain into one
-       component both members reach, and that half has now LANDED: core/idl_name_chain.h holds the link — the
-       composed key, the naming rule it implements, the truncation refusal and the two-armed ask — and
-       core/timing/timer.c and core/idl_index_arg.c both build their chains out of it. So this clause is now
-       about what is left, which is this member's own half and nothing shared. §8.12's handles obey the two
-       facts that make timer.c's enumeration sound: they are strictly monotone per global and they start at 1
-       (see af_reset), so a zeroed cursor is unambiguously before the first and `cancelAnimationFrame(0)` is
-       the remainder world both members answer with nothing. WHAT MUST EXIST AFTERWARD is (a) this member as an
-       IdlStepBody — declared with idl_method_id_step rather than idl_method_id, because a chain parks and a
-       plain C activation has nowhere to — holding an IdlNameChainKey and a cursor on its state, and (b) an
-       enumeration over THIS map's keys, which is the part core/idl_name_chain.h deliberately does not own
-       (core/idl_index_arg.c counts positions, timer.c walks a live map, and this walks the animation frame
-       callback map — three sets, one link).
-       HOW ITS ABSENCE WOULD SHOW: exactly this abort — a bundle that cancels a frame at a handle it computed
-       from a URL ends the document and every sibling flow parked behind it. Once built, the world that
-       answered `handle == h` and the world that exhausted the chain must differ observably at the next frame,
-       in whether callback h runs. */
-    if (concolic_is(argv[0]))
-        DFAIL("cancelAnimationFrame's `handle` is UNKNOWN EXTERNAL INPUT and this member has no fork to ask "
-              "over it. HTML §8.12 Animation frames step 3 removes callbacks[handle] from a map whose keys are "
-              "the handles requestAnimationFrame minted, so the arm set is GIVEN — one world per key the map "
-              "holds, plus one remainder that does nothing — and it is a set of platform-assigned NAMES rather "
-              "than a range of positions. core/idl_index_arg.h's elimination chain asks `index == k` ascending "
-              "from 0 and does NOT serve this member: the map is sparse and the identifier only grows, so that "
-              "chain would ask about handles naming nothing while claiming to separate worlds §8.12 does not "
-              "separate. The LINK such a chain is built out of is written and shared — core/idl_name_chain.h, "
-              "which composes the constraint key from the member's own NAME and refuses a truncated one, and "
-              "which core/timing/timer.c's js_clear_timer already builds §8.7's chain out of, keyed \"is `id` "
-              "the timer with identifier H\" one monotone identifier at a time; §8.12's handles are monotone "
-              "and start at 1 exactly as §8.7's do. What is missing is this member's own half: make it an "
-              "IdlStepBody (idl_method_id_step, so it can park at a link) holding an IdlNameChainKey and a "
-              "cursor, and walk THIS map's keys — the enumeration is deliberately the caller's, because the "
-              "three askers of that link enumerate three different sets");
-    DCHECK(JS_VALUE_GET_TAG(argv[0]) == JS_TAG_INT || JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(argv[0])),
-           "cancelAnimationFrame's `handle` reached the body neither converted nor unknown — the IDL "
-           "declaration is what converts an `unsigned long`, and that conversion is the page's code; the one "
-           "value it does NOT produce a Number for is unknown external input, which the ask above answers");
-    JS_ToUint32(ctx, &want, argv[0]);
-    q = af_queue(ctx);
-    n = af_len(ctx, q);
-    for (i = 0; i < n; i++) {
-        JSValue e = JS_GetPropertyUint32(ctx, q, i), h;
-        uint32_t got = 0;
-
-        if (!JS_IsObject(e)) { JS_FreeValue(ctx, e); continue; }
+    if (JS_IsObject(e)) {
         h = JS_GetPropertyUint32(ctx, e, 0);
         JS_ToUint32(ctx, &got, h);
         JS_FreeValue(ctx, h);
-        JS_FreeValue(ctx, e);
-        if (got == want) { JS_SetPropertyUint32(ctx, q, i, JS_UNDEFINED); break; }
+        DCHECK(got >= 1, "an entry of §8.12's map of animation frame callbacks is filed under the handle 0");
+    }
+    JS_FreeValue(ctx, e);
+    return got;
+}
+
+/* The least handle the map holds at or above `from`, or 0 when it holds none. */
+static uint32_t af_handle_from(JSContext *ctx, uint32_t from)
+{
+    JSValue q = af_queue(ctx);
+    uint32_t i, n = af_len(ctx, q), best = 0;
+
+    for (i = 0; i < n; i++) {
+        uint32_t h = af_handle_at(ctx, q, i);
+
+        if (h && h >= from && (best == 0 || h < best))
+            best = h;
     }
     JS_FreeValue(ctx, q);
-    return JS_UNDEFINED;
+    return best;
 }
+
+/* §8.12 step 3, "remove callbacks[handle]": the entry filed under `want`, if the map holds one. */
+static void af_remove(JSContext *ctx, uint32_t want)
+{
+    JSValue q = af_queue(ctx);
+    uint32_t i, n = af_len(ctx, q);
+
+    for (i = 0; i < n; i++)
+        if (af_handle_at(ctx, q, i) == want) { JS_SetPropertyUint32(ctx, q, i, JS_UNDEFINED); break; }
+    JS_FreeValue(ctx, q);
+}
+
+/* HTML §8.12 Animation frames: `undefined cancelAnimationFrame(unsigned long handle)` — "remove callbacks[handle]".
+ * A handle that names nothing does nothing, which is why there is no throw here and no report: a page cancelling a
+ * frame it already ran is ordinary code.
+ * A step machine, because §3.2's conversion hands unknown external input across as itself, and the worlds step 3
+ * tells apart over an unknown handle are exactly the keys the map holds plus one remainder in which it names none
+ * and nothing is removed. That is a name-keyed elimination chain (core/idl_name_chain.h): one two-armed ask per
+ * handle, ascending from the cursor — handles are monotone per global and start at 1, as §8.7's identifiers are
+ * (core/timing/timer.c's js_clear_timer walks its map the same way) — keyed by the handle's own name, never its
+ * slot. The yes arm removes that entry; the chain's end is the remainder. */
+#define AF_PREDICATE "HTML §8.12 Animation frames cancelAnimationFrame (handle is the callback with handle"
+IDL_NAME_CHAIN_SPELLS(AF_PREDICATE, IDL_NAME_CHAIN_U32_BYTES);
+#define AF_ALGORITHM "HTML §8.12 Animation frames the cancelAnimationFrame(handle) method steps"
+#define AF_STAGES(X) X(AF_REMOVE, AF_ALGORITHM " (step 3: remove callbacks[handle])")
+enum { IDL_STEP_STAGE_BASE(AF_STAGES) AF_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const AF_STEPS[] = { AF_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    uint32_t        next;   /* the least handle the chain has not yet eliminated */
+    IdlNameChainKey key;
+} CancelAfState;
+
+static void caf_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+static int js_cancel_animation_frame(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                                     JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    CancelAfState *s = state;
+    double want = 0;
+    int have;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == AF_REMOVE, "cancelAnimationFrame resumed into a stage its declaration does not have");
+    DCHECK(argc >= 1,
+           "cancelAnimationFrame reached its body with no handle — §3.6 step 5's TypeError is the "
+           "declaration's, not this body's");
+    /* The conversion run on the example, read once so every link decides against one reading of it; 0 for an
+       unknown carrying no example, which the chain reads as JS_OUTCOME_REAL_UNSTATED. */
+    have = idl_number_of(ctx, IDL_UNSIGNED_LONG, argv[0], &want);
+    if (!concolic_is(argv[0])) {
+        DCHECK(have, "a known handle's §3.2.4.6 conversion produced no number");
+        af_remove(ctx, (uint32_t)want);
+        return JS_STEP_DONE;
+    }
+    for (;;) {
+        uint32_t h = af_handle_from(ctx, s->next);
+        char name[IDL_NAME_CHAIN_U32_BYTES + 1];
+        int real, rc;
+        bool yes = false;
+
+        if (h == 0)
+            return JS_STEP_DONE;   /* the remainder: the handle names no entry, and nothing is removed */
+        real = have ? ((uint32_t)want == h) : JS_OUTCOME_REAL_UNSTATED;
+        snprintf(name, sizeof name, "%u", (unsigned)h);
+        rc = idl_name_chain_ask(ctx, hdr, &s->key, argv[0], AF_PREDICATE, name, real, AF_ALGORITHM, &yes);
+        if (rc)
+            return rc;
+        if (yes) {
+            af_remove(ctx, h);
+            return JS_STEP_DONE;
+        }
+        DCHECK(h < UINT32_MAX, "§8.12's elimination chain answered no at the largest handle a uint32 can hold");
+        s->next = h + 1;
+    }
+}
+
+static const IdlStepDecl CAF_DECL = {
+    js_cancel_animation_frame, sizeof(CancelAfState), caf_visit, NULL, AF_ALGORITHM, AF_STEPS, 0, NULL
+};
 
 void animation_frame_init(JSContext *ctx)
 {
@@ -253,7 +280,7 @@ void animation_frame_init(JSContext *ctx)
 
     DCHECK(!g_ready, "animation_frame_init ran twice — §8.12 Animation frames's members are declared once per agent");
     g_id_request = idl_method_id(ctx, REQUEST_ARGS, 1, js_request_animation_frame, 0);
-    g_id_cancel = idl_method_id(ctx, CANCEL_ARGS, 1, js_cancel_animation_frame, 0);
+    g_id_cancel = idl_method_id_step(ctx, CANCEL_ARGS, 1, NULL, 0, &CAF_DECL, 0);
     g_atom_queue = JS_NewAtom(ctx, "animationFrameCallbacks");
     g_atom_next = JS_NewAtom(ctx, "animationFrameCallbackIdentifier");
     CHECK(g_atom_queue != JS_ATOM_NULL && g_atom_next != JS_ATOM_NULL,
