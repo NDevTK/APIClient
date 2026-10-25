@@ -1132,6 +1132,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/insetpct.h"
 #include "fixture/floatplace.h"
 #include "fixture/clearance.h"
+#include "fixture/avoidance.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1616,6 +1617,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "insetpct", HTML_INSETPCT },
     { "floatplace", HTML_FLOATPLACE },
     { "clearance", HTML_CLEARANCE },
+    { "avoidance", HTML_AVOIDANCE },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -14731,6 +14733,98 @@ TF_UNIT void probes_clearance(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `avoidance` document (fixture/avoidance.h). */
+TF_UNIT void probes_avoidance(const char *js, Probe *tab, int *n) {
+    const char *av_why = NULL; int av_reached = !!strstr(js, "\"/api/avoidance\"");
+    const char *av_p_why = NULL; int av_p_tt = 1;
+    const char *av_h_why = NULL; int av_h_tt = 1;
+
+    fold_row(&av_reached, &av_why, av_reached,
+             "NOT REACHED: there is no /api/avoidance record at all, so the document aborted before its fetch");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab1x", "50") &&
+                                  param_value_is(js, "/api/avoidance", "ab1y", "0") &&
+                                  param_value_is(js, "/api/avoidance", "ab1w", "150"),
+             "CSS 2.2 §9.5: ab1's border box is not at (50, 0) and 150px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab2x", "50") &&
+                                  param_value_is(js, "/api/avoidance", "ab2y", "0") &&
+                                  param_value_is(js, "/api/avoidance", "ab2w", "150"),
+             "CSS 2.2 §9.5: ab2's border box is not at (50, 0) and 150px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab3x", "50") &&
+                                  param_value_is(js, "/api/avoidance", "ab3y", "0") &&
+                                  param_value_is(js, "/api/avoidance", "ab3w", "120"),
+             "CSS 2.2 §9.5: ab3's border box is not at (50, 0) and 120px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab4x", "0") &&
+                                  param_value_is(js, "/api/avoidance", "ab4y", "30") &&
+                                  param_value_is(js, "/api/avoidance", "ab4w", "80"),
+             "CSS 2.2 §9.5: ab4's border box is not at (0, 30) and 80px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab5x", "150") &&
+                                  param_value_is(js, "/api/avoidance", "ab5y", "8") &&
+                                  param_value_is(js, "/api/avoidance", "ab5w", "50"),
+             "CSS 2.2 §9.5: ab5's border box is not at (150, 8) and 50px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab6x", "0") &&
+                                  param_value_is(js, "/api/avoidance", "ab6y", "40") &&
+                                  param_value_is(js, "/api/avoidance", "ab6w", "200"),
+             "CSS 2.2 §9.5: ab6's border box is not at (0, 40) and 200px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab7x", "150") &&
+                                  param_value_is(js, "/api/avoidance", "ab7y", "0") &&
+                                  param_value_is(js, "/api/avoidance", "ab7w", "50"),
+             "CSS 2.2 §9.5: ab7's border box is not at (150, 0) and 50px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab8x", "50") &&
+                                  param_value_is(js, "/api/avoidance", "ab8y", "0") &&
+                                  param_value_is(js, "/api/avoidance", "ab8w", "150"),
+             "CSS 2.2 §9.5: ab8's border box is not at (50, 0) and 150px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab9x", "0") &&
+                                  param_value_is(js, "/api/avoidance", "ab9y", "60") &&
+                                  param_value_is(js, "/api/avoidance", "ab9w", "80"),
+             "CSS 2.2 §9.5: ab9's border box is not at (0, 60) and 80px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "an9x", "0") &&
+                                  param_value_is(js, "/api/avoidance", "an9y", "73") &&
+                                  param_value_is(js, "/api/avoidance", "an9w", "200"),
+             "CSS 2.2 §9.5: an9's border box is not at (0, 73) and 200px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab10x", "50") &&
+                                  param_value_is(js, "/api/avoidance", "ab10y", "10") &&
+                                  param_value_is(js, "/api/avoidance", "ab10w", "40"),
+             "CSS 2.2 §9.5: ab10's border box is not at (50, 10) and 40px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab11x", "50") &&
+                                  param_value_is(js, "/api/avoidance", "ab11y", "0") &&
+                                  param_value_is(js, "/api/avoidance", "ab11w", "150"),
+             "CSS 2.2 §9.5: ab11's border box is not at (50, 0) and 150px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab12x", "0") &&
+                                  param_value_is(js, "/api/avoidance", "ab12y", "4") &&
+                                  param_value_is(js, "/api/avoidance", "ab12w", "140"),
+             "CSS 2.2 §9.5: ab12's border box is not at (0, 4) and 140px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab13x", "0") &&
+                                  param_value_is(js, "/api/avoidance", "ab13y", "30") &&
+                                  param_value_is(js, "/api/avoidance", "ab13w", "80"),
+             "CSS 2.2 §9.5: ab13's border box is not at (0, 30) and 80px wide beside the floats");
+    fold_row(&av_p_tt, &av_p_why, param_value_is(js, "/api/avoidance", "ab14x", "60") &&
+                                  param_value_is(js, "/api/avoidance", "ab14y", "0") &&
+                                  param_value_is(js, "/api/avoidance", "ab14w", "140"),
+             "CSS 2.2 §9.5: ab14's border box is not at (60, 0) and 140px wide beside the floats");
+    fold_row(&av_h_tt, &av_h_why, param_value_is(js, "/api/avoidance", "a1h", "30"),
+             "CSS 2.2 §10.6.7: a1's auto height is not 30px");
+    fold_row(&av_h_tt, &av_h_why, param_value_is(js, "/api/avoidance", "a2h", "50"),
+             "CSS 2.2 §10.6.7: a2's auto height is not 50px");
+    fold_row(&av_h_tt, &av_h_why, param_value_is(js, "/api/avoidance", "a5h", "30"),
+             "CSS 2.2 §10.6.7: a5's auto height is not 30px");
+    fold_row(&av_h_tt, &av_h_why, param_value_is(js, "/api/avoidance", "a6h", "50"),
+             "CSS 2.2 §10.6.7: a6's auto height is not 50px");
+    fold_row(&av_h_tt, &av_h_why, param_value_is(js, "/api/avoidance", "a8h", "45"),
+             "CSS 2.2 §10.6.7: a8's auto height is not 45px");
+    fold_row(&av_h_tt, &av_h_why, param_value_is(js, "/api/avoidance", "a9h", "83"),
+             "CSS 2.2 §10.6.7: a9's auto height is not 83px");
+    fold_row(&av_h_tt, &av_h_why, param_value_is(js, "/api/avoidance", "a10h", "30"),
+             "CSS 2.2 §10.6.7: a10's auto height is not 30px");
+    fold_row(&av_h_tt, &av_h_why, param_value_is(js, "/api/avoidance", "a13h", "40"),
+             "CSS 2.2 §10.6.7: a13's auto height is not 40px");
+    const Probe rows[] = {
+        { "avoidance-position", av_reached && av_p_tt, "/api/avoidance", SESS_EXPLORE, av_reached ? av_p_why : av_why },
+        { "avoidance-context-height", av_reached && av_h_tt, "/api/avoidance", SESS_EXPLORE,
+          av_reached ? av_h_why : av_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `boundpark` document (fixture/boundpark.h). */
 TF_UNIT void probes_boundpark(const char *js, Probe *tab, int *n) {
     /* One bound body through four callback routes; each failure arm reports its route, the declined send's
@@ -19428,6 +19522,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_insetpct(js, probes, &np);
     probes_floatplace(js, probes, &np);
     probes_clearance(js, probes, &np);
+    probes_avoidance(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);

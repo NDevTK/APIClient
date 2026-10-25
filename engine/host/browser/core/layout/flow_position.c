@@ -109,6 +109,11 @@ static CssPx fp_icb_width(lxb_dom_element_t *el)
    they coincide; an over-constrained `rtl` box differs exactly where the spec says. */
 static CssPx fp_left_offset(lxb_dom_element_t *el, CssPx cb_width)
 {
+    FlowFloatAvoid avoid;
+
+    /* CSS 2.2 §9.5: a box placed beside the floats of its block formatting context starts where they leave room,
+       as its parent's walk recorded. */
+    if (flow_placement_float_avoid_peek(el, &avoid)) return avoid.left;
     if (!used_value_containing_block_is_rtl(el)) return used_value_px(el, "margin-left");
     return css_px_sub(css_px_sub(cb_width, used_value_px(el, "margin-right")),
                       used_value_border_edge_px(el, false));

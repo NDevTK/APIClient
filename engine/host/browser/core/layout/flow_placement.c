@@ -55,12 +55,14 @@ typedef struct {
     /* Where this box's block formatting context puts it, and its top content edge there (flow_placement.h). */
     FlowBfcEntry             bfc_entry;
     CssPx                    bfc_top;
+    /* §9.5's placement of a box beside the context's floats (flow_placement.h). */
+    FlowFloatAvoid           float_avoid;
     bool                     has_top;
     bool                     has_origin;
     bool                     has_cb_width;
     bool                     has_anon;
     bool                     has_run_first, has_run_after, has_table_box, has_floats, has_float_scan;
-    bool                     has_float_box, has_bfc_entry, has_bfc_frame;
+    bool                     has_float_box, has_bfc_entry, has_bfc_frame, has_float_avoid;
 } FpEntry;
 
 /* One table slot: the key, and the entry held out of line. An entry carries several concolic lengths, each
@@ -549,6 +551,32 @@ bool flow_placement_bfc_frame_peek(const lxb_dom_element_t *el, CssPx *top)
     e = fp_entry_peek(el);
     if (e == NULL || !e->has_bfc_frame) return false;
     *top = e->bfc_top;
+    return true;
+}
+
+void flow_placement_float_avoid_record(const lxb_dom_element_t *el, FlowFloatAvoid a)
+{
+    FpEntry *e;
+
+    DCHECK(el != NULL, "a box's placement beside floats was recorded for no box");
+    e = fp_entry_for_write(el);
+    if (e == NULL) return;
+    DCHECKF(!e->has_float_avoid || (fp_same_example(e->float_avoid.left, a.left) &&
+                                    fp_same_example(e->float_avoid.width, a.width)),
+            "one box was placed beside floats at two places in one job: left %g then %g", e->float_avoid.left.px,
+            a.left.px);
+    e->float_avoid = a;
+    e->has_float_avoid = true;
+}
+
+bool flow_placement_float_avoid_peek(const lxb_dom_element_t *el, FlowFloatAvoid *out)
+{
+    const FpEntry *e;
+
+    DCHECK(el != NULL && out != NULL, "a box's placement beside floats was asked for no box or nowhere");
+    e = fp_entry_peek(el);
+    if (e == NULL || !e->has_float_avoid) return false;
+    *out = e->float_avoid;
     return true;
 }
 

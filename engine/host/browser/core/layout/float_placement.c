@@ -13,11 +13,10 @@
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/used_value.h"
 
-/* The left content edge of block container `cb` in the frame of context root `root`: §9.4.1's horizontal rule
-   applied down the chain of containing blocks, which in one block formatting context is the chain of in-flow
-   block containers. CSS 2.2 §9.4.3's relative translation moves no box of this frame ("Offsetting a box (B1) in
-   this way has no effect on the box (B2) that follows"), so none is added. */
-static CssPx get_content_left(lxb_dom_element_t *cb, lxb_dom_element_t *root)
+/* §9.4.1's horizontal rule applied down the chain of containing blocks, which in one block formatting context is
+   the chain of in-flow block containers. CSS 2.2 §9.4.3's relative translation moves no box of this frame
+   ("Offsetting a box (B1) in this way has no effect on the box (B2) that follows"), so none is added. */
+CssPx float_placement_content_left(lxb_dom_element_t *cb, lxb_dom_element_t *root)
 {
     CssPx left = css_px(0.0);
     lxb_dom_element_t *x;
@@ -42,6 +41,24 @@ static bool get_overlaps(const FlowFloatBox *o, CssPx y, CssPx h)
     return bottom > y.px && (o->top.px < y.px + h.px || o->top.px <= y.px);
 }
 
+bool float_placement_band(const FlowFloatBox *placed, size_t n, CssPx y, CssPx h, CssPx *left, CssPx *right,
+                          CssPx *next)
+{
+    bool any = false;
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        CssPx bottom = css_px_add(placed[i].top, placed[i].height);
+
+        if (!get_overlaps(&placed[i], y, h)) continue;
+        if (placed[i].right) *right = css_px_min(*right, placed[i].left);
+        else *left = css_px_max(*left, css_px_add(placed[i].left, placed[i].width));
+        *next = any ? css_px_min(*next, bottom) : bottom;
+        any = true;
+    }
+    return any;
+}
+
 /* §9.5.1's placement of float `f`, given the margin boxes of every earlier float of its context (`placed`, `n`
    of them). */
 static bool get_place(lxb_dom_element_t *f, lxb_dom_element_t *root, const FlowFloatBox *placed, size_t n,
@@ -49,7 +66,6 @@ static bool get_place(lxb_dom_element_t *f, lxb_dom_element_t *root, const FlowF
 {
     lxb_dom_element_t *cb = block_flow_static_position_containing_block(f);
     CssPx start, frame_top = css_px(0.0), cb_left, cb_right, y, w, h, ignored;
-    size_t i;
     char fbuf[160], cbuf[160];
 
     /* The margin box's size: §10.3.5's shrink-to-fit width and §10.6.7's height, measured first where they
@@ -70,7 +86,7 @@ static bool get_place(lxb_dom_element_t *f, lxb_dom_element_t *root, const FlowF
            "content edge in its formatting context; every walk with a placement record held writes one",
            box_subject(f, fbuf, sizeof fbuf), box_subject(cb, cbuf, sizeof cbuf));
     y = css_px_add(frame_top, start);
-    cb_left = get_content_left(cb, root);
+    cb_left = float_placement_content_left(cb, root);
     cb_right = css_px_add(cb_left, used_value_containing_block_width(f));
     w = css_px_add(used_value_border_edge_px(f, false),
                    css_px_add(used_value_px(f, "margin-left"), used_value_px(f, "margin-right")));
@@ -85,21 +101,12 @@ static bool get_place(lxb_dom_element_t *f, lxb_dom_element_t *root, const FlowF
     if (n > 0) y = css_px_max(y, placed[n - 1].top);
     for (;;) {
         CssPx left = cb_left, right = cb_right, next = css_px(0.0);
-        bool any = false;
-
         /* The edges the floats beside the band leave: "for each such earlier box, either the left outer edge of
            the current box must be to the right of the right outer edge of the earlier box, or its top must be
            lower than the bottom of the earlier box", and "the right outer edge of a left-floating box may not be
            to the right of the left outer edge of any right-floating box that is next to it". */
-        for (i = 0; i < n; i++) {
-            CssPx bottom = css_px_add(placed[i].top, placed[i].height);
+        bool any = float_placement_band(placed, n, y, h, &left, &right, &next);
 
-            if (!get_overlaps(&placed[i], y, h)) continue;
-            if (placed[i].right) right = css_px_min(right, placed[i].left);
-            else left = css_px_max(left, css_px_add(placed[i].left, placed[i].width));
-            next = any ? css_px_min(next, bottom) : bottom;
-            any = true;
-        }
         /* "A floating box must be placed as high as possible": it stays at `y` if it fits between those edges,
            and with no float beside it at all it stays whatever its width ("a left float may not stick out at the
            right edge, unless it is already as far to the left as possible"). Otherwise it moves down to the

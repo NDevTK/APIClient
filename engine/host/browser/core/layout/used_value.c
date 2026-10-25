@@ -2955,6 +2955,7 @@ static CssPx uv_padding(lxb_dom_element_t *el, CssLength len)
 static CssPx uv_block_auto_width(lxb_dom_element_t *el, CssLength size_len, UvBox box)
 {
     UvSurround s;
+    FlowFloatAvoid avoid;
     CssPx cb;
     CssPx margins, content;
 
@@ -2964,6 +2965,13 @@ static CssPx uv_block_auto_width(lxb_dom_element_t *el, CssLength size_len, UvBo
            "the declared arm is what runs — so a non-auto length here is `uv_pass_size`'s dispatch and this "
            "equation having come apart");
     s = uv_surround(el, false);
+    /* CSS 2.2 §9.5: a box that must not overlap the floats of its block formatting context takes the width they
+       leave it — "They may even make the border box of said element narrower than defined by section 10.3.3" —
+       which its parent's walk records before the box is laid out. */
+    if (flow_placement_float_avoid_peek(el, &avoid)) {
+        content = css_px_max(css_px_sub(avoid.width, uv_surround_total(s)), css_px(0.0));
+        return uv_is_border_box(el) ? css_px_add(content, uv_surround_total(s)) : content;
+    }
     cb = used_value_containing_block_width(el);
     margins = css_px_add(uv_margin(el, "margin-left", "margin-right",
                                    css_computed_length(el, "margin-left"), box, &size_len),

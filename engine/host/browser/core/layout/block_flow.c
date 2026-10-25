@@ -1327,39 +1327,6 @@ static bool bf_precedes(const lxb_dom_node_t *a, const lxb_dom_node_t *b)
     return false;
 }
 
-/* CSS 2.2 §9.5: "The border box of a table, a block-level replaced element, or an element in the normal flow that
-   establishes a new block formatting context (such as an element with overflow other than visible) must not
-   overlap the margin box of any floats in the same block formatting context as the element itself." Child `ce`
-   of `el`'s stack is refused when it is such a box and a float of the context precedes it. It answers false
-   ("not yet") when the float search held its place for a resting drive.
-   Named residual. Not covered: a float that precedes the box but ends above it, or sits beside it with room to
-   spare, leaves the box where §9.4.1 put it, and this refuses it. Next: the box placed beside or below the
-   floats at its position, from core/layout/float_placement.h. How its absence shows: this abort firing for a
-   box no float shares a vertical position with. */
-static bool bf_require_no_float_beside(lxb_dom_element_t *el, lxb_dom_element_t *ce)
-{
-#if APICLIENT_DEV
-    lxb_dom_element_t **v;
-    size_t n, i;
-    char cbuf[160], fbuf[160];
-
-    if (!bf_establishes_block_formatting_context(ce) && !replaced_element_is(ce)) return true;
-    if (!block_flow_context_floats_ask(el, &v, &n)) return false;
-    for (i = 0; i < n; i++)
-        if (bf_precedes(lxb_dom_interface_node(v[i]), lxb_dom_interface_node(ce)))
-            DFAILF("%s establishes a block formatting context or is a table or a replaced element, and %s floats "
-                   "earlier in the same context: CSS 2.2 §9.5's border box \"must not overlap the margin box of any "
-                   "floats in the same block formatting context\". BUILD its placement beside or below them over "
-                   "core/layout/float_placement.h", box_subject(ce, cbuf, sizeof cbuf),
-                   box_subject(v[i], fbuf, sizeof fbuf));
-    free(v);
-#else
-    (void) el;
-    (void) ce;
-#endif
-    return true;
-}
-
 /* §9.4.1's OWN question about the box list, asked ONCE rather than per run: has the box whose position was
    requested turned out to be INLINE-LEVEL, and therefore inside one of §9.2.1.1's anonymous boxes rather than
    on the stack? The runs partition the container's content, so an inline-level CHILD is in exactly one of them
@@ -1680,6 +1647,31 @@ static bool bf_is_inclusive_ancestor(const lxb_dom_element_t *a, const lxb_dom_e
     return false;
 }
 
+/* Whether the floats `v[0..last)` before child `ce` of `el`'s stack can be placed now. Placing a float places every
+   float before it, and one whose containing block is an ancestor still resolving its top edge (its margins
+   escaping into the walk placing `ce`) waits for that edge. */
+static bool bf_require_floats_placeable(lxb_dom_element_t *el, lxb_dom_element_t *ce, lxb_dom_element_t **v,
+                                        size_t last)
+{
+    size_t i;
+    char cbuf[160], fbuf[160];
+
+    for (i = 0; i < last; i++) {
+        lxb_dom_element_t *fcb = block_flow_static_position_containing_block(v[i]);
+        FlowFloatBox fb;
+        CssPx unused;
+
+        if (flow_placement_float_box_peek(v[i], &fb) || !bf_is_inclusive_ancestor(fcb, el) ||
+            flow_placement_bfc_frame_peek(fcb, &unused))
+            continue;
+        DFAILF("%s is placed against %s, whose containing block's top content edge is not resolved yet. BUILD the "
+               "float's placement deferred to where that edge resolves", box_subject(ce, cbuf, sizeof cbuf),
+               box_subject(v[i], fbuf, sizeof fbuf));
+        return false;
+    }
+    return true;
+}
+
 /* CSS 2.2 §9.5.2 "Controlling flow next to floats: the clear property" for child `ce` of `el`'s stack, whose
    contribution `b` the walk `w` is about to place. `*cleared` is whether `ce` has clearance and `*top` is then
    its top border edge in the context root's frame: "the bottom outer edge" of the lowest float it clears. Each
@@ -1698,7 +1690,7 @@ static bool bf_clearance_ask(lxb_dom_element_t *el, lxb_dom_element_t *ce, const
     lxb_dom_element_t **v;
     CssPx hyp, bottom = css_px(0.0), frame_clear;
     size_t n, i, last = 0;
-    char cbuf[160], fbuf[160];
+    char cbuf[160];
 
     *cleared = false;
     /* The computed value is css-page-floats-3 §4's set. `inline-start` and `inline-end` are `left` and `right`
@@ -1736,19 +1728,7 @@ static bool bf_clearance_ask(lxb_dom_element_t *el, lxb_dom_element_t *ce, const
         *frame_top = frame_clear;
         *has_frame = true;
     }
-    /* Placing a float places every float before it, and one whose containing block is an ancestor still
-       resolving its top edge (its margins escaping into the walk placing this box) waits for that edge. */
-    for (i = 0; i < last; i++) {
-        lxb_dom_element_t *fcb = block_flow_static_position_containing_block(v[i]);
-        FlowFloatBox fb;
-        CssPx unused;
-
-        if (flow_placement_float_box_peek(v[i], &fb) || !bf_is_inclusive_ancestor(fcb, el) ||
-            flow_placement_bfc_frame_peek(fcb, &unused))
-            continue;
-        DFAILF("%s has `clear` set after %s, whose containing block's top content edge is not resolved yet. BUILD "
-               "the float's placement deferred to where that edge resolves", box_subject(ce, cbuf, sizeof cbuf),
-               box_subject(v[i], fbuf, sizeof fbuf));
+    if (!bf_require_floats_placeable(el, ce, v, last)) {
         free(v);
         return true;
     }
@@ -1777,6 +1757,172 @@ static bool bf_clearance_ask(lxb_dom_element_t *el, lxb_dom_element_t *ce, const
     }
     *cleared = true;
     *top = bottom;
+    return true;
+}
+
+/* `ce`'s horizontal margin `name` as declared, resolved against its containing block's width (CSS 2.1 §8.3): the
+   margin that sits between the containing block's edge and the border box, before §10.3.3's over-constrained case
+   gives the slack to one of the two. An `auto` margin is the caller's to refuse. */
+static CssPx bf_declared_margin_px(lxb_dom_element_t *ce, const char *name)
+{
+    CssLength len = css_computed_length(ce, name);
+    char cbuf[160];
+
+    DCHECKF(len.kind != CSS_LENGTH_KEYWORD, "%s: `%s` is `auto` where a declared margin was asked",
+            box_subject(ce, cbuf, sizeof cbuf), name);
+    if (len.kind == CSS_LENGTH_ABSOLUTE) return len.px;
+    return css_length_resolve_pct(len, used_value_containing_block_width(ce));
+}
+
+/* Whether child `ce` must not overlap the floats of its parent's block formatting context. CSS 2.2 §9.5: "The
+   border box of a table, a block-level replaced element, or an element in the normal flow that establishes a new
+   block formatting context (such as an element with overflow other than visible) must not overlap the margin box
+   of any floats in the same block formatting context as the element itself". css-flexbox-1 §3 "Flex Containers:
+   the flex and inline-flex display values" ("floats do not intrude into the flex container") and css-grid-1 §5.1
+   "Establishing Grid Containers: the grid and inline-grid display values" ("floats do not intrude into the grid
+   container") say it of a flex and a grid container. */
+static bool bf_avoids_floats(lxb_dom_element_t *ce)
+{
+    CssDisplay d = css_computed_display(ce);
+
+    return bf_establishes_block_formatting_context(ce) || replaced_element_is(ce) ||
+           flex_item_display_is_flex_container(d) || css_display_spells(d, CSS_KEYWORD_GRID) ||
+           css_display_spells(d, CSS_KEYWORD_INLINE_GRID);
+}
+
+/* CSS 2.2 §9.5's placement of child `ce` of `el`'s stack beside or below the floats before it: "If necessary,
+   implementations should clear the said element by placing it below any preceding floats, but may place it
+   adjacent to such floats if there is sufficient space. They may even make the border box of said element
+   narrower than defined by section 10.3.3." From its hypothetical position down, at each float bottom, its border
+   box takes the band the floats leave between its margins and the containing block's edges; a definite width
+   fits when it is no wider than the band, an `auto` width when the band has room at all. The band is recorded
+   (flow_placement.h) when a float is beside it, and `*moved` is whether the box went down, to `*top` in the
+   context root's frame, as clearance moves a box. False ("not yet") when a search or placement was deferred.
+   Named residual. Not covered: a box whose height comes from its content is fitted at its top line only, so a
+   float that starts lower beside it, narrowing the band within its height, is refused after the box is laid out
+   (`bf_avoidance_verify`). Next: the box laid out again in the next band down. How its absence shows: that
+   refusal firing for a box whose top line fits. */
+static bool bf_avoidance_ask(lxb_dom_element_t *el, lxb_dom_element_t *ce, const BfWalk *w, const FlowBfcEntry *e,
+                             bool *has_frame, CssPx *frame_top, bool *moved, CssPx *top, CssPx *band_h)
+{
+    lxb_dom_element_t **v, *root;
+    FlowFloatBox *boxes;
+    CssPx mt, ml, mr, hyp, cb_left, cb_right, y, h0, border_w = css_px(0.0), left, right;
+    bool auto_w, any = false, held_float = false;
+    size_t n, i, last = 0;
+    char cbuf[160], vbuf[64];
+
+    *moved = false;
+    *band_h = css_px(0.0);
+    if (!bf_avoids_floats(ce)) return true;
+    if (!block_flow_context_floats_ask(el, &v, &n)) return false;
+    for (; last < n && bf_precedes(lxb_dom_interface_node(v[last]), lxb_dom_interface_node(ce)); last++)
+        if (w->escaping && block_flow_static_position_containing_block(v[last]) == el) held_float = true;
+    if (last == 0) {
+        free(v);
+        return true;
+    }
+    /* Named residual. Not covered: a table and a replaced element, whose widths come from the space available to
+       them rather than from the band alone. Next: their width algorithms run over the band. How its absence shows:
+       this refusal firing for a table or a replaced element after a float. */
+    if (table_wrapper_generates(css_computed_display(ce)) || replaced_element_is(ce) ||
+        !css_computed_keyword_is(ce, "clear", CSS_KEYWORD_NONE) ||
+        css_computed_length_is(ce, "margin-left", CSS_KEYWORD_AUTO) ||
+        css_computed_length_is(ce, "margin-right", CSS_KEYWORD_AUTO) || used_value_containing_block_is_rtl(ce) ||
+        held_float) {
+        DFAILF("%s (computed `clear` `%s`) follows a float in its block formatting context and must not overlap it "
+               "(CSS 2.2 §9.5). BUILD its placement beside the floats for a table, a replaced element, a box with "
+               "`clear` set or an `auto` horizontal margin, an `rtl` containing block, and a parent whose top margin "
+               "still escapes past a float it holds", box_subject(ce, cbuf, sizeof cbuf),
+               box_subject_computed(ce, "clear", vbuf, sizeof vbuf));
+        free(v);
+        return true;
+    }
+    if (!bf_require_floats_placeable(el, ce, v, last)) {
+        free(v);
+        return true;
+    }
+    boxes = malloc(last * sizeof *boxes);
+    CHECK(boxes != NULL, "out of memory placing a box beside its context's floats");
+    for (i = 0; i < last; i++)
+        if (!float_placement_ask(v[i], &boxes[i])) {
+            free(boxes);
+            free(v);
+            return false;
+        }
+    free(v);
+    root = block_flow_context_root(el);
+    mt = used_value_px(ce, "margin-top");
+    hyp = w->escaping ? bf_frame_top(el, e, bf_run_merge(w->run, bf_run_of(mt)))
+                      : css_px_add(css_px_add(*frame_top, w->pos), bf_run_value(bf_run_merge(w->run, bf_run_of(mt))));
+    ml = bf_declared_margin_px(ce, "margin-left");
+    mr = bf_declared_margin_px(ce, "margin-right");
+    cb_left = float_placement_content_left(el, root);
+    cb_right = css_px_add(cb_left, used_value_content_px(el, false));
+    auto_w = css_computed_length_is(ce, "width", CSS_KEYWORD_AUTO);
+    if (!auto_w) border_w = used_value_border_edge_px(ce, false);
+    h0 = used_value_height_behaves_as_auto(ce) ? css_px(0.0) : used_value_border_edge_px(ce, true);
+    for (y = hyp;;) {
+        CssPx next = css_px(0.0);
+
+        left = css_px_add(cb_left, ml);
+        right = css_px_sub(cb_right, mr);
+        any = float_placement_band(boxes, last, y, h0, &left, &right, &next);
+        if (!any || (auto_w ? right.px > left.px : border_w.px <= right.px - left.px)) break;
+        y = next;
+    }
+    free(boxes);
+    if (any) {
+        FlowFloatAvoid a;
+
+        a.left = css_px_sub(left, cb_left);
+        a.width = css_px_sub(right, left);
+        flow_placement_float_avoid_record(ce, a);
+    }
+    *band_h = h0;
+    *top = y;
+    if (y.px <= hyp.px) return true;
+    if (w->escaping && !*has_frame) {
+        *frame_top = bf_frame_top(el, e, w->run);
+        flow_placement_bfc_frame_record(el, *frame_top);
+        *has_frame = true;
+    }
+    *moved = true;
+    return true;
+}
+
+/* The refusal `bf_avoidance_ask`'s residual names: child `ce`, laid out `border_h` tall from `top` in the band
+   it was fitted to at its top line, must find no float narrowing that band lower down. False ("not yet") when a
+   search was deferred. */
+static bool bf_avoidance_verify(lxb_dom_element_t *el, lxb_dom_element_t *ce, CssPx top, CssPx border_h)
+{
+    lxb_dom_element_t **v, *root;
+    FlowFloatAvoid a;
+    CssPx cb_left, left, right, next = css_px(0.0);
+    size_t n, i;
+    char cbuf[160];
+
+    if (!flow_placement_float_avoid_peek(ce, &a)) return true;
+    if (!block_flow_context_floats_ask(el, &v, &n)) return false;
+    root = block_flow_context_root(el);
+    cb_left = float_placement_content_left(el, root);
+    left = css_px_add(cb_left, bf_declared_margin_px(ce, "margin-left"));
+    right = css_px_sub(css_px_add(cb_left, used_value_content_px(el, false)),
+                       bf_declared_margin_px(ce, "margin-right"));
+    for (i = 0; i < n && bf_precedes(lxb_dom_interface_node(v[i]), lxb_dom_interface_node(ce)); i++) {
+        FlowFloatBox fb;
+
+        if (!float_placement_ask(v[i], &fb)) {
+            free(v);
+            return false;
+        }
+        (void)float_placement_band(&fb, 1, top, border_h, &left, &right, &next);
+    }
+    free(v);
+    DCHECKF(left.px <= cb_left.px + a.left.px && right.px >= cb_left.px + a.left.px + a.width.px,
+            "%s was fitted beside the floats of its formatting context at its top line, and a float lower down "
+            "narrows that band within its %gpx height. BUILD its placement in the next band down (CSS 2.2 §9.5)",
+            box_subject(ce, cbuf, sizeof cbuf), border_h.px);
     return true;
 }
 
@@ -1966,8 +2112,8 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
         lxb_dom_element_t *ce = NULL;
         BlockFlowRun anon_run;
         BfBox b;
-        bool cleared = false;
-        CssPx clear_top = css_px(0.0);
+        bool cleared = false, avoided = false;
+        CssPx clear_top = css_px(0.0), avoid_top = css_px(0.0), avoid_h = css_px(0.0);
 
         anon_run.after = w.prev;
         anon_run.end = w.brk;
@@ -2019,12 +2165,20 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             w.at_run = false;
         } else if (w.brk != NULL) {
             ce = lxb_dom_interface_element(w.brk);
-            if (!bf_require_no_float_beside(el, ce)) return bf_walk_stage(body, el, &w, &out);
+            if (held &&
+                !bf_avoidance_ask(el, ce, &w, &entry, &has_frame, &frame_top, &avoided, &avoid_top, &avoid_h))
+                return bf_walk_stage(body, el, &w, &out);
             if (held) bf_entry_write(el, ce, &w, &entry, has_frame, frame_top);
             if (!bf_box(ce, pass, &b))
                 return bf_walk_stage(body, el, &w, &out);   /* "not yet": a question beneath was deferred */
+            if (held && avoid_h.px == 0.0 && !bf_avoidance_verify(el, ce, avoid_top, b.border_h))
+                return bf_walk_stage(body, el, &w, &out);
             if (held && !bf_clearance_ask(el, ce, &b, &w, &entry, &has_frame, &frame_top, &cleared, &clear_top))
                 return bf_walk_stage(body, el, &w, &out);
+            if (avoided) {
+                cleared = true;
+                clear_top = avoid_top;
+            }
             w.prev = w.brk;
             w.brk = bf_next_block_box(el, w.prev, &w.run_inline);
             w.at_run = true;

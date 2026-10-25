@@ -19,4 +19,13 @@
    reads. */
 bool float_placement_ask(lxb_dom_element_t *f, FlowFloatBox *out);
 
+/* The left content edge of block container `cb` in the content-box frame of its context root `root`. */
+CssPx float_placement_content_left(lxb_dom_element_t *cb, lxb_dom_element_t *root);
+
+/* The band the placed margin boxes `placed[0..n)` leave for a box spanning `[y, y + h)` (the line `y` alone when
+   `h` is zero): `*left` and `*right`, given as the edges with no float, are narrowed by each float beside the
+   band, and `*next` becomes the nearest bottom among those floats. Whether any float is beside it. */
+bool float_placement_band(const FlowFloatBox *placed, size_t n, CssPx y, CssPx h, CssPx *left, CssPx *right,
+                          CssPx *next);
+
 #endif

@@ -162,6 +162,15 @@ bool flow_placement_bfc_entry_peek(const lxb_dom_element_t *el, FlowBfcEntry *ou
 void flow_placement_bfc_frame_record(const lxb_dom_element_t *el, CssPx top);
 bool flow_placement_bfc_frame_peek(const lxb_dom_element_t *el, CssPx *top);
 
+/* CSS 2.2 §9.5's placement of a box that must not overlap the context's floats, written by its parent's walk
+   before the box is asked: its border box's left edge in its containing block's content-box frame, and the width
+   its border box takes there when its `width` is `auto`. Absent for a box no float is beside. */
+typedef struct {
+    CssPx left, width;
+} FlowFloatAvoid;
+void flow_placement_float_avoid_record(const lxb_dom_element_t *el, FlowFloatAvoid a);
+bool flow_placement_float_avoid_peek(const lxb_dom_element_t *el, FlowFloatAvoid *out);
+
 /* The node that search examines next, held when a resting drive stopped it, so the next ask continues there. */
 void flow_placement_float_scan_hold(const lxb_dom_element_t *root, lxb_dom_node_t *next);
 bool flow_placement_float_scan_peek(const lxb_dom_element_t *root, lxb_dom_node_t **out);
