@@ -11,8 +11,8 @@
  * work record belongs to the CALLING machine, exactly as abort.h's AbortSignalWork does: a fork mid-report must
  * not hand two arms one dispatch, and the caller is what has a `visit`.
  *
- * §8.1.4.6 takes `optional boolean omitError (default false)`, and the record takes it at its start
- * (report_exception_work_start_with). The stage labels below are resolved by a cross-session resume, so their
+ * §8.1.4.6 takes `optional boolean omitError (default false)`; its one true caller, step 7.2.3, holds errorInfo
+ * and no exception, so the record takes it as that errorInfo (report_exception_work_start_error_info). The stage labels below are resolved by a cross-session resume, so their
  * step numbers are the standard's current ones.
  *
  * WHAT IS NOT MODELLED, AND WHY THAT IS NOT A STUB. errorInfo's `message`, `filename`, `lineno` and `colno` are
@@ -93,21 +93,21 @@ static int g_ready;
    console"), never a hole: step 7 is performed either way and the hook only decides whether anything says so.
    THE FUNCTION IS THE HOST'S AND OUTLIVES THE AGENT; THE REGISTRATION IS THE AGENT'S AND DOES NOT — which is
    why report_exception_free gives it back and why it is declared to core/agent_state.h as a POINTER slot. The
-   pointer is a link-time constant in the program's text (solver/result.c's result_page_error_value, installed
+   pointer is a link-time constant in the program's text (solver/result.c's result_page_error_info, installed
    by solver/engine.c at the session's begin); what is agent-scoped is this static being non-null, and a
    registration carried past the agent is what would make the next host's claim read as a SECOND, different
    claimant to the DCHECK below. */
-static void (*g_console)(JSContext *ctx, JSValueConst exception);
+static void (*g_console)(JSContext *ctx, JSValueConst error_info);
 
 /* §8.1.4.4 step 8's third bullet, as a machine this runtime can be handed — see report_exception_flow. */
 static int g_flow_stepid = -1;
 
 /* §8.1.4.6 step 7.2's brand test and task, registered by core/workers/ (report_exception.h). */
 static bool (*g_dw_implements)(JSValueConst global);
-static void (*g_dw_queue)(JSContext *ctx, JSValueConst exception);
+static void (*g_dw_queue)(JSContext *ctx, JSValueConst error_info);
 
 void report_exception_set_dedicated_worker_terms(bool (*implements)(JSValueConst global),
-                                                 void (*queue)(JSContext *ctx, JSValueConst exception))
+                                                 void (*queue)(JSContext *ctx, JSValueConst error_info))
 {
     DCHECK(!implements == !queue, "§8.1.4.6 step 7.2's brand test and its task were registered apart");
     DCHECK(!implements != !g_dw_implements,
@@ -116,7 +116,7 @@ void report_exception_set_dedicated_worker_terms(bool (*implements)(JSValueConst
     g_dw_queue = queue;
 }
 
-void report_exception_set_console_hook(void (*fn)(JSContext *ctx, JSValueConst exception))
+void report_exception_set_console_hook(void (*fn)(JSContext *ctx, JSValueConst error_info))
 {
     /* THE SAME CLAIMANT MAY SAY SO AGAIN, AND A DIFFERENT ONE MAY NOT. A host that opens a second session on
        one instance registers the same console a second time, which is one claim restated; two DIFFERENT
@@ -212,15 +212,16 @@ static bool reporting_mode(JSContext *ctx, JSValueConst global, int set, bool on
     return was;
 }
 
-void report_exception_work_start(ReportExceptionWork *w)
+void report_exception_work_start_error_info(ReportExceptionWork *w, JSValue info)
 {
-    report_exception_work_start_with(w, /*omit_error*/ false);
+    report_exception_work_start(w);
+    w->info = info;
 }
 
-void report_exception_work_start_with(ReportExceptionWork *w, bool omit_error)
+void report_exception_work_start(ReportExceptionWork *w)
 {
     w->stage = RX_EXTRACT;
-    w->omit_error = omit_error;
+    w->info = JS_UNDEFINED;
     w->reporting = 0;
     w->phase = 0;
     w->ev = JS_UNDEFINED;
@@ -230,6 +231,7 @@ void report_exception_work_start_with(ReportExceptionWork *w, bool omit_error)
 void report_exception_work_visit(JSContext *ctx, ReportExceptionWork *w, JSStepVisit *v)
 {
     int i;
+    v->val(ctx, &w->info);
     v->val(ctx, &w->ev);
     for (i = 0; i < 4; i++)
         v->val(ctx, &w->cb[i]);
@@ -425,9 +427,8 @@ char *report_exception_position(JSContext *ctx, JSValueConst exception, uint32_t
    errorInfo, and names the SECOND caller this is exported for: §7.2.6.8's abort a NavigateEvent, whose step 4
    extracts and whose step 6 fires `navigateerror` with the result.
    Steps 3-5 of report-an-exception are the only writers that standard puts between its own step 2 and its step
-   6.2; report_exception_error_info performs step 5, and steps 3-4 are the identity — see the stage declaration. */
-static JSValue error_info_event(JSContext *ctx, JSValueConst exception, const char *type, bool cancelable,
-                                JSValueConst error)
+   6.2, and all three are the identity for an extracted errorInfo — see the stage declaration. */
+JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const char *type, bool cancelable)
 {
     char *owned = NULL;
     const char *what = JS_DiagCString(ctx, exception, &owned);
@@ -441,22 +442,10 @@ static JSValue error_info_event(JSContext *ctx, JSValueConst exception, const ch
     filename = JS_NewString(ctx, path);
     free(path);
     JS_DiagFreeCString(ctx, what, owned);
-    ev = error_event_new(ctx, type, cancelable, message, filename, line, col, error);
+    ev = error_event_new(ctx, type, cancelable, message, filename, line, col, exception);
     JS_FreeValue(ctx, message);
     JS_FreeValue(ctx, filename);
     return ev;
-}
-
-JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const char *type, bool cancelable)
-{
-    return error_info_event(ctx, exception, type, cancelable, exception);
-}
-
-JSValue report_exception_error_info(JSContext *ctx, JSValueConst exception, bool error_nulled)
-{
-    /* Step 6.2's two flags: `error`, cancelable — an `onerror` returning true is how a page says it handled
-       the exception, which step 7 reads back as notHandled. */
-    return error_info_event(ctx, exception, "error", /*cancelable*/ true, error_nulled ? JS_NULL : exception);
 }
 
 int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst exception, JSValue in,
@@ -481,9 +470,29 @@ int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst ex
        than after the whole head has run. A mint that fails is an allocation failure and nothing else — this
        runs none of the page's code — which is why it is a CHECK and not a swallowed exception: returning 0 here
        left the caller continuing with a live throw in the context and a report that had reported nothing. */
-    /* Steps 3-4 are the identity (script is null); step 5 nulls `error` under omitError. */
-    w->ev = report_exception_error_info(ctx, exception, w->omit_error);
-    CHECK(!JS_IsException(w->ev), "the ErrorEvent carrying §8.1.4.6 step 2's errorInfo could not be allocated");
+    if (JS_IsUndefined(w->info)) {
+        /* Step 6.2's two flags ride the extraction: `error`, cancelable — an `onerror` returning true is how a
+           page says it handled the exception, which step 7 reads back as notHandled. Steps 3-5 are the
+           identity: script is null, and omitError is false. */
+        w->ev = extract_error_information(ctx, exception, "error", /*cancelable*/ true);
+        CHECK(!JS_IsException(w->ev), "the ErrorEvent carrying §8.1.4.6 step 2's errorInfo could not be allocated");
+    } else {
+        /* Step 5's omitError arm, handed in as errorInfo whose `error` is already null. */
+#if APICLIENT_DEV
+        JSValue a[5];
+        int i;
+
+        DCHECK(JS_IsUndefined(exception) && error_event_is(ctx, w->info),
+               "§8.1.4.6's report given errorInfo was also handed an exception, or errorInfo that is not an "
+               "ErrorEvent — report_exception_work_start_error_info is the omitError arm, which has no exception");
+        error_event_handler_arguments(ctx, w->info, a);
+        DCHECK(JS_IsNull(a[4]), "§8.1.4.6 step 5: a report with omitError true was given errorInfo whose `error` "
+                                "is not null");
+        for (i = 0; i < 5; i++) JS_FreeValue(ctx, a[i]);
+#endif
+        w->ev = w->info;
+        w->info = JS_UNDEFINED;
+    }
     STEP_GOTO(w->stage, RX_MODE, &w->phase, NULL);
     return JS_STEP_YIELD;
 
@@ -517,16 +526,16 @@ not_handled:
        that is how a page says it handled the error, so nothing below runs for it.
        Step 7.2 tests the global's brand, never a name the global can reach: `Worker` is exposed in Window
        realms too, and DedicatedWorkerGlobalScope is the one interface whose implementers are the globals the
-       step governs. Its task carries the exception itself and the owner's report nulls `error` (step 7.1 and
-       7.2.3's omitError), so no page in the owner's agent reads the value; the console is written once, by the
-       report that reaches a global that is not a dedicated worker's.
+       step governs. Its task carries errorInfo's four primitives and never the exception (step 7.1): a worker
+       reaches its owner only as data. The console is written once, by the report that reaches a global that
+       is not a dedicated worker's.
        Step 7.3 is "the user agent may report exception to a developer console", which is the host's hook:
        solver/result.h's `pageErrors`. */
     if (not_canceled) {
         if (g_dw_implements != NULL && g_dw_implements(global))
-            g_dw_queue(ctx, exception);         /* steps 7.1-7.2 */
+            g_dw_queue(ctx, w->ev);             /* steps 7.1-7.2 */
         else if (g_console)
-            g_console(ctx, exception);          /* step 7.3 */
+            g_console(ctx, w->ev);              /* step 7.3 */
     }
     JS_FreeValue(ctx, w->ev);
     w->ev = JS_UNDEFINED;

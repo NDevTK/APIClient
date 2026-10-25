@@ -24,6 +24,7 @@
 #include "core/realm.h"
 #include "core/dom/document.h"
 #include "core/events/event.h"
+#include "core/events/error_event.h"
 #include "core/events/event_target.h"
 #include "core/events/message_port.h"
 #include "core/events/report_exception.h"
@@ -154,9 +155,8 @@ static void worker_queue_error(JSContext *ctx, JSValueConst worker)
 /* ---- the task report an exception queues at a dedicated worker's owner ------------------------------------ */
 
 /* HTML §8.1.4.6 report an exception, step 7.2's task: queued on the DOM manipulation task source with the
-   Worker's relevant global object. Its arguments are [workerObject, exception]; the exception is the worker
-   realm's, and is read only by report_exception_error_info, which runs none of the page's code, and by the
-   console hook. */
+   Worker's relevant global object. Its arguments are [workerObject, message, filename, lineno, colno]: errorInfo
+   as step 7.1 leaves it, carried as primitives because a worker reaches its owner only as data. */
 #define WORKER_REPORT_STAGES(X)                                                                             \
     X(WREP_FIRE,   "HTML §8.1.4.6 report an exception step 7.2.2 (set notHandled to the result of firing an "  \
                    "event named error at workerObject, using ErrorEvent, with the cancelable attribute "      \
@@ -195,6 +195,19 @@ static JSValue worker_report_fini(JSContext *ctx, void *stp, bool take_result)
     return JS_UNDEFINED;
 }
 
+/* errorInfo in the owner's realm, from the task's primitives, with `error` null (step 7.1). Owned. */
+static JSValue worker_report_error_info(JSContext *ctx, JSStepHdr *hdr)
+{
+    uint32_t line = 0, col = 0;
+    JSValue ev;
+
+    JS_ToUint32(ctx, &line, step_arg(hdr, 3));   /* numbers the queue asserted: no page code runs */
+    JS_ToUint32(ctx, &col, step_arg(hdr, 4));
+    ev = error_event_new(ctx, "error", /*cancelable*/ true, step_arg(hdr, 1), step_arg(hdr, 2), line, col, JS_NULL);
+    CHECK(!JS_IsException(ev), "§8.1.4.6 step 7.2's ErrorEvent could not be allocated");
+    return ev;
+}
+
 static int worker_report_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     WorkerReportTask *s = stp;
@@ -210,11 +223,9 @@ static int worker_report_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
             s->fphase = 0;
             s->ev = JS_UNDEFINED;
             STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
-            report_exception_work_start_with(&s->rep, /*omit_error*/ true);
+            report_exception_work_start(&s->rep);
             s->started = 1;
-            /* errorInfo as step 7.1 left it: `error` is null. */
-            s->ev = report_exception_error_info(ctx, step_arg(&s->hdr, 1), /*error_nulled*/ true);
-            CHECK(!JS_IsException(s->ev), "§8.1.4.6 step 7.2.2's ErrorEvent could not be allocated");
+            s->ev = worker_report_error_info(ctx, &s->hdr);
         }
         r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), step_arg(&s->hdr, 0), s->ev, JS_UNDEFINED,
                                   cb_result, &not_handled, out_cb, out_argc);
@@ -223,11 +234,13 @@ static int worker_report_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
         s->ev = JS_UNDEFINED;
         if (r < 0) return JS_STEP_ABRUPT;
         if (!not_handled) return JS_STEP_DONE;
+        /* The report's own event: the one fired at the Worker has been dispatched. */
+        report_exception_work_start_error_info(&s->rep, worker_report_error_info(ctx, &s->hdr));
         STEP_GOTO(s->hdr.stage, WREP_REPORT, &s->fphase, NULL);
         return JS_STEP_YIELD;
 
     STEP_ARM(WREP_REPORT);
-        r = report_exception_run(ctx, &s->rep, step_arg(&s->hdr, 1), cb_result, out_cb, out_argc);
+        r = report_exception_run(ctx, &s->rep, JS_UNDEFINED, cb_result, out_cb, out_argc);
         return r ? r : JS_STEP_DONE;
 }
 
@@ -239,23 +252,30 @@ static const JSTrampStepDef worker_report_def = {
 };
 
 /* Step 7.2's queue, handed to core/events/report_exception.c: `wctx` is the realm whose global implements
-   DedicatedWorkerGlobalScope, and its port record names the Worker associated with it (step 7.2.1). */
-static void worker_queue_report(JSContext *wctx, JSValueConst exception)
+   DedicatedWorkerGlobalScope, its port record names the Worker associated with it (step 7.2.1), and
+   `error_info` is the worker realm's ErrorEvent, of which the task takes all but `error`. */
+static void worker_queue_report(JSContext *wctx, JSValueConst error_info)
 {
-    JSValue ports = realm_value_get(wctx, g_ports_slot), fn;
-    JSValueConst args[2];
+    JSValue ports = realm_value_get(wctx, g_ports_slot), fn, info[5];
+    JSValueConst args[5];
     JSValue worker = JS_GetPropertyUint32(wctx, ports, 2);
     WorkerData *w = worker_of(worker);
+    int i;
 
     DCHECK(w != NULL && w->realm == wctx,
            "§8.1.4.6 step 7.2 was asked of a dedicated worker global whose port record names no Worker of its "
            "realm — the constructor writes the record before the worker's program can run");
-    fn = JS_NewCFunction2(w->owner, NULL, "workerReportTask", 2, JS_CFUNC_step, g_report_task_stepid);
+    error_event_handler_arguments(wctx, error_info, info);   /* message, filename, lineno, colno, error */
+    DCHECK(JS_IsString(info[0]) && JS_IsString(info[1]) && JS_IsNumber(info[2]) && JS_IsNumber(info[3]),
+           "§8.1.4.6 step 7.2's task would carry an object of the worker's realm to its owner — errorInfo's "
+           "message, filename, lineno and colno are the primitives the extraction writes");
+    fn = JS_NewCFunction2(w->owner, NULL, "workerReportTask", 5, JS_CFUNC_step, g_report_task_stepid);
     CHECK(!JS_IsException(fn), "§8.1.4.6 step 7.2: the task's callee could not be allocated");
     args[0] = worker;
-    args[1] = exception;
-    JS_EnqueueCallTask(w->owner, fn, 2, args, TASK_SOURCE_DOM_MANIPULATION);
+    for (i = 0; i < 4; i++) args[i + 1] = info[i];
+    JS_EnqueueCallTask(w->owner, fn, 5, args, TASK_SOURCE_DOM_MANIPULATION);
     JS_FreeValue(w->owner, fn);
+    for (i = 0; i < 5; i++) JS_FreeValue(wctx, info[i]);
     JS_FreeValue(wctx, worker);
     JS_FreeValue(wctx, ports);
 }

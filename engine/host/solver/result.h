@@ -167,6 +167,10 @@ void result_page_error(const char *msg, const char *filename);
    them only when they are already strings. A diagnostic that runs the page's code to describe the page's crash
    is a second crash. */
 void result_page_error_value(JSContext *ctx, JSValueConst err);
+/* HTML §8.1.4.6 step 7.3's developer console, given errorInfo (the ErrorEvent the report fired, BORROWED). An
+   `error` the realm holds is described as result_page_error_value describes it; a null one (step 7.2.3's
+   report at a worker's owner, which holds only errorInfo) is described from the message and the throw site. */
+void result_page_error_info(JSContext *ctx, JSValueConst error_info);
 
 /* ---- WHOSE THROW IT WAS ------------------------------------------------------------------------------------
  *

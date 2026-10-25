@@ -30,7 +30,9 @@ typedef struct {
        is HOLDING, so it is its own field and the unlock asks about it directly. */
     uint8_t reporting;
     uint8_t phase;     /* event_target_fire_run's own */
-    bool omit_error;   /* §8.1.4.6's omitError: step 5 sets errorInfo[error] to null */
+    /* errorInfo handed in rather than extracted — §8.1.4.6 step 5's omitError arm, as data: an ErrorEvent of this
+       realm whose `error` is null, or JS_UNDEFINED for a report that extracts it from its exception (owned). */
+    JSValue info;
     JSValue ev;        /* the ErrorEvent, minted once and held across the dispatch (owned) */
     EventFireCb cb;
 } ReportExceptionWork;
@@ -52,12 +54,6 @@ typedef struct {
  * §7.2.6.8 fires `navigateerror` with DOM's plain fire-an-event — and they are here because the one thing every
  * caller does with an errorInfo is dispatch it. `exception` is BORROWED; the result is OWNED. */
 JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const char *type, bool cancelable);
-
-/* §8.1.4.6's errorInfo as report-an-exception fires it: extracted from `exception`, as a cancelable `error`
-   event, with `error` null when `error_nulled` (step 5's omitError, or step 7.1 for the errorInfo step 7.2
-   carries to the Worker). `exception` is BORROWED and may belong to another agent's realm of this runtime; the
-   result is OWNED and belongs to `ctx`'s realm. */
-JSValue report_exception_error_info(JSContext *ctx, JSValueConst exception, bool error_nulled);
 
 /* …AND THE PART OF THAT EXTRACTION A CALLER MAY WANT WITHOUT AN EVENT: §8.1.4.6's `filename`, `lineno` and
  * `colno`, derived from the backtrace the value already carries. One component owns the derivation because
@@ -92,14 +88,16 @@ void report_exception_free(JSRuntime *rt);
  * called `preventDefault()` cancelled the event, which is the page saying it did its own reporting, and a
  * console line written anyway would report as unhandled an exception the page handled.
  * Registering none is a positive statement, never a hole: step 7 runs either way. */
-void report_exception_set_console_hook(void (*fn)(JSContext *ctx, JSValueConst exception));
+/* The hook is handed errorInfo, the ErrorEvent step 6.2 fired (BORROWED): its `error` is the exception when this
+   realm holds it, and null for a report given errorInfo with omitError true. */
+void report_exception_set_console_hook(void (*fn)(JSContext *ctx, JSValueConst error_info));
 
 /* §8.1.4.6 STEP 7.2, handed in by core/workers/, which this layer may not name. `implements` is the brand test
    "global implements DedicatedWorkerGlobalScope"; `queue` queues 7.2's global task at the worker's owner, given
-   the worker realm and the exception (BORROWED), which the task reports with omitError true so the owner's page
-   never reads it. Set once per agent; NULL, NULL gives the registration back. */
+   the worker realm and errorInfo (the worker realm's ErrorEvent, BORROWED), of which it carries only the four
+   primitives step 7.1 leaves. Set once per agent; NULL, NULL gives the registration back. */
 void report_exception_set_dedicated_worker_terms(bool (*implements)(JSValueConst global),
-                                                 void (*queue)(JSContext *ctx, JSValueConst exception));
+                                                 void (*queue)(JSContext *ctx, JSValueConst error_info));
 
 /* HTML §8.1.4.4 "Calling scripts", run a classic script step 8's THIRD BULLET, as the FLOW it has to be.
  *
@@ -119,10 +117,12 @@ void report_exception_set_dedicated_worker_terms(bool (*implements)(JSValueConst
  * JS_GetException and owns it); the frame dups it. Returns the handle JS_FlowNew returns. */
 JSValue *report_exception_flow(JSContext *ctx, JSValueConst exception);
 
-/* A report with §8.1.4.6's omitError at its default, false. */
+/* A report with §8.1.4.6's omitError at its default, false: errorInfo is extracted from the exception. */
 void report_exception_work_start(ReportExceptionWork *w);
-/* A report given omitError, which only step 7.2.3 passes true: the owner's report of a worker's exception. */
-void report_exception_work_start_with(ReportExceptionWork *w, bool omit_error);
+/* A report with omitError true, given errorInfo rather than an exception — step 7.2.3's report at a worker's
+   owner, whose realm cannot reach the worker's exception. `info` is an ErrorEvent of the reporting realm whose
+   `error` is null, and is taken; report_exception_run is then handed JS_UNDEFINED as the exception. */
+void report_exception_work_start_error_info(ReportExceptionWork *w, JSValue info);
 void report_exception_work_visit(JSContext *ctx, ReportExceptionWork *w, JSStepVisit *v);
 /* STEP 6.1'S FLAG, GIVEN BACK — the half of this record's teardown that is NOT a reference and therefore not
    something the visit above can carry. A step machine whose own `visit` names this record discharges the

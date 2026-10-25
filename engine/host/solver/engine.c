@@ -11575,7 +11575,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        per distinct message carried out of the run. Registered rather than performed at the throw, so every caller
        of report an exception writes one (a §2.9 listener that threw, a custom element reaction, an animation-frame
        or IntersectionObserver callback) and a page that cancels the `error` event stops it. */
-    report_exception_set_console_hook(result_page_error_value);
+    report_exception_set_console_hook(result_page_error_info);
     /* The frontier is seeded once, from one of two alternatives. A document nobody has explored starts with one
        flow: the page's scripts over an empty decision vector. A document with a parked residue starts with that
        residue, every flow the last session could not finish, each on its own path; a boot flow beside them would

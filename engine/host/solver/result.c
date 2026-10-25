@@ -37,6 +37,7 @@
 #include "core/layout/flow_placement.h"   /* what the render spent on CSS 2.1 §9.4.1's positions — see the `_layout` block */
 #include "core/frame/window_proxy.h"   /* the ask behind the realm census — see window_proxy_destroy_releases */
 /* §8.1.4.6 "Runtime script errors"'s throw site — one component derives it, this one reports it. */
+#include "core/events/error_event.h"   /* errorInfo's five values, read off the event step 6.2 fired */
 #include "core/events/report_exception.h"
 #include "core/timing/event_loop.h"   /* whether the clock's licence was wanted and refused — see event_loop_advance_census */
 #include "core/rendering/rendering.h"   /* why §8.1.7.3's in-parallel half declined — the `renderingDeclined*` rows */
@@ -317,6 +318,35 @@ void result_page_error_value(JSContext *ctx, JSValueConst err) {
     page_error_key(ctx, err, buf, sizeof buf, &at);
     result_page_error(buf, at);   /* an empty description is dropped by result_page_error's own first line */
     free(at);
+}
+
+void result_page_error_info(JSContext *ctx, JSValueConst error_info) {
+    JSValue a[5];   /* message, filename, lineno, colno, error */
+    const char *msg, *file;
+    uint32_t line = 0, col = 0;
+    char buf[320];
+    int i;
+
+    error_event_handler_arguments(ctx, error_info, a);
+    if (!JS_IsNull(a[4])) {
+        result_page_error_value(ctx, a[4]);
+    } else {
+        /* Engine-minted primitives: the message is a string the extraction wrote, the position two numbers. */
+        DCHECK(JS_IsString(a[0]) && JS_IsString(a[1]) && JS_IsNumber(a[2]) && JS_IsNumber(a[3]),
+               "§8.1.4.6's errorInfo reached the console with a message, filename or position that is not the "
+               "primitive the extraction writes");
+        msg = JS_ToCString(ctx, a[0]);
+        file = JS_ToCString(ctx, a[1]);
+        CHECK(msg && file, "result: OOM describing §8.1.4.6's errorInfo for the developer console");
+        JS_ToUint32(ctx, &line, a[2]);
+        JS_ToUint32(ctx, &col, a[3]);
+        if (*file) snprintf(buf, sizeof buf, "%s  [at %s:%u:%u]", msg, file, line, col);
+        else snprintf(buf, sizeof buf, "%s", msg);
+        result_page_error(buf, file);
+        JS_FreeCString(ctx, msg);
+        JS_FreeCString(ctx, file);
+    }
+    for (i = 0; i < 5; i++) JS_FreeValue(ctx, a[i]);
 }
 
 /* Marks the pending exception as this engine's own exploration (see result.h). Runs at the raise and keys
