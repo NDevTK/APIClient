@@ -72,7 +72,7 @@ lxb_html_tree_insertion_mode_in_head_open(lxb_html_tree_t *tree,
             break;
 
         case LXB_TAG_HTML:
-            return lxb_html_tree_insertion_mode_in_body(tree, token);
+            return lxb_html_tree_insertion_mode_in_body_html(tree, token);
 
         case LXB_TAG_BASE:
         case LXB_TAG_BASEFONT:

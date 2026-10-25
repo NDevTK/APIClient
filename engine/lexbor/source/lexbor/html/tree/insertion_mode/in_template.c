@@ -149,9 +149,13 @@ lxb_html_tree_insertion_mode_in_template(lxb_html_tree_t *tree,
 
     switch (token->tag_id) {
         case LXB_TAG__TEXT:
+            return lxb_html_tree_insertion_mode_in_body_text(tree, token);
+
         case LXB_TAG__EM_COMMENT:
+            return lxb_html_tree_insertion_mode_in_body_comment(tree, token);
+
         case LXB_TAG__EM_DOCTYPE:
-            return lxb_html_tree_insertion_mode_in_body(tree, token);
+            return lxb_html_tree_insertion_mode_in_body_doctype(tree, token);
 
         case LXB_TAG_BASE:
         case LXB_TAG_BASEFONT:

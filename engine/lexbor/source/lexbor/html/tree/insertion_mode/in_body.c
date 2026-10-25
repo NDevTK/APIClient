@@ -78,7 +78,7 @@ lxb_html_tree_insertion_mode_in_body_skip_new_line_textarea(lxb_html_tree_t *tre
 }
 
 /* Open */
-lxb_inline bool
+bool
 lxb_html_tree_insertion_mode_in_body_text(lxb_html_tree_t *tree,
                                           lxb_html_token_t *token)
 {
@@ -148,7 +148,7 @@ lxb_html_tree_insertion_mode_in_body_text_append(lxb_html_tree_t *tree,
     return LXB_STATUS_OK;
 }
 
-lxb_inline bool
+bool
 lxb_html_tree_insertion_mode_in_body_comment(lxb_html_tree_t *tree,
                                              lxb_html_token_t *token)
 {
@@ -164,7 +164,7 @@ lxb_html_tree_insertion_mode_in_body_comment(lxb_html_tree_t *tree,
     return true;
 }
 
-lxb_inline bool
+bool
 lxb_html_tree_insertion_mode_in_body_doctype(lxb_html_tree_t *tree,
                                              lxb_html_token_t *token)
 {
@@ -173,7 +173,7 @@ lxb_html_tree_insertion_mode_in_body_doctype(lxb_html_tree_t *tree,
     return true;
 }
 
-lxb_inline bool
+bool
 lxb_html_tree_insertion_mode_in_body_html(lxb_html_tree_t *tree,
                                           lxb_html_token_t *token)
 {

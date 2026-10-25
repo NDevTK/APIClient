@@ -55,6 +55,28 @@ LXB_API lxb_status_t
 lxb_html_tree_insertion_mode_in_body_text_append(lxb_html_tree_t *tree,
                                                  lexbor_str_t *str);
 
+/*
+ * The "in body" rules for one kind of token: what another insertion mode runs
+ * when it processes a token using the rules for "in body". They are leaves, so
+ * a mode that defers to "in body" for these tokens does not call back into the
+ * mode functions.
+ */
+LXB_API bool
+lxb_html_tree_insertion_mode_in_body_text(lxb_html_tree_t *tree,
+                                          lxb_html_token_t *token);
+
+LXB_API bool
+lxb_html_tree_insertion_mode_in_body_comment(lxb_html_tree_t *tree,
+                                             lxb_html_token_t *token);
+
+LXB_API bool
+lxb_html_tree_insertion_mode_in_body_doctype(lxb_html_tree_t *tree,
+                                             lxb_html_token_t *token);
+
+LXB_API bool
+lxb_html_tree_insertion_mode_in_body_html(lxb_html_tree_t *tree,
+                                          lxb_html_token_t *token);
+
 LXB_API bool
 lxb_html_tree_insertion_mode_text(lxb_html_tree_t *tree,
                                   lxb_html_token_t *token);
