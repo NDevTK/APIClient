@@ -1937,6 +1937,12 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
             sib->acct->branch = br;
         }
     }
+    /* The assumptions, before the index takes the arm's key: the parent's, plus the sibling's own arm when that arm
+       takes absent application state as present. That one is the stated exception to the rank-neutrality equality,
+       which compares the weights with the assumption term left out. */
+    sib->assumed_reads = parent->assumed_reads;
+    for (int i = 0; i < parent->assumed_slots_n; i++) flow_assumed_slot_push(sib, parent->assumed_slots[i]);
+    if (at_branch.assumed_slot >= 0) flow_assumed_slot_push(sib, at_branch.assumed_slot);
     /* Back into the index under its final bucket and family. Inserting into `br` re-keys that bucket in its
        family's heap, which is where the `sub_born++` above, a new offset for every member of the arm, reaches the
        index: one bucket re-keyed, no member. */
@@ -1961,12 +1967,6 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     sib->path_pinned = at_branch.pinned;
     sib->path_peer_driven = at_branch.peer_driven;
     sib->path_peer_pinned = at_branch.peer_pinned;
-    /* And the assumptions: the parent's, plus the sibling's own arm when that arm takes absent application state
-       as present. That one is the stated exception to the equality below, which compares the weights with the
-       assumption term left out. */
-    sib->assumed_reads = parent->assumed_reads;
-    for (int i = 0; i < parent->assumed_slots_n; i++) flow_assumed_slot_push(sib, parent->assumed_slots[i]);
-    if (at_branch.assumed_slot >= 0) flow_assumed_slot_push(sib, at_branch.assumed_slot);
     /* The scheduler's one WFQ, asserted at the fork: a fork is rank-neutral. At the instant it is born the sibling is
        worth exactly what its parent is worth. The equality fires the moment anything enters flow_weight that a fork
        does not carry, which is the shape of every banned fix (a depth bonus, a script-index term, a separate visit
@@ -3913,6 +3913,7 @@ static int ix_t_cmp(const FlowIxTreap *a, const FlowIxTreap *b) {
     if (a->rung != b->rung) return a->rung < b->rung ? -1 : 1;
     if (a->replay != b->replay) return a->replay < b->replay ? -1 : 1;
     if (a->surv != b->surv) return a->surv < b->surv ? -1 : 1;
+    if (a->assumed != b->assumed) return a->assumed < b->assumed ? -1 : 1;
     return 0;
 }
 
@@ -4078,6 +4079,7 @@ static void ix_t_stamp(Flow *f) {
     f->ix_t.replay = f->cand_replay;
     f->ix_t.surv = f->cand_surv;
     f->ix_t.rung = f->cand_rung;
+    f->ix_t.assumed = flow_assumed(f);
 }
 
 static void flow_ix_insert(Flow *f) {
@@ -4139,7 +4141,7 @@ static void flow_ix_rekey(Flow *f) {
     if (!f->ix_in) return;
     fresh.key = flow_index_key(f); fresh.phase = flow_silence_phase(f); fresh.notch = flow_service_notch(f);
     fresh.visits = flow_optimism_den(f); fresh.replay = f->cand_replay; fresh.surv = f->cand_surv;
-    fresh.rung = f->cand_rung;
+    fresh.rung = f->cand_rung; fresh.assumed = flow_assumed(f);
     if (fresh.key == f->ix_t.key && ix_t_cmp(&fresh, &f->ix_t) == 0) return;
     flow_ix_remove(f);
     flow_ix_insert(f);
@@ -5080,7 +5082,10 @@ static double wfq_accounted_spread(const WfqCensus *c) {
             its live guard, so the two ends are over one population. */
          + (c->br_born_min > 0 && c->br_born_max > 0
               ? 1.0 / (double)c->br_born_min - 1.0 / (double)c->br_born_max : 0.0)
-         + (double)((c->svc_max - c->svc_min) + (c->svc_fam_max - c->svc_fam_min) + 1) * FLOW_AGE_QUANTUM;
+         + (double)((c->svc_max - c->svc_min) + (c->svc_fam_max - c->svc_fam_min) + 1) * FLOW_AGE_QUANTUM
+         /* And the assumptions, which enter negatively at FLOW_ASSUMPTION_COST each and are at least zero, so the
+            most any member rests on bounds their range. */
+         + (double)c->assumed_max * FLOW_ASSUMPTION_COST;
 }
 
 /* The mark the census counts families with (FlowAcct's `census_gen`): a generation rather than a clear pass, for

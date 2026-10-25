@@ -98,6 +98,7 @@ typedef struct FlowIxTreap {
     int64_t notch, visits;
     double replay, surv;
     int rung;
+    int64_t assumed;
     uint64_t seq, floor;
     uint64_t prio;
     struct FlowIxNode *cls;
