@@ -744,6 +744,16 @@ static const TfServed TF_SERVED[] = {
       "export default { tag: 'mhDEF' };" },
     /* The fileparse documents' benign seed file: magic `FPX1`, version 1, a 13-byte body. */
     { "https://x.test/files/fpseed.bin", "application/octet-stream", "FPX1\x01\x0d" "return x + 1;" },
+    /* HTML_FILEPARSE_WORKER's dedicated worker: the FPX1 walk over the transferred buffer. */
+    { "https://x.test/chunk/fpworker.js", "text/javascript",
+      "self.onmessage = function fpwOnMessage(e) {"
+      "  fetch('/api/fpw-worker');"
+      "  var buf = e.data, dv = new DataView(buf);"
+      "  if (dv.getUint32(0) !== 0x46505831 || dv.getUint8(4) !== 1) { fetch('/api/fpw-badmagic'); return; }"
+      "  var body = new TextDecoder().decode(new Uint8Array(buf, 6, dv.getUint8(5)));"
+      "  fetch('/api/fpw-parsed');"
+      "  new Function('x', body);"
+      "};" },
     /* HTML_LAZYLOAD's chunk, imported once its observed box is visible. */
     { "https://x.test/chunk/lllazy.js", "text/javascript",
       "export function llInit() { fetch('/api/ll-chunk'); }" },
@@ -1140,6 +1150,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/ttsink.h"
 #include "fixture/fileparsefetch.h"
 #include "fixture/fileparsedrop.h"
+#include "fixture/fileparseworker.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1614,6 +1625,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "ttsink", HTML_TTSINK },
     { "fileparse-fetch", HTML_FILEPARSE_FETCH },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
+    { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -14994,9 +15006,9 @@ TF_UNIT void probes_fileparse_fetch(const char *js, Probe *tab, int *n) {
              "names through the query did not reach new Function as attacker input");
     const Probe rows[] = {
         { "fpf-seed-parsed", sp_tt, "/api/fpf-parsed", SESS_EXPLORE, sp_why },
-        { "fpf-url-attacker", ua_tt, "indexOf('file=')", SESS_EXPLORE, ua_why },
+        { "fpf-url-attacker", ua_tt, "/api/fpf-built", SESS_EXPLORE, ua_why },
         { "fpf-sink-file", sf_tt, "function fpfParse", SESS_EXPLORE, sf_why },
-        { "fpf-sink-query", sq_tt, "'/files/fpseed.bin'", SESS_EXPLORE, sq_why },
+        { "fpf-sink-query", sq_tt, "fpfParse(buf)", SESS_EXPLORE, sq_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -15031,6 +15043,38 @@ TF_UNIT void probes_fileparse_drop(const char *js, Probe *tab, int *n) {
         { "fpd-bytes-read", dr_tt, "/api/fpd-read", SESS_EXPLORE, dr_why },
         { "fpd-sink-file", ds_tt, "function fpdParse", SESS_EXPLORE, ds_why },
         { "fpd-poc-drop", dp_tt, "function fpdOnDrop", SESS_EXPLORE, dp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `fileparse-worker` document (fixture/fileparseworker.h); the worker's witnesses are in
+   TF_SERVED's body, so those rows are keyed by the document's own construction of it. Reach and taint only. */
+TF_UNIT void probes_fileparse_worker(const char *js, Probe *tab, int *n) {
+    char seed[192] = "", query[192] = "";
+    int has_seed = s_rooted_source(js, "eval", "fpseed", seed, sizeof seed);
+    int has_query = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, query, sizeof query);
+    const char *wp_why = NULL; int wp_tt = 1;
+    fold_row(&wp_tt, &wp_why, !!strstr(js, "\"/api/fpw-posted\""),
+             "NOT REACHED: there is no /api/fpw-posted record, so the page never constructed its Worker and posted "
+             "the file's buffer to it");
+    const char *wr_why = NULL; int wr_tt = 1;
+    fold_row(&wr_tt, &wr_why, !!strstr(js, "\"/api/fpw-worker\""),
+             "NOT REACHED: there is no /api/fpw-worker record, so the worker's message handler never ran");
+    fold_row(&wr_tt, &wr_why, !!strstr(js, "\"/api/fpw-parsed\""),
+             "the worker's handler ran but its walk never reached the format's body");
+    const char *ws_why = NULL; int ws_tt = 1;
+    fold_row(&ws_tt, &ws_why, has_seed,
+             "NOT REACHED: no eval @S record carries a source rooted in the seed file's reply, so the bytes lost "
+             "their provenance across the transfer into the worker");
+    const char *wq_why = NULL; int wq_tt = 1;
+    fold_row(&wq_tt, &wq_why, has_query,
+             "NOT REACHED: no eval @S record carries a source rooted in location.search, so the file the query "
+             "names did not reach the worker's new Function as attacker input");
+    const Probe rows[] = {
+        { "fpw-posted", wp_tt, "/api/fpw-posted", SESS_EXPLORE, wp_why },
+        { "fpw-worker-ran", wr_tt, "new Worker('/chunk/fpworker.js')", SESS_EXPLORE, wr_why },
+        { "fpw-sink-file", ws_tt, "fpwWorker.postMessage(buf", SESS_EXPLORE, ws_why },
+        { "fpw-sink-query", wq_tt, "var fpwWorker", SESS_EXPLORE, wq_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -18899,6 +18943,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_ttsink(js, probes, &np);
     probes_fileparse_fetch(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
+    probes_fileparse_worker(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
