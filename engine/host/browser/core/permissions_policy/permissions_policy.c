@@ -7,6 +7,7 @@
 #include "core/frame/csp_source_list.h"
 #include "core/permissions_policy/permissions_policy.h"
 #include "core/url/url.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* §4.1's SUPPORTED FEATURES as one table, built from the one X-list the enum is built from — so a row cannot
    exist in one and not the other, and the token and the §4.8 default allowlist of a feature are read from the
@@ -126,7 +127,7 @@ static void pp_allowlist_add_expression(PpAllowlist *a, const char *s, size_t n)
 
     if (a->n_expressions >= a->cap_expressions) {
         a->cap_expressions = a->cap_expressions ? a->cap_expressions * 2 : 4;
-        a->expressions = realloc(a->expressions, (size_t)a->cap_expressions * sizeof *a->expressions);
+        a->expressions = lexbor_realloc(a->expressions, (size_t)a->cap_expressions * sizeof *a->expressions);
         CHECK(a->expressions != NULL, "permissions policy: OOM growing §4.7's allowlist expressions");
     }
     copy = malloc(n + 1);

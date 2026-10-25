@@ -11,11 +11,12 @@
 #include <stdlib.h>
 #include <lexbor/css/css.h>
 #include <lexbor/selectors/selectors.h>
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static lxb_status_t scr_collect_cb(lxb_dom_node_t *node, lxb_css_selector_specificity_t s, void *vp) {
     struct scr_ctx *c = vp; (void)s;
     if (c->n >= c->cap) { int nc = c->cap ? c->cap * 2 : 8;
-        lxb_dom_element_t **n = realloc(c->els, (size_t)nc * sizeof(lxb_dom_element_t *)); if (!n) return LXB_STATUS_OK; c->els = n; c->cap = nc; }
+        lxb_dom_element_t **n = lexbor_realloc(c->els, (size_t)nc * sizeof(lxb_dom_element_t *)); if (!n) return LXB_STATUS_OK; c->els = n; c->cap = nc; }
     c->els[c->n++] = lxb_dom_interface_element(node);
     return LXB_STATUS_OK;
 }

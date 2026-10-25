@@ -83,6 +83,7 @@
 /* AND OF §7.1.1's SERIALIZATION, for the same reason: turning a live container into the form it crosses a seam
    in turns its CSP list's self-origin RECORD into the bytes that cross with it. */
 #include "core/url/origin.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 struct PolicyContainer {
     /* The serialized CSP list, comma-delimited, or NULL for none (OWNED). It is kept because it is what the
@@ -301,7 +302,7 @@ void policy_container_enforce_policy(PolicyContainer *p, const char *serialized_
        of the old list is a SLICE of `csp_text` (csp_directive_list.h: "the parse borrows its text"), so the
        list is dropped while those slices are still valid rather than left naming a buffer that has moved. */
     csp_list_free(&p->csp);
-    grown = realloc(p->csp_text, old_len + (old_len ? 1 : 0) + add_len + 1);
+    grown = lexbor_realloc(p->csp_text, old_len + (old_len ? 1 : 0) + add_len + 1);
     CHECK(grown != NULL, "policy container: OOM enforcing a policy");
     p->csp_text = grown;
     /* §2.2's serialization of a policy LIST: comma-delimited. The existing bytes are left exactly where they

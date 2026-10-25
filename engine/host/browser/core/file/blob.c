@@ -44,6 +44,7 @@
 #include "core/dom/document.h"
 #include "core/url/url.h"
 #include <stdio.h>
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ONE STRUCT FOR BOTH INTERFACES, and one class id, because §4 says `interface File : Blob` — a File IS a Blob,
    so every brand test that accepts a Blob must accept it, and there is exactly one byte sequence for both to be
@@ -868,7 +869,7 @@ static int js_blob_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
                    "JS_GetArrayBuffer disagree about one allocation, and the copy below trusts the first");
             bytes = base + off;
         }
-        grown = realloc(buf, total + plen + 1);
+        grown = lexbor_realloc(buf, total + plen + 1);
         CHECK(grown, "blob: OOM assembling a Blob's bytes");
         buf = grown;
         if (plen) memcpy(buf + total, bytes, plen);

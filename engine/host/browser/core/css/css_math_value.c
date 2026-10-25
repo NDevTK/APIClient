@@ -21,6 +21,7 @@
 #include "core/idl_args.h"
 #include "core/idl_indexed.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* §4.3.4's SIX CONSTRUCTIBLE INTERFACES, one JSClassID each, plus the abstract superclass and CSSNumericArray.
    ONE CLASS PER INTERFACE AND NOT ONE CLASS WITH A KIND FIELD, for two reasons that are both the spec's:
@@ -380,7 +381,7 @@ static void mv_put(MvBuf *b, const char *s)
         char *grown;
 
         while (want < b->len + n + 1) want *= 2;
-        grown = realloc(b->p, want);
+        grown = lexbor_realloc(b->p, want);
         CHECK(grown != NULL, "css-typed-om: OOM serializing a CSSMathValue");
         b->p = grown;
         b->cap = want;
@@ -398,7 +399,7 @@ static void mv_leaf_push(MvLeaves *l, JSContext *ctx, JSValueConst v)
 {
     if (l->n == l->cap) {
         int want = l->cap ? l->cap * 2 : 8;
-        JSValue *grown = realloc(l->v, (size_t)want * sizeof *grown);
+        JSValue *grown = lexbor_realloc(l->v, (size_t)want * sizeof *grown);
 
         CHECK(grown != NULL, "css-typed-om: OOM collecting a CSSMathValue's unknown leaves");
         l->v = grown;
@@ -491,7 +492,7 @@ JSValue css_math_value_serialize(JSContext *ctx, JSValueConst v)
 
         if (depth == cap) {
             int want = cap ? cap * 2 : 16;
-            MvFrame *grown = realloc(stk, (size_t)want * sizeof *grown);
+            MvFrame *grown = lexbor_realloc(stk, (size_t)want * sizeof *grown);
 
             CHECK(grown != NULL, "css-typed-om: OOM walking a CSSMathValue for §6.5");
             stk = grown;

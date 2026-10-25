@@ -60,6 +60,7 @@
 #include "solver/endpoint.h"
 #include "solver/engine.h"     /* the ONE composition of what a request this running code builds is evidence of */
 #include "solver/solve.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static lxb_dom_element_t *form_elem_of(JSValueConst v)
 {
@@ -361,7 +362,7 @@ static void fb_add(FormBuf *b, const char *s, size_t len)
     if (b->n + len + 1 > b->cap) {
         size_t c = b->cap ? b->cap * 2 : 128;
         while (c < b->n + len + 1) c *= 2;
-        b->s = realloc(b->s, c);
+        b->s = lexbor_realloc(b->s, c);
         CHECK(b->s != NULL, "form: OOM building a submission URL — a dropped field is a missing endpoint value");
         b->cap = c;
     }

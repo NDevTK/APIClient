@@ -13,6 +13,7 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/table_box.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* One growth step for the three arrays this file builds. Allocation failure is a `CHECK`: a dropped row would
    be wrong geometry in release (a data-integrity failure), not an absent one. */
@@ -22,7 +23,7 @@ static void *tb_reserve(void *v, size_t n, size_t *cap, size_t esz)
 
     if (n < *cap) return v;
     *cap = (*cap == 0) ? 8 : *cap * 2;
-    grown = realloc(v, *cap * esz);
+    grown = lexbor_realloc(v, *cap * esz);
     CHECK(grown != NULL,
           "CSS 2.1 §17.2.1's box generation could not allocate one table box's rows or cells — the array holds "
           "one entry per row and per cell of the table being laid out");

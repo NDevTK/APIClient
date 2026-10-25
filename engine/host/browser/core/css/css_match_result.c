@@ -10,6 +10,7 @@
 #include "core/css/css_author_sheets.h"
 #include "core/css/css_layer_order.h"
 #include "core/css/css_match_result.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 struct CssMatchResult {
     lxb_dom_element_t     *el;
@@ -59,7 +60,7 @@ void css_match_result_add(CssMatchResult *m, const char *name, const char *value
             seq, m->n ? m->v[m->n - 1].seq : 0);
     if (m->n == m->cap) {
         uint32_t cap = m->cap ? m->cap * 2 : 16;
-        CssMatchedDeclaration *grown = realloc(m->v, (size_t)cap * sizeof *grown);
+        CssMatchedDeclaration *grown = lexbor_realloc(m->v, (size_t)cap * sizeof *grown);
 
         CHECK(grown != NULL, "css-match-result-oom: an element's matched declarations could not be grown");
         m->v = grown;

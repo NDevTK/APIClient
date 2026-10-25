@@ -20,6 +20,7 @@
 
 #include "check.h"
 #include "core/frame/csp_directive_list.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* INFRA's ASCII WHITESPACE: TAB, LF, FF, CR, SPACE. Spelled out rather than reached for through <ctype.h>,
    whose isspace() is locale-dependent and includes VT. */
@@ -84,7 +85,7 @@ static void csp_directive_split_value(CspDirective *d)
         s = i;
         while (i < d->value_text.n && !csp_ws(d->value_text.p[i])) i++;
         if (i == s) break;
-        grown = realloc(d->value, (d->n_value + 1) * sizeof *grown);
+        grown = lexbor_realloc(d->value, (d->n_value + 1) * sizeof *grown);
         CHECK(grown != NULL, "CSP: OOM splitting a directive value");
         d->value = grown;
         d->value[d->n_value].p = d->value_text.p + s;
@@ -96,7 +97,7 @@ static void csp_directive_split_value(CspDirective *d)
 /* §2.2.1 steps 3.6-3.8: append a directive to the policy's directive set. */
 static void csp_policy_append(CspPolicy *policy, CspToken name, CspToken value_text)
 {
-    CspDirective *grown = realloc(policy->directives, (policy->n_directives + 1) * sizeof *grown);
+    CspDirective *grown = lexbor_realloc(policy->directives, (policy->n_directives + 1) * sizeof *grown);
     CspDirective *d;
 
     CHECK(grown != NULL, "CSP: OOM appending a directive to a policy's directive set");
@@ -202,7 +203,7 @@ void csp_list_append(CspList *out, const char *serialized, size_t len, CspDispos
            policy that permits everything, it is not a policy at all — which matters because every caller's
            quantifier runs over this list, and an "any policy requires X" question would otherwise count it. */
         if (policy.n_directives) {
-            CspPolicy *grown = realloc(out->policies, (out->n_policies + 1) * sizeof *grown);
+            CspPolicy *grown = lexbor_realloc(out->policies, (out->n_policies + 1) * sizeof *grown);
             CHECK(grown != NULL, "CSP: OOM appending a policy to a CSP list");
             out->policies = grown;
             out->policies[out->n_policies++] = policy;

@@ -19,6 +19,7 @@
 #include "core/css/css_math.h"
 #include "core/css/css_syntax_match.h"
 #include "core/css/css_transform_function.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ONE VALUE BEING READ. `base`/`len` are the source every span below indexes — lexbor stamps each token with a
    pointer into the very buffer handed to the tokenizer, so a span is subtraction and not a second cursor. */
@@ -184,7 +185,7 @@ static void val_nest_push(ValNest *k, lxb_css_syntax_token_type_t closer)
 {
     if (k->n == k->cap) {
         size_t cap = k->cap ? k->cap * 2 : 8;
-        lxb_css_syntax_token_type_t *grown = realloc(k->v, cap * sizeof *grown);
+        lxb_css_syntax_token_type_t *grown = lexbor_realloc(k->v, cap * sizeof *grown);
 
         CHECK(grown != NULL, "cssom: OOM tracking the nesting of a custom property value's blocks");
         k->v = grown;

@@ -22,6 +22,7 @@
 #include "libunicode.h"
 #include "core/url/idna.h"
 #include "core/url/idna_table.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- RFC 3492 ------------------------------------------------------------------------------------------- */
 
@@ -158,13 +159,13 @@ int idna_punycode_encode(const uint32_t *in, int in_len, char *out, int out_cap)
 static void *idna_cr_realloc(void *opaque, void *ptr, size_t size)
 {
     (void)opaque;
-    return realloc(ptr, size);
+    return lexbor_realloc(ptr, size);
 }
 
 static void *idna_realloc(void *opaque, void *ptr, size_t size)
 {
     (void)opaque;
-    return realloc(ptr, size);
+    return lexbor_realloc(ptr, size);
 }
 
 /* EXPAND UTF-8 INTO CODE POINTS — which is not a DECODE, and the difference is why this is here rather than in
@@ -437,7 +438,7 @@ int idna_domain_to_ascii(const char *domain, size_t len, char **out, size_t *out
                and enforcing them rejected domains every browser accepts. */
             if (rn + (size_t)label_n + 2 > cap) {
                 cap = (rn + (size_t)label_n + 2) * 2;
-                result = realloc(result, cap);
+                result = lexbor_realloc(result, cap);
                 CHECK(result, "idna: OOM building an A-label");
             }
             /* THE SEPARATOR IS BETWEEN LABELS, not "before a non-empty one". Writing it only when something

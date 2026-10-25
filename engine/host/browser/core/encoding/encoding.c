@@ -47,6 +47,7 @@
 #include "core/idl_args.h"
 #include "core/agent_state.h"
 #include "core/realm.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- §4.2's "get an encoding" ------------------------------------------------------------------------------
  *
@@ -115,7 +116,7 @@ static void enc_put_scalar(EncBuf *o, uint32_t cp)
 {
     if (o->n + 4 > o->cap) {
         size_t want = o->cap ? o->cap * 2 : 64;
-        char *g = o->ctx ? js_realloc(o->ctx, o->b, want) : realloc(o->b, want);
+        char *g = o->ctx ? js_realloc(o->ctx, o->b, want) : lexbor_realloc(o->b, want);
         CHECK(g, "encoding: OOM decoding");
         o->b = g;
         o->cap = want;
@@ -1409,7 +1410,7 @@ char *encoding_decode(const char *p, size_t n, int fallback_encoding, size_t *ou
                    "\"fatal\" mode can produce");
     (void)r;
     {
-        char *g = realloc(o.b, o.n + 1);
+        char *g = lexbor_realloc(o.b, o.n + 1);
         CHECK(g, "encoding: OOM terminating a decode");
         o.b = g;
         o.b[o.n] = 0;
@@ -1450,7 +1451,7 @@ char *encoding_utf8_decode_without_bom(const char *p, size_t n, size_t *out_n)
        is the truth (a decoded U+0000 is a character), and the terminator is what lets a sequence without one
        be handed to a C string reader. */
     {
-        char *g = realloc(o.b, o.n + 1);
+        char *g = lexbor_realloc(o.b, o.n + 1);
         CHECK(g, "encoding: OOM terminating a UTF-8 decode");
         o.b = g;
         o.b[o.n] = 0;

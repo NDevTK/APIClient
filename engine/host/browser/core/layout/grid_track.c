@@ -18,6 +18,7 @@
 #include "core/layout/replaced_element.h"
 #include "core/layout/scroll_container.h"
 #include "core/layout/used_value.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* A grid property this sizing reads as its initial value: `name` must be undeclared on `el`, or declared as
    exactly `initial` (or the CSS-wide keywords that answer it for a non-inherited property). A declaration
@@ -225,7 +226,7 @@ static GridTrack *gt_push(GridAxisSizing *g, const CssGridTrackSize *size)
 
     if (g->ntracks == g->capacity) {
         size_t c = g->capacity ? g->capacity * 2 : 4;
-        GridTrack *grown = realloc(g->tracks, c * sizeof *grown);
+        GridTrack *grown = lexbor_realloc(g->tracks, c * sizeof *grown);
 
         CHECK(grown != NULL, "css-grid-1 §11: out of memory holding a grid axis's tracks");
         g->tracks = grown;
@@ -963,7 +964,7 @@ bool grid_axis_sizing_step(GridAxisSizing *g)
             if (!gt_contributions_ask(g, item, &rec)) return false;
             if (g->ncontribs == g->contribs_cap) {
                 size_t cap = g->contribs_cap ? 2 * g->contribs_cap : 8;
-                GridContribution *grown = realloc(g->contribs, cap * sizeof *grown);
+                GridContribution *grown = lexbor_realloc(g->contribs, cap * sizeof *grown);
 
                 CHECK(grown != NULL, "css-grid-1 §11.5: out of memory recording item contributions");
                 g->contribs = grown;

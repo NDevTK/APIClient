@@ -22,6 +22,7 @@
 #include "core/html/image_source_set.h"
 #include "core/layout/used_value.h"
 #include "core/mime/mime_type.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- the pieces every step below is written over ----------------------------------------------------------- */
 
@@ -81,7 +82,7 @@ static bool iss_ascii_ci_eq(const char *s, size_t n, const char *lower)
 
 static void iss_push(ImageSourceSet *s, char *url, bool has_w, double w, bool has_d, double d)
 {
-    ImageSource *grown = realloc(s->items, (size_t)(s->n + 1) * sizeof *grown);
+    ImageSource *grown = lexbor_realloc(s->items, (size_t)(s->n + 1) * sizeof *grown);
 
     CHECK(grown != NULL, "§4.8.4.3: OOM extending a source set");
     s->items = grown;
@@ -135,7 +136,7 @@ static void desc_add(DescList *d, const char *s, size_t n)
 {
     if (d->n == d->cap) {
         int cap = d->cap ? d->cap * 2 : 4;
-        char **grown = realloc(d->v, (size_t)cap * sizeof *grown);
+        char **grown = lexbor_realloc(d->v, (size_t)cap * sizeof *grown);
 
         CHECK(grown != NULL, "§4.8.4.3.10: OOM collecting an image candidate string's descriptors");
         d->v = grown;
@@ -161,7 +162,7 @@ static void descbuf_put(DescBuf *b, char c)
 {
     if (b->len + 1 >= b->cap) {
         size_t cap = b->cap ? b->cap * 2 : 16;
-        char *grown = realloc(b->s, cap);
+        char *grown = lexbor_realloc(b->s, cap);
 
         CHECK(grown != NULL, "§4.8.4.3.10: OOM building a descriptor");
         b->s = grown;
@@ -436,7 +437,7 @@ static void cv_add(IssCvList *l, size_t begin, size_t end, lxb_css_syntax_token_
 {
     if (l->n == l->cap) {
         int cap = l->cap ? l->cap * 2 : 8;
-        IssCv *grown = realloc(l->v, (size_t)cap * sizeof *grown);
+        IssCv *grown = lexbor_realloc(l->v, (size_t)cap * sizeof *grown);
 
         CHECK(grown != NULL, "§4.8.4.3.11: OOM collecting a sizes attribute's component values");
         l->v = grown;
@@ -549,7 +550,7 @@ static void iss_push_end(IssStream *s, lxb_css_syntax_token_type_t e)
 {
     if (s->n == s->cap) {
         int grow = s->cap ? s->cap * 2 : 8;
-        lxb_css_syntax_token_type_t *a = realloc(s->ends, (size_t)grow * sizeof *a);
+        lxb_css_syntax_token_type_t *a = lexbor_realloc(s->ends, (size_t)grow * sizeof *a);
 
         CHECK(a != NULL, "§4.8.4.3.11: OOM tracking a sizes attribute's nested blocks");
         s->ends = a;

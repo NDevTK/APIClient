@@ -30,6 +30,7 @@
 #include "core/layout/table_width.h"
 #include "core/layout/table_wrapper.h"
 #include "core/layout/used_value.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* Every crash in this file names the box, not the call site: `flow_border_box_origin` is reached from many
    CSSOM View members, and one `element.scrollWidth` places every box in the document (core/layout/
@@ -988,7 +989,7 @@ static bool fp_origin_ancestors_first(lxb_dom_element_t *el)
          x = cb) {
         if (n == cap) {
             size_t c = cap ? cap * 2 : 16;
-            lxb_dom_element_t **grown = realloc(chain, c * sizeof *grown);
+            lxb_dom_element_t **grown = lexbor_realloc(chain, c * sizeof *grown);
 
             CHECK(grown != NULL, "the containing blocks above a box whose origin is asked could not be listed");
             chain = grown;

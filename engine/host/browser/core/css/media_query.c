@@ -27,6 +27,7 @@
 #include "solver/concolic.h"
 #include "solver/decide.h"
 #include "solver/flow.h"   /* the cascade input generation a memo is valid under */
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- three-valued logic — MQ4 §3.1 -------------------------------------------------------------------------
    Kleene's, which is what the spec's own table is. `unknown` is a real third answer and not a stand-in for
@@ -148,7 +149,7 @@ static void mq_walk_push(MqWalk *w, const MqCond *c)
         MqWalkFrame *grown;
 
         w->cap = w->cap ? 2 * w->cap : 16;
-        grown = realloc(w->v, w->cap * sizeof *grown);
+        grown = lexbor_realloc(w->v, w->cap * sizeof *grown);
         CHECK(grown != NULL, "media queries: OOM walking a media condition");
         w->v = grown;
     }
@@ -517,7 +518,7 @@ static MqCond *cond_new(MqCondOp op)
 
 static void cond_add(MqCond *c, MqCond *kid)
 {
-    MqCond **k = realloc(c->kids, (size_t)(c->nkids + 1) * sizeof *k);
+    MqCond **k = lexbor_realloc(c->kids, (size_t)(c->nkids + 1) * sizeof *k);
 
     CHECK(k != NULL, "media queries: OOM extending a media condition");
     c->kids = k;
@@ -871,7 +872,7 @@ static bool parse_condition(MqLex *L, bool allow_or, MqCond **out)
                 MqParseFrame *grown;
 
                 cap = cap ? 2 * cap : 8;
-                grown = realloc(v, cap * sizeof *grown);
+                grown = lexbor_realloc(v, cap * sizeof *grown);
                 CHECK(grown != NULL, "media queries: OOM growing the media-condition parse");
                 v = grown;
             }
@@ -945,7 +946,7 @@ MediaQuerySet *media_query_parse(const char *text)
        nothing is appended. */
     if (L.kind == TK_EOF) return set;
     for (;;) {
-        MqQuery *grown = realloc(set->q, (size_t)(set->n + 1) * sizeof *grown);
+        MqQuery *grown = lexbor_realloc(set->q, (size_t)(set->n + 1) * sizeof *grown);
 
         CHECK(grown != NULL, "media queries: OOM extending a media query list");
         set->q = grown;
@@ -980,7 +981,7 @@ static void out_put(MqOut *o, const char *s)
         char *grown;
 
         while (cap < o->len + n + 1) cap *= 2;
-        grown = realloc(o->s, cap);
+        grown = lexbor_realloc(o->s, cap);
         CHECK(grown != NULL, "media queries: OOM serializing a media query list");
         o->s = grown;
         o->cap = cap;

@@ -24,6 +24,7 @@
 #include "core/realm.h"
 #include "core/rendering/visual_update.h"   /* a media list rewrite is a visible effect */
 #include "solver/concolic.h"   /* CSSOM §4.4's `item` takes an index unknown input crosses AS ITSELF */
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static JSClassID g_list_class;
 static JSValue   g_queries_key = JS_UNDEFINED;
@@ -116,7 +117,7 @@ static char *ml_serialize(JSContext *ctx, JSValueConst self)
         JS_FreeValue(ctx, q);
         if (!c) { free(out); JS_FreeValue(ctx, arr); return NULL; }   /* the conversion threw */
         cap = at + len + 3;
-        grown = realloc(out, cap);
+        grown = lexbor_realloc(out, cap);
         CHECK(grown != NULL, "cssom: OOM serializing a media query list");
         out = grown;
         if (at) { memcpy(out + at, ", ", 2); at += 2; }

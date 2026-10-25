@@ -31,6 +31,7 @@
 #include "core/realm.h"
 #include "core/idl_iter.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static JSClassID g_headers_class;
 static int       g_ctor_stepid = -1;
@@ -90,7 +91,7 @@ void header_list_append(HeaderList *l, const char *name, const char *value)
     DCHECK(l != NULL && name != NULL, "a header was appended to no list");
     if (l->n >= l->cap) {
         l->cap = l->cap ? l->cap * 2 : 8;
-        l->e = realloc(l->e, (size_t)l->cap * sizeof(HeaderEntry));
+        l->e = lexbor_realloc(l->e, (size_t)l->cap * sizeof(HeaderEntry));
         CHECK(l->e, "headers: OOM growing a header list");
     }
     l->e[l->n].name = header_lower(name);
@@ -274,7 +275,7 @@ char **header_list_get_decode_split(const HeaderList *l, const char *name, size_
         for (s = 0; s < o && (tmp[s] == ' ' || tmp[s] == '\t'); s++) {}
         for (e = o; e > s && (tmp[e - 1] == ' ' || tmp[e - 1] == '\t'); e--) {}
         if (*n == cap) {
-            char **grown = realloc(values, (cap = cap ? cap * 2 : 4) * sizeof *values);
+            char **grown = lexbor_realloc(values, (cap = cap ? cap * 2 : 4) * sizeof *values);
             CHECK(grown != NULL, "headers: OOM splitting a header value");
             values = grown;
         }

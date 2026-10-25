@@ -49,6 +49,7 @@
 #include "core/html/form_data.h"
 #include "core/url/url_search_params.h"
 #include <time.h>
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
@@ -669,7 +670,7 @@ static int        g_n;
 static void idl_pool_reserve(int i)
 {
     while (i / IDL_POOL_CHUNK >= g_nchunks) {
-        IdlChunk **c = realloc(g_chunks, (size_t)(g_nchunks + 1) * sizeof *c);
+        IdlChunk **c = lexbor_realloc(g_chunks, (size_t)(g_nchunks + 1) * sizeof *c);
         CHECK(c, "idl: OOM growing the member pool — a member that cannot be declared is an API the page cannot "
                  "call");
         g_chunks = c;
@@ -725,7 +726,7 @@ static void idl_map_step(int stepid, int idx) {
     if (stepid >= g_step2mem_cap) {
         int c = g_step2mem_cap ? g_step2mem_cap * 2 : 64, i;
         while (stepid >= c) c *= 2;
-        g_step2mem = realloc(g_step2mem, (size_t)c * sizeof *g_step2mem);
+        g_step2mem = lexbor_realloc(g_step2mem, (size_t)c * sizeof *g_step2mem);
         CHECK(g_step2mem != NULL, "idl: OOM mapping a step id to its member");
         for (i = g_step2mem_cap; i < c; i++) g_step2mem[i] = -1;
         g_step2mem_cap = c;
@@ -926,7 +927,7 @@ static void idl_dict_intern(JSContext *ctx, const IdlDictDecl *d)
            "conversion diagnostic names, and a dictionary with no members converts nothing");
     atoms = malloc(sizeof(JSAtom) * (size_t)d->n);
     CHECK(atoms != NULL, "idl: OOM interning a nested dictionary's member names");
-    g = realloc(g_dicts, (size_t)(g_ndicts + 1) * sizeof *g);
+    g = lexbor_realloc(g_dicts, (size_t)(g_ndicts + 1) * sizeof *g);
     CHECK(g != NULL, "idl: OOM recording a nested dictionary's declaration");
     g_dicts = g;
     g_dicts[g_ndicts].d = d;
@@ -7197,7 +7198,7 @@ int idl_setter_id_put_forwards(JSContext *ctx, const char *attr_id, const char *
            "a [PutForwards] setter forwards an attribute to ITSELF — §3.3.10 forbids a cycle in a chain of "
            "forwarded assignments outright, and the one-link cycle is the only one a single declaration can "
            "state; this one would re-enter its own setter until the heap ran out");
-    grown = realloc(g_pf, sizeof(*g_pf) * (size_t)(g_pf_n + 1));
+    grown = lexbor_realloc(g_pf, sizeof(*g_pf) * (size_t)(g_pf_n + 1));
     CHECK(grown != NULL, "OOM growing the [PutForwards] pair list");
     g_pf = grown;
     g_pf[g_pf_n].attr    = JS_NewAtom(ctx, attr_id);
@@ -9019,7 +9020,7 @@ static int idl_global_attr_declare(IdlGetter getter, int magic, const char *name
             return i;
     if (g_gattr_n == g_gattr_cap) {
         int cap = g_gattr_cap ? g_gattr_cap * 2 : 32;
-        IdlGlobalAttr *t = realloc(g_gattr, (size_t)cap * sizeof *t);
+        IdlGlobalAttr *t = lexbor_realloc(g_gattr, (size_t)cap * sizeof *t);
         CHECK(t != NULL, "idl: OOM recording a §3.7.6 global attribute — a member that cannot be installed is "
                          "an API the page cannot read");
         g_gattr = t;
@@ -9167,7 +9168,7 @@ static int idl_this_getter_declare(IdlGetter getter, int magic, IdlThisIs is,
             return i;
     if (g_tgetter_n == g_tgetter_cap) {
         int cap = g_tgetter_cap ? g_tgetter_cap * 2 : 16;
-        IdlThisGetter *t = realloc(g_tgetter, (size_t)cap * sizeof *t);
+        IdlThisGetter *t = lexbor_realloc(g_tgetter, (size_t)cap * sizeof *t);
 
         CHECK(t != NULL, "the Web IDL §3.7.6 receiver-stating attribute table could not grow — a member that "
                          "cannot be installed is an API the page cannot read");
@@ -9287,7 +9288,7 @@ static int idl_lenient_setter_declare(IdlThisIs is, const char *iface, const cha
             return i;
     if (g_lenient_n == g_lenient_cap) {
         int cap = g_lenient_cap ? g_lenient_cap * 2 : 8;
-        IdlLenientSetter *t = realloc(g_lenient, (size_t)cap * sizeof *t);
+        IdlLenientSetter *t = lexbor_realloc(g_lenient, (size_t)cap * sizeof *t);
 
         CHECK(t != NULL, "the Web IDL §3.4.2 [LegacyLenientSetter] declaration table could not grow");
         g_lenient = t;
@@ -9365,7 +9366,7 @@ static int idl_replaceable_target_declare(IdlThisIs is, const char *iface)
         if (g_rtarget[i].is == is && strcmp(g_rtarget[i].iface, iface) == 0) return i;
     if (g_rtarget_n == g_rtarget_cap) {
         int cap = g_rtarget_cap ? g_rtarget_cap * 2 : 4;
-        IdlReplaceableTarget *t = realloc(g_rtarget, (size_t)cap * sizeof *t);
+        IdlReplaceableTarget *t = lexbor_realloc(g_rtarget, (size_t)cap * sizeof *t);
 
         CHECK(t != NULL, "the Web IDL §3.7.3 [Replaceable] target table could not grow");
         g_rtarget = t;
@@ -10086,7 +10087,7 @@ static void idl_note_construct_mint(const char *id)
     if (idl_construct_minted(id)) return;
     if (g_ctor_minted_n == g_ctor_minted_cap) {
         int cap = g_ctor_minted_cap ? g_ctor_minted_cap * 2 : 64;
-        char **t = realloc(g_ctor_minted, (size_t)cap * sizeof *t);
+        char **t = lexbor_realloc(g_ctor_minted, (size_t)cap * sizeof *t);
         CHECK(t != NULL, "idl: OOM recording a §3.7.1 constructor mint — this record is what a column's "
                          "constructor-axis declaration is checked against, and a short one certifies a name "
                          "nothing minted");

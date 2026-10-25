@@ -18,6 +18,7 @@
 #include "core/layout/table_column_box.h"
 #include "core/paint/paint_order.h"
 #include "core/paint/stacking_order.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* css-display-3 §2.5 "Box Generation: the none and contents keywords"'s THREE answers, which CSS 2.1 §E.2 needs kept
    apart where core/paint/stacking_order.c could fold two of them together. CSS 2.1 §9.9.1's layers only ever asked
@@ -131,7 +132,7 @@ static void po_push(PoList *l, lxb_dom_element_t *el)
 {
     if (l->n == l->cap) {
         size_t cap = l->cap ? l->cap * 2 : 8;
-        lxb_dom_element_t **v = realloc(l->v, cap * sizeof *v);
+        lxb_dom_element_t **v = lexbor_realloc(l->v, cap * sizeof *v);
 
         CHECK(v != NULL, "paint: OOM growing a CSS 2.1 §E.2 step's member list — a dropped member is a box "
                          "whose marks are never offered, which is a silently incomplete painting order");

@@ -18,6 +18,7 @@
 #include "core/css/css_unit_value.h"
 #include "core/idl_args.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* §4.3.1's SEVEN ARMS, as the names solver/concolic.h keys every derivation this component mints by. They are
  * the SUM VALUE's arms and not §4.3.1's member algorithms, which is a deliberate SPLIT rather than a spelling:
@@ -64,7 +65,7 @@ static void sv_map_add(CssUnitMap *m, const char *unit, int power)
     }
     if (m->n == m->cap) {
         int want = m->cap ? m->cap * 2 : 4;
-        CssSumUnit *grown = realloc(m->e, (size_t)want * sizeof *grown);
+        CssSumUnit *grown = lexbor_realloc(m->e, (size_t)want * sizeof *grown);
 
         CHECK(grown != NULL, "css-typed-om: OOM building a CSS Typed OM 1 §4.3.1 unit map");
         m->e = grown;
@@ -207,7 +208,7 @@ static CssSumItem *sv_push(CssSumValue *s)
 
     if (s->n == s->cap) {
         int want = s->cap ? s->cap * 2 : 4;
-        CssSumItem *grown = realloc(s->v, (size_t)want * sizeof *grown);
+        CssSumItem *grown = lexbor_realloc(s->v, (size_t)want * sizeof *grown);
 
         CHECK(grown != NULL, "css-typed-om: OOM building a CSS Typed OM 1 §4.3.1 sum value");
         s->v = grown;
@@ -367,7 +368,7 @@ static void sv_frame_push(JSContext *ctx, SvFrame **stk, int *depth, int *cap, J
 
     if (*depth == *cap) {
         int want = *cap ? *cap * 2 : 16;
-        SvFrame *grown = realloc(*stk, (size_t)want * sizeof *grown);
+        SvFrame *grown = lexbor_realloc(*stk, (size_t)want * sizeof *grown);
 
         CHECK(grown != NULL, "css-typed-om: OOM walking a CSSMathValue for CSS Typed OM 1 §4.3.1's sum value");
         *stk = grown;
@@ -399,7 +400,7 @@ static void sv_vals_push(SvFrame *f, JSValue v)   /* CONSUMES v */
 {
     if (f->nvals == f->capvals) {
         int want = f->capvals ? f->capvals * 2 : 4;
-        JSValue *grown = realloc(f->vals, (size_t)want * sizeof *grown);
+        JSValue *grown = lexbor_realloc(f->vals, (size_t)want * sizeof *grown);
 
         CHECK(grown != NULL, "css-typed-om: OOM collecting a §4.3.1 CSSMathMin/Max argument list");
         f->vals = grown;

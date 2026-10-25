@@ -41,6 +41,7 @@
 #include "check.h"
 #include "core/encoding/encoding.h"
 #include "core/eventsource/event_source_parser.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* A GROWING BYTE RUN, AND IT IS NOT core/json_buf.h's. That buffer's append takes a NUL-TERMINATED STRING and
    measures it with strlen, which is right for a JSON writer and wrong for exactly this: HTML §9.2.5's `any-char`
@@ -67,7 +68,7 @@ static void es_buf_append(EsBuf *b, const char *p, size_t n)
             CHECK(cap <= ((size_t)-1) / 2, "eventsource: an event stream buffer would exceed the address space");
             cap *= 2;
         }
-        nb = realloc(b->b, cap);
+        nb = lexbor_realloc(b->b, cap);
         CHECK(nb != NULL, "eventsource: OOM growing an event stream buffer");
         b->b = nb;
         b->cap = cap;

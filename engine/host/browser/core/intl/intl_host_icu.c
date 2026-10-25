@@ -30,6 +30,7 @@
 #include "core/intl/intl_environment.h"
 #include "core/intl/intl_host.h"
 #include "core/json_buf.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- requests and answers ------------------------------------------------------------------------------ */
 
@@ -230,7 +231,7 @@ static void tags_add(TagList *l, char *t)
         if (strcmp(l->tags[i], t) == 0) { free(t); return; }
     if (l->n == l->cap) {
         l->cap = l->cap ? l->cap * 2 : 256;
-        l->tags = realloc(l->tags, sizeof(char *) * (size_t)l->cap);
+        l->tags = lexbor_realloc(l->tags, sizeof(char *) * (size_t)l->cap);
         CHECK(l->tags != NULL, "an available-locale list could not grow");
     }
     l->tags[l->n++] = t;
@@ -344,7 +345,7 @@ static char *extension_keyword(const char *ext, size_t len, const char *key)
         } else if (in_key) {
             size_t old = strlen(val);
 
-            val = realloc(val, old + n + 2);
+            val = lexbor_realloc(val, old + n + 2);
             CHECK(val != NULL, "an extension keyword could not be read");
             if (old) val[old++] = '-';
             memcpy(val + old, sub, n);

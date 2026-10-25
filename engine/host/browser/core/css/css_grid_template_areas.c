@@ -7,6 +7,7 @@
 
 #include "check.h"
 #include "core/css/css_grid_template_areas.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* CSS Syntax 3 §4.2's ident code point over UTF-8 bytes: a letter, a digit, `_`, `-`, or any byte of a
    non-ASCII code point. */
@@ -47,7 +48,7 @@ static bool gta_row(const unsigned char *s, size_t len, char ***names, size_t *n
             return false;   /* "A trash token is a syntax error, and makes the declaration invalid." */
         }
         if (*n == *cap) {
-            char **grown = realloc(*names, (*cap = *cap ? 2 * *cap : 8) * sizeof *grown);
+            char **grown = lexbor_realloc(*names, (*cap = *cap ? 2 * *cap : 8) * sizeof *grown);
 
             CHECK(grown != NULL, "css-grid-1 §7.3: out of memory listing template cells");
             *names = grown;
@@ -89,7 +90,7 @@ static bool gta_areas(char **cells, size_t rows, size_t columns, CssGridTemplate
         a.name = strdup(cells[i]);
         CHECK(a.name != NULL, "css-grid-1 §7.3: out of memory naming a grid area");
         if (out->n == cap) {
-            CssGridArea *grown = realloc(out->areas, (cap = cap ? 2 * cap : 4) * sizeof *grown);
+            CssGridArea *grown = lexbor_realloc(out->areas, (cap = cap ? 2 * cap : 4) * sizeof *grown);
 
             CHECK(grown != NULL, "css-grid-1 §7.3: out of memory listing named grid areas");
             out->areas = grown;

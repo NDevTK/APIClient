@@ -45,6 +45,7 @@
 #include "core/realm.h"
 #include "core/idl_iter.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* HTML §4.10.22.4 Constructing the entry list's ENTRY: a name, and a value that is EITHER a USVString OR a File. It was the URL Standard's urlencoded
    list, whose value is bytes, and that was right for exactly as long as nothing could be a File — the file
@@ -73,7 +74,7 @@ static void fd_list_free(JSRuntime *rt, FdList *l)
 static void fd_list_append(FdList *l, const char *name, size_t nlen, JSValue value)
 {
     if (l->n == l->cap) {
-        FdEntry *g = realloc(l->e, sizeof *g * (size_t)(l->cap = l->cap ? l->cap * 2 : 8));
+        FdEntry *g = lexbor_realloc(l->e, sizeof *g * (size_t)(l->cap = l->cap ? l->cap * 2 : 8));
         CHECK(g, "formdata: OOM growing an entry list");
         l->e = g;
     }
@@ -544,7 +545,7 @@ char *form_data_serialize_multipart(JSContext *ctx, JSValueConst fd, char *bound
 #define FD_PUT(p, len) do {                                                   \
         size_t need_ = (len);                                                 \
         while (n + need_ + 1 > cap) {                                         \
-            char *g_ = realloc(out, cap *= 2);                                \
+            char *g_ = lexbor_realloc(out, cap *= 2);                                \
             CHECK(g_, "formdata: OOM growing a multipart body");              \
             out = g_;                                                         \
         }                                                                     \

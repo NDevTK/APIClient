@@ -89,6 +89,7 @@
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* The two per-element slots this component keeps, in the per-flow property shadow the control's value already
    used — so both TIME-TRAVEL: a forked arm's assignment and the files it selected are that flow's, and its
@@ -188,7 +189,7 @@ static void iv_add(IvBuf *b, const char *s, size_t len)
         size_t c = b->cap ? b->cap * 2 : 64;
 
         while (c < b->n + len + 1) c *= 2;
-        b->s = realloc(b->s, c);
+        b->s = lexbor_realloc(b->s, c);
         CHECK(b->s != NULL, "input: OOM sanitizing a control's value");
         b->cap = c;
     }

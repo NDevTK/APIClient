@@ -42,6 +42,7 @@
 #include "core/realm.h"
 #include "core/url/url_search_params.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- a growable byte string --------------------------------------------------------------------------- */
 
@@ -54,7 +55,7 @@ static void ustr_reserve(UStr *s, size_t extra)
     if (s->n + extra + 1 <= s->cap) return;
     s->cap = s->cap ? s->cap * 2 : 32;
     while (s->n + extra + 1 > s->cap) s->cap *= 2;
-    s->p = realloc(s->p, s->cap);
+    s->p = lexbor_realloc(s->p, s->cap);
     CHECK(s->p, "url: OOM building a URL string");
 }
 
@@ -317,7 +318,7 @@ static void path_push(UrlRecord *u, const char *seg, size_t n)
     char *s;
     if (u->npath >= u->cpath) {
         u->cpath = u->cpath ? u->cpath * 2 : 4;
-        u->path = realloc(u->path, (size_t)u->cpath * sizeof(char *));
+        u->path = lexbor_realloc(u->path, (size_t)u->cpath * sizeof(char *));
         CHECK(u->path, "url: OOM growing a path");
     }
     s = malloc(n + 1);
@@ -1488,7 +1489,7 @@ void url_encoded_list_append(UrlEncodedList *l, const char *name, size_t nn, int
            "truncate the half. A real USVString may contain U+0000 and must not be labelled a hole");
     if (l->n >= l->cap) {
         l->cap = l->cap ? l->cap * 2 : 8;
-        l->e = realloc(l->e, (size_t)l->cap * sizeof(UrlEncodedPair));
+        l->e = lexbor_realloc(l->e, (size_t)l->cap * sizeof(UrlEncodedPair));
         CHECK(l->e, "url: OOM growing the list");
     }
     l->e[l->n].name = url_encoded_strdup(name, nn);
@@ -1585,7 +1586,7 @@ char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n)
         need = strlen(en) + strlen(ev) + 3;
         if (n + need > cap) {
             cap = (n + need) * 2;
-            out = realloc(out, cap);
+            out = lexbor_realloc(out, cap);
             CHECK(out, "url: OOM serializing");
         }
         if (i) out[n++] = '&';

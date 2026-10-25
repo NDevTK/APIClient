@@ -15,6 +15,7 @@
 #include "core/css/css_defaulting.h"
 #include "core/css/css_length.h"
 #include "core/css/css_serialize.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ONE PRELUDE BEING READ. `base`/`len` are the source the offsets below index — every token lexbor hands back
    names its own span inside it, which is how a raw span (`supports(...)`'s contents, the media tail) is taken
@@ -301,7 +302,7 @@ static void pbuf_add_n(PBuf *b, const char *s, size_t n)
         char *grown;
 
         while (cap < b->len + n + 1) cap *= 2;
-        grown = realloc(b->s, cap);
+        grown = lexbor_realloc(b->s, cap);
         CHECK(grown != NULL, "cssom: OOM serializing a page selector list");
         b->s = grown;
         b->cap = cap;
@@ -533,7 +534,7 @@ fail:
    two fields rather than either list type — the lists are two different FACTS and this is one allocation. */
 static void pre_names_push(char ***pv, unsigned *pn, char *one)   /* CONSUMES one */
 {
-    char **grown = realloc(*pv, (size_t)(*pn + 1) * sizeof(*grown));
+    char **grown = lexbor_realloc(*pv, (size_t)(*pn + 1) * sizeof(*grown));
 
     CHECK(grown != NULL, "cssom: OOM collecting an at-rule's declared names");
     *pv = grown;
@@ -682,7 +683,7 @@ void css_container_conditions_free(CssContainerConditions *p)
 
 static void pre_container_push(CssContainerConditions *c, char *name, char *query)
 {
-    CssContainerCondition *grown = realloc(c->v, (size_t)(c->n + 1) * sizeof *grown);
+    CssContainerCondition *grown = lexbor_realloc(c->v, (size_t)(c->n + 1) * sizeof *grown);
 
     CHECK(grown != NULL, "cssom: OOM extending an `@container` rule's condition list");
     c->v = grown;

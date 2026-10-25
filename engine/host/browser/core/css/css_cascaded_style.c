@@ -11,6 +11,7 @@
 #include "core/css/css_cascaded_style.h"
 #include "core/css/css_layer_order.h"
 #include "core/css/css_logical.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 typedef struct {
     char               *name;         /* owned; a longhand */
@@ -109,7 +110,7 @@ void css_cascaded_style_add(CssCascadedStyle *s, const char *name, CssOrigin ori
     DCHECK(name != NULL && value != NULL, "a declaration was added to a cascaded style with no name or value");
     if (s->n == s->cap) {
         uint32_t cap = s->cap ? s->cap * 2 : 32;
-        CsdDecl *grown = realloc(s->v, (size_t)cap * sizeof *grown);
+        CsdDecl *grown = lexbor_realloc(s->v, (size_t)cap * sizeof *grown);
 
         CHECK(grown != NULL, "css-cascaded-style-oom: an element's declarations could not be grown");
         s->v = grown;

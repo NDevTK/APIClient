@@ -7,6 +7,7 @@
 
 #include "check.h"
 #include "core/css/css_var.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- the scan ------------------------------------------------------------------------------------------- */
 
@@ -101,7 +102,7 @@ static void cv_put(CvBuf *b, const char *s, size_t n)
         size_t want = (b->cap ? b->cap * 2 : 64);
 
         while (want < b->n + n + 1) want *= 2;
-        b->p = realloc(b->p, want);
+        b->p = lexbor_realloc(b->p, want);
         CHECK(b->p != NULL, "css-variables-1 §3: OOM composing a substituted declaration value — a dropped "
                             "value would read as a property nobody declared rather than as a failure");
         b->cap = want;
@@ -145,7 +146,7 @@ static void cv_push(CvWalk *w, CvKind kind, char *text, const char *name, size_t
         CvFrame *grown;
 
         w->cap = w->cap ? 2 * w->cap : 8;
-        grown = realloc(w->v, w->cap * sizeof *grown);
+        grown = lexbor_realloc(w->v, w->cap * sizeof *grown);
         CHECK(grown != NULL, "css-variables-1 §3: OOM growing the substitution walk");
         w->v = grown;
     }

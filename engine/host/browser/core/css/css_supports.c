@@ -13,6 +13,7 @@
 #include "check.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_supports.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ONE CONDITION BEING READ. `base`/`len` are the span the offsets below index — every token lexbor hands back
    names its own span inside the buffer it was given, which is how a nested `( … )`'s contents are taken as raw
@@ -283,7 +284,7 @@ static bool sup_condition(const char *text, size_t len, bool *matches)
         if (push) {
             if (n == cap) {
                 cap = cap ? 2 * cap : 8;
-                v = realloc(v, cap * sizeof *v);
+                v = lexbor_realloc(v, cap * sizeof *v);
                 CHECK(v != NULL, "cssom: OOM growing the `<supports-condition>` walk");
             }
             memset(&v[n], 0, sizeof v[n]);

@@ -11,6 +11,7 @@
 #include "core/css/css_serialize.h"
 #include "core/css/css_var.h"
 #include "core/html/enumerated_attribute.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- the LIST css-fonts-4 §4.3.1's `<font-src-list>` describes ---------------------------------------------
  *
@@ -78,7 +79,7 @@ static void src_buf_reserve(SrcBuf *b, size_t more)
 {
     if (b->s != NULL && b->n + more + 1 <= b->cap) return;
     while (b->cap < b->n + more + 1) b->cap = b->cap ? b->cap * 2 : 32;
-    b->s = realloc(b->s, b->cap);
+    b->s = lexbor_realloc(b->s, b->cap);
     CHECK(b->s != NULL, "cssom: OOM building a css-fonts-4 §4.3 `src` value — a dropped declaration reads back "
                         "as UNDECLARED, and §4.1 says an `@font-face` rule without a `src` is not considered "
                         "when performing the font matching algorithm at all");
@@ -459,7 +460,7 @@ static void src_list_add(SrcList *l, const SrcItem *it)
 {
     if (l->n == l->cap) {
         l->cap = l->cap ? l->cap * 2 : 4;
-        l->v = realloc(l->v, l->cap * sizeof(*l->v));
+        l->v = lexbor_realloc(l->v, l->cap * sizeof(*l->v));
         CHECK(l->v != NULL, "cssom: OOM growing a css-fonts-4 §4.3 `<font-src-list>`, whose comma-separated "
                             "list has no upper bound");
     }
@@ -470,7 +471,7 @@ static void src_tech_add(SrcItem *it, const char *kw)
 {
     if (it->ntech == it->captech) {
         it->captech = it->captech ? it->captech * 2 : 4;
-        it->tech = realloc(it->tech, it->captech * sizeof(*it->tech));
+        it->tech = lexbor_realloc(it->tech, it->captech * sizeof(*it->tech));
         CHECK(it->tech != NULL, "cssom: OOM growing a css-fonts-4 §4.3.1 `<font-tech>#` list, whose `#` has no "
                                 "upper bound");
     }

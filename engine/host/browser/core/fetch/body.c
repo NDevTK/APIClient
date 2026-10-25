@@ -30,6 +30,7 @@
 #include "core/url/url.h"
 #include "core/streams/readable_stream.h"
 #include "core/url/url_search_params.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* One interface that includes Body. There are two in the platform (Request and Response), so the table is
    fixed and full is a DCHECK rather than a growth path nobody exercises. */
@@ -401,7 +402,7 @@ int body_state_copy(JSContext *ctx, BodyState *dst, const BodyState *src)
         for (i = 0; i < src->nspan; i++) {
             BodySpan *s;
 
-            dst->span = realloc(dst->span, (size_t)(dst->nspan + 1) * sizeof(*dst->span));
+            dst->span = lexbor_realloc(dst->span, (size_t)(dst->nspan + 1) * sizeof(*dst->span));
             CHECK(dst->span != NULL, "body: OOM copying which bytes of a body are unknown input");
             s = &dst->span[dst->nspan++];
             s->off = src->span[i].off;

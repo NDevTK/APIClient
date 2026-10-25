@@ -16,6 +16,7 @@
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
 #include "core/dom/document.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 struct CssAuthorSheets {
     lxb_dom_node_t     *root;
@@ -33,7 +34,7 @@ static void cas_push(CssAuthorSheets *s, uint32_t si, CssRuleCascadeSheet view)
 {
     if (s->n == s->cap) {
         uint32_t cap = s->cap ? s->cap * 2 : 8;
-        CssAuthorSheet *grown = realloc(s->v, (size_t)cap * sizeof *grown);
+        CssAuthorSheet *grown = lexbor_realloc(s->v, (size_t)cap * sizeof *grown);
 
         CHECK(grown != NULL, "cssom: OOM recording an applying sheet of the author origin");
         s->v = grown;
@@ -55,7 +56,7 @@ static void cas_take_registrations(CssAuthorSheets *s, CssRuleCascadeSheet *view
         CssPropertyRegistrationEntry *grown;
 
         while (cap < s->nregs + view->nregs) cap *= 2;
-        grown = realloc(s->regs, (size_t)cap * sizeof *grown);
+        grown = lexbor_realloc(s->regs, (size_t)cap * sizeof *grown);
         CHECK(grown != NULL, "cssom: OOM recording the author origin's `@property` registrations");
         s->regs = grown;
         s->regs_cap = cap;

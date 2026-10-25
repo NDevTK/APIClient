@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "check.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* THE FLAG BITS OF A SIMPLE GLYPH, NAMED AS OpenType 'glyf' — Glyph Data's Simple Glyph flags table names
    them. They are spelled out rather than used as bare numbers because every one of them is a place a
@@ -576,7 +577,7 @@ static GlyphOutlineResult go_expand(const GlyphOutlines *g, uint16_t glyph_id,
                 }
                 if (depth == cap) {
                     size_t ncap = cap ? cap * 2u : 8u;
-                    GoFrame *ns = realloc(stk, ncap * sizeof *ns);
+                    GoFrame *ns = lexbor_realloc(stk, ncap * sizeof *ns);
 
                     CHECK(ns != NULL, "out of memory expanding a composite glyph's components");
                     stk = ns;

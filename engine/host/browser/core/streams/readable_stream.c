@@ -52,6 +52,7 @@
 #include "core/streams/readable_stream_impl.h"
 #include "core/streams/readable_byte_stream.h"
 #include "core/streams/pipe.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* §4.2's states. A stream is readable until it is closed or errored, and those two are terminal. */
 /* §4.2's three states — declared in the header, because pipeTo branches on them and two spellings of
@@ -4242,7 +4243,7 @@ static int drain_append(JSContext *ctx, DrainData *dr, JSValueConst chunk)
         size_t want = dr->cap ? dr->cap * 2 : 256;
         uint8_t *grown;
         while (want < dr->len + n) want *= 2;
-        grown = realloc(dr->buf, want);
+        grown = lexbor_realloc(dr->buf, want);
         CHECK(grown != NULL, "fully read: OOM growing a body's byte sequence");
         dr->buf = grown;
         dr->cap = want;

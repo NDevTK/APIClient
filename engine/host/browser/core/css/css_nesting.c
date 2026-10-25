@@ -9,6 +9,7 @@
 
 #include "check.h"
 #include "core/css/css_nesting.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- the buffer ---------------------------------------------------------------------------------------- */
 
@@ -21,7 +22,7 @@ static void nbuf_add_n(NBuf *b, const char *s, size_t n)
         char *grown;
 
         while (cap < b->len + n + 1) cap *= 2;
-        grown = realloc(b->s, cap);
+        grown = lexbor_realloc(b->s, cap);
         CHECK(grown != NULL, "cssom: OOM resolving a CSS Nesting selector");
         b->s = grown;
         b->cap = cap;

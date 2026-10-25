@@ -14,6 +14,7 @@
 #include "core/xml/xml_ns.h"
 #include "core/xml/xml_parse.h"
 #include "solver/dom_cow.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* §14.4's THREE SUB-WALKS. See the header on why they are this component's phases rather than the driver's
    stages: the driver has ONE rest point here and §14.4 has three things to be resting in the middle of. */
@@ -59,7 +60,7 @@ static void xf_buf_reserve(XfBuf *b, size_t more)
     if (b->len + more <= b->cap)
         return;
     while (want < b->len + more) want *= 2;
-    b->p = (char *)realloc(b->p, want);
+    b->p = (char *)lexbor_realloc(b->p, want);
     CHECK(b->p != NULL, "OOM assembling HTML §14.4 \"Parsing XML fragments\" step 4's start tag — a dropped "
                         "byte is a namespace declaration the context element has and the parse would not, "
                         "which is a namespace well-formedness error reported against the page's own markup");
@@ -118,8 +119,8 @@ static void xf_prefix_add(XfPrefixes *ps, const char *s, size_t n)
         return;
     if (ps->n == ps->cap) {
         size_t want = ps->cap ? ps->cap * 2 : 8;
-        ps->name = (const char **)realloc(ps->name, want * sizeof(*ps->name));
-        ps->len  = (size_t *)realloc(ps->len, want * sizeof(*ps->len));
+        ps->name = (const char **)lexbor_realloc(ps->name, want * sizeof(*ps->name));
+        ps->len  = (size_t *)lexbor_realloc(ps->len, want * sizeof(*ps->len));
         CHECK(ps->name != NULL && ps->len != NULL,
               "OOM collecting the namespace prefixes HTML §14.4 step 4 declares on its synthetic start tag");
         ps->cap = want;

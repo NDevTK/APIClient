@@ -5,6 +5,7 @@
 
 #include "check.h"
 #include "core/agent_state.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 typedef enum {
     SLOT_ID,     /* pre-init: -1 */
@@ -78,7 +79,7 @@ static void slot_declare(const char *component, const void *slot, const char *wh
                 component, file, line, what);
     if (g_n == g_cap) {
         int nc = g_cap ? g_cap * 2 : 32;
-        AgentSlot *n = realloc(g_slots, (size_t)nc * sizeof *n);
+        AgentSlot *n = lexbor_realloc(g_slots, (size_t)nc * sizeof *n);
 
         CHECK(n != NULL, "the agent-state registry could not grow — what it holds is the only record of what "
                          "this browser's releases owe, and a dropped row is a release nothing checks");

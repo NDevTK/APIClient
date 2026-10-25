@@ -9,6 +9,7 @@
 #include "core/css/css_math.h"
 #include "core/css/css_transform_function.h"
 #include "core/json_buf.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* One argument's production. css-transforms-1 §7.1 "2D Transform Functions" gives every argument of a function
    the same one; css-transforms-2 §12.2 "3D Transform Functions" mixes them (rotate3d() is three numbers and an
@@ -492,7 +493,7 @@ bool css_transform_list_parse(JSContext *realm, const CssFontMetrics *font, cons
             CssTransformFunction *g;
 
             cap = cap ? cap * 2 : 4;
-            g = realloc(out->fn, cap * sizeof *g);
+            g = lexbor_realloc(out->fn, cap * sizeof *g);
             CHECK(g != NULL, "css-transforms-1 §3: OOM growing a <transform-list>");
             out->fn = g;
         }

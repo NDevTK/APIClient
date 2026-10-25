@@ -36,6 +36,7 @@
 #include "core/encoding/encoding.h"
 #include "core/html/html_encoding_sniff.h"
 #include "core/mime/mime_type.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* Infra's ASCII WHITESPACE, which is what §2.5.3's "skip any ASCII whitespace" and §4.2's "remove any leading
    and trailing ASCII whitespace" both name. The prescan's own byte lists are written out at their sites
@@ -120,7 +121,7 @@ static void sniff_buf_push(SniffBuf *b, char c)
 {
     if (b->n == b->cap) {
         size_t cap = b->cap ? b->cap * 2 : 32;
-        char *q = realloc(b->p, cap);
+        char *q = lexbor_realloc(b->p, cap);
         CHECK(q != NULL, "html_encoding_sniff: OOM collecting a prescanned attribute");
         b->p = q;
         b->cap = cap;
@@ -147,11 +148,11 @@ static void sniff_names_add(SniffNames *l, const char *s, size_t n)
 
     if (l->n == l->cap) {
         size_t cap = l->cap ? l->cap * 2 : 8;
-        char **ns = realloc(l->s, cap * sizeof *ns);
+        char **ns = lexbor_realloc(l->s, cap * sizeof *ns);
         size_t *nl;
         CHECK(ns != NULL, "html_encoding_sniff: OOM recording a prescanned attribute name");
         l->s = ns;
-        nl = realloc(l->len, cap * sizeof *nl);
+        nl = lexbor_realloc(l->len, cap * sizeof *nl);
         CHECK(nl != NULL, "html_encoding_sniff: OOM recording a prescanned attribute name length");
         l->len = nl;
         l->cap = cap;

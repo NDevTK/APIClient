@@ -13,6 +13,7 @@
 #include "core/css/css_length.h"
 #include "core/css/css_math.h"
 #include "core/css/css_position_value.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 #define BG_N(a) ((unsigned)(sizeof(a) / sizeof((a)[0])))
 
@@ -205,7 +206,7 @@ static void bg_buf_add(BgBuf *b, const char *p, size_t n)
         char *grown;
 
         while (b->n + n + 1 > b->cap) b->cap *= 2;
-        grown = realloc(b->s, b->cap);
+        grown = lexbor_realloc(b->s, b->cap);
         CHECK(grown != NULL, "cssom: OOM growing a `background` value");
         b->s = grown;
     }

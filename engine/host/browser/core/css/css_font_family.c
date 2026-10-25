@@ -10,6 +10,7 @@
 #include "core/css/css_font_family.h"
 #include "core/css/css_serialize.h"
 #include "core/html/enumerated_attribute.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- the LIST css-fonts-4 §2.1's `#` describes ------------------------------------------------------------
  *
@@ -57,7 +58,7 @@ static void ff_buf_reserve(FfBuf *b, size_t more)
 {
     if (b->s != NULL && b->n + more + 1 <= b->cap) return;
     while (b->cap < b->n + more + 1) b->cap = b->cap ? b->cap * 2 : 32;
-    b->s = realloc(b->s, b->cap);
+    b->s = lexbor_realloc(b->s, b->cap);
     CHECK(b->s != NULL, "cssom: OOM building a css-fonts-4 §2.1 `font-family` value — a dropped declaration "
                         "reads back as UNDECLARED, which is a different font from the one it names");
     b->s[b->n] = '\0';
@@ -312,7 +313,7 @@ static void ff_list_add(FfList *l, const char *generic, char *name)
 {
     if (l->n == l->cap) {
         l->cap = l->cap ? l->cap * 2 : 4;
-        l->v = realloc(l->v, l->cap * sizeof(*l->v));
+        l->v = lexbor_realloc(l->v, l->cap * sizeof(*l->v));
         CHECK(l->v != NULL, "cssom: OOM growing a css-fonts-4 §2.1 family list, whose `#` has no upper bound");
     }
     l->v[l->n].generic = generic;

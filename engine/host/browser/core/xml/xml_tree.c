@@ -16,6 +16,7 @@
 #include "core/xml/xml_name.h"
 #include "core/xml/xml_tree.h"
 #include "check.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 struct XmlTreeBuild {
     lxb_dom_document_t *doc;
@@ -142,7 +143,7 @@ static void xml_tree_template_push(XmlTreeBuild *b, lxb_dom_node_t *contents)
 {
     if (b->tpl_n == b->tpl_cap) {
         size_t want = b->tpl_cap ? b->tpl_cap * 2 : 4;
-        lxb_dom_node_t **grown = (lxb_dom_node_t **)realloc(b->tpl, want * sizeof(*grown));
+        lxb_dom_node_t **grown = (lxb_dom_node_t **)lexbor_realloc(b->tpl, want * sizeof(*grown));
 
         CHECK(grown != NULL, "OOM recording a <template>'s template contents for HTML §14.2 — without the "
                              "entry this parse would declare the wrong tree to the per-flow delta, which is a "
@@ -177,7 +178,7 @@ static void xml_tree_text_append(XmlTreeBuild *b, const char *s, size_t len)
         size_t want = b->text_cap ? b->text_cap * 2 : 64;
         char  *grown;
         while (want < b->text_len + len) want *= 2;
-        grown = (char *)realloc(b->text, want);
+        grown = (char *)lexbor_realloc(b->text, want);
         CHECK(grown != NULL, "OOM growing an XML character run — dropping it would give a Text node fewer "
                              "characters than the document contains, with nothing to say so");
         b->text = grown;

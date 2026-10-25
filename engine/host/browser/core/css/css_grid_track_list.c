@@ -6,6 +6,7 @@
 
 #include "check.h"
 #include "core/css/css_grid_track_list.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* The end of the component value starting at `s` and ending by `end`: a run outside parentheses and brackets,
    ended by white space at depth zero. An unbalanced closer ends the value with an error, reported as NULL. */
@@ -46,7 +47,7 @@ static bool gtl_push(CssGridTrackList *l, size_t *cap, CssGridTrackSize t)
 {
     if (l->n == *cap) {
         size_t c = *cap ? *cap * 2 : 4;
-        CssGridTrackSize *grown = realloc(l->tracks, c * sizeof *grown);
+        CssGridTrackSize *grown = lexbor_realloc(l->tracks, c * sizeof *grown);
 
         CHECK(grown != NULL, "css-grid-1 §7.2: out of memory holding a track list");
         l->tracks = grown;

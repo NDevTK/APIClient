@@ -8,6 +8,7 @@
 #include "core/xml/xml_name.h"
 #include "core/xml/xml_pseudo_attr.h"
 #include "core/xml/xml_ref.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 const char *xml_pseudo_attr_error_message(XmlPseudoAttrError err)
 {
@@ -50,7 +51,7 @@ static void pa_buf_grow(PaBuf *b, size_t more)
                                          "string being parsed is larger than this address space can describe");
             cap *= 2;
         }
-        q = (char *)realloc(b->p, cap);
+        q = (char *)lexbor_realloc(b->p, cap);
         CHECK(q != NULL, "OOM building a pseudo-attribute's name or value — a dropped write is a processing "
                          "instruction whose attribute map disagrees with its own data");
         b->p = q;
@@ -207,7 +208,7 @@ static XmlPseudoAttrError pa_one(XmlCharReader *r, XmlPseudoAttrs *out)
         }
     if (out->n == out->cap) {
         size_t cap = out->cap ? out->cap * 2 : 4;
-        XmlPseudoAttr *q = (XmlPseudoAttr *)realloc(out->items, cap * sizeof *q);
+        XmlPseudoAttr *q = (XmlPseudoAttr *)lexbor_realloc(out->items, cap * sizeof *q);
         CHECK(q != NULL, "OOM growing a processing instruction's pseudo-attribute list");
         out->items = q;
         out->cap = cap;

@@ -13,6 +13,7 @@
 #include "core/css/css_dimension.h"
 #include "core/css/css_length.h"
 #include "core/css/css_math.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* §10.7.1 "Numeric Constants: e, pi", to the digits that section itself prints: e is "approximately equal to
    2.7182818284590452354" and pi "approximately equal to 3.1415926535897932". Written out rather than taken
@@ -999,7 +1000,7 @@ static void mth_fn_push(MthFn *f, MthVal v)
         MthVal *grown;
 
         f->cap = f->cap ? 2 * f->cap : 4;
-        grown = realloc(f->arg, f->cap * sizeof *grown);
+        grown = lexbor_realloc(f->arg, f->cap * sizeof *grown);
         CHECK(grown != NULL, "css_math: OOM keeping a math function's operands");
         f->arg = grown;
     }
@@ -1068,7 +1069,7 @@ static void mth_variadic(Mth *m, int kind, const MthVal *argv, unsigned argc, Mt
         if (a.pct_term) any_pct = true;
         acc.blocked = mth_worse(acc.blocked, a.blocked);
         if (m->res != NULL) {
-            args = realloc(args, (size_t)(n + 1) * sizeof *args);
+            args = lexbor_realloc(args, (size_t)(n + 1) * sizeof *args);
             CHECK(args, "css_math: OOM keeping a math function's operands");
             args[n] = a.num;
             if (mth_is_nan(&a)) saw_nan = true;
@@ -1448,7 +1449,7 @@ static MthFrame *mth_walk_push(MthWalk *w)
         MthFrame *grown;
 
         w->cap = w->cap ? 2 * w->cap : 8;
-        grown = realloc(w->v, w->cap * sizeof *grown);
+        grown = lexbor_realloc(w->v, w->cap * sizeof *grown);
         CHECK(grown != NULL, "css_math: OOM growing a math function's nesting");
         w->v = grown;
     }

@@ -26,6 +26,7 @@
 
 #include "check.h"
 #include "core/mime/mime_type.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- Fetch §2.2 and MIME Sniffing §3: the code point classes the algorithm is written on ---------------- */
 
@@ -101,7 +102,7 @@ static void mstr_add(MStr *b, const char *s, size_t n)
         size_t cap = b->cap ? b->cap * 2 : 32;
         char *g;
         while (cap < b->n + n + 1) cap *= 2;
-        g = realloc(b->p, cap);
+        g = lexbor_realloc(b->p, cap);
         CHECK(g != NULL, "MIME: OOM building a parameter value");
         b->p = g;
         b->cap = cap;
@@ -234,7 +235,7 @@ static void mime_param_append(MimeType *m, char *name, char *value)
            "and both of its writers test for existence first");
     if (m->nparams == m->cparams) {
         int cap = m->cparams ? m->cparams * 2 : 4;
-        MimeParam *g = realloc(m->params, sizeof(*g) * (size_t)cap);
+        MimeParam *g = lexbor_realloc(m->params, sizeof(*g) * (size_t)cap);
         CHECK(g != NULL, "MIME: OOM appending a MIME type parameter");
         m->params = g;
         m->cparams = cap;

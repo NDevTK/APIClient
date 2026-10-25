@@ -46,6 +46,7 @@
 #include "core/frame/document_lifecycle.h"
 #include "core/dom/document.h"
 #include <stdio.h>
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* §7.2.3's [[Window]] and the origin its same-origin check reads. Both are per flow (see the file comment), which
    is why this is a record behind a class rather than a property on an object. */
@@ -461,7 +462,7 @@ static void live_nav_record(JSValueConst proxy)
 {
     if (g_live_navs_n == g_live_navs_cap) {
         int cap = g_live_navs_cap ? g_live_navs_cap * 2 : 8;
-        JSValueConst *g = realloc(g_live_navs, (size_t)cap * sizeof *g);
+        JSValueConst *g = lexbor_realloc(g_live_navs, (size_t)cap * sizeof *g);
 
         CHECK(g != NULL, "window proxy: OOM recording a navigable of this agent — an unrecorded navigable "
                          "answers NO realm for its document, so every cross-instance read through it and every "
@@ -1168,7 +1169,7 @@ static void remote_nav_record(JSValueConst proxy, uint32_t doc)
                "w[0]` decide by which row the scan reached first");
     if (g_remote_navs_n == g_remote_navs_cap) {
         int cap = g_remote_navs_cap ? g_remote_navs_cap * 2 : 8;
-        RemoteNav *g = realloc(g_remote_navs, (size_t)cap * sizeof *g);
+        RemoteNav *g = lexbor_realloc(g_remote_navs, (size_t)cap * sizeof *g);
 
         CHECK(g != NULL, "window proxy: OOM recording a remote navigable's identity — an unrecorded navigable "
                          "is minted again on the next ask, and `w[0] === w[0]` is then false about one window");

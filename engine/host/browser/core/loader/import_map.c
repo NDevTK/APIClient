@@ -9,6 +9,7 @@
 #include "core/realm.h"
 #include "core/url/url.h"
 #include "core/loader/import_map.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* The per-realm record: a null-prototype object whose four properties are the global's import map's three items
    and its resolved module set. The slot holds one object for the realm's life and is never replaced; what a flow
@@ -75,7 +76,7 @@ static void im_map_set(ImMap *m, char *key, char *value)
     if (at >= 0) { free(key); free(m->e[at].value); m->e[at].value = value; return; }
     if (m->n == m->cap) {
         int nc = m->cap ? m->cap * 2 : 8;
-        ImEntry *ne = realloc(m->e, (size_t)nc * sizeof *ne);
+        ImEntry *ne = lexbor_realloc(m->e, (size_t)nc * sizeof *ne);
         CHECK(ne != NULL, "import map: OOM growing a map");
         m->e = ne; m->cap = nc;
     }
@@ -119,7 +120,7 @@ static void im_scopes_set(ImScopes *s, char *prefix, ImMap *map)
     }
     if (s->n == s->cap) {
         int nc = s->cap ? s->cap * 2 : 4;
-        ImScope *ns = realloc(s->s, (size_t)nc * sizeof *ns);
+        ImScope *ns = lexbor_realloc(s->s, (size_t)nc * sizeof *ns);
         CHECK(ns != NULL, "import map: OOM growing the scopes map");
         s->s = ns; s->cap = nc;
     }

@@ -9,12 +9,13 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/inline_run_walk.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static void irw_push(InlineRunWalk *w, lxb_dom_element_t *el, BoxTreeChild c, bool fragment)
 {
     if (w->n == w->cap) {
         size_t cap = w->cap != 0 ? w->cap * 2 : 8;
-        InlineRunFrame *grown = realloc(w->frames, cap * sizeof *grown);
+        InlineRunFrame *grown = lexbor_realloc(w->frames, cap * sizeof *grown);
 
         CHECK(grown != NULL, "out of memory holding the inline boxes one inline formatting context's walk is in");
         w->frames = grown;

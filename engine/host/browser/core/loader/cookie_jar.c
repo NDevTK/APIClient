@@ -94,6 +94,7 @@
 #include "core/url/origin.h"
 #include "core/url/public_suffix.h"
 #include "core/url/url.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- the agent's store ------------------------------------------------------------------------------------ */
 
@@ -1058,7 +1059,7 @@ JSValue cookie_jar_cookie_string(JSContext *ctx, const UrlRecord *uri)
     /* STEP 4: `name=value`, joined by "; ". */
     for (i = 0; i < nhit; i++) {
         size_t add = (i ? 2 : 0) + hits[i].nlen + 1 + hits[i].vlen;
-        char *grown = realloc(acc, acc_len + add + 1);
+        char *grown = lexbor_realloc(acc, acc_len + add + 1);
 
         CHECK(grown != NULL, "document.cookie: OOM building the cookie string");
         acc = grown;

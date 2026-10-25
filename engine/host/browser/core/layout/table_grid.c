@@ -11,6 +11,7 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/table_box.h"
 #include "core/layout/table_grid.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* HTML §4.9.12.1 Forming a table's two ceilings, the section's own steps rather than engine bounds: "If colspan
    is greater than 1000, let it be 1000 instead" and "If rowspan is greater than 65534, let it be 65534
@@ -24,7 +25,7 @@ static void *tg_reserve(void *v, size_t n, size_t *cap, size_t esz)
 
     if (n < *cap) return v;
     *cap = (*cap == 0) ? 8 : *cap * 2;
-    grown = realloc(v, *cap * esz);
+    grown = lexbor_realloc(v, *cap * esz);
     CHECK(grown != NULL,
           "CSS 2.1 §17.5's grid could not allocate one table's cells or its per-column occupancy — the arrays "
           "hold one entry per cell box and one per grid column of the table being laid out");

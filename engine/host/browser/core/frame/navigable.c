@@ -44,6 +44,7 @@
 #include "solver/solve.h"           /* the @S URL class's ONE detector — §7.2.2.1 step 4 is an arrival at it */
 #include "solver/concolic.h"         /* and the ONE predicate that asks whether a destination was computed */
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static RealmBuilder g_realm_builder;
 
@@ -1214,7 +1215,7 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
     document_state_x_frame_options(cctx, w->xfo, w->n_xfo);
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;
-        JSContext **g = realloc(g_realms, (size_t)cap * sizeof *g);
+        JSContext **g = lexbor_realloc(g_realms, (size_t)cap * sizeof *g);
         CHECK(g != NULL, "navigable: OOM recording a child realm");
         g_realms = g;
         g_realms_cap = cap;

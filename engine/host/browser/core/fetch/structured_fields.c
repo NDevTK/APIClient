@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "core/fetch/structured_fields.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* THE CURSOR THE RFC IS WRITTEN OVER. Every §4.2 algorithm is stated as "while input_string is not empty:
    char = consume the first character", so the parser is one cursor handed down and never a set of slices —
@@ -46,7 +47,7 @@ static void sf_buf_put(SfBuf *b, char c)
 {
     if (b->n + 2 > b->cap) {
         b->cap = b->cap ? b->cap * 2 : 32;
-        b->p = realloc(b->p, b->cap);
+        b->p = lexbor_realloc(b->p, b->cap);
         CHECK(b->p != NULL, "structured fields: OOM building a field value");
     }
     b->p[b->n++] = c;
@@ -349,7 +350,7 @@ static void sf_params_set(SfItem *it, char *key, const SfBareItem *value)
     }
     if (it->n_params >= it->cap_params) {
         it->cap_params = it->cap_params ? it->cap_params * 2 : 4;
-        it->params = realloc(it->params, (size_t)it->cap_params * sizeof *it->params);
+        it->params = lexbor_realloc(it->params, (size_t)it->cap_params * sizeof *it->params);
         CHECK(it->params != NULL, "structured fields: OOM growing a parameter map");
     }
     it->params[it->n_params].key = key;
@@ -517,7 +518,7 @@ static bool sf_inner_list_in(SfIn *in, SfMember *out)
         }
         if (out->n_items >= out->cap_items) {                        /* step 3.3 / 3.4 */
             out->cap_items = out->cap_items ? out->cap_items * 2 : 4;
-            out->items = realloc(out->items, (size_t)out->cap_items * sizeof *out->items);
+            out->items = lexbor_realloc(out->items, (size_t)out->cap_items * sizeof *out->items);
             CHECK(out->items != NULL, "structured fields: OOM growing §3.1.1's inner list");
         }
         memset(&out->items[out->n_items], 0, sizeof out->items[0]);
@@ -560,7 +561,7 @@ static void sf_dict_set(SfDictionary *d, char *key, const SfMember *value)
     }
     if (d->n_members >= d->cap_members) {
         d->cap_members = d->cap_members ? d->cap_members * 2 : 4;
-        d->members = realloc(d->members, (size_t)d->cap_members * sizeof *d->members);
+        d->members = lexbor_realloc(d->members, (size_t)d->cap_members * sizeof *d->members);
         CHECK(d->members != NULL, "structured fields: OOM growing §3.2's dictionary");
     }
     d->members[d->n_members].key = key;

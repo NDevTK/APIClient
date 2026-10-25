@@ -7,6 +7,7 @@
 #include "core/xml/xml_name.h"
 #include "core/xml/xml_ref.h"
 #include "core/xml/xml_tag.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* THE DELIMITERS, WRITTEN DOWN ONCE — the peek predicates and the scans behind them read the same bytes, which
    is what makes "the caller peeked" an assertion rather than a convention between two spellings. Each is a
@@ -218,7 +219,7 @@ static XmlAttribute *att_room(XmlAttribute *atts, size_t n)
     DCHECK(cap > n && cap <= (size_t)-1 / sizeof *grown,
            "an XML tag's attribute count has reached the point where doubling it overflows — the list is "
            "bounded by the entity, so this is a count no document of a representable size can reach");
-    grown = realloc(atts, cap * sizeof *grown);
+    grown = lexbor_realloc(atts, cap * sizeof *grown);
     CHECK(grown != NULL, "an XML tag's attribute list could not be grown — [40] STag's (S Attribute)* is "
                          "unbounded, so this is the physical memory floor and not a limit this component "
                          "chose");

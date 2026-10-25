@@ -75,6 +75,7 @@ bool css_font_feature_value_at_rule(const char *name)
 #include "core/idl_iter.h"
 #include "core/realm.h"
 #include "solver/concolic.h"   /* §12.2's `set` stores a CROSSED feature index as itself — see its body */
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static JSClassID g_map_class;
 static JSValue   g_entries_key = JS_UNDEFINED;
@@ -435,7 +436,7 @@ char *css_font_feature_values_map_serialize(JSContext *ctx, JSValueConst map)
         JS_ToUint32(ctx, &m, len);
         JS_FreeValue(ctx, len);
         cap = at + strlen(c) + 4 + (size_t)m * 12 + 4;
-        grown = realloc(out, cap);
+        grown = lexbor_realloc(out, cap);
         CHECK(grown != NULL, "cssom: OOM serializing a feature value block");
         out = grown;
         at += (size_t)snprintf(out + at, cap - at, " %s:", c);
@@ -452,7 +453,7 @@ char *css_font_feature_values_map_serialize(JSContext *ctx, JSValueConst map)
         JS_FreeValue(ctx, vals);
     }
     {
-        char *grown = realloc(out, at + 3);
+        char *grown = lexbor_realloc(out, at + 3);
 
         CHECK(grown != NULL, "cssom: OOM closing a feature value block");
         out = grown;

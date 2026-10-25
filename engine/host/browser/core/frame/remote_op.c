@@ -12,6 +12,7 @@
    and this agent must not perform one the standard does not list. */
 #include "core/frame/window_proxy.h"
 #include "core/realm.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* WHICH OPERATION A RECORD IS, and everything that is a fact about it, on one row. The verb, how many fields
    it carries and the program that performs it were three lists in the host this was hoisted out of, and the
@@ -150,7 +151,7 @@ static char **op_split(char *line, int *pn)
         char *t = strchr(q, '\t');
         if (n == cap) {
             cap = cap ? cap * 2 : 8;
-            f = realloc(f, (size_t)cap * sizeof *f);
+            f = lexbor_realloc(f, (size_t)cap * sizeof *f);
             CHECK(f != NULL, "remote op: OOM splitting a cross-agent record");
         }
         f[n++] = q;

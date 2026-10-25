@@ -97,6 +97,7 @@ static const IdlArgType IDL_NSSTR_STR[2] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRI
 #include "core/dom/range.h"
 #include "core/dom/selection.h"        /* Selection API §2's per-document selection, §4.1's getSelection */
 #include "core/dom/node_interface.h"   /* the one place a Document is made; see that header */
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* The document's own state, held on the document, not the file. A similar-origin window agent's documents are
  * JSContexts of one runtime: HTML puts every same-origin document of one browsing-context group in one similar-origin window agent (one
@@ -330,7 +331,7 @@ static const char *doc_addr_intern(Document *d, const char *s)
         if (strcmp(d->addrs[i], s) == 0) return d->addrs[i];
     if (d->n_addrs == d->cap_addrs) {
         int cap = d->cap_addrs ? d->cap_addrs * 2 : 4;
-        char **g = realloc(d->addrs, (size_t)cap * sizeof *g);
+        char **g = lexbor_realloc(d->addrs, (size_t)cap * sizeof *g);
 
         CHECK(g != NULL, "document: OOM recording a Document address — an address this record stops owning is "
                          "one a parked flow's delta still names, so the next context switch would write a "
@@ -3039,7 +3040,7 @@ static JSValue doc_child_text_stripped(JSContext *ctx, lxb_dom_node_t *el)
                 continue;
             }
             {
-                char *grown = realloc(acc, len + 2);
+                char *grown = lexbor_realloc(acc, len + 2);
                 CHECK(grown != NULL, "document.title: OOM collapsing the title's text");
                 acc = grown;
             }
@@ -3520,7 +3521,7 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
                one policy, in which a repeated directive is ignored. */
             size_t dl = strlen(delivered);
             size_t add = dl + (acc_len ? 1 : 0);
-            char *g = realloc(acc, acc_len + add + 1);
+            char *g = lexbor_realloc(acc, acc_len + add + 1);
             CHECK(g != NULL, "document: OOM collecting a policy");
             acc = g;
             if (acc_len) acc[acc_len++] = ',';

@@ -87,6 +87,7 @@
                                       for why this door had to call it rather than be reached from one */
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 #include "core/xml/xml_parse.h"        /* the ONE place an XML document is parsed — shared with §8.5.1 and §7.5.3 */
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* §3's five states, in the order the constants number them. */
 enum { XHR_UNSENT = 0, XHR_OPENED, XHR_HEADERS_RECEIVED, XHR_LOADING, XHR_DONE };
@@ -476,7 +477,7 @@ static char *hl_get(JSContext *ctx, JSValueConst arr, const char *name)
         const char *nm = JS_ToCString(ctx, nv), *val = JS_ToCString(ctx, vv);
         if (nm && val && hl_ci_eq(nm, name)) {
             size_t add = strlen(val), sep = out ? 2 : 0;
-            char *g = realloc(out, len + sep + add + 1);
+            char *g = lexbor_realloc(out, len + sep + add + 1);
             CHECK(g != NULL, "XMLHttpRequest: OOM joining a header value");
             out = g;
             if (sep) { memcpy(out + len, ", ", 2); len += 2; }
@@ -1270,7 +1271,7 @@ static JSValue js_xhr_get_all_response_headers(JSContext *ctx, JSValueConst this
     for (k = 0; k < nn; k++) {
         char *v = hl_get(ctx, d->response_headers, names[k]);
         size_t add = strlen(names[k]) + 2 + (v ? strlen(v) : 0) + 2;
-        char *g = realloc(out, len + add + 1);
+        char *g = lexbor_realloc(out, len + add + 1);
         CHECK(g != NULL, "XMLHttpRequest: OOM building getAllResponseHeaders()");
         out = g;
         len += (size_t)sprintf(out + len, "%s: %s\r\n", names[k], v ? v : "");

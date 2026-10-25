@@ -10,6 +10,7 @@
 #include "check.h"
 #include "core/image/inflate.h"
 #include "core/image/png_decode.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* WHERE THE DECODE IS STANDING. This enum is this file's own vocabulary rather than anything the standard
    names, which is why it lives here and not in the header: a caller has no business branching on it, and a
@@ -331,7 +332,7 @@ static bool png_zdata_reserve(PngDecode *d, size_t need)
     cap = d->zdata_cap ? d->zdata_cap * 2u : 4096u;
     if (cap < need) cap = need;
     if (cap > d->in_len && need <= d->in_len) cap = d->in_len;
-    p = (uint8_t *)realloc(d->zdata, cap);
+    p = (uint8_t *)lexbor_realloc(d->zdata, cap);
     if (p == NULL) return false;
     d->zdata = p;
     d->zdata_cap = cap;

@@ -11,6 +11,7 @@
 #include "core/css/css_color.h"
 #include "core/css/css_length.h"
 #include "core/paint/display_list.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* IS THIS ONE OF THE KINDS THIS COMPONENT DEFINES — A SWITCH AND NOT A RANGE TEST, SO THE COMPILER ASKS THE
    QUESTION FIRST. `DisplayMarkKind` is a closed vocabulary this engine writes, and a `kind <= LAST` comparison
@@ -275,7 +276,7 @@ uint32_t display_list_add_bitmap(DisplayList *dl, const uint8_t *rgba, uint32_t 
             w, h, n, (size_t)w * (size_t)h * 4);
     if (dl->img_n == dl->img_cap) {
         size_t cap = dl->img_cap ? dl->img_cap * 2 : 4;
-        DisplayBitmap *v = realloc(dl->img, cap * sizeof *v);
+        DisplayBitmap *v = lexbor_realloc(dl->img, cap * sizeof *v);
 
         CHECK(v != NULL, "paint: OOM growing a display list's bitmap array — a dropped bitmap is an image "
                          "mark naming pixels the list does not hold, which is the one state "
@@ -416,7 +417,7 @@ void display_list_append(DisplayList *dl, const DisplayMark *mark)
             mark->image.bitmap, dl->img_n);
     if (dl->n == dl->cap) {
         size_t cap = dl->cap ? dl->cap * 2 : 8;
-        DisplayMark *v = realloc(dl->v, cap * sizeof *v);
+        DisplayMark *v = lexbor_realloc(dl->v, cap * sizeof *v);
 
         CHECK(v != NULL, "paint: OOM growing a display list — a dropped mark is ink that is silently absent "
                          "from a sequence whose whole statement is that it is complete and in CSS 2.1 §E.2 "

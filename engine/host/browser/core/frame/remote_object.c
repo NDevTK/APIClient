@@ -94,6 +94,7 @@
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/world.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- THIS AGENT AS AN EXPORTER --------------------------------------------------------------------------- */
 
@@ -122,7 +123,7 @@ static uint32_t remote_object_export(JSContext *ctx, JSValueConst v)
         if (JS_VALUE_GET_PTR(g_exports[i].v) == JS_VALUE_GET_PTR(v)) return i + 1;
     if (g_exports_n == g_exports_cap) {
         uint32_t cap = g_exports_cap ? g_exports_cap * 2 : 16;
-        Export *g = realloc(g_exports, cap * sizeof *g);
+        Export *g = lexbor_realloc(g_exports, cap * sizeof *g);
         CHECK(g != NULL, "remote object: OOM exporting an object — a dropped export is a reference the peer "
                          "holds that names nothing, and every read through it would fail");
         g_exports = g;
@@ -288,7 +289,7 @@ static void wk_capture(JSContext *ctx)
         DCHECK(dlen > 0 && strlen(desc) == dlen && !strchr(desc, '\t') && !strchr(desc, '\n'),
                "a well-known symbol's [[Description]] is empty or carries a tab, a newline or a NUL — these "
                "records are one tab-separated line and the peer would read one field as two");
-        g_wk = realloc(g_wk, (size_t)(g_wk_n + 1) * sizeof *g_wk);
+        g_wk = lexbor_realloc(g_wk, (size_t)(g_wk_n + 1) * sizeof *g_wk);
         CHECK(g_wk != NULL, "remote object: OOM recording this agent's well-known symbols");
         g_wk[g_wk_n].desc = strdup(desc);
         CHECK(g_wk[g_wk_n].desc != NULL, "remote object: OOM recording a well-known symbol's description");
@@ -865,7 +866,7 @@ static void rec_add(Rec *r, const char *t)
     size_t l = strlen(t);
     if (r->n + l + 1 > r->cap) {
         while (r->cap < r->n + l + 1) r->cap = r->cap ? r->cap * 2 : 256;
-        r->s = realloc(r->s, r->cap);
+        r->s = lexbor_realloc(r->s, r->cap);
         CHECK(r->s != NULL, "remote object: OOM building a cross-agent request — a dropped request parks its "
                             "flow on a question nothing is going to answer");
     }

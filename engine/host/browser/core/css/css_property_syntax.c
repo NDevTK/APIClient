@@ -11,6 +11,7 @@
 #include "core/css/css_code_point.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_property_syntax.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* §5.4.2 step 4's "input stream created from the code points of string". `i` is the BYTE offset of the NEXT
    input code point — this engine holds decoded source as UTF-8 rather than as an array of code points, so a
@@ -30,7 +31,7 @@ static void syn_buf_add(SynBuf *b, const char *s, size_t n)
         char *grown;
 
         while (cap < b->len + n + 1) cap *= 2;
-        grown = realloc(b->s, cap);
+        grown = lexbor_realloc(b->s, cap);
         CHECK(grown != NULL, "cssom: OOM building a syntax component's name");
         b->s = grown;
         b->cap = cap;
@@ -243,7 +244,7 @@ static bool syn_consume_data_type(SynStream *p, SynBuf *out)
    handful of them, so a capacity field would be state to keep correct for no allocation saved. */
 static void syn_def_push(CssSyntaxDefinition *d, char *name, CssSyntaxMultiplier m)
 {
-    CssSyntaxComponent *grown = realloc(d->v, (d->n + 1) * sizeof *d->v);
+    CssSyntaxComponent *grown = lexbor_realloc(d->v, (d->n + 1) * sizeof *d->v);
 
     CHECK(grown != NULL, "cssom: OOM appending a syntax component to a syntax definition");
     DCHECK(name != NULL && name[0] != '\0',

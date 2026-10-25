@@ -38,6 +38,7 @@
 #include "core/idl_slots.h"
 #include "core/indexeddb/idb_key.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* §2.4's TWO FIELDS, on the record a key IS. Spelled once so the writers and the readers cannot disagree. */
 #define IDB_KEY_TYPE  "type"
@@ -562,7 +563,7 @@ static JSValue idb_array_to_value(JSContext *ctx, JSValueConst key)
         if (!JS_IsUndefined(pending)) {
             if (sp == cap) {
                 int want = cap ? cap * 2 : 4;
-                Level *a = realloc(st, sizeof(Level) * (size_t)want);
+                Level *a = lexbor_realloc(st, sizeof(Level) * (size_t)want);
 
                 CHECK(a != NULL, "IndexedDB: §7.3's array arm could not grow its level stack — the nesting is "
                                  "the key's own, and a dropped level would hand the page an array with a "
@@ -775,7 +776,7 @@ static int idb_array_compare(JSContext *ctx, JSValueConst a, JSValueConst b)
         if (!JS_IsUndefined(pa)) {
             if (sp == cap) {
                 int want = cap ? cap * 2 : 4;
-                Level *g = realloc(st, sizeof(Level) * (size_t)want);
+                Level *g = lexbor_realloc(st, sizeof(Level) * (size_t)want);
 
                 CHECK(g != NULL, "IndexedDB: §2.4's array arm could not grow its level stack — the nesting is "
                                  "the keys' own, and a dropped level would order two records by a prefix");

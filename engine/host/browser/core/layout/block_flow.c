@@ -31,6 +31,7 @@
 #include "core/layout/table_box.h"
 #include "core/layout/table_wrapper.h"
 #include "core/layout/used_value.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static char *bf_computed(lxb_dom_element_t *el, const char *name)
 {
@@ -372,7 +373,7 @@ bool block_flow_context_floats_ask(lxb_dom_element_t *el, lxb_dom_element_t ***v
                     } else {
                         if (local_n == local_cap) {
                             size_t cap = local_cap != 0 ? local_cap * 2 : 4;
-                            lxb_dom_element_t **g = realloc(local, cap * sizeof *g);
+                            lxb_dom_element_t **g = lexbor_realloc(local, cap * sizeof *g);
 
                             CHECK(g != NULL, "out of memory gathering one block formatting context's floats");
                             local = g;

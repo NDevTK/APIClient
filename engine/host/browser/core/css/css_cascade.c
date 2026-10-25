@@ -10,6 +10,7 @@
 #include "core/css/css_cascade.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_layer_order.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 typedef struct {
     char               *value;            /* the declared value, OWNED */
@@ -82,7 +83,7 @@ void css_cascade_add(CssCascade *c, CssOrigin origin, bool important, bool eleme
            "attached ones");
     if (c->n == c->cap) {
         unsigned cap = c->cap ? c->cap * 2 : 8;
-        CssCascadeDecl *grown = realloc(c->v, (size_t)cap * sizeof(*grown));
+        CssCascadeDecl *grown = lexbor_realloc(c->v, (size_t)cap * sizeof(*grown));
 
         CHECK(grown != NULL, "cssom: OOM collecting a declaration into CSS Cascade §6's cascade");
         c->v = grown;

@@ -44,6 +44,7 @@
 #include "solver/cow.h"
 #include "solver/dom_cow.h"
 #include "solver/solve.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static JSClassID g_range_class;
 
@@ -55,7 +56,7 @@ static void range_register(JSValueConst obj)
 {
     if (g_live_n == g_live_cap) {
         int want = g_live_cap ? g_live_cap * 2 : 8;
-        JSValueConst *a = realloc(g_live, sizeof(*a) * (size_t)want);
+        JSValueConst *a = lexbor_realloc(g_live, sizeof(*a) * (size_t)want);
         CHECK(a != NULL, "the live-range list could not grow — a dropped entry is a range §4.2.3 silently "
                          "stops keeping up to date, which is the one thing that makes it LIVE");
         g_live = a;

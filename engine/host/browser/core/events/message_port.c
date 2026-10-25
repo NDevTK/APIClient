@@ -37,6 +37,7 @@
 #include "core/events/message_port.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 typedef struct {
     JSValue entangled;   /* §9.4.4's entangled port, or JS_UNDEFINED once closed (owned) */
@@ -200,7 +201,7 @@ static void port_track(PortData *d)
 {
     if (g_ports_n == g_ports_cap) {
         int cap = g_ports_cap ? g_ports_cap * 2 : 8;
-        PortData **g = realloc(g_ports, (size_t)cap * sizeof *g);
+        PortData **g = lexbor_realloc(g_ports, (size_t)cap * sizeof *g);
 
         CHECK(g != NULL, "message port: OOM recording a live MessagePort — an unrecorded port is one §7.5.10 "
                          "cannot see, and a destroyed document would keep an entangled channel with nothing "

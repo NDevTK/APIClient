@@ -83,6 +83,7 @@
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/frame/window.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static const IdlArgType IDL_1NSTR[1] = { IDL_DOMSTRING_NULLABLE };
 
@@ -745,7 +746,7 @@ static void node_adopt_push(NodeAdoptStack *s, lxb_dom_node_t *root, lxb_dom_doc
     if (node_document_of(root) == doc) return;
     if (s->sp == s->cap) {
         int want = s->cap ? s->cap * 2 : 4;
-        NodeAdoptFrame *n = realloc(s->f, sizeof(NodeAdoptFrame) * (size_t)want);
+        NodeAdoptFrame *n = lexbor_realloc(s->f, sizeof(NodeAdoptFrame) * (size_t)want);
         CHECK(n != NULL, "DOM §4.5 adopt could not grow its level stack");
         s->f = n;
         s->cap = want;
@@ -2118,7 +2119,7 @@ static JSValue js_text_whole(JSContext *ctx, JSValueConst this_val, int magic)
             size_t want = cap ? cap * 2 : 64;
             char *nb;
             while (want < len + cd->data.length) want *= 2;
-            nb = realloc(buf, want);
+            nb = lexbor_realloc(buf, want);
             CHECK(nb != NULL, "wholeText's buffer could not grow");
             buf = nb;
             cap = want;
@@ -2399,7 +2400,7 @@ static void pi_update_data_from_attributes(JSContext *ctx, lxb_dom_node_t *n, JS
            quotes — grown once per pair rather than once per byte. */
         want = out_len + kl + vl * 6 + 4;
         if (want > out_cap) {
-            char *nb = (char *)realloc(out, want + 1);
+            char *nb = (char *)lexbor_realloc(out, want + 1);
             CHECK(nb != NULL, "OOM building a processing instruction's data from its §4.13 attribute map — a "
                               "dropped write is a node whose data disagrees with the map that produced it");
             out = nb;

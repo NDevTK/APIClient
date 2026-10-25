@@ -6,6 +6,7 @@
 #include "core/timing/event_loop.h"
 #include "core/timing/thread_work.h"
 #include "solver/quantum.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* Lifetime counts over the process, never reset, like the clock asks they are read beside. */
 static long     g_spans[THREAD_WORK_N];
@@ -37,13 +38,13 @@ void thread_work_begin(ThreadWorkSpan *s)
     DCHECK(g_depth >= 0, "a thread-work span ended that never began");
     if (g_depth == g_inner_cap) {
         int cap = g_inner_cap ? 2 * g_inner_cap : 64;
-        int64_t *grown = realloc(g_inner, (size_t)cap * sizeof *grown);
+        int64_t *grown = lexbor_realloc(g_inner, (size_t)cap * sizeof *grown);
 
         CHECK(grown != NULL, "thread_work: OOM growing the span stack");
         g_inner = grown;
 #if APICLIENT_DEV
         {
-            uint32_t *kinds = realloc(g_inner_input, (size_t)cap * sizeof *kinds);
+            uint32_t *kinds = lexbor_realloc(g_inner_input, (size_t)cap * sizeof *kinds);
 
             CHECK(kinds != NULL, "thread_work: OOM growing the span stack");
             g_inner_input = kinds;

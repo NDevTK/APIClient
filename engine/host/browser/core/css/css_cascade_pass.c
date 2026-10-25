@@ -14,6 +14,7 @@
 #include "core/css/css_match_result.h"
 #include "core/layout/layout_job.h"   /* the record of the job whose activation holds the thread */
 #include "solver/flow.h"               /* the running flow's cascade input generation */
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* One element's answers; each is NULL until its first ask, and owned. */
 typedef struct CpElement {
@@ -170,7 +171,7 @@ static void cp_author_add(CssCascadeRecord *r, struct CssAuthorSheets *sheets)
                "caller asks before it builds");
     if (r->author_n == r->author_cap) {
         size_t cap = r->author_cap ? r->author_cap * 2 : 4;
-        struct CssAuthorSheets **grown = realloc(r->author, cap * sizeof *grown);
+        struct CssAuthorSheets **grown = lexbor_realloc(r->author, cap * sizeof *grown);
 
         CHECK(grown != NULL, "css-cascade-pass-oom: the record's author sheet sets could not be grown");
         r->author = grown;

@@ -7,6 +7,7 @@
 #include "check.h"
 #include "core/css/css_at_rule_prelude.h"
 #include "core/css/css_layer_order.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 struct CssLayerNode {
     /* ONE SEGMENT of §6.4.2's layer name, serialized — NULL for §6.4.2.1's anonymous segment, which is why the
@@ -153,7 +154,7 @@ static unsigned layer_seal_walk(CssLayerNode *root)
             top->c = c->next;
             if (depth == cap) {
                 cap *= 2;
-                grown = realloc(v, cap * sizeof *grown);
+                grown = lexbor_realloc(v, cap * sizeof *grown);
                 CHECK(grown != NULL, "cssom: OOM numbering CSS Cascade §6.4.3's layer order");
                 v = grown;
             }

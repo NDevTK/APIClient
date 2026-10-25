@@ -14,6 +14,7 @@
 #include "core/layout/flow_placement.h"
 #include "core/layout/flow_position.h"   /* FlowPoint — the second fact a pass holds about a box */
 #include "core/layout/layout_job.h"   /* the record of the job whose activation holds the thread */
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ONE ENTRY PER BOX AND TWO FACTS IN IT, WHICH IS ONE TABLE AND NOT TWO. The two questions a whole-tree
    geometry walk asks about a box are keyed on the same element, go stale on the same events and live in the
@@ -367,7 +368,7 @@ void flow_placement_anon_append(const lxb_dom_element_t *el, BlockFlowAnonBox bo
            "asked once per job, so a second run of it is a memo probe that missed its own key");
     if (e->anon_n == e->anon_cap) {
         size_t cap = e->anon_cap != 0 ? e->anon_cap * 2 : 4;
-        BlockFlowAnonBox *v = realloc(e->anon, cap * sizeof *v);
+        BlockFlowAnonBox *v = lexbor_realloc(e->anon, cap * sizeof *v);
 
         CHECK(v != NULL, "out of memory recording one container's anonymous block boxes");
         e->anon = v;
@@ -477,7 +478,7 @@ void flow_placement_floats_append(const lxb_dom_element_t *root, lxb_dom_element
     DCHECK(!e->has_floats, "a float was appended to a context whose list was already closed");
     if (e->floats_n == e->floats_cap) {
         size_t cap = e->floats_cap != 0 ? e->floats_cap * 2 : 4;
-        lxb_dom_element_t **v = realloc(e->floats, cap * sizeof *v);
+        lxb_dom_element_t **v = lexbor_realloc(e->floats, cap * sizeof *v);
 
         CHECK(v != NULL, "out of memory recording one block formatting context's floats");
         e->floats = v;

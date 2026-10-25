@@ -1583,7 +1583,7 @@ static void *build_push(RuleBuild *b, JSValue rule)   /* CONSUMES rule */
 {
     if (b->n_built == b->cap_built) {
         unsigned cap = b->cap_built ? b->cap_built * 2 : 8;
-        JSValue *grown = realloc(b->built, (size_t)cap * sizeof(*grown));
+        JSValue *grown = lexbor_realloc(b->built, (size_t)cap * sizeof(*grown));
 
         CHECK(grown != NULL, "cssom: OOM collecting the rules one parse produced");
         b->built = grown;
@@ -4470,7 +4470,7 @@ static void cascade_emit_mark(CascadeEmit *e, const CssLayerNode *layer)
 {
     if (e->n == e->cap) {
         uint32_t cap = e->cap ? e->cap * 2 : 16;
-        const CssLayerNode **grown = realloc(e->layer, (size_t)cap * sizeof(*grown));
+        const CssLayerNode **grown = lexbor_realloc(e->layer, (size_t)cap * sizeof(*grown));
 
         CHECK(grown != NULL, "cssom: OOM recording a rule's cascade layer for the author cascade");
         e->layer = grown;
@@ -5013,7 +5013,7 @@ static void cascade_emit_registration(JSContext *ctx, CascadeEmit *e, const CssR
 
         if (e->nregs == e->regs_cap) {
             uint32_t cap = e->regs_cap ? e->regs_cap * 2 : 8;
-            CssPropertyRegistrationEntry *grown = realloc(e->regs, (size_t)cap * sizeof *grown);
+            CssPropertyRegistrationEntry *grown = lexbor_realloc(e->regs, (size_t)cap * sizeof *grown);
 
             CHECK(grown != NULL, "cssom: OOM recording a sheet's `@property` registrations");
             e->regs = grown;

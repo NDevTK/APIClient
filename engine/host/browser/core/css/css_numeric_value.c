@@ -22,6 +22,7 @@
 #include "core/css/css_unit_value.h"
 #include "core/idl_args.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ONE ENTRY PER MEMBER, ALL PRE-INIT. The initialiser is `{ 0 }`-free on purpose: core/agent_state.h's
    pre-init for an id slot is -1 and 0 is a VALID pool id, so a table shorter than the enumeration would
@@ -546,7 +547,7 @@ static void nv_pair_push(JSContext *ctx, NvPair **stk, int *depth, int *cap, JSV
 {
     if (*depth == *cap) {
         int want = *cap ? *cap * 2 : 8;
-        NvPair *grown = realloc(*stk, (size_t)want * sizeof *grown);
+        NvPair *grown = lexbor_realloc(*stk, (size_t)want * sizeof *grown);
 
         CHECK(grown != NULL, "css-typed-om: OOM comparing two CSSNumericValues");
         *stk = grown;
@@ -952,7 +953,7 @@ static void nv_list_push(NvList *l, JSValue v)   /* CONSUMES v */
 {
     if (l->n == l->cap) {
         int want = l->cap ? l->cap * 2 : 8;
-        JSValue *grown = realloc(l->v, (size_t)want * sizeof *grown);
+        JSValue *grown = lexbor_realloc(l->v, (size_t)want * sizeof *grown);
 
         CHECK(grown != NULL, "css-typed-om: OOM assembling a §4.3.1 operand list");
         l->v = grown;

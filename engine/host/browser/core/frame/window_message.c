@@ -67,6 +67,7 @@
 #include "solver/flow.h"
 #include "solver/post_index.h"
 #include "solver/world.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* THIS DOCUMENT'S WindowProxy is §7.2.3's ONE-per-navigable, and it is READ from where that rule lives
    rather than cached here: a same-origin child is a second realm in this agent, so a file-scope copy would be
@@ -413,7 +414,7 @@ static void post_paths_visit(void *opaque, uint32_t k, const char *path)
     CHECK(shape != NULL && src != NULL, "window message: OOM reading a routed post's unknown");
     if (pp->n == pp->cap) {
         size_t c = pp->cap ? pp->cap * 2 : 4;
-        PostIndexSymbol *a = realloc(pp->out, c * sizeof *a);
+        PostIndexSymbol *a = lexbor_realloc(pp->out, c * sizeof *a);
 
         CHECK(a != NULL, "window message: OOM indexing a routed post's unknowns");
         pp->out = a;

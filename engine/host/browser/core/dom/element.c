@@ -100,6 +100,7 @@ static const IdlArgType ADJ_HTML[2] = { IDL_DOMSTRING, IDL_STRING_UNLESS_IFACE }
 #include "core/dom/slot.h"
 #include "core/dom/document.h"
 #include "core/dom/render_blocking.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* IDENTITY AND THE TREE BASE LIVE IN node.c — one wrapper table for every node kind, because a tree whose only
    node kind is Element cannot represent the document it just parsed. This file is what makes a node an ELEMENT:
@@ -2487,7 +2488,7 @@ static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_n
     tree_steps_insertion_steps(root);
     if (g_ts_n == g_ts_cap) {
         int want = g_ts_cap ? g_ts_cap * 2 : 8;
-        TreeStepEntry *a = realloc(g_ts, sizeof(*a) * (size_t)want);
+        TreeStepEntry *a = lexbor_realloc(g_ts, sizeof(*a) * (size_t)want);
         CHECK(a != NULL, "the pending tree-steps list could not grow — dropping one means an inserted <script> "
                          "never runs and a custom element never upgrades, silently");
         g_ts = a; g_ts_cap = want;
@@ -2524,7 +2525,7 @@ void element_post_connection_record(lxb_dom_node_t *n)
     if (!tree_steps_can_run(n)) return;
     if (g_ts_n == g_ts_cap) {
         int want = g_ts_cap ? g_ts_cap * 2 : 8;
-        TreeStepEntry *a = realloc(g_ts, sizeof(*a) * (size_t)want);
+        TreeStepEntry *a = lexbor_realloc(g_ts, sizeof(*a) * (size_t)want);
         CHECK(a != NULL, "the pending tree-steps list could not grow — dropping one means a script whose text "
                          "was just written never runs, silently");
         g_ts = a; g_ts_cap = want;

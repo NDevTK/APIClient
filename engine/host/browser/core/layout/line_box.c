@@ -27,6 +27,7 @@
 #include "core/layout/text_run.h"
 #include "core/layout/used_value.h"
 #include "solver/metrics.h"   /* `_layoutFillRests` */
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static char *lb_computed(lxb_dom_element_t *el, const char *name)
 {
@@ -1949,7 +1950,7 @@ static LineBoxGlyph *lb_glyphs_room(LineBoxGlyph *v, size_t n, size_t *cap)
 
     if (n < *cap) return v;
     *cap = *cap ? *cap * 2 : 16;
-    grown = realloc(v, *cap * sizeof *grown);
+    grown = lexbor_realloc(v, *cap * sizeof *grown);
     CHECK(grown != NULL, "out of memory placing CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 text. There is "
                          "one entry per character css-text-3 §4.1.1's Phase I left on the line boxes of one "
                          "inline formatting context, so a failure here is the physical floor");
@@ -2609,7 +2610,7 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
         if (!present) continue;
         /* One entry per line of this box, appended to the earlier boxes' fragments; `nf + n` is an upper
            bound, so the array is grown to it rather than counted twice. */
-        frags = realloc(frags, (nf + n) * sizeof *frags);
+        frags = lexbor_realloc(frags, (nf + n) * sizeof *frags);
         CHECK(frags != NULL, "out of memory reporting CSSOM VIEW §6's box fragments. There is one entry per line "
                              "box of one formatting context and the fragments are a subset of them, so a failure "
                              "here is the physical floor");

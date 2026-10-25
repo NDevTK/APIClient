@@ -34,6 +34,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* §6.1's own state: §6's shared traverser, the REFERENCE node pointer, and the CANDIDATE one. A node pointer is
    "a node and a `pointer before` boolean"; the candidate is nullable, which `JS_UNDEFINED` in its node slot is
@@ -61,7 +62,7 @@ static void iter_register(JSValueConst obj)
 {
     if (g_live_n == g_live_cap) {
         int want = g_live_cap ? g_live_cap * 2 : 8;
-        JSValueConst *a = realloc(g_live, sizeof(*a) * (size_t)want);
+        JSValueConst *a = lexbor_realloc(g_live, sizeof(*a) * (size_t)want);
         CHECK(a != NULL, "the live-NodeIterator list could not grow — dropping an entry means §4.2.3's remove "
                          "silently stops adjusting that iterator");
         g_live = a;

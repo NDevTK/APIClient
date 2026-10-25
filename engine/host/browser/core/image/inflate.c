@@ -8,6 +8,7 @@
 
 #include "check.h"
 #include "core/image/inflate.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* WHERE THE DECODE IS STANDING. This file's own vocabulary; see the header's `phase` field for why no caller
    is given it. The order carries no meaning — a phase is a resume point and not a sequence number. */
@@ -205,7 +206,7 @@ static bool out_reserve(Inflate *z, size_t extra)
         if (next <= want) return false;   /* the size a stream is asking for does not fit a size_t */
         want = next;
     }
-    p = realloc(z->out, want);
+    p = lexbor_realloc(z->out, want);
     if (p == NULL) return false;
     z->out = p;
     z->out_cap = want;

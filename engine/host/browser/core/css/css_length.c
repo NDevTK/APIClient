@@ -15,6 +15,7 @@
 #include "core/css/css_math.h"
 #include "core/frame/viewport.h"
 #include "core/realm.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static char *css_len_strdup(const char *s)
 {
@@ -413,7 +414,7 @@ static unsigned css_px_atom_intern(JSContext *realm, const CssPxKey *key, const 
        would copy the whole array for each. */
     if ((size_t)t->atoms_n > t->atom_defs_cap) {
         size_t cap = t->atom_defs_cap ? 2 * t->atom_defs_cap : 64;
-        CssPxAtomDef *grown = realloc(t->atom_defs, cap * sizeof *grown);
+        CssPxAtomDef *grown = lexbor_realloc(t->atom_defs, cap * sizeof *grown);
 
         CHECK(grown, "css_length: OOM recording an atom's definition");
         t->atom_defs = grown;
@@ -756,7 +757,7 @@ static void css_px_expansion_push(CssPxExpansion *x, const CssPxMonomial *mono, 
 {
     if (x->n == x->cap) {
         int cap = x->cap ? 2 * x->cap : 16;
-        CssPxMonomial *grown = realloc(x->m, (size_t)cap * sizeof *grown);
+        CssPxMonomial *grown = lexbor_realloc(x->m, (size_t)cap * sizeof *grown);
 
         CHECK(grown, "css_length: OOM expanding a form for its range");
         x->m = grown;

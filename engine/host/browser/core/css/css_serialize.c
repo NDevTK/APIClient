@@ -8,6 +8,7 @@
 
 #include "check.h"
 #include "core/css/css_serialize.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 typedef struct { char *s; size_t len, cap; } SBuf;
 
@@ -18,7 +19,7 @@ static void sbuf_add_n(SBuf *b, const char *s, size_t n)
         char *grown;
 
         while (cap < b->len + n + 1) cap *= 2;
-        grown = realloc(b->s, cap);
+        grown = lexbor_realloc(b->s, cap);
         CHECK(grown != NULL, "cssom: OOM serializing a CSS string or identifier");
         b->s = grown;
         b->cap = cap;

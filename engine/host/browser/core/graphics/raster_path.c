@@ -10,6 +10,7 @@
 #include "check.h"
 #include "core/canvas/canvas_path.h"
 #include "core/graphics/raster_path.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- the stream ------------------------------------------------------------------------------------------ */
 
@@ -43,7 +44,7 @@ static void rp_grow(RasterPath *p, size_t need)
         CHECK(cap <= SIZE_MAX / 2, "a RasterPath grew past what its capacity can express");
         cap *= 2;
     }
-    v = (double *)realloc(p->v, cap * sizeof(double));
+    v = (double *)lexbor_realloc(p->v, cap * sizeof(double));
     CHECK(v != NULL, "out of memory growing a RasterPath's op stream");
     p->v = v;
     p->cap = cap;
@@ -218,7 +219,7 @@ static void re_push(RasterEdges *e, double x0, double y0, double x1, double y1)
         CHECK(cap <= SIZE_MAX / (2 * sizeof(RasterEdge)),
               "a flattened edge list grew past what its capacity can express");
         cap *= 2;
-        v = (RasterEdge *)realloc(e->v, cap * sizeof(RasterEdge));
+        v = (RasterEdge *)lexbor_realloc(e->v, cap * sizeof(RasterEdge));
         CHECK(v != NULL, "out of memory growing a flattened edge list");
         e->v = v;
         e->cap = cap;

@@ -16,6 +16,7 @@
 #include "solver/engine.h"   /* the engine work count a resting drive's activation spends */
 #include "solver/metrics.h"
 #include "solver/rest_unit.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 typedef enum { LJ_COMPUTING = 1, LJ_SUSPENDED } LjState;
 
@@ -188,7 +189,7 @@ static LayoutBfAnswer *lj_answer_alloc(LayoutJob *job)
     if (c == job->answer_chunks) {
         if (job->answer_chunks == job->answer_cap) {
             size_t cap = job->answer_cap != 0 ? job->answer_cap * 2 : 16;
-            LayoutBfAnswer **v = realloc(job->answers, cap * sizeof *v);
+            LayoutBfAnswer **v = lexbor_realloc(job->answers, cap * sizeof *v);
 
             CHECK(v != NULL, "a layout job's answer storage could not grow");
             job->answers = v;
@@ -217,7 +218,7 @@ static size_t lj_push(LayoutJob *job, LayoutQuestion q, LjState state)
 {
     if (job->n == job->cap) {
         size_t cap = job->cap != 0 ? job->cap * 2 : 64;
-        LjEntry *v = realloc(job->stack, cap * sizeof *v);
+        LjEntry *v = lexbor_realloc(job->stack, cap * sizeof *v);
 
         CHECK(v != NULL, "a layout job's question stack could not grow");
         job->stack = v;
@@ -404,7 +405,7 @@ unsigned layout_job_grid_rows_enter(const lxb_dom_element_t *container)
     if (i == job->nctx) {
         if (job->nctx == job->ctx_cap) {
             size_t cap = job->ctx_cap != 0 ? job->ctx_cap * 2 : 8;
-            LjContext **v = realloc(job->ctxs, cap * sizeof *v);
+            LjContext **v = lexbor_realloc(job->ctxs, cap * sizeof *v);
 
             CHECK(v != NULL, "a layout job's grid row contexts could not grow");
             job->ctxs = v;

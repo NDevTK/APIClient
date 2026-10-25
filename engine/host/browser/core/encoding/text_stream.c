@@ -38,6 +38,7 @@
 #include "core/streams/pipe.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/transform_stream.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- the two interfaces' state ----------------------------------------------------------------------------- */
 
@@ -187,7 +188,7 @@ static void bb_put(ByteBuf *o, uint32_t cp)
     if (o->n + 4 > o->cap) {
         size_t c = o->cap ? o->cap * 2 : 64;
         while (o->n + 4 > c) c *= 2;
-        o->b = realloc(o->b, c);
+        o->b = lexbor_realloc(o->b, c);
         CHECK(o->b != NULL, "encoding: OOM growing a TextEncoderStream chunk");
         o->cap = c;
     }

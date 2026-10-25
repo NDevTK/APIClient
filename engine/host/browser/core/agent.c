@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "core/agent.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static AgentInstall *g_list;
 static int g_n, g_cap;
@@ -21,7 +22,7 @@ void agent_declare_install(AgentInstall install)
         DCHECK(g_list[i] != install, "a per-agent install was declared twice");
     if (g_n == g_cap) {
         int cap = g_cap ? g_cap * 2 : 4;
-        AgentInstall *g = realloc(g_list, (size_t)cap * sizeof *g);
+        AgentInstall *g = lexbor_realloc(g_list, (size_t)cap * sizeof *g);
         CHECK(g != NULL, "agent: OOM recording a per-agent install");
         g_list = g;
         g_cap = cap;

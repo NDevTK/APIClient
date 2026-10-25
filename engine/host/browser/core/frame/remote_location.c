@@ -65,6 +65,7 @@
 #include "core/frame/remote_location.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* HTML §7.2.1.3.1 CrossOriginProperties ( O ), the Location arm, verbatim: « { [[Property]]: "href",
    [[NeedsGetter]]: false, [[NeedsSetter]]: true }, { [[Property]]: "replace" } ». Declared in this component's
@@ -449,7 +450,7 @@ static void rl_record_row(JSValueConst obj, uint32_t doc)
                "`otherW.location === otherW.location` decide by which row the scan reached first");
     if (g_rows_n == g_rows_cap) {
         int cap = g_rows_cap ? g_rows_cap * 2 : 8;
-        RemoteLocRow *g = realloc(g_rows, (size_t)cap * sizeof *g);
+        RemoteLocRow *g = lexbor_realloc(g_rows, (size_t)cap * sizeof *g);
 
         CHECK(g != NULL, "remote location: OOM recording a cross-origin Location — an unrecorded object is "
                          "minted again on the next ask, and `otherW.location === otherW.location` is then "

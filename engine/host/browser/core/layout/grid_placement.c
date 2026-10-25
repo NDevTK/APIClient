@@ -13,6 +13,7 @@
 #include "core/layout/flex_item.h"
 #include "core/layout/grid_explicit_tracks.h"
 #include "core/layout/grid_placement.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 lxb_dom_element_t *grid_item_of(lxb_dom_element_t *container, BoxTreeChild c)
 {
@@ -360,7 +361,7 @@ static void gp_occupy(GpOccupancy *o, size_t row, size_t col, size_t rs, size_t 
     DCHECK(col + cs <= o->columns, "a grid area was occupied past the implicit grid's columns");
     if (row + rs > o->rows) {
         size_t rows = row + rs > 2 * o->rows ? row + rs : 2 * o->rows;
-        unsigned char *grown = realloc(o->bits, rows * o->columns);
+        unsigned char *grown = lexbor_realloc(o->bits, rows * o->columns);
 
         CHECK(grown != NULL, "css-grid-1 §8.5: out of memory marking occupied grid cells");
         memset(grown + o->rows * o->columns, 0, (rows - o->rows) * o->columns);
@@ -420,7 +421,7 @@ void grid_placement_run(lxb_dom_element_t *container, bool intrinsic, GridPlacem
 
         if (it == NULL) continue;
         if (n == cap) {
-            lxb_dom_element_t **grown = realloc(items, (cap = cap ? 2 * cap : 8) * sizeof *grown);
+            lxb_dom_element_t **grown = lexbor_realloc(items, (cap = cap ? 2 * cap : 8) * sizeof *grown);
 
             CHECK(grown != NULL, "css-grid-1 §8.5: out of memory listing grid items");
             items = grown;
@@ -462,7 +463,7 @@ void grid_placement_run(lxb_dom_element_t *container, bool intrinsic, GridPlacem
         if (!row_def[i] || col_def[i]) continue;
         if (row_at[i] >= row_cursors) {
             size_t want = row_at[i] + 1;
-            size_t *grown = realloc(row_cursor, want * sizeof *grown);
+            size_t *grown = lexbor_realloc(row_cursor, want * sizeof *grown);
 
             CHECK(grown != NULL, "css-grid-1 §8.5: out of memory holding per-row cursors");
             memset(grown + row_cursors, 0, (want - row_cursors) * sizeof *grown);

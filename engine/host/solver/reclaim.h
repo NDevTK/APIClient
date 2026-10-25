@@ -91,6 +91,12 @@
  * THERE IS NO reclaim_free, AND THAT IS NOT AN OMISSION. These three are the C allocator plus a retry, so what
  * they return is freed by plain free() and a converted site's free needs no edit at all. A refusal is the only
  * thing this file adds; ownership is untouched. */
+/* The browser half reaches the edge through lexbor_realloc, the library allocator reclaim_install routes here, so
+   its growth buffers over page-grown input refuse by selling rather than by their CHECK; a free path keeps plain
+   realloc, since a sale there would re-enter the release walking it.
+   Named residual. Not covered: the browser half's malloc, calloc and strdup of input-derived sizes, which still
+   call the C library directly. Next diff routes them through lexbor_malloc and lexbor_calloc. Absence shows as an
+   OOM CHECK at a browser component's malloc with `pressureSold` above zero. */
 void *reclaim_malloc(size_t size);
 void *reclaim_realloc(void *ptr, size_t size);
 void *reclaim_calloc(size_t num, size_t size);

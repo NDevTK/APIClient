@@ -16,6 +16,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/line_break.h"
 #include "core/layout/text_run.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* ---- the `white-space` value this component measures ------------------------------------------------------
    css-text-3 §3 "White Space and Wrapping: the white-space property" is a longhand in this level (css-text-4
@@ -171,7 +172,7 @@ static TextRunItem *tr_append_item(TextRunMeasure *m, TextRunItemKind kind, lxb_
 
     if (m->count == m->capacity) {
         size_t capacity = m->capacity != 0 ? m->capacity * 2 : 32;
-        TextRunItem *grown = realloc(m->items, capacity * sizeof *grown);
+        TextRunItem *grown = lexbor_realloc(m->items, capacity * sizeof *grown);
 
         CHECK(grown != NULL, "out of memory collecting one inline formatting context's items for css-sizing-3 "
                              "§5.1's intrinsic inline sizes. The collection is the run's own text and its "

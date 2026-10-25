@@ -38,6 +38,7 @@
 #include "core/dom/shadow_root.h"
 #include "core/frame/viewport.h"
 #include "core/layout/used_value.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static char *css_cv_strdup(const char *s)
 {
@@ -108,7 +109,7 @@ static void cv_chain(lxb_dom_element_t *el, CssPropertyId stop, CvChain *c)
         if (stop != CSS_PROPERTY_INVALID && css_computed_style_holds(e, stop)) break;
         if (c->n == c->cap) {
             c->cap = c->cap ? 2 * c->cap : 16;
-            c->v = realloc(c->v, c->cap * sizeof *c->v);
+            c->v = lexbor_realloc(c->v, c->cap * sizeof *c->v);
             CHECK(c->v != NULL, "css: OOM growing an element's ancestor chain");
         }
         c->v[c->n++] = e;

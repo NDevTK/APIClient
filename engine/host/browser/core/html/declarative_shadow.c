@@ -46,6 +46,7 @@
 #include "core/html/custom_elements.h"
 #include "core/idl_args.h"
 #include "solver/dom_cow.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 static int g_ready;
 static int g_id_enum_set[2] = { -1, -1 };   /* one per enumerated reflection — see the table below */
@@ -179,7 +180,7 @@ static void dsd_push(DsdTrees *t, lxb_dom_node_t *tree)
     if (!tree) return;
     if (t->n == t->cap) {
         int want = t->cap ? t->cap * 2 : 8;
-        lxb_dom_node_t **v = realloc(t->v, sizeof(*v) * (size_t)want);
+        lxb_dom_node_t **v = lexbor_realloc(t->v, sizeof(*v) * (size_t)want);
         CHECK(v != NULL, "the declarative shadow root walk could not grow its list of trees — dropping one "
                          "leaves a shadow tree the parser wrote with its own <template> unconverted");
         t->v = v;

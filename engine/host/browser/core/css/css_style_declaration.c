@@ -129,6 +129,7 @@
 #include "core/css/style_sheet_list.h"
 #include "solver/concolic.h"   /* §6.6.1's `item` takes an index unknown external input crosses AS ITSELF */
 #include "solver/dom_cow.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* TWO PRIVATE KEYS, BOTH SYMBOLS, AND THEY ARE TWO BECAUSE A SLOT IS A BRAND. `g_decl_key` hangs a block's own
    §6.6 record off the block; `g_inline_key` hangs CSSOM §7.1's [SameObject] block off the ELEMENT's wrapper. One key
@@ -185,7 +186,7 @@ static lxb_status_t css_buf_cb(const lxb_char_t *data, size_t len, void *ctx)
     if (b->n + len + 1 > b->cap) {
         size_t c = b->cap ? b->cap * 2 : 128;
         while (c < b->n + len + 1) c *= 2;
-        b->s = realloc(b->s, c);
+        b->s = lexbor_realloc(b->s, c);
         CHECK(b->s != NULL, "cssom: OOM serializing a declaration — a dropped value would read as unset");
         b->cap = c;
     }
@@ -503,7 +504,7 @@ static void cssd_decls_append(CssDecls *d, char *name, char *value, bool importa
 {
     if (d->n == d->cap) {
         d->cap = d->cap ? d->cap * 2 : 8;
-        d->v = realloc(d->v, d->cap * sizeof(*d->v));
+        d->v = lexbor_realloc(d->v, d->cap * sizeof(*d->v));
         CHECK(d->v != NULL, "cssom: OOM collecting a declaration block's declarations — a dropped one reads as "
                             "a property the block never declared");
     }
@@ -1421,7 +1422,7 @@ static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, si
     *parked = false;
     if (si >= g_sheet_parse_n) {
         uint32_t want = si + 1;
-        CssdSheetParse *grown = realloc(g_sheet_parse, (size_t)want * sizeof *grown);
+        CssdSheetParse *grown = lexbor_realloc(g_sheet_parse, (size_t)want * sizeof *grown);
 
         CHECK(grown != NULL, "cssom: the per-sheet parse table allocation failed");
         memset(grown + g_sheet_parse_n, 0, (size_t)(want - g_sheet_parse_n) * sizeof *grown);
@@ -2030,7 +2031,7 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
                 CssdEmitFrame *grown;
 
                 cap *= 2;
-                grown = realloc(v, cap * sizeof *grown);
+                grown = lexbor_realloc(v, cap * sizeof *grown);
                 CHECK(grown != NULL, "cssom: OOM walking a stylesheet's nested rules");
                 v = grown;
             }

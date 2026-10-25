@@ -5,6 +5,7 @@
 
 #include "check.h"
 #include "core/frame/window_features.h"
+#include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* §7.4: a FEATURE SEPARATOR is ASCII whitespace, U+003D (=) or U+002C (,). Named because the tokenizer below
    asks the question five times and the spec asks it by name. */
@@ -97,7 +98,7 @@ static void feat_set(FeatureMap *m, char *name, char *value)
     }
     if (m->n == m->cap) {
         int cap = m->cap ? m->cap * 2 : 8;
-        Feature *e = realloc(m->e, (size_t)cap * sizeof *e);
+        Feature *e = lexbor_realloc(m->e, (size_t)cap * sizeof *e);
         /* A dropped feature is a different popup answer and a different navigable, so this is one of the
            allocation failures CLAUDE.md names as always-fatal rather than a dev-only invariant. */
         CHECK(e != NULL, "window feature map growth failed");
