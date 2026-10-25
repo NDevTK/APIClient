@@ -259,6 +259,18 @@ function docCensus(c, f, nonEmpty) {
   }
   return null;
 }
+/* The `_wfq` rows solver/metrics/wfq_frontier.def declares with kind OBJECT: the operands of a weight gap, a
+   record of numbers whose members may themselves be records of numbers (`top`, `deep`). */
+const WFQ_OPERAND_ROWS = Object.freeze(["curDeepTerms", "neverPickedTerms"]);
+function docWfqOperands(v, f, depth) {
+  if (!docIsRecord(v)) return f + " is not an object";
+  for (const k of Object.keys(v)) {
+    const why = docIsRecord(v[k]) && depth > 0 ? docWfqOperands(v[k], f + "." + k, depth - 1)
+                                               : docCount(v[k], f + "." + k);
+    if (why !== null) return why;
+  }
+  return null;
+}
 /* `members` is always present; term rows appear exactly when it is above zero. */
 function docWfq(w) {
   const why = docObject(w, "_wfq");
@@ -266,7 +278,11 @@ function docWfq(w) {
   if (!Number.isInteger(w.members) || w.members < 0) return "_wfq.members is not a count";
   if ((Object.keys(w).length > 1) !== (w.members > 0))
     return "_wfq reports " + w.members + " members with " + (Object.keys(w).length - 1) + " term rows";
-  for (const k of Object.keys(w)) if (!docIsCount(w[k])) return "_wfq." + k + " is not a finite number";
+  for (const k of Object.keys(w)) {
+    const bad = WFQ_OPERAND_ROWS.includes(k) ? docWfqOperands(w[k], "_wfq." + k, 1)
+              : docIsCount(w[k]) ? null : "_wfq." + k + " is not a finite number";
+    if (bad !== null) return bad;
+  }
   return null;
 }
 function docQuantum(q) {
