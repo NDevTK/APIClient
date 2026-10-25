@@ -1116,6 +1116,8 @@ static long g_pressure_sold;
 /* The cycle collections pressure owed, and the count of finished collections it last sold at (UINT64_MAX before the
    first sale of the session). */
 static long g_pressure_collects;
+/* Compositions between steps (engine_note_rest_composition), the attempts they took, and the most one took. */
+static long g_rest_compositions, g_rest_compose_attempts, g_rest_compose_attempts_max;
 static uint64_t g_pressure_sold_at_collections = UINT64_MAX;
 /* The members pressure's next batch may sell before it owes a collection, and whether the last batch sold all it
    could (engine_relocate_under_pressure). */
@@ -11405,14 +11407,21 @@ static void engine_relocate_under_pressure(JSRuntime *rt) {
 
 /* See engine.h. The probe is a plain allocation, freed at once: what it proves is that the address space holds
    `bytes` now, which is what the composition after it spends. */
-void engine_headroom_at_rest(size_t bytes) {
+int engine_headroom_at_rest(size_t bytes) {
     for (;;) {
         void *p;
-        if (bytes == 0) return;
+        if (bytes == 0) return 1;
         p = malloc(bytes);
-        if (p) { free(p); return; }
-        if (!engine_reclaim_at_rest()) return;   /* the floor: the composition's own CHECK answers */
+        if (p) { free(p); return 1; }
+        if (!engine_reclaim_at_rest()) return 0;   /* the floor: the composition's own CHECK answers */
     }
+}
+
+void engine_note_rest_composition(long attempts) {
+    DCHECK(attempts >= 1, "a composition between steps was noted with no attempt at all");
+    g_rest_compositions++;
+    g_rest_compose_attempts += attempts;
+    if (attempts > g_rest_compose_attempts_max) g_rest_compose_attempts_max = attempts;
 }
 
 /* The seam between two vocabularies for one fact. core/html/unhandled_rejection.h names the two spec steps it
@@ -12879,6 +12888,9 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->paged_floor        = g_reclaim_floor;
     out->pressure_sold      = g_pressure_sold;
     out->pressure_collects  = g_pressure_collects;
+    out->rest_compositions  = g_rest_compositions;
+    out->rest_compose_attempts = g_rest_compose_attempts;
+    out->rest_compose_attempts_max = g_rest_compose_attempts_max;
     out->ram_limit_kib      = (long)(g_ram_limit / 1024);
     out->ram_limit_source   = g_ram_limit_source;
     out->ram_share          = (long)g_ram_share;

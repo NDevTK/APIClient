@@ -47,6 +47,15 @@ void c_alloc_census(CAllocCensus *out)
     out->residue = -1;
 }
 
+void c_alloc_span_open(void) { }
+
+size_t c_alloc_span_take(void)
+{
+    DFAIL("an allocation span was measured under a sanitizer, which owns malloc, so nothing here saw the span's "
+          "blocks — build the span on the sanitizer's allocator hooks to run the RAM floor under one");
+    return 0;
+}
+
 #else
 
 /* The allocator underneath, by the names each C library exports for a replacement to forward to: glibc's `__libc_*`,
@@ -77,6 +86,17 @@ extern void *__libc_memalign(size_t align, size_t n);
    mmap, so its mmapped total stays 0. Their sum is what c_alloc_live answers: the bytes the allocator holds for live
    blocks, headers included, since a heap of small blocks spends a word on each. */
 static size_t g_heap_chunks, g_mmap_chunks;
+
+/* The open span (c_alloc.h): live bytes at its open, the most it has held since, and the largest refused request.
+   Read and written on the engine's thread only, as every span is opened and taken there. */
+static int    g_span_open;
+static size_t g_span_base, g_span_peak, g_span_refused;
+
+/* A request of `n` bytes came back NULL inside the span: the span asked for at least that much. */
+static void c_alloc_span_refused(size_t n)
+{
+    if (g_span_open && n > g_span_refused) g_span_refused = n;
+}
 
 #if !defined(__EMSCRIPTEN__)
 /* glibc's chunk header: the size word before the block, whose bit 1 marks a chunk mmapped on its own. A heap chunk
@@ -122,6 +142,10 @@ static void c_alloc_add(void *p)
     if (!p) return;
     c = c_alloc_chunk(p, &total);
     __atomic_add_fetch(total, c, __ATOMIC_RELAXED);
+    if (g_span_open) {
+        size_t live = c_alloc_live();
+        if (live > g_span_peak) g_span_peak = live;
+    }
 }
 
 static void c_alloc_sub(void *p)
@@ -135,8 +159,25 @@ static void c_alloc_sub(void *p)
     __atomic_sub_fetch(total, c, __ATOMIC_RELAXED);
 }
 
-void *malloc(size_t n) { void *p; C_ALLOC_ENTER(); p = C_ALLOC_MALLOC(n); c_alloc_add(p); return p; }
-void *calloc(size_t k, size_t n) { void *p; C_ALLOC_ENTER(); p = C_ALLOC_CALLOC(k, n); c_alloc_add(p); return p; }
+void *malloc(size_t n)
+{
+    void *p;
+    C_ALLOC_ENTER();
+    p = C_ALLOC_MALLOC(n);
+    if (!p) c_alloc_span_refused(n);
+    c_alloc_add(p);
+    return p;
+}
+
+void *calloc(size_t k, size_t n)
+{
+    void *p;
+    C_ALLOC_ENTER();
+    p = C_ALLOC_CALLOC(k, n);
+    if (!p && n && k <= SIZE_MAX / n) c_alloc_span_refused(k * n);
+    c_alloc_add(p);
+    return p;
+}
 void free(void *p) { c_alloc_sub(p); C_ALLOC_FREE(p); }
 
 void *realloc(void *p, size_t n)
@@ -147,7 +188,7 @@ void *realloc(void *p, size_t n)
     q = C_ALLOC_REALLOC(p, n);
     /* A failed growth leaves `p` standing, so it is counted again; a zero-size realloc that freed it is not. */
     if (q) c_alloc_add(q);
-    else if (n != 0) c_alloc_add(p);
+    else if (n != 0) { c_alloc_span_refused(n); c_alloc_add(p); }
     return q;
 }
 
@@ -162,6 +203,7 @@ void *memalign(size_t align, size_t n)
     void *p;
     C_ALLOC_ENTER();
     p = C_ALLOC_MEMALIGN(align, n);
+    if (!p) c_alloc_span_refused(n);
     c_alloc_add(p);
     return p;
 }
@@ -189,6 +231,22 @@ void *realloc_in_place(void *p, size_t n) { (void)p; (void)n; return NULL; }
 size_t c_alloc_live(void)
 {
     return __atomic_load_n(&g_heap_chunks, __ATOMIC_RELAXED) + __atomic_load_n(&g_mmap_chunks, __ATOMIC_RELAXED);
+}
+
+void c_alloc_span_open(void)
+{
+    DCHECK(!g_span_open, "an allocation span was opened inside another — the inner open would reset the outer's "
+                         "base and its caller would read a peak measured from the wrong live bytes");
+    g_span_open = 1;
+    g_span_base = g_span_peak = c_alloc_live();
+    g_span_refused = 0;
+}
+
+size_t c_alloc_span_take(void)
+{
+    DCHECK(g_span_open, "an allocation span was taken that was never opened");
+    g_span_open = 0;
+    return (g_span_peak - g_span_base) + g_span_refused;
 }
 
 #if defined(__EMSCRIPTEN__)

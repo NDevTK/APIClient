@@ -3,7 +3,7 @@
 #include <string.h>
 
 #include "check.h"
-#include "core/json_buf.h"   /* json_buf_grown_take: the footprint the refusal loop proves room for */
+#include "solver/c_alloc.h"   /* c_alloc_span_*: the ask the refusal loop proves room for */
 #include "solver/compose.h"   /* every census below is sized by what it writes — see composef */
 #include "solver/result.h"
 #include "solver/c_alloc.h"   /* the C heap's running total against the allocator's reading, per census */
@@ -1536,6 +1536,12 @@ char *result_cold_json(void) {
     METRIC_SET(paged_floor, e.paged_floor);
     METRIC_SET(pressure_sold, e.pressure_sold);
     METRIC_SET(pressure_collects, e.pressure_collects);
+    DCHECK(e.rest_compose_attempts >= e.rest_compositions,
+           "the census counted fewer composition attempts than compositions — every composition is one attempt "
+           "or more");
+    METRIC_SET(rest_compositions, e.rest_compositions);
+    METRIC_SET(rest_compose_attempts, e.rest_compose_attempts);
+    METRIC_SET(rest_compose_attempts_max, e.rest_compose_attempts_max);
     METRIC_SET(ram_limit_kib, e.ram_limit_kib);
     METRIC_SET_OBJECT(ram_limit_source, e.ram_limit_source);
     METRIC_SET(ram_nonheap_kib, e.ram_nonheap_kib);
@@ -1834,19 +1840,35 @@ char *result_heap_walk_json(JSContext *ctx) {
    so no host assembles structure again. */
 char *result_json(JSContext *ctx) { return result_json_census(ctx, NULL); }
 
-/* See result.h. `need` is the previous composition's measured footprint, proved available before composing. */
+/* See result.h. Every row of one document describes one instant, so the composition never sells mid-walk: an
+   attempt the allocator refused is dropped whole, flows are sold at rest until that attempt's measured ask fits,
+   and it is composed again, until it fits or nothing is left to sell. The ask is the attempt's allocation span
+   (c_alloc_span_take), every entry of the malloc family counted, and `need` is the last fitted composition's,
+   proved available before the next composes. A refusal after a proven ask must ask for more, so the attempts are
+   bounded by the composition's growth rather than by the sales. */
 char *result_json_at_rest(JSContext *ctx, const ResultCensus *c) {
     static size_t need;
+    size_t proven = 0;   /* the last refused attempt's ask, proven to fit before this attempt */
+    long attempts = 0;
     char *js;
     engine_headroom_at_rest(need);
-    (void)json_buf_grown_take();
     for (;;) {
+        size_t ask;
+        attempts++;
+        c_alloc_span_open();
         js = result_json_census(ctx, c);
-        if (js || !engine_reclaim_at_rest()) break;
+        ask = c_alloc_span_take();
+        if (js) { need = ask; break; }
+        DCHECKF(ask > proven,
+                "a composition was refused asking %zu bytes after %zu bytes were proven to fit — the headroom probe "
+                "proves a block the composition's allocations do not fit into, so the retry cannot be tied to its "
+                "growth", ask, proven);
+        if (ask <= proven || !engine_headroom_at_rest(ask)) break;   /* the floor: the caller's CHECK answers */
+        proven = ask;
+        /* A sale changed the frontier the borrowed census describes, so the retry composes its own. */
         c = NULL;
     }
-    /* …and the document itself, which result_json composes outside any JSON buffer. */
-    need = json_buf_grown_take() + (js ? strlen(js) + 1 : 0);
+    engine_note_rest_composition(attempts);
     return js;
 }
 

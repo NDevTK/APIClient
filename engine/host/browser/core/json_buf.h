@@ -31,7 +31,7 @@ typedef struct {
 
 /* A buffer composed between steps, where the safepoint is closed and a refusal cannot sell a flow: a refusal
    releases it and json_buf_take answers NULL, which the composer passes on as an absent composition and the
-   caller answers by selling at rest and composing again (engine_census_emit, main.c's result_json_at_rest). */
+   caller answers by selling at rest and composing again (engine_census_emit, result.c's result_json_at_rest). */
 #define JSON_BUF_AT_REST { .at_rest = 1 }
 
 /* A FIELD NAME, written as `"name":`.
@@ -70,11 +70,8 @@ void  json_buf_str(JsonBuf *b, const char *s);
    only for a JSON_BUF_AT_REST buffer the allocator refused. */
 char *json_buf_take(JsonBuf *b);
 void  json_buf_free(JsonBuf *b);
-/* An output block of `n` bytes for a composer that writes its bytes itself, counted in json_buf_grown_take's
-   footprint; the caller owns and frees it. NULL on allocation failure, which the caller answers. */
+/* An output block of `n` bytes for a composer that writes its bytes itself; the caller owns and frees it. NULL on
+   allocation failure, which the caller answers. */
 char *json_buf_block(size_t n);
-/* Every block size the process's buffers grew to, and every json_buf_block asked, since the previous call, which
-   bounds from above what a composition's blocks held at once: a composition's measured footprint. */
-size_t json_buf_grown_take(void);
 
 #endif

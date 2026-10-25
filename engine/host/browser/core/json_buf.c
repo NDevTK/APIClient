@@ -8,11 +8,6 @@
 #include "check.h"
 #include "core/json_buf.h"
 
-/* Every block size a growth or a json_buf_block asked for since json_buf_grown_take: an upper bound on what the
-   blocks asked in that span held at any instant, since it counts a growth's old and new blocks both and a taken
-   buffer's bytes stay counted while its caller holds them. The ask is counted, granted or not. */
-static size_t g_json_grown;
-
 /* Room for `extra` more bytes and the NUL. The growth asks lexbor_realloc, which solver/reclaim.c points at the
    refusal edge, so a refusal inside a flow step sells the frontier's tail and retries; the capacity is published
    only after the allocation returns, so a sale run inside it sees the buffer that exists. A refusal that stands
@@ -26,7 +21,6 @@ static int json_buf_ensure(JsonBuf *b, size_t extra)
     if (b->lost) return 0;
     if (b->n + extra + 1 <= cap) return 1;
     while (b->n + extra + 1 > cap) cap = cap ? cap * 2 : 256;
-    g_json_grown += cap;
     grown = lexbor_realloc(b->b, cap);
     if (!grown) {
         CHECK(b->at_rest, "json_buf: OOM growing a JSON buffer — a dropped record is a report that lies by "
@@ -46,15 +40,7 @@ char *json_buf_block(size_t n)
 {
     DCHECK(n > 0, "json_buf: an output block of no bytes was asked — every composer's block holds at least its "
                   "closing NUL");
-    g_json_grown += n;
     return lexbor_malloc(n);
-}
-
-size_t json_buf_grown_take(void)
-{
-    size_t g = g_json_grown;
-    g_json_grown = 0;
-    return g;
 }
 
 void json_buf_raw(JsonBuf *b, const char *s)

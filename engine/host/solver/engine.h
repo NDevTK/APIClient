@@ -465,9 +465,12 @@ int engine_reclaim_at_rest(void);
 #define ENGINE_RAM_SHARE_DEFAULT 850
 void engine_set_ram_share(unsigned permille);
 /* Before a composition between steps, whose allocations cannot sell a flow: sell at rest (engine_reclaim_at_rest)
-   until `bytes`, the composition's footprint measured the last time it ran, can be allocated, or nothing is left
-   to sell. The caller holds no position in the frontier. */
-void engine_headroom_at_rest(size_t bytes);
+   until `bytes` can be allocated, or nothing is left to sell. Returns 1 once `bytes` fits, 0 at the floor. The
+   caller holds no position in the frontier. */
+int engine_headroom_at_rest(size_t bytes);
+/* One composition between steps ran `attempts` times before it fitted or met the floor: the census's
+   restCompositions, restComposeAttempts and restComposeAttemptsMax. */
+void engine_note_rest_composition(long attempts);
 /* Whether this whole frontier was written out rather than drained. The instance teardown's asserts (main.c)
    read it: owed replies and outstanding synchronous requests are re-issued by each recipe's replay, so neither
    is a dropped work item. It is engine-wide; a single flow's release asks the flow's own `paged`
@@ -1148,6 +1151,9 @@ typedef struct {
     long sold_flows;        /* …the exploration flows among them */
     long pressure_sold;     /* …those sold by RAM pressure at rest (engine_set_ram_share), `<= sold`, asserted */
     long pressure_collects; /* cycle collections RAM pressure owed before a sale */
+    long rest_compositions; /* compositions between steps (engine_note_rest_composition) */
+    long rest_compose_attempts;     /* …the attempts they took, `>= rest_compositions` */
+    long rest_compose_attempts_max; /* …and the most one composition took */
     long ram_limit_kib;     /* the limit that pressure is a share of, 0 when there is none */
     const char *ram_limit_source; /* where it came from, as `{"source":…}`: "wasm-heap-max", "rlimit-as"
                                      or "none" */
