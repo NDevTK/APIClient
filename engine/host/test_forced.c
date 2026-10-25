@@ -742,6 +742,8 @@ static const TfServed TF_SERVED[] = {
       "fetch('/api/mhdep?w=mhDEP');"
       "export const mhTag = 'mhTAG';"
       "export default { tag: 'mhDEF' };" },
+    /* The fileparse documents' benign seed file: magic `FPX1`, version 1, a 13-byte body. */
+    { "https://x.test/files/fpseed.bin", "application/octet-stream", "FPX1\x01\x0d" "return x + 1;" },
     /* HTML_LAZYLOAD's chunk, imported once its observed box is visible. */
     { "https://x.test/chunk/lllazy.js", "text/javascript",
       "export function llInit() { fetch('/api/ll-chunk'); }" },
@@ -1136,6 +1138,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
 #include "fixture/ttsink.h"
+#include "fixture/fileparsefetch.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1608,6 +1611,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
     { "ttsink", HTML_TTSINK },
+    { "fileparse-fetch", HTML_FILEPARSE_FETCH },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -14957,6 +14961,44 @@ TF_UNIT void probes_ttsink(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* Whether `needle` occurs inside the result document's endpoint array, the span between its key and the @S
+   array's key that result_json writes after it. */
+static int fcs_has(const char *js, const char *needle) {
+    const char *b = strstr(js, "\"fetchCallSites\":["), *e = b ? strstr(b, "],\"securitySinks\":[") : NULL;
+
+    return b && e && memmem(b, (size_t)(e - b), needle, strlen(needle)) != NULL;
+}
+
+/* The rows of the `fileparse-fetch` document (fixture/fileparsefetch.h). Reach and taint only. */
+TF_UNIT void probes_fileparse_fetch(const char *js, Probe *tab, int *n) {
+    char seed[192] = "", query[192] = "";
+    int has_seed = s_rooted_source(js, "eval", "fpseed", seed, sizeof seed);
+    int has_query = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, query, sizeof query);
+    const char *sp_why = NULL; int sp_tt = 1;
+    fold_row(&sp_tt, &sp_why, !!strstr(js, "\"/api/fpf-parsed\""),
+             "NOT REACHED: there is no /api/fpf-parsed record, so no arm walked the file format to its body");
+    const char *ua_why = NULL; int ua_tt = 1;
+    fold_row(&ua_tt, &ua_why, fcs_has(js, LOCATION_SEARCH_SRC),
+             "no endpoint record's address carries location.search, so the fetch of the file the query names was "
+             "not learned as attacker-steered");
+    const char *sf_why = NULL; int sf_tt = 1;
+    fold_row(&sf_tt, &sf_why, has_seed,
+             "NOT REACHED: no eval @S record carries a source rooted in the seed file's reply, so the file's bytes "
+             "lost their provenance between the reply and new Function (ArrayBuffer, DataView, Uint8Array, "
+             "TextDecoder)");
+    const char *sq_why = NULL; int sq_tt = 1;
+    fold_row(&sq_tt, &sq_why, has_query,
+             "NOT REACHED: no eval @S record carries a source rooted in location.search, so the file the attacker "
+             "names through the query did not reach new Function as attacker input");
+    const Probe rows[] = {
+        { "fpf-seed-parsed", sp_tt, "/api/fpf-parsed", SESS_EXPLORE, sp_why },
+        { "fpf-url-attacker", ua_tt, "indexOf('file=')", SESS_EXPLORE, ua_why },
+        { "fpf-sink-file", sf_tt, "function fpfParse", SESS_EXPLORE, sf_why },
+        { "fpf-sink-query", sq_tt, "'/files/fpseed.bin'", SESS_EXPLORE, sq_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18819,6 +18861,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
     probes_ttsink(js, probes, &np);
+    probes_fileparse_fetch(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
