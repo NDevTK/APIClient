@@ -273,12 +273,9 @@ static JSValue js_idb_open(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 /* An unknown name is spent as a property key is (concolic_key_name_hook): a real string named by the unknown's
    identity, so two requests through one value reach one database, store or index and two values never share
    one, while a stated name converts as the DOMString it is.
-   A database name's lookup forks over the set's names where §5.1 and §5.3 step 4 ask it (idb_open.c's
-   open_find_name, which the request carries the unknown to).
-   Named residual. Not covered: the worlds where an unknown object store or index name equals one the set
-   already holds. Next diff: fork those lookups (objectStore, the transaction scope, index) the same way. How
-   its absence shows: a page that creates a store by a stated name and reads it through an unknown name sees
-   NotFoundError in every world. */
+   Where a lookup asks whether such a name equals one a set holds, the asking step forks over the set's names:
+   §5.1 and §5.3 step 4 (idb_open.c's open_find_name), §4.10 objectStore, §4.4 transaction's scope and §4.5
+   index. */
 const char *idb_name_cstr(JSContext *ctx, JSValueConst v)
 {
     JSValue atom;

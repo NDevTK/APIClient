@@ -291,6 +291,17 @@ JSValue idb_index_create(JSContext *ctx, JSValueConst tx, JSValueConst store, co
     return index;
 }
 
+uint32_t idb_index_set_len(JSContext *ctx, JSValueConst set)
+{
+    return idb_index_list_len(ctx, set);
+}
+
+JSValue idb_index_set_at(JSContext *ctx, JSValueConst set, uint32_t i)
+{
+    DCHECK(i < idb_index_list_len(ctx, set), "an index set was read past its own length");
+    return idb_store_index_at(ctx, set, i);
+}
+
 JSValue idb_index_find_in(JSContext *ctx, JSValueConst set, const char *name)
 {
     JSValue found = JS_NULL;

@@ -37,6 +37,7 @@
 
 #include "check.h"
 #include "core/indexeddb/indexed_db.h"
+#include "solver/concolic.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
@@ -1485,11 +1486,10 @@ fail:
 
 /* ---- §4.5's INDEX, CREATEINDEX and DELETEINDEX ------------------------------------------------------------
  *
- * NONE OF THE THREE IS A MACHINE, and that is a fact about their arguments rather than a shortcut: each takes
- * only `DOMString name`, a `(DOMString or sequence<DOMString>)` and an `IDBIndexParameters` dictionary, all of
- * which the DECLARATION has already converted (core/idl_args.h) — so no body below reads a page value, and
- * there is no §7.4 in any of them. `createIndex` returns an IDBIndex synchronously and NOT an IDBRequest,
- * which is §4.5's own shape. */
+ * No body below reads a page value: each takes only `DOMString name`, a `(DOMString or sequence<DOMString>)`
+ * and an `IDBIndexParameters` dictionary, all converted by the declaration (core/idl_args.h). `index` is a step
+ * body all the same, because an unknown name forks its lookup. `createIndex` returns an IDBIndex synchronously
+ * and not an IDBRequest, which is §4.5's own shape. */
 
 /* "The index(name) method steps are: let transaction be this's transaction. Let store be this's object store.
    If store has been deleted, throw an InvalidStateError. If transaction's state is FINISHED, then throw an
@@ -1498,48 +1498,123 @@ fail:
    THE STATE TEST IS `finished` AND NOT `not active`, which is the standard's and is the one place in §4.5
    where those differ: `tx.objectStore('s').index('i')` from a `setTimeout` after the task returned finds an
    INACTIVE transaction and still answers, because reading the index set changes nothing. */
-static JSValue js_os_index(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    JSValue store, tx, set, index, handle;
-    const char *name;
+#define OSIX_STAGES(X) \
+    X(OSIX_FIND, "Indexed Database §4.5 index(name) (index is the index named name in this's index set, or a " \
+                 "NotFoundError) - an unknown name forks over the index set's names, one ask per index")
+enum { IDL_STEP_STAGE_BASE(OSIX_STAGES) OSIX_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const OSIX_STEPS[] = { OSIX_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    (void)argc; (void)magic;
-    store = os_get(ctx, this_val, OS_STORE);
-    tx = os_get(ctx, this_val, OS_TRANSACTION);
-    DCHECK(JS_IsObject(store) && idb_transaction_is(tx), "an object store handle carried no store or no "
-                                                         "transaction");
-    if (idb_object_store_is_deleted(ctx, store)) {
-        JS_ThrowDOMException(ctx, "InvalidStateError", "the object store has been deleted");
-        goto fail;
-    }
-    if (idb_transaction_state(ctx, tx) == IDB_TX_FINISHED) {
-        JS_ThrowDOMException(ctx, "InvalidStateError", "the transaction has finished");
-        goto fail;
-    }
-    name = idb_name_cstr(ctx, argv[0]);
-    if (name == NULL) goto fail;
-    set = idb_object_store_handle_index_set(ctx, this_val);
-    index = idb_index_find_in(ctx, set, name);
-    JS_FreeValue(ctx, set);
+typedef struct {
+    uint8_t  started;
+    uint32_t cand;   /* which index of the set an unknown name's fork asks next */
+    JSValue  pred;   /* that ask's IsStrictlyEqual, held across its fork (owned) */
+} OsIndexState;
+
+static void os_index_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    OsIndexState *s = st;
+
+    if (s->started) v->val(ctx, &s->pred);
+}
+
+/* The lookup over the handle's index set. A stated name, or an index filed under the name an unknown's
+   identity bought (idb_name_cstr), is found by bytes; otherwise which index an unknown names depends on it, so
+   this forks over IsStrictlyEqual of the unknown and each index's name in the set's order, each equal arm a
+   predicate over the unknown's domain, and the arm equal to none answers JS_NULL. 0 with the index in *pindex
+   (owned), a request code, or -1. */
+static int os_index_find(JSContext *ctx, JSStepHdr *hdr, OsIndexState *s, JSValueConst name_v, JSValue *pindex)
+{
+    JSValue set = idb_object_store_handle_index_set(ctx, hdr->this_val), index;
+    const char *name = idb_name_cstr(ctx, name_v);
+    uint32_t n;
+    int r, arm;
+
+    *pindex = JS_NULL;
+    if (name == NULL) { JS_FreeValue(ctx, set); return -1; }
+    *pindex = idb_index_find_in(ctx, set, name);
     JS_FreeCString(ctx, name);
-    if (JS_IsNull(index)) {
+    if (!JS_IsNull(*pindex) || !concolic_is(name_v)) {
+        JS_FreeValue(ctx, set);
+        return 0;
+    }
+    n = idb_index_set_len(ctx, set);
+    for (; s->cand < n; s->cand++) {
+        index = idb_index_set_at(ctx, set, s->cand);
+        if (JS_IsUninitialized(s->pred)) {
+            JSValue sp[2];
+
+            sp[0] = JS_DupValue(ctx, name_v);
+            sp[1] = idb_index_name(ctx, index);
+            CHECK(concolic_cmp_hook(ctx, sp + 2, 0, JS_CONCOLIC_EQ_STRICT),
+                  "IndexedDB: index's equality declined a name already established as unknown");
+            s->pred = sp[0];
+        }
+        r = step_tobool_run(ctx, hdr, s->pred, "Indexed Database §4.5 index(name) (the index named name)", &arm);
+        if (r) { JS_FreeValue(ctx, index); JS_FreeValue(ctx, set); return r; }
+        JS_FreeValue(ctx, s->pred);
+        s->pred = JS_UNINITIALIZED;
+        if (arm) {
+            *pindex = index;
+            break;
+        }
         JS_FreeValue(ctx, index);
+    }
+    JS_FreeValue(ctx, set);
+    return 0;
+}
+
+static int os_index_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    OsIndexState *s = st;
+    JSValue index, handle;
+    int r;
+
+    (void)argc; (void)out_cb; (void)out_argc;
+    *presult = JS_UNDEFINED;
+    JS_FreeValue(ctx, cb_result);
+    if (!s->started) {
+        JSValue store = os_get(ctx, hdr->this_val, OS_STORE), tx = os_get(ctx, hdr->this_val, OS_TRANSACTION);
+        bool deleted, finished;
+
+        s->started = 1;
+        s->cand = 0;
+        s->pred = JS_UNINITIALIZED;
+        DCHECK(JS_IsObject(store) && idb_transaction_is(tx), "an object store handle carried no store or no "
+                                                             "transaction");
+        deleted = idb_object_store_is_deleted(ctx, store);
+        finished = idb_transaction_state(ctx, tx) == IDB_TX_FINISHED;
+        JS_FreeValue(ctx, store);
+        JS_FreeValue(ctx, tx);
+        if (deleted) {
+            JS_ThrowDOMException(ctx, "InvalidStateError", "the object store has been deleted");
+            return JS_STEP_ABRUPT;
+        }
+        if (finished) {
+            JS_ThrowDOMException(ctx, "InvalidStateError", "the transaction has finished");
+            return JS_STEP_ABRUPT;
+        }
+        hdr->stage = OSIX_FIND;
+    }
+    DCHECK(hdr->stage == OSIX_FIND, "index(name) resumed at a stage it does not declare");
+    r = os_index_find(ctx, hdr, s, argv[0], &index);
+    if (r) return r;
+    if (JS_IsNull(index)) {
         JS_ThrowDOMException(ctx, "NotFoundError", "no index with that name exists in the object store");
-        goto fail;
+        return JS_STEP_ABRUPT;
     }
     /* "Return AN index handle associated with index and this", plus the note a page compares: "each call to
        this method on the same IDBObjectStore instance with the same name returns the same IDBIndex instance." */
-    handle = os_index_handle_for(ctx, this_val, index);
+    handle = os_index_handle_for(ctx, hdr->this_val, index);
     JS_FreeValue(ctx, index);
-    JS_FreeValue(ctx, store);
-    JS_FreeValue(ctx, tx);
-    return handle;
-
-fail:
-    JS_FreeValue(ctx, store);
-    JS_FreeValue(ctx, tx);
-    return JS_EXCEPTION;
+    *presult = handle;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl OSIX_DECL = {
+    os_index_step, sizeof(OsIndexState), os_index_visit, NULL,
+    "Indexed Database §4.5 IDBObjectStore index(name)", OSIX_STEPS
+};
 
 /* The FIRST FIVE STEPS of `createIndex` and the first five of `deleteIndex`, which §4.5 writes identically:
    "Let transaction be this's transaction. Let store be this's object store. If transaction is not an upgrade
@@ -1868,7 +1943,7 @@ void idb_object_store_init(JSContext *ctx)
        `undefined deleteIndex(DOMString name)`. The union is NOT nullable here, unlike createObjectStore's
        `keyPath` — §2.6 gives every index a key path — and the dictionary's two members carry the IDL's own
        `= false`, so the body reads values that are there. */
-    g_id_index = idl_method_id(ctx, INDEX_ARGS, 1, js_os_index, 0);
+    g_id_index = idl_method_id_step(ctx, INDEX_ARGS, 1, NULL, 0, &OSIX_DECL, 0);
     idl_this_iface(idb_object_store_is, "IDBObjectStore");
     g_id_create_index = idl_method_id_dict(ctx, CREATE_INDEX_ARGS, 3, INDEX_PARAMETERS,
                                            (int)(sizeof INDEX_PARAMETERS / sizeof INDEX_PARAMETERS[0]),
