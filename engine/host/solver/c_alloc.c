@@ -64,11 +64,12 @@ extern void *__libc_memalign(size_t align, size_t n);
 #define C_ALLOC_MEMALIGN(a, n) __libc_memalign((a), (n))
 #endif
 
-/* The running totals, relaxed atomics so a thread the runtime may start keeps them whole. `g_usable` is what
-   c_alloc_live answers; the two chunk totals are the allocator's own units, read only by c_alloc_census. An
-   in-use heap chunk is its usable size plus one word on both allocators (glibc's musable, dlmalloc's
-   CHUNK_OVERHEAD without FOOTERS); emscripten's dlmalloc has no mmap, so its mmapped total stays 0. */
-static size_t g_usable, g_heap_chunks, g_mmap_chunks;
+/* The running totals in the allocator's own unit, the chunk, relaxed atomics so a thread the runtime may start
+   keeps them whole. An in-use heap chunk is its usable size plus one word on both allocators (glibc's musable,
+   dlmalloc's CHUNK_OVERHEAD without FOOTERS), an mmapped one its usable size plus two; emscripten's dlmalloc has no
+   mmap, so its mmapped total stays 0. Their sum is what c_alloc_live answers: the bytes the allocator holds for live
+   blocks, headers included, since a heap of small blocks spends a word on each. */
+static size_t g_heap_chunks, g_mmap_chunks;
 
 #if !defined(__EMSCRIPTEN__)
 /* glibc's chunk header: the size word before the block, whose bit 1 marks a chunk mmapped on its own. A heap chunk
@@ -87,9 +88,20 @@ static size_t g_first_before, g_tcache_block;
 #define C_ALLOC_ENTER() do { } while (0)
 #endif
 
+/* The chunk `p` occupies, and which total holds it. */
+static size_t c_alloc_chunk(void *p, size_t **total)
+{
+    size_t u = malloc_usable_size(p);
+#if !defined(__EMSCRIPTEN__)
+    if (c_alloc_mmapped(p)) { *total = &g_mmap_chunks; return u + 2 * sizeof(size_t); }
+#endif
+    *total = &g_heap_chunks;
+    return u + sizeof(size_t);
+}
+
 static void c_alloc_add(void *p)
 {
-    size_t u;
+    size_t *total, c;
 #if !defined(__EMSCRIPTEN__)
     if (g_first == 1) {
         size_t own = p && !c_alloc_mmapped(p) ? malloc_usable_size(p) + sizeof(size_t) : 0;
@@ -98,27 +110,19 @@ static void c_alloc_add(void *p)
     }
 #endif
     if (!p) return;
-    u = malloc_usable_size(p);
-    __atomic_add_fetch(&g_usable, u, __ATOMIC_RELAXED);
-#if !defined(__EMSCRIPTEN__)
-    if (c_alloc_mmapped(p)) { __atomic_add_fetch(&g_mmap_chunks, u + 2 * sizeof(size_t), __ATOMIC_RELAXED); return; }
-#endif
-    __atomic_add_fetch(&g_heap_chunks, u + sizeof(size_t), __ATOMIC_RELAXED);
+    c = c_alloc_chunk(p, &total);
+    __atomic_add_fetch(total, c, __ATOMIC_RELAXED);
 }
 
 static void c_alloc_sub(void *p)
 {
-    size_t u;
+    size_t *total, c;
     if (!p) return;
-    u = malloc_usable_size(p);
-    CHECK(__atomic_load_n(&g_usable, __ATOMIC_RELAXED) >= u,
+    c = c_alloc_chunk(p, &total);
+    CHECK(__atomic_load_n(total, __ATOMIC_RELAXED) >= c,
           "the C heap's running total would fall below zero — a block freed here was handed out by an entry this "
           "file does not replace, so the total no longer describes the heap and RAM pressure reads it");
-    __atomic_sub_fetch(&g_usable, u, __ATOMIC_RELAXED);
-#if !defined(__EMSCRIPTEN__)
-    if (c_alloc_mmapped(p)) { __atomic_sub_fetch(&g_mmap_chunks, u + 2 * sizeof(size_t), __ATOMIC_RELAXED); return; }
-#endif
-    __atomic_sub_fetch(&g_heap_chunks, u + sizeof(size_t), __ATOMIC_RELAXED);
+    __atomic_sub_fetch(total, c, __ATOMIC_RELAXED);
 }
 
 void *malloc(size_t n) { void *p; C_ALLOC_ENTER(); p = C_ALLOC_MALLOC(n); c_alloc_add(p); return p; }
@@ -172,7 +176,10 @@ void *pvalloc(size_t n) { return memalign(4096, (n + 4095) & ~(size_t)4095); }
 void *realloc_in_place(void *p, size_t n) { (void)p; (void)n; return NULL; }
 #endif
 
-size_t c_alloc_live(void) { return __atomic_load_n(&g_usable, __ATOMIC_RELAXED); }
+size_t c_alloc_live(void)
+{
+    return __atomic_load_n(&g_heap_chunks, __ATOMIC_RELAXED) + __atomic_load_n(&g_mmap_chunks, __ATOMIC_RELAXED);
+}
 
 void c_alloc_census(CAllocCensus *out)
 {
