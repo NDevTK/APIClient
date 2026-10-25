@@ -1215,6 +1215,9 @@ static void js_cu_update_visit(JSContext *ctx, void *st, JSStepVisit *v)
                  "ReadOnlyError, a deleted source or effective object store is an InvalidStateError, a false " \
                  "got value flag is an InvalidStateError, a true key only flag is an InvalidStateError, and " \
                  "clone is a clone of value in this member's own Realm during transaction") \
+    X(CUU_KP_START, "Indexed Database §4.9 update step 9.1 (extract a key from clone using the effective object " \
+                    "store's key path: §7.1 evaluate a key path on a value, where an unknown key path forks over " \
+                    "which member of clone it names)") \
     IDB_KEY_PATH_EXTRACT_ALGO_STAGES(X, CUU_KP, "Indexed Database §4.9 update step 9.1 (let kpk be the " \
                                                 "result of extracting a key from a value using a key path " \
                                                 "with clone and the key path of this's effective object " \
@@ -1270,10 +1273,20 @@ static int js_cu_update(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
             STEP_GOTO(hdr->stage, CUU_OPERATION, &hdr->get_phase, &hdr->desc_phase, NULL);
             return JS_STEP_YIELD;
         }
-        /* No multiEntry flag: that flag is an INDEX's, and this is the effective object store's key path. */
-        idb_key_path_walk_start(ctx, hdr, &s->w, &s->kpres, s->clone, s->key_path, /*multi_entry*/ false,
-                                CUU_KP_LENGTH, CUU_OPERATION);                      /* STEP 9.1 */
+        STEP_GOTO(hdr->stage, CUU_KP_START, &hdr->get_phase, &hdr->desc_phase, NULL);
         return JS_STEP_YIELD;
+
+    /* No multiEntry flag: that flag is an INDEX's, and this is the effective object store's key path. Its own
+       stage because an unknown key path forks here and the stage re-enters. */
+    STEP_ARM(CUU_KP_START);
+    {
+        int r;
+
+        JS_FreeValue(ctx, cb_result);
+        r = idb_key_path_walk_start(ctx, hdr, &s->w, &s->kpres, s->clone, s->key_path,
+                                    /*multi_entry*/ false, CUU_KP_LENGTH, CUU_OPERATION);  /* STEP 9.1 */
+        return r ? r : JS_STEP_YIELD;
+    }
 
     /* STEP 9.1's extraction, whose rest points are §7.4's. Named individually for the reason
        core/dom/node.c names `clone a node`'s: a stage added to the algorithm does not compile until it has an

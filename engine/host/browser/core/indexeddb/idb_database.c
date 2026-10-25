@@ -1130,11 +1130,14 @@ int idb_store_record_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *sw, 
            key path, and index's MULTIENTRY FLAG." The value is the one §6.1 was given — §4.5 step 10's clone,
            which is why §7.1's own precondition holds and why nothing here runs the page's code. */
         key_path = idb_index_key_path(ctx, index);
-        idb_key_path_walk_start(ctx, hdr, &sw->w, &sw->kpres, sw->value, key_path,   /* STEP 5.1 */
-                                idb_index_multi_entry(ctx, index), base, base + IDB_SR_INDEX_TOOK);
-        JS_FreeValue(ctx, key_path);
-        JS_FreeValue(ctx, index);
-        return JS_STEP_YIELD;
+        {
+            int r = idb_key_path_walk_start(ctx, hdr, &sw->w, &sw->kpres, sw->value, key_path,  /* STEP 5.1 */
+                                            idb_index_multi_entry(ctx, index), base, base + IDB_SR_INDEX_TOOK);
+
+            JS_FreeValue(ctx, key_path);
+            JS_FreeValue(ctx, index);
+            return r ? r : JS_STEP_YIELD;
+        }
     }
 
     if (phase == IDB_SR_INDEX_TOOK) {

@@ -652,6 +652,9 @@ JSValue idb_object_store_delete_operation(JSContext *ctx, JSValueConst tx, JSVal
                     "rethrow is the conversion's own abrupt completion and rests nowhere)") \
     X(OSP_CLONE, "Indexed Database §4.5 add or put step 10 (let clone be a clone of value in targetRealm during " \
                  "transaction; step 9's targetRealm is this member's own realm)") \
+    X(OSP_KP_START, "Indexed Database §4.5 add or put step 11.1 (extract a key from clone using store's key path: " \
+                    "§7.1 evaluate a key path on a value, where an unknown key path forks over which member of " \
+                    "clone it names)") \
     IDB_KEY_PATH_EXTRACT_ALGO_STAGES(X, OSP_KP, "Indexed Database §4.5 add or put step 11.1 (let kpk be the " \
                                                 "result of extracting a key from a value using a key path with " \
                                                 "clone and store's key path)") \
@@ -774,11 +777,21 @@ static int js_os_put(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
             STEP_GOTO(hdr->stage, OSP_OPERATION, &hdr->get_phase, &hdr->desc_phase, NULL);
             return JS_STEP_YIELD;
         }
-        /* "with clone and store's KEY PATH" — and no multiEntry flag: §7.1's flag is an INDEX's, and §6.1 step
-           5.1 is its one producer. A store's key is never multiEntry. */
-        idb_key_path_walk_start(ctx, hdr, &s->w, &s->kpres, s->clone, s->key_path, /*multi_entry*/ false,
-                                OSP_KP_LENGTH, OSP_TOOK_KPK);                    /* STEP 11.1 */
+        STEP_GOTO(hdr->stage, OSP_KP_START, &hdr->get_phase, &hdr->desc_phase, NULL);
         return JS_STEP_YIELD;
+
+    /* "with clone and store's KEY PATH" — and no multiEntry flag: §7.1's flag is an INDEX's, and §6.1 step 5.1
+       is its one producer. A store's key is never multiEntry. Its own stage because an unknown key path forks
+       here and the stage re-enters. */
+    STEP_ARM(OSP_KP_START);
+    {
+        int r;
+
+        JS_FreeValue(ctx, cb_result);
+        r = idb_key_path_walk_start(ctx, hdr, &s->w, &s->kpres, s->clone, s->key_path,
+                                    /*multi_entry*/ false, OSP_KP_LENGTH, OSP_TOOK_KPK);  /* STEP 11.1 */
+        return r ? r : JS_STEP_YIELD;
+    }
 
     STEP_ARM(OSP_KP_LENGTH);
     STEP_ARM(OSP_KP_BEGIN);

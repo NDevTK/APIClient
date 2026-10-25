@@ -70,6 +70,9 @@ void idb_key_walk_visit(JSContext *ctx, IdbKeyWalk *w, JSStepVisit *v)
        that will re-ask about it — a `val` the visit does not name is not copied by a fork. */
     v->val(ctx, &w->unknown);
     v->val(ctx, &w->key);
+    v->val(ctx, &w->kp_queue);
+    v->val(ctx, &w->kp_pred);
+    v->val(ctx, &w->kp_list);
 }
 
 /* THE DECLARATION ABOVE DISCHARGED, AND NOTHING RESTATED — the shape core/idl_iter.c's `iter_cursor_release`

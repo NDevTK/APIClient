@@ -96,7 +96,10 @@ IdbKeyPathResult idb_key_path_extract(JSContext *ctx, JSValueConst value, JSValu
     IDB_KEY_ARRAY_ALGO_STAGES(X, P, W " → Indexed Database §7.1 extract a key from a value using a key path " \
                                       "step 3 (let key be the result of converting a value to a key with r)")
 
-void idb_key_path_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, IdbKeyPathResult *pres,
+/* A key path holding unknown input is first resolved against `value` (which of its members it names, one
+   world per candidate), so this can return a fork's step code: the caller returns it and calls this again from
+   the same stage, where the walk's own record resumes the resolution. Returns 0 once the walk has begun. */
+int  idb_key_path_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, IdbKeyPathResult *pres,
                              JSValueConst value, JSValueConst key_path, bool multi_entry, int base, int after);
 
 /* STEPS 4-5 AT THE CALLER'S OWN STAGE, over the answer `start` recorded in `res`. Returns §7.1's own three

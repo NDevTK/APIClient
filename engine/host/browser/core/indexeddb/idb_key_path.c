@@ -461,10 +461,10 @@ static bool idb_key_path_evaluate(JSContext *ctx, JSValueConst value, JSValueCon
 static void idb_key_path_precondition(JSContext *ctx, JSValueConst key_path)
 {
     if (idb_key_path_has_unknown(ctx, key_path)) {
-        DFAIL("Indexed Database §7.1 evaluate a key path on a value (or §7.2's injection) was asked to walk a "
-              "key path holding unknown input, which a store or index takes from §2.5's valid world. Build the "
-              "walk over it: its identifiers are unknown, so each step is an unknown member read of the value, "
-              "and the arms where the path names no member reach the walk's failure");
+        DFAIL("Indexed Database §7.2's injection (or §7.1's C entry, which no member calls) was asked to walk a "
+              "key path holding unknown input. §7.1's step walk resolves one first (idb_key_path_resolve_run); "
+              "build §7.2 over one the same way, where the worlds are the value's members its prefix can name "
+              "and a last identifier that may be a name the value does not hold");
         return;
     }
     DCHECK(idb_key_path_value_is_valid(ctx, key_path),
@@ -505,16 +505,185 @@ IdbKeyPathResult idb_key_path_extract(JSContext *ctx, JSValueConst value, JSValu
     return idb_key_path_answer(k, key, pkey);
 }
 
-void idb_key_path_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, IdbKeyPathResult *pres,
-                             JSValueConst value, JSValueConst key_path, bool multi_entry, int base, int after)
+/* The children of one candidate [path, member]: a String member's `length` (§7.1's first arm) and an Object
+   member's own string-keyed properties whose names are identifiers (its "Otherwise" arm reads own properties
+   only, and §2.5 admits no other name). `member` is a StructuredDeserialize output, so the reads run no page
+   code. Appended to `queue` in property order. */
+static void idb_kp_children(JSContext *ctx, JSValue queue, JSValueConst path, JSValueConst member)
 {
-    JSValue r;
+    const char *p = JS_ToCString(ctx, path);
+    JSPropertyEnum *keys = NULL;
+    uint32_t count = 0, i;
 
+    CHECK(p != NULL, "IndexedDB: OOM reading a candidate key path");
+    if (JS_IsString(member)) {
+        JSValue pair = JS_NewArray(ctx), len;
+        char *joined = malloc(strlen(p) + sizeof ".length");
+        bool ok = idb_key_path_step(ctx, member, "length", 6, &len);   /* §7.1's String arm */
+
+        CHECK(joined != NULL, "IndexedDB: OOM composing a candidate key path");
+        DCHECK(ok, "§7.1's String `length` arm answered failure");
+        sprintf(joined, "%s%slength", p, *p ? "." : "");
+        JS_SetPropertyUint32(ctx, pair, 0, JS_NewString(ctx, joined));
+        JS_SetPropertyUint32(ctx, pair, 1, len);
+        JS_SetPropertyUint32(ctx, queue, idb_key_path_list_len(ctx, queue), pair);
+        free(joined);
+    } else if (JS_IsObject(member)) {
+        CHECK(JS_GetOwnPropertyNames(ctx, &keys, &count, member, JS_GPN_STRING_MASK) == 0,
+              "IndexedDB: a StructuredDeserialize output's own properties could not be enumerated");
+        for (i = 0; i < count; i++) {
+            const char *k = JS_AtomToCString(ctx, keys[i].atom);
+
+            CHECK(k != NULL, "IndexedDB: OOM reading a property name");
+            if (*k && !strchr(k, '.') && idb_key_path_is_valid(k, strlen(k))) {
+                JSValue pair = JS_NewArray(ctx);
+                char *joined = malloc(strlen(p) + strlen(k) + 2);
+
+                CHECK(joined != NULL, "IndexedDB: OOM composing a candidate key path");
+                sprintf(joined, "%s%s%s", p, *p ? "." : "", k);
+                JS_SetPropertyUint32(ctx, pair, 0, JS_NewString(ctx, joined));
+                JS_SetPropertyUint32(ctx, pair, 1, JS_GetProperty(ctx, member, keys[i].atom));
+                JS_SetPropertyUint32(ctx, queue, idb_key_path_list_len(ctx, queue), pair);
+                free(joined);
+            }
+            JS_FreeCString(ctx, k);
+        }
+        for (i = 0; i < count; i++) JS_FreeAtom(ctx, keys[i].atom);
+        js_free(ctx, keys);
+    }
+    JS_FreeCString(ctx, p);
+}
+
+/* ONE UNKNOWN KEY PATH STRING `unknown`, against `value`: the key path names one of value's members, so the
+   worlds are an equality with each candidate path, in breadth-first order from "" (the value itself), and the
+   world past every candidate, where it names no member and §7.1 answers failure. A candidate's children join
+   the queue once the path is known not to be it. *pc receives the resolved path (owned) or JS_NULL for that
+   failure world. Returns 0, or a step code the caller returns.
+   Named residual. Not covered: a value whose members reach a cycle has no last candidate, so its failure world
+   is never reached. Next diff: ask the failure world beside each candidate. How its absence shows: no failure
+   arm over a cyclic value whose key path is unknown. */
+static int idb_kp_resolve_one(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValueConst value,
+                              JSValueConst unknown, JSValue *pc)
+{
+    int r, arm;
+
+    if (w->kp_phase == 0) {
+        JSValue pair = JS_NewArray(ctx);
+
+        JS_SetPropertyUint32(ctx, pair, 0, JS_NewString(ctx, ""));
+        JS_SetPropertyUint32(ctx, pair, 1, JS_DupValue(ctx, value));
+        w->kp_queue = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, w->kp_queue, 0, pair);
+        w->kp_pred = JS_UNINITIALIZED;
+        w->kp_cand = 0;
+        w->kp_phase = 1;
+    }
+    for (;;) {
+        JSValue pair, path, member;
+
+        if (w->kp_cand >= idb_key_path_list_len(ctx, w->kp_queue)) {
+            *pc = JS_NULL;
+            break;
+        }
+        pair = JS_GetPropertyUint32(ctx, w->kp_queue, w->kp_cand);
+        path = JS_GetPropertyUint32(ctx, pair, 0);
+        if (JS_IsUninitialized(w->kp_pred)) {
+            JSValue sp[2];
+
+            sp[0] = JS_DupValue(ctx, unknown);
+            sp[1] = JS_DupValue(ctx, path);
+            CHECK(concolic_cmp_hook(ctx, sp + 2, 0, JS_CONCOLIC_EQ_STRICT),
+                  "IndexedDB: §7.1's equality declined a key path already established as unknown");
+            w->kp_pred = sp[0];
+        }
+        r = step_tobool_run(ctx, hdr, w->kp_pred, "Indexed Database §7.1 evaluate a key path on a value (the "
+                            "key path names this member of value)", &arm);
+        if (r) {
+            JS_FreeValue(ctx, path);
+            JS_FreeValue(ctx, pair);
+            return r;
+        }
+        JS_FreeValue(ctx, w->kp_pred);
+        w->kp_pred = JS_UNINITIALIZED;
+        if (arm) {
+            *pc = path;
+            JS_FreeValue(ctx, pair);
+            break;
+        }
+        member = JS_GetPropertyUint32(ctx, pair, 1);
+        idb_kp_children(ctx, w->kp_queue, path, member);
+        JS_FreeValue(ctx, member);
+        JS_FreeValue(ctx, path);
+        JS_FreeValue(ctx, pair);
+        w->kp_cand++;
+    }
+    JS_FreeValue(ctx, w->kp_queue);
+    w->kp_queue = JS_UNDEFINED;
+    w->kp_pred = JS_UNDEFINED;
+    w->kp_cand = 0;
+    w->kp_phase = 0;
+    return 0;
+}
+
+/* A key path holding unknown input, made concrete in this flow: each unknown string resolved against `value`
+   (idb_kp_resolve_one), a list's entries in order. *ppath receives the concrete key path (owned) or JS_NULL
+   where one entry names no member, which is §7.1's failure. Returns 0, or a step code the caller returns. */
+static int idb_key_path_resolve_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValueConst value,
+                                    JSValueConst key_path, JSValue *ppath)
+{
+    uint32_t n;
+    int r;
+
+    if (concolic_is(key_path))
+        return idb_kp_resolve_one(ctx, hdr, w, value, key_path, ppath);
+    DCHECK(JS_IsArray(key_path), "§7.1 resolved a key path holding unknown input that is neither unknown itself "
+                                 "nor a list — idb_key_path_has_unknown answers false for a plain string");
+    if (w->kp_item == 0 && w->kp_phase == 0) w->kp_list = JS_NewArray(ctx);
+    n = idb_key_path_list_len(ctx, key_path);
+    for (; w->kp_item < n; w->kp_item++) {
+        JSValue e = JS_GetPropertyUint32(ctx, key_path, w->kp_item), c = JS_UNDEFINED;
+
+        if (concolic_is(e)) {
+            r = idb_kp_resolve_one(ctx, hdr, w, value, e, &c);
+            JS_FreeValue(ctx, e);
+            if (r) return r;
+            if (JS_IsNull(c)) break;
+        } else {
+            c = e;
+        }
+        JS_SetPropertyUint32(ctx, w->kp_list, w->kp_item, c);
+    }
+    *ppath = w->kp_item < n ? JS_NULL : w->kp_list;
+    if (w->kp_item < n) JS_FreeValue(ctx, w->kp_list);
+    w->kp_list = JS_UNDEFINED;
+    w->kp_item = 0;
+    return 0;
+}
+
+int idb_key_path_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, IdbKeyPathResult *pres,
+                            JSValueConst value, JSValueConst key_path, bool multi_entry, int base, int after)
+{
+    JSValue r, resolved = JS_UNDEFINED;
+    bool ok;
+
+    if (idb_key_path_has_unknown(ctx, key_path)) {
+        int rc = idb_key_path_resolve_run(ctx, hdr, w, value, key_path, &resolved);
+
+        if (rc) return rc;   /* a fork over which member the key path names; the caller's stage re-enters */
+        if (JS_IsNull(resolved)) {
+            *pres = IDB_KEY_PATH_FAILURE;   /* the key path names no member of value */
+            hdr->stage = (uint16_t)after;
+            return 0;
+        }
+        key_path = resolved;
+    }
     idb_key_path_precondition(ctx, key_path);
-    if (!idb_key_path_evaluate(ctx, value, key_path, &r)) {   /* STEPS 1-2 */
+    ok = idb_key_path_evaluate(ctx, value, key_path, &r);    /* STEPS 1-2 */
+    JS_FreeValue(ctx, resolved);
+    if (!ok) {
         *pres = IDB_KEY_PATH_FAILURE;
         hdr->stage = (uint16_t)after;
-        return;
+        return 0;
     }
     /* THE CONVERSION IS WHAT ANSWERS FROM HERE, which is what this records: `failure` is the one answer the walk
        cannot report, because on that arm it was never begun. STEP 3 picks its conversion by the flag. */
@@ -524,6 +693,7 @@ void idb_key_path_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, IdbK
     else
         idb_key_walk_start(ctx, hdr, w, r, base, after);               /* STEP 3 */
     JS_FreeValue(ctx, r);
+    return 0;
 }
 
 IdbKeyPathResult idb_key_path_walk_take(JSContext *ctx, IdbKeyWalk *w, IdbKeyPathResult res, JSValue *pkey)
