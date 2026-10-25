@@ -13,6 +13,8 @@
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/flex_container_baseline.h"
+#include "core/layout/float_placement.h"
+#include "core/layout/flow_placement.h"
 #include "core/layout/grid_baseline.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
@@ -876,50 +878,8 @@ static void lb_collect_end(LbCollect *k, lxb_dom_element_t *style, BlockFlowRun 
     DCHECK(k->walk.end == run.end, "an inline formatting context's collection was closed over another run");
     inline_run_walk_end(&k->walk);
     text_run_measure_finish_begin(k->m);
-    /* CSS 2.2 §9.5 "Floats" reaches every line box of a block formatting context, while the walk above sees
-       only the run: "the current and subsequent line boxes created next to the float are shortened as
-       necessary to make room for the margin box of the float", and §9.4.2 "Inline formatting contexts" says
-       line boxes "may vary in width if available horizontal space is reduced due to floats". `lb_child`
-       refuses a float in this run; a float in a preceding sibling's subtree or an ancestor shortens these line
-       boxes too, and the fill would otherwise report the unshortened containing-block width, a plausible wrong
-       number. This check is the only refusal for that population: §9.5 says a float changes no position on
-       §9.4.1's stack ("as if the float did not exist"), and core/layout/block_flow.c refuses floats only under
-       §9.5.2's and §10.6.7's own conditions. */
-    /* Named residual. Not covered: this asks whether the context holds a float, where §9.5 asks whether a line
-       box is next to one ("a line box is next to a float when there exists a vertical position that satisfies
-       all of these four conditions: (a) at or below the top of the line box, (b) at or above the bottom of the
-       line box, (c) below the top margin edge of the float, and (d) above the bottom margin edge of the
-       float"). Next: §9.5's shortening, that test plus "if a shortened line box is too small to contain any
-       content, then the line box is shifted downward (and its width recomputed) until either some content fits
-       or there are no more floats present", over core/layout/float_placement.h's placement and the line boxes'
-       position in the context root's frame (core/layout/flow_placement.h's entry); `LineBoxAvailableWidth`
-       becomes per line box. How its
-       absence shows: this abort firing for a context in which no line box and no float share a vertical
-       position. */
-    /* An `#if APICLIENT_DEV` block rather than a bare `DCHECKF`, because naming the float needs a local, and a
-       local beside a `DCHECKF` survives in release: a subtree walk per fill feeding an abort that is not
-       there. core/html/close_watcher.c makes the same trade. */
-#if APICLIENT_DEV
-    {
-        lxb_dom_element_t *fl = block_flow_context_first_float(style);
-        char sbuf[160], fbuf[160];
-
-        DCHECKF(fl == NULL,
-                "%s: CSS 2.2 §9.5 \"Floats\" puts %s in the same block formatting context as the line boxes "
-                "this fill is about to measure, and §9.4.2 \"Inline formatting contexts\" makes that float an "
-                "operand of their width: \"although line boxes in the same inline formatting context generally "
-                "have the same width (that of the containing block), they may vary in width if available "
-                "horizontal space is reduced due to floats\". The width this fill would use is the containing "
-                "block's, which is the right number only where no float is next to any of these lines — and "
-                "which line boxes those are is §9.5's own four-condition test over the float's MARGIN BOX, so "
-                "the answer needs the float PLACED. BUILD §9.5's shortening over core/layout/float_placement.h's "
-                "placement of §9.5.1 \"Positioning the float: the 'float' property\": this is the consumer "
-                "that turns that placement into a width. UNTIL THEN THE ABORT IS THE ANSWER — "
-                "the alternative is the containing block's width reported for a line box that is not that "
-                "wide, which no gate here can tell from a measurement",
-                box_subject(style, sbuf, sizeof sbuf), box_subject(fl, fbuf, sizeof fbuf));
-    }
-#endif
+    /* CSS 2.2 §9.5's floats reach these line boxes through the fill's bands (`lb_fill_bands_ask`), and a float
+       inside the run is refused by `lb_child`. */
 }
 
 /* The distribution begun at §9.4.2's width, once css-sizing-3 §2.1's walk has answered whether the run splits. */
@@ -928,9 +888,9 @@ static void lb_fill_distribute_begin(TextRunFill *d, const TextRunMeasure *m, lx
 {
     CssPx available = css_px(0.0);
 
-    /* §9.4.2: "The width of a line box is determined by a containing block and the presence of floats". With
-       floats refused above (in this run by `lb_child`, elsewhere in the context by the check just made), every
-       line box is as wide as the establishing container's content box, which `avail` names: `style` answers
+    /* §9.4.2: "The width of a line box is determined by a containing block and the presence of floats". This
+       is the first line box's width with no float beside it, the establishing container's content box, which a
+       banded fill then narrows line by line (`lb_fill_band`); `avail` names it: `style` answers
        for §9.2.1.1's anonymous block box, whose non-inherited properties "have their initial value" so
        §10.3.3's equation with six zero terms gives it the parent's content width, and a caller states it for
        css-flexbox-1 §4 "Flex Items"' anonymous block container flex item, whose width is css-flexbox-1 §9.7
@@ -1000,6 +960,16 @@ typedef struct LbFill {
     LbExtent       span_strut;
     CssPx         *align;      /* one per line, read where `aligned` */
     bool          *aligned;
+    /* CSS 2.2 §9.5's shortening: the placed margin boxes of the context's floats before this run (`bands_n`), the
+       run's line box top and its establishing box's left content edge in the context root's frame, that box's
+       content width, and per line the band's left edge (from the content edge) and width. `bands` false is a
+       run no float precedes, every line the content box's width. */
+    bool           bands, bands_asked;
+    size_t         banded;     /* lines whose band is set: the open line's is set once the line before it closes */
+    FlowFloatBox  *bands_v;
+    size_t         bands_n;
+    CssPx          origin_top, origin_left, content_w;
+    CssPx         *line_left, *line_w;
     bool           checks;     /* a dev build re-derives this fill; false for that re-derivation */
     struct LbFill *check;      /* the re-derivation, from LB_FILL_CHECK until its extents are compared */
 } LbFill;
@@ -1035,6 +1005,13 @@ static void lb_fill_init(LbFill *f, lxb_dom_element_t *style, BlockFlowRun run, 
     f->span_hi = css_px(0.0);
     f->align = NULL;
     f->aligned = NULL;
+    f->bands = false;
+    f->bands_asked = false;
+    f->banded = 0;
+    f->bands_v = NULL;
+    f->bands_n = 0;
+    f->line_left = NULL;
+    f->line_w = NULL;
     f->checks = checks;
     f->check = NULL;
     f->stepping = false;
@@ -1055,6 +1032,9 @@ static void lb_fill_release(LbFill *f)
     free(f->partial);
     free(f->align);
     free(f->aligned);
+    free(f->bands_v);
+    free(f->line_left);
+    free(f->line_w);
     text_run_measure_release(&f->m);
     if (f->check != NULL) {
         lb_fill_release(f->check);
@@ -1064,7 +1044,7 @@ static void lb_fill_release(LbFill *f)
 }
 
 static CssPx lb_align_offset(lxb_dom_element_t *style, const TextRunMeasure *m, TextRunLine line,
-                             size_t index, size_t n);
+                             size_t index, size_t n, const CssPx *band);
 
 /* css-text-4 §7.1's offset of line `i`, derived on first read: `lb_align_offset` reads a used width only where
    it is an operand, and a line no caller places never asks. */
@@ -1078,7 +1058,9 @@ static CssPx lb_fill_align(LbFill *f, lxb_dom_element_t *style, size_t i)
               "out of memory holding css-text-4 §7.1's line offsets for one inline formatting context");
     }
     if (!f->aligned[i]) {
-        f->align[i] = lb_align_offset(style, &f->m, f->lines[i], i, f->n);
+        f->align[i] = f->bands ? css_px_add(f->line_left[i], lb_align_offset(style, &f->m, f->lines[i], i, f->n,
+                                                                              &f->line_w[i]))
+                               : lb_align_offset(style, &f->m, f->lines[i], i, f->n, NULL);
         f->aligned[i] = true;
     }
     return f->align[i];
@@ -1204,6 +1186,163 @@ static bool lb_left(void)
 
 /* The fill's lines: css-sizing-3 §2.1's walk, then §9.4.2's distribution, then a dev build's second derivation.
    False when the allowance ran out first, with every walk holding its place. */
+/* CSS 2.2 §9.5: "the current and subsequent line boxes created next to the float are shortened as necessary to
+   make room for the margin box of the float". The floats that reach this run's line boxes are those of its block
+   formatting context that precede it in tree order: a float inside the run is refused by `lb_child`, and a later
+   one sits at or below the line holding the box before it ("The outer top of an element's floating box may not be
+   higher than the top of any line-box containing a box generated by an element earlier in the source document").
+   They are placed, with the run's line box top the walk recorded. A stated width is a run sized outside a block
+   formatting context's walk (a flex item's anonymous box, an intrinsic size), which no outer float reaches. False
+   ("not yet") when a search or placement was deferred. */
+static bool lb_fill_bands_ask(LbFill *f)
+{
+    lxb_dom_node_t *sn = lxb_dom_interface_node(f->style), *first = sn;
+    lxb_dom_element_t **v, *after = f->run.after != NULL ? lxb_dom_interface_element(f->run.after) : NULL;
+    CssPx top, unused;
+    size_t n, i, k = 0;
+    char sbuf[160], fbuf[160];
+
+    if (f->bands_asked) return true;
+    if (f->avail.stated) {
+        f->bands_asked = true;
+        return true;
+    }
+    if (!block_flow_context_floats_ask(f->style, &v, &n)) return false;
+    if (f->run.after != NULL) {
+        lxb_dom_node_t *x = f->run.after;
+
+        while (x != sn && x->next == NULL) x = x->parent;
+        first = x == sn ? NULL : x->next;
+    }
+    for (i = 0; i < n; i++)
+        if (first != NULL && block_flow_node_precedes(lxb_dom_interface_node(v[i]), first)) v[k++] = v[i];
+    if (k == 0) {
+        free(v);
+        f->bands_asked = true;
+        return true;
+    }
+    if (!flow_placement_run_top_peek(f->style, after, &top)) {
+        /* The walk of `style` records the top; a reader that reaches these line boxes first (a paint, a
+           fragment's position) asks it, as a question of its own, and is asked again once it has run. */
+        if (!block_flow_walk_ask(f->style)) {
+            free(v);
+            return false;
+        }
+    }
+    if (!flow_placement_run_top_peek(f->style, after, &top)) {
+        DFAILF("%s: %s precedes this run of line boxes in its block formatting context, and the walk recorded no top "
+               "for the run's line boxes", box_subject(f->style, sbuf, sizeof sbuf), box_subject(v[0], fbuf,
+               sizeof fbuf));
+        free(v);
+        f->bands_asked = true;
+        return true;
+    }
+    for (i = 0; i < k; i++) {
+        lxb_dom_element_t *fcb = block_flow_static_position_containing_block(v[i]);
+        FlowFloatBox fb;
+        const lxb_dom_node_t *x;
+        bool open = false;
+
+        if (flow_placement_float_box_peek(v[i], &fb) || flow_placement_bfc_frame_peek(fcb, &unused)) continue;
+        for (x = sn; x != NULL; x = x->parent)
+            if (x == lxb_dom_interface_node(fcb)) open = true;
+        if (!open) continue;
+        DFAILF("%s's line boxes follow %s, whose containing block's top content edge is not resolved yet. BUILD the "
+               "float's placement deferred to where that edge resolves", box_subject(f->style, sbuf, sizeof sbuf),
+               box_subject(v[i], fbuf, sizeof fbuf));
+        free(v);
+        f->bands_asked = true;
+        return true;
+    }
+    if (f->bands_v == NULL) {
+        f->bands_v = malloc(k * sizeof *f->bands_v);
+        CHECK(f->bands_v != NULL, "out of memory holding the floats beside one run of line boxes");
+    }
+    for (i = 0; i < k; i++)
+        if (!float_placement_ask(v[i], &f->bands_v[i])) {
+            free(v);
+            return false;
+        }
+    free(v);
+    f->bands_n = k;
+    f->origin_top = top;
+    f->origin_left = float_placement_content_left(f->style, block_flow_context_root(f->style));
+    f->content_w = used_value_content_px(f->style, false);
+    f->line_left = malloc((f->m.count + 1) * sizeof *f->line_left);
+    f->line_w = malloc((f->m.count + 1) * sizeof *f->line_w);
+    f->partial = malloc((f->m.count + 1) * sizeof *f->partial);
+    CHECK(f->line_left != NULL && f->line_w != NULL && f->partial != NULL,
+          "out of memory holding the line bands of one run of line boxes");
+    f->bands = true;
+    f->bands_asked = true;
+    return true;
+}
+
+/* The band of line `line`, whose top is `y` below the run's line box top: the content box's left and right edges
+   narrowed by the floats beside that line. Named residual. Not covered: the band is taken at the line's top
+   alone, so a float starting lower beside a line box does not shorten it. Next: the band over the line's own
+   height, which the line's extent fixes only once its content is chosen. How its absence shows: content on a line
+   reaching into a float that starts below the line's top. */
+static void lb_fill_band(LbFill *f, size_t line, CssPx y)
+{
+    CssPx left = f->origin_left, right = css_px_add(f->origin_left, f->content_w), next = css_px(0.0);
+
+    (void)float_placement_band(f->bands_v, f->bands_n, css_px_add(f->origin_top, y), css_px(0.0), &left, &right,
+                               &next);
+    f->line_left[line] = css_px_sub(left, f->origin_left);
+    f->line_w[line] = css_px_max(css_px_sub(right, left), css_px(0.0));
+    f->banded = line + 1;
+}
+
+/* With floats beside the run, each line box's extent is taken as the fill closes it, since it fixes where the
+   next line box stands and so the band the fill fits that line to. One item per step, holding its place. */
+static bool lb_fill_band_pull(LbFill *f)
+{
+    const TextRunLine *lines;
+    size_t n = text_run_fill_lines(&f->dist, &lines);
+    char sbuf[160];
+
+    while (f->extents < n) {
+        LbLineFacts *v = &f->partial[f->extents];
+
+        if (!f->walking) {
+            if (!lb_left()) return false;
+            /* A step can close two lines (an overflow and then a forced break or the end of the text), so the
+               second takes its band here, at its own top, from the line just walked. */
+            if (f->banded <= f->extents) lb_fill_band(f, f->extents, f->top);
+            layout_job_line_metrics_spend(lb_line_walk_begin(&f->walk, f->style, lines[f->extents]));
+            f->walking = true;
+            layout_job_line_items_spend(1);
+        }
+        while (!lb_line_walk_done(&f->walk)) {
+            size_t i = f->walk.i;
+
+            if (!lb_left()) return false;
+            if (text_run_measure_item_is_atomic(&f->m, i) && !lb_atomic_ask(text_run_measure_item_style(&f->m, i)))
+                return false;
+            layout_job_line_metrics_spend(lb_line_walk_item(&f->walk, &f->m));
+            layout_job_line_items_spend(1);
+        }
+        v->e = lb_line_walk_end(&f->walk, &f->m, &v->exists);
+        v->top = f->top;
+        if (v->exists) f->top = css_px_add(f->top, css_px_add(v->e.above, v->e.below));
+        f->walking = false;
+        /* §9.5: "If a shortened line box is too small to contain any content, then the line box is shifted
+           downward (and its width recomputed) until either some content fits or there are no more floats
+           present." */
+        DCHECKF(lines[f->extents].size.px <= f->line_w[f->extents].px || f->line_w[f->extents].px >= f->content_w.px,
+                "%s: a line box beside a float is too narrow for its first piece of content (%g px in %g px). "
+                "BUILD CSS 2.2 §9.5's shift of the line box below the float",
+                box_subject(f->style, sbuf, sizeof sbuf), lines[f->extents].size.px, f->line_w[f->extents].px);
+        f->extents++;
+    }
+    if (!text_run_fill_done(&f->dist) && f->banded == n) {
+        lb_fill_band(f, n, f->top);
+        text_run_fill_set_available(&f->dist, f->line_w[n]);
+    }
+    return true;
+}
+
 static bool lb_fill_lines_pull(LbFill *f)
 {
     DCHECK(!f->stepping,
@@ -1235,15 +1374,27 @@ static bool lb_fill_lines_pull(LbFill *f)
         }
         /* A derived width is `style`'s own used width, which may shrink-to-fit over its intrinsic sizes. */
         if (!f->avail.stated && text_run_measure_splits(&f->m) && !used_value_width_ask(f->style)) return false;
+        if (!lb_fill_bands_ask(f)) return false;
         lb_fill_distribute_begin(&f->dist, &f->m, f->style, f->avail);
+        if (f->bands) {
+            lb_fill_band(f, 0, css_px(0.0));
+            if (!text_run_fill_done(&f->dist)) text_run_fill_set_available(&f->dist, f->line_w[0]);
+        }
         f->phase = LB_FILL_DISTRIBUTE;
     }
     if (f->phase == LB_FILL_DISTRIBUTE) {
-        while (!text_run_fill_done(&f->dist)) {
+        for (;;) {
+            if (f->bands && !lb_fill_band_pull(f)) return false;
+            if (text_run_fill_done(&f->dist)) break;
             if (!lb_left()) return false;
             layout_job_line_items_spend(text_run_fill_step(&f->dist, &f->m));
         }
         f->n = text_run_fill_end(&f->dist, &f->m, &f->lines);
+        if (f->bands) {
+            DCHECK(f->extents == f->n, "a banded fill closed with a line box whose extent was not taken");
+            f->facts = f->partial;
+            f->partial = NULL;
+        }
         DCHECK(f->n == 0 || f->lines != NULL, "CSS 2.2 §9.4.2's fill reported line boxes and handed back none");
         f->phase = APICLIENT_DEV && f->checks ? LB_FILL_CHECK : LB_FILL_LINES;
     }
@@ -1436,15 +1587,6 @@ bool line_box_atomics_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAva
     LbFill *f;
     size_t items;
 
-#if APICLIENT_DEV
-    /* The fill's float check (lb_fill) searches the fill's whole formatting context. It is asked here first,
-       where "not yet" propagates, so a resting drive divides the search; the fill then reads the held answer. */
-    {
-        lxb_dom_element_t *fl;
-
-        if (!block_flow_context_first_float_ask(style, &fl)) return false;
-    }
-#endif
     f = lb_fill_of(style, run, avail);
     if (f == NULL || !lb_fill_lines_pull(f)) {
         METRIC_ADD(fill_rests, 1);
@@ -1627,9 +1769,26 @@ bool line_box_content_span_ask(lxb_dom_element_t *style, BlockFlowRun run,
            with no line box reports a degenerate span there. It is inside the padding box (CSS 2 §8.1), CSSOM View
            §2's other operand, so the seed cannot invent an overflow. */
         CssPx widest = lb_widest_line(f->lines, f->n);
+        size_t i;
 
         *lo = css_px(0.0);
         *hi = css_px(0.0);
+        /* CSS 2.2 §9.5's shortened line boxes start at their band's start edge, so each line reaches from there. */
+        if (f->bands) {
+            bool rtl = css_computed_keyword_is(style, "direction", CSS_KEYWORD_RTL);
+
+            for (i = 0; i < f->n; i++) {
+                CssPx end = css_px_add(f->line_left[i], f->line_w[i]);
+
+                if (rtl) {
+                    *lo = css_px_min(*lo, css_px_sub(end, f->lines[i].size));
+                    *hi = css_px_max(*hi, end);
+                } else {
+                    *hi = css_px_max(*hi, css_px_add(f->line_left[i], f->lines[i].size));
+                }
+            }
+            return true;
+        }
         if (css_computed_keyword_is(style, "direction", CSS_KEYWORD_RTL)) {
             /* The start edge is line-right, so content grows toward the lower coordinate and the line box's
                right edge is the far one. Only this arm needs the line box's width, so the used content width is
@@ -1709,7 +1868,7 @@ static char *lb_line_alignment(lxb_dom_element_t *style, bool last)
    of a line box are too long to fit within it, then the contents are start-aligned: any content that doesn't
    fit overflows the line box's end edge", which is also what makes the skip sound. */
 static CssPx lb_align_offset(lxb_dom_element_t *style, const TextRunMeasure *m, TextRunLine line,
-                             size_t index, size_t n)
+                             size_t index, size_t n, const CssPx *band)
 {
     char *kw = lb_line_alignment(style, lb_line_is_last(m, line, index, n));
     bool rtl = css_computed_keyword_is(style, "direction", CSS_KEYWORD_RTL);
@@ -1768,7 +1927,7 @@ static CssPx lb_align_offset(lxb_dom_element_t *style, const TextRunMeasure *m, 
        §10.3 over the establishing box. An `rtl` context aligning line-left is not skipped: §7.1's overflow
        sentence start-aligns a too-long line, which under `rtl` is the line-right edge. */
     if (to_left && !centered && !rtl) return css_px(0.0);
-    width = used_value_content_px(style, false);
+    width = band != NULL ? *band : used_value_content_px(style, false);
     slack = css_px_sub(width, line.size);
     /* §7.1's overflow sentence. A negative slack is a line "too long to fit within it", and its contents are
        start-aligned whatever the property said. */

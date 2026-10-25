@@ -127,6 +127,13 @@ void flow_placement_run_record(const lxb_dom_element_t *container, const lxb_dom
 bool flow_placement_run_peek(const lxb_dom_element_t *container, const lxb_dom_element_t *after,
                              FlowRunStart *out);
 
+/* Where the line boxes of one of §9.2.1.1's runs start in the context root's content-box frame: the top content
+   edge of the box that establishes their inline formatting context (the anonymous block box, or the container
+   when the run is its whole content), keyed as the run start is. The fill reads it to shorten the line boxes
+   beside the context's floats. */
+void flow_placement_run_top_record(const lxb_dom_element_t *container, const lxb_dom_element_t *after, CssPx top);
+bool flow_placement_run_top_peek(const lxb_dom_element_t *container, const lxb_dom_element_t *after, CssPx *out);
+
 /* CSS 2.1 §17.4's table box on its wrapper box's stack: the distance from the wrapper's top content edge to the
    table box's top border edge, keyed by the table element. */
 void flow_placement_table_box_record(const lxb_dom_element_t *table, CssPx top);

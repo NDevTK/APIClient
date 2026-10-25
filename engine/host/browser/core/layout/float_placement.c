@@ -66,6 +66,8 @@ static bool get_place(lxb_dom_element_t *f, lxb_dom_element_t *root, const FlowF
 {
     lxb_dom_element_t *cb = block_flow_static_position_containing_block(f);
     CssPx start, frame_top = css_px(0.0), cb_left, cb_right, y, w, h, ignored;
+    bool clear_left, clear_right;
+    size_t i;
     char fbuf[160], cbuf[160];
 
     /* The margin box's size: §10.3.5's shrink-to-fit width and §10.6.7's height, measured first where they
@@ -99,6 +101,13 @@ static bool get_place(lxb_dom_element_t *f, lxb_dom_element_t *root, const FlowF
        an element earlier in the source document." Earlier floats' tops never decrease, so the last is the
        highest of them. */
     if (n > 0) y = css_px_max(y, placed[n - 1].top);
+    /* CSS 2.2 §9.5.2's constraint for a float with `clear` set: "The top outer edge of the float must be below the
+       bottom outer edge of all earlier left-floating boxes (in the case of 'clear: left'), or all earlier
+       right-floating boxes (in the case of 'clear: right'), or both ('clear: both')." */
+    if (block_flow_clear_sides(f, &clear_left, &clear_right))
+        for (i = 0; i < n; i++)
+            if (placed[i].right ? clear_right : clear_left)
+                y = css_px_max(y, css_px_add(placed[i].top, placed[i].height));
     for (;;) {
         CssPx left = cb_left, right = cb_right, next = css_px(0.0);
         /* The edges the floats beside the band leave: "for each such earlier box, either the left outer edge of

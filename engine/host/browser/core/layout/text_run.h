@@ -296,8 +296,8 @@ typedef struct {
 
 /* CSS 2.2 §9.4.2's distribution of an answered run across line boxes at one available width ("the width of a
    line box is determined by a containing block and the presence of floats"), as a walk over the run's code point
-   positions held between steps. `available` is the establishing box's used content width; a context with floats
-   needs per-line widths and is not a caller yet. It is ignored, provably and asserted, when
+   positions held between steps. `available` is the open line's width, the establishing box's used content width
+   unless the caller narrows it beside floats between steps. It is ignored, provably and asserted, when
    `text_run_measure_splits` is false. Greedy, as §9.4.2 is: the widest prefix that fits, or one segment when
    nothing fits. The lines partition the items in order (a trailing box edge included), so every box has a line,
    as CSSOM View §6's `getClientRects()` step 3 needs. The run must outlive the fill. */
@@ -320,6 +320,11 @@ bool text_run_fill_done(const TextRunFill *f);
 size_t text_run_fill_step(TextRunFill *f, const TextRunMeasure *m);
 size_t text_run_fill_end(TextRunFill *f, const TextRunMeasure *m, TextRunLine **lines);
 void text_run_fill_release(TextRunFill *f);
+/* Between steps: the lines emitted so far (`*lines`, borrowed until the next step or `end`), and the available
+   width of the line now open, which §9.4.2 lets vary line by line ("they may vary in width if available
+   horizontal space is reduced due to floats"). */
+size_t text_run_fill_lines(const TextRunFill *f, const TextRunLine **lines);
+void text_run_fill_set_available(TextRunFill *f, CssPx available);
 
 /* CSS 2.2 §9.4.2's theorem: is there anywhere inside this run for the fill to break. False means one line box
    at every available width, so a caller need not derive one. */

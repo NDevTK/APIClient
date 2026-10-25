@@ -1134,6 +1134,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/floatplace.h"
 #include "fixture/clearance.h"
 #include "fixture/avoidance.h"
+#include "fixture/shortening.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1620,6 +1621,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "floatplace", HTML_FLOATPLACE },
     { "clearance", HTML_CLEARANCE },
     { "avoidance", HTML_AVOIDANCE },
+    { "shortening", HTML_SHORTENING },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -14866,6 +14868,97 @@ TF_UNIT void probes_avoidance(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `shortening` document (fixture/shortening.h). */
+TF_UNIT void probes_shortening(const char *js, Probe *tab, int *n) {
+    const char *sh_why = NULL; int sh_reached = !!strstr(js, "\"/api/shortening\"");
+    const char *sh_p_why = NULL; int sh_p_tt = 1;
+    const char *sh_h_why = NULL; int sh_h_tt = 1;
+
+    fold_row(&sh_reached, &sh_why, sh_reached,
+             "NOT REACHED: there is no /api/shortening record at all, so the document aborted before its fetch");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s1ax", "50") &&
+                                  param_value_is(js, "/api/shortening", "s1ay", "3"),
+             "CSS 2.2 §9.5: s1a is not at (50, 3) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s1cx", "130") &&
+                                  param_value_is(js, "/api/shortening", "s1cy", "3"),
+             "CSS 2.2 §9.5: s1c is not at (130, 3) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s1dx", "50") &&
+                                  param_value_is(js, "/api/shortening", "s1dy", "13"),
+             "CSS 2.2 §9.5: s1d is not at (50, 13) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s1kx", "40") &&
+                                  param_value_is(js, "/api/shortening", "s1ky", "33"),
+             "CSS 2.2 §9.5: s1k is not at (40, 33) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s2ax", "0") &&
+                                  param_value_is(js, "/api/shortening", "s2ay", "3"),
+             "CSS 2.2 §9.5: s2a is not at (0, 3) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s2dx", "0") &&
+                                  param_value_is(js, "/api/shortening", "s2dy", "13"),
+             "CSS 2.2 §9.5: s2d is not at (0, 13) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s2fx", "80") &&
+                                  param_value_is(js, "/api/shortening", "s2fy", "13"),
+             "CSS 2.2 §9.5: s2f is not at (80, 13) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s3ax", "120") &&
+                                  param_value_is(js, "/api/shortening", "s3ay", "8"),
+             "CSS 2.2 §9.5: s3a is not at (120, 8) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s3bx", "160") &&
+                                  param_value_is(js, "/api/shortening", "s3by", "8"),
+             "CSS 2.2 §9.5: s3b is not at (160, 8) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s3cx", "120") &&
+                                  param_value_is(js, "/api/shortening", "s3cy", "18"),
+             "CSS 2.2 §9.5: s3c is not at (120, 18) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s4ax", "50") &&
+                                  param_value_is(js, "/api/shortening", "s4ay", "3"),
+             "CSS 2.2 §9.5: s4a is not at (50, 3) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s4bx", "90") &&
+                                  param_value_is(js, "/api/shortening", "s4by", "3"),
+             "CSS 2.2 §9.5: s4b is not at (90, 3) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s4cx", "130") &&
+                                  param_value_is(js, "/api/shortening", "s4cy", "3"),
+             "CSS 2.2 §9.5: s4c is not at (130, 3) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s4dx", "100") &&
+                                  param_value_is(js, "/api/shortening", "s4dy", "13"),
+             "CSS 2.2 §9.5: s4d is not at (100, 13) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s4ex", "140") &&
+                                  param_value_is(js, "/api/shortening", "s4ey", "13"),
+             "CSS 2.2 §9.5: s4e is not at (140, 13) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s5ax", "50") &&
+                                  param_value_is(js, "/api/shortening", "s5ay", "13"),
+             "CSS 2.2 §9.5: s5a is not at (50, 13) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s6ax", "10") &&
+                                  param_value_is(js, "/api/shortening", "s6ay", "3"),
+             "CSS 2.2 §9.5: s6a is not at (10, 3) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s6cx", "90") &&
+                                  param_value_is(js, "/api/shortening", "s6cy", "3"),
+             "CSS 2.2 §9.5: s6c is not at (90, 3) on its shortened line box");
+    fold_row(&sh_p_tt, &sh_p_why, param_value_is(js, "/api/shortening", "s6dx", "90") &&
+                                  param_value_is(js, "/api/shortening", "s6dy", "13"),
+             "CSS 2.2 §9.5: s6d is not at (90, 13) on its shortened line box");
+    fold_row(&sh_h_tt, &sh_h_why, param_value_is(js, "/api/shortening", "s1h", "40"),
+             "CSS 2.2 §10.6.3: s1 is not 40px tall over its line boxes");
+    fold_row(&sh_h_tt, &sh_h_why, param_value_is(js, "/api/shortening", "s2h", "20"),
+             "CSS 2.2 §10.6.3: s2 is not 20px tall over its line boxes");
+    fold_row(&sh_h_tt, &sh_h_why, param_value_is(js, "/api/shortening", "s3h", "25"),
+             "CSS 2.2 §10.6.3: s3 is not 25px tall over its line boxes");
+    fold_row(&sh_h_tt, &sh_h_why, param_value_is(js, "/api/shortening", "s4h", "35"),
+             "CSS 2.2 §10.6.3: s4 is not 35px tall over its line boxes");
+    fold_row(&sh_h_tt, &sh_h_why, param_value_is(js, "/api/shortening", "d1h", "40"),
+             "CSS 2.2 §10.6.3: d1 is not 40px tall over its line boxes");
+    fold_row(&sh_h_tt, &sh_h_why, param_value_is(js, "/api/shortening", "d3h", "20"),
+             "CSS 2.2 §10.6.3: d3 is not 20px tall over its line boxes");
+    fold_row(&sh_h_tt, &sh_h_why, param_value_is(js, "/api/shortening", "d4h", "20"),
+             "CSS 2.2 §10.6.3: d4 is not 20px tall over its line boxes");
+    fold_row(&sh_h_tt, &sh_h_why, param_value_is(js, "/api/shortening", "s5h", "30"),
+             "CSS 2.2 §10.6.3: s5 is not 30px tall over its line boxes");
+    fold_row(&sh_h_tt, &sh_h_why, param_value_is(js, "/api/shortening", "s6h", "20"),
+             "CSS 2.2 §10.6.3: s6 is not 20px tall over its line boxes");
+    const Probe rows[] = {
+        { "shortening-position", sh_reached && sh_p_tt, "/api/shortening", SESS_EXPLORE,
+          sh_reached ? sh_p_why : sh_why },
+        { "shortening-height", sh_reached && sh_h_tt, "/api/shortening", SESS_EXPLORE, sh_reached ? sh_h_why : sh_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `boundpark` document (fixture/boundpark.h). */
 TF_UNIT void probes_boundpark(const char *js, Probe *tab, int *n) {
     /* One bound body through four callback routes; each failure arm reports its route, the declined send's
@@ -19565,6 +19658,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_floatplace(js, probes, &np);
     probes_clearance(js, probes, &np);
     probes_avoidance(js, probes, &np);
+    probes_shortening(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);

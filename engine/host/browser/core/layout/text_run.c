@@ -1475,6 +1475,19 @@ size_t text_run_fill_end(TextRunFill *f, const TextRunMeasure *m, TextRunLine **
     return n;
 }
 
+size_t text_run_fill_lines(const TextRunFill *f, const TextRunLine **lines)
+{
+    DCHECK(f != NULL && lines != NULL, "CSS 2.2 §9.4.2's emitted lines were asked with no fill or nowhere");
+    *lines = f->out;
+    return f->n;
+}
+
+void text_run_fill_set_available(TextRunFill *f, CssPx available)
+{
+    DCHECK(f != NULL && !f->complete, "CSS 2.2 §9.4.2's open line was narrowed after the fill's last position");
+    f->available = available;
+}
+
 void text_run_fill_release(TextRunFill *f)
 {
     DCHECK(f != NULL, "CSS 2.2 §9.4.2's fill was released with no fill");

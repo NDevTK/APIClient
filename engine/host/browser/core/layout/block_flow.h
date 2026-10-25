@@ -216,48 +216,21 @@ typedef enum {
    aborts naming what to build. `child` is a member of `parent`'s core/layout/box_tree.h sequence. */
 BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, BoxTreeChild child);
 
-/* ---- CSS 2.2 §9.5 "Floats"' OWN POPULATION, ASKED BY A BOX THAT IS NOT THE FLOAT -------------------------
-   THE FIRST FLOAT, IN DOCUMENT ORDER, IN THE BLOCK FORMATTING CONTEXT `el`'s OWN CONTENTS ARE LAID OUT IN —
-   or NULL where that context holds none.
-   IT IS A QUESTION ABOUT A CONTEXT AND NOT ABOUT A CHILD LIST, WHICH IS THE WHOLE REASON IT IS A SECOND ENTRY
-   BESIDE `block_flow_child_kind`. CSS 2.2 §9.5.1 "Positioning the float: the 'float' property" ends its nine
-   rules with the sentence that fixes their scope — "References to other elements in these rules refer only to
-   other elements in the same block formatting context as the float" — and CSS 2.2 §10.6.7 "'Auto' heights for
-   block formatting context roots" says the same thing from the other end, "Only floats that participate in
-   this block formatting context are taken into account, e.g., floats inside absolutely positioned descendants
-   or other floats are not". A float is therefore NOT a fact about the container it is a child of: it reaches
-   every line box in one formatting context, however deeply nested, and a walk over one container's children
-   answers a strictly narrower question that happens to coincide where the float is a sibling.
-   WHICH CONTEXT IS `el`'s CONTENTS' AND NOT `el`'s OWN, and the two differ for exactly the boxes CSS 2.2
-   §9.4.1 "Block formatting contexts" lists: an `overflow: hidden` box's line boxes are shortened by the floats
-   INSIDE it and by none outside it, which is what "establish new block formatting contexts FOR THEIR CONTENTS"
-   means. So the search starts at `el` itself and walks up only while nothing establishes one, and it stops at
-   the root element whatever that element's `display` is — css-display-3 §2.8 "The Root Element's Principal
-   Box" states it outright, "its principal box always establishes an independent formatting context", which
-   CSS 2.2 §9.4.1's own list does not say and does not need to, since there is no box above it to belong to.
-   THE WALK DOWN SKIPS EVERY SUBTREE THAT ESTABLISHES ITS OWN CONTEXT, which is §10.6.7's own example read as
-   an algorithm rather than as an aside: a float inside an absolutely positioned descendant, inside another
-   float, inside an `inline-block` or inside a `table-cell` is in THAT box's context and not in this one.
-   IT ANSWERS AND IT NEVER REFUSES, for `block_flow_child_kind`'s reason: what a float MEANS to the caller is
-   the caller's own section — a shortened line box (§9.4.2), a clearance (§9.5.2), a height increase (§10.6.7) —
-   and a refusal written here would report THIS line for every one of them.
-   IT COSTS A WALK OF THE WHOLE CONTEXT WHEN THE ANSWER IS `NULL`, AND THE CONTRACT SAYS SO RATHER THAN THE
-   CALLERS GUESSING. A float ends the search where it is found, so a document that HAS one is answered out of
-   the first few elements; a document that has NONE is a proof of absence, and there is no shorter proof than
-   the subtree, because a float reaching these line boxes may sit anywhere in the context. The answer is held
-   per context root in the current job's placement record (core/layout/flow_placement.h), whose validity
-   argument covers it, so the proof is paid once per context per job rather than once per line box fill; where
-   the caller is a check rather than a computation, `#if APICLIENT_DEV` keeps a release build from paying it.
-   RETIREMENT: this paragraph goes when §9.5.1's placement is built and this entry's callers ask about a
-   PLACED float rather than about the context holding one. */
-lxb_dom_element_t *block_flow_context_first_float(lxb_dom_element_t *el);
-/* The same search without a drive of its own: false ("not yet") when a resting drive spent its elements
+/* ---- CSS 2.2 §9.5 "Floats"' population, asked by a box that is not the float -------------------------------
+   Every float of the block formatting context `el`'s contents are laid out in, in document order: a newly
+   allocated array at `*v` (the caller frees; NULL with `*n` 0 for none). The context is a fact about a formatting
+   context, not a child list: §9.5.1 scopes its rules to "other elements in the same block formatting context as
+   the float", and §10.6.7 counts "only floats that participate in this block formatting context". It is `el`'s
+   contents' context (`block_flow_context_root`), and the walk down skips every subtree that establishes its own,
+   so a float inside an absolutely positioned box, another float, an `inline-block` or a `table-cell` is in that
+   box's context. It walks the whole context once per job, held per context root in the current job's placement
+   record (core/layout/flow_placement.h). False ("not yet") when a resting drive spent its elements
    (core/layout/layout_job.h's layout_job_scan_take), with its place held for the next ask. */
-bool block_flow_context_first_float_ask(lxb_dom_element_t *el, lxb_dom_element_t **out);
-
-/* Every float of that context, in document order: a newly allocated array at `*v` (the caller frees; NULL with
-   `*n` 0 for none). False ("not yet") as above. */
 bool block_flow_context_floats_ask(lxb_dom_element_t *el, lxb_dom_element_t ***v, size_t *n);
+
+/* Whether node `a` precedes node `b` in tree order (an ancestor precedes its descendants): the order §9.5.1's
+   "earlier in the source document" reads. */
+bool block_flow_node_precedes(const lxb_dom_node_t *a, const lxb_dom_node_t *b);
 
 /* The box whose block formatting context `el`'s contents are in: `el` itself where it establishes one (CSS 2.2
    §9.4.1's list), else its nearest ancestor that does, else the root element. */
@@ -524,6 +497,8 @@ size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
 bool block_flow_is_floated(lxb_dom_element_t *el);
 /* Whether floated `f` floats to the right: §9.5.1's `Value:` line is `left | right | none`. */
 bool block_flow_float_is_right(lxb_dom_element_t *f);
+/* CSS 2.2 §9.5.2's sides `el`'s computed `clear` clears, physical: whether it clears any. */
+bool block_flow_clear_sides(lxb_dom_element_t *el, bool *left, bool *right);
 
 /* The distance from `table`'s table wrapper box's top content edge to its table box's top border edge: CSS 2.1
    §17.4's wrapper stack, past the captions §17.4.1's `caption-side: top` puts above the table box. Zero with
@@ -543,6 +518,10 @@ CssPx block_flow_table_wrapper_height(lxb_dom_element_t *table);
 /* The same enumeration without a drive of its own: false ("not yet") when the walk deferred a contribution,
    with nothing stored; true with the boxes at `*out` (the caller's to free) and their number at `*count`. */
 bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **out, size_t *count);
+
+/* Lays out block container `el`'s own content in the current job — its stack, or its inline formatting context —
+   which writes what that walk records (core/layout/flow_placement.h). False ("not yet") when it was deferred. */
+bool block_flow_walk_ask(lxb_dom_element_t *el);
 
 /* CSS 2.1 §10.6.3's (and, for a box that establishes a block formatting context, §10.6.7's) CONTENT-BASED
    HEIGHT of `el`'s box, in CSS pixels — the used value of a `height` that BEHAVES AS AUTO (css-sizing-3

@@ -405,28 +405,6 @@ bool block_flow_context_floats_ask(lxb_dom_element_t *el, lxb_dom_element_t ***v
     return true;
 }
 
-bool block_flow_context_first_float_ask(lxb_dom_element_t *el, lxb_dom_element_t **out)
-{
-    lxb_dom_element_t **v;
-    size_t n;
-
-    if (!block_flow_context_floats_ask(el, &v, &n)) return false;
-    *out = n > 0 ? v[0] : NULL;
-    free(v);
-    return true;
-}
-
-lxb_dom_element_t *block_flow_context_first_float(lxb_dom_element_t *el)
-{
-    LayoutJobDrive d;
-    lxb_dom_element_t *f = NULL;
-
-    layout_job_drive_begin(&d);
-    while (!block_flow_context_first_float_ask(el, &f)) (void)block_flow_drive_deferred(&d);
-    layout_job_drive_end(&d);
-    return f;
-}
-
 /* CSS 2 §8.1 "Box dimensions"' TWO EDGES between a box's TOP BORDER EDGE and its TOP CONTENT EDGE. §9.4.1's
    stack reaches each child at its top BORDER edge — that is what `block_flow_child_top_ask` reports and what this
    walk's own running position is — while §9.4.2 stacks the line boxes INSIDE a box from its top CONTENT edge,
@@ -1306,7 +1284,7 @@ lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t 
 
 /* Whether node `a` precedes node `b` in tree order (DOM §4.2 "Node tree": "preceding ... if A and B are in the
    same tree and A comes before B in tree order"). An ancestor precedes its descendants. */
-static bool bf_precedes(const lxb_dom_node_t *a, const lxb_dom_node_t *b)
+bool block_flow_node_precedes(const lxb_dom_node_t *a, const lxb_dom_node_t *b)
 {
     const lxb_dom_node_t *x, *y;
     size_t da = 0, db = 0;
@@ -1672,6 +1650,34 @@ static bool bf_require_floats_placeable(lxb_dom_element_t *el, lxb_dom_element_t
     return true;
 }
 
+bool block_flow_clear_sides(lxb_dom_element_t *el, bool *left, bool *right)
+{
+    char nbuf[160];
+
+    *left = *right = false;
+    /* The computed value is css-page-floats-3 §4's set. `inline-start` and `inline-end` are `left` and `right`
+       under the containing block's `direction`; the block-axis values clear only page floats, of which a CSS 2
+       float is none, so like `none` they clear nothing here. */
+    switch (css_computed_keyword(el, "clear")) {
+    case CSS_KEYWORD_LEFT:         *left = true; break;
+    case CSS_KEYWORD_RIGHT:        *right = true; break;
+    case CSS_KEYWORD_BOTH:
+    case CSS_KEYWORD_BOTH_INLINE:  *left = *right = true; break;
+    case CSS_KEYWORD_INLINE_START: *(used_value_containing_block_is_rtl(el) ? right : left) = true; break;
+    case CSS_KEYWORD_INLINE_END:   *(used_value_containing_block_is_rtl(el) ? left : right) = true; break;
+    case CSS_KEYWORD_NONE:
+    case CSS_KEYWORD_BLOCK_START:
+    case CSS_KEYWORD_BLOCK_END:
+    case CSS_KEYWORD_TOP:
+    case CSS_KEYWORD_BOTTOM:
+    case CSS_KEYWORD_BOTH_BLOCK:   break;
+    default:
+        DFAILF("%s: computed `clear` is outside css-page-floats-3 §4's set", box_subject(el, nbuf, sizeof nbuf));
+        break;
+    }
+    return *left || *right;
+}
+
 /* CSS 2.2 §9.5.2 "Controlling flow next to floats: the clear property" for child `ce` of `el`'s stack, whose
    contribution `b` the walk `w` is about to place. `*cleared` is whether `ce` has clearance and `*top` is then
    its top border edge in the context root's frame: "the bottom outer edge" of the lowest float it clears. Each
@@ -1693,32 +1699,13 @@ static bool bf_clearance_ask(lxb_dom_element_t *el, lxb_dom_element_t *ce, const
     char cbuf[160];
 
     *cleared = false;
-    /* The computed value is css-page-floats-3 §4's set. `inline-start` and `inline-end` are `left` and `right`
-       under the containing block's `direction`; the block-axis values clear only page floats, of which a CSS 2
-       float is none, so like `none` they clear nothing here. */
-    switch (css_computed_keyword(ce, "clear")) {
-    case CSS_KEYWORD_LEFT:         left = true; break;
-    case CSS_KEYWORD_RIGHT:        right = true; break;
-    case CSS_KEYWORD_BOTH:
-    case CSS_KEYWORD_BOTH_INLINE:  left = right = true; break;
-    case CSS_KEYWORD_INLINE_START: *(used_value_containing_block_is_rtl(ce) ? &right : &left) = true; break;
-    case CSS_KEYWORD_INLINE_END:   *(used_value_containing_block_is_rtl(ce) ? &left : &right) = true; break;
-    case CSS_KEYWORD_NONE:
-    case CSS_KEYWORD_BLOCK_START:
-    case CSS_KEYWORD_BLOCK_END:
-    case CSS_KEYWORD_TOP:
-    case CSS_KEYWORD_BOTTOM:
-    case CSS_KEYWORD_BOTH_BLOCK:   return true;
-    default:
-        DFAILF("%s: computed `clear` is outside css-page-floats-3 §4's set", box_subject(ce, cbuf, sizeof cbuf));
-        return true;
-    }
+    if (!block_flow_clear_sides(ce, &left, &right)) return true;
     if (!block_flow_context_floats_ask(el, &v, &n)) return false;
     frame_clear = w->escaping ? bf_frame_top(el, e, w->run) : *frame_top;
     hyp = w->escaping ? bf_frame_top(el, e, bf_run_merge(w->run, b->top))
                       : css_px_add(css_px_add(*frame_top, w->pos), bf_run_value(bf_run_merge(w->run, b->top)));
     /* `last` ends the floats this box clears and every float before them, which placing them places. */
-    for (i = 0; i < n && bf_precedes(lxb_dom_interface_node(v[i]), lxb_dom_interface_node(ce)); i++) {
+    for (i = 0; i < n && block_flow_node_precedes(lxb_dom_interface_node(v[i]), lxb_dom_interface_node(ce)); i++) {
         if (!(block_flow_float_is_right(v[i]) ? right : left)) continue;
         last = i + 1;
         if (w->escaping && block_flow_static_position_containing_block(v[i]) == el) held_float = true;
@@ -1816,7 +1803,7 @@ static bool bf_avoidance_ask(lxb_dom_element_t *el, lxb_dom_element_t *ce, const
     *band_h = css_px(0.0);
     if (!bf_avoids_floats(ce)) return true;
     if (!block_flow_context_floats_ask(el, &v, &n)) return false;
-    for (; last < n && bf_precedes(lxb_dom_interface_node(v[last]), lxb_dom_interface_node(ce)); last++)
+    for (; last < n && block_flow_node_precedes(lxb_dom_interface_node(v[last]), lxb_dom_interface_node(ce)); last++)
         if (w->escaping && block_flow_static_position_containing_block(v[last]) == el) held_float = true;
     if (last == 0) {
         free(v);
@@ -1909,7 +1896,7 @@ static bool bf_avoidance_verify(lxb_dom_element_t *el, lxb_dom_element_t *ce, Cs
     left = css_px_add(cb_left, bf_declared_margin_px(ce, "margin-left"));
     right = css_px_sub(css_px_add(cb_left, used_value_content_px(el, false)),
                        bf_declared_margin_px(ce, "margin-right"));
-    for (i = 0; i < n && bf_precedes(lxb_dom_interface_node(v[i]), lxb_dom_interface_node(ce)); i++) {
+    for (i = 0; i < n && block_flow_node_precedes(lxb_dom_interface_node(v[i]), lxb_dom_interface_node(ce)); i++) {
         FlowFloatBox fb;
 
         if (!float_placement_ask(v[i], &fb)) {
@@ -2035,6 +2022,9 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             FlowRunStart start = { css_px(0.0), css_px(0.0), css_px(0.0), esc_top };
 
             flow_placement_run_record(el, NULL, start);
+            /* The line boxes start at this box's top content edge, recorded above for an inline formatting
+               context. */
+            if (held) flow_placement_run_top_record(el, NULL, frame_top);
         }
         /* This container holds no block-level box, so §9.2.1.1 generates nothing and the one inline formatting
            context here is over the WHOLE child list — the same run form the anonymous box is measured through,
@@ -2136,6 +2126,14 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
                 FlowRunStart start = { w.pos, w.run.pos, w.run.neg, w.escaping };
 
                 flow_placement_run_record(el, w.prev != NULL ? lxb_dom_interface_element(w.prev) : NULL, start);
+                /* §9.2.1.1's anonymous block box has zero margins, borders and padding, so its line boxes start at
+                   its top border edge: where the open run resolves, or, while the run still escapes, at this
+                   box's top content edge as it resolves before an empty margin. */
+                if (held)
+                    flow_placement_run_top_record(
+                        el, w.prev != NULL ? lxb_dom_interface_element(w.prev) : NULL,
+                        w.escaping ? bf_frame_top(el, &entry, w.run)
+                                   : css_px_add(css_px_add(frame_top, w.pos), bf_run_value(w.run)));
             }
             if (!block_flow_run_generates_box(el, anon_run)) {
                 /* §9.2.1.1 wraps every run of inline-level content in an anonymous block box, and the
@@ -3330,6 +3328,17 @@ static BlockFlowAnonBox *bf_anon_copy(const BlockFlowAnonBox *v, size_t n)
     CHECK(c != NULL, "out of memory copying one container's anonymous block boxes");
     memcpy(c, v, n * sizeof *c);
     return c;
+}
+
+bool block_flow_walk_ask(lxb_dom_element_t *el)
+{
+    BfBox b;
+    char nbuf[160];
+
+    DCHECKF(el != NULL && block_flow_display_is_block_container(css_computed_display(el)),
+            "%s: a walk was asked of a box that is not a block container",
+            el != NULL ? box_subject(el, nbuf, sizeof nbuf) : "(no element)");
+    return bf_walk(el, BF_BASELINE_NONE, &b);
 }
 
 bool block_flow_anonymous_boxes_ask(lxb_dom_element_t *el, BlockFlowAnonBox **out, size_t *count)

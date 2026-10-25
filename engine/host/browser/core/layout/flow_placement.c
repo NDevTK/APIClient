@@ -43,6 +43,8 @@ typedef struct {
     /* The stack's state at the run that starts this container's content (`run_first`, on the container's
        entry) and at the run after this box (`run_after`, on the box's entry). */
     FlowRunStart             run_first, run_after;
+    /* The top of the line boxes of the run this box starts or follows (flow_placement.h). */
+    CssPx                    run_top_first, run_top_after;
     /* CSS 2.1 §17.4's table box on this table element's wrapper stack. */
     CssPx                    table_box_top;
     /* CSS 2.2 §9.5's floats in the context this box establishes, in document order (owned), closed by
@@ -63,6 +65,7 @@ typedef struct {
     bool                     has_anon;
     bool                     has_run_first, has_run_after, has_table_box, has_floats, has_float_scan;
     bool                     has_float_box, has_bfc_entry, has_bfc_frame, has_float_avoid;
+    bool                     has_run_top_first, has_run_top_after;
 } FpEntry;
 
 /* One table slot: the key, and the entry held out of line. An entry carries several concolic lengths, each
@@ -419,6 +422,34 @@ bool flow_placement_run_peek(const lxb_dom_element_t *container, const lxb_dom_e
     e = fp_entry_peek(after != NULL ? after : container);
     if (e == NULL || !(after != NULL ? e->has_run_after : e->has_run_first)) return false;
     *out = after != NULL ? e->run_after : e->run_first;
+    return true;
+}
+
+void flow_placement_run_top_record(const lxb_dom_element_t *container, const lxb_dom_element_t *after, CssPx top)
+{
+    FpEntry *e;
+    CssPx *slot;
+    bool *has;
+
+    DCHECK(container != NULL, "a run's line box top was recorded for no container");
+    e = fp_entry_for_write(after != NULL ? after : container);
+    if (e == NULL) return;
+    slot = after != NULL ? &e->run_top_after : &e->run_top_first;
+    has = after != NULL ? &e->has_run_top_after : &e->has_run_top_first;
+    DCHECKF(!*has || fp_same_example(*slot, top),
+            "one run's line boxes were put at two tops in one job: %g then %g", slot->px, top.px);
+    *slot = top;
+    *has = true;
+}
+
+bool flow_placement_run_top_peek(const lxb_dom_element_t *container, const lxb_dom_element_t *after, CssPx *out)
+{
+    const FpEntry *e;
+
+    DCHECK(container != NULL && out != NULL, "a run's line box top was asked for no container or nowhere");
+    e = fp_entry_peek(after != NULL ? after : container);
+    if (e == NULL || !(after != NULL ? e->has_run_top_after : e->has_run_top_first)) return false;
+    *out = after != NULL ? e->run_top_after : e->run_top_first;
     return true;
 }
 
