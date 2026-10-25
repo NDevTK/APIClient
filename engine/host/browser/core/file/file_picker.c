@@ -120,62 +120,115 @@ static bool picker_valid_suffix_byte(unsigned char c)
            c == '+' || c == '.';
 }
 
-/* File System Access §3.2.1's *validate a suffix*, all four steps in order, each of them a TypeError.
+/* File System Access §3.2.1's *validate a suffix*, all four steps in order, each of them a TypeError: NULL for a
+ * valid suffix, or the TypeError's message.
  *
  * THEY ARE TypeErrors AND NOT ASSERTS, and that is the rule rather than a preference: a dictionary member is
  * PAGE-SUPPLIED INPUT, so a `DCHECK` here would hand any page an abort switch for the whole engine. This
  * codebase asserts only what it COMPUTED; what a page stated it refuses.
- * Returns 0, or -1 with the throw live. `suffix` is a USVString by the time it arrives — §3.2.12 has already
+ * `sx` is a USVString's UTF-8 by the time it arrives — §3.2.12 has already
  * replaced any unpaired surrogate — so its UTF-8 form round-trips and step 4's "length is more than 16" is
  * counted in CODE POINTS off it, which is what File System Access §2.1's own note about extensions being
  * limited to a length of sixteen code points means, and what a UTF-16 unit count would get wrong for a suffix
  * holding an astral character. */
-static int picker_validate_suffix(JSContext *ctx, JSValueConst suffix)
+static const char *picker_suffix_refusal(const char *sx, size_t len)
 {
-    size_t len = 0, i, cps = 0;
-    const char *sx = JS_ToCStringLen(ctx, &len, suffix);
+    size_t i, cps = 0;
 
-    if (!sx) return -1;
-    if (len == 0 || sx[0] != '.') {                                   /* step 1 */
-        JS_ThrowTypeError(ctx, "a file picker suffix does not start with '.'");
-        goto fail;
-    }
+    if (len == 0 || sx[0] != '.')                                     /* step 1 */
+        return "a file picker suffix does not start with '.'";
     for (i = 0; i < len; i++) {                                       /* step 2 */
-        if (!picker_valid_suffix_byte((unsigned char)sx[i])) {
-            JS_ThrowTypeError(ctx, "a file picker suffix contains a code point that is not ASCII "
-                                   "alphanumeric, '+' or '.'");
-            goto fail;
-        }
+        if (!picker_valid_suffix_byte((unsigned char)sx[i]))
+            return "a file picker suffix contains a code point that is not ASCII alphanumeric, '+' or '.'";
         /* A CONTINUATION BYTE IS NOT A CODE POINT. Every valid suffix byte is ASCII, so by this line no
            multi-byte sequence has survived step 2 — the test is kept anyway because it makes the count
            correct on its own terms rather than correct only because the loop above happens to run first. */
         if (((unsigned char)sx[i] & 0xC0) != 0x80) cps++;
     }
-    if (sx[len - 1] == '.') {                                         /* step 3 */
-        JS_ThrowTypeError(ctx, "a file picker suffix ends with '.'");
-        goto fail;
+    if (sx[len - 1] == '.')                                           /* step 3 */
+        return "a file picker suffix ends with '.'";
+    if (cps > 16)                                                     /* step 4 */
+        return "a file picker suffix is longer than 16 code points";
+    return NULL;
+}
+
+/* The unknown suffixes one pass of process accept types has met, against how many this flow already decided
+   valid: the pass re-runs from step 1 on every entry of its stage, so a suffix decided on an earlier entry is
+   answered from `decided` rather than asked again. `decided` lives on the machine's state. */
+typedef struct {
+    JSStepHdr *hdr;
+    uint32_t  *decided;
+    uint32_t   seen;
+} PickerSuffixAsk;
+
+/* *validate a suffix* over unknown input: its four steps are tests of bytes the input does not hold, so the
+   valid world and the TypeError world are forked, outcome 0 valid; `real` is the four steps run on the
+   suffix's example. The suffix is borrowed from the converted options the machine holds.
+   Named residual. Not covered: the valid arm files no domain over the suffix (a leading '.', the code point
+   set, at most 16 code points). Next diff: file them as that arm's constraint. How its absence shows: a
+   delivery at this suffix composing a value the valid arm's own steps refuse. */
+static int picker_validate_unknown_suffix(JSContext *ctx, PickerSuffixAsk *ask, JSValueConst suffix)
+{
+    JSValue ex;
+    int real = JS_OUTCOME_REAL_UNSTATED, arm = 0, r;
+
+    if (ask->seen++ < *ask->decided) return 0;
+    ex = concolic_example_string(ctx, suffix);
+    if (JS_IsString(ex)) {
+        size_t len = 0;
+        const char *sx = JS_ToCStringLen(ctx, &len, ex);
+
+        CHECK(sx != NULL, "file picker: OOM reading an unknown suffix's example");
+        real = picker_suffix_refusal(sx, len) ? 1 : 0;
+        JS_FreeCString(ctx, sx);
     }
-    if (cps > 16) {                                                   /* step 4 */
-        JS_ThrowTypeError(ctx, "a file picker suffix is longer than 16 code points");
-        goto fail;
+    JS_FreeValue(ctx, ex);
+    r = step_fork_run(ctx, ask->hdr, suffix, "File System Access §3.2.1 validate a suffix", 2, real, &arm);
+    if (r) return r;
+    if (arm == 1) {
+        JS_ThrowTypeError(ctx, "a file picker suffix is not a valid suffix");
+        return -1;
     }
-    JS_FreeCString(ctx, sx);
+    (*ask->decided)++;
     return 0;
-fail:
+}
+
+/* Returns 0, -1 with the throw live, or a step code the caller returns (an unknown suffix's fork). */
+static int picker_validate_suffix(JSContext *ctx, PickerSuffixAsk *ask, JSValueConst suffix)
+{
+    size_t len = 0;
+    const char *sx, *why;
+
+    if (concolic_is(suffix)) return picker_validate_unknown_suffix(ctx, ask, suffix);
+    sx = JS_ToCStringLen(ctx, &len, suffix);
+    if (!sx) return -1;
+    why = picker_suffix_refusal(sx, len);
+    if (why) JS_ThrowTypeError(ctx, "%s", why);
     JS_FreeCString(ctx, sx);
-    return -1;
+    return why ? -1 : 0;
 }
 
 /* File System Access §3.2.1's *process accept types* step 2.1, over ONE `typeString → suffixes` entry of a type's `accept` map:
    parse the MIME type (2.1.1), refuse a failure (2.1.2), refuse parameters (2.1.3), and validate the suffix or
-   every suffix of the sequence (2.1.4 / 2.1.5). Returns 0, or -1 with a throw live. */
-static int picker_check_accept_entry(JSContext *ctx, JSValueConst type_string, JSValueConst suffixes)
+   every suffix of the sequence (2.1.4 / 2.1.5). Returns 0, -1 with a throw live, or an unknown suffix's step
+   code. */
+static int picker_check_accept_entry(JSContext *ctx, PickerSuffixAsk *ask, JSValueConst type_string,
+                                     JSValueConst suffixes)
 {
     MimeType m;
     size_t tlen = 0;
-    const char *ts = JS_ToCStringLen(ctx, &tlen, type_string);
+    const char *ts;
     bool ok;
 
+    if (concolic_is(type_string)) {
+        DFAIL("File System Access §3.2.1 process accept types step 2.1.1 parsed an `accept` key that is unknown "
+              "input (a record of unknown keys). Build parse a MIME type over it as forked worlds: a valid "
+              "parameterless type, a type with parameters (step 2.1.3's TypeError), and a parse failure (step "
+              "2.1.2's)");
+        JS_ThrowTypeError(ctx, "a file picker accept key is not a valid MIME type");
+        return -1;
+    }
+    ts = JS_ToCStringLen(ctx, &tlen, type_string);
     if (!ts) return -1;
     mime_type_init(&m);
     ok = mime_type_parse(&m, ts, tlen);                               /* step 2.1.1 */
@@ -194,7 +247,7 @@ static int picker_check_accept_entry(JSContext *ctx, JSValueConst type_string, J
     /* §3.2.23 gave the value ONE of the union's two arms, so "is a string" is the arm and not a guess: the
        sequence arm produced an Array and the string arm a String, and nothing else can be here. */
     if (!JS_IsArray(suffixes))                                        /* step 2.1.4 */
-        return picker_validate_suffix(ctx, suffixes);
+        return picker_validate_suffix(ctx, ask, suffixes);
     {                                                                 /* step 2.1.5 */
         uint32_t n = 0, i;
         JSValue lv = JS_GetPropertyStr(ctx, suffixes, "length");
@@ -206,9 +259,9 @@ static int picker_check_accept_entry(JSContext *ctx, JSValueConst type_string, J
             int r;
 
             if (JS_IsException(sx)) return -1;
-            r = picker_validate_suffix(ctx, sx);
+            r = picker_validate_suffix(ctx, ask, sx);
             JS_FreeValue(ctx, sx);
-            if (r < 0) return -1;
+            if (r) return r;
         }
     }
     return 0;
@@ -271,8 +324,18 @@ static bool picker_filter_matches(JSContext *ctx, JSValueConst accept, const cha
             for (k = 0; k < sn && !hit; k++) {
                 JSValue sv = one ? JS_DupValue(ctx, suffixes) : JS_GetPropertyUint32(ctx, suffixes, k);
                 size_t sl = 0;
-                const char *sx = JS_ToCStringLen(ctx, &sl, sv);
+                const char *sx;
                 size_t fl = filename ? strlen(filename) : 0;
+
+                if (concolic_is(sv)) {
+                    DFAIL("File System Access §3.2.1 process accept types steps 2.2.2.3-2.2.2.4 asked whether a "
+                          "filename ends with a suffix that is unknown input. Build it as a forked predicate over the "
+                          "suffix (a match and a miss), keyed as the page's own endsWith is, in a step machine "
+                          "the prompt's selection can park in");
+                    JS_FreeValue(ctx, sv);
+                    continue;
+                }
+                sx = JS_ToCStringLen(ctx, &sl, sv);
 
                 if (sx && sl <= fl && !memcmp(filename + fl - sl, sx, sl)) hit = true;
                 if (sx) JS_FreeCString(ctx, sx);
@@ -322,8 +385,9 @@ static bool picker_accepts_admits(JSContext *ctx, JSValueConst accepts, const ch
  * element's `accept` is already `record<USVString, (USVString or sequence<USVString>)>` — Web IDL converted
  * both, in §3.2.17's own member order, before this algorithm's step 1. That is why nothing here reads a page
  * property: everything it walks is an engine-built list.
- * `*out` takes the accepts options (owned). Returns 0, or -1 with a throw live. */
-static int picker_process_accept_types(JSContext *ctx, JSValueConst options, JSValue *out)
+ * `*out` takes the accepts options (owned). Returns 0, -1 with a throw live, or an unknown suffix's step code,
+ * on which the stage re-runs the whole pass from step 1 (see PickerSuffixAsk). */
+static int picker_process_accept_types(JSContext *ctx, PickerSuffixAsk *ask, JSValueConst options, JSValue *out)
 {
     JSValue accepts = JS_NewArray(ctx);                               /* step 1 */
     JSValue types = idl_dict_get(ctx, options, "types");
@@ -357,12 +421,20 @@ static int picker_process_accept_types(JSContext *ctx, JSValueConst options, JSV
             JSValue pair = JS_GetPropertyUint32(ctx, accept, k);
             JSValue key = JS_GetPropertyUint32(ctx, pair, 0);
             JSValue sfx = JS_GetPropertyUint32(ctx, pair, 1);
-            int r = picker_check_accept_entry(ctx, key, sfx);
+            int r = picker_check_accept_entry(ctx, ask, key, sfx);
 
             JS_FreeValue(ctx, sfx);
             JS_FreeValue(ctx, key);
             JS_FreeValue(ctx, pair);
-            if (r < 0) { JS_FreeValue(ctx, accept); JS_FreeValue(ctx, desc); goto fail; }
+            if (r) {
+                JS_FreeValue(ctx, accept);
+                JS_FreeValue(ctx, desc);
+                if (r < 0) goto fail;
+                JS_FreeValue(ctx, accepts);
+                JS_FreeValue(ctx, types);
+                JS_FreeValue(ctx, excl);
+                return r;
+            }
         }
         /* steps 2.2 to 2.5 — the filter is the `accept` map itself, which is what step 2.2's closure captures,
            and step 2.4's "some user understandable string describing filter" for an empty description is left
@@ -811,6 +883,7 @@ typedef struct {
        owned here, so it is in `visit` — the one list a fork copies and a teardown discharges. */
     JSValue picked;
     JSValue cb[3];
+    uint32_t sfx_valid;   /* unknown suffixes this flow decided valid (PickerSuffixAsk) */
 } PickerState;
 
 static void fpk_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -898,6 +971,7 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         s->promise = s->funcs[0] = s->funcs[1] = s->value = JS_UNDEFINED;
         s->start_path = s->id = s->suggested = s->dismissed = s->picked = JS_UNDEFINED;
         s->accepts = JS_UNDEFINED;
+        s->sfx_valid = 0;
         s->cphase = s->ua_phase = s->reject = 0;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         s->started = 1;
@@ -924,9 +998,15 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
            IT IS THE FIRST STEP OF THIS ALGORITHM THAT CAN THROW, and §3.7.7 makes that a REJECTION rather than
            a throw past the page's `.catch` — which is why the capability above is minted before this line and
            why every one of §3.2.1's TypeErrors lands in `reject` like any other failure. */
-        if (magic != M_DIRECTORY && picker_process_accept_types(ctx, options, &s->accepts) < 0) {
-            s->value = JS_GetException(ctx);
-            goto reject;
+        if (magic != M_DIRECTORY) {
+            PickerSuffixAsk ask = { hdr, &s->sfx_valid, 0 };
+
+            rc = picker_process_accept_types(ctx, &ask, options, &s->accepts);
+            if (rc > 0) return rc;   /* an unknown suffix's fork; the stage re-runs the pass */
+            if (rc < 0) {
+                s->value = JS_GetException(ctx);
+                goto reject;
+            }
         }
         STEP_GOTO(hdr->stage, FPK_STARTDIR, &s->cphase, &s->ua_phase, NULL);
         return JS_STEP_YIELD;
