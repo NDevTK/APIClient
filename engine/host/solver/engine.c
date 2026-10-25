@@ -1117,6 +1117,10 @@ static long g_pressure_sold;
    first sale of the session). */
 static long g_pressure_collects;
 static uint64_t g_pressure_sold_at_collections = UINT64_MAX;
+/* The members pressure's next batch may sell before it owes a collection, and whether the last batch sold all it
+   could (engine_relocate_under_pressure). */
+static long g_pressure_batch = 1;
+static bool g_pressure_batch_full;
 
 int engine_take_paged_owed(void) {
     /* The credit counts entries the host was shown and has not answered (engine_reclaim_tail), and this is its
@@ -11311,13 +11315,16 @@ static uint64_t g_pressure_target = UINT64_MAX;
    a sale buys is free chunks later allocations reuse. So the footprint's growth past the line, or past the mark
    where pressure last made room, opens an episode that takes live bytes down by that growth, and the mark moves
    to the footprint. If the freed chunks cannot be reused the footprint grows again and the next step sells again.
-   A collection comes before each sale: what a sale gives back is mostly cycles (a child realm is one, held by its
-   own intrinsics), which only the cycle collector frees, and the allocation threshold that would owe one may stand
-   above the share. So when no collection has finished since the last sale, pressure owes one and returns; the
-   steps that follow are the collector's (engine_collect_slice), and pressure sells only if the live bytes still
-   stand above the episode's target once it has finished. */
+   A collection comes between batches of sales: what a sale gives back is mostly cycles (a child realm is one, held
+   by its own intrinsics), which only the cycle collector frees, and the allocation threshold that would owe one may
+   stand above the share. So pressure sells a batch, owes a collection and returns; the steps that follow are the
+   collector's (engine_collect_slice), and pressure reads the live bytes again only once it has finished. The batch
+   is the scheduler's rest granularity, in members: it doubles each time a full batch and its collection left the
+   episode unmet, and it starts again at one member when an episode closes. */
 static void engine_relocate_under_pressure(JSRuntime *rt) {
     uint64_t line, ref, fp, live;
+    long sold = 0;
+    bool at_floor = false;
     JSGCCycleStats st;
 
     if (g_ram_limit == 0) return;
@@ -11332,20 +11339,39 @@ static void engine_relocate_under_pressure(JSRuntime *rt) {
         g_pressure_frag = fp > live ? fp - live : 0;
         g_ram_fp_mark = fp;
     }
-    while ((uint64_t)c_alloc_live() > g_pressure_target) {
-        JS_GCCycleStats(rt, &st);
-        if (st.collections == g_pressure_sold_at_collections || g_pressure_sold_at_collections == UINT64_MAX) {
-            if (g_pressure_sold_at_collections == UINT64_MAX)
-                g_pressure_sold_at_collections = st.collections;   /* the session's first pressure collects first */
-            JS_GCOwe(rt);
-            g_pressure_collects++;
-            return;
-        }
-        if (!engine_reclaim_at_rest()) break;
-        g_pressure_sold++;
-        g_pressure_sold_at_collections = st.collections;
+    if ((uint64_t)c_alloc_live() <= g_pressure_target) {
+        /* No episode, or the open one is met. */
+        g_pressure_target = UINT64_MAX;
+        g_pressure_batch = 1;
+        g_pressure_batch_full = false;
+        return;
     }
-    g_pressure_target = UINT64_MAX;
+    JS_GCCycleStats(rt, &st);
+    if (st.collections == g_pressure_sold_at_collections || g_pressure_sold_at_collections == UINT64_MAX) {
+        /* The session's first pressure, or a batch whose collection has not finished: collect before selling. */
+        g_pressure_sold_at_collections = st.collections;
+        JS_GCOwe(rt);
+        g_pressure_collects++;
+        return;
+    }
+    if (g_pressure_batch_full)
+        g_pressure_batch *= 2;
+    while (sold < g_pressure_batch && (uint64_t)c_alloc_live() > g_pressure_target) {
+        if (!engine_reclaim_at_rest()) { at_floor = true; break; }
+        sold++;
+    }
+    g_pressure_sold += sold;
+    g_pressure_batch_full = sold == g_pressure_batch;
+    if (at_floor) {
+        /* The frontier's floor closes the episode: nothing is left to sell. */
+        g_pressure_target = UINT64_MAX;
+        g_pressure_batch = 1;
+        g_pressure_batch_full = false;
+    }
+    if (sold == 0) return;
+    g_pressure_sold_at_collections = st.collections;
+    JS_GCOwe(rt);
+    g_pressure_collects++;
 }
 
 /* See engine.h. The probe is a plain allocation, freed at once: what it proves is that the address space holds
@@ -11584,6 +11610,8 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        engine_sched_step pays it (engine_collect_slice). */
     JS_SetGCDriven(JS_GetRuntime(ctx), true);
     g_pressure_sold_at_collections = UINT64_MAX;   /* this session's first pressure collects before it sells */
+    g_pressure_batch = 1;
+    g_pressure_batch_full = false;
 }
 
 void engine_host_baseline(void) {
