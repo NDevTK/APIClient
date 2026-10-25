@@ -36,6 +36,12 @@ typedef struct ResultCensus {
 char *result_json_census(JSContext *ctx, const ResultCensus *c);
 void  result_census_free(ResultCensus *c);
 
+/* result_json_census with the RAM floor's refusal loop, for a host composing between steps: the composition walks
+   the frontier, so it cannot sell a flow mid-walk; a composition the allocator refused is dropped whole, one member
+   is sold at rest (engine_reclaim_at_rest) and it is composed again, until it fits or nothing is left to sell, when
+   it answers NULL. A sale changes the frontier `c` describes, so a retry composes its own census. Caller frees. */
+char *result_json_at_rest(JSContext *ctx, const ResultCensus *c);
+
 /* THE ORDER'S OWN INPUTS, COMPOSED ONCE — solver/flow.h's WfqCensus rendered as one JSON object (caller
  * frees), which `result_json` embeds as the document's `_wfq` and which a host with a line-oriented output
  * prints verbatim. ONE composer, because the alternative is what it replaced: a struct whose rows are added by

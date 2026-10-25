@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/json_buf.h"   /* json_buf_grown_take: the footprint the refusal loop proves room for */
 #include "solver/compose.h"   /* every census below is sized by what it writes — see composef */
 #include "solver/result.h"
 #include "solver/c_alloc.h"   /* the C heap's running total against the allocator's reading, per census */
@@ -1802,6 +1803,22 @@ char *result_heap_walk_json(JSContext *ctx) {
    solve.c its fire-verified sinks — and this only decides that they are one document and what it is called,
    so no host assembles structure again. */
 char *result_json(JSContext *ctx) { return result_json_census(ctx, NULL); }
+
+/* See result.h. `need` is the previous composition's measured footprint, proved available before composing. */
+char *result_json_at_rest(JSContext *ctx, const ResultCensus *c) {
+    static size_t need;
+    char *js;
+    engine_headroom_at_rest(need);
+    (void)json_buf_grown_take();
+    for (;;) {
+        js = result_json_census(ctx, c);
+        if (js || !engine_reclaim_at_rest()) break;
+        c = NULL;
+    }
+    /* …and the document itself, which result_json composes outside any JSON buffer. */
+    need = json_buf_grown_take() + (js ? strlen(js) + 1 : 0);
+    return js;
+}
 
 void result_census_free(ResultCensus *c) {
     free(c->swap); free(c->cold); free(c->heap); free(c->wfq); free(c->fork_at);

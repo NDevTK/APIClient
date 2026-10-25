@@ -21632,7 +21632,7 @@ static int fixture_have_answers(void) {
     /* THE RESULT DOCUMENT, RENDERED AT A STEP BOUNDARY WITH NO FLOW SWITCHED IN — which is the position this
        hook is asked at, and is why it may be rendered from the session's realm at all: the flow stamp and the
        COW capture route are both down between two slices, so nothing this builds is attributed to a flow. */
-    js = result_json(g_probe_ctx);
+    js = result_json_at_rest(g_probe_ctx, NULL);
     CHECK(js, "the fixture could not render the result document — its verdict AND its completion moment are both "
               "functions of that one string, so the run can neither report nor decide it is finished");
     /* A SAMPLE, so a 0 row is INCOMPLETE and not a failure — this hook's whole question is whether every row is
@@ -35323,7 +35323,7 @@ int main(int argc, char **argv) {
 
     /* One result document — both surfaces and the scheduler's interleave count — serialized directly from the
        C findings. The host parses this one line; the assertions below read the same string. */
-    char *js = result_json(ctx);
+    char *js = result_json_at_rest(ctx, NULL);
     CHECK(js, "the result document could not be rendered — this fixture's whole verdict is a function of it, so "
               "there is nothing to report and nothing to assert");
     printf("@RESULT %s\n", js);
