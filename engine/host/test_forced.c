@@ -1142,6 +1142,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/linefloat.h"
 #include "fixture/floatintrinsic.h"
 #include "fixture/flexwrap.h"
+#include "fixture/valignmiddle.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1661,6 +1662,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "linefloat", HTML_LINEFLOAT },
     { "floatintrinsic", HTML_FLOATINTRINSIC },
     { "flexwrap", HTML_FLEXWRAP },
+    { "valignmiddle", HTML_VALIGNMIDDLE },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15250,6 +15252,28 @@ TF_UNIT void probes_shortening(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `valignmiddle` document (fixture/valignmiddle.h). */
+TF_UNIT void probes_valignmiddle(const char *js, Probe *tab, int *n) {
+    const char *vm_why = NULL; int vm_tt = !!strstr(js, "\"/api/valignmiddle\"");
+
+    fold_row(&vm_tt, &vm_why, vm_tt,
+             "NOT REACHED: there is no /api/valignmiddle record at all, so the document aborted before its fetch");
+    fold_row(&vm_tt, &vm_why, param_value_is(js, "/api/valignmiddle", "h1", "100"),
+             "CSS 2.2 §10.8.1: the line holding a 100px `middle` inline-block is not its 100px margin box");
+    fold_row(&vm_tt, &vm_why, param_value_is(js, "/api/valignmiddle", "b1", "0"),
+             "CSS 2.2 §10.8.1: the 100px `middle` inline-block is not at its line's top");
+    fold_row(&vm_tt, &vm_why, param_value_is(js, "/api/valignmiddle", "h2", "106"),
+             "CSS 2.2 §10.8.1: the line holding a `middle` inline-block with a 6px top margin is not its 106px margin box");
+    fold_row(&vm_tt, &vm_why, param_value_is(js, "/api/valignmiddle", "b2", "6"),
+             "CSS 2.2 §10.8.1: that inline-block's border box is not 6px below its line's top");
+    fold_row(&vm_tt, &vm_why, param_value_is(js, "/api/valignmiddle", "h3", "19"),
+             "CSS 2.2 §10.8.1: the line holding a 4px `middle` inline-block is not the strut's 19px");
+    const Probe rows[] = {
+        { "vertical-align-middle", vm_tt, "/api/valignmiddle", SESS_EXPLORE, vm_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `flexwrap` document (fixture/flexwrap.h). */
 TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
     const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
@@ -20795,6 +20819,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_linefloat(js, probes, &np);
     probes_floatintrinsic(js, probes, &np);
     probes_flexwrap(js, probes, &np);
+    probes_valignmiddle(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);

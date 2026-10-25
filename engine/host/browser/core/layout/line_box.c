@@ -11,6 +11,7 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
+#include "core/css/font_metrics.h"   /* the parent's x-height `middle` aligns against */
 #include "core/layout/block_flow.h"
 #include "core/layout/flex_container_baseline.h"
 #include "core/layout/float_placement.h"
@@ -91,15 +92,18 @@ static void lb_require_horizontal_tb(lxb_dom_element_t *el)
    and bottom are is step 2's decision, so an unread `vertical-align` would be a height over an alignment
    nobody chose. It is read as its three longhands (css-inline-3 §4.2 "Transverse Box Alignment: the
    vertical-align property": `[ first | last ] || <'alignment-baseline'> || <'baseline-shift'>`). This
-   implements the one assignment under which every box shares one baseline: §4.2.2's initial `baseline` ("use
-   the dominant baseline choice of the parent"), §4.2.1's initial `auto` source and §4.2.3's initial `0` shift.
-   Under it §10.8.1's `A'` and `D'` are measured from one line, so step 3's maxima compare like numbers; any
+   implements §4.2.2's initial `baseline` ("use the dominant baseline choice of the parent") with §4.2.1's
+   initial `auto` source and §4.2.3's initial `0` shift, and `middle` for an atomic inline-level or replaced box
+   (`lb_atomic_extent`), each placing the box against the parent's baseline, which every box above it shares.
+   Under them §10.8.1's `A'` and `D'` are measured from one line, so step 3's maxima compare like numbers; any
    other value crashes. */
-static void lb_require_baseline_alignment(lxb_dom_element_t *el)
+static void lb_require_baseline_alignment(lxb_dom_element_t *el, bool atomic)
 {
     CssLength shift;
 
-    if (!css_computed_keyword_is(el, "alignment-baseline", CSS_KEYWORD_BASELINE))
+    if (!css_computed_keyword_is(el, "alignment-baseline", CSS_KEYWORD_BASELINE) &&
+        !(css_computed_keyword_is(el, "alignment-baseline", CSS_KEYWORD_MIDDLE) &&
+          (atomic || replaced_element_of(el).replaced)))
         DFAIL("CSS 2.2 §10.8's step 2 aligns this inline-level box \"according to their 'vertical-align' "
               "property\", and css-inline-3 §4.2.2 \"Alignment Baseline Type: the alignment-baseline "
               "longhand\" gives it a computed ALIGNMENT BASELINE that is not `baseline` — one of "
@@ -305,6 +309,17 @@ static LbExtent lb_atomic_extent(lxb_dom_element_t *el)
            "other box reaching here is that walk and this measurement disagreeing about what was collected");
     out.above = margin_box;
     out.below = css_px(0.0);
+    /* CSS 2.2 §10.8.1's `middle`: "Align the vertical midpoint of the box with the baseline of the parent box
+       plus half the x-height of the parent", the box being the margin box. The x-height is the parent's first
+       available font's, css-values-4 §6.1.1's assumed one where the face states none (core/css/font_metrics.h). */
+    if (css_computed_keyword_is(el, "alignment-baseline", CSS_KEYWORD_MIDDLE)) {
+        lxb_dom_element_t *parent = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
+        CssPx half_x = css_px_scale(css_font_size_px(parent), font_metrics_x_height_em() * 0.5);
+
+        out.above = css_px_add(css_px_scale(margin_box, 0.5), half_x);
+        out.below = css_px_sub(margin_box, out.above);
+        return out;
+    }
     if (replaced) return out;
     /* An `inline-grid` or `inline-flex` aligns its first baseline (css-inline-3 §4.2.1's `auto`: first-baseline
        alignment for everything but an inline-block), css-grid-1 §10.6's or css-flexbox-1 §8.5's. With no item
@@ -578,7 +593,7 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
        It is asked of a replaced element before its item is collected, because `lb_atomic_extent` puts that box
        wholly above the baseline only under `baseline`'s "if the box does not have a baseline, align the bottom
        margin edge with the parent's baseline". */
-    lb_require_baseline_alignment(el);
+    lb_require_baseline_alignment(el, atomic);
     /* CSS 2.2 §9.2.2's atomic inline-level box, collected as the one opaque box it is: css-text-3 §5.5's
        atomic item, a margin-box inline size carrying U+FFFC (class CB), identical to the replaced arm's. Where
        its baseline sits is asked once, at `lb_atomic_extent`. Its inline size is CSS 2.2 §10.3.9
