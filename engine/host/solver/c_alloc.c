@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <malloc.h>
 #include <stdint.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -31,6 +32,12 @@
 size_t __sanitizer_get_current_allocated_bytes(void);
 
 size_t c_alloc_live(void) { return __sanitizer_get_current_allocated_bytes(); }
+
+size_t c_alloc_footprint(void)
+{
+    struct mallinfo2 m = mallinfo2();
+    return m.arena + m.hblkhd;
+}
 
 void c_alloc_census(CAllocCensus *out)
 {
@@ -79,11 +86,14 @@ static int c_alloc_mmapped(const void *p) { return (((const size_t *)p)[-1] & 2)
 /* glibc's tcache control block, which the allocator takes for itself inside a thread's first allocation and holds in
    use for the thread's life whatever the tcache tunables say. Measured as `uordblks`' rise across the process's
    first allocation less that allocation's own chunk, so the census can name it apart. 0 before the first entry,
-   1 inside it, 2 once measured. */
-static int    g_first;
-static size_t g_first_before, g_tcache_block;
+   1 inside it, 2 once measured. The program break before that allocation is where glibc's main arena starts, so
+   the arena's extent is the break's distance from it (c_alloc_footprint). */
+static int       g_first;
+static size_t    g_first_before, g_tcache_block;
+static uintptr_t g_brk0;
 #define C_ALLOC_ENTER() \
-    do { if (g_first == 0) { g_first = 1; g_first_before = mallinfo2().uordblks; } } while (0)
+    do { if (g_first == 0) { g_first = 1; g_first_before = mallinfo2().uordblks; g_brk0 = (uintptr_t)sbrk(0); } } \
+    while (0)
 #else
 #define C_ALLOC_ENTER() do { } while (0)
 #endif
@@ -181,6 +191,17 @@ size_t c_alloc_live(void)
     return __atomic_load_n(&g_heap_chunks, __ATOMIC_RELAXED) + __atomic_load_n(&g_mmap_chunks, __ATOMIC_RELAXED);
 }
 
+#if defined(__EMSCRIPTEN__)
+size_t malloc_footprint(void);   /* emscripten's dlmalloc exports it as a weak alias of dlmalloc_footprint */
+size_t c_alloc_footprint(void) { return malloc_footprint(); }
+#else
+size_t c_alloc_footprint(void)
+{
+    DCHECK(g_first == 2, "the allocator's footprint was asked for before anything was allocated through it");
+    return (size_t)((uintptr_t)sbrk(0) - g_brk0) + __atomic_load_n(&g_mmap_chunks, __ATOMIC_RELAXED);
+}
+#endif
+
 void c_alloc_census(CAllocCensus *out)
 {
     size_t heap = __atomic_load_n(&g_heap_chunks, __ATOMIC_RELAXED);
@@ -215,6 +236,10 @@ void c_alloc_census(CAllocCensus *out)
             "block (%zu) are not what glibc holds in use (%zu) — a block was handed out by an entry "
             "solver/c_alloc.c does not replace, or a second thread took a control block of its own",
             heap, g_tcache_block, m.uordblks);
+    DCHECKF(c_alloc_footprint() == m.arena + m.hblkhd,
+            "the allocator's footprint read from the program break and the mmapped total (%zu) is not glibc's own "
+            "arena plus mmapped chunks (%zu) — a second arena (a thread's) or a main arena extended by mmap when the "
+            "break could not move, neither of which the break measures", c_alloc_footprint(), m.arena + m.hblkhd);
     out->arena = m.arena + m.hblkhd;
     out->residue = (long long)(m.uordblks - heap - g_tcache_block);
 #endif

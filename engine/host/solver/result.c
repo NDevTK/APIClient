@@ -1495,6 +1495,8 @@ char *result_cold_json(void) {
     METRIC_SET(pressure_collects, e.pressure_collects);
     METRIC_SET(ram_limit_kib, e.ram_limit_kib);
     METRIC_SET_OBJECT(ram_limit_source, e.ram_limit_source);
+    METRIC_SET(ram_nonheap_kib, e.ram_nonheap_kib);
+    METRIC_SET(pressure_frag_kib, e.pressure_frag_kib);
     METRIC_SET(ram_share, e.ram_share);
     METRIC_SET(preview_asks, pv.asks);
     METRIC_SET(preview_asks_empty, pv.asks_empty);

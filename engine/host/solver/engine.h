@@ -1150,6 +1150,8 @@ typedef struct {
     const char *ram_limit_source; /* where it came from, as `{"source":…}`: "wasm-heap-max", "rlimit-as"
                                      or "none" */
     long ram_share;         /* the share, in permille */
+    long ram_nonheap_kib;   /* the part of the limit no heap block can use, subtracted before the share */
+    long pressure_frag_kib; /* the allocator's footprint less its live bytes when pressure last started selling */
     long sold_cands;        /* …and the candidate members. A paged candidate comes back without its ladder
                                (solver/flow.h's `cand_surv` and `cand_rung` do not cross the tier), so paging
                                one costs the search the distance it had measured */

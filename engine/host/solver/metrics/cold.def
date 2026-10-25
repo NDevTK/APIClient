@@ -204,6 +204,11 @@ METRIC(pressure_collects, "pressureCollects", LIFETIME, "collection", PROCESS, "
 METRIC(ram_limit_kib, "ramLimitKiB", CONSTANT, "KiB", AGENT, "solver/engine.c", INT)
 METRIC(ram_limit_source, "ramLimitSource", CONSTANT, "source", AGENT, "solver/engine.c", OBJECT)
 METRIC(ram_share, "ramShare", CONSTANT, "permille", AGENT, "solver/engine.c", INT)
+/* …and the part of the limit no heap block can use (static data and stack in wasm, every non-heap mapping under
+   an address-space rlimit), subtracted before the share; and the allocator's footprint less its live bytes when
+   pressure last started selling, the fragmentation the line added to live bytes then, 0 before the first sale. */
+METRIC(ram_nonheap_kib, "ramNonHeapKiB", CONSTANT, "KiB", AGENT, "solver/engine.c", INT)
+METRIC(pressure_frag_kib, "pressureFragKiB", GAUGE, "KiB", AGENT, "solver/engine.c", INT)
 /* …and why a park that never happened did not. These are the host asking the cold tier what a
    park would write; `previewAsks: 0` is no host consulting it, and every row below is then
    meaningless. A moment is a conjunction, so the rows split it: a row that never rose wants its

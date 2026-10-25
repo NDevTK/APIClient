@@ -11,6 +11,7 @@
 #include <emscripten/heap.h>   /* emscripten_get_heap_max: the linear memory's ceiling, RAM pressure's limit */
 #else
 #include <sys/resource.h>      /* RLIMIT_AS: the native process's address-space ceiling, RAM pressure's limit */
+#include <unistd.h>            /* sysconf(_SC_PAGESIZE): the unit of /proc/self/statm's mapped size */
 #endif
 #include "core/mime/mime_type.h"   /* §4.4 "Is a JavaScript MIME type": what makes a reply a program rather
                                        than a Response, asked at the fetch delivery below */
@@ -1101,6 +1102,13 @@ static long g_reclaim_asks, g_reclaim_unarmed, g_reclaim_floor;
 static unsigned g_ram_share = ENGINE_RAM_SHARE_DEFAULT;
 static uint64_t g_ram_limit;
 static const char *g_ram_limit_source = "{\"none\":1}";
+/* The part of that limit no heap block can use, read once with it (engine_ram_limit_read), and the allocator's
+   footprint less its live bytes at the last instant pressure started selling, 0 before the first. */
+static uint64_t g_ram_nonheap;
+static uint64_t g_pressure_frag;
+/* The footprint at which pressure last made room: footprint up to it is address space the instance has already
+   held without meeting the limit, so only growth past it (or past the line) asks for a sale. */
+static uint64_t g_ram_fp_mark;
 static long g_pressure_sold;
 /* The cycle collections pressure owed, and the count of finished collections it last sold at (UINT64_MAX before the
    first sale of the session). */
@@ -11253,33 +11261,66 @@ void engine_set_ram_share(unsigned permille) {
    linear memory, or the native process's soft RLIMIT_AS (test_forced.c's native_ceiling_arm sets it to the
    vehicle's address space). A process with no address-space limit has none, where an allocation does not fail and
    pressure has nothing to be a share of. */
+/* With it, the part of the limit no heap block can use: in wasm the static data and stack below `__heap_base`; under
+   an address-space rlimit the process's mapped size less the allocator's footprint at this instant (the binary, the
+   stacks, every other mapping). */
 static void engine_ram_limit_read(void) {
 #if defined(__EMSCRIPTEN__)
+    extern unsigned char __heap_base;
     g_ram_limit = (uint64_t)emscripten_get_heap_max();
     g_ram_limit_source = "{\"wasm-heap-max\":1}";
+    g_ram_nonheap = (uint64_t)(uintptr_t)&__heap_base;
 #else
     struct rlimit rl;
+    unsigned long pages = 0;
+    FILE *statm;
     CHECK(getrlimit(RLIMIT_AS, &rl) == 0, "the native host could not read its address-space limit");
     g_ram_limit = rl.rlim_cur == RLIM_INFINITY ? 0 : (uint64_t)rl.rlim_cur;
     g_ram_limit_source = g_ram_limit ? "{\"rlimit-as\":1}" : "{\"none\":1}";
+    statm = fopen("/proc/self/statm", "r");
+    CHECK(statm && fscanf(statm, "%lu", &pages) == 1,
+          "the native host could not read its mapped size from /proc/self/statm, which RAM pressure's line subtracts");
+    fclose(statm);
+    g_ram_nonheap = (uint64_t)pages * (uint64_t)sysconf(_SC_PAGESIZE) - (uint64_t)c_alloc_footprint();
 #endif
+    CHECK(g_ram_limit == 0 || g_ram_nonheap < g_ram_limit,
+          "the instance's non-heap mappings already fill its memory limit, so no heap block could be allocated");
 }
 
-/* RAM pressure relocates the cold tail (engine.h): sell at rest while the live bytes stand above the share of the
-   limit, so the frontier gives memory back before an allocation that does not ask the refusal edge meets the wall.
-   It ends at the share or at the frontier's floor (engine_reclaim_at_rest's 0), never at a count.
+/* The live bytes the current episode of pressure sells down to, UINT64_MAX when no episode is open. An episode
+   outlives the step that opened it, because each sale waits for a collection to finish first. */
+static uint64_t g_pressure_target = UINT64_MAX;
+
+/* RAM pressure relocates the cold tail (engine.h): sell at rest while the allocator's footprint stands above the
+   share of what the limit leaves the heap, so the frontier gives memory back before an allocation that does not
+   ask the refusal edge meets the wall. It ends at the share or at the frontier's floor (engine_reclaim_at_rest's
+   0), never at a count. A sale frees chunks inside the footprint and the footprint does not give them back
+   (dlmalloc never trims it; glibc trims only its top), so it cannot be brought back under a line it crossed: what
+   a sale buys is free chunks later allocations reuse. So the footprint's growth past the line, or past the mark
+   where pressure last made room, opens an episode that takes live bytes down by that growth, and the mark moves
+   to the footprint. If the freed chunks cannot be reused the footprint grows again and the next step sells again.
    A collection comes before each sale: what a sale gives back is mostly cycles (a child realm is one, held by its
    own intrinsics), which only the cycle collector frees, and the allocation threshold that would owe one may stand
    above the share. So when no collection has finished since the last sale, pressure owes one and returns; the
    steps that follow are the collector's (engine_collect_slice), and pressure sells only if the live bytes still
-   stand above the share once it has finished. */
+   stand above the episode's target once it has finished. */
 static void engine_relocate_under_pressure(JSRuntime *rt) {
-    uint64_t line;
+    uint64_t line, ref, fp, live;
     JSGCCycleStats st;
 
     if (g_ram_limit == 0) return;
-    line = g_ram_limit / 1000 * g_ram_share;
-    while ((uint64_t)c_alloc_live() > line) {
+    line = (g_ram_limit - g_ram_nonheap) / 1000 * g_ram_share;
+    fp = (uint64_t)c_alloc_footprint();
+    ref = line > g_ram_fp_mark ? line : g_ram_fp_mark;
+    if (fp > ref) {
+        uint64_t t;
+        live = (uint64_t)c_alloc_live();
+        t = live > fp - ref ? live - (fp - ref) : 0;
+        if (t < g_pressure_target) g_pressure_target = t;
+        g_pressure_frag = fp > live ? fp - live : 0;
+        g_ram_fp_mark = fp;
+    }
+    while ((uint64_t)c_alloc_live() > g_pressure_target) {
         JS_GCCycleStats(rt, &st);
         if (st.collections == g_pressure_sold_at_collections || g_pressure_sold_at_collections == UINT64_MAX) {
             if (g_pressure_sold_at_collections == UINT64_MAX)
@@ -11288,10 +11329,11 @@ static void engine_relocate_under_pressure(JSRuntime *rt) {
             g_pressure_collects++;
             return;
         }
-        if (!engine_reclaim_at_rest()) return;
+        if (!engine_reclaim_at_rest()) break;
         g_pressure_sold++;
         g_pressure_sold_at_collections = st.collections;
     }
+    g_pressure_target = UINT64_MAX;
 }
 
 /* See engine.h. The probe is a plain allocation, freed at once: what it proves is that the address space holds
@@ -12782,6 +12824,8 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->ram_limit_kib      = (long)(g_ram_limit / 1024);
     out->ram_limit_source   = g_ram_limit_source;
     out->ram_share          = (long)g_ram_share;
+    out->ram_nonheap_kib    = (long)(g_ram_nonheap / 1024);
+    out->pressure_frag_kib  = (long)(g_pressure_frag / 1024);
     /* The payment pair is an inequality, asserted where both halves are read together: `answered` counts the asks
        this session settled, `asked` the ids it minted, and only their order says the two describe one population.
        A fire names a mint or a credit, not a lifetime: all four host counters carry across a session boundary
