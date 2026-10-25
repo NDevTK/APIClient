@@ -1190,6 +1190,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbnameorder.h"
 #include "fixture/idbstorefork.h"
 #include "fixture/idbscopefork.h"
+#include "fixture/idbindexfork.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1709,6 +1710,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbnameorder", HTML_IDBNAMEORDER },
     { "idbstorefork", HTML_IDBSTOREFORK },
     { "idbscopefork", HTML_IDBSCOPEFORK },
+    { "idbindexfork", HTML_IDBINDEXFORK },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16548,6 +16550,26 @@ TF_UNIT void probes_idbscopefork(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `idbindexfork` document (fixture/idbindexfork.h): index() over an unknown name runs one world per
+   index of the store and the NotFoundError world. */
+TF_UNIT void probes_idbindexfork(const char *js, Probe *tab, int *n) {
+    const char *a_why = NULL; int a_tt = 1;
+    fold_row(&a_tt, &a_why, param_value_is(js, "/api/idbx-index", "got", "byA"),
+             "no /api/idbx-index?got=byA record: no arm took the unknown name as the store's index 'byA'");
+    const char *b_why = NULL; int b_tt = 1;
+    fold_row(&b_tt, &b_why, param_value_is(js, "/api/idbx-index", "got", "byB"),
+             "no /api/idbx-index?got=byB record: no arm took the unknown name as the store's index 'byB'");
+    const char *m_why = NULL; int m_tt = 1;
+    fold_row(&m_tt, &m_why, param_value_is(js, "/api/idbx-index", "got", "NotFoundError"),
+             "no /api/idbx-index?got=NotFoundError record: no arm took the unknown name as naming no index");
+    const Probe rows[] = {
+        { "idbx-bya", a_tt, "/api/idbx-index", SESS_EXPLORE, a_why },
+        { "idbx-byb", b_tt, "/api/idbx-index", SESS_EXPLORE, b_why },
+        { "idbx-missing", m_tt, "/api/idbx-index", SESS_EXPLORE, m_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -20838,6 +20860,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbnameorder(js, probes, &np);
     probes_idbstorefork(js, probes, &np);
     probes_idbscopefork(js, probes, &np);
+    probes_idbindexfork(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
