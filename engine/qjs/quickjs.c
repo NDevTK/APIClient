@@ -4757,6 +4757,9 @@ static void js_nested_entry_note(uintptr_t ra0, uintptr_t ra1, bool bytecode)
     CHECK(g_nested_entry_count < (int)countof(g_nested_entries),
           "the nested-entry census holds more distinct call sites than its table: grow the table");
     g_nested_entries[g_nested_entry_count++] = (JSNestedEntry){ ra0, ra1, bytecode, 1 };
+    /* each new site as it is first seen, so a run that aborts before teardown still names it */
+    fprintf(stderr, "@NESTED-NEW {\"ra0\":\"%+lld\",\"ra1\":\"%+lld\",\"bytecode\":%d}\n",
+            (long long)(intptr_t)ra0, (long long)(intptr_t)ra1, bytecode);
 }
 #define JS_NESTED_ENTRY_NOTE(rt_, bytecode_)                                                                \
     do {                                                                                                      \
@@ -25316,6 +25319,9 @@ static void close_lexical_var(JSContext *ctx, JSFunctionBytecode *b,
 
 #define JS_CALL_FLAG_COPY_ARGV   (1 << 1)
 #define JS_CALL_FLAG_GENERATOR   (1 << 2)
+/* The interpreter's own call of a callee with no chain entry (a C function or class call hook): a nested entry
+   by construction, made by no C activation, so the nested-entry census does not count it. */
+#define JS_CALL_FLAG_LEAF_DISPATCH (1 << 3)
 
 /* A continuation-holding builtin holds loop state across a JS callback, and a C frame cannot be parked — so the
    builtin IS a step machine, declared with JS_CFUNC_STEP_DEF. This is NOT an allowlist: there is no JS_Call-loop
@@ -35886,7 +35892,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         }
     }
     p = JS_VALUE_GET_OBJ(func_obj);
-    JS_NESTED_ENTRY_NOTE(rt, p->class_id == JS_CLASS_BYTECODE_FUNCTION);
+    if (!(flags & JS_CALL_FLAG_LEAF_DISPATCH))
+        JS_NESTED_ENTRY_NOTE(rt, p->class_id == JS_CLASS_BYTECODE_FUNCTION);
     if (unlikely(p->class_id != JS_CLASS_BYTECODE_FUNCTION)) {
         JSClassCall *call_func;
         call_func = rt->class_array[p->class_id].call;
@@ -38346,7 +38353,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         ret_val = JS_EXCEPTION;
                     } else {
                         ret_val = JS_CallInternal(ctx, call_argv[-1], gthis, JS_UNDEFINED,
-                                                  call_argc, vc(call_argv), 0);
+                                                  call_argc, vc(call_argv), JS_CALL_FLAG_LEAF_DISPATCH);
                     }
                     /* the arguments were read; an apply shape's list is done with HERE, before either exit — the
                        tail exit below never reaches the cleanup block, which is where it leaked. */
