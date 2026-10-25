@@ -94,6 +94,7 @@
 //     node site.mjs control-preload http://127.0.0.1:8910/ <pass>
 //     node site.mjs control-navdecline http://127.0.0.1:8911/ <pass>
 //     node site.mjs control-navload http://127.0.0.1:8912/ <pass>
+//     node site.mjs control-libs http://127.0.0.1:8913/?item=42&view=compact <pass>
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -186,7 +187,16 @@ const DOCS = [
      and the addresses nav-load-child.html composes are written so that one grep separates them. The census
      row is the only reader of the hard-bar rung and is named in that document's floors. */
   ['nav-load.html', 'control-navload'],
+  /* THE ONE DOCUMENT WHOSE REQUESTS ARE MADE BY REAL LIBRARY CODE, APPENDED FOR THE REASON STATED AT THE TOP OF
+     THIS TABLE. Its scripts are the vendored libraries under ../libraries/, served at `/lib/` by the route
+     below, so a row learns an endpoint only by running jQuery's or axios's own request path. Driven with a
+     query (`?item=42&view=compact`), because one of its calls takes its path and a param from
+     location.search. */
+  ['libraries.html', 'control-libs'],
 ];
+
+/* THE VENDORED LIBRARIES, BY NAME AND OVER AN ALLOWLIST, so no path can reach outside that directory. */
+const LIBS = ['superagent.min.js', 'unfetch.min.js', 'ky.min.js', 'jquery-3.7.1.min.js', 'axios.min.js'];
 
 /* THE ONE NON-SCRIPT SUBRESOURCE ANY ROW FETCHES, and it is answered by every origin for the same reason the
    `.js` bundles are: which document asks for it is stated by that document. It is NOT under `/api/`, because
@@ -314,6 +324,10 @@ DOCS.forEach(([doc, name], i) => {
     if (NAV_CHILDREN.indexOf(p) >= 0) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       return res.end(readFileSync(join(D, 'nav-' + p.slice('/nav/'.length))));
+    }
+    if (p.startsWith('/lib/') && LIBS.indexOf(p.slice('/lib/'.length)) >= 0) {
+      res.writeHead(200, { 'content-type': 'application/javascript' });
+      return res.end(readFileSync(join(D, '..', 'libraries', p.slice('/lib/'.length))));
     }
     if (p === '/route.rsc') {
       res.writeHead(200, { 'content-type': 'text/x-component' });

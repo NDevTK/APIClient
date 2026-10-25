@@ -109,6 +109,7 @@ two disagree — this block is a convenience and `DOCS` is the fact:
     node site.mjs control-method http://127.0.0.1:8908/ <pass>  # the request METHOD axis (non-GET)
     node site.mjs control-gated http://127.0.0.1:8909/ <pass>  # a gated value that also carries a hole
     node site.mjs control-preload http://127.0.0.1:8910/ <pass>  # an `as=image` preload SELECTS a source
+    node site.mjs control-libs http://127.0.0.1:8913/?item=42&view=compact <pass>  # requests made by real libraries
 
 ONE PORT PER DOCUMENT AND NOT ONE PATH PER DOCUMENT, because `site.mjs` isolates a row by ORIGIN: it selects
 the row's runs and documents with `d.url.startsWith(origin)`, so three documents on one origin make every

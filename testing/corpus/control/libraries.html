@@ -1,0 +1,47 @@
+<!doctype html>
+<!-- THE ENDPOINTS A PAGE REACHES THROUGH REAL LIBRARY CODE. Every request below is made by an unmodified
+     vendored library (testing/corpus/libraries/), so the engine learns it only by running that library's own
+     request path: jQuery's $.ajax over XMLHttpRequest, and axios's xhr adapter. Nothing in the engine names
+     either library; the rows read what the run computed.
+     Four live calls, one per shape of page logic:
+       /api/lib-boot           $.get at boot, query params from a literal object ($.param)
+       /api/lib-click          $.post behind a click handler, an urlencoded body
+       /api/lib-item/<item>    $.ajax whose path and param come from location.search
+       /api/lib-state          axios.post with a JSON body built from page state
+     Each has a dead twin that must never appear as `observed`: two in functions nothing calls (an orphan drive
+     may reach them, and is never an observation), one behind a constant-false branch, one behind a member the
+     page's own state object does not hold.
+     The other libraries are loaded and never called: their boot code (UMD wrappers, feature detection, a module
+     script) is what the run has to get past before the page's own calls. redaxios is not loaded: its build
+     assigns `module.exports` unconditionally and throws in a classic script, which no real page ships. -->
+<html><head><meta charset="utf-8"><title>Library requests</title></head>
+<body>
+<button id="save" type="button">Save</button>
+<script src="/lib/superagent.min.js"></script>
+<script src="/lib/unfetch.min.js"></script>
+<script type="module" src="/lib/ky.min.js"></script>
+<script src="/lib/jquery-3.7.1.min.js"></script>
+<script src="/lib/axios.min.js"></script>
+<script>
+var appState = { user: 'u-1042', cart: ['sku-7', 'sku-9'], currency: 'EUR' };
+
+$.get('/api/lib-boot', { lang: 'en', v: 3 });
+
+$('#save').on('click', function () {
+  $.post('/api/lib-click', { action: 'save', count: appState.cart.length });
+});
+
+var libQuery = new URLSearchParams(location.search);
+var libItem = libQuery.get('item');
+if (libItem) {
+  $.ajax({ url: '/api/lib-item/' + encodeURIComponent(libItem), data: { view: libQuery.get('view') || 'full' } });
+}
+
+axios.post('/api/lib-state', { user: appState.user, items: appState.cart.length, currency: appState.currency });
+
+function libUnusedGet() { $.get('/api/lib-dead-get', { lang: 'en' }); }
+function libUnusedPost() { axios.post('/api/lib-dead-post', { user: appState.user }); }
+if (false) { $.ajax({ url: '/api/lib-dead-const' }); }
+if (appState.debugPanel) { axios.get('/api/lib-dead-member'); }
+</script>
+</body></html>
