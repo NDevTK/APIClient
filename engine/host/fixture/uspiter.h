@@ -2,8 +2,8 @@
    by forEach and by keys(), then mutated and read. Its value pairs are a function of the unknown query, so
    every walk forks per index (a world with no pair there, and one with a pair whose name and value derive from
    the query), and a read after a mutation derives from the mutated list, as does that list sent as a request
-   body. Witness fetches carry constants,
-   except the iteration counts, which are concrete in each world.
+   body. A list built with no init is concrete, so its mutation and serialization are the page's own bytes.
+   Witness fetches carry constants, except the iteration counts, which are concrete in each world.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_USPITER_H
@@ -39,6 +39,11 @@ static const char HTML_USPITER[] =
     "if (uspM.get('mode') === 'admin') fetch('/api/uspm-get');"
     "document.getElementById('uspOut').innerHTML = uspM.get('q');"
     "fetch('/api/uspb', { method: 'POST', body: uspM });"
+    "</script>"
+    "<script>"
+    "var uspE = new URLSearchParams();"
+    "uspE.append('k', 'v');"
+    "fetch('/api/uspe?' + uspE.toString());"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

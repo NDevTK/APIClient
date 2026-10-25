@@ -16471,6 +16471,10 @@ TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
                               emitted_record_has(js, "/api/uspb", LOCATION_SEARCH_SRC),
              "Fetch §5.2's URLSearchParams arm: the body is not the serialization derived from the query, so the "
              "list's example parse was sent as concrete bytes");
+    const char *ue_why = NULL; int ue_tt = 1;
+    fold_row(&ue_tt, &ue_why, param_value_is(js, "/api/uspe", "k", "v"),
+             "URL §6.2's absent init is the empty list: the list built with no init, appended `k=v`, did not "
+             "serialize to the concrete query `k=v`");
     const Probe rows[] = {
         { "usp-iter-key", ik_tt, "/api/uspi-key", SESS_EXPLORE, ik_why },
         { "usp-iter-counts", ic_tt, "/api/uspi-done", SESS_EXPLORE, ic_why },
@@ -16479,6 +16483,7 @@ TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
         { "usp-mutate-read", mg_tt, "/api/uspm-get", SESS_EXPLORE, mg_why },
         { "usp-mutate-sink", ms_tt, "'uspOut'", SESS_EXPLORE, ms_why },
         { "usp-body-unknown", ub_tt, "/api/uspb", SESS_EXPLORE, ub_why },
+        { "usp-empty-init", ue_tt, "/api/uspe", SESS_EXPLORE, ue_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
