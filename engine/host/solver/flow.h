@@ -1348,6 +1348,10 @@ typedef struct {
        in flow_order_key's composition, so a reader recomposes each weight and the gap bit for bit and reads
        which term holds the gap. `present` is 0 where `cur_deep_w_gap` was not computed. */
     FlowWeightOperands cur_deep_top_ops, cur_deep_ops;
+    /* The same pair for `never_picked_gap`: the front's operands and the best never-dispatched member's, so a
+       reader names the term that keeps the starved population behind. `present` is 0 where no member is
+       never-dispatched. */
+    FlowWeightOperands never_picked_top_ops, never_picked_ops;
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 

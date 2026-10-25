@@ -4790,6 +4790,9 @@ void flow_wfq_census(WfqCensus *out) {
     /* And how many never-dispatched members stand at that maximum: collected here and attributed to the front once
        flow_best runs below. It costs no weighing; the walk has this member's weight. */
     long never_at_w = 0;
+    /* And the member offering it, the far end of `never_picked_gap`, for its operands (flow.h's
+       `never_picked_ops`). */
+    const Flow *never_holder = NULL;
     /* And the deepest row of the document's program table any member stands at, with the best weight there and how
        many stand with it, collected here for `cur_deep_w_gap` and attributed to the front below. The `have_` flag
        keeps "no member standing" apart from "a member at row 0", where every member of a fresh frontier is. */
@@ -4891,6 +4894,8 @@ void flow_wfq_census(WfqCensus *out) {
     out->cur_deep = 0; out->cur_deep_live = 0; out->cur_deep_w_gap = 0.0;
     memset(&out->cur_deep_top_ops, 0, sizeof out->cur_deep_top_ops);
     memset(&out->cur_deep_ops, 0, sizeof out->cur_deep_ops);
+    memset(&out->never_picked_top_ops, 0, sizeof out->never_picked_top_ops);
+    memset(&out->never_picked_ops, 0, sizeof out->never_picked_ops);
     for (i = 0; i < g_flows_n; i++) {
         const Flow *f = g_flows[i];
         int64_t s = flow_service_notch(f);
@@ -4979,7 +4984,7 @@ void flow_wfq_census(WfqCensus *out) {
             /* The maximum and its width in one pass, without a second weighing: the width resets with the maximum,
                and every later member at exactly that weight joins it. Exact `==` with no epsilon, this file's idiom
                (two members at one weight read one value twice), so the plateau is one the order has. */
-            if (!have_never || w > never_w) { never_w = w; have_never = 1; never_at_w = 1; }
+            if (!have_never || w > never_w) { never_w = w; have_never = 1; never_at_w = 1; never_holder = f; }
             else if (w == never_w) never_at_w++;
         }
         /* And how the dispatches that did happen were distributed over the members that got them, which
@@ -5357,6 +5362,11 @@ void flow_wfq_census(WfqCensus *out) {
         /* And the plateau is the front's only when the best starved member stands on it, hence the exact equality:
            a member a hair behind the front is separated, which is the question. Left at 0 otherwise. */
         if (never_w == out->w_top) out->never_picked_at_top = never_at_w;
+        flow_weight_operands(top, &out->never_picked_top_ops);
+        flow_weight_operands(never_holder, &out->never_picked_ops);
+        DCHECK(out->never_picked_top_ops.w == out->w_top && out->never_picked_ops.w == never_w,
+               "the neverPickedGap operands were read off members whose weights are not the gap's two ends — the "
+               "front and the best never-dispatched member are the two the walk recorded");
     }
 
     /* And how far the front stands ahead of the members that have run furthest through the document, one branch so

@@ -1,6 +1,7 @@
-/* The curDeepWGap split: the @WFQ census's `curDeepTerms` row (solver/result.c) carries the operands of the two
- * weights `curDeepWGap` is the difference of, and this recomposes each weight in solver/flow.c's
- * flow_weight_recompose order, so the doubles agree to the bit, and says how much of the gap each term holds.
+/* The gap splits: the @WFQ census's `curDeepTerms` and `neverPickedTerms` rows (solver/result.c) carry the operands
+ * of the two weights `curDeepWGap` and `neverPickedGap` are the differences of, and this recomposes each weight in
+ * solver/flow.c's flow_weight_recompose order, so the doubles agree to the bit, and says how much of a gap each term
+ * holds.
  *   node engine/wfq_gap.mjs <run-output>   prints one line per @WFQ census that carries the row. */
 
 import { readFileSync } from "node:fs";
@@ -28,21 +29,30 @@ function termsOf(o, q, rungs, where) {
   return { coord, branch, own, opt, dist, w };
 }
 
-/* The split of one census's gap: each term's difference between the front and the best deepest member, and the
-   gap recomposed exactly from the two weights. Null when the census carries no `curDeepTerms`. */
-export function curDeepTermSplit(census, where) {
-  const t = census.curDeepTerms;
+/* The split of one gap row: each term's difference between the front (`top`) and the gap's far end (`far`), and
+   the gap recomposed exactly from the two weights. Null when the census carries no such row. */
+function termSplit(t, far, row, where) {
   if (t === undefined || t === null) return null;
   if (typeof t.ageQuantum !== "number" || typeof t.rungs !== "number" || typeof t.gap !== "number")
-    throw new Error(`${where}: curDeepTerms carries no number ageQuantum, rungs and gap`);
+    throw new Error(`${where}: ${row} carries no number ageQuantum, rungs and gap`);
   const top = termsOf(t.top, t.ageQuantum, t.rungs, where + " (top)");
-  const deep = termsOf(t.deep, t.ageQuantum, t.rungs, where + " (deep)");
-  if (top.w - deep.w !== t.gap)
-    throw new Error(`${where}: the curDeepWGap recomposed from its two weights (${top.w - deep.w}) is not the ` +
+  const end = termsOf(t[far], t.ageQuantum, t.rungs, where + ` (${far})`);
+  if (top.w - end.w !== t.gap)
+    throw new Error(`${where}: the ${row} gap recomposed from its two weights (${top.w - end.w}) is not the ` +
                     `gap the census computed (${t.gap})`);
   const d = {};
-  for (const k of ["coord", "branch", "own", "opt", "dist"]) d[k] = top[k] - deep[k];
-  return { gap: t.gap, terms: d, top: t.top, deep: t.deep };
+  for (const k of ["coord", "branch", "own", "opt", "dist"]) d[k] = top[k] - end[k];
+  return { gap: t.gap, terms: d, top: t.top, far: t[far] };
+}
+
+/* curDeepWGap's split: the front against the best member at the deepest program row. */
+export function curDeepTermSplit(census, where) {
+  return termSplit(census.curDeepTerms, "deep", "curDeepTerms", where);
+}
+
+/* neverPickedGap's split: the front against the best member never handed the thread. */
+export function neverPickedTermSplit(census, where) {
+  return termSplit(census.neverPickedTerms, "never", "neverPickedTerms", where);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -52,14 +62,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   for (const m of text.matchAll(/@WFQ (\{.*\})$/gm)) {
     let c;
     try { c = JSON.parse(m[1]); } catch { continue; }
-    const r = curDeepTermSplit(c, `${path} census ${c.censusSeq}`);
-    if (!r) continue;
     const f = (x) => x.toFixed(6);
-    console.log(`census ${c.censusSeq} curDeep ${c.curDeep} live ${c.curDeepLive} gap ${f(r.gap)} = coord ${f(r.terms.coord)} ` +
-                `+ branch ${f(r.terms.branch)} + own ${f(r.terms.own)} + opt ${f(r.terms.opt)} + dist ${f(r.terms.dist)} | ` +
-                `top born ${r.top.born} visits ${r.top.visits} k ${r.top.ownNotch} K+c ${r.top.coordNotch} picks ` +
-                `${r.top.picks} owed ${r.top.hostOwed} running ${r.top.running} | deep born ${r.deep.born} visits ` +
-                `${r.deep.visits} k ${r.deep.ownNotch} K+c ${r.deep.coordNotch} picks ${r.deep.picks} owed ` +
-                `${r.deep.hostOwed} running ${r.deep.running}`);
+    const end = (e) => `born ${e.born} visits ${e.visits} k ${e.ownNotch} K+c ${e.coordNotch} picks ${e.picks} ` +
+                       `owed ${e.hostOwed} running ${e.running}`;
+    for (const [name, r] of [["curDeep", curDeepTermSplit(c, `${path} census ${c.censusSeq}`)],
+                             ["neverPicked", neverPickedTermSplit(c, `${path} census ${c.censusSeq}`)]]) {
+      if (!r) continue;
+      console.log(`census ${c.censusSeq} ${name} gap ${f(r.gap)} = coord ${f(r.terms.coord)} + branch ` +
+                  `${f(r.terms.branch)} + own ${f(r.terms.own)} + opt ${f(r.terms.opt)} + dist ${f(r.terms.dist)} | ` +
+                  `top ${end(r.top)} | far ${end(r.far)}`);
+    }
   }
 }

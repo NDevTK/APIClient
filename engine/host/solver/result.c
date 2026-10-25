@@ -519,6 +519,7 @@ static char *weight_operands_json(const FlowWeightOperands *o) {
 char *result_wfq_json(void) {
     WfqCensus w;
     char *terms = NULL;
+    char *never_terms = NULL;
     NetReachCensus nr;
     JsonBuf b = JSON_BUF_AT_REST;   /* composed between steps: a refusal makes this census absent */
 
@@ -728,6 +729,16 @@ char *result_wfq_json(void) {
     } else {
         METRIC_ABSENT(cur_deep_terms);
     }
+    if (w.never_picked_top_ops.present) {
+        char *top = weight_operands_json(&w.never_picked_top_ops), *never = weight_operands_json(&w.never_picked_ops);
+        never_terms = composef("{\"ageQuantum\":%.17g,\"rungs\":%d,\"gap\":%.17g,\"top\":%s,\"never\":%s}",
+                               w.never_picked_top_ops.age_quantum, FLOW_RUNGS_N, w.never_picked_gap, top, never);
+        CHECK(top && never && never_terms, "result: OOM composing the neverPickedGap operands");
+        METRIC_SET_OBJECT(never_picked_terms, never_terms);   /* borrowed until the rows are rendered below */
+        free(top); free(never);
+    } else {
+        METRIC_ABSENT(never_picked_terms);
+    }
     METRIC_SET(scan_next_runs, flow_scan_runs(FLOW_SCAN_NEXT));
     METRIC_SET(scan_next_weights, flow_scan_weights(FLOW_SCAN_NEXT));
     METRIC_SET(scan_rival_runs, flow_scan_runs(FLOW_SCAN_RIVAL));
@@ -785,6 +796,7 @@ char *result_wfq_json(void) {
     metrics_family_members_json(METRIC_FAMILY_WFQ_FRONTIER, &b);
     json_buf_raw(&b, "}");
     free(terms);
+    free(never_terms);
     return json_buf_take(&b);
 }
 
