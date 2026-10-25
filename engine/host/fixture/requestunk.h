@@ -3,9 +3,9 @@
    and compiles the reply with `new Function`.
    - `?src=` is wrapped and fetched wherever it points, so the attacker hosts the reply: the compiled text is
      attacker input rooted in the query.
-   - `?page=` is fetched only when it resolves to this document's own origin, by the page's own
-     `new URL(url, location.href).origin` test, which the request's URL shares: its sink must carry no source
-     rooted in the query.
+   - `?page=` (falling back to the seed, TF_SERVED's `/files/fpseed.txt`) is fetched only when it resolves to
+     this document's own origin, by the page's own `new URL(url, location.href).origin` test, which the
+     request's URL shares: its sink must carry no source rooted in the query.
    Each witness fetch carries a constant.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
@@ -30,8 +30,7 @@ static const char HTML_REQUESTUNK[] =
     "  new Function('x', await (await fetch(req)).text());"
     "})();"
     "(async function () {"
-    "  var url = rquParam('page');"
-    "  if (!url) return;"
+    "  var url = rquParam('page') || '/files/fpseed.txt';"
     "  if (new URL(url, location.href).origin !== location.origin) { fetch('/api/rqu-refused'); return; }"
     "  new Function('x', await (await fetch(new Request(url))).text());"
     "  fetch('/api/rqu-pinned');"
