@@ -96,18 +96,20 @@ static bool g_all_unheld_seen;
 bool realm_holders_all_unheld_seen(void) { return g_all_unheld_seen; }
 
 /* See realm_holders.h. */
-bool realm_holders_census(int *min, int *max, long *total, int *unheld) {
+bool realm_holders_census(RealmHolders *out) {
     HolderWalk w;
     long segs = 0, entries = 0, sum = 0;
-    int *holders, lo = -1, hi = -1, none = 0;
+    int *holders, lo = -1, hi = -1, none = 0, rooted = 0;
+    long outside = 0;
 
-    DCHECK(min && max && total && unheld, "the realm-holder census was given nowhere to write a row");
+    DCHECK(out != NULL, "the realm-holder census was given nowhere to write a row");
     memset(&w, 0, sizeof w);
     w.n = navigable_realm_count();
     if (w.n == 0) {
-        *min = *max = -1;
-        *total = 0;
-        *unheld = 0;
+        out->min = out->max = -1;
+        out->total = 0;
+        out->unheld = out->unheld_rooted = 0;
+        out->unheld_outside = 0;
         return true;
     }
     w.words = (w.n + 63) / 64;
@@ -149,6 +151,36 @@ bool realm_holders_census(int *min, int *max, long *total, int *unheld) {
         sum += holders[r];
         if (holders[r] == 0) none++;
     }
+    /* The unheld realms' handles: how many of their references come from outside the GC graph. With no delta
+       naming the realm, such a reference is a C record or a host static rooting it, which no collection frees. */
+    if (!w.refused && none > 0) {
+        JSValue *objs = malloc((size_t)w.n_globals * sizeof *objs);
+        int *from_gc = malloc((size_t)w.n_globals * sizeof *from_gc), k = 0;
+        bool *realm_rooted = calloc((size_t)w.n, sizeof *realm_rooted);
+        if (objs == NULL || from_gc == NULL || realm_rooted == NULL) {
+            w.refused = true;
+        } else {
+            for (int g = 0; g < w.n_globals; g++)
+                if (holders[w.globals[g].realm] == 0)
+                    objs[k++] = JS_MKPTR(JS_TAG_OBJECT, (void *)w.globals[g].global);
+            JS_GCNamedBy(JS_GetRuntime(navigable_realm_at(0)), objs, k, from_gc);
+            k = 0;
+            for (int g = 0; g < w.n_globals; g++) {
+                int ext;
+                if (holders[w.globals[g].realm] != 0) continue;
+                ext = JS_ValueRefCount(objs[k]) - from_gc[k];
+                DCHECKF(ext >= 0, "a handle of an unheld realm reads %d references from GC edges, above its count",
+                        from_gc[k]);
+                outside += ext;
+                if (ext > 0) realm_rooted[w.globals[g].realm] = true;
+                k++;
+            }
+            for (int r = 0; r < w.n; r++) rooted += realm_rooted[r];
+        }
+        free(objs);
+        free(from_gc);
+        free(realm_rooted);
+    }
 out:
     if (w.memo != NULL)
         for (size_t i = 0; i < w.memo_cap; i++) free(w.memo[i].bits);
@@ -157,10 +189,12 @@ out:
     free(holders);
     free(w.globals);
     if (w.refused) return false;
-    *min = lo;
-    *max = hi;
-    *total = sum;
-    *unheld = none;
+    out->min = lo;
+    out->max = hi;
+    out->total = sum;
+    out->unheld = none;
+    out->unheld_rooted = rooted;
+    out->unheld_outside = outside;
     if (none == w.n) g_all_unheld_seen = true;
     return true;
 }

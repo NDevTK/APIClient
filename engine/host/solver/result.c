@@ -1693,8 +1693,7 @@ char *result_heap_json(JSContext *ctx) {
     int rmin = -1, rmax = -1;
     long rtotal = 0;
     /* Which resident flows' deltas name each realm's Window (solver/realm_holders.h), the same instant. */
-    int hmin = -1, hmax = -1, hunheld = 0;
-    long htotal = 0;
+    RealmHolders hold;
     /* …and which function took each reference, at the same instant (see core/frame/navigable.h). A map
        keyed by origin, whose keys are discovered data and so cannot be format literals; each value is the
        positional `[min, max, total]`, safe because that triple is fixed here. The rows are composed one at a
@@ -1718,7 +1717,7 @@ char *result_heap_json(JSContext *ctx) {
        thread time on the pricing clock; `gcOwed` is 1 while a collection is owed or standing. */
     JS_GCCycleStats(rt, &gc);
     navigable_realm_refs(NULL, &rmin, &rmax, &rtotal);   /* `live` is navigable_realm_count() one line down */
-    if (!realm_holders_census(&hmin, &hmax, &htotal, &hunheld))
+    if (!realm_holders_census(&hold))
         return NULL;   /* refused at the RAM floor: an absent census, which the caller's loop answers */
     rsites_n = navigable_realm_ref_sites(rsites, NAVIGABLE_REALM_REF_SITES_MAX, &rreleased);
     /* `null` for a build that watches no references, never `[]`: an empty array is a run holding no live
@@ -1753,7 +1752,7 @@ char *result_heap_json(JSContext *ctx) {
                  "\"childRealmRefsMin\":%d,\"childRealmRefsMax\":%d,\"childRealmRefsTotal\":%lld,"
                  "\"childRealmRefsReleased\":%lld,\"childRealmRefSites\":%s,"
                  "\"childRealmHoldersMin\":%d,\"childRealmHoldersMax\":%d,\"childRealmHoldersTotal\":%lld,"
-                 "\"childRealmsUnheld\":%d,"
+                 "\"childRealmsUnheld\":%d,\"childRealmsUnheldRooted\":%d,\"childRealmUnheldOutsideRefs\":%lld,"
                  "\"stepMachines\":%d,\"trampFrames\":%d,"
                  "\"cLiveKiB\":%lld,\"arenaKiB\":%lld,\"cResidueBytes\":%s,"
                  "\"gcWork\":%llu,\"gcSteps\":%llu,\"gcRestarts\":%llu,\"gcCollections\":%llu,"
@@ -1763,7 +1762,8 @@ char *result_heap_json(JSContext *ctx) {
                  navigable_realm_count(), navigable_realm_made(), navigable_realm_peak(),
                  (long long)window_proxy_destroy_releases(),
                  rmin, rmax, (long long)rtotal, (long long)rreleased, rsites_json,
-                 hmin, hmax, (long long)htotal, hunheld,
+                 hold.min, hold.max, (long long)hold.total, hold.unheld, hold.unheld_rooted,
+                 (long long)hold.unheld_outside,
                  JS_StepMachineCount(rt), JS_TrampFrameCount(rt),
                  (long long)c_alloc_live() / 1024, (long long)ca.arena / 1024, residue,
                  (unsigned long long)gc.work, (unsigned long long)gc.steps, (unsigned long long)gc.restarts,

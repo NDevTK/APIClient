@@ -11,12 +11,19 @@
  * sharing it, so the collection after the last such member is sold is the one that can free it.
  *
  * Per live realm (core/frame/navigable.h), counts the frontier members whose delta (head and frozen chain,
- * cow_delta_objects) owns a reference to its global, its WindowProxy or its Document object. `min`/`max`/`total`
- * are over live realms (-1 for min and max when none is live); `unheld` counts live realms no delta names. Other
- * objects of a realm, suspended frames, jobs, foreign world segments and the pre-fork baseline are not read, so
- * `unheld` is an upper bound on what the next collection frees. Gauges at one instant, each shared segment walked
- * once. A refused allocation at the RAM floor answers false and writes nothing. */
-bool realm_holders_census(int *min, int *max, long *total, int *unheld);
+ * cow_delta_objects) owns a reference to its global, its WindowProxy or its Document object; for the realms no
+ * delta names, counts the references to those handles from outside the GC graph (JS_GCNamedBy), which root a
+ * realm against every collection. Other objects of a realm, suspended frames, jobs, foreign world segments and
+ * the pre-fork baseline are not read, so `unheld` is an upper bound on what the next collection frees. Gauges at
+ * one instant, each shared segment walked once. A refused allocation at the RAM floor answers false. */
+typedef struct {
+    int  min, max;          /* holders per live realm, -1 when none is live */
+    long total;
+    int  unheld;            /* live realms no member's delta names */
+    int  unheld_rooted;     /* ...of which some handle has a reference from outside the GC graph */
+    long unheld_outside;    /* those references, summed over the unheld realms' handles */
+} RealmHolders;
+bool realm_holders_census(RealmHolders *out);
 
 /* Whether some census of this process found at least one live child realm and every live one unheld — the
    instant a realm's last delta holder had gone and the collection that can free it had not yet run. A lifetime

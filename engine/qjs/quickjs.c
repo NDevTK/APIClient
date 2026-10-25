@@ -5691,6 +5691,68 @@ JSContextMarkFunc *JS_GetContextMarkHook(JSRuntime *rt)
     return rt->ctx_mark;
 }
 
+static void mark_children(JSRuntime *rt, JSGCObjectHeader *gp, JS_MarkFunc *mark_func);
+
+/* JS_GCNamedBy's targets for the walk in progress, sorted by address, and their counts. A mark callback takes no
+   argument, so the walk's state is here; the walk runs on the runtime's own thread and never re-enters. */
+static JSGCObjectHeader **g_named_by_targets;
+static int *g_named_by_counts, g_named_by_n;
+
+static void gc_named_by_mark(JSRuntime *rt, JSGCObjectHeader *gp)
+{
+    int lo = 0, hi = g_named_by_n - 1;
+    (void)rt;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (g_named_by_targets[mid] == gp) { g_named_by_counts[mid]++; return; }
+        if ((uintptr_t)g_named_by_targets[mid] < (uintptr_t)gp) lo = mid + 1;
+        else hi = mid - 1;
+    }
+}
+
+static int gc_header_cmp(const void *a, const void *b)
+{
+    uintptr_t x = (uintptr_t)*(JSGCObjectHeader *const *)a, y = (uintptr_t)*(JSGCObjectHeader *const *)b;
+    return x < y ? -1 : x > y;
+}
+
+/* See quickjs.h. The three lists are every GC object: gc_obj_list, and the two a standing collection moves
+   objects onto between its steps. */
+void JS_GCNamedBy(JSRuntime *rt, JSValueConst *objs, int n, int *from_gc)
+{
+    JSGCObjectHeader **sorted;
+    int *counts;
+    struct list_head *heads[3] = { &rt->gc_obj_list, &rt->gc_cycle.decref_done, &rt->tmp_obj_list };
+    struct list_head *el;
+
+    DCHECK(g_named_by_targets == NULL, "JS_GCNamedBy re-entered: its walk state is one per thread");
+    for (int i = 0; i < n; i++) {
+        DCHECK(JS_VALUE_HAS_REF_COUNT(objs[i]) && JS_VALUE_GET_TAG(objs[i]) == JS_TAG_OBJECT,
+               "JS_GCNamedBy was asked about a value that is not an object, so no GC edge can name it");
+        from_gc[i] = 0;
+    }
+    if (n == 0) return;
+    sorted = js_malloc_rt(rt, sizeof *sorted * (size_t)n);
+    counts = js_mallocz_rt(rt, sizeof *counts * (size_t)n);
+    CHECK(sorted != NULL && counts != NULL, "JS_GCNamedBy could not allocate its target table");
+    for (int i = 0; i < n; i++) sorted[i] = (JSGCObjectHeader *)JS_VALUE_GET_PTR(objs[i]);
+    qsort(sorted, (size_t)n, sizeof *sorted, gc_header_cmp);
+    g_named_by_targets = sorted;
+    g_named_by_counts = counts;
+    g_named_by_n = n;
+    for (int h = 0; h < 3; h++)
+        list_for_each(el, heads[h])
+            mark_children(rt, list_entry(el, JSGCObjectHeader, link), gc_named_by_mark);
+    g_named_by_targets = NULL;
+    for (int i = 0; i < n; i++) {
+        JSGCObjectHeader *p = (JSGCObjectHeader *)JS_VALUE_GET_PTR(objs[i]);
+        JSGCObjectHeader **at = bsearch(&p, sorted, (size_t)n, sizeof *sorted, gc_header_cmp);
+        from_gc[i] = counts[at - sorted];
+    }
+    js_free_rt(rt, counts);
+    js_free_rt(rt, sorted);
+}
+
 int JS_ContextRefCount(JSContext *ctx)
 {
     JS_CTX_REFS_CHECK(ctx, JS_REF_COUNT(ctx));

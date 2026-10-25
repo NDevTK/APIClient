@@ -799,6 +799,13 @@ JS_EXTERN int JS_ContextRefReleased(JSContext *ctx);
  * than shared, so an invariant stated over one is a statement about nothing, and asking is asserted against. */
 JS_EXTERN int JS_ValueRefCount(JSValueConst v);
 
+/* HOW MANY OF EACH OBJECT'S REFERENCES A GC OBJECT'S OWN EDGES ACCOUNT FOR — for each of `n` objects, the count
+ * of edges naming it that some GC object's mark reports (mark_children over every GC object, whichever list a
+ * standing collection has moved it to), written to from_gc[i]. JS_ValueRefCount(objs[i]) - from_gc[i] is then
+ * the references held from outside the graph: a C record, a COW delta entry, a host static. A walk of the whole
+ * heap, O(objects × log n); it reads edges and changes nothing. Each object must be a GC object. */
+JS_EXTERN void JS_GCNamedBy(JSRuntime *rt, JSValueConst *objs, int n, int *from_gc);
+
 JS_EXTERN void *JS_GetContextOpaque(JSContext *ctx);
 JS_EXTERN void JS_SetContextOpaque(JSContext *ctx, void *opaque);
 JS_EXTERN JSRuntime *JS_GetRuntime(JSContext *ctx);
