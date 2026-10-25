@@ -2279,6 +2279,76 @@ static void cow_entries_free(JSContext *ctx, CowEntry *e, int n) {
     }
 }
 
+/* One entry's owned object values, as cow_entries_free above releases them: the two must name the same
+   fields. An entry of a head that is APPLIED holds its flow's state on the live heap rather than in `cur` (unset
+   until the next unapply, stale after an earlier one), so its current half is read off the heap the way
+   cow_save_cur reads it, and released again here. */
+static void cow_entry_objects(const void *seg, const CowEntry *e, bool applied, CowObjectVisit visit, void *arg) {
+    const JSValue *vals[8];
+    int n = 0;
+
+    if (e->is_gendata) return;
+    vals[n++] = &e->obj;
+    if (e->is_state) {
+        if (e->state_kind == COW_STATE_HOST_REC) {
+            for (int h = 0; h < 2; h++) {
+                const char *blob = h == 0 ? e->a_base : applied ? e->target : e->a_cur;
+                if (blob == NULL) continue;
+                for (int i = 0; i < e->rec->n_val; i++) {
+                    JSValueConst v = *(const JSValue *)(blob + e->rec->val_off[i]);
+                    if (JS_IsObject(v)) visit(seg, v, arg);
+                }
+            }
+        }
+    } else if (e->is_map) {
+        if (e->map_weak == NULL) {
+            vals[n++] = &e->base.value; vals[n++] = &e->base.getter; vals[n++] = &e->base.setter;
+            vals[n++] = &e->cur.value; vals[n++] = &e->cur.getter; vals[n++] = &e->cur.setter;
+            vals[n++] = &e->map_old;
+        }
+    } else {
+        vals[n++] = &e->base.value; vals[n++] = &e->base.getter; vals[n++] = &e->base.setter;
+        if (applied) {
+            JSContext *ctx = g_cow_ctx;
+            DCHECK(ctx != NULL, "an applied head's entries were walked with no session context to read the heap");
+            if (e->vref) {
+                JSValue v = JS_VarRefGetValue(e->vref);
+                if (JS_IsObject(v)) visit(seg, v, arg);
+                JS_FreeValue(ctx, v);
+            } else {
+                JSPropertyDescriptor cur;
+                int has;
+                concolic_slots_only_begin();
+                has = JS_GetOwnSlotDesc(ctx, &cur, e->obj, e->atom);
+                concolic_slots_only_end();
+                DCHECK(has >= 0, "reading an applied head's captured slot threw — a delta holds something that is "
+                                 "not an object");
+                if (has > 0) {
+                    if (JS_IsObject(cur.value)) visit(seg, cur.value, arg);
+                    if (JS_IsObject(cur.getter)) visit(seg, cur.getter, arg);
+                    if (JS_IsObject(cur.setter)) visit(seg, cur.setter, arg);
+                    cow_desc_free(ctx, &cur);
+                }
+            }
+        } else if (e->cur_state != COW_CUR_UNRECORDED) {
+            vals[n++] = &e->cur.value; vals[n++] = &e->cur.getter; vals[n++] = &e->cur.setter;
+        }
+    }
+    for (int i = 0; i < n; i++)
+        if (JS_IsObject(*vals[i])) visit(seg, *vals[i], arg);
+}
+
+/* See cow.h. */
+void cow_delta_objects(const CowDelta *d, CowSegEnter enter, CowObjectVisit visit, void *arg) {
+    DCHECK(d != NULL && enter != NULL && visit != NULL,
+           "a delta's object walk was asked without a delta, a segment test or a visitor — each is read below");
+    for (int i = 0; i < d->n; i++) cow_entry_objects(NULL, &d->e[i], d->head_applied, visit, arg);
+    for (const CowSeg *s = d->base; s != NULL; s = s->base) {
+        if (!enter(s, arg)) continue;
+        for (int i = 0; i < s->n; i++) cow_entry_objects(s, &s->e[i], false, visit, arg);
+    }
+}
+
 /* `cow_free` — a session teardown that set `g_current` to NULL and did nothing else — is DELETED: it had NO
    CALLER, which is the defect class this codebase has been bitten by repeatedly (a producer nobody runs reads
    exactly like one that works). What it claimed to do is now a property the frontier's teardown ASSERTS instead

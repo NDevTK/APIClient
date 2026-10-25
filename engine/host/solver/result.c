@@ -6,6 +6,7 @@
 #include "solver/compose.h"   /* every census below is sized by what it writes — see composef */
 #include "solver/result.h"
 #include "solver/c_alloc.h"   /* the C heap's running total against the allocator's reading, per census */
+#include "solver/realm_holders.h"   /* which resident flows hold each child realm's Window, per census */
 #include "solver/endpoint.h"
 #include "solver/novelty.h"
 #include "solver/rung_entry.h"  /* the invoker rungs' denominator, read beside `stepUnitRuns` */
@@ -1669,7 +1670,7 @@ char *result_cold_json(void) {
     return out;
 }
 
-/* What the runtime and the C allocator under it hold, every row O(1): the counts QuickJS keeps where it allocates
+/* What the runtime and the C allocator under it hold, every row O(1) but the realm-holder rows: the counts QuickJS keeps where it allocates
    and frees (JS_GetLiveCounts: its allocator's live blocks and bytes, the JS objects, atoms and hashed shapes), the
    child realms navigable.c built, and the C allocator's running total (see result.h). A climbing `allocations`
    with a flat `objects` is memory no JS object owns (atoms, strings, property tables, bytecode); the walk that
@@ -1677,7 +1678,8 @@ char *result_cold_json(void) {
    (result_heap_walk_json). `childRealmsMade` (lifetime) and `childRealmsPeak` (high-water) ride beside the live
    `childRealms`: `made == peak` within one sample says no realm was reclaimed (HTML §7.5.10 "Destroying
    documents" step 7's reference drop), `made > peak` says reclamation ran. `stepMachines` and `trampFrames` are
-   the two largest things in `mallocBytes` QuickJS cannot name. Kinds: every row is a gauge except
+   the two largest things in `mallocBytes` QuickJS cannot name. `childRealmHolders*` and `childRealmsUnheld` are
+   solver/realm_holders.h's walk of every member's delta chain, taken while a child realm is live. Kinds: every row is a gauge except
    `childRealmsMade` and the `gc` rows but `gcOwed`, lifetime counts and the only rows that may be differenced,
    and `childRealmsPeak`, a high-water mark. Sized by composef. */
 char *result_heap_json(JSContext *ctx) {
@@ -1689,6 +1691,9 @@ char *result_heap_json(JSContext *ctx) {
        empty set, which a live realm's refcount cannot be. */
     int rmin = -1, rmax = -1;
     long rtotal = 0;
+    /* Which resident flows' deltas name each realm's Window (solver/realm_holders.h), the same instant. */
+    int hmin = -1, hmax = -1, hunheld = 0;
+    long htotal = 0;
     /* …and which function took each reference, at the same instant (see core/frame/navigable.h). A map
        keyed by origin, whose keys are discovered data and so cannot be format literals; each value is the
        positional `[min, max, total]`, safe because that triple is fixed here. The rows are composed one at a
@@ -1712,6 +1717,8 @@ char *result_heap_json(JSContext *ctx) {
        thread time on the pricing clock; `gcOwed` is 1 while a collection is owed or standing. */
     JS_GCCycleStats(rt, &gc);
     navigable_realm_refs(NULL, &rmin, &rmax, &rtotal);   /* `live` is navigable_realm_count() one line down */
+    if (!realm_holders_census(&hmin, &hmax, &htotal, &hunheld))
+        return NULL;   /* refused at the RAM floor: an absent census, which the caller's loop answers */
     rsites_n = navigable_realm_ref_sites(rsites, NAVIGABLE_REALM_REF_SITES_MAX, &rreleased);
     /* `null` for a build that watches no references, never `[]`: an empty array is a run holding no live
        realm, the opposite fact. */
@@ -1744,6 +1751,8 @@ char *result_heap_json(JSContext *ctx) {
                  "\"childRealmsMade\":%d,\"childRealmsPeak\":%d,\"destroyStep9Releases\":%lld,"
                  "\"childRealmRefsMin\":%d,\"childRealmRefsMax\":%d,\"childRealmRefsTotal\":%lld,"
                  "\"childRealmRefsReleased\":%lld,\"childRealmRefSites\":%s,"
+                 "\"childRealmHoldersMin\":%d,\"childRealmHoldersMax\":%d,\"childRealmHoldersTotal\":%lld,"
+                 "\"childRealmsUnheld\":%d,"
                  "\"stepMachines\":%d,\"trampFrames\":%d,"
                  "\"cLiveKiB\":%lld,\"arenaKiB\":%lld,\"cResidueBytes\":%s,"
                  "\"gcWork\":%llu,\"gcSteps\":%llu,\"gcRestarts\":%llu,\"gcCollections\":%llu,"
@@ -1753,6 +1762,7 @@ char *result_heap_json(JSContext *ctx) {
                  navigable_realm_count(), navigable_realm_made(), navigable_realm_peak(),
                  (long long)window_proxy_destroy_releases(),
                  rmin, rmax, (long long)rtotal, (long long)rreleased, rsites_json,
+                 hmin, hmax, (long long)htotal, hunheld,
                  JS_StepMachineCount(rt), JS_TrampFrameCount(rt),
                  (long long)c_alloc_live() / 1024, (long long)ca.arena / 1024, residue,
                  (unsigned long long)gc.work, (unsigned long long)gc.steps, (unsigned long long)gc.restarts,

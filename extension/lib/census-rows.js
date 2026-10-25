@@ -11,7 +11,7 @@ const CENSUS_ROWS = Object.freeze({
     object: Object.freeze(["curDeepTerms","neverPickedTerms"]),
   }),
   _heap: Object.freeze({
-    numeric: Object.freeze(["allocations","mallocBytes","atoms","objects","shapes","childRealms","childRealmsMade","childRealmsPeak","destroyStep9Releases","childRealmRefsMin","childRealmRefsMax","childRealmRefsTotal","childRealmRefsReleased","stepMachines","trampFrames","cLiveKiB","arenaKiB","gcWork","gcSteps","gcRestarts","gcCollections","gcFreed","gcSlices","gcUs","gcOwed"]),
+    numeric: Object.freeze(["allocations","mallocBytes","atoms","objects","shapes","childRealms","childRealmsMade","childRealmsPeak","destroyStep9Releases","childRealmRefsMin","childRealmRefsMax","childRealmRefsTotal","childRealmRefsReleased","childRealmHoldersMin","childRealmHoldersMax","childRealmHoldersTotal","childRealmsUnheld","stepMachines","trampFrames","cLiveKiB","arenaKiB","gcWork","gcSteps","gcRestarts","gcCollections","gcFreed","gcSlices","gcUs","gcOwed"]),
     object: Object.freeze(["childRealmRefSites","cResidueBytes"]),
   }),
   _swap: Object.freeze({

@@ -126,6 +126,10 @@ static int         g_realms_made, g_realms_peak;
 void navigable_set_realm_builder(RealmBuilder b) { g_realm_builder = b; }
 
 int navigable_realm_count(void) { return g_realms_n; }
+JSContext *navigable_realm_at(int i) {
+    DCHECKF(i >= 0 && i < g_realms_n, "child realm %d was asked of a list of %d", i, g_realms_n);
+    return g_realms[i];
+}
 int navigable_realm_made(void)  { return g_realms_made; }
 int navigable_realm_peak(void)  { return g_realms_peak; }
 

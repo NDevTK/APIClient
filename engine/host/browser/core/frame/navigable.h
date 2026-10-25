@@ -442,6 +442,9 @@ void navigable_free(JSContext *ctx);
    and every fast-array element vector lands in it) and answers a different question with a similar-looking
    number — see the @HEAP line in solver/engine.c. */
 int navigable_realm_count(void);
+/* The i'th live child realm, 0 <= i < navigable_realm_count(), borrowed: the list takes no reference, so the
+   pointer is good until the collector tears the realm down. */
+JSContext *navigable_realm_at(int i);
 
 /* THE TWO NUMBERS THAT MAKE THE ONE ABOVE ANSWERABLE — see navigable.c's note beside the statics.
  * `made` is MONOTONE: every child realm this agent has ever recorded. `peak` is the HIGH-WATER of the live

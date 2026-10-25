@@ -518,6 +518,18 @@ void cow_chain_stats(long *segs, long *entries);
    report a number that drifts the next time an entry kind is added. */
 long cow_chain_bytes(void);
 
+/* THE OBJECTS ONE DELTA HOLDS — every object value its head and its frozen chain own a counted reference to: a
+   captured slot's owner and its base and current descriptors, a strong map record's operands, a component
+   record's saved values (CowRecord's val_off) in both halves. For a head applied to the heap the current half is
+   the live heap's, read as an unapply would read it. `visit` receives the segment the value is in
+   (NULL for the head). `enter` is asked before each frozen segment, nearest first, and a false return skips that
+   segment's entries, so a caller walking many flows can answer a shared segment once. Not walked: the engine's
+   own state blobs (async, module, buffer, object and iteration state) and generator records, which a component
+   record's census does not need. */
+typedef bool (*CowSegEnter)(const void *seg, void *arg);
+typedef void (*CowObjectVisit)(const void *seg, JSValueConst v, void *arg);
+void cow_delta_objects(const CowDelta *d, CowSegEnter enter, CowObjectVisit visit, void *arg);
+
 /* ONE FLOW'S OWN HEAD — the writes it has made since its last fork, which is the part of the heap delta that
    is NOT shared with any sibling and therefore the part a pager pays for once per parked flow. `bytes` is the
    delta's whole host allocation (the struct, its entry array at capacity, and its hash index). */
