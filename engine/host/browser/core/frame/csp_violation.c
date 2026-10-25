@@ -46,6 +46,7 @@
 #include "core/frame/csp_directive_list.h"
 #include "core/frame/csp_source_list.h"
 #include "core/frame/csp_violation.h"
+#include "core/realm.h"   /* a worker global, which §2.4.1 and §5.5 answer apart from a Window */
 #include "core/url/url.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
@@ -455,6 +456,14 @@ static void csp_fire_violation(JSContext *ctx, const CspPolicy *policy, const ch
     char *document_uri, *blocked_uri, *original_policy, *sample_z;
 
     g_csp_violation_reports++;   /* the ask, counted before the task decides whether anything is fired */
+    /* A worker client is not built: §2.4.1 "Create a violation object for global, policy, and directive" gives a
+       non-Window global no referrer, its url is the WorkerGlobalScope's (the worker environment record's), and
+       §5.5 step 3.2 fires at the global itself rather than at a Document. The release arm is today's:
+       document_url's CHECK refuses a realm with no Document. */
+    if (realm_global_is_worker(ctx))
+        DFAIL("CSP §5.5 Report a violation was reached for a WorkerGlobalScope client — build the worker arm: "
+              "§2.4.1's url from the worker's environment record, no referrer, and step 3.2's target the "
+              "global itself (csp_violation_target and the fields record both assume a Document)");
     DCHECK(g_csp_task_stepid >= 0, "a CSP violation was reported before csp_violation_init declared §5.5's task");
     /* §2.4: "each violation has a url, which is its global object's url". */
     document_uri = csp_strip_serialized_url(document_url(ctx));

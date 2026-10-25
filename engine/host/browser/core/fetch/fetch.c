@@ -351,6 +351,7 @@ int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination,
 {
     UrlRecord rec;
     int blocked;
+    bool has_parent = false;
 
     DCHECK(url != NULL, "§4.1 step 7 was asked about a request with no address — every caller resolved one "
                         "before it built the request, and there is no URL for §6.7.2's relations to read");
@@ -373,6 +374,16 @@ int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination,
            "mode is not a missing detail: it flips that arm and refuses a request carrying integrity metadata "
            "that a browser loads. State the mode the algorithm creating this request names (HTML §2.5.1's "
            "create a potential-CORS request answers it from the element's `crossorigin` state)");
+    /* Mixed Content §4.4 step 1.4 reads "request's target browsing context has no parent browsing context"
+       only for a `document` destination, a navigation request, whose client is a Window's; §4.3 decides a
+       worker client from its own origin alone ("If settings' global object is a window" guards the ancestor
+       walk). So the navigable is asked only there, and a worker client never reaches it. */
+    if (!strcmp(destination, "document")) {
+        DCHECK(!realm_global_is_worker(ctx),
+               "a worker client stated a `document` destination — no algorithm a worker runs creates a "
+               "navigation request, and Mixed Content §4.4 step 1.4's target browsing context is a navigable's");
+        has_parent = !window_proxy_is_top_level(document_window_proxy(ctx));
+    }
     url_record_init(&rec);
     /* THE DISJUNCTION IS §4.1 STEP 7'S AND IS WRITTEN AS ONE — bad port, MIXED CONTENT, Content Security
        Policy, and Subresource Integrity §3.8.2's Integrity Policy. ALL FOUR ARE ASKED HERE, and
@@ -389,13 +400,8 @@ int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination,
                   contract for it is stated at fetch_main_upgrade — a caller that judges the pre-upgrade
                   address refuses an `<img src="http://…">` on an https page that a browser loads, and nothing
                   crashes when it does.
-                  Mixed Content §4.4's step 1.4 needs whether this request's target browsing context HAS A
-                  PARENT, and that
-                  is this component's to answer rather than each caller's for the reason the URL parse and the
-                  policy container are: it is a fact about the CLIENT, `ctx` is the client, and every caller
-                  would answer it the same way. */
-               mixed_content_should_block_fetching(ctx, &rec, destination,
-                                                   !window_proxy_is_top_level(document_window_proxy(ctx))) ||
+                  Step 1.4's parent question is answered above. */
+               mixed_content_should_block_fetching(ctx, &rec, destination, has_parent) ||
                /* THE REPORTER IS THIS REALM. §4.1.2 step 3.3.1 runs §5.5 "Report a violation" for every
                   policy that refuses, and §2.4.1 reads the GLOBAL OBJECT's url off it — `ctx` is the client
                   here for the same reason the line above gives about the URL parse and the policy container,
